@@ -40,7 +40,16 @@ jobs:
           EVENT: ${{ github.event_name }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          # Self-hosted pools write these; a pool that is missing, stopped or stale leaves its cells hosted.
+          # A fork PR never gets a pool (a fork also controls its own workflow, so this is not the boundary).
+          PI_LINUX_HEARTBEAT: ${{ vars.PI_LINUX_HEARTBEAT }}
+          PI_MACOS_HEARTBEAT: ${{ vars.PI_MACOS_HEARTBEAT }}
+          # Maintainer kill switch: any non-empty value sends every cell back to hosted runners.
+          PI_POOLS_DISABLED: ${{ vars.PI_POOLS_DISABLED }}
+          UNTRUSTED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'true' || '' }}
         run: |
+          pools=(--pool-heartbeat "pi-linux=$PI_LINUX_HEARTBEAT" --pool-heartbeat "pi-macos=$PI_MACOS_HEARTBEAT")
+          if [ -n "$UNTRUSTED" ] || [ -n "$PI_POOLS_DISABLED" ]; then pools+=(--no-pools); fi
           if [ "$EVENT" = workflow_dispatch ]; then
             # A frozen release-verification/<sha> ref can verify an older main
             # candidate without moving it forward merely because main advanced.
@@ -50,10 +59,10 @@ jobs:
             esac
             git merge-base --is-ancestor "$GITHUB_SHA" origin/main
             # No diff to read: every input is true and every cell runs for real.
-            python3 scripts/ci_paths.py --full --event "$EVENT" --github-output "$GITHUB_OUTPUT"
+            python3 scripts/ci_paths.py --full --event "$EVENT" --github-output "$GITHUB_OUTPUT" "${pools[@]}"
           else
             python3 scripts/ci_paths.py --base "$BASE" --head "$HEAD" --event "$EVENT" \
-              --pr-title="$PR_TITLE" --pr-number "${PR_NUMBER:-0}" --github-output "$GITHUB_OUTPUT"
+              --pr-title="$PR_TITLE" --pr-number "${PR_NUMBER:-0}" --github-output "$GITHUB_OUTPUT" "${pools[@]}"
           fi
       - name: Report classification
         env:
