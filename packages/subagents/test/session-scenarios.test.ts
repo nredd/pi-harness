@@ -1,5 +1,5 @@
 /** Ports of integration/test_subagents.py and router run.sh/no-router on the real core host. */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AssistantMessageEventStream, type FauxResponseStep, getApiProvider, registerApiProvider } from "@earendil-works/pi-ai/compat";
 import { afterEach, expect, it } from "vitest";
@@ -108,6 +108,69 @@ it("zero consumed TTL from env is wired through session sweep", async () => {
     if (before === undefined) delete process.env.PI_SUBAGENTS_CONSUMED_TTL_MIN; else process.env.PI_SUBAGENTS_CONSUMED_TTL_MIN = before;
   }
 });
+
+/** Run with a zero consumed TTL, read when the manager starts, so one clock tick evicts a read record. */
+async function withZeroConsumedTtl(body: () => Promise<void>) {
+  const before = process.env.PI_SUBAGENTS_CONSUMED_TTL_MIN;
+  process.env.PI_SUBAGENTS_CONSUMED_TTL_MIN = "0";
+  try {
+    await body();
+  } finally {
+    if (before === undefined) delete process.env.PI_SUBAGENTS_CONSUMED_TTL_MIN; else process.env.PI_SUBAGENTS_CONSUMED_TTL_MIN = before;
+  }
+}
+
+/** Spawn, read and evict one child, proving the record existed first (#330). */
+async function evictedChild(rememberAgents: boolean, childSteps: FauxResponseStep[]) {
+  fixture = new ScenarioSession({ rememberAgents, outputTranscript: false, agentModels: { "*": "kid/child" } });
+  fixture.physical("kid", "child", childSteps);
+  const h = await fixture.start();
+  h.setResponses([calls(spawn("evicted")), () => calls({ name: "get_subagent_result", args: { agent_id: agentId(h), wait: true } }), answer("FETCHED")]);
+  await h.session.prompt("go");
+  const id = agentId(h);
+  expect(outcomes(h, "get_subagent_result")[0]?.text).toContain("FIRST 330");
+  const { status, sessionFile } = fixture.record(id);
+  expect(status).toBe("completed");
+  fixture.clock.advance(1_000);
+  expect(() => fixture.record(id)).toThrow(`No record ${id}`);
+  return { h, id, sessionFile };
+}
+
+/** One parent turn that resumes `id` through the real Agent tool; returns its result text. */
+async function resumeOnce(h: Awaited<ReturnType<ScenarioSession["start"]>>, id: string) {
+  h.setResponses([calls({ name: "Agent", args: { subagent_type: "general-purpose", description: "again", prompt: "MORE 330", resume: id } }), answer("RESUMED")]);
+  await h.session.prompt("resume");
+  return outcomes(h, "Agent").at(-1)?.text ?? "";
+}
+
+it("resume reopens an evicted agent's conversation (#330)", () => withZeroConsumedTtl(async () => {
+  const { h, id } = await evictedChild(true, [answer("FIRST 330"), context => answer(`USERS ${context.messages.filter(m => m.role === "user").map(text).join(" | ")}`)]);
+  const completed = fixture.completion();
+  const resumed = await resumeOnce(h, id);
+  expect(resumed).toContain(`Agent resumed in background, reopening evicted agent ${id}.`);
+  const next = resumed.match(/Agent ID: (\S+)/)?.[1];
+  expect(next).toBeTruthy();
+  await completed;
+  h.setResponses([calls({ name: "get_subagent_result", args: { agent_id: next, wait: true } }), answer("PARENT DONE")]);
+  await h.session.prompt("fetch");
+  // The child's second turn saw its first prompt, so this is the same conversation, not a fresh agent.
+  expect(outcomes(h, "get_subagent_result").at(-1)?.text).toContain("USERS work | MORE 330");
+}));
+
+it("resume of an evicted in-memory agent says it was evicted (#330)", () => withZeroConsumedTtl(async () => {
+  const { h, id, sessionFile } = await evictedChild(false, [answer("FIRST 330")]);
+  expect(sessionFile).toBeUndefined();
+  const resumed = await resumeOnce(h, id);
+  expect(resumed).toContain(`Agent "${id}" (evicted) completed, evicted after 0 min`);
+  expect(resumed).not.toContain("Agent not found");
+}));
+
+it("resume of an evicted agent whose session file is gone says so (#330)", () => withZeroConsumedTtl(async () => {
+  const { h, id, sessionFile } = await evictedChild(true, [answer("FIRST 330")]);
+  expect(sessionFile && existsSync(sessionFile)).toBe(true);
+  rmSync(sessionFile as string);
+  expect(await resumeOnce(h, id)).toBe(`Could not resume agent "${id}" — its session is gone.`);
+}));
 
 it("coalesced notice reaches next provider request after turn_end", async () => {
   fixture = new ScenarioSession();
