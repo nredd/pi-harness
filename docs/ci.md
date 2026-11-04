@@ -45,7 +45,7 @@ Which cell does what. Every required check name reports, per the ruleset below. 
 
 `scripts/ci_paths.py` publishes all three inputs and fails closed: an unreadable comparison, an empty diff or a Gitlink change sets them all true. A missing output is treated as true too for all three, because the workflow only skips on an explicit `false`.
 
-- `wsl_inputs`: `.github/`, `scripts/wsl2_*`, `scripts/ci*`, `integration/probes/`, the lockfiles and `integration/pyproject.toml`, the guest bootstrap's `scripts/install_gh_linux.sh` and `scripts/install_wsl_owned_tools.sh`, the guest gates' `scripts/import_audit.ts`, `scripts/check-biome-paths.mjs`, `scripts/router_contract.mjs` and `scripts/run-vitest.ts`, `Makefile`, root `package.json` (`packageManager`), `.gitattributes` (the LF checkout), `.gitmodules`, `.node-version`, `.bun-version`, `.python-version`
+- `wsl_inputs`: `.github/`, `scripts/wsl2_*`, `scripts/ci*`, `integration/probes/`, the lockfiles and `integration/pyproject.toml`, the guest bootstrap's `scripts/install_gh_linux.sh` and `scripts/install_wsl_owned_tools.sh`, the guest gates' `scripts/import_audit.ts`, `scripts/check-biome-paths.mjs`, their two tests and `scripts/vitest.config.ts`, `scripts/router_contract.mjs` and `scripts/run-vitest.ts`, `Makefile`, root `package.json` (`packageManager`), `.gitattributes` (the LF checkout), `.gitmodules`, `.node-version`, `.bun-version`, `.python-version`
 - `stack_inputs`: `integration/{stacks,harness,scenarios,providers,golden,probes}`, `integration/conftest.py`, `integration/pyproject.toml`, `integration/uv.lock`, `Makefile`, `.github/`, `forks/`, root `package.json` and `package-lock.json`, `.gitmodules`, the same version pins, `scripts/wsl2_*`. `packages/` is not one: `harness.stack` maps those paths into `local`, the personal stack installs published bytes
 - `benchmark_inputs`: `benchmarks/comparison/` (code, tests, `pyproject.toml`, `uv.lock`, results), `Makefile` (`install-benchmark`, `check-benchmark`, `PY_CHECK`), `.python-version` (the step's `UV_PYTHON`), `.node-version` (the Node that installs the pinned Codex), `.github/workflows/ci.yml` (the Codex pin and the step), `.github/actions/setup-ci-tools/`, `scripts/ci_paths.py` (a broken predicate cannot switch the gate off on the PR that breaks it). Nothing else reads it: no product package imports it, and `coverage/policy.json` only inventories it
 
@@ -65,7 +65,8 @@ On the `owned` job, `@nredd/pi-computer-use`'s macOS-only checks (`test:invarian
 Phase 0 coverage runs inside the existing primary and declared Bun test invocations, never a
 second CI test pass. Each Vitest config explicitly includes owned source, uses text + LCOV and
 `reportOnFailure`; `subagents` retains Istanbul because V8 reload merging is incorrect. The
-existing Node helper gates use c8. An `always()` step after owned tests consumes those independent
+`check-probes` and `check-import-audit` helper gates run Vitest with V8 coverage too, since #347
+(c8 + `node --test` before). An `always()` step after owned tests consumes those independent
 reports with `scripts/coverage_accounting.py`, selects `darwin` / `linux` integer uncovered-line/function
 floors using `sys.platform`, compares **every OS's enforced floors** with the PR base's `coverage/policy.json`,
 and fails closed on missing/invalid input or a missing OS floor. Hosted artifacts, not a local Mac,

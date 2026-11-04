@@ -7,10 +7,10 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import test, { mock } from "node:test";
 import { fileURLToPath } from "node:url";
 import { API } from "typescript/unstable/sync";
-import { type AuditResult, auditFiles } from "./import_audit.ts";
+import { test, vi } from "vitest";
+import { type AuditResult, auditFiles, main } from "./import_audit.ts";
 
 /** Write `sources` under `<root>/pkg/` and audit them in one batch. */
 function audit(sources: Record<string, string>): AuditResult {
@@ -28,6 +28,14 @@ function audit(sources: Record<string, string>): AuditResult {
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
+}
+
+/** Run `main` in process against recording writers. */
+function runMain(args: string[]): { status: number; stdout: string; stderr: string } {
+	let stdout = "";
+	let stderr = "";
+	const status = main(args, { write: (text) => (stdout += text) }, { write: (text) => (stderr += text) });
+	return { status, stdout, stderr };
 }
 
 function one(source: string, name = "a.ts"): { specifiers: string[]; diagnostics: string[] } {
@@ -140,6 +148,7 @@ test("the CLI batches several files and prints one JSON document", () => {
 				"pkg/b.mjs": { specifiers: ["b"], diagnostics: [] },
 			},
 		});
+		assert.deepEqual(runMain([root, "pkg/a.ts", "pkg/b.mjs"]), { status: 0, stdout: out, stderr: "" });
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -157,24 +166,23 @@ test("a listed file tsgo cannot load fails the whole audit instead of passing it
 test("a project tsgo did not open fails the audit and still closes the session", () => {
 	const root = mkdtempSync(join(tmpdir(), "import-audit-project-"));
 	const original = API.prototype.updateSnapshot;
-	const snapshots = mock.method(
-		API.prototype,
-		"updateSnapshot",
-		function (this: API, ...args: Parameters<API["updateSnapshot"]>) {
-			const snapshot = original.apply(this, args);
-			mock.method(snapshot, "getProject", () => undefined);
-			return snapshot;
-		},
-	);
-	const closes = mock.method(API.prototype, "close");
+	const snapshots = vi.spyOn(API.prototype, "updateSnapshot").mockImplementation(function (
+		this: API,
+		...args: Parameters<API["updateSnapshot"]>
+	) {
+		const snapshot = original.apply(this, args);
+		vi.spyOn(snapshot, "getProject").mockImplementation(() => undefined);
+		return snapshot;
+	});
+	const closes = vi.spyOn(API.prototype, "close");
 	try {
 		mkdirSync(join(root, "pkg"));
 		writeFileSync(join(root, "pkg", "a.ts"), 'import "a";');
 		assert.throws(() => auditFiles(root, ["pkg/a.ts"]), /^Error: tsgo did not open the project '.*tsconfig\.json'$/);
-		assert.equal(snapshots.mock.callCount(), 1);
-		assert.equal(closes.mock.callCount(), 1);
+		assert.equal(snapshots.mock.calls.length, 1);
+		assert.equal(closes.mock.calls.length, 1);
 	} finally {
-		mock.restoreAll();
+		vi.restoreAllMocks();
 		rmSync(root, { recursive: true, force: true });
 	}
 });
@@ -186,5 +194,6 @@ test("the CLI rejects a missing ROOT or FILE with usage and exit 2", () => {
 		assert.equal(run.status, 2);
 		assert.equal(run.stdout, "");
 		assert.equal(run.stderr, "usage: node import_audit.ts ROOT FILE...\n");
+		assert.deepEqual(runMain(args), { status: run.status, stdout: run.stdout, stderr: run.stderr });
 	}
 });

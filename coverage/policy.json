@@ -387,7 +387,7 @@
     },
     "coverage-configurations": {
       "root": ".",
-      "owned": ["packages/*/vitest*.config.ts", "packages/todo/.vitest.config.ts", "integration/inprocess/vitest.config.ts"],
+      "owned": ["packages/*/vitest*.config.ts", "packages/todo/.vitest.config.ts", "integration/inprocess/vitest.config.ts", "integration/probes/vitest.config.ts", "scripts/vitest.config.ts"],
       "exclusions": [],
       "status": "pending",
       "goal": "report-only",

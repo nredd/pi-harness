@@ -151,11 +151,33 @@ export function auditFiles(root: string, files: readonly string[]): AuditResult 
 	}
 }
 
-if (import.meta.main) {
-	const [root, ...files] = process.argv.slice(2);
-	if (root === undefined || files.length === 0) {
-		process.stderr.write("usage: node import_audit.ts ROOT FILE...\n");
-		process.exit(2);
-	}
-	process.stdout.write(`${JSON.stringify(auditFiles(root, files))}\n`);
+/** Exit status for a missing ROOT or FILE. */
+const USAGE_EXIT_STATUS = 2;
+
+/** The one method the CLI needs from `process.stdout` and `process.stderr`. */
+interface Writer {
+	write(text: string): unknown;
 }
+
+/**
+ * Run the CLI on `args` (`ROOT FILE...`), in process so the tests measure it: Vitest coverage does
+ * not follow the child processes that also run it through `import.meta.main`.
+ *
+ * @returns The exit status: 0, or 2 after printing usage for a missing ROOT or FILE.
+ * @throws When `tsgo` cannot open the project or load a file, like `auditFiles`.
+ */
+export function main(
+	args: readonly string[],
+	stdout: Writer = process.stdout,
+	stderr: Writer = process.stderr,
+): number {
+	const [root, ...files] = args;
+	if (root === undefined || files.length === 0) {
+		stderr.write("usage: node import_audit.ts ROOT FILE...\n");
+		return USAGE_EXIT_STATUS;
+	}
+	stdout.write(`${JSON.stringify(auditFiles(root, files))}\n`);
+	return 0;
+}
+
+if (import.meta.main) process.exitCode = main(process.argv.slice(2));

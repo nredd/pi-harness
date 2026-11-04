@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
 import { collector } from "./render.ts";
 
 test("a Node `--expose-gc` hook is used as is, and Bun is not consulted", () => {
