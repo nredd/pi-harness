@@ -112,8 +112,8 @@ def test_no_pools_means_every_shard_is_hosted_exactly_as_before() -> None:
 def test_a_pool_that_is_up_takes_only_its_assigned_shard() -> None:
     """Each pool takes one shard; WSL and the other shards stay hosted."""
     both = shard_runners(frozenset({"pi-linux", "pi-macos"}))
-    assert both == HOSTED_RUNNERS | {("ubuntu-24.04", "python"): "pi-linux", ("macos-14", "ts"): "pi-macos"}
-    assert shard_runners(frozenset({"pi-linux"})) == HOSTED_RUNNERS | {("ubuntu-24.04", "python"): "pi-linux"}
+    assert both == HOSTED_RUNNERS | {("ubuntu-24.04", "ts"): "pi-linux", ("macos-14", "ts"): "pi-macos"}
+    assert shard_runners(frozenset({"pi-linux"})) == HOSTED_RUNNERS | {("ubuntu-24.04", "ts"): "pi-linux"}
 
 
 def plan_with(tmp_path: Path, name: str, *extra: str) -> dict[str, Any]:
@@ -154,7 +154,7 @@ def test_main_routes_with_fresh_beats_and_never_with_no_pools(tmp_path: Path) ->
     routed = plan_with(
         tmp_path, "a", "--pool-heartbeat", f"pi-linux={beat}", "--pool-heartbeat", f"pi-macos={beat}"
     )
-    assert cell_runners(routed, "owned (ubuntu-24.04)")["python"] == "pi-linux"
+    assert cell_runners(routed, "owned (ubuntu-24.04)")["ts"] == "pi-linux"
     assert cell_runners(routed, "owned (macos-14)")["ts"] == "pi-macos"
     blocked = plan_with(tmp_path, "b", "--pool-heartbeat", f"pi-linux={beat}", "--no-pools")
     assert set(cell_runners(blocked, "owned (ubuntu-24.04)").values()) == {"ubuntu-24.04"}
