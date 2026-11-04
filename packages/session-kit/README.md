@@ -259,7 +259,10 @@ pid; production commands and leader/descendant probes are not modified.
 Shell fixtures that outlive their test (`trap "" TERM` descendants, `sh -c` leaders with a background
 descendant in `manager.test.ts`, `pidfiles.test.ts`, `diff/git.test.ts`) loop on `STAY_SH`, which
 probes the worker's pid with `ps` and exits once it is gone, so an aborted gate leaves nothing
-behind. `stay.test.ts` covers the guard.
+behind. Other shell waits (the diff shim's readiness loop) also stop on `WORKER_ALIVE_SH`, so a timed
+out test whose temp dir is gone cannot spin forever. Fixtures one level down (the `sweep-child.ts`
+cleaner, the `stay.test.ts` owners) `STAY` on their own parent via `stayFor`. `stay.test.ts` covers
+both guards.
 Extension fixtures always emit shutdown in `afterEach`, including after assertion failures. A nested
 Vitest regression bypasses `scripts/run-vitest.ts`, so it reuses the launcher's exported
 `isolatedHomeEnv` and checks the child saw that `HOME`. It covers both a SIGKILLed worker and a
