@@ -12,6 +12,7 @@ import os
 import signal
 import subprocess
 from dataclasses import dataclass, field, replace
+from enum import Enum, auto
 from pathlib import Path
 from typing import Any
 
@@ -380,6 +381,32 @@ def test_reaped_leader_group_is_never_signalled(tmp_path: Path, monkeypatch: pyt
     assert "not signalled: its leader was already reaped" in raised.value.__notes__[0]
 
 
+RUN_LEADER = ["/bin/sh", "-c", "exit 0"]
+
+
+class Listing(Enum):
+    """How the injected `/bin/ps` seam answers for the refused group."""
+
+    REAL = auto()  # run the real, read-only listing
+    LIVE = auto()  # report a live member in the leader's group
+
+
+def leader_is_unreaped(pid: int) -> bool:
+    """Report whether `pid` is still this process's unreaped child, without reaping it.
+
+    Parameters:
+        pid (int): child process id.
+
+    Returns:
+        bool: the leader still anchors its process group number.
+    """
+    try:
+        os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except ChildProcessError:
+        return False
+    return True
+
+
 @dataclass
 class RefusedGroup:
     """What the injected `killpg` and `/bin/ps` saw for one exited, unreaped leader's group.
@@ -396,15 +423,14 @@ class RefusedGroup:
 
 
 def refuse_zombie_group(
-    monkeypatch: pytest.MonkeyPatch, raised: BaseException, listing: bool | Exception | None
+    monkeypatch: pytest.MonkeyPatch, raised: BaseException, listing: Listing | Exception
 ) -> RefusedGroup:
     """Fail `communicate` once the leader exited unreaped, and answer `EPERM` like Darwin; signal nothing.
 
     Parameters:
         monkeypatch (pytest.MonkeyPatch): installs the seams.
         raised (BaseException): what `communicate` raises after the leader exited.
-        listing (bool | Exception | None): `None` runs the real read-only `/bin/ps`; `True` reports a
-            live member; an exception is the listing failure to raise.
+        listing (Listing | Exception): how `/bin/ps` answers, or the listing failure to raise.
 
     Returns:
         RefusedGroup: what was captured, signalled and listed.
@@ -467,7 +493,7 @@ def refuse_zombie_group(
         seen.listings.append(argv)
         if isinstance(listing, Exception):
             raise listing
-        if listing:
+        if listing is Listing.LIVE:
             return f"{seen.leaders[0].pid} S\n"
         return check_output(argv, **kwargs)
 
@@ -477,23 +503,6 @@ def refuse_zombie_group(
     return seen
 
 
-def leader_is_unreaped(pid: int) -> bool:
-    """Report whether `pid` is still this process's unreaped child, without reaping it.
-
-    Parameters:
-        pid (int): child process id.
-
-    Returns:
-        bool: the leader still anchors its process group number.
-    """
-    try:
-        os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
-    except ChildProcessError:
-        return False
-    return True
-
-
-RUN_LEADER = ["/bin/sh", "-c", "exit 0"]
 # Each `communicate` failure, and what `run` reports for it once the group is gone.
 ORIGINALS: dict[str, tuple[BaseException, type[BaseException]]] = {
     "timeout": (subprocess.TimeoutExpired(RUN_LEADER, 5), pc.ContractError),
@@ -529,7 +538,7 @@ def test_zombie_only_eperm_keeps_the_original_error(
         original (str): `ORIGINALS` key.
     """
     raised, expected = ORIGINALS[original]
-    seen = refuse_zombie_group(monkeypatch, raised, listing=None)
+    seen = refuse_zombie_group(monkeypatch, raised, listing=Listing.REAL)
     with pytest.raises(expected):
         run_exiting_leader(tmp_path)
     [leader] = seen.leaders
@@ -550,7 +559,7 @@ def test_eperm_with_a_live_member_surfaces(
         original (str): `ORIGINALS` key; the refusal replaces that failure.
     """
     raised, _ = ORIGINALS[original]
-    seen = refuse_zombie_group(monkeypatch, raised, listing=True)
+    seen = refuse_zombie_group(monkeypatch, raised, listing=Listing.LIVE)
     with pytest.raises(PermissionError) as caught:
         run_exiting_leader(tmp_path)
     assert caught.value.__context__ is raised
@@ -564,6 +573,8 @@ def test_eperm_with_a_failed_listing_surfaces_chained(
 ) -> None:
     """A listing that cannot explain the `EPERM` surfaces it, chained to the listing failure.
 
+    The original failure stays its context, so the refusal never hides why the group was killed.
+
     Parameters:
         tmp_path (Path): Working directory.
         monkeypatch (pytest.MonkeyPatch): Recording seams.
@@ -574,6 +585,7 @@ def test_eperm_with_a_failed_listing_surfaces_chained(
     with pytest.raises(PermissionError) as caught:
         run_exiting_leader(tmp_path)
     assert caught.value.__cause__ is failure
+    assert caught.value.__context__ is raised
     assert seen.signalled == [(seen.leaders[0].pid, signal.SIGKILL, True)]
 
 

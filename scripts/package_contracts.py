@@ -77,16 +77,15 @@ from faux_provider import (
 )
 
 # `integration` is not an installed package (`package = false`), so the shared owned-group policy is
-# imported from the source tree, like the `PYTHONPATH=integration` workflow steps. Appended, so
-# nothing in `scripts/` is shadowed.
+# imported from the source tree. Module-level, so every importer (`npm_release.py` in `publish.yml`,
+# the stock gate, tests) gets it with no `PYTHONPATH` at each call site. Appended, so nothing in
+# `scripts/` is shadowed.
 sys.path.append(str(Path(__file__).resolve().parents[1] / "integration"))
 from harness import process_group
 
 LOGGER = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-# `/bin/ps` deadline when a group kill is refused, like `harness.headless.GROUP_LISTING_TIMEOUT_S`.
-GROUP_LISTING_TIMEOUT_S = 5.0
 DEFAULT_STOCK_PREFIX = Path.home() / "code" / "pi-harness-builds" / "tools" / "pi-stock-1.3.0"
 
 STOCK_PI_PACKAGE = "@earendil-works/pi-coding-agent"
@@ -1491,7 +1490,8 @@ def run_own_group(
     Raises:
         subprocess.TimeoutExpired: After the group was killed and the leader reaped.
         PermissionError: The kill was refused while a live member remains, or while the listing
-            failed (chained to it); it replaces the original exception, which is its context.
+            failed (chained to it); it replaces the original exception, which is its context. The
+            leader stays unreaped, so `Popen.__exit__` then waits on it with no deadline.
     """
     with subprocess.Popen(
         argv,
@@ -1507,7 +1507,7 @@ def run_own_group(
             stdout, stderr = process.communicate(timeout=timeout)
         except BaseException as e:
             if process.returncode is None:
-                process_group.kill_owned_group(process.pid, GROUP_LISTING_TIMEOUT_S)
+                process_group.kill_owned_group(process.pid, process_group.GROUP_LISTING_TIMEOUT_S)
                 process.wait()
             else:
                 e.add_note(f"process group {process.pid} not signalled: its leader was already reaped")

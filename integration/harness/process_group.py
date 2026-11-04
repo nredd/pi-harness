@@ -16,6 +16,9 @@ import os
 import signal
 import subprocess
 
+# Bound on the `/bin/ps` listing that explains a `killpg` EPERM, for callers without their own deadline.
+GROUP_LISTING_TIMEOUT_S = 5.0
+
 
 def group_has_live_members(pgid: int, timeout: float) -> bool:
     """Check owned-group liveness without mistaking unreaped zombies for writers.
@@ -52,7 +55,8 @@ def kill_owned_group(pgid: int, timeout: float) -> bool:
     Raises:
         ValueError: `pgid` is 0 or 1, which would signal the caller's own group or broadcast.
         PermissionError: refused while a live member remains, or while the listing failed; in
-            that case it is chained to the listing failure.
+            that case it is chained to the listing failure. Either way its `__context__` is the
+            exception the caller was handling, if any.
     """
     if pgid <= 1:
         raise ValueError(f"Refusing to signal process group {pgid}")
@@ -61,11 +65,16 @@ def kill_owned_group(pgid: int, timeout: float) -> bool:
     except ProcessLookupError:
         return True
     except PermissionError as refused:
-        try:
-            live = group_has_live_members(pgid, timeout)
-        except (OSError, subprocess.SubprocessError) as listing:
-            raise refused from listing
+        denied = refused
+    else:
+        return False
+    try:
+        live = group_has_live_members(pgid, timeout)
+    except (OSError, subprocess.SubprocessError) as listing:
+        unexplained = listing
+    else:
         if live:
-            raise
+            raise denied
         return True
-    return False
+    # Raising outside the listing handler keeps the caller's exception as `__context__`.
+    raise denied from unexplained

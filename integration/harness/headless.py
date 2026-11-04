@@ -30,8 +30,6 @@ SEEN_AT = "_harness_seen_s"
 
 DEFAULT_TIMEOUT_S = 180
 MAX_OUTPUT_BYTES = 8 * 1024 * 1024
-# Bound on the `/bin/ps` listing that explains a `killpg` EPERM.
-GROUP_LISTING_TIMEOUT_S = 5.0
 
 
 @dataclass(frozen=True)
@@ -374,7 +372,7 @@ def finish_process(
         raise watch_errors[0]
     killed = timed_out or overflow.is_set()
     if killed:
-        process_group.kill_owned_group(process.pid, GROUP_LISTING_TIMEOUT_S)
+        process_group.kill_owned_group(process.pid, process_group.GROUP_LISTING_TIMEOUT_S)
         exited.wait(10)
     for reader in readers:
         reader.join(timeout=max(0, deadline - time.monotonic()))
@@ -382,7 +380,7 @@ def finish_process(
     # A descendant can overflow after the leader exited: that still kills the group, once.
     if stuck or (overflow.is_set() and not killed):
         timed_out = timed_out or stuck
-        process_group.kill_owned_group(process.pid, GROUP_LISTING_TIMEOUT_S)
+        process_group.kill_owned_group(process.pid, process_group.GROUP_LISTING_TIMEOUT_S)
         for reader in readers:
             reader.join(timeout=2)
     # Reap only now: no signal follows, readers never send one.

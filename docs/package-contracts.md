@@ -262,7 +262,8 @@ leader is unreaped, so a hung probe cannot orphan the child. The kill uses the h
 `package_contracts.py`): macOS answers `EPERM` for a group holding only the exited, unreaped leader,
 which counts as gone when `/bin/ps` shows no live member, so the original timeout or interrupt
 surfaces. `EPERM` with a live member, or one a failed listing cannot explain (chained to it), replaces
-the original exception (#361). The group is signalled only while its
+the original exception, which stays its context (#361). The leader is then left unreaped, so
+`Popen.__exit__` waits on it with no deadline. The group is signalled only while its
 leader is unreaped, so the group id cannot have been reused; if `communicate` already reaped the
 leader, nothing is signalled, the original exception carries a note, and surviving members may
 outlive the gate. Only Python exceptions reach this cleanup: a SIGTERM or SIGHUP the gate does not
