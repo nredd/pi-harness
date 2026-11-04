@@ -11,5 +11,5 @@
     "allowImportingTsExtensions": true,
     "types": ["node"]
   },
-  "files": ["process-lifecycle.test.ts", "render.test.ts", "stack-resources.ts", "transcript-types.ts", "transcript-types.test.ts"]
+  "files": ["process-lifecycle.test.ts", "render.test.ts", "stack-resources.ts", "transcript-types.ts", "transcript-types.test.ts", "vitest.config.ts"]
 }
