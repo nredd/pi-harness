@@ -37,16 +37,16 @@ check-integration:  ## integration units; requires initialized `forks/pi` Gitlin
 	cd integration && uv run --locked pytest tests -p no:cacheprovider
 	$(MAKE) check-probes
 
-check-probes:  ## Probes (process-lifecycle, render, stack-resources) Biome + strict tsc against real sources, then explicit node --test files (no glob)
-	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json integration/probes/process-lifecycle.test.ts integration/probes/render.ts integration/probes/render.test.ts integration/probes/stack-resources.ts integration/providers/auth_guard.mjs integration/providers/auth_transport.mjs integration/providers/auth_runtime_fixture.mjs integration/providers/redirect_anthropic.mjs
+check-probes:  ## Probes (process-lifecycle, render, stack-resources, transcript-types) Biome + strict tsc against real sources, then explicit node --test files (no glob)
+	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json integration/probes/process-lifecycle.test.ts integration/probes/render.ts integration/probes/render.test.ts integration/probes/stack-resources.ts integration/probes/transcript-types.ts integration/probes/transcript-types.test.ts integration/providers/auth_guard.mjs integration/providers/auth_transport.mjs integration/providers/auth_runtime_fixture.mjs integration/providers/redirect_anthropic.mjs
 	node_modules/.bin/tsc -p integration/probes/tsconfig.probes.json
-	cd integration/probes && ../../node_modules/.bin/c8 --all --include=stack-resources.ts --reporter=text --reporter=lcov --reports-dir=coverage/primary node --test transcript-types.test.ts process-lifecycle.test.ts render.test.ts
+	cd integration/probes && NODE_DISABLE_COMPILE_CACHE=1 ../../node_modules/.bin/c8 --all --include=transcript-types.ts --reporter=text --reporter=lcov --reports-dir=coverage/primary node --test transcript-types.test.ts process-lifecycle.test.ts render.test.ts
 
 check-import-audit:  ## Import-audit helper Biome + strict tsc, then node --test against the real TypeScript parser
 	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json scripts/check-biome-paths.mjs scripts/check-biome-paths.test.mjs scripts/import_audit.ts scripts/import_audit.test.ts scripts/router_contract.mjs scripts/run-vitest.ts
 	node --check scripts/router_contract.mjs
 	node_modules/.bin/tsc -p scripts/tsconfig.import-audit.json
-	cd scripts && ../node_modules/.bin/c8 --all --include=import_audit.ts --reporter=text --reporter=lcov --reports-dir=coverage/primary node --test check-biome-paths.test.mjs import_audit.test.ts
+	cd scripts && NODE_DISABLE_COMPILE_CACHE=1 ../node_modules/.bin/c8 --all --include=import_audit.ts --reporter=text --reporter=lcov --reports-dir=coverage/primary node --test check-biome-paths.test.mjs import_audit.test.ts
 
 check-benchmark:  ## benchmarks/comparison unit gate with coverage threshold
 	cd benchmarks/comparison && $(PY_CHECK)

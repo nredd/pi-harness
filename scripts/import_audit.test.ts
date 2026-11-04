@@ -1,11 +1,15 @@
-/** Real-parser tests for the import audit helper: every case goes through `tsgo`, nothing is mocked. */
+/**
+ * Real-parser tests for the import audit helper: every case goes through `tsgo`. The one exception
+ * forces a project lookup miss on a real snapshot, which a real session never produces.
+ */
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import test from "node:test";
+import test, { mock } from "node:test";
 import { fileURLToPath } from "node:url";
+import { API } from "typescript/unstable/sync";
 import { type AuditResult, auditFiles } from "./import_audit.ts";
 
 /** Write `sources` under `<root>/pkg/` and audit them in one batch. */
@@ -106,6 +110,12 @@ test("template with substitutions, sibling templates and computed paths are reje
 	assert.match(found.diagnostics[5] ?? "", /^pkg\/a\.ts:6:10: `import\(\)` type specifier /);
 });
 
+test("parenthesized literal specifiers are unwrapped and classified", () => {
+	const found = one(['const a = import(("a"));', 'const b = require((("b")));', "const c = import((`c`));"].join("\n"));
+	assert.deepEqual(found.specifiers, ["a", "b", "c"]);
+	assert.deepEqual(found.diagnostics, []);
+});
+
 test("nested imports inside functions and classes are found", () => {
 	const found = one('export async function f() {\n\tclass A { async m() { return import("deep"); } }\n}\n');
 	assert.deepEqual(found.specifiers, ["deep"]);
@@ -132,5 +142,49 @@ test("the CLI batches several files and prints one JSON document", () => {
 		});
 	} finally {
 		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a listed file tsgo cannot load fails the whole audit instead of passing it empty", () => {
+	const root = mkdtempSync(join(tmpdir(), "import-audit-missing-"));
+	try {
+		assert.throws(() => auditFiles(root, ["pkg/missing.ts"]), /^Error: tsgo did not load 'pkg\/missing\.ts'$/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a project tsgo did not open fails the audit and still closes the session", () => {
+	const root = mkdtempSync(join(tmpdir(), "import-audit-project-"));
+	const original = API.prototype.updateSnapshot;
+	const snapshots = mock.method(
+		API.prototype,
+		"updateSnapshot",
+		function (this: API, ...args: Parameters<API["updateSnapshot"]>) {
+			const snapshot = original.apply(this, args);
+			mock.method(snapshot, "getProject", () => undefined);
+			return snapshot;
+		},
+	);
+	const closes = mock.method(API.prototype, "close");
+	try {
+		mkdirSync(join(root, "pkg"));
+		writeFileSync(join(root, "pkg", "a.ts"), 'import "a";');
+		assert.throws(() => auditFiles(root, ["pkg/a.ts"]), /^Error: tsgo did not open the project '.*tsconfig\.json'$/);
+		assert.equal(snapshots.mock.callCount(), 1);
+		assert.equal(closes.mock.callCount(), 1);
+	} finally {
+		mock.restoreAll();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("the CLI rejects a missing ROOT or FILE with usage and exit 2", () => {
+	const script = join(dirname(fileURLToPath(import.meta.url)), "import_audit.ts");
+	for (const args of [[], ["root-only"]]) {
+		const run = spawnSync(process.execPath, [script, ...args], { encoding: "utf8" });
+		assert.equal(run.status, 2);
+		assert.equal(run.stdout, "");
+		assert.equal(run.stderr, "usage: node import_audit.ts ROOT FILE...\n");
 	}
 });

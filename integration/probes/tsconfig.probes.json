@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022",
+    "lib": ["ES2023"],
     "module": "ES2022",
     "moduleResolution": "bundler",
     "strict": true,
@@ -10,5 +11,5 @@
     "allowImportingTsExtensions": true,
     "types": ["node"]
   },
-  "files": ["process-lifecycle.test.ts", "render.test.ts", "stack-resources.ts"]
+  "files": ["process-lifecycle.test.ts", "render.test.ts", "stack-resources.ts", "transcript-types.ts", "transcript-types.test.ts"]
 }

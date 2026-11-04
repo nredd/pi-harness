@@ -1,11 +1,12 @@
 # Coverage
 
 Owner scope: the 100% line/function goal covers `subagents`, `plan-mode`, `todo`,
-`session-kit`, `resource-sampler`, `subscription-router`, `preset` and `dev-tools`.
+`session-kit`, `resource-sampler`, `subscription-router`, `preset` and `dev-tools`, plus the
+`runtime-build-tooling`, `workflow-examples` and `import-audit` (`scripts/import_audit.ts`, 0/0 since #321) signals.
 `goal: "100-percent"` is the default and cannot be downgraded relative to an established
 base policy. Eligible package tooling/examples remain pending goal blockers, not hidden source.
-`goal: "report-only"` identifies verification infrastructure (helpers, probes, import-audit,
-inprocess and producer configurations). `goal: "excluded"` records the owner's computer-use
+`goal: "report-only"` identifies verification infrastructure (helpers, probes, inprocess and
+producer configurations). `goal: "excluded"` records the owner's computer-use
 coverage-maintenance exclusion and Python's existing-test-only scope. Both require a nonblank
 `goal_reason`; neither removes any source from the inventory audit. Measured signals outside the
 goal must be report-only and still require complete, valid reports and per-OS references.
@@ -75,8 +76,15 @@ V8 attribution. The preset and todo diagnoses demonstrate false misses and false
 real-loader tests rather than deleting assertions to repair counters. Istanbul credits instrumented
 Vitest transforms, not independent Jiti-only execution. Dev-tools also uses Istanbul, following #195, with all 23 executable modules explicitly included.
 Its static `src/core/index.ts` facade is validated by real source/emitted-ESM instrumentation.
-Other primary producers retain V8. The `node --test` import-audit and probe helpers retain c8 as
-report-only verification signals.
+Other primary producers retain V8. The `node --test` import-audit and probe helpers retain c8,
+run with `NODE_DISABLE_COMPILE_CACHE=1`: a script loaded from Node's compile cache reports only
+function counts (`isBlockCoverage: false`), so an exported `NODE_COMPILE_CACHE` silently drops
+block hits, e.g. the import-audit CLI usage child (#321).
+`import-audit` is in the goal and enforced at 0/0. `probes` measures `integration/probes/transcript-types.ts`,
+the module its `node --test` suite actually imports, and stays report-only until #321's enforced-floor
+goal mode lands. `stack-resources.ts` is a `pi -e` extension loaded only by live scenarios, so it
+sits with the other measurement-pending `probe-boundaries`; before #321 c8 measured it at 0/45
+lines on every OS, an empty measurement rather than a coverage claim.
 
 Every declared `test:bun` command also emits an independent `bun` LCOV signal. Nine Bun signals
 are measured. `preset`, `subscription-router` and `todo` are `enforced` at 0/0 on darwin and linux
