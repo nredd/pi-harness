@@ -9,8 +9,9 @@ import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-a
 import type { Harness } from "@earendil-works/pi-coding-agent/testing";
 import { afterEach, expect, it } from "vitest";
 import planMode from "../../plan-mode/src/plan-mode.js";
+import { NOTIFICATION_HOLD_MS } from "../src/completion-outbox.js";
 import type { AgentRecord } from "../src/types.js";
-import { answer, calls, outcomes, ScenarioSession, spawn, text } from "./helpers/scenario-session.js";
+import { answer, calls, nextEvent, outcomes, ScenarioSession, spawn, text } from "./helpers/scenario-session.js";
 
 let fixture: ScenarioSession;
 afterEach(async () => fixture?.dispose());
@@ -50,13 +51,37 @@ function firstChild(h: Harness): AgentRecord {
   return fixture.record(id);
 }
 
-/** Start the parent with pi-plan-mode admitting `Agent` and the opt-in tools named. */
-async function startPlanning(extra: { factory: ExtensionFactory; path: string }[], planTools: string[]): Promise<Harness> {
+/** Start the parent with pi-plan-mode installed, admitting `Agent`, `steer_subagent` and the opt-in tools named. */
+async function startHost(extra: { factory: ExtensionFactory; path: string }[], planTools: string[]): Promise<Harness> {
   const settingsPath = join(fixture.root, "pi-plan-mode.json");
-  writeFileSync(settingsPath, JSON.stringify({ defaultPlanTools: ["read", "bash", "Agent", ...planTools] }));
-  const h = await fixture.start({ factories: [pi => planMode(pi, { settingsPath, homeDir: fixture.root }), ...extra] });
+  writeFileSync(settingsPath, JSON.stringify({ defaultPlanTools: ["read", "bash", "Agent", "steer_subagent", ...planTools] }));
+  return fixture.start({ factories: [pi => planMode(pi, { settingsPath, homeDir: fixture.root }), ...extra] });
+}
+
+/** The same, already in Plan. */
+async function startPlanning(extra: { factory: ExtensionFactory; path: string }[], planTools: string[]): Promise<Harness> {
+  const h = await startHost(extra, planTools);
   await h.session.prompt("/plan start");
   return h;
+}
+
+/**
+ * One parent turn steering a finished child, which resumes it in the background; resolves once
+ * that run's completion notice has woken the parent and its turn settled.
+ */
+async function steerFinished(h: Harness, agent_id: string) {
+  const completed = fixture.completion();
+  let notified = false;
+  const settled = nextEvent(h, e => {
+    if (e.type === "message_end" && e.message.role === "custom" && e.message.customType === "subagent-notification") notified = true;
+    return notified && e.type === "agent_settled";
+  });
+  h.setResponses([calls({ name: "steer_subagent", args: { agent_id, message: "continue" } }), answer("STEERED"), answer("NOTICED")]);
+  await h.session.prompt("Steer it.");
+  expect(outcomes(h, "steer_subagent").at(-1)?.text).toContain("Agent resumed in background");
+  await completed;
+  fixture.clock.advance(NOTIFICATION_HOLD_MS);
+  await settled;
 }
 
 it("a child started while planning classifies its own extension tools under the parent's Plan policy", async () => {
@@ -115,6 +140,41 @@ it("a resume follows Plan: normal after exit, restricted again after re-entry", 
   expect(childResults(firstChild(h)).at(-1)?.text).toBe("Plan mode blocks mutating tool 'write' in a subagent started while planning.");
   expect(existsSync(join(fixture.cwd, "replanned.txt"))).toBe(false);
   expect(outcomes(h, "Agent").map(o => o.isError)).toEqual([false, false, false]);
+});
+
+it("steer_subagent resumes a finished pre-Plan child under Plan once Plan is on", async () => {
+  fixture = new ScenarioSession();
+  const write = (path: string) => calls({ name: "write", args: { path, content: "x" } });
+  fixture.physical("kid", "child", [write("before-plan.txt"), answer("C1"), write("steered.txt"), answer("C2")]);
+  const h = await startHost([], []);
+
+  // Plan is installed but off: the normal spawn and its write are untouched.
+  h.setResponses([calls(spawn("first", { run_in_background: false })), answer("P1")]);
+  await h.session.prompt("Do the change.");
+  const child = firstChild(h);
+  expect(existsSync(join(fixture.cwd, "before-plan.txt"))).toBe(true);
+
+  await h.session.prompt("/plan start");
+  await steerFinished(h, child.id);
+  expect(childResults(child).at(-1)?.text).toBe("Plan mode blocks mutating tool 'write' in a subagent started while planning.");
+  expect(existsSync(join(fixture.cwd, "steered.txt"))).toBe(false);
+});
+
+it("steer_subagent resumes a child started during Plan with its normal surface after Plan exit", async () => {
+  fixture = new ScenarioSession();
+  const write = (path: string) => calls({ name: "write", args: { path, content: "x" } });
+  fixture.physical("kid", "child", [write("planned.txt"), answer("C1"), write("steered.txt"), answer("C2")]);
+  const h = await startPlanning([], []);
+
+  h.setResponses([calls(spawn("first", { run_in_background: false })), answer("P1")]);
+  await h.session.prompt("Plan the change.");
+  const child = firstChild(h);
+  expect(existsSync(join(fixture.cwd, "planned.txt"))).toBe(false);
+
+  await h.session.prompt("/plan exit");
+  await steerFinished(h, child.id);
+  expect(childResults(child).at(-1)?.text).not.toContain("Plan mode blocks");
+  expect(existsSync(join(fixture.cwd, "steered.txt"))).toBe(true);
 });
 
 it("a worktree child is refused while planning", async () => {
