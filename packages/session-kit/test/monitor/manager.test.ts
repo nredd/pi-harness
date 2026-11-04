@@ -4,13 +4,15 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MonitorError, MonitorManager } from "../../src/monitor/manager.ts";
 import type { MonitorMessage } from "../../src/monitor/types.ts";
 import { alive, tempDir, waitFor } from "./helpers.ts";
-import { STAY } from "./stay.ts";
+import { STAY, STAY_SH } from "./stay.ts";
 
 let tmp: ReturnType<typeof tempDir>;
 let sent: MonitorMessage[];
 let mgr: MonitorManager;
 
 const node = (code: string) => ["node", "-e", code];
+/** A group leader with an in-group descendant (its pid is the first output line) that outlives only while this worker does. */
+const WITH_DESCENDANT = ["sh", "-c", `(${STAY_SH}) & echo $!; wait`];
 
 function make(coalesceMs = 80, killGraceMs = 300): MonitorManager {
 	return new MonitorManager({
@@ -159,7 +161,7 @@ describe("MonitorManager", () => {
 	});
 
 	it("stop kills the whole process group quietly and removes the pidfile", async () => {
-		const info = await mgr.start({ argv: ["sh", "-c", "sleep 300 & echo $!; wait"], name: "w" }, tmp.dir);
+		const info = await mgr.start({ argv: WITH_DESCENDANT, name: "w" }, tmp.dir);
 		await waitFor(() => (mgr.read(info.id)?.lines.length ?? 0) === 1);
 		const grandchild = Number(mgr.read(info.id)?.lines[0]?.text);
 		expect(alive(grandchild)).toBe(true);
@@ -225,7 +227,7 @@ describe("MonitorManager", () => {
 	});
 
 	it("dispose kills every child and group silently and cleans the session dir", async () => {
-		const a = await mgr.start({ argv: ["sh", "-c", "sleep 300 & echo $!; wait"], name: "a" }, tmp.dir);
+		const a = await mgr.start({ argv: WITH_DESCENDANT, name: "a" }, tmp.dir);
 		const b = await mgr.start({ argv: node(STAY), name: "b" }, tmp.dir);
 		await waitFor(() => (mgr.read(a.id)?.lines.length ?? 0) === 1);
 		const grandchild = Number(mgr.read(a.id)?.lines[0]?.text);
