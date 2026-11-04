@@ -58,7 +58,7 @@ import { SubagentScheduler } from "./schedule.js";
 import { resolveStorePath, ScheduleStore } from "./schedule-store.js";
 import { applyAndEmitLoaded, loadSettings, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
 import { hostStartupErrorClass } from "./startup-error.js";
-import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.js";
+import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix, resumeHint } from "./status-note.js";
 import { type AgentConfig, type AgentInvocation, type AgentMentionMode, type AgentRecord, type AgentTombstone, type JoinMode, type NotificationDetails, type SubagentType, type ViewerMarkdownMode, type WidgetMode } from "./types.js";
 import { createMentionProvider, mentionRoster, type TypeInfo } from "./ui/agent-mention.js";
 import { AgentCallView, AgentResultView, type AgentRowLive, keepRowTicking, keepTicking } from "./ui/agent-row.js";
@@ -200,6 +200,7 @@ function formatTaskNotification(record: AgentRecord, showCost = false): NoticeFr
   const costXml = cost > 0 ? `<estimated_cost_usd>${cost.toFixed(4)}</estimated_cost_usd>` : "";
 
   const modelNote = modelSelectionNote(record);
+  const hint = resumeHint(record);
 
   const head = [
     `<task-notification>`,
@@ -207,7 +208,7 @@ function formatTaskNotification(record: AgentRecord, showCost = false): NoticeFr
     record.toolCallId ? `<tool-use-id>${escapeXml(record.toolCallId)}</tool-use-id>` : null,
     record.outputFile ? `<output-file>${escapeXml(record.outputFile)}</output-file>` : null,
     `<status>${escapeXml(status)}</status>`,
-    `<summary>Agent "${escapeXml(record.description)}" ${record.status}${getStatusNote(record.status)}</summary>`,
+    `<summary>Agent "${escapeXml(record.description)}" ${record.status}${getStatusNote(record.status)}${hint ? ` (${hint})` : ""}</summary>`,
     modelNote ? `<model-note>${escapeXml(modelNote)}</model-note>` : null,
   ].filter(Boolean).join('\n');
   const tail = [
@@ -293,6 +294,7 @@ function buildNotificationDetails(record: AgentRecord, resultMaxLen: number, act
     durationMs: record.completedAt ? record.completedAt - record.startedAt : 0,
     outputFile: record.outputFile,
     error: record.error,
+    resumeHint: resumeHint(record) || undefined,
     modelNote: modelSelectionNote(record) || undefined,
     modelTier: record.modelTier,
     resultPreview: record.result

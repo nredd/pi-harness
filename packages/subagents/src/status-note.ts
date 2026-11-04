@@ -80,6 +80,20 @@ export function getForegroundOutcomeNote(status: string): string {
 }
 
 /**
+ * For an `error` run whose session survived, the hint that resuming it
+ * continues the work, naming the agent; "" otherwise. A provider or auth
+ * failure (e.g. a credential helper that failed transiently, #456) ends the
+ * turn but keeps the whole transcript, so the parent should resume the agent
+ * rather than re-spawn it and repay its context. A run that never got a
+ * session has nothing to resume.
+ */
+export function resumeHint(record: Pick<AgentRecord, "id" | "status" | "session">): string {
+  return record.status === "error" && record.session
+    ? `transcript intact; resume agent ${record.id} to continue`
+    : "";
+}
+
+/**
  * Salvaged partial output of a failed run, as a labeled suffix for the error
  * surfaces (or "" if the run produced nothing). `record.result` is bounded to
  * the run's own turns, so this is never a stale earlier answer (#144).
