@@ -9,6 +9,13 @@ import type {
   InputEvent,
   InputSource,
 } from "@earendil-works/pi-coding-agent";
+import {
+  answerPlanModeStateQueries,
+  BLOCKED_MUTATING_TOOLS,
+  blockedShellCallReason,
+  createChildToolPolicy,
+  PLAN_MODE_STATE_VERSION,
+} from "./child-policy.js";
 import { completePlanArguments } from "./command.js";
 import {
   normalizePlanModeCompletion,
@@ -95,15 +102,7 @@ import {
   restorePlanModeState,
 } from "./state.js";
 import { planModeToolAvailability } from "./tool-availability.js";
-import {
-  canSelectToolInPlanMode,
-  classifyPlanModeTool,
-  findBlockedCommandSegment,
-  findBlockedPowerShellCommandSegment,
-  findBlockedSshExecCall,
-  readCommand,
-  SSH_EXEC_TOOL_NAME,
-} from "./tool-policy.js";
+import { canSelectToolInPlanMode, classifyPlanModeTool } from "./tool-policy.js";
 import {
   compareTools,
   filterAvailableSelectedToolNames,
@@ -114,7 +113,6 @@ import { WorkflowMutex, type WorkflowMutexOwner } from "./workflow-mutex.js";
 
 const STATE_ENTRY_TYPE = "plan-mode-state";
 const RECOVERED_RUNTIME_ADMISSION_INPUT_MESSAGE_TYPE = "plan-mode-recovered-input";
-const BLOCKED_MUTATING_TOOLS = new Set(["edit", "write", "update_plan"]);
 const DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
 /** Decline-gate fields cleared whenever a planning workflow starts or ends. */
 const DECLINE_RESET = { declinedPlans: 0, reproposalReview: undefined, planDeclined: false } as const;
@@ -238,6 +236,22 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     clearSaved: (ctx) => {
       if (exitPlanMode(ctx)) ctx.ui.notify("Saved plan cleared.", "info");
     },
+  });
+
+  // Subagent hosts ask before each child run; the live answer covers /reload, /resume and tree moves.
+  answerPlanModeStateQueries(pi, () => {
+    const sessionId = (currentSession as ExtensionContext["sessionManager"] | undefined)?.getSessionId();
+    if (!state.enabled) return { version: PLAN_MODE_STATE_VERSION, active: false, sessionId };
+    return {
+      version: PLAN_MODE_STATE_VERSION,
+      active: true,
+      sessionId,
+      evaluate: createChildToolPolicy({
+        selectedNames: planModePolicyToolNames(),
+        settings,
+        homeDir: dependencies.homeDir,
+      }),
+    };
   });
 
   pi.registerMessageRenderer(PLAN_MESSAGE_TYPE, renderPlanMessage);
@@ -723,41 +737,11 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
           : `Plan mode blocks tool '${event.toolName}' because it is not selected by the Plan policy. Exit Plan mode, then enable it with /plan tools or defaultPlanTools before starting again.`,
       };
     }
-    if (event.toolName === "bash") {
-      const blocked = findBlockedCommandSegment(readCommand(event.input), settings.safeSubcommands, {
-        workingDirectory: ctx.cwd,
-        trustedDirectories: settings.trustedDirectories,
-        homeDir: dependencies.homeDir,
-      });
-      if (blocked !== undefined) {
-        return {
-          block: true,
-          reason: `Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.\nBlocked command: ${blocked}`,
-        };
-      }
-    }
-    if (event.toolName === SSH_EXEC_TOOL_NAME) {
-      const blocked = findBlockedSshExecCall(event.input, settings.safeSubcommands);
-      if (blocked !== undefined) {
-        return {
-          block: true,
-          reason: `Plan mode blocks ssh_exec calls outside its reviewed remote inspection policy.\nBlocked: ${blocked}`,
-        };
-      }
-    }
-    if (event.toolName === "powershell") {
-      const blocked = findBlockedPowerShellCommandSegment(readCommand(event.input), settings.safeSubcommands, {
-        workingDirectory: ctx.cwd,
-        trustedDirectories: settings.trustedDirectories,
-        homeDir: dependencies.homeDir,
-      });
-      if (blocked !== undefined) {
-        return {
-          block: true,
-          reason: `Plan mode blocks PowerShell commands outside its reviewed inspection policy or containing explicitly unsafe syntax.\nBlocked command: ${blocked}`,
-        };
-      }
-    }
+    const blockedShell = blockedShellCallReason(event.toolName, event.input, settings, {
+      workingDirectory: ctx.cwd,
+      homeDir: dependencies.homeDir,
+    });
+    if (blockedShell !== undefined) return { block: true, reason: blockedShell };
   });
 
   pi.on("message_start", (event) => {

@@ -10,6 +10,7 @@ export default defineConfig({
       reportOnFailure: true,
       include: [
         "src/active-implementation-menu.ts",
+        "src/child-policy.ts",
         "src/command.ts",
         "src/completion-tool.ts",
         "src/decline-contract.ts",

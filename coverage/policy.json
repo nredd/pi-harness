@@ -180,7 +180,7 @@
             "src/enterprise-local.ts", "src/env.ts", "src/group-join.ts", "src/home-paths.ts", "src/index.ts",
             "src/invocation-config.ts", "src/memory.ts", "src/mention-clone.ts", "src/mention.ts",
             "src/model-call.ts", "src/model-resolver.ts", "src/model-selection.ts", "src/model-scope.ts", "src/model-tiers.ts", "src/nested-tools.ts",
-            "src/notification-result.ts", "src/output-file.ts", "src/package-resources.ts", "src/process-budget.ts", "src/prompts.ts",
+            "src/notification-result.ts", "src/output-file.ts", "src/package-resources.ts", "src/plan-mode-children.ts", "src/process-budget.ts", "src/prompts.ts",
             "src/quota-admission.ts", "src/resource-loader.ts", "src/schedule-store.ts", "src/schedule.ts", "src/settings.ts",
             "src/skill-loader.ts", "src/stale-ctx.ts", "src/startup-error.ts", "src/status-note.ts", "src/structured-output.ts",
             "src/ui/agent-mention.ts", "src/ui/agent-row.ts", "src/ui/agent-widget.ts",

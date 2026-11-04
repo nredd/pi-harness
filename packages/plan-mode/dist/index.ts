@@ -60,13 +60,67 @@ import {
   snapshotPlanModeSelectedNames,
   updatePlanModeSettings,
   updatePlanModeUi
-} from "./chunks/chunk-N25ESB6Z.ts";
+} from "./chunks/chunk-THD3EC5R.ts";
 
 // src/plan-mode.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
 import { watch } from "node:fs";
 import { basename, dirname } from "node:path";
 import { stripVTControlCharacters as stripVTControlCharacters2 } from "node:util";
+
+// src/child-policy.ts
+var PLAN_MODE_STATE_QUERY = "pi-plan-mode:state-query";
+var PLAN_MODE_STATE_VERSION = 1;
+var BLOCKED_MUTATING_TOOLS = /* @__PURE__ */ new Set(["edit", "write", "update_plan"]);
+function blockedShellCallReason(toolName, input, settings, options) {
+  const shellOptions = { ...options, trustedDirectories: settings.trustedDirectories };
+  if (toolName === "bash") {
+    const blocked = findBlockedCommandSegment(readCommand(input), settings.safeSubcommands, shellOptions);
+    if (blocked !== void 0) {
+      return `Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.
+Blocked command: ${blocked}`;
+    }
+  }
+  if (toolName === SSH_EXEC_TOOL_NAME) {
+    const blocked = findBlockedSshExecCall(input, settings.safeSubcommands);
+    if (blocked !== void 0) {
+      return `Plan mode blocks ssh_exec calls outside its reviewed remote inspection policy.
+Blocked: ${blocked}`;
+    }
+  }
+  if (toolName === "powershell") {
+    const blocked = findBlockedPowerShellCommandSegment(readCommand(input), settings.safeSubcommands, shellOptions);
+    if (blocked !== void 0) {
+      return `Plan mode blocks PowerShell commands outside its reviewed inspection policy or containing explicitly unsafe syntax.
+Blocked command: ${blocked}`;
+    }
+  }
+  return void 0;
+}
+function createChildToolPolicy(options) {
+  const selected = new Set(options.selectedNames);
+  const { settings, homeDir } = options;
+  return ({ toolName, input, cwd, tool }) => {
+    if (BLOCKED_MUTATING_TOOLS.has(toolName)) {
+      return `Plan mode blocks mutating tool '${toolName}' in a subagent started while planning.`;
+    }
+    if (!tool?.sourceInfo?.source) {
+      return `Plan mode blocks tool '${toolName}' in a subagent started while planning because its safe policy metadata is unavailable.`;
+    }
+    const policy = classifyPlanModeTool(tool);
+    if (policy === "blocked" || policy === "user-opt-in" && !selected.has(toolName)) {
+      return `Plan mode blocks tool '${toolName}' in a subagent started while planning because the Plan policy does not admit it.`;
+    }
+    return blockedShellCallReason(toolName, input, settings, { workingDirectory: cwd, homeDir });
+  };
+}
+function answerPlanModeStateQueries(pi, snapshot) {
+  pi.events.on(PLAN_MODE_STATE_QUERY, (data) => {
+    const query = data;
+    if (query?.version !== PLAN_MODE_STATE_VERSION || typeof query.reply !== "function") return;
+    query.reply(snapshot());
+  });
+}
 
 // src/command.ts
 var PLAN_COMMAND_COMPLETIONS = [
@@ -1050,7 +1104,6 @@ var WorkflowMutex = class {
 // src/plan-mode.ts
 var STATE_ENTRY_TYPE = "plan-mode-state";
 var RECOVERED_RUNTIME_ADMISSION_INPUT_MESSAGE_TYPE = "plan-mode-recovered-input";
-var BLOCKED_MUTATING_TOOLS = /* @__PURE__ */ new Set(["edit", "write", "update_plan"]);
 var DEFAULT_TOOLS = ["read", "bash", "edit", "write"];
 var DECLINE_RESET = { declinedPlans: 0, reproposalReview: void 0, planDeclined: false };
 function planMode(pi, dependencies = {}) {
@@ -1062,7 +1115,7 @@ function planMode(pi, dependencies = {}) {
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
     if (!interactiveUiPromise) {
-      interactiveUiPromise = import("./chunks/interactive-ui-OQD4WDF2.ts").catch((error) => {
+      interactiveUiPromise = import("./chunks/interactive-ui-OCQTYYJ3.ts").catch((error) => {
         interactiveUiPromise = void 0;
         throw error;
       });
@@ -1133,6 +1186,20 @@ function planMode(pi, dependencies = {}) {
     clearSaved: (ctx) => {
       if (exitPlanMode(ctx)) ctx.ui.notify("Saved plan cleared.", "info");
     }
+  });
+  answerPlanModeStateQueries(pi, () => {
+    const sessionId = currentSession?.getSessionId();
+    if (!state.enabled) return { version: PLAN_MODE_STATE_VERSION, active: false, sessionId };
+    return {
+      version: PLAN_MODE_STATE_VERSION,
+      active: true,
+      sessionId,
+      evaluate: createChildToolPolicy({
+        selectedNames: planModePolicyToolNames(),
+        settings,
+        homeDir: dependencies.homeDir
+      })
+    };
   });
   pi.registerMessageRenderer(PLAN_MESSAGE_TYPE, renderPlanMessage);
   pi.registerTool({
@@ -1555,44 +1622,11 @@ function planMode(pi, dependencies = {}) {
         reason: workflowDesiredToolNames().has(event.toolName) ? `Plan mode blocks tool '${event.toolName}' because it was not available when the active Plan workflow froze its tool policy. Exit Plan mode, then start again after the tool is available.` : `Plan mode blocks tool '${event.toolName}' because it is not selected by the Plan policy. Exit Plan mode, then enable it with /plan tools or defaultPlanTools before starting again.`
       };
     }
-    if (event.toolName === "bash") {
-      const blocked = findBlockedCommandSegment(readCommand(event.input), settings.safeSubcommands, {
-        workingDirectory: ctx.cwd,
-        trustedDirectories: settings.trustedDirectories,
-        homeDir: dependencies.homeDir
-      });
-      if (blocked !== void 0) {
-        return {
-          block: true,
-          reason: `Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.
-Blocked command: ${blocked}`
-        };
-      }
-    }
-    if (event.toolName === SSH_EXEC_TOOL_NAME) {
-      const blocked = findBlockedSshExecCall(event.input, settings.safeSubcommands);
-      if (blocked !== void 0) {
-        return {
-          block: true,
-          reason: `Plan mode blocks ssh_exec calls outside its reviewed remote inspection policy.
-Blocked: ${blocked}`
-        };
-      }
-    }
-    if (event.toolName === "powershell") {
-      const blocked = findBlockedPowerShellCommandSegment(readCommand(event.input), settings.safeSubcommands, {
-        workingDirectory: ctx.cwd,
-        trustedDirectories: settings.trustedDirectories,
-        homeDir: dependencies.homeDir
-      });
-      if (blocked !== void 0) {
-        return {
-          block: true,
-          reason: `Plan mode blocks PowerShell commands outside its reviewed inspection policy or containing explicitly unsafe syntax.
-Blocked command: ${blocked}`
-        };
-      }
-    }
+    const blockedShell = blockedShellCallReason(event.toolName, event.input, settings, {
+      workingDirectory: ctx.cwd,
+      homeDir: dependencies.homeDir
+    });
+    if (blockedShell !== void 0) return { block: true, reason: blockedShell };
   });
   pi.on("message_start", (event) => {
     if (state.enabled && event.message.role === "user" && messageTextContent(event.message).trim() === FINALIZE_PLAN_PROMPT) {
