@@ -334,9 +334,10 @@ Required tool smoke (agent tool-call syntax; counts from the owner's recorded se
 
 Helper-upgrade/restart check, owner only: with all other desktop work paused, run
 `PI_COMPUTER_USE_LIVE=1 npm run test:macos-live` from the source package after the reviewed upgrade.
-It restarts the shared helper and drives disposable fixture windows, activation and a restorable
-plain-text clipboard round trip. It must reject pre-restart refs rather than aliasing them; confirm
-fresh discovery works afterwards. Recheck both System Settings privacy entries and absence of new
+It starts and restarts its own helper instance on an isolated socket in the test home, never the
+shared helper daemon, and drives disposable fixture windows, activation and a restorable plain-text
+clipboard round trip. It must reject pre-restart refs rather than aliasing them; confirm fresh
+discovery works afterwards. Recheck both System Settings privacy entries and absence of new
 TCC prompts after the restart. Do not run it against active/valuable work or bypass its safeguards.
 
 All live checks above are **NOT RUN** by the implementation agent. Record tool/scenario outcomes,
