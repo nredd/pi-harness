@@ -413,14 +413,12 @@
       "owned": ["transcript-types.ts"],
       "exclusions": [],
       "status": "measured",
-      "goal": "report-only",
-      "goal_reason": "Owner classifies verification probes as report-only, outside the production-package goal.",
-      "note": "Node verification utility imported and executed by `transcript-types.test.ts` under `check-probes`. Enforcement waits on the enforced-floor goal mode: https://github.com/nredd/pi-harness/issues/321.",
+      "goal": "ratchet",
+      "goal_reason": "Owner decision on #321: verification infrastructure stays outside the eight-package zero target, but its measured `primary` uncovered counts are an enforced downward ratchet per OS.",
+      "note": "Node verification utility imported and executed by `transcript-types.test.ts` under `check-probes`.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "enforcement": "report-only",
-          "reason": "Verification probe retained for diagnostics, not a production-package 100-percent target.",
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
           "reporters": ["text", "lcov"]
         }

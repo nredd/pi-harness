@@ -12,7 +12,14 @@ import pytest
 from pydantic import ValidationError
 from test_coverage_accounting import policy, setup_report
 
-from coverage_accounting import Policy, account, check_ratchet
+from coverage_accounting import Counts, Policy, account, check_ratchet, inventory
+
+ROOT = Path(__file__).resolve().parents[2]
+
+# Uncovered (lines, functions) measured on `primary` by CI run 41767456760 (darwin) and 41773210529 (linux).
+VERIFICATION_FLOORS = {
+    "probes": {"darwin": (0, 0), "linux": (0, 0)},
+}
 
 
 def report_only_policy() -> Policy:
@@ -234,3 +241,69 @@ def test_goal_moves_that_loosen_are_rejected(base_goal: str, new_goal: str) -> N
         current["enforcement_changes"] = [{"package": "example", "signal": "primary", "reason": "Loosening."}]
     with pytest.raises(ValueError, match="Cannot remove package from global goal"):
         check_ratchet(Policy.model_validate(current), Policy.model_validate(base))
+
+
+def verification_report(files: list[Path], lines: int, functions: int) -> str:
+    """Render LCOV for real owned source with an exact uncovered line and function total.
+
+    Parameters:
+        files (list[Path]): Absolute owned source paths; the first carries every miss.
+        lines (int): Uncovered executable lines to report.
+        functions (int): Uncovered functions to report.
+    Returns:
+        str: One consistent record per file, each with one covered line and function.
+    Raises:
+        None.
+    """
+    records = []
+    for index, path in enumerate(files):
+        missed_lines, missed_functions = (lines, functions) if index == 0 else (0, 0)
+        names = [f"f{n}" for n in range(missed_functions + 1)]
+        records.append(
+            "\n".join(
+                [f"SF:{path}"]
+                + [f"FN:1,{name}" for name in names]
+                + [f"FNDA:{0 if n else 1},{name}" for n, name in enumerate(names)]
+                + [f"FNF:{len(names)}", "FNH:1"]
+                + [f"DA:{line},{0 if line > 1 else 1}" for line in range(1, missed_lines + 2)]
+                + [f"LF:{missed_lines + 1}", "LH:1", "end_of_record"]
+            )
+        )
+    return "TN:\n" + "\n".join(records) + "\n"
+
+
+@pytest.mark.parametrize("runner_os", ["darwin", "linux"])
+@pytest.mark.parametrize("name", sorted(VERIFICATION_FLOORS))
+def test_verification_primary_signals_enforce_measured_floors(
+    tmp_path: Path, name: str, runner_os: str
+) -> None:
+    """Fail the real `probes` declaration one counter above their measured floor.
+
+    Parameters:
+        tmp_path (Path): Disposable reports root measured against the real source inventory.
+        name (str): Verification package from the committed policy.
+        runner_os (str): Measured OS whose floor is exercised.
+    Returns:
+        None: At the floor accounting passes; one extra line or function fails the budget.
+    Raises:
+        AssertionError: A regression is report-only, or the floor drifts from the CI measurement.
+    """
+    real = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
+    package = real.packages[name]
+    signal = package.signals["primary"]
+    cfg = real.model_copy(update={"packages": {name: package}})
+    files = [ROOT / package.root / path for path in sorted(inventory(ROOT, package))]
+    report = tmp_path / package.root / signal.report
+    report.parent.mkdir(parents=True)
+    lines, functions = VERIFICATION_FLOORS[name][runner_os]
+    for extra_lines, extra_functions in ((0, 0), (1, 0), (0, 1)):
+        report.write_text(verification_report(files, lines + extra_lines, functions + extra_functions))
+        errors = [e for e in account(ROOT, cfg, runner_os, tmp_path)[1] if e.startswith(f"{name}/primary:")]
+        if extra_lines or extra_functions:
+            measured = f"{lines + extra_lines} lines, {functions + extra_functions} functions"
+            assert errors == [f"{name}/primary: Budget exceeded: {measured}"]
+        else:
+            assert errors == []
+    assert package.goal == "ratchet"
+    assert signal.enforcement == "enforced"
+    assert signal.max_uncovered[runner_os] == Counts(lines=lines, functions=functions)
