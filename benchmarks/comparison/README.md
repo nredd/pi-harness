@@ -243,7 +243,9 @@ uv build
 ```
 
 `make all` formats, lints with `--ignore-noqa`, type-checks with ty, and runs pytest with branch
-coverage. Non-native unit tests stub the historical CLI versions and plan-mode configuration.
+coverage. The gate is 100% of statements and branches (`fail_under = 100`), with no omissions or
+exclusion pragmas. The monorepo gate writes LCOV to `coverage/python/lcov.info` for the root
+accounting (`python-benchmarks` in `coverage/policy.json`, see [coverage](../../docs/coverage.md)). Non-native unit tests stub the historical CLI versions and plan-mode configuration.
 The `native_runtime` test uses the real pinned Codex 0.154.0 sandbox without making model calls;
 it is included in the monorepo gate and fails if that prerequisite is missing. Follow the isolated
 Codex install/environment recipe in the [root README](../../README.md). The monorepo gate

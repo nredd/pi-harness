@@ -11,6 +11,7 @@ import json
 import re
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -168,7 +169,7 @@ def test_python_signals_match_the_shared_python_gate() -> None:
     python = {name: pkg for name, pkg in policy["packages"].items() if name.startswith("python-")}
     for name, package in python.items():
         if name == "python-benchmarks":
-            continue
+            continue  # Its own `check-benchmark` recipe, pinned below.
         primary = package["signals"]["primary"]
         assert f"--cov-report=lcov:{primary['report']}" in recipe, name
         source = sources[package["root"]]
@@ -176,6 +177,42 @@ def test_python_signals_match_the_shared_python_gate() -> None:
         assert primary["skip_hosts"] == ["wsl2"], name
         assert primary["producer"] == "coverage.py", name
     assert set(sources) == {"scripts", "integration"}
+
+
+def test_benchmark_signal_matches_its_check_benchmark_producer() -> None:
+    """Bind `python-benchmarks` to the `check-benchmark` recipe, its 100% gate and its macOS-only cell.
+
+    Parameters:
+        None.
+    Returns:
+        None: The recipe writes the policy's LCOV path, coverage.py keeps branch coverage at 100% with no
+            omissions, and the signal names its producer gate and skips every host without one.
+    Raises:
+        AssertionError: The recipe, threshold, exclusions or host scope drift from the policy.
+    """
+    package = json.loads((ROOT / "coverage/policy.json").read_text())["packages"]["python-benchmarks"]
+    primary = package["signals"]["primary"]
+    recipe = subprocess.run(
+        ["make", "--no-print-directory", "-n", "check-benchmark"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert f"cd {package['root']} && uv run --locked pytest" in recipe
+    assert f"--cov-report=lcov:{primary['report']}" in recipe
+    assert "--cov " in recipe
+    project = tomllib.loads((ROOT / package["root"] / "pyproject.toml").read_text())["tool"]["coverage"]
+    assert project["run"] == {"branch": True, "source": ["pi_harness_benchmark"]}
+    assert project["report"]["fail_under"] == 100
+    assert not {"omit", "exclude_lines", "exclude_also"} & (project["run"].keys() | project["report"].keys())
+    assert package["owned"] == ["src/pi_harness_benchmark/*.py"]
+    assert package["exclusions"] == []
+    assert "goal" not in package
+    assert primary["producer"] == "coverage.py"
+    assert primary["gate"] == "check-benchmark"
+    assert primary["skip_hosts"] == ["linux", "wsl2"]
+    assert primary["max_uncovered"] == {"darwin": {"lines": 0, "functions": 0}}
 
 
 def test_declared_bun_commands_delegate_coverage_to_the_launcher() -> None:

@@ -100,8 +100,9 @@ so check `powerd` sleep/wake logs when real-time assertions overrun. Do not rela
 - `check-providers`: Biome, strict `tsc` and Vitest (V8 coverage, `integration/providers/vitest.config.ts`) for the
   synthetic providers (`faux.ts`, `usage_fixture.ts`, `extension_inventory.ts`) and the auth preloads (`redirect_anthropic.mjs`,
   `auth_guard.mjs`, `auth_transport.mjs`, `auth_runtime_fixture.mjs`), against recording registries and a loopback mock, enforced at 0/0
-- `check-benchmark`: ruff, ty, all unit tests with the 90% coverage threshold for
-  `benchmarks/comparison`, including the `native_runtime` Codex sandbox test (see below)
+- `check-benchmark`: ruff, ty, all unit tests with the 100% statement and branch coverage threshold for
+  `benchmarks/comparison`, including the `native_runtime` Codex sandbox test (see below), writing the
+  `python-benchmarks` LCOV for `check-coverage`
 
 The `native_runtime` test runs the real Codex sandbox, so `check-benchmark` needs exactly
 `@openai/codex@0.154.0` (the historical benchmark pin) first on `PATH`, on macOS (Seatbelt). It

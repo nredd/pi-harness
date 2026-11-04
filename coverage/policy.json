@@ -342,11 +342,18 @@
       "root": "benchmarks/comparison",
       "owned": ["src/pi_harness_benchmark/*.py"],
       "exclusions": [],
-      "status": "pending",
-      "goal": "excluded",
-      "goal_reason": "Historical Python benchmark keeps its existing 90-percent combined coverage gate, outside the owned TypeScript package goal.",
-      "note": "Existing pytest-cov gate remains unchanged; no independent LCOV claim.",
-      "signals": {}
+      "status": "measured",
+      "note": "pytest-cov LCOV from `make check-benchmark` (`branch = true`, `fail_under = 100`). macOS only: its `native_runtime` test needs Seatbelt. Path-gated on pull requests (#315), where the plan's `skipped_gates` reports it NOT RUN.",
+      "signals": {
+        "primary": {
+          "report": "coverage/python/lcov.info",
+          "producer": "coverage.py",
+          "gate": "check-benchmark",
+          "skip_hosts": ["linux", "wsl2"],
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 } },
+          "reporters": ["text", "lcov"]
+        }
+      }
     },
     "providers": {
       "root": "integration/providers",

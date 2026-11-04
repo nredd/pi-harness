@@ -7,6 +7,7 @@ References:
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -513,6 +514,78 @@ def test_parse_lcov_rejects_malformed_coveragepy_functions(mutation: tuple[str, 
         parse_lcov(text, bare_sources=True)
 
 
+def test_parse_lcov_reads_a_coveragepy_module_without_functions_as_zero_functions() -> None:
+    """Accept coverage.py 7.17.1's record for a module with no functions, which carries no FN totals.
+
+    Parameters:
+        None.
+    Returns:
+        None: The real `benchmarks/comparison` `__main__.py` record parses with zero functions under
+            coverage.py, and stays a truncated report for every other producer.
+    Raises:
+        AssertionError: The record is rejected for coverage.py or accepted for another producer.
+    """
+    text = "\n".join(
+        [
+            "SF:src/pi_harness_benchmark/__main__.py",
+            "DA:7,1",
+            "DA:9,1",
+            "DA:11,1",
+            "DA:12,0",
+            "LF:4",
+            "LH:3",
+            "BRDA:11,0,jump to line 12,1",
+            "BRDA:11,0,exit the module,1",
+            "BRF:2",
+            "BRH:2",
+            "end_of_record",
+            "",
+        ]
+    )
+    counters = parse_lcov(text, bare_sources=True)["src/pi_harness_benchmark/__main__.py"]
+    assert (counters.lines, counters.uncovered_lines, counters.functions, counters.uncovered_functions) == (
+        4,
+        1,
+        0,
+        0,
+    )
+    assert (counters.branches, counters.uncovered_branches) == (2, 0)
+    # Other producers keep strict numbered branches and required FN totals.
+    with pytest.raises(ValueError, match="Malformed branch counter"):
+        parse_lcov(text)
+    unbranched = text.replace("BRDA:11,0,jump to line 12,1\nBRDA:11,0,exit the module,1\nBRF:2\nBRH:2\n", "")
+    with pytest.raises(ValueError, match="Missing LCOV totals"):
+        parse_lcov(unbranched)
+    # A record with function rows still needs coverage.py's own totals.
+    with pytest.raises(ValueError, match="Missing LCOV totals"):
+        parse_lcov(text.replace("LF:4", "FN:9,12,main\nFNDA:1,main\nLF:4"), bare_sources=True)
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        "BRDA:3,0,,1",
+        "BRDA:3,0, ,1",
+        "BRDA:x,0,jump to line 4,1",
+        "BRDA:3,0,jump to line 4",
+        "BRDA:3,0,jump,x",
+    ],
+)
+def test_parse_lcov_rejects_malformed_coveragepy_branches(row: str) -> None:
+    """Keep named coverage.py branches strict about location, name and hit count.
+
+    Parameters:
+        row (str): A corrupted coverage.py branch row.
+    Returns:
+        None: Every corruption is rejected.
+    Raises:
+        AssertionError: A corrupted branch is accepted.
+    """
+    text = "\n".join(["SF:a.py", "DA:3,1", "LF:1", "LH:1", row, "end_of_record", ""])
+    with pytest.raises(ValueError, match="branch"):
+        parse_lcov(text, bare_sources=True)
+
+
 def test_skipped_host_reports_not_run_but_other_hosts_still_fail_closed(tmp_path: Path) -> None:
     """Scope a signal to hosts that run its producer without loosening anyone else.
 
@@ -548,6 +621,102 @@ def test_ratchet_rejects_adding_skipped_hosts() -> None:
     with pytest.raises(ValueError, match="Cannot add skipped hosts"):
         check_ratchet(current, base)
     check_ratchet(base, current)
+
+
+def test_skipped_producer_gate_reports_not_run_but_a_run_gate_requires_its_report(tmp_path: Path) -> None:
+    """Report a path-gated signal NOT RUN only on a run whose plan skipped its producer gate.
+
+    Parameters:
+        tmp_path (Path): Disposable source root with no LCOV report.
+    Returns:
+        None: A skipped gate reports nothing; an unskipped gate fails on the missing report.
+    Raises:
+        AssertionError: A skipped gate is gated, or a run gate's missing report passes.
+    """
+    setup_report(tmp_path)
+    (tmp_path / "packages/example/coverage/lcov.info").unlink()
+    gated = policy()
+    gated.packages["example"].signals["primary"].gate = "check-benchmark"
+    assert account(tmp_path, gated, skipped_gates=frozenset({"check-benchmark"})) == ([], [])
+    _, errors = account(tmp_path, gated)
+    missing = tmp_path / "packages/example/coverage/lcov.info"
+    assert errors == [f"example/primary: [Errno 2] No such file or directory: '{missing}'"]
+
+
+@pytest.mark.parametrize(
+    "skipped", [frozenset({"check-benchmrk"}), frozenset({"check-benchmark", "check-ts"})]
+)
+def test_skipped_gates_reject_a_gate_no_signal_declares(tmp_path: Path, skipped: frozenset[str]) -> None:
+    """Fail closed on a skipped-gate token no policy signal declares, so a typo cannot skip nothing silently.
+
+    Parameters:
+        tmp_path (Path): Disposable source root with a passing report.
+        skipped (frozenset[str]): Skipped gates holding at least one undeclared token.
+    Returns:
+        None: Accounting refuses the whole gate list before reading any report.
+    Raises:
+        AssertionError: An undeclared token is ignored.
+    """
+    setup_report(tmp_path)
+    gated = policy()
+    gated.packages["example"].signals["primary"].gate = "check-benchmark"
+    unknown = sorted(skipped - {"check-benchmark"})
+    with pytest.raises(ValueError, match=re.escape(f"Skipped gates no policy signal declares: {unknown}")):
+        account(tmp_path, gated, skipped_gates=skipped)
+
+
+def test_skipped_gates_cli_reports_not_run(tmp_path: Path) -> None:
+    """Drive `--skipped-gates` through the real command line against a gated signal with no report.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root with no LCOV report.
+    Returns:
+        None: The skipped run exits 0 with a NOT RUN line; the same run without the flag fails.
+    Raises:
+        AssertionError: The flag is ignored or the missing report passes without it.
+    """
+    setup_report(tmp_path)
+    (tmp_path / "packages/example/coverage/lcov.info").unlink()
+    gated = policy().model_dump(mode="json")
+    gated["packages"]["example"]["signals"]["primary"]["gate"] = "check-benchmark"
+    (tmp_path / "coverage").mkdir()
+    (tmp_path / "coverage/policy.json").write_text(json.dumps(gated))
+    git_read(tmp_path, ["init", "-q", "--template="])
+    command = [sys.executable, str(SCRIPT), "--root", str(tmp_path), "--measure", "--os", "linux"]
+    skipped = subprocess.run(
+        [*command, "--skipped-gates", "check-benchmark"], capture_output=True, text=True, check=False
+    )
+    assert skipped.returncode == 0, skipped.stderr
+    assert (
+        "NOT RUN: 'example/primary': this run skipped its producer gate 'check-benchmark'" in skipped.stderr
+    )
+    required = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert required.returncode == 1
+    assert "example/primary: [Errno 2] No such file or directory" in required.stderr
+    typo = subprocess.run(
+        [*command, "--skipped-gates", "check-benchmrk"], capture_output=True, text=True, check=False
+    )
+    assert typo.returncode == 1
+    assert "Skipped gates no policy signal declares: ['check-benchmrk']" in typo.stderr
+
+
+def test_ratchet_rejects_changing_a_signal_producer_gate() -> None:
+    """Keep `gate` from becoming a way to exempt a signal that already has a base.
+
+    Parameters:
+        None.
+    Returns:
+        None: Adding, changing or dropping the gate against the base policy fails.
+    Raises:
+        AssertionError: A changed producer gate is accepted.
+    """
+    base, current = policy(), policy()
+    current.packages["example"].signals["primary"].gate = "check-benchmark"
+    with pytest.raises(ValueError, match="Cannot change a signal's producer gate"):
+        check_ratchet(current, base)
+    with pytest.raises(ValueError, match="Cannot change a signal's producer gate"):
+        check_ratchet(base, current)
+    check_ratchet(current, current)
 
 
 def test_parse_lcov_keeps_commas_in_lcov_style_function_names() -> None:

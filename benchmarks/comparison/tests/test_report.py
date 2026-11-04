@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -27,7 +28,14 @@ from pi_harness_benchmark.models import (
     StageName,
     TokenUsage,
 )
-from pi_harness_benchmark.report import build_report, load_results, write_report
+from pi_harness_benchmark.report import (
+    _identity_limitations,
+    _matched_identity_limitations,
+    _pair_winner,
+    build_report,
+    load_results,
+    write_report,
+)
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -552,3 +560,116 @@ def test_write_and_load_results(tmp_path: Path) -> None:
     assert "Matched native - Pi median deltas" in markdown
     assert "Auxiliary accounting limitation" in markdown
     assert report["decision_rule"] in markdown
+
+
+def _identities() -> dict[str, dict[str, set[str]]]:
+    return {
+        harness.value: {"providers": set(), "models": set(), "reasoning_levels": set()}
+        for harness in Harness
+    }
+
+
+def test_identity_limitations_accept_codex_provider_alias_and_flag_mismatches(
+    tmp_path: Path,
+) -> None:
+    codex = _result(
+        tmp_path,
+        harness=Harness.CODEX,
+        provider=Provider.OPENAI,
+        repetition=1,
+        wall=10,
+        tokens=100,
+        passed=True,
+    )
+    codex.actual_metadata.provider = "openai-codex"
+    identities = _identities()
+
+    assert _identity_limitations(codex, Provider.OPENAI, identities) == []
+    assert identities["codex"]["providers"] == {"openai-codex"}
+
+    codex.actual_metadata.provider = None
+    codex.actual_metadata.reasoning_level = None
+    identities = _identities()
+
+    limitations = _identity_limitations(codex, Provider.OPENAI, identities)
+
+    run_id = codex.spec.run_id
+    assert limitations == [
+        f"Exact actual identity absent for run '{run_id}'",
+        f"Actual provider mismatch for run '{run_id}': 'None'",
+    ]
+    assert identities["codex"] == {
+        "providers": set(),
+        "models": {"gpt-5.6-terra"},
+        "reasoning_levels": set(),
+    }
+
+
+def test_matched_identity_blocks_reasoning_mismatch_and_warns_when_unknown(
+    tmp_path: Path,
+) -> None:
+    pi_result = _result(
+        tmp_path,
+        harness=Harness.PI_OPENAI,
+        provider=Provider.OPENAI,
+        repetition=1,
+        wall=10,
+        tokens=100,
+        passed=True,
+    )
+    codex = _result(
+        tmp_path,
+        harness=Harness.CODEX,
+        provider=Provider.OPENAI,
+        repetition=1,
+        wall=10,
+        tokens=100,
+        passed=True,
+    )
+    codex.actual_metadata.reasoning_level = "high"
+
+    blocking, warnings = _matched_identity_limitations(pi_result, codex)
+
+    assert blocking == [
+        f"Actual reasoning mismatch for matched runs '{pi_result.spec.run_id}' and "
+        f"'{codex.spec.run_id}'"
+    ]
+    assert warnings == []
+
+    codex.actual_metadata.reasoning_level = None
+
+    blocking, warnings = _matched_identity_limitations(pi_result, codex)
+
+    assert blocking == []
+    assert warnings == [
+        f"Actual reasoning parity unavailable for matched runs '{pi_result.spec.run_id}' "
+        f"and '{codex.spec.run_id}'"
+    ]
+
+
+def _summary(success_rate: float, median: float | None) -> dict[str, Any]:
+    return {
+        "success_rate": {"value": success_rate},
+        "successful_only": {"combined_tokens": {"available": median is not None, "median": median}},
+    }
+
+
+@pytest.mark.parametrize(
+    ("pi", "native", "winner"),
+    [
+        (_summary(1.0, 100), _summary(1.0, None), "no-dominant-winner"),
+        (_summary(1.0, 100), _summary(1.0, 200), "pi-openai"),
+        (_summary(1.0, 200), _summary(1.0, 100), "codex"),
+        (_summary(1.0, 200), _summary(0.5, 100), "no-dominant-winner"),
+    ],
+)
+def test_pair_winner_needs_available_tokens_and_dominance(
+    pi: dict[str, Any], native: dict[str, Any], winner: str
+) -> None:
+    summaries = {"pi-openai": pi, "codex": native}
+    members = (Harness.PI_OPENAI, Harness.CODEX)
+
+    assert (
+        _pair_winner(complete=True, eligible=True, members=members, summaries=summaries) == winner
+    )
+    assert _pair_winner(complete=False, eligible=True, members=members, summaries=summaries) is None

@@ -1316,7 +1316,9 @@ def _planning_quality(
     ), []
 
 
-def _auxiliary_accounting(harness: Harness, paths: list[Path]) -> AuxiliaryUsageAccounting:
+def _auxiliary_accounting(
+    harness: Harness, paths: list[Path]
+) -> tuple[AuxiliaryUsageAccounting, list[str]]:
     """Describe included auxiliary usage and native completeness limits.
 
     Parameters:
@@ -1324,7 +1326,8 @@ def _auxiliary_accounting(harness: Harness, paths: list[Path]) -> AuxiliaryUsage
         paths (list[Path]): Redacted session paths.
 
     Returns:
-        AuxiliaryUsageAccounting: Explicit auxiliary evidence and limitation.
+        tuple[AuxiliaryUsageAccounting, list[str]]: Explicit auxiliary evidence, and the
+            per-format limitation every native format carries.
     """
     if harness in {Harness.PI_ANTHROPIC, Harness.PI_OPENAI}:
         auxiliary = [event for event in parse_pi_events(paths) if event.auxiliary]
@@ -1369,7 +1372,7 @@ def _auxiliary_accounting(harness: Harness, paths: list[Path]) -> AuxiliaryUsage
         categories=sorted({event.category or "unknown" for event in auxiliary}),
         full_accounting_established=False,
         limitation=limitation,
-    )
+    ), [limitation]
 
 
 def analyze_session(
@@ -1422,9 +1425,8 @@ def analyze_session(
         texts,
         window.transition_at,
     )
-    auxiliary_usage = _auxiliary_accounting(harness, paths)
-    if auxiliary_usage.limitation:
-        warnings.append(auxiliary_usage.limitation)
+    auxiliary_usage, auxiliary_warnings = _auxiliary_accounting(harness, paths)
+    warnings.extend(auxiliary_warnings)
     if usage is None:
         warnings.append("Native token usage is unavailable")
     input_tokens = usage.input_tokens if usage is not None else None

@@ -573,7 +573,7 @@ def test_input_flags_fail_closed(repo: Path, case: str) -> None:
 PULL_REQUEST = "pull_request"
 PUSH = "push"
 ALL_NATIVE_GATES = ("check-ts", "check-scripts", "check-integration")
-# The macOS `python` shard also carries the benchmark steps, which still read `benchmark_inputs` themselves.
+# The macOS `python` shard also carries the benchmark steps, which read the plan's `skipped_gates`.
 MAC_GATES = (*ALL_NATIVE_GATES, "check-benchmark")
 WSL_GATES = ("check-ts", "check-probes", "check-providers", "check-import-audit")
 
@@ -854,6 +854,7 @@ def test_write_github_output_publishes_one_line_plan_json(repo: Path, tmp_path: 
                 "guest": "macos",
                 "gates": "check-ts",
                 "workspaces": workspaces,
+                "skipped_gates": "",
             },
             {
                 "os": "macos-14",
@@ -862,10 +863,12 @@ def test_write_github_output_publishes_one_line_plan_json(repo: Path, tmp_path: 
                 "guest": "macos",
                 "gates": "check-scripts check-integration check-benchmark",
                 "workspaces": "",
+                "skipped_gates": "check-benchmark",
             },
         ],
         "guest": "macos",
         "coverage_os": "darwin",
+        "skipped_gates": "check-benchmark",
     }
     assert plan["contracts (macos-14)"]["shards"] == []
     assert (plan["contracts (macos-14)"]["guest"], plan["contracts (macos-14)"]["coverage_os"]) == ("", "")
@@ -1385,3 +1388,50 @@ def test_main_fails_when_the_shard_plan_cannot_be_built(
     assert run_cli(repo, output, "--event", PUSH) == 1
     assert "Cannot read npm workspaces" in caplog.text
     assert output.read_text(encoding="utf-8") == ""
+
+
+@pytest.mark.parametrize(
+    ("files", "event", "skips"),
+    [
+        ({"integration/harness/stack.py": "x\n"}, PULL_REQUEST, True),
+        ({"benchmarks/comparison/tests/test_cli.py": "x\n"}, PULL_REQUEST, False),
+        ({"integration/harness/stack.py": "x\n"}, PUSH, False),
+    ],
+)
+def test_plan_skips_the_benchmark_gate_only_on_a_pull_request_without_its_inputs(
+    repo: Path, files: dict[str, str], event: str, skips: bool
+) -> None:
+    """Publish one skip decision that the macOS shard steps and the fan-in accounting both read.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        files (dict[str, str]): Committed change.
+        event (str): Triggering event name.
+        skips (bool): Whether `check-benchmark` reports NOT RUN on this run.
+    """
+    plan = plan_change(repo, files, event)
+    expected = ("check-benchmark",) if skips else ()
+    mac = plan["owned (macos-14)"]
+    assert mac.gates == MAC_GATES
+    assert mac.skipped_gates == expected
+    assert {shard.name: shard.skipped_gates for shard in mac.shards} == {"ts": (), "python": expected}
+    # A cell never skips a gate it does not plan: Ubuntu and WSL have no benchmark producer at all.
+    for os_name in ("ubuntu-24.04", "wsl2"):
+        cell = plan[f"owned ({os_name})"]
+        assert cell.skipped_gates == ()
+        assert all(shard.skipped_gates == () for shard in cell.shards)
+
+
+def test_full_verification_runs_every_path_gated_gate() -> None:
+    """Skip nothing on a `workflow_dispatch` release verification, which has no diff to read."""
+    plan = ci_paths.plan_cells(ci_paths.full_classification(), "workflow_dispatch")
+    assert all(cell.skipped_gates == () for cell in plan.values())
+    assert set(ci_paths.PATH_GATED_GATES.values()) <= set(ci_paths.INPUT_CLASSES)
+    # Accounting rejects a skipped gate no policy signal declares, so every path-gated gate needs its signal.
+    policy = json.loads((ci_paths.REPO_ROOT / "coverage/policy.json").read_text())
+    declared = {
+        signal.get("gate")
+        for package in policy["packages"].values()
+        for signal in package["signals"].values()
+    }
+    assert set(ci_paths.PATH_GATED_GATES) <= declared
