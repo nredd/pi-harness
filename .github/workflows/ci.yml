@@ -44,10 +44,12 @@ jobs:
           # A fork PR never gets a pool (a fork also controls its own workflow, so this is not the boundary).
           PI_LINUX_HEARTBEAT: ${{ vars.PI_LINUX_HEARTBEAT }}
           PI_MACOS_HEARTBEAT: ${{ vars.PI_MACOS_HEARTBEAT }}
+          # Maintainer kill switch: any non-empty value sends every cell back to hosted runners.
+          PI_POOLS_DISABLED: ${{ vars.PI_POOLS_DISABLED }}
           UNTRUSTED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'true' || '' }}
         run: |
           pools=(--pool-heartbeat "pi-linux=$PI_LINUX_HEARTBEAT" --pool-heartbeat "pi-macos=$PI_MACOS_HEARTBEAT")
-          if [ -n "$UNTRUSTED" ]; then pools+=(--untrusted); fi
+          if [ -n "$UNTRUSTED" ] || [ -n "$PI_POOLS_DISABLED" ]; then pools+=(--no-pools); fi
           if [ "$EVENT" = workflow_dispatch ]; then
             # A frozen release-verification/<sha> ref can verify an older main
             # candidate without moving it forward merely because main advanced.

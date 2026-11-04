@@ -27,7 +27,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from runner_pools import POOLS, available_pools, pool_for_shard
+from runner_pools import POOLS, available_pools, parse_heartbeats, pool_for_shard
 
 LOGGER = logging.getLogger(__name__)
 
@@ -757,9 +757,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="A self-hosted pool's heartbeat variable value (epoch seconds); repeatable, empty when unset",
     )
     parser.add_argument(
-        "--untrusted",
+        "--no-pools",
         action="store_true",
-        help="The event comes from a fork: never route a cell to a self-hosted pool",
+        help="Never route a cell to a self-hosted pool (fork PR, or the PI_POOLS_DISABLED kill switch)",
     )
     args = parser.parse_args(argv)
     if not args.full and not (args.base and args.head):
@@ -777,8 +777,12 @@ def main(argv: list[str] | None = None) -> int:
         int: Process exit status.
     """
     args = parse_args(argv)
-    heartbeats = dict(item.partition("=")[::2] for item in args.pool_heartbeat)
-    pools = available_pools(heartbeats, time.time(), trusted=not args.untrusted)
+    try:
+        heartbeats = parse_heartbeats(args.pool_heartbeat)
+    except ValueError as e:
+        LOGGER.error(f"Invalid --pool-heartbeat: {e}")
+        return 2
+    pools = available_pools(heartbeats, time.time(), trusted=not args.no_pools)
     LOGGER.info(f"Self-hosted pools up: {sorted(pools)}")
     problem = ""
     if args.event == EVENT_PULL_REQUEST:

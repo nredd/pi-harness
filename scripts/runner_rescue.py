@@ -27,17 +27,21 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
-from runner_pools import POOLS, is_fresh
+from runner_pools import POOLS, is_fresh, parse_heartbeats
 
 LOGGER = logging.getLogger(__name__)
 
-GH = os.environ.get("GH_BIN", "/usr/bin/gh")
+GH = "/usr/bin/gh"
 MIN_QUEUED_S = 300
 # A run is rescued at most this many attempts in total, so a cell that cannot start anywhere cannot loop.
 MAX_ATTEMPT = 3
-# Per tick, so one outage cannot cancel the whole queue at once.
-MAX_RUNS_PER_TICK = 5
+# Per tick, so one outage cannot cancel the whole queue at once, and so a tick fits its job timeout.
+MAX_RUNS_PER_TICK = 3
 CANCEL_WAIT_S = 180
+RERUN_TRIES = 3
+RERUN_BACKOFF_S = 10
+# The API's page size; a full page may hide more runs or jobs, which the next tick picks up.
+PAGE_SIZE = 100
 POLL_S = 5
 RERUN_EVENTS = frozenset({"pull_request", "push", "workflow_dispatch"})
 POOL_LABELS = {pool.label: name for name, pool in POOLS.items()}
@@ -55,28 +59,45 @@ def parse_time(stamp: str) -> float:
     return datetime.fromisoformat(stamp).timestamp()
 
 
+def is_candidate(run: Mapping[str, Any], repo: str) -> bool:
+    """Return whether a run may be rescued at all.
+
+    Parameters:
+        run (Mapping[str, Any]): A workflow run from the API.
+        repo (str): `owner/name` of this repository.
+
+    Returns:
+        bool: True for a rerunnable event with attempts left whose head is in this repo. A fork never
+            legitimately gets a pool, so a fork run naming a pool label is left alone rather than rerun.
+    """
+    head = (run.get("head_repository") or {}).get("full_name")
+    return run["event"] in RERUN_EVENTS and run.get("run_attempt", 1) < MAX_ATTEMPT and head == repo
+
+
 def stranded_runs(
     runs: Sequence[Mapping[str, Any]],
     jobs_by_run: Mapping[int, Sequence[Mapping[str, Any]]],
     heartbeats: Mapping[str, str],
     now: float,
+    repo: str,
 ) -> list[int]:
     """Pick the runs to cancel and rerun.
 
     Parameters:
         runs (Sequence[Mapping[str, Any]]): Unfinished workflow runs from the API.
-        jobs_by_run (Mapping[int, Sequence[Mapping[str, Any]]]): Each run's jobs from the API.
-        heartbeats (Mapping[str, str]): Pool name -> heartbeat variable value.
+        jobs_by_run (Mapping[int, Sequence[Mapping[str, Any]]]): Jobs of the candidate runs.
+        heartbeats (Mapping[str, str]): Pool name -> heartbeat variable value; empty when pools are
+            disabled, which makes every pool stale.
         now (float): Current epoch seconds.
+        repo (str): `owner/name` of this repository.
 
     Returns:
-        list[int]: Ids of runs with a job queued past `MIN_QUEUED_S` on a pool label whose heartbeat is stale,
-            oldest first, capped at `MAX_RUNS_PER_TICK`. A run already at `MAX_ATTEMPT` or from an event we
-            cannot rerun is left alone.
+        list[int]: Ids of candidate runs with a job queued past `MIN_QUEUED_S` on a pool label whose
+            heartbeat is stale, oldest first, capped at `MAX_RUNS_PER_TICK`.
     """
     picked: list[int] = []
     for run in sorted(runs, key=lambda r: r["created_at"]):
-        if run["event"] not in RERUN_EVENTS or run.get("run_attempt", 1) >= MAX_ATTEMPT:
+        if not is_candidate(run, repo):
             continue
         for job in jobs_by_run.get(run["id"], ()):
             pools = {POOL_LABELS[label] for label in job["labels"] if label in POOL_LABELS}
@@ -119,7 +140,10 @@ def unfinished_runs(repo: str) -> list[dict[str, Any]]:
     """
     runs: list[dict[str, Any]] = []
     for status in ("queued", "in_progress"):
-        runs += gh_api(f"repos/{repo}/actions/runs?status={status}&per_page=100")["workflow_runs"]
+        page = gh_api(f"repos/{repo}/actions/runs?status={status}&per_page={PAGE_SIZE}")["workflow_runs"]
+        if len(page) == PAGE_SIZE:
+            LOGGER.warning(f"Only the first {PAGE_SIZE} '{status}' runs were read")
+        runs += page
     return list({run["id"]: run for run in runs}.values())
 
 
@@ -133,6 +157,7 @@ def restart(repo: str, run_id: int) -> None:
     Raises:
         TimeoutError: The run is still unfinished `CANCEL_WAIT_S` after a force-cancel.
     """
+    LOGGER.info(f"Restarting run '{run_id}': cancel, wait, rerun")
     gh_api(f"repos/{repo}/actions/runs/{run_id}/cancel", method="POST")
     deadline = time.monotonic() + CANCEL_WAIT_S
     forced = False
@@ -144,7 +169,31 @@ def restart(repo: str, run_id: int) -> None:
             forced = True
             deadline = time.monotonic() + CANCEL_WAIT_S
         time.sleep(POLL_S)
-    gh_api(f"repos/{repo}/actions/runs/{run_id}/rerun", method="POST")
+    rerun(repo, run_id)
+
+
+def rerun(repo: str, run_id: int) -> None:
+    """Rerun a finished run, retrying a transient API failure.
+
+    A run left cancelled is never retried by anyone, so this is worth a few attempts.
+
+    Parameters:
+        repo (str): `owner/name`.
+        run_id (int): The run.
+
+    Raises:
+        subprocess.CalledProcessError: Every attempt failed.
+    """
+    for attempt in range(1, RERUN_TRIES + 1):
+        try:
+            gh_api(f"repos/{repo}/actions/runs/{run_id}/rerun", method="POST")
+        except subprocess.CalledProcessError:
+            if attempt == RERUN_TRIES:
+                LOGGER.error(f"Run '{run_id}' is left cancelled: rerun failed {RERUN_TRIES} times")
+                raise
+            time.sleep(RERUN_BACKOFF_S * attempt)
+        else:
+            return
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -160,19 +209,31 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Re-route runs stranded on a dead self-hosted pool")
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""))
     parser.add_argument("--pool-heartbeat", action="append", default=[], metavar="POOL=VALUE")
+    parser.add_argument(
+        "--pools-disabled",
+        action="store_true",
+        help="The PI_POOLS_DISABLED kill switch is set: treat every pool as down",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Report the runs, change nothing")
     args = parser.parse_args(argv)
     if args.repo.count("/") != 1:
         parser.error(f"--repo must be 'owner/name', got '{args.repo}'")
-    heartbeats = dict(item.partition("=")[::2] for item in args.pool_heartbeat)
-    runs = unfinished_runs(args.repo)
-    jobs_by_run = {
-        run["id"]: gh_api(f"repos/{args.repo}/actions/runs/{run['id']}/jobs?filter=latest&per_page=100")[
-            "jobs"
-        ]
-        for run in runs
-    }
-    picked = stranded_runs(runs, jobs_by_run, heartbeats, time.time())
+    try:
+        heartbeats = {} if args.pools_disabled else parse_heartbeats(args.pool_heartbeat)
+    except ValueError as e:
+        parser.error(str(e))
+    try:
+        runs = [run for run in unfinished_runs(args.repo) if is_candidate(run, args.repo)]
+        jobs_by_run = {
+            run["id"]: gh_api(
+                f"repos/{args.repo}/actions/runs/{run['id']}/jobs?filter=latest&per_page={PAGE_SIZE}"
+            )["jobs"]
+            for run in runs
+        }
+    except subprocess.CalledProcessError as e:
+        LOGGER.error(f"Failed to read runs from the API: {e.stderr}")
+        return 1
+    picked = stranded_runs(runs, jobs_by_run, heartbeats, time.time(), args.repo)
     LOGGER.info(f"Stranded runs: {picked}")
     failed = False
     for run_id in [] if args.dry_run else picked:
