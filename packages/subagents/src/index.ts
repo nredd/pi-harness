@@ -3609,6 +3609,11 @@ Terse command-style prompts produce shallow, generic work.
       "A workflow stops with all of its agents. A stopped agent is not resumed. " +
       "A run of another extension's `workflow` tool is not ours to stop: use that extension's control (e.g. `workflow_control` with action `stop`).",
     promptSnippet: "Stop or cancel a running background agent or workflow",
+    // Plan mode admits a trusted tool only on `readOnlyHint`. Stopping edits no
+    // file and starts nothing; it only ends work already running, so it must
+    // stay callable in Plan, where an orchestrator should still be able to
+    // stand a fan-out down.
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     parameters: Type.Object({
       agent_id: Type.String({
         description: "The agent ID to stop. Its handle or name also works. A SubagentWorkflow run id stops that workflow run.",
@@ -3621,6 +3626,10 @@ Terse command-style prompts produce shallow, generic work.
         task.stoppedBy = "parent";
         task.abortController.abort();
         return textResult(`Workflow "${task.meta?.name ?? task.id}" (${task.id}) stopped, with its agents. A completion notice follows.`);
+      }
+      if (task && (task.status === "running" || task.status === "paused")) {
+        // Told to stop, still unwinding: not "not running", and nothing more to do.
+        return textResult(`Workflow "${task.meta?.name ?? task.id}" (${task.id}) is already stopping. A completion notice follows.`);
       }
       const latest = manager.latestId(params.agent_id);
       const found = resolveAgentRef(latest);
