@@ -8,6 +8,7 @@ References:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from typing import TYPE_CHECKING, Any
@@ -16,7 +17,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import conftest
-from harness import rpc
+from harness import rpc, tmux
 from harness.sandbox import build_sandbox
 from harness.tmux import TmuxPane
 from scenarios import test_startup as startup
@@ -44,6 +45,64 @@ def test_pane_records_status_before_killing_server(tmp_path: Path) -> None:
     assert query.call_args_list[0].args[0] == "display-message"
     assert query.call_args_list[-1].args == ("kill-server",)
     assert not socket_dir.exists()
+
+
+TABLE = """\
+    1     0     1 Ss   10-00:00:01 /sbin/launchd
+  100     1   100 Ss      00:30 sh -c wrapper
+  101   100   100 S+      00:29 bun pi --no-approve
+  102   101   100 Z       00:28 (qmd)
+  200     1   200 Ss      00:30 unrelated 100
+garbage line
+"""
+
+
+def test_process_subtree_selects_root_and_descendants_only() -> None:
+    """A live hung child is visible; unrelated rows, malformed rows and a gone root are not."""
+    tree = tmux.process_subtree(TABLE, 100).splitlines()
+    assert [line.split()[0] for line in tree] == ["100", "101", "102"]
+    assert "Z" in tree[2]
+    assert tmux.process_subtree(TABLE, 999) == ""
+
+
+def test_read_process_table_sees_this_process() -> None:
+    """The real `ps` call lists the test process with all six columns."""
+    row = next(line for line in tmux.read_process_table().splitlines() if line.split()[0] == str(os.getpid()))
+    assert len(row.split(None, 5)) == 6
+
+
+def test_pane_records_process_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The report carries the pane's subtree, taken before teardown."""
+    monkeypatch.setattr(tmux, "read_process_table", MagicMock(return_value=TABLE))
+    pane = TmuxPane(tmp_path / "socket/pi.sock", "pi", exit_status_path=tmp_path / "pi.exit")
+    pane._tmux = MagicMock(return_value="pid=100 dead=0 status= signal=\n")
+    pane.kill()
+    report = json.loads((tmp_path / "pi.pane.json").read_text())
+    assert [line.split()[0] for line in report["process_tree"].splitlines()] == ["100", "101", "102"]
+    assert report["process_tree_error"] is None
+
+
+@pytest.mark.parametrize("failure", [FileNotFoundError("ps"), subprocess.TimeoutExpired("ps", 10)])
+def test_process_table_failure_is_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    """An unreadable process table is evidence, never a replacement exception."""
+    monkeypatch.setattr(tmux, "read_process_table", MagicMock(side_effect=failure))
+    pane = TmuxPane(tmp_path / "socket/pi.sock", "pi", exit_status_path=tmp_path / "pi.exit")
+    pane._tmux = MagicMock(return_value="pid=100 dead=0")
+    pane.kill()
+    report = json.loads((tmp_path / "pi.pane.json").read_text())
+    assert report["process_tree"] is None
+    assert "ps" in report["process_tree_error"]
+
+
+def test_gone_pane_has_no_pid_for_process_tree(tmp_path: Path) -> None:
+    """Without a pane PID the report says so instead of guessing a tree."""
+    pane = TmuxPane(tmp_path / "socket/pi.sock", "pi", exit_status_path=tmp_path / "pi.exit")
+    pane._tmux = MagicMock(side_effect=RuntimeError("no server running"))
+    pane.kill()
+    report = json.loads((tmp_path / "pi.pane.json").read_text())
+    assert report["process_tree_error"] == "No pane PID"
 
 
 def test_gone_pane_still_records_missing_marker(tmp_path: Path) -> None:
