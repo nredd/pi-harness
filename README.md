@@ -90,13 +90,13 @@ so check `powerd` sleep/wake logs when real-time assertions overrun. Do not rela
   `@nredd/pi-dev-tools@0.5.1`, `@nredd/pi-session-kit@0.7.0`,
   `@nredd/pi-subscription-router@0.4.0`, `@nredd/pi-preset@0.2.0`; `@nredd/pi-todo@2.13.10` is pending its first CI-attested release)
 - `check-scripts`: ruff, ty, pytest for `scripts/` (real disposable git repositories), then `check-import-audit`
-- `check-import-audit`: Biome, strict `tsc` and `node --test` for `scripts/import_audit.ts`, the package-contract
+- `check-import-audit`: Biome, strict `tsc` and Vitest (V8 coverage, `scripts/vitest.config.ts`) for `scripts/import_audit.ts`, the package-contract
   import parser (installed TypeScript 7 `unstable/sync` API; real parses, the only mock forces a project lookup miss), enforced at 0/0
 - `check-integration`: ruff, ty, unit tests for `integration/`, then `check-probes`
 - `check-probes`: Biome and strict `tsc` for `integration/probes/process-lifecycle.test.ts`, `render.ts`, `render.test.ts`,
   `stack-resources.ts`, `transcript-types.ts` and `transcript-types.test.ts` (real `dev-tools` and `session-kit` runner
-  sources), then c8 over `transcript-types.ts` with `node --test` on the explicit `transcript-types.test.ts`,
-  `process-lifecycle.test.ts` and `render.test.ts` (no glob; `todo-history.test.ts` is not in this gate)
+  sources), then Vitest with V8 coverage over `transcript-types.ts` on the explicit `transcript-types.test.ts`,
+  `process-lifecycle.test.ts` and `render.test.ts` (no glob, `integration/probes/vitest.config.ts`)
 - `check-benchmark`: ruff, ty, all unit tests with the 90% coverage threshold for
   `benchmarks/comparison`, including the `native_runtime` Codex sandbox test (see below)
 

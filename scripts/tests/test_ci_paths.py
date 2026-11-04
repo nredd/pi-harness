@@ -345,9 +345,12 @@ def test_write_github_output_keeps_input_flags_independent(
         "integration/uv.lock",
         "integration/probes/stack-resources.ts",
         "scripts/check-biome-paths.mjs",
+        "scripts/check-biome-paths.test.mjs",
+        "scripts/import_audit.test.ts",
         "scripts/import_audit.ts",
         "scripts/router_contract.mjs",
         "scripts/run-vitest.ts",
+        "scripts/vitest.config.ts",
     ],
 )
 def test_wsl_inputs_accept_paths_the_guest_path_reads(repo: Path, path: str) -> None:

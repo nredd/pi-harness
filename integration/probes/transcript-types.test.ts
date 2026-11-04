@@ -3,8 +3,8 @@ import fs, { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFile
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mock, test } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { type MockInstance, test, vi } from "vitest";
 import transcriptTypes, { blockTypes, TypeTrace } from "./transcript-types.ts";
 
 const secret = "DO-NOT-LOG-private-text-signature-token";
@@ -205,7 +205,7 @@ for (const failure of ["size-limit", "open-error", "close-error"]) {
 		const originalClose = fs.closeSync;
 		const closeMock =
 			failure === "close-error"
-				? mock.method(fs, "closeSync", (fd: number) => {
+				? vi.spyOn(fs, "closeSync").mockImplementation((fd: number) => {
 						originalClose(fd);
 						throw new Error(secret);
 					})
@@ -217,7 +217,7 @@ for (const failure of ["size-limit", "open-error", "close-error"]) {
 			h.emit("session_start");
 			for (let i = 0; i < (failure === "close-error" ? 1 : 2500); i++) h.emit("message_end", { message: wideMessage });
 			assert.doesNotThrow(() => h.emit("session_shutdown"));
-			closeMock?.mock.restore();
+			closeMock?.mockRestore();
 			syncBuiltinESMExports();
 			assert.equal(h.notices.length, 1);
 			const [notice] = h.notices;
@@ -237,7 +237,7 @@ for (const failure of ["size-limit", "open-error", "close-error"]) {
 				assert.match(notice, /2 MiB limit/);
 			}
 		} finally {
-			closeMock?.mock.restore();
+			closeMock?.mockRestore();
 			syncBuiltinESMExports();
 			h.cleanup();
 		}
@@ -267,7 +267,7 @@ for (const failure of ["write-error", "restart-close-error"]) {
 		const h = harness("pi-type-probe-started-");
 		const message = { role: "assistant", api: "anthropic-messages", content: [{ type: "text", text: secret }] };
 		const originalClose = fs.closeSync;
-		let fsMock: ReturnType<typeof mock.method> | undefined;
+		let fsMock: MockInstance | undefined;
 		try {
 			h.register();
 			h.emit("session_start");
@@ -277,19 +277,20 @@ for (const failure of ["write-error", "restart-close-error"]) {
 			assert.match(started, /"stage":"start"/);
 			fsMock =
 				failure === "write-error"
-					? mock.method(fs, "writeSync", () => {
+					? vi.spyOn(fs, "writeSync").mockImplementation(() => {
 							throw new Error(secret);
 						})
-					: mock.method(fs, "closeSync", (fd: number) => {
+					: vi.spyOn(fs, "closeSync").mockImplementation((fd: number) => {
 							originalClose(fd);
 							throw new Error(secret);
 						});
 			syncBuiltinESMExports();
 			if (failure === "write-error") h.emit("message_end", { message });
 			else h.emit("session_start");
-			fsMock.mock.restore();
+			// Vitest's `mockRestore` also clears the recorded calls, so count them first.
+			assert.ok(fsMock.mock.calls.length >= 1);
+			fsMock.mockRestore();
 			syncBuiltinESMExports();
-			assert.ok(fsMock.mock.callCount() >= 1);
 			assert.equal(h.notices.length, 1);
 			const [notice] = h.notices;
 			assert.ok(notice);
@@ -300,7 +301,7 @@ for (const failure of ["write-error", "restart-close-error"]) {
 			assert.equal(onlyFile(h.directory), file);
 			assert.equal(readFileSync(file, "utf8"), started);
 		} finally {
-			fsMock?.mock.restore();
+			fsMock?.mockRestore();
 			syncBuiltinESMExports();
 			h.cleanup();
 		}

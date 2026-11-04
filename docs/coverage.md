@@ -76,13 +76,22 @@ V8 attribution. The preset and todo diagnoses demonstrate false misses and false
 real-loader tests rather than deleting assertions to repair counters. Istanbul credits instrumented
 Vitest transforms, not independent Jiti-only execution. Dev-tools also uses Istanbul, following #195, with all 23 executable modules explicitly included.
 Its static `src/core/index.ts` facade is validated by real source/emitted-ESM instrumentation.
-Other primary producers retain V8. The `node --test` import-audit and probe helpers retain c8,
-run with `NODE_DISABLE_COMPILE_CACHE=1`: a script loaded from Node's compile cache reports only
-function counts (`isBlockCoverage: false`), so an exported `NODE_COMPILE_CACHE` silently drops
-block hits, e.g. the import-audit CLI usage child (#321).
+Other primary producers retain V8. Since #347 that includes the import-audit and probe helpers:
+`scripts/vitest.config.ts` and `integration/probes/vitest.config.ts` replace c8 + `node --test`, run
+through `scripts/run-vitest.ts node --coverage` with the shared home guard. Vitest transforms and
+runs the measured source itself, so Node's compile cache no longer reaches it: the
+`NODE_DISABLE_COMPILE_CACHE=1` that c8 needed (#321) is gone, and the measured counters are unchanged with
+`NODE_COMPILE_CACHE` exported. Vitest coverage does not follow child processes, which c8 did, so the
+import-audit CLI runs in process through `main()` as well as through the real subprocess; the
+one-line `import.meta.main` dispatch is asserted only by the subprocess tests.
 `import-audit` is in the goal and enforced at 0/0. `probes` measures `integration/probes/transcript-types.ts`,
-the module its `node --test` suite actually imports, and stays report-only until #321's enforced-floor
-goal mode lands. `stack-resources.ts` is a `pi -e` extension loaded only by live scenarios, so it
+the module its suite actually imports, and stays report-only until #321's enforced-floor
+goal mode lands. The counters changed with the producer, the floors did not: c8 counted every
+physical line and only the functions V8 reported (`transcript-types.ts` 207 lines / 8 functions,
+`import_audit.ts` 161 / 7), Vitest's AST-based V8 remap counts statement lines and every function
+including anonymous callbacks (`transcript-types.ts` 103 / 15, `import_audit.ts` 63 / 8 with the new
+`main`). Both are 0 uncovered on darwin and linux before and after.
+`stack-resources.ts` is a `pi -e` extension loaded only by live scenarios, so it
 sits with the other measurement-pending `probe-boundaries`; before #321 c8 measured it at 0/45
 lines on every OS, an empty measurement rather than a coverage claim.
 

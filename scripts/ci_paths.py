@@ -41,11 +41,14 @@ WSL_INPUT_FILES = TOOLCHAIN_INPUTS | {
     "integration/pyproject.toml",
     "integration/uv.lock",
     "scripts/check-biome-paths.mjs",
+    "scripts/check-biome-paths.test.mjs",
+    "scripts/import_audit.test.ts",
     "scripts/import_audit.ts",
     "scripts/install_gh_linux.sh",
     "scripts/install_wsl_owned_tools.sh",
     "scripts/router_contract.mjs",
     "scripts/run-vitest.ts",
+    "scripts/vitest.config.ts",
 }
 WSL_INPUT_PREFIXES = (".github/", "integration/probes/", "scripts/wsl2_", "scripts/ci")
 STACK_INPUT_FILES = TOOLCHAIN_INPUTS | {

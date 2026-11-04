@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test, { type TestContext } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+import { type TestContext, test } from "vitest";
 import { run } from "../../packages/dev-tools/src/core/process.ts";
 import { spawnMonitor } from "../../packages/session-kit/src/monitor/process.ts";
 
@@ -193,7 +193,7 @@ for (const runner of runners) {
 		 */
 		const verifyDescendantCleanup = async (context: TestContext) => {
 			const cwd = await mkdtemp(join(tmpdir(), "pi-lifecycle-"));
-			context.after(
+			context.onTestFinished(
 				/** @returns Removes the disposable directory. @throws On removal failure. */
 				() => rm(cwd, { recursive: true, force: true }),
 			);
@@ -242,7 +242,7 @@ child.once("message", /** @returns {void} Releases the acknowledged leader. @thr
 	 */
 	const verifySeparateStreams = async (context: TestContext) => {
 		const cwd = await mkdtemp(join(tmpdir(), "pi-lifecycle-"));
-		context.after(
+		context.onTestFinished(
 			/** @returns Removes the disposable directory. @throws On removal failure. */
 			() => rm(cwd, { recursive: true, force: true }),
 		);
@@ -273,7 +273,7 @@ child.once("message", /** @returns {void} Releases the acknowledged leader. @thr
 	 */
 	const verifyEscalation = async (context: TestContext) => {
 		const cwd = await mkdtemp(join(tmpdir(), "pi-lifecycle-"));
-		context.after(
+		context.onTestFinished(
 			/** @returns Removes the disposable directory. @throws On removal failure. */
 			() => rm(cwd, { recursive: true, force: true }),
 		);

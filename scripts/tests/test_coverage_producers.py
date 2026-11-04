@@ -31,7 +31,7 @@ def test_primary_configs_match_policy_inventory() -> None:
     policy = json.loads((ROOT / "coverage/policy.json").read_text())
     for package in policy["packages"].values():
         primary = package["signals"].get("primary")
-        if not primary or package["root"] in {"scripts", "integration/probes"}:
+        if not primary:
             continue
         directory = ROOT / package["root"]
         report_directory = Path(primary["report"]).parent.as_posix()
@@ -43,7 +43,8 @@ def test_primary_configs_match_policy_inventory() -> None:
         assert len(configs) == 1, configs
         path = configs[0]
         text = path.read_text()
-        match = INCLUDE.search(text)
+        # The coverage `include`, not a test-file `include` that precedes it.
+        match = INCLUDE.search(text, text.index("coverage: {"))
         assert match, path
         # Configs are formatted JSON-compatible arrays; ignore a trailing comma.
         includes = json.loads(re.sub(r",\s*]", "]", match[1]))
@@ -173,25 +174,23 @@ def test_generated_coverage_is_ignored_by_whole_workspace_linters() -> None:
         assert "coverage/" in (directory / ".gitignore").read_text().splitlines()
 
 
-def test_node_coverage_wraps_the_existing_test_invocations() -> None:
-    """Instrument existing Node invocations without a second test pass.
+def test_node_helper_gates_run_vitest_through_the_launcher() -> None:
+    """Keep the probes and import-audit producers on the guarded Vitest launcher.
 
     Parameters:
         None.
     Returns:
-        None: Both Node producers include all owned source and both reporting formats.
+        None: Both Makefile producers run Vitest with coverage; no `node --test` or c8 remains.
     Raises:
-        AssertionError: Existing Node instrumentation requirements regress.
+        AssertionError: A producer bypasses the launcher or returns to `node --test`/c8.
     """
     makefile = (ROOT / "Makefile").read_text()
-    commands = [line for line in makefile.splitlines() if "/.bin/c8 " in line]
-    assert len(commands) == 2
-    for command in commands:
-        assert "--all " in command
-        assert "--include=" in command
-        assert "--reporter=text " in command
-        assert "--reporter=lcov " in command
-        assert " node --test " in command
+    assert "cd integration/probes && node ../../scripts/run-vitest.ts node --coverage\n" in makefile
+    assert "cd scripts && node run-vitest.ts node --coverage\n" in makefile
+    assert "node --test" not in makefile
+    assert "/.bin/c8 " not in makefile
+    for config in [ROOT / "integration/probes/vitest.config.ts", ROOT / "scripts/vitest.config.ts"]:
+        assert "verification/home-setup.ts" in config.read_text(), config
 
 
 def test_accounting_and_artifacts_follow_tests_even_on_failure() -> None:
