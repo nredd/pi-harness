@@ -30,6 +30,8 @@ SEEN_AT = "_harness_seen_s"
 
 DEFAULT_TIMEOUT_S = 180
 MAX_OUTPUT_BYTES = 8 * 1024 * 1024
+# How long pipe readers get to reach EOF after a group kill before they count as held open.
+POST_KILL_DRAIN_S = 2
 
 
 @dataclass(frozen=True)
@@ -374,6 +376,9 @@ def finish_process(
     if killed:
         process_group.kill_owned_group(process.pid, process_group.GROUP_LISTING_TIMEOUT_S)
         exited.wait(10)
+        # A deadline kill has spent the deadline: readers still need time to see EOF after
+        # the leader dies, or scheduler lag alone would read as stuck and kill again (#370).
+        deadline = max(deadline, time.monotonic() + POST_KILL_DRAIN_S)
     for reader in readers:
         reader.join(timeout=max(0, deadline - time.monotonic()))
     stuck = any(reader.is_alive() for reader in readers)
@@ -382,7 +387,7 @@ def finish_process(
         timed_out = timed_out or stuck
         process_group.kill_owned_group(process.pid, process_group.GROUP_LISTING_TIMEOUT_S)
         for reader in readers:
-            reader.join(timeout=2)
+            reader.join(timeout=POST_KILL_DRAIN_S)
     # Reap only now: no signal follows, readers never send one.
     process.wait(timeout=10)
     if any(reader.is_alive() for reader in readers):

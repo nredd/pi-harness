@@ -314,6 +314,130 @@ def test_deadline_with_a_failed_listing_surfaces_the_eperm(
         process.communicate(timeout=10)
 
 
+class LaggingReader(threading.Thread):
+    """A pipe reader that reaches EOF only a moment after the main thread starts joining it.
+
+    Models a reader the scheduler has not run yet when the killed leader's exit wakes
+    `finish_process`, deterministically instead of by generating load (#370).
+
+    Attributes:
+        joining (threading.Event): set once the main thread starts waiting on this reader.
+        lag_s (float): how long after that the reader sees EOF.
+    """
+
+    def __init__(self, lag_s: float) -> None:
+        """Prepare a daemon reader that lags its first join by `lag_s`.
+
+        Parameters:
+            lag_s (float): how long after the first join the reader sees EOF.
+        """
+        self.joining = threading.Event()
+        self.lag_s = lag_s
+        super().__init__(target=self.drain, daemon=True)
+
+    def drain(self) -> None:
+        """Wait for the main thread to start joining, then lag before EOF."""
+        self.joining.wait(10)
+        time.sleep(self.lag_s)
+
+    def join(self, timeout: float | None = None) -> None:
+        """Release the reader toward EOF, then join as usual.
+
+        Parameters:
+            timeout (float | None): join bound.
+        """
+        self.joining.set()
+        super().join(timeout)
+
+
+def spawn_killable_leader(
+    monkeypatch: pytest.MonkeyPatch, release: Path
+) -> tuple[subprocess.Popen[str], GroupSeams]:
+    """Start a leader that runs until `release` exists, with a recording `killpg` that creates it.
+
+    Models a delivered SIGKILL without signalling anything real: the leader exits once its group
+    is signalled.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): installs the recording seams.
+        release (Path): marker the leader polls for.
+
+    Returns:
+        tuple[subprocess.Popen[str], GroupSeams]: the leader and what was signalled.
+    """
+    process = spawn_session(f"import os,time\nwhile not os.path.exists({str(release)!r}): time.sleep(0.01)\n")
+    seams = record_owned_group(monkeypatch, process, deny=False)
+    recorded = os.killpg
+
+    def delivered(pgid: int, sig: int) -> None:
+        """Record the signal, then let the leader exit as a delivered SIGKILL would.
+
+        Parameters:
+            pgid (int): process group to signal.
+            sig (int): signal to send.
+        """
+        recorded(pgid, sig)
+        release.touch()
+
+    monkeypatch.setattr(os, "killpg", delivered)
+    return process, seams
+
+
+def test_a_delivered_deadline_kill_drains_lagging_readers_without_a_second_kill(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Readers still draining when the killed leader exits get a grace, not a second kill (#370).
+
+    The recording `killpg` models a delivered SIGKILL: the leader exits once signalled, nothing real
+    is signalled. Each reader sees EOF only a moment after `finish_process` starts joining it.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): recording seams.
+        tmp_path (Path): the leader's release marker.
+    """
+    release = tmp_path / "killed"
+    process, seams = spawn_killable_leader(monkeypatch, release)
+    try:
+        readers = [LaggingReader(0.05), LaggingReader(0.05)]
+        for reader in readers:
+            reader.start()
+        assert headless.finish_process(process, list(readers), 0.1, threading.Event(), threading.Event())
+        assert seams.signalled == [(process.pid, signal.SIGKILL)]
+        assert seams.anchored == [True]
+        assert not any(reader.is_alive() for reader in readers)
+        assert process.returncode == 0
+    finally:
+        release.touch()
+        process.communicate(timeout=10)
+
+
+def test_a_reader_held_past_the_post_kill_drain_is_killed_again(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Only a reader still open after the post-kill drain counts as stuck: a second kill, then the error.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): recording seams and a short drain.
+        tmp_path (Path): the leader's release marker.
+    """
+    monkeypatch.setattr(headless, "POST_KILL_DRAIN_S", 0.05)
+    release = tmp_path / "killed"
+    process, seams = spawn_killable_leader(monkeypatch, release)
+    try:
+        readers = [LaggingReader(0), LaggingReader(1)]
+        for reader in readers:
+            reader.start()
+        with pytest.raises(RuntimeError, match="inherited output pipes"):
+            headless.finish_process(process, list(readers), 0.1, threading.Event(), threading.Event())
+        assert seams.signalled == [(process.pid, signal.SIGKILL)] * 2
+        assert seams.anchored == [True, True]
+        assert [reader.is_alive() for reader in readers] == [False, True]
+        assert process.returncode == 0
+    finally:
+        release.touch()
+        process.communicate(timeout=10)
+
+
 def test_inherited_pipe_kill_keeps_the_leader_as_pgid_anchor(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
