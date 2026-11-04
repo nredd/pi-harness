@@ -4,7 +4,7 @@
  * Tools:
  *   Agent             — LLM-callable: spawn a sub-agent
  *   get_subagent_result  — LLM-callable: check background agent status/result
- *   steer_subagent       — LLM-callable: send a steering message to a running agent
+ *   steer_subagent       — LLM-callable: steer a running agent, or resume a finished one
  *
  * Commands:
  *   /agents                 — Interactive agent management menu
@@ -1953,7 +1953,7 @@ Notes:
 - Parallel work: one message, multiple Agent calls — they run concurrently.
 - Subagents run in the background by default; you'll be notified when one completes. Pass run_in_background: false only when your very next action depends on the result and nothing else could usefully happen while it runs. Never fabricate or predict a pending agent's results — if the user asks before the notification arrives, say it's still running.
 - The result is not shown to the user — summarize it for them. Verify an agent's claimed code changes before reporting work done.
-- resume continues a previous agent by ID; steer_subagent messages a running one.${isolationCompactGuideline}`;
+- resume continues a previous agent by ID; steer_subagent messages one, steering it mid-run or resuming it once finished.${isolationCompactGuideline}`;
 
   const fullAgentToolDescription = () => `Launch a new agent to handle complex, multi-step tasks autonomously. Each agent type has specific capabilities and tools available to it.
 
@@ -1978,7 +1978,7 @@ If the target is already known, use a direct tool — \`read\` for a known path,
 - **Foreground vs background**: Pass \`run_in_background: false\` only when your very next action depends on the agent's result and nothing else could usefully happen while it runs — e.g., a research agent whose finding gates the edit you're about to make. Otherwise let it run in the background (the default) — this includes fire-and-forget work, independent investigations, and anything where the user might hand you something else in the meantime. Wanting the result "next" is not enough on its own.
 - **Don't race**: after launching a background agent, you know nothing about its results. Never fabricate or predict them in any format — not as prose, summary, or structured output. The completion notification arrives in a later turn; it is never something you write yourself. If the user asks before it lands, say the agent is still running — give status, not a guess.
 - Use resume with an agent ID to continue a previous agent's work. A new (non-resume) Agent call starts a fresh agent with no memory of prior runs, so the prompt must be self-contained.
-- Use steer_subagent to send mid-run messages to a running background agent.
+- Use steer_subagent to message an agent: it steers a running agent mid-run and resumes a finished one in the background, like resume.
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, etc.), since it is not aware of the user's intent.
 - If an agent's description says it should be used proactively, try to use it without the user having to ask for it first.
 - Use model to select a configured tier (e.g. "@cheap"), an exact "provider/modelId", or a fuzzy tool-call input (e.g. "haiku").
@@ -2390,7 +2390,12 @@ Terse command-style prompts produce shallow, generic work.
           // Evicted by the retention sweep, but a persisted conversation is
           // still on disk: reopen it, as `@handle` does.
           const entry = manager.listTombstones().find(t => t.id === latest);
-          if (!entry) return textResult(`${continued}${agentNotFound(latest)}`);
+          if (!entry) {
+            // Evicted with no session file left to reopen: `rememberAgents` off, or the tombstone was dropped.
+            const note = manager.getEvictedNote(latest);
+            const why = note ? `Cannot resume agent "${latest}": no saved session is left to reopen.\n${describeEvicted(note)}` : agentNotFound(latest);
+            return textResult(`${continued}${why}`);
+          }
           // The reopen is a fresh detached spawn: nothing can block on it here.
           if (!runInBackground) {
             return textResult(
@@ -3398,22 +3403,43 @@ Terse command-style prompts produce shallow, generic work.
     name: SUBAGENT_TOOL_NAMES.STEER,
     label: "Steer Agent",
     description:
-      "Send a steering message to a running agent. The message will interrupt the agent after its current tool execution " +
-      "and be injected into its conversation, allowing you to redirect its work mid-run. A queued agent gets the message when it starts.",
-    promptSnippet: "Send a steering message to redirect a running background agent",
+      "Send a message to an agent. A running agent is interrupted after its current tool execution and the message is injected into its conversation, " +
+      "allowing you to redirect its work mid-run. A queued agent gets the message when it starts. A finished agent is resumed in the background " +
+      "with its full history and the message as its next prompt, exactly like Agent's resume; you will be notified when it completes. " +
+      "An agent the user stopped is not resumed.",
+    promptSnippet: "Send a message to a background agent: steer it mid-run, or resume it once finished",
     parameters: Type.Object({
       agent_id: Type.String({
-        description: "The agent ID to steer (must be running or queued). The agent's handle also works — its `name` if you gave it one, otherwise its type (`explore`, `explore-2`).",
+        description: "The agent ID to message. The agent's handle also works — its `name` if you gave it one, otherwise its type (`explore`, `explore-2`).",
       }),
       message: Type.String({
-        description: "The steering message to send. This will appear as a user message in the agent's conversation.",
+        description: "The message to send. This will appear as a user message in the agent's conversation.",
       }),
     }),
-    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      const record = resolveAgentRef(params.agent_id);
-      if (!record || !isTopLevelAgent(record)) return textResult(agentNotFound(params.agent_id));
-      if (record.status !== "running" && record.status !== "queued") {
-        return textResult(`Agent "${params.agent_id}" is not running (status: ${record.status}). Cannot steer a finished agent.`);
+    execute: async (toolCallId, params, signal, onUpdate, ctx) => {
+      // An evicted id that was reopened answers as the record it continues under (#330).
+      const latest = manager.latestId(params.agent_id);
+      const record = resolveAgentRef(latest);
+      if (record && !isTopLevelAgent(record)) return textResult(agentNotFound(params.agent_id));
+      if (record?.status !== "running" && record?.status !== "queued") {
+        // Finished: continue it, as Claude Code's SendMessage does. An evicted
+        // record is known only by its note; Agent's resume reopens its session
+        // from disk or explains why it cannot.
+        const finished = record ?? manager.getEvictedNote(latest);
+        if (!finished) return textResult(agentNotFound(params.agent_id));
+        if (finished.status === "stopped") {
+          return textResult(`Agent "${finished.id}" was stopped by the user (status: stopped). steer_subagent does not resume an agent the user stopped.`);
+        }
+        // The Agent tool's own resume path, not a copy: same reopen, turn
+        // budget, transcript and result. `subagent_type` is the record's own,
+        // so its frontmatter governs as it does for an `@handle` resume.
+        return agentTool.execute(toolCallId, {
+          resume: latest === params.agent_id ? finished.id : params.agent_id,
+          prompt: params.message,
+          description: finished.description,
+          subagent_type: finished.type,
+          run_in_background: true,
+        }, signal, onUpdate, ctx);
       }
       if (!record.session) {
         // Queued for a concurrency slot, or running with its session still

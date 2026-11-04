@@ -9,18 +9,19 @@
  * coverage — the only existing assertion on this tool is that a nested agent id
  * reports "Agent not found".
  *
- * The plain rejections (unknown id, non-running status) are deliberately not
- * tested: they are single-line guards whose failure is immediately visible in
- * the tool's own reply.
+ * The plain rejection of an unknown id is deliberately not tested: it is a
+ * single-line guard whose failure is immediately visible in the tool's own
+ * reply. A finished agent is resumed instead (#442); the real-host proof of
+ * that, history and completion notice included, is steer-resume-scenarios.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.js", async () => {
   const actual = await vi.importActual<typeof import("../src/agent-runner.js")>("../src/agent-runner.js");
-  return { ...actual, runAgent: vi.fn(), steerAgent: vi.fn() };
+  return { ...actual, runAgent: vi.fn(), resumeAgent: vi.fn(), steerAgent: vi.fn() };
 });
 
-import { runAgent, steerAgent } from "../src/agent-runner.js";
+import { resumeAgent, runAgent, steerAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
 import { ctx, flush, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
 
@@ -30,7 +31,11 @@ import { ctx, flush, hermeticDir, makePi, textOf } from "./helpers/boot-extensio
 beforeEach(() => {
   vi.mocked(steerAgent).mockReset();
   vi.mocked(runAgent).mockReset();
+  vi.mocked(resumeAgent).mockReset();
 });
+
+/** The live manager record behind an id, through the extension's public registry. */
+const recordOf = (id: string) => (globalThis as any)[Symbol.for("pi-subagents:manager")].getRecord(id);
 
 /** Enough of an AgentSession for the manager's and index's onSessionCreated hooks. */
 function fakeSession(overrides: Record<string, unknown> = {}) {
@@ -220,13 +225,55 @@ describe("steer_subagent on a queued agent", () => {
     }
   });
 
-  it("still refuses a finished agent", async () => {
+});
+
+describe("steer_subagent on a finished agent (#442)", () => {
+  it.each([
+    ["completed", { aborted: false, steered: false }],
+    ["steered", { aborted: false, steered: true }],
+    ["aborted", { aborted: true, steered: false }],
+    ["error", new Error("provider 500")],
+  ] as const)("resumes a finished agent (status %s) in the background with the message as its next prompt", async (status, outcome) => {
+    const { pi, tools, lifecycle } = makePi();
+    subagentsExtension(pi);
+    const session = fakeSession();
+    vi.mocked(runAgent).mockImplementation(async (_ctx: any, _type: any, _prompt: any, opts: any) => {
+      opts.onSessionCreated?.(session);
+      if (outcome instanceof Error) throw outcome;
+      return { responseText: "done", session, ...outcome } as any;
+    });
+    vi.mocked(resumeAgent).mockResolvedValue({ text: "resumed answer" } as any);
+
+    const id = await spawnBackground(tools);
+    await flush();
+    expect(recordOf(id).status).toBe(status);
+
+    const result = await steer(tools, id, "keep going");
+
+    expect(textOf(result)).toContain("Agent resumed in background.");
+    expect(textOf(result)).toContain(`Agent ID: ${id}`);
+    expect(resumeAgent).toHaveBeenCalledExactlyOnceWith(session, "keep going", expect.anything());
+    expect(steerAgent).not.toHaveBeenCalled();
+
+    await lifecycle.get("session_shutdown")?.();
+  });
+
+  it("does not resume another agent's child, even once it has finished", async () => {
+    // Ownership is unchanged: a nested or workflow child stays unreachable from
+    // the top-level tool, so finishing cannot turn it into something to resume.
     const { pi, tools, lifecycle } = makePi();
     subagentsExtension(pi);
     vi.mocked(runAgent).mockResolvedValue({ responseText: "done", session: fakeSession(), aborted: false, steered: false } as any);
 
     const id = await spawnBackground(tools);
-    await vi.waitFor(async () => expect(textOf(await steer(tools, id, "late"))).toContain("Cannot steer a finished agent"));
+    await flush();
+    expect(recordOf(id).status).toBe("completed");
+    recordOf(id).parentAgentId = "someone-else";
+
+    const result = await steer(tools, id, "hijack");
+
+    expect(textOf(result)).toBe(`Agent not found: "${id}". It may have been cleaned up.`);
+    expect(resumeAgent).not.toHaveBeenCalled();
 
     await lifecycle.get("session_shutdown")?.();
   });

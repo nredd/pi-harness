@@ -159,6 +159,12 @@ describe("evicted agents", () => {
     subagentsExtension(pi);
     const out = textOf(await tools.get("get_subagent_result").execute("tc", { agent_id: "nope" }, undefined, undefined, ctx()));
     expect(out).toContain('Agent not found: "nope"');
+    // Nothing was evicted under that id, so a resume has no note to explain (#442).
+    const resumeParams = { prompt: "again", description: "again", subagent_type: "general-purpose", resume: "nope", run_in_background: true };
+    for (const [name, params] of [["Agent", resumeParams], ["steer_subagent", { agent_id: "nope", message: "hello" }]] as const) {
+      const text = textOf(await tools.get(name).execute("tc", params, undefined, undefined, ctx()));
+      expect(text).toBe('Agent not found: "nope". It may have been cleaned up.');
+    }
     await lifecycle.get("session_shutdown")?.({}, ctx());
   });
 });
