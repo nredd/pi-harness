@@ -41,7 +41,6 @@ import re
 import secrets
 import selectors
 import shutil
-import signal
 import subprocess
 import sys
 import tarfile
@@ -49,7 +48,7 @@ import tempfile
 import time
 from collections import Counter
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
@@ -77,9 +76,17 @@ from faux_provider import (
     models_json,
 )
 
+# `integration` is not an installed package (`package = false`), so the shared owned-group policy is
+# imported from the source tree, like the `PYTHONPATH=integration` workflow steps. Appended, so
+# nothing in `scripts/` is shadowed.
+sys.path.append(str(Path(__file__).resolve().parents[1] / "integration"))
+from harness import process_group
+
 LOGGER = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+# `/bin/ps` deadline when a group kill is refused, like `harness.headless.GROUP_LISTING_TIMEOUT_S`.
+GROUP_LISTING_TIMEOUT_S = 5.0
 DEFAULT_STOCK_PREFIX = Path.home() / "code" / "pi-harness-builds" / "tools" / "pi-stock-1.3.0"
 
 STOCK_PI_PACKAGE = "@earendil-works/pi-coding-agent"
@@ -1463,12 +1470,14 @@ def run_own_group(
 
     The group is signalled only while the leader is unreaped (`returncode` unset, read without a
     `poll` that could reap it): until then its pid, the group id, cannot be reused, like
-    `integration/harness/headless.py` `kill_process_group`. If `communicate` already reaped the
-    leader (its SIGINT grace wait can), the id may be reused, so nothing is signalled and the
-    original exception says so, and surviving members may outlive the gate. Members left after a
-    normal exit are the program's own job. Only exceptions raised in this process run the cleanup:
-    a SIGTERM or SIGHUP without a Python handler, or a SIGKILL, ends the gate with no cleanup and
-    the group may outlive it.
+    `integration/harness/headless.py`. The kill follows `harness.process_group.kill_owned_group`:
+    `ESRCH`, or the `EPERM` macOS answers for a group holding only the exited, unreaped leader, is
+    gone when `/bin/ps` shows no live member, and the original exception surfaces. If `communicate`
+    already reaped the leader (its SIGINT grace wait can), the id may be reused, so nothing is
+    signalled and the original exception says so, and surviving members may outlive the gate.
+    Members left after a normal exit are the program's own job. Only exceptions raised in this
+    process run the cleanup: a SIGTERM or SIGHUP without a Python handler, or a SIGKILL, ends the
+    gate with no cleanup and the group may outlive it.
 
     Parameters:
         argv (list[str]): Argument vector; `argv[0]` is absolute.
@@ -1481,6 +1490,8 @@ def run_own_group(
 
     Raises:
         subprocess.TimeoutExpired: After the group was killed and the leader reaped.
+        PermissionError: The kill was refused while a live member remains, or while the listing
+            failed (chained to it); it replaces the original exception, which is its context.
     """
     with subprocess.Popen(
         argv,
@@ -1496,8 +1507,7 @@ def run_own_group(
             stdout, stderr = process.communicate(timeout=timeout)
         except BaseException as e:
             if process.returncode is None:
-                with suppress(ProcessLookupError):
-                    os.killpg(process.pid, signal.SIGKILL)
+                process_group.kill_owned_group(process.pid, GROUP_LISTING_TIMEOUT_S)
                 process.wait()
             else:
                 e.add_note(f"process group {process.pid} not signalled: its leader was already reaped")

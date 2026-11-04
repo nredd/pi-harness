@@ -257,7 +257,12 @@ legacy `ps` call is bounded too. `test_probe_reports_cleanup_failure_with_the_pr
 its own copy of the program so `stop` reaps and then throws, and requires the `AggregateError` text.
 The gate runs the probe with `run(..., own_group=True)` (`run_own_group`): its own session, and on
 the 30s timeout or a `KeyboardInterrupt` in the gate the whole process group is killed while its
-leader is unreaped, so a hung probe cannot orphan the child. The group is signalled only while its
+leader is unreaped, so a hung probe cannot orphan the child. The kill uses the harness policy,
+`harness.process_group.kill_owned_group` (imported from the source tree, see `sys.path` in
+`package_contracts.py`): macOS answers `EPERM` for a group holding only the exited, unreaped leader,
+which counts as gone when `/bin/ps` shows no live member, so the original timeout or interrupt
+surfaces. `EPERM` with a live member, or one a failed listing cannot explain (chained to it), replaces
+the original exception (#361). The group is signalled only while its
 leader is unreaped, so the group id cannot have been reused; if `communicate` already reaped the
 leader, nothing is signalled, the original exception carries a note, and surviving members may
 outlive the gate. Only Python exceptions reach this cleanup: a SIGTERM or SIGHUP the gate does not
@@ -273,7 +278,10 @@ inside the window. `test_fifo_witness_measures_eof_from_the_writers_byte` (a 9s 
 clock) and `test_fifo_witness_rejects_eof_without_a_byte` pin both. Its open is non-blocking and
 retried, since a blocking open waits for a reader before any exit timer starts;
 `test_fifo_writer_exits_without_a_reader` requires both writers to exit with no reader or a closed
-one. `test_reaped_leader_group_is_never_signalled` and the `test_run_default_*` timeout/interrupt
+one. `test_zombie_only_eperm_keeps_the_original_error`, `test_eperm_with_a_live_member_surfaces` and
+`test_eperm_with_a_failed_listing_surfaces_chained` inject a refusing `killpg` (nothing is signalled)
+after the leader exited unreaped; the zombie-only case lists the real process table.
+`test_reaped_leader_group_is_never_signalled` and the `test_run_default_*` timeout/interrupt
 tests cover the guard and the unchanged default path. The reaped-leader skip and unhandled
 SIGTERM/SIGHUP/SIGKILL of the gate are not covered by any cleanup.
 Existing `owned` macOS/Linux jobs run the native package tests; existing `contracts` jobs run this

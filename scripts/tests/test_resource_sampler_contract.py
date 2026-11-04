@@ -6,10 +6,14 @@ References:
 
 from __future__ import annotations
 
+import errno
 import json
+import os
+import signal
 import subprocess
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 from contract_helpers import FifoWitness
@@ -374,6 +378,203 @@ def test_reaped_leader_group_is_never_signalled(tmp_path: Path, monkeypatch: pyt
         pc.run([Path("/bin/sh"), "-c", "exit 0"], env={}, cwd=tmp_path, timeout=5, own_group=True)
     assert signalled == []
     assert "not signalled: its leader was already reaped" in raised.value.__notes__[0]
+
+
+@dataclass
+class RefusedGroup:
+    """What the injected `killpg` and `/bin/ps` saw for one exited, unreaped leader's group.
+
+    Attributes:
+        leaders (list[subprocess.Popen[str]]): the run's leader, captured inside `communicate`.
+        signalled (list[tuple[int, int, bool]]): `(pgid, signal, leader still unreaped)` per call.
+        listings (list[list[str]]): `/bin/ps` argument vectors.
+    """
+
+    leaders: list[subprocess.Popen[str]] = field(default_factory=list)
+    signalled: list[tuple[int, int, bool]] = field(default_factory=list)
+    listings: list[list[str]] = field(default_factory=list)
+
+
+def refuse_zombie_group(
+    monkeypatch: pytest.MonkeyPatch, raised: BaseException, listing: bool | Exception | None
+) -> RefusedGroup:
+    """Fail `communicate` once the leader exited unreaped, and answer `EPERM` like Darwin; signal nothing.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): installs the seams.
+        raised (BaseException): what `communicate` raises after the leader exited.
+        listing (bool | Exception | None): `None` runs the real read-only `/bin/ps`; `True` reports a
+            live member; an exception is the listing failure to raise.
+
+    Returns:
+        RefusedGroup: what was captured, signalled and listed.
+    """
+    seen = RefusedGroup()
+    check_output = subprocess.check_output
+    communicate = subprocess.Popen.communicate
+
+    def exited_then_failed(self: subprocess.Popen[str], *args: Any, **kwargs: Any) -> tuple[str, str]:
+        """Wait for the leader's exit without reaping it, then fail like a timeout or interrupt.
+
+        Only the run's leader fails; the real `/bin/ps` listing communicates for real.
+
+        Parameters:
+            self (subprocess.Popen[str]): the run's own session leader, or the listing.
+            *args (Any): real communication positional arguments.
+            **kwargs (Any): real communication keyword arguments.
+
+        Returns:
+            tuple[str, str]: the listing's real output.
+
+        Raises:
+            BaseException: `raised`, with the leader a zombie that still anchors its group.
+        """
+        if self.args != RUN_LEADER:
+            return communicate(self, *args, **kwargs)
+        seen.leaders.append(self)
+        os.waitid(os.P_PID, self.pid, os.WEXITED | os.WNOWAIT)
+        raise raised
+
+    def refused(pgid: int, sig: int) -> None:
+        """Record the owned-group signal and refuse it, like `killpg` at a zombie-only Darwin group.
+
+        Parameters:
+            pgid (int): process group to signal; must be the run's own leader.
+            sig (int): signal to send.
+
+        Raises:
+            PermissionError: always.
+        """
+        leader = seen.leaders[0]
+        assert pgid == leader.pid
+        seen.signalled.append((pgid, sig, leader_is_unreaped(pgid)))
+        raise PermissionError(errno.EPERM, "Operation not permitted")
+
+    def listed(argv: list[str], **kwargs: Any) -> str:
+        """Record the process-table listing, then run it for real or answer the injected verdict.
+
+        Parameters:
+            argv (list[str]): listing argument vector.
+            **kwargs (Any): real `check_output` options.
+
+        Returns:
+            str: `pgid stat` lines.
+
+        Raises:
+            Exception: the injected listing failure.
+        """
+        assert argv[0] == "/bin/ps"
+        seen.listings.append(argv)
+        if isinstance(listing, Exception):
+            raise listing
+        if listing:
+            return f"{seen.leaders[0].pid} S\n"
+        return check_output(argv, **kwargs)
+
+    monkeypatch.setattr(subprocess.Popen, "communicate", exited_then_failed)
+    monkeypatch.setattr(os, "killpg", refused)
+    monkeypatch.setattr(subprocess, "check_output", listed)
+    return seen
+
+
+def leader_is_unreaped(pid: int) -> bool:
+    """Report whether `pid` is still this process's unreaped child, without reaping it.
+
+    Parameters:
+        pid (int): child process id.
+
+    Returns:
+        bool: the leader still anchors its process group number.
+    """
+    try:
+        os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except ChildProcessError:
+        return False
+    return True
+
+
+RUN_LEADER = ["/bin/sh", "-c", "exit 0"]
+# Each `communicate` failure, and what `run` reports for it once the group is gone.
+ORIGINALS: dict[str, tuple[BaseException, type[BaseException]]] = {
+    "timeout": (subprocess.TimeoutExpired(RUN_LEADER, 5), pc.ContractError),
+    "interrupt": (KeyboardInterrupt(), KeyboardInterrupt),
+}
+LISTING_FAILURES = [
+    subprocess.TimeoutExpired(["/bin/ps"], 5),
+    subprocess.CalledProcessError(1, ["/bin/ps"]),
+    FileNotFoundError(errno.ENOENT, "No such file or directory", "/bin/ps"),
+]
+
+
+def run_exiting_leader(tmp_path: Path) -> None:
+    """Run a leader that exits at once through `run_own_group`.
+
+    Parameters:
+        tmp_path (Path): Working directory.
+    """
+    pc.run(RUN_LEADER, env={}, cwd=tmp_path, timeout=5, own_group=True)
+
+
+@pytest.mark.parametrize("original", ORIGINALS)
+def test_zombie_only_eperm_keeps_the_original_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, original: str
+) -> None:
+    """`EPERM` at a group whose only member is the exited, unreaped leader means gone (#361).
+
+    The real `/bin/ps` lists the zombie, so the refusal is explained and the original failure surfaces.
+
+    Parameters:
+        tmp_path (Path): Working directory.
+        monkeypatch (pytest.MonkeyPatch): Recording seams.
+        original (str): `ORIGINALS` key.
+    """
+    raised, expected = ORIGINALS[original]
+    seen = refuse_zombie_group(monkeypatch, raised, listing=None)
+    with pytest.raises(expected):
+        run_exiting_leader(tmp_path)
+    [leader] = seen.leaders
+    assert seen.signalled == [(leader.pid, signal.SIGKILL, True)]
+    assert seen.listings == [["/bin/ps", "-axo", "pgid=,stat="]]
+    assert leader.returncode == 0
+
+
+@pytest.mark.parametrize("original", ORIGINALS)
+def test_eperm_with_a_live_member_surfaces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, original: str
+) -> None:
+    """A refusal while a member still runs is a real failure, never read as reaped.
+
+    Parameters:
+        tmp_path (Path): Working directory.
+        monkeypatch (pytest.MonkeyPatch): Recording seams.
+        original (str): `ORIGINALS` key; the refusal replaces that failure.
+    """
+    raised, _ = ORIGINALS[original]
+    seen = refuse_zombie_group(monkeypatch, raised, listing=True)
+    with pytest.raises(PermissionError) as caught:
+        run_exiting_leader(tmp_path)
+    assert caught.value.__context__ is raised
+    assert len(seen.listings) == 1
+    assert seen.signalled == [(seen.leaders[0].pid, signal.SIGKILL, True)]
+
+
+@pytest.mark.parametrize("failure", LISTING_FAILURES, ids=type)
+def test_eperm_with_a_failed_listing_surfaces_chained(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    """A listing that cannot explain the `EPERM` surfaces it, chained to the listing failure.
+
+    Parameters:
+        tmp_path (Path): Working directory.
+        monkeypatch (pytest.MonkeyPatch): Recording seams.
+        failure (Exception): injected `/bin/ps` failure.
+    """
+    raised, _ = ORIGINALS["timeout"]
+    seen = refuse_zombie_group(monkeypatch, raised, listing=failure)
+    with pytest.raises(PermissionError) as caught:
+        run_exiting_leader(tmp_path)
+    assert caught.value.__cause__ is failure
+    assert seen.signalled == [(seen.leaders[0].pid, signal.SIGKILL, True)]
 
 
 def test_probe_reports_cleanup_failure_with_the_primary_error(tmp_path: Path) -> None:
