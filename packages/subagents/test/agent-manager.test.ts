@@ -2855,11 +2855,11 @@ describe("AgentManager — the agent file's `isolation` wins over the spawn opti
   });
 });
 
-describe("AgentManager.countOwnedPending", () => {
+describe("AgentManager.ownedPending", () => {
   let manager: AgentManager;
   afterEach(() => manager?.dispose());
 
-  it("counts running and queued top-level agents; owned children and finished agents do not count", async () => {
+  it("splits running and queued top-level agents by whether their completion notifies; owned children and finished agents do not count", async () => {
     let finish!: () => void;
     vi.mocked(runAgent).mockImplementation(
       () => new Promise<any>(resolve => {
@@ -2867,19 +2867,25 @@ describe("AgentManager.countOwnedPending", () => {
       }),
     );
     manager = new AgentManager(undefined, 1);
-    expect(manager.countOwnedPending()).toBe(0);
+    expect(manager.ownedPending()).toEqual({ notifying: 0, silent: 0 });
 
     const spawn = (extra: Record<string, unknown>) =>
       manager.spawn(mockPi, mockCtx, "general-purpose", "p", { description: "p", isBackground: true, ...extra });
     const holder = spawn({});
-    expect(manager.countOwnedPending()).toBe(1);
+    expect(manager.ownedPending()).toEqual({ notifying: 1, silent: 0 });
     spawn({}); // queued behind the one-slot pool
     expect(manager.getRecord(holder)?.status).toBe("running");
-    expect(manager.countOwnedPending()).toBe(2);
+    expect(manager.ownedPending()).toEqual({ notifying: 2, silent: 0 });
 
     spawn({ parentAgentId: holder, depth: 2 });
     spawn({ workflowId: "wf_run1" });
-    expect(manager.countOwnedPending()).toBe(2);
+    expect(manager.ownedPending()).toEqual({ notifying: 2, silent: 0 });
+
+    // A foreground start, or an RPC spawn that omits `isBackground`: its
+    // settle marks the result consumed, so no completion notice is armed.
+    const detached = spawn({ isBackground: false });
+    expect(manager.getRecord(detached)?.status).toBe("running");
+    expect(manager.ownedPending()).toEqual({ notifying: 2, silent: 1 });
 
     manager.dispose();
     finish();
@@ -2888,6 +2894,6 @@ describe("AgentManager.countOwnedPending", () => {
     manager = new AgentManager();
     const done = spawn({});
     await manager.getRecord(done)!.promise;
-    expect(manager.countOwnedPending()).toBe(0);
+    expect(manager.ownedPending()).toEqual({ notifying: 0, silent: 0 });
   });
 });

@@ -5,6 +5,7 @@
  * - `monitor_start` / `monitor_read` / `monitor_stop` tools and a `/monitor` command (list, stop)
  * - output is coalesced for 2s in each monitor's ring buffer; only `match`, exit/timeout or
  *   `wake: true` emits a compact custom wake, while passive output stays out of the session
+ * - a run that settles with monitors running gets an info notice naming what each is armed to wake on
  * - every child dies on `session_shutdown`, which pi fires for quit AND for /new, /resume, /fork
  *   and /reload (a reload replaces the extension runtime, so a monitor could not be reattached
  *   anyway). A SIGKILLed pi leaves pidfiles; the next session sweeps only dead owners' files
@@ -18,7 +19,7 @@ import { Type } from "typebox";
 import { isChildSession, registerChildIdentity, registerParentTool } from "../child.ts";
 import { COLLAPSE_KEY_OFF, defaultConfig, type KitConfig } from "../config.ts";
 import { type ManagerOptions, MonitorError, MonitorManager } from "./manager.ts";
-import { formatDuration } from "./messages.ts";
+import { formatDuration, formatPendingMonitors } from "./messages.ts";
 import { boundTail } from "./output.ts";
 import { ensureRoot, rootDir, sessionDirName, sweepOrphans } from "./pidfiles.ts";
 import type { MonitorInfo } from "./types.ts";
@@ -113,6 +114,13 @@ export function register(
 	});
 
 	pi.on("session_shutdown", teardown);
+
+	// A run that settles with monitors running has not finished its work: say what is armed to wake
+	// the parent, instead of leaving a quiet prompt. No manager (a child session) means no monitors.
+	pi.on("agent_settled", (_event, ctx) => {
+		const message = formatPendingMonitors(manager?.running() ?? []);
+		if (message) ctx.ui.notify(message, "info");
+	});
 
 	registerParentTool(pi, {
 		name: "monitor_start",

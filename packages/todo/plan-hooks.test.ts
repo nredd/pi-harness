@@ -325,13 +325,17 @@ describe("settling with in_progress todos", () => {
 		await call(ctx, { action: "create", subject: "Ship the thing" });
 		await call(ctx, { action: "update", id: 1, status: "in_progress" });
 		await handler("agent_settled")({ type: "agent_settled" }, ctx);
-		expect(notices(ctx)).toEqual([["Run ended with 1 in_progress todo: #1 Ship the thing", "warning"]]);
+		expect(notices(ctx)).toEqual([
+			["Run ended with 1 in_progress todo (#1 Ship the thing), armed: no todo wakes the parent", "warning"],
+		]);
 	});
 
 	it("caps the list at three and counts the rest", () => {
 		const task = (id: number, status: string) => ({ id, subject: `t${id}`, status });
 		const state = { tasks: [1, 2, 3, 4, 5].map((id) => task(id, "in_progress")), nextId: 6 } as never;
-		expect(formatInProgressNotice(state)).toBe("Run ended with 5 in_progress todos: #1 t1, #2 t2, #3 t3, +2 more");
+		expect(formatInProgressNotice(state)).toBe(
+			"Run ended with 5 in_progress todos (#1 t1, #2 t2, #3 t3, +2 more), armed: no todo wakes the parent",
+		);
 	});
 
 	it("strips terminal escapes from the subjects", () => {
@@ -339,7 +343,9 @@ describe("settling with in_progress todos", () => {
 			tasks: [{ id: 1, subject: "a\u001b[31mred\u001b[0m", status: "in_progress" }],
 			nextId: 2,
 		} as never;
-		expect(formatInProgressNotice(state)).toBe("Run ended with 1 in_progress todo: #1 ared");
+		expect(formatInProgressNotice(state)).toBe(
+			"Run ended with 1 in_progress todo (#1 ared), armed: no todo wakes the parent",
+		);
 	});
 
 	it("stays silent in Plan mode", async () => {
