@@ -197,13 +197,21 @@ test("a snapshot that throws answers active with a policy refusing every tool", 
 
 test("Plan refuses subagent tools unless a compatible gate answers, and announces itself at start", async () => {
   const mock = createMockPi({
-    activeTools: ["read", "Agent", "steer_subagent"],
-    allTools: [builtinTool("read"), extensionTool("Agent"), extensionTool("steer_subagent")],
+    activeTools: ["read", "Agent", "steer_subagent", "get_subagent_result"],
+    allTools: [
+      builtinTool("read"),
+      extensionTool("Agent"),
+      extensionTool("steer_subagent"),
+      extensionTool("get_subagent_result"),
+    ],
   });
   planMode(mock.pi, {
     readSettings: async () => ({
       kind: "loaded" as const,
-      settings: { thinkingLevel: "inherit" as const, defaultPlanTools: ["read", "Agent", "steer_subagent"] },
+      settings: {
+        thinkingLevel: "inherit" as const,
+        defaultPlanTools: ["read", "Agent", "steer_subagent", "get_subagent_result"],
+      },
     }),
   });
   const asked: unknown[] = [];
@@ -226,6 +234,10 @@ test("Plan refuses subagent tools unless a compatible gate answers, and announce
       reason: `Plan mode blocks '${toolName}' because no compatible subagent gate answered, so a child it starts would not plan. Install @nredd/pi-subagents with Plan support (see the pi-plan-mode README).`,
     });
   }
+  // Only the tools that start or resume a child need the gate; the rest (reading a result, stopping) stay usable.
+  const askedBefore = asked.length;
+  assert.equal(await hook?.({ toolName: "get_subagent_result", input: {} }, context.ctx), undefined);
+  assert.equal(asked.length, askedBefore, "a non-spawning subagent tool never asks for the gate");
   gateVersion = 2;
   const stale = (await hook?.({ toolName: "Agent", input: {} }, context.ctx)) as { block?: boolean } | undefined;
   assert.equal(stale?.block, true);

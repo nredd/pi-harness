@@ -1239,7 +1239,7 @@ A child started while the parent session is in [`pi-plan-mode`](../plan-mode/REA
 - The child's prompt says it is in Plan mode, and its expanded `Agent` row and conversation viewer tags read `plan`
 - Extension tools are classified from the child's own tool metadata (`sourceInfo`): a tool the planner selected is admitted only from the same source path, so a project-scope copy, or a project-scope `readOnlyHint`, stays blocked
 - An answer saying Plan is active but carrying no policy this extension understands fails closed to `read`, `grep`, `find` and `ls`. Without `pi-plan-mode` nothing answers and nothing changes
-- Plan mode and this extension shake hands (`pi-plan-mode:gate-query`): Plan blocks `Agent`, `SubagentWorkflow` and `steer_subagent` while active unless this gate answers, and once Plan mode has shown itself a state query nobody answers refuses the spawn (a resume runs fail-closed). Needs `@nredd/pi-plan-mode` newer than `0.59.3-nredd.3` with this extension newer than `0.22.0-nredd.8`; update both together
+- Plan mode and this extension shake hands (`pi-plan-mode:gate-query`): Plan blocks `Agent`, `SubagentWorkflow` and `steer_subagent` while active unless this gate answers (only those three: `get_subagent_result` and stopping an agent mutate nothing and stay available in Plan), and once Plan mode has shown itself a state query nobody answers refuses the spawn (a resume runs fail-closed). Needs `@nredd/pi-plan-mode` newer than `0.59.3-nredd.3` with this extension newer than `0.22.0-nredd.8`; update both together
 
 What Plan does not reach:
 
