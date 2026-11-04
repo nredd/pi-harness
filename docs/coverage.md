@@ -78,9 +78,11 @@ producers emit `BRDA` rows like the benchmark's `branch = true` producer already
 
 Starting caps are the counts measured on this policy's introducing PR, per OS, from hosted artifacts
 (WSL folded into `linux` as the max): run `41925923830` (`5a0a596e`, #429). Every cap equals that run
-except where two runs on an unchanged source tree differed, which keep the max: `plan-mode` 227
-(`src/plan-mode.ts` 69 in main run `41914882314` versus 68, no plan-mode change between them) and
-`dev-tools/bun` linux 245 (WSL 244 in `41914882314`, 245 here). They are references on the way down, not waivers: #404-#424 each
+except where another run on an unchanged source tree measured more, which keeps the max: `plan-mode`
+227 (`src/plan-mode.ts` 69 in main run `41914882314` versus 68), `dev-tools/bun` linux 246
+(`src/resource/index.ts` 10 versus 9 in #429 run `41930895814`) and `python-scripts` linux 74
+(`package_contracts.py` 8 versus 7 in `41930895814`; its only change was a contract list entry). They
+are references on the way down, not waivers: #404-#424 each
 lower their own signal's cap toward 0 and never raise one, then #425 locks every cap and `target.branches`
 at 0.
 
