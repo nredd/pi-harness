@@ -5,10 +5,10 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { test } from "vitest";
 
-const checker = fileURLToPath(new URL("./check-commit-messages.mjs", import.meta.url));
+const checker = fileURLToPath(new URL("../scripts/check-commit-messages.mjs", import.meta.url));
 const env = Object.fromEntries(
 	Object.entries(process.env).filter(
 		([key]) => !key.startsWith("GIT_") && !key.startsWith("GITHUB_") && key !== "COMMIT_RANGE",
@@ -19,7 +19,7 @@ Object.assign(env, { GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: "1" });
 
 function fixture(t) {
 	const work = mkdtempSync(path.join(os.tmpdir(), "cu-commit-range-"));
-	t.after(() => rmSync(work, { recursive: true, force: true }));
+	t.onTestFinished(() => rmSync(work, { recursive: true, force: true }));
 	const repo = path.join(work, "repo");
 	mkdirSync(repo);
 	const git = (...args) =>

@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
-import { GROUP_KILL_WAIT_MS, GROUP_TERM_GRACE_MS, PS_TIMEOUT_MS, isOwnableGroup, listGroupStates, reapProcessGroup, runCancellable, zombieOnlyListing } from "./setup-helper.mjs";
+import { test, vi } from "vitest";
+import { GROUP_KILL_WAIT_MS, GROUP_TERM_GRACE_MS, PS_TIMEOUT_MS, isOwnableGroup, listGroupStates, reapProcessGroup, runCancellable, zombieOnlyListing } from "../scripts/setup-helper.mjs";
 
 const execute = promisify(execFile);
-const setupUrl = new URL("./setup-helper.mjs", import.meta.url).href;
+const setupUrl = new URL("../scripts/setup-helper.mjs", import.meta.url).href;
 
 /** @returns {Promise<void>} Verifies absence is terminal even if the ID is immediately recycled. @throws {Error} On assertion failure. */
 async function verifyTerminalAbsence() {
@@ -154,7 +154,7 @@ async function verifyCancelledCleanup() {
 
 /** @returns {Promise<void>} Verifies PID-less spawn failure removes every installed listener and never probes. @throws {Error} On assertion failure. */
 async function verifySpawnFailure() {
-	const { runCancellable } = await import("./setup-helper.mjs");
+	const { runCancellable } = await import("../scripts/setup-helper.mjs");
 	const signals = ["SIGTERM", "SIGINT", "SIGHUP", "exit"];
 	const before = signals.map((signal) => process.listenerCount(signal));
 	const calls = [];
@@ -572,13 +572,14 @@ async function verifyInconclusiveListing() {
 }
 
 /**
- * @param {import('node:test').TestContext} t Test context; its mock restores `Date.now`.
+ * @param {import('vitest').TestContext} t Test context; restores `Date.now` when the test finishes.
  * @returns {Promise<void>} Verifies slow listings cannot carry a stage past the overall budget. @throws {Error} On assertion failure.
  */
 async function verifyStageBudgetCap(t) {
 	// A virtual clock that only `ps` advances, by its full bound per run, so the result is independent of load.
 	let clock = 0;
-	t.mock.method(Date, "now", () => clock);
+	const now = vi.spyOn(Date, "now").mockImplementation(() => clock);
+	t.onTestFinished(() => now.mockRestore());
 	const first = Object.assign(new Error("EPERM"), { code: "EPERM" });
 	const calls = [];
 	await assert.rejects(
@@ -658,6 +659,8 @@ async function verifyUnownableExitBackstop() {
 	for (const pid of [1, 0, -1]) assert.deepEqual(await exitBackstopTrace(pid), [], `pid ${pid} must get no exit-time kill`);
 }
 
+// Only Darwin answers EPERM for a zombie-only group; elsewhere Vitest reports these real-group cases as skipped.
+const testDarwin = test.skipIf(process.platform !== "darwin");
 test("ESRCH is terminal, including signal-time disappearance", verifyTerminalAbsence);
 test("EPERM and EIO preserve probe and delivery failures", verifySyscallErrors);
 test("invalid group IDs never reach kill", verifyInvalidGroups);
@@ -669,11 +672,11 @@ test("a zombie-only EPERM group is waited on until ESRCH", verifyDrainingZombieG
 test("EPERM without a proven zombie-only group stays a permission failure", verifyRealPermissionFailure);
 test("a timed-out listing keeps a zombie-only group draining without signalling", verifyUnknownListingKeepsDraining);
 test("listGroupStates reads live, reaped and absent members from ps", verifyListGroupStates);
-test("real Darwin zombie-only group drains to ESRCH", { skip: process.platform !== "darwin" && "only Darwin answers EPERM for a zombie-only group" }, verifyRealDarwinZombieGroup);
-test("real Darwin zombie-only group that never drains is not reaped", { skip: process.platform !== "darwin" && "only Darwin answers EPERM for a zombie-only group" }, verifyRealPersistentZombieGroup);
+testDarwin("real Darwin zombie-only group drains to ESRCH", verifyRealDarwinZombieGroup);
+testDarwin("real Darwin zombie-only group that never drains is not reaped", verifyRealPersistentZombieGroup);
 test("pgid 1 is rejected before any kill (injected kill only)", verifyBroadcastGroupRejected);
 test("EPERM with a failing listing rejects after the budget; a never-observed group at once", verifyInconclusiveListing);
 test("slow listings cannot carry a stage past the overall budget", verifyStageBudgetCap);
 test("runCancellable never reaps an unownable child pid (injected kill only)", verifyUnownableChild);
 test("runCancellable exit backstop skips an unownable child pid (recording kill only)", verifyUnownableExitBackstop);
-test("real Darwin zombie reaped between EPERM and ps keeps draining", { skip: process.platform !== "darwin" && "only Darwin answers EPERM for a zombie-only group" }, verifyRealReapBeforeListing);
+testDarwin("real Darwin zombie reaped between EPERM and ps keeps draining", verifyRealReapBeforeListing);

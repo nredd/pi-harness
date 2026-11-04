@@ -1,65 +1,117 @@
-#!/usr/bin/env node
 // Whole-desktop tools: input validation and helper wire mapping (no real input is posted).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { test } from "vitest";
 
-// Static native wiring checks supplement mocked calls below. They do not prove live GUI behavior.
-const swift = readFileSync(new URL("../native/macos/bridge.swift", import.meta.url), "utf8");
-assert.match(swift, /case "captureDisplay":\s+return try captureDisplay\(request\)/, "native display capture dispatch must remain");
-assert.match(swift, /case "desktopInput":\s+return try desktopInput\(request\)/, "native desktop input dispatch must remain");
-assert.match(swift, /let cursor = CGEvent\(source: nil\)\?\.location/, "cursor readback must use top-left global coordinates");
-assert.match(swift, /for step in interpolatedDragPoints\(/, "native drags must interpolate");
-assert.match(swift, /let tiers:[^\n]+bundleIdentifier[^\n]+localizedName[^\n]+executableURL/, "activation must rank bundle id before name before executable");
-assert.match(swift, /code: "ambiguous_app"/, "ambiguous activation must fail closed");
-assert.match(swift, /executableURL = URL\(fileURLWithPath: "\/usr\/bin\/open"\)/, "activation must use killable open subprocess");
-assert.match(swift, /NSPasteboard\.general\.string\(forType: \.string\)/, "native clipboard read must remain");
-assert.match(swift, /NSPasteboard\.general\.setString\(text, forType: \.string\)/, "native clipboard write must remain");
+test("desktop tool validation, locking and off-macOS refusal", async () => {
+	// Static native wiring checks supplement mocked calls below. They do not prove live GUI behavior.
+	const swift = readFileSync(new URL("../native/macos/bridge.swift", import.meta.url), "utf8");
+	assert.match(swift, /case "captureDisplay":\s+return try captureDisplay\(request\)/, "native display capture dispatch must remain");
+	assert.match(swift, /case "desktopInput":\s+return try desktopInput\(request\)/, "native desktop input dispatch must remain");
+	assert.match(swift, /let cursor = CGEvent\(source: nil\)\?\.location/, "cursor readback must use top-left global coordinates");
+	assert.match(swift, /for step in interpolatedDragPoints\(/, "native drags must interpolate");
+	assert.match(swift, /let tiers:[^\n]+bundleIdentifier[^\n]+localizedName[^\n]+executableURL/, "activation must rank bundle id before name before executable");
+	assert.match(swift, /code: "ambiguous_app"/, "ambiguous activation must fail closed");
+	assert.match(swift, /executableURL = URL\(fileURLWithPath: "\/usr\/bin\/open"\)/, "activation must use killable open subprocess");
+	assert.match(swift, /NSPasteboard\.general\.string\(forType: \.string\)/, "native clipboard read must remain");
+	assert.match(swift, /NSPasteboard\.general\.setString\(text, forType: \.string\)/, "native clipboard write must remain");
 
-const { macosHelper } = await import("../src/platform/macos/helper.ts");
-const { executeDesktopInput, executeDesktopScreenshot, validateDesktopInput } = await import("../src/desktop.ts");
+	const { executeDesktopInput, validateDesktopInput } = await import("../src/desktop.ts");
 
-for (const bad of [
-	{ action: "click", x: Number.NaN, y: 1 },
-	{ action: "click", x: 1, y: 1, clickCount: 4 },
-	{ action: "scroll", x: 1, y: 1 },
-	{ action: "drag", path: [{ x: 1, y: 1 }] },
-	{ action: "typeText", text: "" },
-	{ action: "keypress", keys: [] },
-	{ action: "activateApp" },
-	{ action: "activateApp", app: "  " },
-	{ action: "writeClipboard", text: "" },
-	{ action: "writeClipboard" },
-	{ action: "bogus" },
-])
+	for (const bad of [
+		{ action: "click", x: Number.NaN, y: 1 },
+		{ action: "click", x: 1, y: 1, clickCount: 4 },
+		{ action: "scroll", x: 1, y: 1 },
+		{ action: "drag", path: [{ x: 1, y: 1 }] },
+		{ action: "typeText", text: "" },
+		{ action: "keypress", keys: [] },
+		{ action: "activateApp" },
+		{ action: "activateApp", app: "  " },
+		{ action: "writeClipboard", text: "" },
+		{ action: "writeClipboard" },
+		{ action: "bogus" },
+	])
+		assert.throws(
+			() => validateDesktopInput(bad),
+			undefined,
+			JSON.stringify(bad),
+		);
+	for (const good of [
+		{ action: "moveMouse", x: -500, y: 20 },
+		{ action: "click", x: 1, y: 2, button: "right", clickCount: 2 },
+		{ action: "scroll", x: 1, y: 1, scrollY: -3 },
+		{
+			action: "drag",
+			path: [
+				{ x: 0, y: 0 },
+				{ x: 5, y: 5 },
+			],
+		},
+		{ action: "typeText", text: "hi" },
+		{ action: "keypress", keys: ["cmd+space"] },
+		{ action: "activateApp", app: "com.apple.TextEdit" },
+		{ action: "readClipboard" },
+		{ action: "writeClipboard", text: "x" },
+	])
+		assert.doesNotThrow(() => validateDesktopInput(good));
 	assert.throws(
-		() => validateDesktopInput(bad),
-		undefined,
-		JSON.stringify(bad),
+		() => validateDesktopInput({ action: "scroll", x: 1, y: 1, scrollY: 0.5 }),
+		/whole-number/,
 	);
-for (const good of [
-	{ action: "moveMouse", x: -500, y: 20 },
-	{ action: "click", x: 1, y: 2, button: "right", clickCount: 2 },
-	{ action: "scroll", x: 1, y: 1, scrollY: -3 },
-	{
-		action: "drag",
-		path: [
-			{ x: 0, y: 0 },
-			{ x: 5, y: 5 },
-		],
-	},
-	{ action: "typeText", text: "hi" },
-	{ action: "keypress", keys: ["cmd+space"] },
-	{ action: "activateApp", app: "com.apple.TextEdit" },
-	{ action: "readClipboard" },
-	{ action: "writeClipboard", text: "x" },
-])
-	assert.doesNotThrow(() => validateDesktopInput(good));
-assert.throws(
-	() => validateDesktopInput({ action: "scroll", x: 1, y: 1, scrollY: 0.5 }),
-	/whole-number/,
-);
 
-if (process.platform === "darwin") {
+	if (process.platform !== "darwin") {
+		// Execution is darwin-only by design; the wire mapping and gating test below is skipped here.
+		await assert.rejects(
+			executeDesktopInput("x", { action: "click", x: 1, y: 1 }),
+			/only implemented on macOS/,
+		);
+	}
+
+	// Calls are serialized across a cooperative microtask yield, not an assumed delay.
+	const { withDesktopLock } = await import("../src/desktop.ts");
+	const order = [];
+	await Promise.all([
+		withDesktopLock(
+			/** @returns {Promise<void>} Records a cooperative lock-held transaction. @throws {never} No intentional failures. */
+			async () => {
+				order.push("a1");
+				await Promise.resolve();
+				order.push("a2");
+			},
+		),
+		withDesktopLock(async () => {
+			order.push("b1");
+			order.push("b2");
+		}),
+	]);
+	assert.deepEqual(order, ["a1", "a2", "b1", "b2"]);
+
+	// An aborted, still-queued call never runs.
+	const controller = new AbortController();
+	const ran = [];
+	const slow = withDesktopLock(
+		/** @returns {Promise<void>} Yields once while retaining desktop ownership. @throws {never} No intentional failures. */
+		async () => {
+			await Promise.resolve();
+			ran.push("slow");
+		},
+	);
+	const queued = withDesktopLock(async () => {
+		ran.push("queued");
+	}, controller.signal);
+	controller.abort();
+	await slow;
+	await assert.rejects(queued, /aborted/);
+	assert.deepEqual(ran, ["slow"]);
+});
+
+test.skipIf(process.platform !== "darwin")("desktop helper wire mapping and gating", async ({ onTestFinished }) => {
+	const { macosHelper } = await import("../src/platform/macos/helper.ts");
+	const command = macosHelper.command;
+	onTestFinished(() => {
+		macosHelper.command = command;
+	});
+	const { executeDesktopInput, executeDesktopScreenshot } = await import("../src/desktop.ts");
 	const sent = [];
 	/**
 	 * Record desktop-input wire calls.
@@ -189,56 +241,4 @@ if (process.platform === "darwin") {
 	delete process.env.PI_COMPUTER_USE_HEADLESS;
 	loadComputerUseConfig(process.cwd());
 	assert.equal(sent.length, before, "gated calls must not reach the helper");
-} else {
-	// Execution is darwin-only by design; prove it refuses, then report what this host cannot check.
-	await assert.rejects(
-		executeDesktopInput("x", { action: "click", x: 1, y: 1 }),
-		/only implemented on macOS/,
-	);
-	console.log(
-		"NOT RUN desktop helper wire mapping and gating checks (requires macOS)",
-	);
-}
-
-// Calls are serialized across a cooperative microtask yield, not an assumed delay.
-const { withDesktopLock } = await import("../src/desktop.ts");
-const order = [];
-await Promise.all([
-	withDesktopLock(
-		/** @returns {Promise<void>} Records a cooperative lock-held transaction. @throws {never} No intentional failures. */
-		async () => {
-			order.push("a1");
-			await Promise.resolve();
-			order.push("a2");
-		},
-	),
-	withDesktopLock(async () => {
-		order.push("b1");
-		order.push("b2");
-	}),
-]);
-assert.deepEqual(order, ["a1", "a2", "b1", "b2"]);
-
-// An aborted, still-queued call never runs.
-const controller = new AbortController();
-const ran = [];
-const slow = withDesktopLock(
-	/** @returns {Promise<void>} Yields once while retaining desktop ownership. @throws {never} No intentional failures. */
-	async () => {
-		await Promise.resolve();
-		ran.push("slow");
-	},
-);
-const queued = withDesktopLock(async () => {
-	ran.push("queued");
-}, controller.signal);
-controller.abort();
-await slow;
-await assert.rejects(queued, /aborted/);
-assert.deepEqual(ran, ["slow"]);
-
-console.log(
-	process.platform === "darwin"
-		? "desktop tool checks passed"
-		: "desktop tool validation and lock checks passed (wire mapping and gating NOT RUN)",
-);
+});

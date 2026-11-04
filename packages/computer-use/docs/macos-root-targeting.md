@@ -54,7 +54,7 @@ Measured, not assumed:
 - Root deltas in `act_ui` results carry helper-native refs until `normalizeRootDeltaRefs()` maps them, once per
   transaction, to the extension's `@rN` for the same root (registered from `listRoots`, keyed by `windowId`, the
   same identity `find_roots` uses). An earlier mapper registered a placeholder record under a different identity, so
-  a dialog got `@r2` in the action result and `@r3` from `find_roots`; `check-unpaired-act.mjs` guards this and fails
+  a dialog got `@r2` in the action result and `@r3` from `find_roots`; `test/unpaired-act.test.mjs` guards this and fails
   on the old code. Verified live on Bambu's Open panel (delta `@r2` == `find_roots` `@r2`). A delta whose root is
   gone (`closed`) reuses the existing record, or shows no ref.
 - Element refs live as long as their look: the helper keeps 8 look records and drops a look's element refs when it
@@ -167,7 +167,7 @@ Bugs found by the live run and fixed:
 - `activateApp` launched Calculator (not running) and switched Finder <-> TextEdit; unknown names -> `app_not_found`.
 - `desktop_input` moves running concurrently with a background `act_ui` click on Fusion: both completed, no errors.
 - No natural unpaired dialog was found (the alert and Open panel pair with `low`/`exact`). The unpaired path is covered by the ref-only live
-  runs above and by `scripts/check-unpaired-act.mjs` (stubbed backend).
+  runs above and by `test/unpaired-act.test.mjs` (stubbed backend).
 
 Notes: desktop tools and `act_ui` share one lock. An `act_ui` transaction takes it lazily at its first foreground
 (physical HID) step (the `needsForeground`/current-focus case, the side-effect-free foreground retry, the
