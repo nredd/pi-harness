@@ -112,8 +112,7 @@ export async function ask(
 		.slice(before)
 		.filter((e) => e.toolName === "Agent");
 	expect(ends).toHaveLength(1);
-	const end = ends[0];
-	if (!end) throw new Error("Agent never settled");
+	const [end] = ends as [(typeof ends)[number]];
 	const text = getMessageText(end.result);
 	expect(end.isError, text).toBe(false);
 	expect(h.getPendingResponseCount(), text).toBe(0);

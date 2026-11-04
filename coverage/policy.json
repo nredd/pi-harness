@@ -25,8 +25,7 @@
     { "path": "scripts/run-vitest.ts", "reason": "Verification-only launcher creates disposable test homes and forwards runner arguments; never shipped as a product entrypoint." },
     { "path": "scripts/check-biome-paths.mjs", "reason": "Verification-only lint-path preflight for workspace development commands; package tarballs contain only each package's declared files." },
     { "path": "scripts/check-biome-paths.test.mjs", "reason": "Non-shipped regression test exercises real Biome valid/missing-path behavior and preflight rejection; verification only, not a runtime entrypoint." },
-    { "path": "integration/inprocess/verification/home-guard.ts", "reason": "Verification-only assertion checks worker home boundaries; imported only by test setup and guard regressions, never shipped." },
-    { "path": "integration/inprocess/verification/home-setup.ts", "reason": "Vitest-only lifecycle setup installs home-boundary assertions; never shipped or invoked by production." },
+    { "path": "integration/inprocess/verification/home-setup.ts", "reason": "Vitest setup entry that only calls the measured `installHomeGuard` in `home-guard.ts`; Vitest hard-excludes a config's own `setupFiles` from coverage, so no producer can measure it. Never shipped." },
     { "path": "scripts/router_contract.mjs", "reason": "Stock-Pi packed-router contract fixture with synthetic usage and template imports; verification only, not a shipped router entrypoint." },
     { "path": "packages/computer-use/scripts/check-commit-messages.mjs", "reason": "Repository commit-message policy checker, not runtime code or a published package file." },
     { "path": "packages/computer-use/scripts/check-linux-live.mjs", "reason": "Opt-in D-Bus session launcher for the live Linux Vitest scenario in test/linux-live.test.mjs; holds no assertions and is absent from published files." },
@@ -403,29 +402,20 @@
     },
     "inprocess": {
       "root": "integration/inprocess",
-      "owned": ["support.ts", "goal-support.ts", "native-timers.ts"],
-      "exclusions": [
-        { "path": "agents-support.ts", "kind": "test-helper", "reason": "In-process test assertions and fixture factories, not production behavior." },
-        { "path": "todo-support.ts", "kind": "test-helper", "reason": "In-process todo test host fixture and assertion helpers, not production behavior." }
-      ],
+      "owned": ["agents-support.ts", "goal-support.ts", "native-timers.ts", "support.ts", "todo-support.ts", "verification/home-guard.ts"],
+      "exclusions": [],
       "status": "measured",
-      "goal": "report-only",
-      "goal_reason": "Owner classifies the in-process verification host as report-only, outside the production-package goal.",
-      "note": "Verification infrastructure, measured separately from production packages.",
+      "note": "In-process stack fixtures, measured with every fixture module the suites run. `verification/home-setup.ts` stays a verification helper: Vitest hard-excludes its own `setupFiles` from coverage.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "enforcement": "report-only",
-          "reason": "Verification host retained for diagnostics, not a production-package 100-percent target.",
-          "max_uncovered": { "darwin": { "lines": 15, "functions": 4 }, "linux": { "lines": 25, "functions": 8 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-
-          "max_uncovered": { "darwin": { "lines": 17, "functions": 4 }, "linux": { "lines": 27, "functions": 8 } },
-          "enforcement": "report-only",
-          "reason": "Current Bun producer is not yet verified as a full source-complete port. Flip this package to enforced when its full suite runs under Bun and the Bun inventory covers every owned source file: https://github.com/nredd/pi-harness/issues/160.",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
+          "enforcement": "enforced",
           "reporters": ["text", "lcov"]
         }
       }

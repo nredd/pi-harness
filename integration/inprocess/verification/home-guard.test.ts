@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
-import { assertHomeDirectory } from "./home-guard.ts";
+import { assertHomeDirectory, type GuardListener, installHomeGuard } from "./home-guard.ts";
 
 const FAILURE_EXIT_STATUS = 1;
 const root = fileURLToPath(new URL("../../../", import.meta.url));
@@ -25,6 +25,31 @@ test("missing HOME fails closed", () => {
 	try {
 		delete process.env.HOME;
 		expect(() => assertHomeDirectory("missing.test.ts", undefined, "/real-home")).toThrow(/HOMEDIR GUARD/);
+	} finally {
+		if (previous === undefined) delete process.env.HOME;
+		else process.env.HOME = previous;
+	}
+});
+
+test("installed guard checks setup and both per-test boundaries", () => {
+	const before: GuardListener[] = [];
+	const after: GuardListener[] = [];
+	const hooks = {
+		beforeEach: (listener: GuardListener) => before.push(listener),
+		afterEach: (listener: GuardListener) => after.push(listener),
+	};
+	const context = { task: { file: { filepath: "boundary.test.ts" } } };
+	installHomeGuard("setup.test.ts", hooks);
+	expect([before.length, after.length]).toEqual([1, 1]);
+	for (const listener of [...before, ...after]) expect(() => listener(context)).not.toThrow();
+	const previous = process.env.HOME;
+	try {
+		delete process.env.HOME;
+		expect(() => installHomeGuard(undefined, hooks)).toThrow(/^HOMEDIR GUARD: <unknown test file>:/);
+		expect([before.length, after.length]).toEqual([1, 1]);
+		for (const listener of [...before, ...after]) {
+			expect(() => listener(context)).toThrow(/^HOMEDIR GUARD: boundary\.test\.ts:/);
+		}
 	} finally {
 		if (previous === undefined) delete process.env.HOME;
 		else process.env.HOME = previous;
