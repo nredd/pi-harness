@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
-import { listGroupStates, reapProcessGroup, zombieOnlyListing } from "./setup-helper.mjs";
+import { GROUP_KILL_WAIT_MS, GROUP_TERM_GRACE_MS, PS_TIMEOUT_MS, isOwnableGroup, listGroupStates, reapProcessGroup, runCancellable, zombieOnlyListing } from "./setup-helper.mjs";
 
 const execute = promisify(execFile);
 const setupUrl = new URL("./setup-helper.mjs", import.meta.url).href;
@@ -397,10 +398,10 @@ async function zombieOnlyGroup() {
 			} catch {
 				// Recorded by `tracked`; readiness keeps polling inside its budget.
 			}
-			assert.ok(
-				Date.now() < deadline,
-				`premise: group ${pgid} not zombie-only within ${ZOMBIE_READY_MS}ms; last non-empty listing [${lastListing}], leader row "${processRow(pgid)}", ${tracked.describe()}`,
-			);
+			// Build the message only on failure: `processRow` is another synchronous `ps`.
+			if (Date.now() >= deadline) {
+				assert.fail(`premise: group ${pgid} not zombie-only within ${ZOMBIE_READY_MS}ms; last non-empty listing [${lastListing}], leader row "${processRow(pgid)}", ${tracked.describe()}`);
+			}
 			await delay(10);
 		}
 		// Ownership before any real group syscall: the zombie leads its own group and is the holder's child.
@@ -478,7 +479,9 @@ async function verifyRealReapBeforeListing() {
 					if (error.code === "ESRCH") break;
 					assert.equal(error.code, "EPERM", "premise: only EPERM or ESRCH while the zombie drains");
 				}
-				assert.ok(Date.now() < deadline, `premise: holder ${holder.pid} never reaped group ${group} within ${ZOMBIE_READY_MS}ms; leader row "${processRow(group)}"`);
+				if (Date.now() >= deadline) {
+					assert.fail(`premise: holder ${holder.pid} never reaped group ${group} within ${ZOMBIE_READY_MS}ms; leader row "${processRow(group)}"`);
+				}
 				sleepSync(1);
 			}
 			return listGroupStates(group);
@@ -568,6 +571,93 @@ async function verifyInconclusiveListing() {
 	assert.equal(probes, 3);
 }
 
+/**
+ * @param {import('node:test').TestContext} t Test context; its mock restores `Date.now`.
+ * @returns {Promise<void>} Verifies slow listings cannot carry a stage past the overall budget. @throws {Error} On assertion failure.
+ */
+async function verifyStageBudgetCap(t) {
+	// A virtual clock that only `ps` advances, by its full bound per run, so the result is independent of load.
+	let clock = 0;
+	t.mock.method(Date, "now", () => clock);
+	const first = Object.assign(new Error("EPERM"), { code: "EPERM" });
+	const calls = [];
+	await assert.rejects(
+		reapProcessGroup(424242, (pid, signal) => {
+			calls.push([pid, signal]);
+			throw calls.length === 1 ? first : Object.assign(new Error("EPERM"), { code: "EPERM" });
+		}, () => {
+			clock += PS_TIMEOUT_MS;
+			throw Object.assign(new Error("spawnSync /bin/ps ETIMEDOUT"), { code: "ETIMEDOUT" });
+		}),
+		(actual) => actual === first,
+	);
+	const budget = GROUP_TERM_GRACE_MS + GROUP_KILL_WAIT_MS;
+	assert.ok(clock >= budget, `the unexplained EPERM is probed through the whole budget (ended at ${clock}ms)`);
+	// SIGKILL is withheld while the EPERM is pending, so only the TERM stage's last probe and the KILL stage's
+	// first can run past the budget. An uncapped KILL stage would keep its own 500ms from wherever TERM ended.
+	assert.ok(clock - budget <= 2 * PS_TIMEOUT_MS, `slow listings overran the ${budget}ms budget by ${clock - budget}ms`);
+	assert.ok(calls.every(([pid, signal]) => pid === -424242 && signal === 0), "no signal follows an unexplained EPERM");
+}
+
+/**
+ * @param {number|undefined} pid Pid the fake child reports.
+ * @returns {EventEmitter & {pid: number|undefined}} A child that never runs anything, for the `spawnChild` seam.
+ * @throws {never} Construction cannot fail.
+ */
+function fakeChild(pid) {
+	return Object.assign(new EventEmitter(), { pid });
+}
+
+/** @returns {Promise<void>} Verifies `runCancellable` never reaps or probes a child pid that cannot be an owned group. @throws {Error} On assertion failure. */
+async function verifyUnownableChild() {
+	assert.deepEqual([undefined, Number.NaN, 1.5, -2, -1, 0, 1, 2].map(isOwnableGroup), [false, false, false, false, false, false, false, true]);
+	const signals = ["SIGTERM", "SIGINT", "SIGHUP", "exit"];
+	const before = signals.map((signal) => process.listenerCount(signal));
+	for (const pid of [1, 0, -1]) {
+		const child = fakeChild(pid);
+		const calls = [];
+		const running = runCancellable("pi-cleanup-fake", [], {
+			kill: (...call) => {
+				calls.push(call);
+				return true;
+			},
+			listStates: () => assert.fail(`listing must not run for pid ${pid}`),
+			spawnChild: () => child,
+		});
+		child.emit("close", 0, null);
+		await assert.rejects(running, /owned positive process-group ID above 1/);
+		assert.deepEqual(calls, [], `close-time cleanup of pid ${pid} must make no kill call`);
+		assert.deepEqual(signals.map((signal) => process.listenerCount(signal)), before);
+	}
+}
+
+/**
+ * @param {number} pid Pid the fake child reports.
+ * @returns {Promise<unknown[]>} Every `kill` call the exit-time backstop made, through a recording `kill`.
+ * @throws {Error} On wrapper failure or malformed output.
+ */
+async function exitBackstopTrace(pid) {
+	// The child never closes, so only the exit-time backstop can reach `kill`, and it only records.
+	const program = `
+import { EventEmitter } from "node:events";
+import { runCancellable } from ${JSON.stringify(setupUrl)};
+const trace = [];
+const child = Object.assign(new EventEmitter(), { pid: ${pid} });
+void runCancellable("pi-cleanup-fake", [], { kill: (pid, signal) => { trace.push([pid, signal]); return true; }, listStates: () => [], spawnChild: () => child });
+process.on("exit", () => console.log(JSON.stringify(trace)));
+process.exit(0);
+`;
+	const { stdout } = await execute(process.execPath, ["--input-type=module", "-e", program], { timeout: 5000 });
+	return JSON.parse(stdout.trim());
+}
+
+/** @returns {Promise<void>} Verifies the exit-time backstop is live for an ownable pid and silent for 1, 0 and -1. @throws {Error} On assertion failure. */
+async function verifyUnownableExitBackstop() {
+	// Control first, so silence below is not vacuous: an ownable pid gets a probe, then the exit KILL.
+	assert.deepEqual(await exitBackstopTrace(424242), [[-424242, 0], [-424242, "SIGKILL"]]);
+	for (const pid of [1, 0, -1]) assert.deepEqual(await exitBackstopTrace(pid), [], `pid ${pid} must get no exit-time kill`);
+}
+
 test("ESRCH is terminal, including signal-time disappearance", verifyTerminalAbsence);
 test("EPERM and EIO preserve probe and delivery failures", verifySyscallErrors);
 test("invalid group IDs never reach kill", verifyInvalidGroups);
@@ -583,4 +673,7 @@ test("real Darwin zombie-only group drains to ESRCH", { skip: process.platform !
 test("real Darwin zombie-only group that never drains is not reaped", { skip: process.platform !== "darwin" && "only Darwin answers EPERM for a zombie-only group" }, verifyRealPersistentZombieGroup);
 test("pgid 1 is rejected before any kill (injected kill only)", verifyBroadcastGroupRejected);
 test("EPERM with a failing listing rejects after the budget; a never-observed group at once", verifyInconclusiveListing);
+test("slow listings cannot carry a stage past the overall budget", verifyStageBudgetCap);
+test("runCancellable never reaps an unownable child pid (injected kill only)", verifyUnownableChild);
+test("runCancellable exit backstop skips an unownable child pid (recording kill only)", verifyUnownableExitBackstop);
 test("real Darwin zombie reaped between EPERM and ps keeps draining", { skip: process.platform !== "darwin" && "only Darwin answers EPERM for a zombie-only group" }, verifyRealReapBeforeListing);
