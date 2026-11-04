@@ -1362,6 +1362,20 @@ def test_python_signals_skip_exactly_the_hosts_without_a_pytest_gate(os_name: st
         assert (guest in skipped) == (gate not in ci_paths.OWNED_GATES[os_name])
 
 
+def pool_runs_on(name_format: str, args: str) -> str:
+    """Return the `runs-on` expression of a cell that a self-hosted pool may take.
+
+    Parameters:
+        name_format (str): The check name's `format` string, e.g. `contracts ({0})`.
+        args (str): The matrix arguments it formats.
+
+    Returns:
+        str: A bypass cell runs hosted; a running one on the plan's pool, else its matrix's runner.
+    """
+    cell = f"fromJSON(needs.classify.outputs.plan || '{{}}')[format('{name_format}', {args})]"
+    return f"${{{{ !{cell}.run && 'ubuntu-24.04' || {cell}.runner || matrix.runner }}}}"
+
+
 @pytest.mark.parametrize("name", ["contracts", "stack"])
 def test_shared_guest_matrix(name: str) -> None:
     """Expand every supported cell and reject unsupported hosts/platforms.
@@ -1395,7 +1409,8 @@ def test_shared_guest_matrix(name: str) -> None:
     shell_overrides = [step for step in steps[setup + 1 :] if "run" in step and "shell" in step]
     if name == "stack":
         # WSL runs no stack cell, so this job has no guest boundary to preserve.
-        assert job["runs-on"].endswith("&& 'ubuntu-24.04' || matrix.runner }}")
+        # A bypass cell stays hosted; a running one takes the plan's pool, else its matrix runner.
+        assert job["runs-on"] == pool_runs_on("stack ({0}, {1})", "matrix.os, matrix.stack")
         assert job["defaults"]["run"]["shell"] == "bash -e {0}"
         assert "wsl" not in yaml.safe_dump(steps).lower().replace("wsl2_host", "")
         assert shell_overrides == [
@@ -1404,6 +1419,7 @@ def test_shared_guest_matrix(name: str) -> None:
         assert shell_overrides[0]["shell"] == "bash -e {0}"
         return
     assert not shell_overrides
+    assert job["runs-on"] == pool_runs_on("contracts ({0})", "matrix.os")
     assert 'format(\'bash "{0}/scripts/wsl2_host.sh"' in job["defaults"]["run"]["shell"]
     assert "pwsh" not in job["defaults"]["run"]["shell"]
     selection = steps[0]

@@ -432,7 +432,8 @@ jobs:
             guest: wsl2
     # A cell the plan does not run (NOT RUN, or blocked, or no plan at all) reports from a cheap Ubuntu job and holds
     # no macOS or Windows slot.
-    runs-on: ${{ !fromJSON(needs.classify.outputs.plan || '{}')[format('contracts ({0})', matrix.os)].run && 'ubuntu-24.04' || matrix.runner }}
+    # A running cell the plan hands to a self-hosted pool carries its `runner`; otherwise the matrix's hosted one.
+    runs-on: ${{ !fromJSON(needs.classify.outputs.plan || '{}')[format('contracts ({0})', matrix.os)].run && 'ubuntu-24.04' || fromJSON(needs.classify.outputs.plan || '{}')[format('contracts ({0})', matrix.os)].runner || matrix.runner }}
     defaults:
       run:
         shell: ${{ matrix.guest == 'wsl2' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash -e {0}' }}
@@ -549,7 +550,7 @@ jobs:
             runner: ubuntu-24.04
             guest: linux
             platform: linux-x64
-    runs-on: ${{ !fromJSON(needs.classify.outputs.plan || '{}')[format('stack ({0}, {1})', matrix.os, matrix.stack)].run && 'ubuntu-24.04' || matrix.runner }}
+    runs-on: ${{ !fromJSON(needs.classify.outputs.plan || '{}')[format('stack ({0}, {1})', matrix.os, matrix.stack)].run && 'ubuntu-24.04' || fromJSON(needs.classify.outputs.plan || '{}')[format('stack ({0}, {1})', matrix.os, matrix.stack)].runner || matrix.runner }}
     defaults:
       run:
         shell: bash -e {0}
