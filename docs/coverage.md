@@ -32,8 +32,8 @@ opt-in: ordinary workflows never inspect or transport `globalThis.__coverage__`.
 merges VM counters into Vitest 5's `__VITEST_COVERAGE__` store; the ordinary primary suite keeps its
 `src`-only report separate. These source-complete reports can still contain uncovered paths, not an
 invented 100% result. Their local zero-floor measurement enables enforcement; clean hosted macOS and
-Linux final-HEAD receipts remain required acceptance evidence. The measured per-OS primary floors are enforced now; branches and
-all independent Bun signals stay report-only. The conflict-resolution decisions and exact
+Linux final-HEAD receipts remain required acceptance evidence. The measured per-OS primary floors are enforced now; branches stay
+report-only, and Bun signals follow their own declared enforcement (see below). The conflict-resolution decisions and exact
 base-relative facade ledger regression for the `b51e177` main merge are recorded
 [here](../coverage/receipts/tier-main-merge.md).
 
@@ -78,18 +78,22 @@ Its static `src/core/index.ts` facade is validated by real source/emitted-ESM in
 Other primary producers retain V8. The `node --test` import-audit and probe helpers retain c8 as
 report-only verification signals.
 
-Every declared `test:bun` command also emits an independent `bun` LCOV signal. All nine currently measured
-Bun signals explicitly declare `enforcement: "report-only"`, with a mandatory nonblank `reason`
-and a link to [#160](https://github.com/nredd/pi-harness/issues/160). Their stored `max_uncovered`
-values are advisory references, not enforced budgets. An omitted `enforcement` defaults to
+Every declared `test:bun` command also emits an independent `bun` LCOV signal. Nine Bun signals
+are measured. `preset`, `subscription-router` and `todo` are `enforced` at 0/0 on darwin and linux
+since [#320](https://github.com/nredd/pi-harness/issues/320): full suite, full primary inventory,
+0/0 in PR #332's own hosted macos-14, ubuntu-24.04 and wsl2 artifacts (run `41716990843`,
+receipt [here](../coverage/receipts/bun-enforced.md)). The other six explicitly declare `enforcement: "report-only"`, with a
+mandatory nonblank `reason` and a link to [#160](https://github.com/nredd/pi-harness/issues/160).
+Their stored `max_uncovered` values are advisory references, not enforced budgets. An omitted `enforcement` defaults to
 `enforced` for backwards-compatible primary/base-policy reading; current Bun declarations never
 rely on that default. Native `bun test` subset measurements are NOT the owned-source denominator:
 Bun 1.3.14 native coverage omits never-imported files. Full Vitest-on-Bun producers now use
 Istanbul for router, preset, sampler, todo and inprocess through `scripts/run-vitest.ts bun`.
-They inherit the full explicit primary instrumentation inventory (no `files` subset); `text` and
-`lcov` use Vitest's dotted options and write `coverage/bun/lcov.info`. The sampler retains one
-worker. These signals remain report-only until clean full/inventory receipts exist on both OSes.
-Subagents retains its native subset plus main's guarded real-loader gate (#174); coverage is
+They inherit the full explicit primary instrumentation inventory (no `files` subset). The launcher's
+`bun` engine appends the provider, the `text` and `lcov` reporters (Vitest's dotted options) and
+`coverage/bun`, so each `test:bun` passes only package arguments. The sampler retains one
+worker. Sampler and inprocess stay report-only until later #320 slices.
+Subagents retains its native subset plus main's guarded real-loader gate; coverage is
 disabled for that extra canary so it cannot overwrite Node's primary report. The policy explicitly lists the files currently measured by each signal;
 missing expected files fail. Files outside that Bun subset remain mandatory in primary
 coverage. Imported sibling production source and dedicated test/helper directories are outside
@@ -125,8 +129,10 @@ a report-only-to-enforced promotion establishes the new complete-source floor.
 
 Bun 1.3.14 bypassed `coverageThreshold` with **lcov-only** reporting. Pinned 1.4.4 repairs this:
 a 50%-function fixture exits nonzero with either `lcov` or `text` plus `lcov`. Both reporters remain mandatory
-in signal declarations and actual `test:bun` commands. `scripts/tests/test_coverage_producers.py`
-executes that reproduction with the pinned Bun and checks producer commands. Do not remove
+in signal declarations, the launcher's Bun arguments and native `bun test` commands.
+`scripts/tests/test_coverage_producers.py` executes that reproduction with the pinned Bun, runs the
+real launcher against a recording `bun` to pin its appended arguments, and checks that Vitest-on-Bun
+manifests pass only package arguments. Do not remove
 `text` as a cosmetic CI cleanup, even for report-only signals. Generic LCOV accounting independently
 enforces integer budgets for `enforced` signals only; producer declarations and the real pinned-Bun
 threshold-enforcement reproduction remain mandatory in either mode.
