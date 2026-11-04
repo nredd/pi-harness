@@ -35,7 +35,7 @@ const MAX_INPUT_SAMPLES = 200;
 function percentile(sorted: number[], q: number): number {
 	if (sorted.length === 0) return 0;
 	const index = Math.min(sorted.length - 1, Math.ceil(q * sorted.length) - 1);
-	return sorted[Math.max(0, index)]!;
+	return sorted[Math.max(0, index)] ?? 0;
 }
 
 function isWsl(): boolean {

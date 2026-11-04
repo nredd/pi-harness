@@ -11,5 +11,19 @@
     "allowImportingTsExtensions": true,
     "types": ["node"]
   },
-  "files": ["process-lifecycle.test.ts", "render.test.ts", "stack-resources.ts", "transcript-types.ts", "transcript-types.test.ts", "vitest.config.ts"]
+  "files": [
+    "anthropic-block-types.test.ts",
+    "latency.test.ts",
+    "latency.ts",
+    "process-lifecycle.test.ts",
+    "render.test.ts",
+    "render.ts",
+    "session-kit-child-scope.test.ts",
+    "session-kit-child-scope.ts",
+    "stack-resources.test.ts",
+    "stack-resources.ts",
+    "transcript-types.ts",
+    "transcript-types.test.ts",
+    "vitest.config.ts"
+  ]
 }

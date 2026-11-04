@@ -18,9 +18,9 @@ export default function (pi: ExtensionAPI): void {
 		description: "Harness-only: attempt to activate every registry tool and record child capability provenance.",
 		parameters: Type.Object({}),
 		async execute(_id, _params, _signal, _update, ctx) {
-			const tools = pi.getAllTools().filter((tool) =>
-				["goal_update", "monitor_start", "monitor_read", "monitor_stop"].includes(tool.name),
-			);
+			const tools = pi
+				.getAllTools()
+				.filter((tool) => ["goal_update", "monitor_start", "monitor_read", "monitor_stop"].includes(tool.name));
 			pi.setActiveTools(pi.getAllTools().map((tool) => tool.name));
 			const data = { name: pi.getSessionName(), tools, active: pi.getActiveTools() };
 			writeFileSync(join(ctx.cwd, "session-kit-child-scope.json"), JSON.stringify(data));

@@ -875,7 +875,8 @@ def check_ratchet(current: Policy, base: Policy) -> None:
     Returns:
         None: Enforced budgets, OS membership and enforcement declarations preserve the base ratchet.
     Raises:
-        ValueError: Membership, enforced budgets, enforcement transitions or the final target are weakened.
+        ValueError: A measured package is removed, or membership, enforced budgets, enforcement
+            transitions or the final target are weakened.
     """
     if base.enforce_target and not current.enforce_target:
         raise ValueError("Cannot disable global target")
@@ -883,6 +884,10 @@ def check_ratchet(current: Policy, base: Policy) -> None:
     check_target_allowance_ratchet(current, base)
     for name, previous in base.packages.items():
         if name not in current.packages:
+            # A pending package has no signals, hence no budget to lose; `check_inventory_ratchet`
+            # still requires a `reclassifications` entry for each of its sources.
+            if previous.status == "pending":
+                continue
             raise ValueError(f"Removed package: '{name}'")
         package = current.packages[name]
         graduates = previous.goal == "ratchet" and package.goal == "100-percent"
