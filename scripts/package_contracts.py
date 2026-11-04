@@ -106,6 +106,8 @@ SIBLING_SCOPE = "@nredd/"
 PROVIDER = "local"  # Not `faux`: stats deliberately drop that provider name.
 PHYSICAL_MODEL = "m"
 PI_TIMEOUT_S = 120
+# Linux procfs root, a seam so tests can read a fake `PID/comm` on any host.
+PROC_ROOT = Path("/proc")
 NPM_TIMEOUT_S = 300
 CODE_SUFFIXES = (".ts", ".mts", ".js", ".mjs")
 NO_PROXY_VALUE = "127.0.0.1,localhost"
@@ -1942,7 +1944,9 @@ def shared_library_pin_problems(contract: PackageContract) -> list[str]:
     ]
 
 
-def audit_manifest(contract: PackageContract, manifest: object, expected_files: Sequence[str]) -> list[str]:
+def audit_manifest(
+    contract: PackageContract, manifest: Mapping[str, object], expected_files: Sequence[str]
+) -> list[str]:
     """Check the packed `package.json` for independence and publication safety.
 
     Only the audited fields are validated (see `PackedManifest`); other npm metadata is ignored on
@@ -1950,7 +1954,7 @@ def audit_manifest(contract: PackageContract, manifest: object, expected_files: 
 
     Parameters:
         contract (PackageContract): Expectations.
-        manifest (object): Parsed packed manifest JSON value.
+        manifest (Mapping[str, object]): Parsed packed manifest JSON object.
         expected_files (Sequence[str]): Files that must be reachable through `pi.extensions`.
 
     Returns:
@@ -2007,8 +2011,6 @@ def audit_manifest(contract: PackageContract, manifest: object, expected_files: 
         if declared_range != expected_range:
             problems.append(f"peer '{name}' must use the range '{expected_range}', not '{declared_range}'")
     if contract.library:
-        if not isinstance(manifest, dict):
-            return [*problems, "library manifest must be an object"]
         if "pi" in manifest or peers:
             problems.append("library must not declare `pi` resources or host peers")
         expected = {
@@ -3188,7 +3190,7 @@ def kernel_executable_names(node: Path) -> set[str]:
         set[str]: Acceptable executable basenames.
     """
     resolved = node.resolve().name
-    if sys.platform.startswith("linux"):
+    if host_platform().startswith("linux"):
         return {resolved}
     return {name.encode()[:16].decode(errors="ignore") for name in (node.name, resolved)}
 
@@ -3237,6 +3239,30 @@ def stop_hostile_child(child: subprocess.Popen[bytes]) -> None:
             child.stdout.close()
 
 
+def legacy_name_shows(ctx: Context, pid: int, secret: str) -> bool:
+    """Whether the sampler 0.1.0 name source shows `secret` for `pid`.
+
+    That source is `/proc/PID/comm` (15 bytes) on Linux and `ps -c` comm on Darwin.
+
+    Parameters:
+        ctx (Context): Scenario context; `work` is the `ps` working directory.
+        pid (int): Owned marker child.
+        secret (str): Random marker secret.
+
+    Returns:
+        bool: True when the legacy source carries the secret.
+    """
+    if host_platform().startswith("linux"):
+        return (PROC_ROOT / str(pid) / "comm").read_text().strip() == secret[:15]
+    ps = run(
+        [Path("/bin/ps"), "-c", "-o", "comm=", "-p", str(pid)],
+        env={"LC_ALL": "C", "PATH": "/usr/bin:/bin"},
+        cwd=ctx.work,
+        timeout=30,
+    )
+    return secret in ps.stdout
+
+
 @contextmanager
 def start_hostile_child(
     ctx: Context,
@@ -3277,17 +3303,10 @@ def start_hostile_child(
     )
     try:
         wait_hostile_ready(child, ready_timeout)
-        if sys.platform.startswith("linux"):
-            legacy = Path(f"/proc/{child.pid}/comm").read_text().strip() == secret[:15]
-        else:
-            ps = run(
-                [Path("/bin/ps"), "-c", "-o", "comm=", "-p", str(child.pid)],
-                env={"LC_ALL": "C", "PATH": "/usr/bin:/bin"},
-                cwd=ctx.work,
-                timeout=30,
-            )
-            legacy = secret in ps.stdout
-        require(legacy, "hostile marker child does not expose its secret through the 0.1.0 name source")
+        require(
+            legacy_name_shows(ctx, child.pid, secret),
+            "hostile marker child does not expose its secret through the 0.1.0 name source",
+        )
         yield child
     except BaseException as primary:
         try:
@@ -3430,10 +3449,9 @@ def exercise_resource_snapshot(ctx: Context) -> tuple[str, str]:
     measured = any(
         isinstance(entry.get("cpu"), dict) and entry["cpu"].get("state") == "available" for entry in entries
     )
-    expected = "interval-cpu" if sys.platform.startswith("linux") or measured else "rss"
-    require(
-        ranking == expected, f"resource_snapshot ranking {ranking!r} is not {expected!r} on {sys.platform}"
-    )
+    platform = host_platform()
+    expected = "interval-cpu" if platform.startswith("linux") or measured else "rss"
+    require(ranking == expected, f"resource_snapshot ranking {ranking!r} is not {expected!r} on {platform}")
 
     refused_script = [ToolStep("resource_snapshot", {"process_limit": 51}), TextStep("done")]
     with ctx.provider_session(refused_script):

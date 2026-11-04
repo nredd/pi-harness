@@ -2,6 +2,7 @@
 
 The Pi-driven scenarios need stock Pi and run through `make check-package-contracts`; these tests
 cover the audits and the scripted provider with real inputs and the failure paths that gate relies on.
+`test_stock_scenarios.py` drives the dev-tools, session-kit and router scenarios with a scripted Pi.
 
 References:
     https://docs.npmjs.com/cli/v11/commands/npm-pack
@@ -9,7 +10,9 @@ References:
 
 from __future__ import annotations
 
+import base64
 import dataclasses
+import hashlib
 import io
 import json
 import os
@@ -1026,21 +1029,27 @@ def test_secret_windows_cover_every_twelve_char_fragment() -> None:
     assert all(len(window) == 12 for window in windows)
 
 
-def test_kernel_executable_names_never_invent(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [("linux", {"a-very-long-node-binary-name"}), ("darwin", {"node", "a-very-long-node"})],
+)
+def test_kernel_executable_names_never_invent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str, expected: set[str]
+) -> None:
     """Linux takes only the resolved exe basename; Darwin also the invoked one, truncated to 16 bytes.
 
     Parameters:
         tmp_path (Path): Pytest temporary directory.
+        monkeypatch (pytest.MonkeyPatch): Platform seam.
+        platform (str): Host platform.
+        expected (set[str]): Acceptable names on that platform.
     """
     target = tmp_path / "a-very-long-node-binary-name"
     target.write_text("")
     link = tmp_path / "node"
     link.symlink_to(target)
-    names = pc.kernel_executable_names(link)
-    if sys.platform.startswith("linux"):
-        assert names == {"a-very-long-node-binary-name"}
-    else:
-        assert names == {"node", "a-very-long-node"}
+    monkeypatch.setattr(pc, "host_platform", lambda: platform)
+    assert pc.kernel_executable_names(link) == expected
 
 
 def test_published_sampler_dist_rejects_malformed_metadata(
@@ -1323,11 +1332,13 @@ def test_audit_manifest_rejects_malformed_fields(mutation: dict[str, object], fi
 
 
 @pytest.mark.parametrize("manifest", [[], "x", None, 3])
-def test_audit_manifest_rejects_non_object(manifest: object) -> None:
+def test_audit_manifest_rejects_non_object(manifest: Any) -> None:
     """A manifest that is not a JSON object is reported, not crashed on.
 
+    `audit_tarball` hands over untyped `json.loads` output, so the declared mapping is not enforced there.
+
     Parameters:
-        manifest (object): Non-object JSON value.
+        manifest (Any): Non-object JSON value, as `json.loads` returns it.
     """
     problems = pc.audit_manifest(DEV_TOOLS, manifest, ["src/index.ts"])
     assert any("malformed" in problem for problem in problems), problems
@@ -1723,6 +1734,12 @@ def test_validate_report_accepts_every_scenario_evidence() -> None:
             "extra",
         ),
         (with_entry(evidence={"tool": "monitor_start"}), "evidence"),
+        (
+            with_entry(
+                evidence={"tools": ["monitor_start", "monitor_read"], "monitor_line": "x", "stats_shards": 1}
+            ),
+            "evidence for '@nredd/pi-dev-tools' is a `SessionKitEvidenceModel`",
+        ),
         (
             with_entry(evidence={"virtual_model": "router/default", "dispatched": "local/m"}),
             "evidence",
@@ -3228,3 +3245,476 @@ def test_audit_chunk_graph_requires_reachability_from_index() -> None:
         ),
     }
     assert pc.audit_chunk_graph(pc.PLAN_MODE_CONTRACT, [*files, "dist/loader.ts"], through_non_chunk) == []
+    bare = {
+        "dist/index.ts": pc.FileImports(
+            specifiers=["node:path", "dist/chunks/chunk-AAAAAAA1.ts"], diagnostics=[]
+        )
+    }
+    assert len(pc.audit_chunk_graph(pc.PLAN_MODE_CONTRACT, files, bare)) == 2
+
+
+def test_audit_tarball_checks_the_chunk_graph_of_a_patterned_contract(tmp_path: Path) -> None:
+    """A contract with hashed chunk patterns gets the reachability audit over the real import scan.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+    """
+    files = plan_mode_files()
+    tarball = make_tarball(tmp_path / "plan.tgz", dict.fromkeys(files, b"export {};\n"))
+    artifact = pc.PackedArtifact(
+        pc.PLAN_MODE_CONTRACT, tarball, "1.0.0", INTEGRITY, "a" * 40, 1, tuple(files)
+    )
+    problems = pc.audit_tarball(artifact, ROOT_LICENSE, pc.locate_executable("node"))
+    assert [problem for problem in problems if "is not reachable" in problem] == [
+        f"packed chunk '{name}' is not reachable from 'dist/index.ts' by relative imports"
+        for name in ("dist/chunks/chunk-AAAAAAA1.ts", "dist/chunks/interactive-ui-BBBBBBB2.ts")
+    ]
+
+
+def test_run_own_group_returns_the_captured_streams(tmp_path: Path) -> None:
+    """A leader that exits on its own is returned like `subprocess.run`, and nothing is signalled.
+
+    Parameters:
+        tmp_path (Path): Working directory.
+    """
+    done = pc.run(
+        [Path("/bin/sh"), "-c", "echo out; echo err >&2"], env={}, cwd=tmp_path, timeout=30, own_group=True
+    )
+    assert (done.returncode, done.stdout, done.stderr) == (0, "out\n", "err\n")
+
+
+def test_locate_executable_refuses_a_missing_tool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A tool absent from `PATH` is a contract error, not a `None` path.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Empty `PATH`.
+        tmp_path (Path): Empty directory standing in for `PATH`.
+    """
+    monkeypatch.setenv("PATH", str(tmp_path))
+    with pytest.raises(pc.ContractError, match="`node` not found on PATH"):
+        pc.locate_executable("node")
+
+
+def write_stock_lock(prefix: Path, version: str, integrity: str) -> None:
+    """Write a stock-Pi `package-lock.json` locking `version` / `integrity`.
+
+    Parameters:
+        prefix (Path): Install directory.
+        version (str): Locked version.
+        integrity (str): Locked integrity.
+    """
+    prefix.mkdir(parents=True, exist_ok=True)
+    entry = {"version": version, "integrity": integrity}
+    lock = {"packages": {f"node_modules/{pc.STOCK_PI_PACKAGE}": entry}}
+    (prefix / "package-lock.json").write_text(json.dumps(lock))
+
+
+def test_verify_stock_pi_refuses_another_locked_artifact(tmp_path: Path, sandbox: pc.Sandbox) -> None:
+    """A lockfile pinning any other version or integrity fails before Pi runs.
+
+    Parameters:
+        tmp_path (Path): Install directory root.
+        sandbox (pc.Sandbox): Scrubbed environment.
+    """
+    write_stock_lock(tmp_path / "stock", "0.0.1", pc.STOCK_PI_INTEGRITY)
+    with pytest.raises(pc.ContractError, match=r"is '0\.0\.1' / .*expected"):
+        pc.verify_stock_pi(tmp_path / "stock", tmp_path / "never-run-pi", sandbox)
+
+
+def test_verify_stock_pi_refuses_another_reported_version(tmp_path: Path, sandbox: pc.Sandbox) -> None:
+    """The pinned lock is not enough: `pi --version` must report the pin too.
+
+    Parameters:
+        tmp_path (Path): Install directory root.
+        sandbox (pc.Sandbox): Scrubbed environment.
+    """
+    prefix = tmp_path / "stock"
+    write_stock_lock(prefix, pc.STOCK_PI_VERSION, pc.STOCK_PI_INTEGRITY)
+    pi_bin = prefix / "pi"
+    pi_bin.write_text("#!/bin/sh\necho 9.9.9\n")
+    pi_bin.chmod(0o755)
+    with pytest.raises(pc.ContractError, match=re.escape("`pi --version` reported '9.9.9'")):
+        pc.verify_stock_pi(prefix, pi_bin, sandbox)
+
+
+def lying_npm_pack(
+    tmp_path: Path,
+    sandbox: pc.Sandbox,
+    manifest: dict[str, str],
+    listed: list[str],
+    stdout: str | None = None,
+) -> pc.Sandbox:
+    """Build a sandbox whose fake `npm pack` copies a real tarball and prints a chosen report.
+
+    The report carries the tarball's true digests, so only the varied field can disagree.
+
+    Parameters:
+        tmp_path (Path): Scratch root.
+        sandbox (pc.Sandbox): Source of the real `node` and `git`.
+        manifest (dict[str, str]): Packed `package.json`.
+        listed (list[str]): Files the report claims.
+        stdout (str | None): Raw report text replacing the well-formed one.
+
+    Returns:
+        pc.Sandbox: Sandbox using the fake `npm`.
+    """
+    tarball = make_tarball(tmp_path / "fixture.tgz", {"package.json": json.dumps(manifest).encode()})
+    data = tarball.read_bytes()
+    entry = {
+        "filename": "x-1.0.0.tgz",
+        "integrity": "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode(),
+        "shasum": hashlib.sha1(data, usedforsecurity=False).hexdigest(),
+        "files": [{"path": name} for name in listed],
+    }
+    payload = tmp_path / "payload.json"
+    payload.write_text(json.dumps([entry]) if stdout is None else stdout)
+    fake_npm = tmp_path / "npm"
+    fake_npm.write_text(f'#!/bin/sh\ncp "{tarball}" "$5/x-1.0.0.tgz"\ncat "{payload}"\n')
+    fake_npm.chmod(0o755)
+    (tmp_path / "out").mkdir()
+    return pc.Sandbox(tmp_path / "liar", pc.Tools(sandbox.tools.node, fake_npm, sandbox.tools.git))
+
+
+@pytest.mark.parametrize(
+    ("manifest", "listed", "stdout", "message"),
+    [
+        (
+            {"name": "x", "version": "1.0.0"},
+            ["package.json"],
+            "not json",
+            "Unparseable `npm pack --json` output",
+        ),
+        ({"name": "x", "version": "1.0.0"}, ["package.json"], "[]", "Unparseable `npm pack --json` output"),
+        (
+            {"name": "x", "version": "1.0.0"},
+            ["other.json"],
+            None,
+            "file list for .* disagrees with its tarball",
+        ),
+        ({"name": "x"}, ["package.json"], None, "Packed `package.json` of .* has no usable identity"),
+    ],
+    ids=["not-json", "no-entry", "file-list", "no-version"],
+)
+def test_pack_rejects_inconsistent_npm_reports(
+    tmp_path: Path,
+    sandbox: pc.Sandbox,
+    manifest: dict[str, str],
+    listed: list[str],
+    *,
+    stdout: str | None,
+    message: str,
+) -> None:
+    """Malformed output, a disagreeing file list and an identity-less manifest never become artifacts.
+
+    Parameters:
+        tmp_path (Path): Scratch root.
+        sandbox (pc.Sandbox): Scrubbed environment.
+        manifest (dict[str, str]): Packed `package.json`.
+        listed (list[str]): Files the report claims.
+        stdout (str | None): Raw report replacing the well-formed one.
+        message (str): Expected failure.
+    """
+    liar = lying_npm_pack(tmp_path, sandbox, manifest, listed, stdout)
+    with pytest.raises(pc.ContractError, match=message):
+        pc.pack(DEV_TOOLS, tmp_path / "out", liar, tmp_path)
+
+
+def directory_member_tarball(path: Path, name: str) -> Path:
+    """Write a tarball whose `package/<name>` is a directory, not a file.
+
+    Parameters:
+        path (Path): Destination.
+        name (str): Member path under `package/`.
+
+    Returns:
+        Path: `path`.
+    """
+    with tarfile.open(path, "w:gz") as tar:
+        member = tarfile.TarInfo(f"package/{name}")
+        member.type = tarfile.DIRTYPE
+        tar.addfile(member)
+    return path
+
+
+def test_read_member_refuses_a_non_regular_member(tmp_path: Path) -> None:
+    """A directory under the requested name is not file content.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+    """
+    tarball = directory_member_tarball(tmp_path / "x.tgz", "LICENSE")
+    with pytest.raises(pc.ContractError, match=re.escape("'x.tgz:LICENSE' is not a regular file")):
+        pc.read_member(tarball, "LICENSE")
+
+
+def test_macos_helper_refuses_a_non_regular_member(tmp_path: Path) -> None:
+    """A directory where the helper binary belongs is rejected before its header is read.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+    """
+    tarball = directory_member_tarball(tmp_path / "cu.tgz", "prebuilt/macos/arm64/bridge")
+    with pytest.raises(
+        pc.ContractError, match=re.escape("'cu.tgz:prebuilt/macos/arm64/bridge' is not a regular file")
+    ):
+        pc.check_macos_helper(tarball, "arm64")
+
+
+@pytest.mark.parametrize(
+    ("stdout", "message"),
+    [
+        ('{"files": {"src/a.ts": {"specifiers": []}}}', "Malformed `import_audit.ts` output"),
+        ('{"files": {}}', r"`import_audit.ts` returned \[\] for \['src/a.ts'\]"),
+    ],
+    ids=["malformed", "missing-file"],
+)
+def test_scan_imports_refuses_inconsistent_helper_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stdout: str, message: str
+) -> None:
+    """The batched parser must answer for exactly the submitted files in the documented shape.
+
+    Parameters:
+        tmp_path (Path): Stands in for the `node` directory.
+        monkeypatch (pytest.MonkeyPatch): Replaces the helper run.
+        stdout (str): Helper output.
+        message (str): Expected failure.
+    """
+    monkeypatch.setattr(pc, "run", lambda *_args, **_kwargs: SimpleNamespace(stdout=stdout))
+    with pytest.raises(pc.ContractError, match=message):
+        pc.scan_imports({"src/a.ts": "export {};"}, tmp_path / "node")
+
+
+@pytest.mark.parametrize("nested", [False, True], ids=["scoped-member", "nested-node-modules"])
+def test_walk_installed_entries_refuses_symlinked_members(tmp_path: Path, *, nested: bool) -> None:
+    """A symlinked scoped package or nested `node_modules` could smuggle a host copy in.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        nested (bool): Link a package's nested `node_modules` instead of a scoped package.
+    """
+    modules = tmp_path / "node_modules"
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    if nested:
+        (modules / "pkg").mkdir(parents=True)
+        (modules / "pkg" / "node_modules").symlink_to(target, target_is_directory=True)
+        path = "node_modules/pkg/node_modules"
+    else:
+        (modules / "@scope").mkdir(parents=True)
+        (modules / "@scope" / "pkg").symlink_to(target, target_is_directory=True)
+        path = "node_modules/@scope/pkg"
+    with pytest.raises(pc.ContractError, match=f"Symlinked `node_modules` entry is not allowed: '{path}'"):
+        pc.walk_installed_entries(modules)
+
+
+@pytest.mark.parametrize(
+    ("nested", "locked", "message"),
+    [(True, True, "ships a nested `node_modules`"), (False, False, "is absent from its install lockfile")],
+    ids=["nested", "unlocked"],
+)
+def test_install_alone_refuses_nested_or_unlocked_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, nested: bool, locked: bool, message: str
+) -> None:
+    """The installed package ships no `node_modules` of its own and is recorded in the lockfile.
+
+    Parameters:
+        tmp_path (Path): Temporary installation root.
+        monkeypatch (pytest.MonkeyPatch): Subprocess substitution.
+        nested (bool): Install a nested `node_modules` inside the package.
+        locked (bool): Record the package in the lockfile.
+        message (str): Expected failure.
+    """
+    artifact = pc.PackedArtifact(DEV_TOOLS, tmp_path / "package.tgz", "1.0.0", "sha512-x", "0" * 40, 1, ())
+
+    def fake_run(_cmd: list[object], *, cwd: Path, **_kwargs: object) -> None:
+        """Write the install shape under test.
+
+        Parameters:
+            _cmd (list[object]): Ignored subprocess command.
+            cwd (Path): Consumer project root.
+            **_kwargs (object): Ignored subprocess keyword arguments.
+        """
+        installed = cwd / "node_modules" / DEV_TOOLS.name
+        (installed / ("lib/node_modules" if nested else "src")).mkdir(parents=True)
+        packages = {f"node_modules/{DEV_TOOLS.name}": {}} if locked else {}
+        (cwd / "package-lock.json").write_text(json.dumps({"packages": {"": {}, **packages}}))
+
+    monkeypatch.setattr(pc, "run", fake_run)
+    with pytest.raises(pc.ContractError, match=message):
+        pc.install_alone(artifact, pc.Sandbox(tmp_path / "sandbox", pc.locate_tools()), tmp_path / "project")
+
+
+def test_discovery_refuses_malformed_probe_output(
+    monkeypatch: pytest.MonkeyPatch, sandbox: pc.Sandbox, tmp_path: Path
+) -> None:
+    """A probe report that does not parse is a contract error naming the probe.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Replaces the probe run.
+        sandbox (pc.Sandbox): Scrubbed environment.
+        tmp_path (Path): Pytest temporary directory.
+    """
+    monkeypatch.setattr(pc, "run", lambda *_args, **_kwargs: SimpleNamespace(stdout='{"found": []}'))
+    with pytest.raises(pc.ContractError, match="Sampler discovery probe output is malformed"):
+        pc.discover_child_with_installed_sampler(discovery_context(tmp_path, sandbox), 4242, "0" * 32)
+
+
+@pytest.mark.parametrize(
+    ("only", "scenarios", "message"),
+    [
+        (["nope"], None, "No release contract matches the requested subject"),
+        (["dev-tools"], {}, "No executable stock gate for: dev-tools"),
+    ],
+    ids=["no-contract", "no-gate"],
+)
+def test_run_gate_refuses_an_unrunnable_selection(
+    tmp_path: Path, only: list[str], scenarios: dict[str, Any] | None, message: str
+) -> None:
+    """A selection matching no contract, or one without an executable gate, fails before any work.
+
+    Parameters:
+        tmp_path (Path): Scratch root, left untouched.
+        only (list[str]): Requested package directories.
+        scenarios (dict[str, Any] | None): Gate table; `None` keeps the real one.
+        message (str): Expected failure.
+    """
+    with pytest.raises(pc.ContractError, match=message):
+        pc.run_gate(
+            tmp_path, tmp_path / "stock", only, scenarios=pc.SCENARIOS if scenarios is None else scenarios
+        )
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("problems", "evidence", "message"),
+    [
+        (
+            ["stray file"],
+            {"tool": "git_status"},
+            "Tarball audit failed:\n  - @nredd/pi-dev-tools: stray file",
+        ),
+        ([], {}, "Stock gate produced empty subject evidence for '@nredd/pi-dev-tools'"),
+    ],
+    ids=["audit", "empty-evidence"],
+)
+def test_run_gate_refuses_audit_problems_and_empty_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    problems: list[str],
+    evidence: Any,
+    message: str,
+) -> None:
+    """Static audit problems stop the gate before installing; a scenario must return real evidence.
+
+    Parameters:
+        tmp_path (Path): Scratch root.
+        monkeypatch (pytest.MonkeyPatch): Replaces stock Pi, packing, audit and install.
+        problems (list[str]): Audit findings.
+        evidence (Any): Scenario evidence, deliberately not a valid evidence shape.
+        message (str): Expected failure.
+    """
+    artifact = pc.PackedArtifact(DEV_TOOLS, tmp_path / "x.tgz", "1.0.0", INTEGRITY, "a" * 40, 1, ())
+    installs: list[Path] = []
+
+    def install(_artifact: pc.PackedArtifact, _sandbox: pc.Sandbox, project: Path) -> Path:
+        """Record the install instead of running npm."""
+        installs.append(project)
+        return project / "node_modules" / DEV_TOOLS.name
+
+    monkeypatch.setattr(pc, "ensure_stock_pi", lambda *_args: tmp_path / "never-run-pi")
+    monkeypatch.setattr(pc, "select_artifact", lambda *_args: artifact)
+    monkeypatch.setattr(pc, "audit_tarball", lambda *_args: problems)
+    monkeypatch.setattr(pc, "install_alone", install)
+    work = tmp_path / "work"
+    work.mkdir()
+    with pytest.raises(pc.ContractError, match=message):
+        pc.run_gate(work, tmp_path / "stock", ["dev-tools"], scenarios={"dev-tools": lambda _ctx: evidence})
+    assert installs == ([] if problems else [work / "sandbox-dev-tools" / "project"])
+
+
+def dev_tools_tarball(tmp_path: Path) -> Path:
+    """Write a loadable dev-tools tarball for `--tarball`.
+
+    Parameters:
+        tmp_path (Path): Destination directory.
+
+    Returns:
+        Path: The tarball.
+    """
+    manifest = json.dumps({"name": DEV_TOOLS.name, "version": "1.0.0"}).encode()
+    return make_tarball(tmp_path / "nredd-pi-dev-tools-1.0.0.tgz", {"package.json": manifest})
+
+
+def test_main_refuses_a_tarball_outside_the_package_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every `--tarball` must be one of the `--package` subjects; the gate never starts otherwise.
+
+    Parameters:
+        tmp_path (Path): Scratch root.
+        monkeypatch (pytest.MonkeyPatch): Forbids the gate.
+    """
+    monkeypatch.setattr(pc, "run_gate", lambda *_args: pytest.fail("gate ran"))
+    tarball = dev_tools_tarball(tmp_path)
+    argv = [
+        "--tarball",
+        f"dev-tools={tarball}",
+        "--package",
+        "session-kit",
+        "--work-dir",
+        str(tmp_path / "w"),
+    ]
+    assert pc.main(argv) == 1
+    assert not (tmp_path / "w").exists()
+
+
+def test_main_gate_writes_and_prints_the_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Supplied tarballs select their packages; the validated report is written and printed identically.
+
+    Parameters:
+        tmp_path (Path): Scratch root.
+        monkeypatch (pytest.MonkeyPatch): Replaces the gate.
+        capsys (pytest.CaptureFixture[str]): Captured stdout.
+    """
+    tarball = dev_tools_tarball(tmp_path)
+    report = pc.validate_report(good_report())
+    calls: list[tuple[Path, list[str] | None, dict[str, Path]]] = []
+
+    def gate(
+        work: Path, _stock: Path, only: list[str] | None, supplied: dict[str, Path]
+    ) -> pc.ContractReport:
+        """Record the selection and return a valid report."""
+        calls.append((work, only, supplied))
+        return report
+
+    monkeypatch.setattr(pc, "run_gate", gate)
+    out = tmp_path / "report.json"
+    work = tmp_path / "w"
+    assert pc.main(["--tarball", f"dev-tools={tarball}", "--report", str(out), "--work-dir", str(work)]) == 0
+    assert calls == [(work.resolve(), ["dev-tools"], {"dev-tools": tarball.resolve()})]
+    assert out.read_text() == capsys.readouterr().out == pc.serialize_report(report)
+    assert not work.exists()
+
+
+def test_script_entrypoint_exits_with_mains_status(tmp_path: Path) -> None:
+    """Run as a script, the module exits with `main`'s usage status.
+
+    Parameters:
+        tmp_path (Path): A non-empty `--work-dir`.
+    """
+    (tmp_path / "stale").write_text("x")
+    done = subprocess.run(
+        # `-E -s`, not `-I`: isolation's `-P` drops the script directory, which the real entrypoint
+        # needs for its sibling `faux_provider` import.
+        [sys.executable, "-E", "-s", pc.__file__, "--work-dir", str(tmp_path)],
+        # Scrubbed, except coverage.py's own `patch = ["subprocess"]` hook so the entrypoint is measured.
+        env={"PATH": "/usr/bin:/bin"} | {k: v for k, v in os.environ.items() if k.startswith("COVERAGE_")},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert done.returncode == 2
+    assert "`--work-dir` must be empty" in done.stderr
