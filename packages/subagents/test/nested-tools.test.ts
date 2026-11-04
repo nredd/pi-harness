@@ -321,6 +321,20 @@ describe("child-safe nested Agent tools", () => {
     expect(record.pendingSteers).toEqual(["focus on tests"]);
   });
 
+  // #442 made the top-level steer_subagent resume a finished agent; the nested
+  // tool keeps its own contract, where a finished child resumes through Agent.
+  it("still refuses to steer its own finished child", async () => {
+    const [, , steer] = tools();
+    const sessionSteer = vi.fn();
+    records.set("child-1", { id: "child-1", status: "completed", result: "done", parentAgentId: "parent-1", session: { steer: sessionSteer } });
+
+    const result = await execute(steer, { agent_id: "child-1", message: "more" });
+
+    expect(result.isError).toBe(true);
+    expect(sessionSteer).not.toHaveBeenCalled();
+    expect(manager.resume).not.toHaveBeenCalled();
+  });
+
   it("blocks delegation at the inherited depth cap", async () => {
     const [agent] = tools("all", 2, 2);
     const result = await execute(agent, {
