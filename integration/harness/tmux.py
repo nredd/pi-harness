@@ -38,6 +38,8 @@ set -g remain-on-exit on
 set -g status off
 """
 POLL_INTERVAL_S = 0.05
+PANE_PID = re.compile(r"\bpid=(\d+)")
+PS_TIMEOUT_S = 10.0
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;:?<>]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 
 # SGR mouse button codes.
@@ -103,6 +105,58 @@ class PaneExitEvidence(BaseModel):
     tmux_error: str | None = Field(default=None, description="Native pane query failure, if unavailable")
     exit_status: str | None = Field(default=None, description="Unmodified decoded marker contents, or absent")
     exit_status_error: str | None = Field(default=None, description="Marker read/decode failure")
+    process_tree: str | None = Field(
+        default=None,
+        description="`ps` rows (pid ppid pgid stat etime args) for the pane PID and descendants",
+    )
+    process_tree_error: str | None = Field(
+        default=None, description="Process table read failure, or no pane PID"
+    )
+
+
+def read_process_table() -> str:
+    """Read every process as `pid ppid pgid stat etime args` rows (read only, no signals).
+
+    Returns:
+        str: raw `ps` stdout.
+
+    Raises:
+        OSError: `ps` is missing or cannot start.
+        subprocess.SubprocessError: `ps` failed or timed out.
+    """
+    return subprocess.run(
+        ["ps", "-axo", "pid=,ppid=,pgid=,stat=,etime=,args="],
+        capture_output=True,
+        text=True,
+        timeout=PS_TIMEOUT_S,
+        check=True,
+    ).stdout
+
+
+def process_subtree(table: str, root_pid: int) -> str:
+    """Select `root_pid` and its descendants from a `ps` table.
+
+    Parameters:
+        table (str): rows from `read_process_table`.
+        root_pid (int): pane process whose subtree is wanted.
+
+    Returns:
+        str: matching rows in table order; empty when the root and its children are gone.
+    """
+    rows: dict[int, tuple[int, str]] = {}
+    for line in table.splitlines():
+        fields = line.split(None, 2)
+        if len(fields) >= 2 and fields[0].isdigit() and fields[1].isdigit():
+            rows[int(fields[0])] = (int(fields[1]), line.strip())
+    keep = {root_pid}
+    grew = True
+    while grew:
+        grew = False
+        for pid, (parent, _) in rows.items():
+            if parent in keep and pid not in keep:
+                keep.add(pid)
+                grew = True
+    return "\n".join(line for pid, (_, line) in rows.items() if pid in keep)
 
 
 @dataclass
@@ -357,6 +411,7 @@ class TmuxPane:
             )
         except (RuntimeError, OSError, UnicodeError) as error:
             report.tmux_error = str(error)
+        self._record_process_tree(report)
         try:
             report.exit_status = (
                 self.exit_status_path.read_text() if self.exit_status_path.is_file() else None
@@ -364,6 +419,22 @@ class TmuxPane:
         except (OSError, UnicodeError) as error:
             report.exit_status_error = str(error)
         self.exit_status_path.with_suffix(".pane.json").write_text(report.model_dump_json(indent=2))
+
+    @staticmethod
+    def _record_process_tree(report: PaneExitEvidence) -> None:
+        """Tell a hung child from a dead wrapper: snapshot the pane PID's live subtree.
+
+        Parameters:
+            report (PaneExitEvidence): report whose `tmux` response names the pane PID.
+        """
+        match = PANE_PID.search(report.tmux or "")
+        if match is None:
+            report.process_tree_error = "No pane PID"
+            return
+        try:
+            report.process_tree = process_subtree(read_process_table(), int(match.group(1)))
+        except (OSError, UnicodeError, subprocess.SubprocessError) as error:
+            report.process_tree_error = str(error)
 
     def kill(self) -> None:
         """Save evidence, then tear down the private server and socket dir; safe twice."""
