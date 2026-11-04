@@ -1,5 +1,0 @@
-
-> @nredd/pi-subagents@0.22.0-nredd.7 lint
-> biome check src/ test/
-
-Checked 253 files in 167ms. No fixes applied.

@@ -35,5 +35,5 @@ Recorded environment: Node 26.12.0; package TypeScript 6.0.3, root TypeScript
 7.0.2; root Vitest/Istanbul 5.0.3, package Vitest 4.1.12. Lockfile blob
 `e5df1538f04042bb160565438c70efc2df044cb4` is unchanged from `b51e1774`.
 No guessed mock export, dependency or loader-policy change. Fresh full gates
-are in `subagents-lifecycle-gates.txt`; the separate #174 full-Bun stack-location
+are [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/docs/subagents-lifecycle-gates.txt); the separate #174 full-Bun stack-location
 failure is not a compiler-mock failure and is not claimed fixed here.

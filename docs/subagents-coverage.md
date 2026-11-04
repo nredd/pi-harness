@@ -18,8 +18,8 @@ cd packages/subagents
 ```
 
 The wildcard above is the equivalent compact invocation for the verified identical
-inventory. The final full expanded executed command is committed beside this note
-in `subagents-coverage-command.txt`; the baseline and final differ only in their
+inventory. The final full expanded executed command is
+[here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/docs/subagents-coverage-command.txt); the baseline and final differ only in their
 report directory (`/tmp/subagents-before` and `/tmp/subagents-final`). LCOV is
 retained in those directories. First-theme command and LCOV remain in
 `/tmp/subagents-theme1-command.txt` and `/tmp/subagents-theme1/lcov.info`.
@@ -44,8 +44,8 @@ Final per-file missing lines/functions:
 | `src/workflow/meta.ts` | 11/1 | 1/0 |
 
 Full baseline/remaining file inventories, exact uncovered line numbers and
-Istanbul function labels are in `subagents-coverage-before.txt` and
-`subagents-coverage-remaining.txt` beside this note. All other file counters are
+Istanbul function labels are [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/docs/subagents-coverage-before.txt) and
+[here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/docs/subagents-coverage-remaining.txt). All other file counters are
 unchanged. The 7161-line/1423-function denominator is unchanged.
 
 Inspector tests use the real dialog, stable runtime index 7 (not row index 0),
@@ -102,8 +102,8 @@ No production or inprocess harness files changed; no extra inprocess or root-wid
 suite was run. All suites were serialized, no nested test fanout. Resource
 snapshots preceded full runs; other coverage/policy/TUI work was active.
 
-Durable raw final stdout is committed in `subagents-coverage-gate-{vitest,bun,lint,types}.txt`.
-Mutation failure excerpts for all six runs are in `subagents-coverage-mutations.txt`.
+Durable raw final stdout is in `subagents-coverage-gate-{vitest,bun,lint,types}.txt` [here](https://github.com/nredd/pi-harness/tree/f87c1f99d1c2d7f2069e10b46a5c1ce0603eb0fa/docs).
+Mutation failure excerpts for all six runs are [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/docs/subagents-coverage-mutations.txt).
 The last run rechecks only the overlay-restore mutation after replacing polling
 with an explicit await of the actual rejected viewer promise: both rejection
 cases failed, other three cases passed. Restoration then passed the full gate.
@@ -126,7 +126,7 @@ PR #193 review correction, executed on parent `510270cf8412c0fce4d8159aeaee19ce1
   Keep settlement cancellation, zero pending timers and elapsed-time assertions.
 - Six isolated mutations each exit 1, with exactly one intended test failing
   and four passing; precise changes and assertion outputs are appended to
-  `subagents-coverage-mutations.txt`. All production bytes restored: source diff
+  [`subagents-coverage-mutations.txt`](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/docs/subagents-coverage-mutations.txt). All production bytes restored: source diff
   empty; viewer source blob remains `fce1c903f09fdf9d63f17f745c970b2b40c991ed`.
 - Node 26.12.0: focused restored test 5/5; full Vitest 159 files, 3470 pass,
   8 skip (`--maxWorkers=1`, 180.72s). Biome checks 253 files, no fixes;

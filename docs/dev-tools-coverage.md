@@ -37,7 +37,7 @@ docs-only commit): **1596/1596 lines (100%), 278/278 functions (100%)**, 1877/19
 (95.42%), 1376/1618 branches (85.04%); **445 tests in 31 files**. Bun native scenarios
 (`npm run test:bun`): 5 passed (historical: #320 replaced that subset and its `ssh/hosts.test.ts`
 canary with the full Vitest suite on Bun, enforced at 0/0; counts are in the receipt
-[here](../coverage/receipts/bun-enforced.md)).
+[here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/bun-enforced.md)).
 
 Choose Istanbul as primary: no alias inflation, source-complete inventory, and the same
 line/function denominator as V8. Branch coverage is reported, not treated as line coverage.
