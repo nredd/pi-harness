@@ -5,12 +5,12 @@ Owner scope: the 100% line/function goal covers `subagents`, `plan-mode`, `todo`
 `runtime-build-tooling`, `workflow-examples` and `import-audit` (`scripts/import_audit.ts`, 0/0 since #321) signals.
 `goal: "100-percent"` is the default and cannot be downgraded relative to an established
 base policy. Eligible package tooling/examples remain pending goal blockers, not hidden source.
-`goal: "report-only"` identifies verification infrastructure (helpers, probes, inprocess and
+`goal: "report-only"` identifies verification infrastructure (helpers, probe boundaries, inprocess and
 producer configurations). `goal: "excluded"` records the owner's computer-use
 coverage-maintenance exclusion. Both require a nonblank
 `goal_reason`; neither removes any source from the inventory audit. Measured signals outside the
 goal must be report-only and still require complete, valid reports and per-OS references.
-`goal: "ratchet"` (owner decision on #314, reusable by #321) is the one mode outside the zero target
+`goal: "ratchet"` (owner decision on #314, also used by `probes` since #321) is the one mode outside the zero target
 that is enforced: a measured package whose enforced signals hold their per-OS `max_uncovered` as a
 floor. The target is not applied, and floors only go down (the existing enforced-to-enforced ratchet).
 A package cannot leave `ratchet` except to graduate to `100-percent`, an enforced signal cannot go report-only without a reasoned
@@ -92,8 +92,8 @@ runs the measured source itself, so Node's compile cache no longer reaches it: t
 import-audit CLI runs in process through `main()` as well as through the real subprocess; the
 one-line `import.meta.main` dispatch is asserted only by the subprocess tests.
 `import-audit` is in the goal and enforced at 0/0. `probes` measures `integration/probes/transcript-types.ts`,
-the module its suite actually imports, and stays report-only until #321's enforced-floor
-goal mode lands. The counters changed with the producer, the floors did not: c8 counted every
+the module its suite actually imports, and is an enforced `ratchet` at 0/0 (see the `probes` ratchet
+floors below). The counters changed with the producer, the floors did not: c8 counted every
 physical line and only the functions V8 reported (`transcript-types.ts` 207 lines / 8 functions,
 `import_audit.ts` 161 / 7), Vitest's AST-based V8 remap counts statement lines and every function
 including anonymous callbacks (`transcript-types.ts` 103 / 15, `import_audit.ts` 63 / 8 with the new
@@ -283,6 +283,11 @@ An earlier run (`41702044725`, before the first rebase) is not a source: it pred
 and `harness/release_gate.py`.
 Hosted wall time of the pytest halves with `-n auto --dist loadfile`, `macos-14`: `scripts` 116s and
 `integration` 143s, against 199s and 281s serial.
+
+The verification package `probes` is `goal: "ratchet"` too (#321): its `primary` signal is
+enforced at 0/0 lines/functions on darwin and linux, from the `owned` accounting logs of `macos-14`
+run `41767456760` on commit `74d704f4` and `ubuntu-24.04` and `wsl2` of run `41773210529` on
+`f87c1f99`. `inprocess` stays report-only here: #376 takes both of its signals to 0/0 enforced.
 
 A repository-wide regression scan and the CLI audit tracked plus untracked nonignored TypeScript,
 Python and executable JavaScript (`.mjs`, `.cjs`, `.js`) source using the same Git-listed traversal. Each executable file must be included in a measured/pending inventory or have an explicit
