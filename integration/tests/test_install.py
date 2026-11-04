@@ -19,17 +19,20 @@ import io
 import json
 import os
 import re
+import runpy
 import shutil
 import socket
 import ssl
 import subprocess
 import sys
 import tarfile
-from dataclasses import asdict
+import uuid
+from dataclasses import asdict, replace
 from email.message import Message
 from http.client import HTTPException, IncompleteRead, RemoteDisconnected
 from pathlib import Path
 from textwrap import dedent
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from urllib.error import HTTPError, URLError
 
@@ -61,12 +64,18 @@ from harness.promotion import (
     SNAPSHOT_REPO,
     SNAPSHOT_SIGNER_WORKFLOW,
     SNAPSHOT_SOURCE_REF,
+    CoreEvidence,
+    GateEvidence,
+    OwnedPackageEvidence,
     StackSnapshot,
     load_promoted_snapshot,
+    stack_bytes,
 )
 from harness.release import GITHUB_TOKEN_VARIABLES, release_asset_url
-from harness.stack import install_overrides, package_declarations, source_string
+from harness.runtime_lock import acquire
+from harness.stack import Stack, install_overrides, package_declarations, source_string
 from scenarios.installer import test_installer as acceptance
+from tests.runtime_fixtures import fixture_graph, native_npm
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
@@ -5833,6 +5842,7 @@ def test_interrupt_file_contract_names_the_actual_runtime_error() -> None:
         "test_installer_process.py",
         "test_promotion.py",
         "test_runtime_lock.py",
+        "runtime_fixtures.py",
         "test_runtime_promotion.py",
     ],
 )
@@ -6725,3 +6735,711 @@ def test_proxy_redaction_at_public_diagnostic_boundaries(
     assert "log-user" not in text
     assert "log-password" not in text
     assert "http://host:8080" in text
+
+
+def fixture_layout(tmp_path: Path) -> Layout:
+    """Lay out an installer under a canonical private directory for unit-level journal tests.
+
+    Parameters:
+        tmp_path (Path): private test directory.
+
+    Returns:
+        Layout: installer, agent and link roots, none created yet.
+    """
+    root = tmp_path.resolve()
+    return Layout(root / "state", root / "agent", root / "bin")
+
+
+def identity_record(**changes: Any) -> dict[str, Any]:
+    """Serialize a well-formed journal content identity, with selected fields overridden.
+
+    Parameters:
+        **changes (Any): fields to replace.
+
+    Returns:
+        dict[str, Any]: `RestoreIdentity` fields as a journal stores them.
+    """
+    return {"kind": "file", "device": 1, "inode": 2, "mtime_ns": 3, "size": 4, "sha256": "0" * 64} | changes
+
+
+def write_private(path: Path, text: str) -> None:
+    """Write an owner-only file, as `Journal.persist` does.
+
+    Parameters:
+        path (Path): destination.
+        text (str): contents.
+
+    Returns:
+        None: the file exists with mode 0600.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    path.chmod(0o600)
+
+
+def test_require_unix_runtime_refuses_an_unrecorded_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    """In process: the platform allowlist refuses before any primitive is checked."""
+    monkeypatch.setattr(install.platform, "system", lambda: "FreeBSD")
+    monkeypatch.setattr(install.platform, "machine", lambda: "amd64")
+    with pytest.raises(UnsupportedError, match=r"platform 'FreeBSD/amd64' is not supported, nothing changed"):
+        install.require_unix_runtime(wsl=False)
+
+
+def test_require_unix_runtime_names_every_missing_primitive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """In process: a missing `fcntl` and a missing `os` primitive are reported together."""
+    monkeypatch.setattr(install.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(install.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(install, "fcntl", None)
+    monkeypatch.delattr(install.os, "O_NOCTTY")
+    with pytest.raises(UnsupportedError) as raised:
+        install.require_unix_runtime(wsl=False)
+    assert str(raised.value) == "Required Unix primitives unavailable: os.O_NOCTTY, fcntl; nothing changed"
+
+
+def test_module_without_fcntl_imports_and_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Native Windows has no `fcntl`: the module still imports and admission names it, no traceback."""
+    monkeypatch.setitem(sys.modules, "fcntl", None)
+    namespace = runpy.run_path(str(Path(install.__file__)), run_name="harness_install_without_fcntl")
+    assert namespace["fcntl"] is None
+    monkeypatch.setattr(install.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(install.platform, "machine", lambda: "arm64")
+    with pytest.raises(namespace["UnsupportedError"], match=r"unavailable: fcntl; nothing changed"):
+        namespace["require_unix_runtime"](wsl=False)
+
+
+def test_lock_without_fcntl_refuses_before_creating_the_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`locked` itself refuses without Unix file locking and creates nothing."""
+    layout = fixture_layout(tmp_path)
+    monkeypatch.setattr(install, "fcntl", None)
+    with (
+        pytest.raises(UnsupportedError, match="Unix file locking is unavailable, nothing changed"),
+        install.locked(layout),
+    ):
+        pytest.fail("the lock must not be entered")
+    assert not layout.root.exists()
+
+
+def test_unreadable_core_tarball_is_a_verification_failure(tmp_path: Path) -> None:
+    """Bytes that are not a tarball fail as verification, naming the asset."""
+    tarball = tmp_path / "core.tgz"
+    tarball.write_bytes(b"not a tarball")
+    with pytest.raises(VerificationError, match=r"Could not read the core manifest from 'core\.tgz'"):
+        required_node(tarball)
+
+
+def test_runtime_lock_must_match_owned_provenance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An attested graph whose owned package integrity differs from the promotion is refused."""
+    stack = Stack.model_validate_json((INTEGRATION / "stacks" / "personal.json").read_bytes())
+    runtime = runtime_lock.RuntimeLocks.model_validate_json(
+        (INTEGRATION.parent / runtime_lock.SOURCE_LOCK).read_bytes()
+    )
+    owned = [
+        OwnedPackageEvidence(
+            package=source_string(package).removeprefix("npm:"), integrity="sha512-" + "A" * 86 + "=="
+        )
+        for package in stack.sources
+        if source_string(package).startswith("npm:@nredd/")
+    ]
+    assert owned
+    source_sha = "a" * 40
+    snapshot = StackSnapshot(
+        schema_version=1,
+        source_sha=source_sha,
+        stack_sha256=stack_bytes(stack).sha256,
+        stack=stack,
+        gates=GateEvidence(
+            required_checks=["fixture"],
+            stack_run_ids=[1],
+            owned_packages=owned,
+            core=CoreEvidence(tag=stack.core.tag, integrity=stack.core.integrity),
+        ),
+    )
+    contents = runtime_lock.DependencyGraph(schema_version=1, source_sha=source_sha, runtime=runtime)
+    acquired: list[object] = []
+    monkeypatch.setattr(
+        install,
+        "download",
+        lambda url, destination: destination.write_bytes(contents.model_dump_json().encode()) and destination,
+    )
+    monkeypatch.setattr(install, "verify_public_attestation", lambda *args, **kwargs: None)
+    monkeypatch.setattr(install, "acquire", lambda *args: acquired.append(args))
+    name = owned[0].package.rsplit("@", 1)[0]
+    with pytest.raises(VerificationError) as raised:
+        install.verify_runtime(snapshot, tmp_path, {})
+    assert str(raised.value) == (
+        "Authenticated runtime dependency graph required: "
+        f"Runtime lock differs from owned provenance for '{name}'"
+    )
+    assert acquired == []
+
+
+def runtime_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Verified, Path]:
+    """Replay a real authenticated fixture graph natively and offline into a core prefix.
+
+    Parameters:
+        tmp_path (Path): private archives, npm scratch and install prefix.
+        monkeypatch (pytest.MonkeyPatch): fixture registry transport.
+
+    Returns:
+        tuple[Verified, Path]: verification result carrying the graph and archives, and the prefix.
+    """
+    graph, responses = fixture_graph()
+    monkeypatch.setattr(runtime_lock, "fetch_bytes", responses.__getitem__)
+    archives = acquire(graph, tmp_path / "archives")
+    prefix = tmp_path / "prefix"
+    runtime_lock.install_graph(graph, prefix, tmp_path / "scratch", native_npm(), archives)
+    graphs = {"core": graph, "agent": graph}
+    runtime = runtime_lock.RuntimeLocks(
+        schema_version=1, stack_sha256="0" * 64, platforms=dict.fromkeys(runtime_lock.PLATFORMS, graphs)
+    )
+    snapshot = real_snapshot()
+    verified = Verified(
+        snapshot,
+        [],
+        {},
+        runtime_lock.DependencyGraph(schema_version=1, source_sha=SHA, runtime=runtime),
+        {"core": archives, "agent": archives},
+    )
+    return verified, prefix
+
+
+@pytest.mark.parametrize("state", ["ready", "no-launcher", "foreign-launcher", "changed-bytes", "no-graph"])
+def test_runtime_ready_audits_actual_installed_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str
+) -> None:
+    """A real native install is ready only with the exact launcher and unchanged archive bytes."""
+    verified, prefix = runtime_fixture(tmp_path, monkeypatch)
+    launcher = prefix / "bin" / "pi"
+    launcher.parent.mkdir()
+    launcher.symlink_to(
+        "../node_modules/.bin/foreign" if state == "foreign-launcher" else "../node_modules/.bin/pi"
+    )
+    if state == "no-launcher":
+        launcher.unlink()
+    elif state == "changed-bytes":
+        (prefix / "node_modules" / "issue169-top" / "index.js").write_text("changed")
+    elif state == "no-graph":
+        verified = replace(verified, dependency_graph=None)
+        with pytest.raises(VerificationError, match="legacy install refused"):
+            install.runtime_ready(verified, "core", prefix)
+        return
+    assert install.runtime_ready(verified, "core", prefix) is (state == "ready")
+    # The agent root has no launcher: only its bytes decide.
+    assert install.runtime_ready(verified, "agent", prefix) is (state != "changed-bytes")
+
+
+def test_audit_runtime_raises_on_changed_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`audit_runtime` reports the byte difference that `runtime_ready` turns into not-ready."""
+    verified, prefix = runtime_fixture(tmp_path, monkeypatch)
+    install.audit_runtime(verified, "agent", prefix)
+    (prefix / "node_modules" / "issue169-leaf" / "index.js").write_text("changed")
+    with pytest.raises(runtime_lock.RuntimeLockError, match="runtime bytes"):
+        install.audit_runtime(verified, "agent", prefix)
+
+
+@pytest.mark.parametrize("outcome", ["installed", "mismatch"])
+def test_install_packages_verifies_staged_identities(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, outcome: str
+) -> None:
+    """Staged manifests and owned lock integrity are checked after the injected offline replay."""
+    snapshot = real_snapshot()
+    sources = [source_string(package) for package in snapshot.stack.sources]
+    integrity = owned_integrity(snapshot)
+    replayed: list[Path] = []
+
+    def replay(graph: object, root: Path, scratch: Path, npm: str, archives: object, **kwargs: Any) -> None:
+        """Write what native npm would install for the snapshot, optionally with a wrong version.
+
+        Parameters:
+            graph (object): selected agent graph.
+            root (Path): anchored staged npm prefix.
+            scratch (Path): unused npm scratch.
+            npm (str): unused native npm.
+            archives (object): unused verified archives.
+            **kwargs (Any): caller checkpoint.
+
+        Returns:
+            None: the modeled agent tree is written.
+        """
+        replayed.append(root)
+        packages = {}
+        for source in sources:
+            name, version = source.removeprefix("npm:").rsplit("@", 1)
+            if outcome == "mismatch" and source == sources[-1]:
+                version = "0.0.0"
+            (root / "node_modules" / name).mkdir(parents=True)
+            (root / "node_modules" / name / "package.json").write_text(
+                json.dumps({"name": name, "version": version})
+            )
+            packages[f"node_modules/{name}"] = {
+                "version": version,
+                "integrity": integrity.get(f"{name}@{version}"),
+            }
+        (root / "package-lock.json").write_text(json.dumps({"packages": packages}))
+        kwargs["checkpoint"]()
+
+    assert all(source.startswith("npm:") for source in sources)
+    graph = runtime_lock.NpmGraph.model_construct(manifest={}, lock={})
+    monkeypatch.setattr(install, "require_runtime", lambda verified: SimpleNamespace(runtime=None))
+    monkeypatch.setattr(install, "selected_graphs", lambda runtime: {"core": graph, "agent": graph})
+    monkeypatch.setattr(install, "install_graph", replay)
+    verified = Verified(snapshot, sources, {}, archives={"core": {}, "agent": {}})
+    staging = tmp_path.resolve() / "staging"
+    caplog.set_level("INFO", logger=install.LOGGER.name)
+    with AnchoredStore() as anchors:
+        if outcome == "mismatch":
+            with pytest.raises(
+                InstallError, match=r"Staged packages do not match the snapshot: Installed npm `version`"
+            ):
+                install.install_packages(verified, "/fixture/npm", staging, anchors=anchors)
+        else:
+            assert (
+                install.install_packages(verified, "/fixture/npm", staging, anchors=anchors)
+                == staging / "agent"
+            )
+    assert replayed == [staging / "agent" / "npm"]
+    assert f"Stage authenticated package '{sources[0]}' (scripts disabled)" in caplog.text
+
+
+def test_require_restorable_kind_refuses_a_foreign_target(tmp_path: Path) -> None:
+    """A path outside the installer layout is never replaced."""
+    layout = fixture_layout(tmp_path)
+    foreign = tmp_path.resolve() / "elsewhere"
+    with pytest.raises(
+        UnsupportedError, match=rf"Cannot safely replace '{re.escape(str(foreign))}': .*; nothing changed"
+    ):
+        install.require_restorable_kind(layout, foreign)
+
+
+def test_plan_descriptions_of_existing_packages_and_links(tmp_path: Path) -> None:
+    """Object package entries report their source; links report their target."""
+    assert install.declared_source({"source": "npm:x@1.0.0", "extensions": []}) == "npm:x@1.0.0"
+    assert install.declared_source({"extensions": []}) == '{"extensions": []}'
+    link = tmp_path / "pi"
+    link.symlink_to("/opt/somewhere/pi")
+    assert install.describe(link) == "link to /opt/somewhere/pi"
+
+
+def test_journal_save_and_place_require_a_pending_entry(tmp_path: Path) -> None:
+    """Out-of-order journal calls fail before any rename."""
+    layout = fixture_layout(tmp_path)
+    live = layout.state
+    with AnchoredStore() as anchors:
+        journal = Journal(layout, layout.backups / "run", anchors=anchors)
+        with pytest.raises(OSError, match="Backup directory is not open"):
+            journal.save(live, journal.backups / "installed.json")
+        with journal.open_backups():
+            with pytest.raises(OSError, match=rf"No pending journal entry for '{re.escape(str(live))}'"):
+                journal.save(live, journal.backups / "installed.json")
+            with pytest.raises(OSError, match=rf"No journal entry for replacement '{re.escape(str(live))}'"):
+                journal.place(None, live)
+    assert not layout.journal.exists()
+
+
+def test_restore_hasher_refuses_special_entries(tmp_path: Path) -> None:
+    """A FIFO is neither hashed nor opened for reading."""
+    fifo = tmp_path / "fifo"
+    os.mkfifo(fifo)
+    with pytest.raises(
+        OSError, match=rf"Restore entry '{re.escape(str(fifo))}' is not a file, directory or symlink"
+    ):
+        install.RestoreHasher().identity(fifo)
+
+
+def test_restore_hasher_refuses_an_entry_swapped_before_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rename between the no-follow stat and the open is detected by the descriptor's identity."""
+    path = tmp_path / "entry"
+    path.write_text("original")
+    stat_entry = os.stat
+    swaps: list[Path] = []
+
+    def swap(target: Any, **kwargs: Any) -> os.stat_result:
+        """Stat the entry; on the first stat of `path` only, substitute another inode there.
+
+        Parameters:
+            target (Any): stat target.
+            **kwargs (Any): stat options.
+
+        Returns:
+            os.stat_result: the metadata as it was before any substitution.
+        """
+        info = stat_entry(target, **kwargs)
+        if not swaps and Path(target) == path:
+            swaps.append(path)
+            substitute = tmp_path / "substitute"
+            substitute.write_text("substituted")
+            substitute.replace(path)
+        return info
+
+    monkeypatch.setattr(install.os, "stat", swap)
+    with pytest.raises(OSError, match=rf"Restore entry '{re.escape(str(path))}' changed before hashing"):
+        install.RestoreHasher().identity(path)
+    assert swaps == [path]
+    assert path.read_text() == "substituted"
+
+
+def test_restore_hasher_refuses_an_entry_changed_while_hashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A write that lands while the content is read changes size and fails the post-read check."""
+    path = tmp_path / "entry"
+    path.write_text("original")
+    digest = install.RestoreHasher.file_digest
+
+    def append(self: install.RestoreHasher, descriptor: int) -> str:
+        """Hash the file, then append to it before the identity is re-read.
+
+        Parameters:
+            self (install.RestoreHasher): hasher.
+            descriptor (int): open file.
+
+        Returns:
+            str: digest of the bytes read.
+        """
+        result = digest(self, descriptor)
+        with path.open("a") as handle:
+            handle.write("appended")
+        return result
+
+    monkeypatch.setattr(install.RestoreHasher, "file_digest", append)
+    with pytest.raises(OSError, match=rf"Restore entry '{re.escape(str(path))}' changed while hashing"):
+        install.RestoreHasher().identity(path)
+
+
+def test_read_journal_refuses_a_fifo(tmp_path: Path) -> None:
+    """A FIFO opens without blocking and is refused as not regular."""
+    fifo = tmp_path / "transaction.json"
+    os.mkfifo(fifo, 0o600)
+    with pytest.raises(ValueError, match=r"^it is not a regular file$"):
+        install.read_journal(fifo)
+
+
+def test_read_journal_refuses_a_foreign_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A journal another uid owns is never trusted."""
+    path = tmp_path / "transaction.json"
+    write_private(path, "{}")
+    owner = path.stat().st_uid
+    monkeypatch.setattr(install.os, "getuid", lambda: owner + 1)
+    with pytest.raises(ValueError, match=rf"^it is owned by uid '{owner}', not the current user$"):
+        install.read_journal(path)
+
+
+def test_read_journal_refuses_an_oversized_file(tmp_path: Path) -> None:
+    """The byte bound is checked before reading."""
+    path = tmp_path / "transaction.json"
+    write_private(path, " " * (install.MAX_JOURNAL_BYTES + 1))
+    with pytest.raises(ValueError, match=rf"journal exceeds {install.MAX_JOURNAL_BYTES} bytes"):
+        install.read_journal(path)
+
+
+def test_read_journal_refuses_a_journal_that_grows_while_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A journal that passes the size check but grows before it is read stays bounded."""
+    path = tmp_path / "transaction.json"
+    write_private(path, "{}")
+    fstat = os.fstat
+
+    def grow(descriptor: int) -> os.stat_result:
+        """Return the pre-growth metadata, then grow the file past the bound.
+
+        Parameters:
+            descriptor (int): open journal.
+
+        Returns:
+            os.stat_result: metadata before the growth.
+        """
+        info = fstat(descriptor)
+        with path.open("a") as handle:
+            handle.write(" " * install.MAX_JOURNAL_BYTES)
+        return info
+
+    monkeypatch.setattr(install.os, "fstat", grow)
+    with pytest.raises(ValueError, match=rf"journal exceeds {install.MAX_JOURNAL_BYTES} bytes"):
+        install.read_journal(path)
+
+
+def test_load_journal_refuses_a_non_object(tmp_path: Path) -> None:
+    """A private, readable journal that is not a JSON object is untrusted and changes nothing."""
+    layout = fixture_layout(tmp_path)
+    write_private(layout.journal, "[]")
+    with pytest.raises(
+        install.RollbackError, match="is not trusted: journal is not a JSON object; nothing was restored"
+    ):
+        install.load_journal(layout)
+    assert layout.journal.read_text() == "[]"
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        ("restoring-without-backup", "has invalid `restoring` state"),
+        ("aside-shape", "invalid restore aside for"),
+        ("aside-path", "is not a private sibling of"),
+        ("aside-manifest-root", "Restore aside manifest root does not match its identity"),
+        ("manifest-shape", "Invalid restore cleanup manifest"),
+        ("manifest-bytes", "Restore cleanup manifest exceeds byte limit"),
+        ("original-without-backup", "has original metadata without a backup"),
+        ("target-spelling", "is not a canonical path"),
+        ("restored-type", "has invalid restored metadata"),
+        ("restored-without-original", "has no original identity"),
+        ("aside-without-intent", "has an aside without restore intent"),
+    ],
+)
+def test_untrusted_journal_step_is_refused(tmp_path: Path, case: str, message: str) -> None:
+    """Every malformed step field is refused while validating, before any restore."""
+    layout = fixture_layout(tmp_path)
+    target = layout.state
+    backups = layout.backups / "run"
+    aside = {
+        "path": str(target.with_name(f".{target.name}.pi-stack-restore-{'a' * 32}")),
+        "identity": identity_record(),
+    }
+    step: dict[str, Any] = {"target": str(target), "backup": str(backups / "installed.json")}
+    match case:
+        case "restoring-without-backup":
+            step |= {"backup": None, "restoring": identity_record()}
+        case "aside-shape":
+            step |= {"restoring": identity_record(), "aside": {"path": 1, "identity": identity_record()}}
+        case "aside-path":
+            step |= {"restoring": identity_record(), "aside": aside | {"path": str(tmp_path / "elsewhere")}}
+        case "aside-manifest-root":
+            manifest = {"": identity_record(size=5)}
+            step |= {"restoring": identity_record(), "aside": aside | {"manifest": manifest}}
+        case "manifest-shape":
+            step |= {"restoring": identity_record(), "aside": aside | {"manifest": {}}}
+        case "manifest-bytes":
+            manifest = {"": identity_record(size=install.MAX_RESTORE_BYTES + 1)}
+            step |= {"restoring": identity_record(), "aside": aside | {"manifest": manifest}}
+        case "original-without-backup":
+            step |= {"backup": None, "pending": False, "original": [1, 2, 3]}
+        case "target-spelling":
+            step["target"] = str(target) + "/"
+        case "restored-type":
+            step["restored"] = 1
+        case "restored-without-original":
+            step["restored"] = True
+        case "aside-without-intent":
+            step["aside"] = aside
+    with pytest.raises(ValueError, match=re.escape(message)):
+        install.validate_journal(layout, {"backups": str(backups), "steps": [step]})
+
+
+def test_validate_journal_refuses_a_wrong_document_shape(tmp_path: Path) -> None:
+    """Extra or missing top-level keys are refused."""
+    with pytest.raises(ValueError, match=r"it is not a `\{backups, steps\}` object"):
+        install.validate_journal(fixture_layout(tmp_path), {"backups": "x"})
+
+
+def test_validate_journal_refuses_a_foreign_backup_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run's backup directory another uid owns cannot supply restores."""
+    layout = fixture_layout(tmp_path)
+    backups = layout.backups / "run"
+    backups.mkdir(parents=True)
+    owner = backups.stat().st_uid
+    monkeypatch.setattr(install.os, "getuid", lambda: owner + 1)
+    with pytest.raises(ValueError, match=rf"'{re.escape(str(backups))}' is not owned by the current user"):
+        install.validate_journal(layout, {"backups": str(backups), "steps": []})
+
+
+def test_report_pending_skips_restored_steps(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Only steps still to restore are listed."""
+    layout = fixture_layout(tmp_path)
+    steps = [
+        {"target": str(layout.state), "backup": None, "restored": True},
+        {"target": str(layout.agent_dir / "settings.json"), "backup": None},
+    ]
+    write_private(layout.journal, json.dumps({"backups": str(layout.backups / "run"), "steps": steps}))
+    caplog.set_level("INFO", logger=install.LOGGER.name)
+    install.report_pending(layout, restoring=False)
+    assert f"RESTORE '{layout.agent_dir / 'settings.json'}' by removing it (it was new)" in caplog.text
+    assert f"RESTORE '{layout.state}'" not in caplog.text
+
+
+def aside_step(layout: Layout, **changes: Any) -> install.Step:
+    """Build a state-file step whose displaced live entry sits in a real aside.
+
+    Parameters:
+        layout (Layout): installer paths; the state file and its aside are written.
+        **changes (Any): `Step` fields to replace.
+
+    Returns:
+        install.Step: step with a verified aside identity.
+    """
+    target = layout.state
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("ORIGINAL")
+    path = target.with_name(f".{target.name}.pi-stack-restore-{'a' * 32}")
+    path.write_text("DISPLACED")
+    aside = install.RestoreAside(path, install.RestoreHasher().identity(path))
+    return replace(install.Step(target, layout.backups / "run" / "installed.json", aside=aside), **changes)
+
+
+def test_check_aside_refuses_unverifiable_cleanup(tmp_path: Path) -> None:
+    """Interrupted aside cleanup needs a still-restored original and a cleanup manifest."""
+    layout = fixture_layout(tmp_path)
+    step = aside_step(layout)
+    assert step.aside is not None
+    cleaning = replace(step, aside=replace(step.aside, cleaning=True))
+    with pytest.raises(OSError, match="changed during aside cleanup; restore by hand"):
+        install.check_aside(cleaning)
+    restored = replace(cleaning, restoring=install.live_content(step.target))
+    with pytest.raises(OSError, match="has no cleanup manifest; restore by hand"):
+        install.check_aside(restored)
+
+
+def test_check_aside_refuses_a_changed_aside(tmp_path: Path) -> None:
+    """An aside whose content changed since it was recorded is never removed or restored."""
+    layout = fixture_layout(tmp_path)
+    step = aside_step(layout)
+    assert step.aside is not None
+    assert install.check_aside(step)
+    step.aside.path.write_text("EDITED")
+    with pytest.raises(
+        OSError, match=rf"Restore aside '{re.escape(str(step.aside.path))}' changed; restore by hand"
+    ):
+        install.check_aside(step)
+
+
+def test_finish_aside_keeps_the_aside_without_a_restored_original(
+    tmp_path: Path, anchors: AnchoredStore
+) -> None:
+    """Without recorded restore intent the displaced entry is kept."""
+    layout = fixture_layout(tmp_path)
+    step = aside_step(layout)
+    journal = Journal(layout, layout.backups / "run", anchors=anchors)
+    with pytest.raises(OSError, match="is not safely restored; aside kept"):
+        install.finish_aside(journal, step, 0)
+    assert step.aside is not None
+    assert step.aside.path.read_text() == "DISPLACED"
+
+
+def test_finish_aside_refuses_an_aside_changed_after_its_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, anchors: AnchoredStore
+) -> None:
+    """An edit between the aside check and cleanup's own hash keeps the aside and the journal."""
+    layout = fixture_layout(tmp_path)
+    step = aside_step(layout)
+    step = replace(step, restoring=install.live_content(step.target))
+    assert step.aside is not None
+    aside = step.aside.path
+    check = install.check_aside
+
+    def edit_after_check(checked: install.Step) -> bool:
+        """Verify the aside, then change it before cleanup hashes it again.
+
+        Parameters:
+            checked (install.Step): step under cleanup.
+
+        Returns:
+            bool: the real check's result.
+        """
+        result = check(checked)
+        aside.write_text("EDITED AFTER CHECK")
+        return result
+
+    monkeypatch.setattr(install, "check_aside", edit_after_check)
+    journal = Journal(layout, layout.backups / "run", anchors=anchors)
+    with pytest.raises(OSError, match=rf"Restore aside '{re.escape(str(aside))}' changed before cleanup"):
+        install.finish_aside(journal, step, 0)
+    assert aside.read_text() == "EDITED AFTER CHECK"
+    assert not layout.journal.exists()
+
+
+def test_check_restore_step_refuses_unhashable_live_content(tmp_path: Path, anchors: AnchoredStore) -> None:
+    """A live target recovery cannot hash is reported with the preserve-it-yourself command."""
+    layout = fixture_layout(tmp_path)
+    layout.root.mkdir()
+    os.mkfifo(layout.state)
+    journal = Journal(layout, layout.backups / "run", anchors=anchors)
+    with pytest.raises(
+        OSError, match="does not match the original or recorded replacement; nothing changed"
+    ) as raised:
+        install.check_restore_step(journal, install.Step(layout.state, None))
+    assert isinstance(raised.value.__cause__, OSError)
+    assert "mv -i --" in str(raised.value)
+
+
+def test_check_restore_step_refuses_a_missing_aside(tmp_path: Path, anchors: AnchoredStore) -> None:
+    """A step whose live entry was moved to an aside that has since vanished is restored by hand."""
+    layout = fixture_layout(tmp_path)
+    step = aside_step(layout)
+    assert step.aside is not None
+    assert step.backup is not None
+    step.backup.parent.mkdir(parents=True)
+    step.target.replace(step.backup)
+    step.aside.path.unlink()
+    journal = Journal(layout, step.backup.parent, anchors=anchors)
+    with (
+        journal.open_backups(create=False),
+        pytest.raises(OSError, match=rf"Restore aside '{re.escape(str(step.aside.path))}' is missing"),
+    ):
+        install.check_restore_step(journal, step)
+    assert step.backup.read_text() == "ORIGINAL"
+
+
+def test_restore_backup_refuses_an_existing_aside_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, anchors: AnchoredStore
+) -> None:
+    """A colliding aside name is never overwritten; nothing changes."""
+    layout = fixture_layout(tmp_path)
+    layout.root.mkdir()
+    layout.state.write_text("REPLACEMENT")
+    fixed = uuid.UUID(int=0)
+    occupied = layout.state.with_name(f".{layout.state.name}.pi-stack-restore-{fixed.hex}")
+    occupied.write_text("SOMEONE ELSE")
+    monkeypatch.setattr(install.uuid, "uuid4", lambda: fixed)
+    step = install.Step(
+        layout.state, layout.backups / "run" / "installed.json", restoring=install.live_content(occupied)
+    )
+    journal = Journal(layout, layout.backups / "run", anchors=anchors)
+    with pytest.raises(
+        OSError, match=rf"Restore aside '{re.escape(str(occupied))}' already exists; nothing changed"
+    ):
+        install.restore_backup(journal, step, 0)
+    assert occupied.read_text() == "SOMEONE ELSE"
+    assert layout.state.read_text() == "REPLACEMENT"
+    assert not layout.journal.exists()
+
+
+def test_main_reports_an_interrupt_as_failed(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Ctrl-C maps to a clean failure with the restore-on-next-run note, no traceback."""
+
+    def interrupted(*args: object) -> ExitCode:
+        """Model Ctrl-C during a run.
+
+        Parameters:
+            *args (object): unused run inputs.
+
+        Returns:
+            ExitCode: never returned.
+
+        Raises:
+            KeyboardInterrupt: always.
+        """
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(install, "run", interrupted)
+    assert install.main([SHA]) == ExitCode.FAILED
+    assert (
+        "INTERRUPTED: staging is discarded; an interrupted switch is restored on the next run" in caplog.text
+    )
+
+
+def test_module_entry_point_runs_main(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`python -m harness.install` dispatches to `main`; `--help` exits before anything is read."""
+    monkeypatch.setattr(sys, "argv", ["pi-stack-install", "--help"])
+    with pytest.raises(SystemExit) as raised:
+        runpy.run_path(str(Path(install.__file__)), run_name="__main__")
+    assert raised.value.code == 0
+    assert "usage: pi-stack-install" in capsys.readouterr().out

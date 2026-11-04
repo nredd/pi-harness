@@ -13,6 +13,8 @@ import hashlib
 import io
 import json
 import os
+import re
+import runpy
 import shlex
 import shutil
 import subprocess
@@ -1715,3 +1717,140 @@ def test_valid_wire_body_is_complete(monkeypatch: pytest.MonkeyPatch, length: st
         monkeypatch.setattr(release, "urlopen", opener)
         assert release.fetch_bytes(base + "/asset") == b"abcdef"
         assert requests == ["/asset"]
+
+
+def test_detached_exception_requires_a_distinct_replacement() -> None:
+    """Detaching an exception from itself would keep its raw chain, so it is refused."""
+    error = ValueError("raw")
+    with pytest.raises(ValueError, match=r"^A detached exception requires a distinct replacement$"):
+        release.detached_exception(error, error)
+
+
+def test_redaction_ignores_an_at_sign_outside_the_proxy_authority(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An `@` only in a proxy URL's path is not userinfo, so nothing from it is masked."""
+    for key in release.PROXY_ENVIRONMENT_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ALL_PROXY", "http://proxy.invalid/route@edge")
+    assert (
+        release.redact_diagnostic("via proxy.invalid/route@edge: refused")
+        == "via proxy.invalid/route@edge: refused"
+    )
+
+
+def test_replace_diagnostic_token_refuses_an_empty_token() -> None:
+    """An empty token would match between every character, so it is refused."""
+    with pytest.raises(ValueError, match=r"^A redaction token must not be empty$"):
+        release.replace_diagnostic_token("text", "")
+
+
+def test_connectivity_environment_drops_a_ca_path_that_cannot_resolve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A relative CA path under a vanished working directory is dropped with a warning, not raised."""
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    monkeypatch.chdir(gone)
+    gone.rmdir()
+    with pytest.raises(FileNotFoundError):
+        Path("ca.pem").resolve()
+    with caplog.at_level("WARNING", logger=release.LOGGER.name):
+        assert release.connectivity_environment({"SSL_CERT_FILE": "ca.pem"}) == {}
+    assert caplog.messages == ["Dropping `SSL_CERT_FILE`: expected an absolute existing CA path"]
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        (b"\xff\n", "^Could not decode release checksums for 'v1.3.0-nredd.8': "),
+        (b"single-field\n", "^Malformed release checksum line for 'v1.3.0-nredd.8': 'single-field'$"),
+        (
+            f"{'a' * 64}  pi.tgz\n{'b' * 64}  pi.tgz\n".encode(),
+            "^Duplicate release checksum for 'https://github.com/nredd/pi/releases/download/v1.3.0-nredd.8/pi.tgz'$",
+        ),
+        (b"", "^No release checksums for 'v1.3.0-nredd.8'$"),
+    ],
+)
+def test_release_checksums_refuse_unusable_files(
+    monkeypatch: pytest.MonkeyPatch, body: bytes, message: str
+) -> None:
+    """Undecodable, malformed, duplicated or empty `SHA256SUMS` never yields a checksum map.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): serve the release checksum file offline.
+        body (bytes): served `SHA256SUMS` bytes.
+        message (str): expected refusal.
+    """
+    monkeypatch.setattr(release, "urlopen", lambda *_args, **_kwargs: HTTPBody(body))
+    with pytest.raises(ValueError, match=message):
+        release_checksums(NEW_TAG)
+
+
+@pytest.mark.parametrize(
+    ("manifest", "message"),
+    [
+        ("[]", "^Expected a JSON object in '.*package\\.json'$"),
+        ("{}", "^Root `package.json` has no `overrides` object$"),
+    ],
+)
+def test_root_override_gate_refuses_a_manifest_without_overrides(
+    tmp_path: Path, manifest: str, message: str
+) -> None:
+    """A root manifest that is not an object, or has no `overrides`, fails before any lock or release read.
+
+    Parameters:
+        tmp_path (Path): fixture root.
+        manifest (str): root `package.json` contents.
+        message (str): expected refusal.
+    """
+    (tmp_path / "package.json").write_text(manifest)
+    with pytest.raises(ValueError, match=message):
+        verify_root_overrides(tmp_path)
+
+
+def test_fetch_release_requires_the_selected_npm(tmp_path: Path) -> None:
+    """A missing npm dispatcher is refused after the offline legacy checksums, before the prefix exists."""
+    npm = tmp_path / "absent" / "npm"
+    with pytest.raises(
+        FileNotFoundError, match=f"^Release installation requires `npm` at '{re.escape(str(npm))}'$"
+    ):
+        fetch_release("v1.3.0-nredd.7", tmp_path / "prefix", npm_bin=str(npm))
+    assert not (tmp_path / "prefix").exists()
+
+
+def test_cli_verifies_root_overrides_or_fetches_the_selected_tag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A clean verification returns; `--tag`/`--gitlink` need `--prefix` and install the resolved tag."""
+    calls: list[tuple[str, Path]] = []
+    monkeypatch.setattr(release, "verify_root_overrides", lambda root: calls.append(("verify", root)))
+    monkeypatch.setattr(release, "gitlink_tag", lambda directory: f"tag-of-{directory.name}")
+    monkeypatch.setattr(release, "fetch_release", lambda tag, prefix: calls.append((tag, prefix)))
+    for argv in (
+        ["--verify-root-overrides", "--root", str(tmp_path)],
+        ["--tag", "v1.3.0-nredd.8", "--prefix", str(tmp_path / "a")],
+        ["--gitlink", str(tmp_path / "pi"), "--prefix", str(tmp_path / "b")],
+    ):
+        monkeypatch.setattr(sys, "argv", ["release", *argv])
+        release.main()
+    assert calls == [
+        ("verify", tmp_path.resolve()),
+        ("v1.3.0-nredd.8", (tmp_path / "a").resolve()),
+        ("tag-of-pi", (tmp_path / "b").resolve()),
+    ]
+    monkeypatch.setattr(sys, "argv", ["release", "--tag", "v1.3.0-nredd.8"])
+    with pytest.raises(SystemExit) as caught:
+        release.main()
+    assert caught.value.code == 2
+    assert len(calls) == 3
+
+
+def test_module_entrypoint_rejects_a_fetch_without_prefix(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`python -m harness.release --tag` without `--prefix` is a usage error before any download."""
+    monkeypatch.setattr(sys, "argv", ["release", "--tag", "v1.3.0-nredd.8"])
+    monkeypatch.delitem(sys.modules, "harness.release")
+    with pytest.raises(SystemExit) as caught:
+        runpy.run_module("harness.release", run_name="__main__")
+    assert caught.value.code == 2
+    assert "`--prefix` is required with `--tag` or `--gitlink`" in capsys.readouterr().err

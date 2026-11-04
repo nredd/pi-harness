@@ -34,6 +34,7 @@ from harness.stack import (
     load_stack,
     localize_source,
     package_directory,
+    package_manifest,
     source_string,
     stack_digest,
     validate_release_identity,
@@ -400,6 +401,8 @@ def test_semantic_validators_reject_tampered_stack_documents() -> None:
     personal = Stack.model_validate(stack_document(name="personal", sources=["npm:@nredd/pi-preset@0.2.0"]))
     with pytest.raises(ValueError, match="local path"):
         validate_shipped_stack(Stack.model_validate(stack_document(name="personal")))
+    with pytest.raises(ValueError, match=r"^Shipped stack must be named 'personal'$"):
+        validate_shipped_stack(Stack.model_validate(stack_document(sources=["npm:@nredd/pi-preset@0.2.0"])))
     with pytest.raises(ValueError, match="does not match Gitlink tag"):
         validate_release_identity(personal, "v1.3.0-nredd.6", {})
     wrong = {release_asset_url("v1.3.0-nredd.7", "good.tgz"): "0" * 64}
@@ -714,3 +717,14 @@ def test_enable_faux_models_appends_once_and_keeps_existing(tmp_path: Path) -> N
     settings = box.settings()
     assert settings["enabledModels"] == ["anthropic/claude-opus-5-5", "faux/main", "fauxchild/child"]
     assert settings["retry"] == {"enabled": False}
+
+
+def test_package_manifest_refuses_an_absent_or_non_object_document(tmp_path: Path) -> None:
+    """A missing `package.json` and one holding a non-object are refused, naming the file."""
+    with pytest.raises(FileNotFoundError, match=r"^Package manifest is absent: '.*package\.json'$"):
+        package_manifest(tmp_path)
+    (tmp_path / "package.json").write_text("[]")
+    with pytest.raises(
+        ValueError, match=r"^Package manifest `root` is not a JSON object: '.*package\.json'$"
+    ):
+        package_manifest(tmp_path)
