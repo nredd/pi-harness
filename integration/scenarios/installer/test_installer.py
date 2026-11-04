@@ -30,9 +30,8 @@ from typing import Any
 
 import pytest
 
-from harness import release
+from harness import process_group, release
 from harness.install import EXCLUDE_NEWER, INSTALLER_PYTHON, download
-from harness.process_group import group_has_live_members
 from harness.promotion import (
     SNAPSHOT_ASSET,
     SNAPSHOT_REPO,
@@ -433,21 +432,12 @@ def cleanup_group(process: subprocess.Popen[str], timeout: float = 60) -> None:
         while True:
             remaining = deadline - time.monotonic()
             assert remaining > 0, f"Process group '{process.pid}' survived cleanup"
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                break
-            except PermissionError:
-                # macOS rejects signals to some zombie-only groups. A live member is
-                # still a real permission failure; zombies cannot fork or write.
-                remaining = deadline - time.monotonic()
-                assert remaining > 0, f"Process group '{process.pid}' survived cleanup"
-                if group_has_live_members(process.pid, remaining):
-                    raise
+            # Shared policy: ESRCH or a zombie-only EPERM is gone; a live member re-raises.
+            if process_group.kill_owned_group(process.pid, remaining):
                 break
             remaining = deadline - time.monotonic()
             assert remaining > 0, f"Process group '{process.pid}' survived cleanup"
-            if not group_has_live_members(process.pid, remaining):
+            if not process_group.group_has_live_members(process.pid, remaining):
                 break
             # Never poll/wait here: even a zombie leader reserves the PGID while a
             # fork racing SIGKILL can require another signal. Reap only after the

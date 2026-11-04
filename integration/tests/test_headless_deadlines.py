@@ -12,6 +12,7 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import pytest
@@ -101,38 +102,78 @@ def spawn_session(program: str) -> subprocess.Popen[str]:
     )
 
 
-def deny_owned_group(
-    monkeypatch: pytest.MonkeyPatch, process: subprocess.Popen[str], *, live: bool
-) -> tuple[list[tuple[int, int]], list[int]]:
-    """Inject a macOS `EPERM` from `killpg` and a process-table verdict, never signalling anything.
+def leader_is_unreaped(pid: int) -> bool:
+    """Report whether `pid` is still this process's unreaped child, without reaping it.
+
+    Parameters:
+        pid (int): child process id.
+
+    Returns:
+        bool: the leader still anchors its process group number.
+    """
+    try:
+        os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except ChildProcessError:
+        return False
+    return True
+
+
+@dataclass
+class GroupSeams:
+    """What the injected `killpg` and listing saw.
+
+    Attributes:
+        signalled (list[tuple[int, int]]): `(pgid, signal)` calls.
+        anchored (list[bool]): per call, whether the leader was still unreaped.
+        on_main (list[bool]): per call, whether the main thread sent it.
+        listed (list[int]): listed groups.
+    """
+
+    signalled: list[tuple[int, int]] = field(default_factory=list)
+    anchored: list[bool] = field(default_factory=list)
+    on_main: list[bool] = field(default_factory=list)
+    listed: list[int] = field(default_factory=list)
+
+
+def record_owned_group(
+    monkeypatch: pytest.MonkeyPatch,
+    process: subprocess.Popen[str],
+    *,
+    deny: bool = True,
+    listing: bool | Exception = False,
+) -> GroupSeams:
+    """Inject `killpg` and the process-table listing for one owned group, never signalling anything.
 
     Parameters:
         monkeypatch (pytest.MonkeyPatch): installs the recording seams.
         process (subprocess.Popen[str]): the owned session leader; any other group fails the test.
-        live (bool): whether the injected listing shows a live member.
+        deny (bool): answer `EPERM` like an unreaped Darwin session instead of delivering.
+        listing (bool | Exception): injected liveness, or the listing failure to raise.
 
     Returns:
-        tuple[list[tuple[int, int]], list[int]]: recorded `(pgid, signal)` calls and listed groups.
+        GroupSeams: what was signalled and listed.
     """
-    signalled: list[tuple[int, int]] = []
-    listed: list[int] = []
+    seams = GroupSeams()
 
-    def denied(pgid: int, sig: int) -> None:
-        """Record the owned-group signal and refuse it like an unreaped Darwin session.
+    def recorded(pgid: int, sig: int) -> None:
+        """Record the owned-group signal and its anchoring, then refuse or pretend delivery.
 
         Parameters:
             pgid (int): process group to signal.
             sig (int): signal to send.
 
         Raises:
-            PermissionError: always, as Darwin answers a zombie-only group.
+            PermissionError: when `deny` is set.
         """
         assert pgid == process.pid
-        signalled.append((pgid, sig))
-        raise PermissionError(1, "Operation not permitted")
+        seams.signalled.append((pgid, sig))
+        seams.anchored.append(leader_is_unreaped(pgid))
+        seams.on_main.append(threading.current_thread() is threading.main_thread())
+        if deny:
+            raise PermissionError(1, "Operation not permitted")
 
-    def listing(pgid: int, timeout: float) -> bool:
-        """Record the owned-group listing and return the injected verdict.
+    def listed(pgid: int, timeout: float) -> bool:
+        """Record the owned-group listing and return or raise the injected verdict.
 
         Parameters:
             pgid (int): process group to list.
@@ -140,70 +181,251 @@ def deny_owned_group(
 
         Returns:
             bool: the injected liveness.
+
+        Raises:
+            Exception: the injected listing failure.
         """
         assert pgid == process.pid
         assert timeout > 0
-        listed.append(pgid)
-        return live
+        seams.listed.append(pgid)
+        if isinstance(listing, Exception):
+            raise listing
+        return listing
 
-    monkeypatch.setattr(os, "killpg", denied)
-    monkeypatch.setattr(headless, "group_has_live_members", listing)
-    return signalled, listed
+    monkeypatch.setattr(os, "killpg", recorded)
+    monkeypatch.setattr(process_group, "group_has_live_members", listed)
+    return seams
+
+
+@pytest.fixture
+def thread_deaths(monkeypatch: pytest.MonkeyPatch) -> list[BaseException | None]:
+    """Collect exceptions that escape any thread instead of letting them vanish.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): replaces `threading.excepthook`.
+
+    Returns:
+        list[BaseException | None]: escaped exceptions.
+    """
+    died: list[BaseException | None] = []
+    monkeypatch.setattr(threading, "excepthook", lambda args: died.append(args.exc_value))
+    return died
+
+
+LISTING_FAILURES = [
+    subprocess.TimeoutExpired(["/bin/ps"], 5),
+    subprocess.CalledProcessError(1, ["/bin/ps"]),
+    FileNotFoundError(2, "No such file or directory", "/bin/ps"),
+]
 
 
 @pytest.mark.parametrize("pipe", ["stdout", "stderr"])
-def test_overflow_reader_survives_a_zombie_only_group(monkeypatch: pytest.MonkeyPatch, pipe: str) -> None:
+def test_overflow_reader_survives_a_zombie_only_group(
+    monkeypatch: pytest.MonkeyPatch, thread_deaths: list[BaseException | None], pipe: str
+) -> None:
     """An `EPERM` from an exited, unreaped leader's group must not kill the overflowing reader (#357).
 
     Parameters:
-        monkeypatch (pytest.MonkeyPatch): small output limit, recording `killpg`, thread hook.
+        monkeypatch (pytest.MonkeyPatch): small output limit and recording seams.
+        thread_deaths (list[BaseException | None]): escaped thread exceptions.
         pipe (str): stdout or stderr to overflow.
     """
     monkeypatch.setattr(headless, "MAX_OUTPUT_BYTES", 4096)
-    died: list[BaseException | None] = []
-    monkeypatch.setattr(threading, "excepthook", lambda args: died.append(args.exc_value))
     process = spawn_session(f'import sys; sys.{pipe}.write("x"*8192)')
     try:
-        signalled, listed = deny_owned_group(monkeypatch, process, live=False)
+        seams = record_owned_group(monkeypatch, process)
         with pytest.raises(RuntimeError, match="output bytes"):
             headless.collect_json_process(process, ["overflow"], time.monotonic(), 10)
-        assert died == []
-        assert signalled == [(process.pid, signal.SIGKILL)]
-        assert listed == [process.pid]
+        assert thread_deaths == []
+        assert seams.signalled == [(process.pid, signal.SIGKILL)]
+        assert seams.anchored == [True]
+        assert seams.on_main == [True]
+        assert seams.listed == [process.pid]
+        assert process.returncode == 0
     finally:
-        process.wait(timeout=10)
+        process.communicate(timeout=10)
+
+
+@pytest.mark.parametrize("failure", LISTING_FAILURES, ids=type)
+@pytest.mark.parametrize("pipe", ["stdout", "stderr"])
+def test_overflow_with_a_failed_listing_surfaces_the_eperm(
+    monkeypatch: pytest.MonkeyPatch, thread_deaths: list[BaseException | None], pipe: str, failure: Exception
+) -> None:
+    """A listing that cannot explain the `EPERM` never counts the group as gone and never dies in a reader.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): small output limit and recording seams.
+        thread_deaths (list[BaseException | None]): escaped thread exceptions.
+        pipe (str): stdout or stderr to overflow.
+        failure (Exception): injected `/bin/ps` failure.
+    """
+    monkeypatch.setattr(headless, "MAX_OUTPUT_BYTES", 4096)
+    process = spawn_session(f'import sys; sys.{pipe}.write("x"*8192)')
+    try:
+        seams = record_owned_group(monkeypatch, process, listing=failure)
+        with pytest.raises(PermissionError) as caught:
+            headless.collect_json_process(process, ["overflow"], time.monotonic(), 10)
+        assert caught.value.__cause__ is failure
+        assert thread_deaths == []
+        assert seams.signalled == [(process.pid, signal.SIGKILL)]
+        assert seams.anchored == [True]
+        assert seams.on_main == [True]
+    finally:
+        process.communicate(timeout=10)
 
 
 def test_deadline_kill_survives_a_zombie_only_group(monkeypatch: pytest.MonkeyPatch) -> None:
     """The deadline path still reports a timeout, not the `EPERM`, for a zombie-only group (#357).
 
     Parameters:
-        monkeypatch (pytest.MonkeyPatch): recording `killpg` and listing seams.
+        monkeypatch (pytest.MonkeyPatch): recording seams.
     """
     process = spawn_session("import time; time.sleep(0.5)")
     try:
-        signalled, listed = deny_owned_group(monkeypatch, process, live=False)
+        seams = record_owned_group(monkeypatch, process)
         with pytest.raises(TimeoutError, match="deadline"):
             headless.collect_json_process(process, ["silent"], time.monotonic(), 0.1)
-        assert signalled == [(process.pid, signal.SIGKILL)]
-        assert listed == [process.pid]
+        assert seams.signalled == [(process.pid, signal.SIGKILL)]
+        assert seams.anchored == [True]
+        assert seams.listed == [process.pid]
     finally:
-        process.wait(timeout=10)
+        process.communicate(timeout=10)
+
+
+@pytest.mark.parametrize("failure", LISTING_FAILURES, ids=type)
+def test_deadline_with_a_failed_listing_surfaces_the_eperm(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    """At the deadline, an unexplained `EPERM` surfaces chained to the listing failure.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): recording seams.
+        failure (Exception): injected `/bin/ps` failure.
+    """
+    process = spawn_session("import time; time.sleep(0.5)")
+    try:
+        seams = record_owned_group(monkeypatch, process, listing=failure)
+        with pytest.raises(PermissionError) as caught:
+            headless.collect_json_process(process, ["silent"], time.monotonic(), 0.1)
+        assert caught.value.__cause__ is failure
+        assert seams.signalled == [(process.pid, signal.SIGKILL)]
+    finally:
+        process.communicate(timeout=10)
+
+
+def test_inherited_pipe_kill_keeps_the_leader_as_pgid_anchor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The reader-outlives-leader kill fires while the leader is unreaped, so its PGID cannot be reused.
+
+    The leader exits at once; a descendant in its own session keeps stdout open past the deadline, then
+    exits by itself. The recording `killpg` pretends delivery and signals nothing.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): recording seams.
+        tmp_path (Path): descendant readiness marker.
+    """
+    ready = tmp_path / "ready"
+    holder = f"import pathlib,time; pathlib.Path({str(ready)!r}).touch(); time.sleep(1)"
+    leader = (
+        "import subprocess,sys,time\n"
+        f"subprocess.Popen([sys.executable,'-c',{holder!r}],start_new_session=True)\n"
+        f"while not __import__('os').path.exists({str(ready)!r}): time.sleep(0.01)\n"
+    )
+    process = spawn_session(leader)
+    try:
+        seams = record_owned_group(monkeypatch, process, deny=False)
+        with pytest.raises(TimeoutError, match="deadline"):
+            headless.collect_json_process(process, ["inherited"], time.monotonic(), 0.3)
+        assert ready.exists()
+        assert seams.signalled == [(process.pid, signal.SIGKILL)]
+        assert seams.anchored == [True]
+        assert process.returncode == 0
+    finally:
+        process.communicate(timeout=10)
+
+
+def test_late_overflow_after_leader_exit_still_kills_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A descendant that overflows after its leader exited still gets its group killed, once.
+
+    The recording `killpg` pretends delivery; the descendant writes and exits by itself.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): small output limit and recording seams.
+    """
+    monkeypatch.setattr(headless, "MAX_OUTPUT_BYTES", 4096)
+    writer = 'import sys,time; time.sleep(0.2); sys.stdout.write("x"*8192)'
+    process = spawn_session(f"import subprocess,sys; subprocess.Popen([sys.executable,'-c',{writer!r}])")
+    try:
+        seams = record_owned_group(monkeypatch, process, deny=False)
+        with pytest.raises(RuntimeError, match="output bytes"):
+            headless.collect_json_process(process, ["late"], time.monotonic(), 10)
+        assert seams.signalled == [(process.pid, signal.SIGKILL)]
+        assert seams.anchored == [True]
+        assert seams.on_main == [True]
+    finally:
+        process.communicate(timeout=10)
+
+
+def test_kill_owned_group_refuses_the_own_and_broadcast_groups(monkeypatch: pytest.MonkeyPatch) -> None:
+    """pgid 0 and 1 are rejected before any syscall.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): a `killpg` that must not run.
+    """
+
+    def forbidden(pgid: int, sig: int) -> None:
+        """Fail if any signal is attempted.
+
+        Parameters:
+            pgid (int): process group to signal.
+            sig (int): signal to send.
+
+        Raises:
+            AssertionError: always.
+        """
+        raise AssertionError(f"killpg({pgid}, {sig})")
+
+    monkeypatch.setattr(os, "killpg", forbidden)
+    for pgid in (0, 1):
+        with pytest.raises(ValueError, match="Refusing"):
+            process_group.kill_owned_group(pgid, 5)
 
 
 def test_permission_denied_with_a_live_member_still_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     """`EPERM` with a live member is a real permission failure and surfaces.
 
     Parameters:
-        monkeypatch (pytest.MonkeyPatch): recording `killpg` and listing seams.
+        monkeypatch (pytest.MonkeyPatch): recording seams.
     """
     process = spawn_session("pass")
     try:
-        signalled, listed = deny_owned_group(monkeypatch, process, live=True)
-        with pytest.raises(PermissionError):
-            headless.kill_process_group(process.pid)
-        assert signalled == [(process.pid, signal.SIGKILL)]
-        assert listed == [process.pid]
+        seams = record_owned_group(monkeypatch, process, listing=True)
+        with pytest.raises(PermissionError) as caught:
+            process_group.kill_owned_group(process.pid, 5)
+        assert caught.value.__cause__ is None
+        assert seams.signalled == [(process.pid, signal.SIGKILL)]
+        assert seams.listed == [process.pid]
+    finally:
+        process.communicate(timeout=10)
+
+
+@pytest.mark.parametrize(("deny", "gone"), [(False, False), (True, True)])
+def test_kill_owned_group_reports_whether_the_group_is_gone(
+    monkeypatch: pytest.MonkeyPatch, deny: bool, gone: bool
+) -> None:
+    """Delivery leaves the group possibly present; a zombie-only `EPERM` means gone.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): recording seams.
+        deny (bool): answer `EPERM`.
+        gone (bool): expected verdict.
+    """
+    process = spawn_session("pass")
+    try:
+        seams = record_owned_group(monkeypatch, process, deny=deny)
+        assert process_group.kill_owned_group(process.pid, 5) is gone
+        assert seams.listed == ([process.pid] if deny else [])
     finally:
         process.communicate(timeout=10)
 
@@ -248,8 +470,8 @@ def test_vanished_group_needs_no_listing(monkeypatch: pytest.MonkeyPatch) -> Non
 
     try:
         monkeypatch.setattr(os, "killpg", vanished)
-        monkeypatch.setattr(headless, "group_has_live_members", unexpected)
-        headless.kill_process_group(process.pid)
+        monkeypatch.setattr(process_group, "group_has_live_members", unexpected)
+        assert process_group.kill_owned_group(process.pid, 5)
         assert signalled == [(process.pid, signal.SIGKILL)]
     finally:
         process.communicate(timeout=10)
@@ -268,7 +490,8 @@ def test_real_zombie_only_group_is_not_live_and_kill_tolerates_it() -> None:
         os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
         assert process.returncode is None
         assert not process_group.group_has_live_members(process.pid, 5)
-        headless.kill_process_group(process.pid)
+        # Darwin refuses a zombie-only group (gone); Linux delivers to the zombie (signalled).
+        assert process_group.kill_owned_group(process.pid, 5) is (sys.platform == "darwin")
     finally:
         process.kill()
         process.communicate(timeout=10)

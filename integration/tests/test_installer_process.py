@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from harness import process_group
 from harness.install import remove
 from scenarios.installer import test_installer as installer
 from scenarios.installer.test_installer import kill_at_marker
@@ -107,7 +108,7 @@ def test_cleanup_keeps_leader_unreaped_until_group_quiescence(monkeypatch: pytes
 
     try:
         with monkeypatch.context() as patch:
-            patch.setattr(installer, "group_has_live_members", live_members)
+            patch.setattr(process_group, "group_has_live_members", live_members)
             patch.setattr(process, "wait", owned_wait)
             patch.setattr(process, "poll", no_poll)
             kill_at_marker(process, "MARKER", 3)
@@ -187,7 +188,7 @@ def test_cleanup_preserves_marker_and_cleanup_errors(monkeypatch: pytest.MonkeyP
 
     try:
         with monkeypatch.context() as patch:
-            patch.setattr(installer, "group_has_live_members", live_members)
+            patch.setattr(process_group, "group_has_live_members", live_members)
             if failure == "reap":
                 patch.setattr(process, "wait", failed_reap)
             if failure == "permission":
@@ -197,7 +198,11 @@ def test_cleanup_preserves_marker_and_cleanup_errors(monkeypatch: pytest.MonkeyP
         primary, cleanup = caught.value.exceptions
         assert isinstance(primary, AssertionError)
         assert "Child exited" in str(primary)
-        assert cleanup is error
+        if failure == "process-table" and isinstance(cleanup, PermissionError):
+            # Darwin refused the real exited group: the failed listing cannot explain that EPERM.
+            assert cleanup.__cause__ is error
+        else:
+            assert cleanup is error
         assert process.returncode is not None
         assert process.stdout is not None
         assert process.stdout.closed
@@ -234,7 +239,7 @@ def test_cleanup_tolerates_permission_denied_on_zombie_only_group(monkeypatch: p
     try:
         with monkeypatch.context() as patch:
             patch.setattr(os, "killpg", denied)
-            patch.setattr(installer, "group_has_live_members", lambda pgid, timeout: False)
+            patch.setattr(process_group, "group_has_live_members", lambda pgid, timeout: False)
             installer.cleanup_group(process, timeout=5)
         assert signalled == [signal.SIGKILL]
         assert process.returncode == 0
@@ -277,7 +282,7 @@ def test_group_cleanup_deadline_is_shared_and_reaps(monkeypatch: pytest.MonkeyPa
 
     try:
         monkeypatch.setattr(os, "killpg", signal_once)
-        monkeypatch.setattr(installer, "group_has_live_members", lambda pgid, timeout: True)
+        monkeypatch.setattr(process_group, "group_has_live_members", lambda pgid, timeout: True)
         with pytest.raises(AssertionError, match="survived cleanup"):
             installer.cleanup_group(process, timeout=0.1)
         assert time.monotonic() - started < 3
