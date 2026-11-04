@@ -107,6 +107,15 @@ physical line and only the functions V8 reported (`transcript-types.ts` 207 line
 `import_audit.ts` 161 / 7), Vitest's AST-based V8 remap counts statement lines and every function
 including anonymous callbacks (`transcript-types.ts` 103 / 15, `import_audit.ts` 63 / 8 with the new
 `main`). Both are 0 uncovered on darwin and linux before and after.
+`providers` is in the goal and enforced at 0/0 since #378: `check-providers` runs `integration/providers/vitest.config.ts`
+(forks, the shared home guard) over all seven sources. `faux.ts` and `usage_fixture.ts` stream every
+scripted step shape against a recording registry with a fake clock, `extension_inventory.ts` reads a
+fake registry, and `preloads.test.ts` imports the auth preloads in its own forked worker against a
+loopback mock: the redirect, refused egress, recorded `claude`/`security` spawns, readiness failures
+and every `auth_runtime_fixture.mjs` negative flag. A stand-in `globalThis.Bun` covers the Bun spawn
+wrappers. 194 lines / 51 functions, 0 uncovered on darwin. The `test-helper` exclusion and the five
+`verification_helpers` rows are gone; `fast_timers.mjs` was dead (no scenario passed `fixture_env`
+timers) and is deleted.
 
 Every declared `test:bun` command also emits an independent `bun` LCOV signal. Nine Bun signals
 are measured. `plan-mode`, `preset`, `subscription-router` and `todo` are `enforced` at 0/0 on darwin
@@ -255,7 +264,7 @@ mocked argument/path/error tests still run. Existing native/platform checks rema
 `dev-tools` now emits primary Istanbul and independent native Bun reports after #155/#195.
 Failed-run reports are diagnostic artifacts only and never establish budgets.
 
-Executable providers and producer configurations are named **measurement-pending**
+Producer configurations are named **measurement-pending**
 inventories, not silently omitted. Python `scripts/*.py` (`python-scripts`) and
 `integration/harness/*.py` (`python-harness`) are measured by the one Python gate recipe `PY_GATE` in
 the `Makefile`: ruff, ty, then `pytest -n auto --dist loadfile --cov=<project root>` writing LCOV to
@@ -322,7 +331,7 @@ eight-package zero target; its two measured signals are the enforced `ratchet` f
 
 ## Run and ratchet
 
-Run `make install`, then the existing tests (`make check-ts check-import-audit check-probes`).
+Run `make install`, then the existing tests (`make check-ts check-import-audit check-probes check-providers`).
 Coverage is part of those invocations, not a second test pass. From the repository root:
 
 ```sh

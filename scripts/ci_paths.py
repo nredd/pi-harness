@@ -50,7 +50,13 @@ WSL_INPUT_FILES = TOOLCHAIN_INPUTS | {
     "scripts/run-vitest.ts",
     "scripts/vitest.config.ts",
 }
-WSL_INPUT_PREFIXES = (".github/", "integration/probes/", "scripts/wsl2_", "scripts/ci")
+WSL_INPUT_PREFIXES = (
+    ".github/",
+    "integration/probes/",
+    "integration/providers/",
+    "scripts/wsl2_",
+    "scripts/ci",
+)
 STACK_INPUT_FILES = TOOLCHAIN_INPUTS | {
     "package-lock.json",
     "integration/conftest.py",
@@ -110,7 +116,7 @@ OWNED_SHARDS: dict[str, tuple[Shard, ...]] = {
     ),
     "wsl2": (
         Shard("subagents-computer-use", (CHECK_TS,), ("packages/computer-use", "packages/subagents")),
-        Shard("ts", (CHECK_TS, "check-probes", "check-import-audit")),
+        Shard("ts", (CHECK_TS, "check-probes", "check-providers", "check-import-audit")),
     ),
 }
 OWNED_GATES = {

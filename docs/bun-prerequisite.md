@@ -16,7 +16,7 @@ Current CI scope (2026-10-29):
   fail-closed startup on standalone. `integration/harness/anthropic_mock.py::anthropic_env`,
   `providers/redirect_anthropic.mjs` and `providers/auth_guard.mjs` implement this dependency.
   The candidate adapter receipt lane below does not remove those default skips
-- None of the remaining selected D/E scenarios uses `fast_timers.mjs` or `--expose-gc`.
+- No selected D/E scenario scales timers (`fast_timers.mjs` is deleted, #378) or uses `--expose-gc`.
   Injected-clock behavior is native; GC instrumentation is confined to excluded render benches
   (`integration/harness/probe.py`, `scenarios/bench/test_render.py`), whose probe now falls back to
   `Bun.gc(true)` when `--expose-gc` is unavailable. Not yet run on a compiled standalone. The actual adapter issue is

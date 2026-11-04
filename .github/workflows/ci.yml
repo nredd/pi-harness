@@ -182,6 +182,9 @@ jobs:
       - name: Owned gate check-probes (WSL LCOV producer)
         if: ${{ !cancelled() && steps.install.outcome == 'success' && contains(matrix.gates, 'check-probes') }}
         run: make check-probes
+      - name: Owned gate check-providers (WSL LCOV producer)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && contains(matrix.gates, 'check-providers') }}
+        run: make check-providers
       - name: Owned gate check-import-audit (WSL LCOV producer)
         if: ${{ !cancelled() && steps.install.outcome == 'success' && contains(matrix.gates, 'check-import-audit') }}
         run: make check-import-audit
@@ -199,6 +202,7 @@ jobs:
             packages/*/coverage/**/lcov.info
             integration/inprocess/coverage/**/lcov.info
             integration/probes/coverage/**/lcov.info
+            integration/providers/coverage/**/lcov.info
             integration/coverage/**/lcov.info
             scripts/coverage/**/lcov.info
           if-no-files-found: ignore
@@ -353,6 +357,7 @@ jobs:
             packages/*/coverage/**/lcov.info
             integration/inprocess/coverage/**/lcov.info
             integration/probes/coverage/**/lcov.info
+            integration/providers/coverage/**/lcov.info
             integration/coverage/**/lcov.info
             scripts/coverage/**/lcov.info
             coverage/summary.json

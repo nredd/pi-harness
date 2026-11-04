@@ -30,6 +30,7 @@ OWNED_GATE_STEPS = {
     "check-scripts": "Owned gate check-scripts (ruff, ty, pytest scripts, import audit)",
     "check-integration": "Owned gate check-integration (ruff, ty, pytest integration units, probes)",
     "check-probes": "Owned gate check-probes (WSL LCOV producer)",
+    "check-providers": "Owned gate check-providers (WSL LCOV producer)",
     "check-import-audit": "Owned gate check-import-audit (WSL LCOV producer)",
     "check-benchmark": "Benchmark unit gate",
 }
@@ -46,7 +47,7 @@ OWNED_SHARDS = {
     },
     "wsl2": {
         "subagents-computer-use": ("check-ts",),
-        "ts": ("check-ts", "check-probes", "check-import-audit"),
+        "ts": ("check-ts", "check-probes", "check-providers", "check-import-audit"),
     },
 }
 # The fan-in proves every shard succeeded, then accounts for the merged coverage reports.

@@ -29,21 +29,21 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import {
 	type AssistantMessage,
-	type AssistantMessageEventStream,
 	createAssistantMessageEventStream,
 	createFauxCore,
 	fauxAssistantMessage,
 	fauxText,
 	fauxThinking,
 	fauxToolCall,
-	type Model,
+	type JsonObject,
 	type SimpleStreamOptions,
+	type StreamFunction,
 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 interface ToolStep {
 	name: string;
-	args: Record<string, unknown>;
+	args: JsonObject;
 }
 
 interface Step {
@@ -97,8 +97,7 @@ function textOf(content: unknown): string {
 /** Text of every tool result after the last assistant message. */
 function lastToolResults(messages: readonly ContextMessage[]): string[] {
 	const results: string[] = [];
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const message = messages[i]!;
+	for (const message of [...messages].reverse()) {
 		if (message.role === "assistant") break;
 		if (message.role === "toolResult") results.unshift(textOf(message.content).replace(/\s+/g, " ").slice(0, 300));
 	}
@@ -136,7 +135,7 @@ function latestAgentId(messages: readonly ContextMessage[]): string | undefined 
 	return latest;
 }
 
-function substitute(args: Record<string, unknown>, messages: readonly ContextMessage[]): Record<string, unknown> {
+function substitute(args: JsonObject, messages: readonly ContextMessage[]): JsonObject {
 	const agentId = latestAgentId(messages) ?? "unknown-agent";
 	return Object.fromEntries(
 		Object.entries(args).map(([key, value]) => [
@@ -169,11 +168,7 @@ function respond(step: Step | undefined, context: FauxContext) {
 	return fauxAssistantMessage([...thinking, fauxText(step.text ?? "DONE")]);
 }
 
-type StreamSimple = (
-	model: Model<string>,
-	context: never,
-	options?: SimpleStreamOptions,
-) => AssistantMessageEventStream;
+type StreamSimple = StreamFunction<string, SimpleStreamOptions>;
 
 function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
 	return new Promise((resolve) => {
@@ -240,8 +235,8 @@ export default function harnessFaux(pi: ExtensionAPI): void {
 				name: `${provider} ${id}`,
 				thinkingLevels: ["off", "medium"],
 				route: (request, ctx) => {
-					const [targetProvider, targetId] = to.split("/", 2);
-					const model = ctx.modelRegistry.find(targetProvider!, targetId!);
+					const [targetProvider = "", targetId = ""] = to.split("/", 2);
+					const model = ctx.modelRegistry.find(targetProvider, targetId);
 					if (!model) throw new Error(`faux virtual model ${provider}/${id}: no ${to}`);
 					return { model, thinkingLevel: request.thinkingLevel };
 				},
@@ -269,7 +264,7 @@ export default function harnessFaux(pi: ExtensionAPI): void {
 			baseUrl: "http://127.0.0.1:9",
 			apiKey: "faux",
 			api,
-			streamSimple: withOpenSilence(core.streamSimple as StreamSimple, steps),
+			streamSimple: withOpenSilence(core.streamSimple, steps),
 			models: script.models.map((id) => ({
 				id,
 				name: id,
