@@ -140,6 +140,37 @@ describe("evicted agents", () => {
     await lifecycle.get("session_shutdown")?.({}, ctx());
   });
 
+  it.each([
+    ["nested", { parentAgentId: "someone-else" }],
+    ["workflow", { workflowId: "run-1" }],
+  ] as const)("keeps an evicted %s child unreachable from get_subagent_result and steer_subagent", async (_kind, owner) => {
+    // Live, an owned child answers "Agent not found" to the top-level tools;
+    // eviction must not turn its description and transcript into an answer.
+    const { pi, tools, lifecycle } = makePi();
+    subagentsExtension(pi);
+    const id = await spawnCompletedBackgroundAgent(tools);
+    const record = (globalThis as any)[Symbol.for("pi-subagents:manager")].getRecord(id);
+    expect(record.status).toBe("completed");
+    Object.assign(record, owner);
+    record.resultConsumed = true;
+    record.consumedAt = Date.now();
+
+    expect(record.session).toBeDefined();
+    await vi.advanceTimersByTimeAsync(11 * 60_000 + 60_000);
+    // Proof the sweep evicted it, not merely that it is owned: eviction detaches the session.
+    expect(record.session).toBeUndefined();
+
+    for (const [name, params] of [
+      ["get_subagent_result", { agent_id: id }],
+      ["steer_subagent", { agent_id: id, message: "hello" }],
+    ] as const) {
+      const out = textOf(await tools.get(name).execute("tc", params, undefined, undefined, ctx()));
+      expect(out).toBe(`Agent not found: "${id}". It may have been cleaned up.`);
+    }
+
+    await lifecycle.get("session_shutdown")?.({}, ctx());
+  });
+
   it("keeps an unread result fetchable well past ten minutes", async () => {
     const { pi, tools, lifecycle } = makePi();
     subagentsExtension(pi);

@@ -1984,6 +1984,9 @@ export class AgentManager {
 
   /** Remember that `record` existed, so its id still answers with something better than "not found". */
   private noteEviction(record: AgentRecord): void {
+    // Only the top-level tools read notes, and an owned child (nested or a
+    // workflow's) must stay unreachable from them after eviction as before it.
+    if (!isTopLevelAgent(record)) return;
     const completedAt = record.completedAt ?? this.clock.now();
     this.evictedNotes.delete(record.id);
     this.evictedNotes.set(record.id, {

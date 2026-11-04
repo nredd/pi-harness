@@ -258,6 +258,33 @@ describe("steer_subagent on a finished agent (#442)", () => {
     await lifecycle.get("session_shutdown")?.();
   });
 
+  it("resumes once when two steers race on one finished agent; the second steers the resumed run", async () => {
+    // Parallel tool calls in one turn: the first resume flips the record to
+    // running before it awaits, so the second must not start a second run.
+    const { pi, tools, lifecycle } = makePi();
+    subagentsExtension(pi);
+    const session = fakeSession();
+    vi.mocked(runAgent).mockImplementation(async (_ctx: any, _type: any, _prompt: any, opts: any) => {
+      opts.onSessionCreated?.(session);
+      return { responseText: "done", session, aborted: false, steered: false } as any;
+    });
+    vi.mocked(resumeAgent).mockImplementation(() => new Promise(() => {}) as any);
+    vi.mocked(steerAgent).mockResolvedValue(undefined as any);
+
+    const id = await spawnBackground(tools);
+    await flush();
+    expect(recordOf(id).status).toBe("completed");
+
+    const [first, second] = await Promise.all([steer(tools, id, "one"), steer(tools, id, "two")]);
+
+    expect(resumeAgent).toHaveBeenCalledExactlyOnceWith(session, "one", expect.anything());
+    expect(textOf(first)).toContain("Agent resumed in background.");
+    expect(textOf(second).startsWith("Steering message sent")).toBe(true);
+    expect(steerAgent).toHaveBeenCalledExactlyOnceWith(session, "two");
+
+    await lifecycle.get("session_shutdown")?.();
+  });
+
   it("does not resume another agent's child, even once it has finished", async () => {
     // Ownership is unchanged: a nested or workflow child stays unreachable from
     // the top-level tool, so finishing cannot turn it into something to resume.
