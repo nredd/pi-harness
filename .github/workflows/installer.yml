@@ -24,6 +24,7 @@ name: Installer
       - integration/harness/isolation.py
       - integration/harness/paths.py
       - integration/harness/power.py
+      - integration/harness/process_group.py
       - integration/harness/promotion.py
       - integration/harness/release.py
       - integration/harness/sandbox.py
@@ -51,6 +52,7 @@ name: Installer
       - integration/harness/isolation.py
       - integration/harness/paths.py
       - integration/harness/power.py
+      - integration/harness/process_group.py
       - integration/harness/promotion.py
       - integration/harness/release.py
       - integration/harness/sandbox.py

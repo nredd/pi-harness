@@ -32,6 +32,7 @@ import pytest
 
 from harness import release
 from harness.install import EXCLUDE_NEWER, INSTALLER_PYTHON, download
+from harness.process_group import group_has_live_members
 from harness.promotion import (
     SNAPSHOT_ASSET,
     SNAPSHOT_REPO,
@@ -413,24 +414,6 @@ def test_existing_config_needs_consent_and_survives(
     assert settings["defaultModel"] == "mine"
     (backup,) = (home / ".local" / "share" / "pi-stack" / "backups").iterdir()
     assert json.loads((backup / "settings.json").read_text())["packages"] == ["npm:pi-mine@1.0.0"]
-
-
-def group_has_live_members(pgid: int, timeout: float) -> bool:
-    """Check owned-group liveness without mistaking unreaped zombies for writers.
-
-    Parameters:
-        pgid (int): process group created by this test.
-        timeout (float): remaining cleanup deadline in seconds.
-
-    Returns:
-        bool: a non-zombie process remains in the group.
-    """
-    output = subprocess.check_output(["/bin/ps", "-axo", "pgid=,stat="], text=True, timeout=timeout)
-    return any(
-        fields[0] == str(pgid) and not fields[1].startswith("Z")
-        for line in output.splitlines()
-        if len(fields := line.split()) == 2
-    )
 
 
 def cleanup_group(process: subprocess.Popen[str], timeout: float = 60) -> None:

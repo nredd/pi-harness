@@ -12,12 +12,12 @@ import os
 import signal
 import subprocess
 import time
-from contextlib import suppress
 from dataclasses import dataclass, field
 from threading import Thread
 from typing import TYPE_CHECKING, Any
 
 from harness.paths import FAUX_EXTENSION, pi_command
+from harness.process_group import group_has_live_members
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -30,6 +30,8 @@ SEEN_AT = "_harness_seen_s"
 
 DEFAULT_TIMEOUT_S = 180
 MAX_OUTPUT_BYTES = 8 * 1024 * 1024
+# Bound on the `/bin/ps` listing that explains a `killpg` EPERM.
+GROUP_LISTING_TIMEOUT_S = 5.0
 
 
 @dataclass(frozen=True)
@@ -315,13 +317,23 @@ def collect_json_process(
 
 
 def kill_process_group(pid: int) -> None:
-    """Kill the owned session group, tolerating an already-exited leader.
+    """Kill the owned session group, tolerating an exited leader and a zombie-only group.
 
     Parameters:
         pid (int): owned process group leader.
+
+    Raises:
+        PermissionError: the signal was refused while a live member remains.
     """
-    with suppress(ProcessLookupError):
+    try:
         os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        # macOS answers EPERM for a group whose leader exited but is not reaped yet.
+        # Zombies cannot write, so only a live member makes it a real failure.
+        if group_has_live_members(pid, GROUP_LISTING_TIMEOUT_S):
+            raise
 
 
 def finish_process(process: subprocess.Popen[str], readers: list[Thread], timeout_s: float) -> bool:
