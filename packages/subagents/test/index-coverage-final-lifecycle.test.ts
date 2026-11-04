@@ -572,6 +572,49 @@ describe("index retained lifecycle callbacks", () => {
     } finally { error.mockRestore(); rmSync(dir, { force: true }); mkdirSync(dir, { recursive: true }); }
   });
 
+  it("hands a survivor that finished after reload its full result, like a live notice (#441)", async () => {
+    const body = `SURVIVOR-HEAD${"x".repeat(2_000)}SURVIVOR-TAIL`;
+    const hold = heldResponse(body); provider.setResponses([hold.response]);
+    const first = await bind(); const id = await spawn(first, "late survivor"); await hold.entered;
+    await shutdown(first, "reload");
+    hold.release(); await first.registry.waitForAll(); await flush();
+    const next = await bind();
+    await turnEnd(next);
+    expect(next.boot.pi.sendMessage).toHaveBeenCalledTimes(1);
+    const [message] = next.boot.pi.sendMessage.mock.calls[0];
+    expect(message.content).toContain(`<task-id>${id}</task-id>`);
+    expect(message.content).toContain(`<result>${body}</result>`);
+    expect(message.content).not.toContain("truncated");
+    expect(message.details.resultPreview).toBe(`${body.slice(0, 500)}…`);
+  });
+
+  it("clips survivors spooled across a reload against one shared batch budget at delivery (#441)", async () => {
+    configure({ notificationResultChars: 1_000 });
+    const bodies = Array.from({ length: 6 }, (_, i) => `S${i}-HEAD${"x".repeat(1_500)}S${i}-TAIL`);
+    const holds = bodies.map(body => heldResponse(body)); provider.setResponses(holds.map(h => h.response));
+    const first = await bind();
+    const ids = await Promise.all(bodies.map((_, i) => spawn(first, `survivor ${i}`)));
+    await Promise.all(holds.map(h => h.entered));
+    await shutdown(first, "reload");
+    for (const h of holds) h.release();
+    await first.registry.waitForAll(); await flush();
+    const next = await bind();
+    await turnEnd(next);
+    expect(next.boot.pi.sendMessage).toHaveBeenCalledTimes(1);
+    const [message] = next.boot.pi.sendMessage.mock.calls[0];
+    // Budget 4 x 1000 over six long results: 666 or 667 each, not 1000 each.
+    const kept = ids.map((id, i) => {
+      const notice = message.content.slice(message.content.indexOf(`<task-id>${id}</task-id>`));
+      const result = notice.slice(notice.indexOf("<result>") + 8, notice.indexOf("</result>"));
+      expect(result.startsWith(`S${i}-HEAD`)).toBe(true);
+      expect(result.endsWith(`S${i}-TAIL`)).toBe(true);
+      return result.replace(/\n\.\.\.\(truncated[^\n]*\n/, "").length;
+    });
+    expect(Math.min(...kept)).toBe(666);
+    expect(Math.max(...kept)).toBe(667);
+    expect(kept.reduce((a, b) => a + b, 0)).toBe(4_000);
+  });
+
   it("restores both members of a held grouped completion once after reload", async () => {
     const a = heldResponse("alpha private result"); const b = heldResponse("beta private result");
     provider.setResponses([a.response, b.response]);

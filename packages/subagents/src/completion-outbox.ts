@@ -27,17 +27,25 @@ export const NOTIFICATION_HOLD_MS = 200;
 export interface OutboxMessage {
   content: string;
   details: NotificationDetails;
+  /** Agents whose whole result the content carries: sending it reads their result. */
+  delivered?: string[];
 }
 
 /**
  * A notification for one or more agents, built when they finished: a resume
  * before the send must not rewrite it. Reading an agent's result cancels its
- * id, and an item left with none is dropped; `build` gets the ids still pending.
+ * id, and an item left with none is dropped; `build` gets the ids still pending
+ * and the result length the batch allots each (see `notification-result.ts`).
  */
 export interface OutboxItem {
   ids: string[];
-  build(ids: readonly string[]): OutboxMessage;
+  /** Each agent's full result length, for the batch to split its budget by. */
+  resultChars?: Readonly<Record<string, number>>;
+  build(ids: readonly string[], caps: Readonly<Record<string, number>>): OutboxMessage;
 }
+
+/** Result length per agent of one batch, from each agent's full length. */
+export type ResultAllotment = (chars: Readonly<Record<string, number>>) => Record<string, number>;
 
 export class CompletionOutbox {
   private items: OutboxItem[] = [];
@@ -50,6 +58,8 @@ export class CompletionOutbox {
     private parentRunning: () => boolean,
     /** Shared with the scheduler by hosts that control time in-process. */
     private clock: Clock = realClock,
+    /** Splits a batch's result budget; by default nothing is allotted and each item keeps its own cap. */
+    private allot: ResultAllotment = () => ({}),
   ) {}
 
   /** A newer completion of the same agent (a resume) replaces its pending one. */
@@ -101,7 +111,10 @@ export class CompletionOutbox {
     this.timer = undefined;
     const items = this.items;
     this.items = [];
-    const messages = items.map(item => item.build(item.ids));
+    const chars: Record<string, number> = {};
+    for (const item of items) for (const id of item.ids) if (item.resultChars?.[id] !== undefined) chars[id] = item.resultChars[id];
+    const caps = this.allot(chars);
+    const messages = items.map(item => item.build(item.ids, caps));
     return messages.length > 0 ? combine(messages) : undefined;
   }
 
@@ -118,8 +131,10 @@ export class CompletionOutbox {
 function combine(messages: OutboxMessage[]): OutboxMessage {
   if (messages.length === 1) return messages[0];
   const [first, ...rest] = messages.flatMap(({ details: { others, ...own } }) => [own, ...(others ?? [])]);
+  const delivered = messages.flatMap(m => m.delivered ?? []);
   return {
     content: `${messages.length} background tasks finished.\n\n${messages.map(m => m.content).join("\n\n")}`,
     details: { ...first, others: rest },
+    ...(delivered.length > 0 ? { delivered } : {}),
   };
 }

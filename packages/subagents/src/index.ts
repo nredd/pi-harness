@@ -49,6 +49,7 @@ import { isScopeModelsEnabled, setScopeModelsEnabled } from "./model-scope.js";
 import { admitModelSelection, describeSelection, modelRequest, modelSelectionNote, selectModel } from "./model-selection.js";
 import { tierDisclosure } from "./model-tiers.js";
 import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.js";
+import { clipNotice, DEFAULT_NOTIFICATION_RESULT_CHARS, fairShares, GROUP_PREVIEW_RESULT_CHARS, NOTIFICATION_RESULT_CHARS_CEILING, type NoticeFrame, type NoticeParts, PREVIEW_RESULT_CHARS, previewResult, renderNotice } from "./notification-result.js";
 import { appendModelFallbackEntry, appendModelTierEntry, createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
 import { getPackageAgentsGate, getPackageWorkflowsGate, invalidatePackageCache, isProjectTrusted, packageNameForPath, setPackageAgentsGate, setPackageWorkflowsGate, setProjectTrusted } from "./package-resources.js";
 import { getBudgetPolicy, setBudgetPolicy } from "./process-budget.js";
@@ -182,8 +183,11 @@ function getStatusLabel(status: string, error?: string): string {
   }
 }
 
-/** Format a structured task notification matching Claude Code's <task-notification> XML. */
-function formatTaskNotification(record: AgentRecord, resultMaxLen: number, showCost = false): string {
+/**
+ * Format a structured task notification matching Claude Code's <task-notification> XML.
+ * Everything but the `<result>` is read now; `renderNotice` fills that in.
+ */
+function formatTaskNotification(record: AgentRecord, showCost = false): NoticeFrame {
   const status = getStatusLabel(record.status, record.error);
   const durationMs = record.completedAt ? record.completedAt - record.startedAt : 0;
   const totalTokens = getLifetimeTotal(record.lifetimeUsage);
@@ -195,24 +199,28 @@ function formatTaskNotification(record: AgentRecord, resultMaxLen: number, showC
   const cost = showCost ? getLifetimeCost(record.lifetimeUsage) : 0;
   const costXml = cost > 0 ? `<estimated_cost_usd>${cost.toFixed(4)}</estimated_cost_usd>` : "";
 
-  const resultPreview = record.result
-    ? record.result.length > resultMaxLen
-      ? record.result.slice(0, resultMaxLen) + "\n...(truncated, use get_subagent_result for full output)"
-      : record.result
-    : "No output.";
+  const modelNote = modelSelectionNote(record);
 
-  return [
+  const head = [
     `<task-notification>`,
     `<task-id>${record.id}</task-id>`,
     record.toolCallId ? `<tool-use-id>${escapeXml(record.toolCallId)}</tool-use-id>` : null,
     record.outputFile ? `<output-file>${escapeXml(record.outputFile)}</output-file>` : null,
     `<status>${escapeXml(status)}</status>`,
     `<summary>Agent "${escapeXml(record.description)}" ${record.status}${getStatusNote(record.status)}</summary>`,
-    modelSelectionNote(record) ? `<model-note>${escapeXml(modelSelectionNote(record))}</model-note>` : null,
-    `<result>${escapeXml(resultPreview)}</result>`,
+    modelNote ? `<model-note>${escapeXml(modelNote)}</model-note>` : null,
+  ].filter(Boolean).join('\n');
+  const tail = [
     `<usage><total_tokens>${totalTokens}</total_tokens><tool_uses>${record.toolUses}</tool_uses>${ctxXml}${compactXml}${costXml}<duration_ms>${durationMs}</duration_ms></usage>`,
     `</task-notification>`,
-  ].filter(Boolean).join('\n');
+  ].join('\n');
+  return { head, tail };
+}
+
+/** What a full-result notice carries: the same text `get_subagent_result` returns for a finished agent. */
+function noticeBody(record: AgentRecord): string {
+  if (record.status === "error") return `Error: ${record.error ?? "unknown"}${partialOutputSuffix(record)}`;
+  return record.result?.trim() || "No output.";
 }
 
 /** Build AgentDetails from a base + record-specific fields. */
@@ -512,6 +520,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     persistSettings(ctx, `Viewer markdown set to ${mode}`);
   }
   const pendingUsage = new PendingUsagePool();
+  /** Result characters a completion notice carries per agent; `0` keeps the preview (see notification-result.ts). */
+  let notificationResultChars = DEFAULT_NOTIFICATION_RESULT_CHARS;
 
   // ---- Completion delivery ----
   // Every completion notification goes through the outbox, which sends what is
@@ -519,15 +529,56 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   // completion-outbox.ts). Each is built when the agent finishes, and reading
   // the result (get_subagent_result, rpc consume) cancels it before it is sent.
   const outbox = new CompletionOutbox(
-    (message) => pi.sendMessage<NotificationDetails>({
-      customType: "subagent-notification",
-      content: message.content,
-      display: true,
-      details: message.details,
-    }, { deliverAs: "steer", triggerTurn: true }),
+    (message) => {
+      pi.sendMessage<NotificationDetails>({
+        customType: "subagent-notification",
+        content: message.content,
+        display: true,
+        details: message.details,
+      }, { deliverAs: "steer", triggerTurn: true });
+      // The whole result reached the parent, as get_subagent_result would hand it over.
+      for (const id of message.delivered ?? []) {
+        const record = manager.getRecord(id);
+        // A resume started since: that run's result is still unread.
+        if (!record || record.status === "running" || record.status === "queued") continue;
+        markConsumed(record, clock.now());
+      }
+    },
     () => currentCtx?.signal !== undefined,
     options.clock,
+    (chars) => {
+      if (notificationResultChars === 0) return {};
+      const ids = Object.keys(chars);
+      const shares = fairShares(ids.map(id => chars[id]), notificationResultChars);
+      return Object.fromEntries(ids.map((id, i) => [id, shares[i]]));
+    },
   );
+
+  /**
+   * `record`'s notice, read now so a resume before the send cannot rewrite it.
+   * `render` fills in the result clipped to the share the batch allots it, or
+   * the `notificationResultChars: 0` preview of `previewChars`.
+   */
+  function snapshotNotice(record: AgentRecord, previewChars: number) {
+    const frame = formatTaskNotification(record, showCost);
+    const details = buildNotificationDetails(record, previewChars, agentActivity.get(record.id));
+    if (notificationResultChars === 0) {
+      const text = renderNotice(frame, record.result ? previewResult(record.result, previewChars) : "No output.");
+      return { id: record.id, details, chars: undefined, parts: undefined, render: (_share?: number) => ({ text, delivered: false }) };
+    }
+    const parts: NoticeParts = {
+      ...frame, body: noticeBody(record), cap: notificationResultChars, outputFile: record.outputFile,
+      // A failure stays unread: delivering its notice must not acknowledge it in FleetView (README, FleetView).
+      failed: record.status === "error" || record.status === "aborted",
+    };
+    return { id: record.id, details, chars: parts.body.length, parts, render: (share?: number) => clipNotice(parts, share) };
+  }
+
+  /** Full result lengths of the notices that have one, for the batch budget. */
+  function resultCharsOf(notices: readonly ReturnType<typeof snapshotNotice>[]): Record<string, number> | undefined {
+    const withChars = notices.filter(n => n.chars !== undefined);
+    return withChars.length > 0 ? Object.fromEntries(withChars.map(n => [n.id, n.chars])) : undefined;
+  }
   // A queued result wait must observe completion before its held notification
   // can fire, so successful waits can still suppress that redundant nudge.
   const QUEUE_WAIT_POLL_MS = Math.floor(NOTIFICATION_HOLD_MS / 4);
@@ -540,11 +591,15 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     // cannot be formatted is skipped, as a failed send always was.
     try {
       const footer = record.outputFile ? `\nFull transcript available at: ${record.outputFile}` : '';
-      const message = {
-        content: formatTaskNotification(record, 500, showCost) + footer,
-        details: buildNotificationDetails(record, 500, agentActivity.get(record.id)),
-      };
-      outbox.add({ ids: [record.id], build: () => message });
+      const notice = snapshotNotice(record, PREVIEW_RESULT_CHARS);
+      outbox.add({
+        ids: [record.id],
+        resultChars: resultCharsOf([notice]),
+        build: (_ids, caps) => {
+          const { text, delivered } = notice.render(caps[notice.id]);
+          return { content: text + footer, details: notice.details, ...(delivered ? { delivered: [notice.id] } : {}) };
+        },
+      });
     } catch { /* ignore stale completion side-effect errors */ }
     widget.update();
   }
@@ -556,15 +611,20 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 
       const members = records.filter(r => !r.resultConsumed).flatMap(r => {
         try {
-          return [{ id: r.id, text: formatTaskNotification(r, 300, showCost), details: buildNotificationDetails(r, 300, agentActivity.get(r.id)) }];
+          return [snapshotNotice(r, GROUP_PREVIEW_RESULT_CHARS)];
         } catch { return []; /* as in sendIndividualNudge */ }
       });
+      // Only the preview needs the pointer; a clipped full result carries its own.
+      const trailer = notificationResultChars === 0 ? "\n\nUse get_subagent_result for full output." : "";
       if (members.length > 0) {
         outbox.add({
           ids: members.map(m => m.id),
-          build: (ids) => {
+          resultChars: resultCharsOf(members),
+          build: (ids, caps) => {
             const unread = members.filter(m => ids.includes(m.id));
-            const notifications = unread.map(m => m.text).join('\n\n');
+            const rendered = unread.map(m => ({ id: m.id, ...m.render(caps[m.id]) }));
+            const notifications = rendered.map(m => m.text).join('\n\n');
+            const delivered = rendered.filter(m => m.delivered).map(m => m.id);
             const label = partial
               ? `${unread.length} agent(s) finished (partial — others still running)`
               : `${unread.length} agent(s) finished`;
@@ -573,8 +633,9 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
             const details = first.details;
             if (rest.length > 0) details.others = rest.map(m => m.details);
             return {
-              content: `Background agent group completed: ${label}\n\n${notifications}\n\nUse get_subagent_result for full output.`,
+              content: `Background agent group completed: ${label}\n\n${notifications}${trailer}`,
               details,
+              ...(delivered.length > 0 ? { delivered } : {}),
             };
           },
         });
@@ -654,11 +715,13 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     if (record.resultConsumed) return;
     const footer = record.outputFile ? `\nFull transcript available at: ${record.outputFile}` : "";
     try {
+      const notice = snapshotNotice(record, PREVIEW_RESULT_CHARS);
       spoolDetached(sessionFile, {
         id: record.id,
-        content: formatTaskNotification(record, 500, showCost) + footer,
-        details: buildNotificationDetails(record, 500),
+        content: notice.render().text + footer,
+        details: notice.details,
         record: historyRecord(record),
+        ...(notice.parts ? { notice: { ...notice.parts, footer } } : {}),
       });
     } catch { /* spool unwritable: the transcript file still has the result */ }
   }
@@ -676,9 +739,15 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
         fleet.update();
       }
       const details = result.details as NotificationDetails;
+      // Re-clipped here, so it shares the budget of whatever lands with it. Its
+      // record lives in the orphaned manager, so nothing is marked read.
+      const notice = typeof result.notice?.body === "string" ? result.notice : undefined;
       outbox.add({
         ids: [details.id, ...(details.others?.map(other => other.id) ?? [])],
-        build: () => ({ content: result.content, details }),
+        ...(notice ? { resultChars: { [details.id]: notice.body.length } } : {}),
+        build: (_ids, caps) => notice
+          ? { content: clipNotice(notice, caps[details.id]).text + notice.footer, details }
+          : { content: result.content, details },
       });
     } catch { /* session already gone again; the transcript file still has the result */ }
   }
@@ -1296,7 +1365,9 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       }
       const pending = outbox.takePending();
       if (pending) {
-        try { spoolDetached(sessionFile, { id: nanoid(8), ...pending }); }
+        // Not sent here: the session that reads the spool is the one that sees it.
+        const { delivered: _unsent, ...spooled } = pending;
+        try { spoolDetached(sessionFile, { id: nanoid(8), ...spooled }); }
         catch { console.error("[pi-subagents] Could not spool held completion notices; results remain in their transcripts."); }
       }
     }
@@ -1871,6 +1942,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       setBudgetPolicy,
       setDefaultMaxTurns,
       setGraceTurns,
+      setNotificationResultChars: (n) => { notificationResultChars = n; },
       setDefaultJoinMode,
       setBackgroundByDefault,
       setSchedulingEnabled,
@@ -3316,7 +3388,7 @@ Terse command-style prompts produce shallow, generic work.
     name: SUBAGENT_TOOL_NAMES.GET_RESULT,
     label: "Get Agent Result",
     description:
-      "Check status and retrieve a background agent's full result — its completion notification carries only a preview. Use the agent ID returned by Agent.",
+      "Check status and retrieve a background agent's full result: use it while the agent runs, or when its completion notification says the result was truncated. Use the agent ID returned by Agent.",
     promptSnippet: "Check status and retrieve results from a background agent",
     parameters: Type.Object({
       agent_id: Type.String({
@@ -4068,6 +4140,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
       // normalizeMaxTurns() in agent-runner.ts (which maps 0 → undefined).
       defaultMaxTurns: getDefaultMaxTurns() ?? 0,
       graceTurns: getGraceTurns(),
+      notificationResultChars,
       defaultJoinMode: getDefaultJoinMode(),
       backgroundByDefault: getBackgroundByDefault(),
       schedulingEnabled: isSchedulingEnabled(),
@@ -4148,6 +4221,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
 
   const NUMERIC_IDS = new Set([
     "maxConcurrent", "maxConcurrentForeground", "defaultMaxTurns", "graceTurns", "maxSubagentDepth",
+    "notificationResultChars",
   ]);
 
   async function showSettings(ctx: ExtensionCommandContext) {
@@ -4200,6 +4274,13 @@ Write the file using the write tool. Only write the file, nothing else.`;
           description: "Hard cap on nested delegation — main is 0, its subagents 1 (0/1 = nesting off, Enter to type)",
           currentValue: String(msd),
           values: [String(msd)],
+        },
+        {
+          id: "notificationResultChars",
+          label: "Notice result chars",
+          description: "Result characters a completion notice carries per agent (0 = 500-char preview, Enter to type)",
+          currentValue: String(notificationResultChars),
+          values: [String(notificationResultChars)],
         },
         {
           id: "joinMode",
@@ -4397,6 +4478,14 @@ Write the file using the write tool. Only write the file, nothing else.`;
         if (n >= 1) {
           setGraceTurns(n);
           notifyApplied(ctx, `Grace turns set to ${n}`);
+        }
+      } else if (id === "notificationResultChars") {
+        const n = parseInt(value, 10);
+        if (n >= 0 && n <= NOTIFICATION_RESULT_CHARS_CEILING) {
+          notificationResultChars = n;
+          notifyApplied(ctx, n === 0
+            ? "Completion notices carry a 500-char preview"
+            : `Completion notices carry up to ${n} result chars per agent`);
         }
       } else if (id === "maxSubagentDepth") {
         const n = parseInt(value, 10);
@@ -4599,7 +4688,9 @@ Write the file using the write tool. Only write the file, nothing else.`;
             ? String(getDefaultMaxTurns() ?? 0)
             : result === "maxSubagentDepth"
               ? String(getMaxSubagentDepth())
-              : String(getGraceTurns());
+              : result === "notificationResultChars"
+                ? String(notificationResultChars)
+                : String(getGraceTurns());
 
       const label = result === "maxConcurrent"
         ? "Max concurrency (1+)"
@@ -4609,7 +4700,9 @@ Write the file using the write tool. Only write the file, nothing else.`;
             ? "Default max turns (0 = unlimited)"
             : result === "maxSubagentDepth"
               ? "Nested depth (0/1 = nesting off)"
-              : "Grace turns (1+)";
+              : result === "notificationResultChars"
+                ? `Notice result chars (0 = preview, max ${NOTIFICATION_RESULT_CHARS_CEILING})`
+                : "Grace turns (1+)";
 
       // Loop until user enters a valid integer or cancels (Esc / null).
       // Silently trims whitespace; rejects non-numeric input by re-prompting.

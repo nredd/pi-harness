@@ -11,7 +11,7 @@ import { barrier } from "./helpers/scenario-session.js";
 
 type Component = { render(width: number): string[]; invalidate(): void; handleInput(data: string): void };
 type Factory = (tui: unknown, theme: unknown, keys: unknown, done: (value: string | undefined) => void) => Component;
-const rows = ["maxConcurrent", "maxConcurrentForeground", "defaultMaxTurns", "graceTurns", "maxSubagentDepth", "defaultJoinMode", "backgroundByDefault", "schedulingEnabled", "workflowsEnabled", "packageAgents", "packageWorkflows", "scopeModels", "strictAgentFiles", "disableDefaultAgents", "fallbackSubagent", "outputTranscript", "worktreeIsolation", "reportUsage", "showCost", "showModel", "viewerMarkdown", "fleetView", "agentMentions", "rememberAgents", "widgetMode", "toolDescriptionMode"];
+const rows = ["maxConcurrent", "maxConcurrentForeground", "defaultMaxTurns", "graceTurns", "maxSubagentDepth", "notificationResultChars", "defaultJoinMode", "backgroundByDefault", "schedulingEnabled", "workflowsEnabled", "packageAgents", "packageWorkflows", "scopeModels", "strictAgentFiles", "disableDefaultAgents", "fallbackSubagent", "outputTranscript", "worktreeIsolation", "reportUsage", "showCost", "showModel", "viewerMarkdown", "fleetView", "agentMentions", "rememberAgents", "widgetMode", "toolDescriptionMode"];
 let env: Hermetic;
 let boot: BootedPi;
 let context: ExtensionCommandContext;
@@ -116,12 +116,20 @@ describe("settings callbacks", () => {
     ["maxConcurrent", "7", 7], ["maxConcurrentForeground", "4", 4], ["maxConcurrentForeground", "0", 0],
     ["defaultMaxTurns", "12", 12], ["defaultMaxTurns", "0", 0], ["graceTurns", "6", 6],
     ["maxSubagentDepth", "0", 0], ["maxSubagentDepth", "3", 3],
+    ["notificationResultChars", "4000", 4000], ["notificationResultChars", "0", 0],
   ] as const)("types %s=%s and reopens settings", async (key, input, expected) => {
     selectRow(key); inputs.push(input);
     await command();
     expect(saved()[key]).toBe(expected);
     expect(context.ui.custom).toHaveBeenCalledTimes(2);
     expect(notify).toHaveBeenLastCalledWith(expect.any(String), "info");
+  });
+  it("ignores notice result chars above the ceiling and keeps the default", async () => {
+    selectRow("notificationResultChars"); inputs.push("1000001");
+    await command();
+    expect(context.ui.input).toHaveBeenCalledExactlyOnceWith("Notice result chars (0 = preview, max 1000000)", "16000");
+    expect(saved().notificationResultChars).toBeUndefined();
+    expect(notify).not.toHaveBeenCalled();
   });
   it("re-prompts invalid numbers with their trimmed text, then persists a valid integer", async () => {
     selectRow("maxConcurrent"); inputs.push("  nope  ", "", "1.5", "  8  ");
