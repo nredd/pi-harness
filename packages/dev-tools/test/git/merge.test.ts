@@ -260,24 +260,31 @@ describe("git_commit merge approval", () => {
 	it("keeps configured signing enabled with a controlled signer", async () => {
 		const { root, repo } = mergeFixture();
 		const gpg = join(root, "gpg");
-		const invoked = join(root, "gpg-invoked");
+		const payload = join(root, "gpg-payload");
+		// Like real gpg, read the whole payload before reporting the signature.
 		writeFileSync(
 			gpg,
-			`#!/bin/sh\nprintf signed > ${JSON.stringify(invoked)}\nprintf '[GNUPG:] SIG_CREATED D 1 10 00 0 0 0 0 0 0\\n' >&2\nprintf '%s\\n' '-----BEGIN PGP SIGNATURE-----' fake '-----END PGP SIGNATURE-----'\n`,
+			`#!/bin/sh\ncat > ${JSON.stringify(payload)}\nprintf '[GNUPG:] SIG_CREATED D 1 10 00 0 0 0 0 0 0\\n' >&2\nprintf '%s\\n' '-----BEGIN PGP SIGNATURE-----' fake '-----END PGP SIGNATURE-----'\n`,
 			{ mode: 0o700 },
 		);
 		chmodSync(gpg, 0o700);
 		git(repo, ["config", "commit.gpgsign", "true"]);
 		git(repo, ["config", "gpg.format", "openpgp"]);
 		git(repo, ["config", "gpg.program", gpg]);
+		// Git writes the commit object to the signer's stdin with SIGPIPE ignored and fails the signature on any
+		// write error. A message larger than any pipe buffer makes a signer that exits without draining stdin
+		// fail every time instead of only when Git is descheduled before its first write (#451).
+		const why = "Pad the signed payload past every pipe buffer. ".repeat(6000);
 		const result = await mock.call(
 			"git_commit",
-			{ subject: "Sign resolved merge", paths: ["shared.txt"], push: false },
+			{ subject: "Sign resolved merge", why, paths: ["shared.txt"], push: false },
 			repo,
 		);
 		expect(result.isError, mock.text(result)).toBe(false);
-		expect(existsSync(invoked), mock.text(result)).toBe(true);
-		expect(readFileSync(invoked, "utf8")).toBe("signed");
+		expect(existsSync(payload), mock.text(result)).toBe(true);
+		const signed = readFileSync(payload, "utf8");
+		expect(signed).toContain("\n\nSign resolved merge\n");
+		expect(signed).toContain(why.trim());
 		expect(git(repo, ["cat-file", "-p", "HEAD"])).toContain("gpgsig -----BEGIN PGP SIGNATURE-----");
 	});
 
