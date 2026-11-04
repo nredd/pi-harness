@@ -103,16 +103,16 @@ sits with the other measurement-pending `probe-boundaries`; before #321 c8 measu
 lines on every OS, an empty measurement rather than a coverage claim.
 
 Every declared `test:bun` command also emits an independent `bun` LCOV signal. Nine Bun signals
-are measured. `preset`, `subscription-router` and `todo` are `enforced` at 0/0 on darwin and linux
-since [#320](https://github.com/nredd/pi-harness/issues/320): full suite, full primary inventory,
-0/0 in PR #332's own hosted macos-14, ubuntu-24.04 and wsl2 artifacts (run `41716990843`,
-receipt [here](../coverage/receipts/bun-enforced.md)). The other six explicitly declare `enforcement: "report-only"`, with a
+are measured. `plan-mode`, `preset`, `subscription-router` and `todo` are `enforced` at 0/0 on darwin
+and linux since [#320](https://github.com/nredd/pi-harness/issues/320): full suite, full primary
+inventory, 0/0 in their own PRs' hosted macos-14 and ubuntu-24.04 artifacts (receipts
+[here](../coverage/receipts/bun-enforced.md)). The other five explicitly declare `enforcement: "report-only"`, with a
 mandatory nonblank `reason` and a link to [#160](https://github.com/nredd/pi-harness/issues/160).
 Their stored `max_uncovered` values are advisory references, not enforced budgets. An omitted `enforcement` defaults to
 `enforced` for backwards-compatible primary/base-policy reading; current Bun declarations never
 rely on that default. Native `bun test` subset measurements are NOT the owned-source denominator:
 Bun 1.3.14 native coverage omits never-imported files. Full Vitest-on-Bun producers now use
-Istanbul for router, preset, sampler, todo and inprocess through `scripts/run-vitest.ts bun`.
+Istanbul for router, preset, sampler, todo, plan-mode and inprocess through `scripts/run-vitest.ts bun`.
 They inherit the full explicit primary instrumentation inventory (no `files` subset). The launcher's
 `bun` engine appends the provider, the `text` and `lcov` reporters (Vitest's dotted options) and
 `coverage/bun`, so each `test:bun` passes only package arguments. The sampler retains one
