@@ -47,9 +47,8 @@
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 1380, "functions": 95 }, "linux": { "lines": 1380, "functions": 94 } },
-          "enforcement": "report-only",
-          "reason": "Native Bun compatibility scenarios are not the full owned-source suite; remain report-only, not enforced, until complete-source receipts exist: https://github.com/nredd/pi-harness/issues/160.",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
+          "enforcement": "enforced",
           "reporters": ["text", "lcov"]
         }
       }

@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -36,12 +36,26 @@ export function isolatedHomeEnv(home: string): Record<string, string> {
 	};
 }
 
+/**
+ * Pin the Rust toolchain homes to the account's before HOME is isolated. rustup's `cargo` proxy and
+ * `cargo nextest` resolve `$HOME/.rustup` and `$HOME/.cargo` when these are unset, so a disposable
+ * HOME would make them fail and silently skip every real-toolchain suite (dev-tools' cargo tools).
+ * Explicit values win; the account home comes from the passwd entry, not a possibly isolated HOME.
+ */
+export function toolchainHomeEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+	const account = userInfo().homedir;
+	return {
+		CARGO_HOME: env.CARGO_HOME ?? join(account, ".cargo"),
+		RUSTUP_HOME: env.RUSTUP_HOME ?? join(account, ".rustup"),
+	};
+}
+
 // Isolate before imports: Bun caches os.homedir(), and Pi can read global model policy.
 if (import.meta.main) {
 	const [, , engine, ...packageArgs] = process.argv;
 	if (engine !== "bun" && engine !== "node") throw new Error("Expected engine: node or bun");
 	// A canary that disables coverage must not overwrite another signal's report. Only this exact
-	// argument opts out; every current canary passes it verbatim (subagents, session-kit, dev-tools).
+	// argument opts out; every current canary passes it verbatim (subagents, session-kit).
 	const vitestArgs =
 		engine === "bun" && !packageArgs.includes(COVERAGE_DISABLED_ARG)
 			? [...packageArgs, ...BUN_COVERAGE_ARGS]
@@ -58,7 +72,10 @@ if (import.meta.main) {
 				"run",
 				...vitestArgs,
 			],
-			{ stdio: "inherit", env: { ...process.env, ...isolatedHomeEnv(home), ...TEST_JITI_ENV } },
+			{
+				stdio: "inherit",
+				env: { ...process.env, ...toolchainHomeEnv(process.env), ...isolatedHomeEnv(home), ...TEST_JITI_ENV },
+			},
 		);
 		if (result.error) throw result.error;
 		status = result.status ?? FAILURE_EXIT_STATUS;

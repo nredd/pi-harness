@@ -22,7 +22,7 @@ INCLUDE = re.compile(r"include:\s*(\[[^\]]*\])", re.DOTALL)
 EXCLUDE = re.compile(r"exclude:\s*(\[[^\]]*\])", re.DOTALL)
 NATIVE_BUN_TEST = re.compile(r"(?:\w+=\S+ )*bun test ")
 # Packages still on a native `bun test` subset. #320 retires one per slice; none may come back.
-NATIVE_BUN_PACKAGES = {"dev-tools", "session-kit", "subagents"}
+NATIVE_BUN_PACKAGES = {"session-kit", "subagents"}
 
 
 def test_primary_configs_match_policy_inventory() -> None:

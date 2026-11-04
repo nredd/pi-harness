@@ -1,7 +1,7 @@
 /**
  * Drive dev-tools through a real `AgentSession`: the model's tool calls are faux, everything after
  * them (pi's schema validation, `tool_call` hooks, the real `bash` tool, result serialization) is pi.
- * Runs under Vitest and `bun test`, so it uses no runner-specific API.
+ * Runs under Vitest on Node and Bun.
  */
 
 import { execFileSync } from "node:child_process";

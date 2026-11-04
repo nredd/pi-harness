@@ -120,20 +120,20 @@ wrappers. 194 lines / 51 functions, 0 uncovered on darwin. The `test-helper` exc
 timers) and is deleted.
 
 Every declared `test:bun` command also emits an independent `bun` LCOV signal. Nine Bun signals
-are measured. `plan-mode`, `preset`, `subscription-router` and `todo` are `enforced` at 0/0 on darwin
-and linux since [#320](https://github.com/nredd/pi-harness/issues/320): full suite, full primary
+are measured. `dev-tools`, `plan-mode`, `preset`, `subscription-router` and `todo` are `enforced` at
+0/0 on darwin and linux since [#320](https://github.com/nredd/pi-harness/issues/320): full suite, full primary
 inventory, 0/0 in their own PRs' hosted macos-14 and ubuntu-24.04 artifacts (receipts
 [here](../coverage/receipts/bun-enforced.md)). `resource-sampler` is `enforced` at 0/0 on
 darwin and linux since [#375](https://github.com/nredd/pi-harness/issues/375), which closed its
 darwin 8/4 and linux 47/8 Bun misses with the same fake-host FFI tests as primary. `inprocess` joins them since
-[#376](https://github.com/nredd/pi-harness/issues/376), see below. The other three
+[#376](https://github.com/nredd/pi-harness/issues/376), see below. The other two
 explicitly declare `enforcement: "report-only"`, with a
 mandatory nonblank `reason` and a link to [#160](https://github.com/nredd/pi-harness/issues/160).
 Their stored `max_uncovered` values are advisory references, not enforced budgets. An omitted `enforcement` defaults to
 `enforced` for backwards-compatible primary/base-policy reading; current Bun declarations never
 rely on that default. Native `bun test` subset measurements are NOT the owned-source denominator:
 Bun 1.3.14 native coverage omits never-imported files. Full Vitest-on-Bun producers now use
-Istanbul for router, preset, sampler, todo, plan-mode and inprocess through `scripts/run-vitest.ts bun`.
+Istanbul for router, preset, sampler, todo, plan-mode, dev-tools and inprocess through `scripts/run-vitest.ts bun`.
 They inherit the full explicit primary instrumentation inventory (no `files` subset). The launcher's
 `bun` engine appends the provider, the `text` and `lcov` reporters (Vitest's dotted options) and
 `coverage/bun`, so each `test:bun` passes only package arguments. The sampler retains one
@@ -264,7 +264,8 @@ the global flip. Imported documentation-site TS/TSX/configuration is likewise in
 that exclusion; the documentation generators and optional `scripts/rust-coverage.mjs` tooling are
 measured only by the report-only signal above, never gated. The opt-in Rust report is never collected by normal checks; its
 mocked argument/path/error tests still run. Existing native/platform checks remain unchanged.
-`dev-tools` now emits primary Istanbul and independent native Bun reports after #155/#195.
+`dev-tools` emits primary Istanbul after #155/#195. Since #320 its Bun report comes from the same
+full Vitest suite on Bun through `scripts/run-vitest.ts bun`, not a native `bun test` subset.
 Failed-run reports are diagnostic artifacts only and never establish budgets.
 
 Producer configurations are named **measurement-pending**
