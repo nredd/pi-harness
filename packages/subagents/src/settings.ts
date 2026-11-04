@@ -8,6 +8,7 @@ import { NO_FALLBACK } from "./agent-types.js";
 import { readEnterpriseLocalManifest } from "./enterprise-local.js";
 import { resolveAgentDir } from "./home-paths.js";
 import { type ModelResolution, parseTierBinding, setModelTiers } from "./model-tiers.js";
+import { NOTIFICATION_RESULT_CHARS_CEILING } from "./notification-result.js";
 import { type BudgetPolicy, DEFAULT_BUDGET_POLICY } from "./process-budget.js";
 import type { AgentMentionMode, JoinMode, ViewerMarkdownMode, WidgetMode } from "./types.js";
 
@@ -66,6 +67,15 @@ export interface SubagentsSettings {
    */
   defaultMaxTurns?: number;
   graceTurns?: number;
+  /**
+   * Result characters a background completion notice carries per agent,
+   * defaulting to `16000`. Past it the notice keeps the head and tail and
+   * names the transcript and `get_subagent_result`; agents that finish
+   * together share four times this. A result delivered whole counts as read.
+   * `0` restores the 500-character preview (300 per `group` member). See
+   * `notification-result.ts`.
+   */
+  notificationResultChars?: number;
   defaultJoinMode?: JoinMode;
   /**
    * Whether a top-level `Agent` spawn that doesn't say runs detached.
@@ -391,6 +401,7 @@ export interface SettingsAppliers {
   setBudgetPolicy: (policy: BudgetPolicy) => void;
   setDefaultMaxTurns: (n: number) => void;
   setGraceTurns: (n: number) => void;
+  setNotificationResultChars: (n: number) => void;
   setDefaultJoinMode: (mode: JoinMode) => void;
   setBackgroundByDefault: (b: boolean) => void;
   setSchedulingEnabled: (b: boolean) => void;
@@ -501,6 +512,13 @@ function sanitize(raw: unknown): SubagentsSettings {
     (r.graceTurns as number) <= GRACE_TURNS_CEILING
   ) {
     out.graceTurns = r.graceTurns as number;
+  }
+  if (
+    Number.isInteger(r.notificationResultChars) &&
+    (r.notificationResultChars as number) >= 0 &&
+    (r.notificationResultChars as number) <= NOTIFICATION_RESULT_CHARS_CEILING
+  ) {
+    out.notificationResultChars = r.notificationResultChars as number;
   }
   if (
     Number.isInteger(r.maxSubagentDepth) &&
@@ -753,6 +771,7 @@ export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers):
   }
   if (typeof s.defaultMaxTurns === "number") appliers.setDefaultMaxTurns(s.defaultMaxTurns);
   if (typeof s.graceTurns === "number") appliers.setGraceTurns(s.graceTurns);
+  if (typeof s.notificationResultChars === "number") appliers.setNotificationResultChars(s.notificationResultChars);
   if (typeof s.maxSubagentDepth === "number") appliers.setMaxSubagentDepth(s.maxSubagentDepth);
   if (typeof s.fallbackSubagent === "string") appliers.setFallbackSubagent(s.fallbackSubagent);
   // Module state: reset when a session omits it, or the previous activation's aliases leak.

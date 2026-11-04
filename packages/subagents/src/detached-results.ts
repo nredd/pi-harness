@@ -13,6 +13,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { NoticeParts } from "./notification-result.js";
 import type { AgentRecord } from "./types.js";
 import type { AgentActivity } from "./ui/agent-widget.js";
 
@@ -25,6 +26,8 @@ export interface DetachedResult {
   details: unknown;
   /** History entry for a result that finished detached; absent if already appended. */
   record?: Record<string, unknown>;
+  /** A full-result notice's parts, so delivery clips it against its batch's budget; `content` is the fallback. */
+  notice?: NoticeParts & { footer: string };
 }
 
 const SINK_KEY = Symbol.for("pi-subagents:detached-sink");
