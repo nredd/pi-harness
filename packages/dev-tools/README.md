@@ -331,7 +331,7 @@ this package's coverage denominator.
 ```
 # From the monorepo root:
 make install
-npm run check --workspace @nredd/pi-dev-tools  # biome, tsc --noEmit, vitest, bun test test/scenarios
+npm run check --workspace @nredd/pi-dev-tools  # biome, tsc --noEmit, vitest on Node and Bun
 ```
 
 Harness gate before any tag: `HARNESS_LOCAL=pi-dev-tools make verify` in `~/code/pi-harness-e2e`.
@@ -344,4 +344,4 @@ Pin lives in chezmoi `third_party/pi-agent-settings.base.json`; see `~/.pi/agent
 - `test/<group>/` vitest, `test/fixtures/<group>/` recorded real tool output
 - `test/scenarios/` the extension inside a real `AgentSession` (`@earendil-works/pi-coding-agent/testing`):
   faux model tool calls, pi's validation, `tool_call` hooks, the real `bash` tool and result
-  serialization. Run under Vitest and `bun test`, so they use no runner-specific API
+  serialization. Run under Vitest on both Node and Bun

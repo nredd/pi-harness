@@ -35,7 +35,9 @@ Current primary Node result after #286 (23 modules; `src/git/merge.ts` added): a
 (the last code commit; measured on that tree with `vitest run --coverage`, not on any later
 docs-only commit): **1596/1596 lines (100%), 278/278 functions (100%)**, 1877/1967 statements
 (95.42%), 1376/1618 branches (85.04%); **445 tests in 31 files**. Bun native scenarios
-(`npm run test:bun`): 5 passed.
+(`npm run test:bun`): 5 passed (historical: #320 replaced that subset and its `ssh/hosts.test.ts`
+canary with the full Vitest suite on Bun, enforced at 0/0; counts are in the receipt
+[here](../coverage/receipts/bun-enforced.md)).
 
 Choose Istanbul as primary: no alias inflation, source-complete inventory, and the same
 line/function denominator as V8. Branch coverage is reported, not treated as line coverage.

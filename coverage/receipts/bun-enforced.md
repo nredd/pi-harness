@@ -56,3 +56,27 @@ done; done
 
 All six print `a1087a1cfa17`, over 3701 `DA`/`FNDA` records with 0 misses. `BRDA` branch records are
 not compared; branches are report-only.
+
+## dev-tools
+
+Promotes dev-tools' `bun` signal to enforced at 0/0 on darwin and linux, retiring its native
+`bun test test/scenarios` subset (5 cases) and `ssh/hosts.test.ts` canary (17 cases) for the full
+449-case Vitest suite on Bun 1.4.4 through `scripts/run-vitest.ts bun`, with no `files` subset.
+
+Measured on PR #433 HEAD `eaa4167ab72a2d49d7a633f412251184c67d39a1`, CI run `41863283747`,
+`owned` jobs `126712706367` (macos-14), `126701716897` (ubuntu-24.04) and `126703588001` (wsl2),
+all green. Bun's `test/cargo/tools.test.ts` ran all 14 cases on every OS; on the previous head's run
+`41806017200` it skipped 13 on ubuntu-24.04 and wsl2 because rustup could not find its home under
+the launcher's disposable HOME (fixed by `toolchainHomeEnv` in `scripts/run-vitest.ts`). Counts are
+reparsed from `coverage-macos-14` (artifact `13343851896`), `coverage-ubuntu-24.04` (`13341639716`)
+and `coverage-wsl2` (`13343175567`) LCOV and match each `coverage/summary.json` (`enforced`, delta 0
+from reference 0):
+
+| OS | Source files | Lines / uncovered | Functions / uncovered | `lcov.info` sha256 prefix |
+| --- | --- | --- | --- | --- |
+| macos-14 | 23 | 1600 / 0 | 279 / 0 | `6f943431ec65` |
+| ubuntu-24.04 | 23 | 1600 / 0 | 279 / 0 | `fb0df64b765b` |
+| wsl2 | 23 | 1600 / 0 | 279 / 0 | `059915d1ac54` |
+
+With the plan-mode `norm` above, the Bun and primary reports of all three OSes all print
+`fb774e38bb1f`, over 1879 `DA`/`FNDA` records with 0 misses. `BRDA` branch records are not compared.
