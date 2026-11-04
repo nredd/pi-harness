@@ -22,11 +22,11 @@ A package cannot leave `ratchet` except to graduate to `100-percent`, an enforce
 signal. The rule keeping `excluded`/`report-only` signals report-only is unchanged. A floor is a new
 enforced signal, not an allowance or waiver: it is the measured count on a named commit and OS.
 
-The initial integration checkpoint is recorded [here](../coverage/receipts/main-integration.md).
+The initial integration checkpoint is recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/main-integration.md).
 Facade validation and the actual hosted producer failure diagnosis are recorded
-[here](../coverage/receipts/facade-followup.md). Git fixture isolation, both hosted artifacts and the
-#155 -> #195 dev-tools dependency decision are recorded [here](../coverage/receipts/git-isolation.md).
-Final hosted closure and per-OS receipts are recorded [here](../coverage/receipts/final-closure.md).
+[here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/facade-followup.md). Git fixture isolation, both hosted artifacts and the
+#155 -> #195 dev-tools dependency decision are recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/git-isolation.md).
+Final hosted closure and per-OS receipts are recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/final-closure.md).
 All eight primary packages have zero uncovered lines/functions on macOS and Linux. Until #375,
 Linux missed 47 lines / 8 functions in resource-sampler's native `darwin.ts` paths under a
 `target_allowances` entry. `nativeCalls` now takes an injectable host (`platform`, `arch`,
@@ -48,7 +48,7 @@ invented 100% result. Their local zero-floor measurement enables enforcement; cl
 Linux final-HEAD receipts remain required acceptance evidence. The measured per-OS primary floors are enforced now; uncovered
 branches are capped per signal ([branch caps](#branch-caps)), and Bun signals follow their own declared enforcement (see below). The conflict-resolution decisions and exact
 base-relative facade ledger regression for the `b51e177` main merge are recorded
-[here](../coverage/receipts/tier-main-merge.md).
+[here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/tier-main-merge.md).
 
 The target is **100% of owned executable source lines AND functions**, measured by each
 package's primary runner. Uncovered branches are gated by per-signal caps on their way to 0 (below). This is source coverage, not
@@ -111,9 +111,9 @@ Eligible pending packages then fail, too; owner-excluded/report-only domains do 
 ## Independent signals
 
 Clean local counts, report hashes and the measured +26-second (8.5%) serial runtime sample are
-recorded [here](../coverage/receipts/phase0-macos.md). These local receipts are advisory evidence,
+recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/phase0-macos.md). These local receipts are advisory evidence,
 not hosted floors or a hosted-CI timing claim. Hosted artifact measurements and their independent
-run comparison are recorded [here](../coverage/receipts/hosted-platforms.md).
+run comparison are recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/hosted-platforms.md).
 
 The accounting script consumes LCOV, not runner APIs. Primary reports use Istanbul for `subagents`, `plan-mode`, `todo` and `preset`.
 Real Pi/Jiti reloads collide with Vitest-generated scripts at identical source URLs and corrupt
@@ -173,7 +173,7 @@ Every declared `test:bun` command also emits an independent `bun` LCOV signal. N
 are measured. `dev-tools`, `plan-mode`, `preset`, `subscription-router` and `todo` are `enforced` at
 0/0 on darwin and linux since [#320](https://github.com/nredd/pi-harness/issues/320): full suite, full primary
 inventory, 0/0 in their own PRs' hosted macos-14 and ubuntu-24.04 artifacts (receipts
-[here](../coverage/receipts/bun-enforced.md)). `resource-sampler` is `enforced` at 0/0 on
+[here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/bun-enforced.md)). `resource-sampler` is `enforced` at 0/0 on
 darwin and linux since [#375](https://github.com/nredd/pi-harness/issues/375), which closed its
 darwin 8/4 and linux 47/8 Bun misses with the same fake-host FFI tests as primary. `inprocess` joins them since
 [#376](https://github.com/nredd/pi-harness/issues/376), see below. The other two
@@ -220,7 +220,7 @@ Flip a package's Bun signal to `enforced` **only when its full suite runs under 
 OSes and its Bun inventory covers every owned executable source file**, including never-imported
 modules through explicit import-all/instrumentation. A green compatibility subset alone is not
 that evidence, even when its test count matches primary. Follow #160's reviewed migration spec;
-record complete-source receipts before establishing enforced Bun floors. Accounting rejects an
+cite complete-source hosted run ids before establishing enforced Bun floors. Accounting rejects an
 enforced Bun signal whose file subset omits owned source. Enforced-to-enforced budgets ratchet;
 a report-only-to-enforced promotion establishes the new complete-source floor.
 
@@ -392,8 +392,8 @@ eight-package zero target; its two measured signals are the enforced `ratchet` f
   the new file. Do not fabricate a report or merge compatibility counters with primary counters.
 - Run `make check-scripts` to check source classification and producer wiring;
   run the affected package's existing primary/declared compatibility invocations, then
-  `make check-coverage`. Missing expected source fails closed. Keep fresh clean
-  receipts and never raise uncovered budgets to accommodate new untested behavior.
+  `make check-coverage`. Missing expected source fails closed. Cite the clean
+  hosted run ids in the PR and never raise uncovered budgets to accommodate new untested behavior.
 - For a genuine non-shipped verification harness, add one exact `verification_helpers` entry with
   its own reason. For source removal, rename or role changes, follow the reclassification ledger
   below, including affected compatibility scopes.
@@ -491,9 +491,10 @@ Reduce budgets only to clean-producer measured values. Missing reports or failed
 cannot establish floors. The initial hosted accounting failure exposed wrong local floors; its
 complete reports came from successful test producers, so they establish the initial per-OS policy
 before this PR introduces that policy to main. This is not permission to raise an existing main
-floor. Keep measurement receipts with the policy update. A new package needs an owned inventory,
+floor. Cite the measuring hosted run ids in the package `note`; receipts live in git history and
+the PR, not in the tree. A new package needs an owned inventory,
 justified declaration exclusions, a primary producer reading that inventory, text+LCOV wiring,
-independent runtime signal if declared, and clean-run receipts before its budgets are accepted.
+independent runtime signal if declared, and clean hosted runs before its budgets are accepted.
 The command also rejects npm workspaces missing from policy.
 
 ## Refresh floors from hosted artifacts

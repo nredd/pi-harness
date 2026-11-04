@@ -36,7 +36,7 @@
       "owned": ["src/**/*.ts"],
       "exclusions": [{ "path": "src/core/index.ts", "kind": "non-executable-facade", "reason": "Only static named ESM re-exports; no executable statements or functions. Strict facade validation rejects executable additions; every target module remains owned and instrumented." }],
       "status": "measured",
-      "note": "Primary Istanbul follows #195. Floors/references come from complete hosted runs 40852918834 and 40857829296; see coverage/receipts/final-closure.md.",
+      "note": "Primary Istanbul follows #195. Floors/references come from complete hosted runs 40852918834 and 40857829296.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",

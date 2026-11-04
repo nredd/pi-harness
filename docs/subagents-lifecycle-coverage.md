@@ -17,8 +17,8 @@ Close 108 lines and 24 functions; 27 previously gapped modules close completely.
 Of 71 lifecycle-owned sources, 67 have full lines/functions. Target is NOT 100%.
 All 75 measured sources, per-file denominators and before/final gaps are in
 `subagents-lifecycle-files.md`; stable remaining anchors are in
-`subagents-lifecycle-remaining.txt`. `subagents-lifecycle-before.txt` records the
-baseline gap counts. The expanded command is `subagents-lifecycle-command.txt`.
+[`subagents-lifecycle-remaining.txt`](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/docs/subagents-lifecycle-remaining.txt). [`subagents-lifecycle-before.txt`](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/docs/subagents-lifecycle-before.txt) records the
+baseline gap counts. The expanded command is [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/docs/subagents-lifecycle-command.txt).
 Istanbul 5.0.3 matches the root Vitest 5.0.3 runner through an ignored tooling link;
 no manifest/lock changes. Branches remain report-only.
 
@@ -46,7 +46,7 @@ rejection and removal from the runtime source, the unread row must still render.
 The failed agent overlay independently must leave `resultConsumed` unset.
 Separate exact acknowledgement mutants fail those semantic assertions, not an
 unrelated keyboard-consumption assertion. Mutation commands, red outcomes and
-byte-exact restoration are recorded in `subagents-lifecycle-mutations.txt`.
+byte-exact restoration are recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/docs/subagents-lifecycle-mutations.txt).
 
 Remaining lifecycle-owned gaps:
 
@@ -66,7 +66,7 @@ fabricated stack, rather than replacing the original failure with the getter's e
 The lifecycle regression still uses a real worker and asserts no child was spawned.
 The counts and gate receipts below describe the pre-reconciliation measurement.
 
-Fresh gate evidence is in `subagents-lifecycle-gates.txt`. Full Node/Istanbul,
+Fresh gate evidence is [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/docs/subagents-lifecycle-gates.txt). Full Node/Istanbul,
 lint/types and pinned Bun native `31 + 10` pass. Full Bun compatibility remains
 NOT green: the unchanged #174 authored-stack-location assertion fails. Its
 production fix is separately owned; this PR neither duplicates it nor weakens
