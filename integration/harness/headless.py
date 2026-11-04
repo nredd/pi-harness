@@ -9,14 +9,14 @@ from __future__ import annotations
 import json
 import logging
 import os
-import signal
 import subprocess
 import time
 from contextlib import suppress
 from dataclasses import dataclass, field
-from threading import Thread
+from threading import Event, Thread
 from typing import TYPE_CHECKING, Any
 
+from harness import process_group
 from harness.paths import FAUX_EXTENSION, pi_command
 
 if TYPE_CHECKING:
@@ -30,6 +30,8 @@ SEEN_AT = "_harness_seen_s"
 
 DEFAULT_TIMEOUT_S = 180
 MAX_OUTPUT_BYTES = 8 * 1024 * 1024
+# Bound on the `/bin/ps` listing that explains a `killpg` EPERM.
+GROUP_LISTING_TIMEOUT_S = 5.0
 
 
 @dataclass(frozen=True)
@@ -248,6 +250,9 @@ def collect_json_process(
     Raises:
         TimeoutError: the process never settled before its deadline.
         RuntimeError: an output cap was exceeded.
+        PermissionError: killing the session group was refused and not explained as zombie-only,
+            see `harness.process_group.kill_owned_group`.
+        OSError: waiting for the leader's exit failed.
     """
     events: list[dict[str, Any]] = []
     noise: list[str] = []
@@ -255,7 +260,9 @@ def collect_json_process(
     assert process.stdout is not None
     assert process.stderr is not None
     errors: list[str] = []
-    overflow: list[bool] = []
+    # Readers never signal: they flag overflow and wake the main thread, which owns every kill.
+    overflow = Event()
+    wake = Event()
 
     def drain_stdout() -> None:
         """Bound stdout while preserving event-read timestamps for benchmarks."""
@@ -265,8 +272,8 @@ def collect_json_process(
         for line in iter(lambda: stdout.readline(MAX_OUTPUT_BYTES + 1), ""):
             total += len(line.encode())
             if total > MAX_OUTPUT_BYTES:
-                overflow.append(True)
-                kill_process_group(process.pid)
+                overflow.set()
+                wake.set()
                 return
             stripped = line.strip()
             if not stripped:
@@ -289,19 +296,19 @@ def collect_json_process(
         for chunk in iter(lambda: stderr.read(4096), ""):
             total += len(chunk.encode())
             if total > MAX_OUTPUT_BYTES:
-                overflow.append(True)
-                kill_process_group(process.pid)
+                overflow.set()
+                wake.set()
                 return
             errors.append(chunk)
 
     readers = [Thread(target=drain_stdout, daemon=True), Thread(target=drain_stderr, daemon=True)]
     for reader in readers:
         reader.start()
-    timed_out = finish_process(process, readers, timeout_s)
+    timed_out = finish_process(process, readers, timeout_s, wake, overflow)
     stderr = "".join(errors)
     if timed_out:
         raise TimeoutError(f"Pi exceeded {timeout_s}s deadline: {argv}; stderr={stderr[-2000:]}")
-    if overflow:
+    if overflow.is_set():
         raise RuntimeError(f"Pi exceeded {MAX_OUTPUT_BYTES} output bytes: {argv}")
     return RunResult(
         argv=argv,
@@ -314,44 +321,74 @@ def collect_json_process(
     )
 
 
-def kill_process_group(pid: int) -> None:
-    """Kill the owned session group, tolerating an already-exited leader.
+def finish_process(
+    process: subprocess.Popen[str], readers: list[Thread], timeout_s: float, wake: Event, overflow: Event
+) -> bool:
+    """Wait with a deadline, kill the group when needed, join the pipe readers, then reap.
 
-    Parameters:
-        pid (int): owned process group leader.
-    """
-    with suppress(ProcessLookupError):
-        os.killpg(pid, signal.SIGKILL)
-
-
-def finish_process(process: subprocess.Popen[str], readers: list[Thread], timeout_s: float) -> bool:
-    """Wait with a deadline, then join concurrent pipe readers and close their descriptors.
+    The leader is reaped only after the last signal. Until then its zombie reserves the
+    process-group number, so no kill here can reach a reused, foreign group. Precondition:
+    nothing else reaps `process` or signals its group; readers only set `wake` and `overflow`.
 
     Parameters:
         process (subprocess.Popen[str]): real process session leader.
         readers (list[Thread]): concurrent pipe drainers.
         timeout_s (float): maximum process lifetime.
+        wake (Event): set by a reader on overflow; also set here when the leader exits.
+        overflow (Event): a reader exceeded the output cap.
 
     Returns:
         bool: whether the process exceeded its deadline.
+
+    Raises:
+        PermissionError: killing the group was refused and not explained as zombie-only, see
+            `harness.process_group.kill_owned_group`.
+        OSError: waiting for the leader's exit failed.
+        RuntimeError: a process outside the group kept the output pipes open.
+        subprocess.TimeoutExpired: the leader survived SIGKILL.
+
+    On `PermissionError` or `OSError` the group may still be alive, so this neither reaps the
+    leader nor closes the pipes: reaping could block and closing could race the readers. The
+    leader stays a child of this process and the daemon readers end when the pipes do.
     """
     deadline = time.monotonic() + timeout_s
-    timed_out = False
-    try:
-        process.wait(timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        kill_process_group(process.pid)
-        process.wait(timeout=10)
+    exited = Event()
+
+    watch_errors: list[OSError] = []
+
+    def watch_leader() -> None:
+        """Wake the main thread when the leader exits, leaving it unreaped as the PGID anchor."""
+        try:
+            # ECHILD only if something reaped it anyway; it has exited either way.
+            with suppress(ChildProcessError):
+                os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
+        except OSError as error:
+            watch_errors.append(error)
+        finally:
+            exited.set()
+            wake.set()
+
+    Thread(target=watch_leader, daemon=True).start()
+    timed_out = not wake.wait(timeout_s)
+    if watch_errors:
+        raise watch_errors[0]
+    killed = timed_out or overflow.is_set()
+    if killed:
+        process_group.kill_owned_group(process.pid, GROUP_LISTING_TIMEOUT_S)
+        exited.wait(10)
     for reader in readers:
         reader.join(timeout=max(0, deadline - time.monotonic()))
-    if any(reader.is_alive() for reader in readers):
-        timed_out = True
-        kill_process_group(process.pid)
+    stuck = any(reader.is_alive() for reader in readers)
+    # A descendant can overflow after the leader exited: that still kills the group, once.
+    if stuck or (overflow.is_set() and not killed):
+        timed_out = timed_out or stuck
+        process_group.kill_owned_group(process.pid, GROUP_LISTING_TIMEOUT_S)
         for reader in readers:
             reader.join(timeout=2)
-        if any(reader.is_alive() for reader in readers):
-            raise RuntimeError("Pi left inherited output pipes open outside its process group")
+    # Reap only now: no signal follows, readers never send one.
+    process.wait(timeout=10)
+    if any(reader.is_alive() for reader in readers):
+        raise RuntimeError("Pi left inherited output pipes open outside its process group")
     assert process.stdout is not None
     assert process.stderr is not None
     process.stdout.close()

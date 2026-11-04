@@ -30,7 +30,7 @@ from typing import Any
 
 import pytest
 
-from harness import release
+from harness import process_group, release
 from harness.install import EXCLUDE_NEWER, INSTALLER_PYTHON, download
 from harness.promotion import (
     SNAPSHOT_ASSET,
@@ -415,24 +415,6 @@ def test_existing_config_needs_consent_and_survives(
     assert json.loads((backup / "settings.json").read_text())["packages"] == ["npm:pi-mine@1.0.0"]
 
 
-def group_has_live_members(pgid: int, timeout: float) -> bool:
-    """Check owned-group liveness without mistaking unreaped zombies for writers.
-
-    Parameters:
-        pgid (int): process group created by this test.
-        timeout (float): remaining cleanup deadline in seconds.
-
-    Returns:
-        bool: a non-zombie process remains in the group.
-    """
-    output = subprocess.check_output(["/bin/ps", "-axo", "pgid=,stat="], text=True, timeout=timeout)
-    return any(
-        fields[0] == str(pgid) and not fields[1].startswith("Z")
-        for line in output.splitlines()
-        if len(fields := line.split()) == 2
-    )
-
-
 def cleanup_group(process: subprocess.Popen[str], timeout: float = 60) -> None:
     """Quiesce an owned session, retaining its unreaped leader as the PGID anchor.
 
@@ -450,21 +432,12 @@ def cleanup_group(process: subprocess.Popen[str], timeout: float = 60) -> None:
         while True:
             remaining = deadline - time.monotonic()
             assert remaining > 0, f"Process group '{process.pid}' survived cleanup"
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                break
-            except PermissionError:
-                # macOS rejects signals to some zombie-only groups. A live member is
-                # still a real permission failure; zombies cannot fork or write.
-                remaining = deadline - time.monotonic()
-                assert remaining > 0, f"Process group '{process.pid}' survived cleanup"
-                if group_has_live_members(process.pid, remaining):
-                    raise
+            # Shared policy: ESRCH or a zombie-only EPERM is gone; a live member re-raises.
+            if process_group.kill_owned_group(process.pid, remaining):
                 break
             remaining = deadline - time.monotonic()
             assert remaining > 0, f"Process group '{process.pid}' survived cleanup"
-            if not group_has_live_members(process.pid, remaining):
+            if not process_group.group_has_live_members(process.pid, remaining):
                 break
             # Never poll/wait here: even a zombie leader reserves the PGID while a
             # fork racing SIGKILL can require another signal. Reap only after the
