@@ -1145,7 +1145,7 @@ def test_wsl_setup_does_not_upgrade_distribution_packages() -> None:
     [
         ("ubuntu-24.04", {"check-ts", "check-scripts", "check-integration"}),
         ("macos-14", {"check-ts", "check-scripts", "check-integration"}),
-        ("wsl2", {"check-ts", "check-probes", "check-import-audit"}),
+        ("wsl2", {"check-ts", "check-probes", "check-providers", "check-import-audit"}),
     ],
 )
 def test_owned_shards_run_exactly_the_gates_the_plan_lists(os_name: str, gates: set[str]) -> None:

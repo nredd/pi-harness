@@ -169,20 +169,14 @@ def test_install_refuses_a_stack_without_the_router(tmp_path: Path) -> None:
     assert box.settings_path.read_bytes() == before
 
 
-def test_fixture_env_points_the_fixture_at_state_log_and_timers(tmp_path: Path) -> None:
-    """State/log variables follow the fixture; the timer preload is opt-in.
+def test_fixture_env_points_the_fixture_at_state_and_log(tmp_path: Path) -> None:
+    """State/log variables follow the fixture.
 
     Parameters:
         tmp_path (Path): private state and log locations.
     """
     fixture = quota.UsageFixture(tmp_path / "state.json", tmp_path / "log.jsonl")
-    files = {"HARNESS_USAGE_STATE": str(fixture.state_path), "HARNESS_USAGE_LOG": str(fixture.log_path)}
-    assert quota.fixture_env(fixture) == files
-    assert quota.fixture_env(fixture, {}) == files
-    timers = {
-        "HARNESS_TIMER_MAP": json.dumps({"60000": 1500, "12000": 800}),
-        "NODE_OPTIONS": f"--import {quota.FAST_TIMERS_PRELOAD}",
+    assert quota.fixture_env(fixture) == {
+        "HARNESS_USAGE_STATE": str(fixture.state_path),
+        "HARNESS_USAGE_LOG": str(fixture.log_path),
     }
-    assert quota.fixture_env(fixture, quota.FAST_TIMERS) == files | timers
-    assert quota.fixture_env(None, quota.FAST_TIMERS) == timers
-    assert quota.fixture_env(None) == {}

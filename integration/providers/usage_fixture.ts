@@ -49,18 +49,10 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.events.on(CHANNEL, (raw) => {
-		const params = (raw && typeof raw === "object" ? raw : {}) as Record<
-			string,
-			unknown
-		>;
-		const requestId =
-			typeof params.requestId === "string" ? params.requestId : undefined;
+		const params = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+		const requestId = typeof params.requestId === "string" ? params.requestId : undefined;
 		const log = process.env.HARNESS_USAGE_LOG;
-		if (log)
-			appendFileSync(
-				log,
-				`${JSON.stringify({ t: Date.now(), refresh: params.refresh, ready })}\n`,
-			);
+		if (log) appendFileSync(log, `${JSON.stringify({ t: Date.now(), refresh: params.refresh, ready })}\n`);
 		if (!requestId) return;
 		const state = readState();
 		if (state.mode === "hang") return;

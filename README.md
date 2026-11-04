@@ -92,11 +92,14 @@ so check `powerd` sleep/wake logs when real-time assertions overrun. Do not rela
 - `check-scripts`: ruff, ty, pytest for `scripts/` (real disposable git repositories), then `check-import-audit`
 - `check-import-audit`: Biome, strict `tsc` and Vitest (V8 coverage, `scripts/vitest.config.ts`) for `scripts/import_audit.ts`, the package-contract
   import parser (installed TypeScript 7 `unstable/sync` API; real parses, the only mock forces a project lookup miss), enforced at 0/0
-- `check-integration`: ruff, ty, unit tests for `integration/` (needs `tmux`: the live-session drivers run against a stub pi on private servers), then `check-probes`
+- `check-integration`: ruff, ty, unit tests for `integration/` (needs `tmux`: the live-session drivers run against a stub pi on private servers), then `check-probes` and `check-providers`
 - `check-probes`: Biome and strict `tsc` for every `integration/probes` source and test (real `dev-tools` and
   `session-kit` runner sources; Biome only for `anthropic-block-types.mjs`), then Vitest with V8 coverage over
   `anthropic-block-types.mjs`, `latency.ts`, `render.ts`, `session-kit-child-scope.ts`, `stack-resources.ts` and
   `transcript-types.ts`, enforced at 0/0, on the config's explicit test files (no glob, `integration/probes/vitest.config.ts`)
+- `check-providers`: Biome, strict `tsc` and Vitest (V8 coverage, `integration/providers/vitest.config.ts`) for the
+  synthetic providers (`faux.ts`, `usage_fixture.ts`, `extension_inventory.ts`) and the auth preloads (`redirect_anthropic.mjs`,
+  `auth_guard.mjs`, `auth_transport.mjs`, `auth_runtime_fixture.mjs`), against recording registries and a loopback mock, enforced at 0/0
 - `check-benchmark`: ruff, ty, all unit tests with the 90% coverage threshold for
   `benchmarks/comparison`, including the `native_runtime` Codex sandbox test (see below)
 

@@ -214,6 +214,7 @@ def test_wsl2_capture_mirrors_only_coverage_reports_and_clears_stale_files(tmp_p
         "packages/example/coverage/bun/lcov.info",
         "integration/inprocess/coverage/primary/lcov.info",
         "integration/probes/coverage/primary/lcov.info",
+        "integration/providers/coverage/primary/lcov.info",
         "scripts/coverage/primary/lcov.info",
         "coverage/summary.json",
     ]

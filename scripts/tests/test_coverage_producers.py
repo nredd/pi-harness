@@ -222,21 +222,26 @@ def test_generated_coverage_is_ignored_by_whole_workspace_linters() -> None:
 
 
 def test_node_helper_gates_run_vitest_through_the_launcher() -> None:
-    """Keep the probes and import-audit producers on the guarded Vitest launcher.
+    """Keep the probes, providers and import-audit producers on the guarded Vitest launcher.
 
     Parameters:
         None.
     Returns:
-        None: Both Makefile producers run Vitest with coverage; no `node --test` or c8 remains.
+        None: Every Makefile producer runs Vitest with coverage; no `node --test` or c8 remains.
     Raises:
         AssertionError: A producer bypasses the launcher or returns to `node --test`/c8.
     """
     makefile = (ROOT / "Makefile").read_text()
     assert "cd integration/probes && node ../../scripts/run-vitest.ts node --coverage\n" in makefile
+    assert "cd integration/providers && node ../../scripts/run-vitest.ts node --coverage\n" in makefile
     assert "cd scripts && node run-vitest.ts node --coverage\n" in makefile
     assert "node --test" not in makefile
     assert "/.bin/c8 " not in makefile
-    for config in [ROOT / "integration/probes/vitest.config.ts", ROOT / "scripts/vitest.config.ts"]:
+    for config in [
+        ROOT / "integration/probes/vitest.config.ts",
+        ROOT / "integration/providers/vitest.config.ts",
+        ROOT / "scripts/vitest.config.ts",
+    ]:
         assert "verification/home-setup.ts" in config.read_text(), config
 
 

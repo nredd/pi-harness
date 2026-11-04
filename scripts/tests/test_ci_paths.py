@@ -345,6 +345,7 @@ def test_write_github_output_keeps_input_flags_independent(
         "integration/pyproject.toml",
         "integration/uv.lock",
         "integration/probes/stack-resources.ts",
+        "integration/providers/faux.ts",
         "scripts/check-biome-paths.mjs",
         "scripts/check-biome-paths.test.mjs",
         "scripts/import_audit.test.ts",
@@ -574,7 +575,7 @@ PUSH = "push"
 ALL_NATIVE_GATES = ("check-ts", "check-scripts", "check-integration")
 # The macOS `python` shard also carries the benchmark steps, which still read `benchmark_inputs` themselves.
 MAC_GATES = (*ALL_NATIVE_GATES, "check-benchmark")
-WSL_GATES = ("check-ts", "check-probes", "check-import-audit")
+WSL_GATES = ("check-ts", "check-probes", "check-providers", "check-import-audit")
 
 
 def plan_change(repo: Path, files: dict[str, str], event: str) -> dict[str, ci_paths.CellPlan]:
@@ -1221,7 +1222,7 @@ def test_owned_shards_follow_the_issue_split_and_runner_budget(repo: Path) -> No
     assert mac["python"]["gates"] == "check-scripts check-integration check-benchmark"
     wsl = {entry["shard"]: entry for entry in shard_outputs(plan["owned (wsl2)"])}
     assert wsl["subagents-computer-use"]["workspaces"] == "packages/computer-use packages/subagents"
-    assert wsl["ts"]["gates"] == "check-ts check-probes check-import-audit"
+    assert wsl["ts"]["gates"] == "check-ts check-probes check-providers check-import-audit"
     for os_name, entries in (("ubuntu-24.04", ubuntu), ("macos-14", mac), ("wsl2", wsl)):
         runner, guest = ci_paths.RUNNERS[os_name]
         assert all(entry["os"] == os_name for entry in entries.values())
