@@ -15,8 +15,13 @@ const GIT_ENV = {
 	GIT_COMMITTER_NAME: "t",
 	GIT_COMMITTER_EMAIL: "t@t",
 };
+/**
+ * `maintenance.auto=false`: a commit otherwise detaches `git maintenance run --auto`, whose
+ * `worktree prune` can land late under load and delete admin dirs a test is still writing.
+ */
 function sh(cwd: string, ...args: string[]): string {
-	return execFileSync("git", ["-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main", ...args], {
+	const config = ["-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main", "-c", "maintenance.auto=false"];
+	return execFileSync("git", [...config, ...args], {
 		cwd,
 		env: GIT_ENV,
 		encoding: "utf8",

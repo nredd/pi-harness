@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { registerGitTools } from "../../src/git/index.ts";
 import { prepareMerge } from "../../src/git/merge.ts";
 import { createMockPi } from "../support.ts";
@@ -32,6 +32,7 @@ const mock = createMockPi();
 beforeAll(() => registerGitTools(mock.pi));
 const roots: string[] = [];
 afterEach(() => {
+	vi.unstubAllEnvs();
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -407,6 +408,44 @@ describe("git_commit merge approval", () => {
 		expect(result.isError, mock.text(result)).toBe(false);
 		// Once for the staging `git add`, once more for the merge commit itself.
 		expect(readFileSync(marker, "utf8")).toBe("xx");
+	});
+
+	it("starts the proxy runtime only for checked hooks and hooks present when Git calls them", async () => {
+		const { root, repo } = mergeFixture();
+		const hooks = join(root, "hooks");
+		mkdirSync(hooks);
+		const marker = join(root, "post-commit-ran");
+		// Created mid-commit: the proxy must look the real hook up when Git calls it, not at approval.
+		writeFileSync(
+			join(hooks, "pre-commit"),
+			`#!/bin/sh\nprintf '#!/bin/sh\\nprintf ran > %s\\n' ${JSON.stringify(marker)} > ${JSON.stringify(join(hooks, "post-commit"))}\nchmod 700 ${JSON.stringify(join(hooks, "post-commit"))}\n`,
+			{ mode: 0o700 },
+		);
+		git(repo, ["config", "core.hooksPath", hooks]);
+		// The proxy shim reaches its runtime through `env`; record which hook each launch was for.
+		const bin = join(root, "bin");
+		mkdirSync(bin);
+		const launches = join(root, "launches");
+		writeFileSync(
+			join(bin, "env"),
+			`#!/bin/sh\nprev=\nfor arg; do case $prev in *run.mjs) printf '%s\\n' "$arg" >> ${JSON.stringify(launches)};; esac; prev=$arg; done\nexec /usr/bin/env "$@"\n`,
+			{ mode: 0o700 },
+		);
+		vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+		const result = await mock.call(
+			"git_commit",
+			{ subject: "Merge with few runtimes", paths: ["shared.txt"], push: false },
+			repo,
+		);
+		expect(result.isError, mock.text(result)).toBe(false);
+		expect(parents(repo)).toHaveLength(2);
+		expect(readFileSync(marker, "utf8")).toBe("ran");
+		expect(readFileSync(launches, "utf8").trim().split("\n")).toEqual([
+			"pre-commit",
+			"prepare-commit-msg",
+			"commit-msg",
+			"post-commit",
+		]);
 	});
 
 	it("leaves the named paths staged when a merge is rejected", async () => {

@@ -90,7 +90,9 @@ name a state (`not a git repository`, `unknown revision`, `path not tracked`, `n
   parents, signing and hooks. Approval checks cover the entire index even from a subdirectory
   with `diff.relative=true`; configured relative hook paths still resolve from the worktree root.
   Every hook in the configured hooks directory (e.g. `post-index-change`) still runs during a
-  merge commit. Absolute paths are matched after resolving symlinks in their parent directory,
+  merge commit, looked up when Git calls it. Only `pre-commit`, `prepare-commit-msg` and
+  `commit-msg` always start the checking runtime; any other hook that is absent at that point
+  starts nothing. Absolute paths are matched after resolving symlinks in their parent directory,
   so `/var` and `/private/var` spellings agree and an escaping symlink is rejected. A rejected
   merge leaves the named paths staged and `MERGE_HEAD` in place. Only a "not a git repository"
   answer from the merge probe falls through to an ordinary commit's `stage: "add"`; any other probe
