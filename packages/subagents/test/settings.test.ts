@@ -662,6 +662,17 @@ describe("settings persistence", () => {
       expect(loadSettings(projectDir).graceTurns).toBeUndefined();
     });
 
+    it("keeps notificationResultChars from 0 to 1e6, dropping the rest", () => {
+      writeProject({ notificationResultChars: 0 });
+      expect(loadSettings(projectDir)).toEqual({ notificationResultChars: 0 });
+      writeProject({ notificationResultChars: 1_000_000 });
+      expect(loadSettings(projectDir)).toEqual({ notificationResultChars: 1_000_000 });
+      for (const bad of [-1, 1_000_001, 2.5, "16000"]) {
+        writeProject({ notificationResultChars: bad } as any);
+        expect(loadSettings(projectDir)).toEqual({});
+      }
+    });
+
     it("drops absurdly large values (e.g. 1e6)", () => {
       writeProject({ maxConcurrent: 1_000_000, defaultMaxTurns: 1_000_000, graceTurns: 1_000_000 });
       expect(loadSettings(projectDir)).toEqual({});
@@ -720,6 +731,7 @@ describe("settings persistence", () => {
         setBudgetPolicy: vi.fn(),
         setDefaultMaxTurns: vi.fn(),
         setGraceTurns: vi.fn(),
+        setNotificationResultChars: vi.fn(),
         setDefaultJoinMode: vi.fn(),
         setBackgroundByDefault: vi.fn(),
         setSchedulingEnabled: vi.fn(),
@@ -812,6 +824,11 @@ describe("settings persistence", () => {
       // whole suite green while `subagents.json` silently stops working.
       applySettings({ fallbackSubagent: "none" }, appliers);
       expect(appliers.setFallbackSubagent).toHaveBeenCalledWith("none");
+    });
+
+    it("applies notificationResultChars, 0 included", () => {
+      applySettings({ notificationResultChars: 0 }, appliers);
+      expect(appliers.setNotificationResultChars).toHaveBeenCalledWith(0);
     });
 
     it("applies only the fields that are present", () => {
@@ -992,6 +1009,7 @@ describe("settings persistence", () => {
         setBudgetPolicy: vi.fn(),
         setDefaultMaxTurns: vi.fn(),
         setGraceTurns: vi.fn(),
+        setNotificationResultChars: vi.fn(),
         setDefaultJoinMode: vi.fn(),
         setBackgroundByDefault: vi.fn(),
         setSchedulingEnabled: vi.fn(),

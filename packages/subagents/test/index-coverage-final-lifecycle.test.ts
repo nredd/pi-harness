@@ -572,6 +572,22 @@ describe("index retained lifecycle callbacks", () => {
     } finally { error.mockRestore(); rmSync(dir, { force: true }); mkdirSync(dir, { recursive: true }); }
   });
 
+  it("hands a survivor that finished after reload its full result, like a live notice (#441)", async () => {
+    const body = `SURVIVOR-HEAD${"x".repeat(2_000)}SURVIVOR-TAIL`;
+    const hold = heldResponse(body); provider.setResponses([hold.response]);
+    const first = await bind(); const id = await spawn(first, "late survivor"); await hold.entered;
+    await shutdown(first, "reload");
+    hold.release(); await first.registry.waitForAll(); await flush();
+    const next = await bind();
+    await turnEnd(next);
+    expect(next.boot.pi.sendMessage).toHaveBeenCalledTimes(1);
+    const [message] = next.boot.pi.sendMessage.mock.calls[0];
+    expect(message.content).toContain(`<task-id>${id}</task-id>`);
+    expect(message.content).toContain(`<result>${body}</result>`);
+    expect(message.content).not.toContain("truncated");
+    expect(message.details.resultPreview).toBe(`${body.slice(0, 500)}…`);
+  });
+
   it("restores both members of a held grouped completion once after reload", async () => {
     const a = heldResponse("alpha private result"); const b = heldResponse("beta private result");
     provider.setResponses([a.response, b.response]);

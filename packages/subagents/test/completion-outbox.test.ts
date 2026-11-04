@@ -108,7 +108,7 @@ describe("CompletionOutbox", () => {
       outbox.add({ ids: ["a", "b"], build });
       outbox.cancel("a");
       vi.advanceTimersByTime(NOTIFICATION_HOLD_MS);
-      expect(build).toHaveBeenCalledExactlyOnceWith(["b"]);
+      expect(build).toHaveBeenCalledExactlyOnceWith(["b"], {});
       expect(send).toHaveBeenCalledExactlyOnceWith({ content: "b", details: details("b") });
     });
 
@@ -151,6 +151,36 @@ describe("CompletionOutbox", () => {
     expect(outbox.takePending()).toBeUndefined();
     vi.advanceTimersByTime(NOTIFICATION_HOLD_MS);
     expect(send).not.toHaveBeenCalled();
+  });
+
+  describe("a batch's result budget", () => {
+    it("allots the batch from every pending item's result length and merges what each delivered whole", () => {
+      const allot = vi.fn((chars: Readonly<Record<string, number>>) => Object.fromEntries(Object.keys(chars).map(id => [id, 7])));
+      outbox.dispose();
+      outbox = new CompletionOutbox(send, () => running, undefined, allot);
+      const sized = (id: string): OutboxItem => ({
+        ids: [id], resultChars: { [id]: 100 },
+        build: (_ids, caps) => ({ ...message(`${id}@${caps[id]}`), delivered: [id] }),
+      });
+      outbox.add(sized("a"));
+      outbox.add(sized("b"));
+      outbox.add(item("c")); // fixed content: no length, nothing delivered
+      vi.advanceTimersByTime(NOTIFICATION_HOLD_MS);
+
+      expect(allot).toHaveBeenCalledExactlyOnceWith({ a: 100, b: 100 });
+      const [sent] = send.mock.calls[0];
+      expect(sent.content).toBe("3 background tasks finished.\n\n<done a@7>\n\n<done b@7>\n\n<done c>");
+      expect(sent.delivered).toEqual(["a", "b"]);
+    });
+
+    it("allots nothing by default, and a coalesced message without whole results has no delivered list", () => {
+      const build = vi.fn((_ids: readonly string[], _caps: Readonly<Record<string, number>>) => message("a"));
+      outbox.add({ ids: ["a"], resultChars: { a: 100 }, build });
+      outbox.add(item("b"));
+      vi.advanceTimersByTime(NOTIFICATION_HOLD_MS);
+      expect(build).toHaveBeenCalledExactlyOnceWith(["a"], {});
+      expect(send.mock.calls[0][0]).not.toHaveProperty("delivered");
+    });
   });
 
   it("dispose drops pending completions and their timer", () => {
