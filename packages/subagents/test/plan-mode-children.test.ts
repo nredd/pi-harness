@@ -1,8 +1,8 @@
 /**
- * plan-mode-children.test.ts — #437 at the manager and contract level: which
- * runs are put under Plan mode's policy, and what the query contract does with
- * odd answers. The real-session behavior is pinned in
- * plan-mode-children-e2e.test.ts against the real pi-plan-mode extension.
+ * plan-mode-children.test.ts -- #437 at the manager level: which runs are put
+ * under Plan mode's policy. The query contract is pinned in
+ * plan-mode-contract.test.ts, and real sessions in plan-mode-children-e2e.test.ts
+ * and plan-mode-session.test.ts against the real pi-plan-mode extension.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -15,12 +15,7 @@ vi.mock("../src/mention-clone.js", () => ({ runMentionClone: vi.fn() }));
 import { AgentManager } from "../src/agent-manager.js";
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
-import {
-  PLAN_MODE_STATE_QUERY,
-  type PlanToolPolicy,
-  planGateReason,
-  queryPlanPolicy,
-} from "../src/plan-mode-children.js";
+import { PLAN_MODE_STATE_QUERY, type PlanToolPolicy } from "../src/plan-mode-children.js";
 import { buildInvocationTags } from "../src/ui/agent-widget.js";
 import { ctx, type Hermetic, hermeticDir, makePi } from "./helpers/boot-extension.js";
 
@@ -47,64 +42,6 @@ function planningPi(planning: { active: boolean }) {
 }
 
 const call = (toolName: string) => ({ toolName, input: {}, cwd: "/repo", tool: undefined });
-
-describe("queryPlanPolicy", () => {
-  it("is undefined without a bus, without an answer, or when nobody is planning", () => {
-    expect(queryPlanPolicy(undefined)).toBeUndefined();
-    expect(queryPlanPolicy(planBus(() => undefined))).toBeUndefined();
-    expect(queryPlanPolicy(planBus(() => ({ version: 1, active: false })))).toBeUndefined();
-    expect(queryPlanPolicy(planBus(() => null))).toBeUndefined();
-  });
-
-  it("returns the planner's policy", () => {
-    const policy = queryPlanPolicy(planBus(() => ({ version: 1, active: true, evaluate: BLOCK_WRITE })));
-    expect(policy?.(call("write"))).toBe("Plan blocks write");
-    expect(policy?.(call("read"))).toBeUndefined();
-  });
-
-  it("fails closed on an active answer it cannot use", () => {
-    for (const answer of [{ version: 1, active: true }, { version: 2, active: true, evaluate: () => undefined }]) {
-      const policy = queryPlanPolicy(planBus(() => answer));
-      expect(policy?.(call("read"))).toBeUndefined();
-      expect(policy?.(call("bash"))).toBe(
-        "Plan mode is active and sent no tool policy this subagent understands, so 'bash' is blocked.",
-      );
-    }
-  });
-
-  it("combines several active answers so any refusal wins", () => {
-    const blockBash: PlanToolPolicy = ({ toolName }) => (toolName === "bash" ? "no bash" : undefined);
-    const events = {
-      emit: (_channel: string, data: unknown) => {
-        const { reply } = data as { reply: (state: unknown) => void };
-        reply({ version: 1, active: true, evaluate: BLOCK_WRITE });
-        reply({ version: 1, active: true, evaluate: blockBash });
-      },
-    };
-    const policy = queryPlanPolicy(events);
-    expect(policy?.(call("write"))).toBe("Plan blocks write");
-    expect(policy?.(call("bash"))).toBe("no bash");
-    expect(policy?.(call("read"))).toBeUndefined();
-  });
-});
-
-describe("planGateReason", () => {
-  const tools = () => [{ name: "write", sourceInfo: { source: "builtin" } }] as any;
-
-  it("asks the policy with the child's own tool metadata, except for exempt or ungated calls", () => {
-    const seen: unknown[] = [];
-    const policy: PlanToolPolicy = (c) => {
-      seen.push(c.tool);
-      return "no";
-    };
-    const gate = { policy };
-    expect(planGateReason(gate, { toolName: "write", input: {}, cwd: "/r" }, tools, new Set())).toBe("no");
-    expect(seen).toEqual([{ name: "write", sourceInfo: { source: "builtin" } }]);
-    expect(planGateReason(gate, { toolName: "Agent", input: {}, cwd: "/r" }, tools, new Set(["Agent"]))).toBeUndefined();
-    expect(planGateReason({}, { toolName: "write", input: {}, cwd: "/r" }, tools, new Set())).toBeUndefined();
-    expect(planGateReason(undefined, { toolName: "write", input: {}, cwd: "/r" }, tools, new Set())).toBeUndefined();
-  });
-});
 
 describe("AgentManager under Plan mode", () => {
   let manager: AgentManager | undefined;
@@ -195,6 +132,25 @@ describe("AgentManager under Plan mode", () => {
     expect(manager.getRecord(nested)?.planGate?.policy?.(call("write"))).toBe("Plan blocks write");
     const unrelated = manager.spawn(pi, mockCtx, "general-purpose", "later", { description: "u", isBackground: true });
     expect(manager.getRecord(unrelated)?.planGate?.policy).toBeUndefined();
+  });
+
+  it("restricts a nested child of a pre-Plan owner when Plan is on at its spawn", async () => {
+    const planning = { active: false };
+    const pi = planningPi(planning);
+    vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}));
+    manager = new AgentManager();
+
+    const owner = manager.spawn(pi, mockCtx, "general-purpose", "orchestrate", { description: "o", isBackground: true });
+    expect(manager.getRecord(owner)?.planGate?.policy).toBeUndefined();
+    planning.active = true;
+    const nested = manager.spawn(pi, mockCtx, "general-purpose", "leaf", {
+      description: "n",
+      isBackground: true,
+      parentAgentId: owner,
+      depth: 2,
+    });
+    expect(manager.getRecord(nested)?.planGate?.policy?.(call("write"))).toBe("Plan blocks write");
+    expect(manager.getRecord(owner)?.planGate?.policy).toBeUndefined();
   });
 
   it("refuses worktree isolation while planning", async () => {

@@ -652,7 +652,6 @@ export class AgentManager {
   private decidePlanGate(record: AgentRecord, query: () => PlanToolPolicy | undefined): void {
     const owner = record.parentAgentId === undefined ? undefined : this.agents.get(record.parentAgentId);
     const policy = owner?.planGate?.policy ?? query();
-    record.planQuery = query;
     record.planGate ??= {};
     record.planGate.policy = policy;
     if (policy || record.invocation?.planMode) {
@@ -793,6 +792,7 @@ export class AgentManager {
       rootSessionId: options.rootSessionId,
     };
     this.decidePlanGate(record, () => queryPlanPolicy(pi.events));
+    record.planQuery = () => queryPlanPolicy(pi.events, "restrict");
     this.agents.set(id, record);
     // After the insert, so `takenHandles()` already counts this record's own
     // handle — a spawn named after its own type gets `explore-2`, not a

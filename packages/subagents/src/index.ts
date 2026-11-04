@@ -52,6 +52,7 @@ import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.js";
 import { clipNotice, DEFAULT_NOTIFICATION_RESULT_CHARS, fairShares, GROUP_PREVIEW_RESULT_CHARS, NOTIFICATION_RESULT_CHARS_CEILING, type NoticeFrame, type NoticeParts, PREVIEW_RESULT_CHARS, previewResult, renderNotice } from "./notification-result.js";
 import { appendModelFallbackEntry, appendModelTierEntry, createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
 import { getPackageAgentsGate, getPackageWorkflowsGate, invalidatePackageCache, isProjectTrusted, packageNameForPath, setPackageAgentsGate, setPackageWorkflowsGate, setProjectTrusted } from "./package-resources.js";
+import { answerPlanGateQueries } from "./plan-mode-children.js";
 import { getBudgetPolicy, setBudgetPolicy } from "./process-budget.js";
 import { checkAdmission, describeBlock, mayPark, modelRef, QUOTA_RESTART_GRACE_MS } from "./quota-admission.js";
 import { SubagentScheduler } from "./schedule.js";
@@ -753,6 +754,9 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   }
 
   let unwatchDetached: (() => void) | undefined;
+
+  // At load, before pi-plan-mode's session_start ask: Plan admits `Agent` only with this gate (#437).
+  answerPlanGateQueries(pi.events);
 
   // Background completion: route through group join or send individual nudge
   const manager = new AgentManager((record) => {

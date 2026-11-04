@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import type { ToolInfo } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
-import { createChildToolPolicy, PLAN_MODE_STATE_QUERY, type PlanModeStateSnapshot } from "../src/child-policy.js";
+import {
+  answerPlanModeStateQueries,
+  createChildToolPolicy,
+  PLAN_MODE_GATE_QUERY,
+  PLAN_MODE_STATE_QUERY,
+  type PlanModeStateSnapshot,
+} from "../src/child-policy.js";
 import planMode from "../src/plan-mode.js";
 import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
 
@@ -91,7 +97,10 @@ test("malformed state queries get no answer", () => {
 
 test("the child policy admits what Plan would and nothing else", () => {
   const evaluate = createChildToolPolicy({
-    selectedNames: ["lsp_diagnostics"],
+    selected: new Map([
+      ["lsp_diagnostics", extensionTool("lsp_diagnostics").sourceInfo.path],
+      ["unloaded", undefined],
+    ]),
     settings: { safeSubcommands: { ssh: ["nas"] } },
     homeDir: "/home/u",
   });
@@ -114,6 +123,22 @@ test("the child policy admits what Plan would and nothing else", () => {
     "Plan mode blocks tool 'deploy' in a subagent started while planning because the Plan policy does not admit it.",
   );
   assert.equal(evaluate(call("lsp_diagnostics", extensionTool("lsp_diagnostics"))), undefined);
+  // Selected by name in the planner, but this copy comes from somewhere else: not the same tool.
+  const projectCopy = {
+    ...extensionTool("lsp_diagnostics"),
+    sourceInfo: { source: "auto", scope: "project", path: "/repo/.pi/extensions/lsp.ts" },
+  };
+  assert.equal(
+    evaluate(call("lsp_diagnostics", projectCopy)),
+    "Plan mode blocks tool 'lsp_diagnostics' in a subagent started while planning because the Plan policy does not admit it.",
+  );
+  // A selection the planner could not resolve to a file admits nothing.
+  assert.match(evaluate(call("unloaded", extensionTool("unloaded"))) ?? "", /does not admit it/u);
+  // A project-scope readOnlyHint is not a trusted declaration.
+  assert.match(
+    evaluate(call("proj_read", { ...projectCopy, name: "proj_read", annotations: { readOnlyHint: true } })) ?? "",
+    /does not admit it/u,
+  );
   assert.equal(evaluate(call("git_status", annotated)), undefined);
   assert.equal(evaluate(call("powershell", builtinTool("powershell"), { command: "Get-ChildItem" })), undefined);
   assert.equal(
@@ -156,3 +181,54 @@ for (const reason of ["reload", "resume"] as const) {
     assert.match(restored?.evaluate?.(call("write", builtinTool("write"))) ?? "", /blocks mutating tool 'write'/u);
   });
 }
+
+test("a snapshot that throws answers active with a policy refusing every tool", () => {
+  const mock = createMockPi();
+  answerPlanModeStateQueries(mock.pi, () => {
+    throw new Error("broken");
+  });
+  const [state] = query(mock);
+  assert.equal(state?.active, true);
+  assert.equal(
+    state?.evaluate?.(call("read", builtinTool("read"))),
+    "Plan mode blocks tool 'read' in a subagent started while planning because it could not build the child policy.",
+  );
+});
+
+test("Plan refuses subagent tools unless a compatible gate answers, and announces itself at start", async () => {
+  const mock = createMockPi({
+    activeTools: ["read", "Agent", "steer_subagent"],
+    allTools: [builtinTool("read"), extensionTool("Agent"), extensionTool("steer_subagent")],
+  });
+  planMode(mock.pi, {
+    readSettings: async () => ({
+      kind: "loaded" as const,
+      settings: { thinkingLevel: "inherit" as const, defaultPlanTools: ["read", "Agent", "steer_subagent"] },
+    }),
+  });
+  const asked: unknown[] = [];
+  let gateVersion: number | undefined;
+  mock.eventBus.on(PLAN_MODE_GATE_QUERY, (data) => {
+    asked.push(data);
+    if (gateVersion !== undefined) {
+      (data as { reply: (answer: unknown) => void }).reply({ version: gateVersion, gate: "test" });
+    }
+  });
+  const context = createMockContext();
+  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  assert.equal(asked.length, 1, "session start announces Plan mode to subagent gates");
+  await mock.commands.get("plan")?.handler("start", context.ctx);
+  const hook = mock.events.get("tool_call")?.[0];
+
+  for (const toolName of ["Agent", "steer_subagent"]) {
+    assert.deepEqual(await hook?.({ toolName, input: {} }, context.ctx), {
+      block: true,
+      reason: `Plan mode blocks '${toolName}' because no compatible subagent gate answered, so a child it starts would not plan. Install @nredd/pi-subagents with Plan support (see the pi-plan-mode README).`,
+    });
+  }
+  gateVersion = 2;
+  const stale = (await hook?.({ toolName: "Agent", input: {} }, context.ctx)) as { block?: boolean } | undefined;
+  assert.equal(stale?.block, true);
+  gateVersion = 1;
+  assert.equal(await hook?.({ toolName: "Agent", input: {} }, context.ctx), undefined);
+});
