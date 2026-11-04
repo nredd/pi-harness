@@ -62,7 +62,7 @@ Measured, not assumed:
   FIFO capped at 1024. Window refs are deduped per window and not evicted (bounded by the number of windows).
   An incremental look (`expand_ui` graft, `baseLookId`) inherits its base look's refs, since the grafted outline
   still uses them. Acting with a current look on a ref whose look aged out fails with `stale_ref`; acting with an
-  aged-out look id fails with `stale_look`. Both live-checked in `check-macos-helper-live.mjs`, which also fails
+  aged-out look id fails with `stale_look`. Both live-checked in `test/macos-helper-live.test.mjs`, which also fails
   when the base-look transfer is disabled (checked).
 
 ## Helper lifecycle
@@ -105,7 +105,8 @@ Non-pointer actions on the same tool:
 `test:act-outcomes`, `test:desktop`, `test:unpaired` (stubbed backend: unpaired successor, delta refs, lock
 scope). `PI_COMPUTER_USE_LIVE=1 npm run test:macos-live` drives the real helper against an `NSAlert` fixture
 (`windowElement`, `look`, `act`, `axWaitFor`, `desktopInput` parsing, `activateApp`, clipboard round trip with
-restore, ref epoch across a restart, look-scoped ref eviction). It restarts the shared helper daemon.
+restore, ref epoch across a restart, look-scoped ref eviction). It restarts only its own helper instance, launched
+from the installed bundle on the isolated test home's socket.
 
 ## Real GUI validation
 

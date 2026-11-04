@@ -234,9 +234,9 @@ the report instead of dropping out; `scripts/tests/test_coverage_producers.py` b
 `goal: "excluded"` and report-only, with no 100% claim; subprocess-run scripts count only what the
 suites import. First references: macOS **2061 lines / 539 functions** uncovered (local
 `npm test` on `9aad6172`, unchanged when re-measured with the glob `include` on the #353 follow-up), Linux **2088 / 548** (hosted `coverage-ubuntu-24.04` artifact, run
-`41748291074`, same commit). The remaining
-`check-linux-native`, `check-macos-helper-live` and `check-linux-live` scripts are outside this
-signal until their #347 follow-up. Its TS entries and
+`41748291074`, same commit). The native and
+live suites (`linux-native`, `macos-helper-live`, `linux-live`) also run under Vitest now; skipped off
+their platform or opt-in, and `linux-native` counts only the `src/platform/linux/helper.ts` client it imports. Its TS entries and
 native sources stay in inventory. The owner explicitly excludes this package from coverage maintenance, so it does not block
 the global flip. Imported documentation-site TS/TSX/configuration is likewise inventory-only under
 that exclusion; the documentation generators and optional `scripts/rust-coverage.mjs` tooling are

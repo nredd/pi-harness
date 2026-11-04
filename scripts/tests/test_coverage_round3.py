@@ -307,7 +307,7 @@ def test_unshipped_computer_checks_have_individual_verification_reasons() -> Non
     [
         "scripts/router_contract.mjs",
         "packages/computer-use/scripts/pi-cubench-agent.mjs",
-        "packages/computer-use/scripts/check-linux-native.mjs",
+        "packages/computer-use/scripts/check-linux-live.mjs",
         "packages/computer-use/scripts/check-package-assets.mjs",
     ],
 )
@@ -339,9 +339,16 @@ def test_ported_computer_suites_are_conventional_tests() -> None:
     cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
     helpers = {helper.path for helper in cfg.verification_helpers}
     suites = sorted((ROOT / "packages/computer-use/test").glob("*.test.mjs"))
-    assert len(suites) == 21
+    assert len(suites) == 25
     for suite in suites:
         assert is_test_path(suite.relative_to(ROOT))
-    for moved in ["check-linux-build-scripts.mjs", "check-platform-linux.mjs", "check-cleanup.test.mjs"]:
+    for moved in [
+        "check-linux-build-scripts.mjs",
+        "check-platform-linux.mjs",
+        "check-cleanup.test.mjs",
+        "check-linux-native.mjs",
+        "check-macos-helper-live.mjs",
+        "check-windows-build-scripts.mjs",
+    ]:
         assert f"packages/computer-use/scripts/{moved}" not in helpers
         assert not (ROOT / "packages/computer-use/scripts" / moved).exists()

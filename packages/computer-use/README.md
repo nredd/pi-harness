@@ -51,9 +51,10 @@ source-bound references, and `npm run docs:check` validates them without buildin
 
 ## Checks and release
 
-`npm run check` runs the owned deterministic package checks. Native and live platform skips print
-`NOT RUN`; this package remains outside the coverage gate. Never run `test:macos-live` on an occupied
-desktop: it restarts the shared helper and manipulates fixture windows, apps, and the clipboard.
+`npm run check` runs the owned deterministic package checks. Vitest reports native and live suites off
+their platform or opt-in as skipped; this package remains outside the coverage gate. Never run
+`test:macos-live` on an occupied desktop: it manipulates fixture windows, apps, and the clipboard. It
+starts, restarts and stops its own helper instance on the test home's socket, never the shared daemon.
 Owner-only smoke commands and rollback are recorded in `UPSTREAM.md`.
 
 The harness root `publish.yml` owns releases; nested upstream workflows are dormant reference source.
