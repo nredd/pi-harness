@@ -10,7 +10,7 @@ import type { Harness } from "@earendil-works/pi-coding-agent/testing";
 import { afterEach, expect, it } from "vitest";
 import planMode from "../../plan-mode/src/plan-mode.js";
 import { NOTIFICATION_HOLD_MS } from "../src/completion-outbox.js";
-import { PLAN_PARK_REFUSAL, PLAN_SCHEDULE_REFUSAL, planSteerRefusal } from "../src/plan-mode-children.js";
+import { PLAN_MODE_GATE_QUERY, PLAN_PARK_REFUSAL, PLAN_SCHEDULE_REFUSAL, planSteerRefusal } from "../src/plan-mode-children.js";
 import type { AgentRecord } from "../src/types.js";
 import { answer, calls, nextEvent, outcomes, ScenarioSession, spawn, text } from "./helpers/scenario-session.js";
 
@@ -210,6 +210,32 @@ it("a running pre-Plan child cannot be steered while planning, and can be after 
   const result = outcomes(h, "get_subagent_result").at(-1)?.text ?? "";
   expect(result).toContain("USERS work | PIVOT");
   expect(result).not.toContain("EDIT EVERYTHING");
+});
+
+it("stop_subagent stays available while planning and never asks for the subagent gate", async () => {
+  fixture = new ScenarioSession();
+  const hold = fixture.heldTool();
+  fixture.physical("kid", "child", [calls({ name: "hold", args: {} }), answer("NEVER")]);
+  let gateQueries = 0;
+  const h = await startHost([], [], { factories: [pi => { pi.events.on(PLAN_MODE_GATE_QUERY, () => { gateQueries++; }); }] });
+  h.setResponses([calls(spawn("busy")), answer("SPAWNED")]);
+  await h.session.prompt("Start it.");
+  await hold.entered;
+  const id = outcomes(h, "Agent")[0]?.text.match(/Agent ID: (\S+)/)?.[1];
+  if (!id) throw new Error(JSON.stringify(outcomes(h, "Agent")));
+
+  // The steer refusal names stopping as a way out; it has to work under Plan, ungated.
+  await h.session.prompt("/plan start");
+  const before = gateQueries;
+  expect(before).toBeGreaterThan(0); // the listener sees Plan's own announce
+  h.setResponses([calls({ name: "stop_subagent", args: { agent_id: id } }), answer("STOPPED")]);
+  await h.session.prompt("Stand it down.");
+  const [stopped] = outcomes(h, "stop_subagent");
+  expect(stopped?.isError).toBe(false);
+  expect(stopped?.text).not.toContain("Plan mode blocks");
+  expect(gateQueries).toBe(before);
+  expect(fixture.record(id).status).toBe("stopped");
+  hold.release();
 });
 
 it("a schedule is refused while planning", async () => {

@@ -128,7 +128,7 @@ export function planningNow(events: { emit(channel: string, data: unknown): void
 export function planSteerRefusal(id: string): string {
   return (
     `Cannot steer agent "${id}" while Plan mode is active: it started before Plan and runs without Plan's restrictions, so a steer could make it edit. ` +
-    "Wait for it to finish and steer it then (that resumes it read-only), stop it from /agents, or leave Plan mode (/plan exit) first."
+    "Wait for it to finish and steer it then (that resumes it read-only), stop it with stop_subagent, or leave Plan mode (/plan exit) first."
   );
 }
 
