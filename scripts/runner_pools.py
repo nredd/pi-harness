@@ -47,7 +47,9 @@ POOLS = {
 # `(matrix os, owned shard)` -> pool. One long shard per host: a pool runs jobs one at a time, so giving
 # it more cells lengthens the critical path. Everything absent here, WSL included, is always hosted.
 SELF_HOSTED_SHARDS = {
-    ("ubuntu-24.04", "python"): "pi-linux",
+    # TODO(redd): move back to `python` once #458 is fixed; that shard runs `check-integration`, whose
+    # install-recovery test fails on a quiet ext4 filesystem.
+    ("ubuntu-24.04", "ts"): "pi-linux",
     ("macos-14", "ts"): "pi-macos",
 }
 

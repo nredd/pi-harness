@@ -331,7 +331,7 @@ Blocker regression receipts:
 
 ## Self-hosted pools
 
-Two `owned` shards run on an owned machine while it is up, and on the hosted runner otherwise: `owned shard (ubuntu-24.04, python)` on `pi-linux` (NAS VM) and `owned shard (macos-14, ts)` on `pi-macos` (MacBook). Job names, steps and check names are unchanged, only the shard's `runner` value in the `classify` plan differs. WSL and every other cell are always hosted.
+Two `owned` shards run on an owned machine while it is up, and on the hosted runner otherwise: `owned shard (ubuntu-24.04, ts)` on `pi-linux` (NAS VM) and `owned shard (macos-14, ts)` on `pi-macos` (MacBook). Job names, steps and check names are unchanged, only the shard's `runner` value in the `classify` plan differs. WSL and every other cell are always hosted.
 
 - Each pool's host writes the repo variable `PI_LINUX_HEARTBEAT` / `PI_MACOS_HEARTBEAT` (epoch seconds every ~45 s, `0` on a clean stop) only while its scheduler loop is alive, so a hung supervisor goes stale like a dead one. `classify` passes both to `scripts/ci_paths.py`; `scripts/runner_pools.py` treats a value as up only if it is a positive integer at most 120 s old (30 s of clock skew tolerated). Missing, `0`, stale or garbled means hosted, so unset variables reproduce the all-hosted plan byte for byte. A mistyped `--pool-heartbeat POOL=VALUE` fails `classify` instead of quietly going hosted
 - Kill switch: any non-empty repo variable `PI_POOLS_DISABLED` plans every cell hosted and makes the rescue treat every pool as down. Use it when a pool beats but cannot run jobs
