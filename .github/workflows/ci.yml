@@ -147,6 +147,14 @@ jobs:
           if command -v fd >/dev/null; then fd --version; else fdfind --version; fi
       - name: Initialize the core fork at its Gitlink
         run: git submodule update --init forks/pi
+      # `check-integration` drives the live-session drivers against a stub pi in panes on private tmux servers. Same
+      # install as the `stack` job; only Linux and macOS shards list that gate.
+      - name: Install tmux (Linux)
+        if: runner.os == 'Linux' && contains(matrix.gates, 'check-integration')
+        run: sudo apt-get update && sudo apt-get install --yes tmux
+      - name: Install tmux (macOS)
+        if: runner.os == 'macOS' && contains(matrix.gates, 'check-integration')
+        run: brew install tmux
       # Verifies the root core overrides before `npm ci`; the read-only token is for `gh attestation verify`.
       - name: Install
         id: install

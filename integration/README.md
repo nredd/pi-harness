@@ -4,7 +4,7 @@
 
 - CI is the gate for tap and profile pin bumps. `pi-harness-e2e`'s local `make verify` is retired by this gate, not a prerequisite for it. Owner-local installation/render checks belong to the dotfiles doctor (`PLAN.md` item 7)
 - No default binary, home, credentials or package set. Inputs are `PI_BIN` and `--stack <file>`; the release fetcher accepts `--tag` or an initialized `--gitlink`. Nothing discovers the owner's Pi, dotfiles, tap or Brewfile
-- Do not run real processes on the owner's swap-bound Mac. `make check-integration` runs formatter, linter, ty and infrastructure units only; CI owns scenarios
+- Do not run real Pi processes on the owner's swap-bound Mac. `make check-integration` runs formatter, linter, ty and infrastructure units only; CI owns scenarios. The live-session drivers (`tmux`, `rpc`, `headless`, `interactive`, `probe`, `fleet_load`) run against `tests/stub_pi.py`, a stdlib stand-in for the JSON, RPC and TUI surfaces, each pane on a private tmux server the test starts and proves gone (#383). So the gate needs `tmux`, never Pi. No test signals a real process: sessions end on EOF or their own exit, kill paths use recording fakes and deadlines a fake clock
 
 Inputs and installation:
 
