@@ -504,6 +504,41 @@ def test_permission_denied_with_a_live_member_still_fails(monkeypatch: pytest.Mo
         process.communicate(timeout=10)
 
 
+def kill_while_handling(original: Exception, pgid: int) -> None:
+    """Kill the owned group from inside the handler for `original`, as a caller's cleanup does.
+
+    Parameters:
+        original (Exception): the exception being handled when the kill runs.
+        pgid (int): the test's own session group.
+    """
+    try:
+        raise original
+    except type(original):
+        process_group.kill_owned_group(pgid, 5)
+
+
+@pytest.mark.parametrize("listing", [True, *LISTING_FAILURES], ids=lambda listing: type(listing).__name__)
+def test_a_refusal_keeps_the_callers_exception_as_context(
+    monkeypatch: pytest.MonkeyPatch, listing: bool | Exception
+) -> None:
+    """A surfaced `EPERM` keeps the exception its caller was handling, even past a failed listing (#361).
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): recording seams.
+        listing (bool | Exception): a live member, or the listing failure to raise.
+    """
+    process = spawn_session("pass")
+    original = TimeoutError("why the group was killed")
+    try:
+        record_owned_group(monkeypatch, process, listing=listing)
+        with pytest.raises(PermissionError) as caught:
+            kill_while_handling(original, process.pid)
+        assert caught.value.__context__ is original
+        assert caught.value.__cause__ is (None if listing is True else listing)
+    finally:
+        process.communicate(timeout=10)
+
+
 @pytest.mark.parametrize(("deny", "gone"), [(False, False), (True, True)])
 def test_kill_owned_group_reports_whether_the_group_is_gone(
     monkeypatch: pytest.MonkeyPatch, deny: bool, gone: bool
