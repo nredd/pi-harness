@@ -491,4 +491,23 @@ describe("AgentManager — retention override (PI_SUBAGENTS_*_TTL_MIN)", () => {
     expect(manager!.getRecord(id)).toBeDefined();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('ignoring PI_SUBAGENTS_CONSUMED_TTL_MIN="-1"'));
   });
+
+  it("follows reopen links to the newest id and bounds them like the eviction notes (#330)", () => {
+    manager = new AgentManager();
+    expect(manager.latestId("a")).toBe("a");
+    manager.linkSuccessor("a", "b");
+    manager.linkSuccessor("b", "c");
+    expect(manager.latestId("a")).toBe("c");
+    manager.unlinkSuccessor("b");
+    expect(manager.latestId("a")).toBe("b");
+
+    // 500 more links push the oldest, "a", out; the newest still resolves.
+    for (let i = 0; i < 500; i++) manager.linkSuccessor(`old-${i}`, `new-${i}`);
+    expect(manager.latestId("a")).toBe("a");
+    expect(manager.latestId("old-0")).toBe("new-0");
+    expect(manager.latestId("old-499")).toBe("new-499");
+
+    manager.clearCompleted();
+    expect(manager.latestId("old-499")).toBe("old-499");
+  });
 });
