@@ -4,6 +4,12 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { type GitRunOptions, git, gitFailure } from "./run.ts";
 
+/** File name of the runtime script every hook shim execs; the shims find it by this suffix. */
+export const HOOK_RUNNER = "run.mjs";
+
+/** Hooks Git runs before it writes the commit: the proxy checks the merge index around each one. */
+const CHECKED_HOOKS = ["pre-commit", "prepare-commit-msg", "commit-msg"];
+
 interface Approval {
 	root: string;
 	mergePath: string;
@@ -57,7 +63,7 @@ function proxiedHooks(hooksDir: string): string[] {
 		const code = (error as NodeJS.ErrnoException).code;
 		if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
 	}
-	const names = new Set(["pre-commit", "prepare-commit-msg", "commit-msg", "post-commit", "reference-transaction"]);
+	const names = new Set([...CHECKED_HOOKS, "post-commit", "reference-transaction"]);
 	for (const name of present) if (/^[A-Za-z0-9_-]+$/.test(name)) names.add(name);
 	return [...names];
 }
@@ -82,9 +88,14 @@ function canonicalPath(path: string): string {
  * Write a plain-Node hook proxy. It delegates to the repository's configured hook and checks the
  * merge index immediately before and after every pre-commit hook Git invokes. This avoids a
  * pathspec merge commit while still preserving hooks, signing and their real exit status.
+ *
+ * Two checks decide that an unchecked hook is absent: the shell shim's `[ -e ]` skips the runtime
+ * when no entry exists, and the runner's `X_OK` access check skips one that is missing, under a
+ * non-directory, or not executable. Change them together: if the shim skips something the runner
+ * would run, that hook is silently dropped.
  */
 function writeHookProxy(directory: string, approval: Approval): void {
-	const runner = join(directory, "run.mjs");
+	const runner = join(directory, HOOK_RUNNER);
 	writeFileSync(
 		runner,
 		`import { accessSync, constants, readFileSync } from "node:fs";
@@ -104,7 +115,7 @@ function check() {
 }
 const hook = process.argv[2];
 try {
-	const commitTreeHook = ["pre-commit", "prepare-commit-msg", "commit-msg"].includes(hook);
+	const commitTreeHook = ${JSON.stringify(CHECKED_HOOKS)}.includes(hook);
 	if (commitTreeHook) check();
 	const original = join(approval.hooks, hook);
 	let executable = true;
@@ -129,9 +140,13 @@ try {
 	);
 	const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 	for (const hook of proxiedHooks(approval.hooks)) {
+		// Only the commit-tree hooks check the index. Any other hook with no real counterpart at call
+		// time is a no-op, so the shell skips it instead of starting a runtime: Git calls
+		// reference-transaction several times per commit, and each runtime start is a real cost.
+		const skip = CHECKED_HOOKS.includes(hook) ? "" : `[ -e ${quote(join(approval.hooks, hook))} ] || exit 0\n`;
 		writeFileSync(
 			join(directory, hook),
-			`#!/bin/sh\nexec env BUN_BE_BUN=1 ELECTRON_RUN_AS_NODE=1 ${quote(process.execPath)} ${quote(runner)} ${quote(hook)} "$@"\n`,
+			`#!/bin/sh\n${skip}exec env BUN_BE_BUN=1 ELECTRON_RUN_AS_NODE=1 ${quote(process.execPath)} ${quote(runner)} ${quote(hook)} "$@"\n`,
 			{
 				mode: 0o700,
 			},

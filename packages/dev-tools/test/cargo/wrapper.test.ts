@@ -23,14 +23,15 @@ function setup() {
 
 describe("cargo executable boundary", () => {
 	it("maps abnormal exits and noncompiler failures for every wrapper", async () => {
+		// 13 sequential launches: a shell, not a fresh runtime, so the sweep stays cheap under load.
 		const f = setup();
 		for (const name of ["check", "clippy", "fmt", "test", "build", "run", "doc", "bench", "add"]) {
-			f.script('process.kill(process.pid, "SIGTERM");');
+			f.script("kill -TERM $$", "/bin/sh");
 			const result = await f.call(`cargo_${name}`, name === "add" ? { crates: ["local"] } : {}, f.root);
 			expect(result.isError, name).toBe(true);
 			expect(f.text(result), name).toContain("SIGTERM");
 		}
-		f.script('console.error("manifest rejected"); process.exit(2);');
+		f.script("echo 'manifest rejected' >&2; exit 2", "/bin/sh");
 		for (const name of ["check", "fmt", "test", "add"]) {
 			const result = await f.call(`cargo_${name}`, name === "add" ? { crates: ["local"] } : {}, f.root);
 			expect(result.isError).toBe(true);
