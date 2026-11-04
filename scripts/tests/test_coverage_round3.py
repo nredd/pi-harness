@@ -22,6 +22,7 @@ from coverage_accounting import (
     audit_inventory,
     check_inventory_ratchet,
     inventory,
+    is_test_path,
     repository_files,
 )
 from tests.test_coverage_accounting import FIXTURES, policy, setup_report
@@ -306,9 +307,7 @@ def test_unshipped_computer_checks_have_individual_verification_reasons() -> Non
     [
         "scripts/router_contract.mjs",
         "packages/computer-use/scripts/pi-cubench-agent.mjs",
-        "packages/computer-use/scripts/check-linux-build-scripts.mjs",
         "packages/computer-use/scripts/check-linux-native.mjs",
-        "packages/computer-use/scripts/check-platform-linux.mjs",
         "packages/computer-use/scripts/check-package-assets.mjs",
     ],
 )
@@ -325,3 +324,24 @@ def test_reviewed_javascript_harnesses_are_explicitly_classified(path: str) -> N
     cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
     helpers = {helper.path: helper.reason for helper in cfg.verification_helpers}
     assert helpers.get(path, "").strip(), path
+
+
+def test_ported_computer_suites_are_conventional_tests() -> None:
+    """Keep the computer-use Vitest suites (#347) in test scope instead of helper classification.
+
+    Parameters:
+        None.
+    Returns:
+        None: Every ported suite is a conventional test file with no stale helper entry.
+    Raises:
+        AssertionError: A suite leaves `test/`, or a helper entry still names its old script.
+    """
+    cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
+    helpers = {helper.path for helper in cfg.verification_helpers}
+    suites = sorted((ROOT / "packages/computer-use/test").glob("*.test.mjs"))
+    assert len(suites) == 21
+    for suite in suites:
+        assert is_test_path(suite.relative_to(ROOT))
+    for moved in ["check-linux-build-scripts.mjs", "check-platform-linux.mjs", "check-cleanup.test.mjs"]:
+        assert f"packages/computer-use/scripts/{moved}" not in helpers
+        assert not (ROOT / "packages/computer-use/scripts" / moved).exists()

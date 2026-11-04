@@ -44,7 +44,7 @@ private struct CapturedWindowImage {
 	let frame: CGRect
 }
 
-// BEGIN PURE (compiled standalone by scripts/check-macos-native-pure.mjs; Foundation + ApplicationServices only)
+// BEGIN PURE (compiled standalone by test/macos-native-pure.test.mjs; Foundation + ApplicationServices only)
 /// Native refs for AX windows and elements. Window refs are deduped and live for the process
 /// (bounded by the number of windows). Element refs are minted fresh per look: refs owned by a look
 /// are dropped when that look ages out (`dropElements(owner:)`); unowned refs (element queries)

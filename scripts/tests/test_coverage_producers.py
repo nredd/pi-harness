@@ -15,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 INCLUDE = re.compile(r"include:\s*(\[[^\]]*\])", re.DOTALL)
+EXCLUDE = re.compile(r"exclude:\s*(\[[^\]]*\])", re.DOTALL)
 NATIVE_BUN_TEST = re.compile(r"(?:\w+=\S+ )*bun test ")
 
 
@@ -43,11 +44,19 @@ def test_primary_configs_match_policy_inventory() -> None:
         assert len(configs) == 1, configs
         path = configs[0]
         text = path.read_text()
-        # The coverage `include`, not a test-file `include` that precedes it.
-        match = INCLUDE.search(text, text.index("coverage: {"))
+        # The coverage `include`/`exclude`, not test-file ones that precede them.
+        coverage = text[text.index("coverage: {") :]
+        match = INCLUDE.search(coverage)
         assert match, path
         # Configs are formatted JSON-compatible arrays; ignore a trailing comma.
         includes = json.loads(re.sub(r",\s*]", "]", match[1]))
+        excluded = EXCLUDE.search(coverage)
+        excludes = json.loads(re.sub(r",\s*]", "]", excluded[1])) if excluded else []
+        dropped = {
+            source.relative_to(directory).as_posix()
+            for pattern in excludes
+            for source in directory.glob(pattern)
+        }
         expected = primary.get("files")
         if expected is None:
             expected = {
@@ -62,7 +71,7 @@ def test_primary_configs_match_policy_inventory() -> None:
             for pattern in includes
             for source in directory.glob(pattern)
             if source.is_file() and not source.name.endswith(".test.ts")
-        }
+        } - dropped
         assert included == set(expected), path
         assert "reportOnFailure: true" in text
         assert '"lcov"' in text
