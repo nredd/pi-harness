@@ -122,3 +122,46 @@ def test_replaced_regular_candidate_never_blocks_or_follows_final_link(
     with pytest.raises((files.NonRegularFileError, OSError)):
         files.read_regular_bytes(candidate)
     assert flags_seen
+
+
+def test_dangling_followed_link_reads_as_absent(tmp_path: Path) -> None:
+    """A followed link whose target is gone is absent, like a missing file; unfollowed it is refused.
+
+    Parameters:
+        tmp_path (Path): private link and missing target.
+    """
+    link = tmp_path / "settings.json"
+    link.symlink_to(tmp_path / "missing.json")
+    assert files.read_regular(link, follow=True) is None
+    with pytest.raises(files.NonRegularFileError, match="is a symlink"):
+        files.read_regular(link, follow=False)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO requires POSIX")
+@pytest.mark.parametrize("follow", [False, True])
+def test_entry_swapped_after_precheck_is_refused_by_fstat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, follow: bool
+) -> None:
+    """A stale "regular" precheck over a FIFO is caught on the descriptor, without a blocking read.
+
+    Parameters:
+        tmp_path (Path): private FIFO.
+        monkeypatch (pytest.MonkeyPatch): stale precheck and open-flag guard.
+        follow (bool): accepted-link wording in the refusal.
+    """
+    fifo = tmp_path / "settings.json"
+    os.mkfifo(fifo)
+    monkeypatch.setattr(files, "entry_kind", lambda _: "file")
+    original_open = os.open
+
+    def nonblocking_open(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        """Assert the nonblocking flag BEFORE opening, so a regression can never hang the test."""
+        assert flags & os.O_NONBLOCK
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(files.os, "open", nonblocking_open)
+    accepted = "a regular file or a link to one" if follow else "a regular file"
+    with pytest.raises(
+        files.NonRegularFileError, match=f"stopped being a regular file.*only reads {accepted} "
+    ):
+        files.read_regular(fifo, follow=follow)

@@ -1,8 +1,7 @@
-"""History fixtures and explicit installed session-kit resource selection.
+"""Session-kit `/stats` history fixtures.
 
 References:
 - https://github.com/nredd/pi-session-kit
-- https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md
 """
 
 from __future__ import annotations
@@ -11,14 +10,9 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, TypedDict
 
-from harness.stack import find_package, package_manifest
-
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from harness.sandbox import Sandbox
-
-KIT = "pi-session-kit"
 STATS_DAYS = 45
 
 
@@ -38,23 +32,6 @@ STATS_MODELS = [
     ("openai-codex", "gpt-6.1-sol", 6),
     ("openai-codex", "gpt-5.6-terra", 2),
 ]
-
-
-def kit_args(box: Sandbox, *, explicit: bool = False) -> list[str]:
-    """Use package discovery, or explicitly load the declared package's entry.
-
-    Parameters:
-        box (Sandbox): installed sandbox.
-        explicit (bool): caller disabled extension discovery.
-
-    Returns:
-        list[str]: no flags for discovery, one explicit entry otherwise.
-    """
-    if not explicit:
-        return []
-    directory = find_package(KIT, box.settings().get("packages", []), box.agent_dir)
-    manifest = package_manifest(directory)
-    return ["-e", str(directory / manifest["pi"]["extensions"][0])]
 
 
 def compact(value: Any) -> str:

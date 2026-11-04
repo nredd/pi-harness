@@ -145,3 +145,44 @@ def test_portable_missing_artifact_is_failure(tmp_path: Path) -> None:
     """Missing producer bundles are gate failures, not skips or kit-source fallbacks."""
     with pytest.raises(FileNotFoundError, match="artifact is missing"):
         stats.portable_command(tmp_path / "missing.mjs", tmp_path / "home", ["export"])
+
+
+def test_portable_command_refuses_a_path_without_node(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No `node` on PATH is a gate failure, before the home or bundle copy is created.
+
+    Parameters:
+        tmp_path (Path): bundle, empty PATH directory and unused home.
+        monkeypatch (pytest.MonkeyPatch): PATH limited to an empty directory.
+    """
+    artifact = tmp_path / "managed.mjs"
+    artifact.write_text("// standalone test placeholder\n")
+    empty = tmp_path / "empty-bin"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    with pytest.raises(FileNotFoundError, match="No `node` on PATH"):
+        stats.portable_command(artifact, tmp_path / "home", ["export"])
+    assert not (tmp_path / "home").exists()
+
+
+def test_import_machines_runs_the_public_import_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Import passes only the viewer and shared tree to the CLI, never a cache path.
+
+    Parameters:
+        tmp_path (Path): bundle, home, viewer and shared roots.
+        monkeypatch (pytest.MonkeyPatch): recording CLI runner.
+    """
+    run = Mock(return_value="")
+    monkeypatch.setattr(stats, "portable_command", run)
+    assert (
+        stats.import_machines(
+            tmp_path / "bundle", tmp_path / "home", tmp_path / "viewer", tmp_path / "shared"
+        )
+        is None
+    )
+    run.assert_called_once_with(
+        tmp_path / "bundle",
+        tmp_path / "home",
+        ["import", "--agent-dir", str(tmp_path / "viewer"), "--input", str(tmp_path / "shared")],
+    )

@@ -1,12 +1,12 @@
-"""A git clone with one of every working-tree state, for scenarios that need a real diff to review.
+"""Run git with a fixed throwaway identity, for scenarios that need a real repository.
 
 References:
-    https://git-scm.com/docs/git-status#_short_format
-    https://git-scm.com/docs/git-mv
+    https://git-scm.com/docs/git (`-c <name>=<value>`, ENVIRONMENT VARIABLES)
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 from typing import TYPE_CHECKING
 
@@ -27,8 +27,21 @@ GIT_IDENTITY = [
 ]
 
 
+def git_env() -> dict[str, str]:
+    """Return the caller's environment without any inherited `GIT_*` and without user/system config.
+
+    A hook or a parent git exports `GIT_DIR`, `GIT_INDEX_FILE`, `GIT_WORK_TREE` and friends; inherited,
+    they would point every fixture command at THAT repository instead of `cwd`.
+
+    Returns:
+        dict[str, str]: child environment for `git`.
+    """
+    scrubbed = {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
+    return scrubbed | {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+
+
 def git(cwd: Path, *args: str) -> str:
-    """Run git in `cwd` with a fixed identity and no signing.
+    """Run git in `cwd` with a fixed identity, no signing, and no inherited repository or config.
 
     Parameters:
         cwd (Path): repository directory.
@@ -38,34 +51,5 @@ def git(cwd: Path, *args: str) -> str:
         str: stdout and stderr, merged so a failure carries git's diagnostics.
     """
     return subprocess.check_output(
-        [GIT_BIN, *GIT_IDENTITY, *args], cwd=cwd, text=True, stderr=subprocess.STDOUT
+        [GIT_BIN, *GIT_IDENTITY, *args], cwd=cwd, env=git_env(), text=True, stderr=subprocess.STDOUT
     )
-
-
-def make_git_fixture(root: Path) -> tuple[Path, Path]:
-    """Create a clone with a bare remote and one of every working-tree state.
-
-    Parameters:
-        root (Path): directory to create under.
-
-    Returns:
-        tuple[Path, Path]: (repo, bare remote).
-    """
-    remote = root / "remote.git"
-    repo = root / "repo"
-    git(root, "init", "-q", "--bare", "-b", "main", str(remote))
-    git(root, "clone", "-q", str(remote), str(repo))
-    for key, value in (("user.name", "h"), ("user.email", "h@h"), ("commit.gpgsign", "false")):
-        git(repo, "config", key, value)
-    (repo / "a.txt").write_text("one\n")
-    (repo / "b.txt").write_text("b\n")
-    (repo / "old.txt").write_text("same\n")
-    git(repo, "add", "a.txt", "b.txt", "old.txt")
-    git(repo, "commit", "-q", "-m", "Initial")
-    git(repo, "push", "-q", "-u", "origin", "main")
-    (repo / "a.txt").write_text("one\ntwo\n")
-    (repo / "c.txt").write_text("c\n")
-    (repo / "spaced name.txt").write_text("n\n")
-    git(repo, "mv", "old.txt", "renamed.txt")
-    git(repo, "add", "c.txt")
-    return repo, remote

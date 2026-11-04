@@ -340,22 +340,6 @@ def subagents_policy(stack: Stack) -> dict[str, bool]:
     return {"workflowsEnabled": False} | package_agents_policy(stack)
 
 
-def package_name(source: str) -> str:
-    """Return the short name of an explicit npm/git/path source.
-
-    Parameters:
-        source (str): package source.
-
-    Returns:
-        str: short name.
-    """
-    spec = source.removeprefix("npm:").removeprefix("git:").rstrip("/")
-    last = spec.rsplit("/", 1)[-1]
-    if "@" in last.lstrip("@"):
-        spec = spec[: spec.rindex("@")]
-    return spec.rsplit("/", 1)[-1].rsplit(":", 1)[-1].removesuffix(".git")
-
-
 def install_shims(shims_dir: Path) -> None:
     """Write non-destructive policy stand-ins.
 
