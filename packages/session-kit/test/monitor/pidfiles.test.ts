@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type PidRecord, psInfo, sweepOrphans, writePidfile } from "../../src/monitor/pidfiles.ts";
 import { alive, cleanupProcs, deadPid, spawnSleeper, tempDir, waitFor } from "./helpers.ts";
+import { STAY_SH } from "./stay.ts";
 
 let tmp: ReturnType<typeof tempDir>;
 beforeEach(() => {
@@ -50,11 +51,10 @@ describe("sweepOrphans", () => {
 
 	it("awaits escalation after the actual leader exits and retains recovery coverage", async () => {
 		const file = join(tmp.dir, "grandchild");
-		const child = spawn(
-			"/bin/sh",
-			["-c", `/bin/sh -c 'trap "" TERM; echo $$ > "${file}"; while :; do sleep 1; done' & wait`],
-			{ detached: true, stdio: "ignore" },
-		);
+		const child = spawn("/bin/sh", ["-c", `/bin/sh -c 'trap "" TERM; echo $$ > "${file}"; ${STAY_SH}' & wait`], {
+			detached: true,
+			stdio: "ignore",
+		});
 		const pid = child.pid as number;
 		let grandchild = 0;
 		try {
@@ -89,11 +89,10 @@ describe("sweepOrphans", () => {
 
 	it("recovers a resistant orphan whose leader exited before any sweep, even after an interrupted concurrent cleaner", async () => {
 		const file = join(tmp.dir, "early-grandchild");
-		const leader = spawn(
-			"/bin/sh",
-			["-c", `/bin/sh -c 'trap "" TERM; echo $$ > "${file}"; while :; do sleep 1; done' & sleep 0.2`],
-			{ detached: true, stdio: "ignore" },
-		);
+		const leader = spawn("/bin/sh", ["-c", `/bin/sh -c 'trap "" TERM; echo $$ > "${file}"; ${STAY_SH}' & sleep 0.2`], {
+			detached: true,
+			stdio: "ignore",
+		});
 		const pid = leader.pid as number;
 		await new Promise((resolve) => leader.once("spawn", resolve));
 		const startedAt = Date.now();

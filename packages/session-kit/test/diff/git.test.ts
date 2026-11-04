@@ -15,6 +15,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { loadDiff, loadStat, MAX_UNTRACKED_FILES, runGit, untrackedPatch } from "../../src/diff/git.ts";
 import { PER_FILE_BYTES } from "../../src/diff/parse.ts";
 import { alive, waitFor } from "../monitor/helpers.ts";
+import { STAY_SH } from "../monitor/stay.ts";
 
 vi.mock("node:child_process", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:child_process")>();
@@ -251,7 +252,7 @@ describe("runGit / untrackedPatch", () => {
 
 	it("kills a SIGTERM-resistant git group and resolves when its grandchild holds pipes", async () => {
 		const shim = join(dir, "git-shim");
-		writeFileSync(shim, "#!/bin/sh\ntrap '' TERM\n/bin/sleep 30 &\nwait\n");
+		writeFileSync(shim, `#!/bin/sh\ntrap '' TERM\n(${STAY_SH}) &\nwait\n`);
 		chmodSync(shim, 0o755);
 		const started = Date.now();
 		const r = await runGit(["status"], { cwd: dir, cmd: shim, timeoutMs: 20 });
@@ -264,7 +265,7 @@ describe("runGit / untrackedPatch", () => {
 		const pidfile = join(dir, "descendant");
 		writeFileSync(
 			shim,
-			`#!/bin/sh\n/bin/sh -c 'trap "" TERM; exec >/dev/null 2>&1; echo $$ > "${pidfile}"; while :; do sleep 1; done' &\nwhile [ ! -s "${pidfile}" ]; do sleep 0.01; done\nprintf 'oversized output'\nwait\n`,
+			`#!/bin/sh\n/bin/sh -c 'trap "" TERM; exec >/dev/null 2>&1; echo $$ > "${pidfile}"; ${STAY_SH}' &\nwhile [ ! -s "${pidfile}" ]; do sleep 0.01; done\nprintf 'oversized output'\nwait\n`,
 		);
 		chmodSync(shim, 0o755);
 		// Admit timeout/cap clocks only after the real shim has created its resistant descendant.
