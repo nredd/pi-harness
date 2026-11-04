@@ -12,7 +12,7 @@ const CHILD_TIMEOUT_MS = 60_000;
 
 it("the opt-in live smoke entry point retains its operator-backed Vitest command", () => {
   const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
-  expect(manifest.scripts["test:e2e"]).toBe("vitest run e2e --reporter=verbose");
+  expect(manifest.scripts["test:e2e"]).toBe("JITI_FS_CACHE=false vitest run e2e --reporter=verbose");
 });
 
 it("npm test cannot inherit operator model tiers through HOME or explicit config roots", async () => {

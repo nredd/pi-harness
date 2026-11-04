@@ -63,6 +63,36 @@ the guard. A subprocess regression runs the real
 without mutating HOME. The boundary negative controls still prove mismatches fail closed.
 `support.test.ts` pins the fixed launch home and independent fixture paths on both engines.
 
+## jiti cache
+
+Pi's extension loader leaves jiti's transform cache at its default, `$TMPDIR/jiti`. jiti names each
+entry after the source's absolute path and never evicts, so every fixture extension a test writes
+into a fresh `mkdtemp` dir left a file behind for good: one fleet Mac reached ~39k files / 489MB
+([#352](https://github.com/nredd/pi-harness/issues/352)). Test runs therefore set
+`JITI_FS_CACHE=false`; spawned probes inherit it. jiti 2.7 reads the variable as a boolean only, so
+a per-run cache path is not available without a `TMPDIR` override. Fixture paths are fresh per
+run, so the cache never hit there anyway. Real `pi` keeps the cache: its extension paths are
+stable install paths, one entry each, rewritten in place.
+
+`scripts/run-vitest.ts` sets it for every child. Every script that launches `vitest` or `bun test`
+directly carries an inline `JITI_FS_CACHE=false` prefix instead. Those prefixes are a stopgap: they
+go away as the scripts move onto `run-vitest.ts`
+([#347](https://github.com/nredd/pi-harness/issues/347),
+[#320](https://github.com/nredd/pi-harness/issues/320)). Routing them through the launcher now
+would also change their `HOME` isolation, which is #347's scope.
+
+Not covered, by design: ad-hoc `npx vitest` / `bun test` runs typed by hand, and
+`packages/subagents/test/perf/ab.mjs`, a manual A/B tool that spawns `npx vitest bench` in two
+trees and inherits whatever the operator's shell sets.
+
+`launcher.test.ts` resolves Pi through its package root export and loads a real `.ts` extension
+with `discoverAndLoadExtensions` under a private stand-in `TMPDIR`. It proves the same load writes
+`jiti/` outside the launcher, then proves the launcher run writes nothing. Its wiring test scans the
+root and every workspace `package.json`, splits scripts on `&&`, `||`, `;` and `|`, matches
+`vitest` or `bun test` as the command head (bare or through `npx`, `bunx`, `bun x`, `npm exec`),
+fails on any match without the prefix, and pins the exact set of direct launchers. Adding one is a
+deliberate edit there and here.
+
 ## Phase 2 home injection
 
 The todo/subagents guard deferral is resolved by #171. Both Vitest configs install the shared
