@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import subprocess
 import time
 from contextlib import ExitStack
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import pytest
 
@@ -171,20 +172,47 @@ def test_children_die_when_pi_quits_mid_monitor(sandbox: Sandbox, tags: tuple[in
         assert stopped[0].is_error, stopped[0]
 
 
-def monitor_list(owner: RpcProcess) -> str:
+class CommandOwner(Protocol):
+    """The RPC surface `monitor_list` needs: send a command, consume stdout records in order."""
+
+    def send(self, command: dict[str, Any]) -> None:
+        """Send one RPC JSON record."""
+
+    def receive(self, predicate: Callable[[dict[str, Any]], bool], timeout_s: float = 60) -> dict[str, Any]:
+        """Consume records until one matches."""
+
+
+#: The `/monitor list` reply: `no monitors`, or one `m<N> "<name>" <state>` line per monitor.
+MONITOR_LISTING = re.compile(r'^(?:no monitors$|m\d+ ")')
+
+
+def monitor_list(owner: CommandOwner) -> str:
     """Read the owner's public `/monitor` listing through RPC notifications.
 
+    Only notifications written before the command's own `response` are considered, and of those only
+    the listing: a run that settled with a monitor running already queued a `Run ended with ...`
+    notice after `agent_end`, which `RpcProcess.prompt` does not wait for (#292).
+
     Parameters:
-        owner (RpcProcess): live session whose registry is queried.
+        owner (CommandOwner): live session whose registry is queried.
 
     Returns:
         str: command notification, not filesystem-derived ownership.
     """
-    owner.send({"type": "prompt", "message": "/monitor"})
-    event = owner.receive(
-        lambda event: event.get("type") == "extension_ui_request" and event.get("method") == "notify"
-    )
-    return event["message"]
+    command_id = f"monitor-list-{time.monotonic_ns()}"
+    notices: list[str] = []
+
+    def until_response(event: dict[str, Any]) -> bool:
+        if event.get("type") == "extension_ui_request" and event.get("method") == "notify":
+            notices.append(event["message"])
+        return event.get("type") == "response" and event.get("id") == command_id
+
+    owner.send({"id": command_id, "type": "prompt", "message": "/monitor"})
+    response = owner.receive(until_response)
+    assert response.get("success"), response
+    listings = [notice for notice in notices if MONITOR_LISTING.match(notice)]
+    assert len(listings) == 1, f"expected exactly one /monitor listing, got {notices}"
+    return listings[0]
 
 
 def test_next_session_sweeps_only_dead_owners(
