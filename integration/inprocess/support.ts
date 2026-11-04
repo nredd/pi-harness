@@ -36,25 +36,47 @@ const WAKE_STOP_TIMEOUT_MS = 5_000;
 /** Captured at import so a test that patches global timers cannot unbound teardown. */
 const nativeSetTimeout = globalThis.setTimeout;
 
+/** The `caffeinate` surface teardown uses; tests drive it with a fake emitter. */
+export type WakeHelper = Pick<ChildProcess, "exitCode" | "signalCode" | "pid" | "kill"> & NodeJS.EventEmitter;
+
+/**
+ * Arm `expire` after `ms` and return its disarm. Tests inject one that fires at once or never.
+ *
+ * Parameters:
+ *   expire (() => void): called when the bound elapses.
+ *   ms (number): bound in milliseconds.
+ *
+ * Returns:
+ *   () => void: cancels the pending expiry.
+ */
+export type Deadline = (expire: () => void, ms: number) => () => void;
+
+/** Real bound on the timer captured at import. */
+const nativeDeadline: Deadline = (expire, ms) => {
+	const timer = nativeSetTimeout(expire, ms);
+	return () => clearTimeout(timer);
+};
+
 /**
  * Wait for `child` to exit, at most `ms`.
  *
  * Parameters:
- *   child (ChildProcess): process already signalled.
+ *   child (WakeHelper): process already signalled.
  *   ms (number): bound in milliseconds.
+ *   deadline (Deadline): arms the bound.
  *
  * Returns:
  *   Promise<boolean>: true when it exited within the bound.
  */
-async function exitedWithin(child: ChildProcess, ms: number): Promise<boolean> {
-	let timer: ReturnType<typeof setTimeout> | undefined;
+async function exitedWithin(child: WakeHelper, ms: number, deadline: Deadline): Promise<boolean> {
+	let disarm: (() => void) | undefined;
 	const timeout = new Promise<false>((resolve) => {
-		timer = nativeSetTimeout(() => resolve(false), ms);
+		disarm = deadline(() => resolve(false), ms);
 	});
 	try {
 		return await Promise.race([once(child, "exit").then(() => true as const), timeout]);
 	} finally {
-		clearTimeout(timer);
+		disarm?.();
 	}
 }
 
@@ -63,33 +85,42 @@ async function exitedWithin(child: ChildProcess, ms: number): Promise<boolean> {
  * more bounded wait.
  *
  * Parameters:
- *   wake (ChildProcess): the `caffeinate` helper.
+ *   wake (WakeHelper): the `caffeinate` helper.
+ *   deadline (Deadline): arms each bounded wait; real timers by default.
  *
  * Raises:
  *   Error: the helper survived SIGKILL past the bound.
  */
-async function stopWake(wake: ChildProcess): Promise<void> {
+export async function stopWake(wake: WakeHelper, deadline: Deadline = nativeDeadline): Promise<void> {
 	if (wake.exitCode !== null || wake.signalCode !== null) return;
 	wake.kill("SIGTERM");
-	if (await exitedWithin(wake, WAKE_STOP_TIMEOUT_MS)) return;
+	if (await exitedWithin(wake, WAKE_STOP_TIMEOUT_MS, deadline)) return;
 	wake.kill("SIGKILL");
-	if (!(await exitedWithin(wake, WAKE_STOP_TIMEOUT_MS)))
+	if (!(await exitedWithin(wake, WAKE_STOP_TIMEOUT_MS, deadline)))
 		throw new Error(`caffeinate ${wake.pid} survived SIGKILL for ${WAKE_STOP_TIMEOUT_MS} ms`);
+}
+
+/** macOS holds the same process-scoped wake assertions as harness/power.py; other OSes hold none. */
+function holdWake(): WakeHelper | undefined {
+	return process.platform === "darwin"
+		? spawn("/usr/bin/caffeinate", ["-disu", "-w", String(process.pid)], { stdio: "ignore" })
+		: undefined;
 }
 
 /**
  * Isolate Pi and peers before imports. HOME stays in the launcher's sandbox because
  * Bun caches homedir(); per-fixture Pi and XDG directories remain independent.
- * macOS holds the same process-scoped wake
- * assertions as harness/power.py: idle-only `-i` cannot prevent maintenance sleep.
+ * Idle-only `caffeinate -i` cannot prevent maintenance sleep, so the helper holds `-disu`;
  * `-w` releases assertions if the runner is killed before cleanup.
+ *
+ * Parameters:
+ *   spawnWake (() => WakeHelper | undefined): starts the wake helper; tests inject a fake.
  */
-export async function isolateStackHome(): Promise<{ root: string; cleanup(): Promise<void> }> {
+export async function isolateStackHome(
+	spawnWake: () => WakeHelper | undefined = holdWake,
+): Promise<{ root: string; cleanup(): Promise<void> }> {
 	const root = mkdtempSync(join(tmpdir(), "pi-stack-"));
-	const wake =
-		process.platform === "darwin"
-			? spawn("/usr/bin/caffeinate", ["-disu", "-w", String(process.pid)], { stdio: "ignore" })
-			: undefined;
+	const wake = spawnWake();
 	if (wake) {
 		try {
 			await once(wake, "spawn");
@@ -168,9 +199,9 @@ export function isolateResearchPackages(root: string): () => void {
 	};
 }
 
-/** Refuse package-local host copies before importing any extension code. */
-export function assertHostIdentity(fork: ForkName): void {
-	const directory = new URL(`packages/${FORK_ENTRIES[fork].dir}/`, ROOT);
+/** Refuse package-local host copies before importing any extension code; tests inject a copy `root`. */
+export function assertHostIdentity(fork: ForkName, root: URL = ROOT): void {
+	const directory = new URL(`packages/${FORK_ENTRIES[fork].dir}/`, root);
 	const parent = new URL("package.json", directory);
 	for (const name of HOSTS) {
 		const remove = fileURLToPath(new URL("node_modules/", directory));
@@ -189,17 +220,27 @@ export function assertHostIdentity(fork: ForkName): void {
 	}
 }
 
-/** Both runtimes must use ESM import conditions and the actual importing directory. */
-function resolveHost(name: string, parent: URL): string {
+/**
+ * Both runtimes must use ESM import conditions and the actual importing directory.
+ *
+ * Parameters:
+ *   name (string): host package specifier.
+ *   parent (URL): importing file whose directory anchors resolution.
+ *   bun (boolean): use Bun's resolver; the current runtime's by default.
+ *
+ * Returns:
+ *   string: real path of the resolved entry.
+ */
+export function resolveHost(name: string, parent: URL, bun = process.versions.bun !== undefined): string {
 	// Bun supports an explicit import.meta.resolve parent. Node requires an experimental
 	// flag for that parent, but its require resolver accepts import conditions instead.
-	if (process.versions.bun) return realpathSync(fileURLToPath(import.meta.resolve(name, parent.href)));
+	if (bun) return realpathSync(fileURLToPath(import.meta.resolve(name, parent.href)));
 	const resolution = { paths: undefined, conditions: new Set(["node", "import"]) };
 	return realpathSync(createRequire(parent).resolve(name, resolution));
 }
 
 /** Import the declared real entry, not a copy or a test implementation. */
-async function loadFactory(url: URL, resetMemory = false): Promise<ExtensionFactory> {
+export async function loadFactory(url: URL, resetMemory = false): Promise<ExtensionFactory> {
 	const loaded: unknown = await import(/* @vite-ignore */ url.href);
 	if (!loaded || typeof loaded !== "object" || !("default" in loaded) || typeof loaded.default !== "function") {
 		throw new Error(`Extension '${url.href}' has no default factory`);
