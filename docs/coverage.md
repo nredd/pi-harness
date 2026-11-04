@@ -220,10 +220,12 @@ The generated stats CLI bundle has a reasoned generated-artifact exclusion; its 
 documentation site. Since #347 its suites run under Vitest, and the separate `computer-use-vitest`
 policy entry (same root) measures the 33 executable JS/TS runtime modules with Istanbul: `src`,
 `extensions`, `setup-helper.mjs`, `build-native.mjs`, `rust-coverage.mjs` and the documentation
-generators, with the declaration-only `src/platform/types.ts` excluded as type-only. It stays
+generators, with the declaration-only `src/platform/types.ts` excluded as type-only. The Vitest
+`include` globs `src/**` and `extensions/**` and `exclude`s only `types.ts`, so a new module joins
+the report instead of dropping out; `scripts/tests/test_coverage_producers.py` binds both to the policy. It stays
 `goal: "excluded"` and report-only, with no 100% claim; subprocess-run scripts count only what the
 suites import. First references: macOS **2061 lines / 539 functions** uncovered (local
-`npm test` on `9aad6172`), Linux **2088 / 548** (hosted `coverage-ubuntu-24.04` artifact, run
+`npm test` on `9aad6172`, unchanged when re-measured with the glob `include` on the #353 follow-up), Linux **2088 / 548** (hosted `coverage-ubuntu-24.04` artifact, run
 `41748291074`, same commit). The remaining
 `check-linux-native`, `check-macos-helper-live` and `check-linux-live` scripts are outside this
 signal until their #347 follow-up. Its TS entries and
