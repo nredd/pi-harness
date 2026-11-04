@@ -26,6 +26,7 @@ vi.mock("../src/agent-runner.js", async () => {
 vi.mock("../src/mention-clone.js", () => ({ runMentionClone: vi.fn() }));
 
 import { getDefaultMaxTurns, resumeAgent, runAgent, setDefaultMaxTurns } from "../src/agent-runner.js";
+import { NOTIFICATION_HOLD_MS } from "../src/completion-outbox.js";
 import subagentsExtension from "../src/index.js";
 import { runMentionClone } from "../src/mention-clone.js";
 import { ctx, flush, type Hermetic, hermeticDir, makePi, startSession, textOf } from "./helpers/boot-extension.js";
@@ -1024,10 +1025,10 @@ describe("@agent-<type> — Claude Code's manual spelling", () => {
 });
 
 describe("resuming an evicted agent by name", () => {
-  // Only the GC interval and Date are faked: `flush()` runs on setImmediate,
-  // and the manager's cleanup timer is started in its constructor, so the
-  // fake clock has to be installed before boot().
-  beforeEach(() => vi.useFakeTimers({ toFake: ["setInterval", "Date"] }));
+  // The GC interval, the completion notice's hold timer and Date are faked:
+  // `flush()` runs on setImmediate, and the manager's cleanup timer is started
+  // in its constructor, so the fake clock has to be installed before boot().
+  beforeEach(() => vi.useFakeTimers({ toFake: ["setInterval", "setTimeout", "Date"] }));
   afterEach(() => vi.useRealTimers());
 
   /**
@@ -1038,12 +1039,16 @@ describe("resuming an evicted agent by name", () => {
    */
   async function evict(id: string) {
     const manager = (globalThis as any)[Symbol.for("pi-subagents:manager")];
+    // Deliver the held completion notice first. Delivery marks the record read
+    // and stamps `consumedAt` (#447), so landing between the backdating below
+    // and the sweep would restart the 10-minute window and keep the record.
+    await vi.advanceTimersByTimeAsync(NOTIFICATION_HOLD_MS);
     const record = manager.getRecord(id);
     record.sessionFile = sessionPath();
     writeFileSync(record.sessionFile, "");
     // Read, which is what the 10-minute window applies to; an unread record is kept for 60.
     record.resultConsumed = true;
-    record.completedAt = Date.now() - 11 * 60_000;
+    record.completedAt = record.consumedAt = Date.now() - 11 * 60_000;
     await vi.advanceTimersByTimeAsync(60_000);
     return manager;
   }
