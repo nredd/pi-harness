@@ -9,10 +9,8 @@ const CHILD_FAILURE_STATUS = 7;
 const FAILURE_EXIT_STATUS = 1;
 const EXECUTABLE_MODE = 0o755;
 const launcher = fileURLToPath(new URL("../../../scripts/run-vitest.ts", import.meta.url));
-const loaderUrl = new URL(
-	"../../../node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/loader.js",
-	import.meta.url,
-).href;
+// The package root export, not a dist path: the fake engine runs outside Vitest's resolver.
+const piUrl = import.meta.resolve("@earendil-works/pi-coding-agent");
 
 test("launcher isolates HOME before Bun starts, forwards arguments and propagates failure with cleanup", () => {
 	const fixture = mkdtempSync(join(tmpdir(), "pi-launcher-test-"));
@@ -67,8 +65,8 @@ test("launcher keeps a real extension load out of the shared jiti cache", () => 
 		const engine = join(bin, "bun");
 		writeFileSync(
 			engine,
-			`#!/usr/bin/env node\nconst { loadExtensions } = await import(${JSON.stringify(loaderUrl)});
-const { errors } = await loadExtensions([${JSON.stringify(extension)}], ${JSON.stringify(fixture)});
+			`#!/usr/bin/env node\nconst { discoverAndLoadExtensions } = await import(${JSON.stringify(piUrl)});
+const { errors } = await discoverAndLoadExtensions([${JSON.stringify(extension)}], ${JSON.stringify(fixture)}, ${JSON.stringify(join(fixture, "agent"))});
 if (errors.length > 0) throw new Error(JSON.stringify(errors));\n`,
 			{ mode: EXECUTABLE_MODE },
 		);
@@ -91,28 +89,73 @@ if (errors.length > 0) throw new Error(JSON.stringify(errors));\n`,
 	}
 });
 
-test("workspace scripts that bypass the launcher disable jiti's fs cache themselves", () => {
+/** `vitest` or `bun test` as a command head, bare or through a package runner, after any env assignments. */
+const DIRECT_LAUNCH =
+	/^((?:\w+=\S*\s+)*)(?:(?:npx|bunx|bun\s+x|npm\s+exec)\s+(?:-\S+\s+)*)?(?:vitest|bun\s+test)(?=\s|$)/;
+const SHELL_SEPARATOR = /&&|\|\||;|\|/;
+
+/** Return each direct test launch in a script and whether it carries `JITI_FS_CACHE=false`. */
+function directLaunches(script: string): { command: string; guarded: boolean }[] {
+	return script.split(SHELL_SEPARATOR).flatMap((part) => {
+		const command = part.trim();
+		const launch = DIRECT_LAUNCH.exec(command);
+		if (!launch) return [];
+		const [, assignments = ""] = launch;
+		return [{ command, guarded: assignments.split(/\s+/).includes("JITI_FS_CACHE=false") }];
+	});
+}
+
+test("the direct-launch matcher sees every shell form of a test command", () => {
+	expect(directLaunches("vitest")).toEqual([{ command: "vitest", guarded: false }]);
+	expect(directLaunches("tsc --noEmit; vitest run")).toEqual([{ command: "vitest run", guarded: false }]);
+	expect(directLaunches("a || npx --yes vitest bench | tee out")).toEqual([
+		{ command: "npx --yes vitest bench", guarded: false },
+	]);
+	expect(directLaunches("bunx vitest && bun x vitest && npm exec vitest")).toHaveLength(3);
+	expect(directLaunches("X=1 JITI_FS_CACHE=false bun test a.test.ts")).toEqual([
+		{ command: "X=1 JITI_FS_CACHE=false bun test a.test.ts", guarded: true },
+	]);
+	// The launcher's own arguments are not a direct launch.
+	expect(directLaunches("node ../../scripts/run-vitest.ts bun test/a.test.ts")).toEqual([]);
+	expect(directLaunches("vitest-coverage-merge && bun tests")).toEqual([]);
+});
+
+test("scripts that bypass the launcher disable jiti's fs cache themselves", () => {
 	const root = fileURLToPath(new URL("../../../", import.meta.url));
 	const packages = readdirSync(join(root, "packages")).map((name) => join("packages", name));
+	const direct: string[] = [];
 	const unguarded: string[] = [];
-	let direct = 0;
-	for (const workspace of [...packages, "integration/inprocess"]) {
-		const manifest = join(root, workspace, "package.json");
-		if (!existsSync(manifest)) continue;
-		const scripts: Record<string, string> = JSON.parse(readFileSync(manifest, "utf8")).scripts ?? {};
+	for (const workspace of [".", ...packages, "integration/inprocess"]) {
+		// A workspace without a manifest is a broken checkout, not a reason to skip it.
+		const scripts: Record<string, string> =
+			JSON.parse(readFileSync(join(root, workspace, "package.json"), "utf8")).scripts ?? {};
 		for (const [name, script] of Object.entries(scripts)) {
-			for (const command of script.split("&&").map((part) => part.trim())) {
-				const launch = /^((?:\w+=\S+ )*)(?:vitest run|bun test)\b/.exec(command);
-				if (!launch) continue;
-				direct += 1;
-				const [, prefix = ""] = launch;
-				if (!prefix.split(" ").includes("JITI_FS_CACHE=false")) unguarded.push(`${workspace} ${name}: ${command}`);
+			for (const { command, guarded } of directLaunches(script)) {
+				direct.push(`${workspace} ${name}`);
+				if (!guarded) unguarded.push(`${workspace} ${name}: ${command}`);
 			}
 		}
 	}
-	// Non-vacuous: direct `vitest run` / `bun test` launches exist today.
-	expect(direct).toBeGreaterThan(0);
 	expect(unguarded).toEqual([]);
+	// Exact, so a new direct launcher is a deliberate edit here and in docs/verification-engines.md.
+	expect(direct.sort()).toEqual([
+		"packages/dev-tools test",
+		"packages/dev-tools test:bun",
+		"packages/plan-mode test",
+		"packages/plan-mode test:bun",
+		"packages/plan-mode test:dist",
+		"packages/preset test",
+		"packages/resource-sampler test",
+		"packages/session-kit test",
+		"packages/session-kit test:bun",
+		"packages/subagents bench",
+		"packages/subagents test:bun",
+		"packages/subagents test:e2e",
+		"packages/subagents test:watch",
+		"packages/subagents test:workflow-examples",
+		"packages/subscription-router test",
+		"packages/todo test",
+	]);
 });
 
 test("launcher refuses an unknown engine before spawning", () => {
