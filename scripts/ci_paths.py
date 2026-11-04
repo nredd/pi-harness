@@ -24,10 +24,10 @@ import subprocess
 import time
 import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-from runner_pools import POOLS, available_pools, parse_heartbeats, pool_for_shard
+from runner_pools import OS_POOLS, POOLS, CellKey, assign_cells, parse_heartbeats, pool_capacity
 
 LOGGER = logging.getLogger(__name__)
 
@@ -252,6 +252,8 @@ class CellPlan:
             empty.
         skipped_gates (tuple[str, ...]): Planned `gates` this run skips (`coverage_accounting.py
             --skipped-gates`).
+        runner (str): The self-hosted pool label a `contracts` or `stack` cell runs on, empty to keep the
+            hosted runner its matrix names.
     """
 
     run: bool
@@ -263,6 +265,7 @@ class CellPlan:
     guest: str = ""
     coverage_os: str = ""
     skipped_gates: tuple[str, ...] = ()
+    runner: str = ""
 
     def to_output(self) -> dict[str, object]:
         """Return the JSON-ready form the workflow reads with `fromJSON`.
@@ -271,7 +274,7 @@ class CellPlan:
             dict[str, object]: Booleans, the space-joined gates, the reason, the block flag, the shard
                 matrix entries and the fan-in's accounting `guest`, `coverage_os` and `skipped_gates`.
         """
-        return {
+        output: dict[str, object] = {
             "run": self.run,
             "scenarios": self.scenarios,
             "gates": " ".join(self.gates),
@@ -282,6 +285,10 @@ class CellPlan:
             "coverage_os": self.coverage_os,
             "skipped_gates": " ".join(self.skipped_gates),
         }
+        # Only a pool-routed cell carries a runner, so the plan is byte-identical while no pool is up.
+        if self.runner:
+            output["runner"] = self.runner
+        return output
 
 
 def run_git(repo: Path, *args: str) -> str:
@@ -560,11 +567,7 @@ def skipped_gates(result: ChangeClassification, event: str) -> frozenset[str]:
 
 
 def shard_plans(
-    os_name: str,
-    workspaces: tuple[str, ...],
-    path_gated: frozenset[str] = frozenset(),
-    *,
-    pools: frozenset[str] = frozenset(),
+    os_name: str, workspaces: tuple[str, ...], path_gated: frozenset[str] = frozenset()
 ) -> tuple[ShardPlan, ...]:
     """Expand an `owned` cell's `OWNED_SHARDS` entry into its shard jobs.
 
@@ -572,7 +575,6 @@ def shard_plans(
         os_name (str): Matrix `os` value.
         workspaces (tuple[str, ...]): Every npm workspace, in npm order.
         path_gated (frozenset[str]): Path-gated gates this run skips.
-        pools (frozenset[str]): Self-hosted pools that are up; a shard assigned to one runs on its label.
 
     Returns:
         tuple[ShardPlan, ...]: One entry per shard; a `check-ts` shard naming no workspaces takes the rest.
@@ -595,12 +597,11 @@ def shard_plans(
             raise ClassificationError(
                 f"owned shard ({os_name}, {shard.name}) runs check-ts with no workspaces"
             )
-        pool = pool_for_shard(os_name, shard.name)
         plans.append(
             ShardPlan(
                 os_name,
                 shard.name,
-                POOLS[pool].label if pool in pools else runner,
+                runner,
                 guest,
                 shard.gates,
                 selected if CHECK_TS in shard.gates else (),
@@ -616,8 +617,6 @@ def native_plan(
     result: ChangeClassification,
     event: str,
     workspaces: tuple[str, ...],
-    *,
-    pools: frozenset[str] = frozenset(),
 ) -> CellPlan:
     """Plan an `owned` or `contracts` cell.
 
@@ -627,7 +626,6 @@ def native_plan(
         result (ChangeClassification): Diff classification.
         event (str): Triggering event name.
         workspaces (tuple[str, ...]): Every npm workspace, for the `owned` shards.
-        pools (frozenset[str]): Self-hosted pools that are up, for the `owned` shards' runners.
 
     Returns:
         CellPlan: Whether the cell runs and, for `owned`, which gates on which shards.
@@ -645,7 +643,7 @@ def native_plan(
         scenarios=True,
         gates=OWNED_GATES[os_name],
         reason="",
-        shards=shard_plans(os_name, workspaces, path_gated, pools=pools),
+        shards=shard_plans(os_name, workspaces, path_gated),
         guest=RUNNERS[os_name][1],
         coverage_os=COVERAGE_OS[os_name],
         skipped_gates=tuple(gate for gate in OWNED_GATES[os_name] if gate in path_gated),
@@ -675,11 +673,63 @@ def stack_plan(os_name: str, stack: str, result: ChangeClassification, event: st
     return CellPlan(run=True, scenarios=True, gates=(), reason="")
 
 
+def running_cells(cells: Mapping[str, CellPlan]) -> dict[CellKey, str]:
+    """List the cells this run executes in full, the only ones a pool can take.
+
+    Parameters:
+        cells (Mapping[str, CellPlan]): Per check name plan.
+
+    Returns:
+        dict[CellKey, str]: `(job, os, variant)` -> check name. A `stack` cell that only runs setup
+            (`scenarios` false), a bypass cell and a blocked cell are left out: they are short or not run.
+    """
+    found: dict[CellKey, str] = {}
+    for os_name in OS_POOLS:
+        owned = cells[f"owned ({os_name})"]
+        if owned.run:
+            found |= {("owned", os_name, shard.name): f"owned ({os_name})" for shard in owned.shards}
+        if cells[f"contracts ({os_name})"].run:
+            found[("contracts", os_name, "")] = f"contracts ({os_name})"
+        for stack in STACKS:
+            plan = cells[f"stack ({os_name}, {stack})"]
+            if plan.run and plan.scenarios:
+                found[("stack", os_name, stack)] = f"stack ({os_name}, {stack})"
+    return found
+
+
+def apply_capacity(cells: Mapping[str, CellPlan], capacity: Mapping[str, int]) -> dict[str, CellPlan]:
+    """Move the longest running cells onto the pools that have free slots.
+
+    Parameters:
+        cells (Mapping[str, CellPlan]): Per check name plan, every runner still hosted.
+        capacity (Mapping[str, int]): Pool name -> free slots, from `pool_capacity`.
+
+    Returns:
+        dict[str, CellPlan]: The plan with each chosen `owned` shard and `contracts`/`stack` cell on its
+            pool's label; unchanged when `capacity` is empty.
+    """
+    running = running_cells(cells)
+    chosen = assign_cells(running, capacity)
+    planned = dict(cells)
+    for (job, os_name, variant), pool in chosen.items():
+        name = running[job, os_name, variant]
+        label = POOLS[pool].label
+        if job == "owned":
+            shards = tuple(
+                replace(shard, runner=label) if shard.name == variant else shard
+                for shard in cells[name].shards
+            )
+            planned[name] = replace(cells[name], shards=shards)
+        else:
+            planned[name] = replace(cells[name], runner=label)
+    return planned
+
+
 def plan_cells(
     result: ChangeClassification,
     event: str,
     title_problem: str = "",
-    pools: frozenset[str] = frozenset(),
+    capacity: Mapping[str, int] | None = None,
 ) -> dict[str, CellPlan]:
     """Plan every required check name, so each one keeps reporting.
 
@@ -687,7 +737,8 @@ def plan_cells(
         result (ChangeClassification): Diff classification.
         event (str): Triggering event name.
         title_problem (str): A PR title failure; it blocks every cell before any slot does real work.
-        pools (frozenset[str]): Self-hosted pools that are up; their assigned shards run on them.
+        capacity (Mapping[str, int] | None): Pool name -> free slots; the longest running cells go to pools
+            with room, the rest stay hosted. None or empty plans every cell hosted.
 
     Returns:
         dict[str, CellPlan]: One plan per ruleset context, keyed by the check name.
@@ -699,14 +750,14 @@ def plan_cells(
     workspaces = npm_workspaces(REPO_ROOT)
     cells: dict[str, CellPlan] = {}
     for os_name in OWNED_SHARDS:
-        cells[f"owned ({os_name})"] = native_plan("owned", os_name, result, event, workspaces, pools=pools)
+        cells[f"owned ({os_name})"] = native_plan("owned", os_name, result, event, workspaces)
         cells[f"contracts ({os_name})"] = native_plan("contracts", os_name, result, event, workspaces)
         for stack in STACKS:
             cells[f"stack ({os_name}, {stack})"] = stack_plan(os_name, stack, result, event)
     if title_problem:
         blocked = CellPlan(run=False, scenarios=False, gates=(), reason=title_problem, blocked=True)
         return dict.fromkeys(cells, blocked)
-    return cells
+    return apply_capacity(cells, capacity or {})
 
 
 def write_github_output(path: Path, result: ChangeClassification, cells: Mapping[str, CellPlan]) -> None:
@@ -782,8 +833,8 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as e:
         LOGGER.error(f"Invalid --pool-heartbeat: {e}")
         return 2
-    pools = available_pools(heartbeats, time.time(), trusted=not args.no_pools)
-    LOGGER.info(f"Self-hosted pools up: {sorted(pools)}")
+    capacity = pool_capacity(heartbeats, time.time(), trusted=not args.no_pools)
+    LOGGER.info(f"Self-hosted pools up (free slots): {capacity}")
     problem = ""
     if args.event == EVENT_PULL_REQUEST:
         # Block the cells rather than exit non-zero: a missing title must not skip the one rule only this
@@ -795,7 +846,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     result = full_classification() if args.full else classify(args.repo, args.base, args.head)
     try:
-        cells = plan_cells(result, args.event, problem, pools)
+        cells = plan_cells(result, args.event, problem, capacity)
     except ClassificationError as e:
         # A failed `classify` turns every required check red; a plan without shards would skip real work.
         LOGGER.error(f"Failed to plan the CI cells: {e}")
