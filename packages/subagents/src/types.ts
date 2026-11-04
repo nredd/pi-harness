@@ -7,6 +7,7 @@ import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { ModelFallback } from "./model-resolver.js";
 import type { ModelSelection } from "./model-selection.js";
 import type { TierDisclosure } from "./model-tiers.js";
+import type { PlanGate, PlanToolPolicy } from "./plan-mode-children.js";
 import type { BudgetLease } from "./process-budget.js";
 import type { LifetimeUsage } from "./usage.js";
 
@@ -244,6 +245,13 @@ export interface AgentRecord {
   consumedAt?: number;
   /** Steering messages queued before the session was ready. */
   pendingSteers?: string[];
+  /**
+   * The Plan restriction its runs are under (#437): set at spawn, re-decided at
+   * each resume, read by the child's tool hooks on every call.
+   */
+  planGate?: PlanGate;
+  /** Asks the parent's pi-plan-mode again, for a resume. */
+  planQuery?: () => PlanToolPolicy | undefined;
   /** Worktree info if the agent is running in an isolated worktree. */
   worktree?: { path: string; branch: string; baseSha: string; repoRoot: string; workPath: string };
   /** Worktree cleanup result after agent completion. */
@@ -361,6 +369,8 @@ export interface AgentInvocation {
   inheritContext?: boolean;
   runInBackground?: boolean;
   isolation?: IsolationMode;
+  /** The run is under Plan mode's policy because its parent was planning (#437). */
+  planMode?: boolean;
 }
 
 /** Details attached to custom notification messages for visual rendering. */

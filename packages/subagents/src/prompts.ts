@@ -2,6 +2,7 @@
  * prompts.ts — System prompt builder for agents.
  */
 
+import { PLAN_MODE_CHILD_PROMPT } from "./plan-mode-children.js";
 import type { AgentConfig, EnvInfo } from "./types.js";
 
 /** Extra sections to inject into the system prompt (memory, skills, etc.). */
@@ -16,6 +17,8 @@ export interface PromptExtras {
    * to stay in the copy.
    */
   worktreeBase?: string;
+  /** Set when the parent was planning at spawn: the child is told it plans too (#437). */
+  planMode?: boolean;
   /**
    * Set only for a workflow's own children, and only when they have no
    * `StructuredOutput` tool to answer through.
@@ -93,6 +96,8 @@ Return only the answer, in exactly the shape the prompt asks for — no preamble
 </workflow_child>`
     : "";
 
+  const planModeBlock = extras?.planMode ? `\n\n${PLAN_MODE_CHILD_PROMPT}` : "";
+
   const nestingBlock = extras?.nestingDisabled
     ? `\n\n<nesting_disabled>
 Nested subagents are disabled for this session, so you have no Agent tool. Do the work yourself, inline.
@@ -137,7 +142,7 @@ You are operating as a sub-agent invoked to handle a specific task.
     // placed verbatim (no wrapper tag) so it forms an identical byte prefix
     // with the parent session, maximising KV cache hits. The <active_agent>
     // tag and env block vary per call and are placed after the cached prefix.
-    return identity + "\n\n" + bridge + "\n\n" + activeAgentTag + envBlock + worktreeBlock + workflowBlock + nestingBlock + customSection + extrasSuffix;
+    return identity + "\n\n" + bridge + "\n\n" + activeAgentTag + envBlock + worktreeBlock + planModeBlock + workflowBlock + nestingBlock + customSection + extrasSuffix;
   }
 
   // "replace" mode — env header + the config's full system prompt
@@ -146,7 +151,7 @@ You have been invoked to handle a specific task autonomously.
 
 ${envBlock}`;
 
-  return activeAgentTag + replaceHeader + worktreeBlock + workflowBlock + nestingBlock + "\n\n" + config.systemPrompt + extrasSuffix;
+  return activeAgentTag + replaceHeader + worktreeBlock + planModeBlock + workflowBlock + nestingBlock + "\n\n" + config.systemPrompt + extrasSuffix;
 }
 
 /** Fallback base prompt when parent system prompt is unavailable in append mode. */
