@@ -11,6 +11,7 @@ import {
   PLAN_MODE_STATE_QUERY,
   type PlanToolPolicy,
   planGateReason,
+  planningNow,
   queryPlanPolicy,
 } from "../src/plan-mode-children.js";
 
@@ -51,7 +52,35 @@ describe("queryPlanPolicy", () => {
     expect(queryPlanPolicy(undefined)).toBeUndefined();
     expect(queryPlanPolicy(planBus(() => undefined))).toBeUndefined();
     expect(queryPlanPolicy(planBus(() => ({ version: 1, active: false })))).toBeUndefined();
-    expect(queryPlanPolicy(planBus(() => null))).toBeUndefined();
+  });
+
+  it("fails closed on a malformed answer, which never counts as Plan being off", () => {
+    for (const answer of [null, {}, { version: 2, active: false }, { version: 1 }, { version: 1, active: "no" }]) {
+      const policy = queryPlanPolicy(planBus(() => answer));
+      expect(policy?.(call("ls"))).toBeUndefined();
+      expect(policy?.(call("bash"))).toBe(FAIL_CLOSED_BASH);
+    }
+    // Next to a well-formed "not planning", a malformed answer still restricts.
+    const events = {
+      emit: (_channel: string, data: unknown) => {
+        const { reply } = data as { reply: (state: unknown) => void };
+        reply({ version: 1, active: false });
+        reply({ version: 7 });
+      },
+    };
+    expect(queryPlanPolicy(events)?.(call("bash"))).toBe(FAIL_CLOSED_BASH);
+    expect(planningNow(events)).toBe(true);
+  });
+
+  it("planningNow is false only when Plan mode is absent or says it is off", () => {
+    expect(planningNow(undefined)).toBe(false);
+    expect(planningNow(planBus(() => undefined))).toBe(false);
+    expect(planningNow(planBus(() => ({ version: 1, active: false })))).toBe(false);
+    expect(planningNow(planBus(() => ({ version: 1, active: true, evaluate: BLOCK_WRITE })))).toBe(true);
+    const silent = planBus(() => undefined);
+    answerPlanGateQueries(silent);
+    askGate(silent);
+    expect(planningNow(silent)).toBe(true);
   });
 
   it("returns the planner's policy", () => {
