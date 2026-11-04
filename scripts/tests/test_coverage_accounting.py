@@ -7,6 +7,7 @@ References:
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import subprocess
@@ -17,7 +18,16 @@ import pytest
 from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from coverage_accounting import Package, Policy, account, check_ratchet, git_read, inventory, parse_lcov
+from coverage_accounting import (
+    Package,
+    Policy,
+    account,
+    check_ratchet,
+    git_read,
+    inventory,
+    parse_lcov,
+    signal_comparisons,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "coverage"
 SCRIPT = Path(__file__).resolve().parents[1] / "coverage_accounting.py"
@@ -84,21 +94,234 @@ def setup_report(tmp_path: Path, fixture: str = "passing.info") -> Path:
     return report
 
 
-def test_passing_lines_and_functions_branches_report_only(tmp_path: Path) -> None:
-    """Keep branches reported without gating primary coverage.
+def branch_policy(cap: int | None, **package: object) -> Policy:
+    """Return the miniature policy with a branch cap on the active OS.
+
+    Parameters:
+        cap (int | None): Uncovered-branch cap, or None for no `branches` key.
+        **package (object): Package fields to override, e.g. `goal`.
+    Returns:
+        Policy: Validated fixture policy.
+    Raises:
+        ValidationError: The overridden fixture policy is invalid.
+    """
+    data = policy().model_dump(exclude_none=True)
+    data["packages"]["example"] |= package
+    data["packages"]["example"]["signals"]["primary"]["max_uncovered"][sys.platform]["branches"] = cap
+    if package.get("goal") not in {None, "100-percent"}:
+        data["packages"]["example"]["signals"]["primary"] |= {
+            "enforcement": "report-only",
+            "reason": "Fixture.",
+        }
+    return Policy.model_validate(data)
+
+
+@pytest.mark.parametrize(("cap", "errors"), [(1, []), (2, [])])
+def test_branch_cap_met(tmp_path: Path, cap: int, errors: list[str]) -> None:
+    """Pass a signal whose uncovered branches are at or under its cap.
+
+    Parameters:
+        tmp_path (Path): Disposable report root.
+        cap (int): Cap at or above the one uncovered branch.
+        errors (list[str]): Expected accounting errors.
+    Returns:
+        None: The measured branch counter is reported and accepted.
+    Raises:
+        AssertionError: A branch count within its cap fails.
+    """
+    setup_report(tmp_path, "branches.info")
+    results, actual = account(tmp_path, branch_policy(cap))
+    assert actual == errors
+    assert (results[0]["branches"], results[0]["uncovered_branches"]) == (2, 1)
+
+
+def test_branch_cap_exceeded(tmp_path: Path) -> None:
+    """Fail an enforced signal on one uncovered branch over its cap, naming every counter.
 
     Parameters:
         tmp_path (Path): Disposable report root.
     Returns:
-        None: Integer line/function counters pass despite an uncovered branch.
+        None: The failure names measured and budgeted branches next to lines and functions.
     Raises:
-        AssertionError: Branch-only misses fail accounting.
+        AssertionError: A branch-only excess passes or the message drops a counter.
     """
-    setup_report(tmp_path)
-    results, errors = account(tmp_path, policy())
+    setup_report(tmp_path, "branches.info")
+    assert account(tmp_path, branch_policy(0))[1] == [
+        "example/primary: Budget exceeded: 0 lines, 0 functions, 1 branches uncovered, "
+        "budget 0 lines, 0 functions, 0 branches"
+    ]
+
+
+def test_branch_records_without_cap_fail(tmp_path: Path) -> None:
+    """Require a cap on every signal whose producer emits branch records.
+
+    Parameters:
+        tmp_path (Path): Disposable report root.
+    Returns:
+        None: An uncapped branch-producing signal fails.
+    Raises:
+        AssertionError: Branch records go ungated for lack of a cap.
+    """
+    setup_report(tmp_path, "branches.info")
+    assert account(tmp_path, policy())[1] == [
+        "example/primary: Missing branch cap: the report has 2 branch records"
+    ]
+
+
+def test_excluded_goal_needs_no_branch_cap(tmp_path: Path) -> None:
+    """Accept uncapped branch records only for an owner-excluded package.
+
+    Parameters:
+        tmp_path (Path): Disposable report root.
+    Returns:
+        None: The excluded package reports its branches and passes without a cap.
+    Raises:
+        AssertionError: The excluded carve-out is missing or widened.
+    """
+    setup_report(tmp_path, "branches.info")
+    results, errors = account(tmp_path, branch_policy(None, goal="excluded", goal_reason="Owner decision."))
     assert not errors
     assert results[0]["uncovered_branches"] == 1
-    assert results[0]["uncovered_lines"] == 0
+    _, errors = account(tmp_path, branch_policy(None, goal="report-only", goal_reason="Fixture."))
+    assert errors == ["example/primary: Missing branch cap: the report has 2 branch records"]
+
+
+def test_branch_cap_without_branch_records_fails_closed(tmp_path: Path) -> None:
+    """Reject a capped signal whose report has lines but no `BRDA` rows.
+
+    Parameters:
+        tmp_path (Path): Disposable report root.
+    Returns:
+        None: A producer that stopped emitting branches can't read as zero uncovered.
+    Raises:
+        AssertionError: A branchless report passes a branch cap.
+    """
+    setup_report(tmp_path)
+    assert account(tmp_path, branch_policy(0))[1] == [
+        "example/primary: Branch producer missing: "
+        "a branch cap is declared but the report has no BRDA records"
+    ]
+
+
+def test_report_only_branch_delta_is_logged(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Log a report-only signal's branch reference and signed delta without gating it.
+
+    Parameters:
+        tmp_path (Path): Disposable report root.
+        caplog (pytest.LogCaptureFixture): Captured accounting log.
+    Returns:
+        None: The over-reference branch count is logged and the JSON delta carries it.
+    Raises:
+        AssertionError: A report-only branch excess fails or goes unreported.
+    """
+    setup_report(tmp_path, "branches.info")
+    cfg = branch_policy(0, goal="report-only", goal_reason="Fixture.")
+    caplog.set_level(logging.INFO)
+    results, errors = account(tmp_path, cfg)
+    assert not errors
+    assert (
+        "reference lines=0, functions=0, branches=0; delta lines=+0, functions=+0, branches=+1" in caplog.text
+    )
+    totals = {"example/primary": {key: value for key, value in results[0].items() if isinstance(value, int)}}
+    assert signal_comparisons(cfg, totals, sys.platform)["example/primary"]["delta"] == {
+        "lines": 0,
+        "functions": 0,
+        "branches": 1,
+    }
+    uncapped = signal_comparisons(policy(), totals, sys.platform)["example/primary"]
+    assert uncapped["reference"] == {"lines": 0, "functions": 0}
+    assert uncapped["delta"] == {"lines": 0, "functions": 0}
+
+
+@pytest.mark.parametrize(("target", "cap", "error"), [(None, 1, False), (None, 0, True), (0, 1, True)])
+def test_global_target_uses_signal_branch_cap_until_target_is_set(
+    tmp_path: Path, target: int | None, cap: int, error: bool
+) -> None:
+    """Gate a 100-percent primary on its own branch cap until `target.branches` locks it.
+
+    Parameters:
+        tmp_path (Path): Disposable report root.
+        target (int | None): `target.branches`, unset while caps are being driven down.
+        cap (int): The primary signal's branch cap.
+        error (bool): Whether the one uncovered branch fails.
+    Returns:
+        None: The signal cap applies while the target is unset; a set target overrides it.
+    Raises:
+        AssertionError: The target ignores the branch cap or a set target is bypassed.
+    """
+    setup_report(tmp_path, "branches.info")
+    cfg = branch_policy(cap)
+    cfg.enforce_target = True
+    cfg.target.branches = target
+    assert bool(account(tmp_path, cfg)[1]) == error
+
+
+def test_ratchet_rejects_raising_or_removing_a_branch_cap() -> None:
+    """Keep branch caps monotonic: no raise, no removing a key the base had.
+
+    Parameters:
+        None.
+    Returns:
+        None: Raising or dropping a cap fails, lowering or adding one passes.
+    Raises:
+        AssertionError: A branch cap can be weakened.
+    """
+    base = branch_policy(1)
+    for weaker in (branch_policy(2), policy()):
+        with pytest.raises(ValueError, match="Ratchet violation"):
+            check_ratchet(weaker, base)
+    check_ratchet(branch_policy(0), base)
+    check_ratchet(base, policy())
+    locked = policy()
+    locked.target.branches = 0
+    with pytest.raises(ValueError, match="Cannot remove the branch target"):
+        check_ratchet(policy(), locked)
+    check_ratchet(locked, policy())
+
+
+def test_branch_target_must_be_zero() -> None:
+    """Keep the branch target zero.
+
+    Parameters:
+        None.
+    Returns:
+        None: A nonzero branch target is rejected.
+    Raises:
+        AssertionError: The declaration validates.
+    """
+    data = policy().model_dump()
+    data["target"]["branches"] = 1
+    with pytest.raises(ValidationError, match="zero uncovered lines, functions and branches"):
+        Policy.model_validate(data)
+
+
+def test_real_coveragepy_branch_report_parses(tmp_path: Path) -> None:
+    """Parse the branch rows coverage.py writes for `--cov-branch`, including never-reached `-` rows.
+
+    Parameters:
+        tmp_path (Path): Disposable module and report directory.
+    Returns:
+        None: Named branch identities and `-` counts parse into exact counters.
+    Raises:
+        AssertionError: A real coverage.py branch row is rejected or miscounted.
+    """
+    module = tmp_path / "mod.py"
+    module.write_text(
+        "def sign(value):\n    if value:\n        return 1\n    return 0\n\n\n"
+        "def never(value):\n    if value:\n        return 1\n    return 0\n\n\n"
+        "if sign(1):\n    sign(0)\n"
+    )
+    for argv in (["run", "--branch", "mod.py"], ["lcov", "-o", "lcov.info"]):
+        subprocess.run(
+            [sys.executable, "-m", "coverage", *argv], cwd=tmp_path, check=True, capture_output=True
+        )
+    text = (tmp_path / "lcov.info").read_text()
+    assert "BRDA:8,0,jump to line 9,-" in text
+    counters = parse_lcov(text, bare_sources=True)["mod.py"]
+    assert (counters.branches, counters.uncovered_branches) == (6, 3)
+    assert (counters.lines, counters.uncovered_lines) == (10, 3)
+    with pytest.raises(ValueError, match="branch"):
+        parse_lcov(text.replace(",-\n", ",x\n", 1), bare_sources=True)
 
 
 def test_uncovered_counts_fail(tmp_path: Path) -> None:
@@ -157,7 +380,7 @@ def test_fail_closed(tmp_path: Path, mode: str) -> None:
         (FIXTURES / "passing.info").read_text().replace("LF:2", "LF:3"),
         (FIXTURES / "passing.info").read_text().replace("DA:2,1", "DA:1,1"),
         (FIXTURES / "passing.info").read_text().replace("FNDA:1,answer", "FNDA:-1,answer"),
-        (FIXTURES / "passing.info").read_text().replace("BRH:1", "BRH:2"),
+        (FIXTURES / "branches.info").read_text().replace("BRH:1", "BRH:2"),
         (FIXTURES / "passing.info").read_text().replace("FNF:1\n", ""),
         (FIXTURES / "passing.info").read_text() * 2,
     ],
@@ -377,6 +600,33 @@ def test_cli_uses_real_git_base_and_always_writes_summary(tmp_path: Path) -> Non
     )
     assert result.returncode == 1
     assert "Ratchet violation" in json.loads(summary.read_text())["errors"][0]
+
+
+def test_cli_measure_proposes_branch_caps(tmp_path: Path) -> None:
+    """Propose a branch cap from a branch-producing report and none from a branchless one.
+
+    Parameters:
+        tmp_path (Path): Disposable source and report root.
+    Returns:
+        None: The measured floors and the logged policy diff carry branches only where measured.
+    Raises:
+        AssertionError: `--measure` drops measured branches or invents a cap.
+    """
+    report = setup_report(tmp_path, "branches.info")
+    (tmp_path / "coverage").mkdir()
+    (tmp_path / "coverage/policy.json").write_text(policy().model_dump_json())
+    git_read(tmp_path, ["init", "-q", "--template="])
+    git_read(tmp_path, ["add", "."])
+    for fixture, floor in (("branches.info", {"branches": 1}), ("passing.info", {})):
+        shutil.copyfile(FIXTURES / fixture, report)
+        summary = tmp_path / f"{fixture}.json"
+        argv = ["--root", str(tmp_path), "--measure", "--os", sys.platform, "--summary", str(summary)]
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), *argv], check=True, capture_output=True, text=True
+        )
+        floors = json.loads(summary.read_text())["measured_floors"]["example/primary"][sys.platform]
+        assert floors == {"lines": 0, "functions": 0} | floor
+        assert bool(re.search(r'^\+\s+"branches": 1$', result.stderr, re.MULTILINE)) == bool(floor)
 
 
 def test_aggregate_function_lcov_is_validated() -> None:

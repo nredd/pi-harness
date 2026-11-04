@@ -167,7 +167,9 @@ def test_enforced_target_has_no_per_file_escape(tmp_path: Path, runner_os: str) 
         "functions": 8,
     }
     cfg = Policy.model_validate(data)
-    assert account(tmp_path, cfg, runner_os)[1] == ["example/primary: Budget exceeded: 1 lines, 1 functions"]
+    assert account(tmp_path, cfg, runner_os)[1] == [
+        "example/primary: Budget exceeded: 1 lines, 1 functions uncovered, budget 0 lines, 0 functions"
+    ]
     data["packages"]["example"]["target_allowances"] = [
         RETIRED_ALLOWANCE | {"owner": "example", "os": runner_os}
     ]

@@ -46,6 +46,14 @@ class StrictModel(BaseModel):
 class Counts(StrictModel):
     lines: int = Field(ge=0, description="Stored uncovered executable-line budget or advisory reference.")
     functions: int = Field(ge=0, description="Stored uncovered-function budget or advisory reference.")
+    branches: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Stored uncovered-branch cap or advisory reference; null only for producers without branch "
+            "records or `goal: excluded` packages."
+        ),
+    )
 
 
 class Exclusion(StrictModel):
@@ -294,10 +302,10 @@ class Policy(StrictModel):
         Returns:
             Policy: Validated zero-uncovered final target.
         Raises:
-            ValueError: Either final target counter is nonzero.
+            ValueError: A final target counter is nonzero.
         """
-        if self.target.lines or self.target.functions:
-            raise ValueError("The target must be zero uncovered lines and functions")
+        if self.target.lines or self.target.functions or self.target.branches:
+            raise ValueError("The target must be zero uncovered lines, functions and branches")
         return self
 
 
@@ -832,6 +840,24 @@ def check_enforcement_changes(current: Policy, base: Policy) -> None:
         )
 
 
+def loosens(budget: Counts, floor: Counts) -> bool:
+    """Compare a budget with the base floor it must not exceed, counter by counter.
+
+    Parameters:
+        budget (Counts): Current budget.
+        floor (Counts): Base budget.
+    Returns:
+        bool: Whether any counter rises, or a branch cap the base had is dropped.
+    Raises:
+        None.
+    """
+    return (
+        budget.lines > floor.lines
+        or budget.functions > floor.functions
+        or (floor.branches is not None and (budget.branches is None or budget.branches > floor.branches))
+    )
+
+
 def check_ratchet(current: Policy, base: Policy) -> None:
     """Ratchet enforced budgets and require explicit declarations for enforcement downgrades.
 
@@ -846,6 +872,8 @@ def check_ratchet(current: Policy, base: Policy) -> None:
     """
     if base.enforce_target and not current.enforce_target:
         raise ValueError("Cannot disable global target")
+    if loosens(current.target, base.target):
+        raise ValueError("Cannot remove the branch target")
     check_enforcement_changes(current, base)
     for name, previous in base.packages.items():
         if name not in current.packages:
@@ -861,19 +889,31 @@ def check_ratchet(current: Policy, base: Policy) -> None:
         for signal_name, old in previous.signals.items():
             if signal_name not in package.signals:
                 raise ValueError(f"Removed signal: '{name}/{signal_name}'")
-            new = package.signals[signal_name]
-            if not set(new.skip_hosts) <= set(old.skip_hosts):
-                raise ValueError(f"Cannot add skipped hosts: '{name}/{signal_name}'")
-            if new.gate != old.gate:
-                raise ValueError(f"Cannot change a signal's producer gate: '{name}/{signal_name}'")
-            for runner_os, floor in old.max_uncovered.items():
-                if runner_os not in new.max_uncovered:
-                    raise ValueError(f"Missing OS floor: '{name}/{signal_name}/{runner_os}'")
-                budget = new.max_uncovered[runner_os]
-                if old.enforcement == new.enforcement == "enforced" and (
-                    budget.lines > floor.lines or budget.functions > floor.functions
-                ):
-                    raise ValueError(f"Ratchet violation: '{name}/{signal_name}/{runner_os}'")
+            check_signal_ratchet(f"{name}/{signal_name}", package.signals[signal_name], old)
+
+
+def check_signal_ratchet(label: str, new: Signal, old: Signal) -> None:
+    """Ratchet one signal's hosts, producer gate and per-OS floors against its base declaration.
+
+    Parameters:
+        label (str): `package/signal` for error messages.
+        new (Signal): Current declaration.
+        old (Signal): Base declaration.
+    Returns:
+        None: The signal preserves the base ratchet.
+    Raises:
+        ValueError: A host is newly skipped, the gate changes, an OS floor disappears or an enforced
+            counter (including a branch cap) is raised or dropped.
+    """
+    if not set(new.skip_hosts) <= set(old.skip_hosts):
+        raise ValueError(f"Cannot add skipped hosts: '{label}'")
+    if new.gate != old.gate:
+        raise ValueError(f"Cannot change a signal's producer gate: '{label}'")
+    for runner_os, floor in old.max_uncovered.items():
+        if runner_os not in new.max_uncovered:
+            raise ValueError(f"Missing OS floor: '{label}/{runner_os}'")
+        if old.enforcement == new.enforcement == "enforced" and loosens(new.max_uncovered[runner_os], floor):
+            raise ValueError(f"Ratchet violation: '{label}/{runner_os}'")
 
 
 def scoped_records(
@@ -1000,6 +1040,45 @@ def require_declared_gates(policy: Policy, skipped_gates: frozenset[str]) -> Non
         raise ValueError(f"Skipped gates no policy signal declares: {undeclared}")
 
 
+def check_branch_cap(package: Package, cap: Counts, records: dict[str, FileCoverage]) -> None:
+    """Require a branch cap exactly when the producer emits branch records.
+
+    A capped signal whose report has executable lines but no branch records fails closed, so a
+    producer that silently stops writing `BRDA` rows can't read as zero uncovered branches.
+
+    Parameters:
+        package (Package): Package whose goal may exempt it from branch caps.
+        cap (Counts): The signal's declared per-OS budget or reference.
+        records (dict[str, FileCoverage]): The signal's validated, scoped report records.
+    Returns:
+        None: The declared cap matches the producer's branch output.
+    Raises:
+        ValueError: Branch records have no cap outside `goal: excluded`, or a cap has no branch records.
+    """
+    branches = sum(counters.branches for counters in records.values())
+    if cap.branches is None and branches and package.goal != "excluded":
+        raise ValueError(f"Missing branch cap: the report has {branches} branch records")
+    if cap.branches is not None and not branches and any(counters.lines for counters in records.values()):
+        raise ValueError(
+            "Branch producer missing: a branch cap is declared but the report has no BRDA records"
+        )
+
+
+def describe(lines: int, functions: int, branches: int | None) -> str:
+    """Format uncovered counters for budget messages.
+
+    Parameters:
+        lines (int): Uncovered lines.
+        functions (int): Uncovered functions.
+        branches (int | None): Uncovered branches, or null when the signal has no branch cap.
+    Returns:
+        str: Human-readable counter list; branches appear only when capped.
+    Raises:
+        None.
+    """
+    return f"{lines} lines, {functions} functions" + ("" if branches is None else f", {branches} branches")
+
+
 def account(
     root: Path,
     policy: Policy,
@@ -1052,6 +1131,7 @@ def account(
                 records = scoped_records(root, policy, package, signal, reports_root)
                 uncovered_lines = sum(c.uncovered_lines for c in records.values())
                 uncovered_functions = sum(c.uncovered_functions for c in records.values())
+                uncovered_branches = sum(c.uncovered_branches for c in records.values())
                 for path, counters in sorted(records.items()):
                     item = {"package": name, "signal": signal_name, "os": runner_os, "file": path} | vars(
                         counters
@@ -1060,29 +1140,48 @@ def account(
                     LOGGER.info(f"{label} {path}: {counters}")
                 LOGGER.info(
                     f"{label}/{runner_os} ({signal.enforcement}): "
-                    f"uncovered lines={uncovered_lines}, functions={uncovered_functions}"
+                    f"uncovered lines={uncovered_lines}, functions={uncovered_functions}, "
+                    f"branches={uncovered_branches}"
                 )
                 reference = signal.max_uncovered.get(runner_os)
                 if reference is not None:
+                    capped = reference.branches is not None
                     LOGGER.info(
                         f"{label}/{runner_os}: reference lines={reference.lines}, "
-                        f"functions={reference.functions}; "
-                        f"delta lines={uncovered_lines - reference.lines:+d}, "
+                        f"functions={reference.functions}"
+                        + (f", branches={reference.branches}" if capped else "")
+                        + f"; delta lines={uncovered_lines - reference.lines:+d}, "
                         f"functions={uncovered_functions - reference.functions:+d}"
+                        + (
+                            f", branches={uncovered_branches - (reference.branches or 0):+d}"
+                            if capped
+                            else ""
+                        )
                     )
                 if measure:
                     continue
+                declared = signal.max_uncovered[runner_os]
+                check_branch_cap(package, declared, records)
+                # Until `target.branches` locks it, a 100-percent primary keeps its own branch cap.
                 budget = (
-                    policy.target
+                    policy.target.model_copy(
+                        update={"branches": declared.branches} if policy.target.branches is None else {}
+                    )
                     if policy.enforce_target and package.goal == "100-percent" and signal_name == "primary"
-                    else signal.max_uncovered[runner_os]
+                    else declared
                 )
                 if signal.enforcement == "enforced" and (
-                    uncovered_lines > budget.lines or uncovered_functions > budget.functions
+                    uncovered_lines > budget.lines
+                    or uncovered_functions > budget.functions
+                    or (budget.branches is not None and uncovered_branches > budget.branches)
                 ):
-                    raise ValueError(
-                        f"Budget exceeded: {uncovered_lines} lines, {uncovered_functions} functions"
+                    measured = describe(
+                        uncovered_lines,
+                        uncovered_functions,
+                        uncovered_branches if budget.branches is not None else None,
                     )
+                    allowed = describe(budget.lines, budget.functions, budget.branches)
+                    raise ValueError(f"Budget exceeded: {measured} uncovered, budget {allowed}")
             except (OSError, ValueError) as error:
                 errors.append(f"{label}: {error}")
     return results, errors
@@ -1110,11 +1209,16 @@ def signal_comparisons(
         comparisons[label] = {
             "enforcement": signal.enforcement,
             "reason": signal.reason,
-            "reference": reference.model_dump() if reference is not None else None,
+            "reference": reference.model_dump(exclude_none=True) if reference is not None else None,
             "delta": {
                 "lines": counts["uncovered_lines"] - reference.lines,
                 "functions": counts["uncovered_functions"] - reference.functions,
             }
+            | (
+                {"branches": counts["uncovered_branches"] - reference.branches}
+                if reference.branches is not None
+                else {}
+            )
             if reference is not None
             else None,
         }
@@ -1143,8 +1247,8 @@ def log_measured_diff(policy: Policy, floors: dict[str, dict[str, dict[str, int]
     LOGGER.info(
         "".join(
             difflib.unified_diff(
-                policy.model_dump_json(indent=2).splitlines(keepends=True),
-                proposed.model_dump_json(indent=2).splitlines(keepends=True),
+                policy.model_dump_json(indent=2, exclude_none=True).splitlines(keepends=True),
+                proposed.model_dump_json(indent=2, exclude_none=True).splitlines(keepends=True),
                 fromfile="coverage/policy.json",
                 tofile=f"measured/{runner_os}/policy.json",
             )
@@ -1251,8 +1355,12 @@ def main() -> int:
             value = result[metric]
             if isinstance(value, int):
                 counters[metric] = counters.get(metric, 0) + value
+    # A producer without branch records proposes no branch cap; `check_branch_cap` would reject one.
     floors = {
-        label: {args.os: {"lines": counts["uncovered_lines"], "functions": counts["uncovered_functions"]}}
+        label: {
+            args.os: {"lines": counts["uncovered_lines"], "functions": counts["uncovered_functions"]}
+            | ({"branches": counts["uncovered_branches"]} if counts["branches"] else {})
+        }
         for label, counts in totals.items()
     }
     if args.measure and not errors and policy is not None:
