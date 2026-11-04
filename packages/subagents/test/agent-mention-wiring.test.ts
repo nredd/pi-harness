@@ -1335,6 +1335,134 @@ describe("resuming an evicted agent by name", () => {
     );
     expect(uiCtx.ui.notify).toHaveBeenCalledWith("Started @explore", "info");
   });
+
+  // The same tombstone, reached by the orchestrator's `Agent({ resume: id })` (#330).
+  describe("through Agent resume", () => {
+    const resume = (tools: Map<string, any>, id: string, extra: Record<string, unknown> = {}) =>
+      tools.get("Agent").execute(
+        "tc-resume",
+        { prompt: "anything else?", description: "again", subagent_type: "Explore", resume: id, run_in_background: true, ...extra },
+        undefined, undefined, ctx(),
+      ).then(textOf);
+    /** The id runAgent was last started under: the only handle on an agent spawned without a receipt. */
+    const lastAgentId = () => (vi.mocked(runAgent).mock.calls.at(-1)![3] as any).agentId as string;
+
+    it("refuses a blocking resume instead of silently detaching it", async () => {
+      const { tools } = boot();
+      finishedRun(fakeSession());
+      const id = await spawnBackground(tools);
+      await flush();
+      await evict(id);
+      vi.mocked(runAgent).mockClear();
+
+      const out = await resume(tools, id, { run_in_background: false });
+
+      expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
+      expect(out).toBe(
+        `Agent "${id}" was evicted; its conversation reopens only in the background, under a new Agent ID. ` +
+        "Call Agent again with this resume and run_in_background: true.",
+      );
+    });
+
+    it("hands max_turns to the reopened run", async () => {
+      const { tools } = boot();
+      finishedRun(fakeSession());
+      const id = await spawnBackground(tools);
+      await flush();
+      await evict(id);
+      vi.mocked(runAgent).mockClear();
+      heldRun(fakeSession());
+
+      await resume(tools, id, { max_turns: 3 });
+
+      expect(vi.mocked(runAgent)).toHaveBeenCalledWith(
+        expect.anything(), "Explore", "anything else?",
+        expect.objectContaining({ resumeSessionFile: sessionPath(), maxTurns: 3 }),
+      );
+    });
+
+    it("reopens once when the same evicted id is resumed twice in one turn", async () => {
+      // Two reopens would be two agents appending to one session file, both holding the handle.
+      const { tools } = boot();
+      finishedRun(fakeSession());
+      const id = await spawnBackground(tools);
+      await flush();
+      await evict(id);
+      vi.mocked(runAgent).mockClear();
+      heldRun(fakeSession());
+
+      const [first, second] = await Promise.all([resume(tools, id), resume(tools, id)]);
+
+      expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
+      const next = lastAgentId();
+      expect(first).toContain(`Agent ID: ${next}`);
+      expect(second).toBe(
+        `Agent ${id} continues as ${next}; use that id from now on.\n` +
+        `Agent "${next}" is still running — it can only be resumed once its current run finishes.\n` +
+        "Use steer_subagent to send it a message mid-run, or get_subagent_result to wait for it.",
+      );
+    });
+
+    it("follows the old id to the successor once that is evicted too", async () => {
+      const { tools } = boot();
+      finishedRun(fakeSession());
+      const id = await spawnBackground(tools);
+      await flush();
+      await evict(id);
+      await resume(tools, id);
+      await flush();
+      const next = lastAgentId();
+      await evict(next);
+      vi.mocked(runAgent).mockClear();
+      heldRun(fakeSession());
+
+      const out = await resume(tools, id);
+
+      expect(out).toContain(`Agent ${id} continues as ${next}; use that id from now on.`);
+      expect(out).toContain(`reopening evicted agent ${next}.`);
+      expect(vi.mocked(runAgent)).toHaveBeenCalledWith(
+        expect.anything(), "Explore", "anything else?",
+        expect.objectContaining({ resumeSessionFile: sessionPath() }),
+      );
+    });
+
+    it("says the type is gone rather than reopening under a substitute", async () => {
+      hermetic = hermeticDir({
+        settings: { outputTranscript: false },
+        agentFiles: { scout: "---\ndescription: scouts\n---\nbody" },
+      });
+      const b = makePi();
+      subagentsExtension(b.pi);
+      booted = b.lifecycle;
+      await startSession(b.lifecycle, true);
+      finishedRun(fakeSession());
+      const id = await spawnBackground(b.tools, "scout");
+      await flush();
+      await evict(id);
+      vi.mocked(runAgent).mockClear();
+      writeFileSync(join(process.cwd(), ".pi", "agents", "scout.md"), "---\ndescription: scouts\nenabled: false\n---\nbody");
+
+      const out = await resume(b.tools, id, { subagent_type: "scout" });
+
+      expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
+      expect(out).toBe(`Could not resume agent "${id}" — the scout agent is no longer available.`);
+    });
+
+    it("reports a spawn failure and lets the next resume try again", async () => {
+      const { tools } = boot();
+      finishedRun(fakeSession());
+      const id = await spawnBackground(tools);
+      await flush();
+      await evict(id);
+      vi.mocked(runAgent).mockClear();
+      vi.mocked(runAgent).mockImplementationOnce(() => { throw new Error("boom 330"); });
+
+      expect(await resume(tools, id)).toBe(`Could not resume agent "${id}": boom 330`);
+
+      heldRun(fakeSession());
+      expect(await resume(tools, id)).toContain(`reopening evicted agent ${id}.`);
+    });
+  });
 });
 
 // Claude Code's names work for the model as well as the human, because its

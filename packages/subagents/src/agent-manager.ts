@@ -591,6 +591,8 @@ export class AgentManager {
 
   /** Evicted records by id, oldest first (insertion order). */
   private evictedNotes = new Map<string, EvictedNote>();
+  /** Evicted id -> the id its reopened conversation runs under, so the old id keeps resolving (#330). */
+  private successors = new Map<string, string>();
 
   /**
    * Agents waiting to start, tagged with the pool they wait on (none for a
@@ -2001,6 +2003,27 @@ export class AgentManager {
     }
   }
 
+  /** Record that evicted `id` was reopened as `next`; bounded like the eviction notes. */
+  linkSuccessor(id: string, next: string): void {
+    this.successors.delete(id);
+    this.successors.set(id, next);
+    // One link per call, so at most one over the bound: drop the oldest.
+    if (this.successors.size > MAX_EVICTED_NOTES) this.successors.delete(this.successors.keys().next().value as string);
+  }
+
+  /** Forget a reopen that never started, so `id` resolves to its tombstone again. */
+  unlinkSuccessor(id: string): void {
+    this.successors.delete(id);
+  }
+
+  /** The newest id `id` continues under, following every reopen; `id` itself when never reopened. */
+  latestId(id: string): string {
+    // Acyclic: every successor is a freshly generated id.
+    let current = id;
+    for (let next = this.successors.get(current); next !== undefined; next = this.successors.get(current)) current = next;
+    return current;
+  }
+
   /** What became of an evicted agent, by id; undefined for an id this session never evicted. */
   getEvictedNote(id: string): EvictedNote | undefined {
     return this.evictedNotes.get(id);
@@ -2045,6 +2068,7 @@ export class AgentManager {
     this.tombstones.clear();
     // Ids are only meaningful within the session that issued them.
     this.evictedNotes.clear();
+    this.successors.clear();
   }
 
   /** Whether any agents are still running or queued. */
