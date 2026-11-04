@@ -32,7 +32,7 @@
     "build": "tsc -p tsconfig.build.json",
     "lint": "biome check src test",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --coverage --maxWorkers=1",
+    "test": "JITI_FS_CACHE=false vitest run --coverage --maxWorkers=1",
     "test:bun": "node ../../scripts/run-vitest.ts bun --maxWorkers=1",
     "check": "npm run lint && npm run typecheck && npm run build && npm test && npm run test:bun"
   },

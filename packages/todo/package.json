@@ -23,7 +23,7 @@
     "access": "public"
   },
   "scripts": {
-    "test": "vitest run --coverage --config .vitest.config.ts",
+    "test": "JITI_FS_CACHE=false vitest run --coverage --config .vitest.config.ts",
     "lint": "biome check --error-on-warnings .",
     "typecheck": "tsc --noEmit",
     "check": "npm run lint && npm run typecheck && npm test && npm run test:bun",

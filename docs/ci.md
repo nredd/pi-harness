@@ -411,8 +411,11 @@ runtime) and Bun the standalone target. Full Vitest runs on both engines for
 `subscription-router`, `preset`, `resource-sampler`, `todo` and `integration/inprocess`.
 `test:bun` launches `bun --bun vitest run` through `scripts/run-vitest.ts` in a disposable
 spawn-time home (the keys come from its exported `isolatedHomeEnv`, which nested runners such as
-session-kit's worker-death test reuse); `make check-ts` and both existing `owned` OS cells run it. Each invocation
-prints engine/OS/package duration and exit status and appends it to the CI step summary.
+session-kit's worker-death test reuse); `make check-ts` and both existing `owned` OS cells run it.
+The launcher also sets `JITI_FS_CACHE=false`. The `test:bun` scripts that start with native
+`bun test` (dev-tools, plan-mode, session-kit, subagents) set it for that half through an inline
+prefix, not the launcher, as do the direct `vitest` scripts; see `docs/verification-engines.md`. Each
+invocation prints engine/OS/package duration and exit status and appends it to the CI step summary.
 The launcher's `bun` engine also appends the Bun signal's Istanbul coverage arguments.
 The shared guard checks `os.homedir() === HOME` at setup, before each test and after each test,
 failing with the offending file and an instruction to inject home directories. These are

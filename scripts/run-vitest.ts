@@ -17,6 +17,14 @@ const BUN_COVERAGE_ARGS = [
 ];
 const COVERAGE_DISABLED_ARG = "--coverage.enabled=false";
 
+/**
+ * Turn off jiti's transform cache for test children. Pi's extension loader leaves it at the default,
+ * `$TMPDIR/jiti`, keyed by absolute path and never evicted, so every fixture extension a test writes
+ * into a fresh mkdtemp dir would add a file there for good. jiti 2.7 reads this variable as a boolean
+ * only, so a per-run cache path is not an option.
+ */
+const TEST_JITI_ENV = { JITI_FS_CACHE: "false" } as const;
+
 /** Every home-derived variable a Vitest child must not inherit; one place for each new guarded var. */
 export function isolatedHomeEnv(home: string): Record<string, string> {
 	return {
@@ -50,7 +58,7 @@ if (import.meta.main) {
 				"run",
 				...vitestArgs,
 			],
-			{ stdio: "inherit", env: { ...process.env, ...isolatedHomeEnv(home) } },
+			{ stdio: "inherit", env: { ...process.env, ...isolatedHomeEnv(home), ...TEST_JITI_ENV } },
 		);
 		if (result.error) throw result.error;
 		status = result.status ?? FAILURE_EXIT_STATUS;

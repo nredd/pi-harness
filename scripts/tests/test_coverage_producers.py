@@ -15,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 INCLUDE = re.compile(r"include:\s*(\[[^\]]*\])", re.DOTALL)
+NATIVE_BUN_TEST = re.compile(r"(?:\w+=\S+ )*bun test ")
 
 
 def test_primary_configs_match_policy_inventory() -> None:
@@ -148,7 +149,8 @@ def test_declared_bun_commands_delegate_coverage_to_the_launcher() -> None:
         command = json.loads(manifest.read_text())["scripts"].get("test:bun")
         if not command:
             continue
-        if command.startswith("bun test "):
+        # Native Bun commands may carry an env prefix such as `JITI_FS_CACHE=false` (#352).
+        if NATIVE_BUN_TEST.match(command):
             assert "--coverage-reporter=text" in command, manifest
             assert "--coverage-reporter=lcov" in command, manifest
             assert "--coverage-dir=coverage/bun" in command, manifest
