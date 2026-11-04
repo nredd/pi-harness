@@ -3,7 +3,11 @@
 `make check-package-contracts` proves the three plugin tarballs work alone against exact stock Pi.
 It is explicit and separate from `make check`: it needs the npm registry on first use (to install
 stock Pi) and runs real Pi processes. The tooling itself (`scripts/package_contracts.py`,
-`scripts/faux_provider.py`) is unit tested by `make check-scripts`.
+`scripts/faux_provider.py`) is unit tested by `make check-scripts`, with no uncovered line or
+function in `package_contracts.py` on either OS (#381): `scripts/tests/test_stock_scenarios.py` drives
+the dev-tools, session-kit and router scenarios through a scripted `run_pi` and provider, one test per
+rejected violation, and the Linux/Darwin name-source branches run on both hosts through the
+`host_platform` and `PROC_ROOT` seams.
 
 Pinned identity (constants in `scripts/package_contracts.py`, never "latest"):
 
