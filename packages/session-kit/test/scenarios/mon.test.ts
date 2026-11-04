@@ -92,8 +92,9 @@ function rendersScan(screen: string, snapshot: ResourceSnapshot): void {
 	expect(snapshot.processes.length > 0 || snapshot.coverage.reasons.includes("deadline"), screen).toBe(true);
 	const { complete, enumerated, reasons, sampled } = snapshot.coverage;
 	if (complete) expect(screen).not.toContain("Partial list");
+	// The notice joins reasons in scan order, so an unreadable-process reason can come before the budget one.
 	if (reasons.includes("deadline"))
-		expect(screen).toContain(`Partial list: ${sampled} of ${enumerated} seen (time budget`);
+		expect(screen).toMatch(new RegExp(`Partial list: ${sampled} of ${enumerated} seen \\([^)]*time budget`));
 }
 
 function layout(width: number, height: number): string[] {
