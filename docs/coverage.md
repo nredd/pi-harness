@@ -99,8 +99,9 @@ executable probe in process under `check-probes`: `transcript-types.ts`, `render
 fakes (`stack-resources.ts` drives the real package manager over a disposable preset), and the
 `anthropic-block-types.mjs` CLI, re-imported per test with its own argv against the installed pi-ai
 build, a misclassifying fake build and no argument. `latency.test.ts` fakes only the probe's `/proc`
-reads and schedules with fake timers, so the Linux mount/WSL path and the non-Linux fallback both run
-on every OS. With those five files in `coverage.include` and no new tests, darwin on `f2d607eb`
+reads, and runs every clock it reads (timers, `Date`, `performance.now()`) on fake timers, with its
+`Atomics.wait` self-test stall advancing the fake clock instead of blocking. The Linux mount/WSL path
+and the non-Linux fallback both run on every OS, and no reading depends on real time or load. With those five files in `coverage.include` and no new tests, darwin on `f2d607eb`
 left 182 of 291 lines and 46 of 63 functions uncovered; with the tests it is 0/0. The
 `probe-boundaries` pending package and the `anthropic-block-types.mjs` `verification_helpers` row
 are gone. The counters changed with the producer, the floors did not: c8 counted every

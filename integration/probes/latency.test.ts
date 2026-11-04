@@ -36,6 +36,9 @@ const saved = new Map(ENV.map((name) => [name, process.env[name]]));
 let root = "";
 let exitListeners: ((...args: unknown[]) => void)[] = [];
 let stdinData: (() => void) | undefined;
+// Milliseconds the probe's `Atomics.wait` self-test "blocked" for: added to the fake clock's
+// `performance.now()` without firing any timer, exactly what a blocked event loop looks like.
+let stalled = 0;
 
 beforeEach(() => {
 	root = fs.mkdtempSync(join(tmpdir(), "latency-probe-"));
@@ -49,8 +52,17 @@ beforeEach(() => {
 		return process.stdin;
 	});
 	exitListeners = process.listeners("exit") as typeof exitListeners;
-	// Real `performance.now()` keeps measuring; only scheduling is virtual.
-	vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout", "Date"] });
+	// Every clock the probe reads is virtual: no real time passes and no reading depends on load.
+	vi.useFakeTimers({
+		toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout", "Date", "performance"],
+	});
+	stalled = 0;
+	const fakeNow = performance.now.bind(performance);
+	vi.spyOn(performance, "now").mockImplementation(() => fakeNow() + stalled);
+	vi.spyOn(Atomics, "wait").mockImplementation((_array, _index, _value, timeout) => {
+		stalled += timeout ?? 0;
+		return "timed-out";
+	});
 });
 
 afterEach(() => {
@@ -140,10 +152,10 @@ test("on Linux it tags WSL, picks the longest matching mount and times input-to-
 	stdinData();
 	tui.terminal.write("frame-1");
 	tui.terminal.write("ü");
-	vi.advanceTimersByTime(1500);
-	// The self-test stall fired at 1.5 s and blocked the loop for 60 ms of real time.
-	vi.advanceTimersByTime(20);
-	vi.advanceTimersByTime(480);
+	vi.advanceTimersByTime(1499);
+	assert.equal(stalled, 0, "the self-test stall is not due before 1.5 s");
+	vi.advanceTimersByTime(501);
+	assert.equal(stalled, 60, "the self-test stall fired once, for PI_LATENCY_STALL_BLOCK_MS");
 	assert.deepEqual(written, ["frame-1", "ü"]);
 
 	const [first, second, third, ...rest] = records(out);
@@ -154,23 +166,22 @@ test("on Linux it tags WSL, picks the longest matching mount and times input-to-
 	assert.equal(first.tui, true);
 	const startFs = first.fs as { type: string; stat_ms: number; fsync_ms: number };
 	assert.equal(startFs.type, "9p");
-	assert.ok(startFs.stat_ms >= 0 && startFs.fsync_ms >= 0);
+	assert.deepEqual(startFs, { type: "9p", stat_ms: 0, fsync_ms: 0 });
 	assert.deepEqual(fs.readdirSync(agentDir), [], "the fsync scratch file is removed");
 
+	// Window one, 0-1 s: two writes (9 bytes, `ü` is two), one paint after the first input, no lag.
 	assert.equal(second.kind, "summary");
-	const write = second.write as { bytes: number; calls: number; bytes_per_s: number };
-	assert.equal(write.bytes, "frame-1".length + 2);
-	assert.equal(write.calls, 2);
-	assert.ok(write.bytes_per_s > 0);
-	assert.equal((second.input_to_paint_ms as number[]).length, 1);
+	assert.equal(second.window_s, 1);
+	assert.deepEqual(second.write, { bytes: 9, calls: 2, max_block_ms: 0, total_block_ms: 0, bytes_per_s: 9 });
+	assert.deepEqual(second.input_to_paint_ms, [0]);
+	assert.deepEqual(second.loop_lag_ms, { p50: 0, p95: 0, p99: 0, max: 0 });
+	assert.deepEqual(second.stalls, []);
 
+	// Window two, 1-2 s: the stall fired first at 1.5 s, so that tick ran 60 ms late; the other 99 on time.
 	assert.equal(third.kind, "summary");
-	const stalls = third.stalls as { ms: number }[];
-	assert.ok(
-		stalls.some((stall) => stall.ms >= 50),
-		JSON.stringify(stalls),
-	);
-	assert.ok((third.loop_lag_ms as { max: number }).max >= 50);
+	assert.equal(third.window_s, 1.06);
+	assert.deepEqual(third.stalls, [{ at: (first.t as number) + 1500, ms: 60 }]);
+	assert.deepEqual(third.loop_lag_ms, { p50: 0, p95: 0, p99: 0, max: 60 });
 	assert.deepEqual(third.write, { bytes: 0, calls: 0, max_block_ms: 0, total_block_ms: 0, bytes_per_s: 0 });
 	assert.deepEqual(third.input_to_paint_ms, []);
 });
@@ -213,7 +224,7 @@ test("summarises every five seconds by default, with percentiles over the window
 	const summary = records(out)[1];
 	assert.ok(summary);
 	const lag = summary.loop_lag_ms as { p50: number; p95: number; p99: number; max: number };
-	assert.ok(lag.p50 <= lag.p95 && lag.p95 <= lag.p99 && lag.p99 <= lag.max);
-	assert.ok((summary.window_s as number) >= 0);
+	assert.deepEqual(lag, { p50: 0, p95: 0, p99: 0, max: 0 });
+	assert.equal(summary.window_s, 5);
 	assert.equal(fs.readdirSync(root).filter((name) => name.startsWith(".latency-probe-")).length, 0);
 });

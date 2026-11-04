@@ -298,6 +298,40 @@ def test_explicit_reasoned_reclassification_allows_legitimate_change(tmp_path: P
     check_inventory_ratchet(tmp_path, current, base, "HEAD")
 
 
+def test_removed_pending_package_still_needs_a_reclassification_per_file(tmp_path: Path) -> None:
+    """Prove `check_ratchet` skipping a removed pending package does not drop its sources silently.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+    Returns:
+        None: Each file the deleted pending package owned needs its own reasoned entry.
+    Raises:
+        AssertionError: A pending package and its source can vanish without a declaration.
+    """
+    setup_report(tmp_path)
+    (tmp_path / "packages/pending").mkdir(parents=True)
+    for name in ["a.ts", "b.ts"]:
+        (tmp_path / "packages/pending" / name).write_text("export const probe = 1;\n")
+    base = policy()
+    base.packages["pending"] = Package(
+        root="packages/pending", owned=["*.ts"], exclusions=[], status="pending", note="Later.", signals={}
+    )
+    commit_base(tmp_path, base)
+    current = policy()
+    with pytest.raises(ValueError, match="Inventory ratchet requires"):
+        check_inventory_ratchet(tmp_path, current, base, "HEAD")
+    entries = [
+        Reclassification(package="pending", path=f"packages/pending/{name}", reason="Measured elsewhere now.")
+        for name in ["a.ts", "b.ts"]
+    ]
+    for kept in entries:
+        current.reclassifications = [kept]
+        with pytest.raises(ValueError, match="Inventory ratchet requires"):
+            check_inventory_ratchet(tmp_path, current, base, "HEAD")
+    current.reclassifications = entries
+    check_inventory_ratchet(tmp_path, current, base, "HEAD")
+
+
 @pytest.mark.parametrize("invalid", ["duplicate", "stale", "replacement"])
 def test_invalid_reclassification_cannot_approve_loss(tmp_path: Path, invalid: str) -> None:
     """Reject ambiguous approvals and nonexistent replacement identities.
