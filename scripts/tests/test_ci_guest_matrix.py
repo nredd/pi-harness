@@ -1637,7 +1637,8 @@ def test_fan_in_accounts_each_cell_against_its_own_os_floors(os_name: str, cover
         coverage_os (str): `coverage_accounting.py --os` it must select.
     """
     step = fan_in_step("Coverage accounting (existing reports, including test failures)")
-    assert render(step["env"]["COVERAGE_OS"], {"matrix.os": os_name}) == coverage_os
+    context = {"matrix.os": os_name, "needs.classify.outputs.plan": classify_outputs(PULL_REQUEST)["plan"]}
+    assert render(step["env"]["COVERAGE_OS"], context) == coverage_os
     assert (
         step["run"]
         == 'make check-coverage BASE="$BASE" COVERAGE_OS="$COVERAGE_OS" COVERAGE_HOST="$COVERAGE_HOST"'

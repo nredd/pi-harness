@@ -331,10 +331,10 @@ jobs:
         if: always() && steps.plan.outputs.run == 'true'
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
-          COVERAGE_OS: ${{ matrix.os == 'macos-14' && 'darwin' || 'linux' }}
-          # The cell's guest class (`linux`, `macos`, `wsl2`), from the plan the shards ran: signals listing it in
-          # `skip_hosts` (Python on WSL) report NOT RUN.
-          COVERAGE_HOST: ${{ fromJSON(needs.classify.outputs.plan)[format('owned ({0})', matrix.os)].shards[0].guest }}
+          # The plan owns both: the floors' platform, and the host class whose `skip_hosts` signals (Python on
+          # WSL) report NOT RUN.
+          COVERAGE_OS: ${{ fromJSON(needs.classify.outputs.plan)[format('owned ({0})', matrix.os)].coverage_os }}
+          COVERAGE_HOST: ${{ fromJSON(needs.classify.outputs.plan)[format('owned ({0})', matrix.os)].guest }}
         run: make check-coverage BASE="$BASE" COVERAGE_OS="$COVERAGE_OS" COVERAGE_HOST="$COVERAGE_HOST"
       - name: Preserve independent coverage reports and summary
         if: always() && steps.plan.outputs.run == 'true'

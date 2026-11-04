@@ -123,6 +123,9 @@ RUNNERS = {
     "macos-14": ("xcode-27", "macos"),
     "wsl2": ("windows-2025", "wsl2"),
 }
+# The platform whose coverage floors account a cell's reports (`coverage_accounting.py --os`); the fan-in
+# runs on Ubuntu, so it cannot read its own `sys.platform`. WSL reports are Linux reports.
+COVERAGE_OS = {"ubuntu-24.04": "linux", "macos-14": "darwin", "wsl2": "linux"}
 STACKS = ("personal", "local")
 SMOKE_CELL = ("ubuntu-24.04", "personal")
 # NOT RUN reasons; the reporter appends "This is not a pass." to each.
@@ -228,6 +231,9 @@ class CellPlan:
         reason (str): Why work is skipped, empty when everything the cell owns runs.
         blocked (bool): Whether the cell must fail with `reason` (an invalid PR title).
         shards (tuple[ShardPlan, ...]): The shard jobs a running `owned` cell fans in, else empty.
+        guest (str): A running `owned` cell's CI host class (`coverage_accounting.py --host`), else empty.
+        coverage_os (str): A running `owned` cell's coverage platform (`coverage_accounting.py --os`), else
+            empty.
     """
 
     run: bool
@@ -236,13 +242,15 @@ class CellPlan:
     reason: str
     blocked: bool = False
     shards: tuple[ShardPlan, ...] = ()
+    guest: str = ""
+    coverage_os: str = ""
 
     def to_output(self) -> dict[str, object]:
         """Return the JSON-ready form the workflow reads with `fromJSON`.
 
         Returns:
-            dict[str, object]: Booleans, the space-joined gates, the reason, the block flag and the shard
-                matrix entries.
+            dict[str, object]: Booleans, the space-joined gates, the reason, the block flag, the shard
+                matrix entries and the fan-in's accounting `guest` and `coverage_os`.
         """
         return {
             "run": self.run,
@@ -251,6 +259,8 @@ class CellPlan:
             "reason": self.reason,
             "blocked": self.blocked,
             "shards": [shard.to_output() for shard in self.shards],
+            "guest": self.guest,
+            "coverage_os": self.coverage_os,
         }
 
 
@@ -578,6 +588,8 @@ def native_plan(
         gates=OWNED_GATES[os_name],
         reason="",
         shards=shard_plans(os_name, workspaces),
+        guest=RUNNERS[os_name][1],
+        coverage_os=COVERAGE_OS[os_name],
     )
 
 

@@ -20,6 +20,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import ci_paths
+import coverage_accounting
 import merge_pr_checks
 
 GIT = ci_paths.GIT
@@ -614,7 +615,9 @@ def test_code_change_runs_every_native_cell_with_its_gates(repo: Path) -> None:
     """
     plan = plan_change(repo, {"packages/dev-tools/src/index.ts": "x\n"}, PULL_REQUEST)
     ubuntu = plan["owned (ubuntu-24.04)"]
-    assert ubuntu == ci_paths.CellPlan(True, True, ALL_NATIVE_GATES, "", shards=ubuntu.shards)
+    assert ubuntu == ci_paths.CellPlan(
+        True, True, ALL_NATIVE_GATES, "", shards=ubuntu.shards, guest="linux", coverage_os="linux"
+    )
     assert len(ubuntu.shards) == 4
     assert plan["owned (macos-14)"].gates == MAC_GATES
     assert plan["contracts (macos-14)"] == ci_paths.CellPlan(True, True, (), "")
@@ -645,7 +648,9 @@ def test_wsl_inputs_wake_wsl_with_only_the_lcov_producers(repo: Path) -> None:
     """
     plan = plan_change(repo, {".github/workflows/ci.yml": "x\n"}, PULL_REQUEST)
     wsl = plan["owned (wsl2)"]
-    assert wsl == ci_paths.CellPlan(True, True, WSL_GATES, "", shards=wsl.shards)
+    assert wsl == ci_paths.CellPlan(
+        True, True, WSL_GATES, "", shards=wsl.shards, guest="wsl2", coverage_os="linux"
+    )
     assert len(wsl.shards) == 2
     assert plan["contracts (wsl2)"].run
     assert plan["stack (ubuntu-24.04, personal)"].scenarios
@@ -858,8 +863,11 @@ def test_write_github_output_publishes_one_line_plan_json(repo: Path, tmp_path: 
                 "workspaces": "",
             },
         ],
+        "guest": "macos",
+        "coverage_os": "darwin",
     }
     assert plan["contracts (macos-14)"]["shards"] == []
+    assert (plan["contracts (macos-14)"]["guest"], plan["contracts (macos-14)"]["coverage_os"]) == ("", "")
     assert plan["stack (wsl2, local)"]["reason"] == ci_paths.STACK_NOT_RUN["wsl2", "local"]
 
 
@@ -1234,6 +1242,30 @@ def test_cell_gates_are_its_shards_gates_in_order(repo: Path, os_name: str) -> N
     assert plan.gates == ci_paths.OWNED_GATES[os_name]
 
 
+@pytest.mark.parametrize(
+    ("os_name", "coverage_os"), [("ubuntu-24.04", "linux"), ("macos-14", "darwin"), ("wsl2", "linux")]
+)
+def test_owned_cells_publish_the_fan_ins_accounting_platform(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, os_name: str, coverage_os: str
+) -> None:
+    """Publish the `--os` and `--host` the Ubuntu fan-in accounts a cell with, from the plan alone.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        monkeypatch (pytest.MonkeyPatch): Sets `sys.argv` for the real accounting parser.
+        os_name (str): Matrix `os` value.
+        coverage_os (str): Platform whose floors that cell's reports are held to.
+    """
+    plan = plan_change(repo, {".github/workflows/ci.yml": "x\n"}, PUSH)[f"owned ({os_name})"]
+    assert plan.coverage_os == coverage_os
+    # One guest per cell: every shard ran there, so the cell's host class is theirs.
+    assert {shard.guest for shard in plan.shards} == {plan.guest} == {ci_paths.RUNNERS[os_name][1]}
+    argv = ["coverage_accounting.py", "--base", "x", "--os", plan.coverage_os, "--host", plan.guest]
+    monkeypatch.setattr(sys, "argv", argv)
+    args = coverage_accounting.parse_args()
+    assert (args.os, args.host) == (coverage_os, plan.guest)
+
+
 def test_gate_names_never_contain_one_another() -> None:
     """Keep `contains(<space-joined gates>, '<gate>')` in the workflow an exact membership test."""
     names = {gate for gates in ci_paths.OWNED_GATES.values() for gate in gates}
@@ -1254,6 +1286,7 @@ def test_cells_that_do_not_run_plan_no_shards(repo: Path) -> None:
     assert code["contracts (ubuntu-24.04)"].shards == ()
     assert code["stack (ubuntu-24.04, local)"].shards == ()
     assert code["owned (macos-14)"].shards
+    assert all((cell.guest, cell.coverage_os) == ("", "") for cell in (*docs.values(), code["owned (wsl2)"]))
     blocked = ci_paths.plan_cells(classify_change(repo, {"b.txt": "x\n"}), PULL_REQUEST, "too long")
     assert all(cell.shards == () for cell in blocked.values())
 

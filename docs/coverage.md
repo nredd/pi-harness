@@ -57,7 +57,7 @@ integer budgets (or report-only reference numbers) by runner OS: `darwin` (`maco
 `linux` (`ubuntu-24.04`), never rounded
 percentages or platform averages. The `owned (wsl2)` cell's shards run the same producers inside Ubuntu
 on WSL2 and the cell is explicitly **Linux-like, enforced**: its Ubuntu fan-in accounts the reports
-against the existing Linux floors, as the macOS fan-in passes `COVERAGE_OS=darwin` for the darwin ones. Native Windows coverage is not measured. WSL contract scenarios
+against the existing Linux floors, as the macOS fan-in passes `COVERAGE_OS=darwin` for the darwin ones (each from the plan's `coverage_os`). Native Windows coverage is not measured. WSL contract scenarios
 remain separate acceptance evidence, not owned-source coverage. WSL reports are preserved as
 `coverage-wsl2`, never merged with or averaged into `coverage-ubuntu-24.04`. Unsupported OSes and missing selected-OS floors
 fail closed, including when the global target is enabled. `enforce_target: true` applies after every
