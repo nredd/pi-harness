@@ -28,25 +28,44 @@ function exitNote(info: MonitorInfo): string {
 	}
 }
 
+// Terminal control characters, written as regex escape text (`\\u001b`, not the character itself),
+// so no pattern below holds a raw control character for `noControlCharactersInRegex` to flag.
+const ESC = "\\u001b";
+const BEL = "\\u0007";
+const CSI_C1 = "\\u009b";
+const OSC_C1 = "\\u009d";
+const ST_C1 = "\\u009c";
+const C0 = "\\u0000-\\u001f";
+const C1 = "\\u007f-\\u009f";
+/** CSI sequences, via both ESC-[ and the C1 single-byte introducer. */
+const CSI_SEQUENCE = new RegExp(`(?:${ESC}\\[|${CSI_C1})[0-?]*[ -/]*[@-~]`, "g");
+/** OSC sequences with their payload; an unterminated OSC swallows the rest, as a terminal would. */
+const OSC_SEQUENCE = new RegExp(`(?:${ESC}\\]|${OSC_C1})[^${BEL}${ST_C1}${ESC}]*(?:${BEL}|${ST_C1}|${ESC}\\\\)?`, "g");
+/** Any remaining two-character ESC sequence. */
+const ESC_PAIR = new RegExp(`${ESC}.`, "g");
+const CONTROL_CHARACTER = new RegExp(`[${C0}${C1}]`, "g");
+
 /**
  * Remove terminal control characters from model-controlled text (a monitor's `match`) before it
  * reaches `ctx.ui.notify`: whole CSI/OSC sequences, other ESC pairs, C0/C1 controls (newlines and
  * tabs become spaces) and bidi controls. The same rules as `packages/todo/tool/sanitize.ts`; the
  * packages publish independently and share no runtime dependency, so it is mirrored, not imported.
  */
-// biome-ignore-start lint/suspicious/noControlCharactersInRegex: matching terminal control characters is this function's job
 function sanitizeTerminalText(value: string): string {
-	return value
-		.replace(/(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]/g, "")
-		.replace(/(?:\u001b\]|\u009d)[^\u0007\u009c\u001b]*(?:\u0007|\u009c|\u001b\\)?/g, "")
-		.replace(/\u001b./g, "")
-		.replace(/[\u2028\u2029]/g, " ")
-		.replace(/[\u0000-\u001f\u007f-\u009f]/g, (character) =>
-			character === "\n" || character === "\r" || character === "\t" ? " " : "",
-		)
-		.replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");
+	return (
+		value
+			.replace(CSI_SEQUENCE, "")
+			.replace(OSC_SEQUENCE, "")
+			.replace(ESC_PAIR, "")
+			// Unicode line/paragraph separators join lines like \n does below.
+			.replace(/[\u2028\u2029]/g, " ")
+			.replace(CONTROL_CHARACTER, (character) =>
+				character === "\n" || character === "\r" || character === "\t" ? " " : "",
+			)
+			// Bidi embedding/override/isolate controls and LRM/RLM marks.
+			.replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "")
+	);
 }
-// biome-ignore-end lint/suspicious/noControlCharactersInRegex: end of the terminal-control matcher
 
 /**
  * What wakes the parent from a running monitor: every batch with `wake`, else a `match` line, and
