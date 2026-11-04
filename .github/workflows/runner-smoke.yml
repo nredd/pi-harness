@@ -1,0 +1,70 @@
+# Proves each self-hosted runner pool is up and isolated. See docs/self-hosted-runners.md.
+name: Runner smoke
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/runner-smoke.yml
+      - docs/self-hosted-runners.md
+
+permissions:
+  contents: read
+
+jobs:
+  pi-linux:
+    # Same-repo only: a fork PR could rewrite `runs-on`, so this guard is NOT the security boundary.
+    # The boundary is fork-PR approval, repo-scoped JIT runners and the per-VM firewall.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    name: smoke (pi-linux)
+    runs-on: [self-hosted, pi-linux]
+    timeout-minutes: 10
+    steps:
+      - name: Identify the runner
+        run: |
+          uname -a
+          echo "runner=$RUNNER_NAME os=$RUNNER_OS arch=$RUNNER_ARCH"
+          nproc
+          free -g | head -2
+      - name: Public internet reachable
+        run: curl -fsS --max-time 10 -o /dev/null https://api.github.com
+      - name: Private networks unreachable
+        run: |
+          fail=0
+          for target in 192.168.40.1:80 192.168.40.100:22 192.168.40.100:8006 100.85.85.113:22 10.0.0.1:80; do
+            if timeout 5 bash -c "exec 3<>/dev/tcp/${target%:*}/${target#*:}" 2>/dev/null; then
+              echo "::error::reachable: $target"; fail=1
+            else
+              echo "blocked: $target"
+            fi
+          done
+          exit $fail
+
+  pi-macos:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    name: smoke (pi-macos)
+    runs-on: [self-hosted, pi-macos]
+    timeout-minutes: 10
+    steps:
+      - name: Identify the runner
+        run: |
+          uname -a
+          echo "runner=$RUNNER_NAME os=$RUNNER_OS arch=$RUNNER_ARCH user=$(id -un)"
+          sw_vers -productVersion
+      - name: Public internet reachable
+        run: curl -fsS --max-time 10 -o /dev/null https://api.github.com
+      - name: Private networks unreachable
+        run: |
+          fail=0
+          for target in 192.168.1.1:80 192.168.40.1:80 192.168.40.100:22 100.85.85.113:22 100.99.73.79:22 10.0.0.1:80; do
+            if /usr/bin/nc -z -G 3 "${target%:*}" "${target#*:}" 2>/dev/null; then
+              echo "::error::reachable: $target"; fail=1
+            else
+              echo "blocked: $target"
+            fi
+          done
+          exit $fail
+      - name: Owner home unreadable
+        run: |
+          if ls /Users/redd >/dev/null 2>&1; then echo "::error::can read /Users/redd"; exit 1; fi
+          echo "blocked: /Users/redd"
