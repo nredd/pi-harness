@@ -5,7 +5,7 @@ WSL bootstrap explicitly sets `core.autocrlf=false` and `core.eol=lf`, then rebu
 alone can retain clean CRLF stat entries. The real-Git regression verifies exact tracked text
 and unchanged binary bytes; no source assertion or generated-runtime comparison is weakened.
 
-CI is the gate. Local runs are for development. Hosted runners only, no stored credentials or secrets.
+CI is the gate. Local runs are for development. Hosted runners by default, plus two owned shards that move to self-hosted pools while those are up (see [Self-hosted pools](#self-hosted-pools)). No stored credentials or secrets.
 The publish job alone requests a short-lived npm OIDC identity.
 
 The `stack` job's `Report coverage exclusions` summary writes only `GITHUB_STEP_SUMMARY` text.
@@ -328,6 +328,16 @@ Blocker regression receipts:
   logs are `/tmp/tui-mutant-{scan,pane,writer,zero}.log`, not durable CI artifacts. Restoring the
   old fixture teardown or final timeout screenshot separately also fails the caller regressions
   (`/tmp/tui-mutant-teardown.log`, `/tmp/tui-mutant-wait-capture.log`).
+
+## Self-hosted pools
+
+Two `owned` shards run on an owned machine while it is up, and on the hosted runner otherwise: `owned shard (ubuntu-24.04, python)` on `pi-linux` (NAS VM) and `owned shard (macos-14, ts)` on `pi-macos` (MacBook). Job names, steps and check names are unchanged, only the shard's `runner` value in the `classify` plan differs. WSL and every other cell are always hosted.
+
+- Each pool's host writes the repo variable `PI_LINUX_HEARTBEAT` / `PI_MACOS_HEARTBEAT` (epoch seconds every ~45 s, `0` on a clean stop). `classify` passes both to `scripts/ci_paths.py`; `scripts/runner_pools.py` treats a value as up only if it is a positive integer at most 120 s old (30 s of clock skew tolerated). Missing, `0`, stale or garbled means hosted, so an unset variable reproduces the all-hosted plan exactly
+- A fork PR never gets a pool: `classify` passes `--untrusted` and the pool list is empty. This is not the security boundary (a fork edits its own workflow; fork-PR approval and the ephemeral, network-isolated runners are), it just keeps honest runs honest
+- `.github/workflows/runner-rescue.yml` runs every 5 minutes on a hosted runner. A run with a job queued on a pool label for over 5 minutes while that pool's heartbeat is stale is cancelled and rerun (at most 5 runs per tick, at most 3 attempts per run); the rerun's `classify` then plans those shards hosted. It needs `actions: write` only
+- Window: a pool that dies right after `classify` read a fresh heartbeat strands its job for up to ~7 minutes (heartbeat TTL plus the rescue threshold plus the 5 minute cron) before the rescue reroutes it
+- The cells and pools live in `SELF_HOSTED_SHARDS` / `POOLS` in `scripts/runner_pools.py`. A pool runs jobs one at a time, so each takes one long shard; give it more and the critical path gets longer, not shorter
 
 ## Capacity controls
 
