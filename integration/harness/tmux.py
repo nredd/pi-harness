@@ -245,7 +245,7 @@ class TmuxPane:
         Returns:
             list[str]: exactly `height` rows when the pane is alive.
         """
-        return [line.rstrip() for line in self.capture().split("\n")]
+        return [line.rstrip() for line in self.capture().splitlines()]
 
     def wait_for(self, pattern: str, *, timeout_s: float = 30.0, absent: bool = False) -> str:
         """Poll until a regex matches (or stops matching) the plain screen.
@@ -294,7 +294,7 @@ class TmuxPane:
             if current != last:
                 last, since = current, time.monotonic()
             elif time.monotonic() - since >= quiet_s:
-                return [line.rstrip() for line in current.split("\n")]
+                return [line.rstrip() for line in current.splitlines()]
         raise TmuxTimeoutError(f"Screen never settled for {quiet_s}s within {timeout_s}s", last)
 
     def resize(self, width: int, height: int) -> None:
