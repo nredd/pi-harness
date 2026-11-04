@@ -59,7 +59,13 @@ CellKey = tuple[str, str, str]
 # VM, so short jobs lose, and an unlisted cell is not known to pass on the pool images.
 CELL_SECONDS: dict[CellKey, int] = {
     ("owned", "macos-14", "ts"): 937,
+    ("owned", "macos-14", "python"): 462,
+    ("contracts", "macos-14", ""): 331,
+    ("stack", "macos-14", "local"): 711,
+    ("stack", "ubuntu-24.04", "personal"): 940,
     ("owned", "ubuntu-24.04", "ts"): 428,
+    ("owned", "ubuntu-24.04", "computer-use"): 282,
+    ("owned", "ubuntu-24.04", "subagents"): 243,
 }
 MIN_HEAVY_S = 240
 
@@ -113,7 +119,7 @@ def free_slots(value: str, now: float, pool: Pool) -> int | None:
         return None
     free = _split_beat(value)[1]
     if free is None:
-        return min(1, pool.slots)
+        return pool.slots  # EXPERIMENT: plain epoch = all slots free
     try:
         count = int(free)
     except ValueError:
