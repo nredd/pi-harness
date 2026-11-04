@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -733,3 +734,165 @@ def test_timeout_artifact_keeps_partial_streams_unmodified(
     assert report["startup_returncode"] == 124
     assert report["startup_timed_out"] is True
     assert report["replay_timed_out"] is None
+
+
+def test_read_regular_refuses_a_non_regular_input(tmp_path: Path) -> None:
+    """A directory where a file belongs is refused instead of read."""
+    (tmp_path / "evidence.json").mkdir()
+    with pytest.raises(ValueError, match=r"^Diagnostic input is not a bounded regular file$"):
+        diag.read_regular(tmp_path / "evidence.json", tmp_path)
+
+
+def test_publish_refuses_unsafe_inventories_before_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An existing destination, an unlisted path or an oversized input stops publication with nothing written.
+
+    Parameters:
+        tmp_path (Path): private publication parent.
+        monkeypatch (pytest.MonkeyPatch): shrinks the size limit so no large buffer is allocated.
+    """
+    existing = tmp_path / "existing"
+    existing.mkdir()
+    with pytest.raises(FileExistsError, match=r"^Diagnostic output must be a new directory$"):
+        diag.publish({"pi": b"x"}, existing)
+    output = tmp_path / "artifacts"
+    with pytest.raises(ValueError, match=r"^Unapproved diagnostic artifact path$"):
+        diag.publish({"auth.json": b"x"}, output)
+    monkeypatch.setattr(diag, "MAX_FILE_BYTES", 4)
+    with pytest.raises(ValueError, match=r"^Diagnostic input exceeds the publication size limit$"):
+        diag.publish({"pi": b"12345"}, output)
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["existing"]
+
+
+def test_capture_cache_refuses_conflicting_correlated_bytes(tmp_path: Path) -> None:
+    """One correlated Jiti name with different bytes in two cache roots is ambiguous, so it is refused."""
+    box = build_sandbox(tmp_path / "sandbox")
+    core = tmp_path / "core"
+    source = box.agent_dir / "npm/node_modules/pi-memory/index.ts"
+    name = diag.cache_names(source)[0]
+    for root, contents in ((box.root / "tmp/jiti", "one"), (core / "node_modules/.cache/jiti", "two")):
+        root.mkdir(parents=True)
+        (root / name).write_text(contents)
+    with pytest.raises(ValueError, match=r"^Conflicting correlated Jiti cache bytes$"):
+        diag.capture_cache(box, core, source, "primary")
+
+
+def test_build_metadata_records_versions_and_unavailable_queries(
+    tmp_path: Path, inputs: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each identity comes from its own query; one that cannot start is recorded as unavailable, not raised.
+
+    Parameters:
+        tmp_path (Path): private fixture directory.
+        inputs (tuple[Path, Path, Path]): synthetic executable/core/evidence.
+        monkeypatch (pytest.MonkeyPatch): a `PATH` with no `bun`.
+    """
+    binary, core, _evidence = inputs
+    binary.write_text("#!/bin/sh\necho 'pi 9.9.9'\n")
+    binary.chmod(0o755)
+    identity = ["-c", "user.name=t", "-c", "user.email=t@e.invalid", "-c", "commit.gpgsign=false"]
+    subprocess.run(["git", "init", "-q", str(core)], check=True)
+    subprocess.run(
+        ["git", "-C", str(core), *identity, "commit", "-q", "--allow-empty", "-m", "c"], check=True
+    )
+    head = subprocess.check_output(["git", "-C", str(core), "rev-parse", "HEAD"], text=True).strip()
+    empty = tmp_path / "empty-path"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    metadata = diag.build_metadata(build_sandbox(tmp_path / "sandbox"), binary, core)
+    assert (metadata.core_sha, metadata.pi_version) == (head, "pi 9.9.9")
+    assert metadata.bun_version == "unavailable (FileNotFoundError)"
+    assert metadata.node_version.startswith("v")
+    assert metadata.build_command[-3:] == ["linux-x64", "--out", str(binary.parent.parent)]
+
+
+def test_replay_memory_skips_a_stack_without_the_memory_package(tmp_path: Path) -> None:
+    """An installed memory entrypoint that no `npm:pi-memory@` declaration loads is never rewritten."""
+    box = build_sandbox(tmp_path / "sandbox")
+    memory = box.agent_dir / "npm/node_modules/pi-memory"
+    memory.mkdir(parents=True)
+    (memory / "index.ts").write_text("export default function() {}")
+    box.patch_json("settings.json", {"packages": ["npm:other@1.0.0", {"source": "npm:another@1.0.0"}]})
+    assert diag.replay_memory(box, ["pi"], {}) is None
+    assert not (memory / "diagnostic-wrapper.ts").exists()
+
+
+def test_cli_prepare_build_uses_the_pinned_bun_on_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`prepare-build` wraps the `bun` found on `PATH`, and refuses with a usage error when there is none.
+
+    Parameters:
+        tmp_path (Path): private executable and evidence directories.
+        monkeypatch (pytest.MonkeyPatch): `PATH` and CLI arguments.
+    """
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    monkeypatch.setenv("PATH", str(tools))
+    monkeypatch.setattr(diag.sys, "argv", ["diagnostic", "prepare-build", "--directory", str(tmp_path / "a")])
+    with pytest.raises(SystemExit) as caught:
+        diag.main()
+    assert caught.value.code == 2
+    assert not (tmp_path / "a").exists()
+    (tools / "bun").write_text("#!/bin/sh\n")
+    (tools / "bun").chmod(0o755)
+    assert diag.main() == 0
+    assert repr(str((tools / "bun").resolve())) in (tmp_path / "a/bin/bun").read_text()
+
+
+def test_cli_keeps_the_status_when_readiness_cannot_be_announced(
+    tmp_path: Path,
+    inputs: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An unwritable `--github-output` is logged; the original failed startup status still wins.
+
+    Parameters:
+        tmp_path (Path): private fixture/publication directory.
+        inputs (tuple[Path, Path, Path]): synthetic executable/core/evidence.
+        monkeypatch (pytest.MonkeyPatch): synthetic installer, startup and CLI inputs.
+        caplog (pytest.LogCaptureFixture): captured diagnostics.
+    """
+    binary, core, evidence = inputs
+    box = build_sandbox(tmp_path / "sandbox")
+    monkeypatch.setattr(diag, "install_stack", lambda *_: box)
+    monkeypatch.setattr(diag, "execute", lambda argv, **_: diag.StartupResult(5, b"", b"failed"))
+    monkeypatch.setattr(diag, "build_metadata", lambda *_: diag.BuildMetadata())
+    github_output = tmp_path / "github-output"
+    github_output.mkdir()
+    monkeypatch.setattr(
+        diag.sys,
+        "argv",
+        [
+            "diagnostic",
+            "startup",
+            "--binary",
+            str(binary),
+            "--core",
+            str(core),
+            "--build-evidence",
+            str(evidence),
+            "--output",
+            str(tmp_path / "artifacts"),
+            "--github-output",
+            str(github_output),
+        ],
+    )
+    with caplog.at_level("ERROR", logger=diag.LOGGER.name):
+        assert diag.main() == 5
+    assert (tmp_path / "artifacts").is_dir()
+    assert "Cannot announce scanned diagnostic artifact; original startup status preserved" in caplog.messages
+
+
+def test_module_entrypoint_requires_an_action(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`python -m harness.standalone_diagnostics` with no action is a usage error, before any install."""
+    monkeypatch.setattr(sys, "argv", ["standalone_diagnostics"])
+    monkeypatch.delitem(sys.modules, "harness.standalone_diagnostics")
+    with pytest.raises(SystemExit) as caught:
+        runpy.run_module("harness.standalone_diagnostics", run_name="__main__")
+    assert caught.value.code == 2
+    assert "the following arguments are required: action" in capsys.readouterr().err
