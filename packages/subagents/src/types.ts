@@ -374,6 +374,8 @@ export interface NotificationDetails {
   durationMs: number;
   outputFile?: string;
   error?: string;
+  /** Set for a failed agent whose transcript survived: `resume agent <id> to continue` (status-note.ts `resumeHint`). */
+  resumeHint?: string;
   /** The `Note:` line when the agent ran on the parent model because its configured one did not resolve. */
   modelNote?: string;
   modelTier?: TierDisclosure;

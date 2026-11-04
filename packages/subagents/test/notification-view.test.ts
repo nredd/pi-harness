@@ -56,6 +56,25 @@ describe("collapsed notice", () => {
   });
 });
 
+describe("resumable failure (#456)", () => {
+  const resumeHint = "transcript intact; resume agent a1 to continue";
+
+  it("leads the collapsed line with the agent to resume, ahead of stats truncation can cut", () => {
+    const [line] = render(details({ status: "error", resumeHint }), false);
+    expect(line).toBe("✗ audit the RPC path · resume a1 to continue · 12 tools · 33.8k token · ~$0.0042 · 41.2s");
+  });
+
+  it("spells the hint out under the error when expanded", () => {
+    const lines = render(details({ status: "error", error: "API key auth failed", resumeHint }), true);
+    expect(lines.slice(1, 4)).toEqual(["  error · ↻5 · 12 tools · 33.8k token · ~$0.0042 · 41.2s", "  API key auth failed", `  ${resumeHint}`]);
+  });
+
+  it("is absent without a hint", () => {
+    expect(render(details({ status: "error" }), false)[0]).not.toContain("resume");
+    expect(render(details({ status: "error" }), true).join("\n")).not.toContain("resume");
+  });
+});
+
 describe("model fallback", () => {
   const modelNote = 'Note: configured model "ghost" did not resolve; running on parent model anthropic/x.';
 

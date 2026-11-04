@@ -399,6 +399,8 @@ By default, foreground and background agents each stream their full conversation
 
 Expanded, a notice adds `↻3 · 3 tools · 12.4k token · 4.1s`, the result preview, and the transcript as an OSC 8 hyperlink labelled `transcript ↗` (the path follows it as plain text). A group expands to one block per agent, plus a total when `showCost` is on. The LLM receives structured `<task-notification>` XML for parsing, while the user sees the themed visual.
 
+A failed agent whose session survived is resumable: a provider or credential error (e.g. a transient `!command` API key failure) ends its turn but keeps the whole transcript. Its collapsed notice reads `✗ desc · resume <id> to continue · ...`, and both the expanded notice and the `<task-notification>` `<summary>` say `transcript intact; resume agent <id> to continue`. A run that failed before it had a session carries no such hint.
+
 ## Default Agent Types
 
 | Type | Tools | Model | Prompt Mode | Description |
