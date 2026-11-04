@@ -16,7 +16,7 @@ References:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 # A heartbeat is written every ~45 s; two minutes tolerates a missed write or two without routing long
@@ -71,14 +71,36 @@ def is_fresh(value: str, now: float, ttl_s: int = HEARTBEAT_TTL_S) -> bool:
     return beat > 0 and -CLOCK_SKEW_S <= now - beat <= ttl_s
 
 
+def parse_heartbeats(items: Sequence[str]) -> dict[str, str]:
+    """Parse repeated `POOL=VALUE` command-line items.
+
+    Parameters:
+        items (Sequence[str]): e.g. `["pi-linux=1799999990", "pi-macos="]`; an empty value means unset.
+
+    Returns:
+        dict[str, str]: Pool name -> raw heartbeat value.
+
+    Raises:
+        ValueError: An item has no `=` or names a pool that does not exist, so a typo cannot silently
+            leave a pool looking down.
+    """
+    beats: dict[str, str] = {}
+    for item in items:
+        name, sep, value = item.partition("=")
+        if not sep or name not in POOLS:
+            raise ValueError(f"Expected 'POOL=VALUE' for a known pool, got '{item}'")
+        beats[name] = value
+    return beats
+
+
 def available_pools(heartbeats: Mapping[str, str], now: float, *, trusted: bool) -> frozenset[str]:
     """Return the pools whose cells may run self-hosted on this run.
 
     Parameters:
         heartbeats (Mapping[str, str]): Pool name -> heartbeat variable value; absent means no heartbeat.
         now (float): Current epoch seconds.
-        trusted (bool): Whether the event is same-repo or a push/dispatch. An untrusted event (a fork PR)
-            gets no pool, whatever the heartbeats say.
+        trusted (bool): False for a fork PR, or when the maintainer kill switch `PI_POOLS_DISABLED` is set:
+            no pool, whatever the heartbeats say.
 
     Returns:
         frozenset[str]: Names of the fresh pools, empty when `trusted` is false.
