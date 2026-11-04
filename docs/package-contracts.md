@@ -264,10 +264,13 @@ outlive the gate. Only Python exceptions reach this cleanup: a SIGTERM or SIGHUP
 handle, or a SIGKILL, ends the worker with no cleanup and the group may outlive it. Default `run`
 stays plain `subprocess.run`, which kills only the child. `test_probe_timeout_kills_its_whole_process_group` and
 `test_probe_interrupt_kills_its_whole_process_group` time out or interrupt the real probe and require
-EOF within 10s on a FIFO only the child holds (`FifoWitness`; the child exits on its own 20s after
-it starts, opening included, so a regression cannot leave it behind). Both arm the timeout or
-interrupt only once the child's first byte arrived, so a slow node boot under load cannot let a 2s
-deadline kill the group before the child exists. Its open is non-blocking and
+EOF within 10s of the child's first byte on a FIFO only the child holds (`FifoWitness`; the child
+exits on its own 20s after it starts, opening included, so a regression cannot leave it behind). Both
+arm the timeout or interrupt only once that byte arrived, so a slow node boot under load cannot let a
+2s deadline kill the group before the child exists, nor eat into the EOF window. `gone` refuses EOF
+without a byte. The byte itself must come within 10s: a later one could put the child's own 20s exit
+inside the window. `test_fifo_witness_measures_eof_from_the_writers_byte` (a 9s boot on a faked
+clock) and `test_fifo_witness_rejects_eof_without_a_byte` pin both. Its open is non-blocking and
 retried, since a blocking open waits for a reader before any exit timer starts;
 `test_fifo_writer_exits_without_a_reader` requires both writers to exit with no reader or a closed
 one. `test_reaped_leader_group_is_never_signalled` and the `test_run_default_*` timeout/interrupt
