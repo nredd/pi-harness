@@ -278,13 +278,16 @@ root (`.` and `harness`), so the policy `owned` globs stay the only copy of the 
 `coverage_accounting.py` count. `pytest-cov` is locked in `integration/pyproject.toml`.
 `parse_lcov` accepts coverage.py's `FN:<line>,<end>,<name>` rows. Only a signal declaring
 `producer: "coverage.py"` may contain the bare `SF`/`end_of_record` record coverage.py writes for a
-file with no executable lines; for any other producer a bare record is a truncated report and fails. Both Python signals declare `skip_hosts: ["wsl2"]`: the WSL cell runs no
+file with no executable lines; for any other producer a bare record is a truncated report and fails. The same
+`coverage.py` dialect covers what `branch = true` writes (#387): a module without functions carries no `FNF`/`FNH`,
+read as zero functions, and `BRDA` names each branch by its destination (`jump to line 12`) instead of a number. Both Python signals declare `skip_hosts: ["wsl2"]`: the WSL cell runs no
 pytest (`docs/ci.md`), so the WSL fan-in's `check-coverage` (`COVERAGE_HOST=wsl2`) reports them NOT RUN. A test pins
 `skip_hosts` to exactly the owned cells whose planned gates omit the producer, and the ratchet rejects adding
 a skipped host.
 
 `benchmarks/comparison` (`python-benchmarks`, #387) is measured by its own `make check-benchmark`: pytest-cov with
-`branch = true` and `fail_under = 100` in its `pyproject.toml`, writing LCOV to `benchmarks/comparison/coverage/python/lcov.info`.
+`branch = true` and `fail_under = 100` in its `pyproject.toml` (coverage.py 7.17.1, as `integration/`), writing LCOV to
+`benchmarks/comparison/coverage/python/lcov.info`.
 Its enforced `primary` signal is 0/0 on darwin only and declares `skip_hosts: ["linux", "wsl2"]`: the `native_runtime`
 test needs Seatbelt, so only the macOS cell runs the producer. The CI step is path-gated (#315), so the signal also
 declares `gate: "check-benchmark"`. `scripts/ci_paths.py` lists a skipped gate in the cell's `skipped_gates`, the fan-in

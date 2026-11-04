@@ -360,6 +360,7 @@ class LcovRecord:
     functions: dict[str, int] = field(default_factory=dict)
     branches: dict[str, int] = field(default_factory=dict)
     summaries: dict[str, int] = field(default_factory=dict)
+    coveragepy: bool = False
 
     def add(self, row: str) -> None:
         """Validate a supported LCOV row before adding its counter.
@@ -417,14 +418,23 @@ class LcovRecord:
         """Validate a branch identity and its optional hit count.
 
         Parameters:
-            value (str): LCOV branch location, identity and optional hit count.
+            value (str): LCOV branch location, identity and optional hit count. coverage.py names the
+                branch by its destination (`jump to line 12`) where LCOV has a branch number.
         Returns:
             None: The validated branch counter is accumulated.
         Raises:
             ValueError: The branch record is malformed or duplicated.
         """
         parts = value.split(",")
-        if len(parts) != 4 or not all(p.isdecimal() for p in parts[:3]):
+        if self.coveragepy and len(parts) >= 4:
+            head, _, count = value.rpartition(",")
+            parts = [*head.split(",", 2), count]
+        named = self.coveragepy and bool(parts[2:3]) and bool(parts[2].strip())
+        if (
+            len(parts) != 4
+            or not all(p.isdecimal() for p in parts[:2])
+            or not (parts[2].isdecimal() or named)
+        ):
             raise ValueError(f"Malformed branch counter: '{value}'")
         identity = ",".join(parts[:3])
         if identity in self.branches or (parts[3] != "-" and not parts[3].lstrip("-").isdecimal()):
@@ -436,7 +446,8 @@ class LcovRecord:
 
         Parameters:
             bare_source (bool): Accept a record with no rows at all, as coverage.py writes for a source
-                without executable lines. Other producers must emit totals, so a bare record is truncation.
+                without executable lines, and a record with no function rows or totals, as it writes for a
+                module without functions. Other producers must emit totals, so either is truncation.
         Returns:
             FileCoverage: Validated executable line, function and branch counters.
         Raises:
@@ -446,6 +457,8 @@ class LcovRecord:
             raise ValueError("Missing function counters")
         if bare_source and not (self.lines or self.functions or self.branches or self.summaries):
             return FileCoverage(0, 0, 0, 0, 0, 0)
+        if bare_source and not self.definitions and not {"FNF", "FNH"} & self.summaries.keys():
+            self.summaries |= {"FNF": 0, "FNH": 0}
         totals = {
             "LF": len(self.lines),
             "LH": sum(value > 0 for value in self.lines.values()),
@@ -480,7 +493,8 @@ def parse_lcov(text: str, *, bare_sources: bool = False) -> dict[str, FileCovera
 
     Parameters:
         text (str): Complete LCOV document.
-        bare_sources (bool): Treat a bare `SF`/`end_of_record` pair as an empty source (coverage.py only).
+        bare_sources (bool): Read coverage.py's dialect: a bare `SF`/`end_of_record` pair is an empty
+            source, a module without functions omits FN totals, and branches are named, not numbered.
     Returns:
         dict[str, FileCoverage]: Records keyed by the original source path.
     Raises:
@@ -488,7 +502,7 @@ def parse_lcov(text: str, *, bare_sources: bool = False) -> dict[str, FileCovera
     """
     records: dict[str, FileCoverage] = {}
     source: str | None = None
-    record = LcovRecord()
+    record = LcovRecord(coveragepy=bare_sources)
     for row in text.splitlines():
         if row.startswith("TN:") and source is None:
             continue
@@ -496,7 +510,7 @@ def parse_lcov(text: str, *, bare_sources: bool = False) -> dict[str, FileCovera
             if source is not None or not row[3:] or row[3:] in records:
                 raise ValueError("Duplicate or nested LCOV source record")
             source = row[3:]
-            record = LcovRecord()
+            record = LcovRecord(coveragepy=bare_sources)
             continue
         if source is None:
             raise ValueError(f"LCOV data outside a source record: '{row}'")

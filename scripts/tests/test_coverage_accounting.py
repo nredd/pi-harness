@@ -513,6 +513,78 @@ def test_parse_lcov_rejects_malformed_coveragepy_functions(mutation: tuple[str, 
         parse_lcov(text, bare_sources=True)
 
 
+def test_parse_lcov_reads_a_coveragepy_module_without_functions_as_zero_functions() -> None:
+    """Accept coverage.py 7.17.1's record for a module with no functions, which carries no FN totals.
+
+    Parameters:
+        None.
+    Returns:
+        None: The real `benchmarks/comparison` `__main__.py` record parses with zero functions under
+            coverage.py, and stays a truncated report for every other producer.
+    Raises:
+        AssertionError: The record is rejected for coverage.py or accepted for another producer.
+    """
+    text = "\n".join(
+        [
+            "SF:src/pi_harness_benchmark/__main__.py",
+            "DA:7,1",
+            "DA:9,1",
+            "DA:11,1",
+            "DA:12,0",
+            "LF:4",
+            "LH:3",
+            "BRDA:11,0,jump to line 12,1",
+            "BRDA:11,0,exit the module,1",
+            "BRF:2",
+            "BRH:2",
+            "end_of_record",
+            "",
+        ]
+    )
+    counters = parse_lcov(text, bare_sources=True)["src/pi_harness_benchmark/__main__.py"]
+    assert (counters.lines, counters.uncovered_lines, counters.functions, counters.uncovered_functions) == (
+        4,
+        1,
+        0,
+        0,
+    )
+    assert (counters.branches, counters.uncovered_branches) == (2, 0)
+    # Other producers keep strict numbered branches and required FN totals.
+    with pytest.raises(ValueError, match="Malformed branch counter"):
+        parse_lcov(text)
+    unbranched = text.replace("BRDA:11,0,jump to line 12,1\nBRDA:11,0,exit the module,1\nBRF:2\nBRH:2\n", "")
+    with pytest.raises(ValueError, match="Missing LCOV totals"):
+        parse_lcov(unbranched)
+    # A record with function rows still needs coverage.py's own totals.
+    with pytest.raises(ValueError, match="Missing LCOV totals"):
+        parse_lcov(text.replace("LF:4", "FN:9,12,main\nFNDA:1,main\nLF:4"), bare_sources=True)
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        "BRDA:3,0,,1",
+        "BRDA:3,0, ,1",
+        "BRDA:x,0,jump to line 4,1",
+        "BRDA:3,0,jump to line 4",
+        "BRDA:3,0,jump,x",
+    ],
+)
+def test_parse_lcov_rejects_malformed_coveragepy_branches(row: str) -> None:
+    """Keep named coverage.py branches strict about location, name and hit count.
+
+    Parameters:
+        row (str): A corrupted coverage.py branch row.
+    Returns:
+        None: Every corruption is rejected.
+    Raises:
+        AssertionError: A corrupted branch is accepted.
+    """
+    text = "\n".join(["SF:a.py", "DA:3,1", "LF:1", "LH:1", row, "end_of_record", ""])
+    with pytest.raises(ValueError, match="branch"):
+        parse_lcov(text, bare_sources=True)
+
+
 def test_skipped_host_reports_not_run_but_other_hosts_still_fail_closed(tmp_path: Path) -> None:
     """Scope a signal to hosts that run its producer without loosening anyone else.
 
