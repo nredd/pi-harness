@@ -29,15 +29,39 @@ function exitNote(info: MonitorInfo): string {
 }
 
 /**
+ * Remove terminal control characters from model-controlled text (a monitor's `match`) before it
+ * reaches `ctx.ui.notify`: whole CSI/OSC sequences, other ESC pairs, C0/C1 controls (newlines and
+ * tabs become spaces) and bidi controls. The same rules as `packages/todo/tool/sanitize.ts`; the
+ * packages publish independently and share no runtime dependency, so it is mirrored, not imported.
+ */
+// biome-ignore-start lint/suspicious/noControlCharactersInRegex: matching terminal control characters is this function's job
+function sanitizeTerminalText(value: string): string {
+	return value
+		.replace(/(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]/g, "")
+		.replace(/(?:\u001b\]|\u009d)[^\u0007\u009c\u001b]*(?:\u0007|\u009c|\u001b\\)?/g, "")
+		.replace(/\u001b./g, "")
+		.replace(/[\u2028\u2029]/g, " ")
+		.replace(/[\u0000-\u001f\u007f-\u009f]/g, (character) =>
+			character === "\n" || character === "\r" || character === "\t" ? " " : "",
+		)
+		.replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");
+}
+// biome-ignore-end lint/suspicious/noControlCharactersInRegex: end of the terminal-control matcher
+
+/**
  * What wakes the parent from a running monitor: every batch with `wake`, else a `match` line, and
  * always a natural exit or timeout. Only `monitor_stop` ends one without a wake.
  */
 function armedOn(info: MonitorInfo): string {
-	const on = info.wake ? "every batch or " : info.match ? `/${info.match}/ or ` : "";
+	const on = info.wake ? "every batch or " : info.match ? `/${sanitizeTerminalText(info.match)}/ or ` : "";
 	return `${info.id} "${info.name}" on ${on}exit`;
 }
 
-/** The settle report for running monitors, or `undefined` when none are running. */
+/**
+ * The settle report for running monitors, or `undefined` when none are running. Same shape as the
+ * `subagents` and `todo` settle notices, `Run ended with N <work>, armed: <what wakes the parent>`,
+ * naming only monitors. Every running monitor is armed: natural exit and timeout always wake.
+ */
 export function formatPendingMonitors(running: MonitorInfo[]): string | undefined {
 	if (running.length === 0) return undefined;
 	const plural = running.length === 1 ? "" : "s";

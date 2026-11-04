@@ -2881,7 +2881,7 @@ describe("AgentManager.ownedPending", () => {
     spawn({ workflowId: "wf_run1" });
     expect(manager.ownedPending()).toEqual({ notifying: 2, silent: 0 });
 
-    // A detached start (RPC, `@handle`) passes `isBackground: false`: its
+    // A foreground start, or an RPC spawn that omits `isBackground`: its
     // settle marks the result consumed, so no completion notice is armed.
     const detached = spawn({ isBackground: false });
     expect(manager.getRecord(detached)?.status).toBe("running");

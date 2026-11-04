@@ -108,6 +108,13 @@ describe("formatPendingMonitors", () => {
 		expect(formatPendingMonitors([info()])).toBe('Run ended with 1 monitor running, armed: m1 "build" on exit');
 	});
 
+	it("strips terminal escapes, newlines and bidi controls from a model-supplied match", () => {
+		const match = "a\u001b[31mred\u001b[0m\u001b]8;;http://x\u0007link\u001b]8;;\u0007\nnext\u202e\u2066z\u009b2J";
+		expect(formatPendingMonitors([info({ match })])).toBe(
+			'Run ended with 1 monitor running, armed: m1 "build" on /aredlink nextz/ or exit',
+		);
+	});
+
 	it("reports nothing when no monitor is running", () => {
 		expect(formatPendingMonitors([])).toBeUndefined();
 	});

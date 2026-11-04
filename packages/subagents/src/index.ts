@@ -216,23 +216,6 @@ function formatTaskNotification(record: AgentRecord, resultMaxLen: number, showC
 }
 
 /** Build AgentDetails from a base + record-specific fields. */
-/**
- * The settle report for owned agents still pending, or `undefined` when none
- * are: how many, then what is armed to wake the parent. Foreground and
- * detached agents are named as not armed, so a stop that nothing will resume
- * never reads as one that something will.
- */
-function formatOwnedPendingNotice({ notifying, silent }: OwnedPending): string | undefined {
-  const total = notifying + silent;
-  if (total === 0) return undefined;
-  const plural = (n: number) => (n === 1 ? "" : "s");
-  const armed = notifying > 0
-    ? `${notifying} completion notice${plural(notifying)} ${notifying === 1 ? "wakes" : "wake"} the parent`
-    : "nothing wakes the parent";
-  const unarmed = silent > 0 ? `; ${silent} foreground or detached agent${plural(silent)} will not` : "";
-  return `Run ended with ${total} agent${plural(total)} running or queued, armed: ${armed}${unarmed}`;
-}
-
 function buildDetails(
   base: Pick<AgentDetails, "displayName" | "description" | "subagentType" | "modelName" | "modelNote" | "modelFallback" | "modelTier" | "tags">,
   record: { toolUses: number; startedAt: number; completedAt?: number; status: string; error?: string; id?: string; session?: any; outputFile?: string; lifetimeUsage: LifetimeUsage },
@@ -259,6 +242,31 @@ function buildDetails(
 }
 
 /** Build notification details for the custom message renderer. */
+
+/**
+ * The settle report for owned agents still pending, or `undefined` when none
+ * are. Every package's settle notice shares one shape,
+ * `Run ended with N <work>, armed: <what wakes the parent>`, and names only
+ * its own work, so one package saying nothing of its own is armed cannot read
+ * as "nothing at all is armed" beside another's armed monitor.
+ *
+ * A background agent's completion notice starts a parent turn in every join
+ * mode. Two edges qualify that: after a session switch the notice is spooled
+ * for the session it belongs to and lands when that session is live again, and
+ * a held send that outlives a tearing-down `pi -p` is dropped. Foreground
+ * agents and RPC spawns without `isBackground` are marked consumed at settle
+ * and notify nobody, so they are named as not armed.
+ */
+function formatOwnedPendingNotice({ notifying, silent }: OwnedPending): string | undefined {
+  const total = notifying + silent;
+  if (total === 0) return undefined;
+  const plural = (n: number) => (n === 1 ? "" : "s");
+  const armed = notifying > 0
+    ? `${notifying} agent completion notice${plural(notifying)} ${notifying === 1 ? "wakes" : "wake"} the parent`
+    : "no agent completion notice wakes the parent";
+  const unarmed = silent > 0 ? `; ${silent} foreground or RPC-spawned agent${plural(silent)} will not` : "";
+  return `Run ended with ${total} agent${plural(total)} running or queued, armed: ${armed}${unarmed}`;
+}
 function buildNotificationDetails(record: AgentRecord, resultMaxLen: number, activity?: AgentActivity): NotificationDetails {
   const totalTokens = getLifetimeTotal(record.lifetimeUsage);
 

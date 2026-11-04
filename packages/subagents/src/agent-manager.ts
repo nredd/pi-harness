@@ -216,9 +216,9 @@ function assertValidSpawnCwd(cwd: unknown): asserts cwd is string | undefined | 
 
 /** The session's own pending agents, split by whether their completion wakes the parent. */
 export interface OwnedPending {
-  /** Background agents whose completion notice starts a parent turn. */
+  /** Background agents (Agent tool, `@handle`, scheduler, background resume) whose completion notice starts a parent turn. */
   notifying: number;
-  /** Foreground or detached agents whose settle notifies nobody. */
+  /** Foreground agents and RPC spawns without `isBackground`, whose settle notifies nobody. */
   silent: number;
 }
 
@@ -2057,9 +2057,9 @@ export class AgentManager {
   /**
    * The session's own agents (see `isTopLevelAgent`) still running or queued,
    * split by whether their completion wakes the parent. A background agent's
-   * settle sends a completion notice that starts a turn; a foreground or
-   * detached one (`isBackground` unset) is marked consumed at settle and
-   * notifies nobody. Owned children report through their owner, so counting
+   * settle sends a completion notice that starts a turn, in every join mode;
+   * a foreground one, or an RPC spawn that omits `isBackground`, is marked
+   * consumed at settle and notifies nobody. Owned children report through their owner, so counting
    * them would double-count the same work.
    */
   ownedPending(): OwnedPending {

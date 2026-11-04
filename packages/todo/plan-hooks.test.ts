@@ -326,7 +326,7 @@ describe("settling with in_progress todos", () => {
 		await call(ctx, { action: "update", id: 1, status: "in_progress" });
 		await handler("agent_settled")({ type: "agent_settled" }, ctx);
 		expect(notices(ctx)).toEqual([
-			["Run ended with 1 in_progress todo: #1 Ship the thing; armed: no wake from todos", "warning"],
+			["Run ended with 1 in_progress todo (#1 Ship the thing), armed: no todo wakes the parent", "warning"],
 		]);
 	});
 
@@ -334,7 +334,7 @@ describe("settling with in_progress todos", () => {
 		const task = (id: number, status: string) => ({ id, subject: `t${id}`, status });
 		const state = { tasks: [1, 2, 3, 4, 5].map((id) => task(id, "in_progress")), nextId: 6 } as never;
 		expect(formatInProgressNotice(state)).toBe(
-			"Run ended with 5 in_progress todos: #1 t1, #2 t2, #3 t3, +2 more; armed: no wake from todos",
+			"Run ended with 5 in_progress todos (#1 t1, #2 t2, #3 t3, +2 more), armed: no todo wakes the parent",
 		);
 	});
 
@@ -344,7 +344,7 @@ describe("settling with in_progress todos", () => {
 			nextId: 2,
 		} as never;
 		expect(formatInProgressNotice(state)).toBe(
-			"Run ended with 1 in_progress todo: #1 ared; armed: no wake from todos",
+			"Run ended with 1 in_progress todo (#1 ared), armed: no todo wakes the parent",
 		);
 	});
 

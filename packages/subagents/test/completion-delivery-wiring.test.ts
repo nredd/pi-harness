@@ -45,9 +45,10 @@ afterEach(async () => {
 });
 
 /** Boot the extension with a parent whose run state the test controls. */
-async function boot(settings: Record<string, unknown> = {}) {
+async function boot(settings: Record<string, unknown> = {}, events?: unknown) {
   hermetic = hermeticDir({ settings: { outputTranscript: false, schedulingEnabled: false, ...settings } });
   booted = makePi();
+  if (events) booted.pi.events = events;
   subagentsExtension(booted.pi);
   const parent = { running: true };
   const signal = new AbortController().signal;
@@ -386,67 +387,127 @@ describe("`group` join mode — one notification per turn's batch", () => {
 describe("settling with owned agents still running", () => {
   const notices = (parentCtx: any): any[][] => parentCtx.ui.notify.mock.calls;
   const settled = (b: BootedPi) => b.lifecycle.get("agent_settled")?.({ type: "agent_settled", aborted: false });
-  /** A detached start, as RPC and `@handle` make it: running, but its settle notifies nobody. */
-  const spawnDetached = (b: BootedPi, parentCtx: any, prompt: string): string =>
-    (globalThis as any)[MANAGER_KEY].spawn(b.pi, parentCtx, "general-purpose", prompt, { description: prompt });
+  /** The parent's run ends: its last turn ends, then nothing is in flight. */
+  const runEnds = (b: Awaited<ReturnType<typeof boot>>) => {
+    turnEnd(b, "stop");
+    b.parent.running = false;
+  };
 
-  it("reports running agents and the completion notices armed to wake the parent, then goes quiet once they finish", async () => {
-    vi.useFakeTimers();
-    const runs = controllableRuns();
-    const b = await boot();
-    await spawn(b, b.parentCtx, "alpha");
-    await spawn(b, b.parentCtx, "beta");
-    b.parentCtx.ui.notify.mockClear();
+  /** A minimal real event bus, so a spawn goes through the actual `subagents:rpc:spawn` handler. */
+  function eventBus() {
+    const handlers = new Map<string, Array<(data: unknown) => void>>();
+    return {
+      on: (event: string, handler: (data: unknown) => void) => {
+        handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+        return () => {};
+      },
+      emit: (event: string, data: unknown) => { for (const h of handlers.get(event) ?? []) h(data); },
+    };
+  }
 
-    settled(b);
-    expect(notices(b.parentCtx)).toEqual([
-      ["Run ended with 2 agents running or queued, armed: 2 completion notices wake the parent", "info"],
-    ]);
+  /** Spawn over RPC without `isBackground`, as another extension may: running, but its settle notifies nobody. */
+  async function rpcSpawn(bus: ReturnType<typeof eventBus>, prompt: string): Promise<string> {
+    const reply = new Promise<any>((resolve) => bus.on(`subagents:rpc:spawn:reply:${prompt}`, resolve));
+    bus.emit("subagents:rpc:spawn", { requestId: prompt, type: "general-purpose", prompt, options: { description: prompt } });
+    return (await reply).data.id;
+  }
 
-    runs.settle("alpha");
-    runs.settle("beta");
-    await vi.advanceTimersByTimeAsync(0);
-    b.parentCtx.ui.notify.mockClear();
-    settled(b);
-    expect(notices(b.parentCtx)).toEqual([]);
-  });
+  it.each(["async", "group", "smart"])(
+    "counts background agents under `%s` join as armed, and their completion notice does start a parent turn",
+    async (defaultJoinMode) => {
+      vi.useFakeTimers();
+      const runs = controllableRuns();
+      const b = await boot({ defaultJoinMode });
+      // Spawned inside the parent's turn: `group` defers them to `turnGroupSpawns` until it ends.
+      await Promise.all([spawn(b, b.parentCtx, "alpha"), spawn(b, b.parentCtx, "beta")]);
+      runEnds(b);
+      b.parentCtx.ui.notify.mockClear();
+
+      settled(b);
+      expect(notices(b.parentCtx)).toEqual([
+        ["Run ended with 2 agents running or queued, armed: 2 agent completion notices wake the parent", "info"],
+      ]);
+
+      runs.settle("alpha");
+      runs.settle("beta");
+      await vi.advanceTimersByTimeAsync(60_000);
+      const calls = b.pi.sendMessage.mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      for (const [, options] of calls) expect(options).toEqual({ deliverAs: "steer", triggerTurn: true });
+      expect(sentContents(b).join("\n")).toMatch(/alpha done[\s\S]*beta done|beta done[\s\S]*alpha done/);
+
+      b.parentCtx.ui.notify.mockClear();
+      settled(b);
+      expect(notices(b.parentCtx)).toEqual([]);
+    },
+  );
 
   it("says agent and notice in the singular", async () => {
     vi.useFakeTimers();
     controllableRuns();
     const b = await boot();
     await spawn(b, b.parentCtx, "alpha");
+    runEnds(b);
     b.parentCtx.ui.notify.mockClear();
     settled(b);
     expect(notices(b.parentCtx)).toEqual([
-      ["Run ended with 1 agent running or queued, armed: 1 completion notice wakes the parent", "info"],
+      ["Run ended with 1 agent running or queued, armed: 1 agent completion notice wakes the parent", "info"],
     ]);
   });
 
-  it("names the agents whose completion will not wake the parent", async () => {
+  it("counts an `@handle` mention's agent as armed: it starts in the background", async () => {
     vi.useFakeTimers();
     controllableRuns();
-    const b = await boot();
+    const b = await boot({ agentMentions: "direct" });
+    b.parent.running = false;
+    const handled = await b.lifecycle.get("input")({ type: "input", text: "@general-purpose look around", source: "interactive" }, b.parentCtx);
+    expect(handled).toEqual({ action: "handled" });
+    expect(notices(b.parentCtx)).toContainEqual(["Started @general-purpose", "info"]);
+    b.parentCtx.ui.notify.mockClear();
+    settled(b);
+    expect(notices(b.parentCtx)).toEqual([
+      ["Run ended with 1 agent running or queued, armed: 1 agent completion notice wakes the parent", "info"],
+    ]);
+  });
+
+  it("names an RPC spawn without `isBackground` as not armed, beside an armed background agent", async () => {
+    vi.useFakeTimers();
+    controllableRuns();
+    const bus = eventBus();
+    const b = await boot({}, bus);
     await spawn(b, b.parentCtx, "alpha");
-    spawnDetached(b, b.parentCtx, "gamma");
-    spawnDetached(b, b.parentCtx, "delta");
+    const id = await rpcSpawn(bus, "gamma");
+    expect((globalThis as any)[MANAGER_KEY].getRecord(id)).toMatchObject({ status: "running", isBackground: undefined });
+    runEnds(b);
     b.parentCtx.ui.notify.mockClear();
     settled(b);
     expect(notices(b.parentCtx)).toEqual([
-      ["Run ended with 3 agents running or queued, armed: 1 completion notice wakes the parent; 2 foreground or detached agents will not", "info"],
+      ["Run ended with 2 agents running or queued, armed: 1 agent completion notice wakes the parent; 1 foreground or RPC-spawned agent will not", "info"],
     ]);
   });
 
-  it("warns when nothing is armed to wake the parent", async () => {
+  it("warns when no agent completion notice is armed, for an in-flight foreground agent", async () => {
     vi.useFakeTimers();
-    controllableRuns();
+    const runs = controllableRuns();
     const b = await boot();
-    spawnDetached(b, b.parentCtx, "gamma");
+    // A foreground `Agent` call blocks its tool call until the run settles.
+    const call = b.tools.get("Agent").execute(
+      "call-fg",
+      { prompt: "fg", description: "fg", subagent_type: "general-purpose", run_in_background: false },
+      undefined, undefined, b.parentCtx,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    const started = b.pi.events.emit.mock.calls.find(([event]: [string]) => event === "subagents:started");
+    const record = (globalThis as any)[MANAGER_KEY].getRecord(started[1].id);
+    expect(record).toMatchObject({ status: "running", blocking: true });
+    expect(record.isBackground).toBeFalsy();
     b.parentCtx.ui.notify.mockClear();
     settled(b);
     expect(notices(b.parentCtx)).toEqual([
-      ["Run ended with 1 agent running or queued, armed: nothing wakes the parent; 1 foreground or detached agent will not", "warning"],
+      ["Run ended with 1 agent running or queued, armed: no agent completion notice wakes the parent; 1 foreground or RPC-spawned agent will not", "warning"],
     ]);
+    runs.settle("fg");
+    await call;
   });
 
   it("stays silent when no owned agent is pending", async () => {

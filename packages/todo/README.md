@@ -145,7 +145,7 @@ the full list grouped by status.
   [batch outcomes](./docs/batch-outcomes.md). If a run tries to finish with plan
   items open, the model gets one reminder listing them before it can wrap up.
   Outside Plan mode, a run that settles with `in_progress` todos also shows a warning
-  naming them (first three, then a count) and `armed: no wake from todos`, so a stop with
+  naming them (first three, then a count) and `armed: no todo wakes the parent`, so a stop with
   owned work pending is never silent and never reads as resumable.
   Reminders pause while Plan mode is active; old approved todos remain until a
   replacement is approved. Exiting planning without approval resumes the old
