@@ -366,7 +366,7 @@
           "report": "coverage/python/lcov.info",
           "producer": "coverage.py",
           "skip_hosts": ["wsl2"],
-          "max_uncovered": { "darwin": { "lines": 636, "functions": 70 }, "linux": { "lines": 636, "functions": 70 } },
+          "max_uncovered": { "darwin": { "lines": 628, "functions": 69 }, "linux": { "lines": 628, "functions": 69 } },
           "reporters": ["text", "lcov"]
         }
       }
