@@ -219,6 +219,24 @@ def test_required_checks_from_real_ruleset() -> None:
             ],
             "invalid `integration_id`",
         ),
+        (
+            [{"type": "required_status_checks", "parameters": {"required_status_checks": ["a"]}}],
+            "^Required-status-checks entry has an invalid `context`$",
+        ),
+        (
+            [
+                {
+                    "type": "required_status_checks",
+                    "parameters": {
+                        "required_status_checks": [
+                            {"context": "a", "integration_id": 1},
+                            {"context": "a", "integration_id": 2},
+                        ]
+                    },
+                }
+            ],
+            "^Required check 'a' is configured with conflicting apps$",
+        ),
     ],
 )
 def test_required_checks_fail_closed(rules: list[Any], message: str) -> None:
@@ -800,6 +818,15 @@ def test_legacy_core_tags_skip_attestation(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setattr(promotion, "verify_provenance", forbidden)
     stack = Stack.model_validate_json(stack_path.read_bytes())
     verify_core_assets(stack, tmp_path / "core")
+    assert promotion.verify_core(stack, tmp_path / "core") == CoreEvidence(tag=tag, integrity=dict(frozen))
+    name = sorted(frozen)[0]
+    tampered = stack.model_copy(
+        update={"core": stack.core.model_copy(update={"integrity": dict(frozen) | {name: "0" * 64}})}
+    )
+    with pytest.raises(
+        ValueError, match=f"^Stack core integrity does not match release asset '{re.escape(name)}'$"
+    ):
+        promotion.verify_core(tampered, tmp_path / "core")
 
 
 FAKE_GH = """#!{python}
@@ -1239,3 +1266,65 @@ def test_workflow_runs_are_single_allowlisted_commands_without_expressions() -> 
         assert "\n" not in run.strip()
         assert run.startswith(ALLOWED_RUN_PREFIXES), run
         assert not re.search(r"\|\||\||&|;|>|<|`|\$\(", run), run
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (
+            {"core": CORE | {"integrity": {"core.zip": "0" * 64}}},
+            "`core.integrity` must contain tarball names",
+        ),
+        ({"core": CORE | {"integrity": {"a.tgz": "F" * 64}}}, "`core.integrity` must contain tarball names"),
+        ({"required_checks": ["a", "a"]}, "`required_checks` must contain unique nonempty names"),
+        ({"required_checks": [" "]}, "`required_checks` must contain unique nonempty names"),
+        ({"owned_packages": [OWNED, OWNED]}, "`owned_packages` must contain unique exact package versions"),
+    ],
+)
+def test_gate_evidence_refuses_ambiguous_records(change: dict[str, Any], message: str) -> None:
+    """Non-tarball or non-lowercase core digests and duplicated checks or packages never validate.
+
+    Parameters:
+        change (dict[str, Any]): `GATES` fields to replace.
+        message (str): expected validator message.
+    """
+    with pytest.raises(ValidationError, match=re.escape(message)):
+        GateEvidence.model_validate(GATES | change)
+
+
+def test_run_command_reports_an_executable_that_cannot_start(tmp_path: Path) -> None:
+    """A missing executable is the requested `PromotionError` type, chained to the `OSError`."""
+    missing = str(tmp_path / "absent")
+    with pytest.raises(
+        GitError, match=f"^Command could not complete: {re.escape(missing)} status: "
+    ) as error:
+        promotion.run_command(missing, "status", error=GitError)
+    assert isinstance(error.value.__cause__, OSError)
+
+
+STACK_CHECK = """import json, sys
+assert sys.argv[1:4] == ["stack-check", "--tag", "@nredd/pi-preset@0.2.0"], sys.argv
+print({output!r})
+"""
+
+
+@pytest.mark.parametrize(
+    "output",
+    [json.dumps(OWNED), "not evidence"],
+)
+def test_run_stack_check_parses_the_trusted_script_output(tmp_path: Path, output: str) -> None:
+    """The trusted repo's `stack-check` stdout is the evidence; unparseable stdout is an `EvidenceError`.
+
+    Parameters:
+        tmp_path (Path): fixture repository holding the stand-in `scripts/npm_release.py`.
+        output (str): what the script prints.
+    """
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "npm_release.py").write_text(STACK_CHECK.format(output=output))
+    if output == "not evidence":
+        message = "^Package check printed unusable evidence for '@nredd/pi-preset@0.2.0': "
+        with pytest.raises(EvidenceError, match=message) as error:
+            run_stack_check(tmp_path, "@nredd/pi-preset@0.2.0", tmp_path)
+        assert isinstance(error.value.__cause__, ValueError)
+    else:
+        assert run_stack_check(tmp_path, "@nredd/pi-preset@0.2.0", tmp_path) == OwnedPackageEvidence(**OWNED)
