@@ -23,3 +23,36 @@ Later commits on the PR change only docs, comments and tests, not producers or m
 Not promoted here: `resource-sampler` (report-only reference darwin 8/4, linux 47/8) and
 `inprocess` (darwin 17/4, linux 27/8, goal `report-only`). Both measured at delta 0 in the same
 artifacts.
+
+## plan-mode
+
+Promotes plan-mode's `bun` signal to enforced at 0/0 on darwin and linux, retiring its native
+`bun test` subset (8 cases) and `tool-policy.test.ts` canary (25 cases) for the full 637-case
+Vitest suite on Bun 1.4.4 through `scripts/run-vitest.ts bun`, with no `files` subset.
+
+Measured on PR #362 HEAD `74d704f4a36366350ba8be6acfd437c3a137f3e3`, CI run `41767456760`,
+`owned` jobs `126369170331` (macos-14, green), `126369170371` (ubuntu-24.04, green) and
+`126369170298` (wsl2, red only on subagents `preloaded-skill-e2e.test.ts` timing out at 5000ms,
+filed under #312; plan-mode ran and accounted). Counts are reparsed from `coverage-macos-14`
+(artifact `13294596478`), `coverage-ubuntu-24.04` (`13294082326`) and `coverage-wsl2`
+(`13293962501`) LCOV and match each `coverage/summary.json` (`enforced`, delta 0 from reference 0):
+
+| OS | Source files | Lines / uncovered | Functions / uncovered | `lcov.info` sha256 prefix |
+| --- | --- | --- | --- | --- |
+| macos-14 | 34 | 2999 / 0 | 702 / 0 | `9effc27bcffb` |
+| ubuntu-24.04 | 34 | 2999 / 0 | 702 / 0 | `76238761ebe4` |
+| wsl2 | 34 | 2999 / 0 | 702 / 0 | `cee1c3d86f51` |
+
+The files differ byte-wise because hit counts vary per OS (e.g. `DA:114,4438` on macos-14 vs
+`DA:114,2854` on ubuntu-24.04). Normalizing every `DA`/`FNDA` count to hit/miss, the record sets
+are identical across all three OSes and identical to each OS's Node primary report:
+
+```sh
+norm() { grep -E '^(SF|FN|DA|FNDA|LF|LH|FNF|FNH):' "$1" | sed -E 's/^DA:([0-9]+),0$/DA:\1,miss/; s/^DA:([0-9]+),[1-9][0-9]*$/DA:\1,hit/; s/^FNDA:0,/FNDA:miss,/; s/^FNDA:[1-9][0-9]*,/FNDA:hit,/'; }
+for o in macos-14 ubuntu-24.04 wsl2; do for s in bun primary; do
+  norm coverage-$o/packages/plan-mode/coverage/$s/lcov.info | shasum -a 256 | cut -c1-12
+done; done
+```
+
+All six print `a1087a1cfa17`, over 3701 `DA`/`FNDA` records with 0 misses. `BRDA` branch records are
+not compared; branches are report-only.

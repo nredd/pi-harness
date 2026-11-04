@@ -109,6 +109,7 @@ test("guarded suites keep the shared setup and launcher in their gates", async (
 		"packages/resource-sampler",
 		"integration/inprocess",
 		"packages/todo",
+		"packages/plan-mode",
 		"packages/subagents",
 	]) {
 		const manifest = JSON.parse(readFileSync(join(root, directory, "package.json"), "utf8"));

@@ -13,7 +13,8 @@ The separate approved D7 toolchain upgrade selects Bun 1.4.4; evidence and remai
 | `preset` | Full Vitest + guard | Full Vitest + guard |
 | `resource-sampler` | Full Vitest + guard, one worker | Full Vitest + guard, one worker |
 | `integration/inprocess` | Full Vitest + guard, spawn-time home | Full Vitest + guard, spawn-time home |
-| `session-kit`, `plan-mode`, `dev-tools` | Existing full Vitest | Existing native Bun subsets plus spawn-time-home Vitest home-forwarding canaries |
+| `plan-mode` | Full Vitest + guard | Full Vitest + guard |
+| `session-kit`, `dev-tools` | Existing full Vitest | Existing native Bun subsets plus spawn-time-home Vitest home-forwarding canaries |
 | `todo` | Full Vitest + guard | Full Vitest + guard |
 | `subagents` | Full Vitest + guard | Native-scenario subset + guarded real-loader gate; full suite pending [#320](https://github.com/nredd/pi-harness/issues/320) |
 | `computer-use` | Full Vitest + guard, one file at a time; `check-linux-native`, `check-macos-helper-live`, `check-linux-live` stay scripts (#347 follow-up) | Not run |
@@ -54,7 +55,7 @@ Only the exact argument `--coverage.enabled=false` opts out, and then it appends
 canary cannot overwrite another report. The `node` engine never appends coverage arguments.
 `scripts/tests/test_coverage_producers.py` pins that contract by running the real launcher.
 
-Unit tests cover matching, mismatched and missing homes, the six-workspace wiring contract,
+Unit tests cover matching, mismatched and missing homes, the seven-workspace wiring contract,
 and launcher failure/cleanup/argument forwarding. Two subprocess fixtures pin the beforeEach
 and afterEach boundaries independently, using canonicalized symlinked temporary homes:
 Bun/Vite's bundled config loader otherwise fails through macOS `/var` aliases before reaching
@@ -100,8 +101,11 @@ setup on both engines; fixtures inject disposable homes instead of mutating HOME
 `test:bun` uses the full-suite launcher with `.vitest.config.ts` (390 tests).
 
 Subagents retains its native-scenario subset plus the real-loader Vitest gate through the
-spawn-time-home launcher. `session-kit`, `plan-mode`, and `dev-tools` likewise retain their
-native subsets while their injected-home canaries run through `scripts/run-vitest.ts bun`.
+spawn-time-home launcher. `session-kit` and `dev-tools` likewise retain their native subsets
+while their injected-home canaries run through `scripts/run-vitest.ts bun`. Since #320
+`plan-mode` runs its full suite on Bun with the shared guard instead of its native subset and
+`tool-policy.test.ts` canary, every case of which is in the full run. Counts are in the receipt
+[here](../coverage/receipts/bun-enforced.md).
 `session-kit` also runs its home-only factory canary through `scripts/run-vitest.ts node`, and
 leaves it out of its ordinary Node Vitest run and native Bun scenario list. On both engines the
 launcher installs disposable `HOME`/`USERPROFILE` values before the canary imports the SDK, so
@@ -123,7 +127,7 @@ the same entry point with `--config .vitest.config.ts`. Since #320 the launcher 
 coverage arguments itself, so each `test:bun` carries only its package arguments:
 
 ```sh
-node ../../scripts/run-vitest.ts bun                              # router, preset, inprocess
+node ../../scripts/run-vitest.ts bun                              # router, preset, plan-mode, inprocess
 node ../../scripts/run-vitest.ts bun --maxWorkers=1               # resource-sampler
 node ../../scripts/run-vitest.ts bun --config .vitest.config.ts   # todo
 ```
@@ -140,10 +144,10 @@ coverage. Expected reports, relative to the repository root:
 - `packages/resource-sampler/coverage/bun/lcov.info`
 - `integration/inprocess/coverage/bun/lcov.info`
 
-Bun signals for `preset`, `subscription-router` and `todo` are **enforced** at 0/0 on both OSes
-since #320; the rest stay **report-only** with their reasons and per-OS references. Primary
+Bun signals for `plan-mode`, `preset`, `subscription-router` and `todo` are **enforced** at 0/0
+on both OSes since #320; the rest stay **report-only** with their reasons and per-OS references. Primary
 signals stay enforced. Changing producers is not an enforcement promotion, permission to merge engine
-counters, or permission to raise budgets. The three promotions rest on #320's own hosted macOS
+counters, or permission to raise budgets. The four promotions rest on their own PRs' hosted macOS
 and Ubuntu artifacts, recorded [here](../coverage/receipts/bun-enforced.md).
 
 On that rebase, #162 must also inventory `scripts/run-vitest.ts` and the new
