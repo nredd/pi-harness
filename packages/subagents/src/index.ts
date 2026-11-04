@@ -19,7 +19,7 @@ import { Type } from "typebox";
 import { abortable } from "./abortable.js";
 import { hasAgentBadge, renderAgentName } from "./agent-color.js";
 import { buildNewAgentFile, disableInContent, enableInContent, isEmptyStub, locateAgentFile as locateAgentFileAtHome, personalAgentsDir as personalAgentsDirAtHome, projectAgentsDir, serializeAgentFile } from "./agent-file-toggle.js";
-import { AgentManager, describeEvicted, isTopLevelAgent, markConsumed } from "./agent-manager.js";
+import { AgentManager, describeEvicted, isTopLevelAgent, markConsumed, type OwnedPending } from "./agent-manager.js";
 import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, getRememberAgents, normalizeMaxTurns, resolveEffectiveMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, setRememberAgents, steerAgent } from "./agent-runner.js";
 import { rowDescription, sourceIndicator, sourceLegend } from "./agent-source-badge.js";
 import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, getConfig, getFallbackSubagent, isDefaultsDisabled, NO_FALLBACK, registerAgents, resolveSpawnType, resolveType, setDefaultsDisabled, setFallbackSubagent } from "./agent-types.js";
@@ -242,6 +242,31 @@ function buildDetails(
 }
 
 /** Build notification details for the custom message renderer. */
+
+/**
+ * The settle report for owned agents still pending, or `undefined` when none
+ * are. Every package's settle notice shares one shape,
+ * `Run ended with N <work>, armed: <what wakes the parent>`, and names only
+ * its own work, so one package saying nothing of its own is armed cannot read
+ * as "nothing at all is armed" beside another's armed monitor.
+ *
+ * A background agent's completion notice starts a parent turn in every join
+ * mode. Two edges qualify that: after a session switch the notice is spooled
+ * for the session it belongs to and lands when that session is live again, and
+ * a held send that outlives a tearing-down `pi -p` is dropped. Foreground
+ * agents and RPC spawns without `isBackground` are marked consumed at settle
+ * and notify nobody, so they are named as not armed.
+ */
+function formatOwnedPendingNotice({ notifying, silent }: OwnedPending): string | undefined {
+  const total = notifying + silent;
+  if (total === 0) return undefined;
+  const plural = (n: number) => (n === 1 ? "" : "s");
+  const armed = notifying > 0
+    ? `${notifying} agent completion notice${plural(notifying)} ${notifying === 1 ? "wakes" : "wake"} the parent`
+    : "no agent completion notice wakes the parent";
+  const unarmed = silent > 0 ? `; ${silent} foreground or RPC-spawned agent${plural(silent)} will not` : "";
+  return `Run ended with ${total} agent${plural(total)} running or queued, armed: ${armed}${unarmed}`;
+}
 function buildNotificationDetails(record: AgentRecord, resultMaxLen: number, activity?: AgentActivity): NotificationDetails {
   const totalTokens = getLifetimeTotal(record.lifetimeUsage);
 
@@ -1749,18 +1774,14 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   pi.on("agent_end", () => outbox.onAgentEnd());
   pi.on("agent_settled", () => {
     outbox.onAgentEnd();
-    // The run is over but owned agents are not: say so, instead of leaving a
-    // quiet prompt that looks like finished work. No wake claim: foreground and
-    // non-waking join-mode agents never notify this session. `currentCtx` is set
-    // at `session_start` and cleared only at `session_shutdown`, and pi settles
-    // a run only inside a live session, so it is defined here.
-    const pending = manager.countOwnedPending();
-    if (pending > 0) {
-      currentCtx?.ui.notify(
-        `Run ended with ${pending} agent${pending === 1 ? "" : "s"} still running or queued`,
-        "info",
-      );
-    }
+    // The run is over but owned agents are not: say so, and say what will
+    // wake the parent, instead of leaving a quiet prompt that looks like
+    // finished work. `currentCtx` is set at `session_start` and cleared only at
+    // `session_shutdown`, and pi settles a run only inside a live session, so
+    // it is defined here.
+    const pending = manager.ownedPending();
+    const message = formatOwnedPendingNotice(pending);
+    if (message) currentCtx?.ui.notify(message, pending.notifying > 0 ? "info" : "warning");
   });
 
   /** Build the full type list text dynamically from available agents only. */
