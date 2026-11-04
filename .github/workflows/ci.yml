@@ -207,6 +207,7 @@ jobs:
         if: always() && steps.plan.outputs.run == 'true'
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+          COVERAGE_HOST: ${{ matrix.guest }}
         run: make check-coverage BASE="$BASE"
       # WSL producers run on the guest Linux filesystem; artifact actions run on Windows.
       - uses: ./.github/actions/capture-ci-wsl
@@ -220,6 +221,7 @@ jobs:
             packages/*/coverage/**/lcov.info
             integration/inprocess/coverage/**/lcov.info
             integration/probes/coverage/**/lcov.info
+            integration/coverage/**/lcov.info
             scripts/coverage/**/lcov.info
             coverage/summary.json
           if-no-files-found: error

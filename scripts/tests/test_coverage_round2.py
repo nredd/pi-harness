@@ -467,9 +467,17 @@ def test_reviewed_missing_source_is_explicitly_pending(file: str) -> None:
         and Path(file).relative_to(package.root).as_posix() in inventory(ROOT, package)
     ]
     assert owners, file
-    assert all(package.status == "pending" and package.note.strip() for package in owners)
     if file.endswith(".py"):
-        assert all(package.goal == "excluded" and package.goal_reason.strip() for package in owners)
+        # Python has a pytest-cov LCOV producer: measured and held at its per-OS floor (`ratchet`).
+        assert all(
+            package.status == "measured"
+            and package.goal == "ratchet"
+            and package.goal_reason.strip()
+            and package.signals["primary"].enforcement == "enforced"
+            for package in owners
+        )
+    else:
+        assert all(package.status == "pending" and package.note.strip() for package in owners)
 
 
 @pytest.mark.parametrize(
