@@ -761,15 +761,16 @@ def discovery_context(root: Path, sandbox: pc.Sandbox) -> pc.Context:
 
 
 @pytest.mark.parametrize(
-    ("script", "message", "status"),
+    ("script", "message", "status", "expires"),
     [
-        ("setInterval(() => {}, 1000)", "readiness timed out", -9),
-        ("process.stdout.write('rea'); setInterval(() => {}, 1000)", "readiness timed out", -9),
-        ("process.exit(7)", "exited before readiness", 7),
+        ("setInterval(() => {}, 1000)", "readiness timed out", -9, True),
+        ("process.stdout.write('rea'); setInterval(() => {}, 1000)", "readiness timed out", -9, True),
+        ("process.exit(7)", "exited before readiness", 7, False),
         (
             "process.title='ordinary'; console.log('ready'); setInterval(() => {}, 1000)",
             "does not expose its secret",
             -9,
+            False,
         ),
     ],
 )
@@ -781,8 +782,13 @@ def test_hostile_marker_startup_failure_reaps_actual_child(
     message: str,
     *,
     status: int,
+    expires: bool,
 ) -> None:
     """Every startup failure owns and reaps a real marker, including a partial readiness line.
+
+    Only the cases whose subject is the readiness clock use the short `ready_timeout`. The others fail
+    on a child event (exit, wrong name), so node boot time under load must not race a 0.5s deadline
+    and turn that event into a timeout: they keep the production default as a hang guard only.
 
     Parameters:
         tmp_path (Path): Scratch project.
@@ -791,6 +797,7 @@ def test_hostile_marker_startup_failure_reaps_actual_child(
         script (str): Failing child program.
         message (str): Expected startup failure.
         status (int): Exact reaped exit code, including SIGKILL as -9.
+        expires (bool): Whether the case is expected to hit the short readiness deadline.
     """
     seen: list[subprocess.Popen[bytes]] = []
     wait_ready = pc.wait_hostile_ready
@@ -802,10 +809,11 @@ def test_hostile_marker_startup_failure_reaps_actual_child(
 
     monkeypatch.setattr(pc, "wait_hostile_ready", observe)
     started = time.monotonic()
+    limits = {"ready_timeout": 0.5} if expires else {}
     with (
         pytest.raises(pc.ContractError, match=message),
         pc.start_hostile_child(
-            discovery_context(tmp_path, sandbox), tmp_path, "ab" * 16, script=script, ready_timeout=0.5
+            discovery_context(tmp_path, sandbox), tmp_path, "ab" * 16, script=script, **limits
         ),
     ):
         pytest.fail("startup unexpectedly succeeded")
@@ -813,7 +821,8 @@ def test_hostile_marker_startup_failure_reaps_actual_child(
     assert seen[0].returncode == status
     assert seen[0].stdout is not None
     assert seen[0].stdout.closed
-    assert time.monotonic() - started < 4
+    if expires:
+        assert time.monotonic() - started < 4
 
 
 @pytest.mark.parametrize("stage", ["startup", "completed-probe", "success"])
