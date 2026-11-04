@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -33,6 +33,10 @@ const fakeBun: { fetch: typeof fetch; spawn: Spawn; spawnSync: Spawn } = {
 	spawn: (command) => bunCalls.push(["spawn", command]),
 	spawnSync: (command) => bunCalls.push(["spawnSync", command]),
 };
+// The real exports, read before the preload replaces them, to prove the wrappers are in place.
+const originalSpawnSync = spawnSync;
+const originalExecFileSync = execFileSync;
+const bunRecorders = { spawn: fakeBun.spawn, spawnSync: fakeBun.spawnSync };
 let server: Server;
 let mock = "";
 let root = "";
@@ -181,17 +185,38 @@ test("a later fetch assignment replaces the inner fetch, never the redirect in f
 });
 
 test("claude and security are blocked and recorded through child_process and Bun; others run", () => {
-	const commands = [
-		() => spawnSync("/usr/bin/security", ["find-generic-password"]),
-		() => execFileSync("claude", ["--version"]),
-		() => fakeBun.spawn(["/opt/homebrew/bin/claude", "-p"]),
-		() => fakeBun.spawnSync({ cmd: ["security", "dump-keychain"] }),
-	];
-	for (const command of commands) assert.throws(command, /harness blocked `(claude|security)` via /);
+	// Fail safe: if a wrapper ever regressed, these calls reach only recording stubs the test owns,
+	// on an isolated PATH or by an absolute path inside it, never a real `claude` or `security`.
+	const stubs = join(root, "stub-bin");
+	const stubLog = join(root, "stub-calls.log");
+	mkdirSync(stubs);
+	for (const name of ["claude", "security"]) {
+		writeFileSync(join(stubs, name), `#!/bin/sh\necho "${name} $*" >> '${stubLog}'\n`);
+		chmodSync(join(stubs, name), 0o755);
+	}
+	const sentinel = join(stubs, "security");
+	assert.notEqual(spawnSync, originalSpawnSync, "redirect preload did not wrap child_process.spawnSync");
+	assert.notEqual(execFileSync, originalExecFileSync, "redirect preload did not wrap child_process.execFileSync");
+	assert.notEqual(fakeBun.spawn, bunRecorders.spawn, "redirect preload did not wrap Bun.spawn");
+	assert.notEqual(fakeBun.spawnSync, bunRecorders.spawnSync, "redirect preload did not wrap Bun.spawnSync");
+	const path = process.env.PATH;
+	process.env.PATH = stubs;
+	try {
+		const commands = [
+			() => spawnSync(sentinel, ["find-generic-password"]),
+			() => execFileSync("claude", ["--version"]),
+			() => fakeBun.spawn([join(stubs, "claude"), "-p"]),
+			() => fakeBun.spawnSync({ cmd: ["security", "dump-keychain"] }),
+		];
+		for (const command of commands) assert.throws(command, /harness blocked `(claude|security)` via /);
+	} finally {
+		process.env.PATH = path;
+	}
+	assert.equal(existsSync(stubLog), false, "a blocked command reached its stub");
 	assert.deepEqual(readFileSync(blockedLog, "utf8").trim().split("\n"), [
-		"security /usr/bin/security (spawnSync)",
+		`security ${sentinel} (spawnSync)`,
 		"claude claude (execFileSync)",
-		"claude /opt/homebrew/bin/claude (Bun.spawn)",
+		`claude ${join(stubs, "claude")} (Bun.spawn)`,
 		"security security (Bun.spawnSync)",
 	]);
 	// Only those two binaries: the same APIs still launch everything else.

@@ -176,7 +176,7 @@ jobs:
       - name: Owned gate check-scripts (ruff, ty, pytest scripts, import audit)
         if: ${{ !cancelled() && steps.install.outcome == 'success' && contains(matrix.gates, 'check-scripts') }}
         run: make check-scripts
-      - name: Owned gate check-integration (ruff, ty, pytest integration units, probes)
+      - name: Owned gate check-integration (ruff, ty, pytest integration units, probes, providers)
         if: ${{ !cancelled() && steps.install.outcome == 'success' && contains(matrix.gates, 'check-integration') }}
         run: make check-integration
       - name: Owned gate check-probes (WSL LCOV producer)

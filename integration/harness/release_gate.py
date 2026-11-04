@@ -28,7 +28,9 @@ SYSTEMS = ("ubuntu-24.04", "macos-14", "wsl2")
 OWNED_GATE_STEPS = {
     "check-ts": "Owned gate check-ts (biome, tsc, Vitest on Node and Bun, computer-use checks)",
     "check-scripts": "Owned gate check-scripts (ruff, ty, pytest scripts, import audit)",
-    "check-integration": "Owned gate check-integration (ruff, ty, pytest integration units, probes)",
+    "check-integration": (
+        "Owned gate check-integration (ruff, ty, pytest integration units, probes, providers)"
+    ),
     "check-probes": "Owned gate check-probes (WSL LCOV producer)",
     "check-providers": "Owned gate check-providers (WSL LCOV producer)",
     "check-import-audit": "Owned gate check-import-audit (WSL LCOV producer)",
