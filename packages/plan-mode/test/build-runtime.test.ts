@@ -7,7 +7,7 @@ import { createRpcHarness } from "@narumitw/pi-tui-kit/testing";
 import { test, vi } from "vitest";
 import { type BuildMetadata, listFiles, registerRuntimeBuilderContract } from "./harness/runtime-builder-contract.js";
 import { builtinTool, createMockContext, extensionTool } from "./harness/support.js";
-import { jitiRuntimeLoadBudgetMs } from "./harness/test-timeout-policy.js";
+import { jitiRuntimeLoadBudgetMs, jitiRuntimeLoadTestName } from "./harness/test-timeout-policy.js";
 import { nativeTool } from "./tool-exposure-support.js";
 
 const lstatFailure = vi.hoisted(() => ({ path: undefined as string | undefined }));
@@ -258,7 +258,7 @@ test("committed runtime matches a fresh build", async () => {
 });
 
 // Cold jiti transform of a fresh build; budget measured in `jitiRuntimeLoadBudgetMs` (#312).
-test("generated runtime is loadable by Pi's Jiti resource loader", { timeout: jitiRuntimeLoadBudgetMs }, async () => {
+test(jitiRuntimeLoadTestName, { timeout: jitiRuntimeLoadBudgetMs }, async () => {
   const builder = await loadBuilder();
   const root = await mkdtemp(join(packageRoot, ".pi-plan-mode-build-test-"));
   const agentDir = join(root, "agent");

@@ -80,8 +80,9 @@ mention clone through the real loader and package manager, with filesystem canar
 for those explicit settings entries. Runner cases execute only the injected
 extension factories; both lanes stop before any model request. Vite bundles only
 owned TypeScript; the actual Pi SDK stays external.
-Each case is bounded by its child's 10s `spawnSync` timeout, not Vitest's 5s
-default: the cold SDK import is measured per case in
+Each case gets its child's 10s `spawnSync` timeout plus a 1s margin for the
+rest of the test, not Vitest's 5s default: the cold SDK import is measured per
+case in
 [`test-worker-budgets.md`](../../../docs/test-worker-budgets.md#measured-cold-budgets-312).
 
 This is not a filesystem sandbox. Before loader-level `noSkills` takes effect,

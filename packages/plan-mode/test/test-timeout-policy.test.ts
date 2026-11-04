@@ -4,11 +4,10 @@ import {
   assertTestTasksWithinCap,
   assertTestTimeoutWithinCap,
   jitiRuntimeLoadBudgetMs,
+  jitiRuntimeLoadTestName as jitiTest,
   maximumTestTimeoutMs,
   measuredTestBudgetsMs,
 } from "./harness/test-timeout-policy.js";
-
-const jitiTest = "generated runtime is loadable by Pi's Jiti resource loader";
 
 test("every test is capped at the default maximum", () => {
   assertTestTimeoutWithinCap(maximumTestTimeoutMs, "ordinary");

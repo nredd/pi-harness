@@ -58,28 +58,42 @@ Pi SDK import in a child, or Pi's jiti loader Babel-transforming TypeScript with
 no fs cache (`JITI_FS_CACHE=false`, #354). Owner decision on #312, 2026-11-03:
 each gets an explicit per-test budget derived from measured cold timings and
 cited next to it, as #353 did for its Swift cold-cache cases. No global
-`testTimeout`, retry or skipped assertion changes. Hosted figures are the slowest
-across the `owned` macOS/Ubuntu/WSL2 jobs of 19 CI runs on 2026-11-03; gate figures come from local
-3-slot gates in `pi-harness-builds/resume-20261029`.
+`testTimeout`, retry or skipped assertion changes.
 
-| Case | Alone | Hosted max | Gate max | Budget |
+Margin rule, one per shape:
+- A cold load inside the test (jiti in-process): twice the worst local gate
+  figure, the ratio #353 applied to its hosted cold figures
+- A test bounded by its own child (`spawnSync` with a timeout): the child's bound
+  plus a margin for the measured non-spawn part, so the child's own failure
+  reports before Vitest's timer
+
+Hosted figures are the slowest across the `owned` macOS/Ubuntu/WSL2 jobs of the
+19 completed `ci.yml` runs from 41735166876 to 41769460797 (2026-11-03). Gate
+figures come from local 3-slot gate logs in `pi-harness-builds/resume-20261029`.
+
+| Case | Alone | Hosted max (job) | Gate max | Budget |
 | --- | --- | --- | --- | --- |
-| `subagents/test/resource-loader-home.test.ts`, each child case | 0.4-1.4 s | 2.28 s | 7.51 s (`issue173-gate2.log`) | 10 s, the child's own `spawnSync` timeout |
-| `subagents/test/preloaded-skill-e2e.test.ts`, both cases | 1.3-1.7 s cold, 0.9-1.0 s warm | 4.94 s passing, 5 s default hit twice on WSL2 | 9.69 s (`gate-321-r2.log`) | 20 s, twice the gate max |
-| `plan-mode/test/build-runtime.test.ts`, Jiti resource loader | 0.37-0.46 s | 1.36 s | 6.27 s (`issue158-gate7.log`) | 13 s, twice the gate max |
+| `subagents/test/resource-loader-home.test.ts`, each child case | child 0.4-1.4 s, rest at most 11.5 ms | 2.28 s (126298828972) | 7.51 s (`issue173-gate2.log`) | 11 s: the child's 10 s plus 1 s |
+| `subagents/test/preloaded-skill-e2e.test.ts`, cold case | 1.3-1.7 s | 4.94 s passing (126376146266) | 9.69 s (`gate-321-r2.log`) | 20 s |
+| `subagents/test/preloaded-skill-e2e.test.ts`, warm case | 0.9-1.0 s | 3.25 s (126369170298) | 5.82 s (`gate-321-r2.log`) | 20 s, same load |
+| `plan-mode/test/build-runtime.test.ts`, Jiti resource loader | 0.37-0.46 s | 1.36 s (126369170298) | 6.27 s (`issue158-gate7.log`) | 13 s |
+
+The `preloaded-skill-e2e` cold case hit the 5 s default on hosted `owned (wsl2)`
+three times: jobs 126342175715 (5064 ms), 126369170298 (5120 ms) and
+126389841734 (5007 ms, #362). It was at most 2.44 s hosted before #354 (job
+126264703240) and 2.3-5.1 s after: with the fs cache off every load
+re-transforms the extension's ~74 sources. A cheaper loader path stays open.
 
 `plan-mode` caps every test at 5 s in `test/harness/test-timeout-policy.ts`.
-The Jiti case passes it only through `measuredTestBudgetsMs`, by exact name and
-up to its own budget; `test/test-timeout-policy.test.ts` pins that no other
-test inherits it.
+The Jiti case passes it only through `measuredTestBudgetsMs`, by exact name
+(`jitiRuntimeLoadTestName`) and up to its own budget;
+`test/test-timeout-policy.test.ts` pins that no other test inherits it.
 
 RED under 50 self-terminating spinners (load ~90-100, Apple M4, 10 cores):
 `resource-loader-home` timed out 4 of 13 cases at 5019-5296 ms, the
-`preloaded-skill-e2e` cases ran 12823 ms and 9814 ms against 5 s. The hosted
-`preloaded-skill-e2e` cold case went from at most 2.44 s before #354 to
-2.3-5.1 s after it: with the fs cache off every load re-transforms the
-extension's ~74 sources. A cheaper loader path stays open; the budget does not
-claim to bound arbitrary host starvation.
+`preloaded-skill-e2e` cases ran 12823 ms and 9814 ms against 5 s. GREEN under
+the same load peaked at 18172 ms, 9560 ms and 4204 ms (Jiti). The budgets do
+not claim to bound arbitrary host starvation.
 
 ## Remaining external acceptance criterion
 
