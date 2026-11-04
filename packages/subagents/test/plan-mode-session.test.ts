@@ -10,6 +10,7 @@ import type { Harness } from "@earendil-works/pi-coding-agent/testing";
 import { afterEach, expect, it } from "vitest";
 import planMode from "../../plan-mode/src/plan-mode.js";
 import { NOTIFICATION_HOLD_MS } from "../src/completion-outbox.js";
+import { PLAN_MODE_GATE_QUERY, PLAN_PARK_REFUSAL, PLAN_SCHEDULE_REFUSAL, planSteerRefusal } from "../src/plan-mode-children.js";
 import type { AgentRecord } from "../src/types.js";
 import { answer, calls, nextEvent, outcomes, ScenarioSession, spawn, text } from "./helpers/scenario-session.js";
 
@@ -52,10 +53,10 @@ function firstChild(h: Harness): AgentRecord {
 }
 
 /** Start the parent with pi-plan-mode installed, admitting `Agent`, `steer_subagent` and the opt-in tools named. */
-async function startHost(extra: { factory: ExtensionFactory; path: string }[], planTools: string[]): Promise<Harness> {
+async function startHost(extra: { factory: ExtensionFactory; path: string }[], planTools: string[], options: { noRouter?: boolean; factories?: ExtensionFactory[] } = {}): Promise<Harness> {
   const settingsPath = join(fixture.root, "pi-plan-mode.json");
   writeFileSync(settingsPath, JSON.stringify({ defaultPlanTools: ["read", "bash", "Agent", "steer_subagent", ...planTools] }));
-  return fixture.start({ factories: [pi => planMode(pi, { settingsPath, homeDir: fixture.root }), ...extra] });
+  return fixture.start({ noRouter: options.noRouter, factories: [pi => planMode(pi, { settingsPath, homeDir: fixture.root }), ...extra, ...(options.factories ?? [])] });
 }
 
 /** The same, already in Plan. */
@@ -176,6 +177,93 @@ it("steer_subagent resumes a child started during Plan with its normal surface a
   await steerFinished(h, child.id);
   expect(childResults(child).at(-1)?.text).not.toContain("Plan mode blocks");
   expect(existsSync(join(fixture.cwd, "steered.txt"))).toBe(true);
+});
+
+it("a running pre-Plan child cannot be steered while planning, and can be after Plan exit", async () => {
+  fixture = new ScenarioSession();
+  const hold = fixture.heldTool();
+  fixture.physical("kid", "child", [calls({ name: "hold", args: {} }), context => answer(`USERS ${context.messages.filter(m => m.role === "user").map(text).join(" | ")}`)]);
+  const h = await startHost([], []);
+  h.setResponses([calls(spawn("busy")), answer("SPAWNED")]);
+  await h.session.prompt("Start it.");
+  await hold.entered;
+  const receipt = outcomes(h, "Agent")[0]?.text ?? "";
+  const id = receipt.match(/Agent ID: (\S+)/)?.[1];
+  if (!id) throw new Error(receipt);
+  const steer = async (message: string) => {
+    h.setResponses([calls({ name: "steer_subagent", args: { agent_id: id, message } }), answer("STEERED")]);
+    await h.session.prompt("Steer it.");
+    return outcomes(h, "steer_subagent").at(-1)?.text;
+  };
+
+  await h.session.prompt("/plan start");
+  expect(await steer("EDIT EVERYTHING")).toBe(planSteerRefusal(id));
+  expect(fixture.record(id).pendingSteers ?? []).toEqual([]);
+
+  await h.session.prompt("/plan exit");
+  expect(await steer("PIVOT")).toContain("Steering message sent to agent");
+  const completed = fixture.completion();
+  hold.release();
+  await completed;
+  h.setResponses([calls({ name: "get_subagent_result", args: { agent_id: id, wait: true } }), answer("DONE")]);
+  await h.session.prompt("Fetch it.");
+  const result = outcomes(h, "get_subagent_result").at(-1)?.text ?? "";
+  expect(result).toContain("USERS work | PIVOT");
+  expect(result).not.toContain("EDIT EVERYTHING");
+});
+
+it("stop_subagent stays available while planning and never asks for the subagent gate", async () => {
+  fixture = new ScenarioSession();
+  const hold = fixture.heldTool();
+  fixture.physical("kid", "child", [calls({ name: "hold", args: {} }), answer("NEVER")]);
+  let gateQueries = 0;
+  const h = await startHost([], [], { factories: [pi => { pi.events.on(PLAN_MODE_GATE_QUERY, () => { gateQueries++; }); }] });
+  h.setResponses([calls(spawn("busy")), answer("SPAWNED")]);
+  await h.session.prompt("Start it.");
+  await hold.entered;
+  const id = outcomes(h, "Agent")[0]?.text.match(/Agent ID: (\S+)/)?.[1];
+  if (!id) throw new Error(JSON.stringify(outcomes(h, "Agent")));
+
+  // The steer refusal names stopping as a way out; it has to work under Plan, ungated.
+  await h.session.prompt("/plan start");
+  const before = gateQueries;
+  expect(before).toBeGreaterThan(0); // the listener sees Plan's own announce
+  h.setResponses([calls({ name: "stop_subagent", args: { agent_id: id } }), answer("STOPPED")]);
+  await h.session.prompt("Stand it down.");
+  const [stopped] = outcomes(h, "stop_subagent");
+  expect(stopped?.isError).toBe(false);
+  expect(stopped?.text).not.toContain("Plan mode blocks");
+  expect(gateQueries).toBe(before);
+  expect(fixture.record(id).status).toBe("stopped");
+  hold.release();
+});
+
+it("a schedule is refused while planning", async () => {
+  fixture = new ScenarioSession();
+  fixture.physical("kid", "child", []);
+  const h = await startPlanning([], []);
+  h.setResponses([calls(spawn("later", { schedule: "+1h" })), answer("P1")]);
+  await h.session.prompt("Plan the change.");
+  expect(outcomes(h, "Agent")[0]?.text).toBe(PLAN_SCHEDULE_REFUSAL);
+});
+
+it("a quota-blocked dispatch is not parked while planning", async () => {
+  fixture = new ScenarioSession();
+  const child = fixture.physical("kid", "child", [answer("MUST NOT RUN")]);
+  const blocked: ExtensionFactory = pi => {
+    pi.events.on("router:rpc:admit", raw => {
+      const { requestId } = raw as { requestId: string };
+      pi.events.emit(`router:rpc:admit:reply:${requestId}`, { success: true, data: { ok: false, resetAt: fixture.clock.now() + 60_000, wait: true } });
+    });
+  };
+  const h = await startHost([], [], { noRouter: true, factories: [blocked] });
+  await h.session.prompt("/plan start");
+  h.setResponses([calls(spawn("parked")), answer("P1")]);
+  await h.session.prompt("Plan the change.");
+  const [outcome] = outcomes(h, "Agent");
+  expect(outcome?.isError).toBe(true);
+  expect(outcome?.text).toContain(PLAN_PARK_REFUSAL);
+  expect(child.state.callCount).toBe(0);
 });
 
 it("a worktree child is refused while planning", async () => {

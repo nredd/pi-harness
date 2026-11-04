@@ -165,6 +165,9 @@ describe("AgentManager under Plan mode", () => {
       'Cannot run with isolation: "worktree" while Plan mode is active: a worktree exists to make edits. Omit `isolation`, or leave Plan mode first.',
     );
     expect(runAgent).not.toHaveBeenCalled();
+    // An immediate start that fails takes its record with it: nothing is left running in the fleet.
+    expect(manager.getRecord(id)).toBeUndefined();
+    expect(manager.listAgents()).toEqual([]);
   });
 });
 

@@ -197,10 +197,11 @@ test("a snapshot that throws answers active with a policy refusing every tool", 
 
 test("Plan refuses subagent tools unless a compatible gate answers, and announces itself at start", async () => {
   const mock = createMockPi({
-    activeTools: ["read", "Agent", "steer_subagent", "get_subagent_result"],
+    activeTools: ["read", "Agent", "SubagentWorkflow", "steer_subagent", "get_subagent_result"],
     allTools: [
       builtinTool("read"),
       extensionTool("Agent"),
+      extensionTool("SubagentWorkflow"),
       extensionTool("steer_subagent"),
       extensionTool("get_subagent_result"),
     ],
@@ -210,7 +211,7 @@ test("Plan refuses subagent tools unless a compatible gate answers, and announce
       kind: "loaded" as const,
       settings: {
         thinkingLevel: "inherit" as const,
-        defaultPlanTools: ["read", "Agent", "steer_subagent", "get_subagent_result"],
+        defaultPlanTools: ["read", "Agent", "SubagentWorkflow", "steer_subagent", "get_subagent_result"],
       },
     }),
   });
@@ -228,7 +229,7 @@ test("Plan refuses subagent tools unless a compatible gate answers, and announce
   await mock.commands.get("plan")?.handler("start", context.ctx);
   const hook = mock.events.get("tool_call")?.[0];
 
-  for (const toolName of ["Agent", "steer_subagent"]) {
+  for (const toolName of ["Agent", "SubagentWorkflow", "steer_subagent"]) {
     assert.deepEqual(await hook?.({ toolName, input: {} }, context.ctx), {
       block: true,
       reason: `Plan mode blocks '${toolName}' because no compatible subagent gate answered, so a child it starts would not plan. Install @nredd/pi-subagents with Plan support (see the pi-plan-mode README).`,
