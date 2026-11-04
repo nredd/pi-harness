@@ -42,9 +42,9 @@
     "check": "npm run test:dist && npm run build && biome check . && npm run typecheck && npm test && npm run test:bun",
     "format": "biome check --write .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --coverage",
-    "test:bun": "bun test ./test/confirmation-session.test.ts ./test/decline-session.test.ts ./test/policy-session.test.ts ./test/transcript-session.test.ts --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=coverage/bun && node ../../scripts/run-vitest.ts bun ./test/tool-policy.test.ts --coverage.enabled=false",
-    "test:dist": "vitest run --config vitest.runtime-build.config.ts --coverage",
+    "test": "JITI_FS_CACHE=false vitest run --coverage",
+    "test:bun": "JITI_FS_CACHE=false bun test ./test/confirmation-session.test.ts ./test/decline-session.test.ts ./test/policy-session.test.ts ./test/transcript-session.test.ts --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=coverage/bun && node ../../scripts/run-vitest.ts bun ./test/tool-policy.test.ts --coverage.enabled=false",
+    "test:dist": "JITI_FS_CACHE=false vitest run --config vitest.runtime-build.config.ts --coverage",
     "prepack": "npm run build"
   },
   "peerDependencies": {
