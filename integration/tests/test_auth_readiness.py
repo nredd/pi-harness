@@ -8,13 +8,21 @@ References:
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+import subprocess
+from typing import TYPE_CHECKING, Any
 from urllib.error import HTTPError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import pytest
 
-from harness.anthropic_mock import AnthropicMock, anthropic_env, expected_billing_version
+from harness.anthropic_mock import (
+    RECORDING_SHIMS,
+    AnthropicMock,
+    anthropic_env,
+    expected_billing_version,
+    install_recording_shims,
+    shim_calls,
+)
 from harness.sandbox import build_sandbox
 
 if TYPE_CHECKING:
@@ -103,3 +111,106 @@ def test_each_auth_launch_requires_a_fresh_preload_nonce(tmp_path: Path) -> None
         assert first["BUN_OPTIONS"].startswith("--preload ")
         assert "redirect_anthropic.mjs" in first["BUN_OPTIONS"]
         assert box.env(first)["HARNESS_AUTH_NONCE"] == first["HARNESS_AUTH_NONCE"]
+
+
+def post(url: str, body: bytes, content_type: str) -> tuple[int, dict[str, Any]]:
+    """POST to the mock and return its status and JSON body, error statuses included.
+
+    Parameters:
+        url (str): full request URL.
+        body (bytes): request body.
+        content_type (str): `content-type` header.
+
+    Returns:
+        tuple[int, dict[str, Any]]: HTTP status and decoded reply.
+    """
+    request = Request(url, data=body, headers={"content-type": content_type}, method="POST")
+    try:
+        with urlopen(request, timeout=5) as response:
+            return response.status, json.loads(response.read())
+    except HTTPError as error:
+        with error:
+            return error.code, json.loads(error.read())
+
+
+def test_mock_url_refuses_before_start_and_after_stop() -> None:
+    """The base URL exists only while the server is serving."""
+    mock = AnthropicMock()
+    with pytest.raises(RuntimeError, match="not started"):
+        _ = mock.url
+    with mock:
+        assert mock.url.startswith("http://127.0.0.1:")
+    with pytest.raises(RuntimeError, match="not started"):
+        _ = mock.url
+
+
+def test_token_replies_are_scripted_in_order_then_refused() -> None:
+    """Queued token replies are consumed FIFO, an unscripted refresh is a 500, every request is recorded."""
+    with AnthropicMock() as mock:
+        mock.queue_token(200, {"access_token": "fake-access", "expires_in": 3600})
+        mock.queue_token(400, {"error": "invalid_grant"})
+        form = b"grant_type=refresh_token&refresh_token=fake-refresh"
+        assert post(mock.url + "/v1/oauth/token", form, "application/x-www-form-urlencoded") == (
+            200,
+            {"access_token": "fake-access", "expires_in": 3600},
+        )
+        assert post(mock.url + "/v1/oauth/token", b'{"grant_type": "refresh_token"}', "application/json") == (
+            400,
+            {"error": "invalid_grant"},
+        )
+        assert post(mock.url + "/v1/oauth/token?beta=1", b"not json", "text/plain") == (
+            500,
+            {"error": "unscripted"},
+        )
+        assert [(token.path, token.body) for token in mock.tokens] == [
+            ("/v1/oauth/token", {"grant_type": "refresh_token", "refresh_token": "fake-refresh"}),
+            ("/v1/oauth/token", {"grant_type": "refresh_token"}),
+            ("/v1/oauth/token?beta=1", "not json"),
+        ]
+        assert mock.tokens[0].headers["content-type"] == "application/x-www-form-urlencoded"
+        assert mock.token_replies == []
+        assert mock.messages == []
+
+
+def test_message_status_answers_with_an_authentication_error() -> None:
+    """A non-200 `message_status` records the call and replies with an Anthropic error body."""
+    with AnthropicMock(message_status=401) as mock:
+        body = b'{"model": "claude-haiku-4-5", "messages": []}'
+        assert post(mock.url + "/v1/messages", body, "application/json") == (
+            401,
+            {"type": "error", "error": {"type": "authentication_error"}},
+        )
+        assert [(m.path, m.body) for m in mock.messages] == [
+            ("/v1/messages", {"model": "claude-haiku-4-5", "messages": []})
+        ]
+        assert mock.tokens == []
+
+
+def test_unscripted_post_path_is_not_found_and_unrecorded() -> None:
+    """Only the token and messages endpoints are served."""
+    with AnthropicMock() as mock:
+        assert post(mock.url + "/v1/complete", b"{}", "application/json") == (
+            404,
+            {"error": "unscripted path /v1/complete"},
+        )
+        assert mock.messages == mock.tokens == []
+
+
+def test_recording_shims_log_argv_and_fail(tmp_path: Path) -> None:
+    """Each shim on the sandbox PATH records its argv and exits 1, so a reach for it fails loudly.
+
+    Parameters:
+        tmp_path (Path): private sandbox root.
+    """
+    box = build_sandbox(tmp_path / "box")
+    install_recording_shims(box)
+    assert shim_calls(box) == []
+    for name in RECORDING_SHIMS:
+        assert (box.shims_dir / name).stat().st_mode & 0o111
+    env = box.env()
+    claude = subprocess.run(["claude", "-p", "hi there"], env=env, cwd=box.workdir, check=False)
+    security = subprocess.run(
+        ["security", "find-generic-password", "-s", "Claude Code"], env=env, cwd=box.workdir, check=False
+    )
+    assert (claude.returncode, security.returncode) == (1, 1)
+    assert shim_calls(box) == ["claude -p hi there", "security find-generic-password -s Claude Code"]
