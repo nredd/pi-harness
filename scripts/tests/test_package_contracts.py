@@ -25,6 +25,7 @@ import urllib.request
 from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -32,6 +33,7 @@ from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import contract_helpers
 from contract_helpers import FifoWitness, node_writer, python_writer
 
 import faux_provider as fp
@@ -503,6 +505,48 @@ def test_fifo_writer_exits_without_a_reader(tmp_path: Path, language: str, reade
     started = time.monotonic()
     subprocess.run(argv, cwd=tmp_path, capture_output=True, timeout=10, check=False)
     assert time.monotonic() - started < 5
+
+
+@pytest.mark.parametrize(
+    ("eof_at", "expected"),
+    [pytest.param(11.0, True, id="eof-2s-after-byte"), pytest.param(19.0, False, id="eof-10s-after-byte")],
+)
+def test_fifo_witness_measures_eof_from_the_writers_byte(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, eof_at: float, expected: bool
+) -> None:
+    """A writer that boots 9s after the FIFO is made keeps its whole EOF window, counted from its byte.
+
+    The witness clock is faked; the writer, its byte and its EOF are real. EOF 2s after a late byte
+    is a kill (the writer's own exit is `WITNESS_EXIT_S` after it started); EOF 10s after it may be
+    the writer's self-exit.
+
+    Parameters:
+        tmp_path (Path): Writer working directory holding the FIFO.
+        monkeypatch (pytest.MonkeyPatch): Fakes the witness clock.
+        eof_at (float): Witness clock when EOF is read; the byte is read at 9s.
+        expected (bool): Whether `gone` accepts the EOF.
+    """
+    now = 0.0
+    monkeypatch.setattr(contract_helpers, "time", SimpleNamespace(monotonic=lambda: now))
+    with FifoWitness(tmp_path) as witness:
+        now = 9.0
+        subprocess.run([sys.executable, "-c", python_writer(0)], cwd=tmp_path, timeout=10, check=True)
+        assert witness.started()
+        now = eof_at
+        assert witness.gone() is expected
+
+
+def test_fifo_witness_rejects_eof_without_a_byte(tmp_path: Path) -> None:
+    """EOF from a writer that never wrote proves nothing, so `gone` cannot pass vacuously.
+
+    Parameters:
+        tmp_path (Path): Writer working directory holding the FIFO.
+    """
+    silent = "import os; os.close(os.open('alive.fifo', os.O_WRONLY | os.O_NONBLOCK))"
+    with FifoWitness(tmp_path) as witness:
+        subprocess.run([sys.executable, "-c", silent], cwd=tmp_path, timeout=10, check=True)
+        assert not witness.started()
+        assert not witness.gone()
 
 
 @pytest.mark.parametrize(
