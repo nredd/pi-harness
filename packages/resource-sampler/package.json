@@ -33,7 +33,7 @@
     "lint": "biome check src test",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --coverage --maxWorkers=1",
-    "test:bun": "node ../../scripts/run-vitest.ts bun --maxWorkers=1 --coverage --coverage.provider=istanbul --coverage.reporter=text --coverage.reporter=lcov --coverage.reportsDirectory=coverage/bun",
+    "test:bun": "node ../../scripts/run-vitest.ts bun --maxWorkers=1",
     "check": "npm run lint && npm run typecheck && npm run build && npm test && npm run test:bun"
   },
   "devDependencies": {

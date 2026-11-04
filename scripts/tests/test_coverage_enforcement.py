@@ -403,20 +403,30 @@ def test_cli_downgrade_against_real_base_requires_entry(tmp_path: Path) -> None:
             assert not errors
 
 
+ENFORCED_BUN_PACKAGES = {"preset", "subscription-router", "todo"}
+
+
 def test_current_bun_policy_is_explicit_and_links_migration() -> None:
-    """Keep every current Bun signal explicitly advisory until its source-complete port.
+    """Pin the promoted Bun signals at zero and keep the rest explicitly advisory.
 
     Parameters:
         None.
     Returns:
-        None: All current Bun declarations carry an explicit mode and #160 rationale.
+        None: Promoted signals enforce 0/0 on both OSes; the rest carry an explicit mode and #160 rationale.
     Raises:
-        AssertionError: A current signal silently defaults to enforcement or lacks its reason.
+        AssertionError: A signal defaults to enforcement, lacks its reason or loosens a promoted floor.
     """
     data = json.loads((ROOT / "coverage/policy.json").read_text())
-    signals = [pkg["signals"]["bun"] for pkg in data["packages"].values() if "bun" in pkg["signals"]]
+    packages = data["packages"]
+    signals = {name: pkg["signals"]["bun"] for name, pkg in packages.items() if "bun" in pkg["signals"]}
     assert len(signals) == 9
-    for signal in signals:
-        assert signal["enforcement"] == "report-only"
-        assert "https://github.com/nredd/pi-harness/issues/160" in signal["reason"]
-        assert "enforced" in signal["reason"]
+    for name, signal in signals.items():
+        if name in ENFORCED_BUN_PACKAGES:
+            assert signal["enforcement"] == "enforced", name
+            assert "files" not in signal, name
+            zero = {"lines": 0, "functions": 0}
+            assert signal["max_uncovered"] == {"darwin": zero, "linux": zero}, name
+        else:
+            assert signal["enforcement"] == "report-only", name
+            assert "https://github.com/nredd/pi-harness/issues/160" in signal["reason"]
+            assert "enforced" in signal["reason"]

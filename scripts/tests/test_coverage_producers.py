@@ -67,35 +67,94 @@ def test_primary_configs_match_policy_inventory() -> None:
         assert '"text"' in text
 
 
-def test_declared_bun_coverage_commands_have_both_reporters() -> None:
-    """Bind declared Bun commands to visible and machine reporting.
+LAUNCHER = "node ../../scripts/run-vitest.ts bun"
+# Package-specific Vitest options only; the launcher owns every coverage flag.
+LAUNCHER_PACKAGE_ARGS = {
+    "resource-sampler": " --maxWorkers=1",
+    "todo": " --config .vitest.config.ts",
+}
+BUN_COVERAGE_ARGS = [
+    "--coverage",
+    "--coverage.provider=istanbul",
+    "--coverage.reporter=text",
+    "--coverage.reporter=lcov",
+    "--coverage.reportsDirectory=coverage/bun",
+]
+
+
+def launch_bun(tmp_path: Path, *args: str) -> list[str]:
+    """Run the real launcher against a recording `bun` and return the argv it received.
+
+    Parameters:
+        tmp_path (Path): Disposable directory for the fake executable and receipt.
+        *args (str): Package arguments after the `bun` engine selector.
+    Returns:
+        list[str]: Arguments the launcher passed to `bun`.
+    Raises:
+        AssertionError: Node is missing or the launcher exits nonzero.
+    """
+    node = shutil.which("node")
+    assert node, "Node is required to execute the launcher, not a skipped verification"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    receipt = tmp_path / "argv.json"
+    fake = bin_dir / "bun"
+    fake.write_text(
+        "#!/usr/bin/env node\n"
+        'require("node:fs").writeFileSync(process.env.RECEIPT, JSON.stringify(process.argv.slice(2)));\n'
+    )
+    fake.chmod(0o755)
+    env = {"PATH": f"{bin_dir}:{Path(node).parent}", "RECEIPT": str(receipt)}
+    result = subprocess.run(
+        [node, ROOT / "scripts/run-vitest.ts", "bun", *args],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(receipt.read_text())
+
+
+def test_bun_launcher_owns_istanbul_reporters_and_directory(tmp_path: Path) -> None:
+    """Bind the Bun signal's provider, both reporters and output directory to the launcher.
+
+    Parameters:
+        tmp_path (Path): Disposable directory for the recording `bun`.
+    Returns:
+        None: The launcher appends the Bun coverage contract unless coverage is disabled.
+    Raises:
+        AssertionError: The launcher drops a reporter, the provider or the independent directory.
+    """
+    argv = launch_bun(tmp_path, "--maxWorkers=1")
+    assert argv[0] == "--bun"
+    assert argv[2:] == ["run", "--maxWorkers=1", *BUN_COVERAGE_ARGS]
+    canary = launch_bun(tmp_path, "test/resource-loader-home.test.ts", "--coverage.enabled=false")
+    assert canary[2:] == ["run", "test/resource-loader-home.test.ts", "--coverage.enabled=false"]
+
+
+def test_declared_bun_commands_delegate_coverage_to_the_launcher() -> None:
+    """Keep every Vitest-on-Bun producer on the launcher, and native subsets on both reporters.
 
     Parameters:
         None.
     Returns:
-        None: Every declared compatibility suite uses both required reporters.
+        None: Vitest-on-Bun manifests pass only package arguments; native subsets keep both reporters.
     Raises:
-        AssertionError: A producer removes a reporter or the independent output directory.
+        AssertionError: A manifest bypasses the launcher, restates coverage flags or drops a reporter.
     """
     manifests = [*ROOT.glob("packages/*/package.json"), ROOT / "integration/inprocess/package.json"]
     for manifest in manifests:
         command = json.loads(manifest.read_text())["scripts"].get("test:bun")
-        if command:
-            if "scripts/run-vitest.ts bun" in command and not command.startswith("bun test "):
-                assert command.startswith("node ../../scripts/run-vitest.ts bun "), manifest
-                assert "--coverage.provider=istanbul" in command, manifest
-                assert "--coverage.reporter=text" in command, manifest
-                assert "--coverage.reporter=lcov" in command, manifest
-                assert "--coverage.reportsDirectory=coverage/bun" in command, manifest
-                assert not re.search(r"\S+\.test\.[cm]?[jt]s", command), manifest
-                if manifest.parent.name == "resource-sampler":
-                    assert "--maxWorkers=1" in command
-                if manifest.parent.name == "todo":
-                    assert "--config .vitest.config.ts" in command
-            else:
-                assert "--coverage-reporter=text" in command, manifest
-                assert "--coverage-reporter=lcov" in command, manifest
-                assert "--coverage-dir=coverage/bun" in command, manifest
+        if not command:
+            continue
+        if command.startswith("bun test "):
+            assert "--coverage-reporter=text" in command, manifest
+            assert "--coverage-reporter=lcov" in command, manifest
+            assert "--coverage-dir=coverage/bun" in command, manifest
+        else:
+            expected = LAUNCHER + LAUNCHER_PACKAGE_ARGS.get(manifest.parent.name, "")
+            assert command == expected, manifest
 
 
 def test_generated_coverage_is_ignored_by_whole_workspace_linters() -> None:
