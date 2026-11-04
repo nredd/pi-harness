@@ -11,7 +11,7 @@ vi.mock("../src/agent-runner.js", async () => {
   return { ...actual, runAgent: vi.fn(), resumeAgent: vi.fn(), steerAgent: vi.fn() };
 });
 
-import { runAgent } from "../src/agent-runner.js";
+import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import { registerRunningDetached, unregisterRunningDetached } from "../src/detached-results.js";
 import subagentsExtension from "../src/index.js";
 import { ctx, flush, type Hermetic, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
@@ -49,6 +49,7 @@ async function boot(settings: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.mocked(runAgent).mockReset();
+  vi.mocked(resumeAgent).mockReset();
 });
 afterEach(async () => {
   await booted.lifecycle.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" } as any, context());
@@ -82,6 +83,47 @@ describe("stop_subagent", () => {
     expect(textOf(result)).toContain("Status: stopped | Tool uses: 0");
     expect(textOf(result)).toContain("Description: alpha task");
     expect(textOf(result)).toContain("One completion notice with its partial output follows.");
+    expect(recordOf(id)).toMatchObject({ status: "stopped", stoppedBy: "parent" });
+  });
+
+  it("says a second stop of the same agent finds it already stopped", async () => {
+    await boot();
+    heldRuns();
+    const id = await spawn("alpha");
+    await flush();
+
+    expect(textOf(await stop(id))).toContain(`Agent ${id} stopped.`);
+    const again = await stop(id);
+
+    expect(again.isError).toBe(true);
+    expect(textOf(again)).toBe(`"${id}" is not running (status: stopped), so there is nothing to stop.\nNothing is running or queued.`);
+    expect(recordOf(id)).toMatchObject({ status: "stopped", stoppedBy: "parent" });
+  });
+
+  it("stops an agent steer_subagent just resumed, aborting the resumed run", async () => {
+    await boot();
+    const session = { steer: vi.fn(), dispose: vi.fn(), subscribe: vi.fn(() => () => {}), messages: [], getActiveToolNames: vi.fn(() => []) };
+    vi.mocked(runAgent).mockImplementation(async (_ctx: any, _type: any, _prompt: any, opts: any) => {
+      opts.onSessionCreated?.(session);
+      return { responseText: "first", session, aborted: false, steered: false } as any;
+    });
+    let resumeSignal: AbortSignal | undefined;
+    vi.mocked(resumeAgent).mockImplementation((_session: any, _prompt: any, opts: any) => new Promise((resolve) => {
+      resumeSignal = opts.signal;
+      opts.signal.addEventListener("abort", () => resolve({ text: "cut short" } as any), { once: true });
+    }) as any);
+    const id = await spawn("alpha");
+    await vi.waitFor(() => expect(recordOf(id).status).toBe("completed"));
+    const resumed = await booted.tools.get("steer_subagent").execute("tc-steer", { agent_id: id, message: "more" }, undefined, undefined, context());
+    expect(textOf(resumed)).toContain("Agent resumed in background.");
+    await vi.waitFor(() => expect(resumeSignal).toBeDefined());
+    expect(recordOf(id).status).toBe("running");
+
+    const result = await stop(id);
+
+    expect(textOf(result)).toContain(`Agent ${id} stopped.`);
+    expect(resumeSignal?.aborted).toBe(true);
+    await recordOf(id).promise;
     expect(recordOf(id)).toMatchObject({ status: "stopped", stoppedBy: "parent" });
   });
 

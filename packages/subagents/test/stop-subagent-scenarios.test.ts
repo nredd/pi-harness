@@ -121,8 +121,17 @@ it("stop_subagent cancels a SubagentWorkflow run by its Task ID, with its agents
     if (ms === NOTIFICATION_HOLD_MS) armed.resolve();
     return setTimeout(callback, ms);
   };
+  const registry = Reflect.get(globalThis, Symbol.for("pi-subagents:manager")) as { hasRunning(): boolean };
+  expect(registry.hasRunning()).toBe(true);
   const stopped = await callOnce(h, "stop_subagent", { agent_id: runId });
   expect(stopped.text).toBe(`Workflow "wf454" (${runId}) stopped, with its agents. A completion notice follows.`);
+  // Checked while the child's stream is still held, so a settle cannot hide a survivor:
+  // every record, the workflow's child included, is already stopped.
+  expect(registry.hasRunning()).toBe(false);
+  // Aborted but not yet settled: a second stop says so instead of "not running (status: running)".
+  const again = await callOnce(h, "stop_subagent", { agent_id: runId });
+  expect(again.isError).toBe(false);
+  expect(again.text).toBe(`Workflow "wf454" (${runId}) is already stopping. A completion notice follows.`);
   stream.release();
   await armed.promise;
   fixture.clock.advance(NOTIFICATION_HOLD_MS);
@@ -130,8 +139,8 @@ it("stop_subagent cancels a SubagentWorkflow run by its Task ID, with its agents
   expect(notice).toContain("<status>Stopped by the parent with stop_subagent</status>");
   expect(notice).not.toContain("NEVER 454");
 
-  // Settled: a second stop finds nothing left to stop, and says what it was.
-  const again = await callOnce(h, "stop_subagent", { agent_id: runId });
-  expect(again.isError).toBe(true);
-  expect(again.text).toBe(`"${runId}" is not running (status: killed), so there is nothing to stop.\nNothing is running or queued.`);
+  // Settled: a later stop finds nothing left to stop, and says what it was.
+  const late = await callOnce(h, "stop_subagent", { agent_id: runId });
+  expect(late.isError).toBe(true);
+  expect(late.text).toBe(`"${runId}" is not running (status: killed), so there is nothing to stop.\nNothing is running or queued.`);
 });
