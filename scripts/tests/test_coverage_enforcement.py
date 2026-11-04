@@ -403,7 +403,14 @@ def test_cli_downgrade_against_real_base_requires_entry(tmp_path: Path) -> None:
             assert not errors
 
 
-ENFORCED_BUN_PACKAGES = {"plan-mode", "preset", "resource-sampler", "subscription-router", "todo"}
+ENFORCED_BUN_PACKAGES = {
+    "inprocess",
+    "plan-mode",
+    "preset",
+    "resource-sampler",
+    "subscription-router",
+    "todo",
+}
 
 
 def test_current_bun_policy_is_explicit_and_links_migration() -> None:

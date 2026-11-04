@@ -2,11 +2,12 @@
 
 Owner scope: the 100% line/function goal covers `subagents`, `plan-mode`, `todo`,
 `session-kit`, `resource-sampler`, `subscription-router`, `preset` and `dev-tools`, plus the
-`runtime-build-tooling`, `workflow-examples`, `import-audit` (`scripts/import_audit.ts`, 0/0 since #321) and
-`probes` (every executable `integration/probes` source, 0/0 since #377) signals.
+`runtime-build-tooling`, `workflow-examples`, `import-audit` (`scripts/import_audit.ts`, 0/0 since #321),
+`probes` (every executable `integration/probes` source, 0/0 since #377) and
+`inprocess` (every in-process stack fixture module, 0/0 on both engines since #376) signals.
 `goal: "100-percent"` is the default and cannot be downgraded relative to an established
 base policy. Eligible package tooling/examples remain pending goal blockers, not hidden source.
-`goal: "report-only"` identifies verification infrastructure (helpers, inprocess and
+`goal: "report-only"` identifies verification infrastructure (helpers and
 producer configurations). `goal: "excluded"` records the owner's computer-use
 coverage-maintenance exclusion. Both require a nonblank
 `goal_reason`; neither removes any source from the inventory audit. Measured signals outside the
@@ -114,7 +115,8 @@ and linux since [#320](https://github.com/nredd/pi-harness/issues/320): full sui
 inventory, 0/0 in their own PRs' hosted macos-14 and ubuntu-24.04 artifacts (receipts
 [here](../coverage/receipts/bun-enforced.md)). `resource-sampler` is `enforced` at 0/0 on
 darwin and linux since [#375](https://github.com/nredd/pi-harness/issues/375), which closed its
-darwin 8/4 and linux 47/8 Bun misses with the same fake-host FFI tests as primary. The other four
+darwin 8/4 and linux 47/8 Bun misses with the same fake-host FFI tests as primary. `inprocess` joins them since
+[#376](https://github.com/nredd/pi-harness/issues/376), see below. The other three
 explicitly declare `enforcement: "report-only"`, with a
 mandatory nonblank `reason` and a link to [#160](https://github.com/nredd/pi-harness/issues/160).
 Their stored `max_uncovered` values are advisory references, not enforced budgets. An omitted `enforcement` defaults to
@@ -125,7 +127,7 @@ Istanbul for router, preset, sampler, todo, plan-mode and inprocess through `scr
 They inherit the full explicit primary instrumentation inventory (no `files` subset). The launcher's
 `bun` engine appends the provider, the `text` and `lcov` reporters (Vitest's dotted options) and
 `coverage/bun`, so each `test:bun` passes only package arguments. The sampler retains one
-worker. Inprocess stays report-only until a later #320 slice.
+worker.
 Subagents retains its native subset plus main's guarded real-loader gate; coverage is
 disabled for that extra canary so it cannot overwrite Node's primary report. The policy explicitly lists the files currently measured by each signal;
 missing expected files fail. Files outside that Bun subset remain mandatory in primary
@@ -451,16 +453,22 @@ after cancellation. Whether hosted Darwin counts stay stable is not yet measured
 `check_ratchet()` compare only those two counters. Branch totals/misses remain JSON diagnostics,
 never enforced thresholds; the existing branch-only LCOV regression explicitly passes.
 
-Linux in-process primary coverage in run `40441614924` is 25 uncovered lines / 8 functions versus
-Darwin's 15 / 4. The entire delta is `integration/inprocess/support.ts` (21 / 5 versus 11 / 1);
-`goal-support.ts` and `native-timers.ts` have identical counters. `isolateStackHome()` only spawns
-`/usr/bin/caffeinate` on Darwin. Linux never invokes `stopWake()` or `exitedWithin()` and its timeout,
-exit and Promise callbacks (lines 51-77), while macOS executes normal wake-helper teardown.
-The `support.test.ts` sleep-assertion test explicitly skips outside Darwin: primary logs show
-63 passed / 1 skipped on Linux versus 64 passed on macOS. Bun likewise skips that test and reports
-37 / 5 versus 22 / 4. This is an intentional platform branch, not missing tmux or a Pi binary:
-these real in-process sessions use the installed core harness and the remaining suites run on
-both OSes. No wake path, source file or test assertion is excluded to hide the difference.
+`inprocess` is `enforced` at 0/0 lines/functions on darwin and linux for both `primary` and `bun`
+since #376, with nothing excluded. Its inventory is every fixture module the suites run:
+`support.ts`, `goal-support.ts`, `native-timers.ts`, `agents-support.ts`, `todo-support.ts` and
+`verification/home-guard.ts`. The first two `test-helper` exclusions and the `home-guard.ts`
+verification-helper entry are gone. `verification/home-setup.ts` stays a verification helper:
+Vitest hard-excludes a config's own `setupFiles` from coverage, so it is now a one-call entry and the
+guard it installs (`installHomeGuard`) is measured in `home-guard.ts`. Before #376, main `f2d607eb`
+measured primary 15 / 4 darwin, 25 / 8 linux and Bun 17 / 4, 27 / 8 (run `41781117332`); the Linux
+delta was the macOS-only `caffeinate` teardown in `support.ts`. `stopWake()` and
+`isolateStackHome()` now take an injected `Deadline` and wake spawner, so `support.test.ts` drives
+SIGTERM-exits, SIGKILL-exits, survives-SIGKILL and the spawn failure with a fake helper on every OS
+(no real signals, no real waits). Negative tests cover the host-identity mismatch, an entry without
+a default factory, a memory entry without its reset seams, a fatal `session_start` in `startStack`,
+the offline usage transport and a physical transport core cannot authenticate. Bun's missing
+`resolveHost` Node branch is exercised by checking both engines' resolvers agree on a dual-format
+host. The real `caffeinate` sleep-assertion test still runs on macOS only.
 
 The in-process `@nredd/pi-stack-tests` reviewer suite executes real Pi `grep`/`find` tools
 under both Node and Bun. Each launcher gets a fresh disposable home, so a managed binary

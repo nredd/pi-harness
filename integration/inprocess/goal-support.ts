@@ -1,7 +1,7 @@
 /** Isolated kit stacks and shared clocks; only provider replies and quota snapshots are doubles. */
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { ExtensionContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, ExtensionFactory, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
 	createTestUiContext,
 	type FauxProviderRegistration,
@@ -18,6 +18,7 @@ import {
 	type UsageGetOptions,
 	UsageService,
 	type UsageSnapshot,
+	type UsageTransport,
 } from "../../packages/subscription-router/src/usage.ts";
 import { freezeNativeTimers } from "./native-timers.ts";
 import { assertHostIdentity, isolateStackHome, startStack } from "./support.ts";
@@ -34,6 +35,43 @@ export {
 	tool,
 } from "../../packages/session-kit/test/scenarios/support.ts";
 
+/** The usage transport's side effects, refused: stack scenarios read neither credentials nor the network. */
+export const OFFLINE: Pick<UsageTransport, "fetch" | "getAccessToken"> = {
+	fetch: async () => {
+		throw new Error("No network in stack scenarios");
+	},
+	getAccessToken: async () => {
+		throw new Error("No credentials in stack scenarios");
+	},
+};
+
+/**
+ * Point a session's model runtime at one physical faux transport, refusing a registration
+ * core cannot authenticate before any scenario dispatches through it.
+ *
+ * Parameters:
+ *   runtime (Pick<ModelRuntime, "registerProvider" | "getAuth">): the session's model runtime.
+ *   physical (FauxProviderRegistration): transport owned by the stack.
+ *
+ * Raises:
+ *   Error: core resolves no auth for the registered model.
+ */
+export async function routePhysical(
+	runtime: Pick<ModelRuntime, "registerProvider" | "getAuth">,
+	physical: FauxProviderRegistration,
+): Promise<void> {
+	const model = physical.getModel();
+	runtime.registerProvider(model.provider, {
+		baseUrl: model.baseUrl,
+		apiKey: "faux",
+		api: physical.api,
+		models: physical.models,
+	});
+	if (!(await runtime.getAuth(model))) {
+		throw new Error(`Missing faux auth for '${model.provider}/${model.id}'`);
+	}
+}
+
 /** A cached provider-level quota snapshot; fresh confirmation never reads credentials or the network. */
 export class StackUsage extends UsageService {
 	readonly snapshots = new Map<string, UsageSnapshot>();
@@ -41,15 +79,7 @@ export class StackUsage extends UsageService {
 	onRefresh?: (provider: string) => void;
 
 	constructor(readonly clock: FakeClock) {
-		super({
-			now: () => clock.now(),
-			fetch: async () => {
-				throw new Error("No network in stack scenarios");
-			},
-			getAccessToken: async () => {
-				throw new Error("No credentials in stack scenarios");
-			},
-		});
+		super({ now: () => clock.now(), ...OFFLINE });
 	}
 
 	/** Seed fresh windows, with a reset exactly one hour from the shared fake clock. */
@@ -170,18 +200,7 @@ export class GoalStack {
 			...options,
 		});
 		this.live.push(h);
-		for (const p of this.physical) {
-			const model = p.getModel();
-			h.session.modelRuntime.registerProvider(model.provider, {
-				baseUrl: model.baseUrl,
-				apiKey: "faux",
-				api: p.api,
-				models: p.models,
-			});
-			if (!(await h.session.modelRuntime.getAuth(model))) {
-				throw new Error(`Missing faux auth for '${model.provider}/${model.id}'`);
-			}
-		}
+		for (const p of this.physical) await routePhysical(h.session.modelRuntime, p);
 		return h;
 	}
 

@@ -59,3 +59,17 @@ it("freezes positive deadlines, preserves zero macrotasks and restores globals a
 		frozen.restore();
 	}
 });
+
+it("disposes an inert timer when its `using` scope exits", () => {
+	const frozen = freezeNativeTimers();
+	try {
+		{
+			using timeout = setTimeout(() => {}, 1);
+			expect(timeout.hasRef()).toBe(true);
+			expect(frozen.records).toMatchObject([{ kind: "timeout", delay: 1, cleared: false }]);
+		}
+		expect(frozen.records).toMatchObject([{ kind: "timeout", delay: 1, cleared: true }]);
+	} finally {
+		frozen.restore();
+	}
+});

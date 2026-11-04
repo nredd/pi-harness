@@ -32,9 +32,9 @@ below; broader Istanbul consolidation remains phase 3.
 
 ## Home boundaries
 
-`integration/inprocess/verification/home-guard.ts` exports the reusable assertion;
-`home-setup.ts` installs it at worker setup, before each test and after each test on **both**
-engines. A mismatch fails with the offending test file and an explicit injection fix. A missing
+`integration/inprocess/verification/home-guard.ts` exports the reusable assertion and
+`installHomeGuard`; `home-setup.ts` calls it to check at worker setup, before each test and after
+each test on **both** engines. A mismatch fails with the offending test file and an explicit injection fix. A missing
 `HOME` also fails. This is a boundary guard, not a filesystem sandbox: a test can temporarily
 mutate and restore HOME between boundaries without detection. Do not use it to justify runtime
 HOME mutation. In particular, an earlier fixture cleanup can restore HOME before the afterEach
