@@ -15,7 +15,7 @@ import pytest
 from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from coverage_accounting import Counts, Policy, account, check_ratchet
+from coverage_accounting import Counts, Policy, account, base_policy, check_ratchet
 from tests.test_coverage_accounting import SCRIPT, policy, setup_report
 from tests.test_coverage_round2 import commit_base
 
@@ -137,124 +137,69 @@ def test_base_os_floor_cannot_disappear(tmp_path: Path, runner_os: str) -> None:
         check_ratchet(current, base)
 
 
-def test_target_allowance_preserves_only_scoped_foreign_native_misses(tmp_path: Path) -> None:
-    """Allow the declared Linux native slice without weakening portable coverage.
+# The last allowance `main` carried before #375 deleted support, verbatim, for base-read fixtures.
+RETIRED_ALLOWANCE = {
+    "owner": "resource-sampler",
+    "os": "linux",
+    "files": ["src/darwin.ts"],
+    "max_uncovered": {"lines": 47, "functions": 8},
+    "reason": "Linux cannot execute owned Darwin FFI paths; source remains in the complete primary report.",
+}
+
+
+@pytest.mark.parametrize("runner_os", ["darwin", "linux"])
+def test_enforced_target_has_no_per_file_escape(tmp_path: Path, runner_os: str) -> None:
+    """Hold every eligible primary source to zero once the target is on, foreign native code included.
 
     Parameters:
-        tmp_path (Path): Disposable two-source LCOV/source root.
+        tmp_path (Path): Disposable source/report root with one uncovered native file.
+        runner_os (str): Either measured OS; neither has a source-scoped exception.
     Returns:
-        None: Only the declared foreign native file receives its historical allowance.
+        None: A raised per-OS floor and a `target_allowances` entry both fail to admit the miss.
     Raises:
-        AssertionError: A target allowance becomes a package-wide budget.
+        AssertionError: An uncovered source passes the enforced zero target.
     """
-    setup_report(tmp_path)
-    package = tmp_path / "packages/example"
-    (package / "src/darwin.ts").write_text("export function foreign() { return 0; }\n")
-    report = package / "coverage/lcov.info"
-    foreign = "\n".join(
-        [
-            "SF:src/darwin.ts",
-            *[f"FN:{index},foreign{index}" for index in range(1, 9)],
-            *[f"FNDA:0,foreign{index}" for index in range(1, 9)],
-            "FNF:8",
-            "FNH:0",
-            *[f"DA:{index},0" for index in range(1, 48)],
-            "LF:47",
-            "LH:0",
-            "end_of_record",
-        ]
-    )
-    portable = "\n".join(
-        [
-            "SF:src/index.ts",
-            "FN:1,answer",
-            "FNDA:1,answer",
-            "FNF:1",
-            "FNH:1",
-            "DA:1,1",
-            "DA:2,1",
-            "LF:2",
-            "LH:2",
-            "end_of_record",
-        ]
-    )
-    report.write_text(f"TN:\n{foreign}\n{portable}\n")
+    setup_report(tmp_path, "uncovered.info")
     data = policy().model_dump()
     data["enforce_target"] = True
-    data["packages"]["example"]["signals"]["primary"]["files"] = None
-    data["packages"]["example"]["signals"]["primary"]["max_uncovered"]["linux"] = {
+    data["packages"]["example"]["signals"]["primary"]["max_uncovered"][runner_os] = {
         "lines": 47,
         "functions": 8,
     }
-    data["packages"]["example"]["target_allowances"] = [
-        {
-            "owner": "example",
-            "os": "linux",
-            "files": ["src/darwin.ts"],
-            "max_uncovered": {"lines": 47, "functions": 8},
-            "reason": "Linux cannot execute the owned Darwin FFI source.",
-        }
-    ]
     cfg = Policy.model_validate(data)
-    assert not account(tmp_path, cfg, "linux")[1]
-    lower_declared_floor = cfg.model_copy(deep=True)
-    lower_declared_floor.packages["example"].signals["primary"].max_uncovered["linux"] = Counts(
-        lines=46, functions=7
-    )
-    assert account(tmp_path, lower_declared_floor, "linux")[1] == [
-        "example/primary: Budget exceeded: 47 lines, 8 functions"
+    assert account(tmp_path, cfg, runner_os)[1] == ["example/primary: Budget exceeded: 1 lines, 1 functions"]
+    data["packages"]["example"]["target_allowances"] = [
+        RETIRED_ALLOWANCE | {"owner": "example", "os": runner_os}
     ]
-    foreign_under_floor = foreign.replace("DA:47,0\n", "").replace("LF:47", "LF:46")
-    portable_miss = portable.replace("DA:2,1", "DA:2,0").replace("LH:2", "LH:1")
-    report.write_text(f"TN:\n{foreign_under_floor}\n{portable_miss}\n")
-    errors = account(tmp_path, cfg, "linux")[1]
-    assert errors == ["example/primary: Target allowance excludes uncovered source: 'src/index.ts'"]
-    assert "Budget exceeded" in account(tmp_path, cfg, "darwin")[1][0]
-    missing_data = cfg.model_dump()
-    missing_data["packages"]["example"]["target_allowances"][0]["files"] = ["src/missing.ts"]
-    missing = Policy.model_validate(missing_data)
-    assert account(tmp_path, missing, "linux")[1] == [
-        "example/primary: Target allowance files missing from primary report: '['src/missing.ts']'"
-    ]
+    with pytest.raises(ValidationError, match="target_allowances"):
+        Policy.model_validate(data)
 
 
-def test_target_allowance_ratchet_cannot_expand_scope_or_budget() -> None:
-    """Reject new target allowance OSes, paths and budgets after activation.
+def test_base_policy_drops_only_retired_package_keys() -> None:
+    """Read a pre-#375 base that still declares an allowance, and nothing looser.
 
     Parameters:
         None.
     Returns:
-        None: A base-enabled allowance can only be removed or tightened.
+        None: The repository policy ratchets against a base carrying the retired key.
     Raises:
-        AssertionError: A later policy expands the target exception.
+        AssertionError: The retired key breaks the base read, or the scrub admits other drift.
     """
-    data = policy().model_dump()
-    data["enforce_target"] = True
-    data["packages"]["example"]["target_allowances"] = [
-        {
-            "owner": "example",
-            "os": "linux",
-            "files": ["src/index.ts"],
-            "max_uncovered": {"lines": 1, "functions": 1},
-            "reason": "Fixture-only foreign source.",
-        }
-    ]
-    base = Policy.model_validate(data)
-    with pytest.raises(ValueError, match="Target allowance budget exceeds base floor"):
-        check_ratchet(base, policy())
-    disabled = base.model_dump()
-    disabled["enforce_target"] = False
-    with pytest.raises(ValidationError, match="Target allowances require the global target"):
-        Policy.model_validate(disabled)
-    for change, expected in [
-        (("os", "darwin"), "OS"),
-        (("files", ["src/index.ts", "src/extra.ts"]), "scope"),
-        (("max_uncovered", {"lines": 2, "functions": 1}), "budget"),
-    ]:
-        current_data = base.model_dump()
-        current_data["packages"]["example"]["target_allowances"][0][change[0]] = change[1]
-        with pytest.raises(ValueError, match=f"Target allowance {expected}"):
-            check_ratchet(Policy.model_validate(current_data), base)
+    current = json.loads((Path(__file__).resolve().parents[2] / "coverage/policy.json").read_text())
+    assert all("target_allowances" not in package for package in current["packages"].values())
+    old = json.loads(json.dumps(current))
+    old["packages"]["resource-sampler"]["target_allowances"] = [RETIRED_ALLOWANCE]
+    base = base_policy(json.dumps(old))
+    assert base == Policy.model_validate(current)
+    unknown = json.loads(json.dumps(old))
+    unknown["packages"]["resource-sampler"]["future_allowances"] = []
+    with pytest.raises(ValidationError, match="future_allowances"):
+        base_policy(json.dumps(unknown))
+    for malformed in ["[]", '{"packages": []}', '{"packages": {"example": 1}}']:
+        with pytest.raises(ValidationError):
+            base_policy(malformed)
+    with pytest.raises(ValueError, match="Expecting value"):
+        base_policy("not json")
 
 
 def test_enabled_global_target_cannot_be_disabled(tmp_path: Path) -> None:

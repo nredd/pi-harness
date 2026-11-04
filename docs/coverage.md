@@ -24,15 +24,16 @@ Facade validation and the actual hosted producer failure diagnosis are recorded
 [here](../coverage/receipts/facade-followup.md). Git fixture isolation, both hosted artifacts and the
 #155 -> #195 dev-tools dependency decision are recorded [here](../coverage/receipts/git-isolation.md).
 Final hosted closure and per-OS receipts are recorded [here](../coverage/receipts/final-closure.md).
-All eight primary packages have zero uncovered lines/functions on macOS. Linux has zero misses
-except resource-sampler's native `darwin.ts` paths: **47 lines / 8 functions**. `collect.ts` is
-fully covered on both OSes. Those Darwin-only paths remain owned and measured, not excluded.
+All eight primary packages have zero uncovered lines/functions on macOS and Linux. Until #375,
+Linux missed 47 lines / 8 functions in resource-sampler's native `darwin.ts` paths under a
+`target_allowances` entry. `nativeCalls` now takes an injectable host (`platform`, `arch`,
+`versions.bun`, `getBuiltinModule`, defaulting to `process`), so recording fakes of `bun:ffi` and
+`node:ffi` drive both adapters, and a fake `NativeCalls` drives the per-PID loop, on every OS. The
+real libproc path still runs on macOS. Accounting no longer supports `target_allowances`: the
+current policy rejects the key, and only the base-policy read drops it so a ratchet against an
+older commit still parses.
 `enforce_target` is enabled now that eligible runtime tooling/examples are measured with complete
-primary reports. `resource-sampler` declares its existing Linux-only Darwin FFI slice as a reviewed
-`target_allowances` entry: exact owned primary paths, package owner, OS, ceiling and reason.
-Accounting requires every uncovered line/function outside that slice to remain zero, and clamps the
-slice to the current declared primary floor; it stays in the complete report and cannot become a
-package waiver. Their source-complete
+primary reports. Their source-complete
 producers now emit `packages/plan-mode/coverage/runtime-build-tooling/lcov.info` from `test:dist`
 and `packages/subagents/coverage/workflow-examples/lcov.info` from `test:workflow-examples`.
 Workflow examples are instrumented only after metadata validation, including their literal metadata
@@ -62,11 +63,8 @@ against the existing Linux floors, as the macOS fan-in passes `COVERAGE_OS=darwi
 remain separate acceptance evidence, not owned-source coverage. WSL reports are preserved as
 `coverage-wsl2`, never merged with or averaged into `coverage-ubuntu-24.04`. Unsupported OSes and missing selected-OS floors
 fail closed, including when the global target is enabled. `enforce_target: true` applies after every
-eligible pending inventory is measured, together with the reviewed source-scoped `target_allowances`
-declaration for the existing foreign native slice. An allowance is valid only for a measured eligible
-enforced primary signal, has one exact scope per OS, must fit both the pre-target and current primary
-floors, and may never cover uncovered portable source. Once enabled, the ratchet rejects a new OS,
-path expansion or budget expansion. That flip applies to primary signals;
+eligible pending inventory is measured, and holds every eligible primary signal to zero on every
+OS with no per-file or per-OS exception. That flip applies to primary signals;
 independent runtime signals retain their declared enforcement modes. Primary signals of eligible packages always remain
 `enforced`; the 100% goal is measured by PRIMARY signals, not the Bun compatibility subset.
 Eligible pending packages then fail, too; owner-excluded/report-only domains do not.
@@ -114,7 +112,10 @@ Every declared `test:bun` command also emits an independent `bun` LCOV signal. N
 are measured. `plan-mode`, `preset`, `subscription-router` and `todo` are `enforced` at 0/0 on darwin
 and linux since [#320](https://github.com/nredd/pi-harness/issues/320): full suite, full primary
 inventory, 0/0 in their own PRs' hosted macos-14 and ubuntu-24.04 artifacts (receipts
-[here](../coverage/receipts/bun-enforced.md)). The other five explicitly declare `enforcement: "report-only"`, with a
+[here](../coverage/receipts/bun-enforced.md)). `resource-sampler` is `enforced` at 0/0 on
+darwin and linux since [#375](https://github.com/nredd/pi-harness/issues/375), which closed its
+darwin 8/4 and linux 47/8 Bun misses with the same fake-host FFI tests as primary. The other four
+explicitly declare `enforcement: "report-only"`, with a
 mandatory nonblank `reason` and a link to [#160](https://github.com/nredd/pi-harness/issues/160).
 Their stored `max_uncovered` values are advisory references, not enforced budgets. An omitted `enforcement` defaults to
 `enforced` for backwards-compatible primary/base-policy reading; current Bun declarations never
@@ -124,7 +125,7 @@ Istanbul for router, preset, sampler, todo, plan-mode and inprocess through `scr
 They inherit the full explicit primary instrumentation inventory (no `files` subset). The launcher's
 `bun` engine appends the provider, the `text` and `lcov` reporters (Vitest's dotted options) and
 `coverage/bun`, so each `test:bun` passes only package arguments. The sampler retains one
-worker. Sampler and inprocess stay report-only until later #320 slices.
+worker. Inprocess stays report-only until a later #320 slice.
 Subagents retains its native subset plus main's guarded real-loader gate; coverage is
 disabled for that extra canary so it cannot overwrite Node's primary report. The policy explicitly lists the files currently measured by each signal;
 missing expected files fail. Files outside that Bun subset remain mandatory in primary
@@ -188,8 +189,9 @@ Production exclusions are limited to generated artifacts, genuine type-only decl
 validated non-executable ESM facades. Every exclusion has a path (a glob is permitted for generated
 hashed artifacts), a `generated`, `type-only`, `non-executable-facade` or genuine `test-helper` kind
 and a substantive reason. No UI, platform, error-path,
-CLI or "hard to test" exemptions. A measured per-OS budget is not a source exemption: Linux
-resource-sampler retains Darwin-native code in both its inventory and LCOV report. Runtime enums/constants are executable source.
+CLI or "hard to test" exemptions. Platform-specific code is covered on every OS through injected
+seams: resource-sampler's Darwin FFI source is in both its inventory and LCOV report on Linux, at 0/0.
+Runtime enums/constants are executable source.
 Review exclusions as carefully as code; the script cannot prove every human justification.
 
 `non-executable-facade` requires an exact package-relative `.ts` path already matched by `owned`.

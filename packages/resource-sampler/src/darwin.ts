@@ -94,15 +94,25 @@ interface BunFfi {
 	};
 }
 
+/** The `process` fields that select an FFI adapter; tests inject a fake host to run both on any OS. */
+export interface NativeHost {
+	readonly platform: string;
+	readonly arch: string;
+	/** Runtime versions; only a `bun` entry selects the Bun adapter. */
+	readonly versions: Readonly<Record<string, string | undefined>>;
+	getBuiltinModule(id: string): unknown;
+}
+
 /**
  * Load only fixed native symbols, lazily; unsupported runtimes retain unavailable process metrics.
+ * @param host Platform, architecture, runtime and builtin loader; defaults to the running `process`.
  * @returns Owned syscall bindings, or undefined for unsupported platform/architecture/runtime.
  * @throws If opening the runtime FFI library fails.
  */
-function nativeCalls(): NativeCalls | undefined {
-	if (process.platform !== "darwin" || !["arm64", "x64"].includes(process.arch)) return undefined;
-	if (process.versions.bun) {
-		const ffi = process.getBuiltinModule("bun:ffi") as BunFfi | undefined;
+export function nativeCalls(host: NativeHost = process): NativeCalls | undefined {
+	if (host.platform !== "darwin" || !["arm64", "x64"].includes(host.arch)) return undefined;
+	if (host.versions.bun) {
+		const ffi = host.getBuiltinModule("bun:ffi") as BunFfi | undefined;
 		if (!ffi) return undefined;
 		const lib = ffi.dlopen("/usr/lib/libproc.dylib", {
 			proc_pidinfo: { args: ["i32", "i32", "u64", "ptr", "i32"], returns: "i32" },
@@ -123,7 +133,7 @@ function nativeCalls(): NativeCalls | undefined {
 			close: () => lib.close(),
 		};
 	}
-	const ffi = process.getBuiltinModule("node:ffi") as typeof import("node:ffi") | undefined;
+	const ffi = host.getBuiltinModule("node:ffi") as typeof import("node:ffi") | undefined;
 	if (!ffi) return undefined;
 	const lib = ffi.dlopen("/usr/lib/libproc.dylib", {
 		proc_pidinfo: { arguments: ["i32", "i32", "u64", "pointer", "i32"], return: "i32" },
