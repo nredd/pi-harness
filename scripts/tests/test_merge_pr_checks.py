@@ -391,7 +391,7 @@ def test_workflow_matrix_contract() -> None:
     workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text()
     jobs = yaml.safe_load(workflow)["jobs"]
     expected = set()
-    for name in ("owned", "contracts", "stack"):
+    for name in ("contracts", "stack"):
         matrix = jobs[name]["strategy"]["matrix"]
         assert matrix["os"] == ["ubuntu-24.04", "macos-14", "wsl2"]
         assert "exclude" not in matrix
@@ -401,8 +401,36 @@ def test_workflow_matrix_contract() -> None:
                 expected |= {f"stack ({os_name}, {stack})" for stack in matrix["stack"]}
             else:
                 expected.add(f"{name} ({os_name})")
+    # Each `owned (<os>)` is its own one-cell fan-in job, so all three share one placeholder name.
+    fan_ins = [job for job in jobs.values() if job.get("name") == "owned (${{ matrix.os }})"]
+    assert [job["strategy"]["matrix"]["os"] for job in fan_ins] == [["ubuntu-24.04"], ["macos-14"], ["wsl2"]]
+    expected |= {"owned (ubuntu-24.04)", "owned (macos-14)", "owned (wsl2)"}
     assert expected == checks.EXPECTED_MATRIX
-    assert all(f"    name: {name}\n" in workflow for name in checks.MATRIX)
+    names = {job.get("name") for job in jobs.values()}
+    assert set(checks.MATRIX) <= names
+    shard_names = {name for name in names if name and name.startswith("owned shard (")}
+    assert set(checks.MATRIX) | shard_names == checks.PLACEHOLDERS
+
+
+def test_cancelled_shard_placeholder_is_superseded_like_a_required_one() -> None:
+    """Admit a zero-step cancelled `owned shard` placeholder with the same complete-successor proof.
+
+    Returns:
+        None: The synthetic shard placeholder passes, and the same name with executed steps refuses.
+    """
+    gh = Replay()
+    old = next(j for j in gh.data["old_jobs"] if j["name"] == "owned (${{ matrix.os }})")
+    shard = copy.deepcopy(old) | {
+        "id": old["id"] + 1,
+        "name": "owned shard (${{ matrix.os }}, ${{ matrix.shard }})",
+    }
+    shard["html_url"] = f"https://github.com/{REPO}/actions/runs/{shard['run_id']}/job/{shard['id']}"
+    gh.data["old_jobs"].append(shard)
+    gh.data["checks"].append({"name": shard["name"], "state": "CANCELLED", "link": shard["html_url"]})
+    gh.gate()
+    shard["steps"] = [{"name": "started"}]
+    with pytest.raises(checks.CheckError, match="not an unexecuted CI matrix placeholder"):
+        gh.gate()
 
 
 def test_cli_failures_and_pagination(monkeypatch: pytest.MonkeyPatch) -> None:

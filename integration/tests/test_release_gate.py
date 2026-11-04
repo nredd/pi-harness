@@ -21,6 +21,23 @@ SHA = "a" * 40
 ROOT = Path(__file__).resolve().parents[2]
 # The CI plan owns which owned gates and stack cells run; load it by path, `scripts/` is not a package.
 CI_PLAN: dict[str, Any] = runpy.run_path(str(ROOT / "scripts/ci_paths.py"))
+OWNED_JOB_SUFFIX = {"ubuntu-24.04": "ubuntu", "macos-14": "macos", "wsl2": "wsl2"}
+
+
+def ci_job(name: str) -> str:
+    """Return the `ci.yml` job id that reports one expected job name.
+
+    Parameters:
+        name (str): Job name, e.g. `owned shard (macos-14, ts)` or `contracts (wsl2)`.
+
+    Returns:
+        str: Job id; each OS has its own `owned-shards-<os>` and `owned-<os>` (fan-in) job.
+    """
+    if name.startswith("owned shard ("):
+        return f"owned-shards-{OWNED_JOB_SUFFIX[name.removeprefix('owned shard (').split(',')[0]]}"
+    if name.startswith("owned ("):
+        return f"owned-{OWNED_JOB_SUFFIX[name.removeprefix('owned (').removesuffix(')')]}"
+    return name.split(" ", maxsplit=1)[0]
 
 
 def evidence() -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
@@ -187,6 +204,14 @@ def test_required_job_names_are_pinned() -> None:
         "owned (ubuntu-24.04)",
         "owned (macos-14)",
         "owned (wsl2)",
+        "owned shard (ubuntu-24.04, subagents)",
+        "owned shard (ubuntu-24.04, computer-use)",
+        "owned shard (ubuntu-24.04, ts)",
+        "owned shard (ubuntu-24.04, python)",
+        "owned shard (macos-14, ts)",
+        "owned shard (macos-14, python)",
+        "owned shard (wsl2, subagents-computer-use)",
+        "owned shard (wsl2, ts)",
         "contracts (ubuntu-24.04)",
         "contracts (macos-14)",
         "contracts (wsl2)",
@@ -261,7 +286,7 @@ def test_workflow_execution_names_and_barriers() -> None:
     ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
     fork = yaml.safe_load((ROOT / ".github/workflows/forks.yml").read_text())
     for name, required in gate.expected_jobs().items():
-        job = fork["jobs"]["core"] if name.startswith("release-core") else ci["jobs"][name.split(" ")[0]]
+        job = fork["jobs"]["core"] if name.startswith("release-core") else ci["jobs"][ci_job(name)]
         assert required <= {step.get("name") for step in job["steps"]}
     assert ci["jobs"]["release-core"]["uses"] == "./.github/workflows/forks.yml"
     for workflow, job_names in [("publish.yml", ["verify", "publish"]), ("promote-stack.yml", ["verify"])]:
@@ -310,20 +335,28 @@ def test_stack_cells_are_exactly_the_executing_matrix() -> None:
 
 
 def test_owned_gate_steps_follow_the_plan_and_exist_in_the_workflow() -> None:
-    """Bind the verifier's owned steps to the planned gates and to the real split steps in `ci.yml`.
+    """Bind the verifier's owned shards and steps to the plan and to the real steps in `ci.yml`.
 
     Returns:
-        None: Each system requires exactly its planned gate steps, all present in the owned job.
+        None: Each shard requires exactly its planned gate steps, each fan-in its shard and accounting steps,
+            all present in the jobs that run them.
     """
-    assert CI_PLAN["OWNED_GATES"] == gate.OWNED_GATES
+    plan = {
+        system: {shard.name: shard.gates for shard in shards}
+        for system, shards in CI_PLAN["OWNED_SHARDS"].items()
+    }
+    assert plan == gate.OWNED_SHARDS
     assert set(gate.OWNED_GATE_STEPS) == {name for gates in CI_PLAN["OWNED_GATES"].values() for name in gates}
-    ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-    steps = {step.get("name") for step in ci["jobs"]["owned"]["steps"]}
-    assert set(gate.OWNED_GATE_STEPS.values()) <= steps
-    for system, gates in CI_PLAN["OWNED_GATES"].items():
-        required = gate.expected_jobs()[f"owned ({system})"]
-        assert {gate.OWNED_GATE_STEPS[name] for name in gates} <= required
-        assert required.isdisjoint(gate.OWNED_GATE_STEPS[n] for n in gate.OWNED_GATE_STEPS if n not in gates)
+    jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
+    for system in gate.SYSTEMS:
+        shard_steps = {step.get("name") for step in jobs[ci_job(f"owned shard ({system}, x)")]["steps"]}
+        fan_in_steps = {step.get("name") for step in jobs[ci_job(f"owned ({system})")]["steps"]}
+        assert set(gate.OWNED_GATE_STEPS.values()) <= shard_steps
+        assert set(gate.OWNED_FAN_IN_STEPS) <= fan_in_steps
+        assert gate.expected_jobs()[f"owned ({system})"] == set(gate.OWNED_FAN_IN_STEPS)
+        for shard, gates in plan[system].items():
+            required = gate.expected_jobs()[f"owned shard ({system}, {shard})"]
+            assert required == {gate.OWNED_GATE_STEPS[name] for name in gates}
 
 
 def test_discovery_reads_all_pages(monkeypatch: pytest.MonkeyPatch) -> None:

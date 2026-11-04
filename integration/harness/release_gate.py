@@ -21,20 +21,39 @@ from harness.promotion import SHA_PATTERN, EvidenceError, run_command
 
 LOGGER = logging.getLogger(__name__)
 SYSTEMS = ("ubuntu-24.04", "macos-14", "wsl2")
-# One `ci.yml` step per owned gate. `scripts/ci_paths.py` `OWNED_GATES` plans which gates each system runs:
-# native cells run the Python suites, WSL keeps only the LCOV producers. A test pins this to that table.
+# One `ci.yml` step per owned gate. Each `owned (<os>)` check is a fan-in over `owned shard (<os>, <shard>)`
+# jobs, and `scripts/ci_paths.py` `OWNED_SHARDS` plans which gates each shard runs: native cells run the
+# Python suites, WSL keeps only the LCOV producers, and the macOS `python` shard carries the benchmark gate.
+# Tests pin both tables to the plan and the step names to `ci.yml`.
 OWNED_GATE_STEPS = {
     "check-ts": "Owned gate check-ts (biome, tsc, Vitest on Node and Bun, computer-use checks)",
     "check-scripts": "Owned gate check-scripts (ruff, ty, pytest scripts, import audit)",
     "check-integration": "Owned gate check-integration (ruff, ty, pytest integration units, probes)",
     "check-probes": "Owned gate check-probes (WSL LCOV producer)",
     "check-import-audit": "Owned gate check-import-audit (WSL LCOV producer)",
+    "check-benchmark": "Benchmark unit gate",
 }
-OWNED_GATES = {
-    "ubuntu-24.04": ("check-ts", "check-scripts", "check-integration"),
-    "macos-14": ("check-ts", "check-scripts", "check-integration"),
-    "wsl2": ("check-ts", "check-probes", "check-import-audit"),
+OWNED_SHARDS = {
+    "ubuntu-24.04": {
+        "subagents": ("check-ts",),
+        "computer-use": ("check-ts",),
+        "ts": ("check-ts",),
+        "python": ("check-scripts", "check-integration"),
+    },
+    "macos-14": {
+        "ts": ("check-ts",),
+        "python": ("check-scripts", "check-integration", "check-benchmark"),
+    },
+    "wsl2": {
+        "subagents-computer-use": ("check-ts",),
+        "ts": ("check-ts", "check-probes", "check-import-audit"),
+    },
 }
+# The fan-in proves every shard succeeded, then accounts for the merged coverage reports.
+OWNED_FAN_IN_STEPS = (
+    "Require every planned shard to succeed",
+    "Coverage accounting (existing reports, including test failures)",
+)
 CONTRACT_STEPS = (
     "Packed plugins alone on exact stock Pi, plus packed preset audit",
     "Packed pi-plan-mode with its registry dependency on exact stock Pi",
@@ -113,18 +132,15 @@ def expected_jobs() -> dict[str, set[str]]:
     """Return required jobs and steps that must actually execute successfully.
 
     Returns:
-        dict[str, set[str]]: Every owned and contracts cell, each stack cell that runs one, and the
-        Gitlinked core gate. Each owned cell names its planned gate steps. Stack cells the plan never
-        runs are excluded.
+        dict[str, set[str]]: Every owned fan-in and its shards, every contracts cell, each stack cell
+        that runs one, and the Gitlinked core gate. Each shard names its planned gate steps. Stack
+        cells the plan never runs are excluded.
     """
     expected = {}
     for system in SYSTEMS:
-        owned = {OWNED_GATE_STEPS[gate] for gate in OWNED_GATES[system]} | {
-            "Coverage accounting (existing reports, including test failures)"
-        }
-        if system == "macos-14":
-            owned.add("Benchmark unit gate")
-        expected[f"owned ({system})"] = owned
+        expected[f"owned ({system})"] = set(OWNED_FAN_IN_STEPS)
+        for shard, gates in OWNED_SHARDS[system].items():
+            expected[f"owned shard ({system}, {shard})"] = {OWNED_GATE_STEPS[gate] for gate in gates}
         expected[f"contracts ({system})"] = set(CONTRACT_STEPS)
     for system, stack, platform in STACK_CELLS:
         steps = {
