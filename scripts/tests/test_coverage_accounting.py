@@ -16,7 +16,7 @@ import pytest
 from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from coverage_accounting import Policy, account, check_ratchet, git_read, inventory, parse_lcov
+from coverage_accounting import Package, Policy, account, check_ratchet, git_read, inventory, parse_lcov
 
 FIXTURES = Path(__file__).parent / "fixtures" / "coverage"
 SCRIPT = Path(__file__).resolve().parents[1] / "coverage_accounting.py"
@@ -211,6 +211,33 @@ def test_ratchet_cannot_remove_a_signal_or_package() -> None:
     current.packages["example"].signals.clear()
     with pytest.raises(ValueError, match="Removed signal"):
         check_ratchet(current, policy())
+
+
+def test_ratchet_allows_removing_a_pending_package() -> None:
+    """Let a measurement-pending inventory go once its sources are measured elsewhere.
+
+    A pending package has no signals, so no budget can be lost; its source membership is still
+    guarded by `check_inventory_ratchet`, which demands a `reclassifications` entry per file.
+
+    Parameters:
+        None.
+    Returns:
+        None: Dropping a pending package passes the budget ratchet.
+    Raises:
+        AssertionError: A pending package cannot be retired after its sources graduate.
+    """
+    base = policy()
+    base.packages["pending"] = Package.model_validate(
+        {
+            "root": "pending",
+            "owned": ["*.ts"],
+            "exclusions": [],
+            "status": "pending",
+            "note": "Later.",
+            "signals": {},
+        }
+    )
+    check_ratchet(policy(), base)
 
 
 @pytest.mark.parametrize("reason", ["", "   "])

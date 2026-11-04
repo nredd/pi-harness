@@ -4,13 +4,28 @@ import { defineConfig } from "vitest/config";
 // process groups through the production runners. Explicit files, no glob.
 export default defineConfig({
 	test: {
-		include: ["transcript-types.test.ts", "process-lifecycle.test.ts", "render.test.ts"],
+		include: [
+			"anthropic-block-types.test.ts",
+			"latency.test.ts",
+			"process-lifecycle.test.ts",
+			"render.test.ts",
+			"session-kit-child-scope.test.ts",
+			"stack-resources.test.ts",
+			"transcript-types.test.ts",
+		],
 		coverage: {
 			provider: "v8",
 			reporter: ["text", "lcov"],
 			reportsDirectory: "coverage/primary",
 			reportOnFailure: true,
-			include: ["transcript-types.ts"],
+			include: [
+				"anthropic-block-types.mjs",
+				"latency.ts",
+				"render.ts",
+				"session-kit-child-scope.ts",
+				"stack-resources.ts",
+				"transcript-types.ts",
+			],
 		},
 		pool: "forks",
 		maxWorkers: 2,

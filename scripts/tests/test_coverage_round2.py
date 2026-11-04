@@ -298,6 +298,40 @@ def test_explicit_reasoned_reclassification_allows_legitimate_change(tmp_path: P
     check_inventory_ratchet(tmp_path, current, base, "HEAD")
 
 
+def test_removed_pending_package_still_needs_a_reclassification_per_file(tmp_path: Path) -> None:
+    """Prove `check_ratchet` skipping a removed pending package does not drop its sources silently.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+    Returns:
+        None: Each file the deleted pending package owned needs its own reasoned entry.
+    Raises:
+        AssertionError: A pending package and its source can vanish without a declaration.
+    """
+    setup_report(tmp_path)
+    (tmp_path / "packages/pending").mkdir(parents=True)
+    for name in ["a.ts", "b.ts"]:
+        (tmp_path / "packages/pending" / name).write_text("export const probe = 1;\n")
+    base = policy()
+    base.packages["pending"] = Package(
+        root="packages/pending", owned=["*.ts"], exclusions=[], status="pending", note="Later.", signals={}
+    )
+    commit_base(tmp_path, base)
+    current = policy()
+    with pytest.raises(ValueError, match="Inventory ratchet requires"):
+        check_inventory_ratchet(tmp_path, current, base, "HEAD")
+    entries = [
+        Reclassification(package="pending", path=f"packages/pending/{name}", reason="Measured elsewhere now.")
+        for name in ["a.ts", "b.ts"]
+    ]
+    for kept in entries:
+        current.reclassifications = [kept]
+        with pytest.raises(ValueError, match="Inventory ratchet requires"):
+            check_inventory_ratchet(tmp_path, current, base, "HEAD")
+    current.reclassifications = entries
+    check_inventory_ratchet(tmp_path, current, base, "HEAD")
+
+
 @pytest.mark.parametrize("invalid", ["duplicate", "stale", "replacement"])
 def test_invalid_reclassification_cannot_approve_loss(tmp_path: Path, invalid: str) -> None:
     """Reject ambiguous approvals and nonexistent replacement identities.
@@ -441,6 +475,7 @@ def test_audit_detects_uninventoried_new_ts_and_python(tmp_path: Path) -> None:
     [
         "scripts/coverage_accounting.py",
         "integration/harness/paths.py",
+        "integration/probes/anthropic-block-types.mjs",
         "integration/probes/latency.ts",
         "integration/probes/render.ts",
         "integration/probes/session-kit-child-scope.ts",
@@ -449,15 +484,15 @@ def test_audit_detects_uninventoried_new_ts_and_python(tmp_path: Path) -> None:
         "integration/providers/usage_fixture.ts",
     ],
 )
-def test_reviewed_missing_source_is_explicitly_pending(file: str) -> None:
+def test_reviewed_missing_source_is_explicitly_accounted(file: str) -> None:
     """Keep the review's identified executable source visible without inventing baselines.
 
     Parameters:
         file (str): Previously unaccounted executable repository path.
     Returns:
-        None: A named pending package owns the source and explains the follow-up.
+        None: A package owns the source: measured by a real producer, or pending with a follow-up.
     Raises:
-        AssertionError: The source is omitted or silently treated as measured.
+        AssertionError: The source is omitted or treated as measured without a producer.
     """
     cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
     owners = [
@@ -473,6 +508,14 @@ def test_reviewed_missing_source_is_explicitly_pending(file: str) -> None:
             package.status == "measured"
             and package.goal == "ratchet"
             and package.goal_reason.strip()
+            and package.signals["primary"].enforcement == "enforced"
+            for package in owners
+        )
+    elif file.startswith("integration/probes/"):
+        # Since #377 every probe runs in process under `check-probes`: measured and enforced at 0/0.
+        assert all(
+            package.status == "measured"
+            and package.goal == "100-percent"
             and package.signals["primary"].enforcement == "enforced"
             for package in owners
         )

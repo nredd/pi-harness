@@ -135,7 +135,7 @@ historical approvals cannot silently waive enforcement. Initial policy introduct
 Enforced-to-enforced floors ratchet per OS; advisory references do not become hidden budgets.
 `computer-use` stays not measured, tracked for its native Swift/Rust and documentation site. Its 33 JS/TS runtime modules are measured by the report-only `computer-use-vitest` signal (#347). `dev-tools` uses #195's primary Istanbul decision with
 all 23 executable modules and zero uncovered lines/functions on both hosted OSes after #155.
-Its independent native Bun scenarios remain advisory. Python `scripts/` and `integration/harness/` are measured by `PY_GATE` (see `docs/coverage.md`). Remaining boundary probes/providers,
+Its independent native Bun scenarios remain advisory. Python `scripts/` and `integration/harness/` are measured by `PY_GATE` (see `docs/coverage.md`). Remaining providers,
 benchmark source and producer configurations are explicitly inventoried as measurement-pending.
 The repository-wide TS/Python/JavaScript audit and the base-tree/current-tree inventory ratchet
 prevent silent source omission; reasoned reclassifications are required for membership losses.
