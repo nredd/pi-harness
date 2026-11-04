@@ -75,6 +75,7 @@ const failClosedPolicy: PlanToolPolicy = ({ toolName }) =>
  * Ask the parent's pi-plan-mode whether a child started now must plan. Returns
  * the policy to run it under, or `undefined` when nobody is planning. Several
  * answers (two Plan extensions) combine fail-closed: any active one restricts.
+ * A malformed answer (not version 1 with a boolean `active`) restricts like an unusable one.
  * When Plan mode is installed but nothing answers, a new child is refused
  * (`silent: "refuse"`, which throws) and a resumed one runs fail-closed.
  */
@@ -89,17 +90,18 @@ export function queryPlanPolicy(
   events.emit(PLAN_MODE_STATE_QUERY, {
     version: PLAN_MODE_STATE_VERSION,
     reply: (state: unknown) => {
-      answered = true;
       const answer = state as { version?: unknown; active?: unknown; evaluate?: unknown } | undefined;
-      if (answer?.active !== true) return;
-      policies.push(
-        answer.version === PLAN_MODE_STATE_VERSION && typeof answer.evaluate === "function"
-          ? (answer.evaluate as PlanToolPolicy)
-          : failClosedPolicy,
-      );
+      // Only a well-formed answer says whether Plan is on; anything else restricts, never frees.
+      if (answer?.version !== PLAN_MODE_STATE_VERSION || typeof answer.active !== "boolean") {
+        policies.push(failClosedPolicy);
+        return;
+      }
+      answered = true;
+      if (!answer.active) return;
+      policies.push(typeof answer.evaluate === "function" ? (answer.evaluate as PlanToolPolicy) : failClosedPolicy);
     },
   });
-  if (!answered && planModeSeen.has(events)) {
+  if (!answered && policies.length === 0 && planModeSeen.has(events)) {
     if (silent === "refuse") throw new Error(PLAN_MODE_SILENT_ERROR);
     return failClosedPolicy;
   }
@@ -112,6 +114,31 @@ export function queryPlanPolicy(
     return undefined;
   };
 }
+
+/**
+ * Whether a Plan policy is active on `events` now, failing closed: an installed Plan mode that
+ * answers badly or not at all counts as planning. For work that would otherwise outlive Plan
+ * unrestricted (a schedule, a quota-parked dispatch, steering an unrestricted child).
+ */
+export function planningNow(events: { emit(channel: string, data: unknown): void } | undefined): boolean {
+  return queryPlanPolicy(events, "restrict") !== undefined;
+}
+
+/** Plan's model must not steer a child that runs without Plan's restrictions. */
+export function planSteerRefusal(id: string): string {
+  return (
+    `Cannot steer agent "${id}" while Plan mode is active: it started before Plan and runs without Plan's restrictions, so a steer could make it edit. ` +
+    "Wait for it to finish and steer it then (that resumes it read-only), stop it with stop_subagent, or leave Plan mode (/plan exit) first."
+  );
+}
+
+/** A scheduled agent fires as a fresh spawn, after Plan, with nothing restricting it. */
+export const PLAN_SCHEDULE_REFUSAL =
+  "Cannot schedule an agent while Plan mode is active: it would start later, after Plan, without Plan's restrictions. Start it now, or leave Plan mode first.";
+
+/** A quota-parked dispatch is a scheduled job too. */
+export const PLAN_PARK_REFUSAL =
+  "The agent was not started or parked: Plan mode is active, and a parked agent would start after Plan without Plan's restrictions. Retry after the reset, or leave Plan mode first.";
 
 /**
  * The refusal for one child tool call, or `undefined`. Tools this extension
