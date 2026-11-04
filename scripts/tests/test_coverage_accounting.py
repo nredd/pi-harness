@@ -550,6 +550,79 @@ def test_ratchet_rejects_adding_skipped_hosts() -> None:
     check_ratchet(base, current)
 
 
+def test_skipped_producer_gate_reports_not_run_but_a_run_gate_requires_its_report(tmp_path: Path) -> None:
+    """Report a path-gated signal NOT RUN only on a run whose plan skipped its producer gate.
+
+    Parameters:
+        tmp_path (Path): Disposable source root with no LCOV report.
+    Returns:
+        None: A skipped gate reports nothing; an unskipped or unnamed gate fails on the missing report.
+    Raises:
+        AssertionError: A skipped gate is gated, or a run gate's missing report passes.
+    """
+    setup_report(tmp_path)
+    (tmp_path / "packages/example/coverage/lcov.info").unlink()
+    gated = policy()
+    gated.packages["example"].signals["primary"].gate = "check-benchmark"
+    assert account(tmp_path, gated, skipped_gates=frozenset({"check-benchmark"})) == ([], [])
+    for skipped in (frozenset(), frozenset({"check-scripts"})):
+        _, errors = account(tmp_path, gated, skipped_gates=skipped)
+        missing = tmp_path / "packages/example/coverage/lcov.info"
+        assert errors == [f"example/primary: [Errno 2] No such file or directory: '{missing}'"], skipped
+    # A signal that names no gate is never skipped by a gate list.
+    _, errors = account(tmp_path, policy(), skipped_gates=frozenset({""}))
+    assert errors
+
+
+def test_skipped_gates_cli_reports_not_run(tmp_path: Path) -> None:
+    """Drive `--skipped-gates` through the real command line against a gated signal with no report.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root with no LCOV report.
+    Returns:
+        None: The skipped run exits 0 with a NOT RUN line; the same run without the flag fails.
+    Raises:
+        AssertionError: The flag is ignored or the missing report passes without it.
+    """
+    setup_report(tmp_path)
+    (tmp_path / "packages/example/coverage/lcov.info").unlink()
+    gated = policy().model_dump(mode="json")
+    gated["packages"]["example"]["signals"]["primary"]["gate"] = "check-benchmark"
+    (tmp_path / "coverage").mkdir()
+    (tmp_path / "coverage/policy.json").write_text(json.dumps(gated))
+    git_read(tmp_path, ["init", "-q", "--template="])
+    command = [sys.executable, str(SCRIPT), "--root", str(tmp_path), "--measure", "--os", "linux"]
+    skipped = subprocess.run(
+        [*command, "--skipped-gates", "check-ts check-benchmark"], capture_output=True, text=True, check=False
+    )
+    assert skipped.returncode == 0, skipped.stderr
+    assert (
+        "NOT RUN: 'example/primary': this run skipped its producer gate 'check-benchmark'" in skipped.stderr
+    )
+    required = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert required.returncode == 1
+    assert "example/primary: [Errno 2] No such file or directory" in required.stderr
+
+
+def test_ratchet_rejects_changing_a_signal_producer_gate() -> None:
+    """Keep `gate` from becoming a way to exempt a signal that already has a base.
+
+    Parameters:
+        None.
+    Returns:
+        None: Adding, changing or dropping the gate against the base policy fails.
+    Raises:
+        AssertionError: A changed producer gate is accepted.
+    """
+    base, current = policy(), policy()
+    current.packages["example"].signals["primary"].gate = "check-benchmark"
+    with pytest.raises(ValueError, match="Cannot change a signal's producer gate"):
+        check_ratchet(current, base)
+    with pytest.raises(ValueError, match="Cannot change a signal's producer gate"):
+        check_ratchet(base, current)
+    check_ratchet(current, current)
+
+
 def test_parse_lcov_keeps_commas_in_lcov_style_function_names() -> None:
     """Treat everything after `FN:<line>,` as the name when no end line is present.
 

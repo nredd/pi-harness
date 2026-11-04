@@ -130,6 +130,10 @@ class Signal(StrictModel):
         default_factory=list,
         description="CI hosts whose gate list never runs this signal's producer; reported NOT RUN there.",
     )
+    gate: str = Field(
+        default="",
+        description="Make target producing the report; a run that skips that gate reports it NOT RUN.",
+    )
 
     @model_validator(mode="after")
     def text_and_lcov(self) -> Signal:
@@ -846,6 +850,8 @@ def check_ratchet(current: Policy, base: Policy) -> None:
             new = package.signals[signal_name]
             if not set(new.skip_hosts) <= set(old.skip_hosts):
                 raise ValueError(f"Cannot add skipped hosts: '{name}/{signal_name}'")
+            if new.gate != old.gate:
+                raise ValueError(f"Cannot change a signal's producer gate: '{name}/{signal_name}'")
             for runner_os, floor in old.max_uncovered.items():
                 if runner_os not in new.max_uncovered:
                     raise ValueError(f"Missing OS floor: '{name}/{signal_name}/{runner_os}'")
@@ -944,6 +950,25 @@ def validate_signal_inventory(owned: set[str], signal_name: str, signal: Signal)
         raise ValueError("Enforced Bun signal must measure every owned executable file")
 
 
+def not_run_reason(signal: Signal, host: str | None, skipped_gates: frozenset[str]) -> str:
+    """Return why this run has no producer for a signal, or an empty string when the report is required.
+
+    Parameters:
+        signal (Signal): Signal declaration.
+        host (str | None): CI host class, or null outside CI.
+        skipped_gates (frozenset[str]): Make targets this run planned but skipped.
+    Returns:
+        str: The NOT RUN reason, empty when the signal must be accounted.
+    Raises:
+        None.
+    """
+    if host is not None and host in signal.skip_hosts:
+        return f"host '{host}' has no producer in that cell"
+    if signal.gate and signal.gate in skipped_gates:
+        return f"this run skipped its producer gate '{signal.gate}'"
+    return ""
+
+
 def account(
     root: Path,
     policy: Policy,
@@ -952,6 +977,7 @@ def account(
     measure: bool = False,
     *,
     host: str | None = None,
+    skipped_gates: frozenset[str] = frozenset(),
 ) -> tuple[list[dict[str, object]], list[str]]:
     """Account for independent package/file counters and retain signal failures.
 
@@ -962,6 +988,8 @@ def account(
         reports_root (Path | None): Downloaded artifact root, or null for working-tree reports.
         measure (bool): Report validated measurements without enforcing budgets; not a gate.
         host (str | None): CI host class; signals listing it in `skip_hosts` are reported NOT RUN.
+        skipped_gates (frozenset[str]): Make targets this run planned but skipped; a signal whose `gate`
+            is one of them is reported NOT RUN.
     Returns:
         tuple[list[dict[str, object]], list[str]]: Per-file metrics and explicit accounting failures.
     Raises:
@@ -980,8 +1008,9 @@ def account(
             continue
         for signal_name, signal in package.signals.items():
             label = f"{name}/{signal_name}"
-            if host is not None and host in signal.skip_hosts:
-                LOGGER.warning(f"NOT RUN on host '{host}': '{label}' has no producer in that cell")
+            reason = not_run_reason(signal, host, skipped_gates)
+            if reason:
+                LOGGER.warning(f"NOT RUN: '{label}': {reason}")
                 continue
             try:
                 validate_signal_inventory(owned, signal_name, signal)
@@ -1107,6 +1136,11 @@ def parse_args() -> argparse.Namespace:
     bases.add_argument("--compare-ref", help="Gate against the merge base of HEAD and this ref instead.")
     parser.add_argument("--os", default=sys.platform, choices=["darwin", "linux"])
     parser.add_argument("--host", help="CI host class (e.g. wsl2) selecting signals' `skip_hosts`.")
+    parser.add_argument(
+        "--skipped-gates",
+        default="",
+        help="Space-separated Make targets the CI plan skipped; signals produced by them report NOT RUN.",
+    )
     parser.add_argument("--reports-root", type=Path, help="Root of downloaded CI artifacts.")
     parser.add_argument("--measure", action="store_true", help="Print measured policy diff; NOT a gate.")
     parser.add_argument("--summary", type=Path, default=Path("coverage/summary.json"))
@@ -1163,7 +1197,15 @@ def main() -> int:
             base = base_policy(previous)
             check_ratchet(policy, base)
             check_inventory_ratchet(root, policy, base, args.base)
-        results, errors = account(root, policy, args.os, args.reports_root, args.measure, host=args.host)
+        results, errors = account(
+            root,
+            policy,
+            args.os,
+            args.reports_root,
+            args.measure,
+            host=args.host,
+            skipped_gates=frozenset(args.skipped_gates.split()),
+        )
     except subprocess.CalledProcessError as error:
         errors.append(f"Git metadata read failed: '{error.output}'")
     except (OSError, ValueError, KeyError, TypeError) as error:

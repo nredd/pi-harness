@@ -4,7 +4,8 @@ Owner scope: the 100% line/function goal covers `subagents`, `plan-mode`, `todo`
 `session-kit`, `resource-sampler`, `subscription-router`, `preset` and `dev-tools`, plus the
 `runtime-build-tooling`, `workflow-examples`, `import-audit` (`scripts/import_audit.ts`, 0/0 since #321),
 `probes` (every executable `integration/probes` source, 0/0 since #377) and
-`inprocess` (every in-process stack fixture module, 0/0 on both engines since #376) signals.
+`inprocess` (every in-process stack fixture module, 0/0 on both engines since #376) signals,
+and `python-benchmarks` (`benchmarks/comparison`, darwin only, 0/0 since #387).
 `goal: "100-percent"` is the default and cannot be downgraded relative to an established
 base policy. Eligible package tooling/examples remain pending goal blockers, not hidden source.
 `goal: "report-only"` identifies verification infrastructure (helpers and
@@ -280,8 +281,16 @@ root (`.` and `harness`), so the policy `owned` globs stay the only copy of the 
 file with no executable lines; for any other producer a bare record is a truncated report and fails. Both Python signals declare `skip_hosts: ["wsl2"]`: the WSL cell runs no
 pytest (`docs/ci.md`), so the WSL fan-in's `check-coverage` (`COVERAGE_HOST=wsl2`) reports them NOT RUN. A test pins
 `skip_hosts` to exactly the owned cells whose planned gates omit the producer, and the ratchet rejects adding
-a skipped host. `benchmarks/comparison` keeps its own pytest-cov 90% combined gate unchanged (in CI path-gated to PRs that change its inputs, plus every `main` push, see [CI](ci.md)); it is not
-fed to accounting because a path-gated skip would otherwise fail as a missing report. The declaration-only `integration/harness/__init__.py` has an explicit
+a skipped host.
+
+`benchmarks/comparison` (`python-benchmarks`, #387) is measured by its own `make check-benchmark`: pytest-cov with
+`branch = true` and `fail_under = 100` in its `pyproject.toml`, writing LCOV to `benchmarks/comparison/coverage/python/lcov.info`.
+Its enforced `primary` signal is 0/0 on darwin only and declares `skip_hosts: ["linux", "wsl2"]`: the `native_runtime`
+test needs Seatbelt, so only the macOS cell runs the producer. The CI step is path-gated (#315), so the signal also
+declares `gate: "check-benchmark"`. `scripts/ci_paths.py` lists a skipped gate in the cell's `skipped_gates`, the fan-in
+passes it as `COVERAGE_SKIPPED_GATES` (`--skipped-gates`), and the signal reports NOT RUN on that run only; a run
+that executes the gate requires the report. The ratchet rejects changing a signal's `gate`, as it rejects adding a
+skipped host. Before #387 the gate was 90% with 85 statements and 58 partial branches missed (run `41755991256`). The declaration-only `integration/harness/__init__.py` has an explicit
 reasoned exclusion.
 
 Both Python packages are `goal: "ratchet"` with an enforced `primary` signal (#314). First floors
@@ -515,6 +524,6 @@ settings change. A failed earlier test may prevent later packages from running; 
 reports correctly fail rather than pretending full coverage. Do not reuse stale local reports
 to claim a clean gate.
 
-The Python benchmark's existing combined line/branch 90% gate is unchanged: still in `make check`, and in CI on `main` pushes and on PRs that touch `benchmark_inputs` (NOT RUN otherwise). Instrumented runs
+The Python benchmark's combined statement/branch gate is 100% (#387): still in `make check`, and in CI on `main` pushes and on PRs that touch `benchmark_inputs` (NOT RUN otherwise). Instrumented runs
 must not refresh performance baselines. Quiet-runner benches and live platform/TCC checks are NOT RUN by this coverage gate.
 The WSL2 owned cell runs the workspace producers and enforces Linux floors as documented above. See [CI](ci.md) for platform boundaries.

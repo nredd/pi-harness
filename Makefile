@@ -37,8 +37,8 @@ check-scripts:  ## Format/lint/type/tests for scripts/ (real disposable git repo
 	$(MAKE) check-import-audit
 
 # Unset BASE: compare against where HEAD diverged from origin/main. Any explicit BASE, even empty, is passed unchanged.
-check-coverage:  ## Account for existing reports without running any tests; compare budgets to BASE, else HEAD's merge base with origin/main; COVERAGE_OS=darwin|linux names the reports' OS, COVERAGE_HOST the CI host class
-	uv run --locked --project integration python scripts/coverage_accounting.py $(if $(filter undefined,$(origin BASE)),--compare-ref origin/main,--base "$(BASE)")$(if $(COVERAGE_OS), --os "$(COVERAGE_OS)")$(if $(COVERAGE_HOST), --host "$(COVERAGE_HOST)")
+check-coverage:  ## Account for existing reports without running any tests; compare budgets to BASE, else HEAD's merge base with origin/main; COVERAGE_OS=darwin|linux names the reports' OS, COVERAGE_HOST the CI host class, COVERAGE_SKIPPED_GATES the gates the CI plan skipped
+	uv run --locked --project integration python scripts/coverage_accounting.py $(if $(filter undefined,$(origin BASE)),--compare-ref origin/main,--base "$(BASE)")$(if $(COVERAGE_OS), --os "$(COVERAGE_OS)")$(if $(COVERAGE_HOST), --host "$(COVERAGE_HOST)")$(if $(COVERAGE_SKIPPED_GATES), --skipped-gates "$(COVERAGE_SKIPPED_GATES)")
 
 check-integration:  ## integration units; requires initialized `forks/pi` Gitlink and tmux (stub pi on private servers; no real pi or scenarios)
 	$(call PY_GATE,integration,,tests,harness)
@@ -61,9 +61,9 @@ check-import-audit:  ## Import-audit helper Biome + strict tsc, then Vitest agai
 	node_modules/.bin/tsc -p scripts/tsconfig.import-audit.json
 	cd scripts && node run-vitest.ts node --coverage
 
-check-benchmark:  ## benchmarks/comparison unit gate with coverage threshold
+check-benchmark:  ## benchmarks/comparison unit gate, 100% statement+branch coverage, LCOV under coverage/python/
 	cd benchmarks/comparison && $(PY_CHECK)
-	cd benchmarks/comparison && uv run --locked pytest -p no:cacheprovider --cov --cov-report=term-missing:skip-covered
+	cd benchmarks/comparison && uv run --locked pytest -p no:cacheprovider --cov --cov-report=lcov:coverage/python/lcov.info --cov-report=term-missing:skip-covered
 
 check-package-contracts: check-resource-sampler-contract  ## Pack, audit, install and exercise each @nredd/pi-* tarball alone through exact stock Pi 1.3.0, plus audit+install of the packed preset (npm registry on first run)
 	cd scripts && uv run --locked --project ../integration python package_contracts.py $(if $(REPORT),--report $(REPORT))

@@ -1050,32 +1050,43 @@ def test_benchmark_gate_runs_on_inputs_or_main_push_only_on_macos(
         assert (FAN_IN_BENCHMARK_NOTICE in fan_in) is (check != "owned (macos-14)")
 
 
-@pytest.mark.parametrize("event", ["pull_request", "push"])
-@pytest.mark.parametrize("benchmark_inputs", ["true", "false", ""])
 @pytest.mark.parametrize(
-    "gates",
-    ["check-scripts check-integration check-benchmark", "check-scripts check-integration", "check-ts"],
+    ("gates", "skipped_gates"),
+    [
+        ("check-scripts check-integration check-benchmark", ""),
+        ("check-scripts check-integration check-benchmark", "check-benchmark"),
+        ("check-scripts check-integration", ""),
+        ("check-ts", ""),
+    ],
 )
-def test_benchmark_run_and_skip_conditions_are_exact_complements(
-    event: str, benchmark_inputs: str, gates: str
-) -> None:
+def test_benchmark_run_and_skip_conditions_are_exact_complements(gates: str, skipped_gates: str) -> None:
     """Never both run and skip, and never neither, on the shard that carries the benchmark; nothing elsewhere.
 
+    `ci_paths.shard_plans` only ever skips a gate the shard plans, so those are the reachable entries.
+
     Parameters:
-        event (str): Triggering event.
-        benchmark_inputs (str): `classify` output, empty modelling a missing output.
         gates (str): The shard's planned gates.
+        skipped_gates (str): The shard's plan-skipped gates.
     """
     steps = {step.get("name"): step for step in jobs()["owned-shards-macos"]["steps"]}
-    context = {
-        "matrix.gates": gates,
-        "runner.os": "macOS",
-        "github.event_name": event,
-        "needs.classify.outputs.benchmark_inputs": benchmark_inputs,
-    }
+    context = {"matrix.gates": gates, "matrix.skipped_gates": skipped_gates, "runner.os": "macOS"}
     runs = bool(evaluate(steps[BENCHMARK_STEP]["if"], context))
     skips = bool(evaluate(steps[BENCHMARK_SKIP_STEP]["if"], context))
     assert runs != skips if "check-benchmark" in gates.split() else not (runs or skips)
+
+
+def test_benchmark_report_is_uploaded_after_the_benchmark_gate_writes_it() -> None:
+    """Upload the shard's coverage only after `check-benchmark`, and keep its LCOV in both artifact globs."""
+    shard = [step.get("name") for step in jobs()["owned-shards-macos"]["steps"]]
+    upload = shard.index("Preserve this shard's coverage reports")
+    assert shard.index(BENCHMARK_STEP) < upload
+    assert shard.index(BENCHMARK_SKIP_STEP) < upload
+    glob = "benchmarks/comparison/coverage/**/lcov.info"
+    shard_upload = next(
+        step for step in jobs()["owned-shards-macos"]["steps"] if step.get("name") == shard[upload]
+    )
+    assert glob in shard_upload["with"]["path"].split()
+    assert glob in fan_in_step("Preserve independent coverage reports and summary")["with"]["path"].split()
 
 
 def test_benchmark_skip_step_prints_its_not_run_reason(tmp_path: Path) -> None:
@@ -1339,9 +1350,13 @@ def test_python_signals_skip_exactly_the_hosts_without_a_pytest_gate(os_name: st
     context = {"matrix.os": os_name, "needs.classify.outputs.plan": classify_outputs(PULL_REQUEST)["plan"]}
     guest = ci_paths.RUNNERS[os_name][1]
     assert render(accounting["env"]["COVERAGE_HOST"], context) == guest
-    assert accounting["run"].endswith('COVERAGE_HOST="$COVERAGE_HOST"')
+    assert 'COVERAGE_HOST="$COVERAGE_HOST"' in accounting["run"]
     policy = json.loads((ROOT / "coverage/policy.json").read_text())
-    for name, gate in (("python-scripts", "check-scripts"), ("python-harness", "check-integration")):
+    for name, gate in (
+        ("python-scripts", "check-scripts"),
+        ("python-harness", "check-integration"),
+        ("python-benchmarks", "check-benchmark"),
+    ):
         skipped = set(policy["packages"][name]["signals"]["primary"]["skip_hosts"])
         assert (guest in skipped) == (gate not in ci_paths.OWNED_GATES[os_name])
 
@@ -1639,9 +1654,9 @@ def test_fan_in_accounts_each_cell_against_its_own_os_floors(os_name: str, cover
     step = fan_in_step("Coverage accounting (existing reports, including test failures)")
     context = {"matrix.os": os_name, "needs.classify.outputs.plan": classify_outputs(PULL_REQUEST)["plan"]}
     assert render(step["env"]["COVERAGE_OS"], context) == coverage_os
-    assert (
-        step["run"]
-        == 'make check-coverage BASE="$BASE" COVERAGE_OS="$COVERAGE_OS" COVERAGE_HOST="$COVERAGE_HOST"'
+    assert step["run"] == (
+        'make check-coverage BASE="$BASE" COVERAGE_OS="$COVERAGE_OS" COVERAGE_HOST="$COVERAGE_HOST" '
+        'COVERAGE_SKIPPED_GATES="$COVERAGE_SKIPPED_GATES"'
     )
     recipe = subprocess.run(
         ["make", "--no-print-directory", "-n", "check-coverage", "BASE=base", f"COVERAGE_OS={coverage_os}"],
@@ -1651,6 +1666,41 @@ def test_fan_in_accounts_each_cell_against_its_own_os_floors(os_name: str, cover
         check=True,
     ).stdout
     assert recipe.strip().endswith(f'--base "base" --os "{coverage_os}"')
+    skipping = subprocess.run(
+        ["make", "--no-print-directory", "-n", "check-coverage", "COVERAGE_SKIPPED_GATES=check-benchmark"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert skipping.strip().endswith('--skipped-gates "check-benchmark"')
+
+
+@pytest.mark.parametrize(
+    ("trigger", "skipped"),
+    [
+        (Trigger(benchmark_inputs="false"), "check-benchmark"),
+        (Trigger(benchmark_inputs="true"), ""),
+        (Trigger(event="push", benchmark_inputs="false"), ""),
+    ],
+)
+def test_fan_in_accounting_skips_exactly_the_gates_its_shards_skipped(trigger: Trigger, skipped: str) -> None:
+    """Hand the fan-in's accounting the same `skipped_gates` the macOS shard's benchmark steps read.
+
+    Parameters:
+        trigger (Trigger): Event and `classify` outputs.
+        skipped (str): Gates the macOS cell reports NOT RUN.
+    """
+    step = fan_in_step("Coverage accounting (existing reports, including test failures)")
+    plan = classify_outputs(trigger)["plan"]
+    for os_name in OWNED_FAN_IN:
+        context = {"matrix.os": os_name, "needs.classify.outputs.plan": plan}
+        rendered = render(step["env"]["COVERAGE_SKIPPED_GATES"], context)
+        shard_skips = {
+            gate for entry in shard_entries(os_name, trigger) for gate in entry["skipped_gates"].split()
+        }
+        assert rendered == (skipped if os_name == "macos-14" else "")
+        assert set(rendered.split()) == shard_skips
 
 
 @pytest.mark.parametrize("check", ["owned (ubuntu-24.04)", "owned (macos-14)", "owned (wsl2)"])

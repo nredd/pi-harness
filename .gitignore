@@ -11,4 +11,5 @@ __pycache__/
 packages/**/coverage/
 integration/**/coverage/
 scripts/coverage/
+benchmarks/comparison/coverage/
 /coverage/summary.json

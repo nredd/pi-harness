@@ -127,3 +127,13 @@ def test_package_main_module_delegates_to_cli(monkeypatch: pytest.MonkeyPatch) -
     runpy.run_module("pi_harness_benchmark.__main__", run_name="__main__")
 
     assert called
+
+
+def test_package_main_module_is_inert_when_imported(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_main() -> None:
+        pytest.fail("Importing `pi_harness_benchmark.__main__` must not run the CLI")
+
+    monkeypatch.setattr(cli, "main", fail_main)
+    namespace = runpy.run_module("pi_harness_benchmark.__main__", run_name="imported")
+
+    assert namespace["main"] is fail_main

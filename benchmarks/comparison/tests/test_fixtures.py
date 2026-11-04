@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from pi_harness_benchmark import fixtures
+from pi_harness_benchmark.fixtures import _initialize_git, generate_fixtures
 from pi_harness_benchmark.models import Fixture
 from pi_harness_benchmark.process import executable
 
@@ -296,3 +298,33 @@ def test_hidden_gate_distinguishes_fixed_limit_product_choice(
 
     assert visible.returncode == 0, visible.stdout
     assert hidden.returncode == hidden_exit_code, hidden.stdout
+
+
+def test_generate_refuses_existing_output_unless_forced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stale = tmp_path / "hidden" / "old-fixture" / "test_acceptance.py"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("stale\n", encoding="utf-8")
+    (tmp_path / "seeds").mkdir()
+
+    with pytest.raises(FileExistsError, match="already exists"):
+        generate_fixtures(tmp_path)
+    assert stale.is_file()
+
+    # No definitions: `force` must still clear every stale generated root before regenerating.
+    monkeypatch.setattr(fixtures, "DEFINITIONS", {})
+
+    assert generate_fixtures(tmp_path, force=True) == {}
+    assert not (tmp_path / "seeds").exists()
+    assert not (tmp_path / "hidden").exists()
+
+
+def test_seed_commit_failure_names_the_fixture(tmp_path: Path) -> None:
+    seed = tmp_path / "empty-seed"
+    seed.mkdir()
+
+    with pytest.raises(
+        RuntimeError, match=r"(?s)Could not commit fixture 'empty-seed': .*nothing to commit"
+    ):
+        _initialize_git(seed)
