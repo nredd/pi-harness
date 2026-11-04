@@ -24,6 +24,13 @@ function writeScout(agentDir: string): void {
   writeFileSync(join(agentDir, "agents", "scout.md"), "---\nname: scout\ndescription: scout\ntools: read\nskills: review\nextensions: false\n---\nScout.\n");
 }
 
+// Each case boots a real parent and child through Pi's jiti loader, which Babel-transforms the
+// extension's ~74 source files with no fs cache (`JITI_FS_CACHE=false`, #354). Cold case: 1.3-1.7s
+// alone, up to 4.94s passing hosted, 9.69s in a local gate (`gate-321-r2.log`); warm case at most
+// 3.25s hosted and 5.82s there. Budget is twice the worst gate figure. Rule and job IDs:
+// `docs/test-worker-budgets.md#measured-cold-budgets-312` (owner decision on #312, 2026-11-03).
+const COLD_CHILD_PROMPT_BUDGET_MS = 20_000;
+
 describe("preloaded skills in real child prompts", () => {
   let run: PrintModeRun | undefined;
   let fixture: Hermetic | undefined;
@@ -37,7 +44,7 @@ describe("preloaded skills in real child prompts", () => {
     cwd = undefined;
   });
 
-  it("keeps an untrusted project skill out of the child prompt", async () => {
+  it("keeps an untrusted project skill out of the child prompt", { timeout: COLD_CHILD_PROMPT_BUDGET_MS }, async () => {
     fixture = hermeticDir();
     cwd = fixture.dir;
     const projectSkill = join(cwd, ".pi", "skills", "review");
@@ -77,7 +84,7 @@ describe("preloaded skills in real child prompts", () => {
     expect(childPrompt).not.toContain(HOSTILE);
   });
 
-  it("adds a configured package skill to a real child prompt", async () => {
+  it("adds a configured package skill to a real child prompt", { timeout: COLD_CHILD_PROMPT_BUDGET_MS }, async () => {
     fixture = hermeticDir();
     cwd = fixture.dir;
     const packageRoot = join(cwd, "package");
