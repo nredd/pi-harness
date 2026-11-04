@@ -2854,3 +2854,40 @@ describe("AgentManager — the agent file's `isolation` wins over the spawn opti
     expect(createWorktree).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("AgentManager.countOwnedPending", () => {
+  let manager: AgentManager;
+  afterEach(() => manager?.dispose());
+
+  it("counts running and queued top-level agents; owned children and finished agents do not count", async () => {
+    let finish!: () => void;
+    vi.mocked(runAgent).mockImplementation(
+      () => new Promise<any>(resolve => {
+        finish = () => resolve({ responseText: "done", session: mockSession(), aborted: false, steered: false });
+      }),
+    );
+    manager = new AgentManager(undefined, 1);
+    expect(manager.countOwnedPending()).toBe(0);
+
+    const spawn = (extra: Record<string, unknown>) =>
+      manager.spawn(mockPi, mockCtx, "general-purpose", "p", { description: "p", isBackground: true, ...extra });
+    const holder = spawn({});
+    expect(manager.countOwnedPending()).toBe(1);
+    spawn({}); // queued behind the one-slot pool
+    expect(manager.getRecord(holder)?.status).toBe("running");
+    expect(manager.countOwnedPending()).toBe(2);
+
+    spawn({ parentAgentId: holder, depth: 2 });
+    spawn({ workflowId: "wf_run1" });
+    expect(manager.countOwnedPending()).toBe(2);
+
+    manager.dispose();
+    finish();
+    vi.mocked(runAgent).mockReset();
+    resolvedRun();
+    manager = new AgentManager();
+    const done = spawn({});
+    await manager.getRecord(done)!.promise;
+    expect(manager.countOwnedPending()).toBe(0);
+  });
+});

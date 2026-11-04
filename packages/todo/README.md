@@ -144,6 +144,8 @@ the full list grouped by status.
   deferrals, while each operation reports its own outcome and reason. See
   [batch outcomes](./docs/batch-outcomes.md). If a run tries to finish with plan
   items open, the model gets one reminder listing them before it can wrap up.
+  Outside Plan mode, a run that settles with `in_progress` todos also shows a warning
+  naming them (first three, then a count), so a stop with owned work pending is never silent.
   Reminders pause while Plan mode is active; old approved todos remain until a
   replacement is approved. Exiting planning without approval resumes the old
   obligations. Details in the

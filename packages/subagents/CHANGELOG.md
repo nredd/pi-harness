@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Settling with agents still running is reported ([#292](https://github.com/nredd/pi-harness/issues/292)).** When a run settles while the session's own agents are running or queued, the parent shows `Run ended with N agents still running or queued`. Nested and workflow children are not counted, and no wake-up is promised: only background agents in a waking join mode notify this session.
+
 ### Fixed
 - **Nested `Agent` is omitted when its allowlist resolves to no enabled agent ([#331](https://github.com/nredd/pi-harness/issues/331), [#333](https://github.com/nredd/pi-harness/issues/333)).** The tool advertised `Available: none` and then rejected `subagent_type: "none"` with `Allowed: none`, which blocked nested review delegation. A child whose `allowed_subagents` names only missing or disabled agents now gets no nested tools and the nesting-disabled prompt note; a type that vanishes mid-session gets "No nested agent types are available" instead of the placeholder.
 - **Named `skills:` preloads use Pi's configured resource discovery and project trust ([#264](https://github.com/nredd/pi-harness/issues/264), [#277](https://github.com/nredd/pi-harness/pull/277)).** Untrusted projects can no longer shadow global or package skills, and skills shipped by configured packages now preload.
