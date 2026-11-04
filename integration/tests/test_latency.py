@@ -56,6 +56,7 @@ def test_summarize_filters_by_time_and_reduces() -> None:
 
 
 def test_input_p95_is_the_nearest_rank_of_input_to_paint() -> None:
+    """`input_p95_ms` is the nearest-rank p95 of the bursts, `0.0` without samples."""
     assert Reading(0.0, 0.0, 0, 0.0, 0.0, [float(n) for n in range(20, 0, -1)]).input_p95_ms == 19.0
     assert Reading(0.0, 0.0, 0, 0.0, 0.0, []).input_p95_ms == 0.0
 
