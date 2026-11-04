@@ -187,4 +187,49 @@ describe("background completion notification wiring", () => {
 
     await handlers.get("session_shutdown")?.();
   });
+
+  // #456: a transient credential-helper failure ends the child's turn as an
+  // `error` but leaves its session intact, so the notice must say it can be
+  // resumed and name the agent to resume.
+  it("marks a failed agent whose session survived as resumable, naming its id", async () => {
+    vi.useFakeTimers();
+    const failure = "API key auth failed for provider fake_provider: Failed to resolve API key from shell command: fake-secret-helper get (command exited with code 1; failed 3 attempts)";
+    vi.mocked(runAgent).mockResolvedValue({ ...completedRun(), responseText: "", failure });
+
+    const { pi, tools, handlers } = makePi();
+    subagentsExtension(pi);
+
+    await spawnBackground(tools.get("Agent")!, "auth-call", "auth child");
+    await vi.advanceTimersByTimeAsync(200); // result-consumption hold
+
+    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+    const [message] = vi.mocked(pi.sendMessage).mock.calls[0] as [{ content: string; details: { id: string; resumeHint?: string } }];
+    const id = message.details.id;
+    const hint = `transcript intact; resume agent ${id} to continue`;
+    expect(message.content).toContain(`<task-id>${id}</task-id>`);
+    expect(message.content).toContain(`<summary>Agent "auth child" error (${hint})</summary>`);
+    expect(message.content).toContain(failure);
+    expect(message.details.resumeHint).toBe(hint);
+
+    await handlers.get("session_shutdown")?.();
+  });
+
+  it("does not offer a resume when the run never produced a session", async () => {
+    vi.useFakeTimers();
+    vi.mocked(runAgent).mockRejectedValue(new Error("model registry unavailable"));
+
+    const { pi, tools, handlers } = makePi();
+    subagentsExtension(pi);
+
+    await spawnBackground(tools.get("Agent")!, "rejected-call", "rejected child");
+    await vi.advanceTimersByTimeAsync(200); // result-consumption hold
+
+    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+    const [message] = vi.mocked(pi.sendMessage).mock.calls[0] as [{ content: string; details: { resumeHint?: string } }];
+    expect(message.content).toContain("model registry unavailable");
+    expect(message.content).not.toContain("resume agent");
+    expect(message.details.resumeHint).toBeUndefined();
+
+    await handlers.get("session_shutdown")?.();
+  });
 });

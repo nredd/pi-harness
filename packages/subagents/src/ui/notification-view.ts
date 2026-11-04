@@ -46,8 +46,10 @@ export function noticeSummary(d: NotificationDetails, theme: Theme, showCost: bo
   // from the right, and a substituted model must not be what gets cut.
   const flag = fallbackFlag(theme, d) ? `${fallbackFlag(theme, d)} ` : "";
   const head = `${icon(d, theme)} ${flag}${theme.bold(d.description)}`;
+  // Ahead of the stats for the same reason: truncation must not cut it.
+  const resume = d.resumeHint ? [theme.fg("warning", `resume ${d.id} to continue`)] : [];
   const stats = statParts(d, showCost).map(p => theme.fg("dim", p));
-  return [head, ...stats].join(dot);
+  return [head, ...resume, ...stats].join(dot);
 }
 
 /** `3 agents finished · ✓ a, ✓ b, ✗ c`. */
@@ -83,6 +85,7 @@ function detailLines(d: NotificationDetails, theme: Theme, showCost: boolean, in
   stats.push(...statParts(d, showCost));
   if (stats.length > 0) lines.push(indent + theme.fg("dim", stats.join(" · ")));
   if (d.error) lines.push(indent + theme.fg("error", d.error));
+  if (d.resumeHint) lines.push(indent + theme.fg("warning", d.resumeHint));
   if (d.modelNote) lines.push(indent + theme.fg("warning", d.modelNote));
   for (const line of d.resultPreview.split("\n").slice(0, EXPANDED_PREVIEW_LINES)) {
     lines.push(indent + theme.fg("dim", line));
