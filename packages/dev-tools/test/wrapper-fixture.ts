@@ -10,9 +10,12 @@ export function wrapperFixture(manifest: "Cargo.toml" | "pyproject.toml") {
 	return {
 		root,
 		bin,
-		/** Replace only the private executable, keeping the wrapper's real process runner and locks. */
-		script(body: string) {
-			writeFileSync(bin, `#!${process.execPath}\n${body}\n`, { mode: 0o700 });
+		/**
+		 * Replace only the private executable, keeping the wrapper's real process runner and locks.
+		 * `interpreter` defaults to this runtime; `/bin/sh` starts far cheaper for exit-only bodies.
+		 */
+		script(body: string, interpreter = process.execPath) {
+			writeFileSync(bin, `#!${interpreter}\n${body}\n`, { mode: 0o700 });
 		},
 		cleanup() {
 			rmSync(root, { recursive: true, force: true });
