@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { type GitRunOptions, git, gitFailure } from "./run.ts";
 
+/** File name of the runtime script every hook shim execs; the shims find it by this suffix. */
+export const HOOK_RUNNER = "run.mjs";
+
 /** Hooks Git runs before it writes the commit: the proxy checks the merge index around each one. */
 const CHECKED_HOOKS = ["pre-commit", "prepare-commit-msg", "commit-msg"];
 
@@ -85,9 +88,14 @@ function canonicalPath(path: string): string {
  * Write a plain-Node hook proxy. It delegates to the repository's configured hook and checks the
  * merge index immediately before and after every pre-commit hook Git invokes. This avoids a
  * pathspec merge commit while still preserving hooks, signing and their real exit status.
+ *
+ * Two checks decide that an unchecked hook is absent: the shell shim's `[ -e ]` skips the runtime
+ * when no entry exists, and the runner's `X_OK` access check skips one that is missing, under a
+ * non-directory, or not executable. Change them together: if the shim skips something the runner
+ * would run, that hook is silently dropped.
  */
 function writeHookProxy(directory: string, approval: Approval): void {
-	const runner = join(directory, "run.mjs");
+	const runner = join(directory, HOOK_RUNNER);
 	writeFileSync(
 		runner,
 		`import { accessSync, constants, readFileSync } from "node:fs";

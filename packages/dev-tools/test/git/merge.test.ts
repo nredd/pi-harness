@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { registerGitTools } from "../../src/git/index.ts";
-import { prepareMerge } from "../../src/git/merge.ts";
+import { HOOK_RUNNER, prepareMerge } from "../../src/git/merge.ts";
 import { createMockPi } from "../support.ts";
 
 const ENV = {
@@ -428,7 +428,7 @@ describe("git_commit merge approval", () => {
 		const launches = join(root, "launches");
 		writeFileSync(
 			join(bin, "env"),
-			`#!/bin/sh\nprev=\nfor arg; do case $prev in *run.mjs) printf '%s\\n' "$arg" >> ${JSON.stringify(launches)};; esac; prev=$arg; done\nexec /usr/bin/env "$@"\n`,
+			`#!/bin/sh\nprev=\nfor arg; do case $prev in */${HOOK_RUNNER}) printf '%s\\n' "$arg" >> ${JSON.stringify(launches)};; esac; prev=$arg; done\nexec /usr/bin/env "$@"\n`,
 			{ mode: 0o700 },
 		);
 		vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
