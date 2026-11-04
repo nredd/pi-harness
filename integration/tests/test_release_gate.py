@@ -20,6 +20,8 @@ from harness import release_gate as gate
 SHA = "a" * 40
 ROOT = Path(__file__).resolve().parents[2]
 # The CI plan owns which owned gates and stack cells run; load it by path, `scripts/` is not a package.
+# Its sibling modules (`runner_pools`) resolve through `sys.path`, which `run_path` does not extend.
+sys.path.insert(0, str(ROOT / "scripts"))
 CI_PLAN: dict[str, Any] = runpy.run_path(str(ROOT / "scripts/ci_paths.py"))
 OWNED_JOB_SUFFIX = {"ubuntu-24.04": "ubuntu", "macos-14": "macos", "wsl2": "wsl2"}
 
