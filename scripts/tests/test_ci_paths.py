@@ -571,6 +571,8 @@ def test_input_flags_fail_closed(repo: Path, case: str) -> None:
 PULL_REQUEST = "pull_request"
 PUSH = "push"
 ALL_NATIVE_GATES = ("check-ts", "check-scripts", "check-integration")
+# The macOS `python` shard also carries the benchmark steps, which still read `benchmark_inputs` themselves.
+MAC_GATES = (*ALL_NATIVE_GATES, "check-benchmark")
 WSL_GATES = ("check-ts", "check-probes", "check-import-audit")
 
 
@@ -611,8 +613,10 @@ def test_code_change_runs_every_native_cell_with_its_gates(repo: Path) -> None:
         None: Assertions verify the plan.
     """
     plan = plan_change(repo, {"packages/dev-tools/src/index.ts": "x\n"}, PULL_REQUEST)
-    assert plan["owned (ubuntu-24.04)"] == ci_paths.CellPlan(True, True, ALL_NATIVE_GATES, "")
-    assert plan["owned (macos-14)"].gates == ALL_NATIVE_GATES
+    ubuntu = plan["owned (ubuntu-24.04)"]
+    assert ubuntu == ci_paths.CellPlan(True, True, ALL_NATIVE_GATES, "", shards=ubuntu.shards)
+    assert len(ubuntu.shards) == 4
+    assert plan["owned (macos-14)"].gates == MAC_GATES
     assert plan["contracts (macos-14)"] == ci_paths.CellPlan(True, True, (), "")
     assert plan["stack (macos-14, local)"].scenarios
     assert plan["stack (ubuntu-24.04, local)"].scenarios
@@ -640,7 +644,9 @@ def test_wsl_inputs_wake_wsl_with_only_the_lcov_producers(repo: Path) -> None:
         None: Assertions verify the plan.
     """
     plan = plan_change(repo, {".github/workflows/ci.yml": "x\n"}, PULL_REQUEST)
-    assert plan["owned (wsl2)"] == ci_paths.CellPlan(True, True, WSL_GATES, "")
+    wsl = plan["owned (wsl2)"]
+    assert wsl == ci_paths.CellPlan(True, True, WSL_GATES, "", shards=wsl.shards)
+    assert len(wsl.shards) == 2
     assert plan["contracts (wsl2)"].run
     assert plan["stack (ubuntu-24.04, personal)"].scenarios
 
@@ -720,7 +726,7 @@ def test_main_push_keeps_only_the_ubuntu_personal_smoke(repo: Path) -> None:
     assert plan["stack (ubuntu-24.04, personal)"] == ci_paths.CellPlan(True, True, (), "")
     for name in ("stack (ubuntu-24.04, local)", "stack (macos-14, local)"):
         assert plan[name] == ci_paths.CellPlan(False, False, (), ci_paths.NOT_RUN["main_smoke"])
-    assert plan["owned (macos-14)"].gates == ALL_NATIVE_GATES
+    assert plan["owned (macos-14)"].gates == MAC_GATES
     assert plan["owned (wsl2)"].gates == WSL_GATES
 
 
@@ -743,7 +749,7 @@ def test_plan_fails_closed_to_running_everything(repo: Path, case: str) -> None:
         commit(repo, "bump gitlink")
     plan = ci_paths.plan_cells(ci_paths.classify(repo, base, "HEAD"), PULL_REQUEST)
     assert plan["owned (wsl2)"].run
-    assert plan["owned (macos-14)"].gates == ALL_NATIVE_GATES
+    assert plan["owned (macos-14)"].gates == MAC_GATES
     assert plan["stack (ubuntu-24.04, personal)"].scenarios
 
 
@@ -827,13 +833,33 @@ def test_write_github_output_publishes_one_line_plan_json(repo: Path, tmp_path: 
     output = tmp_path / "out"
     ci_paths.write_github_output(output, result, ci_paths.plan_cells(result, PULL_REQUEST))
     plan = read_plan(output)
+    workspaces = " ".join(ci_paths.npm_workspaces(ci_paths.REPO_ROOT))
     assert plan["owned (macos-14)"] == {
         "run": True,
         "scenarios": True,
-        "gates": "check-ts check-scripts check-integration",
+        "gates": "check-ts check-scripts check-integration check-benchmark",
         "reason": "",
         "blocked": False,
+        "shards": [
+            {
+                "os": "macos-14",
+                "shard": "ts",
+                "runner": "xcode-27",
+                "guest": "macos",
+                "gates": "check-ts",
+                "workspaces": workspaces,
+            },
+            {
+                "os": "macos-14",
+                "shard": "python",
+                "runner": "xcode-27",
+                "guest": "macos",
+                "gates": "check-scripts check-integration check-benchmark",
+                "workspaces": "",
+            },
+        ],
     }
+    assert plan["contracts (macos-14)"]["shards"] == []
     assert plan["stack (wsl2, local)"]["reason"] == ci_paths.STACK_NOT_RUN["wsl2", "local"]
 
 
@@ -1124,3 +1150,204 @@ def test_main_publishes_every_flag_for_a_benchmark_diff(repo: Path, tmp_path: Pa
     assert "docs_only=false" in lines
     assert "benchmarks/comparison/uv.lock" in lines
     assert "wsl_inputs=false" in lines
+
+
+WORKSPACES = ci_paths.npm_workspaces(ci_paths.REPO_ROOT)
+SHARD_NAMES = {
+    "ubuntu-24.04": ("subagents", "computer-use", "ts", "python"),
+    "macos-14": ("ts", "python"),
+    "wsl2": ("subagents-computer-use", "ts"),
+}
+
+
+def shard_outputs(plan: ci_paths.CellPlan) -> list[dict[str, str]]:
+    """Return a cell's shards as the workflow's matrix `include` reads them.
+
+    Parameters:
+        plan (ci_paths.CellPlan): One `owned` cell.
+
+    Returns:
+        list[dict[str, str]]: The published shard entries.
+    """
+    return [shard.to_output() for shard in plan.shards]
+
+
+@pytest.mark.parametrize("os_name", list(SHARD_NAMES))
+def test_owned_shards_run_every_workspace_exactly_once_in_npm_order(repo: Path, os_name: str) -> None:
+    """Split `check-ts` across a cell's shards without dropping, repeating or reordering a workspace.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        os_name (str): Matrix `os` value.
+    """
+    plan = plan_change(repo, {".github/workflows/ci.yml": "x\n"}, PUSH)[f"owned ({os_name})"]
+    entries = shard_outputs(plan)
+    assert tuple(entry["shard"] for entry in entries) == SHARD_NAMES[os_name]
+    selected = [entry["workspaces"].split() for entry in entries if "check-ts" in entry["gates"].split()]
+    flat = [workspace for workspaces in selected for workspace in workspaces]
+    assert sorted(flat) == sorted(WORKSPACES)
+    for workspaces in selected:
+        assert workspaces == [workspace for workspace in WORKSPACES if workspace in workspaces]
+    assert all(entry["workspaces"] == "" for entry in entries if "check-ts" not in entry["gates"].split())
+
+
+def test_owned_shards_follow_the_issue_split_and_runner_budget(repo: Path) -> None:
+    """Pin the shard split: four Ubuntu shards, at most two macOS shards, two WSL shards.
+
+    Parameters:
+        repo (Path): Disposable repository.
+    """
+    plan = plan_change(repo, {".github/workflows/ci.yml": "x\n"}, PUSH)
+    ubuntu = {entry["shard"]: entry for entry in shard_outputs(plan["owned (ubuntu-24.04)"])}
+    assert ubuntu["subagents"]["workspaces"] == "packages/subagents"
+    assert ubuntu["computer-use"]["workspaces"] == "packages/computer-use"
+    assert ubuntu["python"]["gates"] == "check-scripts check-integration"
+    assert ubuntu["ts"]["workspaces"].split() == [
+        workspace
+        for workspace in WORKSPACES
+        if workspace not in {"packages/subagents", "packages/computer-use"}
+    ]
+    mac = {entry["shard"]: entry for entry in shard_outputs(plan["owned (macos-14)"])}
+    assert len(mac) <= 2
+    assert mac["ts"]["workspaces"].split() == list(WORKSPACES)
+    assert mac["python"]["gates"] == "check-scripts check-integration check-benchmark"
+    wsl = {entry["shard"]: entry for entry in shard_outputs(plan["owned (wsl2)"])}
+    assert wsl["subagents-computer-use"]["workspaces"] == "packages/computer-use packages/subagents"
+    assert wsl["ts"]["gates"] == "check-ts check-probes check-import-audit"
+    for os_name, entries in (("ubuntu-24.04", ubuntu), ("macos-14", mac), ("wsl2", wsl)):
+        runner, guest = ci_paths.RUNNERS[os_name]
+        assert all(entry["os"] == os_name for entry in entries.values())
+        assert all((entry["runner"], entry["guest"]) == (runner, guest) for entry in entries.values())
+
+
+@pytest.mark.parametrize("os_name", list(SHARD_NAMES))
+def test_cell_gates_are_its_shards_gates_in_order(repo: Path, os_name: str) -> None:
+    """Keep the cell's `gates` the ordered union of its shards' gates, so the fan-in and the shards agree.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        os_name (str): Matrix `os` value.
+    """
+    plan = plan_change(repo, {".github/workflows/ci.yml": "x\n"}, PUSH)[f"owned ({os_name})"]
+    union = [gate for entry in shard_outputs(plan) for gate in entry["gates"].split()]
+    assert plan.gates == tuple(dict.fromkeys(union))
+    assert plan.gates == ci_paths.OWNED_GATES[os_name]
+
+
+def test_gate_names_never_contain_one_another() -> None:
+    """Keep `contains(<space-joined gates>, '<gate>')` in the workflow an exact membership test."""
+    names = {gate for gates in ci_paths.OWNED_GATES.values() for gate in gates}
+    assert not any(a != b and a in b for a in names for b in names)
+
+
+def test_cells_that_do_not_run_plan_no_shards(repo: Path) -> None:
+    """Plan no shard job for a bypass, contracts, stack or blocked cell.
+
+    Parameters:
+        repo (Path): Disposable repository.
+    """
+    docs = plan_change(repo, {"docs/ci.md": "x\n"}, PULL_REQUEST)
+    assert docs["owned (ubuntu-24.04)"].shards == ()
+    assert docs["owned (wsl2)"].shards == ()
+    code = plan_change(repo, {"packages/dev-tools/src/index.ts": "x\n"}, PULL_REQUEST)
+    assert code["owned (wsl2)"].shards == ()
+    assert code["contracts (ubuntu-24.04)"].shards == ()
+    assert code["stack (ubuntu-24.04, local)"].shards == ()
+    assert code["owned (macos-14)"].shards
+    blocked = ci_paths.plan_cells(classify_change(repo, {"b.txt": "x\n"}), PULL_REQUEST, "too long")
+    assert all(cell.shards == () for cell in blocked.values())
+
+
+def write_workspace(root: Path, relative: str) -> None:
+    """Create one npm workspace directory with a manifest.
+
+    Parameters:
+        root (Path): Fixture repository root.
+        relative (str): Workspace path.
+    """
+    (root / relative).mkdir(parents=True)
+    (root / relative / "package.json").write_text("{}\n", encoding="utf-8")
+
+
+def test_npm_workspaces_follow_the_manifest_patterns_in_order(tmp_path: Path) -> None:
+    """Expand each `workspaces` pattern in turn, sorted within it, skipping directories without a manifest.
+
+    Parameters:
+        tmp_path (Path): Fixture repository root.
+    """
+    (tmp_path / "package.json").write_text(
+        json.dumps({"workspaces": ["packages/*", "integration/inprocess"]}), encoding="utf-8"
+    )
+    for relative in ("packages/zeta", "packages/alpha", "integration/inprocess"):
+        write_workspace(tmp_path, relative)
+    (tmp_path / "packages/no-manifest").mkdir()
+    assert ci_paths.npm_workspaces(tmp_path) == ("packages/alpha", "packages/zeta", "integration/inprocess")
+
+
+@pytest.mark.parametrize(
+    ("manifest", "message"),
+    [
+        (None, "Cannot read npm workspaces"),
+        ("{", "Cannot read npm workspaces"),
+        ("{}", "declares no workspaces"),
+    ],
+)
+def test_npm_workspaces_fail_closed(tmp_path: Path, manifest: str | None, message: str) -> None:
+    """Refuse to plan shards from a missing, malformed or workspace-free root manifest.
+
+    Parameters:
+        tmp_path (Path): Fixture repository root.
+        manifest (str | None): Root `package.json` text, or None for no file.
+        message (str): Expected error fragment.
+    """
+    if manifest is not None:
+        (tmp_path / "package.json").write_text(manifest, encoding="utf-8")
+    with pytest.raises(ci_paths.ClassificationError, match=message):
+        ci_paths.npm_workspaces(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("shards", "message"),
+    [
+        ((ci_paths.Shard("x", ("check-ts",), ("packages/missing",)),), "names unknown workspaces"),
+        (
+            (ci_paths.Shard("all", ("check-ts",), ("packages/a",)), ci_paths.Shard("rest", ("check-ts",))),
+            "no workspaces",
+        ),
+    ],
+)
+def test_shard_plans_refuse_a_broken_split(
+    monkeypatch: pytest.MonkeyPatch, shards: tuple[ci_paths.Shard, ...], message: str
+) -> None:
+    """Refuse a shard naming a workspace that does not exist, or a `check-ts` shard left with nothing.
+
+    `make check-ts WORKSPACES=` with an empty list would run every workspace, so it never reaches CI.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Shard table override.
+        shards (tuple[ci_paths.Shard, ...]): A broken split for `ubuntu-24.04`.
+        message (str): Expected error fragment.
+    """
+    monkeypatch.setitem(ci_paths.OWNED_SHARDS, "ubuntu-24.04", shards)
+    with pytest.raises(ci_paths.ClassificationError, match=message):
+        ci_paths.shard_plans("ubuntu-24.04", ("packages/a",))
+
+
+def test_main_fails_when_the_shard_plan_cannot_be_built(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Fail `classify`, which turns every required check red, rather than publish a plan without shards.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        tmp_path (Path): Pytest temporary directory.
+        monkeypatch (pytest.MonkeyPatch): Repository root override.
+        caplog (pytest.LogCaptureFixture): Logged error.
+    """
+    classify_change(repo, {"a.txt": "x\n"})
+    monkeypatch.setattr(ci_paths, "REPO_ROOT", tmp_path / "no-checkout")
+    output = tmp_path / "out"
+    output.write_text("", encoding="utf-8")
+    assert run_cli(repo, output, "--event", PUSH) == 1
+    assert "Cannot read npm workspaces" in caplog.text
+    assert output.read_text(encoding="utf-8") == ""

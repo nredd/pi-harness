@@ -55,9 +55,9 @@ cross-platform collector paths without removing guards.
 zero uncovered lines/functions. Schema version 2 keys each signal's transitional `max_uncovered`
 integer budgets (or report-only reference numbers) by runner OS: `darwin` (`macos-14`) and
 `linux` (`ubuntu-24.04`), never rounded
-percentages or platform averages. The `owned (wsl2)` cell runs the same producers inside Ubuntu
-on WSL2 and is explicitly **Linux-like, enforced**: guest `sys.platform == "linux"` selects the
-existing Linux floors. Native Windows coverage is not measured. WSL contract scenarios
+percentages or platform averages. The `owned (wsl2)` cell's shards run the same producers inside Ubuntu
+on WSL2 and the cell is explicitly **Linux-like, enforced**: its Ubuntu fan-in accounts the reports
+against the existing Linux floors, as the macOS fan-in passes `COVERAGE_OS=darwin` for the darwin ones. Native Windows coverage is not measured. WSL contract scenarios
 remain separate acceptance evidence, not owned-source coverage. WSL reports are preserved as
 `coverage-wsl2`, never merged with or averaged into `coverage-ubuntu-24.04`. Unsupported OSes and missing selected-OS floors
 fail closed, including when the global target is enabled. `enforce_target: true` applies after every
@@ -256,8 +256,8 @@ root (`.` and `harness`), so the policy `owned` globs stay the only copy of the 
 `parse_lcov` accepts coverage.py's `FN:<line>,<end>,<name>` rows. Only a signal declaring
 `producer: "coverage.py"` may contain the bare `SF`/`end_of_record` record coverage.py writes for a
 file with no executable lines; for any other producer a bare record is a truncated report and fails. Both Python signals declare `skip_hosts: ["wsl2"]`: the WSL cell runs no
-pytest (`docs/ci.md`), so `check-coverage` there (`COVERAGE_HOST=wsl2`) reports them NOT RUN. A test pins
-`skip_hosts` to exactly the matrix cells whose `gates` omit the producer, and the ratchet rejects adding
+pytest (`docs/ci.md`), so the WSL fan-in's `check-coverage` (`COVERAGE_HOST=wsl2`) reports them NOT RUN. A test pins
+`skip_hosts` to exactly the owned cells whose planned gates omit the producer, and the ratchet rejects adding
 a skipped host. `benchmarks/comparison` keeps its own pytest-cov 90% combined gate unchanged (in CI path-gated to PRs that change its inputs, plus every `main` push, see [CI](ci.md)); it is not
 fed to accounting because a path-gated skip would otherwise fail as a missing report. The declaration-only `integration/harness/__init__.py` has an explicit
 reasoned exclusion.

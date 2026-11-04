@@ -12,6 +12,9 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 INCLUDE = re.compile(r"include:\s*(\[[^\]]*\])", re.DOTALL)
@@ -231,34 +234,69 @@ def test_node_helper_gates_run_vitest_through_the_launcher() -> None:
         assert "verification/home-setup.ts" in config.read_text(), config
 
 
-def test_accounting_and_artifacts_follow_tests_even_on_failure() -> None:
-    """Keep accounting and artifacts after tests, including failure paths.
+def owned_jobs() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return the shared steps of the `owned` shard jobs and of the `owned (<os>)` fan-ins.
 
     Parameters:
         None.
     Returns:
-        None: Existing owned CI jobs account for and preserve their reports.
+        tuple[list[dict[str, Any]], list[dict[str, Any]]]: Shard steps, fan-in steps.
+    Raises:
+        OSError: The workflow cannot be read.
+    """
+    jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
+    return jobs["owned-shards-ubuntu"]["steps"], jobs["owned-ubuntu"]["steps"]
+
+
+def step_named(steps: list[dict[str, Any]], prefix: str) -> dict[str, Any]:
+    """Return the first step whose name starts with a prefix.
+
+    Parameters:
+        steps (list[dict[str, Any]]): Job steps.
+        prefix (str): Name prefix.
+    Returns:
+        dict[str, Any]: The step.
+    Raises:
+        StopIteration: No step has that prefix.
+    """
+    return next(step for step in steps if step.get("name", "").startswith(prefix))
+
+
+def test_accounting_and_artifacts_follow_tests_even_on_failure() -> None:
+    """Keep each shard's reports, and the fan-in's accounting and artifact, on failure paths too.
+
+    Parameters:
+        None.
+    Returns:
+        None: Shards preserve their reports; the fan-in accounts for all of them and preserves the result.
     Raises:
         AssertionError: CI drops failure accounting, base history or artifacts.
     """
-    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-    owned = workflow.split("  owned:", 1)[1].split("  contracts:", 1)[0]
-    accounting = owned.split("- name: Coverage accounting", 1)[1].split("- name:", 1)[0]
-    artifacts = owned.split("- name: Preserve independent coverage reports", 1)[1].split("- name:", 1)[0]
-    assert owned.rindex("- name: Owned gate ") < owned.index("Coverage accounting")
-    assert "if: always() && steps.plan.outputs.run == 'true'" in accounting
-    assert "if: always() && steps.plan.outputs.run == 'true'" in artifacts
-    assert 'make check-coverage BASE="$BASE"' in accounting
-    assert "github.event.pull_request.base.sha" in accounting
-    assert "fetch-depth: 0" in owned
-    assert "coverage/summary.json" in artifacts
-    assert "lcov.info" in artifacts
-    # WSL runs ordinary producers/accounting inside Linux, but uploads from the Windows host.
-    export = owned.index(
-        "- uses: ./.github/actions/capture-ci-wsl", owned.index("- name: Coverage accounting")
-    )
-    assert export < owned.index("- name: Preserve independent coverage reports")
-    assert "name: coverage-${{ matrix.os }}" in artifacts
+    shard, fan_in = owned_jobs()
+    reports = step_named(shard, "Preserve this shard's coverage reports")
+    last_gate = max(i for i, step in enumerate(shard) if step.get("name", "").startswith("Owned gate "))
+    assert last_gate < shard.index(reports)
+    assert reports["if"] == "always()"
+    assert reports["with"]["name"] == "coverage-${{ matrix.os }}-${{ matrix.shard }}"
+    assert "lcov.info" in reports["with"]["path"]
+    # WSL runs ordinary producers inside Linux, but uploads from the Windows host.
+    export = next(i for i, step in enumerate(shard) if step.get("uses") == "./.github/actions/capture-ci-wsl")
+    assert last_gate < export < shard.index(reports)
+    checkout = next(step for step in shard if "actions/checkout@" in step.get("uses", ""))
+    assert checkout["with"]["fetch-depth"] == 0
+    accounting = step_named(fan_in, "Coverage accounting")
+    artifacts = step_named(fan_in, "Preserve independent coverage reports")
+    merge = step_named(fan_in, "Merge the shards' coverage reports")
+    assert fan_in.index(merge) < fan_in.index(accounting) < fan_in.index(artifacts)
+    assert accounting["if"] == "always() && steps.plan.outputs.run == 'true'"
+    assert artifacts["if"] == "always() && steps.plan.outputs.run == 'true'"
+    assert accounting["run"].startswith('make check-coverage BASE="$BASE"')
+    assert "github.event.pull_request.base.sha" in accounting["env"]["BASE"]
+    full = next(step for step in fan_in if step.get("with", {}).get("fetch-depth") == 0)
+    assert fan_in.index(full) < fan_in.index(accounting)
+    assert "coverage/summary.json" in artifacts["with"]["path"]
+    assert "lcov.info" in artifacts["with"]["path"]
+    assert artifacts["with"]["name"] == "coverage-${{ matrix.os }}"
 
 
 def test_reviewer_dependencies_are_provisioned_before_owned_tests() -> None:
@@ -271,17 +309,20 @@ def test_reviewer_dependencies_are_provisioned_before_owned_tests() -> None:
     Raises:
         AssertionError: Reviewer tests can fall back to network downloads.
     """
-    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-    owned = workflow.split("  owned:", 1)[1].split("  contracts:", 1)[0]
-    install = owned.index("Install reviewer read dependencies (Ubuntu)")
-    verify = owned.index("Verify reviewer read dependencies")
-    assert install < verify < owned.index("- name: Owned gate ")
+    shard, _ = owned_jobs()
+    owned = yaml.safe_dump(shard, width=1000)
+    install = shard.index(step_named(shard, "Install reviewer read dependencies (Ubuntu)"))
+    verify = shard.index(step_named(shard, "Verify reviewer read dependencies"))
+    assert install < verify < shard.index(step_named(shard, "Owned gate "))
     assert "apt-get install --yes ripgrep fd-find" in owned
-    assert "matrix.os == 'ubuntu-24.04'" in owned
+    assert (
+        step_named(shard, "Install reviewer read dependencies (Ubuntu)")["if"]
+        == "matrix.os == 'ubuntu-24.04'"
+    )
     wsl = (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
     packages = wsl.split("additional-packages:", 1)[1].splitlines()[0].split()
     assert {"ripgrep", "fd-find"}.issubset(packages)
-    mac_install = owned.index("Install reviewer read dependencies (macOS)")
+    mac_install = shard.index(step_named(shard, "Install reviewer read dependencies (macOS)"))
     assert mac_install < verify
     assert "tool: ripgrep@14.1.1,fd-find@10.5.0" in owned
     assert "BINSTALL_DISABLE_STRATEGIES: compile" in owned

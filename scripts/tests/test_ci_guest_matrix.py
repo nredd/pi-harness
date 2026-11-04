@@ -7,6 +7,7 @@ References:
 
 from __future__ import annotations
 
+import fnmatch
 import itertools
 import json
 import os
@@ -16,7 +17,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,13 @@ PERSONAL_STEPS = {
 }
 LOCAL_STEPS = {"Standalone D and E (local)", "Candidate compiled-core auth adapter (local)"}
 BUILD_AND_NODE = {"Assembled D and E boundaries (explicit stack, no machine config)", "Build standalone"}
+# Each `owned (<os>)` check is its own fan-in job over its own shard job (#350).
+OWNED_FAN_IN = {"ubuntu-24.04": "owned-ubuntu", "macos-14": "owned-macos", "wsl2": "owned-wsl2"}
+OWNED_SHARD_JOBS = {
+    "ubuntu-24.04": "owned-shards-ubuntu",
+    "macos-14": "owned-shards-macos",
+    "wsl2": "owned-shards-wsl2",
+}
 
 
 @dataclass(frozen=True)
@@ -146,30 +154,43 @@ def jobs() -> dict[str, Any]:
     return yaml.safe_load(WORKFLOW.read_text())["jobs"]
 
 
-def expand(name: str) -> dict[str, dict[str, str]]:
-    """Expand a job matrix with GitHub's `include` rules, keyed by the check name it reports.
+def job_id(name: str, cell: dict[str, str]) -> str:
+    """Return the workflow job that reports one cell of a check family.
 
     Parameters:
-        name (str): Workflow job name.
+        name (str): Check family, `owned`, `contracts` or `stack`.
+        cell (dict[str, str]): Expanded matrix cell.
+
+    Returns:
+        str: Job id; each `owned (<os>)` cell is its own fan-in job.
+    """
+    return OWNED_FAN_IN[cell["os"]] if name == "owned" else name
+
+
+def expand(name: str) -> dict[str, dict[str, str]]:
+    """Expand a check family's matrices with GitHub's `include` rules, keyed by each cell's check name.
+
+    Parameters:
+        name (str): Check family, `owned`, `contracts` or `stack`.
 
     Returns:
         dict[str, dict[str, str]]: Each reported check name and its cell values.
     """
-    job = jobs()[name]
-    matrix = job["strategy"]["matrix"]
-    axes = {key: value for key, value in matrix.items() if key != "include"}
     cells: dict[str, dict[str, str]] = {}
-    for values in itertools.product(*axes.values()):
-        cell = dict(zip(axes, values, strict=True))
-        for record in matrix["include"]:
-            # An include applies unless it would overwrite an original axis value.
-            if all(cell.get(key) == value for key, value in record.items() if key in axes):
-                cell |= record
-        cells[
-            job["name"]
-            .replace("${{ matrix.os }}", cell["os"])
-            .replace("${{ matrix.stack }}", cell.get("stack", ""))
-        ] = cell
+    for job in (jobs()[job] for job in (OWNED_FAN_IN.values() if name == "owned" else [name])):
+        matrix = job["strategy"]["matrix"]
+        axes = {key: value for key, value in matrix.items() if key != "include"}
+        for values in itertools.product(*axes.values()):
+            cell = dict(zip(axes, values, strict=True))
+            for record in matrix.get("include", []):
+                # An include applies unless it would overwrite an original axis value.
+                if all(cell.get(key) == value for key, value in record.items() if key in axes):
+                    cell |= record
+            cells[
+                job["name"]
+                .replace("${{ matrix.os }}", cell["os"])
+                .replace("${{ matrix.stack }}", cell.get("stack", ""))
+            ] = cell
     return cells
 
 
@@ -305,7 +326,7 @@ def runner_for(name: str, cell: dict[str, str], trigger: Trigger = PULL_REQUEST)
         str: Selected runner label.
     """
     context = {f"matrix.{key}": value for key, value in cell.items()}
-    return evaluate(jobs()[name]["runs-on"], context | classify_context(trigger))
+    return render(jobs()[job_id(name, cell)]["runs-on"], context | classify_context(trigger))
 
 
 def report_step() -> dict[str, Any]:
@@ -333,7 +354,7 @@ def run_plan(
         tuple[dict[str, str], str, str]: Step outputs, output text and the step summary.
     """
     cell = expand(name)[check]
-    job_step = next(step for step in jobs()[name]["steps"] if step.get("id") == "plan")
+    job_step = next(step for step in jobs()[job_id(name, cell)]["steps"] if step.get("id") == "plan")
     assert job_step["uses"] == "./.github/actions/report-plan"
     values = {f"matrix.{key}": value for key, value in cell.items()} | classify_context(trigger)
     inputs = {f"inputs.{key}": render(value, values) for key, value in job_step["with"].items()}
@@ -377,14 +398,93 @@ def executed_steps(name: str, check: str, tmp_path: Path, trigger: Trigger = PUL
         "github.event_name": trigger.event,
         "runner.os": RUNNER_OS[runner_for(name, cell, trigger)],
     }
+    return walk_steps(jobs()[job_id(name, cell)]["steps"], context)
+
+
+def walk_steps(steps: list[dict[str, Any]], context: dict[str, Any]) -> set[str]:
+    """Return the steps whose real `if` holds, assuming each executed step succeeds.
+
+    Parameters:
+        steps (list[dict[str, Any]]): A job's steps.
+        context (dict[str, Any]): Dotted context values.
+
+    Returns:
+        set[str]: Display names (or `uses`) of the executed steps.
+    """
+    context = dict(context)
     executed: set[str] = set()
-    for step in jobs()[name]["steps"]:
+    for step in steps:
         if "if" in step and not evaluate(step["if"], context):
             continue
         executed.add(step.get("name") or step["uses"])
         if "id" in step:
             context[f"steps.{step['id']}.outcome"] = "success"
     return executed
+
+
+def shard_entries(os_name: str, trigger: Trigger = PULL_REQUEST) -> list[dict[str, str]]:
+    """Return the matrix entries a cell's shard job really runs: none when its `if` is false.
+
+    Parameters:
+        os_name (str): Matrix `os` of the `owned` cell.
+        trigger (Trigger): Event and `classify` outputs.
+
+    Returns:
+        list[dict[str, str]]: The evaluated `strategy.matrix.include`, from the real plan.
+    """
+    job = jobs()[OWNED_SHARD_JOBS[os_name]]
+    context = classify_context(trigger)
+    # No status function in the `if`, so GitHub's implicit `success()` needs a successful `classify`.
+    if trigger.classify_result != "success" or not evaluate(job["if"], context):
+        return []
+    return list(evaluate(job["strategy"]["matrix"]["include"], context))
+
+
+def shard_runner(os_name: str, entry: dict[str, str]) -> str:
+    """Return the runner one shard job selects.
+
+    Parameters:
+        os_name (str): Matrix `os` of the `owned` cell.
+        entry (dict[str, str]): Shard matrix entry.
+
+    Returns:
+        str: Runner label.
+    """
+    context = {f"matrix.{key}": value for key, value in entry.items()}
+    return render(jobs()[OWNED_SHARD_JOBS[os_name]]["runs-on"], context)
+
+
+def shard_steps(os_name: str, entry: dict[str, str], trigger: Trigger = PULL_REQUEST) -> set[str]:
+    """Walk one shard's steps with their real `if` conditions.
+
+    Parameters:
+        os_name (str): Matrix `os` of the `owned` cell.
+        entry (dict[str, str]): Shard matrix entry.
+        trigger (Trigger): Event and `classify` outputs.
+
+    Returns:
+        set[str]: Display names of the steps the shard executes.
+    """
+    context = {f"matrix.{key}": value for key, value in entry.items()} | {
+        "needs.classify.outputs.benchmark_inputs": trigger.benchmark_inputs,
+        "github.event_name": trigger.event,
+        "runner.os": RUNNER_OS[shard_runner(os_name, entry)],
+    }
+    return walk_steps(jobs()[OWNED_SHARD_JOBS[os_name]]["steps"], context)
+
+
+def shard_gates(steps: set[str]) -> set[str]:
+    """Return the Make targets of the executed `Owned gate <target>` steps.
+
+    Parameters:
+        steps (set[str]): Executed step names.
+
+    Returns:
+        set[str]: Gate names.
+    """
+    return {
+        step.removeprefix("Owned gate ").split(" ")[0] for step in steps if step.startswith("Owned gate ")
+    }
 
 
 @pytest.mark.parametrize("name", ["owned", "contracts", "stack"])
@@ -449,43 +549,73 @@ def test_stack_bypass_cells_report_not_run(tmp_path: Path, check: str, event: st
     assert executed_steps("stack", check, tmp_path, trigger) == PLAN_ONLY
 
 
-@pytest.mark.parametrize("name", ["owned", "contracts"])
-@pytest.mark.parametrize(
-    ("trigger", "runner", "runs"),
-    [
-        (Trigger(wsl_inputs="false"), "ubuntu-24.04", False),
-        (Trigger(wsl_inputs="false", docs_only="true"), "ubuntu-24.04", False),
-        (Trigger(wsl_inputs="true"), "windows-2025", True),
-        (Trigger(wsl_inputs=""), "windows-2025", True),
-        (Trigger(event="push", wsl_inputs="false"), "windows-2025", True),
-        (Trigger(event="push", wsl_inputs="false", docs_only="true"), "windows-2025", True),
-    ],
-)
-def test_wsl_cells_run_on_main_and_for_wsl_inputs(
-    tmp_path: Path, name: str, trigger: Trigger, runner: str, runs: bool
+WSL_TRIGGERS = [
+    (Trigger(wsl_inputs="false"), "ubuntu-24.04", False),
+    (Trigger(wsl_inputs="false", docs_only="true"), "ubuntu-24.04", False),
+    (Trigger(wsl_inputs="true"), "windows-2025", True),
+    (Trigger(wsl_inputs=""), "windows-2025", True),
+    (Trigger(event="push", wsl_inputs="false"), "windows-2025", True),
+    (Trigger(event="push", wsl_inputs="false", docs_only="true"), "windows-2025", True),
+]
+
+
+@pytest.mark.parametrize(("trigger", "runner", "runs"), WSL_TRIGGERS)
+def test_wsl_contracts_run_on_main_and_for_wsl_inputs(
+    tmp_path: Path, trigger: Trigger, runner: str, runs: bool
 ) -> None:
     """Hold Windows slots only for `main` and PRs touching WSL inputs, failing closed.
 
     Parameters:
         tmp_path (Path): Disposable output directory.
-        name (str): Ordinary CI gate job.
         trigger (Trigger): Event and `classify` outputs.
         runner (str): Expected runner.
         runs (bool): Whether the cell does real work.
     """
-    check = f"{name} (wsl2)"
-    assert runner_for(name, expand(name)[check], trigger) == runner
-    outputs, stdout, summary = run_plan(name, check, tmp_path, trigger)
+    check = "contracts (wsl2)"
+    assert runner_for("contracts", expand("contracts")[check], trigger) == runner
+    outputs, stdout, summary = run_plan("contracts", check, tmp_path, trigger)
     assert outputs["run"] == str(runs).lower()
-    steps = executed_steps(name, check, tmp_path, trigger)
+    steps = executed_steps("contracts", check, tmp_path, trigger)
     assert ("Select and verify Git Bash on the Windows host" in steps) is runs
     if runs:
         assert "NOT RUN" not in stdout + summary
         assert "./.github/actions/setup-ci-tools" in steps
         return
     assert steps == PLAN_ONLY
-    assert f"::notice title={name} (wsl2) NOT RUN::" in stdout
-    assert f"### {name} (wsl2) NOT RUN" in summary
+    assert f"::notice title={check} NOT RUN::" in stdout
+    assert f"### {check} NOT RUN" in summary
+    assert "not a pass" in summary
+
+
+@pytest.mark.parametrize(("trigger", "runner", "runs"), WSL_TRIGGERS)
+def test_wsl_owned_shards_run_on_main_and_for_wsl_inputs(
+    tmp_path: Path, trigger: Trigger, runner: str, runs: bool
+) -> None:
+    """Start Windows shards only for `main` and PRs touching WSL inputs; the fan-in reports from Ubuntu.
+
+    Parameters:
+        tmp_path (Path): Disposable output directory.
+        trigger (Trigger): Event and `classify` outputs.
+        runner (str): Runner the cell's work lands on.
+        runs (bool): Whether the cell does real work.
+    """
+    check = "owned (wsl2)"
+    assert runner_for("owned", expand("owned")[check], trigger) == "ubuntu-24.04"
+    outputs, stdout, summary = run_plan("owned", check, tmp_path, trigger)
+    assert outputs["run"] == str(runs).lower()
+    entries = shard_entries("wsl2", trigger)
+    assert bool(entries) is runs
+    for entry in entries:
+        assert shard_runner("wsl2", entry) == runner
+        steps = shard_steps("wsl2", entry, trigger)
+        assert "Select and verify Git Bash on the Windows host" in steps
+        assert "./.github/actions/setup-ci-tools" in steps
+    if runs:
+        assert "NOT RUN" not in stdout + summary
+        return
+    assert executed_steps("owned", check, tmp_path, trigger) == PLAN_ONLY
+    assert f"::notice title={check} NOT RUN::" in stdout
+    assert f"### {check} NOT RUN" in summary
     assert "not a pass" in summary
 
 
@@ -500,8 +630,14 @@ def test_native_cells_ignore_wsl_inputs(tmp_path: Path, name: str, os_name: str)
         os_name (str): Native matrix cell.
     """
     check = f"{name} ({os_name})"
-    assert runner_for(name, expand(name)[check], Trigger(wsl_inputs="false")) == PLATFORMS[os_name][0]
-    outputs, stdout, _ = run_plan(name, check, tmp_path, Trigger(wsl_inputs="false"))
+    trigger = Trigger(wsl_inputs="false")
+    if name == "owned":
+        entries = shard_entries(os_name, trigger)
+        assert entries
+        assert {shard_runner(os_name, entry) for entry in entries} == {PLATFORMS[os_name][0]}
+    else:
+        assert runner_for(name, expand(name)[check], trigger) == PLATFORMS[os_name][0]
+    outputs, stdout, _ = run_plan(name, check, tmp_path, trigger)
     assert outputs["run"] == "true"
     assert "NOT RUN" not in stdout
 
@@ -739,6 +875,11 @@ def test_dispatch_classifies_only_frozen_main_candidates(
 
     (repo / "scripts").mkdir()
     shutil.copy(ROOT / "scripts/ci_paths.py", repo / "scripts/ci_paths.py")
+    # The plan splits `owned` by the checkout's npm workspaces.
+    shutil.copy(ROOT / "package.json", repo / "package.json")
+    for workspace in ci_paths.npm_workspaces(ROOT):
+        (repo / workspace).mkdir(parents=True)
+        shutil.copy(ROOT / workspace / "package.json", repo / workspace / "package.json")
     command("init", "--quiet", "--template=", "-b", "main")
     commits = {}
     for name in ("old", "tip"):
@@ -844,11 +985,17 @@ def test_benchmark_install_runs_only_where_check_benchmark_runs() -> None:
     full = recipe("install")
     assert full.index("--verify-root-overrides") < full.index("npm ci") < full.index("benchmarks/comparison")
     cfg = jobs()
-    for name in ("owned", "contracts"):
+    for name in ("owned-shards-macos", "contracts"):
         install = next(step for step in cfg[name]["steps"] if step.get("name") == "Install")
         assert install["run"] == "make install-owned"
-    gate = next(step for step in cfg["owned"]["steps"] if step.get("name") == "Benchmark unit gate")
-    assert "runner.os == 'macOS'" in gate["if"]
+    gate = next(
+        step for step in cfg["owned-shards-macos"]["steps"] if step.get("name") == "Benchmark unit gate"
+    )
+    assert "contains(matrix.gates, 'check-benchmark')" in gate["if"]
+    assert [
+        shard.name for shard in ci_paths.OWNED_SHARDS["macos-14"] if "check-benchmark" in shard.gates
+    ] == ["python"]
+    assert not any("check-benchmark" in ci_paths.OWNED_GATES[os_name] for os_name in ("ubuntu-24.04", "wsl2"))
     assert gate["run"].index("make install-benchmark") < gate["run"].index("make check-benchmark")
     # No cp315 `pydantic-core` wheel: an unpinned interpreter makes uv compile it, per sync.
     run = gate["run"]
@@ -857,6 +1004,7 @@ def test_benchmark_install_runs_only_where_check_benchmark_runs() -> None:
 
 BENCHMARK_STEP = "Benchmark unit gate"
 BENCHMARK_SKIP_STEP = "Benchmark unit gate (not run, no benchmark inputs)"
+FAN_IN_BENCHMARK_NOTICE = "Benchmark unit gate (not run)"
 
 
 @pytest.mark.parametrize(
@@ -881,40 +1029,53 @@ def test_benchmark_gate_runs_on_inputs_or_main_push_only_on_macos(
         trigger (Trigger): Event and `classify` outputs.
         runs (bool): Whether the macOS cell executes the gate.
     """
-    (tmp_path / "mac").mkdir()
-    mac = executed_steps("owned", "owned (macos-14)", tmp_path / "mac", trigger)
-    assert (BENCHMARK_STEP in mac) is runs
-    assert (BENCHMARK_SKIP_STEP in mac) is not runs
-    for check in ("owned (ubuntu-24.04)", "owned (wsl2)"):
+    trigger = replace(trigger, wsl_inputs="true")
+    mac = {
+        entry["shard"]: shard_steps("macos-14", entry, trigger)
+        for entry in shard_entries("macos-14", trigger)
+    }
+    assert {name for name, steps in mac.items() if BENCHMARK_STEP in steps} == ({"python"} if runs else set())
+    assert {name for name, steps in mac.items() if BENCHMARK_SKIP_STEP in steps} == (
+        set() if runs else {"python"}
+    )
+    for os_name in ("ubuntu-24.04", "wsl2"):
+        for entry in shard_entries(os_name, trigger):
+            other = shard_steps(os_name, entry, trigger)
+            assert BENCHMARK_STEP not in other
+            assert BENCHMARK_SKIP_STEP not in other
+    # The macOS-only notice reports from the fan-in of every cell that carries no benchmark shard.
+    for check in expand("owned"):
         (tmp_path / check).mkdir()
-        other = executed_steps("owned", check, tmp_path / check, trigger)
-        assert BENCHMARK_STEP not in other
-        assert BENCHMARK_SKIP_STEP not in other
+        fan_in = executed_steps("owned", check, tmp_path / check, trigger)
+        assert (FAN_IN_BENCHMARK_NOTICE in fan_in) is (check != "owned (macos-14)")
 
 
 @pytest.mark.parametrize("event", ["pull_request", "push"])
 @pytest.mark.parametrize("benchmark_inputs", ["true", "false", ""])
-@pytest.mark.parametrize("plan_run", ["true", "false"])
+@pytest.mark.parametrize(
+    "gates",
+    ["check-scripts check-integration check-benchmark", "check-scripts check-integration", "check-ts"],
+)
 def test_benchmark_run_and_skip_conditions_are_exact_complements(
-    event: str, benchmark_inputs: str, plan_run: str
+    event: str, benchmark_inputs: str, gates: str
 ) -> None:
-    """Never both run and skip, and never neither, on a macOS cell that executes its plan.
+    """Never both run and skip, and never neither, on the shard that carries the benchmark; nothing elsewhere.
 
     Parameters:
         event (str): Triggering event.
         benchmark_inputs (str): `classify` output, empty modelling a missing output.
-        plan_run (str): Whether the cell's plan executes its work.
+        gates (str): The shard's planned gates.
     """
-    steps = {step.get("name"): step for step in jobs()["owned"]["steps"]}
+    steps = {step.get("name"): step for step in jobs()["owned-shards-macos"]["steps"]}
     context = {
-        "steps.plan.outputs.run": plan_run,
+        "matrix.gates": gates,
         "runner.os": "macOS",
         "github.event_name": event,
         "needs.classify.outputs.benchmark_inputs": benchmark_inputs,
     }
     runs = bool(evaluate(steps[BENCHMARK_STEP]["if"], context))
     skips = bool(evaluate(steps[BENCHMARK_SKIP_STEP]["if"], context))
-    assert runs != skips if plan_run == "true" else not (runs or skips)
+    assert runs != skips if "check-benchmark" in gates.split() else not (runs or skips)
 
 
 def test_benchmark_skip_step_prints_its_not_run_reason(tmp_path: Path) -> None:
@@ -923,7 +1084,9 @@ def test_benchmark_skip_step_prints_its_not_run_reason(tmp_path: Path) -> None:
     Parameters:
         tmp_path (Path): Disposable output directory.
     """
-    step = next(step for step in jobs()["owned"]["steps"] if step.get("name") == BENCHMARK_SKIP_STEP)
+    step = next(
+        step for step in jobs()["owned-shards-macos"]["steps"] if step.get("name") == BENCHMARK_SKIP_STEP
+    )
     script = tmp_path / "skip.sh"
     script.write_text(step["run"])
     summary = tmp_path / "summary"
@@ -945,19 +1108,31 @@ def test_benchmark_skip_step_prints_its_not_run_reason(tmp_path: Path) -> None:
 
 def test_every_planned_gate_has_a_step_that_survives_other_gate_failures() -> None:
     """Give each gate the plan can list its own step, so one red gate never hides another's evidence."""
-    planned = {gate for gates in ci_paths.OWNED_GATES.values() for gate in gates}
+    # `check-benchmark` keeps its own run/skip pair and its old condition (no `!cancelled()`), tested above.
+    planned = {gate for gates in ci_paths.OWNED_GATES.values() for gate in gates} - {"check-benchmark"}
     steps = {
-        step["run"]: step
-        for step in jobs()["owned"]["steps"]
+        step["name"].removeprefix("Owned gate ").split(" ")[0]: step
+        for step in jobs()["owned-shards-ubuntu"]["steps"]
         if step.get("name", "").startswith("Owned gate ")
     }
-    assert set(steps) == {f"make {gate}" for gate in planned}
+    assert set(steps) == planned
     for gate in planned:
-        condition = steps[f"make {gate}"]["if"]
+        condition = steps[gate]["if"]
+        assert steps[gate]["run"].split(" ")[:2] == ["make", gate]
         assert "!cancelled()" in condition
         assert "steps.install.outcome == 'success'" in condition
-        assert f"contains(steps.plan.outputs.gates, '{gate}')" in condition
-    assert not any("matrix.gates" in yaml.safe_dump(step) for step in jobs()["owned"]["steps"])
+        assert f"contains(matrix.gates, '{gate}')" in condition
+    # `check-ts` runs exactly the shard's workspaces, rendered into the command: the WSL adapter forwards
+    # only an explicit environment allowlist.
+    assert steps["check-ts"]["run"] == 'make check-ts WORKSPACES="${{ matrix.workspaces }}"'
+
+
+def test_no_step_names_a_shard() -> None:
+    """Keep the shard list in `ci_paths.OWNED_SHARDS`: no step reads a shard's name."""
+    for job in OWNED_SHARD_JOBS.values():
+        for step in jobs()[job]["steps"]:
+            assert "matrix.shard" not in step.get("if", "")
+            assert "matrix.shard" not in step.get("run", "")
 
 
 def test_wsl_setup_does_not_upgrade_distribution_packages() -> None:
@@ -966,27 +1141,36 @@ def test_wsl_setup_does_not_upgrade_distribution_packages() -> None:
 
 
 @pytest.mark.parametrize(
-    ("check", "gates"),
+    ("os_name", "gates"),
     [
-        ("owned (ubuntu-24.04)", {"check-ts", "check-scripts", "check-integration"}),
-        ("owned (macos-14)", {"check-ts", "check-scripts", "check-integration"}),
-        ("owned (wsl2)", {"check-ts", "check-probes", "check-import-audit"}),
+        ("ubuntu-24.04", {"check-ts", "check-scripts", "check-integration"}),
+        ("macos-14", {"check-ts", "check-scripts", "check-integration"}),
+        ("wsl2", {"check-ts", "check-probes", "check-import-audit"}),
     ],
 )
-def test_owned_cells_run_exactly_the_gates_the_plan_lists(
-    tmp_path: Path, check: str, gates: set[str]
-) -> None:
-    """Walk real step conditions over the real plan: one step per listed gate and no others.
+def test_owned_shards_run_exactly_the_gates_the_plan_lists(os_name: str, gates: set[str]) -> None:
+    """Walk real step conditions over the real plan: each shard runs its own gates, the cell runs them all.
 
     Parameters:
-        tmp_path (Path): Disposable output directory.
-        check (str): Running owned cell.
-        gates (set[str]): Gates its steps must execute.
+        os_name (str): Running owned cell.
+        gates (set[str]): Gate steps the cell's shards must execute between them.
     """
-    steps = executed_steps("owned", check, tmp_path, Trigger(event="push"))
-    assert {
-        step.removeprefix("Owned gate ").split(" ")[0] for step in steps if step.startswith("Owned gate ")
-    } == gates
+    entries = shard_entries(os_name, Trigger(event="push"))
+    executed = {
+        entry["shard"]: shard_gates(shard_steps(os_name, entry, Trigger(event="push"))) for entry in entries
+    }
+    for entry in entries:
+        assert executed[entry["shard"]] == set(entry["gates"].split()) - {"check-benchmark"}
+    assert set().union(*executed.values()) == gates
+
+
+def test_only_the_computer_use_shards_add_the_arm64_target() -> None:
+    """Install the aarch64 target where computer-use's Linux checks run, nowhere else."""
+    for os_name in OWNED_SHARD_JOBS:
+        for entry in shard_entries(os_name, Trigger(event="push")):
+            steps = shard_steps(os_name, entry, Trigger(event="push"))
+            expected = os_name != "macos-14" and "packages/computer-use" in entry["workspaces"].split()
+            assert ("Add the aarch64 Linux compile target" in steps) is expected, entry["shard"]
 
 
 def test_blocked_plan_fails_every_cell_before_any_work(tmp_path: Path) -> None:
@@ -996,6 +1180,7 @@ def test_blocked_plan_fails_every_cell_before_any_work(tmp_path: Path) -> None:
         tmp_path (Path): Disposable output directory.
     """
     trigger = Trigger(title_problem="Shorten the PR title to at most 65 characters.")
+    assert not any(shard_entries(os_name, trigger) for os_name in OWNED_SHARD_JOBS)
     for name in ("owned", "contracts", "stack"):
         for check in expand(name):
             work = tmp_path / check.replace(" ", "_").replace("(", "").replace(")", "").replace(",", "")
@@ -1017,13 +1202,16 @@ def test_a_failed_classify_fails_all_twelve_required_checks_instead_of_skipping_
     """
     trigger = Trigger(classify_result=result)
     names: set[str] = set()
+    # No shard job starts, so the fan-ins report the failure on their own.
+    assert not any(shard_entries(os_name, trigger) for os_name in OWNED_SHARD_JOBS)
     for name in ("owned", "contracts", "stack"):
-        # The job still starts: its `if` holds when `needs.classify` did not succeed.
-        context = {"needs.classify.result": result}
-        assert evaluate(jobs()[name]["if"], context) is True
-        # ... but a cancelled run still stops, so the `if` is not a constant.
-        assert evaluate(jobs()[name]["if"], context | {"cancelled": "true"}) is False
         for check, cell in expand(name).items():
+            job = jobs()[job_id(name, cell)]
+            # The job still starts: its `if` holds when `needs.classify` did not succeed.
+            context = {"needs.classify.result": result}
+            assert evaluate(job["if"], context) is True
+            # ... but a cancelled run still stops, so the `if` is not a constant.
+            assert evaluate(job["if"], context | {"cancelled": "true"}) is False
             names.add(check)
             assert runner_for(name, cell, trigger) == "ubuntu-24.04"  # No macOS or Windows slot is spent.
             work = tmp_path / f"{len(names)}"
@@ -1076,10 +1264,17 @@ def test_a_cell_holds_a_native_slot_only_when_the_plan_runs_it(trigger: Trigger)
         trigger (Trigger): Event and `classify` outputs.
     """
     published = json.loads(classify_outputs(trigger)["plan"])
-    for name in ("owned", "contracts", "stack"):
+    for name in ("contracts", "stack"):
         for check, cell in expand(name).items():
             expected = cell["runner"] if published[check]["run"] else "ubuntu-24.04"
             assert runner_for(name, cell, trigger) == expected, check
+    # An owned cell's work runs on its shards; the fan-in itself only reads artifacts, on Ubuntu.
+    for check, cell in expand("owned").items():
+        assert runner_for("owned", cell, trigger) == "ubuntu-24.04"
+        entries = shard_entries(cell["os"], trigger)
+        assert bool(entries) is published[check]["run"], check
+        runner = ci_paths.RUNNERS[cell["os"]][0]
+        assert {shard_runner(cell["os"], entry) for entry in entries} <= {runner}
 
 
 def test_every_job_reports_through_the_one_shared_action() -> None:
@@ -1087,10 +1282,11 @@ def test_every_job_reports_through_the_one_shared_action() -> None:
     cfg = jobs()
     plans = {
         name: next(step for step in cfg[name]["steps"] if step.get("id") == "plan")
-        for name in ("owned", "contracts", "stack")
+        for name in (*OWNED_FAN_IN.values(), "contracts", "stack")
     }
     assert {step["uses"] for step in plans.values()} == {"./.github/actions/report-plan"}
-    assert plans["owned"]["with"]["cell"] == "${{ format('owned ({0})', matrix.os) }}"
+    for job in OWNED_FAN_IN.values():
+        assert plans[job]["with"]["cell"] == "${{ format('owned ({0})', matrix.os) }}"
     action = yaml.safe_load(REPORT_PLAN.read_text())
     assert action["runs"]["using"] == "composite"
     assert action["runs"]["steps"][0]["shell"] == "bash -e {0}"
@@ -1131,26 +1327,26 @@ def test_classify_step_threads_the_pr_title_into_the_plan(tmp_path: Path) -> Non
     assert plan["owned (macos-14)"]["reason"].startswith("The squash subject")
 
 
-def test_python_signals_skip_exactly_the_hosts_without_a_pytest_gate() -> None:
-    """Scope each Python LCOV signal to the cells that run its producer, and no others."""
-    # `ci_paths` owns each owned cell's gates (#318); the matrix maps the cell's `os` to its `guest`.
-    gates = {cell["guest"]: ci_paths.OWNED_GATES[cell["os"]] for cell in expand("owned").values()}
+@pytest.mark.parametrize("os_name", sorted(OWNED_FAN_IN))
+def test_python_signals_skip_exactly_the_hosts_without_a_pytest_gate(os_name: str) -> None:
+    """Scope each Python LCOV signal to the cells that run its producer, and no others.
+
+    Parameters:
+        os_name (str): Matrix `os` of the cell whose fan-in accounts for it.
+    """
+    # `ci_paths` owns each owned cell's gates and guest; the fan-in reads the guest from the shards' plan.
+    accounting = fan_in_step("Coverage accounting (existing reports, including test failures)")
+    context = {"matrix.os": os_name, "needs.classify.outputs.plan": classify_outputs(PULL_REQUEST)["plan"]}
+    guest = ci_paths.RUNNERS[os_name][1]
+    assert render(accounting["env"]["COVERAGE_HOST"], context) == guest
+    assert accounting["run"].endswith('COVERAGE_HOST="$COVERAGE_HOST"')
     policy = json.loads((ROOT / "coverage/policy.json").read_text())
-    accounting = next(
-        step for step in jobs()["owned"]["steps"] if step.get("name", "").startswith("Coverage accounting")
-    )
-    assert accounting["env"]["COVERAGE_HOST"] == "${{ matrix.guest }}"
-    # The WSL guest only sees variables named in WSLENV; without it the skip never reaches the guest make.
-    wslenv = re.search(r"\$env:WSLENV = '([^']*)'", (ROOT / "scripts/wsl2_shell.ps1").read_text())
-    assert wslenv
-    assert "COVERAGE_HOST" in wslenv[1].split(":")
-    for name in ("python-scripts", "python-harness"):
+    for name, gate in (("python-scripts", "check-scripts"), ("python-harness", "check-integration")):
         skipped = set(policy["packages"][name]["signals"]["primary"]["skip_hosts"])
-        gate = "check-scripts" if name == "python-scripts" else "check-integration"
-        assert skipped == {guest for guest, ran in gates.items() if gate not in ran}
+        assert (guest in skipped) == (gate not in ci_paths.OWNED_GATES[os_name])
 
 
-@pytest.mark.parametrize("name", ["owned", "contracts", "stack"])
+@pytest.mark.parametrize("name", ["contracts", "stack"])
 def test_shared_guest_matrix(name: str) -> None:
     """Expand every supported cell and reject unsupported hosts/platforms.
 
@@ -1217,10 +1413,269 @@ def test_shared_guest_matrix(name: str) -> None:
     assert "always()" in diagnostics[0]["if"]
 
 
+def test_owned_fan_ins_share_one_definition_and_wait_only_for_their_own_shards() -> None:
+    """Keep three identical fan-ins, each bound to its own shard job, reporting from Ubuntu."""
+    cfg = jobs()
+    steps = [cfg[job]["steps"] for job in OWNED_FAN_IN.values()]
+    assert steps[0] == steps[1] == steps[2]
+    for os_name, job in OWNED_FAN_IN.items():
+        fan_in = cfg[job]
+        shards = OWNED_SHARD_JOBS[os_name]
+        assert fan_in["name"] == "owned (${{ matrix.os }})"
+        assert fan_in["strategy"]["matrix"] == {"os": [os_name]}
+        # A failed classify or a failed shard must still produce a red required check, never a skipped one.
+        assert fan_in["if"] == "${{ !cancelled() }}"
+        assert fan_in["needs"] == ["classify", shards]
+        assert fan_in["env"] == {"SHARDS_RESULT": f"${{{{ needs.{shards}.result }}}}"}
+        assert fan_in["runs-on"] == "ubuntu-24.04"
+        assert "defaults" not in fan_in
+
+
+def test_owned_shard_jobs_share_one_definition_and_read_only_their_cell() -> None:
+    """Keep three identical shard jobs whose `if` and matrix both read their own cell of the plan."""
+    cfg = jobs()
+    steps = [cfg[job]["steps"] for job in OWNED_SHARD_JOBS.values()]
+    assert steps[0] == steps[1] == steps[2]
+    for os_name, job in OWNED_SHARD_JOBS.items():
+        shards = cfg[job]
+        cell = f"['owned ({os_name})']"
+        assert shards["name"] == "owned shard (${{ matrix.os }}, ${{ matrix.shard }})"
+        assert shards["needs"] == "classify"
+        assert shards["if"] == f"${{{{ fromJSON(needs.classify.outputs.plan || '{{}}'){cell}.run }}}}"
+        assert shards["strategy"] == {
+            "fail-fast": False,
+            "matrix": {"include": f"${{{{ fromJSON(needs.classify.outputs.plan){cell}.shards }}}}"},
+        }
+        assert shards["runs-on"] == "${{ matrix.runner }}"
+        assert 'format(\'bash "{0}/scripts/wsl2_host.sh"' in shards["defaults"]["run"]["shell"]
+        assert shards["defaults"]["run"]["shell"].endswith("|| 'bash -e {0}' }}")
+
+
+def test_owned_runners_match_the_contracts_matrix() -> None:
+    """Keep the plan's shard runners and guests identical to the `contracts` matrix of the same OS."""
+    assert {
+        cell["os"]: (cell["runner"], cell["guest"]) for cell in expand("contracts").values()
+    } == ci_paths.RUNNERS
+
+
+def test_owned_shards_keep_the_guest_boundary() -> None:
+    """Select Git Bash first, run the WSL capture and cleanup, and keep one diagnostics upload per shard."""
+    steps = jobs()["owned-shards-wsl2"]["steps"]
+    selection = steps[0]
+    assert selection["if"] == "runner.os == 'Windows'"
+    assert selection["shell"] == "pwsh"
+    assert not [step for step in steps if "run" in step and "shell" in step and step is not selection]
+    assert any(step.get("with", {}).get("cleanup") == "cleanup" for step in steps)
+    diagnostics = [
+        step for step in steps if step.get("with", {}).get("path", "").endswith("/wsl2-diagnostics/")
+    ]
+    assert len(diagnostics) == 1
+    assert "always()" in diagnostics[0]["if"]
+    # One artifact name per shard: two shards of one run cannot upload the same name.
+    assert diagnostics[0]["with"]["name"] == "wsl2-diagnostics-owned-${{ matrix.shard }}"
+    setup = next(step for step in steps if step.get("id") == "tools")
+    assert setup["with"] == {"guest": "${{ matrix.guest }}", "owned": "true"}
+    capture = [step for step in steps if step.get("uses") == "./.github/actions/capture-ci-wsl"]
+    upload = next(step for step in steps if step.get("name") == "Preserve this shard's coverage reports")
+    assert steps.index(capture[0]) < steps.index(upload) < steps.index(capture[1])
+
+
+def fan_in_step(name: str) -> dict[str, Any]:
+    """Return one step of the shared fan-in definition.
+
+    Parameters:
+        name (str): Step name.
+
+    Returns:
+        dict[str, Any]: The step record.
+    """
+    return next(step for step in jobs()["owned-ubuntu"]["steps"] if step.get("name") == name)
+
+
+@pytest.mark.parametrize(
+    ("result", "passes"), [("success", True), ("failure", False), ("cancelled", False), ("skipped", False)]
+)
+def test_fan_in_requires_every_planned_shard(tmp_path: Path, result: str, passes: bool) -> None:
+    """Run the fan-in's real check: only a `success` of the whole shard matrix passes a running cell.
+
+    Parameters:
+        tmp_path (Path): Disposable directory.
+        result (str): `needs.<shard job>.result`.
+        passes (bool): Whether the step succeeds.
+    """
+    step = fan_in_step("Require every planned shard to succeed")
+    assert step["if"] == "steps.plan.outputs.run == 'true'"
+    script = tmp_path / "require.sh"
+    script.write_text(step["run"])
+    completed = subprocess.run(
+        ["/bin/bash", "-e", str(script)],
+        env=os.environ | {"SHARDS_RESULT": result, "CELL": "owned (macos-14)"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (completed.returncode == 0) is passes
+    if passes:
+        assert "Every planned shard of owned (macos-14) succeeded" in completed.stdout
+    else:
+        assert f"::error title=owned (macos-14) shards {result}::" in completed.stdout
+
+
+def run_merge(tmp_path: Path, shards: dict[str, list[str]]) -> tuple[subprocess.CompletedProcess[str], Path]:
+    """Run the fan-in's real merge step over downloaded shard artifacts.
+
+    Parameters:
+        tmp_path (Path): Disposable directory.
+        shards (dict[str, list[str]]): Artifact name and the report paths inside it.
+
+    Returns:
+        tuple[subprocess.CompletedProcess[str], Path]: The step's result and the workspace it merged into.
+    """
+    temp, workspace = tmp_path / "runner-temp", tmp_path / "workspace"
+    workspace.mkdir()
+    for artifact, reports in shards.items():
+        for report in reports:
+            path = temp / "shard-coverage" / artifact / report
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"{artifact}\n")
+    script = tmp_path / "merge.sh"
+    script.write_text(fan_in_step("Merge the shards' coverage reports")["run"])
+    completed = subprocess.run(
+        ["/bin/bash", "-e", str(script)],
+        env=os.environ | {"RUNNER_TEMP": str(temp), "GITHUB_WORKSPACE": str(workspace)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return completed, workspace
+
+
+def test_fan_in_merges_each_shard_report_at_its_repository_path(tmp_path: Path) -> None:
+    """Put every downloaded report back where its producer wrote it, so accounting reads the same paths.
+
+    Parameters:
+        tmp_path (Path): Disposable directory.
+    """
+    completed, workspace = run_merge(
+        tmp_path,
+        {
+            "coverage-ubuntu-24.04-subagents": ["packages/subagents/coverage/primary/lcov.info"],
+            "coverage-ubuntu-24.04-python": [
+                "scripts/coverage/primary/lcov.info",
+                "integration/probes/coverage/primary/lcov.info",
+            ],
+        },
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert (workspace / "packages/subagents/coverage/primary/lcov.info").read_text() == (
+        "coverage-ubuntu-24.04-subagents\n"
+    )
+    assert (workspace / "scripts/coverage/primary/lcov.info").read_text() == "coverage-ubuntu-24.04-python\n"
+    assert (workspace / "integration/probes/coverage/primary/lcov.info").is_file()
+
+
+def test_fan_in_refuses_a_report_two_shards_produced(tmp_path: Path) -> None:
+    """Fail rather than let one shard's report silently replace another's.
+
+    Parameters:
+        tmp_path (Path): Disposable directory.
+    """
+    report = "scripts/coverage/primary/lcov.info"
+    completed, workspace = run_merge(tmp_path, {"coverage-wsl2-a": [report], "coverage-wsl2-b": [report]})
+    assert completed.returncode == 1
+    assert (
+        f"::error title=duplicate shard coverage::More than one shard produced: {report}" in completed.stdout
+    )
+    assert not (workspace / report).exists()
+
+
+def test_fan_in_fails_when_no_shard_uploaded_a_report(tmp_path: Path) -> None:
+    """Fail closed when nothing was downloaded at all.
+
+    Parameters:
+        tmp_path (Path): Disposable directory.
+    """
+    completed, _ = run_merge(tmp_path, {})
+    assert completed.returncode != 0
+
+
+def test_fan_in_downloads_exactly_its_own_shard_uploads() -> None:
+    """Match every shard upload of the cell, and neither another cell's nor the fan-in's own artifact."""
+    shard_upload = next(
+        step
+        for step in jobs()["owned-shards-ubuntu"]["steps"]
+        if step.get("name") == "Preserve this shard's coverage reports"
+    )
+    download = fan_in_step("Download the shards' coverage reports")
+    fan_in_upload = fan_in_step("Preserve independent coverage reports and summary")
+    assert "merge-multiple" not in download["with"]
+    assert download["with"]["path"] == "${{ runner.temp }}/shard-coverage"
+    for os_name in OWNED_SHARD_JOBS:
+        pattern = render(download["with"]["pattern"], {"matrix.os": os_name})
+        names = {
+            render(shard_upload["with"]["name"], {"matrix.os": other, "matrix.shard": entry["shard"]}): other
+            for other in OWNED_SHARD_JOBS
+            for entry in shard_entries(other, Trigger(event="push"))
+        }
+        assert {name for name in names if fnmatch.fnmatchcase(name, pattern)} == {
+            name for name, other in names.items() if other == os_name
+        }
+        assert not fnmatch.fnmatchcase(render(fan_in_upload["with"]["name"], {"matrix.os": os_name}), pattern)
+    # The shards upload reports only; the fan-in's accounting writes the one summary.
+    assert "summary.json" not in shard_upload["with"]["path"]
+    assert shard_upload["with"]["path"] + "coverage/summary.json\n" == fan_in_upload["with"]["path"]
+
+
+@pytest.mark.parametrize(
+    ("os_name", "coverage_os"), [("ubuntu-24.04", "linux"), ("macos-14", "darwin"), ("wsl2", "linux")]
+)
+def test_fan_in_accounts_each_cell_against_its_own_os_floors(os_name: str, coverage_os: str) -> None:
+    """Account the macOS reports with the darwin floors although the fan-in runs on Ubuntu.
+
+    Parameters:
+        os_name (str): Matrix `os` of the cell.
+        coverage_os (str): `coverage_accounting.py --os` it must select.
+    """
+    step = fan_in_step("Coverage accounting (existing reports, including test failures)")
+    assert render(step["env"]["COVERAGE_OS"], {"matrix.os": os_name}) == coverage_os
+    assert (
+        step["run"]
+        == 'make check-coverage BASE="$BASE" COVERAGE_OS="$COVERAGE_OS" COVERAGE_HOST="$COVERAGE_HOST"'
+    )
+    recipe = subprocess.run(
+        ["make", "--no-print-directory", "-n", "check-coverage", "BASE=base", f"COVERAGE_OS={coverage_os}"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert recipe.strip().endswith(f'--base "base" --os "{coverage_os}"')
+
+
+@pytest.mark.parametrize("check", ["owned (ubuntu-24.04)", "owned (macos-14)", "owned (wsl2)"])
+def test_running_fan_in_accounts_for_the_merged_reports(tmp_path: Path, check: str) -> None:
+    """Walk a running fan-in: shard check, checkout, download, merge, accounting and the summary upload.
+
+    Parameters:
+        tmp_path (Path): Disposable output directory.
+        check (str): Owned cell.
+    """
+    steps = executed_steps("owned", check, tmp_path, Trigger(event="push"))
+    assert {
+        "Require every planned shard to succeed",
+        "Download the shards' coverage reports",
+        "Merge the shards' coverage reports",
+        "Coverage accounting (existing reports, including test failures)",
+        "Preserve independent coverage reports and summary",
+        "./.github/actions/setup-ci-tools",
+    } <= steps
+    assert not any(step.startswith("Owned gate ") for step in steps)
+
+
 def test_git_bash_selection_is_one_ordered_candidate_in_every_job() -> None:
     """Avoid treating Get-Command's application collection as one resolved path."""
     cfg = jobs()
-    selections = {cfg[name]["steps"][0]["run"] for name in ("owned", "contracts")}
+    selections = {cfg[name]["steps"][0]["run"] for name in (*OWNED_SHARD_JOBS.values(), "contracts")}
     assert len(selections) == 1
     selection = selections.pop()
     assert "Get-Command bash.exe -All -CommandType Application | Select-Object -First 1).Source" in selection
@@ -1231,15 +1686,22 @@ def test_git_bash_selection_is_one_ordered_candidate_in_every_job() -> None:
 def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> None:
     """Keep exact scenario selectors and gates."""
     cfg = jobs()
-    assert set(cfg) == {"classify", "owned", "contracts", "stack", "release-core"}
+    assert set(cfg) == {
+        "classify",
+        *OWNED_SHARD_JOBS.values(),
+        *OWNED_FAN_IN.values(),
+        "contracts",
+        "stack",
+        "release-core",
+    }
     assert cfg["release-core"] == {
         "if": "github.event_name == 'workflow_dispatch'",
         "needs": "classify",
         "uses": "./.github/workflows/forks.yml",
     }
-    owned = cfg["owned"]["steps"]
+    owned = cfg["owned-shards-ubuntu"]["steps"]
     arm = next(step for step in owned if step.get("name") == "Add the aarch64 Linux compile target")
-    assert "matrix.guest != 'macos'" in arm["if"]
+    assert arm["if"] == "matrix.guest != 'macos' && contains(matrix.workspaces, 'packages/computer-use')"
     contracts = [step["run"] for step in cfg["contracts"]["steps"] if "run" in step]
     for target in (
         "check-package-contracts",
@@ -1573,7 +2035,9 @@ def test_toolchain_pins_and_token_lifetime_follow_shared_steps() -> None:
     assert "< .bun-version" in bootstrap
     assert 'require("./package.json").packageManager' in bootstrap
     cfg = jobs()
-    for name in ("owned", "contracts", "stack"):
+    for job in OWNED_FAN_IN.values():
+        assert not any("GH_TOKEN" in step.get("env", {}) for step in cfg[job]["steps"])
+    for name in (*OWNED_SHARD_JOBS.values(), "contracts", "stack"):
         steps = cfg[name]["steps"]
         token_steps = [step for step in steps if "GH_TOKEN" in step.get("env", {})]
         if name == "stack":

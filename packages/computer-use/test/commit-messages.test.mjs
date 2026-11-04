@@ -182,7 +182,12 @@ test("depth-one history never silently passes PR, push or local validation; rest
 
 test("owned CI checkout supplies complete history for event-selected ranges", () => {
 	const workflow = readFileSync(new URL("../../../.github/workflows/ci.yml", import.meta.url), "utf8");
-	const owned = workflow.slice(workflow.indexOf("\n  owned:"), workflow.indexOf("\n  contracts:"));
+	// This lint runs in computer-use's `check-ts`, inside the `owned` shard jobs; all three OSes share their steps.
+	const owned = workflow.slice(
+		workflow.indexOf("\n  owned-shards-ubuntu:"),
+		workflow.indexOf("\n  owned-shards-macos:"),
+	);
+	assert.ok(workflow.includes("    steps: *owned-shard-steps"), "macOS and WSL shards must reuse these steps");
 	const checkout = owned.match(/- uses: actions\/checkout@[^\n]+[\s\S]*?(?=\n {6}- |$)/)?.[0];
 	assert.ok(checkout, "owned checkout must exist");
 	assert.match(checkout, /fetch-depth: 0/, "owned checkout must fetch event base/head history");

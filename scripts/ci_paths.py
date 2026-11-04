@@ -73,11 +73,55 @@ EVENT_PULL_REQUEST = "pull_request"
 EVENT_PUSH = "push"
 # GitHub squashes a PR to `<title> (#N)`; `main` lints that subject (`check-commit-messages.mjs`).
 SQUASH_SUBJECT_LIMIT = 72
-# Native cells run every Python gate; WSL keeps only the LCOV producers (Ubuntu runs the Python unit suites).
+CHECK_TS = "check-ts"
+
+
+@dataclass(frozen=True)
+class Shard:
+    """One parallel job of an `owned` cell; the cell's required check is a fan-in over its shards.
+
+    Parameters:
+        name (str): Job suffix, `owned shard (<os>, <name>)`.
+        gates (tuple[str, ...]): Make targets the shard runs, one workflow step each.
+        workspaces (tuple[str, ...]): npm workspaces its `check-ts` runs. Empty means every workspace no other
+            shard of the same cell names, so a new workspace lands in a shard without editing this table.
+    """
+
+    name: str
+    gates: tuple[str, ...]
+    workspaces: tuple[str, ...] = ()
+
+
+# Shard units and timings are in #350 and docs/ci.md. Native cells run every Python gate; WSL keeps only the
+# LCOV producers (Ubuntu runs the Python unit suites). macOS stays at two shards: a public repo gets 5
+# concurrent macOS runners, shared by every PR. WSL stays at two: each Windows job pays ~3.5 min of guest
+# setup, and two shards already finish inside the macOS critical path. `check-benchmark` marks the shard that
+# carries the macOS benchmark steps.
+OWNED_SHARDS: dict[str, tuple[Shard, ...]] = {
+    "ubuntu-24.04": (
+        Shard("subagents", (CHECK_TS,), ("packages/subagents",)),
+        Shard("computer-use", (CHECK_TS,), ("packages/computer-use",)),
+        Shard("ts", (CHECK_TS,)),
+        Shard("python", ("check-scripts", "check-integration")),
+    ),
+    "macos-14": (
+        Shard("ts", (CHECK_TS,)),
+        Shard("python", ("check-scripts", "check-integration", "check-benchmark")),
+    ),
+    "wsl2": (
+        Shard("subagents-computer-use", (CHECK_TS,), ("packages/computer-use", "packages/subagents")),
+        Shard("ts", (CHECK_TS, "check-probes", "check-import-audit")),
+    ),
+}
 OWNED_GATES = {
-    "ubuntu-24.04": ("check-ts", "check-scripts", "check-integration"),
-    "macos-14": ("check-ts", "check-scripts", "check-integration"),
-    "wsl2": ("check-ts", "check-probes", "check-import-audit"),
+    os_name: tuple(dict.fromkeys(gate for shard in shards for gate in shard.gates))
+    for os_name, shards in OWNED_SHARDS.items()
+}
+# Runner label and execution guest per OS, as the `contracts` matrix spells them (a test pins the two).
+RUNNERS = {
+    "ubuntu-24.04": ("ubuntu-24.04", "linux"),
+    "macos-14": ("xcode-27", "macos"),
+    "wsl2": ("windows-2025", "wsl2"),
 }
 STACKS = ("personal", "local")
 SMOKE_CELL = ("ubuntu-24.04", "personal")
@@ -138,15 +182,52 @@ class ChangeClassification:
 
 
 @dataclass(frozen=True)
+class ShardPlan:
+    """One shard job of a running `owned` cell, as its matrix entry.
+
+    Parameters:
+        os (str): Matrix `os` value of the cell.
+        name (str): Shard name.
+        runner (str): Runner label.
+        guest (str): Execution guest, `linux`, `macos` or `wsl2`.
+        gates (tuple[str, ...]): Make targets, one workflow step each.
+        workspaces (tuple[str, ...]): npm workspaces its `check-ts` runs, in npm workspace order.
+    """
+
+    os: str
+    name: str
+    runner: str
+    guest: str
+    gates: tuple[str, ...]
+    workspaces: tuple[str, ...]
+
+    def to_output(self) -> dict[str, str]:
+        """Return the matrix `include` entry the shard job reads.
+
+        Returns:
+            dict[str, str]: Strings only; gates and workspaces are space-joined.
+        """
+        return {
+            "os": self.os,
+            "shard": self.name,
+            "runner": self.runner,
+            "guest": self.guest,
+            "gates": " ".join(self.gates),
+            "workspaces": " ".join(self.workspaces),
+        }
+
+
+@dataclass(frozen=True)
 class CellPlan:
     """What one required check name does on this run.
 
     Parameters:
         run (bool): Whether the cell does real work. False reports NOT RUN from a cheap bypass runner.
         scenarios (bool): Whether the cell's scenario steps run (the personal stack can run setup only).
-        gates (tuple[str, ...]): Make targets an `owned` cell runs, one workflow step each.
+        gates (tuple[str, ...]): Make targets an `owned` cell runs across its shards.
         reason (str): Why work is skipped, empty when everything the cell owns runs.
         blocked (bool): Whether the cell must fail with `reason` (an invalid PR title).
+        shards (tuple[ShardPlan, ...]): The shard jobs a running `owned` cell fans in, else empty.
     """
 
     run: bool
@@ -154,12 +235,14 @@ class CellPlan:
     gates: tuple[str, ...]
     reason: str
     blocked: bool = False
+    shards: tuple[ShardPlan, ...] = ()
 
     def to_output(self) -> dict[str, object]:
         """Return the JSON-ready form the workflow reads with `fromJSON`.
 
         Returns:
-            dict[str, object]: Booleans, the space-joined gates, the reason and the block flag.
+            dict[str, object]: Booleans, the space-joined gates, the reason, the block flag and the shard
+                matrix entries.
         """
         return {
             "run": self.run,
@@ -167,6 +250,7 @@ class CellPlan:
             "gates": " ".join(self.gates),
             "reason": self.reason,
             "blocked": self.blocked,
+            "shards": [shard.to_output() for shard in self.shards],
         }
 
 
@@ -402,7 +486,73 @@ def skipped(reason: str) -> CellPlan:
     return CellPlan(run=False, scenarios=False, gates=(), reason=reason)
 
 
-def native_plan(job: str, os_name: str, result: ChangeClassification, event: str) -> CellPlan:
+def npm_workspaces(root: Path) -> tuple[str, ...]:
+    """Return the npm workspaces in the order `npm run <script> --workspaces` visits them.
+
+    Parameters:
+        root (Path): Repository root holding the root `package.json`.
+
+    Returns:
+        tuple[str, ...]: Workspace paths relative to `root`, pattern by pattern, sorted within each pattern.
+
+    Raises:
+        ClassificationError: The manifest is missing or malformed, or no workspace directory exists.
+    """
+    manifest = root / "package.json"
+    try:
+        patterns = json.loads(manifest.read_text(encoding="utf-8")).get("workspaces", [])
+    except (OSError, json.JSONDecodeError) as e:
+        raise ClassificationError(f"Cannot read npm workspaces from '{manifest}': {e}") from e
+    found = tuple(
+        path.relative_to(root).as_posix()
+        for pattern in patterns
+        for path in sorted(root.glob(pattern))
+        if (path / "package.json").is_file()
+    )
+    if not found:
+        raise ClassificationError(f"'{manifest}' declares no workspaces")
+    return found
+
+
+def shard_plans(os_name: str, workspaces: tuple[str, ...]) -> tuple[ShardPlan, ...]:
+    """Expand an `owned` cell's `OWNED_SHARDS` entry into its shard jobs.
+
+    Parameters:
+        os_name (str): Matrix `os` value.
+        workspaces (tuple[str, ...]): Every npm workspace, in npm order.
+
+    Returns:
+        tuple[ShardPlan, ...]: One entry per shard; a `check-ts` shard naming no workspaces takes the rest.
+
+    Raises:
+        ClassificationError: A shard names a workspace that does not exist, or a `check-ts` shard has none to
+            run (`make check-ts WORKSPACES=` with an empty list would run them all).
+    """
+    shards = OWNED_SHARDS[os_name]
+    named = {workspace for shard in shards for workspace in shard.workspaces}
+    unknown = named.difference(workspaces)
+    if unknown:
+        raise ClassificationError(f"owned ({os_name}) names unknown workspaces: {sorted(unknown)}")
+    runner, guest = RUNNERS[os_name]
+    plans = []
+    for shard in shards:
+        chosen = set(shard.workspaces) if shard.workspaces else set(workspaces) - named
+        selected = tuple(workspace for workspace in workspaces if workspace in chosen)
+        if CHECK_TS in shard.gates and not selected:
+            raise ClassificationError(
+                f"owned shard ({os_name}, {shard.name}) runs check-ts with no workspaces"
+            )
+        plans.append(
+            ShardPlan(
+                os_name, shard.name, runner, guest, shard.gates, selected if CHECK_TS in shard.gates else ()
+            )
+        )
+    return tuple(plans)
+
+
+def native_plan(
+    job: str, os_name: str, result: ChangeClassification, event: str, workspaces: tuple[str, ...]
+) -> CellPlan:
     """Plan an `owned` or `contracts` cell.
 
     Parameters:
@@ -410,17 +560,25 @@ def native_plan(job: str, os_name: str, result: ChangeClassification, event: str
         os_name (str): Matrix `os` value.
         result (ChangeClassification): Diff classification.
         event (str): Triggering event name.
+        workspaces (tuple[str, ...]): Every npm workspace, for the `owned` shards.
 
     Returns:
-        CellPlan: Whether the cell runs and, for `owned`, which gates.
+        CellPlan: Whether the cell runs and, for `owned`, which gates on which shards.
     """
     if os_name == "wsl2" and event == EVENT_PULL_REQUEST and not result.inputs["wsl_inputs"]:
         return skipped(WSL_BYPASS.format(job=job))
     # A real WSL cell keeps its docs-only acceptance on `main`.
     if result.docs_only and os_name != "wsl2":
         return skipped(NOT_RUN["docs_only"])
-    gates = OWNED_GATES[os_name] if job == "owned" else ()
-    return CellPlan(run=True, scenarios=True, gates=gates, reason="")
+    if job != "owned":
+        return CellPlan(run=True, scenarios=True, gates=(), reason="")
+    return CellPlan(
+        run=True,
+        scenarios=True,
+        gates=OWNED_GATES[os_name],
+        reason="",
+        shards=shard_plans(os_name, workspaces),
+    )
 
 
 def stack_plan(os_name: str, stack: str, result: ChangeClassification, event: str) -> CellPlan:
@@ -456,11 +614,16 @@ def plan_cells(result: ChangeClassification, event: str, title_problem: str = ""
 
     Returns:
         dict[str, CellPlan]: One plan per ruleset context, keyed by the check name.
+
+    Raises:
+        ClassificationError: The checkout's npm workspaces cannot be read or split into shards.
     """
+    # The checkout under test, which the shard jobs check out too, not the `--repo` the diff is read from.
+    workspaces = npm_workspaces(REPO_ROOT)
     cells: dict[str, CellPlan] = {}
-    for os_name in OWNED_GATES:
-        cells[f"owned ({os_name})"] = native_plan("owned", os_name, result, event)
-        cells[f"contracts ({os_name})"] = native_plan("contracts", os_name, result, event)
+    for os_name in OWNED_SHARDS:
+        cells[f"owned ({os_name})"] = native_plan("owned", os_name, result, event, workspaces)
+        cells[f"contracts ({os_name})"] = native_plan("contracts", os_name, result, event, workspaces)
         for stack in STACKS:
             cells[f"stack ({os_name}, {stack})"] = stack_plan(os_name, stack, result, event)
     if title_problem:
@@ -535,7 +698,13 @@ def main(argv: list[str] | None = None) -> int:
             else "A pull_request plan needs --pr-title and --pr-number to check the squash subject."
         )
     result = full_classification() if args.full else classify(args.repo, args.base, args.head)
-    write_github_output(args.github_output, result, plan_cells(result, args.event, problem))
+    try:
+        cells = plan_cells(result, args.event, problem)
+    except ClassificationError as e:
+        # A failed `classify` turns every required check red; a plan without shards would skip real work.
+        LOGGER.error(f"Failed to plan the CI cells: {e}")
+        return 1
+    write_github_output(args.github_output, result, cells)
     return 0
 
 

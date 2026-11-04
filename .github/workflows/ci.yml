@@ -85,32 +85,25 @@ jobs:
             echo "No quiet self-hosted runner exists yet (migration plan section 7). This is not a pass."
           } >>"$GITHUB_STEP_SUMMARY"
 
-  owned:
-    if: ${{ !cancelled() }}
-    name: owned (${{ matrix.os }})
+  # Each `owned (<os>)` required check is a fan-in over parallel shard jobs (#350). `scripts/ci_paths.py`
+  # `OWNED_SHARDS` owns the split: the plan publishes each running cell's shards, and a shard job's matrix is that
+  # list, so no step here names a shard. One shard job and one fan-in per OS, because `needs` is per job: a single
+  # fan-in matrix would hold Ubuntu's check until the macOS shards finish. The three jobs of each kind share their
+  # steps through YAML anchors.
+  owned-shards-ubuntu:
+    if: ${{ fromJSON(needs.classify.outputs.plan || '{}')['owned (ubuntu-24.04)'].run }}
+    name: &owned-shard-name owned shard (${{ matrix.os }}, ${{ matrix.shard }})
     needs: classify
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14, wsl2]
-        include:
-          - os: ubuntu-24.04
-            runner: ubuntu-24.04
-            guest: linux
-          - os: macos-14
-            runner: xcode-27
-            guest: macos
-          - os: wsl2
-            runner: windows-2025
-            guest: wsl2
-    # A cell the plan does not run (NOT RUN, or blocked, or no plan at all) reports from a cheap Ubuntu job and holds
-    # no macOS or Windows slot.
-    runs-on: ${{ !fromJSON(needs.classify.outputs.plan || '{}')[format('owned ({0})', matrix.os)].run && 'ubuntu-24.04' || matrix.runner }}
-    defaults:
+        include: ${{ fromJSON(needs.classify.outputs.plan)['owned (ubuntu-24.04)'].shards }}
+    runs-on: &owned-shard-runner ${{ matrix.runner }}
+    defaults: &owned-shard-defaults
       run:
         shell: ${{ matrix.guest == 'wsl2' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash -e {0}' }}
-    timeout-minutes: ${{ matrix.os == 'wsl2' && 45 || 30 }}
-    steps:
+    timeout-minutes: &owned-shard-timeout ${{ matrix.os == 'wsl2' && 45 || 30 }}
+    steps: &owned-shard-steps
       - name: Select and verify Git Bash on the Windows host
         if: runner.os == 'Windows'
         shell: pwsh
@@ -127,6 +120,154 @@ jobs:
           $gitBin >> $env:GITHUB_PATH
           "PI_CI_GIT_BASH=$bash" >> $env:GITHUB_ENV
           "Git Bash executable: $resolved" >> $env:GITHUB_STEP_SUMMARY
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci-tools
+        id: tools
+        with:
+          guest: ${{ matrix.guest }}
+          owned: 'true'
+      # Real reviewer reads need system binaries, not Pi's live latest-release download fallback.
+      - name: Install reviewer read dependencies (Ubuntu)
+        if: matrix.os == 'ubuntu-24.04'
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep fd-find
+      # fd-find 10.4.2+ ships binstall metadata matching its release assets; fail rather than compile from source.
+      - name: Install reviewer read dependencies (macOS)
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        if: runner.os == 'macOS'
+        env:
+          BINSTALL_DISABLE_STRATEGIES: compile
+        with:
+          tool: ripgrep@14.1.1,fd-find@10.5.0
+      - name: Verify reviewer read dependencies
+        run: |
+          rg --version
+          if command -v fd >/dev/null; then fd --version; else fdfind --version; fi
+      - name: Initialize the core fork at its Gitlink
+        run: git submodule update --init forks/pi
+      # Verifies the root core overrides before `npm ci`; the read-only token is for `gh attestation verify`.
+      - name: Install
+        id: install
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: make install-owned
+      # computer-use's Linux helper checks (cargo tests, packed-source build, diagnostics) run inside its `check-ts` on
+      # Ubuntu and WSL and print NOT RUN on macOS. ARM64 is compile-only (`cargo check`, no linker): never a runtime claim.
+      - name: Add the aarch64 Linux compile target
+        if: matrix.guest != 'macos' && contains(matrix.workspaces, 'packages/computer-use')
+        run: |
+          rustup target add aarch64-unknown-linux-gnu
+          echo "PI_CU_LINUX_ARM64_CHECK=1" >>"$GITHUB_ENV"
+      # One step per gate the shard lists, so a failing gate never hides another gate's evidence. `check-ts` runs
+      # only the shard's workspaces, each package's own `npm run check` in npm workspace order.
+      - name: Owned gate check-ts (biome, tsc, Vitest on Node and Bun, computer-use checks)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && contains(matrix.gates, 'check-ts') }}
+        run: make check-ts WORKSPACES="${{ matrix.workspaces }}"
+      - name: Owned gate check-scripts (ruff, ty, pytest scripts, import audit)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && contains(matrix.gates, 'check-scripts') }}
+        run: make check-scripts
+      - name: Owned gate check-integration (ruff, ty, pytest integration units, probes)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && contains(matrix.gates, 'check-integration') }}
+        run: make check-integration
+      - name: Owned gate check-probes (WSL LCOV producer)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && contains(matrix.gates, 'check-probes') }}
+        run: make check-probes
+      - name: Owned gate check-import-audit (WSL LCOV producer)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && contains(matrix.gates, 'check-import-audit') }}
+        run: make check-import-audit
+      # WSL producers run on the guest Linux filesystem; artifact actions run on Windows.
+      - uses: ./.github/actions/capture-ci-wsl
+        if: always() && matrix.os == 'wsl2' && steps.tools.outcome == 'success'
+      # Reports only: the fan-in accounts for the whole cell. A shard that produces no report (computer-use) uploads
+      # nothing, and the fan-in's accounting fails on any report the policy expects and no shard produced.
+      - name: Preserve this shard's coverage reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-${{ matrix.os }}-${{ matrix.shard }}
+          path: |
+            packages/*/coverage/**/lcov.info
+            integration/inprocess/coverage/**/lcov.info
+            integration/probes/coverage/**/lcov.info
+            integration/coverage/**/lcov.info
+            scripts/coverage/**/lcov.info
+          if-no-files-found: ignore
+      - name: Benchmark unit gate
+        if: contains(matrix.gates, 'check-benchmark') && (needs.classify.outputs.benchmark_inputs != 'false' || github.event_name == 'push')
+        run: |
+          # The runner image's Homebrew Python drifts (3.15.1 now); `pydantic-core` has no cp315 wheel in
+          # `benchmarks/comparison/uv.lock`, so uv compiled it from source (~84s here, and again in every
+          # cold-cache gate sync the tests run, which inherit this interpreter). Pin the repo's interpreter.
+          export UV_PYTHON="$(tr -d '\n' < .python-version)"
+          make install-benchmark
+          # The native_runtime test runs the real Codex sandbox (Seatbelt); exact historical pin, no credentials.
+          npm install --ignore-scripts --prefix "$RUNNER_TEMP/codex" @openai/codex@0.154.0
+          mkdir -p "$RUNNER_TEMP/codex-home" "$RUNNER_TEMP/codex-cache"
+          CODEX_HOME="$RUNNER_TEMP/codex-home" XDG_CACHE_HOME="$RUNNER_TEMP/codex-cache" \
+            PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" make check-benchmark
+      - name: Benchmark unit gate (not run, no benchmark inputs)
+        if: contains(matrix.gates, 'check-benchmark') && needs.classify.outputs.benchmark_inputs == 'false' && github.event_name != 'push'
+        run: |
+          why="This pull request changes no benchmark input (BENCHMARK_INPUT_FILES and BENCHMARK_INPUT_PREFIXES in scripts/ci_paths.py); check-benchmark runs for real on main pushes and on PRs that change them."
+          echo "::notice title=check-benchmark NOT RUN::$why"
+          {
+            echo "### check-benchmark: NOT RUN"
+            echo "$why This is not a pass."
+          } >>"$GITHUB_STEP_SUMMARY"
+      - uses: ./.github/actions/capture-ci-wsl
+        if: always() && matrix.os == 'wsl2' && steps.tools.outcome == 'success'
+        with:
+          cleanup: cleanup
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && runner.os == 'Windows'
+        with:
+          name: wsl2-diagnostics-owned-${{ matrix.shard }}
+          path: ${{ runner.temp }}/wsl2-diagnostics/
+          if-no-files-found: warn
+
+  owned-shards-macos:
+    if: ${{ fromJSON(needs.classify.outputs.plan || '{}')['owned (macos-14)'].run }}
+    name: *owned-shard-name
+    needs: classify
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.classify.outputs.plan)['owned (macos-14)'].shards }}
+    runs-on: *owned-shard-runner
+    defaults: *owned-shard-defaults
+    timeout-minutes: *owned-shard-timeout
+    steps: *owned-shard-steps
+
+  owned-shards-wsl2:
+    if: ${{ fromJSON(needs.classify.outputs.plan || '{}')['owned (wsl2)'].run }}
+    name: *owned-shard-name
+    needs: classify
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.classify.outputs.plan)['owned (wsl2)'].shards }}
+    runs-on: *owned-shard-runner
+    defaults: *owned-shard-defaults
+    timeout-minutes: *owned-shard-timeout
+    steps: *owned-shard-steps
+
+  # The fan-in always reports from Ubuntu: it runs no tests, so a NOT RUN, blocked or running cell holds no macOS or
+  # Windows slot. Its one-cell matrix keeps the required name, and the `owned (${{ matrix.os }})` placeholder name of
+  # a job a cancelled run never started.
+  owned-ubuntu:
+    if: ${{ !cancelled() }}
+    name: &owned-name owned (${{ matrix.os }})
+    needs: [classify, owned-shards-ubuntu]
+    strategy:
+      matrix:
+        os: [ubuntu-24.04]
+    env:
+      SHARDS_RESULT: ${{ needs.owned-shards-ubuntu.result }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: &owned-timeout 15
+    steps: &owned-steps
       # The plan step lives in a local action, so a sparse checkout of `.github/actions` comes first. The full
       # checkout below runs only when the plan says the cell runs.
       - name: Check out the local actions
@@ -142,76 +283,59 @@ jobs:
           plan: ${{ needs.classify.outputs.plan }}
           classify_result: ${{ needs.classify.result }}
           changed_files: ${{ needs.classify.outputs.changed_files }}
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # `needs.<job>.result` folds every shard of the matrix into one value, and is `skipped` when the shard job
+      # never ran. A running cell needs `success`: a failed, cancelled or skipped shard fails the required check.
+      - name: Require every planned shard to succeed
         if: steps.plan.outputs.run == 'true'
+        env:
+          CELL: ${{ format('owned ({0})', matrix.os) }}
+        run: |
+          if [ "$SHARDS_RESULT" != success ]; then
+            echo "::error title=$CELL shards $SHARDS_RESULT::The plan runs this cell, but its shard jobs finished '$SHARDS_RESULT'; see the 'owned shard' jobs"
+            exit 1
+          fi
+          echo "Every planned shard of $CELL succeeded"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' }}
         with:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup-ci-tools
-        id: tools
-        if: steps.plan.outputs.run == 'true'
+        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' }}
         with:
-          guest: ${{ matrix.guest }}
-          owned: 'true'
-      # Real reviewer reads need system binaries, not Pi's live latest-release download fallback.
-      - name: Install reviewer read dependencies (Ubuntu)
-        if: steps.plan.outputs.run == 'true' && matrix.os == 'ubuntu-24.04'
-        run: sudo apt-get update && sudo apt-get install --yes ripgrep fd-find
-      # fd-find 10.4.2+ ships binstall metadata matching its release assets; fail rather than compile from source.
-      - name: Install reviewer read dependencies (macOS)
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
-        if: steps.plan.outputs.run == 'true' && runner.os == 'macOS'
-        env:
-          BINSTALL_DISABLE_STRATEGIES: compile
+          guest: linux
+      - name: Download the shards' coverage reports
+        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          tool: ripgrep@14.1.1,fd-find@10.5.0
-      - name: Verify reviewer read dependencies
-        if: steps.plan.outputs.run == 'true'
+          pattern: coverage-${{ matrix.os }}-*
+          path: ${{ runner.temp }}/shard-coverage
+      # Each artifact lands in its own directory; a report path two shards both produced would let one copy
+      # silently replace the other, so that fails instead.
+      - name: Merge the shards' coverage reports
+        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' }}
         run: |
-          rg --version
-          if command -v fd >/dev/null; then fd --version; else fdfind --version; fi
-      - name: Initialize the core fork at its Gitlink
-        if: steps.plan.outputs.run == 'true'
-        run: git submodule update --init forks/pi
-      # Verifies the root core overrides before `npm ci`; the read-only token is for `gh attestation verify`.
-      - name: Install
-        id: install
-        if: steps.plan.outputs.run == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: make install-owned
-      # computer-use's Linux helper checks (cargo tests, packed-source build, diagnostics) run inside `check-ts` on
-      # Ubuntu and print NOT RUN on macOS. ARM64 is compile-only (`cargo check`, no linker): never a runtime claim.
-      - name: Add the aarch64 Linux compile target
-        if: steps.plan.outputs.run == 'true' && matrix.guest != 'macos'
-        run: |
-          rustup target add aarch64-unknown-linux-gnu
-          echo "PI_CU_LINUX_ARM64_CHECK=1" >>"$GITHUB_ENV"
-      # One step per gate the plan lists, so a failing gate never hides another gate's evidence.
-      - name: Owned gate check-ts (biome, tsc, Vitest on Node and Bun, computer-use checks)
-        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.install.outcome == 'success' && contains(steps.plan.outputs.gates, 'check-ts') }}
-        run: make check-ts
-      - name: Owned gate check-scripts (ruff, ty, pytest scripts, import audit)
-        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.install.outcome == 'success' && contains(steps.plan.outputs.gates, 'check-scripts') }}
-        run: make check-scripts
-      - name: Owned gate check-integration (ruff, ty, pytest integration units, probes)
-        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.install.outcome == 'success' && contains(steps.plan.outputs.gates, 'check-integration') }}
-        run: make check-integration
-      - name: Owned gate check-probes (WSL LCOV producer)
-        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.install.outcome == 'success' && contains(steps.plan.outputs.gates, 'check-probes') }}
-        run: make check-probes
-      - name: Owned gate check-import-audit (WSL LCOV producer)
-        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.install.outcome == 'success' && contains(steps.plan.outputs.gates, 'check-import-audit') }}
-        run: make check-import-audit
+          cd "$RUNNER_TEMP/shard-coverage"
+          duplicates=$(find . -mindepth 2 -type f | cut -d/ -f3- | sort | uniq -d)
+          if [ -n "$duplicates" ]; then
+            echo "::error title=duplicate shard coverage::More than one shard produced: ${duplicates//$'\n'/ }"
+            exit 1
+          fi
+          for shard in */; do
+            echo "Merging ${shard%/}"
+            cp -R "$shard." "$GITHUB_WORKSPACE/"
+          done
+      # The accounting reads reports, the policy and Git, and runs no test, so the macOS cell's reports are
+      # accounted here with `--os darwin` (the `--reports-root` replay docs/coverage.md describes).
       - name: Coverage accounting (existing reports, including test failures)
         if: always() && steps.plan.outputs.run == 'true'
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
-          COVERAGE_HOST: ${{ matrix.guest }}
-        run: make check-coverage BASE="$BASE"
-      # WSL producers run on the guest Linux filesystem; artifact actions run on Windows.
-      - uses: ./.github/actions/capture-ci-wsl
-        if: always() && matrix.os == 'wsl2' && steps.tools.outcome == 'success'
+          COVERAGE_OS: ${{ matrix.os == 'macos-14' && 'darwin' || 'linux' }}
+          # The cell's guest class (`linux`, `macos`, `wsl2`), from the plan the shards ran: signals listing it in
+          # `skip_hosts` (Python on WSL) report NOT RUN.
+          COVERAGE_HOST: ${{ fromJSON(needs.classify.outputs.plan)[format('owned ({0})', matrix.os)].shards[0].guest }}
+        run: make check-coverage BASE="$BASE" COVERAGE_OS="$COVERAGE_OS" COVERAGE_HOST="$COVERAGE_HOST"
       - name: Preserve independent coverage reports and summary
         if: always() && steps.plan.outputs.run == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -232,41 +356,35 @@ jobs:
           for manifest in packages/*/package.json; do
             node -e 'const m = require(process.argv[1]); if (!m.scripts["test:bun"]) console.log(`::notice title=bun test not run::${m.name} has no declared Bun suite yet`)' "./$manifest"
           done
-      - name: Benchmark unit gate
-        if: steps.plan.outputs.run == 'true' && runner.os == 'macOS' && (needs.classify.outputs.benchmark_inputs != 'false' || github.event_name == 'push')
-        run: |
-          # The runner image's Homebrew Python drifts (3.15.1 now); `pydantic-core` has no cp315 wheel in
-          # `benchmarks/comparison/uv.lock`, so uv compiled it from source (~84s here, and again in every
-          # cold-cache gate sync the tests run, which inherit this interpreter). Pin the repo's interpreter.
-          export UV_PYTHON="$(tr -d '\n' < .python-version)"
-          make install-benchmark
-          # The native_runtime test runs the real Codex sandbox (Seatbelt); exact historical pin, no credentials.
-          npm install --ignore-scripts --prefix "$RUNNER_TEMP/codex" @openai/codex@0.154.0
-          mkdir -p "$RUNNER_TEMP/codex-home" "$RUNNER_TEMP/codex-cache"
-          CODEX_HOME="$RUNNER_TEMP/codex-home" XDG_CACHE_HOME="$RUNNER_TEMP/codex-cache" \
-            PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" make check-benchmark
       - name: Benchmark unit gate (not run)
-        if: steps.plan.outputs.run == 'true' && runner.os != 'macOS'
+        if: steps.plan.outputs.run == 'true' && !contains(steps.plan.outputs.gates, 'check-benchmark')
         run: echo "::notice title=check-benchmark not run::macOS only, its native_runtime test needs Seatbelt"
-      - name: Benchmark unit gate (not run, no benchmark inputs)
-        if: steps.plan.outputs.run == 'true' && runner.os == 'macOS' && needs.classify.outputs.benchmark_inputs == 'false' && github.event_name != 'push'
-        run: |
-          why="This pull request changes no benchmark input (BENCHMARK_INPUT_FILES and BENCHMARK_INPUT_PREFIXES in scripts/ci_paths.py); check-benchmark runs for real on main pushes and on PRs that change them."
-          echo "::notice title=check-benchmark NOT RUN::$why"
-          {
-            echo "### check-benchmark: NOT RUN"
-            echo "$why This is not a pass."
-          } >>"$GITHUB_STEP_SUMMARY"
-      - uses: ./.github/actions/capture-ci-wsl
-        if: always() && matrix.os == 'wsl2' && steps.tools.outcome == 'success'
-        with:
-          cleanup: cleanup
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always() && runner.os == 'Windows'
-        with:
-          name: wsl2-diagnostics-owned
-          path: ${{ runner.temp }}/wsl2-diagnostics/
-          if-no-files-found: warn
+
+  owned-macos:
+    if: ${{ !cancelled() }}
+    name: *owned-name
+    needs: [classify, owned-shards-macos]
+    strategy:
+      matrix:
+        os: [macos-14]
+    env:
+      SHARDS_RESULT: ${{ needs.owned-shards-macos.result }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: *owned-timeout
+    steps: *owned-steps
+
+  owned-wsl2:
+    if: ${{ !cancelled() }}
+    name: *owned-name
+    needs: [classify, owned-shards-wsl2]
+    strategy:
+      matrix:
+        os: [wsl2]
+    env:
+      SHARDS_RESULT: ${{ needs.owned-shards-wsl2.result }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: *owned-timeout
+    steps: *owned-steps
 
   contracts:
     if: ${{ !cancelled() }}
