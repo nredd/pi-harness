@@ -18,9 +18,9 @@ benchmarks, and exact-stack release tooling. The Pi core retains its upstream hi
 
 Current status is [here](PLAN.md); the original migration plan and its superseded requirements are
 [here](docs/migration-plan.md). Primary owned-source coverage enforcement is enabled through
-`coverage/policy.json`; its eligible packages and the only reviewed Linux foreign-native allowance
-are documented in [coverage](docs/coverage.md). Bun signals are enforced at 0/0 for `preset`,
-`subscription-router` and `todo`; the other Bun compatibility signals remain report-only.
+`coverage/policy.json`; its eligible packages are documented in [coverage](docs/coverage.md), and no
+package has a per-file or per-OS allowance. Bun signals are enforced at 0/0 for `plan-mode`, `preset`,
+`resource-sampler`, `subscription-router` and `todo`; the other Bun compatibility signals remain report-only.
 Every migration PR requires separate Standards and Spec reviewer subagents against its final HEAD,
 including documentation, fork, dotfiles, and automated promotion changes.
 
