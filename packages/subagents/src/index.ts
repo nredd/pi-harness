@@ -49,7 +49,7 @@ import { isScopeModelsEnabled, setScopeModelsEnabled } from "./model-scope.js";
 import { admitModelSelection, describeSelection, modelRequest, modelSelectionNote, selectModel } from "./model-selection.js";
 import { tierDisclosure } from "./model-tiers.js";
 import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.js";
-import { clipResult, DEFAULT_NOTIFICATION_RESULT_CHARS, fairShares, GROUP_PREVIEW_RESULT_CHARS, NOTIFICATION_RESULT_CHARS_CEILING, PREVIEW_RESULT_CHARS, previewResult } from "./notification-result.js";
+import { clipNotice, DEFAULT_NOTIFICATION_RESULT_CHARS, fairShares, GROUP_PREVIEW_RESULT_CHARS, NOTIFICATION_RESULT_CHARS_CEILING, type NoticeFrame, type NoticeParts, PREVIEW_RESULT_CHARS, previewResult, renderNotice } from "./notification-result.js";
 import { appendModelFallbackEntry, appendModelTierEntry, createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
 import { getPackageAgentsGate, getPackageWorkflowsGate, invalidatePackageCache, isProjectTrusted, packageNameForPath, setPackageAgentsGate, setPackageWorkflowsGate, setProjectTrusted } from "./package-resources.js";
 import { getBudgetPolicy, setBudgetPolicy } from "./process-budget.js";
@@ -185,9 +185,9 @@ function getStatusLabel(status: string, error?: string): string {
 
 /**
  * Format a structured task notification matching Claude Code's <task-notification> XML.
- * Everything but the `<result>` is read now; the returned function fills that in.
+ * Everything but the `<result>` is read now; `renderNotice` fills that in.
  */
-function formatTaskNotification(record: AgentRecord, showCost = false): (result: string) => string {
+function formatTaskNotification(record: AgentRecord, showCost = false): NoticeFrame {
   const status = getStatusLabel(record.status, record.error);
   const durationMs = record.completedAt ? record.completedAt - record.startedAt : 0;
   const totalTokens = getLifetimeTotal(record.lifetimeUsage);
@@ -214,7 +214,7 @@ function formatTaskNotification(record: AgentRecord, showCost = false): (result:
     `<usage><total_tokens>${totalTokens}</total_tokens><tool_uses>${record.toolUses}</tool_uses>${ctxXml}${compactXml}${costXml}<duration_ms>${durationMs}</duration_ms></usage>`,
     `</task-notification>`,
   ].join('\n');
-  return (result) => `${head}\n<result>${escapeXml(result)}</result>\n${tail}`;
+  return { head, tail };
 }
 
 /** What a full-result notice carries: the same text `get_subagent_result` returns for a finished agent. */
@@ -560,24 +560,18 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
    * the `notificationResultChars: 0` preview of `previewChars`.
    */
   function snapshotNotice(record: AgentRecord, previewChars: number) {
-    const render = formatTaskNotification(record, showCost);
+    const frame = formatTaskNotification(record, showCost);
     const details = buildNotificationDetails(record, previewChars, agentActivity.get(record.id));
-    const cap = notificationResultChars;
-    if (cap === 0) {
-      const text = render(record.result ? previewResult(record.result, previewChars) : "No output.");
-      return { id: record.id, details, chars: undefined, render: (_share?: number) => ({ text, delivered: false }) };
+    if (notificationResultChars === 0) {
+      const text = renderNotice(frame, record.result ? previewResult(record.result, previewChars) : "No output.");
+      return { id: record.id, details, chars: undefined, parts: undefined, render: (_share?: number) => ({ text, delivered: false }) };
     }
-    const body = noticeBody(record);
-    const outputFile = record.outputFile;
-    // A failure stays unread: delivering its notice must not acknowledge it in FleetView (README, FleetView).
-    const failed = record.status === "error" || record.status === "aborted";
-    return {
-      id: record.id, details, chars: body.length,
-      render: (share?: number) => {
-        const clipped = clipResult(body, Math.min(share ?? cap, cap), outputFile);
-        return { text: render(clipped.text), delivered: clipped.complete && !failed };
-      },
+    const parts: NoticeParts = {
+      ...frame, body: noticeBody(record), cap: notificationResultChars, outputFile: record.outputFile,
+      // A failure stays unread: delivering its notice must not acknowledge it in FleetView (README, FleetView).
+      failed: record.status === "error" || record.status === "aborted",
     };
+    return { id: record.id, details, chars: parts.body.length, parts, render: (share?: number) => clipNotice(parts, share) };
   }
 
   /** Full result lengths of the notices that have one, for the batch budget. */
@@ -727,6 +721,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
         content: notice.render().text + footer,
         details: notice.details,
         record: historyRecord(record),
+        ...(notice.parts ? { notice: { ...notice.parts, footer } } : {}),
       });
     } catch { /* spool unwritable: the transcript file still has the result */ }
   }
@@ -744,9 +739,15 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
         fleet.update();
       }
       const details = result.details as NotificationDetails;
+      // Re-clipped here, so it shares the budget of whatever lands with it. Its
+      // record lives in the orphaned manager, so nothing is marked read.
+      const notice = typeof result.notice?.body === "string" ? result.notice : undefined;
       outbox.add({
         ids: [details.id, ...(details.others?.map(other => other.id) ?? [])],
-        build: () => ({ content: result.content, details }),
+        ...(notice ? { resultChars: { [details.id]: notice.body.length } } : {}),
+        build: (_ids, caps) => notice
+          ? { content: clipNotice(notice, caps[details.id]).text + notice.footer, details }
+          : { content: result.content, details },
       });
     } catch { /* session already gone again; the transcript file still has the result */ }
   }

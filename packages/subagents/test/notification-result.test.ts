@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clipResult, DEFAULT_NOTIFICATION_RESULT_CHARS, fairShares, NOTIFICATION_BATCH_AGENTS, previewResult } from "../src/notification-result.js";
+import { clipNotice, clipResult, DEFAULT_NOTIFICATION_RESULT_CHARS, fairShares, NOTIFICATION_BATCH_AGENTS, previewResult, RESULT_FRAMING, renderNotice } from "../src/notification-result.js";
 
 describe("clipResult", () => {
   it("keeps a result that fits whole", () => {
@@ -50,5 +50,24 @@ describe("fairShares", () => {
   it("defaults to 16k per agent and four agents' worth per batch", () => {
     expect(DEFAULT_NOTIFICATION_RESULT_CHARS).toBe(16_000);
     expect(NOTIFICATION_BATCH_AGENTS).toBe(4);
+  });
+});
+
+describe("renderNotice / clipNotice", () => {
+  const frame = { head: "<task-notification>", tail: "</task-notification>" };
+
+  it("escapes the result into a framed <result>", () => {
+    expect(renderNotice(frame, "a<b")).toBe(`<task-notification>\n${RESULT_FRAMING}\n<result>a&lt;b</result>\n</task-notification>`);
+  });
+
+  it("counts the cap on the raw result, before escaping", () => {
+    const parts = { ...frame, body: "<<<<", cap: 4, failed: false };
+    expect(clipNotice(parts)).toEqual({ text: renderNotice(frame, "<<<<"), delivered: true });
+  });
+
+  it("never exceeds the cap whatever share it is given, and leaves a failure unread", () => {
+    const parts = { ...frame, body: "abcdef", cap: 4, failed: true };
+    expect(clipNotice(parts, 100)).toEqual({ text: renderNotice(frame, clipResult("abcdef", 4).text), delivered: false });
+    expect(clipNotice({ ...parts, body: "abc" })).toEqual({ text: renderNotice(frame, "abc"), delivered: false });
   });
 });
