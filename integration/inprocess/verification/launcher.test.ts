@@ -142,7 +142,6 @@ test("scripts that bypass the launcher disable jiti's fs cache themselves", () =
 		"packages/dev-tools test",
 		"packages/dev-tools test:bun",
 		"packages/plan-mode test",
-		"packages/plan-mode test:bun",
 		"packages/plan-mode test:dist",
 		"packages/preset test",
 		"packages/resource-sampler test",

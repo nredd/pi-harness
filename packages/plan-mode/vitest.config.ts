@@ -56,7 +56,7 @@ export default defineConfig({
     globalSetup: ["./test/harness/vitest.global-setup.ts"],
     pool: "forks",
     runner: "./test/harness/vitest.runner.ts",
-    setupFiles: ["./test/harness/vitest.setup.ts"],
+    setupFiles: ["./test/harness/vitest.setup.ts", "../../integration/inprocess/verification/home-setup.ts"],
     teardownTimeout: 10_000,
     testTimeout: 5_000,
   },
