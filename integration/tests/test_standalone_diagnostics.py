@@ -866,11 +866,20 @@ def test_cli_keeps_the_status_when_readiness_cannot_be_announced(
         diag.sys,
         "argv",
         [
-            "diagnostic", "startup", "--binary", str(binary), "--core", str(core),
-            "--build-evidence", str(evidence), "--output", str(tmp_path / "artifacts"),
-            "--github-output", str(github_output),
+            "diagnostic",
+            "startup",
+            "--binary",
+            str(binary),
+            "--core",
+            str(core),
+            "--build-evidence",
+            str(evidence),
+            "--output",
+            str(tmp_path / "artifacts"),
+            "--github-output",
+            str(github_output),
         ],
-    )  # fmt: skip
+    )
     with caplog.at_level("ERROR", logger=diag.LOGGER.name):
         assert diag.main() == 5
     assert (tmp_path / "artifacts").is_dir()

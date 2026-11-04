@@ -154,10 +154,20 @@ def prepare_argv(tmp_path: Path, graph: Path) -> list[str]:
         list[str]: CLI arguments.
     """
     return [
-        "prepare-release", "--repo", "o/r", "--source-sha", SHA,
-        "--rebuilt", str(tmp_path / "rebuilt.json"), "--existing-dir", str(tmp_path / "existing"),
-        "--dependency-graph", str(graph), "--github-output", str(tmp_path / "output"),
-    ]  # fmt: skip
+        "prepare-release",
+        "--repo",
+        "o/r",
+        "--source-sha",
+        SHA,
+        "--rebuilt",
+        str(tmp_path / "rebuilt.json"),
+        "--existing-dir",
+        str(tmp_path / "existing"),
+        "--dependency-graph",
+        str(graph),
+        "--github-output",
+        str(tmp_path / "output"),
+    ]
 
 
 def test_main_prepare_release_writes_the_state_output(

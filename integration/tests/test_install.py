@@ -75,7 +75,7 @@ from harness.release import GITHUB_TOKEN_VARIABLES, release_asset_url
 from harness.runtime_lock import acquire
 from harness.stack import Stack, install_overrides, package_declarations, source_string
 from scenarios.installer import test_installer as acceptance
-from tests.test_runtime_lock import fixture_graph, native_npm
+from tests.runtime_fixtures import fixture_graph, native_npm
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
@@ -5842,6 +5842,7 @@ def test_interrupt_file_contract_names_the_actual_runtime_error() -> None:
         "test_installer_process.py",
         "test_promotion.py",
         "test_runtime_lock.py",
+        "runtime_fixtures.py",
         "test_runtime_promotion.py",
     ],
 )
@@ -7054,26 +7055,31 @@ def test_restore_hasher_refuses_an_entry_swapped_before_open(
     path = tmp_path / "entry"
     path.write_text("original")
     stat_entry = os.stat
+    swaps: list[Path] = []
 
     def swap(target: Any, **kwargs: Any) -> os.stat_result:
-        """Stat the original, then substitute another inode at the same path.
+        """Stat the entry; on the first stat of `path` only, substitute another inode there.
 
         Parameters:
-            target (Any): entry path.
+            target (Any): stat target.
             **kwargs (Any): stat options.
 
         Returns:
-            os.stat_result: the original entry's metadata.
+            os.stat_result: the metadata as it was before any substitution.
         """
         info = stat_entry(target, **kwargs)
-        substitute = tmp_path / "substitute"
-        substitute.write_text("substituted")
-        substitute.replace(path)
+        if not swaps and Path(target) == path:
+            swaps.append(path)
+            substitute = tmp_path / "substitute"
+            substitute.write_text("substituted")
+            substitute.replace(path)
         return info
 
     monkeypatch.setattr(install.os, "stat", swap)
     with pytest.raises(OSError, match=rf"Restore entry '{re.escape(str(path))}' changed before hashing"):
         install.RestoreHasher().identity(path)
+    assert swaps == [path]
+    assert path.read_text() == "substituted"
 
 
 def test_restore_hasher_refuses_an_entry_changed_while_hashing(
