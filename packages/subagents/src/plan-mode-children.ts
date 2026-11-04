@@ -1,5 +1,5 @@
 /**
- * plan-mode-children.ts — keeps a child started while the parent plans in Plan
+ * plan-mode-children.ts -- keeps a child started while the parent plans in Plan
  * mode (#437), as Claude Code keeps a subagent spawned in plan mode in plan mode.
  *
  * pi-plan-mode gates only its own session's tool calls, and a child is a separate
@@ -15,7 +15,28 @@
 import type { ToolInfo } from "@earendil-works/pi-coding-agent";
 
 export const PLAN_MODE_STATE_QUERY = "pi-plan-mode:state-query";
+/** pi-plan-mode asks here whether a compatible gate is installed; answering is the handshake. */
+export const PLAN_MODE_GATE_QUERY = "pi-plan-mode:gate-query";
 const PLAN_MODE_STATE_VERSION = 1;
+
+/** Buses on which pi-plan-mode has shown itself by asking {@link PLAN_MODE_GATE_QUERY}. */
+const planModeSeen = new WeakSet<object>();
+
+/**
+ * Answer pi-plan-mode's gate query, so Plan admits `Agent` and friends, and remember that Plan
+ * mode is installed on this bus: from then on a state query nobody answers fails closed.
+ */
+export function answerPlanGateQueries(events: { on(channel: string, handler: (data: unknown) => void): unknown }): void {
+  events.on(PLAN_MODE_GATE_QUERY, (data) => {
+    planModeSeen.add(events);
+    const reply = (data as { reply?: unknown } | undefined)?.reply;
+    if (typeof reply === "function") reply({ version: PLAN_MODE_STATE_VERSION, gate: "@nredd/pi-subagents" });
+  });
+}
+
+/** Thrown when pi-plan-mode is installed but did not answer whether it is planning. */
+export const PLAN_MODE_SILENT_ERROR =
+  "Plan mode is installed but did not answer whether it is planning, so this subagent was not started. Reload Pi, or update @nredd/pi-plan-mode and @nredd/pi-subagents together.";
 
 /** One tool call inside a child session. */
 interface PlanModeChildToolCall {
@@ -54,16 +75,21 @@ const failClosedPolicy: PlanToolPolicy = ({ toolName }) =>
  * Ask the parent's pi-plan-mode whether a child started now must plan. Returns
  * the policy to run it under, or `undefined` when nobody is planning. Several
  * answers (two Plan extensions) combine fail-closed: any active one restricts.
+ * When Plan mode is installed but nothing answers, a new child is refused
+ * (`silent: "refuse"`, which throws) and a resumed one runs fail-closed.
  */
 export function queryPlanPolicy(
   events: { emit(channel: string, data: unknown): void } | undefined,
+  silent: "refuse" | "restrict" = "refuse",
 ): PlanToolPolicy | undefined {
   // Hosts without an event bus (bare programmatic callers) cannot run pi-plan-mode either.
   if (!events) return undefined;
   const policies: PlanToolPolicy[] = [];
+  let answered = false;
   events.emit(PLAN_MODE_STATE_QUERY, {
     version: PLAN_MODE_STATE_VERSION,
     reply: (state: unknown) => {
+      answered = true;
       const answer = state as { version?: unknown; active?: unknown; evaluate?: unknown } | undefined;
       if (answer?.active !== true) return;
       policies.push(
@@ -73,6 +99,10 @@ export function queryPlanPolicy(
       );
     },
   });
+  if (!answered && planModeSeen.has(events)) {
+    if (silent === "refuse") throw new Error(PLAN_MODE_SILENT_ERROR);
+    return failClosedPolicy;
+  }
   if (policies.length === 0) return undefined;
   return (call) => {
     for (const policy of policies) {

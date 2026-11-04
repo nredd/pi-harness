@@ -1,5 +1,5 @@
 /**
- * plan-mode-children-e2e.test.ts — #437: a child started while the parent plans
+ * plan-mode-children-e2e.test.ts -- #437: a child started while the parent plans
  * must plan too. Real pi loader + the real pi-plan-mode extension next to this
  * one in the parent + real child sessions on a faux model, so the child's tool
  * calls go through the same hooks a production child's do.

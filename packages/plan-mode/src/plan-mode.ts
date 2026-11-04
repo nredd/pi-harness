@@ -15,6 +15,8 @@ import {
   blockedShellCallReason,
   createChildToolPolicy,
   PLAN_MODE_STATE_VERSION,
+  SUBAGENT_SPAWN_TOOLS,
+  subagentGateInstalled,
 } from "./child-policy.js";
 import { completePlanArguments } from "./command.js";
 import {
@@ -247,7 +249,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       active: true,
       sessionId,
       evaluate: createChildToolPolicy({
-        selectedNames: planModePolicyToolNames(),
+        selected: new Map(planModePolicyToolNames().map((name) => [name, toolByName(name)?.sourceInfo?.path])),
         settings,
         homeDir: dependencies.homeDir,
       }),
@@ -532,6 +534,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     shuttingDownSession = undefined;
     workflowOwner = undefined;
     workflowMutex.bindSession(ctx.sessionManager);
+    // Every extension is loaded by now: the ask tells a subagent gate that Plan mode is present.
+    subagentGateInstalled(pi);
     refreshStateBeforeFirstAgentStart = event.reason === "new";
     pendingRuntimeAdmissionSession = undefined;
     queuedRuntimeAdmissionInputs = [];
@@ -735,6 +739,12 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         reason: workflowDesiredToolNames().has(event.toolName)
           ? `Plan mode blocks tool '${event.toolName}' because it was not available when the active Plan workflow froze its tool policy. Exit Plan mode, then start again after the tool is available.`
           : `Plan mode blocks tool '${event.toolName}' because it is not selected by the Plan policy. Exit Plan mode, then enable it with /plan tools or defaultPlanTools before starting again.`,
+      };
+    }
+    if (SUBAGENT_SPAWN_TOOLS.has(event.toolName) && !subagentGateInstalled(pi)) {
+      return {
+        block: true,
+        reason: `Plan mode blocks '${event.toolName}' because no compatible subagent gate answered, so a child it starts would not plan. Install @nredd/pi-subagents with Plan support (see the pi-plan-mode README).`,
       };
     }
     const blockedShell = blockedShellCallReason(event.toolName, event.input, settings, {

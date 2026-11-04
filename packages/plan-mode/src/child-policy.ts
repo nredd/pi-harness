@@ -19,6 +19,17 @@ import {
 export const PLAN_MODE_STATE_QUERY = "pi-plan-mode:state-query";
 export const PLAN_MODE_STATE_VERSION = 1;
 
+/**
+ * Channel Plan mode asks on, at session start and before each subagent tool call, whether a
+ * compatible subagent gate is installed. A gate answers `reply({ version: 1, gate })` and in doing
+ * so learns that Plan mode is present, so it can refuse a child when a later state query goes
+ * unanswered. Without an answer, Plan refuses {@link SUBAGENT_SPAWN_TOOLS}.
+ */
+export const PLAN_MODE_GATE_QUERY = "pi-plan-mode:gate-query";
+
+/** `@nredd/pi-subagents` tools that start or resume a child; refused in Plan without a gate. */
+export const SUBAGENT_SPAWN_TOOLS: ReadonlySet<string> = new Set(["Agent", "SubagentWorkflow", "steer_subagent"]);
+
 /** Built-in tools Plan mode never runs, in the planner or in a child it started. */
 export const BLOCKED_MUTATING_TOOLS: ReadonlySet<string> = new Set(["edit", "write", "update_plan"]);
 
@@ -85,16 +96,18 @@ export function blockedShellCallReason(
 /**
  * The Plan policy for a child started while planning. A child has its own registry, so the
  * planner's frozen selection cannot be its allowlist: safe built-ins and trusted read-only
- * extension tools run as Plan would admit them, any other tool only when the planner's policy
- * selected it by name, and every shell call goes through the same reviewed checks.
+ * extension tools run as Plan classifies the child's own tool, any other tool only when the
+ * planner's policy selected a tool of that name loaded from the same file, and every shell call
+ * goes through the same reviewed checks. Matching the file keeps a same-named tool from another
+ * source (say, a project-scope copy) out.
  */
 export function createChildToolPolicy(options: {
-  selectedNames: readonly string[];
+  /** Selected tool name -> the planner's source path for it. */
+  selected: ReadonlyMap<string, string | undefined>;
   settings: ShellSettings;
   homeDir: string | undefined;
 }): PlanModeChildToolPolicy {
-  const selected = new Set(options.selectedNames);
-  const { settings, homeDir } = options;
+  const { selected, settings, homeDir } = options;
   return ({ toolName, input, cwd, tool }) => {
     if (BLOCKED_MUTATING_TOOLS.has(toolName)) {
       return `Plan mode blocks mutating tool '${toolName}' in a subagent started while planning.`;
@@ -103,14 +116,24 @@ export function createChildToolPolicy(options: {
       return `Plan mode blocks tool '${toolName}' in a subagent started while planning because its safe policy metadata is unavailable.`;
     }
     const policy = classifyPlanModeTool(tool);
-    if (policy === "blocked" || (policy === "user-opt-in" && !selected.has(toolName))) {
+    const selectedPath = selected.get(toolName);
+    const selectedHere = selectedPath !== undefined && selectedPath === tool.sourceInfo.path;
+    if (policy === "blocked" || (policy === "user-opt-in" && !selectedHere)) {
       return `Plan mode blocks tool '${toolName}' in a subagent started while planning because the Plan policy does not admit it.`;
     }
     return blockedShellCallReason(toolName, input, settings, { workingDirectory: cwd, homeDir });
   };
 }
 
-/** Answers {@link PLAN_MODE_STATE_QUERY} with whatever `snapshot` reports at that moment. */
+/** What a child gets when Plan mode cannot build its real answer: no tool at all. */
+const refuseEverything: PlanModeChildToolPolicy = ({ toolName }) =>
+  `Plan mode blocks tool '${toolName}' in a subagent started while planning because it could not build the child policy.`;
+
+/**
+ * Answers {@link PLAN_MODE_STATE_QUERY} with whatever `snapshot` reports at that moment. A
+ * snapshot that throws answers active with a policy that refuses every tool: this is a security
+ * gate, and an error must never read as "not planning".
+ */
 export function answerPlanModeStateQueries(
   pi: Pick<ExtensionAPI, "events">,
   snapshot: () => PlanModeStateSnapshot,
@@ -118,6 +141,24 @@ export function answerPlanModeStateQueries(
   pi.events.on(PLAN_MODE_STATE_QUERY, (data) => {
     const query = data as Partial<PlanModeStateQuery> | undefined;
     if (query?.version !== PLAN_MODE_STATE_VERSION || typeof query.reply !== "function") return;
-    query.reply(snapshot());
+    let state: PlanModeStateSnapshot;
+    try {
+      state = snapshot();
+    } catch {
+      state = { version: PLAN_MODE_STATE_VERSION, active: true, sessionId: undefined, evaluate: refuseEverything };
+    }
+    query.reply(state);
   });
+}
+
+/** True when a compatible subagent gate answers {@link PLAN_MODE_GATE_QUERY} right now. */
+export function subagentGateInstalled(pi: Pick<ExtensionAPI, "events">): boolean {
+  let installed = false;
+  pi.events.emit(PLAN_MODE_GATE_QUERY, {
+    version: PLAN_MODE_STATE_VERSION,
+    reply: (answer: unknown) => {
+      if ((answer as { version?: unknown } | undefined)?.version === PLAN_MODE_STATE_VERSION) installed = true;
+    },
+  });
+  return installed;
 }

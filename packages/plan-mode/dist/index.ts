@@ -71,6 +71,8 @@ import { stripVTControlCharacters as stripVTControlCharacters2 } from "node:util
 // src/child-policy.ts
 var PLAN_MODE_STATE_QUERY = "pi-plan-mode:state-query";
 var PLAN_MODE_STATE_VERSION = 1;
+var PLAN_MODE_GATE_QUERY = "pi-plan-mode:gate-query";
+var SUBAGENT_SPAWN_TOOLS = /* @__PURE__ */ new Set(["Agent", "SubagentWorkflow", "steer_subagent"]);
 var BLOCKED_MUTATING_TOOLS = /* @__PURE__ */ new Set(["edit", "write", "update_plan"]);
 function blockedShellCallReason(toolName, input, settings, options) {
   const shellOptions = { ...options, trustedDirectories: settings.trustedDirectories };
@@ -98,8 +100,7 @@ Blocked command: ${blocked}`;
   return void 0;
 }
 function createChildToolPolicy(options) {
-  const selected = new Set(options.selectedNames);
-  const { settings, homeDir } = options;
+  const { selected, settings, homeDir } = options;
   return ({ toolName, input, cwd, tool }) => {
     if (BLOCKED_MUTATING_TOOLS.has(toolName)) {
       return `Plan mode blocks mutating tool '${toolName}' in a subagent started while planning.`;
@@ -108,18 +109,37 @@ function createChildToolPolicy(options) {
       return `Plan mode blocks tool '${toolName}' in a subagent started while planning because its safe policy metadata is unavailable.`;
     }
     const policy = classifyPlanModeTool(tool);
-    if (policy === "blocked" || policy === "user-opt-in" && !selected.has(toolName)) {
+    const selectedPath = selected.get(toolName);
+    const selectedHere = selectedPath !== void 0 && selectedPath === tool.sourceInfo.path;
+    if (policy === "blocked" || policy === "user-opt-in" && !selectedHere) {
       return `Plan mode blocks tool '${toolName}' in a subagent started while planning because the Plan policy does not admit it.`;
     }
     return blockedShellCallReason(toolName, input, settings, { workingDirectory: cwd, homeDir });
   };
 }
+var refuseEverything = ({ toolName }) => `Plan mode blocks tool '${toolName}' in a subagent started while planning because it could not build the child policy.`;
 function answerPlanModeStateQueries(pi, snapshot) {
   pi.events.on(PLAN_MODE_STATE_QUERY, (data) => {
     const query = data;
     if (query?.version !== PLAN_MODE_STATE_VERSION || typeof query.reply !== "function") return;
-    query.reply(snapshot());
+    let state;
+    try {
+      state = snapshot();
+    } catch {
+      state = { version: PLAN_MODE_STATE_VERSION, active: true, sessionId: void 0, evaluate: refuseEverything };
+    }
+    query.reply(state);
   });
+}
+function subagentGateInstalled(pi) {
+  let installed = false;
+  pi.events.emit(PLAN_MODE_GATE_QUERY, {
+    version: PLAN_MODE_STATE_VERSION,
+    reply: (answer) => {
+      if (answer?.version === PLAN_MODE_STATE_VERSION) installed = true;
+    }
+  });
+  return installed;
 }
 
 // src/command.ts
@@ -1195,7 +1215,7 @@ function planMode(pi, dependencies = {}) {
       active: true,
       sessionId,
       evaluate: createChildToolPolicy({
-        selectedNames: planModePolicyToolNames(),
+        selected: new Map(planModePolicyToolNames().map((name) => [name, toolByName(name)?.sourceInfo?.path])),
         settings,
         homeDir: dependencies.homeDir
       })
@@ -1447,6 +1467,7 @@ function planMode(pi, dependencies = {}) {
     shuttingDownSession = void 0;
     workflowOwner = void 0;
     workflowMutex.bindSession(ctx.sessionManager);
+    subagentGateInstalled(pi);
     refreshStateBeforeFirstAgentStart = event.reason === "new";
     pendingRuntimeAdmissionSession = void 0;
     queuedRuntimeAdmissionInputs = [];
@@ -1620,6 +1641,12 @@ function planMode(pi, dependencies = {}) {
       return {
         block: true,
         reason: workflowDesiredToolNames().has(event.toolName) ? `Plan mode blocks tool '${event.toolName}' because it was not available when the active Plan workflow froze its tool policy. Exit Plan mode, then start again after the tool is available.` : `Plan mode blocks tool '${event.toolName}' because it is not selected by the Plan policy. Exit Plan mode, then enable it with /plan tools or defaultPlanTools before starting again.`
+      };
+    }
+    if (SUBAGENT_SPAWN_TOOLS.has(event.toolName) && !subagentGateInstalled(pi)) {
+      return {
+        block: true,
+        reason: `Plan mode blocks '${event.toolName}' because no compatible subagent gate answered, so a child it starts would not plan. Install @nredd/pi-subagents with Plan support (see the pi-plan-mode README).`
       };
     }
     const blockedShell = blockedShellCallReason(event.toolName, event.input, settings, {
