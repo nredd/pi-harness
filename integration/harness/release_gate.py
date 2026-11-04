@@ -21,7 +21,20 @@ from harness.promotion import SHA_PATTERN, EvidenceError, run_command
 
 LOGGER = logging.getLogger(__name__)
 SYSTEMS = ("ubuntu-24.04", "macos-14", "wsl2")
-OWNED_STEP = "Owned gates (biome, tsc, Vitest on Node and Bun, scripts, integration units)"
+# One `ci.yml` step per owned gate. `scripts/ci_paths.py` `OWNED_GATES` plans which gates each system runs:
+# native cells run the Python suites, WSL keeps only the LCOV producers. A test pins this to that table.
+OWNED_GATE_STEPS = {
+    "check-ts": "Owned gate check-ts (biome, tsc, Vitest on Node and Bun, computer-use checks)",
+    "check-scripts": "Owned gate check-scripts (ruff, ty, pytest scripts, import audit)",
+    "check-integration": "Owned gate check-integration (ruff, ty, pytest integration units, probes)",
+    "check-probes": "Owned gate check-probes (WSL LCOV producer)",
+    "check-import-audit": "Owned gate check-import-audit (WSL LCOV producer)",
+}
+OWNED_GATES = {
+    "ubuntu-24.04": ("check-ts", "check-scripts", "check-integration"),
+    "macos-14": ("check-ts", "check-scripts", "check-integration"),
+    "wsl2": ("check-ts", "check-probes", "check-import-audit"),
+}
 CONTRACT_STEPS = (
     "Packed plugins alone on exact stock Pi, plus packed preset audit",
     "Packed pi-plan-mode with its registry dependency on exact stock Pi",
@@ -32,7 +45,7 @@ CONTRACT_STEPS = (
 STACK_STEP = "Assembled D and E boundaries (explicit stack, no machine config)"
 STARTUP_STEP = "Strict standalone startup with failure-only diagnostics"
 # Cells that run a stack, as (system, stack, standalone platform). Every other stack cell is a
-# required-check name with no work behind it (`not_run` in ci.yml) and is never evidence.
+# required-check name with no work behind it (`STACK_NOT_RUN` in `scripts/ci_paths.py`) and is never evidence.
 STACK_CELLS = (
     ("ubuntu-24.04", "personal", "linux-x64"),
     ("ubuntu-24.04", "local", "linux-x64"),
@@ -101,11 +114,14 @@ def expected_jobs() -> dict[str, set[str]]:
 
     Returns:
         dict[str, set[str]]: Every owned and contracts cell, each stack cell that runs one, and the
-        Gitlinked core gate. `not_run` stack cells are excluded.
+        Gitlinked core gate. Each owned cell names its planned gate steps. Stack cells the plan never
+        runs are excluded.
     """
     expected = {}
     for system in SYSTEMS:
-        owned = {OWNED_STEP, "Coverage accounting (existing reports, including test failures)"}
+        owned = {OWNED_GATE_STEPS[gate] for gate in OWNED_GATES[system]} | {
+            "Coverage accounting (existing reports, including test failures)"
+        }
         if system == "macos-14":
             owned.add("Benchmark unit gate")
         expected[f"owned ({system})"] = owned

@@ -208,7 +208,7 @@ def test_accounting_and_artifacts_follow_tests_even_on_failure() -> None:
     owned = workflow.split("  owned:", 1)[1].split("  contracts:", 1)[0]
     accounting = owned.split("- name: Coverage accounting", 1)[1].split("- name:", 1)[0]
     artifacts = owned.split("- name: Preserve independent coverage reports", 1)[1].split("- name:", 1)[0]
-    assert owned.index("Owned gates (") < owned.index("Coverage accounting")
+    assert owned.rindex("- name: Owned gate ") < owned.index("Coverage accounting")
     assert "if: always() && steps.plan.outputs.run == 'true'" in accounting
     assert "if: always() && steps.plan.outputs.run == 'true'" in artifacts
     assert 'make check-coverage BASE="$BASE"' in accounting
@@ -238,7 +238,7 @@ def test_reviewer_dependencies_are_provisioned_before_owned_tests() -> None:
     owned = workflow.split("  owned:", 1)[1].split("  contracts:", 1)[0]
     install = owned.index("Install reviewer read dependencies (Ubuntu)")
     verify = owned.index("Verify reviewer read dependencies")
-    assert install < verify < owned.index("Owned gates (")
+    assert install < verify < owned.index("- name: Owned gate ")
     assert "apt-get install --yes ripgrep fd-find" in owned
     assert "matrix.os == 'ubuntu-24.04'" in owned
     wsl = (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
