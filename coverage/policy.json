@@ -113,31 +113,21 @@
       "owned": ["src/**/*.ts"],
       "exclusions": [{ "path": "src/types.ts", "kind": "type-only", "reason": "Only TypeScript declarations; emits no executable JavaScript." }],
       "status": "measured",
-      "note": "Hosted run 40857829296: primary Darwin 0/0; Linux 47 lines/8 functions only in native Darwin FFI paths (src/darwin.ts). collect.ts is fully covered on both OSes. Source stays owned; this is a measured per-OS floor, not an exclusion. See coverage/receipts/final-closure.md.",
+      "note": "Primary and Bun 0/0 on darwin and linux. Both Darwin FFI adapters and the per-PID loop run on every OS through an injected host and fake NativeCalls (#375); macOS also exercises the real libproc path.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 47, "functions": 8 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
 
-          "max_uncovered": { "darwin": { "lines": 8, "functions": 4 }, "linux": { "lines": 47, "functions": 8 } },
-          "enforcement": "report-only",
-          "reason": "Full Vitest/Istanbul suite with complete primary inventory; current clean macOS/Linux full-suite and inventory receipts are required before this signal becomes enforced: https://github.com/nredd/pi-harness/issues/160.",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0 }, "linux": { "lines": 0, "functions": 0 } },
+          "enforcement": "enforced",
           "reporters": ["text", "lcov"]
         }
-      },
-      "target_allowances": [
-        {
-          "owner": "resource-sampler",
-          "os": "linux",
-          "files": ["src/darwin.ts"],
-          "max_uncovered": { "lines": 47, "functions": 8 },
-          "reason": "Linux cannot execute owned Darwin FFI paths; source remains in the complete primary report."
-        }
-      ]
+      }
     },
     "session-kit": {
       "root": "packages/session-kit",

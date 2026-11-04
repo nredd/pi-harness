@@ -109,13 +109,13 @@ artifact for macOS). The full download/replay and independent-two-run comparison
 [here](coverage.md#refresh-floors-from-hosted-artifacts); this command never edits or commits policy. Branches
 are reported only: `Counts`, the accounting budget predicate and the base ratchet enforce only
 lines/functions. Darwin sampler branch variation (#164) changes no floor. Final hosted run
-`40857829296` establishes zero primary misses for all eight packages on macOS and all except
-resource-sampler on Linux. Linux retains 47 lines / 8 functions in native `darwin.ts` paths as
-an explicit per-OS floor, not an exclusion. Session-kit now has zero primary misses on both
+`40857829296` established zero primary misses for all eight packages on macOS and all except
+resource-sampler on Linux, whose 47 lines / 8 functions in native `darwin.ts` paths went to 0/0
+with #375's fake-host FFI tests; no package has a per-OS allowance. Session-kit now has zero primary misses on both
 OSes after the deterministic formatter test removes the incidental comparator hit (#163).
 The earlier 110/32 transitional floor is historical only. Another `always()` step retains LCOV and the per-package/per-file JSON summary
 on either outcome. Bun signals for `plan-mode`, `preset`, `subscription-router` and `todo` are
-enforced at 0/0 on both OSes (#320). The rest explicitly use `enforcement: "report-only"` with
+enforced at 0/0 on both OSes (#320), and `resource-sampler` since #375. The rest explicitly use `enforcement: "report-only"` with
 mandatory reasons linked to #160. Report-only signals retain fail-closed LCOV parsing, expected-file checks,
 per-OS references, inventory ratcheting, and text+LCOV reporter checks. Counts and signed deltas
 from references are logged and included under JSON `signals`; budget excess alone cannot fail

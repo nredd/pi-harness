@@ -145,7 +145,7 @@ coverage. Expected reports, relative to the repository root:
 - `integration/inprocess/coverage/bun/lcov.info`
 
 Bun signals for `plan-mode`, `preset`, `subscription-router` and `todo` are **enforced** at 0/0
-on both OSes since #320; the rest stay **report-only** with their reasons and per-OS references. Primary
+on both OSes since #320, and `resource-sampler` since #375; the rest stay **report-only** with their reasons and per-OS references. Primary
 signals stay enforced. Changing producers is not an enforcement promotion, permission to merge engine
 counters, or permission to raise budgets. The four promotions rest on their own PRs' hosted macOS
 and Ubuntu artifacts, recorded [here](../coverage/receipts/bun-enforced.md).
