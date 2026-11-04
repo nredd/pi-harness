@@ -880,7 +880,12 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     const byId = manager.getRecord(ref);
     if (byId) return byId;
     const resolved = manager.resolveMention(ref);
-    return resolved?.kind === "live" ? resolved.record : undefined;
+    if (resolved?.kind === "live") return resolved.record;
+    // Survivors of a /reload, /new or /resume live in the orphaned manager, so
+    // this fresh one has never heard of them (#330). Same live records, so
+    // reading and steering them work unchanged.
+    const survivors = listRunningDetached(currentCtx?.sessionManager?.getSessionFile?.()).map(d => d.record);
+    return survivors.find(r => r.id === ref) ?? survivors.find(r => r.handle === ref || r.alias === ref);
   };
 
   const registryEntry = {
