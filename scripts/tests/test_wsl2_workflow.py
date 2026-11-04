@@ -38,8 +38,12 @@ def test_wsl2_workflow_runs_for_pull_requests_and_main() -> None:
     assert "  pull_request:" in workflow
     assert "    branches: [main]" in workflow
     assert not (WORKFLOW.parent / "wsl2.yml").exists()
-    assert workflow.count("os: [ubuntu-24.04, macos-14, wsl2]") == 3
-    assert workflow.count("runner: windows-2025") == 2
+    # `contracts` and `stack` keep the three-OS matrix; `owned` is one fan-in per OS whose shards take their
+    # runner from the plan (`ci_paths.RUNNERS`, pinned to the `contracts` matrix by a test).
+    assert workflow.count("os: [ubuntu-24.04, macos-14, wsl2]") == 2
+    assert workflow.count("runner: windows-2025") == 1
+    assert "os: [wsl2]" in workflow
+    assert "runs-on: &owned-shard-runner ${{ matrix.runner }}" in workflow
     assert "runs-on: wsl2" not in workflow
     assert "timeout-minutes: ${{ matrix.os == 'wsl2' && 45 || 30 }}" in workflow
     assert "timeout-minutes: 40" in workflow

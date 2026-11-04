@@ -29,15 +29,15 @@ install-benchmark:  ## Install benchmarks/comparison, only `check-benchmark` rea
 check: check-ts check-scripts check-integration check-benchmark  ## Owned-code gates only (NOT forks, NOT the full stack)
 	$(MAKE) check-coverage
 
-check-ts:  ## Biome (non-rewriting), tsc, vitest for every npm workspace
-	npm run check
+check-ts:  ## Biome (non-rewriting), tsc, vitest for every npm workspace, or only WORKSPACES (paths, in npm order)
+	npm run check$(foreach workspace,$(WORKSPACES), --workspace=$(workspace))
 
 check-scripts:  ## Format/lint/type/tests for scripts/ (real disposable git repos)
 	$(call PY_GATE,scripts,--project ../integration,,.)
 	$(MAKE) check-import-audit
 
-check-coverage:  ## Account for existing reports without running any tests; compare budgets to BASE
-	uv run --locked --project integration python scripts/coverage_accounting.py --base "$(or $(BASE),origin/main)"$(if $(COVERAGE_HOST), --host "$(COVERAGE_HOST)")
+check-coverage:  ## Account for existing reports without running any tests; compare budgets to BASE; COVERAGE_OS=darwin|linux names the reports' OS, COVERAGE_HOST the CI host class
+	uv run --locked --project integration python scripts/coverage_accounting.py --base "$(or $(BASE),origin/main)"$(if $(COVERAGE_OS), --os "$(COVERAGE_OS)")$(if $(COVERAGE_HOST), --host "$(COVERAGE_HOST)")
 
 check-integration:  ## integration units; requires initialized `forks/pi` Gitlink (no pi, tmux, or scenarios)
 	$(call PY_GATE,integration,,tests,harness)

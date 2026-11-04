@@ -32,6 +32,9 @@ MATRIX = {
     },
 }
 EXPECTED_MATRIX = set.union(*MATRIX.values())
+# The `owned` shard jobs (#350) report no required context, but a cancelled run leaves their zero-step
+# placeholder too, under the same proof as the required matrix placeholders.
+PLACEHOLDERS = set(MATRIX) | {"owned shard (${{ matrix.os }}, ${{ matrix.shard }})"}
 JSON = TypeAdapter(JsonValue)
 PAGES = TypeAdapter(list[dict[str, JsonValue]])
 
@@ -240,7 +243,7 @@ def superseded(gh: GitHub, repo: str, pr: PullRequest, check: ReportedCheck, run
         CheckError: Any identity, freshness or matrix evidence is missing.
     """
     match = JOB_URL.fullmatch(check.link)
-    if repo != "nredd/pi-harness" or check.name not in MATRIX or match is None:
+    if repo != "nredd/pi-harness" or check.name not in PLACEHOLDERS or match is None:
         raise CheckError(f"{check.state} {check.name}")
     run_id, job_id = match.groups()
     prefix = f"repos/{repo}"
