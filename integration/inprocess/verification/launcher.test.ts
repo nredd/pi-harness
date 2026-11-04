@@ -140,7 +140,6 @@ test("scripts that bypass the launcher disable jiti's fs cache themselves", () =
 	// Exact, so a new direct launcher is a deliberate edit here and in docs/verification-engines.md.
 	expect(direct.sort()).toEqual([
 		"packages/dev-tools test",
-		"packages/dev-tools test:bun",
 		"packages/plan-mode test",
 		"packages/plan-mode test:dist",
 		"packages/preset test",
