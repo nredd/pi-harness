@@ -126,9 +126,10 @@ counters or average platforms. Replacing producers with a single Bun runner late
 the producer wiring and reviewed signal inventory, not the accounting algorithm (issue #160).
 
 The policy decision's roughly **1-7%** small-subset characterization must not be mistaken for a
-measured source-coverage percentage or a universal suite ratio. Hosted run `40455349710` measured
-8 Bun tests versus 539 primary tests for plan-mode (1.5%), 22 versus 3078 for subagents (0.7%) and
-2 versus 387 for todo (0.5%). There are exceptions: preset runs its whole suite under Bun (173
+measured source-coverage percentage or a universal suite ratio. Historically, hosted run `40455349710`
+measured 8 Bun tests versus 539 primary tests for plan-mode (1.5%), 22 versus 3078 for subagents (0.7%)
+and 2 versus 387 for todo (0.5%), before #320 moved plan-mode and todo onto their full suites under
+Bun. There are exceptions: preset runs its whole suite under Bun (173
 tests on both engines, `npm run check -w @nredd/pi-preset` at `dcc7903b`), and the in-process host
 runs the same 64 cases (one intentionally skipped on Linux). Other package ratios also differ.
 LCOV imported-file denominators and JSC/V8/Istanbul executable counters differ, so these
@@ -195,8 +196,8 @@ Vitest Istanbul instrumenter both have zero statement/function/branch maps for t
 link bindings; their target modules remain fully owned and instrumented. No LF/FNF records are
 invented, no imported dependency execution is attributed to a facade, and membership reclassification
 still requires the base-relative ledger once a base policy exists. The current ledger explicitly
-accounts for both owned plan-mode facade paths and the affected Bun subset relative to integration
-base `71b0aea`; an attributed policy/path snapshot in
+accounts for both owned plan-mode facade paths and the Bun subset that existed at integration
+base `71b0aea` (the Bun signal now measures the full owned inventory, #320); an attributed policy/path snapshot in
 `scripts/tests/fixtures/coverage/plan-mode-integration-base.json` reconstructs that package's base
 membership in disposable Git and rejects deleting any one receipt. That pre-squash PR object is
 not reachable from main, so tests do not require it in fresh hosted clones. The fixture copies

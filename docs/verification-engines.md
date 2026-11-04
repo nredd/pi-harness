@@ -103,8 +103,9 @@ setup on both engines; fixtures inject disposable homes instead of mutating HOME
 Subagents retains its native-scenario subset plus the real-loader Vitest gate through the
 spawn-time-home launcher. `session-kit` and `dev-tools` likewise retain their native subsets
 while their injected-home canaries run through `scripts/run-vitest.ts bun`. Since #320
-`plan-mode` runs its full 637-test suite on Bun with the shared guard instead of its 8-test native
-subset and `tool-policy.test.ts` canary; all 33 of those cases are in the full run.
+`plan-mode` runs its full suite on Bun with the shared guard instead of its native subset and
+`tool-policy.test.ts` canary, every case of which is in the full run. Counts are in the receipt
+[here](../coverage/receipts/bun-enforced.md).
 `session-kit` also runs its home-only factory canary through `scripts/run-vitest.ts node`, and
 leaves it out of its ordinary Node Vitest run and native Bun scenario list. On both engines the
 launcher installs disposable `HOME`/`USERPROFILE` values before the canary imports the SDK, so

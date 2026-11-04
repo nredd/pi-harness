@@ -121,8 +121,9 @@ these advisory signals. Primary budgets stay enforced and define the 100% goal. 
 Bun counters into primary coverage.
 
 The owner's roughly 1-7% small-subset description is not a measured source-coverage percentage:
-hosted run `40455349710` has plan-mode 8/539 Bun/primary tests (1.5%), subagents 22/3078 (0.7%)
-and todo 2/387 (0.5%); preset and in-process run their full test sets. The precise limitation is
+historical hosted run `40455349710` had plan-mode 8/539 Bun/primary tests (1.5%), subagents 22/3078
+(0.7%) and todo 2/387 (0.5%); preset and in-process ran their full test sets. plan-mode and todo
+now run their full suites under Bun too (#320). The precise limitation is
 incomplete verified source scope. A strict Bun budget blocked main #153's primary-tested additions
 (subagents Bun 7728/512 -> 7763/515, primary unchanged at 500/68 on both OSes).
 

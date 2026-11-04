@@ -43,4 +43,16 @@ filed under #312; plan-mode ran and accounted). Counts are reparsed from `covera
 | ubuntu-24.04 | 34 | 2999 / 0 | 702 / 0 | `76238761ebe4` |
 | wsl2 | 34 | 2999 / 0 | 702 / 0 | `cee1c3d86f51` |
 
-The LCOV files differ only in branch hit counts; line and function counters match Node primary.
+The files differ byte-wise because hit counts vary per OS (e.g. `DA:114,4438` on macos-14 vs
+`DA:114,2854` on ubuntu-24.04). Normalizing every `DA`/`FNDA` count to hit/miss, the record sets
+are identical across all three OSes and identical to each OS's Node primary report:
+
+```sh
+norm() { grep -E '^(SF|FN|DA|FNDA|LF|LH|FNF|FNH):' "$1" | sed -E 's/^DA:([0-9]+),0$/DA:\1,miss/; s/^DA:([0-9]+),[1-9][0-9]*$/DA:\1,hit/; s/^FNDA:0,/FNDA:miss,/; s/^FNDA:[1-9][0-9]*,/FNDA:hit,/'; }
+for o in macos-14 ubuntu-24.04 wsl2; do for s in bun primary; do
+  norm coverage-$o/packages/plan-mode/coverage/$s/lcov.info | shasum -a 256 | cut -c1-12
+done; done
+```
+
+All six print `a1087a1cfa17`, over 3701 `DA`/`FNDA` records with 0 misses. `BRDA` branch records are
+not compared; branches are report-only.
