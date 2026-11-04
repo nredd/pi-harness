@@ -39,7 +39,7 @@ check-scripts:  ## Format/lint/type/tests for scripts/ (real disposable git repo
 check-coverage:  ## Account for existing reports without running any tests; compare budgets to BASE; COVERAGE_OS=darwin|linux names the reports' OS, COVERAGE_HOST the CI host class
 	uv run --locked --project integration python scripts/coverage_accounting.py --base "$(or $(BASE),origin/main)"$(if $(COVERAGE_OS), --os "$(COVERAGE_OS)")$(if $(COVERAGE_HOST), --host "$(COVERAGE_HOST)")
 
-check-integration:  ## integration units; requires initialized `forks/pi` Gitlink (no pi, tmux, or scenarios)
+check-integration:  ## integration units; requires initialized `forks/pi` Gitlink and tmux (stub pi on private servers; no real pi or scenarios)
 	$(call PY_GATE,integration,,tests,harness)
 	$(MAKE) check-probes
 

@@ -63,6 +63,21 @@ def strip_ansi(text: str) -> str:
     return ANSI_ESCAPE.sub("", text)
 
 
+def plain_rows(capture: str) -> list[str]:
+    """Split a `capture-pane -p` capture into rows, trailing spaces removed.
+
+    Splits on `\\n` only: `str.splitlines` would also break on form feeds and other screen
+    content, and the capture's trailing newline would otherwise add a phantom row.
+
+    Parameters:
+        capture (str): plain capture, one newline-terminated line per row.
+
+    Returns:
+        list[str]: one entry per pane row.
+    """
+    return [line.rstrip() for line in capture.removesuffix("\n").split("\n")]
+
+
 def sgr_mouse(button: int, column: int, row: int, *, release: bool = False) -> bytes:
     """Encode one SGR (1006) mouse report.
 
@@ -245,7 +260,7 @@ class TmuxPane:
         Returns:
             list[str]: exactly `height` rows when the pane is alive.
         """
-        return [line.rstrip() for line in self.capture().split("\n")]
+        return plain_rows(self.capture())
 
     def wait_for(self, pattern: str, *, timeout_s: float = 30.0, absent: bool = False) -> str:
         """Poll until a regex matches (or stops matching) the plain screen.
@@ -294,7 +309,7 @@ class TmuxPane:
             if current != last:
                 last, since = current, time.monotonic()
             elif time.monotonic() - since >= quiet_s:
-                return [line.rstrip() for line in current.split("\n")]
+                return plain_rows(current)
         raise TmuxTimeoutError(f"Screen never settled for {quiet_s}s within {timeout_s}s", last)
 
     def resize(self, width: int, height: int) -> None:
