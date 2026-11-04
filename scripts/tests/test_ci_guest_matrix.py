@@ -875,6 +875,7 @@ def test_dispatch_classifies_only_frozen_main_candidates(
 
     (repo / "scripts").mkdir()
     shutil.copy(ROOT / "scripts/ci_paths.py", repo / "scripts/ci_paths.py")
+    shutil.copy(ROOT / "scripts/runner_pools.py", repo / "scripts/runner_pools.py")
     # The plan splits `owned` by the checkout's npm workspaces.
     shutil.copy(ROOT / "package.json", repo / "package.json")
     for workspace in ci_paths.npm_workspaces(ROOT):
