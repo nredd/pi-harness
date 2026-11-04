@@ -243,6 +243,21 @@ describe("AgentManager — retention windows", () => {
     expect(describeEvicted(manager.getEvictedNote(second.id)!)).not.toContain("transcript");
   });
 
+  it.each([
+    ["nested", { parentAgentId: "parent-1" }],
+    ["workflow", { workflowId: "run-1" }],
+  ] as const)("leaves no note for an evicted %s child, which top-level tools must not reach", async (_kind, owner) => {
+    const { id, record } = await finished({ outputFile: "/tmp/t/child.output" });
+    Object.assign(record, owner);
+    markConsumed(record);
+    record.consumedAt = record.completedAt = Date.now() - (TEN_MINUTES + 30_000);
+
+    await vi.advanceTimersByTimeAsync(TICK);
+
+    expect(manager.getRecord(id)).toBeUndefined();
+    expect(manager.getEvictedNote(id)).toBeUndefined();
+  });
+
   it("forgets evicted notes at a session boundary", async () => {
     const { id, record } = await finished();
     markConsumed(record);
