@@ -3,7 +3,7 @@
  * extension in the parent, real children that discover real extension files, and
  * every child call through the production hooks. Runs under `bun test` too.
  */
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import type { Harness } from "@earendil-works/pi-coding-agent/testing";
@@ -98,9 +98,10 @@ it("a child started while planning classifies its own extension tools under the 
     calls(...["alpha_write", "gamma_read", "sel_tool", "proj_read", "proj_sel"].map(name => ({ name, args: {} }))),
     answer("CHILD DONE"),
   ]);
-  // The parent selected `sel_tool` from the user's file, and `proj_sel` from another install.
+  // The parent selected `sel_tool` from the user's file, and `proj_sel` from another install. The path is
+  // the one discovery reports, unresolved: under a symlinked tmpdir (macOS `/var`) a realpath would not match.
   const h = await startPlanning(
-    [parentTools(realpathSync(userTools), ["sel_tool"]), parentTools(join(fixture.root, "elsewhere", "proj_sel.ts"), ["proj_sel"])],
+    [parentTools(userTools, ["sel_tool"]), parentTools(join(fixture.root, "elsewhere", "proj_sel.ts"), ["proj_sel"])],
     ["sel_tool", "proj_sel"],
   );
   h.setResponses([calls(spawn("tools", { run_in_background: false })), answer("PARENT DONE")]);
