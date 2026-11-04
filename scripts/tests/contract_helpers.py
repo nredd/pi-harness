@@ -140,7 +140,8 @@ class FifoWitness:
 
     The writer opens `alive.fifo` in its working directory, writes one byte, and exits at most
     `WITNESS_EXIT_S` seconds after it started, even if no reader ever appears. No PID is probed or
-    signalled.
+    signalled. Every window is measured from the writer's byte, not from the FIFO's creation, so a
+    slow boot under load cannot eat into the EOF window.
     """
 
     PYTHON_WRITER = python_writer()
@@ -155,7 +156,7 @@ class FifoWitness:
         self.path = directory / "alive.fifo"
         os.mkfifo(self.path)
         self.reader = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK)
-        self.created_at = time.monotonic()
+        self.started_at: float | None = None
 
     def __enter__(self) -> FifoWitness:
         """Return the open witness.
@@ -194,7 +195,11 @@ class FifoWitness:
         return os.read(self.reader, 1)
 
     def started(self, seconds: float = 10) -> bool:
-        """Whether the writer opened the FIFO and wrote its byte within `seconds`.
+        """Whether the writer opened the FIFO and wrote its byte within `seconds`, recording when.
+
+        The byte is timed when read. A caller waiting from the spawn on records it at most `seconds`
+        after the writer started, so `gone` cannot mistake the writer's own `WITNESS_EXIT_S` self-exit
+        for a kill.
 
         Parameters:
             seconds (float): Wait bound.
@@ -202,7 +207,10 @@ class FifoWitness:
         Returns:
             bool: True once the writer's byte arrived.
         """
-        return self._read(seconds) == b"x"
+        if self._read(seconds) != b"x":
+            return False
+        self.started_at = time.monotonic()
+        return True
 
     def gone(self, seconds: float = 5) -> bool:
         """Whether every writer closed the FIFO, by exiting, within `seconds`.
@@ -211,8 +219,11 @@ class FifoWitness:
             seconds (float): Wait bound, well under `WITNESS_EXIT_S`.
 
         Returns:
-            bool: True at EOF, if it came within half the writer's own exit bound of creating the
-                FIFO, so the writer's self-exit cannot be mistaken for a kill.
+            bool: True at EOF after the writer's byte, if it came within half the writer's own exit
+                bound of that byte, so the writer's self-exit cannot be mistaken for a kill. False
+                without a byte: EOF from a writer that never ran proves nothing.
         """
+        if self.started_at is None:
+            return False
         eof = self._read(seconds) == b""
-        return eof and time.monotonic() - self.created_at < WITNESS_EXIT_S / 2
+        return eof and time.monotonic() - self.started_at < WITNESS_EXIT_S / 2
