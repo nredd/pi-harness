@@ -46,7 +46,7 @@ let maxSubagentDepth = 2;
 export function getMaxSubagentDepth(): number { return maxSubagentDepth; }
 export function setMaxSubagentDepth(n: number): void { maxSubagentDepth = Math.max(0, Math.floor(n)); }
 
-const NESTED_TOOL_NAMES = ["Agent", "get_subagent_result", "steer_subagent"] as const;
+const NESTED_TOOL_NAMES = ["Agent", "get_subagent_result", "steer_subagent", "stop_subagent"] as const;
 
 /**
  * Why a subagent may not start background work. A detached child's completion
@@ -118,6 +118,8 @@ export interface NestedAgentManager {
   ): Promise<{ id: string; record: AgentRecord }>;
   getRecord(id: string): AgentRecord | undefined;
   resume(id: string, prompt: string, signal?: AbortSignal, options?: { maxTurns?: number }): Promise<AgentRecord | undefined>;
+  /** Stop a running or queued agent; false when it was neither. */
+  abort(id: string, by?: AgentRecord["stoppedBy"]): boolean;
 }
 
 export interface NestedToolContext {
@@ -181,8 +183,8 @@ function formatOutcome(record: AgentRecord, position: ResultPosition): string {
   // leads — appended, it would look like part of the child's own output.
   const text = record.result?.trim() || record.error?.trim() || "No output.";
   const note = position === "inline"
-    ? getForegroundOutcomeNote(record.status)
-    : getStatusNote(record.status);
+    ? getForegroundOutcomeNote(record.status, record.stoppedBy)
+    : getStatusNote(record.status, record.stoppedBy);
   return note ? `Nested agent${note}.\n\n${text}` : text;
 }
 
@@ -490,5 +492,22 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
     },
   });
 
-  return [agentTool, resultTool, steerTool];
+  const stopTool = defineTool({
+    name: NESTED_TOOL_NAMES[3],
+    label: "Stop Nested Agent",
+    description: "Stop a running or queued nested agent owned by this parent. It ends with status `stopped` before its next tool call.",
+    parameters: Type.Object({
+      agent_id: Type.String(),
+    }),
+    execute: async (_toolCallId, params) => {
+      const record = context.manager.getRecord(params.agent_id);
+      if (!ownsRecord(record, context.parentAgentId) || (record.status !== "running" && record.status !== "queued")) {
+        return textResult(`Running nested agent not found or not owned by this parent: "${params.agent_id}".`, true);
+      }
+      context.manager.abort(record.id, "parent");
+      return textResult(`Nested agent ${params.agent_id} stopped.`);
+    },
+  });
+
+  return [agentTool, resultTool, steerTool, stopTool];
 }

@@ -186,6 +186,13 @@ export interface AgentRecord {
   alias?: string;
   description: string;
   status: "queued" | "running" | "completed" | "steered" | "aborted" | "stopped" | "error";
+  /**
+   * Set when the agent that spawned this one stopped it with `stop_subagent`
+   * (#443). Unset on a `stopped` record means a human stopped it (a viewer's
+   * `x`, the stop-all chord, `/agents`, or the RPC), which the status notes
+   * word differently.
+   */
+  stoppedBy?: "parent";
   result?: string;
   error?: string;
   toolUses: number;

@@ -1916,7 +1916,14 @@ export class AgentManager {
     );
   }
 
-  abort(id: string): boolean {
+  /**
+   * Stop a running or queued agent; false when it was neither.
+   *
+   * @param by `"parent"` when the agent that spawned it asked (`stop_subagent`);
+   *   omitted for a human stop. Written on every stop, so a resumed record never
+   *   carries an earlier run's answer.
+   */
+  abort(id: string, by?: AgentRecord["stoppedBy"]): boolean {
     const record = this.agents.get(id);
     if (!record) return false;
 
@@ -1926,11 +1933,14 @@ export class AgentManager {
     if (record.status === "queued") {
       this.dequeue(q => q.id === id);
       record.status = "stopped";
+      record.stoppedBy = by;
       record.completedAt = this.clock.now();
       return true;
     }
 
     if (record.status !== "running") return false;
+    // Before the abort: the run settles asynchronously and its notice reads this.
+    record.stoppedBy = by;
     record.abortController?.abort();
     record.status = "stopped";
     record.completedAt = this.clock.now();
