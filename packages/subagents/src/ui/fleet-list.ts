@@ -2,6 +2,7 @@
  * fleet-list.ts — Claude Code-style "FleetView" list rendered below the editor.
  *
  * Starts as a one-line state/count summary; ctrl+shift+a toggles the full list.
+ * ctrl+shift+k, pressed twice within three seconds, stops every running agent and workflow.
  * Shows `main` + each running/queued subagent as a navigable list. Pressing ↓ (or
  * ←) at an empty prompt activates the list; ↑/↓ move the selection (filled ● marker),
  * Enter opens the selected agent's live conversation overlay, Esc returns to the prompt.
@@ -27,6 +28,10 @@ import { FleetJournal, type FleetJournalEntry, type FleetSnapshot, fleetAlert, M
 
 /** Matches the todo/monitor disclosure shortcut family; arrows keep their navigation roles. */
 export const FLEET_COLLAPSE_KEY = "ctrl+shift+a";
+/** Stop every running agent and workflow: Claude Code's `ctrl+x ctrl+k`, minus pi's `ctrl+x` (copy). */
+export const STOP_ALL_KEY = "ctrl+shift+k";
+/** A second stop-all press within this window confirms the first. */
+export const STOP_ALL_CONFIRM_MS = 3000;
 /** Quiet-period debounce bounds journal writes per toggle burst; shutdown flushes immediately. */
 export const FLEET_DISCLOSURE_SETTLE_MS = 300;
 
@@ -257,6 +262,10 @@ export class FleetList {
   private readonly observedWorkflows = new WeakMap<object, number>();
   /** Quota parking has no AgentRecord; the scheduler supplies its enabled-job count. */
   private parkedSource: () => number = () => 0;
+  /** What the stop-all chord stops; the extension supplies it. */
+  private stopAll: () => { agents: number; workflows: number } = () => ({ agents: 0, workflows: 0 });
+  /** When the stop-all chord was first pressed, while its confirmation window is open. */
+  private stopAllArmedAt: number | undefined;
   /** Whether arrow keys currently navigate the list (vs. flow to the editor). */
   private active = false;
   /** 0 = `main`, 1..N = subagents. */
@@ -365,6 +374,29 @@ export class FleetList {
   /** Inject scheduler display data, without coupling the fleet to scheduling behavior. */
   setParkedSource(source: () => number): void {
     this.parkedSource = source;
+  }
+
+  /** Inject what the stop-all chord stops, without coupling the fleet to workflows or orphans. */
+  setStopAll(stop: () => { agents: number; workflows: number }): void {
+    this.stopAll = stop;
+  }
+
+  /**
+   * The stop-all chord: the first press arms it and says so, a second within
+   * {@link STOP_ALL_CONFIRM_MS} stops everything. A press after the window
+   * re-arms rather than stopping, so a stray key never costs a run.
+   */
+  private pressStopAll(): void {
+    const now = this.clock.now();
+    if (this.stopAllArmedAt === undefined || now - this.stopAllArmedAt > STOP_ALL_CONFIRM_MS) {
+      this.stopAllArmedAt = now;
+      this.ui?.notify(`Press ${STOP_ALL_KEY} again within ${STOP_ALL_CONFIRM_MS / 1000}s to stop every running agent and workflow.`, "warning");
+      return;
+    }
+    this.stopAllArmedAt = undefined;
+    const { agents, workflows } = this.stopAll();
+    this.ui?.notify(agents + workflows === 0 ? "Nothing was running." : `Stopped ${agents} agent(s) and ${workflows} workflow(s).`, "info");
+    this.update();
   }
 
   // ---- Lifecycle ----
@@ -626,6 +658,11 @@ export class FleetList {
       // Kitty event type 2 is auto-repeat; arrows deliberately still repeat.
       if (isKeyRepeat(data)) return { consume: true };
       this.toggleCollapse();
+      return { consume: true };
+    }
+    if (matchesKey(data, STOP_ALL_KEY)) {
+      // A held key must not confirm its own first press.
+      if (!isKeyRepeat(data)) this.pressStopAll();
       return { consume: true };
     }
 

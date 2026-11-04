@@ -10,6 +10,9 @@
 
 import type { AgentRecord } from "./types.js";
 
+/** Who stopped a `stopped` record: the spawning agent, or (unset) a human. */
+type StoppedBy = AgentRecord["stoppedBy"];
+
 /**
  * Explicit parenthetical note for a non-normal terminal outcome, so the parent
  * agent can't mistake partial output for a completed result. Empty string for a
@@ -17,12 +20,16 @@ import type { AgentRecord } from "./types.js";
  *
  * `stopped` (a human aborted it) is deliberately distinct from `aborted` (the
  * turn limit was hit) — the parent should treat human intervention differently
- * from a budget cutoff.
+ * from a budget cutoff. A stop the parent itself made with `stop_subagent`
+ * (`stoppedBy: "parent"`) is stated plainly instead: shouting a human
+ * intervention that never happened would misreport its own decision back to it.
  */
-export function getStatusNote(status: string): string {
+export function getStatusNote(status: string, stoppedBy?: StoppedBy): string {
   switch (status) {
     case "stopped":
-      return " (STOPPED BY THE USER before completion — output is partial; the task was NOT finished)";
+      return stoppedBy === "parent"
+        ? " (stopped by the parent with stop_subagent before completion — output is partial; the task was NOT finished)"
+        : " (STOPPED BY THE USER before completion — output is partial; the task was NOT finished)";
     case "aborted":
       return " (aborted — hit the turn limit before completion; output may be incomplete)";
     case "steered":
@@ -66,10 +73,12 @@ export function getStatusNote(status: string): string {
  * behavior) and adding an instruction (which can) are not equally safe bets.
  * Don't add either back without a way to measure it.
  */
-export function getForegroundOutcomeNote(status: string): string {
+export function getForegroundOutcomeNote(status: string, stoppedBy?: StoppedBy): string {
   switch (status) {
     case "stopped":
-      return " (STOPPED BY THE USER — everything the agent produced is above; the task is unfinished)";
+      return stoppedBy === "parent"
+        ? " (stopped by the parent with stop_subagent — everything the agent produced is above; the task is unfinished)"
+        : " (STOPPED BY THE USER — everything the agent produced is above; the task is unfinished)";
     case "aborted":
       return " (aborted at the turn limit — everything the agent produced is above; the task is unfinished)";
     case "steered":

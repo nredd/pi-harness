@@ -93,6 +93,11 @@ beforeEach(() => {
     awaitStartup: vi.fn(async () => {}),
     getRecord: (id: string) => records.get(id),
     resume: vi.fn(),
+    abort: vi.fn((id: string, by?: string) => {
+      const record = records.get(id);
+      if (record) Object.assign(record, { status: "stopped", stoppedBy: by });
+      return record !== undefined;
+    }),
   } as any;
 });
 
@@ -414,6 +419,38 @@ describe("child-safe nested Agent tools", () => {
       prompt: "Continue",
     })).isError).toBe(true);
     expect(manager.resume).not.toHaveBeenCalled();
+  });
+
+  // #443 — a nested parent may stop its own running or queued child, never a
+  // sibling's, and never one that already finished.
+  it("stops its own running or queued child, and refuses a sibling's or a finished one", async () => {
+    const stop = tools().find(tool => tool.name === "stop_subagent")!;
+    records.set("mine", { id: "mine", status: "running", parentAgentId: "parent-1" });
+    records.set("waiting", { id: "waiting", status: "queued", parentAgentId: "parent-1" });
+    records.set("foreign", { id: "foreign", status: "running", parentAgentId: "other" });
+    records.set("done", { id: "done", status: "completed", parentAgentId: "parent-1" });
+
+    for (const id of ["mine", "waiting"]) {
+      const result = await execute(stop, { agent_id: id });
+      expect(result).toMatchObject({ isError: false, content: [{ text: `Nested agent ${id} stopped.` }] });
+      expect(records.get(id)).toMatchObject({ status: "stopped", stoppedBy: "parent" });
+    }
+    for (const id of ["foreign", "done", "missing"]) {
+      const result = await execute(stop, { agent_id: id });
+      expect(result).toMatchObject({ isError: true, content: [{ text: `Running nested agent not found or not owned by this parent: "${id}".` }] });
+    }
+    expect(manager.abort.mock.calls).toEqual([["mine", "parent"], ["waiting", "parent"]]);
+    expect(records.get("foreign").status).toBe("running");
+  });
+
+  it("words a parent-stopped child as the parent's stop, not the user's", async () => {
+    const [, getResult] = tools();
+    records.set("mine", { id: "mine", status: "stopped", stoppedBy: "parent", result: "partial", parentAgentId: "parent-1" });
+
+    const text = (await execute(getResult, { agent_id: "mine" })).content[0].text;
+
+    expect(text).toContain("stopped by the parent with stop_subagent before completion");
+    expect(text).not.toContain("STOPPED BY THE USER");
   });
 
   // #368 — a nested resume carries the caller's turn budget like a spawn does.

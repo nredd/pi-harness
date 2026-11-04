@@ -3,7 +3,7 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { type AgentManager, markConsumed } from "../src/agent-manager.js";
 import type { AgentRecord } from "../src/types.js";
-import { FLEET_DISCLOSURE_SETTLE_MS, FleetList, type FleetUICtx, type FleetWorkflow, renderFleetSummary } from "../src/ui/fleet-list.js";
+import { FLEET_DISCLOSURE_SETTLE_MS, FleetList, type FleetUICtx, type FleetWorkflow, renderFleetSummary, STOP_ALL_CONFIRM_MS } from "../src/ui/fleet-list.js";
 import { FLEET_STATE_ENTRY, FLEET_STATE_VERSION, type FleetJournalEntry, MAX_COMPACT_ALERT_COUNT, MAX_FLEET_ALERT_DETAILS } from "../src/ui/fleet-state.js";
 import { FakeClock } from "./helpers/fake-clock.js";
 
@@ -395,6 +395,68 @@ describe("collapsed fleet", () => {
     expect(h.render()).toEqual([]);
     h.fleet.setEnabled(true);
     expect(h.render()).toHaveLength(1);
+    h.fleet.dispose();
+  });
+});
+
+// #443: Claude Code's stop-all is `ctrl+x ctrl+k`, pressed twice within 3s. pi
+// binds `ctrl+x` to copy, so the chord here is `ctrl+shift+k` (kitty CSI-u).
+describe("stop-all chord", () => {
+  const PRESS = "\x1b[107;6u";
+  const stopAllHarness = (stopped = { agents: 2, workflows: 1 }) => {
+    const h = setup([openable(1)]);
+    const stopAll = vi.fn(() => stopped);
+    h.fleet.setStopAll(stopAll);
+    return { ...h, stopAll };
+  };
+
+  it("arms on the first press with a hint and stops everything only on a second press inside the window", () => {
+    const h = stopAllHarness();
+    expect(h.fleet.handleKey(PRESS)).toEqual({ consume: true });
+    expect(h.ui.notify).toHaveBeenLastCalledWith("Press ctrl+shift+k again within 3s to stop every running agent and workflow.", "warning");
+    expect(h.stopAll).not.toHaveBeenCalled();
+    // Neither a held key nor its release confirms the press.
+    expect(h.fleet.handleKey("\x1b[107;6:2u")).toEqual({ consume: true });
+    expect(h.fleet.handleKey("\x1b[107;6:3u")).toBeUndefined();
+    expect(h.stopAll).not.toHaveBeenCalled();
+
+    h.clock.advance(STOP_ALL_CONFIRM_MS);
+    h.fleet.handleKey(PRESS);
+    expect(h.stopAll).toHaveBeenCalledTimes(1);
+    expect(h.ui.notify).toHaveBeenLastCalledWith("Stopped 2 agent(s) and 1 workflow(s).", "info");
+    expect(h.abort).not.toHaveBeenCalled();
+
+    // Disarmed by the stop: the next press arms again.
+    h.fleet.handleKey(PRESS);
+    expect(h.stopAll).toHaveBeenCalledTimes(1);
+    h.fleet.dispose();
+  });
+
+  it("re-arms instead of stopping when the second press comes after the window", () => {
+    const h = stopAllHarness();
+    h.fleet.handleKey(PRESS);
+    h.clock.advance(STOP_ALL_CONFIRM_MS + 1);
+    h.fleet.handleKey(PRESS);
+    expect(h.stopAll).not.toHaveBeenCalled();
+    expect(h.ui.notify).toHaveBeenCalledTimes(2);
+    h.fleet.handleKey(PRESS);
+    expect(h.stopAll).toHaveBeenCalledTimes(1);
+    h.fleet.dispose();
+  });
+
+  it("says when there was nothing to stop", () => {
+    const h = stopAllHarness({ agents: 0, workflows: 0 });
+    h.fleet.handleKey(PRESS);
+    h.fleet.handleKey(PRESS);
+    expect(h.ui.notify).toHaveBeenLastCalledWith("Nothing was running.", "info");
+    h.fleet.dispose();
+  });
+
+  it("is inert until the extension supplies what to stop", () => {
+    const h = setup([openable(1)]);
+    h.fleet.handleKey(PRESS);
+    h.fleet.handleKey(PRESS);
+    expect(h.ui.notify).toHaveBeenLastCalledWith("Nothing was running.", "info");
     h.fleet.dispose();
   });
 });
