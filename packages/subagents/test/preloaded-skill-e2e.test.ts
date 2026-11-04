@@ -24,7 +24,15 @@ function writeScout(agentDir: string): void {
   writeFileSync(join(agentDir, "agents", "scout.md"), "---\nname: scout\ndescription: scout\ntools: read\nskills: review\nextensions: false\n---\nScout.\n");
 }
 
-describe("preloaded skills in real child prompts", () => {
+// Each case boots a real parent and child through Pi's jiti loader, which Babel-transforms the
+// extension's ~74 source files with no fs cache (`JITI_FS_CACHE=false`, #354). Measured (#312): the
+// first, cold case 1.3-1.7s alone, up to 4.94s passing on hosted `owned (wsl2)` (it hit the 5s
+// default there twice, 2026-11-03) and 9.69s in a local 3-slot gate (`gate-321-r2.log`); the warm
+// second case at most 3.25s hosted and 5.82s in that gate. Budget: twice the worst gate figure, as #353 sized its
+// cold-cache budgets (owner decision on #312, 2026-11-03).
+const COLD_CHILD_PROMPT_BUDGET_MS = 20_000;
+
+describe("preloaded skills in real child prompts", { timeout: COLD_CHILD_PROMPT_BUDGET_MS }, () => {
   let run: PrintModeRun | undefined;
   let fixture: Hermetic | undefined;
   let cwd: string | undefined;

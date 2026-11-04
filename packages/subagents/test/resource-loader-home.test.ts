@@ -13,6 +13,12 @@ const helper = fileURLToPath(new URL("./helpers/real-loader-home.ts", import.met
 const pinnedBunVersion = readFileSync(fileURLToPath(new URL("../../../.bun-version", import.meta.url)), "utf8").trim();
 let bundleDir: string;
 
+// One cold real-SDK child per test, ~90% of it the SDK import (#312). Measured per test: 0.4-1.4s
+// alone, at most 2.28s hosted (`owned` macos/ubuntu/wsl2, 19 CI runs 2026-11-03) and 7.51s in a
+// local 3-slot gate (`issue173-gate2.log`). The test is bounded by its child, so both share the
+// child's 10s `spawnSync` timeout instead of Vitest's 5s default (owner decision on #312, 2026-11-03).
+const PROBE_BUDGET_MS = 10_000;
+
 // Flip when #179 gives the host package manager an injected-home seam.
 const EXPECTED_AMBIENT_ACCESSES = [
   // `collectSkillEntries` first checks the automatic host root exists.
@@ -60,7 +66,7 @@ describe("real resource-loader settings home", () => {
         // HOME changes only at process creation, so Node and Bun both see the
         // same disposable ambient home. The production code never mutates it.
         const args = [join(bundleDir, "probe.mjs")];
-        const child = spawnSync(process.execPath, args, { env, encoding: "utf8", timeout: 10000 });
+        const child = spawnSync(process.execPath, args, { env, encoding: "utf8", timeout: PROBE_BUDGET_MS });
         expect(child.status, child.stdout + child.stderr).toBe(0);
         const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
         expect(result.runtime).toBe(process.versions.bun ?? "node");
@@ -71,7 +77,7 @@ describe("real resource-loader settings home", () => {
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
-    });
+    }, PROBE_BUDGET_MS);
   }
 });
 
@@ -83,7 +89,7 @@ it("keeps ambient user skill content out of an injected-home preload", () => {
   delete env.PI_CODING_AGENT_DIR;
   delete env.PI_CODING_AGENT_SESSION_DIR;
   try {
-    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: 10000 });
+    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: PROBE_BUDGET_MS });
     expect(child.status, child.stdout + child.stderr).toBe(0);
     const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
     expect(result.runtime).toBe(process.versions.bun ?? "node");
@@ -93,7 +99,7 @@ it("keeps ambient user skill content out of an injected-home preload", () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-});
+}, PROBE_BUDGET_MS);
 
 it("builds a real child prompt from the injected private package, not an ambient decoy", () => {
   const fixture = hermeticDir();
@@ -104,7 +110,7 @@ it("builds a real child prompt from the injected private package, not an ambient
   delete env.PI_CODING_AGENT_DIR;
   delete env.PI_CODING_AGENT_SESSION_DIR;
   try {
-    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: 10000 });
+    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: PROBE_BUDGET_MS });
     expect(child.status, child.stdout + child.stderr).toBe(0);
     const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
     expect(result.runtime).toBe(process.versions.bun ?? "node");
@@ -116,7 +122,7 @@ it("builds a real child prompt from the injected private package, not an ambient
     rmSync(root, { recursive: true, force: true });
     fixture.restore();
   }
-});
+}, PROBE_BUDGET_MS);
 
 it("keeps a native-disabled skill out of a real injected-home child prompt", () => {
   const fixture = hermeticDir();
@@ -127,7 +133,7 @@ it("keeps a native-disabled skill out of a real injected-home child prompt", () 
   delete env.PI_CODING_AGENT_DIR;
   delete env.PI_CODING_AGENT_SESSION_DIR;
   try {
-    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: 10000 });
+    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: PROBE_BUDGET_MS });
     expect(child.status, child.stdout + child.stderr).toBe(0);
     const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
     expect(result.runtime).toBe(process.versions.bun ?? "node");
@@ -139,7 +145,7 @@ it("keeps a native-disabled skill out of a real injected-home child prompt", () 
     rmSync(root, { recursive: true, force: true });
     fixture.restore();
   }
-});
+}, PROBE_BUDGET_MS);
 
 it.each(["disabled", "allowed"])("honors a project package %s filter in a private real child behind a rejected alias", filter => {
   const fixture = hermeticDir();
@@ -150,7 +156,7 @@ it.each(["disabled", "allowed"])("honors a project package %s filter in a privat
   delete env.PI_CODING_AGENT_DIR;
   delete env.PI_CODING_AGENT_SESSION_DIR;
   try {
-    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: 10000 });
+    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: PROBE_BUDGET_MS });
     expect(child.status, child.stdout + child.stderr).toBe(0);
     const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
     expect(result.runtime).toBe(process.versions.bun ?? "node");
@@ -167,7 +173,7 @@ it.each(["disabled", "allowed"])("honors a project package %s filter in a privat
     rmSync(root, { recursive: true, force: true });
     fixture.restore();
   }
-});
+}, PROBE_BUDGET_MS);
 
 it("#179 characterizes Pi's ambient .agents/skills scan before loader-level noSkills", () => {
   const root = mkdtempSync(join(tmpdir(), "real-loader-home-"));
@@ -177,7 +183,7 @@ it("#179 characterizes Pi's ambient .agents/skills scan before loader-level noSk
   delete env.PI_CODING_AGENT_DIR;
   delete env.PI_CODING_AGENT_SESSION_DIR;
   try {
-    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: 10000 });
+    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: PROBE_BUDGET_MS });
     expect(child.status, child.stdout + child.stderr).toBe(0);
     const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
     expect(result.runtime).toBe(process.versions.bun ?? "node");
@@ -185,7 +191,7 @@ it("#179 characterizes Pi's ambient .agents/skills scan before loader-level noSk
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-});
+}, PROBE_BUDGET_MS);
 
 it.each([
   ["glob-cwd", [".agents/glob-cwd", ".agents/glob-pattern/*.missing"]],
@@ -199,14 +205,14 @@ it.each([
   delete env.PI_CODING_AGENT_DIR;
   delete env.PI_CODING_AGENT_SESSION_DIR;
   try {
-    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: 10000 });
+    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: PROBE_BUDGET_MS });
     expect(child.status, child.stdout + child.stderr).toBe(0);
     const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
     expect(result.ambientAccesses).toEqual(expect.arrayContaining(expected));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-});
+}, PROBE_BUDGET_MS);
 
 const bunIt = process.versions.bun ? it : it.skip;
 bunIt("records the Bun.file ambient-home bypass probe", () => {
@@ -217,14 +223,14 @@ bunIt("records the Bun.file ambient-home bypass probe", () => {
   delete env.PI_CODING_AGENT_DIR;
   delete env.PI_CODING_AGENT_SESSION_DIR;
   try {
-    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: 10000 });
+    const child = spawnSync(process.execPath, [join(bundleDir, "probe.mjs")], { env, encoding: "utf8", timeout: PROBE_BUDGET_MS });
     expect(child.status, child.stdout + child.stderr).toBe(0);
     const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
     expect(result.ambientAccesses).toEqual(expect.arrayContaining([".agents/bun-file"]));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-});
+}, PROBE_BUDGET_MS);
 
 it("normalizes copied settings and package filters without changing other source forms", () => {
   const settings = {

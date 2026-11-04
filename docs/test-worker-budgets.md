@@ -51,6 +51,36 @@ The source-home fixture work in #232/#242, fixture ordering in #211/#236 and
 model-scope work in #240 are independent. This audit neither duplicates them nor
 uses their pending results as evidence.
 
+## Measured cold budgets (#312)
+
+Three cases are CPU-bound cold loads with no wait to make event-driven: a real
+Pi SDK import in a child, or Pi's jiti loader Babel-transforming TypeScript with
+no fs cache (`JITI_FS_CACHE=false`, #354). Owner decision on #312, 2026-11-03:
+each gets an explicit per-test budget derived from measured cold timings and
+cited next to it, as #353 did for its Swift cold-cache cases. No global
+`testTimeout`, retry or skipped assertion changes. Hosted figures are the slowest
+across the `owned` macOS/Ubuntu/WSL2 jobs of 19 CI runs on 2026-11-03; gate figures come from local
+3-slot gates in `pi-harness-builds/resume-20261029`.
+
+| Case | Alone | Hosted max | Gate max | Budget |
+| --- | --- | --- | --- | --- |
+| `subagents/test/resource-loader-home.test.ts`, each child case | 0.4-1.4 s | 2.28 s | 7.51 s (`issue173-gate2.log`) | 10 s, the child's own `spawnSync` timeout |
+| `subagents/test/preloaded-skill-e2e.test.ts`, both cases | 1.3-1.7 s cold, 0.9-1.0 s warm | 4.94 s passing, 5 s default hit twice on WSL2 | 9.69 s (`gate-321-r2.log`) | 20 s, twice the gate max |
+| `plan-mode/test/build-runtime.test.ts`, Jiti resource loader | 0.37-0.46 s | 1.36 s | 6.27 s (`issue158-gate7.log`) | 13 s, twice the gate max |
+
+`plan-mode` caps every test at 5 s in `test/harness/test-timeout-policy.ts`.
+The Jiti case passes it only through `measuredTestBudgetsMs`, by exact name and
+up to its own budget; `test/test-timeout-policy.test.ts` pins that no other
+test inherits it.
+
+RED under 50 self-terminating spinners (load ~90-100, Apple M4, 10 cores):
+`resource-loader-home` timed out 4 of 13 cases at 5019-5296 ms, the
+`preloaded-skill-e2e` cases ran 12823 ms and 9814 ms against 5 s. The hosted
+`preloaded-skill-e2e` cold case went from at most 2.44 s before #354 to
+2.3-5.1 s after it: with the fs cache off every load re-transforms the
+extension's ~74 sources. A cheaper loader path stays open; the budget does not
+claim to bound arbitrary host starvation.
+
 ## Remaining external acceptance criterion
 
 Keep #105 open after the worker-cap PR. The historical report does not retain
