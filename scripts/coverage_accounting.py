@@ -130,6 +130,10 @@ class Signal(StrictModel):
         default_factory=list,
         description="CI hosts whose gate list never runs this signal's producer; reported NOT RUN there.",
     )
+    gate: str = Field(
+        default="",
+        description="Make target producing the report; a run that skips that gate reports it NOT RUN.",
+    )
 
     @model_validator(mode="after")
     def text_and_lcov(self) -> Signal:
@@ -356,6 +360,7 @@ class LcovRecord:
     functions: dict[str, int] = field(default_factory=dict)
     branches: dict[str, int] = field(default_factory=dict)
     summaries: dict[str, int] = field(default_factory=dict)
+    coveragepy: bool = False
 
     def add(self, row: str) -> None:
         """Validate a supported LCOV row before adding its counter.
@@ -413,14 +418,23 @@ class LcovRecord:
         """Validate a branch identity and its optional hit count.
 
         Parameters:
-            value (str): LCOV branch location, identity and optional hit count.
+            value (str): LCOV branch location, identity and optional hit count. coverage.py names the
+                branch by its destination (`jump to line 12`) where LCOV has a branch number.
         Returns:
             None: The validated branch counter is accumulated.
         Raises:
             ValueError: The branch record is malformed or duplicated.
         """
         parts = value.split(",")
-        if len(parts) != 4 or not all(p.isdecimal() for p in parts[:3]):
+        if self.coveragepy and len(parts) >= 4:
+            head, _, count = value.rpartition(",")
+            parts = [*head.split(",", 2), count]
+        named = self.coveragepy and bool(parts[2:3]) and bool(parts[2].strip())
+        if (
+            len(parts) != 4
+            or not all(p.isdecimal() for p in parts[:2])
+            or not (parts[2].isdecimal() or named)
+        ):
             raise ValueError(f"Malformed branch counter: '{value}'")
         identity = ",".join(parts[:3])
         if identity in self.branches or (parts[3] != "-" and not parts[3].lstrip("-").isdecimal()):
@@ -432,7 +446,8 @@ class LcovRecord:
 
         Parameters:
             bare_source (bool): Accept a record with no rows at all, as coverage.py writes for a source
-                without executable lines. Other producers must emit totals, so a bare record is truncation.
+                without executable lines, and a record with no function rows or totals, as it writes for a
+                module without functions. Other producers must emit totals, so either is truncation.
         Returns:
             FileCoverage: Validated executable line, function and branch counters.
         Raises:
@@ -442,6 +457,8 @@ class LcovRecord:
             raise ValueError("Missing function counters")
         if bare_source and not (self.lines or self.functions or self.branches or self.summaries):
             return FileCoverage(0, 0, 0, 0, 0, 0)
+        if bare_source and not self.definitions and not {"FNF", "FNH"} & self.summaries.keys():
+            self.summaries |= {"FNF": 0, "FNH": 0}
         totals = {
             "LF": len(self.lines),
             "LH": sum(value > 0 for value in self.lines.values()),
@@ -476,7 +493,8 @@ def parse_lcov(text: str, *, bare_sources: bool = False) -> dict[str, FileCovera
 
     Parameters:
         text (str): Complete LCOV document.
-        bare_sources (bool): Treat a bare `SF`/`end_of_record` pair as an empty source (coverage.py only).
+        bare_sources (bool): Read coverage.py's dialect: a bare `SF`/`end_of_record` pair is an empty
+            source, a module without functions omits FN totals, and branches are named, not numbered.
     Returns:
         dict[str, FileCoverage]: Records keyed by the original source path.
     Raises:
@@ -484,7 +502,7 @@ def parse_lcov(text: str, *, bare_sources: bool = False) -> dict[str, FileCovera
     """
     records: dict[str, FileCoverage] = {}
     source: str | None = None
-    record = LcovRecord()
+    record = LcovRecord(coveragepy=bare_sources)
     for row in text.splitlines():
         if row.startswith("TN:") and source is None:
             continue
@@ -492,7 +510,7 @@ def parse_lcov(text: str, *, bare_sources: bool = False) -> dict[str, FileCovera
             if source is not None or not row[3:] or row[3:] in records:
                 raise ValueError("Duplicate or nested LCOV source record")
             source = row[3:]
-            record = LcovRecord()
+            record = LcovRecord(coveragepy=bare_sources)
             continue
         if source is None:
             raise ValueError(f"LCOV data outside a source record: '{row}'")
@@ -846,6 +864,8 @@ def check_ratchet(current: Policy, base: Policy) -> None:
             new = package.signals[signal_name]
             if not set(new.skip_hosts) <= set(old.skip_hosts):
                 raise ValueError(f"Cannot add skipped hosts: '{name}/{signal_name}'")
+            if new.gate != old.gate:
+                raise ValueError(f"Cannot change a signal's producer gate: '{name}/{signal_name}'")
             for runner_os, floor in old.max_uncovered.items():
                 if runner_os not in new.max_uncovered:
                     raise ValueError(f"Missing OS floor: '{name}/{signal_name}/{runner_os}'")
@@ -944,6 +964,42 @@ def validate_signal_inventory(owned: set[str], signal_name: str, signal: Signal)
         raise ValueError("Enforced Bun signal must measure every owned executable file")
 
 
+def not_run_reason(signal: Signal, host: str | None, skipped_gates: frozenset[str]) -> str:
+    """Return why this run has no producer for a signal, or an empty string when the report is required.
+
+    Parameters:
+        signal (Signal): Signal declaration.
+        host (str | None): CI host class, or null outside CI.
+        skipped_gates (frozenset[str]): Make targets this run planned but skipped.
+    Returns:
+        str: The NOT RUN reason, empty when the signal must be accounted.
+    Raises:
+        None.
+    """
+    if host is not None and host in signal.skip_hosts:
+        return f"host '{host}' has no producer in that cell"
+    if signal.gate and signal.gate in skipped_gates:
+        return f"this run skipped its producer gate '{signal.gate}'"
+    return ""
+
+
+def require_declared_gates(policy: Policy, skipped_gates: frozenset[str]) -> None:
+    """Reject skipped gates no policy signal declares, so a typo cannot silently skip nothing.
+
+    Parameters:
+        policy (Policy): Policy whose signals declare their producer gates.
+        skipped_gates (frozenset[str]): Make targets this run planned but skipped.
+    Returns:
+        None: The gates are all declared.
+    Raises:
+        ValueError: A skipped gate is declared by no policy signal.
+    """
+    declared = {signal.gate for package in policy.packages.values() for signal in package.signals.values()}
+    undeclared = sorted(skipped_gates - (declared - {""}))
+    if undeclared:
+        raise ValueError(f"Skipped gates no policy signal declares: {undeclared}")
+
+
 def account(
     root: Path,
     policy: Policy,
@@ -952,6 +1008,7 @@ def account(
     measure: bool = False,
     *,
     host: str | None = None,
+    skipped_gates: frozenset[str] = frozenset(),
 ) -> tuple[list[dict[str, object]], list[str]]:
     """Account for independent package/file counters and retain signal failures.
 
@@ -962,13 +1019,17 @@ def account(
         reports_root (Path | None): Downloaded artifact root, or null for working-tree reports.
         measure (bool): Report validated measurements without enforcing budgets; not a gate.
         host (str | None): CI host class; signals listing it in `skip_hosts` are reported NOT RUN.
+        skipped_gates (frozenset[str]): Make targets this run planned but skipped; a signal whose `gate`
+            is one of them is reported NOT RUN.
     Returns:
         tuple[list[dict[str, object]], list[str]]: Per-file metrics and explicit accounting failures.
     Raises:
-        ValueError: A package inventory cannot be expanded.
+        ValueError: The OS is unmeasured, a skipped gate is declared by no policy signal, or a package
+            inventory cannot be expanded.
     """
     if runner_os not in {"darwin", "linux"}:
         raise ValueError(f"Coverage is not measured on OS: '{runner_os}'")
+    require_declared_gates(policy, skipped_gates)
     results: list[dict[str, object]] = []
     errors: list[str] = []
     for name, package in policy.packages.items():
@@ -980,8 +1041,9 @@ def account(
             continue
         for signal_name, signal in package.signals.items():
             label = f"{name}/{signal_name}"
-            if host is not None and host in signal.skip_hosts:
-                LOGGER.warning(f"NOT RUN on host '{host}': '{label}' has no producer in that cell")
+            reason = not_run_reason(signal, host, skipped_gates)
+            if reason:
+                LOGGER.warning(f"NOT RUN: '{label}': {reason}")
                 continue
             try:
                 validate_signal_inventory(owned, signal_name, signal)
@@ -1107,6 +1169,11 @@ def parse_args() -> argparse.Namespace:
     bases.add_argument("--compare-ref", help="Gate against the merge base of HEAD and this ref instead.")
     parser.add_argument("--os", default=sys.platform, choices=["darwin", "linux"])
     parser.add_argument("--host", help="CI host class (e.g. wsl2) selecting signals' `skip_hosts`.")
+    parser.add_argument(
+        "--skipped-gates",
+        default="",
+        help="Space-separated Make targets the CI plan skipped; signals produced by them report NOT RUN.",
+    )
     parser.add_argument("--reports-root", type=Path, help="Root of downloaded CI artifacts.")
     parser.add_argument("--measure", action="store_true", help="Print measured policy diff; NOT a gate.")
     parser.add_argument("--summary", type=Path, default=Path("coverage/summary.json"))
@@ -1163,7 +1230,15 @@ def main() -> int:
             base = base_policy(previous)
             check_ratchet(policy, base)
             check_inventory_ratchet(root, policy, base, args.base)
-        results, errors = account(root, policy, args.os, args.reports_root, args.measure, host=args.host)
+        results, errors = account(
+            root,
+            policy,
+            args.os,
+            args.reports_root,
+            args.measure,
+            host=args.host,
+            skipped_gates=frozenset(args.skipped_gates.split()),
+        )
     except subprocess.CalledProcessError as error:
         errors.append(f"Git metadata read failed: '{error.output}'")
     except (OSError, ValueError, KeyError, TypeError) as error:

@@ -168,6 +168,10 @@ BENCHMARK_INPUT_FILES = frozenset(
     {"Makefile", ".python-version", ".node-version", ".github/workflows/ci.yml", "scripts/ci_paths.py"}
 )
 BENCHMARK_INPUT_PREFIXES = ("benchmarks/comparison/", ".github/actions/setup-ci-tools/")
+# Gates a pull request skips when it changes none of their `INPUT_CLASSES` inputs. Every push runs them, which
+# still catches runner and image drift. The shard steps and the fan-in's coverage accounting both read the
+# plan's `skipped_gates`, so a skipped producer's signal reports NOT RUN instead of a missing report.
+PATH_GATED_GATES = {"check-benchmark": "benchmark_inputs"}
 FULL_RELEASE_CANDIDATE = "Full frozen release candidate"
 
 
@@ -201,6 +205,7 @@ class ShardPlan:
         guest (str): Execution guest, `linux`, `macos` or `wsl2`.
         gates (tuple[str, ...]): Make targets, one workflow step each.
         workspaces (tuple[str, ...]): npm workspaces its `check-ts` runs, in npm workspace order.
+        skipped_gates (tuple[str, ...]): Its `PATH_GATED_GATES` this run reports NOT RUN.
     """
 
     os: str
@@ -209,12 +214,13 @@ class ShardPlan:
     guest: str
     gates: tuple[str, ...]
     workspaces: tuple[str, ...]
+    skipped_gates: tuple[str, ...] = ()
 
     def to_output(self) -> dict[str, str]:
         """Return the matrix `include` entry the shard job reads.
 
         Returns:
-            dict[str, str]: Strings only; gates and workspaces are space-joined.
+            dict[str, str]: Strings only; gates, workspaces and skipped gates are space-joined.
         """
         return {
             "os": self.os,
@@ -223,6 +229,7 @@ class ShardPlan:
             "guest": self.guest,
             "gates": " ".join(self.gates),
             "workspaces": " ".join(self.workspaces),
+            "skipped_gates": " ".join(self.skipped_gates),
         }
 
 
@@ -240,6 +247,8 @@ class CellPlan:
         guest (str): A running `owned` cell's CI host class (`coverage_accounting.py --host`), else empty.
         coverage_os (str): A running `owned` cell's coverage platform (`coverage_accounting.py --os`), else
             empty.
+        skipped_gates (tuple[str, ...]): Planned `gates` this run skips (`coverage_accounting.py
+            --skipped-gates`).
     """
 
     run: bool
@@ -250,13 +259,14 @@ class CellPlan:
     shards: tuple[ShardPlan, ...] = ()
     guest: str = ""
     coverage_os: str = ""
+    skipped_gates: tuple[str, ...] = ()
 
     def to_output(self) -> dict[str, object]:
         """Return the JSON-ready form the workflow reads with `fromJSON`.
 
         Returns:
             dict[str, object]: Booleans, the space-joined gates, the reason, the block flag, the shard
-                matrix entries and the fan-in's accounting `guest` and `coverage_os`.
+                matrix entries and the fan-in's accounting `guest`, `coverage_os` and `skipped_gates`.
         """
         return {
             "run": self.run,
@@ -267,6 +277,7 @@ class CellPlan:
             "shards": [shard.to_output() for shard in self.shards],
             "guest": self.guest,
             "coverage_os": self.coverage_os,
+            "skipped_gates": " ".join(self.skipped_gates),
         }
 
 
@@ -530,12 +541,30 @@ def npm_workspaces(root: Path) -> tuple[str, ...]:
     return found
 
 
-def shard_plans(os_name: str, workspaces: tuple[str, ...]) -> tuple[ShardPlan, ...]:
+def skipped_gates(result: ChangeClassification, event: str) -> frozenset[str]:
+    """Return the `PATH_GATED_GATES` this run skips: a non-push run that changes none of a gate's inputs.
+
+    Parameters:
+        result (ChangeClassification): Diff classification.
+        event (str): Triggering event name.
+
+    Returns:
+        frozenset[str]: Make targets to report NOT RUN wherever a cell plans them.
+    """
+    if event == EVENT_PUSH:
+        return frozenset()
+    return frozenset(gate for gate, inputs in PATH_GATED_GATES.items() if not result.inputs[inputs])
+
+
+def shard_plans(
+    os_name: str, workspaces: tuple[str, ...], path_gated: frozenset[str] = frozenset()
+) -> tuple[ShardPlan, ...]:
     """Expand an `owned` cell's `OWNED_SHARDS` entry into its shard jobs.
 
     Parameters:
         os_name (str): Matrix `os` value.
         workspaces (tuple[str, ...]): Every npm workspace, in npm order.
+        path_gated (frozenset[str]): Path-gated gates this run skips.
 
     Returns:
         tuple[ShardPlan, ...]: One entry per shard; a `check-ts` shard naming no workspaces takes the rest.
@@ -560,7 +589,13 @@ def shard_plans(os_name: str, workspaces: tuple[str, ...]) -> tuple[ShardPlan, .
             )
         plans.append(
             ShardPlan(
-                os_name, shard.name, runner, guest, shard.gates, selected if CHECK_TS in shard.gates else ()
+                os_name,
+                shard.name,
+                runner,
+                guest,
+                shard.gates,
+                selected if CHECK_TS in shard.gates else (),
+                tuple(gate for gate in shard.gates if gate in path_gated),
             )
         )
     return tuple(plans)
@@ -588,14 +623,16 @@ def native_plan(
         return skipped(NOT_RUN["docs_only"])
     if job != "owned":
         return CellPlan(run=True, scenarios=True, gates=(), reason="")
+    path_gated = skipped_gates(result, event)
     return CellPlan(
         run=True,
         scenarios=True,
         gates=OWNED_GATES[os_name],
         reason="",
-        shards=shard_plans(os_name, workspaces),
+        shards=shard_plans(os_name, workspaces, path_gated),
         guest=RUNNERS[os_name][1],
         coverage_os=COVERAGE_OS[os_name],
+        skipped_gates=tuple(gate for gate in OWNED_GATES[os_name] if gate in path_gated),
     )
 
 

@@ -188,6 +188,29 @@ jobs:
       - name: Owned gate check-import-audit (WSL LCOV producer)
         if: ${{ !cancelled() && steps.install.outcome == 'success' && contains(matrix.gates, 'check-import-audit') }}
         run: make check-import-audit
+      - name: Benchmark unit gate
+        # `scripts/ci_paths.py` `PATH_GATED_GATES` plans the skip; the fan-in accounting reads the same plan.
+        if: contains(matrix.gates, 'check-benchmark') && !contains(matrix.skipped_gates, 'check-benchmark')
+        run: |
+          # The runner image's Homebrew Python drifts (3.15.1 now); `pydantic-core` has no cp315 wheel in
+          # `benchmarks/comparison/uv.lock`, so uv compiled it from source (~84s here, and again in every
+          # cold-cache gate sync the tests run, which inherit this interpreter). Pin the repo's interpreter.
+          export UV_PYTHON="$(tr -d '\n' < .python-version)"
+          make install-benchmark
+          # The native_runtime test runs the real Codex sandbox (Seatbelt); exact historical pin, no credentials.
+          npm install --ignore-scripts --prefix "$RUNNER_TEMP/codex" @openai/codex@0.154.0
+          mkdir -p "$RUNNER_TEMP/codex-home" "$RUNNER_TEMP/codex-cache"
+          CODEX_HOME="$RUNNER_TEMP/codex-home" XDG_CACHE_HOME="$RUNNER_TEMP/codex-cache" \
+            PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" make check-benchmark
+      - name: Benchmark unit gate (not run, no benchmark inputs)
+        if: contains(matrix.skipped_gates, 'check-benchmark')
+        run: |
+          why="This pull request changes no benchmark input (BENCHMARK_INPUT_FILES and BENCHMARK_INPUT_PREFIXES in scripts/ci_paths.py); check-benchmark runs for real on main pushes and on PRs that change them."
+          echo "::notice title=check-benchmark NOT RUN::$why"
+          {
+            echo "### check-benchmark: NOT RUN"
+            echo "$why This is not a pass."
+          } >>"$GITHUB_STEP_SUMMARY"
       # WSL producers run on the guest Linux filesystem; artifact actions run on Windows.
       - uses: ./.github/actions/capture-ci-wsl
         if: always() && matrix.os == 'wsl2' && steps.tools.outcome == 'success'
@@ -205,29 +228,8 @@ jobs:
             integration/providers/coverage/**/lcov.info
             integration/coverage/**/lcov.info
             scripts/coverage/**/lcov.info
+            benchmarks/comparison/coverage/**/lcov.info
           if-no-files-found: ignore
-      - name: Benchmark unit gate
-        if: contains(matrix.gates, 'check-benchmark') && (needs.classify.outputs.benchmark_inputs != 'false' || github.event_name == 'push')
-        run: |
-          # The runner image's Homebrew Python drifts (3.15.1 now); `pydantic-core` has no cp315 wheel in
-          # `benchmarks/comparison/uv.lock`, so uv compiled it from source (~84s here, and again in every
-          # cold-cache gate sync the tests run, which inherit this interpreter). Pin the repo's interpreter.
-          export UV_PYTHON="$(tr -d '\n' < .python-version)"
-          make install-benchmark
-          # The native_runtime test runs the real Codex sandbox (Seatbelt); exact historical pin, no credentials.
-          npm install --ignore-scripts --prefix "$RUNNER_TEMP/codex" @openai/codex@0.154.0
-          mkdir -p "$RUNNER_TEMP/codex-home" "$RUNNER_TEMP/codex-cache"
-          CODEX_HOME="$RUNNER_TEMP/codex-home" XDG_CACHE_HOME="$RUNNER_TEMP/codex-cache" \
-            PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" make check-benchmark
-      - name: Benchmark unit gate (not run, no benchmark inputs)
-        if: contains(matrix.gates, 'check-benchmark') && needs.classify.outputs.benchmark_inputs == 'false' && github.event_name != 'push'
-        run: |
-          why="This pull request changes no benchmark input (BENCHMARK_INPUT_FILES and BENCHMARK_INPUT_PREFIXES in scripts/ci_paths.py); check-benchmark runs for real on main pushes and on PRs that change them."
-          echo "::notice title=check-benchmark NOT RUN::$why"
-          {
-            echo "### check-benchmark: NOT RUN"
-            echo "$why This is not a pass."
-          } >>"$GITHUB_STEP_SUMMARY"
       - uses: ./.github/actions/capture-ci-wsl
         if: always() && matrix.os == 'wsl2' && steps.tools.outcome == 'success'
         with:
@@ -343,11 +345,12 @@ jobs:
         if: always() && steps.plan.outputs.run == 'true'
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
-          # The plan owns both: the floors' platform, and the host class whose `skip_hosts` signals (Python on
-          # WSL) report NOT RUN.
+          # The plan owns all three: the floors' platform, the host class whose `skip_hosts` signals (Python on
+          # WSL) report NOT RUN, and the path-gated gates whose `gate` signals report NOT RUN on this run.
           COVERAGE_OS: ${{ fromJSON(needs.classify.outputs.plan)[format('owned ({0})', matrix.os)].coverage_os }}
           COVERAGE_HOST: ${{ fromJSON(needs.classify.outputs.plan)[format('owned ({0})', matrix.os)].guest }}
-        run: make check-coverage BASE="$BASE" COVERAGE_OS="$COVERAGE_OS" COVERAGE_HOST="$COVERAGE_HOST"
+          COVERAGE_SKIPPED_GATES: ${{ fromJSON(needs.classify.outputs.plan)[format('owned ({0})', matrix.os)].skipped_gates }}
+        run: make check-coverage BASE="$BASE" COVERAGE_OS="$COVERAGE_OS" COVERAGE_HOST="$COVERAGE_HOST" COVERAGE_SKIPPED_GATES="$COVERAGE_SKIPPED_GATES"
       - name: Preserve independent coverage reports and summary
         if: always() && steps.plan.outputs.run == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -360,6 +363,7 @@ jobs:
             integration/providers/coverage/**/lcov.info
             integration/coverage/**/lcov.info
             scripts/coverage/**/lcov.info
+            benchmarks/comparison/coverage/**/lcov.info
             coverage/summary.json
           if-no-files-found: error
       - name: Packages without a Bun run (not run)

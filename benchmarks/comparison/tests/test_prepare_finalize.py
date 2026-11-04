@@ -1,24 +1,60 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import shutil
 import subprocess
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from pi_harness_benchmark.artifacts import discover_session_logs, redact_text, snapshot_git
+from pi_harness_benchmark import finalize, prepare
+from pi_harness_benchmark.artifacts import (
+    _is_bounded_session_path,
+    discover_session_logs,
+    redact_text,
+    snapshot_git,
+)
 from pi_harness_benchmark.finalize import (
+    _MISSING_REASONING_WARNING,
+    AcceptanceEvidence,
     RunStateError,
+    _documentation_status,
+    _failure_reason,
     _hidden_gate_suite,
     _materialize_gate_snapshot,
+    _reasoning_from_terminal,
+    _run_gate,
+    _verify_final_seed,
     finalize_run,
     mark_run,
 )
 from pi_harness_benchmark.matrix import generate_matrix
-from pi_harness_benchmark.models import BenchmarkResult, Fixture, Harness, RunManifest
-from pi_harness_benchmark.prepare import CLI_VERSIONS, load_manifest, prepare_run
+from pi_harness_benchmark.models import (
+    BenchmarkResult,
+    DocumentationStatus,
+    Fixture,
+    GateResult,
+    GateSuite,
+    Harness,
+    RunManifest,
+    RunStatus,
+)
+from pi_harness_benchmark.prepare import (
+    CLI_VERSIONS,
+    PI_PLAN_EXTENSION_VERSION,
+    PI_PLAN_RETENTION,
+    PI_PLAN_THINKING_LEVEL,
+    _instructions,
+    create_sandbox_profile,
+    load_manifest,
+    prepare_run,
+    save_manifest,
+    verify_pi_plan_configuration,
+)
 from pi_harness_benchmark.process import executable
 
 
@@ -559,3 +595,455 @@ def test_redaction_preserves_usage_token_fields() -> None:
     parsed = json.loads(redacted)
     assert parsed["turn_token_usage"]["output_tokens"] == 3
     assert parsed["thread_token_usage"]["total_tokens"] == 52
+
+
+START = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def _commit(worktree: Path, *args: str) -> None:
+    git = executable("git")
+    subprocess.check_call(
+        [str(git), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", *args],
+        cwd=worktree,
+    )
+
+
+def _passed_suite(manifest: RunManifest, name: str) -> GateSuite:
+    output_path = manifest.run_dir / f"{name}.log"
+    output_path.write_text("ok\n", encoding="utf-8")
+    gate = GateResult(
+        name=name,
+        command=["/usr/bin/true"],
+        exit_code=0,
+        passed=True,
+        duration_seconds=0,
+        output_path=output_path,
+    )
+    return GateSuite(
+        name=name, subgates=[gate], passed=True, environment_path=manifest.run_dir / name
+    )
+
+
+def _failed_suite(manifest: RunManifest, name: str, failed: str) -> GateSuite:
+    suite = _passed_suite(manifest, name)
+    gate = suite.subgates[0].model_copy(update={"name": failed, "exit_code": 1, "passed": False})
+    return suite.model_copy(update={"subgates": [suite.subgates[0], gate], "passed": False})
+
+
+def test_session_discovery_requires_both_timing_boundaries(
+    tmp_path: Path,
+    generated_workspace: Path,
+) -> None:
+    root = _benchmark_root(tmp_path, generated_workspace)
+    manifest, _ = prepare_run(root, generate_matrix()[0])
+    session = manifest.native_session_roots[0] / "session.jsonl"
+    session.parent.mkdir(parents=True, exist_ok=True)
+    session.write_text("{}\n", encoding="utf-8")
+
+    assert not _is_bounded_session_path(session, manifest)
+    with pytest.raises(ValueError, match="`agent_started_at` and `stopped_at`"):
+        discover_session_logs(manifest)
+    assert session.is_file()
+
+
+def test_session_discovery_without_logs_warns_and_keeps_missing_pi_root(
+    tmp_path: Path,
+    generated_workspace: Path,
+) -> None:
+    root = _benchmark_root(tmp_path, generated_workspace)
+    manifest, _ = prepare_run(root, generate_matrix()[0])
+    manifest.agent_started_at = START
+    manifest.stopped_at = START + timedelta(seconds=20)
+    pi_root = manifest.native_session_roots[0]
+    shutil.rmtree(pi_root)
+
+    artifacts, warnings = discover_session_logs(manifest)
+
+    assert not pi_root.exists()
+    assert artifacts == []
+    assert warnings == [
+        f"Terminal log is missing: '{manifest.terminal_log_path}'",
+        "No matching native JSON/JSONL session log was discovered",
+    ]
+
+
+def test_snapshot_refuses_an_unreadable_untracked_path(tmp_path: Path) -> None:
+    git = executable("git")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.check_call([str(git), "init", "--quiet"], cwd=repo)
+    (repo / "tracked.txt").write_text("seed\n", encoding="utf-8")
+    subprocess.check_call([str(git), "add", "."], cwd=repo)
+    _commit(repo, "commit", "--quiet", "-m", "Seed")
+    seed_commit = subprocess.check_output(
+        [str(git), "rev-parse", "HEAD"], cwd=repo, text=True
+    ).strip()
+    unreadable = repo / "unreadable.txt"
+    unreadable.write_text("agent output\n", encoding="utf-8")
+    unreadable.chmod(0)
+    try:
+        with pytest.raises(
+            RuntimeError, match=re.escape("Could not snapshot untracked path 'unreadable.txt'")
+        ):
+            snapshot_git(repo, tmp_path / "artifacts", seed_commit)
+    finally:
+        unreadable.chmod(0o600)
+
+
+def test_pi_plan_configuration_reports_every_pinned_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "package.json"
+    package.write_text(json.dumps({"version": "0.0.1"}), encoding="utf-8")
+    cfg = tmp_path / "plan-mode.json"
+    cfg.write_text(
+        json.dumps({"implementationPlanRetention": "keep", "thinkingLevel": "high"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(prepare, "PI_PLAN_PACKAGE_PATH", package)
+    monkeypatch.setattr(prepare, "PI_PLAN_CONFIGURATION_PATH", cfg)
+
+    with pytest.raises(RuntimeError) as caught:
+        verify_pi_plan_configuration(when=START)
+
+    assert str(caught.value) == (
+        "Pi plan configuration mismatch: "
+        f"extension version expected '{PI_PLAN_EXTENSION_VERSION}', found '0.0.1'; "
+        f"`implementationPlanRetention` expected '{PI_PLAN_RETENTION}', found 'keep'; "
+        f"`thinkingLevel` expected '{PI_PLAN_THINKING_LEVEL}', found 'high'"
+    )
+
+
+def test_sandbox_profile_refuses_a_path_inside_the_clone(
+    tmp_path: Path,
+    generated_workspace: Path,
+) -> None:
+    root = _benchmark_root(tmp_path, generated_workspace)
+    manifest, _ = prepare_run(root, generate_matrix()[0])
+    manifest.sandbox_profile_path = manifest.worktree / "agent.sb"
+
+    with pytest.raises(ValueError, match="cannot be inside the fixture clone"):
+        create_sandbox_profile(manifest)
+
+    assert not manifest.sandbox_profile_path.exists()
+
+
+def test_prepare_requires_generated_seeds(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="Generated seed does not exist"):
+        prepare_run(tmp_path, generate_matrix()[0])
+
+    assert not (tmp_path / "artifacts").exists()
+
+
+def test_prepare_replaces_an_existing_run_only_when_asked(
+    tmp_path: Path,
+    generated_workspace: Path,
+) -> None:
+    root = _benchmark_root(tmp_path, generated_workspace)
+    spec = generate_matrix()[0]
+    manifest, _ = prepare_run(root, spec)
+    stale = manifest.run_dir / "stale.txt"
+    stale.write_text("stale\n", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="Run directory already exists"):
+        prepare_run(root, spec)
+    assert stale.is_file()
+
+    replaced, _ = prepare_run(root, spec, replace=True)
+
+    assert replaced.run_dir == manifest.run_dir
+    assert not stale.exists()
+    assert load_manifest(replaced.run_dir).seed_commit == manifest.seed_commit
+
+
+def test_prepare_refuses_a_clone_that_is_not_pristine(
+    tmp_path: Path,
+    generated_workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _benchmark_root(tmp_path, generated_workspace)
+    real_output = prepare.output
+
+    def dirty_status(argv: list[str], *, cwd: Path | None = None) -> str:
+        if argv[1:] == ["status", "--porcelain"]:
+            return " M src/module.py\n"
+        return real_output(argv, cwd=cwd)
+
+    monkeypatch.setattr(prepare, "output", dirty_status)
+
+    with pytest.raises(RuntimeError, match=re.escape("with status 'M src/module.py'")):
+        prepare_run(root, generate_matrix()[0])
+
+
+def test_clarification_instructions_require_the_external_answer_file(
+    tmp_path: Path,
+    generated_workspace: Path,
+) -> None:
+    root = _benchmark_root(tmp_path, generated_workspace)
+    spec = next(run for run in generate_matrix() if run.clarification is not None)
+    manifest, _ = prepare_run(root, spec)
+    manifest.clarification_path = None
+
+    with pytest.raises(ValueError, match="requires an external answer artifact"):
+        _instructions(manifest)
+
+
+def test_mark_start_rejects_untracked_agent_files(
+    tmp_path: Path,
+    generated_workspace: Path,
+) -> None:
+    root = _benchmark_root(tmp_path, generated_workspace)
+    manifest, _ = prepare_run(root, generate_matrix()[0])
+    (manifest.worktree / "notes.txt").write_text("early edit\n", encoding="utf-8")
+
+    with pytest.raises(RunStateError, match=r"not pristine: '\?\? notes.txt'"):
+        mark_run(manifest.run_dir, "start", when=START)
+
+    assert load_manifest(manifest.run_dir).agent_started_at is None
+
+
+def test_mark_start_names_only_unfinished_predecessors(
+    tmp_path: Path,
+    generated_workspace: Path,
+) -> None:
+    root = _benchmark_root(tmp_path, generated_workspace)
+    first, second, third = generate_matrix()[:3]
+    finished, _ = prepare_run(root, first)
+    finished.status = RunStatus.FINALIZED
+    save_manifest(finished)
+    prepare_run(root, second)
+    manifest, _ = prepare_run(root, third)
+
+    with pytest.raises(RunStateError) as caught:
+        mark_run(manifest.run_dir, "start", when=START)
+
+    assert str(caught.value) == f"Matrix predecessor runs are not finalized: {[second.run_id]}"
+
+
+@pytest.mark.parametrize("plan", [None, " \n"])
+def test_mark_implementation_requires_accepted_plan_text(
+    tmp_path: Path,
+    generated_workspace: Path,
+    plan: str | None,
+) -> None:
+    root = _benchmark_root(tmp_path, generated_workspace)
+    manifest, _ = prepare_run(root, generate_matrix()[0])
+    mark_run(manifest.run_dir, "start", when=START)
+    if plan is not None:
+        manifest.accepted_plan_path.write_text(plan, encoding="utf-8")
+
+    with pytest.raises(RunStateError, match="Accepted plan artifact is missing or empty"):
+        mark_run(manifest.run_dir, "implementation", when=START + timedelta(seconds=1))
+
+    assert load_manifest(manifest.run_dir).implementation_started_at is None
+
+
+def test_gate_that_cannot_execute_is_a_failed_gate(tmp_path: Path) -> None:
+    output_path = tmp_path / "gates" / "missing.log"
+
+    result = _run_gate("missing", [str(tmp_path / "no-such-gate")], tmp_path, output_path, {})
+
+    assert result.exit_code == 127
+    assert not result.passed
+    assert output_path.read_text(encoding="utf-8").startswith("Could not execute gate: ")
+
+
+def test_gate_snapshots_and_hidden_suite_replace_stale_copies(
+    tmp_path: Path,
+    generated_workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _benchmark_root(tmp_path, generated_workspace)
+    manifest, _ = prepare_run(root, generate_matrix()[0])
+    snapshot = snapshot_git(manifest.worktree, manifest.run_dir, manifest.seed_commit)
+    destination = _materialize_gate_snapshot(manifest, snapshot, "visible")
+    (destination / "stale.txt").write_text("stale\n", encoding="utf-8")
+
+    assert _materialize_gate_snapshot(manifest, snapshot, "visible") == destination
+    assert not (destination / "stale.txt").exists()
+
+    stale_suite = manifest.run_dir / "hidden-suite" / "stale_test.py"
+    stale_suite.parent.mkdir()
+    stale_suite.write_text("stale\n", encoding="utf-8")
+    calls: list[tuple[Path, dict[str, str]]] = []
+
+    def record_gate(
+        name: str, command: list[str], cwd: Path, output_path: Path, env: dict[str, str]
+    ) -> GateResult:
+        calls.append((cwd, env))
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("", encoding="utf-8")
+        return GateResult(
+            name=name,
+            command=command,
+            exit_code=0,
+            passed=True,
+            duration_seconds=0,
+            output_path=output_path,
+        )
+
+    monkeypatch.setattr(finalize, "_run_gate", record_gate)
+    hidden_path = root / "workspace" / "hidden" / manifest.spec.fixture.value
+
+    suite = _hidden_gate_suite(manifest, destination, hidden_path)
+
+    assert suite.passed
+    assert [cwd for cwd, _ in calls] == [manifest.benchmark_root, stale_suite.parent]
+    assert all(env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1" for _, env in calls)
+    assert not stale_suite.exists()
+    assert sorted(path.name for path in hidden_path.iterdir()) == sorted(
+        path.name for path in stale_suite.parent.iterdir() if path.name != "pytest.ini"
+    )
+
+
+def test_documentation_status_classifies_non_python_changes() -> None:
+    assert _documentation_status([]) is DocumentationStatus.NOT_APPLICABLE
+    assert _documentation_status(["docs/usage.md", "src/a.py"]) is DocumentationStatus.UPDATED
+    assert _documentation_status(["src/a.py"]) is DocumentationStatus.MISSING
+    assert _documentation_status(["data.json"]) is DocumentationStatus.NOT_APPLICABLE
+
+
+def test_failure_reason_reports_the_first_unmet_acceptance_condition(
+    tmp_path: Path,
+    generated_workspace: Path,
+) -> None:
+    root = _benchmark_root(tmp_path, generated_workspace)
+    manifest, _ = prepare_run(root, generate_matrix()[0])
+    passed = _passed_suite(manifest, "visible")
+    hidden_failed = _failed_suite(manifest, "hidden", "pytest")
+    evidence = AcceptanceEvidence(
+        planning_required=True,
+        asked_before_choosing=None,
+        plan_captured=True,
+        documentation_required=False,
+        documentation_status=DocumentationStatus.NOT_APPLICABLE,
+    )
+
+    assert (
+        _failure_reason(passed, passed, replace(evidence, plan_captured=False))
+        == "Accepted plan text was not captured before implementation"
+    )
+    assert (
+        _failure_reason(passed, hidden_failed, evidence)
+        == "Hidden acceptance subgates failed: pytest"
+    )
+    assert (
+        _failure_reason(passed, passed, evidence)
+        == "Required ambiguity clarification was not established before implementation"
+    )
+    assert _failure_reason(passed, passed, replace(evidence, asked_before_choosing=True)) is None
+
+
+def test_final_seed_verification_requires_a_pristine_start(
+    tmp_path: Path,
+    generated_workspace: Path,
+) -> None:
+    root = _benchmark_root(tmp_path, generated_workspace)
+    manifest, _ = prepare_run(root, generate_matrix()[0])
+
+    with pytest.raises(RunStateError, match="lacks pre-start pristine seed verification"):
+        _verify_final_seed(manifest)
+
+
+def test_claude_reasoning_needs_a_terminal_transcript() -> None:
+    assert _reasoning_from_terminal(Harness.CLAUDE, []) is None
+
+
+def _started_and_stopped(root: Path, spec_index: int = 0) -> RunManifest:
+    manifest, _ = prepare_run(root, generate_matrix()[spec_index])
+    mark_run(manifest.run_dir, "start", when=START, allow_out_of_order=True)
+    return manifest
+
+
+def test_finalize_requires_a_stop_boundary(
+    tmp_path: Path,
+    generated_workspace: Path,
+) -> None:
+    manifest = _started_and_stopped(_benchmark_root(tmp_path, generated_workspace))
+
+    with pytest.raises(RunStateError, match="Record `start` and `stop` before finalizing"):
+        finalize_run(manifest.run_dir)
+
+
+def test_finalize_rejects_contamination_written_during_the_run(
+    tmp_path: Path,
+    generated_workspace: Path,
+) -> None:
+    manifest = _started_and_stopped(_benchmark_root(tmp_path, generated_workspace))
+    (manifest.worktree / "notes" / "terminal.log").parent.mkdir()
+    (manifest.worktree / "notes" / "terminal.log").write_text("copied\n", encoding="utf-8")
+    mark_run(manifest.run_dir, "stop", when=START + timedelta(seconds=1))
+
+    with pytest.raises(RunStateError, match="Final benchmark contamination found in clone"):
+        finalize_run(manifest.run_dir)
+    assert load_manifest(manifest.run_dir).status is RunStatus.PREPARED
+
+
+def test_finalize_rejects_history_that_drops_the_seed(
+    tmp_path: Path,
+    generated_workspace: Path,
+) -> None:
+    manifest = _started_and_stopped(_benchmark_root(tmp_path, generated_workspace))
+    _commit(manifest.worktree, "checkout", "--quiet", "--orphan", "rewritten")
+    _commit(manifest.worktree, "commit", "--quiet", "-m", "Rewrite history")
+    mark_run(manifest.run_dir, "stop", when=START + timedelta(seconds=1))
+
+    with pytest.raises(RunStateError, match="does not descend from seed"):
+        finalize_run(manifest.run_dir)
+
+
+def test_finalize_requires_the_hidden_acceptance_suite(
+    tmp_path: Path,
+    generated_workspace: Path,
+) -> None:
+    root = _benchmark_root(tmp_path, generated_workspace)
+    manifest = _started_and_stopped(root)
+    mark_run(manifest.run_dir, "stop", when=START + timedelta(seconds=1))
+    shutil.rmtree(root / "workspace" / "hidden" / manifest.spec.fixture.value)
+
+    with pytest.raises(FileNotFoundError, match="Hidden acceptance suite does not exist"):
+        finalize_run(manifest.run_dir)
+    assert load_manifest(manifest.run_dir).status is RunStatus.PREPARED
+
+
+def test_finalize_takes_claude_reasoning_from_the_terminal_when_sessions_omit_it(
+    tmp_path: Path,
+    generated_workspace: Path,
+    sample_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _benchmark_root(tmp_path, generated_workspace)
+    index = next(i for i, run in enumerate(generate_matrix()) if run.harness is Harness.CLAUDE)
+    manifest = _started_and_stopped(root, index)
+    manifest.accepted_plan_path.write_text("Accepted plan\n", encoding="utf-8")
+    mark_run(manifest.run_dir, "implementation", when=START + timedelta(seconds=10))
+    mark_run(manifest.run_dir, "stop", when=START + timedelta(seconds=20))
+    session_root = tmp_path / "claude-projects"
+    session = session_root / "project" / "session.jsonl"
+    session.parent.mkdir(parents=True)
+    session.write_text(
+        json.dumps({"type": "system", "cwd": str(manifest.worktree)})
+        + "\n"
+        + (sample_dir / "claude-session.jsonl").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    mtime = (START + timedelta(seconds=15)).timestamp()
+    os.utime(session, (mtime, mtime))
+    manifest.terminal_log_path.write_text("Sonnet 5 with medium effort\n", encoding="utf-8")
+    stopped = load_manifest(manifest.run_dir)
+    stopped.native_session_roots = [session_root]
+    save_manifest(stopped)
+    monkeypatch.setattr(
+        finalize, "_visible_gate_suite", lambda m, _cwd: _passed_suite(m, "visible")
+    )
+    monkeypatch.setattr(
+        finalize, "_hidden_gate_suite", lambda m, _cwd, _hidden: _passed_suite(m, "hidden")
+    )
+
+    result = finalize_run(manifest.run_dir)
+
+    assert result.actual_metadata.model == "claude-sonnet-5"
+    assert result.actual_metadata.reasoning_level == "medium"
+    assert _MISSING_REASONING_WARNING not in result.parser_warnings
+    assert [item.source_kind for item in result.sessions] == ["terminal", "native-session"]
+    assert session.is_file()
