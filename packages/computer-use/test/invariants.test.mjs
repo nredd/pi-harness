@@ -6,6 +6,7 @@ import path from "node:path";
 import { noteAfterAct, noteFromLook } from "../src/note.ts";
 import { countOutlineNodes, foldToBudget, graftScopedOutline, nodeByRef, parseLookResponse, renderInteractiveControls } from "../src/outline.ts";
 import { shouldPreferForegroundModalWindow } from "../src/root-selection.ts";
+import { test } from "vitest";
 
 const root = path.resolve(new URL("..", import.meta.url).pathname);
 const swift = fs.readFileSync(path.join(root, "native/macos/bridge.swift"), "utf8");
@@ -23,6 +24,7 @@ const srcFiles = fs.readdirSync(path.join(root, "src"), { recursive: true })
 	.map((file) => [file, fs.readFileSync(path.join(root, "src", file), "utf8")]);
 const results = [];
 
+/** Record one named LIVE sub-check; the gated LIVE test fails after all of them ran. */
 function check(name, fn) {
 	try {
 		fn();
@@ -30,7 +32,6 @@ function check(name, fn) {
 		console.log(`PASS ${name}`);
 	} catch (error) {
 		results.push([name, false]);
-		process.exitCode = 1;
 		console.error(`FAIL ${name}: ${error.message}`);
 	}
 }
@@ -39,32 +40,32 @@ function assert(condition, message) {
 	if (!condition) throw new Error(message);
 }
 
-check("INV-1 static helper observation commands removed", () => {
+test("INV-1 static helper observation commands removed", () => {
 	assert(!swift.includes("visionTargets"), "bridge.swift still contains visionTargets");
 	assert(!swift.includes("axSnapshotTree"), "bridge.swift still contains axSnapshotTree");
 	assert(!/case\s+"screenshot"/.test(swift), "bridge.swift still dispatches screenshot");
 });
 
-check("INV-1 static src lookCompat absent", () => {
+test("INV-1 static src lookCompat absent", () => {
 	for (const [file, text] of srcFiles) {
 		assert(!text.includes("lookCompat"), `lookCompat appears in src/${file}`);
 	}
 });
 
-check("INV-2 static no TS coordinate transforms or capture dimensions", () => {
+test("INV-2 static no TS coordinate transforms or capture dimensions", () => {
 	for (const [file, text] of srcFiles) {
 		assert(!/screenPointToCapturePoint|screenFrameToCaptureFrame/.test(text), `coordinate transform appears in src/${file}`);
 		assert(!/\bcaptureWidth\b|\bcaptureHeight\b/.test(text), `capture dimensions appear in src/${file}`);
 	}
 });
 
-check("INV-3 static scene fusion and auto-confirm absent", () => {
+test("INV-3 static scene fusion and auto-confirm absent", () => {
 	for (const [file, text] of srcFiles) {
 		assert(!/sceneAxTargetsFromSemantic|buildSceneProjection|autoConfirmButton|coordinateStateSignature/.test(text), `deleted scene/confirm helper appears in src/${file}`);
 	}
 });
 
-check("INV-4 static act owns input command surface", () => {
+test("INV-4 static act owns input command surface", () => {
 	assert(srcFiles.some(([, text]) => /interface HelperActResult[\s\S]*outcome: ActOutcome/.test(text)), "TS helper act result does not carry outcome");
 	for (const [file, text] of srcFiles) {
 		assert(!/verifiedCoordinateClick|coordinateStateSignature/.test(text), `deleted verification helper appears in src/${file}`);
@@ -80,7 +81,7 @@ check("INV-4 static act owns input command surface", () => {
 	}
 });
 
-check("INV-8 deleted architecture-v1 identifiers absent", () => {
+test("INV-8 deleted architecture-v1 identifiers absent", () => {
 	const deletedSrcIdentifiers = [
 		"SceneProjection", "SceneTarget", "SceneEdge", "SceneAssociation", "buildSceneProjection",
 		"sceneAssociationScore", "labelAssociationScore", "bestEdgesByVision", "clusterVisionUnknowns",
@@ -104,14 +105,14 @@ check("INV-8 deleted architecture-v1 identifiers absent", () => {
 	}
 });
 
-check("INV-5 listRoots seam stays platform-neutral", () => {
+test("INV-5 listRoots seam stays platform-neutral", () => {
 	assert(srcFiles.some(([, text]) => /interface PlatformRoot[\s\S]*isModal: boolean/.test(text)), "PlatformRoot lacks required isModal fact");
 	assert(srcFiles.some(([, text]) => /interface PlatformRoot[\s\S]*metadata\?: Record<string, unknown>/.test(text)), "PlatformRoot lacks metadata escape hatch");
 	assert(!srcFiles.some(([, text]) => /interface PlatformRoot[\s\S]*\bpairing:/.test(text)), "PlatformRoot must not require pairing");
 	assert(!srcFiles.some(([, text]) => /interface PlatformRoot[\s\S]*\bsheetCount:/.test(text)), "PlatformRoot must not require sheetCount");
 });
 
-check("explicit root is not replaced by a modal window behind it", () => {
+test("explicit root is not replaced by a modal window behind it", () => {
 	const root = (overrides) => ({
 		windowId: 1,
 		windowRef: "w1",
@@ -131,7 +132,7 @@ check("explicit root is not replaced by a modal window behind it", () => {
 	assert(shouldPreferForegroundModalWindow(current, foregroundModal), "foreground modal root was not promoted");
 });
 
-check("macOS ScreenCaptureKit config sizes window screenshots", () => {
+test("macOS ScreenCaptureKit config sizes window screenshots", () => {
 	const captureFunction = swift.slice(swift.indexOf("private func captureWindow"), swift.indexOf("private func jpegData"));
 	assert(/config\.width\s*=/.test(captureFunction), "captureWindow does not set SCStreamConfiguration.width");
 	assert(/config\.height\s*=/.test(captureFunction), "captureWindow does not set SCStreamConfiguration.height");
@@ -143,7 +144,7 @@ function enclosingFunctionName(text, index) {
 	return matches.at(-1)?.[1] ?? "(unknown)";
 }
 
-check("INV-6 static note is derived and disposable", () => {
+test("INV-6 static note is derived and disposable", () => {
 	for (const match of noteTs.matchAll(/export\s+function\s+([A-Za-z0-9_]+)/g)) {
 		assert(/^note|^render/.test(match[1]), `src/note.ts exports non-note/render function ${match[1]}`);
 	}
@@ -155,29 +156,29 @@ check("INV-6 static note is derived and disposable", () => {
 	}
 });
 
-check("INV-7 static no label-confirm press regex", () => {
+test("INV-7 static no label-confirm press regex", () => {
 	for (const [file, text] of srcFiles) {
 		assert(!/\/[^/\n]*(confirm|ok|continue|apply)[^/\n]*\/[gimsuyd]*[\s\S]{0,200}(\bpress\b|AXPress|axPress|axPerformActionElement)/i.test(text), `confirm-label press regex appears in src/${file}`);
 		assert(!/(confirm|ok|continue|apply)[\s\S]{0,80}(includes|startsWith|endsWith|===|==)[\s\S]{0,200}(\bpress\b|AXPress|axPress|axPerformActionElement)/i.test(text), `confirm-label press comparison appears in src/${file}`);
 	}
 });
 
-check("INV-8 tsc no unused locals", () => {
+test("INV-8 tsc no unused locals", () => {
 	execFileSync("npx", ["tsc", "--noEmit"], { cwd: root, stdio: "pipe" });
 });
 
-check("INV-9 immutable state ownership", () => {
+test("INV-9 immutable state ownership", () => {
 	const state = fs.readFileSync(path.join(root, "src/state.ts"), "utf8");
 	assert(!/runtimeState\.current(Target|Capture|Look|Outline|Note|ImageMode|StateTarget)/.test(ts), "global current UI state remains in bridge");
 	assert(state.includes("class SavedStates") && state.includes("new StateStore<UiObservation>"), "unified bounded observation store is missing");
 });
 
-check("INV-10 resource-keyed scheduling", () => {
+test("INV-10 resource-keyed scheduling", () => {
 	assert(ts.includes("desktopResourceKey") && ts.includes("resourceScheduler.write"), "desktop writes are not resource scheduled");
 	assert(!ts.includes("withRuntimeLock"), "global runtime lock remains");
 });
 
-check("INV-11 unified agent contract", () => {
+test("INV-11 unified agent contract", () => {
 	const extension = fs.readFileSync(path.join(root, "extensions/computer-use.ts"), "utf8");
 	const tools = [...extension.matchAll(/\bname:\s*"([^"]+)"/g)].map((match) => match[1]);
 	const expected = ["find_roots", "observe_ui", "search_ui", "expand_ui", "inspect_ui", "act_ui", "read_text", "wait_for", "launch_browser", "navigate_browser", "evaluate_browser", "desktop_screenshot", "desktop_input"];
@@ -186,14 +187,14 @@ check("INV-11 unified agent contract", () => {
 	assert(extension.includes("Required state id owning every @e ref"), "state-scoped ref contract is missing");
 });
 
-check("INV-11a compact observe view", () => {
+test("INV-11a compact observe view", () => {
 	const extension = fs.readFileSync(path.join(root, "extensions/computer-use.ts"), "utf8");
 	assert(extension.includes('detail: Type.Optional(Type.Union([Type.Literal("compact"), Type.Literal("outline")]'), "observe_ui does not declare detail compact|outline");
 	assert(ts.includes("function renderStateView") && (ts.match(/renderStateView\(/g) ?? []).length >= 4 && (ts.match(/waitForViewText\(/g) ?? []).length >= 3, "full views do not route through renderStateView");
 	assert(/`Controls \([^`]*stateId \$\{stateId\}, root \$\{outline\.root\.ref\}/.test(ts), "controls header does not show stateId and root ref");
 });
 
-check("INV-12 parallel native transports", () => {
+test("INV-12 parallel native transports", () => {
 	const swift = fs.readFileSync(path.join(root, "native/macos/bridge.swift"), "utf8");
 	const windows = fs.readFileSync(path.join(root, "native/windows/bridge-rs/src/main.rs"), "utf8");
 	assert(swift.includes("Thread.detachNewThread") && swift.includes("physicalInputLock"), "macOS helper is not concurrent with protected physical input");
@@ -201,7 +202,7 @@ check("INV-12 parallel native transports", () => {
 	assert(windows.includes("thread::spawn") && windows.includes("physical_input_lock"), "Windows helper is not concurrent with protected physical input");
 });
 
-check("INV-14 native batches settle once", () => {
+test("INV-14 native batches settle once", () => {
 	const swift = fs.readFileSync(path.join(root, "native/macos/bridge.swift"), "utf8");
 	const windows = fs.readFileSync(path.join(root, "native/windows/bridge-rs/src/main.rs"), "utf8");
 	assert(ts.includes("currentPlatformBackend.actBatch") && ts.includes("dispatchUiTransaction"), "bridge does not route batches through the native transaction seam");
@@ -210,7 +211,7 @@ check("INV-14 native batches settle once", () => {
 	assert(swift.includes('response["stoppedAt"]') && windows.includes('response["stoppedAt"]'), "native batches do not report their checked stop boundary");
 });
 
-check("INV-15 semantic action postconditions", () => {
+test("INV-15 semantic action postconditions", () => {
 	const extension = fs.readFileSync(path.join(root, "extensions/computer-use.ts"), "utf8");
 	const actions = fs.readFileSync(path.join(root, "src/actions.ts"), "utf8");
 	const swift = fs.readFileSync(path.join(root, "native/macos/bridge.swift"), "utf8");
@@ -220,7 +221,7 @@ check("INV-15 semantic action postconditions", () => {
 	assert(swift.includes("waitForRootChange") && swift.includes("state.change.broadcast()"), "macOS waits are not change-notification assisted");
 });
 
-check("INV-16 clean headless contract and non-destructive helper install", () => {
+test("INV-16 clean headless contract and non-destructive helper install", () => {
 	assert(!/stealth_mode|stealthMode|PI_COMPUTER_USE_STEALTH|PI_COMPUTER_USE_STRICT_AX/.test(configTs), "obsolete stealth configuration aliases remain");
 	assert(!/tccutil[\s\S]{0,80}reset|resetTcc/i.test(setupHelper), "helper installation can reset macOS privacy grants");
 	assert(setupHelper.includes("pi-computer-use Local Signing (com.injaneity.pi-computer-use)"), "stable bundle-specific local signing identity is missing");
@@ -231,7 +232,7 @@ check("INV-16 clean headless contract and non-destructive helper install", () =>
 	assert(swift.includes("Web text replacement requires synthesized keyboard input, which strict headless mode prohibits"), "macOS strict headless can synthesize web text replacement");
 });
 
-check("INV-17 macOS agent cursor stays native, configurable, and background-only", () => {
+test("INV-17 macOS agent cursor stays native, configurable, and background-only", () => {
 	assert(configTs.includes("cursor_overlay: boolean") && configTs.includes("PI_COMPUTER_USE_CURSOR_OVERLAY"), "agent cursor config is incomplete");
 	assert(swift.includes('delivery == "pid"'), "physical cursor delivery can display the agent cursor");
 	assert(swift.includes('policy != "ax_only"'), "strict-headless actions can display the agent cursor");
@@ -242,7 +243,7 @@ check("INV-17 macOS agent cursor stays native, configurable, and background-only
 	assert(agentCursorSwift.includes("paused: !renderer.isAnimating"), "agent cursor timeline continues rendering while idle");
 });
 
-check("INV-17b macOS activity glow is configurable, headless-safe, and connection-owned", () => {
+test("INV-17b macOS activity glow is configurable, headless-safe, and connection-owned", () => {
 	assert(configTs.includes("activity_glow: boolean") && configTs.includes("activity_glow: false") && configTs.includes("PI_COMPUTER_USE_ACTIVITY_GLOW"), "activity glow config or default is incomplete");
 	assert(extensionTs.includes('pi.on("tool_execution_start"') && extensionTs.includes('pi.on("agent_end"'), "extension does not track computer-use activity lifecycle");
 	assert(extensionTs.includes("config.headless") && extensionTs.includes("config.activity_glow"), "activity glow is not configurable or headless-safe");
@@ -255,7 +256,7 @@ check("INV-17b macOS activity glow is configurable, headless-safe, and connectio
 	assert(activityGlowSwift.includes("window.setAccessibilityElement(false)"), "activity glow can appear in accessibility discovery");
 });
 
-check("INV-18 consolidated actions and diff-first resulting views", () => {
+test("INV-18 consolidated actions and diff-first resulting views", () => {
 	const actions = fs.readFileSync(path.join(root, "src/actions.ts"), "utf8");
 	const view = fs.readFileSync(path.join(root, "src/view.ts"), "utf8");
 	const macBackend = fs.readFileSync(path.join(root, "src/platform/macos/backend.ts"), "utf8");
@@ -270,7 +271,7 @@ check("INV-18 consolidated actions and diff-first resulting views", () => {
 	assert(!ts.includes("preserveFocus") && macBackend.includes("preserveFocus") && swift.includes("!preserveFocus"), "native focus continuity leaks through the coordinator or is not enforced by the backend");
 });
 
-check("INV-19 macOS root identity resolution", () => {
+test("INV-19 macOS root identity resolution", () => {
 	assert(swift.includes("let requestedRoot = windowRef.flatMap { refStore.window(for: $0) }"), "look does not resolve native root refs from the window store");
 	assert(swift.includes("else if let requestedRoot, let owner = pidForElement(requestedRoot)"), "look cannot recover the owner pid from a stored native root");
 	assert(!swift.includes("CGWindowListCopyWindowInfo([.optionIncludingWindow]"), "window lookup uses optionIncludingWindow without an above/below selector");
@@ -279,7 +280,7 @@ check("INV-19 macOS root identity resolution", () => {
 	assert(swift.includes("($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == windowId"), "window lookup does not verify the returned stable ID");
 });
 
-check("INV-20 bounded broad root discovery", () => {
+test("INV-20 bounded broad root discovery", () => {
 	assert(swift.includes("private func broadRootCandidateApps"), "macOS helper lacks a broad root-candidate preflight");
 	assert(swift.includes("private func cgBroadRootOwners"), "macOS helper lacks a dedicated broad-owner preflight");
 	assert(swift.includes("layer == 0 || layer == popupLevel"), "broad root discovery is not bounded by layer-0 and popup-menu owners");
@@ -298,12 +299,10 @@ check("INV-20 bounded broad root discovery", () => {
 	assert(swift.includes("recentCompletedRequestIds"), "helper diagnostics cannot establish abandoned-request completion");
 });
 
-function checkMacosOnly(name, fn) {
-	if (process.platform === "darwin") return check(name, fn);
-	console.log(`NOT RUN ${name} (requires macOS xcrun)`);
-}
+// NOT RUN elsewhere (requires macOS xcrun): Vitest reports the skip, never a pass.
+const testMacosOnly = test.skipIf(process.platform !== "darwin");
 
-checkMacosOnly("INV-8 swift typecheck", () => {
+testMacosOnly("INV-8 swift typecheck", () => {
 	const triple = process.arch === "x64" ? "x86_64-apple-macosx14.0" : "arm64-apple-macosx14.0";
 	execFileSync("xcrun", [
 		"swiftc", "-target", triple, "-parse-as-library",
@@ -321,7 +320,7 @@ checkMacosOnly("INV-8 swift typecheck", () => {
 	], { cwd: root, stdio: "pipe" });
 });
 
-checkMacosOnly("INV-17 macOS agent cursor lifecycle", () => {
+testMacosOnly("INV-17 macOS agent cursor lifecycle", () => {
 	const triple = process.arch === "x64" ? "x86_64-apple-macosx14.0" : "arm64-apple-macosx14.0";
 	const binary = path.join(os.tmpdir(), `pi-computer-use-cursor-tests-${process.pid}`);
 	try {
@@ -437,10 +436,6 @@ async function pidForWindow(socketPath, windowId) {
 }
 
 async function liveChecks() {
-	if (process.env.PI_CU_LIVE !== "1") {
-		console.log("NOT RUN LIVE invariants (set PI_CU_LIVE=1)");
-		return;
-	}
 	try {
 		const socketPath = process.env.PI_CU_SOCKET_PATH ?? path.join(os.homedir(), "Library/Caches/pi-computer-use/bridge.sock");
 		const diagnostics = await call(socketPath, { id: "inv-diagnostics", cmd: "diagnostics" });
@@ -611,10 +606,13 @@ async function liveChecks() {
 		}
 	} catch (error) {
 		results.push(["LIVE", false]);
-		process.exitCode = 1;
 		console.error(`FAIL LIVE ${error.message}`);
 	}
 }
 
-await liveChecks();
-if (results.some(([, ok]) => !ok)) process.exit(1);
+// NOT RUN unless PI_CU_LIVE=1 (needs the running macOS helper): Vitest reports the skip, never a pass.
+test.runIf(process.env.PI_CU_LIVE === "1")("LIVE invariants", async () => {
+	await liveChecks();
+	const failed = results.filter(([, ok]) => !ok).map(([name]) => name);
+	assert(failed.length === 0, `LIVE invariant failures: ${failed.join(", ")}`);
+});

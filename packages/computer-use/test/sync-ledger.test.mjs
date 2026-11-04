@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import test from "node:test";
-import { validateLedger } from "./check-sync-ledger.mjs";
+import { test } from "vitest";
+import { validateLedger } from "../scripts/check-sync-ledger.mjs";
 
 const control = { name: "remove behavior", file: "src/a.ts", check: "check-a.mjs" };
 const ledger = {

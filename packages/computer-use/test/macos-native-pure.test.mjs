@@ -1,19 +1,17 @@
-#!/usr/bin/env node
 // Compiles the PURE region of native/macos/bridge.swift with a fixture main and runs it.
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { test } from "vitest";
 
-if (process.platform !== "darwin") {
-	console.log("NOT RUN macos native pure checks (requires macOS swiftc)");
-	process.exit(0);
-}
-const source = readFileSync(new URL("../native/macos/bridge.swift", import.meta.url), "utf8");
-const match = source.match(/\/\/ BEGIN PURE[^\n]*\n([\s\S]*?)\/\/ END PURE/);
-if (!match) throw new Error("PURE region not found in bridge.swift");
+// NOT RUN elsewhere (requires macOS swiftc): Vitest reports the skip, never a pass.
+test.skipIf(process.platform !== "darwin")("macOS native pure ref store and input helpers", async () => {
+	const source = readFileSync(new URL("../native/macos/bridge.swift", import.meta.url), "utf8");
+	const match = source.match(/\/\/ BEGIN PURE[^\n]*\n([\s\S]*?)\/\/ END PURE/);
+	if (!match) throw new Error("PURE region not found in bridge.swift");
 
-const main = `
+	const main = `
 import Foundation\nimport CoreGraphics\nimport ApplicationServices
 var failures = 0
 func check(_ ok: Bool, _ name: String) { if !ok { failures += 1; print("FAIL: \\(name)") } }
@@ -81,11 +79,19 @@ check(AXRefStore().storeWindow(el) != w1, "another store (helper process) never 
 if failures > 0 { exit(1) }
 print("macos native pure checks passed")
 `;
-const dir = mkdtempSync(path.join(tmpdir(), "pcu-pure-"));
-try {
-	writeFileSync(path.join(dir, "main.swift"), match[1] + main);
-	execFileSync("swiftc", ["-O", "-o", path.join(dir, "t"), path.join(dir, "main.swift")], { stdio: "inherit" });
-	process.stdout.write(execFileSync(path.join(dir, "t"), { encoding: "utf8" }));
-} finally {
-	rmSync(dir, { recursive: true, force: true });
-}
+	const dir = mkdtempSync(path.join(tmpdir(), "pcu-pure-"));
+	try {
+		writeFileSync(path.join(dir, "main.swift"), match[1] + main);
+		execFileSync("swiftc", ["-O", "-o", path.join(dir, "t"), path.join(dir, "main.swift")], { stdio: "inherit" });
+		let output;
+		try {
+			output = execFileSync(path.join(dir, "t"), { encoding: "utf8" });
+		} catch (error) {
+			// Vitest prints the message, not the child's stdout: carry the Swift FAIL lines into it.
+			throw new Error(`${error.message}\n${error.stdout ?? ""}`, { cause: error });
+		}
+		process.stdout.write(output);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});

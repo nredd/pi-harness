@@ -3,9 +3,9 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { parseArgs, runCoverage, TOOL_VERSION } from "./rust-coverage.mjs";
+import { test } from "vitest";
+import { parseArgs, runCoverage, TOOL_VERSION } from "../scripts/rust-coverage.mjs";
 
 test("validates crate/arguments and resolves output paths without shell interpolation", () => {
 	assert.deepEqual(parseArgs(["--crate", "linux", "--output", "space ; $dir"], "darwin"), {
@@ -26,7 +26,7 @@ test("validates crate/arguments and resolves output paths without shell interpol
 });
 
 test("missing cargo tool gives actionable pinned install documentation", () => {
-	const result = spawnSync(process.execPath, [fileURLToPath(new URL("./rust-coverage.mjs", import.meta.url))], {
+	const result = spawnSync(process.execPath, [fileURLToPath(new URL("../scripts/rust-coverage.mjs", import.meta.url))], {
 		env: { ...process.env, PATH: "" },
 		encoding: "utf8",
 	});

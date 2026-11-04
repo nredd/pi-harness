@@ -10,15 +10,18 @@ import { fileURLToPath } from "node:url";
 import { validateLedger } from "./check-sync-ledger.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const sandbox = mkdtempSync(path.join(os.tmpdir(), "cu-sync-reverts-"));
-const nodeModules = path.resolve(root, "../../node_modules");
+const repository = path.resolve(root, "../..");
+// The sandbox mirrors the monorepo layout so the copied `vitest.config.ts` resolves its shared home guard.
+const sandboxRoot = mkdtempSync(path.join(os.tmpdir(), "cu-sync-reverts-"));
+const sandbox = path.join(sandboxRoot, "packages", "computer-use");
+const nodeModules = path.join(repository, "node_modules");
 const cases = [
 	{
 		name: "Structured upstream disposition reference validation",
 		file: "scripts/check-sync-ledger.mjs",
 		before: "validateUpstream(patch.upstream, patch.id);",
 		after: "/* carried upstream validation dropped */",
-		check: "check-sync-ledger.test.mjs",
+		check: "test/sync-ledger.test.mjs",
 		failure: /Missing expected exception/,
 	},
 	{
@@ -26,7 +29,7 @@ const cases = [
 		file: "docs/content/docs/tutorials/getting-started.mdx",
 		before: "pi install npm:@nredd/pi-computer-use",
 		after: "pi install npm:@injaneity/pi-computer-use",
-		check: "check-docs.mjs",
+		check: "scripts/check-docs.mjs",
 		failure: /tutorial must install the owned package/,
 	},
 	{
@@ -34,7 +37,7 @@ const cases = [
 		file: "docs/content/docs/how-to-guides/develop-and-validate.mdx",
 		before: "The harness root `.github/workflows/publish.yml` owns releases",
 		after: "The nested `.github/workflows/publish-npm.yml` owns releases",
-		check: "check-docs.mjs",
+		check: "scripts/check-docs.mjs",
 		failure: /release guide must identify the harness root workflow/,
 	},
 	{
@@ -42,7 +45,7 @@ const cases = [
 		file: "docs/content/docs/how-to-guides/troubleshooting.mdx",
 		before: "PI_COMPUTER_USE_ALLOW_BUILD=1 node scripts/setup-helper.mjs --platform linux --runtime",
 		after: "node scripts/setup-helper.mjs --platform linux --runtime",
-		check: "check-docs.mjs",
+		check: "scripts/check-docs.mjs",
 		failure: /Linux repair must opt in to the source build/,
 	},
 	{
@@ -50,7 +53,7 @@ const cases = [
 		file: "docs/README.md",
 		before: "cd packages/computer-use",
 		after: "cd .",
-		check: "check-docs.mjs",
+		check: "scripts/check-docs.mjs",
 		failure: /website commands must enter packages\/computer-use/,
 	},
 	{
@@ -58,7 +61,7 @@ const cases = [
 		file: "scripts/rust-coverage.mjs",
 		before: "Missing cargo-llvm-cov; install pinned",
 		after: "Tool unavailable; install pinned",
-		check: "rust-coverage.test.mjs",
+		check: "test/rust-coverage.test.mjs",
 		failure: /Missing cargo-llvm-cov/,
 	},
 	{
@@ -66,7 +69,7 @@ const cases = [
 		file: "scripts/setup-helper.mjs",
 		before: "await stopRunningHelper();",
 		after: "/* old helper left running */",
-		check: "check-local-signing.mjs",
+		check: "test/local-signing.test.mjs",
 		failure: /replacement must stop the helper/,
 	},
 	{
@@ -74,7 +77,7 @@ const cases = [
 		file: "src/platform/macos/helper.ts",
 		before: "processStartMs + 1_000 < binaryChangeMs",
 		after: "false",
-		check: "check-macos-observe-target.mjs",
+		check: "test/macos-observe-target.test.mjs",
 		failure: /older daemon must be stale/,
 	},
 	{
@@ -82,7 +85,7 @@ const cases = [
 		file: "src/platform/macos/helper.ts",
 		before: "const { ctimeMs } = await stat(HELPER_APP_EXECUTABLE_PATH)",
 		after: "const { mtimeMs: ctimeMs } = await stat(HELPER_APP_EXECUTABLE_PATH)",
-		check: "check-macos-observe-target.mjs",
+		check: "test/macos-observe-target.test.mjs",
 		failure: /binary freshness must use ctime, not preserved mtime/,
 	},
 	{
@@ -90,7 +93,7 @@ const cases = [
 		file: "native/macos/bridge.swift",
 		before: 'case "captureDisplay":',
 		after: 'case "captureDisplayDropped":',
-		check: "check-desktop-tools.mjs",
+		check: "test/desktop-tools.test.mjs",
 		failure: /native display capture dispatch must remain/,
 	},
 	{
@@ -98,7 +101,7 @@ const cases = [
 		file: "native/macos/bridge.swift",
 		before: "let cursor = CGEvent(source: nil)?.location",
 		after: "let cursor = NSEvent.mouseLocation",
-		check: "check-desktop-tools.mjs",
+		check: "test/desktop-tools.test.mjs",
 		failure: /cursor readback must use top-left global coordinates/,
 	},
 	{
@@ -106,7 +109,7 @@ const cases = [
 		file: "src/desktop.ts",
 		before: "if (config.headless)",
 		after: "if (false)",
-		check: "check-desktop-tools.mjs",
+		check: "test/desktop-tools.test.mjs",
 		failure: /Missing expected rejection/,
 		darwinOnly: true,
 	},
@@ -115,7 +118,7 @@ const cases = [
 		file: "src/desktop.ts",
 		before: "if (!config.desktop_control)",
 		after: "if (false)",
-		check: "check-desktop-tools.mjs",
+		check: "test/desktop-tools.test.mjs",
 		failure: /Missing expected rejection/,
 		darwinOnly: true,
 	},
@@ -124,7 +127,7 @@ const cases = [
 		file: "src/desktop.ts",
 		before: "return await desktopLeaseStorage.run(lease, work);",
 		after: "return await work();",
-		check: "check-unpaired-act.mjs",
+		check: "test/unpaired-act.test.mjs",
 		failure: /desktop_input must not interleave inside a physical act_ui transaction/,
 	},
 	{
@@ -132,7 +135,7 @@ const cases = [
 		file: "native/macos/bridge.swift",
 		before: "guard from != to else { return }",
 		after: "guard false else { return }",
-		check: "check-macos-native-pure.mjs",
+		check: "test/macos-native-pure.test.mjs",
 		failure: /refs handed to a successor look survive the base look's eviction/,
 		darwinOnly: true,
 	},
@@ -141,7 +144,7 @@ const cases = [
 		file: "native/macos/bridge.swift",
 		before: "String(UInt32.random(in: 0x1000...0xFFFF_FFFF), radix: 16)",
 		after: '"1000"',
-		check: "check-macos-native-pure.mjs",
+		check: "test/macos-native-pure.test.mjs",
 		failure: /another store \(helper process\) never reissues the same ref/,
 		darwinOnly: true,
 	},
@@ -150,7 +153,7 @@ const cases = [
 		file: "native/macos/bridge.swift",
 		before: "if unowned.count > unownedCapacity {",
 		after: "if false {",
-		check: "check-macos-native-pure.mjs",
+		check: "test/macos-native-pure.test.mjs",
 		failure: /unowned refs capped at 3/,
 		darwinOnly: true,
 	},
@@ -159,7 +162,7 @@ const cases = [
 		file: "native/macos/bridge.swift",
 		before: "for ref in refsByOwner.removeValue(forKey: owner) ?? [] { removeElement(ref) }",
 		after: "/* owned refs leaked */",
-		check: "check-macos-native-pure.mjs",
+		check: "test/macos-native-pure.test.mjs",
 		failure: /dropping a look frees only its refs/,
 		darwinOnly: true,
 	},
@@ -168,7 +171,7 @@ const cases = [
 		file: "src/bridge.ts",
 		before: "if (!execution.rootDelta?.length) return;",
 		after: "return;",
-		check: "check-unpaired-act.mjs",
+		check: "test/unpaired-act.test.mjs",
 		failure: /delta line missing an @r ref/,
 	},
 	{
@@ -177,7 +180,7 @@ const cases = [
 		before:
 			'const rootExpired = exactRootAvailable === true && (error as { code?: string } | undefined)?.code === "root_not_found";',
 		after: "const rootExpired = false;",
-		check: "check-act-outcomes.mjs",
+		check: "test/act-outcomes.test.mjs",
 		failure: /coded stale root must report root_stale/,
 	},
 	{
@@ -185,7 +188,7 @@ const cases = [
 		file: "src/bridge.ts",
 		before: "REPLACEMENT_ROOT_KINDS.has(delta.kind)",
 		after: "true",
-		check: "check-act-outcomes.mjs",
+		check: "test/act-outcomes.test.mjs",
 		failure: /menus, dead and foreign roots must not count as replacements/,
 	},
 	{
@@ -193,7 +196,7 @@ const cases = [
 		file: "native/macos/bridge.swift",
 		before: "{ $0.bundleIdentifier }, { $0.localizedName }",
 		after: "{ $0.localizedName }, { $0.bundleIdentifier }",
-		check: "check-desktop-tools.mjs",
+		check: "test/desktop-tools.test.mjs",
 		failure: /activation must rank bundle id before name before executable/,
 	},
 	{
@@ -201,7 +204,7 @@ const cases = [
 		file: "src/desktop.ts",
 		before: "</clipboard>",
 		after: "clipboard-end",
-		check: "check-desktop-tools.mjs",
+		check: "test/desktop-tools.test.mjs",
 		failure: /clipboard content must be fenced as untrusted data/,
 		darwinOnly: true,
 	},
@@ -210,7 +213,7 @@ const cases = [
 		file: "scripts/setup-helper.mjs",
 		before: '"--target-dir", linuxBuildTargetDir',
 		after: '"--target-dir-dropped", linuxBuildTargetDir',
-		check: "check-linux-build-scripts.mjs",
+		check: "test/linux-build-scripts.test.mjs",
 		failure: /target-dir/,
 	},
 	{
@@ -218,7 +221,7 @@ const cases = [
 		file: "scripts/setup-helper.mjs",
 		before: 'if (!signalGroup("SIGKILL")) return;',
 		after: "return; /* compiler group not killed */",
-		check: "check-linux-build-scripts.mjs",
+		check: "test/linux-build-scripts.test.mjs",
 		failure: /compiler cleanup must escalate to group SIGKILL/,
 	},
 	{
@@ -226,7 +229,7 @@ const cases = [
 		file: "scripts/docs-generators/generate-tool-reference.mjs",
 		before: "const tools = [...COMPUTER_USE_TOOLS, ...DESKTOP_TOOLS];",
 		after: "const tools = [...COMPUTER_USE_TOOLS];",
-		check: "check-docs-platform.mjs",
+		check: "scripts/check-docs-platform.mjs",
 		failure: /generated references must be identical on linux/,
 	},
 	{
@@ -234,7 +237,7 @@ const cases = [
 		file: "package.json",
 		before: '"native/macos/agent_cursor_motion.swift",',
 		after: "",
-		check: "check-package-assets.mjs",
+		check: "scripts/check-package-assets.mjs",
 		failure: /missing package\/native\/macos\/agent_cursor_motion.swift/,
 	},
 ];
@@ -245,6 +248,8 @@ try {
 	// them. Keep this self-contained package-root fixture list aligned with the checks selected above.
 	for (const entry of [
 		"src",
+		"test",
+		"vitest.config.ts",
 		"extensions",
 		"native",
 		"scripts",
@@ -263,8 +268,17 @@ try {
 			filter: (source) => !source.split(path.sep).includes("target"),
 		});
 	}
-	symlinkSync(nodeModules, path.join(sandbox, "node_modules"), "dir");
-	const env = { ...process.env, PI_CU_LIVE: "", PI_COMPUTER_USE_LIVE: "", HOME: sandbox };
+	symlinkSync(nodeModules, path.join(sandboxRoot, "node_modules"), "dir");
+	symlinkSync(path.join(repository, "integration"), path.join(sandboxRoot, "integration"), "dir");
+	// NO_COLOR keeps Vitest's CI-colored output matchable; each Vitest control gets its own isolated home.
+	const env = {
+		...process.env,
+		PI_CU_LIVE: "",
+		PI_COMPUTER_USE_LIVE: "",
+		HOME: sandbox,
+		NO_COLOR: "1",
+		GITHUB_STEP_SUMMARY: "",
+	};
 	for (const test of cases) {
 		if (test.darwinOnly && process.platform !== "darwin") {
 			console.log(`NOT RUN revert proof: ${test.name} (requires macOS)`);
@@ -275,11 +289,17 @@ try {
 		assert.ok(source.includes(test.before), `Revert anchor missing for ${test.name}`);
 		writeFileSync(file, source.replace(test.before, test.after));
 		try {
-			const result = spawnSync(
-				process.execPath,
-				[path.join(nodeModules, "tsx/dist/cli.mjs"), path.join(sandbox, "scripts", test.check)],
-				{ cwd: sandbox, env, encoding: "utf8", timeout: 90_000, maxBuffer: 8 * 1024 * 1024 },
-			);
+			// Vitest suites run through the repository launcher; repository gates stay plain CLIs under tsx.
+			const args = test.check.endsWith(".test.mjs")
+				? [path.join(repository, "scripts/run-vitest.ts"), "node", test.check, "--coverage.enabled=false"]
+				: [path.join(nodeModules, "tsx/dist/cli.mjs"), path.join(sandbox, test.check)];
+			const result = spawnSync(process.execPath, args, {
+				cwd: sandbox,
+				env,
+				encoding: "utf8",
+				timeout: 90_000,
+				maxBuffer: 8 * 1024 * 1024,
+			});
 			assert.ifError(result.error);
 			assert.notEqual(result.status, 0, `Dropped patch survived: ${test.name}`);
 			assert.match(`${result.stdout}\n${result.stderr}`, test.failure, `Wrong failure for ${test.name}`);
@@ -289,5 +309,5 @@ try {
 		}
 	}
 } finally {
-	rmSync(sandbox, { recursive: true, force: true });
+	rmSync(sandboxRoot, { recursive: true, force: true });
 }

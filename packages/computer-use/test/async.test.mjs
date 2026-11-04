@@ -3,8 +3,8 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
 import { pathToFileURL } from "node:url";
+import { test, vi } from "vitest";
 import {
 	COMMAND_KILL_WAIT_MS,
 	COMMAND_TERM_WAIT_MS,
@@ -17,7 +17,7 @@ import {
 	stopCheckChild,
 	within,
 	writeSignalReadinessObserver,
-} from "./check-async.mjs";
+} from "../scripts/check-async.mjs";
 
 const NEGATIVE_CONTROL_TIMEOUT_MS = 1;
 const COMMAND_TIMEOUT_CONTROL_MS = 25;
@@ -416,15 +416,13 @@ async function verifyFailedChildCleanup() {
 }
 
 /**
- * @param {import('node:test').TestContext} context Scoped syscall mocks.
+ * @param {import('vitest').TestContext} context Scoped syscall mocks; the recording kill is restored when the test finishes.
  * @returns {Promise<void>} Verifies probe-only cleanup despite an observable former PGID.
  * @throws {Error} On any non-probe signal.
  */
 async function verifyCompletedGroupProbes(context) {
 	const calls = [];
-	context.mock.method(
-		process,
-		"kill",
+	const kill = vi.spyOn(process, "kill").mockImplementation(
 		/** @returns {boolean} First observes a possibly recycled group. @throws {Error} On non-probe signals, then ESRCH on the next probe. */
 		(pid, signal) => {
 			calls.push([pid, signal]);
@@ -437,6 +435,7 @@ async function verifyCompletedGroupProbes(context) {
 			throw Object.assign(new Error("group gone"), { code: "ESRCH" });
 		},
 	);
+	context.onTestFinished(() => kill.mockRestore());
 	await stopCheckChild(
 		{
 			pid: 424242,
@@ -456,21 +455,20 @@ async function verifyCompletedGroupProbes(context) {
 }
 
 /**
- * @param {import('node:test').TestContext} context Scoped syscall mocks.
+ * @param {import('vitest').TestContext} context Scoped syscall mocks; the recording kill is restored when the test finishes.
  * @returns {Promise<void>} Verifies probe-only cleanup releases retained handles.
  * @throws {Error} On missing deadline or handle release.
  */
 async function verifyCompletedStreamLifetime(context) {
 	let destroyed = 0;
 	let unreferenced = false;
-	context.mock.method(
-		process,
-		"kill",
+	const kill = vi.spyOn(process, "kill").mockImplementation(
 		/** @returns {never} Never returns. @throws {Error} No signal is safe after completed-leader ownership release. */
 		() => {
 			throw new Error("must not signal completed fixture");
 		},
 	);
+	context.onTestFinished(() => kill.mockRestore());
 	const stream = {
 		/** @returns {void} Records pipe release. @throws {never} No errors. */
 		destroy: () => {
@@ -656,10 +654,9 @@ test(
 	"command deadline closes its real child and reports operation context",
 	verifyCommandDeadline,
 );
-test(
+test.skipIf(process.platform === "win32")(
 	"group cleanup kills a redirected TERM-ignoring descendant after its leader closes",
 	{
-		skip: process.platform === "win32",
 		timeout:
 			COMMAND_TERM_WAIT_MS + COMMAND_KILL_WAIT_MS + DEFAULT_CHECK_TIMEOUT_MS,
 	},

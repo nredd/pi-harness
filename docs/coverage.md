@@ -216,12 +216,21 @@ and runnable workflow examples are explicitly pending source, not verification e
 The generated stats CLI bundle has a reasoned generated-artifact exclusion; its original
 `src/stats/cli.ts` remains owned and measured.
 
-`computer-use` is explicitly **not measured, tracked**. Its custom platform/native scripts
-continue running, but no invented instrumentation or 100% claim is made. Its TS entries and
+`computer-use` is explicitly **not measured, tracked** for its native Swift/Rust sources and the
+documentation site. Since #347 its suites run under Vitest, and the separate `computer-use-vitest`
+policy entry (same root) measures the 33 executable JS/TS runtime modules with Istanbul: `src`,
+`extensions`, `setup-helper.mjs`, `build-native.mjs`, `rust-coverage.mjs` and the documentation
+generators, with the declaration-only `src/platform/types.ts` excluded as type-only. It stays
+`goal: "excluded"` and report-only, with no 100% claim; subprocess-run scripts count only what the
+suites import. First references: macOS **2061 lines / 539 functions** uncovered (local
+`npm test` on `9aad6172`), Linux **2088 / 548** (hosted `coverage-ubuntu-24.04` artifact, run
+`41748291074`, same commit). The remaining
+`check-linux-native`, `check-macos-helper-live` and `check-linux-live` scripts are outside this
+signal until their #347 follow-up. Its TS entries and
 native sources stay in inventory. The owner explicitly excludes this package from coverage maintenance, so it does not block
-the global flip. Imported documentation-site TS/TSX/configuration, documentation generators and
-optional `scripts/rust-coverage.mjs` tooling are likewise inventory-only under that exclusion, not
-new measured or gated domains. The opt-in Rust report is never collected by normal checks; its
+the global flip. Imported documentation-site TS/TSX/configuration is likewise inventory-only under
+that exclusion; the documentation generators and optional `scripts/rust-coverage.mjs` tooling are
+measured only by the report-only signal above, never gated. The opt-in Rust report is never collected by normal checks; its
 mocked argument/path/error tests still run. Existing native/platform checks remain unchanged.
 `dev-tools` now emits primary Istanbul and independent native Bun reports after #155/#195.
 Failed-run reports are diagnostic artifacts only and never establish budgets.
