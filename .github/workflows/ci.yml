@@ -24,6 +24,7 @@ jobs:
       wsl_inputs: ${{ steps.classify.outputs.wsl_inputs }}
       stack_inputs: ${{ steps.classify.outputs.stack_inputs }}
       benchmark_inputs: ${{ steps.classify.outputs.benchmark_inputs }}
+      plan: ${{ steps.classify.outputs.plan }}
       changed_files: ${{ steps.classify.outputs.changed_files }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -32,11 +33,15 @@ jobs:
           persist-credentials: false
       - id: classify
         name: Classify changed paths
+        # `plan` is every cell's decision (run, scenarios, gates, NOT RUN reason); the jobs below only read it.
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
           HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT: ${{ github.event_name }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+          if [ "$EVENT" = workflow_dispatch ]; then
             # A frozen release-verification/<sha> ref can verify an older main
             # candidate without moving it forward merely because main advanced.
             case "$GITHUB_REF" in
@@ -44,12 +49,11 @@ jobs:
               *) echo 'Full verification requires main or an exact frozen candidate ref' >&2; exit 1 ;;
             esac
             git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-            echo 'docs_only=false' >>"$GITHUB_OUTPUT"
-            echo 'wsl_inputs=true' >>"$GITHUB_OUTPUT"
-            echo 'stack_inputs=true' >>"$GITHUB_OUTPUT"
-            echo 'changed_files=Full frozen release candidate' >>"$GITHUB_OUTPUT"
+            # No diff to read: every input is true and every cell runs for real.
+            python3 scripts/ci_paths.py --full --event "$EVENT" --github-output "$GITHUB_OUTPUT"
           else
-            python3 scripts/ci_paths.py --base "$BASE" --head "$HEAD" --github-output "$GITHUB_OUTPUT"
+            python3 scripts/ci_paths.py --base "$BASE" --head "$HEAD" --event "$EVENT" \
+              --pr-title="$PR_TITLE" --pr-number "${PR_NUMBER:-0}" --github-output "$GITHUB_OUTPUT"
           fi
       - name: Report classification
         env:
@@ -82,6 +86,7 @@ jobs:
           } >>"$GITHUB_STEP_SUMMARY"
 
   owned:
+    if: ${{ !cancelled() }}
     name: owned (${{ matrix.os }})
     needs: classify
     strategy:
@@ -92,18 +97,15 @@ jobs:
           - os: ubuntu-24.04
             runner: ubuntu-24.04
             guest: linux
-            gates: check-ts check-scripts check-integration
           - os: macos-14
             runner: xcode-27
             guest: macos
-            gates: check-ts check-scripts check-integration
           - os: wsl2
             runner: windows-2025
             guest: wsl2
-            # Only LCOV producers: `pytest scripts` and `pytest tests` duplicate Ubuntu here.
-            gates: check-ts check-probes check-import-audit
-    # WSL has no required-check bypass of its own: a PR without WSL inputs reports from a cheap Ubuntu job.
-    runs-on: ${{ matrix.os == 'wsl2' && github.event_name == 'pull_request' && needs.classify.outputs.wsl_inputs == 'false' && 'ubuntu-24.04' || matrix.runner }}
+    # A cell the plan does not run (NOT RUN, or blocked, or no plan at all) reports from a cheap Ubuntu job and holds
+    # no macOS or Windows slot.
+    runs-on: ${{ !fromJSON(needs.classify.outputs.plan || '{}')[format('owned ({0})', matrix.os)].run && 'ubuntu-24.04' || matrix.runner }}
     defaults:
       run:
         shell: ${{ matrix.guest == 'wsl2' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash -e {0}' }}
@@ -125,35 +127,21 @@ jobs:
           $gitBin >> $env:GITHUB_PATH
           "PI_CI_GIT_BASH=$bash" >> $env:GITHUB_ENV
           "Git Bash executable: $resolved" >> $env:GITHUB_STEP_SUMMARY
+      # The plan step lives in a local action, so a sparse checkout of `.github/actions` comes first. The full
+      # checkout below runs only when the plan says the cell runs.
+      - name: Check out the local actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/actions
+          persist-credentials: false
       - id: plan
         name: Report execution plan
-        shell: bash -e {0}
-        env:
-          DOCS_ONLY: ${{ needs.classify.outputs.docs_only }}
-          CHANGED_FILES: ${{ needs.classify.outputs.changed_files }}
-        run: |
-          if [ "${{ matrix.os }}" = wsl2 ] && [ "$RUNNER_OS" != Windows ]; then
-            why="This pull request changes no CI or WSL inputs; owned (wsl2) runs for real on main pushes and on PRs that change them."
-            echo "run=false" >>"$GITHUB_OUTPUT"
-            echo "::notice title=owned (wsl2) NOT RUN::$why"
-            {
-              echo "### owned (wsl2): NOT RUN"
-              echo "$why This is not a pass."
-            } >>"$GITHUB_STEP_SUMMARY"
-          elif [ "$DOCS_ONLY" = true ] && [ "${{ matrix.os }}" != wsl2 ]; then
-            echo "run=false" >>"$GITHUB_OUTPUT"
-            echo "::notice title=docs-only CI bypass::Skipping expensive owned checks because this change is docs-only"
-            {
-              echo "### owned: skipped"
-              echo "Skipped because the change is docs-only."
-              echo '```text'
-              printf '%s\n' "$CHANGED_FILES"
-              echo '```'
-            } >>"$GITHUB_STEP_SUMMARY"
-          else
-            echo "run=true" >>"$GITHUB_OUTPUT"
-            echo "owned checks will run"
-          fi
+        uses: ./.github/actions/report-plan
+        with:
+          cell: ${{ format('owned ({0})', matrix.os) }}
+          plan: ${{ needs.classify.outputs.plan }}
+          classify_result: ${{ needs.classify.result }}
+          changed_files: ${{ needs.classify.outputs.changed_files }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.plan.outputs.run == 'true'
         with:
@@ -187,6 +175,7 @@ jobs:
         run: git submodule update --init forks/pi
       # Verifies the root core overrides before `npm ci`; the read-only token is for `gh attestation verify`.
       - name: Install
+        id: install
         if: steps.plan.outputs.run == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -198,9 +187,22 @@ jobs:
         run: |
           rustup target add aarch64-unknown-linux-gnu
           echo "PI_CU_LINUX_ARM64_CHECK=1" >>"$GITHUB_ENV"
-      - name: Owned gates (biome, tsc, Vitest on Node and Bun, scripts, integration units)
-        if: steps.plan.outputs.run == 'true'
-        run: make ${{ matrix.gates }}
+      # One step per gate the plan lists, so a failing gate never hides another gate's evidence.
+      - name: Owned gate check-ts (biome, tsc, Vitest on Node and Bun, computer-use checks)
+        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.install.outcome == 'success' && contains(steps.plan.outputs.gates, 'check-ts') }}
+        run: make check-ts
+      - name: Owned gate check-scripts (ruff, ty, pytest scripts, import audit)
+        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.install.outcome == 'success' && contains(steps.plan.outputs.gates, 'check-scripts') }}
+        run: make check-scripts
+      - name: Owned gate check-integration (ruff, ty, pytest integration units, probes)
+        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.install.outcome == 'success' && contains(steps.plan.outputs.gates, 'check-integration') }}
+        run: make check-integration
+      - name: Owned gate check-probes (WSL LCOV producer)
+        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.install.outcome == 'success' && contains(steps.plan.outputs.gates, 'check-probes') }}
+        run: make check-probes
+      - name: Owned gate check-import-audit (WSL LCOV producer)
+        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.install.outcome == 'success' && contains(steps.plan.outputs.gates, 'check-import-audit') }}
+        run: make check-import-audit
       - name: Coverage accounting (existing reports, including test failures)
         if: always() && steps.plan.outputs.run == 'true'
         env:
@@ -265,6 +267,7 @@ jobs:
           if-no-files-found: warn
 
   contracts:
+    if: ${{ !cancelled() }}
     name: contracts (${{ matrix.os }})
     needs: classify
     strategy:
@@ -281,8 +284,9 @@ jobs:
           - os: wsl2
             runner: windows-2025
             guest: wsl2
-    # WSL has no required-check bypass of its own: a PR without WSL inputs reports from a cheap Ubuntu job.
-    runs-on: ${{ matrix.os == 'wsl2' && github.event_name == 'pull_request' && needs.classify.outputs.wsl_inputs == 'false' && 'ubuntu-24.04' || matrix.runner }}
+    # A cell the plan does not run (NOT RUN, or blocked, or no plan at all) reports from a cheap Ubuntu job and holds
+    # no macOS or Windows slot.
+    runs-on: ${{ !fromJSON(needs.classify.outputs.plan || '{}')[format('contracts ({0})', matrix.os)].run && 'ubuntu-24.04' || matrix.runner }}
     defaults:
       run:
         shell: ${{ matrix.guest == 'wsl2' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash -e {0}' }}
@@ -304,35 +308,21 @@ jobs:
           $gitBin >> $env:GITHUB_PATH
           "PI_CI_GIT_BASH=$bash" >> $env:GITHUB_ENV
           "Git Bash executable: $resolved" >> $env:GITHUB_STEP_SUMMARY
+      # The plan step lives in a local action, so a sparse checkout of `.github/actions` comes first. The full
+      # checkout below runs only when the plan says the cell runs.
+      - name: Check out the local actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/actions
+          persist-credentials: false
       - id: plan
         name: Report execution plan
-        shell: bash -e {0}
-        env:
-          DOCS_ONLY: ${{ needs.classify.outputs.docs_only }}
-          CHANGED_FILES: ${{ needs.classify.outputs.changed_files }}
-        run: |
-          if [ "${{ matrix.os }}" = wsl2 ] && [ "$RUNNER_OS" != Windows ]; then
-            why="This pull request changes no CI or WSL inputs; contracts (wsl2) runs for real on main pushes and on PRs that change them."
-            echo "run=false" >>"$GITHUB_OUTPUT"
-            echo "::notice title=contracts (wsl2) NOT RUN::$why"
-            {
-              echo "### contracts (wsl2): NOT RUN"
-              echo "$why This is not a pass."
-            } >>"$GITHUB_STEP_SUMMARY"
-          elif [ "$DOCS_ONLY" = true ] && [ "${{ matrix.os }}" != wsl2 ]; then
-            echo "run=false" >>"$GITHUB_OUTPUT"
-            echo "::notice title=docs-only CI bypass::Skipping expensive contracts checks because this change is docs-only"
-            {
-              echo "### contracts: skipped"
-              echo "Skipped because the change is docs-only."
-              echo '```text'
-              printf '%s\n' "$CHANGED_FILES"
-              echo '```'
-            } >>"$GITHUB_STEP_SUMMARY"
-          else
-            echo "run=true" >>"$GITHUB_OUTPUT"
-            echo "contracts checks will run"
-          fi
+        uses: ./.github/actions/report-plan
+        with:
+          cell: ${{ format('contracts ({0})', matrix.os) }}
+          plan: ${{ needs.classify.outputs.plan }}
+          classify_result: ${{ needs.classify.result }}
+          changed_files: ${{ needs.classify.outputs.changed_files }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.plan.outputs.run == 'true'
         with:
@@ -386,6 +376,7 @@ jobs:
     uses: ./.github/workflows/forks.yml
 
   stack:
+    if: ${{ !cancelled() }}
     name: stack (${{ matrix.os }}, ${{ matrix.stack }})
     needs: classify
     strategy:
@@ -402,68 +393,37 @@ jobs:
             runner: xcode-27
             guest: macos
             platform: darwin-arm64
-          # Required check names with no work behind them, on Ubuntu so they hold no macOS or Windows slot.
+          # Required check names with no work behind them (scripts/ci_paths.py plans NOT RUN), on Ubuntu so they
+          # hold no macOS or Windows slot.
           - os: macos-14
             stack: personal
             runner: ubuntu-24.04
             guest: linux
-            not_run: macOS runs only the local stack; ubuntu-24.04 carries the published personal stack.
           - os: wsl2
             runner: ubuntu-24.04
             guest: linux
             platform: linux-x64
-            not_run: WSL runs no stack cell; owned (wsl2) and contracts (wsl2) are its only evidence.
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ !fromJSON(needs.classify.outputs.plan || '{}')[format('stack ({0}, {1})', matrix.os, matrix.stack)].run && 'ubuntu-24.04' || matrix.runner }}
     defaults:
       run:
         shell: bash -e {0}
     timeout-minutes: 40
     steps:
+      # The plan step lives in a local action, so a sparse checkout of `.github/actions` comes first. The full
+      # checkout below runs only when the plan says the cell runs.
+      - name: Check out the local actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/actions
+          persist-credentials: false
       - id: plan
         name: Report execution plan
-        shell: bash -e {0}
-        env:
-          DOCS_ONLY: ${{ needs.classify.outputs.docs_only }}
-          STACK_INPUTS: ${{ needs.classify.outputs.stack_inputs }}
-          CHANGED_FILES: ${{ needs.classify.outputs.changed_files }}
-          NOT_RUN: ${{ matrix.not_run }}
-        run: |
-          if [ -n "$NOT_RUN" ]; then
-            echo "run=false" >>"$GITHUB_OUTPUT"
-            echo "::notice title=stack cell NOT RUN::$NOT_RUN"
-            {
-              echo "### stack: NOT RUN"
-              echo "$NOT_RUN This is not a pass."
-            } >>"$GITHUB_STEP_SUMMARY"
-          elif [ "$DOCS_ONLY" = true ]; then
-            echo "run=false" >>"$GITHUB_OUTPUT"
-            echo "::notice title=docs-only CI bypass::Skipping expensive stack scenario because this change is docs-only"
-            {
-              echo "### stack: skipped"
-              echo "Skipped because the change is docs-only."
-              echo '```text'
-              printf '%s\n' "$CHANGED_FILES"
-              echo '```'
-            } >>"$GITHUB_STEP_SUMMARY"
-          elif [ "$GITHUB_EVENT_NAME" = push ] && { [ "${{ matrix.os }}" != ubuntu-24.04 ] || [ "${{ matrix.stack }}" != personal ]; }; then
-            echo "run=false" >>"$GITHUB_OUTPUT"
-            echo "::notice title=main CI smoke::Skipping this stack cell on main; ubuntu-24.04/personal remains the merged-result smoke"
-            echo "### stack: main-push selective smoke" >>"$GITHUB_STEP_SUMMARY"
-            echo "Skipped on a main push; \`stack (ubuntu-24.04, personal)\` validates the merged result." >>"$GITHUB_STEP_SUMMARY"
-          elif [ "$GITHUB_EVENT_NAME" = pull_request ] && [ "${{ matrix.stack }}" = personal ] && [ "$STACK_INPUTS" = false ]; then
-            why="This pull request changes no stack inputs; the personal stack installs published packages, so its scenarios cannot change. Setup still runs."
-            echo "run=true" >>"$GITHUB_OUTPUT"
-            echo "scenarios=false" >>"$GITHUB_OUTPUT"
-            echo "::notice title=personal stack NOT RUN::$why"
-            {
-              echo "### stack: personal scenarios NOT RUN"
-              echo "$why This is not a pass."
-            } >>"$GITHUB_STEP_SUMMARY"
-          else
-            echo "run=true" >>"$GITHUB_OUTPUT"
-            echo "scenarios=true" >>"$GITHUB_OUTPUT"
-            echo "stack scenario will run"
-          fi
+        uses: ./.github/actions/report-plan
+        with:
+          cell: ${{ format('stack ({0}, {1})', matrix.os, matrix.stack) }}
+          plan: ${{ needs.classify.outputs.plan }}
+          classify_result: ${{ needs.classify.result }}
+          changed_files: ${{ needs.classify.outputs.changed_files }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.plan.outputs.run == 'true'
         with:

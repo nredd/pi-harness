@@ -46,6 +46,8 @@ candidate `head_sha`, the current attempt's complete matrix and core jobs, the s
 execution steps (not just successful job labels), and all retained, nonempty coverage, packed
 contract, Node stack and standalone stack artifacts bound to that run and SHA.
 
+The required steps follow the CI plan (`scripts/ci_paths.py`, [ci.md](ci.md)): each `owned (<os>)` cell must have executed its planned `Owned gate <target>` steps (`OWNED_GATES`: native cells `check-ts`, `check-scripts`, `check-integration`; WSL `check-ts`, `check-probes`, `check-import-audit`), and the stack cells are exactly those the plan can run, never the `STACK_NOT_RUN` names. A dispatch is planned with `ci_paths.py --full`, so every such cell runs. Tests pin `harness.release_gate` to `OWNED_GATES`, `STACK_NOT_RUN` and the step names in `ci.yml`.
+
 Artifacts are per run, with no attempt field, so each required artifact is bound to the job that
 uploads it (`coverage-<os>` to `owned (<os>)`, `contract-reports-<os>` to `contracts (<os>)`,
 `stack-*` and `standalone-*` to their `stack (<os>, <stack>)` cell). That job must be in the
