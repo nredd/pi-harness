@@ -19,13 +19,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, describe, test } from "vitest";
+import { afterAll, beforeAll, describe, test } from "vitest";
 
 const SCRIPTS_DIR = fileURLToPath(new URL("../scripts", import.meta.url));
 const ROOT = path.resolve(SCRIPTS_DIR, "..");
-const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "pi-computer-use-script-test-"));
-const TEST_HELPER_APP = path.join(TEST_ROOT, "pi-computer-use.app");
-const TEST_WINDOWS_HELPER = path.join(TEST_ROOT, "windows-bridge.exe");
+// Scratch root and helper fingerprints are taken in the suite's `beforeAll`, so a skipped default
+// `npm test` creates no temp dir and reads no helper.
+let TEST_ROOT;
+let TEST_HELPER_APP;
+let TEST_WINDOWS_HELPER;
 const LIVE_HELPER = "/Applications/pi-computer-use.app/Contents/MacOS/bridge";
 // Each script run carries its own 120 s deadline; the Vitest case only adds teardown headroom so the
 // script's labelled timeout, not the runner's, reports a hang.
@@ -39,8 +41,8 @@ function fileFingerprint(filePath) {
 	return `${stat.mtimeMs}:${stat.size}:${hash}`;
 }
 
-const liveHelperBefore = fileFingerprint(LIVE_HELPER);
-const armPrebuiltBefore = fileFingerprint(path.join(ROOT, "prebuilt", "macos", "arm64", "bridge"));
+let liveHelperBefore;
+let armPrebuiltBefore;
 
 // ---------------------------------------------------------------------------
 // Path constants – replicated to avoid crossing the TS/ESM module boundary
@@ -120,6 +122,13 @@ function isDarwin() {
 // Opt-in, as before the port: `check` never ran this suite, and its two macOS helper builds outlast the
 // scripts' own 120 s deadline on a loaded host. `npm run test:windows-scripts` sets the flag.
 describe.skipIf(process.env.PI_CU_WINDOWS_SCRIPTS !== "1")("Windows build/install script routing (PI_CU_WINDOWS_SCRIPTS=1)", () => {
+	beforeAll(() => {
+		TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "pi-computer-use-script-test-"));
+		TEST_HELPER_APP = path.join(TEST_ROOT, "pi-computer-use.app");
+		TEST_WINDOWS_HELPER = path.join(TEST_ROOT, "windows-bridge.exe");
+		liveHelperBefore = fileFingerprint(LIVE_HELPER);
+		armPrebuiltBefore = fileFingerprint(path.join(ROOT, "prebuilt", "macos", "arm64", "bridge"));
+	});
 	afterAll(() => rmSilent(TEST_ROOT));
 
 	test("path alignment", () => {
