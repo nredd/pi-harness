@@ -135,10 +135,10 @@ node ../../scripts/run-vitest.ts bun --config .vitest.config.ts   # todo
 
 Keep the sampler's `--maxWorkers=1`. Install the Istanbul provider version compatible with the
 pinned Vitest. Istanbul remains the provider on Bun 1.4.4; do not substitute the V8 provider or
-Bun-native coverage flags. Both `text` and `lcov` reporters are mandatory. Set explicit
-per-signal source inventories and matching instrumentation includes in #162, including
-never-imported files where full-source coverage is claimed; test counts alone are not source
-coverage. Expected reports, relative to the repository root:
+Bun-native coverage flags. Both `text` and `lcov` reporters are mandatory. The per-signal
+source inventory (#162) lives only in `coverage/policy.json`; each config reads it as its
+instrumentation `include`, so never-imported files count wherever full-source coverage is claimed.
+Test counts alone are not source coverage. Expected reports, relative to the repository root:
 
 - `packages/subscription-router/coverage/bun/lcov.info`
 - `packages/preset/coverage/bun/lcov.info`

@@ -119,7 +119,7 @@ The accounting script consumes LCOV, not runner APIs. Primary reports use Istanb
 Real Pi/Jiti reloads collide with Vitest-generated scripts at identical source URLs and corrupt
 V8 attribution. The preset and todo diagnoses demonstrate false misses and false hits; preserve
 real-loader tests rather than deleting assertions to repair counters. Istanbul credits instrumented
-Vitest transforms, not independent Jiti-only execution. Dev-tools also uses Istanbul, following #195, with all 23 executable modules explicitly included.
+Vitest transforms, not independent Jiti-only execution. Dev-tools also uses Istanbul, following #195, over all 23 executable modules.
 Its static `src/core/index.ts` facade is validated by real source/emitted-ESM instrumentation.
 Other primary producers retain V8. Since #347 that includes the import-audit and probe helpers:
 `scripts/vitest.config.ts` and `integration/probes/vitest.config.ts` replace c8 + `node --test`, run
@@ -184,7 +184,7 @@ Their stored `max_uncovered` values are advisory references, not enforced budget
 rely on that default. Native `bun test` subset measurements are NOT the owned-source denominator:
 Bun 1.3.14 native coverage omits never-imported files. Full Vitest-on-Bun producers now use
 Istanbul for router, preset, sampler, todo, plan-mode, dev-tools and inprocess through `scripts/run-vitest.ts bun`.
-They inherit the full explicit primary instrumentation inventory (no `files` subset). The launcher's
+They inherit the full primary instrumentation inventory (no `files` subset). The launcher's
 `bun` engine appends the provider, the `text` and `lcov` reporters (Vitest's dotted options) and
 `coverage/bun`, so each `test:bun` passes only package arguments. The sampler retains one
 worker.
@@ -241,8 +241,11 @@ and absent expected source all fail closed.
 ## Inventory and exclusions
 
 Each package lists owned source files or source globs. A signal without a `files` subset expects
-the entire expanded inventory after justified exclusions. Primary instrumentation includes must cover that inventory, including never-imported
-modules. New source matched by a glob fails until instrumentation includes are updated.
+the entire expanded inventory after justified exclusions. `coverage/policy.json` is the only copy of
+that inventory: every Vitest coverage producer reads it with `readFileSync` and passes its package's
+`owned` as `coverage.include` and `exclusions[].path` as `coverage.exclude`. A never-imported module
+matched by a glob lands in the report uncovered and fails accounting; a report missing an expected
+file fails accounting too, so no test re-checks the configs against the policy.
 Tests and dedicated test-helper directories are outside production scope by definition, not
 coverage exclusions. Non-directory test fixture/assertion helpers use explicit `test-helper`
 exclusions with reasons. The legacy `test_helpers` field remains readable for old base policies,
@@ -301,9 +304,9 @@ The generated stats CLI bundle has a reasoned generated-artifact exclusion; its 
 documentation site. Since #347 its suites run under Vitest, and the separate `computer-use-vitest`
 policy entry (same root) measures the 33 executable JS/TS runtime modules with Istanbul: `src`,
 `extensions`, `setup-helper.mjs`, `build-native.mjs`, `rust-coverage.mjs` and the documentation
-generators, with the declaration-only `src/platform/types.ts` excluded as type-only. The Vitest
-`include` globs `src/**` and `extensions/**` and `exclude`s only `types.ts`, so a new module joins
-the report instead of dropping out; `scripts/tests/test_coverage_producers.py` binds both to the policy. It stays
+generators, with the declaration-only `src/platform/types.ts` excluded as type-only. Its Vitest
+config reads both from the policy like every other producer, so a new module joins the report
+instead of dropping out. It stays
 `goal: "excluded"` and report-only, with no 100% claim; subprocess-run scripts count only what the
 suites import. First references: macOS **2061 lines / 539 functions** uncovered (local
 `npm test` on `9aad6172`, unchanged when re-measured with the glob `include` on the #353 follow-up), Linux **2088 / 548** (hosted `coverage-ubuntu-24.04` artifact, run
@@ -383,12 +386,11 @@ eight-package zero target; its two measured signals are the enforced `ratchet` f
 
 - Check that the new file matches its package's `owned` inventory; otherwise add it explicitly.
   Do not mark shipped runtime code as verification just because it lives under `scripts/`.
-- For a measured package, update the primary producer's explicit includes so never-imported source
-  still counts. For #161's `packages/subagents/src/model-selection.ts`, `src/**/*.ts` already owns
-  the file, but the explicit list in `packages/subagents/vitest.config.ts` must include it too.
+- Do not edit a measured package's Vitest config: it reads `owned` and `exclusions` from the policy,
+  so a never-imported file is reported uncovered and fails accounting until a test covers it.
 - Update an independent compatibility `files` list only when that declared suite actually reports
   the new file. Do not fabricate a report or merge compatibility counters with primary counters.
-- Run `make check-scripts` to check source classification and producer inventory consistency;
+- Run `make check-scripts` to check source classification and producer wiring;
   run the affected package's existing primary/declared compatibility invocations, then
   `make check-coverage`. Missing expected source fails closed. Keep fresh clean
   receipts and never raise uncovered budgets to accommodate new untested behavior.
@@ -485,7 +487,7 @@ cannot establish floors. The initial hosted accounting failure exposed wrong loc
 complete reports came from successful test producers, so they establish the initial per-OS policy
 before this PR introduces that policy to main. This is not permission to raise an existing main
 floor. Keep measurement receipts with the policy update. A new package needs an owned inventory,
-justified declaration exclusions, complete primary includes, text+LCOV producer wiring,
+justified declaration exclusions, a primary producer reading that inventory, text+LCOV wiring,
 independent runtime signal if declared, and clean-run receipts before its budgets are accepted.
 The command also rejects npm workspaces missing from policy.
 

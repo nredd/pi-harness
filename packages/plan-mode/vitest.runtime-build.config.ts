@@ -1,4 +1,9 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vitest/config";
+
+const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] } = JSON.parse(
+  readFileSync(new URL("../../coverage/policy.json", import.meta.url), "utf8"),
+).packages["runtime-build-tooling"];
 
 export default defineConfig({
   test: {
@@ -7,7 +12,8 @@ export default defineConfig({
       reporter: ["text", "lcov"],
       reportsDirectory: "coverage/runtime-build-tooling",
       reportOnFailure: true,
-      include: ["scripts/*.mjs"],
+      include: owned,
+      exclude: exclusions.map(({ path }) => path),
     },
     environment: "node",
     env: {

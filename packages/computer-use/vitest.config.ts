@@ -1,4 +1,12 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vitest/config";
+
+const {
+	owned,
+	exclusions,
+}: { owned: string[]; exclusions: { path: string }[] } = JSON.parse(
+	readFileSync(new URL("../../coverage/policy.json", import.meta.url), "utf8"),
+).packages["computer-use-vitest"];
 
 export default defineConfig({
 	test: {
@@ -20,18 +28,8 @@ export default defineConfig({
 			reporter: ["text", "lcov"],
 			reportsDirectory: "coverage/primary",
 			reportOnFailure: true,
-			// Globs mirror the policy `owned` set so a new module cannot drop out of the report.
-			include: [
-				"extensions/**/*.ts",
-				"scripts/build-native.mjs",
-				"scripts/docs-generators/*.mjs",
-				"scripts/rust-coverage.mjs",
-				"scripts/setup-helper.mjs",
-				"src/**/*.mjs",
-				"src/**/*.ts",
-			],
-			// Type-only declarations; matches the policy exclusion.
-			exclude: ["src/platform/types.ts"],
+			include: owned,
+			exclude: exclusions.map(({ path }) => path),
 		},
 	},
 });

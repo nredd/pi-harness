@@ -1,4 +1,9 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vitest/config";
+
+const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] } = JSON.parse(
+	readFileSync(new URL("../../coverage/policy.json", import.meta.url), "utf8"),
+).packages.probes;
 
 // Match `integration/inprocess`: forks, because `process-lifecycle.test.ts` spawns and signals real
 // process groups through the production runners. Explicit files, no glob.
@@ -18,14 +23,8 @@ export default defineConfig({
 			reporter: ["text", "lcov"],
 			reportsDirectory: "coverage/primary",
 			reportOnFailure: true,
-			include: [
-				"anthropic-block-types.mjs",
-				"latency.ts",
-				"render.ts",
-				"session-kit-child-scope.ts",
-				"stack-resources.ts",
-				"transcript-types.ts",
-			],
+			include: owned,
+			exclude: exclusions.map(({ path }) => path),
 		},
 		pool: "forks",
 		maxWorkers: 2,

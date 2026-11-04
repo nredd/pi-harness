@@ -1,4 +1,9 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vitest/config";
+
+const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] } = JSON.parse(
+	readFileSync(new URL("../../coverage/policy.json", import.meta.url), "utf8"),
+).packages.preset;
 
 // Interactive theme/keybinding state is process-global; keep hosts serial per worker.
 export default defineConfig({
@@ -8,7 +13,8 @@ export default defineConfig({
 			reporter: ["text", "lcov"],
 			reportsDirectory: "coverage/primary",
 			reportOnFailure: true,
-			include: ["extensions/expanded-footer.ts", "lib/footer-cache.ts", "lib/footer-quota.ts"],
+			include: owned,
+			exclude: exclusions.map(({ path }) => path),
 		},
 		pool: "forks",
 		maxWorkers: 2,

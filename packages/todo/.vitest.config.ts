@@ -1,5 +1,10 @@
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+
+const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] } = JSON.parse(
+	readFileSync(new URL("../../coverage/policy.json", import.meta.url), "utf8"),
+).packages.todo;
 
 export default defineConfig({
 	resolve: {
@@ -13,26 +18,8 @@ export default defineConfig({
 			reporter: ["text", "lcov"],
 			reportsDirectory: "coverage/primary",
 			reportOnFailure: true,
-			include: [
-				"config.ts",
-				"index.ts",
-				"plan-hooks.ts",
-				"todo-overlay.ts",
-				"todo.ts",
-				"state/i18n-bridge.ts",
-				"state/invariants.ts",
-				"state/plan.ts",
-				"state/replay.ts",
-				"state/selectors.ts",
-				"state/state-reducer.ts",
-				"state/state.ts",
-				"state/store.ts",
-				"state/task-graph.ts",
-				"tool/response-envelope.ts",
-				"tool/sanitize.ts",
-				"tool/types.ts",
-				"view/format.ts",
-			],
+			include: owned,
+			exclude: exclusions.map(({ path }) => path),
 		},
 		include: ["*.test.ts", "state/**/*.test.ts", "tool/**/*.test.ts", "view/**/*.test.ts"],
 		setupFiles: ["./.test-support/setup.ts", "../../integration/inprocess/verification/home-setup.ts"],

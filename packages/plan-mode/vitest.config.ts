@@ -1,4 +1,9 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vitest/config";
+
+const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] } = JSON.parse(
+  readFileSync(new URL("../../coverage/policy.json", import.meta.url), "utf8"),
+).packages["plan-mode"];
 
 export default defineConfig({
   test: {
@@ -8,43 +13,8 @@ export default defineConfig({
       reporter: ["text", "lcov"],
       reportsDirectory: "coverage/primary",
       reportOnFailure: true,
-      include: [
-        "src/active-implementation-menu.ts",
-        "src/child-policy.ts",
-        "src/command.ts",
-        "src/completion-tool.ts",
-        "src/decline-contract.ts",
-        "src/extension-runtime.ts",
-        "src/finalization-request.ts",
-        "src/fresh-implementation.ts",
-        "src/headless-turn.ts",
-        "src/implementation-models.ts",
-        "src/implementation-retention.ts",
-        "src/message-transform.ts",
-        "src/mode-contract.ts",
-        "src/plan-action-controller.ts",
-        "src/plan-action-menus.ts",
-        "src/plan-approval.ts",
-        "src/plan-export-controller.ts",
-        "src/plan-export-screen.ts",
-        "src/plan-export.ts",
-        "src/plan-launch-menu.ts",
-        "src/plan-mode.ts",
-        "src/presentation.ts",
-        "src/prompt.ts",
-        "src/question-tool.ts",
-        "src/ready-plan-chooser.ts",
-        "src/required-tools.ts",
-        "src/saved-plan-menu.ts",
-        "src/saved-plan-preflight.ts",
-        "src/settings-menu.ts",
-        "src/settings.ts",
-        "src/state.ts",
-        "src/tool-availability.ts",
-        "src/tool-policy.ts",
-        "src/tool-selection.ts",
-        "src/workflow-mutex.ts",
-      ],
+      include: owned,
+      exclude: exclusions.map(({ path }) => path),
     },
     environment: "node",
     env: {
