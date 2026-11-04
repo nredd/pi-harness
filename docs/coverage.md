@@ -314,7 +314,7 @@ eight-package zero target; its two measured signals are the enforced `ratchet` f
   the new file. Do not fabricate a report or merge compatibility counters with primary counters.
 - Run `make check-scripts` to check source classification and producer inventory consistency;
   run the affected package's existing primary/declared compatibility invocations, then
-  `make check-coverage BASE=origin/main`. Missing expected source fails closed. Keep fresh clean
+  `make check-coverage`. Missing expected source fails closed. Keep fresh clean
   receipts and never raise uncovered budgets to accommodate new untested behavior.
 - For a genuine non-shipped verification harness, add one exact `verification_helpers` entry with
   its own reason. For source removal, rename or role changes, follow the reclassification ledger
@@ -326,8 +326,16 @@ Run `make install`, then the existing tests (`make check-ts check-import-audit c
 Coverage is part of those invocations, not a second test pass. From the repository root:
 
 ```sh
-make check-coverage BASE=origin/main
+make check-coverage
 ```
+
+With `BASE` unset this compares against `git merge-base HEAD origin/main`, where the topic diverged,
+and logs that SHA (`--compare-ref origin/main`). Comparing an older topic with the moving
+`origin/main` tree instead reads every file added only on newer main as a topic deletion. A missing or
+empty ref, no common ancestor or several merge bases (criss-cross history) fail closed, there is no
+fallback. Fetch `origin/main`, or pass the base yourself. An explicit `BASE` is used unchanged, even an
+empty one, which fails: hosted CI passes the event's base SHA for its synthetic merge checkout, and
+frozen acceptance and artifact replay pass the base of the exact tree they verify.
 
 All Git base/inventory reads honor the explicit repository root: inherited `GIT_*` routing,
 alternate index/object paths and injected config entries are removed, and global/system config
