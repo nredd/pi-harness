@@ -72,6 +72,11 @@ and declare no cap until #320 moves them to Vitest-on-Bun Istanbul, which then a
 plan-mode moved in #433 and #362 and are capped); `computer-use-vitest` is owner-excluded (`goal: excluded`), the only
 goal that may carry branch records without a cap.
 
+Branch units differ by producer: Istanbul and Bun count AST arms (including an implicit `else` and each
+logical operand), coverage.py counts jump arcs, so caps are only comparable within one signal. Both
+fail-closed checks are aggregate per signal, not per file: `Branch producer missing` needs the whole
+report to have zero `BRDA` rows.
+
 Python measures branches: `PY_GATE` in the `Makefile` passes `--cov-branch`, so both coverage.py
 producers emit `BRDA` rows like the benchmark's `branch = true` producer already did (`-` for a branch whose line never ran, named targets such as `jump to line 9`).
 `test_real_coveragepy_branch_report_parses` runs real coverage.py to pin that shape.

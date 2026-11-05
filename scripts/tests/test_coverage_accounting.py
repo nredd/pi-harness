@@ -274,7 +274,7 @@ def test_ratchet_rejects_raising_or_removing_a_branch_cap() -> None:
     check_ratchet(base, policy())
     locked = policy()
     locked.target.branches = 0
-    with pytest.raises(ValueError, match="Cannot remove the branch target"):
+    with pytest.raises(ValueError, match="Cannot loosen the target"):
         check_ratchet(policy(), locked)
     check_ratchet(locked, policy())
 

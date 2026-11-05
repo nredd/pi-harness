@@ -873,7 +873,7 @@ def check_ratchet(current: Policy, base: Policy) -> None:
     if base.enforce_target and not current.enforce_target:
         raise ValueError("Cannot disable global target")
     if loosens(current.target, base.target):
-        raise ValueError("Cannot remove the branch target")
+        raise ValueError("Cannot loosen the target")
     check_enforcement_changes(current, base)
     for name, previous in base.packages.items():
         if name not in current.packages:

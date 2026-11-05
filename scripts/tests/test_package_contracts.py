@@ -819,12 +819,18 @@ def test_stop_hostile_child_kills_only_a_live_child(*, exited: bool) -> None:
     """
     program = "pass" if exited else "import time; time.sleep(60)"
     child = subprocess.Popen([sys.executable, "-c", program], stdout=subprocess.PIPE)
-    if exited:
+    try:
+        if exited:
+            child.wait(timeout=10)
+        pc.stop_hostile_child(child)
+        assert child.returncode == (0 if exited else -9)
+        assert child.stdout is not None
+        assert child.stdout.closed
+    finally:
+        # This test spawned `child`, so it may signal it; a failed assert must not leak the sleep.
+        if child.poll() is None:
+            child.kill()
         child.wait(timeout=10)
-    pc.stop_hostile_child(child)
-    assert child.returncode == (0 if exited else -9)
-    assert child.stdout is not None
-    assert child.stdout.closed
 
 
 @pytest.mark.parametrize(
