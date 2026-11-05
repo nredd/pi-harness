@@ -649,8 +649,9 @@ function waitForCaller(
 			resolve(snapshot);
 		};
 		const abort = () => finish();
-		// One credential lookup plus one fetch, regardless of supersession count.
-		const timer = setTimeout(() => finish(onTimeout()), 2 * REQUEST_TIMEOUT_MS);
+		// One credential lookup plus one fetch, regardless of supersession count. Re-check
+		// the signal: a foreign listener can stop the `abort` event before ours runs.
+		const timer = setTimeout(() => finish(signal?.aborted ? undefined : onTimeout()), 2 * REQUEST_TIMEOUT_MS);
 		signal?.addEventListener("abort", abort, { once: true });
 		void refresh.then(finish);
 	});
