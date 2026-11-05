@@ -102,20 +102,28 @@ export function applyAgentEvent(sessionId: string, channel: string, payload: unk
 }
 
 /**
- * The state of `sessionId`'s most recently updated agent matching `owner`, by slugged id,
- * handle, name, `nameBase` or previous id. Most recent wins, so a retry spawned under the
- * same name (`auth-audit-2`, `nameBase` `auth-audit`) shadows the failed first try.
+ * The state of the agent in `sessionId` that `owner` names, by slugged id, handle, name,
+ * `nameBase` or previous id. Among several matches a `running` one wins (the most recent
+ * of those), else the most recently updated: a settled same-name sibling (`auth-audit-2`,
+ * or a scout named `Explore` beside an unnamed `explore`) never shadows a live owner, and a
+ * retry still shadows its failed first try.
  */
 export function agentStateFor(sessionId: string, owner: string | undefined): AgentRunState | undefined {
 	const wanted = ownerKey(owner);
 	const agents = sessions.get(sessionId);
 	if (!wanted || !agents) return undefined;
+	let latest: AgentRunState | undefined;
 	const entries = [...agents.values()];
 	for (let i = entries.length - 1; i >= 0; i--) {
-		if (entries[i].keys.has(wanted)) return entries[i].state;
+		if (!entries[i].keys.has(wanted)) continue;
+		if (entries[i].state === "running") return "running";
+		latest ??= entries[i].state;
 	}
-	return undefined;
+	return latest;
 }
+
+/** The lookup for a surface with no live agent state: owners render alone. */
+export const NO_AGENT_STATE: AgentStateLookup = () => undefined;
 
 /** Bind `agentStateFor` to one session. */
 export function agentLookup(sessionId: string): AgentStateLookup {
