@@ -1,83 +1,34 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, test } from "vitest";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { afterAll, beforeAll, describe, test, vi } from "vitest";
 import { shutdownComputerUseSession, testing } from "../src/bridge.ts";
 
-// Fake `chrome`: refuses to start unless it can write its profile, like the real browser, then serves the
-// smallest CDP surface `launch_browser` reads (`/json/version`, one `/json/list` page, `{}` for every
-// WebSocket command). It records its argv so the test can find the profile dir and port.
-const FAKE_BROWSER = String.raw`#!/usr/bin/env node
-import { createHash } from "node:crypto";
+const PACKAGE_DIR = fileURLToPath(new URL("..", import.meta.url));
+const FAKE_BROWSER = fileURLToPath(new URL("./fixtures/fake-browser.mjs", import.meta.url));
+const BRIDGE_URL = pathToFileURL(path.join(PACKAGE_DIR, "src/bridge.ts")).href;
+const CHILD_TIMEOUT_MS = 15_000;
+
+// Runs in a separate Pi-like process that exits as soon as it is done, so nothing keeps the event loop
+// alive for a late `close` event. `shutdown` quits normally after session shutdown; `exit` calls
+// `process.exit()` with the browser still running, as a hard quit would. Prints the profile dir and
+// whether it still existed when session shutdown returned.
+const CHILD_SCRIPT = `
 import fs from "node:fs";
-import http from "node:http";
-import path from "node:path";
-
-const arg = (name) => process.argv.find((value) => value.startsWith("--" + name + "="))?.slice(name.length + 3);
-const port = Number(arg("remote-debugging-port"));
-const profile = arg("user-data-dir");
-fs.writeFileSync(process.env.FAKE_BROWSER_LOG, JSON.stringify({ port, profile }));
-try {
-	fs.writeFileSync(path.join(profile, "Local State"), "{}");
-} catch (error) {
-	process.stderr.write(String(error));
-	process.exit(1);
+import { shutdownComputerUseSession, testing } from ${JSON.stringify(BRIDGE_URL)};
+await testing.performLaunchBrowser({});
+const { profile } = JSON.parse(fs.readFileSync(process.env.FAKE_BROWSER_LOG, "utf8"));
+if (process.argv[2] === "exit") {
+	process.stdout.write(JSON.stringify({ profile }));
+	process.exit(0);
 }
-
-const frame = (payload) => Buffer.concat([Buffer.from([0x81, payload.length]), payload]);
-const server = http.createServer((request, response) => {
-	response.setHeader("content-type", "application/json");
-	if (request.url === "/json/version") return response.end("{}");
-	if (request.url === "/json/list") {
-		return response.end(JSON.stringify([{ id: "fake", type: "page", title: "Fake", url: "about:blank", webSocketDebuggerUrl: "ws://127.0.0.1:" + port + "/devtools/page/fake" }]));
-	}
-	response.statusCode = 404;
-	response.end();
-});
-server.on("upgrade", (request, socket) => {
-	const accept = createHash("sha1").update(request.headers["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
-	socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + accept + "\r\n\r\n");
-	let buffer = Buffer.alloc(0);
-	socket.on("error", () => {});
-	socket.on("data", (chunk) => {
-		buffer = Buffer.concat([buffer, chunk]);
-		while (buffer.length >= 6) {
-			let length = buffer[1] & 0x7f;
-			let offset = 2;
-			if (length === 126) {
-				if (buffer.length < 4) return;
-				length = buffer.readUInt16BE(2);
-				offset = 4;
-			}
-			if (buffer.length < offset + 4 + length) return;
-			const opcode = buffer[0] & 0x0f;
-			const mask = buffer.subarray(offset, offset + 4);
-			const payload = Buffer.from(buffer.subarray(offset + 4, offset + 4 + length));
-			buffer = buffer.subarray(offset + 4 + length);
-			for (let index = 0; index < payload.length; index += 1) payload[index] ^= mask[index % 4];
-			if (opcode === 8) return socket.end();
-			if (opcode === 1) socket.write(frame(Buffer.from(JSON.stringify({ id: JSON.parse(payload.toString()).id, result: {} }))));
-		}
-	});
-});
-server.listen(port, "127.0.0.1");
+await shutdownComputerUseSession();
+process.stdout.write(JSON.stringify({ profile, existsAfterShutdown: fs.existsSync(profile) }));
 `;
-
-/**
- * Read the host's ephemeral port range, which is where `freeTcpPort()` gets the CDP port.
- * @returns {[number, number]} Inclusive first and last ephemeral port.
- * @throws {Error} If the range cannot be read on this platform.
- */
-function ephemeralPortRange() {
-	if (process.platform === "darwin") {
-		const [first, last] = execFileSync("sysctl", ["-n", "net.inet.ip.portrange.first", "net.inet.ip.portrange.last"], { encoding: "utf8" }).trim().split(/\s+/).map(Number);
-		return [first, last];
-	}
-	const [first, last] = fs.readFileSync("/proc/sys/net/ipv4/ip_local_port_range", "utf8").trim().split(/\s+/).map(Number);
-	return [first, last];
-}
 
 /**
  * Wait until a path no longer exists.
@@ -92,6 +43,41 @@ async function waitForRemoval(target, timeoutMs) {
 	assert(!fs.existsSync(target), `managed browser profile ${target} outlived the browser`);
 }
 
+/**
+ * Run `CHILD_SCRIPT` under tsx and return what it printed.
+ * @param {string} script Path of the written child script.
+ * @param {"shutdown"|"exit"} mode How the child quits.
+ * @returns {Promise<{ profile: string, existsAfterShutdown?: boolean }>} The child's report.
+ * @throws {Error} If the child fails, times out or prints no report.
+ */
+async function runChild(script, mode) {
+	const child = spawn(process.execPath, ["--import", "tsx", script, mode], { cwd: PACKAGE_DIR, stdio: ["ignore", "pipe", "inherit"], timeout: CHILD_TIMEOUT_MS });
+	let stdout = "";
+	child.stdout.on("data", (chunk) => {
+		stdout += chunk;
+	});
+	const [code, signal] = await new Promise((resolve, reject) => {
+		child.once("error", reject);
+		child.once("close", (exitCode, exitSignal) => resolve([exitCode, exitSignal]));
+	});
+	assert.equal(code, 0, `${mode} child failed (signal ${signal}): ${stdout}`);
+	return JSON.parse(stdout);
+}
+
+/**
+ * Whether anything still answers CDP discovery on `port`, i.e. the fake browser is still running.
+ * @param {number} port The browser's debugging port.
+ * @returns {Promise<boolean>} True if `/json/version` answered.
+ * @throws {never} Connection failures resolve false.
+ */
+async function cdpAnswers(port) {
+	try {
+		return (await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1_000) })).ok;
+	} catch {
+		return false;
+	}
+}
+
 describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 	const saved = {};
 	let scratch;
@@ -103,38 +89,44 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		tmp = path.join(scratch, "tmp");
 		fs.mkdirSync(tmp);
 		log = path.join(scratch, "argv.json");
-		const executable = path.join(scratch, "fake-chrome.mjs");
-		fs.writeFileSync(executable, FAKE_BROWSER, { mode: 0o755 });
-		for (const name of ["TMPDIR", "FAKE_BROWSER_LOG", "PI_COMPUTER_USE_CHROME_EXECUTABLE", "PI_COMPUTER_USE_CDP_PORT"]) saved[name] = process.env[name];
+		for (const name of ["TMPDIR", "FAKE_BROWSER_LOG", "FAKE_BROWSER_IGNORE_SIGTERM", "PI_COMPUTER_USE_CHROME_EXECUTABLE", "PI_COMPUTER_USE_CDP_PORT"]) saved[name] = process.env[name];
 		process.env.TMPDIR = tmp;
 		process.env.FAKE_BROWSER_LOG = log;
-		process.env.PI_COMPUTER_USE_CHROME_EXECUTABLE = executable;
+		process.env.PI_COMPUTER_USE_CHROME_EXECUTABLE = FAKE_BROWSER;
 		delete process.env.PI_COMPUTER_USE_CDP_PORT;
-
-		// Squat the retired fixed name `pi-chrome-cdp-<port>` for every port `freeTcpPort()` can hand out,
-		// as another account sharing `/tmp` would. A launch that still uses it cannot write its profile.
-		const [first, last] = ephemeralPortRange();
-		for (let port = first; port <= last; port += 1) fs.mkdirSync(path.join(tmp, `pi-chrome-cdp-${port}`), { mode: 0o555 });
 	});
 
 	afterAll(async () => {
+		vi.restoreAllMocks();
 		await shutdownComputerUseSession();
 		for (const [name, value] of Object.entries(saved)) {
 			if (value === undefined) delete process.env[name];
 			else process.env[name] = value;
 		}
 		if (scratch) {
+			fs.chmodSync(tmp, 0o755);
 			for (const entry of fs.readdirSync(tmp)) fs.chmodSync(path.join(tmp, entry), 0o755);
 			fs.rmSync(scratch, { recursive: true, force: true });
 		}
 	});
 
-	test("launch uses a private profile dir that ignores a squatted fixed name and is removed on exit", async () => {
+	test("launch uses a private profile dir that ignores a squatted fixed name and is removed on shutdown", async () => {
+		// Squat the retired fixed name `pi-chrome-cdp-<port>` read-only, as another account sharing `/tmp`
+		// would, for the port `freeTcpPort()` picks: its probe server reaches `listening` before the
+		// profile dir is chosen. A launch that still used the fixed name could not write its profile.
+		const createServer = net.createServer.bind(net);
+		vi.spyOn(net, "createServer").mockImplementation((...args) => {
+			const server = createServer(...args);
+			server.once("listening", () => fs.mkdirSync(path.join(tmp, `pi-chrome-cdp-${server.address().port}`), { mode: 0o555 }));
+			return server;
+		});
 		const result = await testing.performLaunchBrowser({});
+		vi.restoreAllMocks();
 		assert.match(result.content[0].text, /Fake|about:blank/, "launch_browser did not observe the managed page");
 
 		const { port, profile } = JSON.parse(fs.readFileSync(log, "utf8"));
 		const legacy = path.join(tmp, `pi-chrome-cdp-${port}`);
+		assert(fs.existsSync(legacy), "the chosen port's legacy profile dir was not squatted");
 		assert.throws(() => fs.accessSync(legacy, fs.constants.W_OK), "squatted legacy profile dir is writable, so this run proves nothing (root?)");
 		assert.equal(path.dirname(profile), tmp, "profile dir is not under os.tmpdir()");
 		assert.match(path.basename(profile), /^pi-chrome-cdp-[^/]+$/);
@@ -143,6 +135,76 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		assert.equal(fs.statSync(profile).uid, process.getuid(), "profile dir is not owned by this account");
 
 		await shutdownComputerUseSession();
-		await waitForRemoval(profile, 5_000);
+		assert(!fs.existsSync(profile), "session shutdown returned before removing the profile dir");
+	});
+
+	test("shutdown SIGKILLs a browser that ignores SIGTERM, then removes its profile", async () => {
+		process.env.FAKE_BROWSER_IGNORE_SIGTERM = "1";
+		try {
+			await testing.performLaunchBrowser({});
+		} finally {
+			delete process.env.FAKE_BROWSER_IGNORE_SIGTERM;
+		}
+		const { port, profile } = JSON.parse(fs.readFileSync(log, "utf8"));
+		// Waits out the bridge's 5s SIGTERM grace period before it escalates.
+		await shutdownComputerUseSession();
+		assert(!fs.existsSync(profile), "session shutdown returned before removing the profile dir");
+		assert.equal(await cdpAnswers(port), false, "managed browser survived SIGKILL");
+	});
+
+	test("a profile that cannot be removed stays tracked, and the exit hook removes it", async () => {
+		await testing.performLaunchBrowser({});
+		const { profile } = JSON.parse(fs.readFileSync(log, "utf8"));
+		// Removing `profile` needs write access to its parent, so shutdown's `rm` fails and is logged.
+		fs.chmodSync(tmp, 0o555);
+		try {
+			await shutdownComputerUseSession();
+			assert(fs.existsSync(profile), "profile removal unexpectedly succeeded under a read-only parent (root?)");
+		} finally {
+			fs.chmodSync(tmp, 0o755);
+		}
+		testing.removeProfileDirsOnExit();
+		assert(!fs.existsSync(profile), "exit hook did not remove the profile dir shutdown could not");
+
+		// The exit hook itself must not throw when removal fails: it logs and moves on.
+		await testing.performLaunchBrowser({});
+		const { port, profile: stuck } = JSON.parse(fs.readFileSync(log, "utf8"));
+		fs.chmodSync(tmp, 0o555);
+		try {
+			testing.removeProfileDirsOnExit();
+		} finally {
+			fs.chmodSync(tmp, 0o755);
+		}
+		assert(fs.existsSync(stuck), "profile removal unexpectedly succeeded under a read-only parent (root?)");
+		assert.equal(await cdpAnswers(port), false, "exit hook did not kill the managed browser");
+		await shutdownComputerUseSession();
+	});
+
+	test("an aborted launch stops the browser and removes its profile", async () => {
+		const before = new Set(fs.readdirSync(tmp));
+		const controller = new AbortController();
+		controller.abort();
+		await assert.rejects(testing.performLaunchBrowser({}, controller.signal), /aborted/);
+		const created = fs.readdirSync(tmp).filter((entry) => !before.has(entry));
+		assert.equal(created.length, 1, `expected one new profile dir, got ${created.join(", ")}`);
+		assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, undefined, "aborted launch left its CDP port configured");
+		await waitForRemoval(path.join(tmp, created[0]), 5_000);
+	});
+
+	test("a Pi process that quits right after shutdown leaves no profile dir behind", async () => {
+		const script = path.join(scratch, "child.mjs");
+		fs.writeFileSync(script, CHILD_SCRIPT);
+		const { profile, existsAfterShutdown } = await runChild(script, "shutdown");
+		assert.equal(existsAfterShutdown, false, "session shutdown returned before removing the profile dir");
+		assert(!fs.existsSync(profile), `profile ${profile} survived the Pi process`);
+	});
+
+	test("a hard exit without session shutdown kills the browser and removes its profile dir", async () => {
+		const script = path.join(scratch, "child.mjs");
+		fs.writeFileSync(script, CHILD_SCRIPT);
+		const { profile } = await runChild(script, "exit");
+		const { port } = JSON.parse(fs.readFileSync(log, "utf8"));
+		assert(!fs.existsSync(profile), `profile ${profile} survived a hard exit`);
+		assert.equal(await cdpAnswers(port), false, "managed browser outlived the Pi process");
 	});
 });
