@@ -38,12 +38,14 @@ import pytest
 
 from harness import install, promotion, release
 from harness.release import (
+    ATTESTATION_VERIFY_ATTEMPTS,
     ATTESTATION_WORKFLOW,
     FETCH_ATTEMPTS,
     FETCH_RETRY_AFTER_CAP_SECONDS,
     FETCH_RETRY_BACKOFF_SECONDS,
     GITHUB_TOKEN_VARIABLES,
     RELEASE_PACKAGES,
+    VERIFIER_INIT_FAILURE,
     AttestationRateLimitedError,
     attestation_bundle,
     fetch_release,
@@ -52,6 +54,7 @@ from harness.release import (
     release_checksums,
     release_tarballs,
     verify_asset,
+    verify_attestation,
     verify_provenance,
     verify_public_attestation,
     verify_root_overrides,
@@ -896,6 +899,152 @@ def test_public_attestation_falls_back_to_gh_login_only_when_rate_limited(
     assert argv[argv.index("--signer-workflow") + 1] == "o/r/.github/workflows/w.yml"
     assert argv[argv.index("--source-ref") + 1] == "refs/heads/main"
     assert "--deny-self-hosted-runners" in argv
+
+
+INIT_ERROR = (
+    "Error: failed to choose verifier based on provided bundle issuer: "
+    "public good verifier is not available (initialization may have failed)"
+)
+
+
+def scripted_gh(tmp_path: Path, outcomes: list[tuple[int, str]]) -> tuple[Path, Path]:
+    """Write an executable fake `gh` that answers successive calls from a fixed script.
+
+    Call `n` prints `outcomes[n]`'s message and exits with its code; calls past the end repeat
+    the last outcome. The child environment is scrubbed, so state lives at absolute paths.
+
+    Parameters:
+        tmp_path (Path): private directory for the script and its call log.
+        outcomes (list[tuple[int, str]]): exit code and output per call.
+
+    Returns:
+        tuple[Path, Path]: the executable and its one-line-per-call log.
+    """
+    calls = tmp_path / "gh-calls"
+    cases = "".join(
+        f"  {index}) printf '%s\\n' {shlex.quote(message)}; exit {code} ;;\n"
+        for index, (code, message) in enumerate(outcomes, start=1)
+    )
+    last_code, last_message = outcomes[-1]
+    gh_bin = tmp_path / "gh"
+    gh_bin.write_text(
+        "#!/bin/sh\n"
+        f'echo "$*" >> {shlex.quote(str(calls))}\n'
+        f"n=$(wc -l < {shlex.quote(str(calls))} | tr -d ' ')\n"
+        'case "$n" in\n'
+        f"{cases}"
+        f"  *) printf '%s\\n' {shlex.quote(last_message)}; exit {last_code} ;;\n"
+        "esac\n"
+    )
+    gh_bin.chmod(0o755)
+    return gh_bin, calls
+
+
+def verify_with(gh_bin: Path, artifact: Path) -> None:
+    """Run the shared verification path against a scripted `gh`.
+
+    Parameters:
+        gh_bin (Path): fake GitHub CLI.
+        artifact (Path): artifact under verification.
+
+    Raises:
+        RuntimeError: the scripted `gh` rejected the artifact.
+    """
+    verify_attestation(artifact, "o/r", "o/r/.github/workflows/w.yml", "refs/tags/t", gh_bin=str(gh_bin))
+
+
+@pytest.mark.parametrize("transient", [1, ATTESTATION_VERIFY_ATTEMPTS - 1])
+def test_verifier_init_failure_is_retried_then_passes(
+    tmp_path: Path, no_backoff: list[float], caplog: pytest.LogCaptureFixture, transient: int
+) -> None:
+    """A transient Sigstore trust-root fetch failure retries with backoff and a logged attempt."""
+    artifact = tmp_path / "pi-tui"
+    artifact.write_bytes(b"core")
+    gh_bin, calls = scripted_gh(tmp_path, [(1, INIT_ERROR)] * transient + [(0, "verified")])
+    with caplog.at_level("WARNING", logger=release.LOGGER.name):
+        verify_with(gh_bin, artifact)
+    assert len(calls.read_text().splitlines()) == transient + 1
+    assert no_backoff == [release.ATTESTATION_RETRY_BACKOFF_SECONDS * 2**n for n in range(transient)]
+    assert caplog.messages == [
+        "Sigstore verifier initialization failed verifying 'pi-tui' "
+        f"(attempt {n}/{ATTESTATION_VERIFY_ATTEMPTS}); retrying in {delay:g}s"
+        for n, delay in enumerate(no_backoff, start=1)
+    ]
+
+
+def test_verifier_init_failure_on_every_attempt_fails_with_the_original_message(
+    tmp_path: Path, no_backoff: list[float]
+) -> None:
+    """Retries are bounded; exhausting them reports gh's own initialization error."""
+    artifact = tmp_path / "pi-tui"
+    artifact.write_bytes(b"core")
+    gh_bin, calls = scripted_gh(tmp_path, [(1, INIT_ERROR)])
+    with pytest.raises(RuntimeError, match=re.escape(VERIFIER_INIT_FAILURE)) as caught:
+        verify_with(gh_bin, artifact)
+    assert str(caught.value).startswith(f"GitHub provenance verification failed for '{artifact}': ")
+    assert len(calls.read_text().splitlines()) == ATTESTATION_VERIFY_ATTEMPTS
+    assert len(no_backoff) == ATTESTATION_VERIFY_ATTEMPTS - 1
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        'Error: verifying with issuer "sigstore.dev": expected SourceRepositoryRef to be '
+        "refs/tags/t, got refs/heads/main",
+        'Error: expected SAN value to match regex "^https://github.com/o/r/.github/workflows/w.yml"',
+        "Error: no attestations found for subject digest sha256:" + "0" * 64,
+        "Error: failed to fetch attestations from o/r: HTTP 404: Not Found",
+        "Error: failed to choose verifier based on provided bundle issuer: "
+        "GitHub verifier is not available (initialization may have failed)",
+        "",
+    ],
+)
+def test_real_verification_failure_is_never_retried(
+    tmp_path: Path, no_backoff: list[float], caplog: pytest.LogCaptureFixture, message: str
+) -> None:
+    """Signer, ref, digest and lookup failures fail closed on the first attempt."""
+    artifact = tmp_path / "pi-tui"
+    artifact.write_bytes(b"core")
+    gh_bin, calls = scripted_gh(tmp_path, [(1, message), (0, "verified")])
+    with (
+        caplog.at_level("WARNING", logger=release.LOGGER.name),
+        pytest.raises(RuntimeError, match="GitHub provenance verification failed") as caught,
+    ):
+        verify_with(gh_bin, artifact)
+    assert message in str(caught.value)
+    assert len(calls.read_text().splitlines()) == 1
+    assert no_backoff == []
+    assert caplog.messages == []
+
+
+def test_verifier_init_message_on_timeout_is_not_a_retry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, no_backoff: list[float]
+) -> None:
+    """Only a nonzero `gh` exit is classified; a timeout fails closed even with the text."""
+    artifact = tmp_path / "pi-tui"
+    artifact.write_bytes(b"core")
+    gh_bin = tmp_path / "gh"
+    gh_bin.touch()
+    calls: list[list[str]] = []
+
+    def timeout(argv: list[str], **_kwargs: Any) -> str:
+        """Time out after printing the initialization error.
+
+        Parameters:
+            argv (list[str]): GitHub CLI command and arguments.
+            **_kwargs (Any): subprocess options.
+
+        Raises:
+            subprocess.TimeoutExpired: always.
+        """
+        calls.append(argv)
+        raise subprocess.TimeoutExpired(argv, 120, output=INIT_ERROR)
+
+    monkeypatch.setattr(subprocess, "check_output", timeout)
+    with pytest.raises(RuntimeError, match=re.escape(VERIFIER_INIT_FAILURE)):
+        verify_with(gh_bin, artifact)
+    assert len(calls) == 1
+    assert no_backoff == []
 
 
 def test_fetch_release_binds_bytes_to_explicit_checksums(
