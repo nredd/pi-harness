@@ -489,6 +489,63 @@ describe("git_commit merge approval", () => {
 		expect(mock.text(result)).toContain("Invalid MERGE_HEAD");
 	});
 
+	it("rejects a MERGE_HEAD that names a tree instead of a commit", async () => {
+		const { repo } = mergeFixture();
+		writeFileSync(join(repo, ".git", "MERGE_HEAD"), `${git(repo, ["rev-parse", "HEAD^{tree}"])}\n`);
+		const result = await mock.call(
+			"git_commit",
+			{ subject: "Reject tree merge", paths: ["shared.txt"], push: false },
+			repo,
+		);
+		expect(result.structuredContent).toMatchObject({ stage: "validate", sha: null });
+		expect(mock.text(result)).toContain("MERGE_HEAD must name commits");
+	});
+
+	it("rejects truncated approval output instead of reading a partial answer", async () => {
+		const { repo } = mergeFixture();
+		await expect(prepareMerge(["shared.txt"], { cwd: repo, maxBytes: 8 })).rejects.toThrow(
+			"Git merge approval output truncated",
+		);
+	});
+
+	it("surfaces an unreadable approved path's parent instead of walking past it", async () => {
+		const { repo } = mergeFixture();
+		const locked = join(repo, "locked");
+		mkdirSync(join(locked, "sub"), { recursive: true });
+		chmodSync(locked, 0o000);
+		try {
+			const result = await mock.call(
+				"git_commit",
+				{ subject: "Reject unreadable path", paths: ["locked/sub/x"], push: false },
+				repo,
+			);
+			expect(result.structuredContent).toMatchObject({ stage: "validate", sha: null });
+			expect(mock.text(result)).toContain("EACCES");
+		} finally {
+			chmodSync(locked, 0o755);
+		}
+	});
+
+	it("surfaces an unreadable hooks directory instead of proxying none of its hooks", async () => {
+		const { root, repo } = mergeFixture();
+		const hooks = join(root, "hooks");
+		mkdirSync(hooks);
+		git(repo, ["config", "core.hooksPath", hooks]);
+		chmodSync(hooks, 0o000);
+		try {
+			const result = await mock.call(
+				"git_commit",
+				{ subject: "Reject unreadable hooks", paths: ["shared.txt"], push: false },
+				repo,
+			);
+			expect(result.structuredContent).toMatchObject({ stage: "validate", sha: null });
+			expect(mock.text(result)).toContain("EACCES");
+			expect(parents(repo)).toHaveLength(1);
+		} finally {
+			chmodSync(hooks, 0o755);
+		}
+	});
+
 	it("rethrows an aborted repository query instead of treating it as no merge", async () => {
 		const { repo } = mergeFixture();
 		const controller = new AbortController();

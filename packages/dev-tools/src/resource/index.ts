@@ -254,9 +254,10 @@ function formatSnapshot(snapshot: Snapshot): string {
 	const pressure = snapshot.memory.pressure
 		? `, ${snapshot.memory.pressure.source} ${snapshot.memory.pressure.value}${snapshot.memory.pressure.source === "memory_pressure" ? "% free" : "% some avg10"}`
 		: "";
+	// Available metadata always has at least one entry: an empty sample is reported unavailable.
 	const processes =
 		snapshot.processes.status === "available"
-			? `${snapshot.processes.entries.length} bounded entries ranked by ${snapshot.processes.ranking} (${snapshot.processes.cpuSemantics}; truncated=${snapshot.processes.truncated}; pid ppid cpu RSS executable)${snapshot.processes.entries.length > 0 ? `\n${snapshot.processes.entries.map((entry) => `${entry.pid} ${entry.parentPid} ${formatMetric(entry.cpu)} ${entry.rssBytes} ${entry.executable === "" ? UNKNOWN_EXECUTABLE : entry.executable}`).join("\n")}` : ""}`
+			? `${snapshot.processes.entries.length} bounded entries ranked by ${snapshot.processes.ranking} (${snapshot.processes.cpuSemantics}; truncated=${snapshot.processes.truncated}; pid ppid cpu RSS executable)\n${snapshot.processes.entries.map((entry) => `${entry.pid} ${entry.parentPid} ${formatMetric(entry.cpu)} ${entry.rssBytes} ${entry.executable === "" ? UNKNOWN_EXECUTABLE : entry.executable}`).join("\n")}`
 			: `unavailable (${snapshot.processes.reason})`;
 	return `host ${snapshot.platform}: CPU ${cpu}; memory ${memory}${pressure}; processes ${processes}. Executables are untrusted kernel-reported basenames (${UNKNOWN_EXECUTABLE} when unreadable), never arguments, titles or environments; no process-to-agent attribution.`;
 }

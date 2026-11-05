@@ -28,6 +28,7 @@ describe("abnormalExit", () => {
 		expect(abnormalExit({ ...base, exitCode: null, spawnError: "ENOENT" }, "x")).toBe("x: could not start: ENOENT");
 		expect(abnormalExit({ ...base, exitCode: null, timedOut: true }, "x")).toBe("x: timed out after 1.5s");
 		expect(abnormalExit({ ...base, exitCode: null, termSignal: "SIGSEGV" }, "x")).toBe("x: killed by SIGSEGV");
+		expect(abnormalExit({ ...base, exitCode: null }, "x")).toBe("x: killed by signal");
 	});
 });
 

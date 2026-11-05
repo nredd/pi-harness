@@ -30,7 +30,7 @@ import {
 	withFileLock,
 	withLock,
 } from "../core/index.ts";
-import { assertRef, git, gitFailure } from "./run.ts";
+import { assertRef, git, gitExitText, gitFailure } from "./run.ts";
 
 const DEFAULT_TIMEOUT_S = 60;
 const LOCK_DIR = "pi-dev-tools-worktree.lock";
@@ -132,7 +132,8 @@ function pathState(target: string): PathState {
 	} catch (e) {
 		const err = e as NodeJS.ErrnoException;
 		if (err.code === "ENOENT") return { state: "free" }; // absent, or removed under us
-		return { error: `path unreadable (${err.code ?? "error"}): ${target}: ${err.message}` };
+		// Node fs errors from stat/readdir always carry a code.
+		return { error: `path unreadable (${err.code}): ${target}: ${err.message}` };
 	}
 }
 
@@ -286,7 +287,7 @@ export function registerWorktreeTools(pi: ExtensionAPI): void {
 				);
 				const refFailure = abnormalExit(ref, what);
 				if (refFailure) return failed(refFailure);
-				if (ref.exitCode !== 0 && ref.exitCode !== 1) return failed(gitFailure(ref, what) ?? what);
+				if (ref.exitCode !== 0 && ref.exitCode !== 1) return failed(gitExitText(ref, what));
 				const exists = ref.exitCode === 0;
 				let args: string[];
 				if (exists) {
@@ -310,7 +311,7 @@ export function registerWorktreeTools(pi: ExtensionAPI): void {
 						if (baseFailure) return failed(baseFailure);
 						// --verify --quiet: 1 = does not resolve. Other codes are real errors.
 						if (base.exitCode === 1) return failed(`${what}: unknown revision '${params.base}'`);
-						if (base.exitCode !== 0) return failed(gitFailure(base, what) ?? what);
+						if (base.exitCode !== 0) return failed(gitExitText(base, what));
 					}
 					args = [
 						"worktree",
@@ -434,7 +435,8 @@ export function registerWorktreeTools(pi: ExtensionAPI): void {
 					.split("\n")
 					.map((line) => /^Removing (.+?): (.*)$/.exec(line))
 					.filter((m): m is RegExpExecArray => m !== null)
-					.map((m) => ({ name: m[1] ?? "", reason: m[2] ?? "" }));
+					// Both groups are mandatory in the pattern, so every match carries them.
+					.map(([, name, reason]) => ({ name: String(name), reason: String(reason) }));
 				const verb = dryRun ? "would prune" : "pruned";
 				const text = pruned.length
 					? `${verb} ${pruned.length}:\n${pruned.map((p) => `${p.name}: ${p.reason}`).join("\n")}`

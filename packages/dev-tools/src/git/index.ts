@@ -176,13 +176,16 @@ export function registerGitTools(pi: ExtensionAPI): void {
 			const r = await git(args, { cwd, signal, timeoutMs: readTimeout(params) });
 			const failure = gitFailure(r, "git log");
 			if (failure) return failed(failure);
-			const records = oneline ? r.stdout.split("\n") : r.stdout.split("\0");
+			const split = oneline ? r.stdout.split("\n") : r.stdout.split("\0");
+			// Truncation keeps the head, so only the last record can be cut mid-field: drop it, `bound` reports the cut.
+			const records = r.stdoutDropped ? split.slice(0, -1) : split;
 			const commits = records
 				.map((rec) => rec.replace(/^\n/, ""))
 				.filter((rec) => rec.trim() !== "")
 				.map((rec) => {
-					const [head = "", ...bodyLines] = rec.split("\n");
-					const [sha = "", author = "", date = "", ...subject] = head.split("\t");
+					// `split` always yields one element, and every complete record has the format's three literal tabs.
+					const [head, ...bodyLines] = rec.split("\n") as [string, ...string[]];
+					const [sha, author, date, ...subject] = head.split("\t") as [string, string, string, ...string[]];
 					return { sha, author, date, subject: subject.join("\t"), body: bodyLines.join("\n").trim() };
 				});
 			const lines = commits.map(
@@ -224,7 +227,7 @@ export function registerGitTools(pi: ExtensionAPI): void {
 			});
 			const headFailure = gitFailure(head, "git show");
 			if (headFailure) return failed(headFailure);
-			const [sha = "", subject = ""] = head.stdout.trim().split("\t");
+			const [sha, subject = ""] = head.stdout.trim().split("\t") as [string, ...string[]];
 			if (!sha) return failed(`git show: '${params.rev}' is not a commit (a blob or tree has no history)`);
 			const args = ["show", "--no-color", "--no-ext-diff", "--format=%H%n%an <%ae>%n%aI%n%n%B", "--stat=100"];
 			if (!params.stat) args.push("--patch");
@@ -369,7 +372,8 @@ export function registerGitTools(pi: ExtensionAPI): void {
 				const head = await git(["log", "-1", "--format=%H%x09%G?"], { cwd, signal, timeoutMs });
 				if (gitFailure(head, "git log"))
 					return fail("commit", `committed, but could not read HEAD: ${head.stderr.trim()}`);
-				const [sha = "", sig = "N"] = head.stdout.trim().split("\t");
+				// The format's literal tab always yields both fields; `%G?` prints `N` when unsigned.
+				const [sha, sig] = head.stdout.trim().split("\t") as [string, string];
 				// G good, U good but untrusted key, X/Y good but expired: all signed. N none, B bad, E unverifiable: not.
 				const signed = ["G", "U", "X", "Y"].includes(sig);
 				const short = sha.slice(0, 7);

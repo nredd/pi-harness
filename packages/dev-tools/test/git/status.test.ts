@@ -58,6 +58,21 @@ describe("parsePorcelainV2", () => {
 		expect(s.unstaged[0]?.path).toBe("sub");
 	});
 
+	it("leaves tracking unknown for a branch.ab value it cannot read", () => {
+		const s = parsePorcelainV2(["# branch.head main", "# branch.upstream origin/main", "# branch.ab +x -y"].join(NUL));
+		expect(s).toMatchObject({ tracked: false, ahead: 0, behind: 0 });
+		expect(formatStatus(s).split("\n")[0]).toBe("main (origin/main gone)");
+	});
+
+	it("drops ignored entries, which carry no XY code", () => {
+		const s = parsePorcelainV2(
+			["# branch.head main", "! build/out.o", "1 .M N... 100644 100644 100644 h1 h2 a.txt"].join(NUL),
+		);
+		expect(s.unstaged.map((e) => e.path)).toEqual(["a.txt"]);
+		expect([...s.staged, ...s.conflicted]).toEqual([]);
+		expect(s.untracked).toEqual([]);
+	});
+
 	it("formats compactly with rename arrows", () => {
 		const text = formatStatus(parsePorcelainV2(SAMPLE));
 		expect(text.split("\n")[0]).toBe("main (origin/main +2 -1)");

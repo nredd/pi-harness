@@ -135,4 +135,7 @@ describe("validateHost", () => {
 	it("lists the known hosts in the rejection", () => {
 		expect(validateHost("evil", known)).toContain("known: colima, colima-work, deep-host");
 	});
+	it("says (none) when the config defines no hosts", () => {
+		expect(validateHost("home", new Set())).toBe("host 'home' is not a Host entry in ~/.ssh/config; known: (none)");
+	});
 });
