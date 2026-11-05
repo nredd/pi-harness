@@ -9,7 +9,12 @@ import { createMockCtx, createMockPi, makeTheme } from "@juicesharp/rpiv-test-ut
 import { describe, expect, it, vi } from "vitest";
 import registerTodo from "./.test-support/home-fixtures.ts";
 import { getState } from "./state/store.ts";
-import { SUBAGENT_COMPLETED_EVENT, SUBAGENT_FAILED_EVENT, SUBAGENT_STARTED_EVENT } from "./tool/types.ts";
+import {
+	SUBAGENT_COMPLETED_EVENT,
+	SUBAGENT_CREATED_EVENT,
+	SUBAGENT_FAILED_EVENT,
+	SUBAGENT_STARTED_EVENT,
+} from "./tool/types.ts";
 import { renderTodoResult } from "./view/format.ts";
 
 type Handler = (...args: unknown[]) => unknown;
@@ -325,6 +330,30 @@ describe("repeated settles during background work (#448)", () => {
 			`Run ended with 1 in_progress todo, ${ARMED}; held by the parent: #1 Audit auth (@scout done)`,
 			"warning",
 		]);
+	});
+
+	it("counts a queued Agent spawn with running, then follows started and completed", async () => {
+		const h = setup();
+		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		await ownedTodo(h, ctx, "scout");
+		await h.emit(SUBAGENT_CREATED_EVENT, { id: "a1", handle: "scout", isBackground: true });
+		expect(await settle(h, ctx)).toEqual([
+			[`Run ended with 1 in_progress todo, ${ARMED}; agent running: #1 Audit auth (@scout queued)`, "info"],
+		]);
+		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "scout" });
+		expect(await settle(h, ctx)).toEqual([
+			[`Run ended with 1 in_progress todo, ${ARMED}; agent running: #1 Audit auth (@scout running)`, "info"],
+		]);
+		await h.emit(SUBAGENT_COMPLETED_EVENT, { id: "a1", status: "completed" });
+		const done = [
+			`Run ended with 1 in_progress todo, ${ARMED}; held by the parent: #1 Audit auth (@scout done)`,
+			"warning",
+		];
+		expect(await settle(h, ctx)).toEqual([done]);
+
+		// A detached resume re-announces the id after it completed: still done, still a warning.
+		await h.emit(SUBAGENT_CREATED_EVENT, { id: "a1", handle: "scout", isBackground: true });
+		expect(await settle(h, ctx)).toEqual([done]);
 	});
 
 	it("reports again once the list empties and refills, and forgets a shut-down session", async () => {

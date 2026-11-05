@@ -119,7 +119,7 @@ the full list grouped by status.
   on the row as `@auth-audit`; when it names a top-level subagent of this session
   (from [`pi-subagents`](https://github.com/nredd/pi-harness/tree/main/packages/subagents#events)
   lifecycle events, per the [owner match rule](./docs/overlay.md#owner-match-rule))
-  the row also shows that agent's live state, `running`, `done`, `failed` or
+  the row also shows that agent's live state, `queued`, `running`, `done`, `failed` or
   `stopped`. An
   `in_progress` todo whose agent failed or stopped is marked `✗ failed` or `✗ stopped`; the todo
   stays `in_progress` until the parent completes it with evidence. Complete each
@@ -154,12 +154,14 @@ the full list grouped by status.
   Outside Plan mode, a run that settles with `in_progress` todos also reports them
   (`agent_settled` in `plan-hooks.ts`), grouped by why each is still open: `owner agent failed
   or stopped` (all named), `held by the parent`, `blocked` and `agent running`, three per group
-  then a count. `blocked` means a live `blockedBy` dependency: one `in_progress` whose owner agent
-  has not failed or stopped, or one `pending` whose owner agent is running. A todo is `held by the
+  then a count. `agent running` includes an owner agent still `queued`. `blocked` means a live
+  `blockedBy` dependency: one `in_progress` whose owner agent has not failed or stopped, or one
+  `pending` whose owner agent is running or queued. A todo is `held by the
   parent` when it has no owner, a free-text owner, an agent that finished without the todo being
   completed, or open blockers that are all dead (`deferred`, unowned `pending`, or abandoned), shown
-  as e.g. `(by #3 deferred)`. A child still queued by pi-subagents emits no lifecycle event until it
-  starts, so its todo reads `held` until then and `agent running` after. Its armed clause, `armed:
+  as e.g. `(by #3 deferred)`. An `Agent`-tool background spawn is heard at `subagents:created`, so
+  it counts as running while still queued; spawns that skip `created` (cross-extension RPC, the
+  scheduler, `@handle`) are first heard at `subagents:started` and read `held` until then. Its armed clause, `armed:
   no todo-owned wake (monitor and agent notices list session wakes)`, says only that todos arm
   nothing themselves; the `subagents` and `session-kit` monitor notices say what does wake the
   parent. Abandoned or parent-held work makes it a warning, repeated on every settle, so a stop with

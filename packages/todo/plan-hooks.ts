@@ -169,26 +169,31 @@ interface Row {
 	deps: readonly Task[];
 }
 
+/** A running or queued agent: either will deliver and wake the parent. */
+function isWorking(agent: AgentRunState | undefined): boolean {
+	return agent === "running" || agent === "queued";
+}
+
 /**
  * Whether an open dependency is being worked: `in_progress` with no failed or stopped owner, or
- * `pending` with an owner whose agent is running. A deferred or unowned pending one never
+ * `pending` with an owner whose agent is running or queued. A deferred or unowned pending one never
  * delivers on its own, so a todo waiting only on those is the parent's to unblock.
  */
 function isLive(dep: Task, lookup: AgentStateLookup): boolean {
 	const agent = lookup(dep.owner);
 	if (dep.status === "in_progress") return !isAbandoned(dep, agent);
-	return dep.status === "pending" && agent === "running";
+	return dep.status === "pending" && isWorking(agent);
 }
 
 /**
  * Classify one `in_progress` todo. Its owner's failed or stopped agent makes it abandoned; a running
- * one owns it; else a live `blockedBy` dependency makes it wait; anything else, including a todo
+ * or queued one owns it; else a live `blockedBy` dependency makes it wait; anything else, including a todo
  * whose agent is done or whose open blockers are all dead, waits on the parent.
  */
 function classify(task: Task, byId: ReadonlyMap<number, Task>, lookup: AgentStateLookup): Row {
 	const agent = lookup(task.owner);
 	if (isAbandoned(task, agent)) return { task, kind: "abandoned", agent, deps: [] };
-	if (agent === "running") return { task, kind: "running", agent, deps: [] };
+	if (isWorking(agent)) return { task, kind: "running", agent, deps: [] };
 	const open = (task.blockedBy ?? []).flatMap((id) => {
 		const dep = byId.get(id);
 		return dep && OPEN.has(dep.status) ? [dep] : [];
