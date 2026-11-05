@@ -1825,6 +1825,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     opts: { outputTranscript: boolean; maxTurns?: number; toolCallId?: string },
   ): Promise<AgentRecord | undefined> {
     const id = existing.id;
+    const priorSettleSeq = existing.settleSeq;
+    const resumeSeq = manager.nextSequence();
     const joinMode = resolveJoinMode(defaultJoinMode, true);
     // Assigned unconditionally: the completion notification carries this as
     // `<tool-use-id>`, so a mention-resume (which passes none) has to CLEAR the
@@ -1899,6 +1901,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       type: existing.type,
       description: existing.description,
       isBackground: true,
+      ...(record.status === "queued" && priorSettleSeq !== undefined ? { queuedAfterSettleSeq: priorSettleSeq, queuedResumeSeq: resumeSeq } : {}),
       ...eventFields(existing),
     });
 

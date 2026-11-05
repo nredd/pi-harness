@@ -49,9 +49,9 @@ snapshots are saved.
   (`subagents:created` / `started` / `completed` / `failed`), chosen by the
   [owner match rule](#owner-match-rule), the agent's last known state follows:
   `queued` (accent), `running` (accent), `done` (success), `failed` (error) or `stopped` (muted).
-  `queued` is an `Agent`-tool background spawn heard at `subagents:created` before it
-  starts; a `created` for an agent already heard (a detached resume or a foreground
-  handoff) never overrides its state.
+  `queued` is a background spawn or resume heard at `subagents:created` before it
+  starts. A queued resume identifies the exact preceding `settleSeq` and its new
+  `queuedResumeSeq`; stale re-announcements or foreground handoffs cannot override a later state.
   Free text that matches no agent shows only `@owner`. Another session's agents
   never match, so `/new` or `/resume` starts with no states. An `in_progress` todo whose agent
   failed or stopped is marked in the error color, `✗ failed` or `✗ stopped`. The
@@ -86,9 +86,9 @@ the order in which it first heard of each agent. Then:
   shows, unless some *other* agent whose `nameBase` matches was spawned after the
   exact match last settled. That is a retry under the same name, and of those the
   one started most recently shows instead.
-- With an exact match still `queued` (heard at `created`, never started), the most
-  recently settled `nameBase` match spawned after it shows instead, if any: a queued spawn may never
-  run, and a settled sibling says more.
+- With an exact match `queued`, the most recently settled `nameBase` match spawned after that
+  queue entry shows instead, if any: a queued spawn or resume may never run, and a newer settled
+  sibling says more. A resumed owner's earlier siblings cannot mask its new queue entry.
 - With no exact match, the most recently updated `nameBase` match shows.
 
 So for owner `Auth Audit`:
