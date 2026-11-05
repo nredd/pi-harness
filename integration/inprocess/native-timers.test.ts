@@ -73,3 +73,31 @@ it("disposes an inert timer when its `using` scope exits", () => {
 		frozen.restore();
 	}
 });
+
+it("clears a real zero-delay interval through the frozen clearInterval", async () => {
+	const frozen = freezeNativeTimers();
+	try {
+		let fired = 0;
+		const interval = setInterval(() => fired++, 0);
+		clearInterval(interval);
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		expect(fired).toBe(0);
+		expect(frozen.records).toEqual([]);
+	} finally {
+		frozen.restore();
+	}
+});
+
+it("records an unknown origin when no stack frame names the caller", () => {
+	const frozen = freezeNativeTimers();
+	const limit = Error.stackTraceLimit;
+	try {
+		Error.stackTraceLimit = 0;
+		setTimeout(() => {}, 1);
+		expect(frozen.records).toEqual([{ kind: "timeout", delay: 1, origin: "unknown origin", cleared: false }]);
+	} finally {
+		Error.stackTraceLimit = limit;
+		frozen.restore();
+	}
+});
