@@ -22,9 +22,15 @@ export type AgentRunState = "running" | "done" | "failed" | "stopped";
 export type AgentStateLookup = (owner: string | undefined) => AgentRunState | undefined;
 
 interface AgentEntry {
-	/** Match keys: the id, then every previous id, `handle` and `name`. */
+	/** Exact match keys: the id, every previous id, `handle` and `name`. */
 	keys: Set<string>;
+	/** The spawner `name` before collision numbering; matches only as a fallback, see `agentStateFor`. */
+	nameBase?: string;
 	state: AgentRunState;
+	/** Sequence number of the latest `started`. */
+	startedAt: number;
+	/** Sequence number of the latest settle, unset while running. */
+	settledAt?: number;
 }
 
 /** Bound memory in a long session; the oldest-updated agents drop first. */
@@ -32,6 +38,8 @@ export const MAX_TRACKED_AGENTS = 256;
 
 // Per session, insertion order is update order: every write deletes then re-inserts.
 const sessions = new Map<string, Map<string, AgentEntry>>();
+// Orders starts and settles across every agent; only comparisons matter, never values.
+let sequence = 0;
 
 /** pi-subagents' `MAX_HANDLE_LENGTH`; `ownerKey` must cut where `handleBase` does. */
 const MAX_KEY_LENGTH = 64;
@@ -87,39 +95,52 @@ export function applyAgentEvent(sessionId: string, channel: string, payload: unk
 	const predecessor = typeof data.previousId === "string" ? agents.get(data.previousId) : undefined;
 	// A later payload without a field keeps the identity an earlier one gave.
 	const keys = new Set([...(predecessor?.keys ?? []), ...(previous?.keys ?? [])]);
-	for (const value of [data.id, data.previousId, data.handle, data.name, data.nameBase]) {
+	for (const value of [data.id, data.previousId, data.handle, data.name]) {
 		const k = ownerKey(value);
 		if (k) keys.add(k);
 	}
+	const nameBase = ownerKey(data.nameBase) ?? previous?.nameBase ?? predecessor?.nameBase;
+	// A repeated `started` keeps its start; any other transition is a new point in the sequence.
+	const restarted = state === "running" && previous?.state !== "running";
+	const startedAt = restarted || !previous ? ++sequence : previous.startedAt;
+	const settledAt = state === "running" ? undefined : previous?.state === state ? previous.settledAt : ++sequence;
 	if (typeof data.previousId === "string") agents.delete(data.previousId);
 	agents.delete(data.id);
-	agents.set(data.id, { keys, state });
+	agents.set(data.id, { keys, nameBase, state, startedAt, settledAt });
 	while (agents.size > MAX_TRACKED_AGENTS) {
 		const oldest = agents.keys().next().value as string;
 		agents.delete(oldest);
 	}
-	return previous === undefined || previous.state !== state || previous.keys.size !== keys.size;
+	return (
+		previous === undefined ||
+		previous.state !== state ||
+		previous.keys.size !== keys.size ||
+		previous.nameBase !== nameBase
+	);
 }
 
 /**
- * The state of the agent in `sessionId` that `owner` names, by slugged id, handle, name,
- * `nameBase` or previous id. Among several matches a `running` one wins (the most recent
- * of those), else the most recently updated: a settled same-name sibling (`auth-audit-2`,
- * or a scout named `Explore` beside an unnamed `explore`) never shadows a live owner, and a
- * retry still shadows its failed first try.
+ * The state of the agent in `sessionId` that `owner` names. The full rule, with examples,
+ * is in `docs/overlay.md` (Owner):
+ * - an exact match (slugged id, previous id, `handle` or `name`; the most recently
+ *   updated if several) decides, unless a `nameBase`-only match STARTED AFTER it settled,
+ *   which is a retry under the same name: then the latest such retry decides;
+ * - with no exact match, the most recently updated `nameBase` match decides.
+ * So a sibling started while the owner ran never masks the owner's own outcome either way.
  */
 export function agentStateFor(sessionId: string, owner: string | undefined): AgentRunState | undefined {
 	const wanted = ownerKey(owner);
 	const agents = sessions.get(sessionId);
 	if (!wanted || !agents) return undefined;
-	let latest: AgentRunState | undefined;
-	const entries = [...agents.values()];
-	for (let i = entries.length - 1; i >= 0; i--) {
-		if (!entries[i].keys.has(wanted)) continue;
-		if (entries[i].state === "running") return "running";
-		latest ??= entries[i].state;
-	}
-	return latest;
+	const entries = [...agents.values()].reverse();
+	const exact = entries.find((entry) => entry.keys.has(wanted));
+	const byBase = entries.filter((entry) => entry !== exact && entry.nameBase === wanted);
+	if (!exact) return byBase[0]?.state;
+	const settledAt = exact.settledAt;
+	if (settledAt === undefined) return exact.state;
+	const retries = byBase.filter((entry) => entry.startedAt > settledAt);
+	retries.sort((a, b) => b.startedAt - a.startedAt);
+	return retries[0]?.state ?? exact.state;
 }
 
 /** The lookup for a surface with no live agent state: owners render alone. */
@@ -151,4 +172,5 @@ export function isAbandoned(task: Pick<Task, "status">, state: AgentRunState | u
 /** Test-only: forget every tracked agent in every session. */
 export function __resetAgents(): void {
 	sessions.clear();
+	sequence = 0;
 }

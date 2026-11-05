@@ -51,10 +51,8 @@ snapshots are saved.
   known state follows: `running` (accent), `done` (success), `failed` (error) or
   `stopped` (muted). Both sides are slugged like a handle (case, a leading `@`,
   spaces and punctuation ignored, so `Auth Audit` matches `auth-audit`); free text
-  that matches no agent shows only `@owner`. When several agents match, a running one
-  wins (the most recent of those), else the most recently updated: a retry
-  (`auth-audit-2`, `nameBase` `auth-audit`) shadows its failed first try, and a
-  failed same-name sibling never shadows a live owner. Another session's agents never match,
+  that matches no agent shows only `@owner`. Which agent decides is set by the
+  [owner match rule](#owner-match-rule). Another session's agents never match,
   so `/new` or `/resume` starts with no states. An `in_progress` todo whose agent
   failed or stopped is marked in the error color, `✗ failed` or `✗ stopped`. The
   todo's own status never changes: the parent completes it with evidence.
@@ -67,6 +65,31 @@ snapshots are saved.
   always appended below the panel so it is not flush against the input box.
 
 Rows longer than the terminal width are truncated with `…`.
+
+### Owner match rule
+
+An owner can match an agent exactly, by its id, a previous id, its `handle` or its
+`name` (`auth-audit-2` for a numbered retry), or loosely, by its `nameBase` (the
+spawner's `name` before numbering, `auth-audit`). pi-todo orders each agent's latest
+start and settle in one sequence, then:
+
+- With an exact match (the most recently updated, if several), that agent's state
+  shows, unless a `nameBase`-only match *started after* it settled. That is a retry
+  under the same name, and the latest-started such retry shows instead.
+- With no exact match, the most recently updated `nameBase` match shows.
+
+So for owner `Auth Audit`:
+
+| Sequence | Shows |
+| --- | --- |
+| `auth-audit` fails, then retry `auth-audit-2` starts | `running` (the retry) |
+| `auth-audit` runs, sibling `auth-audit-2` starts and fails | `running` (the owner) |
+| `auth-audit` runs, sibling `auth-audit-2` starts, then `auth-audit` fails | `✗ failed` (the owner) |
+| `auth-audit` runs, sibling `auth-audit-2` starts, then `auth-audit` completes | `done` (the owner) |
+
+A sibling started while the owner ran never masks the owner's own outcome. The
+same holds for an unnamed `explore` beside a scout named `Explore` (`explore-2`).
+A resumed owner is running again and decides once more.
 
 ## Scrolling
 
