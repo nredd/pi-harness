@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { open, opendir, readlink } from "node:fs/promises";
+import { open, readdir, readlink } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import {
 	darwinMemory,
@@ -184,16 +184,19 @@ export async function command(
 }
 
 /**
- * Scan Linux sequentially and close the directory even on cancellation.
+ * Scan Linux sequentially over a names-only `/proc` listing.
+ *
+ * Names only, never `opendir` Dirents: `/proc` reports a PID that exits mid-listing as `DT_UNKNOWN`, and
+ * Node's `Dir` then `lstat`s it, and that ENOENT rejects the iterator with its batch, which cannot resume, so
+ * the whole scan was lost (`process-collection-unavailable`). A vanished PID must fail its own stat read instead.
  * @param budget Shared scan limits and cancellation.
  * @param hz Host CLK_TCK rate in ticks per second.
  * @returns Validated identity-bracketed process counters; aborts propagate.
  */
 export async function linuxProcesses(budget: Budget, hz: number): Promise<ProcessCounter[]> {
 	const result: ProcessCounter[] = [];
-	const directory = await opendir("/proc");
-	for await (const entry of directory) {
-		if (!/^\d+$/.test(entry.name)) continue;
+	for (const pid of await readdir("/proc")) {
+		if (!/^\d+$/.test(pid)) continue;
 		if (!budget.ready()) break;
 		if (budget.enumerated >= budget.maxPids) {
 			budget.reasons.add("pid-limit");
@@ -201,14 +204,14 @@ export async function linuxProcesses(budget: Budget, hz: number): Promise<Proces
 		}
 		budget.enumerated++;
 		try {
-			const path = `/proc/${entry.name}`;
+			const path = `/proc/${pid}`;
 			const first = linuxStat(await budget.read(`${path}/stat`), hz, performance.now());
 			if (!first) throw new Error("process incomplete");
 			const name = await budget.executable(`${path}/exe`);
 			const rssBytes = linuxRss(await budget.read(`${path}/status`));
 			const last = linuxStat(await budget.read(`${path}/stat`), hz, performance.now());
 			// The name and RSS reads sit between two stat reads, so PID reuse rejects both.
-			if (!last || first.pid !== Number(entry.name) || first.identity !== last.identity || rssBytes === null)
+			if (!last || first.pid !== Number(pid) || first.identity !== last.identity || rssBytes === null)
 				throw new Error("process changed or incomplete");
 			result.push({ ...last, name, rssBytes });
 		} catch {

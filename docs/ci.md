@@ -569,6 +569,9 @@ Flake policy (migration plan section 7):
   failed. The rerun must pass. Both attempts stay in the run's attempt history; name the flake in the PR
 - Known timing-sensitive suites: session-kit `monitor` and `diff` reaping, dev-tools kill escalation,
   core `chord`/`durable` 5 s timeouts. They were green alone and flaky on a loaded laptop
+- dev-tools real-host `resource_snapshot` child sample on Linux (#499): published sampler `0.2.0` drops
+  the whole baseline when a process exits mid-`/proc` scan, so the child reads `warming` or
+  `process-collection-unavailable`. Fixed in sampler source, flaky until `0.2.1` is pinned
 - Subagents' genuine manager-reload fixture also includes synchronous TypeScript preparation and child
   imports inside its 5 s test deadline. PR #138's macOS failure reported that deadline at 5597 ms
   ([here](https://github.com/nredd/pi-harness/actions/runs/40369078357/job/121734701111)). Controlled

@@ -330,8 +330,12 @@ describe("resource_snapshot on the real host through the published sampler", () 
 				if (pid === undefined) throw new Error("child did not start");
 				const real = realSampler();
 				const snapshot = await resourceSnapshot(50, { createSampler: real.createSampler }, undefined, 200);
-				const raw = real.state.samples.at(-1);
-				if (raw === undefined || snapshot.processes.status !== "available") throw new Error("missing process metadata");
+				const [baseline, raw] = real.state.samples;
+				if (baseline === undefined || raw === undefined || snapshot.processes.status !== "available")
+					throw new Error("missing process metadata");
+				// A failed baseline collection leaves every end-scan process warming; name that cause, not the symptom.
+				// Published 0.2.0 still hits it when any PID exits mid-listing (#499, sampler README).
+				expect(baseline.coverage.reasons).not.toContain("process-collection-unavailable");
 				expect(raw.coverage.reasons).not.toContain("process-collection-unavailable");
 				const found = raw.processes.find((entry) => entry.pid === pid);
 				expect(
