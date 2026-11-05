@@ -124,11 +124,14 @@ test("restoration skips non-completion messages before recovering the last compl
 
 test("active plan status reports the frozen tool summary", () => {
   assert.equal(
-    planModeStatusText({ enabled: true, awaitingAction: true, latestPlan: "# Ready" }, () => "read only"),
+    planModeStatusText(
+      { enabled: true, awaitingAction: true, declinedPlans: 0, latestPlan: "# Ready" },
+      () => "read only",
+    ),
     "Plan mode is active and a proposed plan is ready. read only",
   );
   assert.equal(
-    planModeStatusText({ enabled: false, awaitingAction: false }, () => "unused"),
+    planModeStatusText({ enabled: false, awaitingAction: false, declinedPlans: 0 }, () => "unused"),
     "Plan mode is off.",
   );
 });
@@ -144,7 +147,11 @@ test("message and widget components remain renderable after invalidation", () =>
   component.invalidate();
   assert.deepEqual(component.render(80), before);
   const context = createMockContext({ hasUI: true, mode: "tui", theme });
-  updatePlanModeUi(context.ctx, { enabled: true, awaitingAction: true, latestPlan: "# Task" }, () => "read");
+  updatePlanModeUi(
+    context.ctx,
+    { enabled: true, awaitingAction: true, declinedPlans: 0, latestPlan: "# Task" },
+    () => "read",
+  );
   const factory = context.widgets.get("plan-mode-plan") as (tui: unknown, theme: Theme) => Component;
   const widget = factory({}, theme);
   const lines = widget.render(40);
@@ -177,15 +184,18 @@ test("export failures are visible headlessly and never overwrite or create inval
   try {
     const context = createMockContext({ cwd: directory, hasUI: false });
     await assert.rejects(
-      exportStoredPlan({ enabled: false, awaitingAction: false }, undefined, context.ctx),
+      exportStoredPlan({ enabled: false, awaitingAction: false, declinedPlans: 0 }, undefined, context.ctx),
       /No completed plan/,
     );
     const interactive = createMockContext({ cwd: directory, hasUI: true });
-    assert.equal(await exportStoredPlan({ enabled: false, awaitingAction: false }, undefined, interactive.ctx), false);
+    assert.equal(
+      await exportStoredPlan({ enabled: false, awaitingAction: false, declinedPlans: 0 }, undefined, interactive.ctx),
+      false,
+    );
     assert.match(interactive.notifications.at(-1)?.message ?? "", /No completed plan/);
     assert.equal(interactive.notifications.at(-1)?.level, "warning");
     await assert.rejects(exportPlanToFile("# Plan", "x".repeat(300), directory), /ENAMETOOLONG/);
-    const state = { enabled: true, awaitingAction: true, latestPlan: "# Plan" };
+    const state = { enabled: true, awaitingAction: true, declinedPlans: 0, latestPlan: "# Plan" };
     assert.throws(() => resolvePlanExportPath("bad\0path", directory), /NUL/);
     await writeFile(join(directory, "blocker"), "owned");
     await assert.rejects(exportPlanToFile("# Plan", "blocker/plan.md", directory), /ENOTDIR|EEXIST/);
