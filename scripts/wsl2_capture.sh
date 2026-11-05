@@ -9,9 +9,10 @@ PATH=$(< "$RUNNER_TEMP/tool-path")
 if [ "${1:-}" = cleanup ]; then
   diagnostics_dir="$WSL_HOST_TEMP/wsl2-diagnostics"
   source "$worktree/scripts/wsl2_cleanup.sh"
-  # Failure-only guest evidence for whole-guest stalls (#445): kernel log plus memory, swap and
-  # pressure state. Fixed /proc files and dmesg only, no environment or HOME. The shared credential
-  # policy scans the synthetic report before export. Nothing here alters the capture status.
+  # Failure-only guest evidence for whole-guest stalls (#445): unprivileged kernel log plus memory,
+  # swap and pressure state. Fixed /proc files and dmesg only, no sudo, environment or HOME. The
+  # shared credential policy scans the synthetic report before export. Nothing here alters the
+  # capture status.
   capture_guest_state() {
     local report="$RUNNER_TEMP/guest-state.txt" kernel_log="$RUNNER_TEMP/guest-dmesg.txt" path
     {
@@ -25,14 +26,11 @@ if [ "${1:-}" = cleanup ]; then
       printf '\n== /proc/vmstat (swap, reclaim, OOM) ==\n'
       grep -E '^(pswpin|pswpout|pgmajfault|allocstall_[a-z]+|oom_kill) ' /proc/vmstat 2>/dev/null \
         || printf 'UNAVAILABLE: not readable\n'
-      if command -v sudo >/dev/null && timeout 20 sudo -n dmesg >"$kernel_log" 2>/dev/null; then
-        printf '\n== dmesg via sudo -n (last 400 lines) ==\n'
-        tail -n 400 "$kernel_log"
-      elif timeout 20 dmesg >"$kernel_log" 2>/dev/null; then
+      if timeout 20 dmesg >"$kernel_log" 2>/dev/null; then
         printf '\n== dmesg unprivileged (last 400 lines) ==\n'
         tail -n 400 "$kernel_log"
       else
-        printf '\n== dmesg ==\nUNAVAILABLE: neither `sudo -n dmesg` nor unprivileged `dmesg` succeeded\n'
+        printf '\n== dmesg ==\nUNAVAILABLE: unprivileged dmesg failed (see dmesg_restrict above)\n'
       fi
     } >"$report" 2>/dev/null
     rm -f "$kernel_log"

@@ -1900,14 +1900,11 @@ def test_guest_adapter_refuses_escaping_directory(tmp_path: Path, directory: str
     assert "escapes guest checkout" in result.stderr
 
 
-def stub_guest_state_commands(
-    commands: Path, *, sudo: bool = False, dmesg: bool = False, kernel: str = ""
-) -> Path:
-    """Stub the guest-state collector's privileged and kernel commands; nothing touches host sudo.
+def stub_guest_state_commands(commands: Path, *, dmesg: bool = False, kernel: str = "") -> Path:
+    """Stub the guest-state collector's kernel commands, plus a `sudo` that only records calls.
 
     Parameters:
         commands (Path): PATH-prepended stub directory, created when absent.
-        sudo (bool): `sudo -n dmesg` succeeds.
         dmesg (bool): unprivileged `dmesg` succeeds.
         kernel (str): Extra kernel-log line, e.g. a planted credential.
 
@@ -1916,13 +1913,11 @@ def stub_guest_state_commands(
     """
     commands.mkdir(exist_ok=True)
     marker = commands.parent / "kernel-log-attempts"
+    sudo_calls = commands.parent / "sudo-calls"
     log = f"printf '%s\\n' \"$0 $*\" >> {shlex.quote(str(marker))}\n"
     stubs = {
-        "sudo": (
-            f"#!/bin/sh\n{log}"
-            '[ "$1" = -n ] && [ "$2" = dmesg ] || exit 90\n'
-            + (f"printf '[    1.0] sudo kernel line\\n{kernel}\\n'\n" if sudo else "exit 1\n")
-        ),
+        # The capture must never escalate; any call is recorded and fails.
+        "sudo": f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {shlex.quote(str(sudo_calls))}\nexit 90\n",
         "dmesg": (
             f"#!/bin/sh\n{log}"
             + (
@@ -2010,9 +2005,8 @@ def test_capture_retains_first_failure_and_only_explicit_reports(
 @pytest.mark.parametrize(
     ("case", "heading"),
     [
-        ("sudo", "== dmesg via sudo -n (last 400 lines) =="),
         ("unprivileged", "== dmesg unprivileged (last 400 lines) =="),
-        ("unavailable", "UNAVAILABLE: neither `sudo -n dmesg` nor unprivileged `dmesg` succeeded"),
+        ("unavailable", "UNAVAILABLE: unprivileged dmesg failed (see dmesg_restrict above)"),
         ("credential", "withheld"),
         ("no-scanner", "withheld"),
     ],
@@ -2039,8 +2033,7 @@ def test_failed_capture_exports_scanned_guest_state(tmp_path: Path, case: str, h
     credential = "ghp_" + "A" * 36
     stub_guest_state_commands(
         tmp_path / "commands",
-        sudo=case in {"sudo", "credential"},
-        dmesg=case in {"unprivileged", "no-scanner"},
+        dmesg=case in {"unprivileged", "credential", "no-scanner"},
         kernel=credential if case == "credential" else "",
     )
     host_temp = tmp_path / "host/temp"
@@ -2065,6 +2058,7 @@ def test_failed_capture_exports_scanned_guest_state(tmp_path: Path, case: str, h
     assert heading in exported
     assert "synthetic-sentinel" not in exported + result.stdout + result.stderr
     assert credential not in exported + result.stdout + result.stderr
+    assert not (tmp_path / "sudo-calls").exists()
     if heading != "withheld":
         assert exported.startswith("WSL guest state at ")
         assert exported.splitlines()[0].endswith(" (UTC): guest status 47, job status failure")
@@ -2110,6 +2104,7 @@ def test_job_status_alone_triggers_guest_state(tmp_path: Path, job_status: str, 
     subprocess.run(command, env=env, capture_output=True, text=True, check=True)
     assert not (worktree / ".ci-temp/first-failure").exists()
     assert marker.exists() is collected
+    assert not (tmp_path / "sudo-calls").exists()
     exported = host_temp / "wsl2-diagnostics/guest-state.txt"
     assert exported.exists() is collected
     if collected:
