@@ -19,7 +19,7 @@ export function runnerResolution(opts: { hold?: boolean } = {}) {
     });
     if (typeof outcome === "string") throw new Error(outcome);
     if (outcome.fallback) options.onModelFallback?.(outcome.fallback);
-    const session = { dispose: vi.fn(), messages: [], model: outcome.model } as any;
+    const session = { dispose: vi.fn(), subscribe: vi.fn(() => vi.fn()), messages: [], model: outcome.model } as any;
     options.onSessionCreated?.(session);
     if (opts.hold) return new Promise(() => {}) as never;
     return { responseText: "done", session, aborted: false, steered: false };

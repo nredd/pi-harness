@@ -88,6 +88,7 @@ interface NestedSpawnOptions {
   signal?: AbortSignal;
   onAssistantUsage?: (usage: { input: number; output: number; cacheWrite: number }) => void;
   onSessionCreated?: (session: AgentSession) => void;
+  onPrepare?: (id: string) => void;
   depth: number;
   parentAgentId: string;
   maxSubagentDepth: number;
@@ -113,8 +114,6 @@ export interface NestedAgentManager {
     type: string,
     prompt: string,
     options: Omit<NestedSpawnOptions, "isBackground">,
-    /** Fires synchronously after spawn, before the session exists — where the transcript is attached. */
-    onSpawned?: (id: string) => void,
   ): Promise<{ id: string; record: AgentRecord }>;
   getRecord(id: string): AgentRecord | undefined;
   resume(id: string, prompt: string, signal?: AbortSignal, options?: { maxTurns?: number }): Promise<AgentRecord | undefined>;
@@ -426,8 +425,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
           ctx,
           resolvedType,
           params.prompt,
-          { ...options, signal },
-          attachTranscript,
+          { ...options, signal, onPrepare: attachTranscript },
         );
         return textResult(formatRecord(record, "inline"), record.status === "error");
       } catch (err) {
