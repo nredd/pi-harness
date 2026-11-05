@@ -56,6 +56,34 @@ describe("applyAgentEvent", () => {
 		expect(stateOf("explore")).toBe("done");
 	});
 
+	it("accepts only a queued resume bound to the most recent settle", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "resume", handle: "resume" });
+		apply(SUBAGENT_FAILED_EVENT, { id: "resume", status: "error", settleSeq: 10 });
+		const queued = { id: "resume", queuedAfterSettleSeq: 10, queuedResumeSeq: 11 };
+		expect(apply(SUBAGENT_CREATED_EVENT, queued)).toBe(true);
+		expect(stateOf("resume")).toBe("queued");
+		expect(apply(SUBAGENT_CREATED_EVENT, queued)).toBe(false);
+		apply(SUBAGENT_STARTED_EVENT, { id: "resume" });
+		expect(apply(SUBAGENT_CREATED_EVENT, queued)).toBe(false);
+		apply(SUBAGENT_COMPLETED_EVENT, { id: "resume", settleSeq: 20 });
+		expect(apply(SUBAGENT_CREATED_EVENT, queued)).toBe(false);
+		expect(stateOf("resume")).toBe("done");
+		expect(apply(SUBAGENT_CREATED_EVENT, { id: "resume", queuedAfterSettleSeq: 20, queuedResumeSeq: 21 })).toBe(true);
+		expect(stateOf("resume")).toBe("queued");
+	});
+
+	it("does not let an older settled retry mask a newly queued resume", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1", name: "auth-audit", nameBase: "auth-audit", spawnSeq: 1 });
+		apply(SUBAGENT_FAILED_EVENT, { id: "a1", status: "error", settleSeq: 2 });
+		apply(SUBAGENT_STARTED_EVENT, { id: "a2", name: "auth-audit-2", nameBase: "auth-audit", spawnSeq: 3 });
+		apply(SUBAGENT_COMPLETED_EVENT, { id: "a2", settleSeq: 4 });
+		apply(SUBAGENT_CREATED_EVENT, { id: "a1", queuedAfterSettleSeq: 2, queuedResumeSeq: 5 });
+		expect(stateOf("auth-audit")).toBe("queued");
+		apply(SUBAGENT_STARTED_EVENT, { id: "a3", name: "auth-audit-3", nameBase: "auth-audit", spawnSeq: 6 });
+		apply(SUBAGENT_FAILED_EVENT, { id: "a3", status: "error", settleSeq: 7 });
+		expect(stateOf("auth-audit")).toBe("failed");
+	});
+
 	it("lets a settled nameBase retry outrank an owner still queued", () => {
 		apply(SUBAGENT_CREATED_EVENT, { id: "a1", name: "auth-audit", nameBase: "auth-audit" });
 		apply(SUBAGENT_STARTED_EVENT, { id: "a2", name: "auth-audit-2", nameBase: "auth-audit" });

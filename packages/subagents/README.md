@@ -1091,7 +1091,7 @@ Every project now starts with concurrency 16 and grace 10, without ever touching
 
 ## Events
 
-Agent lifecycle events are emitted via `pi.events.emit()` so other extensions can react:
+Agent lifecycle events are emitted via `pi.events.emit()` so other extensions can react. A queued background resume's `subagents:created` includes `queuedAfterSettleSeq` (the preceding terminal event's `settleSeq`) and `queuedResumeSeq` (the new queue entry's sequence). A listener can match the preceding settle before marking an existing agent queued and reject late announcements after a later settle.
 
 | Event | When | Key fields |
 |-------|------|------------|

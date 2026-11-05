@@ -7,6 +7,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { agentStateFor, applyAgentEvent, forgetAgents } from "../../todo/state/agents.ts";
 import type * as AgentRunner from "../src/agent-runner.js";
 
 vi.mock("../src/agent-runner.js", async () => {
@@ -111,6 +112,40 @@ describe("lifecycle event identity", () => {
     expect(eventsNamed(pi, "subagents:created")).toEqual([
       expect.objectContaining({ id, handle: "scout", name: "auth-audit", isBackground: true }),
     ]);
+  });
+
+  it.each(["done", "failed"])("tracks a queued background resume after %s without accepting a stale created", async (outcome) => {
+    writeFileSync(join(cwd, "agent-dir", "subagents.json"), JSON.stringify({ maxConcurrent: 1 }));
+    const { pi, tools } = await boot();
+    pi.events.emit.mockImplementation((channel: string, data: unknown) => applyAgentEvent("resume-s1", channel, data));
+    const resolve = runnerResolution();
+    vi.mocked(runAgent).mockImplementationOnce((async (...args: any[]) => {
+      const result = await (resolve as any)(...args);
+      if (outcome === "failed") throw new Error("first run failed");
+      return result;
+    }) as any).mockImplementation(runnerResolution({ hold: true }) as any);
+    const spawn = (name: string) => tools.get("Agent").execute(
+      "tc", { prompt: "go", description: name, subagent_type: "scout", name, run_in_background: true },
+      undefined, undefined, ctx(),
+    );
+    const first = await spawn("Auth Audit");
+    await flush();
+    const id = /Agent ID: (\S+)/.exec(first.content.map((c: any) => c.text ?? "").join(""))![1];
+    expect(agentStateFor("resume-s1", "auth-audit")).toBe(outcome);
+    const stale = eventsNamed(pi, "subagents:created").find((e: any) => e.id === id);
+    pi.events.emit("subagents:created", stale);
+    expect(agentStateFor("resume-s1", "auth-audit")).toBe(outcome);
+    await spawn("Blocker");
+    await flush();
+    const before = eventsNamed(pi, "subagents:created").length;
+    await tools.get("Agent").execute(
+      "resume", { prompt: "again", description: "resume", subagent_type: "scout", resume: id, run_in_background: true },
+      undefined, undefined, ctx(),
+    );
+    expect((globalThis as any)[Symbol.for("pi-subagents:manager")].getRecord(id).status).toBe("queued");
+    expect(eventsNamed(pi, "subagents:created")).toHaveLength(before + 1);
+    expect(agentStateFor("resume-s1", "auth-audit")).toBe("queued");
+    forgetAgents("resume-s1");
   });
 
   it("omits name for an unnamed spawn and keeps handle on a failure", async () => {
