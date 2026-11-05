@@ -1091,7 +1091,7 @@ Every project now starts with concurrency 16 and grace 10, without ever touching
 
 ## Events
 
-Agent lifecycle events are emitted via `pi.events.emit()` so other extensions can react. A queued background resume's `subagents:created` includes `queuedAfterSettleSeq` (the preceding terminal event's `settleSeq`) and `queuedResumeSeq` (the new queue entry's sequence). A listener can match the preceding settle before marking an existing agent queued and reject late announcements after a later settle.
+Agent lifecycle events are emitted via `pi.events.emit()` so other extensions can react. A queued background resume's `subagents:created` includes `queuedAfterSettleSeq` (the preceding terminal event's `settleSeq`) and `queuedResumeSeq` (the new queue entry's sequence). A listener can match the preceding settle before marking an existing agent queued and reject late announcements after a later settle. Lifecycle events also carry `wakesParent` for completion-notice eligibility. A foreground handoff's `subagents:created` carries `backgroundHandoff` and the same `runSeq` as its `started`, so listeners can update eligibility without accepting a stale handoff from an earlier run.
 
 | Event | When | Key fields |
 |-------|------|------------|

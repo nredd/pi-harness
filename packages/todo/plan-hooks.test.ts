@@ -351,7 +351,8 @@ describe("settling with in_progress todos", () => {
 			nextId: 7,
 		} as never;
 		const states: Record<string, AgentRunState> = { worker: "running", finished: "done" };
-		const notice = formatInProgressNotice(state, (owner) => states[owner ?? ""]);
+		const lookup = Object.assign((owner: string | undefined) => states[owner ?? ""], { wakesParent: () => true });
+		const notice = formatInProgressNotice(state, lookup);
 		expect(notice?.text).toContain("#1 t1 (@release-team)");
 		expect(notice?.text).toContain("#2 t2 (@deploy-team; by #4 deferred)");
 		expect(notice?.text).toContain("#3 t3 (@audit-team; by #5)");
@@ -392,7 +393,7 @@ describe("settling with in_progress todos", () => {
 			nextId: 9,
 		} as never;
 		const states: Record<string, AgentRunState> = { w1: "running", w2: "done", w3: "stopped", w4: "failed" };
-		const lookup = (owner: string | undefined) => states[owner ?? ""];
+		const lookup = Object.assign((owner: string | undefined) => states[owner ?? ""], { wakesParent: () => true });
 		expect(formatInProgressNotice(state, lookup)).toEqual({
 			text: `Run ended with 7 in_progress todos, ${ARMED}; owner agent failed or stopped: #3 t3 (@w3 stopped), #4 t4 (@w4 failed); held by the parent: #2 t2 (@w2 done), #7 t7; blocked: #5 t5 (by #2); agent running: #1 t1 (@w1 running), #8 t8 (@w1 running)`,
 			level: "warning",
@@ -410,7 +411,9 @@ describe("settling with in_progress todos", () => {
 			],
 			nextId: 5,
 		} as never;
-		const lookup = (owner: string | undefined) => (owner === "w1" ? "running" : undefined);
+		const lookup = Object.assign((owner: string | undefined) => (owner === "w1" ? ("running" as const) : undefined), {
+			wakesParent: () => true,
+		});
 		expect(formatInProgressNotice(state, lookup)).toEqual({
 			text: `Run ended with 3 in_progress todos, ${ARMED}; blocked: #2 t2 (by #1), #3 t3 (by #4); agent running: #1 t1 (@w1 running)`,
 			level: "info",

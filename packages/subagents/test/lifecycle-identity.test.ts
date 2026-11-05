@@ -7,7 +7,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { agentStateFor, applyAgentEvent, forgetAgents } from "../../todo/state/agents.ts";
+import { formatInProgressNotice } from "../../todo/plan-hooks.ts";
+import { agentLookup, agentStateFor, applyAgentEvent, forgetAgents } from "../../todo/state/agents.ts";
 import type * as AgentRunner from "../src/agent-runner.js";
 
 vi.mock("../src/agent-runner.js", async () => {
@@ -145,7 +146,42 @@ describe("lifecycle event identity", () => {
     expect((globalThis as any)[Symbol.for("pi-subagents:manager")].getRecord(id).status).toBe("queued");
     expect(eventsNamed(pi, "subagents:created")).toHaveLength(before + 1);
     expect(agentStateFor("resume-s1", "auth-audit")).toBe("queued");
+    expect(agentLookup("resume-s1").wakesParent?.("auth-audit")).toBe(true);
     forgetAgents("resume-s1");
+  });
+
+  it.each([false, true])("classifies actual RPC completion wake eligibility: background=%s", async (isBackground) => {
+    const b = makePi();
+    const handlers = new Map<string, Array<(data: unknown) => void>>();
+    b.pi.events.on.mockImplementation((name: string, handler: (data: unknown) => void) => {
+      handlers.set(name, [...(handlers.get(name) ?? []), handler]);
+      return () => {};
+    });
+    b.pi.events.emit.mockImplementation((name: string, data: unknown) => {
+      applyAgentEvent("rpc-wake", name, data);
+      for (const handler of handlers.get(name) ?? []) handler(data);
+    });
+    subagentsExtension(b.pi);
+    await startSession(b.lifecycle, true, { model: PARENT, modelRegistry: ctx().modelRegistry });
+    let finish!: (result: Awaited<ReturnType<typeof runAgent>>) => void;
+    vi.mocked(runAgent).mockImplementation((_context, _type, _prompt, options) => {
+      const session = { dispose: vi.fn(), messages: [], model: PARENT };
+      options?.onSessionCreated?.(session as never);
+      return new Promise((resolve) => { finish = resolve; });
+    });
+    let id = "";
+    b.pi.events.on("subagents:rpc:spawn:reply:wake", (reply: { data: { id: string } }) => { id = reply.data.id; });
+    b.pi.events.emit("subagents:rpc:spawn", { requestId: "wake", type: "scout", prompt: "go", options: { description: "rpc", isBackground } });
+    await flush();
+    expect(id).not.toBe("");
+    const state = { tasks: [{ id: 1, subject: "Audit", status: "in_progress", owner: id }], nextId: 2 } as never;
+    const notice = formatInProgressNotice(state, agentLookup("rpc-wake"));
+    finish({ responseText: "done", session: { dispose: vi.fn(), messages: [], model: PARENT }, aborted: false, steered: false } as never);
+    await flush();
+    const manager = Reflect.get(globalThis, Symbol.for("pi-subagents:manager")) as { getRecord(id: string): { resultConsumed?: boolean } };
+    expect(Boolean(manager.getRecord(id).resultConsumed)).toBe(!isBackground);
+    expect(notice?.level).toBe(isBackground ? "info" : "warning");
+    forgetAgents("rpc-wake");
   });
 
   it("omits name for an unnamed spawn and keeps handle on a failure", async () => {
@@ -205,7 +241,7 @@ describe("lifecycle event identity", () => {
     writeFileSync(join(cwd, "agent-dir", "subagents.json"), JSON.stringify({ maxConcurrent: 1 }));
     const { pi, tools } = await boot();
     const manager = (globalThis as any)[Symbol.for("pi-subagents:manager")];
-    vi.mocked(runAgent).mockImplementation(runnerResolution({ hold: true }) as any);
+    vi.mocked(runAgent).mockImplementation(runnerResolution({ hold: true }));
     const spawn = (name: string) =>
       tools.get("Agent").execute(
         "tc",

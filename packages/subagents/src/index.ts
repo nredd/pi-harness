@@ -706,6 +706,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
    * match an agent by what the parent typed, not only its id. `spawnSeq` orders the spawn
    * against other spawns and `settleSeq`s, queued time included.
    */
+  const lifecycleRuns = new WeakMap<AgentRecord, number>();
   function eventFields(record: AgentRecord | undefined): Record<string, unknown> {
     return {
       handle: record?.handle,
@@ -713,6 +714,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       ...(record?.nameBase ? { nameBase: record.nameBase } : {}),
       ...(record?.previousId ? { previousId: record.previousId } : {}),
       spawnSeq: record?.spawnSeq,
+      ...(record && lifecycleRuns.has(record) ? { runSeq: lifecycleRuns.get(record) } : {}),
+      wakesParent: record?.isBackground === true,
       ...fallbackFields(record),
     };
   }
@@ -846,6 +849,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       fleet.ensureTimer();
       fleet.update();
     }
+    // Bind later handoff announcements to this exact run.
+    lifecycleRuns.set(record, manager.nextSequence());
     // Emit started event when agent transitions to running (including from queue)
     pi.events.emit("subagents:started", {
       id: record.id,
@@ -1495,6 +1500,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
           type: record.type,
           description: record.description,
           isBackground: true,
+          backgroundHandoff: true,
           ...eventFields(record),
         });
       }
