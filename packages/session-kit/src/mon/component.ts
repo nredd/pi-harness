@@ -104,6 +104,16 @@ function clock(ms: number): string {
 	return [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, "0")).join(":");
 }
 
+/**
+ * Shorten a notice for narrow or cramped layouts.
+ * @param notice Full collector notice.
+ * @returns Partial-list reason, a retry hint for a stopped sampler, or the notice itself.
+ */
+function compactNotice(notice: string): string {
+	if (notice.startsWith("Partial list:")) return `Partial: ${notice.match(/\(([^)]+)\)/)?.[1] ?? "list incomplete"}`;
+	return notice.startsWith("Sampling stopped") ? "Stopped: reopen to retry" : notice;
+}
+
 /** Single-interaction view; update is the sole ingress for sampler data. */
 export class MonView implements Component {
 	private snapshot: MonSnapshot | undefined;
@@ -214,7 +224,7 @@ export class MonView implements Component {
 						? "rss"
 						: data === "p"
 							? "pid"
-							: (SORTS[(SORTS.indexOf(this.sort) + 1) % SORTS.length] ?? "cpu");
+							: (SORTS[(SORTS.indexOf(this.sort) + 1) % SORTS.length] as MonSort);
 			this.reorder();
 		} else {
 			if (data === "j" || matchesKey(data, Key.down)) index++;
@@ -242,11 +252,11 @@ export class MonView implements Component {
 
 	/**
 	 * Choose severity, always paired with a number or unknown marker.
-	 * @param value Host CPU percentage or null.
+	 * @param value Host CPU percentage; unknown CPU is dimmed by the caller.
 	 * @returns Theme color for the CPU state.
 	 */
-	private cpuColor(value: number | null): Color {
-		return value === null ? "dim" : value >= 85 ? "error" : value >= 50 ? "warning" : "success";
+	private cpuColor(value: number): Color {
+		return value >= 85 ? "error" : value >= 50 ? "warning" : "success";
 	}
 
 	/**
@@ -335,7 +345,8 @@ export class MonView implements Component {
 			],
 			rightWidth,
 		);
-		return cpu.map((line, i) => `${line}  ${memory[i] ?? ""}`);
+		// Both cards hold five body rows, so every CPU row has a memory row beside it.
+		return cpu.map((line, i) => `${line}  ${memory[i] as string}`);
 	}
 
 	/** Compact three-line summary when cards do not fit. */
@@ -478,11 +489,6 @@ export class MonView implements Component {
 		} else {
 			const notice = this.snapshot?.notice;
 			const hint = this.snapshot?.hint;
-			const compactNotice = notice?.startsWith("Partial list:")
-				? `Partial: ${notice.match(/\(([^)]+)\)/)?.[1] ?? "list incomplete"}`
-				: notice?.startsWith("Sampling stopped")
-					? "Stopped: reopen to retry"
-					: notice;
 			const diagnosticRows = Number(status === "stale") + Number(Boolean(notice)) + Number(Boolean(hint));
 			if (height >= CARD_MIN_HEIGHT + diagnosticRows && width >= CARD_MIN_WIDTH) lines.push(...this.cards(width));
 			else if (height >= 8) {
@@ -498,11 +504,11 @@ export class MonView implements Component {
 							` Last success: ${this.lastSuccess === undefined ? "none" : new Date(this.lastSuccess).toISOString()}`,
 						),
 					);
-				if (notice) lines.push(t.fg("warning", ` ▲ ${sanitize(width < 60 ? (compactNotice ?? notice) : notice)}`));
+				if (notice) lines.push(t.fg("warning", ` ▲ ${sanitize(width < 60 ? compactNotice(notice) : notice)}`));
 				if (hint && lines.length < height - 5) lines.push(t.fg("muted", ` ${sanitize(hint)}`));
 			} else if (notice && height >= 6) {
 				// One short warning must survive even when there is no room for the metric summary.
-				lines.push(t.fg("warning", ` ▲ ${sanitize(compactNotice ?? notice)}`));
+				lines.push(t.fg("warning", ` ▲ ${sanitize(compactNotice(notice))}`));
 			}
 			lines.push(
 				`${t.bold(t.fg("accent", " PROCESSES"))}  ${t.fg("muted", `${this.processes.length} sampled`)}  ${t.fg("accent", `${this.sort.toUpperCase()} ${this.sort === "pid" ? "↑" : "↓"}`)}`,

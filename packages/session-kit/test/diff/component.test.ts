@@ -48,6 +48,20 @@ function make(rows = 24, files = sample()) {
 }
 
 describe("DiffView", () => {
+	it("appends load notices to the title line", () => {
+		const view = new DiffView({
+			files: sample(),
+			label: "HEAD",
+			notices: ["cut at 2MB", "more untracked"],
+			theme: theme as never,
+			rows: () => 10,
+			requestRender: vi.fn(),
+			onClose: vi.fn(),
+		});
+		expect(view.render(200)[0]?.replace(ANSI, "")).toContain("  ! cut at 2MB; more untracked");
+		expect(make(10).view.render(200)[0]?.replace(ANSI, "")).not.toContain("!");
+	});
+
 	it("renders exactly `rows` lines, none wider than the pane, at every width from 60 to 320", () => {
 		for (const width of [1, 5, 20, 40, 59, 60, 61, 80, 99, 120, 160, 200, 240, 319, 320]) {
 			for (const rows of [3, 10, 24, 60]) {

@@ -108,6 +108,36 @@ describe("parseUnifiedDiff", () => {
 		expect(file).toMatchObject({ path: "a", status: "mode", additions: 0, deletions: 0 });
 	});
 
+	it("keeps a trailing lone backslash in a quoted path", () => {
+		expect(unquoteC('"a\\"')).toBe("a\\");
+	});
+
+	it("takes the whole header as the path when it has no a/ b/ prefixes", () => {
+		const [file] = parseUnifiedDiff("diff --git one two\nBinary files differ\n");
+		expect(file).toMatchObject({ path: "one two", status: "binary" });
+		expect(file?.oldPath).toBeUndefined();
+	});
+
+	it("counts dropped deletions, but not context, past the per-file cap", () => {
+		const body = Array.from({ length: 200 }, (_, i) => `-gone ${i}`).join("\n");
+		const [file] = parseUnifiedDiff(
+			`diff --git a/d b/d\n--- a/d\n+++ b/d\n@@ -1,201 +0,1 @@\n${body}\n ${"k".repeat(600)}\n`,
+			500,
+		);
+		expect(file?.deletions).toBe(200);
+		expect(file?.additions).toBe(0);
+		expect(file?.lines.filter((l) => l.startsWith("-gone"))).toHaveLength(50);
+		expect(file?.notice).toMatch(/truncated: 151 more lines/);
+	});
+
+	it("classifies a no-newline marker inside a hunk as meta", () => {
+		const [file] = parseUnifiedDiff(
+			"diff --git a/n b/n\n--- a/n\n+++ b/n\n@@ -1 +1 @@\n-a\n+b\n\\ No newline at end of file\n",
+		);
+		if (!file) throw new Error("no file");
+		expect(classifyLines(file)).toEqual(["meta", "meta", "meta", "hunk", "removed", "added", "meta"]);
+	});
+
 	it("returns nothing for empty input", () => {
 		expect(parseUnifiedDiff("")).toEqual([]);
 	});
