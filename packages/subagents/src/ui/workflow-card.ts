@@ -45,7 +45,7 @@ import {
   type WorkflowEntry,
   type WorkflowRunStatus,
 } from "../workflow/progress.js";
-import type { Theme } from "./agent-widget.js";
+import { formatCompactTokens, type Theme } from "./agent-widget.js";
 import { fallbackFlagText, hasFallback } from "./fallback-flag.js";
 
 /**
@@ -183,13 +183,6 @@ export interface WorkflowCardInput {
 /* ------------------------------------------------------------------------- *
  * Formatting
  * ------------------------------------------------------------------------- */
-
-/** `18.4k` / `1.2M` — bare magnitude, since the row already reads as a stat. */
-export function formatCompactTokens(count: number): string {
-  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
-  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k`;
-  return `${count}`;
-}
 
 /**
  * One label for the model pair. A fallback that never differed from the primary
