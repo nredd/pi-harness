@@ -663,6 +663,14 @@ export class AgentManager {
   }
 
   /** Update the max concurrent background agents limit. */
+  /** Spawns and settles, in order: `spawnSeq` / `settleSeq` on lifecycle events. */
+  private lifecycleSequence = 0;
+
+  /** The next lifecycle sequence number; the host stamps `settleSeq` with it at settle. */
+  nextSequence(): number {
+    return ++this.lifecycleSequence;
+  }
+
   setMaxConcurrent(n: number) {
     this.maxConcurrent = Math.max(1, n);
     // Start queued agents if the new limit allows
@@ -770,6 +778,7 @@ export class AgentManager {
       startedAt: this.clock.now(),
       abortController,
       lifetimeUsage: { input: 0, output: 0, cacheWrite: 0, cost: 0 },
+      spawnSeq: this.nextSequence(),
       compactionCount: 0,
       // Raw tri-state (not coerced to a boolean): true = background, false =
       // foreground (has an inline tool-result surface), undefined = caller never

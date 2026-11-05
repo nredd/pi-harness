@@ -117,12 +117,10 @@ the full list grouped by status.
 - **Task status reflects actual work.** Mark every started task `in_progress`,
   including parallel work; assign `owner` to identify each worker. The owner shows
   on the row as `@auth-audit`; when it names a top-level subagent of this session
-  (its id, `@handle`, `name` or, after a reopen, its previous id, from
-  [`pi-subagents`](https://github.com/nredd/pi-harness/tree/main/packages/subagents#events) lifecycle events) the row also
-  shows that agent's live state, `running`, `done`, `failed` or `stopped`. The owner
-  is slugged like a handle, so `Auth Audit` matches `auth-audit`; a retry under the
-  same name takes over only once the first try has settled, see the
-  [owner match rule](./docs/overlay.md#owner-match-rule). An
+  (from [`pi-subagents`](https://github.com/nredd/pi-harness/tree/main/packages/subagents#events)
+  lifecycle events, per the [owner match rule](./docs/overlay.md#owner-match-rule))
+  the row also shows that agent's live state, `running`, `done`, `failed` or
+  `stopped`. An
   `in_progress` todo whose agent failed or stopped is marked `✗ failed` or `✗ stopped`; the todo
   stays `in_progress` until the parent completes it with evidence. Complete each
   verified task immediately. Atomic batches may record independently verified

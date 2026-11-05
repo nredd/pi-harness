@@ -51,7 +51,8 @@ export interface PlanApprovedPayload {
 
 // ---------------------------------------------------------------------------
 // Subagent integration. pi-subagents emits these top-level lifecycle events on
-// `pi.events` with `id` plus optional `handle`/`name`/`nameBase`/`previousId`; `failed` also carries
+// `pi.events` with `id` plus optional `handle`/`name`/`nameBase`/`previousId`/`spawnSeq`;
+// `completed`/`failed` add `settleSeq`, and `failed` also carries
 // `status` (`error`, `aborted` or `stopped`). Read only to show a todo owner's
 // agent state; neither package imports the other.
 // ---------------------------------------------------------------------------

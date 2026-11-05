@@ -685,6 +685,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       durationMs,
       tokens,
       usage,
+      ...(record.settleSeq !== undefined ? { settleSeq: record.settleSeq } : {}),
     };
   }
 
@@ -699,7 +700,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
    * (`explore-2`), `name` (the handle drawn from the spawner's `name`, `auth-audit-2`),
    * `nameBase` (that name before collision numbering, `auth-audit`) and `previousId` (the
    * evicted id a reopen continues) are each omitted when absent, so a listener such as
-   * pi-todo can match an agent by what the parent typed, not only its id.
+   * pi-todo can match an agent by what the parent typed, not only its id. `spawnSeq`
+   * orders the spawn against other spawns and `settleSeq`s, queued time included.
    */
   function eventFields(record: AgentRecord | undefined): Record<string, unknown> {
     return {
@@ -707,6 +709,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       ...(record?.alias ? { name: record.alias } : {}),
       ...(record?.nameBase ? { nameBase: record.nameBase } : {}),
       ...(record?.previousId ? { previousId: record.previousId } : {}),
+      ...(record?.spawnSeq !== undefined ? { spawnSeq: record.spawnSeq } : {}),
       ...fallbackFields(record),
     };
   }
@@ -796,6 +799,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     if (!record.resultConsumed) fleet.ingestFailure(record);
     // Emit lifecycle event based on terminal status
     const isError = record.status === "error" || record.status === "stopped" || record.status === "aborted";
+    record.settleSeq = manager.nextSequence();
     const eventData = buildEventData(record);
     if (isError) {
       pi.events.emit("subagents:failed", eventData);

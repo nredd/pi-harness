@@ -215,6 +215,41 @@ describe("agentStateFor", () => {
 		expect(stateOf("Auth Audit")).toBe("running");
 	});
 
+	it("does not take a queued same-name sibling, dequeued by the owner's settle, for a retry", () => {
+		const a = { name: "auth-audit", nameBase: "auth-audit" };
+		const b = { name: "auth-audit-2", nameBase: "auth-audit" };
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1", ...a, spawnSeq: 1 });
+		// a2 spawned at 2 but queued, so todo hears nothing until a1's settle frees its slot.
+		apply(SUBAGENT_FAILED_EVENT, { id: "a1", ...a, spawnSeq: 1, settleSeq: 3, status: "error" });
+		apply(SUBAGENT_STARTED_EVENT, { id: "a2", ...b, spawnSeq: 2 });
+		expect(stateOf("@auth-audit")).toBe("failed");
+		apply(SUBAGENT_COMPLETED_EVENT, { id: "a2", ...b, spawnSeq: 2, settleSeq: 4 });
+		expect(stateOf("@auth-audit")).toBe("failed");
+	});
+
+	it("takes a sibling spawned after the owner's settle for a retry by spawnSeq", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1", name: "auth-audit", nameBase: "auth-audit", spawnSeq: 1 });
+		apply(SUBAGENT_FAILED_EVENT, { id: "a1", settleSeq: 2, status: "error" });
+		apply(SUBAGENT_STARTED_EVENT, { id: "a2", name: "auth-audit-2", nameBase: "auth-audit", spawnSeq: 3 });
+		expect(stateOf("Auth Audit")).toBe("running");
+	});
+
+	it("carries the first spawnSeq over a reopen, so a reopened concurrent sibling stays no retry", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1", name: "auth-audit", nameBase: "auth-audit", spawnSeq: 1 });
+		apply(SUBAGENT_STARTED_EVENT, { id: "a2", name: "auth-audit-2", nameBase: "auth-audit", spawnSeq: 2 });
+		apply(SUBAGENT_FAILED_EVENT, { id: "a1", settleSeq: 3, status: "error" });
+		apply(SUBAGENT_COMPLETED_EVENT, { id: "a2", settleSeq: 4 });
+		// The reopened run is a new record, so its own spawnSeq comes after a1 settled.
+		apply(SUBAGENT_STARTED_EVENT, {
+			id: "a3",
+			previousId: "a2",
+			name: "auth-audit-2",
+			nameBase: "auth-audit",
+			spawnSeq: 9,
+		});
+		expect(stateOf("@auth-audit")).toBe("failed");
+	});
+
 	it("falls back to the latest nameBase match when nothing matches exactly", () => {
 		apply(SUBAGENT_STARTED_EVENT, { id: "b1", name: "deploy-2", nameBase: "deploy" });
 		expect(stateOf("deploy")).toBe("running");
