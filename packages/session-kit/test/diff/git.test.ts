@@ -252,11 +252,29 @@ describe("runGit / untrackedPatch", () => {
 
 	it("kills a SIGTERM-resistant git group and resolves when its grandchild holds pipes", async () => {
 		const shim = join(dir, "git-shim");
-		writeFileSync(shim, `#!/bin/sh\ntrap '' TERM\n(${STAY_SH}) &\nwait\n`);
+		writeFileSync(shim, `#!/bin/sh\ntrap '' TERM\n(${STAY_SH}) &\nprintf ready\nwait\n`);
 		chmodSync(shim, 0o755);
-		const started = Date.now();
-		const r = await runGit(["status"], { cwd: dir, cmd: shim, timeoutMs: 20 });
-		expect(Date.now() - started).toBeLessThan(4_000);
+		// `ready` is printed after the trap and after the grandchild forked. Only then admit the timeout
+		// clock: a SIGTERM before the trap, or before the group exists, would not exercise the kill path.
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		let ready!: () => void;
+		const readiness = new Promise<void>((resolve) => {
+			ready = resolve;
+		});
+		const nativeSpawn = vi.mocked(spawn).getMockImplementation();
+		if (!nativeSpawn) throw new Error("Missing native spawn implementation");
+		vi.mocked(spawn).mockImplementationOnce((...args) => {
+			const child = nativeSpawn(...args);
+			child.stdout?.once("data", () => ready());
+			return child;
+		});
+		const running = runGit(["status"], { cwd: dir, cmd: shim, timeoutMs: 20 });
+		await readiness;
+		// SIGTERM at 20ms is ignored by the group; SIGKILL follows the 2s grace.
+		await vi.advanceTimersByTimeAsync(2_020);
+		vi.useRealTimers();
+		const r = await running;
+		expect(r.stdout.toString("utf8")).toBe("ready");
 		expect(r.code).toBeNull();
 	});
 
