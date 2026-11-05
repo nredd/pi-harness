@@ -224,7 +224,7 @@
       "owned": ["config.ts", "index.ts", "plan-hooks.ts", "todo-overlay.ts", "todo.ts", "state/**/*.ts", "tool/**/*.ts", "view/**/*.ts"],
       "exclusions": [],
       "status": "measured",
-      "note": "",
+      "note": "Primary branch cap 63 measured on darwin, linux and WSL2 by successful TS producer jobs in hosted run 42042321087 at 4efe693bb8e09ebbe80d572b1fad3b9db8d9914f",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
