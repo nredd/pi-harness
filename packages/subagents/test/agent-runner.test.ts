@@ -569,7 +569,7 @@ describe("agent-runner failed-final-turn detection (#144)", () => {
 
     expect(result.failure).toBe("retries exhausted: 529 overloaded");
     // The earlier text stays available as context — status honesty, not data loss.
-    expect(result.responseText).toBe("partial progress");
+    expect(result.responseText).toBe("Earlier progress:\npartial progress\n\nLatest activity: other tool (completed).");
   });
 
   it("flags a provider error that left partial text in the SAME final message", async () => {
@@ -671,7 +671,7 @@ describe("agent-runner failed-final-turn detection (#144)", () => {
     const result = await resumeAgent(session as any, "go", { type: "Explore" });
 
     expect(result.failure).toBe("retries exhausted: 529 overloaded");
-    expect(result.text).toBe("new partial"); // this resume's progress, not the prior answer
+    expect(result.text).toBe("Earlier progress:\nnew partial\n\nLatest activity: other tool (completed)."); // not the prior answer
   });
 
   it("collector: a toolResult/user message_start no longer wipes collected assistant text", async () => {

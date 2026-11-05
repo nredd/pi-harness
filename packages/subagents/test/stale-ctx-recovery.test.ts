@@ -6,6 +6,7 @@
  */
 import { join } from "node:path";
 import { type AgentSession, type ExtensionFactory, SessionManager } from "@earendil-works/pi-coding-agent";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resumeAgent, retryStaleCtx, staleCtxOutcome } from "../src/agent-runner.js";
 import * as worktrees from "../src/worktree.js";
@@ -38,14 +39,17 @@ function routedModel(getModel: () => unknown): ExtensionFactory {
 }
 
 /** Spawn a background child that runs one held tool, so its next model step happens after we act. */
-async function startHeldChild(responses: ReturnType<typeof answer>[], virtual = true) {
+async function startHeldChild(responses: ReturnType<typeof answer>[], virtual = true, earlierProse = false) {
   fixture = new ScenarioSession();
   const hold = fixture.heldTool();
   // Count real executions of the side-effecting tool in the disk-loaded child.
   const original = Reflect.get(globalThis, "__subagentScenarioHold") as () => Promise<unknown>;
   let executions = 0;
   Reflect.set(globalThis, "__subagentScenarioHold", async () => { executions++; return original(); });
-  const physical = fixture.physical("fauxphys", "physical", [calls({ name: "hold", args: {} }), ...responses]);
+  const first = earlierProse
+    ? fauxAssistantMessage([{ type: "text", text: "EARLIER PROGRESS" }, fauxToolCall("hold", {})], { stopReason: "toolUse" })
+    : calls({ name: "hold", args: {} });
+  const physical = fixture.physical("fauxphys", "physical", [first, ...responses]);
   // A persisted session: only then does a reload detach (not abort) running children.
   const sessionManager = SessionManager.create(fixture.cwd, join(fixture.root, "sessions"));
   const h = await fixture.start({ factories: [routedModel(() => physical.getModel())], harness: { sessionManager } });
@@ -83,6 +87,20 @@ it("retries the step once a real reload has re-registered the parent's routes", 
   expect(record.session?.messages.filter(m => m.role === "user")).toHaveLength(2);
 });
 
+it("reports later tool activity after earlier prose when a real child fails", { timeout: 30_000 }, async () => {
+  const { hold, record } = await startHeldChild([], true, true);
+  routeBroken.on = true;
+  hold.release();
+  await record.promise;
+  expect(record.status).toBe("error");
+  expect(record.error).toContain("This extension ctx is stale");
+  expect(record.result).toContain("Earlier progress:");
+  expect(record.result).toContain("EARLIER PROGRESS");
+  expect(record.result).toContain("Latest activity:");
+  expect(record.result).toContain("other tool");
+  expect(record.result).not.toContain("SLEPT");
+});
+
 it("a detached child outlives a reload: usage observers closed over the old pi cannot fail its turn", { timeout: 30_000 }, async () => {
   // No virtual model, so routing cannot be the cause: the stale `pi` in the
   // manager's usage callback (`subagents:usage`) used to kill the child's next turn.
@@ -104,7 +122,7 @@ function deadSession(prompt: () => Promise<void>) {
     messages: [
       { role: "user", content: [{ type: "text", text: "go" }] },
       { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "1", name: "bash", arguments: {} }] },
-      { role: "toolResult", content: [{ type: "text", text: "pushed branch redd/x" }] },
+      { role: "toolResult", toolName: "bash", isError: false, content: [{ type: "text", text: "pushed branch redd/x" }] },
       { role: "assistant", stopReason: "error", errorMessage: stale, content: [{ type: "text", text: "" }] },
     ],
   } as unknown as AgentSession;
@@ -117,8 +135,8 @@ it("retries a bounded number of times, then reports an interruption with the las
   expect(prompts).toHaveBeenCalledTimes(3);
   const outcome = staleCtxOutcome(session, 0);
   expect(outcome?.failure).toMatch(/interrupted by a session reload/);
-  expect(outcome?.partial).toContain("Last tool calls: bash");
-  expect(outcome?.partial).toContain("pushed branch redd/x");
+  expect(outcome?.partial).toContain("Latest activity: bash (completed)");
+  expect(outcome?.partial).not.toContain("pushed branch redd/x");
 });
 
 it("does not retry when the final step failed for another reason", async () => {
@@ -262,6 +280,23 @@ describe("resumeAgent", () => {
     const session = { messages, prompt, subscribe: () => () => {}, abort: async () => {} } as unknown as AgentSession;
     return { session, prompt };
   }
+
+  it("keeps streamed partial text when it is absent from the final messages", async () => {
+    const listeners: ((event: unknown) => void)[] = [];
+    const messages: unknown[] = [];
+    const session = {
+      messages,
+      subscribe: (listener: (event: unknown) => void) => { listeners.push(listener); return () => {}; },
+      prompt: async () => {
+        for (const listener of listeners) listener({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "partial stream" } });
+        messages.push({ role: "assistant", stopReason: "error", errorMessage: "This extension ctx is stale after session replacement or reload", content: [] });
+      },
+      abort: async () => {},
+    } as unknown as AgentSession;
+    const result = await resumeAgent(session, "go", { type: "general-purpose", staleRetryDelaysMs: [] });
+    expect(result.text).toBe("partial stream");
+    expect(result.failure).toContain("This extension ctx is stale");
+  });
 
   it("recovers a resumed run that died on a stale ctx", async () => {
     vi.useFakeTimers();
