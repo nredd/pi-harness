@@ -23,6 +23,7 @@ import runpy
 import shutil
 import socket
 import ssl
+import stat
 import subprocess
 import sys
 import tarfile
@@ -4875,6 +4876,62 @@ def test_recovery_state_cross_product(
         assert backup.exists() == (presence == "present" and outcome == "skip")
 
 
+@pytest.mark.parametrize("legacy", [False, True], ids=["typed", "legacy"])
+@pytest.mark.parametrize("live", ["directory", "symlink"])
+def test_replacement_reusing_the_original_inode_and_ctime_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, live: str, legacy: bool
+) -> None:
+    """A different kind with the original's device/inode/ctime is not the untouched original.
+
+    Quiet ext4 can hand a replacement the unlinked original's inode within one ctime tick, so the
+    journal's original fingerprint is forged here to the live entry's exact triple. A typed
+    journal records the regular-file type; a legacy one gets it from the file-only target.
+    """
+    harness = Harness(tmp_path, monkeypatch)
+    layout, target = harness.layout, harness.layout.state
+    recovery_entry(target, live, "keep me")
+    backups = layout.backups / "reuse"
+    backups.mkdir(parents=True)
+    info = target.lstat()
+    original = [info.st_dev, info.st_ino, info.st_ctime_ns] + ([] if legacy else [stat.S_IFREG])
+    step = {
+        "target": str(target),
+        "backup": str(backups / target.name),
+        "pending": True,
+        "original": original,
+    }
+    install.write_atomic(
+        layout.journal, json.dumps({"backups": str(backups), "steps": [step]}), mode=install.JOURNAL_MODE
+    )
+    before = tree(harness.home)
+    with pytest.raises(RollbackError, match=r"Expected backup.*missing"):
+        rollback(layout)
+    assert tree(harness.home) == before
+
+
+def test_pending_step_records_the_original_file_type(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An interrupted switch journals each saved original's `S_IFMT` type next to its fingerprint."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    interrupt(harness, monkeypatch)
+    steps = [step for step in json.loads(harness.layout.journal.read_text())["steps"] if step["backup"]]
+    assert steps
+    for step in steps:
+        backup = Path(step["backup"])
+        entry = backup if backup.exists(follow_symlinks=False) else Path(step["target"])
+        assert step["original"][3] == stat.S_IFMT(entry.lstat().st_mode)
+
+
+def test_legacy_original_of_a_multi_kind_target_is_refused(tmp_path: Path) -> None:
+    """A three-field original cannot default its type for a tree that may be a directory or symlink."""
+    layout = fixture_layout(tmp_path)
+    target = layout.agent_dir / "npm"
+    backups = layout.backups / "run"
+    step = {"target": str(target), "backup": str(backups / "npm"), "pending": True, "original": [1, 2, 3]}
+    with pytest.raises(ValueError, match="has a legacy original identity without its file type"):
+        install.validate_journal(layout, {"backups": str(backups), "steps": [step]})
+
+
 @pytest.mark.parametrize(
     "bad_hash", [None, "", "f" * 63, "g" * 64, 3, [], True, pytest.param(..., id="missing")]
 )
@@ -7184,6 +7241,8 @@ def test_load_journal_refuses_a_non_object(tmp_path: Path) -> None:
         ("manifest-shape", "Invalid restore cleanup manifest"),
         ("manifest-bytes", "Restore cleanup manifest exceeds byte limit"),
         ("original-without-backup", "has original metadata without a backup"),
+        ("original-kind", "has an original file type it cannot hold"),
+        ("original-arity", "has invalid pending/original metadata"),
         ("target-spelling", "is not a canonical path"),
         ("restored-type", "has invalid restored metadata"),
         ("restored-without-original", "has no original identity"),
@@ -7217,6 +7276,10 @@ def test_untrusted_journal_step_is_refused(tmp_path: Path, case: str, message: s
             step |= {"restoring": identity_record(), "aside": aside | {"manifest": manifest}}
         case "original-without-backup":
             step |= {"backup": None, "pending": False, "original": [1, 2, 3]}
+        case "original-kind":
+            step |= {"pending": True, "original": [1, 2, 3, stat.S_IFDIR]}
+        case "original-arity":
+            step |= {"pending": True, "original": [1, 2, 3, stat.S_IFREG, 5]}
         case "target-spelling":
             step["target"] = str(target) + "/"
         case "restored-type":
