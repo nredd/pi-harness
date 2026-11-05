@@ -215,3 +215,14 @@ removes the private dir in one `finally`. The tool does not expose the config di
 relies on the dir living for the whole nextest run. With the tool's `rmSync(cfgDir)` removed
 it fails on the leaked dir; with the `TMPDIR` stub removed it fails on the `tmpdir()` check.
 No product code, retries or timeouts changed.
+
+## git, ssh, core and resource branches (#404)
+
+Every Istanbul branch in `src/git/`, `src/ssh/`, `src/core/` and `src/resource/` is covered on
+both engines. With #405's cargo/py half that leaves 0 uncovered branches, so the `primary` and
+`bun` caps are 0 on darwin and linux. Tests drive real disposable repos, a PATH `git` shim that fails or kills one chosen
+subcommand, real `ssh-keygen` SSH signing with a repo-local allowed-signers file (so `signed` is
+host-independent), scp stand-ins and injected `/proc`/`memory_pressure` text for the Linux and
+Darwin resource arms. Branches that no input could reach were deleted after checking every
+caller: `??` fallbacks behind guaranteed regex groups, fixed `%x09` formats, settled-timer and
+`err.code` guards, and the empty-process-list arm that `summarizeProcesses` reports as unavailable.

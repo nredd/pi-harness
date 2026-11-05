@@ -628,6 +628,70 @@ describe("resource_snapshot mapping", () => {
 		},
 	);
 
+	it("keeps optional memory figures null when the probe output lacks them", async () => {
+		const linux = options(fixture("linux", [proc(5, 50, warming)]), { readFile: async () => "MemTotal: 1 kB\n" });
+		expect((await resourceSnapshot(1, linux.resolved, undefined, INTERVAL_MS)).memory.availableBytes).toBeNull();
+		const darwin = options(fixture("darwin", [proc(5, 50, darwinCpu)]), {
+			run: async () => completed("The system has 17179869184 (4194304 pages with a page size of 4096).\n"),
+		});
+		expect((await resourceSnapshot(1, darwin.resolved, undefined, INTERVAL_MS)).memory.pressure).toBeNull();
+	});
+
+	it("prints unavailable load, CPU, pressure and process metadata as words, never numbers", async () => {
+		const mock = createMockPi();
+		const coverage = {
+			complete: false,
+			enumerated: 0,
+			sampled: 0,
+			skipped: 0,
+			bytesRead: 0,
+			reasons: ["unsupported-platform"],
+		};
+		const { resolved } = options((ms) => ({
+			...fixture("win32", [], { coverage })(ms),
+			cpu: { state: "unavailable", reason: "no counters" },
+		}));
+		registerResourceTools(mock.pi, resolved);
+		const result = await mock.call("resource_snapshot", { process_limit: 1, interval_ms: INTERVAL_MS }, "/tmp");
+		expect(mock.text(result)).toMatch(
+			/^host win32: CPU 8 logical CPUs, load unavailable, interval utilization unavailable over 120ms; memory 0\.0 GiB free of 0\.0 GiB; processes unavailable \(bounded process metadata is unsupported on win32\)\. /,
+		);
+	});
+
+	it("prints Linux PSI and an empty process sample as unavailable", async () => {
+		const mock = createMockPi();
+		const { resolved } = options(fixture("linux", []));
+		registerResourceTools(mock.pi, resolved);
+		const text = mock.text(
+			await mock.call("resource_snapshot", { process_limit: 1, interval_ms: INTERVAL_MS }, "/tmp"),
+		);
+		expect(text).toContain("load 1.25/2.50/3.75");
+		expect(text).toContain(
+			"of 0.0 GiB, linux-psi 0.42% some avg10; processes unavailable (process metadata unavailable (empty)). Executables",
+		);
+	});
+
+	it("prints Darwin memory_pressure as percent free", async () => {
+		const mock = createMockPi();
+		const { resolved } = options(fixture("darwin", [proc(6, 500, darwinCpu)]));
+		registerResourceTools(mock.pi, resolved);
+		const text = mock.text(
+			await mock.call("resource_snapshot", { process_limit: 1, interval_ms: INTERVAL_MS }, "/tmp"),
+		);
+		expect(text).toContain("of 0.0 GiB, memory_pressure 37% free; processes 1 bounded entries ranked by rss");
+		expect(text).toContain("\n6 1 unavailable 500 node.");
+	});
+
+	it.runIf(process.platform === "darwin" || process.platform === "linux")(
+		"samples the real host with every default option",
+		async () => {
+			const snapshot = await resourceSnapshot(1);
+			expect(snapshot.platform).toBe(process.platform);
+			expect(snapshot.interval.requestedMs).toBe(500);
+			expect(snapshot.memory.totalBytes).toBeGreaterThan(0);
+		},
+	);
+
 	it("keeps base memory figures when optional probes throw", async () => {
 		const linux = options(fixture("linux", [proc(5, 50, warming)]), {
 			readFile: async () => {

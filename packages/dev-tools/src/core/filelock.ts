@@ -83,7 +83,11 @@ const sleep = (ms: number) =>
 function readOwner(dir: string): LockOwner | undefined {
 	try {
 		const o = JSON.parse(readFileSync(join(dir, OWNER), "utf8")) as Partial<LockOwner>;
-		return Number.isInteger(o.pid) && (o.pid ?? 0) > 0 && typeof o.startedAt === "number" && typeof o.token === "string"
+		return typeof o.pid === "number" &&
+			Number.isInteger(o.pid) &&
+			o.pid > 0 &&
+			typeof o.startedAt === "number" &&
+			typeof o.token === "string"
 			? (o as LockOwner)
 			: undefined;
 	} catch {
@@ -128,7 +132,7 @@ function reclaim(dir: string, judged: LockOwner | undefined): boolean {
 	} catch {
 		try {
 			const files = readdirSync(guard);
-			const match = files.length === 1 ? /^(\d+)\.([a-f0-9-]+)$/.exec(files[0] ?? "") : null;
+			const match = files.length === 1 ? /^(\d+)\.([a-f0-9-]+)$/.exec(String(files[0])) : null;
 			if (match && Number(match[1]) > 0 && !pidAlive(Number(match[1]))) {
 				// Unlink ONLY this immutable dead owner's file, never a replacement's file.
 				unlinkSync(join(guard, files[0] as string));
