@@ -114,7 +114,8 @@ describe("evicted agents", () => {
     process.chdir(tmpDir);
     // Only the clock and the GC interval; real timers keep the flush helper working.
     // The completion outbox's `NOTIFICATION_HOLD_MS` setTimeout stays real too, so a
-    // case must consume a result through the tools before advancing the clock (#481).
+    // case must consume a result through the tools before advancing the clock, or
+    // keep the notice preview-only so delivering it does not consume (#481).
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
   });
 
@@ -183,6 +184,11 @@ describe("evicted agents", () => {
   });
 
   it("keeps an unread result fetchable well past ten minutes", async () => {
+    // A preview-only notice, so its delivery leaves the result truly unread.
+    writeFileSync(
+      join(tmpDir, ".pi", "subagents.json"),
+      JSON.stringify({ schedulingEnabled: false, notificationResultChars: 0 }),
+    );
     const tools = load();
     const id = await spawnCompletedBackgroundAgent(tools);
 
