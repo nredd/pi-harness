@@ -183,6 +183,11 @@ def test_wsl2_workflow_preserves_and_uploads_bounded_diagnostics() -> None:
     assert capture.index("trap finish_capture EXIT") < capture.index("for name in")
     assert "cleanup_wsl2_worktree" in capture
     assert workflow.count("cleanup: cleanup") == 2
+    # Both cleanup captures see timeouts and cancels, which leave no guest first-failure record.
+    assert workflow.count("cleanup: cleanup\n          job-status: ${{ job.status }}\n") == 2
+    action = (ROOT / ".github/actions/capture-ci-wsl/action.yml").read_text()
+    assert "WSL_JOB_STATUS: ${{ inputs.job-status }}" in action
+    assert ":WSL_JOB_STATUS'" in action
     assert workflow.count("path: ${{ runner.temp }}/wsl2-diagnostics/") == 2
     assert "if: always()" in workflow
     assert "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" in workflow
