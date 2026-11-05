@@ -3,12 +3,15 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-const homeProbe = vi.hoisted(() => ({ home: "", globError: "" }));
+const homeProbe = vi.hoisted(() => ({ home: "", injected: "", globError: "" }));
 vi.mock("node:fs", async (importOriginal) => {
 	const fs = await importOriginal<typeof import("node:fs")>();
+	const within = (path: string, root: string): boolean => path === root || path.startsWith(`${root}/`);
+	// The injected home may itself live under the real home (e.g. `TMPDIR=$HOME/tmp`), so only
+	// real-home paths outside the injected subtree count as probes.
 	const rejectRealHomeProbe = (path: unknown): void => {
-		const home = homeProbe.home;
-		if (home && typeof path === "string" && (path === home || path.startsWith(`${home}/`)))
+		const { home, injected } = homeProbe;
+		if (home && typeof path === "string" && within(path, home) && !(injected && within(path, injected)))
 			throw new Error(`probed real home: ${path}`);
 	};
 	return {
@@ -73,6 +76,7 @@ describe("readKnownHosts", () => {
 		const first = join(home, ".ssh", "first.conf");
 		const second = join(home, ".ssh", "second.conf");
 		homeProbe.home = homedir();
+		homeProbe.injected = home;
 		mkdirSync(join(home, ".ssh"), { recursive: true });
 		writeFileSync(config, "Include ~/.ssh/first.conf\n");
 		writeFileSync(first, "Include ~/.ssh/second.conf\n");
@@ -83,6 +87,21 @@ describe("readKnownHosts", () => {
 			expect([...readKnownHosts(undefined, { homeDir: home })]).toEqual(["isolated"]);
 		} finally {
 			homeProbe.home = "";
+			homeProbe.injected = "";
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	it("still rejects a real-home probe while an injected home is active", () => {
+		const home = mkdtempSync(join(tmpdir(), "pi-dev-tools-home-"));
+		homeProbe.home = homedir();
+		homeProbe.injected = home;
+		try {
+			// Omitting `homeDir` falls back to the native home, which the guard must still catch.
+			expect(() => readKnownHosts()).toThrow(`probed real home: ${sshConfigPath(homedir())}`);
+		} finally {
+			homeProbe.home = "";
+			homeProbe.injected = "";
 			rmSync(home, { recursive: true, force: true });
 		}
 	});

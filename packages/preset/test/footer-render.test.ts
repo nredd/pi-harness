@@ -178,6 +178,12 @@ it("uses USERPROFILE then the OS home when HOME is empty", () => {
 	expect(formatCwd("/private/fixture/project", "", { HOME: "/private/fixture" })).toBe("/private/fixture/project");
 });
 
+it("keeps a cwd outside the home, including a sibling that shares its prefix, unabbreviated", () => {
+	// Pinned explicitly: scenario cwds under `os.tmpdir()` may or may not sit inside the real home.
+	expect(formatCwd("/private/elsewhere/project", "/private/fixture")).toBe("/private/elsewhere/project");
+	expect(formatCwd("/private/fixture-sibling/project", "/private/fixture")).toBe("/private/fixture-sibling/project");
+});
+
 it("cwd branch session and sorted sanitized statuses preserve their rows", async () => {
 	const f = await mount();
 	try {

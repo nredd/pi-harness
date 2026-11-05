@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, expect, it } from "vitest";
+import { formatCwd } from "../../extensions/expanded-footer.ts";
 import {
 	COLD,
 	DROP_COLD,
@@ -155,10 +156,12 @@ it.each([60, 120, 320])("long cwd branch and name stay on the first row: %i", as
 	const result = layout(width);
 	expect(result.tier).toBe(width === 60 ? "compact" : "full");
 	expect(result.cause).toBe(width === 60 ? "prefix" : "prefix-changed");
+	// The footer `~`-abbreviates a cwd under HOME, which includes a TMPDIR under HOME.
+	const shown = formatCwd(cwd);
 	const holders = fixture
 		.requireHost()
 		.viewport()
-		.filter((row) => row.includes(cwd.slice(0, 16)) || row.includes("very-long-branch"));
+		.filter((row) => row.includes(shown.slice(0, 16)) || row.includes("very-long-branch"));
 	expect(holders).toEqual([result.rows[0]]);
 	if (width === 320) expect(result.rows[0]).toContain("(feature/");
 	else expect(result.rows[0]?.trimEnd()).toMatch(/\.\.\.$/);
