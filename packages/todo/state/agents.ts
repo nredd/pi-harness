@@ -28,13 +28,17 @@ interface AgentEntry {
 	nameBase?: string;
 	state: AgentRunState;
 	/**
-	 * Sequence number of this conversation's first `started`: set once per id and carried
-	 * over a `previousId` fold, so a resume or reopen never makes a sibling look like a retry.
+	 * When this conversation was spawned, set once per id and carried over a `previousId`
+	 * fold, so neither a resume nor a reopen makes a sibling look like a retry. `spawnSeq`
+	 * is pi-subagents' own spawn order, which counts time spent queued; `firstSeenAt` is
+	 * this tracker's sequence at the first event heard, the fallback when `spawnSeq` is absent.
 	 */
-	firstStartedAt: number;
-	/** Sequence number of the latest `started`; orders retries. */
+	spawnSeq?: number;
+	firstSeenAt: number;
+	/** This tracker's sequence at the latest `started`; orders retries. */
 	startedAt: number;
-	/** Sequence number of the latest settle, unset while running. */
+	/** The latest settle: pi-subagents' `settleSeq` (same counter as `spawnSeq`) and this tracker's sequence. */
+	settleSeq?: number;
 	settledAt?: number;
 }
 
@@ -108,11 +112,17 @@ export function applyAgentEvent(sessionId: string, channel: string, payload: unk
 	// A repeated `started` keeps its start; any other transition is a new point in the sequence.
 	const restarted = state === "running" && previous?.state !== "running";
 	const startedAt = restarted || !previous ? ++sequence : previous.startedAt;
-	const firstStartedAt = previous?.firstStartedAt ?? predecessor?.firstStartedAt ?? startedAt;
-	const settledAt = state === "running" ? undefined : previous?.state === state ? previous.settledAt : ++sequence;
+	const firstSeenAt = previous?.firstSeenAt ?? predecessor?.firstSeenAt ?? startedAt;
+	const spawnSeq = previous?.spawnSeq ?? predecessor?.spawnSeq ?? sequenceField(data.spawnSeq);
+	const settled = state !== "running";
+	const repeated = settled && previous?.state === state;
+	const settledAt = !settled ? undefined : repeated ? previous.settledAt : ++sequence;
+	const settleSeq = !settled
+		? undefined
+		: (sequenceField(data.settleSeq) ?? (repeated ? previous.settleSeq : undefined));
 	if (typeof data.previousId === "string") agents.delete(data.previousId);
 	agents.delete(data.id);
-	agents.set(data.id, { keys, nameBase, state, firstStartedAt, startedAt, settledAt });
+	agents.set(data.id, { keys, nameBase, state, spawnSeq, firstSeenAt, startedAt, settleSeq, settledAt });
 	while (agents.size > MAX_TRACKED_AGENTS) {
 		const oldest = agents.keys().next().value as string;
 		agents.delete(oldest);
@@ -125,6 +135,21 @@ export function applyAgentEvent(sessionId: string, channel: string, payload: unk
 	);
 }
 
+/** A finite sequence number from a payload, else `undefined`. */
+function sequenceField(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * Whether `candidate` was spawned after `owner` last settled. pi-subagents' own counter
+ * decides when both carry it, so a sibling spawned while the owner ran but dequeued only
+ * by its settle is no retry; otherwise this tracker's order of first events decides.
+ */
+function spawnedAfterSettle(candidate: AgentEntry, owner: AgentEntry): boolean {
+	if (candidate.spawnSeq !== undefined && owner.settleSeq !== undefined) return candidate.spawnSeq > owner.settleSeq;
+	return candidate.firstSeenAt > (owner.settledAt ?? Number.POSITIVE_INFINITY);
+}
+
 /** The state of the agent in `sessionId` that `owner` names, per `docs/overlay.md#owner-match-rule`. */
 export function agentStateFor(sessionId: string, owner: string | undefined): AgentRunState | undefined {
 	const wanted = ownerKey(owner);
@@ -134,9 +159,8 @@ export function agentStateFor(sessionId: string, owner: string | undefined): Age
 	const exact = entries.find((entry) => entry.keys.has(wanted));
 	const byBase = entries.filter((entry) => entry !== exact && entry.nameBase === wanted);
 	if (!exact) return byBase[0]?.state;
-	const settledAt = exact.settledAt;
-	if (settledAt === undefined) return exact.state;
-	const retries = byBase.filter((entry) => entry.firstStartedAt > settledAt);
+	if (exact.settledAt === undefined) return exact.state;
+	const retries = byBase.filter((entry) => spawnedAfterSettle(entry, exact));
 	retries.sort((a, b) => b.startedAt - a.startedAt);
 	return retries[0]?.state ?? exact.state;
 }

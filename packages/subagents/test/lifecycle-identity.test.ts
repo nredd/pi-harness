@@ -140,4 +140,29 @@ describe("lifecycle event identity", () => {
     expect(started.find((e: any) => e.id === first)).toMatchObject({ name: "auth-audit", nameBase: "auth-audit" });
     expect(started.find((e: any) => e.id === retry)).toMatchObject({ name: "auth-audit-2", nameBase: "auth-audit" });
   });
+
+  it("orders a queued spawn before the settle that dequeued it (spawnSeq < settleSeq)", async () => {
+    writeFileSync(join(cwd, "agent-dir", "subagents.json"), JSON.stringify({ maxConcurrent: 1 }));
+    const { pi } = await boot();
+    const manager = (globalThis as any)[Symbol.for("pi-subagents:manager")];
+    let failFirst!: (err: Error) => void;
+    vi.mocked(runAgent)
+      .mockImplementationOnce((() => new Promise((_resolve, reject) => { failFirst = reject; })) as any)
+      .mockImplementation(runnerResolution({ hold: true }) as any);
+    const first = manager.spawn(pi, ctx(), "scout", "go", { description: "a", name: "Auth Audit", isBackground: true });
+    const queued = manager.spawn(pi, ctx(), "scout", "go", { description: "b", name: "Auth Audit", isBackground: true });
+    await flush();
+    expect(eventsNamed(pi, "subagents:started").map((e: any) => e.id)).toEqual([first]);
+
+    failFirst(new Error("boom"));
+    await flush();
+
+    const failed = eventsNamed(pi, "subagents:failed").find((e: any) => e.id === first);
+    const started = eventsNamed(pi, "subagents:started").find((e: any) => e.id === queued);
+    expect(started).toMatchObject({ name: "auth-audit-2", nameBase: "auth-audit" });
+    expect(typeof failed.settleSeq).toBe("number");
+    expect(started.spawnSeq).toBeLessThan(failed.settleSeq);
+    expect(eventsNamed(pi, "subagents:started").find((e: any) => e.id === first).spawnSeq).toBeLessThan(started.spawnSeq);
+    expect(started).not.toHaveProperty("settleSeq");
+  });
 });

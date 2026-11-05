@@ -320,6 +320,13 @@ export interface AgentRecord {
    * lifecycle events so a listener keyed by the old id follows the conversation.
    */
   previousId?: string;
+  /**
+   * Order of this record's spawn among the manager's spawns and settles, set once at
+   * creation (before any queueing) and announced as `spawnSeq` on lifecycle events.
+   */
+  spawnSeq?: number;
+  /** Order of this record's latest settle on the same counter, announced as `settleSeq`. */
+  settleSeq?: number;
   /** Nesting depth: top-level subagent = 1. */
   depth?: number;
   /**

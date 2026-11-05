@@ -72,13 +72,15 @@ match an agent exactly, by its id, a previous id, its `handle` or its `name`
 `name` before numbering, `auth-audit`). Agents tracked beyond the newest 256 per
 session are forgotten.
 
-pi-todo orders starts and settles in one sequence. Each conversation keeps its
-*first* start, set once per id and carried to the new id when an evicted agent is
-reopened (`previousId`); its latest start and latest settle move with every resume.
-Then:
+Each conversation is dated from its *spawn*, not its start: pi-subagents stamps
+`spawnSeq` when the agent is created, before any time queued, and `settleSeq` on each
+settle, from one counter. The spawn is set once per id and carried to the new id when
+an evicted agent is reopened (`previousId`); the latest start and latest settle move
+with every resume. Without those stamps (an older pi-subagents) pi-todo falls back to
+the order in which it first heard of each agent. Then:
 
 - With an exact match (the most recently updated, if several), that agent's state
-  shows, unless some *other* agent whose `nameBase` matches first started after the
+  shows, unless some *other* agent whose `nameBase` matches was spawned after the
   exact match last settled. That is a retry under the same name, and of those the
   one started most recently shows instead.
 - With no exact match, the most recently updated `nameBase` match shows.
@@ -92,8 +94,8 @@ So for owner `Auth Audit`:
 | `auth-audit` runs, sibling `auth-audit-2` starts, then `auth-audit` fails | `✗ failed` (the owner) |
 | `auth-audit` runs, sibling `auth-audit-2` starts, then `auth-audit` completes | `done` (the owner) |
 
-A sibling first started while the owner ran never masks the owner's own outcome,
-even when that sibling is later resumed or reopened. The same holds for an unnamed
+A sibling spawned while the owner ran never masks the owner's own outcome, even when
+it sat queued until the owner's settle freed its slot, or is later resumed or reopened. The same holds for an unnamed
 `explore` beside a scout named `Explore` (`explore-2`). A resumed owner is running
 again and decides once more.
 
