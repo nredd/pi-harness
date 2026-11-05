@@ -1,10 +1,14 @@
-/** Routine operational tools stay in the real parent loadout without a discovery round trip. */
+/**
+ * Routine operational tools stay in the real parent loadout without a discovery round trip, while
+ * rarely used monitor and quota tools stay deferred until `search_tools` promotes them.
+ */
 import { join } from "node:path";
 import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import { fauxAssistantMessage, type Harness } from "@earendil-works/pi-coding-agent/testing";
 import { Type } from "typebox";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { createDevTools } from "../../packages/dev-tools/src/index.ts";
+import { runTools } from "../../packages/dev-tools/test/scenarios/support.ts";
 import { defaultConfig } from "../../packages/session-kit/src/config.ts";
 import { createSessionKit } from "../../packages/session-kit/src/index.ts";
 import { configFor } from "../../packages/session-kit/test/scenarios/support.ts";
@@ -22,11 +26,10 @@ const ROUTINE_TOOLS = [
 	"git_commit",
 	"ssh_exec",
 	"resource_snapshot",
-	"monitor_start",
-	"monitor_read",
-	"monitor_stop",
-	"subscription_usage",
 ] as const;
+
+/** Owner policy (#291): used in under 1% of parent sessions, so promoted on demand. */
+const DEFERRED_TOOLS = ["monitor_start", "monitor_read", "monitor_stop", "subscription_usage"] as const;
 
 let home: Awaited<ReturnType<typeof isolateStackHome>>;
 let h: Harness;
@@ -83,8 +86,22 @@ const parentTools = () => observeTools(h, "inspect routine tools");
 
 it("keeps routine tools available in a fresh parent session and after a real parent turn", async () => {
 	// This first provider request deliberately occurs before any `search_tools` call.
-	expect(await parentTools()).toEqual(expect.arrayContaining([...ROUTINE_TOOLS]));
-	expect(await parentTools()).toEqual(expect.arrayContaining([...ROUTINE_TOOLS]));
+	const fresh = await parentTools();
+	expect(fresh).toEqual(expect.arrayContaining([...ROUTINE_TOOLS]));
+	for (const name of DEFERRED_TOOLS) expect(fresh).not.toContain(name);
+	const afterTurn = await parentTools();
+	expect(afterTurn).toEqual(expect.arrayContaining([...ROUTINE_TOOLS]));
+	for (const name of DEFERRED_TOOLS) expect(afterTurn).not.toContain(name);
+});
+
+it.each([
+	["monitor tools", "monitor start background process", ["monitor_start", "monitor_read", "monitor_stop"]],
+	["subscription_usage", "subscription quota usage windows", ["subscription_usage"]],
+])("promotes deferred %s through search_tools", async (_label, query, names) => {
+	const [searched] = await runTools(h, [{ name: "search_tools", args: { query, kind: "tool" } }]);
+	expect(searched?.isError, searched?.text).toBe(false);
+	for (const name of names) expect(searched?.text).toContain(name);
+	expect(await parentTools()).toEqual(expect.arrayContaining([...names, ...ROUTINE_TOOLS]));
 });
 
 it("keeps routine tools active in the provider request triggered by a real child notification", async () => {
@@ -194,7 +211,7 @@ it.each([
 			],
 		});
 		const registered = started.session.getAllTools().map((t) => t.name);
-		expect(registered).toEqual(expect.arrayContaining([...ROUTINE_TOOLS]));
+		expect(registered).toEqual(expect.arrayContaining([...ROUTINE_TOOLS, ...DEFERRED_TOOLS]));
 	} finally {
 		if (started) await started.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 		started?.cleanup();
