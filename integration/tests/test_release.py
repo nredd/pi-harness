@@ -1807,6 +1807,19 @@ def test_rate_limit_honors_capped_retry_after(
     assert no_backoff == [delay]
 
 
+@pytest.mark.parametrize("status", [502, 503, 504])
+def test_server_error_ignores_retry_after(
+    monkeypatch: pytest.MonkeyPatch, no_backoff: list[float], status: int
+) -> None:
+    """Only 429 honors `Retry-After`; a 5xx keeps the fixed doubling backoff."""
+    with scripted_http([(status, {"Retry-After": "30"}, b"")]) as (url, opener, requests):
+        monkeypatch.setattr(release, "urlopen", opener)
+        with pytest.raises(release.FetchError):
+            release.fetch_bytes(url)
+    assert len(requests) == FETCH_ATTEMPTS
+    assert no_backoff == [FETCH_RETRY_BACKOFF_SECONDS * 2**n for n in range(FETCH_ATTEMPTS - 1)]
+
+
 @pytest.mark.parametrize(
     "failure",
     [
