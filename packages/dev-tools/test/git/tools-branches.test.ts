@@ -119,6 +119,48 @@ describe("git read tool options", () => {
 		expect(mock.text(r)).toMatch(/ alice: First\n {2}Body line one\n {2}Body line two$/);
 	});
 
+	it("git_log author alone keeps only that author's commits", async () => {
+		const { repo } = fixture();
+		const r = await mock.call("git_log", { author: "bob" }, repo);
+		expect(r.isError, mock.text(r)).toBe(false);
+		expect((r.structuredContent as { commits: { subject: string }[] }).commits.map((c) => c.subject)).toEqual([
+			"Second",
+		]);
+	});
+
+	it("git_log since alone drops every older commit", async () => {
+		const { repo } = fixture();
+		const r = await mock.call("git_log", { since: "2099-12-31" }, repo);
+		expect(r.isError, mock.text(r)).toBe(false);
+		expect(mock.text(r)).toBe("no commits");
+		expect(r.structuredContent).toEqual({ commits: [] });
+	});
+
+	it("git_log drops the record a 4 MiB stdout cut left partial and still reports the cut", async () => {
+		const { root, repo } = fixture();
+		// 1465-byte records: the 4 MiB stream cap keeps 2863 whole ones and cuts the next inside its author field.
+		const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+		const bin = join(root, "bin");
+		mkdirSync(bin);
+		writeFileSync(
+			join(bin, "git"),
+			`#!/bin/sh
+case " $* " in *" log "*) awk 'BEGIN { s = sprintf("%1431s", ""); gsub(/ /, "x", s); for (i = 0; i < 5000; i++) printf "%07x\\tbob\\t2026-01-01T00:00:00Z\\t%s\\n", i, s }'; exit 0;; esac\nexec ${JSON.stringify(realGit)} "$@"\n`,
+		);
+		chmodSync(join(bin, "git"), 0o755);
+		process.env.PATH = `${bin}:${oldPath}`;
+		const r = await mock.call("git_log", {}, repo);
+		expect(r.isError, mock.text(r)).toBe(false);
+		const commits = (r.structuredContent as { commits: { sha: string; date: string; subject: string }[] }).commits;
+		expect(commits.length).toBeGreaterThan(0);
+		expect(commits.length).toBeLessThan(5000);
+		for (const c of commits) {
+			expect(c.date).toBe("2026-01-01T00:00:00Z");
+			expect(c.subject).toHaveLength(1431);
+		}
+		expect(mock.text(r)).toMatch(/\[output truncated at the .*\(producer dropped \d+ more bytes\)\]$/);
+	});
+
 	it("git_log names an unknown ref", async () => {
 		const { repo } = fixture();
 		const r = await mock.call("git_log", { ref: "no-such-branch" }, repo);
