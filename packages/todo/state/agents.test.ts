@@ -56,6 +56,18 @@ describe("applyAgentEvent", () => {
 		expect(stateOf("explore")).toBe("done");
 	});
 
+	it("lets a settled nameBase retry outrank an owner still queued", () => {
+		apply(SUBAGENT_CREATED_EVENT, { id: "a1", name: "auth-audit", nameBase: "auth-audit" });
+		apply(SUBAGENT_STARTED_EVENT, { id: "a2", name: "auth-audit-2", nameBase: "auth-audit" });
+		// A running sibling does not outrank the queued owner; a settled one does.
+		expect(stateOf("auth-audit")).toBe("queued");
+		apply(SUBAGENT_FAILED_EVENT, { id: "a2", status: "error" });
+		expect(stateOf("auth-audit")).toBe("failed");
+		apply(SUBAGENT_STARTED_EVENT, { id: "a3", name: "auth-audit-3", nameBase: "auth-audit" });
+		apply(SUBAGENT_COMPLETED_EVENT, { id: "a3" });
+		expect(stateOf("auth-audit")).toBe("done");
+	});
+
 	it("reports a change only when state or identity moved", () => {
 		expect(apply(SUBAGENT_STARTED_EVENT, { id: "a1" })).toBe(true);
 		expect(apply(SUBAGENT_STARTED_EVENT, { id: "a1" })).toBe(false);

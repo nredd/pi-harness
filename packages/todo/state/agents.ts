@@ -1,6 +1,7 @@
 /**
  * Last known state of each session's top-level subagents, fed by pi-subagents'
- * lifecycle events on `pi.events`. A todo's free-text `owner` is matched
+ * lifecycle events on `pi.events`: `created` -> `queued` (first heard only), `started` ->
+ * `running`, `completed` -> `done`, `failed` -> `failed` or `stopped`. A todo's free-text `owner` is matched
  * against an agent's id, `handle`, `name`, `nameBase` or a reopened agent's previous id,
  * purely for display: nothing here reads or writes any todo list, so a child
  * session still cannot touch the parent's tasks.
@@ -164,6 +165,14 @@ function spawnedAfterSettle(candidate: AgentEntry, owner: AgentEntry): boolean {
 	return candidate.firstSeenAt > (owner.settledAt ?? Number.POSITIVE_INFINITY);
 }
 
+/** The most recently settled of `entries`, by this tracker's order. */
+function latestSettled(entries: readonly AgentEntry[]): AgentEntry | undefined {
+	type Settled = AgentEntry & { settledAt: number };
+	const settled = entries.filter((entry): entry is Settled => entry.settledAt !== undefined);
+	settled.sort((a, b) => b.settledAt - a.settledAt);
+	return settled[0];
+}
+
 /** The state of the agent in `sessionId` that `owner` names, per `docs/overlay.md#owner-match-rule`. */
 export function agentStateFor(sessionId: string, owner: string | undefined): AgentRunState | undefined {
 	const wanted = ownerKey(owner);
@@ -173,6 +182,8 @@ export function agentStateFor(sessionId: string, owner: string | undefined): Age
 	const exact = entries.find((entry) => entry.keys.has(wanted));
 	const byBase = entries.filter((entry) => entry !== exact && entry.nameBase === wanted);
 	if (!exact) return byBase[0]?.state;
+	// A queued exact match may never run; a retry that already settled says more.
+	if (exact.state === "queued") return latestSettled(byBase)?.state ?? exact.state;
 	if (exact.settledAt === undefined) return exact.state;
 	const retries = byBase.filter((entry) => spawnedAfterSettle(entry, exact));
 	retries.sort((a, b) => b.startedAt - a.startedAt);
