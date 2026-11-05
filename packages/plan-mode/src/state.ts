@@ -68,7 +68,7 @@ export interface PlanModeState {
   latestPlanSource?: PlanCompletionSource;
   awaitingAction: boolean;
   /** Ready plans the user declined (Esc/Stay or a reply) since this planning workflow began. */
-  declinedPlans?: number;
+  declinedPlans: number;
   /** Explicit proposal-review permission, normally requested after a decline. */
   reproposalReview?: ReproposalReview;
   /** The current proposal already counted as declined; keeps Esc then a reply from double counting. */
@@ -109,7 +109,7 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
     }
   }
   const entry = branch[stateEntryIndex];
-  if (!isRecord(entry?.data)) return { enabled: false, awaitingAction: false };
+  if (!isRecord(entry?.data)) return { enabled: false, awaitingAction: false, declinedPlans: 0 };
 
   const enabled = entry.data.enabled === true;
   const persistedSource = enabled ? planCompletionSource(entry.data.latestPlanSource) : undefined;
