@@ -13,6 +13,8 @@ import {
   configuredPlanExportPath,
   configuredPlanModeToggleShortcut,
   defaultPlanModeToolNames,
+  deferPlanEdit,
+  editPlanThenReopen,
   findAvailableImplementationModel,
   normalizeKeyId,
   planExportDestination,
@@ -23,7 +25,7 @@ import {
   retentionLabel,
   snapshotAvailableImplementationModels,
   updatePlanModeSettings
-} from "./chunk-THD3EC5R.ts";
+} from "./chunk-VZDACPW4.ts";
 
 // src/active-implementation-menu.ts
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
@@ -209,11 +211,6 @@ async function chooseReadyPlanAction(ctx) {
 }
 
 // src/plan-action-menus.ts
-async function editPlanThenReopen(options) {
-  if (options.signal.aborted || !options.isCurrent()) return false;
-  await options.edit();
-  return !options.signal.aborted && options.isCurrent();
-}
 var THINKING_LEVEL_DESCRIPTIONS = {
   off: "No reasoning",
   minimal: "Very brief reasoning (~1k tokens)",
@@ -230,7 +227,7 @@ async function showPlanModeMenu(ctx, options) {
     options.implementationDefaults,
     options.implementFresh
   );
-  let editRequested = false;
+  const deferredEdit = deferPlanEdit(options);
   const menu = defineMenu2({
     start: "main",
     screens: {
@@ -264,10 +261,7 @@ async function showPlanModeMenu(ctx, options) {
         options.show();
         return { kind: "close" };
       },
-      edit: async () => {
-        editRequested = true;
-        return { kind: "close" };
-      },
+      edit: deferredEdit.action,
       finalize: async () => {
         options.finalize();
         return { kind: "close" };
@@ -308,7 +302,7 @@ async function showPlanModeMenu(ctx, options) {
     signal: options.signal,
     isCurrent: options.isCurrent
   });
-  if (editRequested && await editPlanThenReopen(options)) await showPlanModeMenu(ctx, options);
+  await deferredEdit.reopenAfter(() => showPlanModeMenu(ctx, options));
 }
 async function showReadyPlanMenu(ctx, options) {
   let start = "ready";
@@ -341,9 +335,7 @@ async function showReadyPlanMenu(ctx, options) {
     }
     start = action === "implement-fresh" ? "fresh" : "export";
   }
-  if (await runReadyPlanMenu(ctx, options, start) && await editPlanThenReopen(options)) {
-    await showReadyPlanMenu(ctx, options);
-  }
+  await runReadyPlanMenu(ctx, options, start);
 }
 async function runReadyPlanMenu(ctx, options, start) {
   const freshFlow = createFreshImplementationFlow(
@@ -352,7 +344,7 @@ async function runReadyPlanMenu(ctx, options, start) {
     options.implementationDefaults,
     options.implementFresh
   );
-  let editRequested = false;
+  const deferredEdit = deferPlanEdit(options);
   const menu = defineMenu2({
     start,
     screens: {
@@ -381,10 +373,7 @@ async function runReadyPlanMenu(ctx, options, start) {
         options.show();
         return { kind: "close" };
       },
-      edit: async () => {
-        editRequested = true;
-        return { kind: "close" };
-      },
+      edit: deferredEdit.action,
       "implement-here": async () => {
         await options.implementHere();
         return { kind: "close" };
@@ -421,7 +410,7 @@ async function runReadyPlanMenu(ctx, options, start) {
     signal: options.signal,
     isCurrent: options.isCurrent
   });
-  return editRequested;
+  await deferredEdit.reopenAfter(() => showReadyPlanMenu(ctx, options));
 }
 function createFreshImplementationFlow(ctx, planThinkingLevel, implementationDefaults, implementFresh) {
   const models = snapshotAvailableModels(ctx);
@@ -677,7 +666,7 @@ async function showSavedPlanMenu(ctx, options) {
   if (!ctx.hasUI) {
     throw new Error(`${options.statusText} Use /plan show, /plan implement, /plan export, or /plan exit.`);
   }
-  let editRequested = false;
+  const deferredEdit = deferPlanEdit(options);
   const menu = defineMenu4({
     start: "saved",
     screens: {
@@ -724,10 +713,7 @@ async function showSavedPlanMenu(ctx, options) {
         options.show();
         return { kind: "close" };
       },
-      edit: async () => {
-        editRequested = true;
-        return { kind: "close" };
-      },
+      edit: deferredEdit.action,
       "implement-here": async () => {
         await options.implementHere();
         return { kind: "close" };
@@ -753,7 +739,7 @@ async function showSavedPlanMenu(ctx, options) {
     signal: options.signal,
     isCurrent: options.isCurrent
   });
-  if (editRequested && await editPlanThenReopen(options)) await showSavedPlanMenu(ctx, options);
+  await deferredEdit.reopenAfter(() => showSavedPlanMenu(ctx, options));
 }
 
 // src/settings-menu.ts
@@ -1176,4 +1162,4 @@ export {
   showReadyPlanMenu,
   showSavedPlanMenu
 };
-//# sourceMappingURL=interactive-ui-4KRKM4SR.ts.map
+//# sourceMappingURL=interactive-ui-AU4WYPXK.ts.map

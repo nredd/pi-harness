@@ -17,6 +17,38 @@ export interface PlanEditDetails {
   plan: string;
 }
 
+/** Lifecycle and edit callback shared by every menu that offers `Edit plan…`. */
+export interface PlanEditOption {
+  signal: AbortSignal;
+  isCurrent(): boolean;
+  /** Opens the plan in the host editor; the caller reopens its menu afterwards. */
+  edit(): Promise<void>;
+}
+
+/** Runs the deferred edit once the menu has closed; true when the menu should reopen. */
+export async function editPlanThenReopen(options: PlanEditOption) {
+  if (options.signal.aborted || !options.isCurrent()) return false;
+  await options.edit();
+  return !options.signal.aborted && options.isCurrent();
+}
+
+/**
+ * The `Edit plan…` menu action closes the menu first, because the host editor cannot open over it.
+ * `reopenAfter` then runs the edit and reopens the menu while it is still current.
+ */
+export function deferPlanEdit(options: PlanEditOption) {
+  let requested = false;
+  return {
+    action: async () => {
+      requested = true;
+      return { kind: "close" as const };
+    },
+    async reopenAfter(reopen: () => Promise<void>) {
+      if (requested && (await editPlanThenReopen(options))) await reopen();
+    },
+  };
+}
+
 export type PlanEditReview =
   | { kind: "cancelled" }
   | { kind: "unchanged" }
