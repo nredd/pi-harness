@@ -5,30 +5,42 @@ import {
 	SUBAGENT_FAILED_EVENT,
 	SUBAGENT_STARTED_EVENT,
 } from "../tool/types.ts";
-import { agentStateForOwner, applyAgentEvent, isAbandoned, MAX_TRACKED_AGENTS, ownerLabel } from "./agents.ts";
+import {
+	agentLookup,
+	agentStateFor,
+	applyAgentEvent,
+	forgetAgents,
+	isAbandoned,
+	MAX_TRACKED_AGENTS,
+	ownerLabel,
+} from "./agents.ts";
+
+const S = "s1";
+const apply = (channel: string, payload: unknown) => applyAgentEvent(S, channel, payload);
+const stateOf = (owner: string | undefined) => agentStateFor(S, owner);
 
 describe("applyAgentEvent", () => {
 	it("maps the lifecycle to running, done, failed and stopped", () => {
-		applyAgentEvent(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "explore" });
-		expect(agentStateForOwner("explore")).toBe("running");
-		applyAgentEvent(SUBAGENT_COMPLETED_EVENT, { id: "a1", status: "steered" });
-		expect(agentStateForOwner("explore")).toBe("done");
-		applyAgentEvent(SUBAGENT_FAILED_EVENT, { id: "a1", status: "stopped" });
-		expect(agentStateForOwner("explore")).toBe("stopped");
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "explore" });
+		expect(stateOf("explore")).toBe("running");
+		apply(SUBAGENT_COMPLETED_EVENT, { id: "a1", status: "steered" });
+		expect(stateOf("explore")).toBe("done");
+		apply(SUBAGENT_FAILED_EVENT, { id: "a1", status: "stopped" });
+		expect(stateOf("explore")).toBe("stopped");
 		for (const status of ["error", "aborted", undefined]) {
-			applyAgentEvent(SUBAGENT_FAILED_EVENT, { id: "a1", status });
-			expect(agentStateForOwner("explore"), String(status)).toBe("failed");
+			apply(SUBAGENT_FAILED_EVENT, { id: "a1", status });
+			expect(stateOf("explore"), String(status)).toBe("failed");
 		}
 	});
 
 	it("reports a change only when state or identity moved", () => {
-		expect(applyAgentEvent(SUBAGENT_STARTED_EVENT, { id: "a1" })).toBe(true);
-		expect(applyAgentEvent(SUBAGENT_STARTED_EVENT, { id: "a1" })).toBe(false);
-		expect(applyAgentEvent(SUBAGENT_STARTED_EVENT, { id: "a1", name: "auth-audit" })).toBe(true);
+		expect(apply(SUBAGENT_STARTED_EVENT, { id: "a1" })).toBe(true);
+		expect(apply(SUBAGENT_STARTED_EVENT, { id: "a1" })).toBe(false);
+		expect(apply(SUBAGENT_STARTED_EVENT, { id: "a1", name: "auth-audit" })).toBe(true);
 		// A payload without the field keeps the earlier identity.
-		expect(applyAgentEvent(SUBAGENT_STARTED_EVENT, { id: "a1" })).toBe(false);
-		expect(agentStateForOwner("auth-audit")).toBe("running");
-		expect(applyAgentEvent(SUBAGENT_COMPLETED_EVENT, { id: "a1" })).toBe(true);
+		expect(apply(SUBAGENT_STARTED_EVENT, { id: "a1" })).toBe(false);
+		expect(stateOf("auth-audit")).toBe("running");
+		expect(apply(SUBAGENT_COMPLETED_EVENT, { id: "a1" })).toBe(true);
 	});
 
 	it.each([
@@ -38,37 +50,72 @@ describe("applyAgentEvent", () => {
 		["an empty id", SUBAGENT_STARTED_EVENT, { id: "" }],
 		["an unrelated channel", STATE_ENTRY_TYPE, { id: "a1" }],
 	])("ignores %s", (_label, channel, payload) => {
-		expect(applyAgentEvent(channel, payload)).toBe(false);
-		expect(agentStateForOwner("a1")).toBeUndefined();
+		expect(apply(channel, payload)).toBe(false);
+		expect(stateOf("a1")).toBeUndefined();
 	});
 
 	it("drops the least recently updated agent past the cap", () => {
-		for (let i = 0; i <= MAX_TRACKED_AGENTS; i++) applyAgentEvent(SUBAGENT_STARTED_EVENT, { id: `a${i}` });
-		expect(agentStateForOwner("a0")).toBeUndefined();
-		expect(agentStateForOwner("a1")).toBe("running");
-		expect(agentStateForOwner(`a${MAX_TRACKED_AGENTS}`)).toBe("running");
+		for (let i = 0; i <= MAX_TRACKED_AGENTS; i++) apply(SUBAGENT_STARTED_EVENT, { id: `a${i}` });
+		expect(stateOf("a0")).toBeUndefined();
+		expect(stateOf("a1")).toBe("running");
+		expect(stateOf(`a${MAX_TRACKED_AGENTS}`)).toBe("running");
+	});
+
+	it("keys a previous id this session never tracked", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "new", previousId: "evicted-before-tracking" });
+		expect(stateOf("evicted-before-tracking")).toBe("running");
+	});
+
+	it("follows a reopened agent from its previous id", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "old", handle: "explore" });
+		apply(SUBAGENT_FAILED_EVENT, { id: "old", status: "error" });
+		expect(apply(SUBAGENT_STARTED_EVENT, { id: "new", handle: "explore", previousId: "old" })).toBe(true);
+		expect(stateOf("old")).toBe("running");
+		apply(SUBAGENT_COMPLETED_EVENT, { id: "new" });
+		expect(stateOf("old")).toBe("done");
+		// Chained reopens keep every earlier id.
+		apply(SUBAGENT_STARTED_EVENT, { id: "newer", previousId: "new" });
+		expect(stateOf("old")).toBe("running");
+		expect(stateOf("new")).toBe("running");
 	});
 });
 
-describe("agentStateForOwner", () => {
+describe("agentStateFor", () => {
 	it("matches id, handle or name, case-insensitive with an optional @", () => {
-		applyAgentEvent(SUBAGENT_STARTED_EVENT, { id: "AbC123", handle: "explore-2", name: "auth-audit" });
-		for (const owner of ["abc123", "@Explore-2", " @AUTH-AUDIT "])
-			expect(agentStateForOwner(owner), owner).toBe("running");
+		apply(SUBAGENT_STARTED_EVENT, { id: "AbC123", handle: "explore-2", name: "auth-audit" });
+		for (const owner of ["abc123", "@Explore-2", " @AUTH-AUDIT "]) expect(stateOf(owner), owner).toBe("running");
+	});
+
+	it("slugs the owner like a handle, so a spawner name matches its handle", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1", name: "auth-audit" });
+		for (const owner of ["Auth Audit", "auth  audit!", "--Auth.Audit--"])
+			expect(stateOf(owner), owner).toBe("running");
+		expect(stateOf("authaudit")).toBeUndefined();
 	});
 
 	it("returns nothing for free text, a blank owner or no owner", () => {
-		applyAgentEvent(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "explore" });
-		for (const owner of ["Sergii", "", "  @ ", undefined]) expect(agentStateForOwner(owner)).toBeUndefined();
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "explore" });
+		for (const owner of ["Sergii", "", "  @ ", undefined]) expect(stateOf(owner)).toBeUndefined();
 	});
 
 	it("prefers the most recently updated of two agents sharing a name", () => {
-		applyAgentEvent(SUBAGENT_STARTED_EVENT, { id: "old", name: "worker" });
-		applyAgentEvent(SUBAGENT_STARTED_EVENT, { id: "new", name: "worker" });
-		applyAgentEvent(SUBAGENT_FAILED_EVENT, { id: "new", status: "error" });
-		expect(agentStateForOwner("worker")).toBe("failed");
-		applyAgentEvent(SUBAGENT_COMPLETED_EVENT, { id: "old" });
-		expect(agentStateForOwner("worker")).toBe("done");
+		apply(SUBAGENT_STARTED_EVENT, { id: "old", name: "worker" });
+		apply(SUBAGENT_STARTED_EVENT, { id: "new", name: "worker" });
+		apply(SUBAGENT_FAILED_EVENT, { id: "new", status: "error" });
+		expect(stateOf("worker")).toBe("failed");
+		apply(SUBAGENT_COMPLETED_EVENT, { id: "old" });
+		expect(stateOf("worker")).toBe("done");
+	});
+
+	it("never answers from another session, and forgets a session on demand", () => {
+		applyAgentEvent("s1", SUBAGENT_STARTED_EVENT, { id: "a1", handle: "scout" });
+		applyAgentEvent("s2", SUBAGENT_FAILED_EVENT, { id: "b1", handle: "scout", status: "error" });
+		expect(agentLookup("s1")("scout")).toBe("running");
+		expect(agentLookup("s2")("scout")).toBe("failed");
+		expect(agentLookup("s3")("scout")).toBeUndefined();
+		forgetAgents("s2");
+		expect(agentLookup("s2")("scout")).toBeUndefined();
+		expect(agentLookup("s1")("scout")).toBe("running");
 	});
 });
 

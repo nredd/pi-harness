@@ -42,6 +42,7 @@ For the channel list, the reply envelope, the per-channel snippets and the event
 | `rootSessionId` | Names a transcript directory, so a forged value is a path-traversal primitive |
 | `resumeSessionFile` | Worse: it names a file to **open and replay** as a conversation. Dispatcher only, and only from a path this extension itself recorded |
 | `reclaim` | Bypasses handle allocation, so a forged value would duplicate a live agent's name and make `@handle` ambiguous |
+| `previousId` | Names the evicted agent a reopen continues, so a forged value would make lifecycle events claim another agent's id |
 | `blocking` | Every spawn through here is detached. A forged `blocking` would charge it to the foreground pool and defer it behind a queue whose gate nobody is holding |
 | `modelSelection`, `modelFallback`, `modelTier`, `previousModelTier` | Internal resolution outcomes. A caller cannot forge a different selection, bypass scope validation, or invent a fallback disclosure |
 

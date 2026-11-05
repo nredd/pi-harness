@@ -1,15 +1,10 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import {
-	type AgentRunState,
-	type AgentStateLookup,
-	agentStateForOwner,
-	isAbandoned,
-	ownerLabel,
-} from "../state/agents.ts";
+import { type AgentRunState, type AgentStateLookup, agentLookup, isAbandoned, ownerLabel } from "../state/agents.ts";
 import { formatStatusLabel } from "../state/i18n-bridge.ts";
 import { selectTaskSubjectById } from "../state/selectors.ts";
 import type { TaskState } from "../state/state.ts";
+import { getActiveRenderSession } from "../state/store.ts";
 import { sanitizeTerminalText } from "../tool/sanitize.ts";
 import type { Task, TaskAction, TaskDetails, TaskMutationParams, TaskStatus } from "../tool/types.ts";
 
@@ -93,7 +88,7 @@ interface OwnerChunk {
 /**
  * The owner segment shared by the overlay and `/todos`: `@owner`, then the
  * owning subagent's live state when `lookup` knows it. An `in_progress` todo
- * whose agent failed or stopped is marked `✗ failed`; the todo itself stays
+ * whose agent failed or stopped is marked `✗ failed` or `✗ stopped`; the todo itself stays
  * `in_progress` until the parent completes it with evidence.
  */
 export function ownerChunks(t: Task, lookup: AgentStateLookup): OwnerChunk[] {
@@ -103,7 +98,7 @@ export function ownerChunks(t: Task, lookup: AgentStateLookup): OwnerChunk[] {
 	const state = lookup(t.owner);
 	if (!state) return chunks;
 	if (isAbandoned(t, state)) {
-		chunks.push({ color: "error", text: state === "failed" ? "✗ failed" : "stopped ✗ failed" });
+		chunks.push({ color: "error", text: `✗ ${state}` });
 	} else {
 		chunks.push({ color: AGENT_STATE_COLOR[state], text: state });
 	}
@@ -118,7 +113,7 @@ export function formatOverlayTaskLine(
 	t: Task,
 	theme: Theme,
 	showId: boolean,
-	lookup: AgentStateLookup = agentStateForOwner,
+	lookup: AgentStateLookup = agentLookup(getActiveRenderSession()),
 ): string {
 	const glyph = overlayStatusGlyph(t.status, theme);
 	const subjectColor =
@@ -148,8 +143,8 @@ export function formatOverlayTaskLine(
  * Format a single task line for the `/todos` slash command (no glyph color,
  * indented bullet prefix). Pre-refactor `todo.ts:670-674`.
  */
-export function formatCommandTaskLine(t: Task, glyph: string, lookup: AgentStateLookup = agentStateForOwner): string {
-	const owner = ownerChunks(t, lookup)
+export function formatCommandTaskLine(t: Task, glyph: string, lookup?: AgentStateLookup): string {
+	const owner = ownerChunks(t, lookup ?? (() => undefined))
 		.map((chunk) => ` ${chunk.text}`)
 		.join("");
 	const form = t.status === "in_progress" && t.activeForm ? ` (${sanitizeTerminalText(t.activeForm)})` : "";

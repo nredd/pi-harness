@@ -51,12 +51,20 @@ function setup() {
 		const widget = factory({ requestRender: vi.fn() }, plainTheme) as { render(w: number): string[] };
 		return widget.render(200).slice(1, -1);
 	};
+	/** Mount the registered widget on a fresh TUI stub, as Pi does, and return the stub. */
+	const mount = (ctx: Ctx) => {
+		const setWidget = ctx.ui.setWidget as ReturnType<typeof vi.fn>;
+		const registered = setWidget.mock.calls.filter((call: unknown[]) => call[1] !== undefined);
+		const tui = { requestRender: vi.fn() };
+		registered[registered.length - 1]?.[1](tui, plainTheme);
+		return tui;
+	};
 	const todos = async (ctx: Ctx) => {
 		await cmd.handler("", ctx as never);
 		const calls = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls;
 		return String(calls[calls.length - 1]?.[0]);
 	};
-	return { bus, handler, emit, call, toolEnd, rows, todos };
+	return { bus, handler, emit, call, toolEnd, rows, mount, todos };
 }
 
 async function ownedTodo(h: ReturnType<typeof setup>, ctx: Ctx, owner: string) {
@@ -100,18 +108,64 @@ describe("owner matches a subagent", () => {
 		]);
 	});
 
-	it("keeps the last known state across eviction and a session switch", async () => {
+	it("keeps the last known state within a session after the agent goes quiet", async () => {
+		const h = setup();
+		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		await ownedTodo(h, ctx, "a1");
+		await h.emit(SUBAGENT_FAILED_EVENT, { id: "a1", status: "stopped" });
+		// Eviction emits nothing, so later work in the session still shows the last state.
+		await h.call(ctx, { action: "create", subject: "Next" });
+		await h.toolEnd();
+		expect(h.rows(ctx)[0]).toBe("├─ ◐ #1 Audit auth @a1 ✗ stopped");
+	});
+
+	it("never shows another session's agent after a session switch", async () => {
 		const h = setup();
 		const first = createMockCtx({ sessionId: "s1", hasUI: true });
-		await ownedTodo(h, first, "a1");
-		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a1" });
+		await ownedTodo(h, first, "scout");
+		await h.emit(SUBAGENT_FAILED_EVENT, { id: "a1", handle: "scout", status: "error" });
+		expect(h.rows(first)).toEqual(["└─ ◐ #1 Audit auth @scout ✗ failed"]);
 		await h.handler("session_shutdown")({}, first);
-		// Arrives with no foreground bound: recorded, nothing to render, no throw.
-		await h.emit(SUBAGENT_FAILED_EVENT, { id: "a1", status: "stopped" });
+		// Arrives with no session bound: dropped, nothing to render, no throw.
+		await h.emit(SUBAGENT_COMPLETED_EVENT, { id: "a1", handle: "scout" });
 
 		const second = createMockCtx({ sessionId: "s2", hasUI: true });
-		await ownedTodo(h, second, "a1");
-		expect(h.rows(second)).toEqual(["└─ ◐ #1 Audit auth @a1 stopped ✗ failed"]);
+		await ownedTodo(h, second, "scout");
+		expect(h.rows(second)).toEqual(["└─ ◐ #1 Audit auth @scout"]);
+		await h.emit(SUBAGENT_STARTED_EVENT, { id: "b1", handle: "scout" });
+		expect(h.rows(second)).toEqual(["└─ ◐ #1 Audit auth @scout running"]);
+	});
+
+	it("forgets a session's agents when it shuts down, so a resume starts without stale states", async () => {
+		const h = setup();
+		const first = createMockCtx({ sessionId: "s1", hasUI: true });
+		await ownedTodo(h, first, "scout");
+		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "scout" });
+		await h.handler("session_shutdown")({}, first);
+
+		const resumed = createMockCtx({ sessionId: "s1", hasUI: true });
+		await ownedTodo(h, resumed, "scout");
+		expect(h.rows(resumed)).toEqual(["└─ ◐ #1 Audit auth @scout"]);
+	});
+
+	it("repaints the live overlay when an owner's agent changes state", async () => {
+		const h = setup();
+		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		await ownedTodo(h, ctx, "scout");
+		const tui = h.mount(ctx);
+		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "scout" });
+		expect(tui.requestRender).toHaveBeenCalledTimes(1);
+		// An unchanged state is not a repaint.
+		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "scout" });
+		expect(tui.requestRender).toHaveBeenCalledTimes(1);
+	});
+
+	it("matches a spawner name typed as free text, e.g. Auth Audit", async () => {
+		const h = setup();
+		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		await ownedTodo(h, ctx, "Auth Audit");
+		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "general-purpose", name: "auth-audit" });
+		expect(h.rows(ctx)).toEqual(["└─ ◐ #1 Audit auth @Auth Audit running"]);
 	});
 });
 

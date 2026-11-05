@@ -1,13 +1,15 @@
 /**
- * Last known state of the top-level subagents this process has heard about,
- * fed by pi-subagents' lifecycle events on `pi.events`. A todo's free-text
- * `owner` is matched against an agent's id, `handle` or `name` purely for
- * display: nothing here reads or writes any todo list, so a child session
- * still cannot touch the parent's tasks.
+ * Last known state of each session's top-level subagents, fed by pi-subagents'
+ * lifecycle events on `pi.events`. A todo's free-text `owner` is matched
+ * against an agent's id, `handle`, `name` or a reopened agent's previous id,
+ * purely for display: nothing here reads or writes any todo list, so a child
+ * session still cannot touch the parent's tasks.
  *
- * Either package works without the other: no pi-subagents means no events,
- * so owners render without a state. An evicted agent or a session switch emits
- * nothing further, so the last known state stays until the entry ages out.
+ * Agents are keyed by the session that heard them, so after `/new` or
+ * `/resume` a todo never shows another session's agent. Either package works
+ * without the other: no pi-subagents means no events, so owners render without
+ * a state. An evicted agent emits nothing further, so its last known state
+ * stays until the session ends or the entry ages out.
  */
 
 import { sanitizeTerminalText } from "../tool/sanitize.ts";
@@ -20,23 +22,29 @@ export type AgentRunState = "running" | "done" | "failed" | "stopped";
 export type AgentStateLookup = (owner: string | undefined) => AgentRunState | undefined;
 
 interface AgentEntry {
-	id: string;
-	handle?: string;
-	name?: string;
+	/** Match keys: the id, then every previous id, `handle` and `name`. */
+	keys: Set<string>;
 	state: AgentRunState;
 }
 
 /** Bound memory in a long session; the oldest-updated agents drop first. */
 export const MAX_TRACKED_AGENTS = 256;
 
-// Insertion order is update order: every write deletes then re-inserts.
-const agents = new Map<string, AgentEntry>();
+// Per session, insertion order is update order: every write deletes then re-inserts.
+const sessions = new Map<string, Map<string, AgentEntry>>();
 
-/** Lowercased owner or identity key without a leading `@`, or `undefined` when empty. */
+/**
+ * The comparison key for an owner or an agent identity, slugged the way
+ * pi-subagents' `handleBase` turns a spawner `name` into a handle, so the
+ * owner `Auth Audit` or `@auth-audit` matches the payload `name` `auth-audit`.
+ */
 function key(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
-	const normalized = value.trim().replace(/^@/, "").toLowerCase();
-	return normalized || undefined;
+	const slug = value
+		.toLowerCase()
+		.replace(/[^a-z0-9_-]+/g, "-")
+		.replace(/^-+|-+$/g, "");
+	return slug || undefined;
 }
 
 /**
@@ -51,49 +59,62 @@ function stateFor(channel: string, status: unknown): AgentRunState | undefined {
 }
 
 /**
- * Record one lifecycle event. Returns `true` when an agent's tracked state or
- * identity changed, so the caller refreshes the overlay only then. Malformed
- * payloads and unknown channels are ignored.
+ * Record one lifecycle event heard by `sessionId`. Returns `true` when an
+ * agent's tracked state or identity changed, so the caller refreshes the
+ * overlay only then. A `previousId` (an evicted agent reopened under a new id)
+ * folds the old entry into the new one, so an owner set to the old id follows
+ * the conversation. Malformed payloads and unknown channels are ignored.
  */
-export function applyAgentEvent(channel: string, payload: unknown): boolean {
+export function applyAgentEvent(sessionId: string, channel: string, payload: unknown): boolean {
 	if (!payload || typeof payload !== "object") return false;
 	const data = payload as Record<string, unknown>;
 	if (typeof data.id !== "string" || data.id.length === 0) return false;
 	const state = stateFor(channel, data.status);
 	if (!state) return false;
+	let agents = sessions.get(sessionId);
+	if (!agents) {
+		agents = new Map();
+		sessions.set(sessionId, agents);
+	}
 	const previous = agents.get(data.id);
-	const next: AgentEntry = {
-		id: data.id,
-		// A later payload without a field keeps the identity an earlier one gave.
-		handle: typeof data.handle === "string" ? data.handle : previous?.handle,
-		name: typeof data.name === "string" ? data.name : previous?.name,
-		state,
-	};
+	const predecessor = typeof data.previousId === "string" ? agents.get(data.previousId) : undefined;
+	// A later payload without a field keeps the identity an earlier one gave.
+	const keys = new Set([...(predecessor?.keys ?? []), ...(previous?.keys ?? [])]);
+	for (const value of [data.id, data.previousId, data.handle, data.name]) {
+		const k = key(value);
+		if (k) keys.add(k);
+	}
+	if (typeof data.previousId === "string") agents.delete(data.previousId);
 	agents.delete(data.id);
-	agents.set(data.id, next);
+	agents.set(data.id, { keys, state });
 	while (agents.size > MAX_TRACKED_AGENTS) {
 		const oldest = agents.keys().next().value as string;
 		agents.delete(oldest);
 	}
-	return (
-		previous === undefined ||
-		previous.state !== next.state ||
-		previous.handle !== next.handle ||
-		previous.name !== next.name
-	);
+	return previous === undefined || previous.state !== state || previous.keys.size !== keys.size;
 }
 
-/** The most recently updated agent whose id, handle or name equals `owner` (case-insensitive, `@` optional). */
-export const agentStateForOwner: AgentStateLookup = (owner) => {
+/** The state of `sessionId`'s most recently updated agent matching `owner`, by slugged id, handle, name or previous id. */
+export function agentStateFor(sessionId: string, owner: string | undefined): AgentRunState | undefined {
 	const wanted = key(owner);
-	if (!wanted) return undefined;
+	const agents = sessions.get(sessionId);
+	if (!wanted || !agents) return undefined;
 	const entries = [...agents.values()];
 	for (let i = entries.length - 1; i >= 0; i--) {
-		const entry = entries[i];
-		if (key(entry.id) === wanted || key(entry.handle) === wanted || key(entry.name) === wanted) return entry.state;
+		if (entries[i].keys.has(wanted)) return entries[i].state;
 	}
 	return undefined;
-};
+}
+
+/** Bind `agentStateFor` to one session. */
+export function agentLookup(sessionId: string): AgentStateLookup {
+	return (owner) => agentStateFor(sessionId, owner);
+}
+
+/** Drop everything `sessionId` tracked; called when that session shuts down. */
+export function forgetAgents(sessionId: string): void {
+	sessions.delete(sessionId);
+}
 
 /** `@owner` for display (terminal-safe, one leading `@`), or `undefined` for a blank owner. */
 export function ownerLabel(owner: string | undefined): string | undefined {
@@ -108,7 +129,7 @@ export function isAbandoned(task: Pick<Task, "status">, state: AgentRunState | u
 	return task.status === "in_progress" && (state === "failed" || state === "stopped");
 }
 
-/** Test-only: forget every tracked agent. */
+/** Test-only: forget every tracked agent in every session. */
 export function __resetAgents(): void {
-	agents.clear();
+	sessions.clear();
 }

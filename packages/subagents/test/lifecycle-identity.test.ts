@@ -14,7 +14,7 @@ vi.mock("../src/agent-runner.js", async () => {
   return { ...actual, runAgent: vi.fn(), resumeAgent: vi.fn() };
 });
 
-import { runAgent } from "../src/agent-runner.js";
+import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import { registerAgents } from "../src/agent-types.js";
 import { flush, makePi, startSession } from "./helpers/boot-extension.js";
 import subagentsExtension from "./helpers/home-extension.js";
@@ -45,6 +45,7 @@ beforeEach(() => {
   writeFileSync(join(cwd, ".pi", "agents", "scout.md"), "---\ndescription: scout\ntools: read\n---\nscout.\n");
   mkdirSync(join(cwd, "agent-dir"), { recursive: true });
   vi.mocked(runAgent).mockReset();
+  vi.mocked(resumeAgent).mockReset();
 });
 
 afterEach(() => {
@@ -85,6 +86,31 @@ describe("lifecycle event identity", () => {
       const [event] = eventsNamed(pi, name);
       expect(event, name).toMatchObject({ handle: "scout", name: "auth-audit" });
     }
+  });
+
+  it("a background resume re-announces the record's own identity on created", async () => {
+    const { pi, tools } = await boot();
+    vi.mocked(runAgent).mockImplementation(runnerResolution() as any);
+    vi.mocked(resumeAgent).mockResolvedValue({ text: "again", aborted: false, steered: false } as any);
+    const first = await tools.get("Agent").execute(
+      "tc",
+      { prompt: "go", description: "audit", subagent_type: "scout", name: "Auth Audit", run_in_background: true },
+      undefined, undefined, ctx(),
+    );
+    await flush();
+    const id = /Agent ID: (\S+)/.exec(first.content.map((c: any) => c.text ?? "").join(""))![1];
+    pi.events.emit.mockClear();
+
+    await tools.get("Agent").execute(
+      "tc2",
+      { prompt: "more", description: "more", subagent_type: "scout", resume: id, run_in_background: true },
+      undefined, undefined, ctx(),
+    );
+    await flush();
+
+    expect(eventsNamed(pi, "subagents:created")).toEqual([
+      expect.objectContaining({ id, handle: "scout", name: "auth-audit", isBackground: true }),
+    ]);
   });
 
   it("omits name for an unnamed spawn and keeps handle on a failure", async () => {

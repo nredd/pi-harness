@@ -17,7 +17,7 @@ import type {
 	ExtensionAPI,
 	SessionBoundaryDraft,
 } from "@earendil-works/pi-coding-agent";
-import { type AgentStateLookup, agentStateForOwner, isAbandoned, ownerLabel } from "./state/agents.ts";
+import { type AgentStateLookup, agentLookup, isAbandoned, ownerLabel } from "./state/agents.ts";
 import { applyPlanApproval, selectOpenPlanItems, selectPlanProgress } from "./state/plan.ts";
 import type { TaskState } from "./state/state.ts";
 import { commitState, getState, sid } from "./state/store.ts";
@@ -134,7 +134,7 @@ export function formatPlanReminder(state: TaskState): string {
  */
 export function formatInProgressNotice(
 	state: TaskState,
-	lookup: AgentStateLookup = agentStateForOwner,
+	lookup: AgentStateLookup = () => undefined,
 ): string | undefined {
 	const active = state.tasks.filter((t) => t.status === "in_progress");
 	if (!active.length) return undefined;
@@ -212,7 +212,8 @@ export function registerPlanHooks(
 	// covers plan items and only once, so report the state instead of leaving a quiet prompt.
 	pi.on("agent_settled", (_event, ctx) => {
 		if (isPlanning(ctx, [])) return;
-		const message = formatInProgressNotice(getState(sid(ctx)));
+		const id = sid(ctx);
+		const message = formatInProgressNotice(getState(id), agentLookup(id));
 		if (message) ctx.ui.notify(message, "warning");
 	});
 
