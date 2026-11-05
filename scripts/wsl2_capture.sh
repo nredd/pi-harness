@@ -9,6 +9,40 @@ PATH=$(< "$RUNNER_TEMP/tool-path")
 if [ "${1:-}" = cleanup ]; then
   diagnostics_dir="$WSL_HOST_TEMP/wsl2-diagnostics"
   source "$worktree/scripts/wsl2_cleanup.sh"
+  # Failure-only guest evidence for whole-guest stalls (#445): kernel log plus memory, swap and
+  # pressure state. Fixed /proc files and dmesg only, no environment or HOME. The shared credential
+  # policy scans the synthetic report before export. Nothing here alters the capture status.
+  capture_guest_state() {
+    local report="$RUNNER_TEMP/guest-state.txt" kernel_log="$RUNNER_TEMP/guest-dmesg.txt" path
+    {
+      printf 'WSL guest state after failure status %s at %s (UTC)\n' "$capture_status" "$(date -u +%FT%TZ)"
+      for path in /proc/uptime /proc/loadavg /proc/meminfo /proc/swaps /proc/pressure/cpu \
+        /proc/pressure/memory /proc/pressure/io /proc/sys/kernel/dmesg_restrict; do
+        printf '\n== %s ==\n' "$path"
+        cat "$path" 2>/dev/null || printf 'UNAVAILABLE: not readable\n'
+      done
+      printf '\n== /proc/vmstat (swap, reclaim, OOM) ==\n'
+      grep -E '^(pswpin|pswpout|pgmajfault|allocstall_[a-z]+|oom_kill) ' /proc/vmstat 2>/dev/null \
+        || printf 'UNAVAILABLE: not readable\n'
+      if command -v sudo >/dev/null && timeout 20 sudo -n dmesg >"$kernel_log" 2>/dev/null; then
+        printf '\n== dmesg via sudo -n (last 400 lines) ==\n'
+        tail -n 400 "$kernel_log"
+      elif timeout 20 dmesg >"$kernel_log" 2>/dev/null; then
+        printf '\n== dmesg unprivileged (last 400 lines) ==\n'
+        tail -n 400 "$kernel_log"
+      else
+        printf '\n== dmesg ==\nUNAVAILABLE: neither `sudo -n dmesg` nor unprivileged `dmesg` succeeded\n'
+      fi
+    } >"$report" 2>/dev/null
+    rm -f "$kernel_log"
+    if (cd "$worktree/integration" && timeout 60 python3 -m harness.credentials "$report"); then
+      cat "$report" >"$diagnostics_dir/guest-state.txt" \
+        || printf 'WARNING: could not export WSL guest state\n' >&2
+    else
+      printf 'WSL guest state withheld: the shared credential scan refused it or could not run.\n' \
+        >"$diagnostics_dir/guest-state.txt" || printf 'WARNING: could not record withheld guest state\n' >&2
+    fi
+  }
   finish_capture() {
     capture_status=$?
     set +e
@@ -16,6 +50,7 @@ if [ "${1:-}" = cleanup ]; then
       capture_status=$(< "$RUNNER_TEMP/first-failure")
       [[ "$capture_status" =~ ^[0-9]+$ ]] || capture_status=1
     fi
+    [ "$capture_status" -eq 0 ] || capture_guest_state
     # The existing helper reads $? on entry, retaining the original guest failure.
     (exit "$capture_status")
     cleanup_wsl2_worktree
