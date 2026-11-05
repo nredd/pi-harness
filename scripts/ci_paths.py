@@ -50,6 +50,8 @@ WSL_INPUT_FILES = TOOLCHAIN_INPUTS | {
     "scripts/install_gh_linux.sh",
     "scripts/install_wsl_owned_tools.sh",
     "scripts/router_contract.mjs",
+    "scripts/router_contract.test.mjs",
+    "scripts/run-vitest.test.ts",
     "scripts/run-vitest.ts",
     "scripts/vitest.config.ts",
 }
