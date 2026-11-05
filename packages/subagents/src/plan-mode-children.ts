@@ -13,6 +13,7 @@
  * than imported because either package installs without the other.
  */
 import type { ToolInfo } from "@earendil-works/pi-coding-agent";
+import type { AgentRecord } from "./types.js";
 
 export const PLAN_MODE_STATE_QUERY = "pi-plan-mode:state-query";
 /** pi-plan-mode asks here whether a compatible gate is installed; answering is the handshake. */
@@ -122,6 +123,18 @@ export function queryPlanPolicy(
  */
 export function planningNow(events: { emit(channel: string, data: unknown): void } | undefined): boolean {
   return queryPlanPolicy(events, "restrict") !== undefined;
+}
+
+/**
+ * Whether a steer must be refused: the agent is running or queued under no Plan policy (it started
+ * before Plan) while Plan is active, so the steer would drive it with its full surface. The one
+ * predicate for `steer_subagent` and `subagents:rpc:steer`.
+ */
+export function planSteerBlocked(
+  record: Pick<AgentRecord, "status" | "planGate">,
+  events: { emit(channel: string, data: unknown): void } | undefined,
+): boolean {
+  return (record.status === "running" || record.status === "queued") && !record.planGate?.policy && planningNow(events);
 }
 
 /** Plan's model must not steer a child that runs without Plan's restrictions. */

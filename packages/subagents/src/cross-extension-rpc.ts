@@ -16,6 +16,7 @@
 import { isTopLevelAgent } from "./agent-manager.js";
 import type { ModelRegistry } from "./model-resolver.js";
 import { selectModel } from "./model-selection.js";
+import { planSteerBlocked, planSteerRefusal } from "./plan-mode-children.js";
 import type { AgentRecord } from "./types.js";
 
 /** Minimal event bus interface needed by the RPC handlers. */
@@ -39,11 +40,11 @@ export interface SpawnCapable {
   awaitStartup(id: string): Promise<void>;
   abort(id: string): boolean;
   /**
-   * The record behind an id, for the stop handler's ownership check. Narrowed
-   * to the two fields `isTopLevelAgent` reads, so the RPC layer keeps its
-   * deliberately shallow view of the manager.
+   * The record behind an id, for the stop and steer handlers' ownership check
+   * and the steer handler's Plan check. Narrowed to the fields those read, so
+   * the RPC layer keeps its deliberately shallow view of the manager.
    */
-  getRecord(id: string): Pick<AgentRecord, "parentAgentId" | "workflowId"> | undefined;
+  getRecord(id: string): Pick<AgentRecord, "parentAgentId" | "workflowId" | "status" | "planGate"> | undefined;
   /**
    * Mark a settled agent's result as read by the caller, suppressing the
    * completion notification — what `get_subagent_result` does when it returns
@@ -152,10 +153,11 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
   // a live hole: no RPC hands out agent ids, so a caller has no ordinary way to
   // name one it does not own — but the guard is cheap and the id may leak some
   // other way. Same refuse-what-we-should-not-touch stance as `consume` below.
-  const assertOwned = (agentId: string): void => {
+  const assertOwned = (agentId: string) => {
     const record = manager.getRecord(agentId);
     if (!record) throw new Error("Agent not found");
     if (!isTopLevelAgent(record)) throw new Error("Agent is owned by another agent or workflow");
+    return record;
   };
 
   const unsubStop = handleRpc<{ requestId: string; agentId: string }>(
@@ -187,7 +189,9 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
   const unsubSteer = handleRpc<{ requestId: string; agentId: string; message: unknown }>(
     events, "subagents:rpc:steer", ({ agentId, message }) => {
       if (typeof message !== "string" || message.trim().length === 0) throw new Error("Steer message must be a non-empty string");
-      assertOwned(agentId);
+      const record = assertOwned(agentId);
+      // Same refusal as `steer_subagent`, so another extension cannot steer a pre-Plan agent into edits.
+      if (planSteerBlocked(record, events)) throw new Error(planSteerRefusal(agentId));
       if (!manager.steer(agentId, message)) throw new Error("Agent is not running");
     },
   );

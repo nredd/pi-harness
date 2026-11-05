@@ -212,6 +212,41 @@ it("a running pre-Plan child cannot be steered while planning, and can be after 
   expect(result).not.toContain("EDIT EVERYTHING");
 });
 
+it("another extension cannot steer a running pre-Plan child over RPC while planning", async () => {
+  fixture = new ScenarioSession();
+  const hold = fixture.heldTool();
+  fixture.physical("kid", "child", [calls({ name: "hold", args: {} }), context => answer(`USERS ${context.messages.filter(m => m.role === "user").map(text).join(" | ")}`)]);
+  let bus: ExtensionAPI["events"] | undefined;
+  const h = await startHost([], [], { factories: [pi => { bus = pi.events; }] });
+  h.setResponses([calls(spawn("busy")), answer("SPAWNED")]);
+  await h.session.prompt("Start it.");
+  await hold.entered;
+  const id = outcomes(h, "Agent")[0]?.text.match(/Agent ID: (\S+)/)?.[1];
+  if (!id || !bus) throw new Error(JSON.stringify(outcomes(h, "Agent")));
+  const events = bus;
+  let n = 0;
+  const steer = (message: string) => new Promise<unknown>(resolve => {
+    const requestId = `rpc-${++n}`;
+    events.on(`subagents:rpc:steer:reply:${requestId}`, resolve);
+    events.emit("subagents:rpc:steer", { requestId, agentId: id, message });
+  });
+
+  await h.session.prompt("/plan start");
+  expect(await steer("EDIT EVERYTHING")).toEqual({ success: false, error: planSteerRefusal(id) });
+  expect(fixture.record(id).pendingSteers ?? []).toEqual([]);
+
+  await h.session.prompt("/plan exit");
+  expect(await steer("PIVOT")).toEqual({ success: true });
+  const completed = fixture.completion();
+  hold.release();
+  await completed;
+  h.setResponses([calls({ name: "get_subagent_result", args: { agent_id: id, wait: true } }), answer("DONE")]);
+  await h.session.prompt("Fetch it.");
+  const result = outcomes(h, "get_subagent_result").at(-1)?.text ?? "";
+  expect(result).toContain("USERS work | PIVOT");
+  expect(result).not.toContain("EDIT EVERYTHING");
+});
+
 it("stop_subagent stays available while planning and never asks for the subagent gate", async () => {
   fixture = new ScenarioSession();
   const hold = fixture.heldTool();
