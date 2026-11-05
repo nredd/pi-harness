@@ -147,7 +147,7 @@ def test_preset_resource_selection(sandbox: Sandbox) -> None:
 
 
 def test_tool_set(sandbox: Sandbox) -> None:
-    """The stack's exact schema golden and deferred monitor/worktree promotion survive the real loader.
+    """The stack's exact schema golden and deferred `monitor_*`/worktree promotion survive the real loader.
 
     Parameters:
         sandbox (Sandbox): private installed stack with explicit tool policy.
@@ -175,10 +175,10 @@ def test_tool_set(sandbox: Sandbox) -> None:
     before, after = (set(text.removeprefix("TOOLS ").split(",")) for text in texts)
     name = (sandbox.agent_dir / "stack-name").read_text()
     assert_golden(f"{name}-tools.txt", "\n".join(sorted(before)) + "\n")
-    promoted = {"monitor_start", "monitor_stop", "git_worktree_add", "git_worktree_remove"}
+    promoted = {"monitor_start", "monitor_read", "monitor_stop", "git_worktree_add", "git_worktree_remove"}
     assert not before & promoted, before
     assert promoted <= after, after
-    assert {"monitor_read", "git_worktree_list"} <= before
+    assert "git_worktree_list" in before
     found = [outcome for outcome in result.tool_outcomes() if outcome.name == "search_tools"]
     assert len(found) == 2, result.transcript()
     assert all(not outcome.is_error for outcome in found), found

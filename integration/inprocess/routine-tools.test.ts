@@ -89,7 +89,9 @@ it("keeps routine tools available in a fresh parent session and after a real par
 	const fresh = await parentTools();
 	expect(fresh).toEqual(expect.arrayContaining([...ROUTINE_TOOLS]));
 	for (const name of DEFERRED_TOOLS) expect(fresh).not.toContain(name);
-	expect(await parentTools()).toEqual(expect.arrayContaining([...ROUTINE_TOOLS]));
+	const afterTurn = await parentTools();
+	expect(afterTurn).toEqual(expect.arrayContaining([...ROUTINE_TOOLS]));
+	for (const name of DEFERRED_TOOLS) expect(afterTurn).not.toContain(name);
 });
 
 it.each([
