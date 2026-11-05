@@ -6,6 +6,7 @@ export const READY_PLAN_ACTIONS = [
   "implement-here",
   "implement-fresh",
   "export",
+  "edit",
   "save",
   "stay",
   "exit",
@@ -18,6 +19,7 @@ const READY_PLAN_LABELS: Record<ReadyPlanAction, string> = {
   "implement-here": "Implement here",
   "implement-fresh": "Start fresh and implement",
   export: "Export plan…",
+  edit: "Edit plan…",
   save: "Save for later",
   stay: "Stay in Plan mode",
   exit: "Discard plan and exit",
@@ -27,7 +29,8 @@ const READY_PLAN_LABELS: Record<ReadyPlanAction, string> = {
  * Shows the compact ready-plan action chooser used in fullscreen TUI sessions.
  *
  * Escape resolves to `stay` (keep the plan, remain in Plan mode), Ctrl+C closes with no action,
- * and the plan is only discarded through the explicit `exit` item.
+ * Ctrl+G resolves to `edit` (the same key core uses for its external editor), and the plan is only
+ * discarded through the explicit `exit` item.
  */
 export async function chooseReadyPlanAction(ctx: ExtensionContext): Promise<ReadyPlanAction | undefined> {
   if (ctx.mode !== "tui" || !ctx.hasUI) return undefined;
@@ -88,6 +91,10 @@ export async function chooseReadyPlanAction(ctx: ExtensionContext): Promise<Read
       handleInput(data: string) {
         if (matchesKey(data, Key.ctrl("c"))) {
           finish(undefined);
+          return;
+        }
+        if (matchesKey(data, Key.ctrl("g"))) {
+          finish("edit");
           return;
         }
         if (keybindings.matches(data, "tui.select.cancel")) {

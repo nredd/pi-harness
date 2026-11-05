@@ -45,7 +45,7 @@ function assertImplementationChoiceCopy(title: string, options: string[]) {
     options.filter((option) => IMPLEMENTATION_CHOICES.includes(option)),
     IMPLEMENTATION_CHOICES,
   );
-  assert.ok(options.length <= 8, "seven actions plus the Pi TUI Kit Close route");
+  assert.ok(options.length <= 9, "eight actions plus the Pi TUI Kit Close route");
 }
 
 test("user-opened ready menu presents both implementation contexts in one flat group", async () => {
@@ -103,6 +103,7 @@ test("Escape stays in Plan mode, Ctrl-C closes with no action, and only the menu
       planThinkingLevel: undefined,
       implementationOutcome: () => "Plan reinjection: Until /plan exit\u001b]8;;unsafe\u0007.",
       getExportDestination: () => ({ configuredPath: "PLAN.md", resolvedPath: "/tmp/PLAN.md" }),
+      edit: async () => undefined,
       show: () => {
         actions.push("show");
       },
