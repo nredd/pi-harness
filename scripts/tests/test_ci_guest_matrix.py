@@ -2048,6 +2048,7 @@ def test_failed_capture_exports_scanned_guest_state(tmp_path: Path, case: str, h
     env |= {
         "WSL_HOST_WORKSPACE": str(tmp_path / "host"),
         "WSL_HOST_TEMP": str(host_temp),
+        "WSL_JOB_STATUS": "failure",
         "PATH": f"{tmp_path / 'commands'}{os.pathsep}{env['PATH']}",
     }
     (ti / "tool-path").write_text(env["PATH"])
@@ -2065,35 +2066,56 @@ def test_failed_capture_exports_scanned_guest_state(tmp_path: Path, case: str, h
     assert "synthetic-sentinel" not in exported + result.stdout + result.stderr
     assert credential not in exported + result.stdout + result.stderr
     if heading != "withheld":
-        assert exported.startswith("WSL guest state after failure status 47 at ")
+        assert exported.startswith("WSL guest state at ")
+        assert exported.splitlines()[0].endswith(" (UTC): guest status 47, job status failure")
         for section in ("/proc/meminfo", "/proc/swaps", "/proc/pressure/memory", "/proc/loadavg"):
             assert f"== {section} ==" in exported
         assert "== /proc/vmstat (swap, reclaim, OOM) ==" in exported
     assert "status 47" in (host_temp / "wsl2-diagnostics/capture-status.txt").read_text()
 
 
-def test_successful_capture_collects_no_guest_state(tmp_path: Path) -> None:
-    """Keep guest-state collection on the failure path: a green guest never reads the kernel log.
+@pytest.mark.parametrize(
+    ("job_status", "collected"), [("cancelled", True), ("failure", True), ("success", False), ("", False)]
+)
+def test_job_status_alone_triggers_guest_state(tmp_path: Path, job_status: str, collected: bool) -> None:
+    """Collect after a timeout or cancel that killed the guest step before it wrote first-failure.
+
+    A green guest with a green job never reads the kernel log. The job status never changes the
+    capture's own exit status.
 
     Parameters:
         tmp_path (Path): Disposable guest and host directories.
+        job_status (str): The caller's `job.status`; empty when an older caller passes none.
+        collected (bool): Guest state is expected.
     """
     worktree, env = guest_fixture(tmp_path)
     (worktree / "scripts").mkdir()
     shutil.copyfile(ROOT / "scripts/wsl2_cleanup.sh", worktree / "scripts/wsl2_cleanup.sh")
-    marker = stub_guest_state_commands(tmp_path / "commands", sudo=True, dmesg=True)
+    shutil.copytree(
+        ROOT / "integration/harness",
+        worktree / "integration/harness",
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+    marker = stub_guest_state_commands(tmp_path / "commands", dmesg=True)
     host_temp = tmp_path / "host/temp"
     (host_temp / "wsl2-diagnostics").mkdir(parents=True)
     env |= {
         "WSL_HOST_WORKSPACE": str(tmp_path / "host"),
         "WSL_HOST_TEMP": str(host_temp),
+        "WSL_JOB_STATUS": job_status,
         "PATH": f"{tmp_path / 'commands'}{os.pathsep}{env['PATH']}",
     }
     (worktree / ".ci-temp/tool-path").write_text(env["PATH"])
     command = ["/bin/bash", str(ROOT / "scripts/wsl2_capture.sh"), "cleanup"]
     subprocess.run(command, env=env, capture_output=True, text=True, check=True)
-    assert not marker.exists()
-    assert not (host_temp / "wsl2-diagnostics/guest-state.txt").exists()
+    assert not (worktree / ".ci-temp/first-failure").exists()
+    assert marker.exists() is collected
+    exported = host_temp / "wsl2-diagnostics/guest-state.txt"
+    assert exported.exists() is collected
+    if collected:
+        text = exported.read_text()
+        assert text.splitlines()[0].endswith(f" (UTC): guest status 0, job status {job_status}")
+        assert "== dmesg unprivileged (last 400 lines) ==" in text
     assert "status 0" in (host_temp / "wsl2-diagnostics/capture-status.txt").read_text()
 
 
