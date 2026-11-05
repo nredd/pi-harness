@@ -36,7 +36,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 TESTED_DOCUMENTATION = frozenset({"README.md", "packages/preset/README.md"})
 # Tool pins and root manifests read by both the WSL bootstrap and the stack job.
 TOOLCHAIN_INPUTS = frozenset(
-    {"Makefile", "package.json", ".gitmodules", ".node-version", ".bun-version", ".python-version"}
+    {"Makefile", "package.json", ".npmrc", ".gitmodules", ".node-version", ".bun-version", ".python-version"}
 )
 WSL_INPUT_FILES = TOOLCHAIN_INPUTS | {
     ".gitattributes",
