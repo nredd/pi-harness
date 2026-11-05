@@ -19,6 +19,7 @@ import { createMockContext, createMockPi } from "./support.js";
 const BASE_STATE: PlanModeState = {
   enabled: false,
   awaitingAction: false,
+  declinedPlans: 0,
 };
 
 function fgTrackingTheme() {

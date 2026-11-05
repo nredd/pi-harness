@@ -9,7 +9,7 @@ import { debuglog } from "node:util";
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { canRetryInForeground, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, type ActionState, type PreparedAction } from "./actions.ts";
 import { cdpClickForContext, cdpDragForContext, cdpEvaluateForContext, cdpKeypressForContext, cdpMouseForContext, cdpNavigateContext, cdpScrollForContext, cdpSnapshotForContext, cdpTabForWindow, cdpTypeFocusedForContext, cdpTypeForContext, disconnectCdp, listCdpPageContexts, type CdpConsoleEntry, type CdpPageSnapshot } from "./cdp.ts";
-import { getComputerUseConfig, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig } from "./config.ts";
+import { type ComputerUseConfig, getComputerUseConfig, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig } from "./config.ts";
 import { normalizeFindParams } from "./find-params.ts";
 import { noteAfterAct, noteFromLook, noteRegionKeyForRef, renderNote, type WindowNote } from "./note.ts";
 import { controlLine, foldToBudget, graftScopedOutline, nodeByRef, outlineNodeLabel, outlineNodePath, rankedTextMatch, renderInteractiveControls, restoreOutline, searchOutline, searchOutlineRanked, serializeOutline, serializeOutlineNodeShallow, serializeOutlineSearchMatch, type LookResponse, type Outline, type OutlineChange, type OutlineDiff, type OutlineNode, type OutlineSearchMatch, type SerializedOutline, type SerializedOutlineNode, type SerializedOutlineSearchMatch } from "./outline.ts";
@@ -283,7 +283,6 @@ interface RuntimeState {
 	browserContextByRoot: Map<string, string>;
 	nextRootRefIndex: number;
 	managedBrowser?: ChildProcess;
-	managedBrowserProfileDir?: string;
 	managedBrowserCdpPort?: string;
 	previousCdpPort?: string;
 	permissionStatus?: PermissionStatus;
@@ -348,17 +347,8 @@ export async function shutdownComputerUseSession(): Promise<void> {
 	resourceScheduler = new ResourceScheduler();
 	disconnectCdp();
 
-	const managedBrowser = runtimeState.managedBrowser;
-	const managedBrowserProfileDir = runtimeState.managedBrowserProfileDir;
-	runtimeState.managedBrowser = undefined;
-	runtimeState.managedBrowserProfileDir = undefined;
-	if (managedBrowser && managedBrowserProfileDir) await stopManagedBrowser(managedBrowser, managedBrowserProfileDir);
-	if (runtimeState.managedBrowserCdpPort && process.env.PI_COMPUTER_USE_CDP_PORT === runtimeState.managedBrowserCdpPort) {
-		if (runtimeState.previousCdpPort === undefined) delete process.env.PI_COMPUTER_USE_CDP_PORT;
-		else process.env.PI_COMPUTER_USE_CDP_PORT = runtimeState.previousCdpPort;
-	}
-	runtimeState.managedBrowserCdpPort = undefined;
-	runtimeState.previousCdpPort = undefined;
+	// Waits for a `launch_browser` already stopping, creating or spawning a browser, then stops what it produced.
+	await withManagedBrowserLifecycle(releaseManagedBrowser);
 
 	savedStates.clear();
 	clearStoredOutputs();
@@ -2156,7 +2146,7 @@ async function performAct(params: ActParams, signal?: AbortSignal): Promise<Agen
 	return await performDesktopTransaction(params, actions, signal);
 }
 
-function managedBrowserExecutableCandidates(browser: "helium" | "chrome"): string[] {
+function managedBrowserExecutableCandidates(browser: ComputerUseConfig["managed_browser"]): string[] {
 	const overrideName = browser === "helium" ? "PI_COMPUTER_USE_HELIUM_EXECUTABLE" : "PI_COMPUTER_USE_CHROME_EXECUTABLE";
 	const override = trimOrUndefined(process.env[overrideName]);
 	if (override) return [path.resolve(override)];
@@ -2206,7 +2196,7 @@ function managedBrowserExecutableCandidates(browser: "helium" | "chrome"): strin
 	return [...new Set([...platformCandidates.filter((candidate): candidate is string => Boolean(candidate)), ...pathCandidates])];
 }
 
-async function managedBrowserExecutable(browser: "helium" | "chrome"): Promise<string> {
+async function managedBrowserExecutable(browser: ComputerUseConfig["managed_browser"]): Promise<string> {
 	const candidates = managedBrowserExecutableCandidates(browser);
 	for (const candidate of candidates) {
 		try {
@@ -2324,12 +2314,21 @@ function waitForClose(child: ChildProcess, timeoutMs: number): Promise<boolean> 
 }
 
 /**
+ * Find the tracked profile dir a managed browser was launched with.
+ * @param browser Managed browser process.
+ * @returns Its profile dir, or `undefined` once that dir has been removed.
+ */
+function profileDirOf(browser: ChildProcess): string | undefined {
+	for (const [profileDir, owner] of liveProfileDirs) if (owner === browser) return profileDir;
+	return undefined;
+}
+
+/**
  * Stop a managed browser and delete its profile before returning. The browser is `unref()`ed, so
  * without this wait Pi exits before `close` fires and the profile, cookies included, stays behind.
- * @param browser Managed browser process.
- * @param profileDir Its private profile dir.
+ * @param browser Managed browser process; its profile dir is looked up in `liveProfileDirs`.
  */
-async function stopManagedBrowser(browser: ChildProcess, profileDir: string): Promise<void> {
+async function stopManagedBrowser(browser: ChildProcess): Promise<void> {
 	const terminated = waitForClose(browser, MANAGED_BROWSER_EXIT_TIMEOUT_MS);
 	browser.kill("SIGTERM");
 	if (!(await terminated)) {
@@ -2338,38 +2337,71 @@ async function stopManagedBrowser(browser: ChildProcess, profileDir: string): Pr
 		browser.kill("SIGKILL");
 		if (!(await killed)) debugLog("managed browser %d still running after SIGKILL", browser.pid);
 	}
-	await removeProfileDir(profileDir);
+	// The `close` listener usually removed it already; a failed removal is still tracked and retried here.
+	const profileDir = profileDirOf(browser);
+	if (profileDir) await removeProfileDir(profileDir);
 }
 
-// Side effects: starts a Pi-managed browser process, replaces any previous managed browser,
-// and sets PI_COMPUTER_USE_CDP_PORT for subsequent CDP context discovery.
-async function performLaunchBrowser(params: LaunchBrowserParams, signal?: AbortSignal): Promise<AgentToolResult<BrowserObservationDetails>> {
-	const browser = getComputerUseConfig().managed_browser;
+/**
+ * Managed-browser lifecycle steps, chained so they never interleave. Tools run in parallel, and a
+ * launch or shutdown that ran while another launch was between stopping the old browser and
+ * recording the new one would miss a browser and leave it running until Pi exits.
+ */
+let managedBrowserLifecycle: Promise<void> = Promise.resolve();
+
+/**
+ * Run `step` once every earlier lifecycle step has settled.
+ * @param step Reads or replaces `runtimeState.managedBrowser`.
+ * @returns What `step` returns; its rejection does not block later steps.
+ */
+function withManagedBrowserLifecycle<T>(step: () => Promise<T>): Promise<T> {
+	const run = managedBrowserLifecycle.then(step);
+	managedBrowserLifecycle = run.then(
+		() => undefined,
+		() => undefined,
+	);
+	return run;
+}
+
+/**
+ * Forget the managed browser, restore the CDP port it replaced, then stop it and remove its profile.
+ * Call only inside `withManagedBrowserLifecycle`.
+ */
+async function releaseManagedBrowser(): Promise<void> {
+	const managedBrowser = runtimeState.managedBrowser;
+	runtimeState.managedBrowser = undefined;
+	if (runtimeState.managedBrowserCdpPort && process.env.PI_COMPUTER_USE_CDP_PORT === runtimeState.managedBrowserCdpPort) {
+		if (runtimeState.previousCdpPort === undefined) delete process.env.PI_COMPUTER_USE_CDP_PORT;
+		else process.env.PI_COMPUTER_USE_CDP_PORT = runtimeState.previousCdpPort;
+	}
+	runtimeState.managedBrowserCdpPort = undefined;
+	runtimeState.previousCdpPort = undefined;
+	if (managedBrowser) await stopManagedBrowser(managedBrowser);
+}
+
+/**
+ * Stop the previous managed browser, then start a new one with a private profile dir and record it.
+ * Call only inside `withManagedBrowserLifecycle`.
+ * @param browser Configured managed browser, which names the executable and the profile dir.
+ * @param url First page to open.
+ * @returns The spawned browser and its `--remote-debugging-port`, already recorded in `runtimeState`.
+ * @throws {Error} If no executable is found, or `mkdtemp` or a synchronous `spawn` fails; the new
+ * profile dir is removed first.
+ */
+async function startManagedBrowser(browser: ComputerUseConfig["managed_browser"], url: string): Promise<{ managedBrowser: ChildProcess; port: number }> {
 	const executable = await managedBrowserExecutable(browser);
 	const port = await freeTcpPort();
-	const requestedUrl = trimOrUndefined(params.url);
-	if (requestedUrl && !/^https?:\/\//i.test(requestedUrl)) throw new Error("launch_browser.url must be an absolute HTTP(S) URL.");
-	const url = requestedUrl ?? "about:blank";
+	disconnectCdp();
+	await releaseManagedBrowser();
 	// A fixed name in a shared temp dir can be owned or pre-seeded by another account, so each
 	// launch gets a private profile dir that lives exactly as long as its browser process.
 	const profileDir = await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`));
-	disconnectCdp();
-	runtimeState.managedBrowser?.kill("SIGTERM");
-	const args = [
-		`--remote-debugging-port=${port}`,
-		`--user-data-dir=${profileDir}`,
-		"--no-first-run",
-		"--no-default-browser-check",
-		url,
-	];
-	if (runtimeState.previousCdpPort === undefined && runtimeState.managedBrowserCdpPort === undefined) {
-		runtimeState.previousCdpPort = process.env.PI_COMPUTER_USE_CDP_PORT;
-	}
 	let managedBrowser: ChildProcess;
 	try {
+		const args = [`--remote-debugging-port=${port}`, `--user-data-dir=${profileDir}`, "--no-first-run", "--no-default-browser-check", url];
 		managedBrowser = spawn(executable, args, { stdio: "ignore", detached: false });
 	} catch (error) {
-		await rm(profileDir, { recursive: true, force: true });
+		await removeProfileDir(profileDir);
 		throw error;
 	}
 	// `close` also fires after an async spawn failure. Session shutdown waits for it and the exit hook
@@ -2377,22 +2409,32 @@ async function performLaunchBrowser(params: LaunchBrowserParams, signal?: AbortS
 	trackProfileDir(profileDir, managedBrowser);
 	managedBrowser.once("close", () => void removeProfileDir(profileDir));
 	managedBrowser.unref();
+	runtimeState.previousCdpPort = process.env.PI_COMPUTER_USE_CDP_PORT;
 	runtimeState.managedBrowser = managedBrowser;
-	runtimeState.managedBrowserProfileDir = profileDir;
 	runtimeState.managedBrowserCdpPort = String(port);
 	process.env.PI_COMPUTER_USE_CDP_PORT = String(port);
+	return { managedBrowser, port };
+}
+
+// Side effects: stops any previous managed browser (SIGTERM, then SIGKILL) and removes its profile,
+// creates a private profile dir under os.tmpdir() tracked in `liveProfileDirs` until removed,
+// installs the `exit` hook once, starts a Pi-managed browser process, and sets
+// PI_COMPUTER_USE_CDP_PORT for subsequent CDP context discovery. Waits for any earlier launch or
+// shutdown to finish its lifecycle step first.
+async function performLaunchBrowser(params: LaunchBrowserParams, signal?: AbortSignal): Promise<AgentToolResult<BrowserObservationDetails>> {
+	const requestedUrl = trimOrUndefined(params.url);
+	if (requestedUrl && !/^https?:\/\//i.test(requestedUrl)) throw new Error("launch_browser.url must be an absolute HTTP(S) URL.");
+	const browser = getComputerUseConfig().managed_browser;
+	// Joins the lifecycle chain before the first `await`, so a shutdown called after this launch
+	// always runs after it and stops the browser it starts.
+	const { managedBrowser, port } = await withManagedBrowserLifecycle(async () => await startManagedBrowser(browser, requestedUrl ?? "about:blank"));
 	try {
 		await waitForCdpPort(port, signal);
 	} catch (error) {
-		if (runtimeState.managedBrowser === managedBrowser) {
-			runtimeState.managedBrowser = undefined;
-			runtimeState.managedBrowserProfileDir = undefined;
-			managedBrowser.kill("SIGTERM");
-			if (runtimeState.previousCdpPort === undefined) delete process.env.PI_COMPUTER_USE_CDP_PORT;
-			else process.env.PI_COMPUTER_USE_CDP_PORT = runtimeState.previousCdpPort;
-			runtimeState.managedBrowserCdpPort = undefined;
-			runtimeState.previousCdpPort = undefined;
-		}
+		// A later launch or a shutdown that already took this browser over has stopped it.
+		await withManagedBrowserLifecycle(async () => {
+			if (runtimeState.managedBrowser === managedBrowser) await releaseManagedBrowser();
+		});
 		throw error;
 	}
 	const page = (await listCdpPageContexts())[0];

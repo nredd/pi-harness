@@ -282,6 +282,46 @@ describe("FleetList detached agents", () => {
 });
 
 describe("FleetList navigation", () => {
+  it.each([1, 5, 6, 8])("keeps expanded content contiguous with %i children (#552)", count => {
+    const h = harness(Array.from({ length: count }, (_, i) => makeRecord({ id: `child-${i}`, description: `child ${i}` })));
+    try {
+      for (const width of [80, 120, 200]) {
+        const lines = h.render(width).map(plain);
+        const main = lines.findIndex(line => line.includes(" main"));
+        expect(main).toBeGreaterThanOrEqual(0);
+        expect(lines[main + 1]).toContain("running");
+        if (width >= 120) expect(lines[main + 1]).toContain("child 0");
+      }
+      h.press(DOWN); // activate main
+      for (let selection = 0; selection <= count; selection++) {
+        const lines = h.render().map(plain);
+        const main = lines.findIndex(line => line.includes(" main"));
+        const lastContent = lines.findLastIndex(line => line.trim() !== "");
+        expect(lines.slice(main, lastContent + 1).every(line => line.trim() !== "")).toBe(true);
+        expect(lines).toHaveLength(4 + Math.min(count, 5));
+        expect(lines.some(line => line.includes("●") && line.includes(selection ? `child ${selection - 1}` : " main"))).toBe(true);
+        h.press(DOWN);
+      }
+      h.press(ESC);
+      h.press("\x1b[97;6u");
+      expect(h.render()).toHaveLength(1);
+    } finally {
+      h.fleet.dispose();
+    }
+  });
+
+  it("keeps a workflow immediately after main in an overflowing mixed fleet (#552)", () => {
+    const h = harness(Array.from({ length: 6 }, (_, i) => makeRecord({ id: `child-${i}` })));
+    try {
+      h.setWorkflows([makeWorkflow({ name: "first workflow" })]);
+      const lines = h.render().map(plain);
+      const main = lines.findIndex(line => line.includes(" main"));
+      expect(lines[main + 1]).toContain("first workflow");
+    } finally {
+      h.fleet.dispose();
+    }
+  });
+
   it("does not register a widget when there are no agents", () => {
     const h = harness([]);
     expect(h.render()).toEqual([]);
@@ -644,7 +684,8 @@ describe("FleetList rendering", () => {
     const many = harness(Array.from({ length: 8 }, (_, i) =>
       makeRecord({ id: `a${i}`, description: `report ${i}` }))).render(120);
     expect(many.at(-1)).toBe("");
-    expect(many.at(-2)).toContain("↓ 5 more");
+    expect(many.at(-2)).toBe(""); // unused upper-indicator slot stays below content
+    expect(many.at(-3)).toContain("↓ 5 more");
   });
 
   it("never emits a line wider than the terminal (guards wrap-induced flicker)", () => {

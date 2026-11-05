@@ -43,7 +43,9 @@ function setup() {
 	const cmd = captured.commands.get("todos");
 	if (!tool || !cmd) throw new Error("todo tool or command not registered");
 	const emit = async (channel: string, payload: Record<string, unknown>) => {
-		for (const h of bus.get(channel) ?? []) await h(payload);
+		// Existing lifecycle fixtures represent background agents unless a test says otherwise.
+		const event = { wakesParent: true, ...payload };
+		for (const h of bus.get(channel) ?? []) await h(event);
 	};
 	const call = (ctx: Ctx, params: Record<string, unknown>) =>
 		tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx as never);
@@ -330,6 +332,21 @@ describe("repeated settles during background work (#448)", () => {
 			`Run ended with 1 in_progress todo, ${ARMED}; held by the parent: #1 Audit auth (@scout done)`,
 			"warning",
 		]);
+	});
+
+	it("repeats a warning for a silent agent, then dedupes after a verified handoff", async () => {
+		const h = setup();
+		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		await ownedTodo(h, ctx, "scout");
+		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "scout", wakesParent: false, runSeq: 10 });
+		expect((await settle(h, ctx))[0]?.[1]).toBe("warning");
+		expect((await settle(h, ctx))[0]?.[1]).toBe("warning");
+		await h.emit(SUBAGENT_CREATED_EVENT, { id: "a1", backgroundHandoff: true, runSeq: 9 });
+		expect((await settle(h, ctx))[0]?.[1]).toBe("warning");
+		await h.emit(SUBAGENT_CREATED_EVENT, { id: "a1", backgroundHandoff: true, runSeq: 10 });
+		expect((await settle(h, ctx))[0]?.[1]).toBe("info");
+		await h.emit(SUBAGENT_CREATED_EVENT, { id: "a1", backgroundHandoff: true, runSeq: 10 });
+		expect(await settle(h, ctx)).toEqual([]);
 	});
 
 	it("counts a queued Agent spawn with running, then follows started and completed", async () => {

@@ -40,3 +40,33 @@ it("refuses a physical transport core cannot authenticate", async () => {
 		physical.unregister();
 	}
 });
+
+it("serves cached usage stamped at the fake clock, refreshing only on a fresh read", async () => {
+	const clock = new FakeClock();
+	const usage = new StackUsage(clock);
+	usage.set("anthropic", 40);
+	clock.advance(5_000);
+	// A fresh read with no listener still answers from the cache.
+	expect(await usage.get(ctx as ExtensionContext, "anthropic", { fresh: true })).toMatchObject({
+		provider: "anthropic",
+		retrievedAt: clock.now(),
+	});
+	const refreshed: string[] = [];
+	usage.onRefresh = (provider) => refreshed.push(provider);
+	await usage.get(ctx as ExtensionContext, "anthropic");
+	await usage.get(ctx as ExtensionContext, "anthropic", { fresh: false });
+	expect(refreshed).toEqual([]);
+	await usage.get(ctx as ExtensionContext, "anthropic", { fresh: true });
+	expect(refreshed).toEqual(["anthropic"]);
+	expect(usage.reads).toEqual([
+		{ provider: "anthropic", options: { fresh: true } },
+		{ provider: "anthropic", options: {} },
+		{ provider: "anthropic", options: { fresh: false } },
+		{ provider: "anthropic", options: { fresh: true } },
+	]);
+});
+
+it("refuses a usage read for a provider it never seeded", async () => {
+	const usage = new StackUsage(new FakeClock());
+	await expect(usage.get(ctx as ExtensionContext, "openai-codex")).rejects.toThrow("Missing usage for 'openai-codex'");
+});

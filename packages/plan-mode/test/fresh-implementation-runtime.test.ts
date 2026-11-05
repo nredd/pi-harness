@@ -211,6 +211,7 @@ test("clear-on-start persists only temporary runtime intent when an override is 
   assert.deepEqual(destinationState, {
     enabled: false,
     awaitingAction: false,
+    declinedPlans: 0,
     pendingImplementationRuntime: { version: 1, thinkingLevel: "medium" },
   });
 });

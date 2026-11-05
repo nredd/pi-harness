@@ -1,6 +1,6 @@
 /**
  * Last known state of each session's top-level subagents, fed by pi-subagents'
- * lifecycle events on `pi.events`: `created` -> `queued` (first heard only), `started` ->
+ * lifecycle events on `pi.events`: `created` -> `queued` (first heard or a verified queued resume), `started` ->
  * `running`, `completed` -> `done`, `failed` -> `failed` or `stopped`. A todo's free-text `owner` is matched
  * against an agent's id, `handle`, `name`, `nameBase` or a reopened agent's previous id,
  * purely for display: nothing here reads or writes any todo list, so a child
@@ -29,7 +29,9 @@ import {
 export type AgentRunState = "queued" | "running" | "done" | "failed" | "stopped";
 
 /** Looks up an owner's agent state; injectable so history and tests stay deterministic. */
-export type AgentStateLookup = (owner: string | undefined) => AgentRunState | undefined;
+export type AgentStateLookup = ((owner: string | undefined) => AgentRunState | undefined) & {
+	wakesParent?: (owner: string | undefined) => boolean;
+};
 
 interface AgentEntry {
 	/** Exact match keys: the id, every previous id, `handle` and `name`. */
@@ -50,6 +52,10 @@ interface AgentEntry {
 	/** The latest settle: pi-subagents' `settleSeq` (same counter as `spawnSeq`) and this tracker's sequence. */
 	settleSeq?: number;
 	settledAt?: number;
+	/** Sequence of a queued resume, so older sibling retries cannot mask it. */
+	queuedResumeSeq?: number;
+	wakesParent: boolean;
+	runSeq?: number;
 }
 
 /** Bound memory in a long session; the oldest-updated agents drop first. */
@@ -82,7 +88,7 @@ export function ownerKey(value: unknown): string | undefined {
 }
 
 /**
- * `subagents:created` reads `queued`; it only ever opens an entry, see `applyAgentEvent`.
+ * `subagents:created` reads `queued`; an existing entry requires a matching prior settle, see `applyAgentEvent`.
  * `subagents:failed` covers error, abort and stop. A stop is someone's
  * decision rather than a fault, so it reads `stopped`; the rest read `failed`.
  */
@@ -99,9 +105,9 @@ function stateFor(channel: string, status: unknown): AgentRunState | undefined {
  * agent's tracked state or identity changed, so the caller refreshes the
  * overlay only then. A `previousId` (an evicted agent reopened under a new id)
  * folds the old entry into the new one, so an owner set to the old id follows
- * the conversation. A `created` for an id already heard (a detached resume or a foreground
- * handoff re-announcing it after `started`) changes nothing. Malformed payloads and unknown
- * channels are ignored.
+ * the conversation. A `created` for an id already heard changes nothing unless it identifies the
+ * exact prior settle of a queued resume. This rejects late re-announcements after a newer settle.
+ * Malformed payloads and unknown channels are ignored.
  */
 export function applyAgentEvent(sessionId: string, channel: string, payload: unknown): boolean {
 	if (!payload || typeof payload !== "object") return false;
@@ -116,7 +122,28 @@ export function applyAgentEvent(sessionId: string, channel: string, payload: unk
 	}
 	const previous = agents.get(data.id);
 	const predecessor = typeof data.previousId === "string" ? agents.get(data.previousId) : undefined;
-	if (state === "queued" && (previous || predecessor)) return false;
+	if (
+		state === "queued" &&
+		previous?.state === "running" &&
+		data.backgroundHandoff === true &&
+		previous.runSeq !== undefined &&
+		data.runSeq === previous.runSeq
+	) {
+		if (previous.wakesParent) return false;
+		previous.wakesParent = true;
+		return true;
+	}
+	if (state === "queued" && (previous || predecessor)) {
+		const prior = previous ?? predecessor;
+		const resumeSeq = sequenceField(data.queuedResumeSeq);
+		if (
+			prior?.settleSeq === undefined ||
+			data.queuedAfterSettleSeq !== prior.settleSeq ||
+			resumeSeq === undefined ||
+			resumeSeq <= prior.settleSeq
+		)
+			return false;
+	}
 	// A later payload without a field keeps the identity an earlier one gave.
 	const keys = new Set([...(predecessor?.keys ?? []), ...(previous?.keys ?? [])]);
 	for (const value of [data.id, data.previousId, data.handle, data.name]) {
@@ -137,7 +164,22 @@ export function applyAgentEvent(sessionId: string, channel: string, payload: unk
 		: (sequenceField(data.settleSeq) ?? (repeated ? previous.settleSeq : undefined));
 	if (typeof data.previousId === "string") agents.delete(data.previousId);
 	agents.delete(data.id);
-	agents.set(data.id, { keys, nameBase, state, spawnSeq, firstSeenAt, startedAt, settleSeq, settledAt });
+	const queuedResumeSeq = state === "queued" ? sequenceField(data.queuedResumeSeq) : undefined;
+	const wakesParent = data.wakesParent === true;
+	const runSeq = sequenceField(data.runSeq);
+	agents.set(data.id, {
+		keys,
+		nameBase,
+		state,
+		spawnSeq,
+		firstSeenAt,
+		startedAt,
+		settleSeq,
+		settledAt,
+		queuedResumeSeq,
+		wakesParent,
+		runSeq,
+	});
 	while (agents.size > MAX_TRACKED_AGENTS) {
 		const oldest = agents.keys().next().value as string;
 		agents.delete(oldest);
@@ -146,7 +188,8 @@ export function applyAgentEvent(sessionId: string, channel: string, payload: unk
 		previous === undefined ||
 		previous.state !== state ||
 		previous.keys.size !== keys.size ||
-		previous.nameBase !== nameBase
+		previous.nameBase !== nameBase ||
+		previous.wakesParent !== wakesParent
 	);
 }
 
@@ -170,6 +213,8 @@ function spawnedAfterSettle(candidate: AgentEntry, owner: AgentEntry): boolean {
  * it, else by this tracker's order of first events.
  */
 function spawnedAfter(candidate: AgentEntry, owner: AgentEntry): boolean {
+	if (candidate.spawnSeq !== undefined && owner.queuedResumeSeq !== undefined)
+		return candidate.spawnSeq > owner.queuedResumeSeq;
 	if (candidate.spawnSeq !== undefined && owner.spawnSeq !== undefined) return candidate.spawnSeq > owner.spawnSeq;
 	return candidate.firstSeenAt > owner.firstSeenAt;
 }
@@ -183,21 +228,25 @@ function latestSettled(entries: readonly AgentEntry[]): AgentEntry | undefined {
 }
 
 /** The state of the agent in `sessionId` that `owner` names, per `docs/overlay.md#owner-match-rule`. */
-export function agentStateFor(sessionId: string, owner: string | undefined): AgentRunState | undefined {
+function agentEntryFor(sessionId: string, owner: string | undefined): AgentEntry | undefined {
 	const wanted = ownerKey(owner);
 	const agents = sessions.get(sessionId);
 	if (!wanted || !agents) return undefined;
 	const entries = [...agents.values()].reverse();
 	const exact = entries.find((entry) => entry.keys.has(wanted));
 	const byBase = entries.filter((entry) => entry !== exact && entry.nameBase === wanted);
-	if (!exact) return byBase[0]?.state;
+	if (!exact) return byBase[0];
 	// A queued exact match may never run; a retry spawned after it that already settled says more.
-	if (exact.state === "queued")
-		return latestSettled(byBase.filter((entry) => spawnedAfter(entry, exact)))?.state ?? exact.state;
-	if (exact.settledAt === undefined) return exact.state;
+	if (exact.state === "queued") return latestSettled(byBase.filter((entry) => spawnedAfter(entry, exact))) ?? exact;
+	if (exact.settledAt === undefined) return exact;
 	const retries = byBase.filter((entry) => spawnedAfterSettle(entry, exact));
 	retries.sort((a, b) => b.startedAt - a.startedAt);
-	return retries[0]?.state ?? exact.state;
+	return retries[0] ?? exact;
+}
+
+/** The state of the matching agent, if any. */
+export function agentStateFor(sessionId: string, owner: string | undefined): AgentRunState | undefined {
+	return agentEntryFor(sessionId, owner)?.state;
 }
 
 /** The lookup for a surface with no live agent state: owners render alone. */
@@ -205,7 +254,9 @@ export const NO_AGENT_STATE: AgentStateLookup = () => undefined;
 
 /** Bind `agentStateFor` to one session. */
 export function agentLookup(sessionId: string): AgentStateLookup {
-	return (owner) => agentStateFor(sessionId, owner);
+	return Object.assign((owner: string | undefined) => agentStateFor(sessionId, owner), {
+		wakesParent: (owner: string | undefined) => agentEntryFor(sessionId, owner)?.wakesParent === true,
+	});
 }
 
 /** Drop everything `sessionId` tracked; called when that session shuts down. */

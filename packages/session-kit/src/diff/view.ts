@@ -10,7 +10,7 @@ export function sanitize(text: string, tabWidth = TAB_WIDTH): string {
 	let out = "";
 	let col = 0;
 	for (const ch of text) {
-		const code = ch.codePointAt(0) ?? 0;
+		const code = ch.codePointAt(0) as number;
 		if (ch === "\t") {
 			const pad = tabWidth - (col % tabWidth);
 			out += " ".repeat(pad);

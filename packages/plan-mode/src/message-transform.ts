@@ -39,7 +39,7 @@ export function parseProposedPlan(text: string): ProposedPlanParseResult {
 
   const matches = Array.from(text.matchAll(PROPOSED_PLAN_PATTERN));
   if (matches.length !== 1) return { kind: "malformed" };
-  const plan = matches[0]?.[1]?.trim() ?? "";
+  const plan = matches[0][1].trim();
   return plan ? { kind: "valid", plan } : { kind: "empty" };
 }
 

@@ -35,7 +35,7 @@ test("fresh state rejects missing plans before replacing a session", async () =>
   const context = fixture({ newSession: async () => assert.fail("must retain the current session") });
   assert.deepEqual(
     await startFreshImplementationFromState(context.ctx, {
-      getState: () => ({ enabled: true, awaitingAction: false }),
+      getState: () => ({ enabled: true, awaitingAction: false, declinedPlans: 0 }),
       menuIsCurrent: () => true,
       retention: "keep",
       stateEntryType: "state",

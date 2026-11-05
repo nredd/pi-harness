@@ -94,6 +94,31 @@ describe("/goal command", () => {
 		await goalCmd(fake, "resume");
 		expect(fake.notices.map((n) => n.type)).toEqual(["error", "error"]);
 	});
+	it("refuses to resume a budget-exhausted goal", async () => {
+		const fake = await boot();
+		await goalCmd(fake, "ship it --turns 1");
+		await fake.turnEnd();
+		await goalCmd(fake, "resume");
+		expect(fake.notices.at(-1)).toEqual({
+			message: "turns budget exhausted; start a new one with /goal <objective> --turns N",
+			type: "error",
+		});
+		expect(lastGoal(fake).status).toBe("budget");
+	});
+	it("clears with nothing set without writing an entry", async () => {
+		const fake = await boot();
+		await goalCmd(fake, "clear");
+		expect(fake.notices.at(-1)).toEqual({ message: "goal cleared", type: "info" });
+		expect(fake.entries).toHaveLength(0);
+	});
+	it("ignores /goal after the session renames itself into a child", async () => {
+		const fake = await boot();
+		fake.state.sessionName = "general-purpose#1a2b3c4d";
+		await goalCmd(fake, "ship it");
+		expect(fake.entries).toHaveLength(0);
+		expect(fake.notices).toHaveLength(0);
+		expect(fake.sent).toHaveLength(0);
+	});
 });
 
 describe("settle nudge", () => {
@@ -223,6 +248,7 @@ describe("budgets", () => {
 		expect(turnTokens({ role: "user" })).toBe(0);
 		expect(turnTokens(undefined)).toBe(0);
 		expect(turnTokens({ role: "assistant", usage: { input: 1, output: 2, cacheWrite: 3 } })).toBe(6);
+		expect(turnTokens({ role: "assistant", usage: {} })).toBe(0);
 	});
 });
 
@@ -284,6 +310,13 @@ describe("stops", () => {
 		await fake.emit("turn_start");
 		await fake.emit("agent_settled");
 		expect(lastGoal(fake).status).toBe("active");
+	});
+	it("ignores a stopped run when no goal is active", async () => {
+		const fake = await boot();
+		await fake.settle({ outcome: "aborted" });
+		await fake.emit("agent_settled");
+		expect(fake.entries).toHaveLength(0);
+		expect(fake.notices).toHaveLength(0);
 	});
 	it("does not pause when another handler (router) already continued the errored run", async () => {
 		const fake = await boot();
@@ -378,6 +411,14 @@ describe("background subagents", () => {
 		fake.emit("message_end", { message: { role: "custom", customType: "subagent-notification" } });
 		expect((await fake.settle())?.continue).toBe(true);
 	});
+	it("nudges after a queued background agent is stopped before starting", async () => {
+		const fake = await boot();
+		await goalCmd(fake, "ship it");
+		fake.events.emit("subagents:created", { id: "queued", isBackground: true });
+		expect(await fake.settle()).toBeUndefined();
+		fake.events.emit("subagents:failed", { id: "queued", status: "stopped" });
+		expect((await fake.settle())?.continue).toBe(true);
+	});
 	it("wakes itself when a finished agent's notice never comes", async () => {
 		const fake = await boot();
 		await goalCmd(fake, "ship it");
@@ -398,6 +439,24 @@ describe("background subagents", () => {
 		fake.state.idle = false;
 		await vi.advanceTimersByTimeAsync(WAKE_MS + 100);
 		expect(fake.sent).toHaveLength(1);
+	});
+	it("does not wake a goal that was paused after the wake was armed", async () => {
+		const fake = await boot();
+		await goalCmd(fake, "ship it");
+		fake.events.emit("subagents:started", { id: "a" });
+		await fake.settle();
+		await fake.emit("agent_settled");
+		fake.events.emit("subagents:completed", { id: "a" });
+		await goalCmd(fake, "pause");
+		await vi.advanceTimersByTimeAsync(WAKE_MS + 100);
+		expect(fake.sent).toHaveLength(1);
+	});
+	it("status says how many subagents the goal waits on", async () => {
+		const fake = await boot();
+		await goalCmd(fake, "ship it");
+		fake.events.emit("subagents:started", { id: "a" });
+		await goalCmd(fake, "status");
+		expect(fake.notices.at(-1)?.message).toMatch(/\nwaiting on 1 subagent\(s\)$/);
 	});
 	it("cancels the wake when a run starts", async () => {
 		const fake = await boot();

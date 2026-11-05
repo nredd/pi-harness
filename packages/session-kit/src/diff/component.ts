@@ -86,7 +86,8 @@ export class DiffView implements Component {
 			cached = { kinds: classifyLines(file), plain: file.lines.map((l) => sanitize(l)) };
 			this.rowCache.set(index, cached);
 		}
-		const rows: Row[] = cached.plain.map((text, i) => ({ text, kind: cached?.kinds[i] ?? "context" }));
+		const { kinds, plain } = cached;
+		const rows: Row[] = plain.map((text, i) => ({ text, kind: kinds[i] as LineKind }));
 		if (file.notice) rows.push({ text: `... ${file.notice}`, kind: "notice" });
 		return rows;
 	}

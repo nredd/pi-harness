@@ -9,6 +9,8 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import {
 	assertHostIdentity,
 	type Deadline,
+	holdWake,
+	isolateResearchPackages,
 	isolateStackHome,
 	loadFactory,
 	loadFork,
@@ -184,6 +186,69 @@ it("removes the fixture home when the wake helper cannot spawn", async () => {
 		rmSync(temp, { recursive: true, force: true });
 	}
 });
+
+it("holds no wake helper off macOS", () => {
+	for (const platform of ["linux", "win32", "freebsd"] as const) expect(holdWake(platform)).toBeUndefined();
+});
+
+it.skipIf(existsSync("/usr/bin/caffeinate"))("refuses a macOS fixture whose caffeinate is missing", async () => {
+	const temp = realpathSync(mkdtempSync(join(tmpdir(), "pi-wake-missing-")));
+	const previous = process.env.TMPDIR;
+	try {
+		process.env.TMPDIR = temp;
+		const attempt = isolateStackHome(() => holdWake("darwin"));
+		await expect(attempt).rejects.toThrow("Cannot hold macOS wake assertions for stack tests");
+		await expect(attempt).rejects.toHaveProperty("cause.code", "ENOENT");
+		expect(readdirSync(temp)).toEqual([]);
+	} finally {
+		if (previous === undefined) delete process.env.TMPDIR;
+		else process.env.TMPDIR = previous;
+		rmSync(temp, { recursive: true, force: true });
+	}
+});
+
+it("isolates without a wake helper and unsets on cleanup what was unset before", async () => {
+	const previous = { agent: process.env.PI_CODING_AGENT_DIR, xdg: process.env.XDG_CONFIG_HOME };
+	delete process.env.PI_CODING_AGENT_DIR;
+	delete process.env.XDG_CONFIG_HOME;
+	try {
+		const fixture = await isolateStackHome(() => undefined);
+		expect(process.env.PI_CODING_AGENT_DIR).toBe(join(fixture.root, "agent"));
+		expect(process.env.XDG_CONFIG_HOME).toBe(join(fixture.root, ".config"));
+		await fixture.cleanup();
+		expect("PI_CODING_AGENT_DIR" in process.env).toBe(false);
+		expect("XDG_CONFIG_HOME" in process.env).toBe(false);
+		expect(existsSync(fixture.root)).toBe(false);
+	} finally {
+		for (const [key, value] of [
+			["PI_CODING_AGENT_DIR", previous.agent],
+			["XDG_CONFIG_HOME", previous.xdg],
+		] as const) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+	}
+});
+
+for (const path of ["/usr/bin:/bin", undefined]) {
+	it(`puts the failing qmd first on ${path === undefined ? "an unset" : "the inherited"} PATH and restores it`, () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-research-path-"));
+		const previous = process.env.PATH;
+		try {
+			if (path === undefined) delete process.env.PATH;
+			else process.env.PATH = path;
+			const restore = isolateResearchPackages(root);
+			expect(process.env.PATH).toBe(path === undefined ? join(root, "bin") : `${join(root, "bin")}:${path}`);
+			restore();
+			expect(process.env.PATH).toBe(path);
+			expect("PATH" in process.env).toBe(path !== undefined);
+		} finally {
+			if (previous === undefined) delete process.env.PATH;
+			else process.env.PATH = previous;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+}
 
 it("refuses a fork that resolves its own host copy", () => {
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-host-copy-")));

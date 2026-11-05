@@ -321,7 +321,9 @@ export function register(pi: ExtensionAPI, _config: KitConfig, clock: Clock = re
 						"error",
 					);
 				}
-				if (command.kind === "resume") {
+				if (command.kind !== "set") {
+					// Fails typecheck when a new command kind reaches this resume path.
+					command.kind satisfies "resume";
 					if (!goal) return ctx.ui.notify("no goal to resume", "error");
 					const result = resumeGoal(goal);
 					if (!result.ok) return ctx.ui.notify(result.error, "error");
@@ -329,7 +331,6 @@ export function register(pi: ExtensionAPI, _config: KitConfig, clock: Clock = re
 					kickoff(ctx, kickoffPrompt(result.goal, true));
 					return;
 				}
-				if (command.kind !== "set") return;
 				const started = newGoal(command.objective, command.maxTurns, command.maxTokens);
 				commit(ctx, started);
 				kickoff(ctx, kickoffPrompt(started, false));

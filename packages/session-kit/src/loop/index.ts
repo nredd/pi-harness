@@ -20,19 +20,16 @@ export function register(pi: ExtensionAPI, _config: KitConfig, clock: Clock = re
 	let nextId = 1;
 
 	const stop = (id: string): void => {
-		const loop = loops.get(id);
-		if (!loop) return;
-		loop.timer.cancel();
+		loops.get(id)?.timer.cancel();
 		loops.delete(id);
 	};
 	const stopAll = (): void => {
 		for (const id of [...loops.keys()]) stop(id);
 	};
 
-	const tick = (id: string): void => {
-		const loop = loops.get(id);
-		const ctx = lastCtx;
-		if (!loop || !ctx) return;
+	/** Only a live interval calls this: `stop` cancels it, and its command set `lastCtx` first. */
+	const tick = (id: string, loop: { entry: LoopEntry }): void => {
+		const ctx = lastCtx as ExtensionContext;
 		try {
 			const decision = decideTick({
 				isChild: isChildSession(pi),
@@ -76,9 +73,8 @@ export function register(pi: ExtensionAPI, _config: KitConfig, clock: Clock = re
 		if (paused > 0) ctx.ui.notify(`loop paused (${paused}): ${reason}. /loop resume after resolving it`, "warning");
 	};
 
-	watchQuota(pi, (reason, ctx) => {
-		if (!isChildSession(pi)) pauseLoops(reason, ctx);
-	});
+	// `watchQuota` never reports into a child session.
+	watchQuota(pi, pauseLoops);
 
 	watchStops(pi, (outcome, ctx) => {
 		if (outcome !== "error" || isChildSession(pi)) return;
@@ -109,7 +105,9 @@ export function register(pi: ExtensionAPI, _config: KitConfig, clock: Clock = re
 					const lines = [...loops.values()].map(({ entry }) => describeLoop(entry));
 					return ctx.ui.notify(lines.length > 0 ? lines.join("\n") : "no loops", "info");
 				}
-				if (command.kind === "stop" || command.kind === "resume") {
+				if (command.kind !== "start") {
+					// Fails typecheck when a new command kind reaches this stop/resume path.
+					command.kind satisfies "stop" | "resume";
 					if (command.kind === "resume" && shared.quotaParked.size > 0)
 						return ctx.ui.notify("refused: quota dispatch is still parked. Resolve it before resuming loops", "error");
 					const ids = select(command.target);
@@ -121,7 +119,6 @@ export function register(pi: ExtensionAPI, _config: KitConfig, clock: Clock = re
 					}
 					return ctx.ui.notify(`${command.kind === "stop" ? "stopped" : "resumed"} ${ids.join(", ")}`, "info");
 				}
-				if (command.kind !== "start") return;
 				const id = String(nextId++);
 				const entry: LoopEntry = {
 					id,
@@ -132,8 +129,8 @@ export function register(pi: ExtensionAPI, _config: KitConfig, clock: Clock = re
 					runs: 0,
 					skipped: 0,
 				};
-				const timer = clock.setInterval(() => tick(id), command.intervalMs);
-				loops.set(id, { entry, timer });
+				const loop = { entry, timer: clock.setInterval(() => tick(id, loop), command.intervalMs) };
+				loops.set(id, loop);
 				ctx.ui.notify(`loop ${id}: every ${formatInterval(command.intervalMs)}, max ${command.maxRuns} runs`, "info");
 				if (command.intervalMs > CACHE_WARM_MS) {
 					ctx.ui.notify(

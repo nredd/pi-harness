@@ -10,7 +10,7 @@ test("stale Plan actions do not load interactive UI", async () => {
       interactiveLoads += 1;
       return {} as never;
     },
-    getState: () => ({ enabled: false, awaitingAction: false }),
+    getState: () => ({ enabled: false, awaitingAction: false, declinedPlans: 0 }),
     captureLifecycle: () => ({
       signal: new AbortController().signal,
       isCurrent: () => false,
@@ -67,6 +67,7 @@ test("user-opened fresh actions stop after menu disposal", async () => {
     getState: () => ({
       enabled: true,
       awaitingAction: true,
+      declinedPlans: 0,
       latestPlan: "# Plan",
       latestPlanSource: "plan_mode_complete",
     }),
@@ -136,6 +137,7 @@ test("saved-plan fresh actions use persistent defaults and fall back from missin
       getState: () => ({
         enabled: false,
         awaitingAction: false,
+        declinedPlans: 0,
         savedPlan: { plan: "# Plan", source: "plan_mode_complete" },
       }),
       captureLifecycle: () => ({
