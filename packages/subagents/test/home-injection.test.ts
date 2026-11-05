@@ -34,6 +34,18 @@ let home: string;
 let cwd: string;
 let previousAgentDir: string | undefined;
 
+/**
+ * Filesystem probes under the real home, excluding the injected home. The injected home may
+ * itself live under the real home (e.g. `TMPDIR=$HOME/tmp`), so its subtree is not a leak.
+ */
+function realHomeProbes(): string[] {
+  const within = (path: string, root: string) => path === root || path.startsWith(root + sep);
+  const realHome = resolve(homedir());
+  const injected = resolve(home);
+  const paths = probes.flatMap(probe => vi.mocked(probe).mock.calls.map(call => resolve(String(call[0]))));
+  return paths.filter(path => within(path, realHome) && !within(path, injected));
+}
+
 function write(path: string, content: string) {
   fs.mkdirSync(dirname(path), { recursive: true });
   fs.writeFileSync(path, content);
@@ -53,9 +65,7 @@ afterEach(() => {
   // Assert even when a production catch swallows a filesystem error. Do not
   // replace the real home or rely on HOME having been set before Bun launched.
   try {
-    const realHome = resolve(homedir());
-    const paths = probes.flatMap(probe => vi.mocked(probe).mock.calls.map(call => resolve(String(call[0]))));
-    expect(paths.filter(path => path === realHome || path.startsWith(realHome + sep))).toEqual([]);
+    expect(realHomeProbes()).toEqual([]);
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -65,6 +75,13 @@ afterEach(() => {
 });
 
 describe("home injection without real-home filesystem access", () => {
+  it("detects a probe of the real home even while an injected home is active", () => {
+    // Omitting `homeDir` falls back to the native home, which the guard must catch.
+    resolveMemoryDir("home-injection-guard", "user", cwd);
+    expect(realHomeProbes()).toContain(resolve(homedir(), ".pi", "agent-memory", "home-injection-guard"));
+    vi.clearAllMocks();
+  });
+
   it("reads both memory APIs and the legacy fallback only under the injected home", () => {
     const legacy = join(home, ".pi", "agent-memory", "scout");
     write(join(legacy, "MEMORY.md"), "ISOLATED MEMORY");
