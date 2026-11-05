@@ -5,7 +5,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { DefaultResourceLoader, ExtensionRunner, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createRpcHarness } from "@narumitw/pi-tui-kit/testing";
 import { test, vi } from "vitest";
-import { type BuildMetadata, listFiles, registerRuntimeBuilderContract } from "./harness/runtime-builder-contract.js";
+import {
+  type BuildMetadata,
+  listFiles,
+  type RuntimeBuilder,
+  registerRuntimeBuilderContract,
+} from "./harness/runtime-builder-contract.js";
 import { builtinTool, createMockContext, extensionTool } from "./harness/support.js";
 import { jitiRuntimeLoadBudgetMs, jitiRuntimeLoadTestName } from "./harness/test-timeout-policy.js";
 import { nativeTool } from "./tool-exposure-support.js";
@@ -255,6 +260,133 @@ test("committed runtime matches a fresh build", async () => {
   const committed = await snapshot();
   await builder.buildRuntime();
   assert.deepEqual(await snapshot(), committed);
+});
+
+const minimalBanner = "// minimal runtime builder fixture";
+
+/** A builder with only the required options, so every optional policy takes its default. */
+async function loadMinimalBuilder(entries?: Record<string, string>): Promise<RuntimeBuilder> {
+  const { createRuntimeBuilder } = (await import(
+    pathToFileURL(join(packageRoot, "scripts", "runtime-builder.mjs")).href
+  )) as {
+    createRuntimeBuilder(options: {
+      packageRoot: string;
+      temporaryPrefix: string;
+      banner: string;
+      entries?: Record<string, string>;
+    }): RuntimeBuilder;
+  };
+  return createRuntimeBuilder({ packageRoot, temporaryPrefix: ".pi-plan-mode", banner: minimalBanner, entries });
+}
+
+test("build script import without an invoked script path does not build", async () => {
+  const scriptUrl = pathToFileURL(join(packageRoot, "scripts", "build-runtime.mjs")).href;
+  const previousArgv = process.argv;
+  try {
+    // `node --input-type=module -e "import(...)"` leaves `process.argv[1]` unset.
+    process.argv = previousArgv.slice(0, 1);
+    const module = await import(`${scriptUrl}?no-invoked-path=${crypto.randomUUID()}`);
+    assert.equal(typeof module.buildRuntime, "function");
+  } finally {
+    process.argv = previousArgv;
+  }
+});
+
+test("default-policy builder publishes named entries without requiring lazy chunks", async () => {
+  const builder = await loadMinimalBuilder({ index: "src/index.ts" });
+  const root = await mkdtemp(join(packageRoot, ".pi-plan-mode-build-test-"));
+  try {
+    const output = join(root, "dist");
+    const metadata = await builder.buildRuntime({ outputDirectory: output });
+    const files = await listFiles(output);
+    assert.ok(files.includes("index.ts"));
+    assert.ok(files.includes("index.ts.map"));
+    assert.ok(
+      Object.values(metadata.outputs ?? {}).some((built) => built.entryPoint === "src/index.ts"),
+      "named entries must build the configured entrypoint",
+    );
+    assert.match(await readFile(join(output, "index.ts"), "utf8"), /^\/\/ minimal runtime builder fixture/u);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test("eager graph walks shared and absent chunks once and requires the entrypoint", async () => {
+  const builder = await loadMinimalBuilder();
+  assert.throws(() => builder.validateEagerGraph({}), /Generated runtime metadata has no src\/index.ts entrypoint/u);
+  const { eagerInputs, eagerOutputs } = builder.validateEagerGraph({
+    outputs: {
+      "dist/index.ts": {
+        entryPoint: "src/index.ts",
+        imports: [
+          { kind: "import-statement", path: "dist/chunks/shared-parent.ts" },
+          { kind: "import-statement", path: "dist/chunks/shared.ts" },
+          { kind: "import-statement", path: "dist/chunks/not-emitted.ts" },
+        ],
+        inputs: { "src/index.ts": {} },
+      },
+      "dist/chunks/shared-parent.ts": {
+        imports: [{ kind: "import-statement", path: "dist/chunks/shared.ts" }],
+      },
+      "dist/chunks/shared.ts": { inputs: { "src/shared.ts": {} } },
+    },
+  });
+  assert.deepEqual([...eagerOutputs].sort(), [
+    "dist/chunks/shared-parent.ts",
+    "dist/chunks/shared.ts",
+    "dist/index.ts",
+  ]);
+  assert.deepEqual([...eagerInputs].sort(), ["/src/index.ts", "/src/shared.ts"]);
+});
+
+test("generated output rejects retained JavaScript, missing banners, and missing source maps", async () => {
+  const builder = await loadMinimalBuilder();
+  const root = await mkdtemp(join(packageRoot, ".pi-plan-mode-build-test-"));
+  try {
+    const retainedJs = join(root, "retained-js");
+    await mkdir(retainedJs);
+    await writeFile(join(retainedJs, "index.ts"), `${minimalBanner}\nexport {};\n`);
+    await writeFile(join(retainedJs, "index.js"), "export {};\n");
+    await assert.rejects(builder.validateGeneratedFiles(retainedJs), /Generated runtime retains a \.js file/u);
+
+    const noBanner = join(root, "no-banner");
+    await mkdir(noBanner);
+    await writeFile(join(noBanner, "index.ts"), "export {};\n");
+    await writeFile(join(noBanner, "index.ts.map"), "{}");
+    await assert.rejects(builder.validateGeneratedFiles(noBanner), /Generated marker is missing from index.ts/u);
+
+    const noMap = join(root, "no-map");
+    await mkdir(noMap);
+    await writeFile(join(noMap, "index.ts"), `${minimalBanner}\nexport {};\n`);
+    await assert.rejects(builder.validateGeneratedFiles(noMap), /Source map is missing for index.ts/u);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test("publication rejects aliased staging and rethrows a first-publish rename failure", async () => {
+  const builder = await loadMinimalBuilder();
+  const root = await mkdtemp(join(packageRoot, ".pi-plan-mode-build-test-"));
+  try {
+    const output = join(root, "dist");
+    await assert.rejects(builder.publishRuntime(output, output), /Staging and output must differ/u);
+
+    const staging = join(root, "staging");
+    await mkdir(staging);
+    await writeFile(join(staging, "next.ts"), "next");
+    const failure = new Error("injected first publication failure");
+    await assert.rejects(
+      builder.publishRuntime(staging, output, {
+        renamePath: async () => {
+          throw failure;
+        },
+      }),
+      (error: unknown) => error === failure,
+    );
+    assert.deepEqual(await listFiles(root), ["staging/next.ts"]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
 });
 
 // Cold jiti transform of a fresh build; budget measured in `jitiRuntimeLoadBudgetMs` (#312).
