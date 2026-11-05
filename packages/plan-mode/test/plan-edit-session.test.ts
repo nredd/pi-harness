@@ -125,3 +125,75 @@ test("An edited ready plan survives resume and /plan show displays it", async ()
     fixture.cleanup();
   }
 });
+
+test("Edit is refused while an agent run is active, with no state entry and no edit message", async () => {
+  const fixture = new SessionFixture();
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  try {
+    const harness = await fixture.create();
+    const warnings: string[] = [];
+    let editors = 0;
+    let savedMenus = 0;
+    await harness.session.bindExtensions({
+      mode: "rpc",
+      uiContext: createTestUiContext({
+        async select(title, options) {
+          if (title.startsWith("Proposed plan ready")) return "Save for later";
+          if (!options.includes("Edit plan…")) return undefined;
+          savedMenus += 1;
+          return savedMenus === 1 ? "Edit plan…" : undefined;
+        },
+        async editor() {
+          editors += 1;
+          return EDITED;
+        },
+        notify(message, level) {
+          if (level === "warning") warnings.push(message);
+        },
+      }),
+    });
+    harness.setResponses([
+      complete("First"),
+      async () => {
+        entered.resolve();
+        await release.promise;
+        return fauxAssistantMessage("Busy work done.");
+      },
+    ]);
+    await harness.session.prompt("/plan start");
+    await harness.session.prompt("plan it");
+    await harness.session.waitForIdle();
+    expect(state(harness).savedPlan?.plan).toBe("# First\n\n- Do the First thing.");
+    const entriesBefore = harness.sessionManager.getBranch().length;
+
+    const run = harness.session.prompt("unrelated work");
+    await entered.promise;
+    expect(harness.session.isStreaming).toBe(true);
+    await harness.session.prompt("/plan");
+
+    expect(savedMenus).toBe(2);
+    expect(editors).toBe(0);
+    expect(warnings).toContain(
+      "Cannot edit the plan while an agent run is active. Wait for the run to settle, then retry.",
+    );
+    const branch = harness.sessionManager.getBranch();
+    expect(
+      branch.slice(entriesBefore).filter((entry) => entry.type === "custom" && entry.customType === "plan-mode-state"),
+    ).toEqual([]);
+    release.resolve();
+    await run;
+    await harness.session.waitForIdle();
+    const after = harness.sessionManager.getBranch();
+    expect(
+      after.filter((entry) => entry.type === "custom_message" && entry.customType === PLAN_EDIT_MESSAGE_TYPE),
+    ).toEqual([]);
+    expect(state(harness).savedPlan).toEqual({
+      plan: "# First\n\n- Do the First thing.",
+      source: "plan_mode_complete",
+    });
+  } finally {
+    release.resolve();
+    fixture.cleanup();
+  }
+});

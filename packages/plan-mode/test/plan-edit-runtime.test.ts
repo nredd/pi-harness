@@ -315,3 +315,30 @@ test("a saved plan edit is restored and implemented later with its edited text",
     [formatTransferredPlanPrompt(EDITED, false)],
   );
 });
+
+test("an edit is refused when a run starts while the editor is open", async () => {
+  const mock = createMockPi({ activeTools: ["read"] });
+  planMode(mock.pi, MISSING_SETTINGS);
+  let idle = true;
+  const { context } = editingContext(
+    async () => {
+      idle = false;
+      return EDITED;
+    },
+    { isIdle: () => idle },
+  );
+  await readyPlan(mock, context.ctx);
+  const entries = mock.entries.length;
+  await mock.commands.get("plan")?.handler("", context.ctx);
+
+  assert.equal(mock.entries.length, entries);
+  assert.deepEqual(editMessages(mock), []);
+  assert.equal(latestState(mock).latestPlan, PLAN);
+  assert.ok(
+    context.notifications.some(
+      ({ message, level }) =>
+        level === "warning" &&
+        message === "Cannot edit the plan while an agent run is active. Wait for the run to settle, then retry.",
+    ),
+  );
+});

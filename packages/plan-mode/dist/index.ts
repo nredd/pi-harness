@@ -2059,14 +2059,23 @@ function planMode(pi, dependencies = {}) {
     const current = readyPresentationIntent;
     return current?.nonce === intent.nonce && completedPlanIsCurrent(current);
   }
+  function planEditBlockedByRun(ctx) {
+    if (ctx.isIdle() && !ctx.hasPendingMessages()) return false;
+    ctx.ui.notify(
+      "Cannot edit the plan while an agent run is active. Wait for the run to settle, then retry.",
+      "warning"
+    );
+    return true;
+  }
   async function editPlan(ctx, isCurrent) {
     const enabled = state.enabled;
     const savedPlan = enabled ? void 0 : state.savedPlan;
     const before = enabled ? state.latestPlan : savedPlan?.plan;
-    if (!before) return;
+    if (!before || planEditBlockedByRun(ctx)) return;
     const edited = await ctx.ui.editor(enabled ? "Edit proposed plan" : "Edit saved plan", before);
     const review = reviewEditedPlan(before, edited);
     if (review.kind === "cancelled" || review.kind === "unchanged") return;
+    if (planEditBlockedByRun(ctx)) return;
     const unchangedWhileEditing = isCurrent() && state.enabled === enabled && (enabled ? state.latestPlan === before : state.savedPlan === savedPlan);
     if (!unchangedWhileEditing) {
       ctx.ui.notify("The plan changed while the editor was open. The edit was discarded.", "warning");
