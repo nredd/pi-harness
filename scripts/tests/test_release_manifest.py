@@ -399,9 +399,12 @@ def test_main_writes_the_default_output_and_refuses_dirty_trees(tmp_path: Path) 
     assert json.loads(output.read_text(encoding="utf-8"))["release"]["dirty"] is True
 
 
-def test_main_rejects_malformed_pairs(tmp_path: Path) -> None:
-    """A malformed `NAME=VALUE` option exits 1 before Git is consulted."""
-    assert rm.main(["bad", "--repo-root", str(tmp_path), "--evidence", "novalue"]) == 1
+def test_main_rejects_malformed_pairs(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """A malformed `NAME=VALUE` option exits 1 on a clean repository that would otherwise succeed."""
+    repo = make_repo(tmp_path)
+    assert rm.main(["bad", "--repo-root", str(repo), "--evidence", "novalue"]) == 1
+    assert "FAILED: `--evidence` must be NAME=VALUE, got 'novalue'" in caplog.text
+    assert not (repo / "releases").exists()
 
 
 def test_script_entry_point_exits_with_main_status(tmp_path: Path) -> None:
