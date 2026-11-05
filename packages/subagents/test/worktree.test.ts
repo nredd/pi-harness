@@ -3,15 +3,35 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupWorktree,
-  createWorktree,
+  createWorktree as createUntrackedWorktree,
   isWorktreeIsolationEnabled,
   pruneWorktrees,
   setWorktreeIsolationEnabled,
   WorktreeError,
 } from "../src/worktree.js";
+
+/** Every worktree path this file created, checked for leaks once the file finishes. */
+const createdWorktreePaths: string[] = [];
+
+/**
+ * `createWorktree`, recording the `$TMPDIR/pi-agent-*` path it made. Removing
+ * the repo and pruning drops a worktree's registration but never its
+ * directory, so a test that forgets to remove one leaks it on every run (#366).
+ */
+async function createWorktree(...args: Parameters<typeof createUntrackedWorktree>): ReturnType<typeof createUntrackedWorktree> {
+  const wt = await createUntrackedWorktree(...args);
+  createdWorktreePaths.push(wt.path);
+  return wt;
+}
+
+afterAll(() => {
+  const leaked = createdWorktreePaths.filter(path => existsSync(path));
+  for (const path of leaked) rmSync(path, { recursive: true, force: true });
+  expect(leaked, "tests left these worktree directories in $TMPDIR").toEqual([]);
+});
 
 /**
  * Minimal stand-in for pi.exec(): runs the command for real, and — like the
@@ -454,9 +474,9 @@ describe("cleanupWorktree — failure path", () => {
   it("swallows a git failure inside a still-present worktree and reports no changes", async () => {
     // The outer catch. The directory exists — so the existsSync guard above
     // does not fire — but git cannot operate in it, which is what a corrupted
-    // or externally-detached worktree looks like. The agent's work is lost
-    // either way; what matters is that cleanup does not reject out of the
-    // manager's settle path and take the whole record down with it.
+    // or externally-detached worktree looks like. What matters is that cleanup
+    // does not reject out of the manager's settle path and take the whole
+    // record down with it.
     const wt = (await createWorktree(pi, repoDir, "corrupt"))!;
     writeFileSync(join(wt.path, "work.txt"), "agent output");
     // Break the worktree's link back to the repo.
@@ -466,6 +486,11 @@ describe("cleanupWorktree — failure path", () => {
 
     expect(result.hasChanges).toBe(false);
     expect(result.branch).toBeUndefined();
+    // Deliberately left behind: git cannot vouch for the directory, and it
+    // holds the agent's only copy of its uncommitted work, so cleanup leaves
+    // it to inspect rather than deleting it.
+    expect(existsSync(join(wt.path, "work.txt"))).toBe(true);
+    rmSync(wt.path, { recursive: true, force: true });
   });
 
   it("reports no changes when the preservation commit fails", async () => {
