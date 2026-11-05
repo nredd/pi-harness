@@ -7,6 +7,11 @@ registered. Runs on Node >=22.14 and Bun.
 Sampler `0.2.0` adds native Darwin interval CPU/footprint and host used/swap metrics. Its
 consumer pins are exact registry dependencies, never workspace links.
 
+Unreleased after `0.2.0`: published `0.2.0` lists `/proc` with `opendir`, so on Linux any PID exiting
+mid-listing rejects the whole listing (`lstat` ENOENT on the `DT_UNKNOWN` entry). That scan returns no
+processes (`process-collection-unavailable`) and, as a baseline, leaves every next-scan process
+`warming` (#499). This source lists names only; it needs a release and consumer pin bumps.
+
 Upgrade from `0.1.0`, which is unsafe: on Darwin it reported `ps -c -o comm`, the basename of argv[0],
 so a launcher-chosen argv[0] or Node `process.title` (e.g. `npm exec <package> mcp`) leaked into
 `processes[].name`. On Bun, host `cpu` read lazily populated `os.cpus()` objects, so the second sample
@@ -94,8 +99,12 @@ Semantics:
 Bounds:
 
 - Default scan budget 250ms, 2048 PIDs, 2MiB captured bytes; options allow at most 5s, 16384 PIDs,
-  16MiB. Linux proc files read sequentially (concurrency one), at most 8KiB each. Directory iteration
-  stops at the budget; Darwin output stops at the PID/output budget and reaps the fixed helper. Native reads charge
+  16MiB. Linux proc files read sequentially (concurrency one), at most 8KiB each. Linux lists `/proc`
+  names only, never `opendir` Dirents: a PID that exits mid-listing comes back `DT_UNKNOWN` and the
+  runtime would `lstat` it, so it is instead one skipped row (`process-unreadable-or-changed`) when
+  its own stat read fails. RESIDUAL: that one `readdir` is read whole (one short name per process,
+  e.g. ~100KiB at 16384 PIDs) before the PID cap, deadline or abort can apply; per-PID reads stop at
+  the budget; Darwin output stops at the PID/output budget and reaps the fixed helper. Native reads charge
   8 bytes for the timebase and 328 bytes per admitted PID (two 96-byte rusage buffers and one 136-byte
   metadata buffer), including failed calls, to that SAME byte budget. Only `pbi_comm` and numeric
   fields are inspected; `pbi_name`, arguments and environment are never decoded or exported. Native
