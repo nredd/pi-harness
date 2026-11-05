@@ -1,16 +1,13 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
-import { editPlanThenReopen } from "./plan-action-menus.js";
+import { deferPlanEdit, type PlanEditOption } from "./plan-edit.js";
 import { type PlanExportDestinationProvider, planExportInputScreen } from "./plan-export-screen.js";
 
-interface SavedPlanMenuOptions {
+interface SavedPlanMenuOptions extends PlanEditOption {
   statusText: string;
   implementationOutcome(): string;
   getExportDestination: PlanExportDestinationProvider;
-  signal: AbortSignal;
-  isCurrent(): boolean;
   show(): void;
-  edit(): Promise<void>;
   implementHere(): void | Promise<void>;
   implementFresh(signal: AbortSignal): void | Promise<void>;
   exportPlan(path: string, signal: AbortSignal): Promise<boolean>;
@@ -24,7 +21,7 @@ export async function showSavedPlanMenu(ctx: ExtensionContext, options: SavedPla
   }
   type Screen = "saved" | "export";
   type Action = "show" | "edit" | "implement-here" | "implement-fresh" | "export" | "settings" | "clear";
-  let editRequested = false;
+  const deferredEdit = deferPlanEdit(options);
   const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
     start: "saved",
     screens: {
@@ -71,10 +68,7 @@ export async function showSavedPlanMenu(ctx: ExtensionContext, options: SavedPla
         options.show();
         return { kind: "close" };
       },
-      edit: async () => {
-        editRequested = true;
-        return { kind: "close" };
-      },
+      edit: deferredEdit.action,
       "implement-here": async () => {
         await options.implementHere();
         return { kind: "close" };
@@ -101,5 +95,5 @@ export async function showSavedPlanMenu(ctx: ExtensionContext, options: SavedPla
     signal: options.signal,
     isCurrent: options.isCurrent,
   });
-  if (editRequested && (await editPlanThenReopen(options))) await showSavedPlanMenu(ctx, options);
+  await deferredEdit.reopenAfter(() => showSavedPlanMenu(ctx, options));
 }

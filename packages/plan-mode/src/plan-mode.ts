@@ -124,6 +124,13 @@ interface ReadyPresentationIntent {
   plan: string;
   source: PlanCompletionSource;
 }
+interface UnappliedPlanEdit {
+  /** The plan the text was edited from; a different current plan drops the text. */
+  before: string;
+  enabled: boolean;
+  sessionGeneration: number;
+  text: string;
+}
 interface PendingWorkflowToolPolicy {
   generation: number;
   mode: "resolve" | "revalidate";
@@ -185,6 +192,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   let publishedContractMode: PlanModeContract | undefined;
   let modeContractsRelevant = false;
   let readyPresentationIntent: ReadyPresentationIntent | undefined;
+  /** Editor text that was not applied, restored when the same plan is edited again. */
+  let unappliedPlanEdit: UnappliedPlanEdit | undefined;
   let readyPresentationInFlightNonce: number | undefined;
   let nextReadyPresentationNonce = 0;
   let menuGeneration = 0;
@@ -1117,21 +1126,39 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     const savedPlan = enabled ? undefined : state.savedPlan;
     const before = enabled ? state.latestPlan : savedPlan?.plan;
     if (!before || planEditBlockedByRun(ctx)) return;
-    const edited = await ctx.ui.editor(enabled ? "Edit proposed plan" : "Edit saved plan", before);
+    const kept = unappliedPlanEdit;
+    const restored =
+      kept?.before === before && kept.enabled === enabled && kept.sessionGeneration === menuGeneration
+        ? kept.text
+        : undefined;
+    unappliedPlanEdit = undefined;
+    const edited = await ctx.ui.editor(enabled ? "Edit proposed plan" : "Edit saved plan", restored ?? before);
     const review = reviewEditedPlan(before, edited);
-    if (review.kind === "cancelled" || review.kind === "unchanged") return;
+    if (review.kind === "unchanged") return;
+    if (review.kind === "cancelled") {
+      // Closing the editor keeps a restored draft for the next edit of the same plan.
+      if (restored !== undefined) unappliedPlanEdit = kept;
+      return;
+    }
+    const keepEdit = (reason: string, level: "warning" | "error" = "warning") => {
+      unappliedPlanEdit = { before, enabled, sessionGeneration: menuGeneration, text: edited as string };
+      ctx.ui.notify(`${reason} The edit was not applied; Edit plan… reopens it while this plan is current.`, level);
+    };
     // A run that started while the editor was open would defer the edit message past newer output.
-    if (planEditBlockedByRun(ctx)) return;
+    if (!ctx.isIdle() || ctx.hasPendingMessages()) {
+      keepEdit("An agent run started while the editor was open.");
+      return;
+    }
     const unchangedWhileEditing =
       isCurrent() &&
       state.enabled === enabled &&
       (enabled ? state.latestPlan === before : state.savedPlan === savedPlan);
     if (!unchangedWhileEditing) {
-      ctx.ui.notify("The plan changed while the editor was open. The edit was discarded.", "warning");
+      keepEdit("The plan changed while the editor was open.");
       return;
     }
     if (review.kind === "rejected") {
-      ctx.ui.notify(`Edited plan rejected: ${review.error}. The plan is unchanged.`, "warning");
+      keepEdit(`Edited plan rejected: ${review.error}.`);
       return;
     }
     try {
@@ -1139,7 +1166,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       pi.sendMessage(createPlanEditMessage(before, review.plan), { triggerTurn: false });
     } catch (error: unknown) {
       const detail = safeTerminalText(error instanceof Error ? error.message : String(error));
-      ctx.ui.notify(`Unable to record the plan edit: ${detail}`, "error");
+      keepEdit(`Unable to record the plan edit: ${detail}.`, "error");
       return;
     }
     if (enabled) {

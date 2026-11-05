@@ -6,27 +6,11 @@ import {
   type ImplementationModelOverride,
   snapshotAvailableImplementationModels,
 } from "./implementation-models.js";
+import { deferPlanEdit, editPlanThenReopen, type PlanEditOption } from "./plan-edit.js";
 import { type PlanExportDestinationProvider, planExportInputScreen } from "./plan-export-screen.js";
 import { chooseReadyPlanAction } from "./ready-plan-chooser.js";
 import { IMPLEMENTATION_THINKING_LEVELS, type PlanModeFixedThinkingLevel } from "./settings.js";
 import type { ImplementationRuntimeSelection } from "./state.js";
-
-interface MenuLifecycle {
-  signal: AbortSignal;
-  isCurrent(): boolean;
-}
-
-interface PlanEditOption extends MenuLifecycle {
-  /** Opens the plan in the host editor; the caller reopens its menu afterwards. */
-  edit(): Promise<void>;
-}
-
-/** Runs the deferred edit once the menu has closed; true when the menu should reopen. */
-export async function editPlanThenReopen(options: PlanEditOption) {
-  if (options.signal.aborted || !options.isCurrent()) return false;
-  await options.edit();
-  return !options.signal.aborted && options.isCurrent();
-}
 
 const THINKING_LEVEL_DESCRIPTIONS: Record<PlanModeFixedThinkingLevel, string> = {
   off: "No reasoning",
@@ -75,7 +59,7 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
     options.implementationDefaults,
     options.implementFresh,
   );
-  let editRequested = false;
+  const deferredEdit = deferPlanEdit(options);
   const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
     start: "main",
     screens: {
@@ -111,10 +95,7 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
         options.show();
         return { kind: "close" };
       },
-      edit: async () => {
-        editRequested = true;
-        return { kind: "close" };
-      },
+      edit: deferredEdit.action,
       finalize: async () => {
         options.finalize();
         return { kind: "close" };
@@ -156,7 +137,7 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
     signal: options.signal,
     isCurrent: options.isCurrent,
   });
-  if (editRequested && (await editPlanThenReopen(options))) await showPlanModeMenu(ctx, options);
+  await deferredEdit.reopenAfter(() => showPlanModeMenu(ctx, options));
 }
 
 interface ReadyPlanMenuOptions extends PlanEditOption {
@@ -204,16 +185,14 @@ export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPla
     }
     start = action === "implement-fresh" ? "fresh" : "export";
   }
-  if ((await runReadyPlanMenu(ctx, options, start)) && (await editPlanThenReopen(options))) {
-    await showReadyPlanMenu(ctx, options);
-  }
+  await runReadyPlanMenu(ctx, options, start);
 }
 
 async function runReadyPlanMenu(
   ctx: ExtensionContext,
   options: ReadyPlanMenuOptions,
   start: "ready" | "fresh" | "export",
-): Promise<boolean> {
+): Promise<void> {
   type Screen = "ready" | "fresh" | "models" | "thinking" | "export";
   type Action =
     | "show"
@@ -232,7 +211,7 @@ async function runReadyPlanMenu(
     options.implementationDefaults,
     options.implementFresh,
   );
-  let editRequested = false;
+  const deferredEdit = deferPlanEdit(options);
   const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
     start,
     screens: {
@@ -261,10 +240,7 @@ async function runReadyPlanMenu(
         options.show();
         return { kind: "close" };
       },
-      edit: async () => {
-        editRequested = true;
-        return { kind: "close" };
-      },
+      edit: deferredEdit.action,
       "implement-here": async () => {
         await options.implementHere();
         return { kind: "close" };
@@ -302,7 +278,7 @@ async function runReadyPlanMenu(
     signal: options.signal,
     isCurrent: options.isCurrent,
   });
-  return editRequested;
+  await deferredEdit.reopenAfter(() => showReadyPlanMenu(ctx, options));
 }
 
 interface ModelChoice {

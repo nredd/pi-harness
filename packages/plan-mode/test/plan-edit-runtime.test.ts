@@ -12,6 +12,7 @@ const PLAN = "# Original\n\n- Keep the first step.";
 const EDITED = "# Original\n\n- Keep the edited step.";
 const MISSING_SETTINGS = { readSettings: async () => ({ kind: "missing" as const }) };
 const STATE_ENTRY_TYPE = "plan-mode-state";
+const KEPT = " The edit was not applied; Edit plan… reopens it while this plan is current.";
 
 type Mock = ReturnType<typeof createMockPi>;
 
@@ -62,8 +63,8 @@ test("cancelled, unchanged, empty and oversized edits leave the plan, entries an
   for (const [result, warning] of [
     [undefined, undefined],
     [`\n${PLAN}\n`, undefined],
-    ["  \n", "Edited plan rejected: plan must not be empty. The plan is unchanged."],
-    ["x".repeat(50_001), "Edited plan rejected: plan must not exceed 50000 characters. The plan is unchanged."],
+    ["  \n", `Edited plan rejected: plan must not be empty.${KEPT}`],
+    ["x".repeat(50_001), `Edited plan rejected: plan must not exceed 50000 characters.${KEPT}`],
   ] as const) {
     const mock = createMockPi({ activeTools: ["read"] });
     planMode(mock.pi, MISSING_SETTINGS);
@@ -187,9 +188,7 @@ test("an edit is discarded when the plan changes while the editor is open", asyn
   assert.deepEqual(editMessages(mock), []);
   assert.equal(latestState(mock).enabled, false);
   assert.ok(
-    context.notifications.some(
-      ({ message }) => message === "The plan changed while the editor was open. The edit was discarded.",
-    ),
+    context.notifications.some(({ message }) => message === `The plan changed while the editor was open.${KEPT}`),
   );
 });
 
@@ -211,7 +210,8 @@ test("a failed edit record leaves the ready plan unchanged", async () => {
     assert.equal(latestState(mock).latestPlan, PLAN);
     assert.ok(
       context.notifications.some(
-        ({ message, level }) => level === "error" && message === "Unable to record the plan edit: session closed",
+        ({ message, level }) =>
+          level === "error" && message === `Unable to record the plan edit: session closed.${KEPT}`,
       ),
     );
   }
@@ -337,8 +337,75 @@ test("an edit is refused when a run starts while the editor is open", async () =
   assert.ok(
     context.notifications.some(
       ({ message, level }) =>
-        level === "warning" &&
-        message === "Cannot edit the plan while an agent run is active. Wait for the run to settle, then retry.",
+        level === "warning" && message === `An agent run started while the editor was open.${KEPT}`,
     ),
   );
+});
+
+/** RPC `/plan` menus that pick `Edit plan…` on every open and close the reopened menu. */
+function repeatEditContext(editor: (title: string, prefill?: string) => Promise<string | undefined>) {
+  let opened = 0;
+  return createMockContext({
+    mode: "rpc",
+    hasUI: true,
+    select: async (_title: string, options: string[]) => {
+      opened += 1;
+      return opened % 2 === 1 && options.includes("Edit plan…") ? "Edit plan…" : undefined;
+    },
+    editor,
+  });
+}
+
+test("refused editor text reopens on the next edit of the same plan until it is saved", async () => {
+  const mock = createMockPi({ activeTools: ["read"] });
+  planMode(mock.pi, MISSING_SETTINGS);
+  const tooLong = `${PLAN}\n${"x".repeat(50_000)}`;
+  const results = [tooLong, undefined, EDITED, undefined];
+  const prefills: Array<string | undefined> = [];
+  const context = repeatEditContext(async (_title, prefill) => {
+    prefills.push(prefill);
+    return results.shift();
+  });
+  await readyPlan(mock, context.ctx);
+  for (let attempt = 0; attempt < 4; attempt += 1) await mock.commands.get("plan")?.handler("", context.ctx);
+
+  // Rejected, then cancelled (kept), then saved (cleared), then the saved plan is current.
+  assert.deepEqual(prefills, [PLAN, tooLong, tooLong, EDITED]);
+  assert.equal(latestState(mock).latestPlan, EDITED);
+  assert.equal(editMessages(mock).length, 1);
+});
+
+test("refused editor text is dropped once the plan it was based on changes", async () => {
+  const mock = createMockPi({ activeTools: ["read"] });
+  planMode(mock.pi, MISSING_SETTINGS);
+  let idle = true;
+  let opened = 0;
+  const results = [EDITED, undefined];
+  const prefills: Array<string | undefined> = [];
+  const context = createMockContext({
+    mode: "rpc",
+    hasUI: true,
+    select: async (_title: string, options: string[]) => {
+      opened += 1;
+      return opened % 2 === 1 && options.includes("Edit plan…") ? "Edit plan…" : undefined;
+    },
+    editor: async (_title: string, prefill?: string) => {
+      prefills.push(prefill);
+      idle = prefills.length !== 1;
+      return results.shift();
+    },
+    isIdle: () => idle,
+  });
+  await readyPlan(mock, context.ctx);
+  // The first edit is refused because a run starts while the editor is open.
+  await mock.commands.get("plan")?.handler("", context.ctx);
+  idle = true;
+  const complete = mock.tools.find((candidate) => candidate.name === "plan_mode_complete")?.execute as (
+    ...args: unknown[]
+  ) => Promise<unknown>;
+  await complete("replacement", { plan: "# Replacement\n\n- New step." }, undefined, undefined, context.ctx);
+  await mock.commands.get("plan")?.handler("", context.ctx);
+
+  assert.deepEqual(prefills, [PLAN, "# Replacement\n\n- New step."]);
+  assert.equal(latestState(mock).latestPlan, "# Replacement\n\n- New step.");
 });
