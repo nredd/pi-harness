@@ -74,6 +74,15 @@ describe("agent type registry", () => {
       expect(config?.model).toBe("@cheap");
     });
 
+    it("default agents name tiers, never models", () => {
+      for (const [name, config] of DEFAULT_AGENTS) {
+        if (config.model !== undefined) expect(config.model, name).toMatch(/^@[a-z0-9][a-z0-9._-]*$/);
+        const text = JSON.stringify(config);
+        for (const leak of [/\b(?:anthropic|openai-codex|openai|router)\/[\w.-]+/, /\bclaude-[a-z]+-\d/, /\bgpt-\d/])
+          expect(text, name).not.toMatch(leak);
+      }
+    });
+
     it("resolveType returns canonical key or undefined", () => {
       expect(resolveType("Explore")).toBe("Explore");
       expect(resolveType("explore")).toBe("Explore");

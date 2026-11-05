@@ -877,7 +877,7 @@ Routed personal setup (configure the router profiles separately):
 
 ```json
 {
-  "modelTiers": { "cheap": ["router/cheap"], "default": ["router/default"], "deep": ["router/deep"], "review": ["router/review"] },
+  "modelTiers": { "cheap": ["router/cheap"], "default": ["router/default"], "deep": ["router/deep"], "frontier": ["router/frontier"], "review": ["router/review"] },
   "modelResolution": { "onUnmapped": "error", "onUnavailable": "error" },
   "agentModels": { "*": "@default", "Explore": "@cheap", "code-reviewer": "@review" }
 }
@@ -897,6 +897,14 @@ Enterprise manifest (machine-local, permissions `0600`):
 { "version": 1, "subagents": { "modelTiers": { "cheap": ["example-provider/example-wire-model"] }, "agentModels": { "Explore": "@cheap" } } }
 ```
 
+Enterprise `frontier` binding, two exact flagship members in order (placeholders):
+
+```json
+{ "version": 1, "subagents": { "modelTiers": { "frontier": ["example-provider/example-flagship-a", "example-provider/example-flagship-b"] } } }
+```
+
+`@frontier` is the tier for the hardest design and architecture work. Skills and agents name `@frontier` on every profile; only this binding differs. Leave it unbound when no flagship is served: an unbound `@frontier` follows `modelResolution.onUnmapped`, so the work default inherits the parent model with a visible note, and the personal `"error"` refuses it. It never falls back to `@deep` or another tier.
+
 Ordered static list:
 
 ```json
@@ -906,6 +914,8 @@ Ordered static list:
 Static tiers choose the first credentialed, admitted member and retain skipped members with `no-credentials` or `quota` reasons. With a router installed, each member is admitted separately. Without one, admission fails open and disclosure explicitly says `static; no quota signal`.
 
 `modelResolution.onUnmapped` and `onUnavailable` each accept `error` or `inherit`; both library defaults are `inherit`, with a visible note. Neither policy applies to quota exhaustion. Whitespace-only model inputs mean unset; `@` alone and unknown/case-mismatched tier names are visibly unmapped.
+
+The `Agent` tool guideline and its `model` parameter list the configured tier keys, e.g. `Configured tiers: @cheap, @deep, @default, @frontier, @review. Prefer a tier over a model id.`, never their members. With no tiers configured they keep the generic tier / `provider/modelId` / fuzzy-name text.
 
 Results disclose `Model: @cheap -> provider/id via router/cheap` before the first response using admission's `resolvedModel`, then follow the answering model. Mid-run changes say `switched ... within tier`. Shared leading `[@cheap]` flags identify healthy tiers neutrally; warning flags and grouped alert counts cover only actual switches, parent inheritance, unavailable or unmapped outcomes. Structured `modelTier` outcomes survive records, events, transcripts, eviction and workflow journals. Reopened evicted sessions select/admit anew and retain old outcomes separately as `previousModelTier` and `previousModelFallback`; live resumes keep the existing session's selection. Scheduled tier jobs store `@cheap`, not today's physical pick, and resolve it again when they fire.
 

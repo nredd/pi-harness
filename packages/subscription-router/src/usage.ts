@@ -179,7 +179,40 @@ export function parseAnthropic(payload: unknown): ParsedUsage | undefined {
 			families: families ? [...families] : undefined,
 		});
 	}
+	for (const window of anthropicScopedLimits(root.limits)) {
+		if (!windows.some((existing) => existing.name === window.name)) windows.push(window);
+	}
 	return windows.length === 0 ? undefined : { windows };
+}
+
+/**
+ * Model-scoped weekly windows Anthropic reports only in its `limits` list, e.g. Fable's
+ * `{ kind: "weekly_scoped", scope: { model: { display_name: "Fable" } } }`. Each becomes a
+ * `seven_day_<family>` window gating the lowercased display name; names that are not one
+ * family token are skipped rather than guessed.
+ */
+function anthropicScopedLimits(limits: unknown): UsageWindow[] {
+	if (!Array.isArray(limits)) return [];
+	const windows: UsageWindow[] = [];
+	for (const entry of limits) {
+		const item = asRecord(entry);
+		if (item?.kind !== "weekly_scoped") continue;
+		const displayName = asRecord(asRecord(item.scope)?.model)?.display_name;
+		const family = typeof displayName === "string" ? displayName.trim().toLowerCase() : "";
+		if (!/^[a-z0-9]+$/.test(family)) continue;
+		const usedPercent = percentage(item.percent);
+		if (usedPercent === undefined) continue;
+		windows.push({
+			name: `seven_day_${family}`,
+			usedPercent,
+			resetAt: timestamp(item.resets_at),
+			durationMs: 604_800_000,
+			spanSource: "reported",
+			scope: "model",
+			families: [family],
+		});
+	}
+	return windows;
 }
 
 /** Parse the ChatGPT Codex `wham/usage` payload. */
