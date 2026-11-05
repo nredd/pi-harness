@@ -358,6 +358,11 @@ def test_cli_version_parser_rejects_substring_matches(monkeypatch: pytest.Monkey
 def test_codex_version_pin_still_rejects_current_host_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Keep benchmark preparation pinned despite the independent sandbox test.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Override the native version output.
+    """
     spec = next(run for run in generate_matrix() if run.harness is Harness.CODEX)
     monkeypatch.setattr("pi_harness_benchmark.prepare.output", lambda _argv: "codex-cli 0.166.0")
 
