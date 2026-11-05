@@ -6,6 +6,7 @@ import {
   PLAN_MODE_COMPLETE_TOOL_NAME,
   PLAN_MODE_QUESTION_TOOL_NAME,
   PLAN_MODE_THINKING_LEVELS,
+  availablePlanModelTiers,
   canSelectToolInPlanMode,
   configuredImplementationModel,
   configuredImplementationPlanRetention,
@@ -21,11 +22,12 @@ import {
   planModeSettingsPath,
   planModeToolAvailability,
   planModeToolSelection,
+  planModelTarget,
   readPlanModeSettings,
   retentionLabel,
   snapshotAvailableImplementationModels,
   updatePlanModeSettings
-} from "./chunk-VZDACPW4.ts";
+} from "./chunk-4SQVAWPB.ts";
 
 // src/active-implementation-menu.ts
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
@@ -223,6 +225,7 @@ var THINKING_LEVEL_DESCRIPTIONS = {
 async function showPlanModeMenu(ctx, options) {
   const freshFlow = createFreshImplementationFlow(
     ctx,
+    options.planModel,
     options.planThinkingLevel,
     options.implementationDefaults,
     options.implementFresh
@@ -340,6 +343,7 @@ async function showReadyPlanMenu(ctx, options) {
 async function runReadyPlanMenu(ctx, options, start) {
   const freshFlow = createFreshImplementationFlow(
     ctx,
+    options.planModel,
     options.planThinkingLevel,
     options.implementationDefaults,
     options.implementFresh
@@ -412,10 +416,15 @@ async function runReadyPlanMenu(ctx, options, start) {
   });
   await deferredEdit.reopenAfter(() => showReadyPlanMenu(ctx, options));
 }
-function createFreshImplementationFlow(ctx, planThinkingLevel, implementationDefaults, implementFresh) {
-  const models = snapshotAvailableModels(ctx);
-  const planModel = ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : void 0;
-  const planModelSummary = ctx.model ? `${safeModelMetadata(ctx.model.id, "unknown model")} [${safeModelMetadata(ctx.model.provider, "unknown provider")}]` : void 0;
+var FRESH_PLAN_MODEL_CHOICES = {
+  "same as plan": "Same as plan",
+  "previous model": "Previous model"
+};
+function createFreshImplementationFlow(ctx, freshPlanModel, planThinkingLevel, implementationDefaults, implementFresh) {
+  const { model: planModel, label: planModelLabel } = freshPlanModel;
+  const models = snapshotAvailableModels(ctx, planModel);
+  const planModelSummary = planModel ? `${safeModelMetadata(planModel.modelId, "unknown model")} [${safeModelMetadata(planModel.provider, "unknown provider")}]` : void 0;
+  const planModelChoice = FRESH_PLAN_MODEL_CHOICES[planModelLabel];
   const configuredModel = implementationDefaults?.model;
   const configuredAvailableModel = findAvailableImplementationModel(
     models.map((choice) => choice.modelInfo),
@@ -431,7 +440,7 @@ function createFreshImplementationFlow(ctx, planThinkingLevel, implementationDef
       title: "Fresh implementation settings",
       lines: [
         "These choices apply once to the new implementation session.",
-        ...unavailableDefaultActive && configuredModel ? [`Configured default ${safeModelReference(configuredModel)} is unavailable; using same as plan.`] : []
+        ...unavailableDefaultActive && configuredModel ? [`Configured default ${safeModelReference(configuredModel)} is unavailable; using ${planModelLabel}.`] : []
       ],
       items: [
         {
@@ -444,7 +453,7 @@ function createFreshImplementationFlow(ctx, planThinkingLevel, implementationDef
         {
           id: "implementation-model",
           label: "Model",
-          description: selectedModel?.summary ?? (planModelSummary ? `${planModelSummary} \xB7 same as plan` : "Same as plan"),
+          description: selectedModel?.summary ?? (planModelSummary ? `${planModelSummary} \xB7 ${planModelLabel}` : planModelChoice),
           to: "models"
         },
         {
@@ -461,7 +470,7 @@ function createFreshImplementationFlow(ctx, planThinkingLevel, implementationDef
       items: [
         {
           id: "same-as-plan",
-          label: "Same as plan",
+          label: planModelChoice,
           ...planModelSummary ? { description: planModelSummary } : {}
         },
         ...models.map((choice) => ({
@@ -509,7 +518,7 @@ function createFreshImplementationFlow(ctx, planThinkingLevel, implementationDef
         selectedModelUsesDefault = false;
         unavailableDefaultActive = true;
         ctx.ui.notify(
-          `Configured default ${safeModelReference(configuredModel)} is unavailable; using same as plan.`,
+          `Configured default ${safeModelReference(configuredModel)} is unavailable; using ${planModelLabel}.`,
           "warning"
         );
       }
@@ -525,12 +534,12 @@ function createFreshImplementationFlow(ctx, planThinkingLevel, implementationDef
     }
   };
 }
-function snapshotAvailableModels(ctx) {
+function snapshotAvailableModels(ctx, planModel) {
   return snapshotAvailableImplementationModels(ctx).map((model, index) => {
     const provider = safeModelMetadata(model.provider, "unknown provider");
     const modelId = safeModelMetadata(model.id, "unknown model");
     const name = safeModelMetadata(model.name, "");
-    const isPlanModel = ctx.model?.provider === model.provider && ctx.model.id === model.id;
+    const isPlanModel = planModel?.provider === model.provider && planModel.modelId === model.id;
     const summary = `${modelId} [${provider}]`;
     return {
       itemId: `model-${index}`,
@@ -757,6 +766,7 @@ async function showPlanModeSettings(ctx, options) {
   const implementationModels = snapshotAvailableImplementationModels(ctx);
   const modelItemIds = new Map(implementationModels.map((model, index) => [model, `plan-settings-model:${index}`]));
   const modelsByItemId = new Map(implementationModels.map((model) => [modelItemIds.get(model), model]));
+  const planModelTiers = availablePlanModelTiers(implementationModels);
   const loadState = async () => {
     const loaded = await readSettings(options.settingsPath);
     if (loaded.kind === "invalid") {
@@ -832,9 +842,35 @@ async function showPlanModeSettings(ctx, options) {
             description: "Saved TUI shortcut. Changes require /reload or restarting Pi; the current binding stays unchanged.",
             currentValue: configuredPlanModeToggleShortcut(state.settings) ?? "none",
             action: "open-shortcut"
+          },
+          {
+            id: "planModel",
+            label: "Plan model",
+            description: "Choose the router tier Plan turns run on when the next Plan workflow starts.",
+            currentValue: planModelValue(state.settings.planModel, planModelTiers),
+            action: "open-plan-model"
           }
         ]
       },
+      "plan-model": ({ state }) => ({
+        kind: "choice",
+        title: "Plan model",
+        lines: [
+          "Plan turns run on the chosen router tier; leaving Plan restores the previous model.",
+          "Inherit is the default and the fallback when the tier is unavailable."
+        ],
+        items: [
+          { id: "inherit", label: "Inherit", description: "Plan on the current model." },
+          ...planModelTiers.map((tier) => ({
+            id: tier,
+            label: tier,
+            description: safeModelReference2(planModelTarget(tier))
+          }))
+        ],
+        action: "set-plan-model",
+        initialItemId: planModelTiers.find((tier) => tier === state.settings.planModel) ?? "inherit",
+        hint: "back"
+      }),
       tools: ({ state }) => ({
         kind: "multiSelect",
         title: "Default Plan policy allowlist",
@@ -913,6 +949,17 @@ async function showPlanModeSettings(ctx, options) {
           signal,
           `Plan mode thinking level: ${value}. Applies to the next Plan workflow.`
         );
+      },
+      "open-plan-model": async () => ({ kind: "to", screen: "plan-model" }),
+      "set-plan-model": async ({ ctx: actionCtx, itemId, signal }) => {
+        const tier = planModelTiers.find((candidate) => candidate === itemId);
+        const result = await savePatch(
+          actionCtx,
+          { planModel: tier ?? null },
+          signal,
+          `Plan model: ${tier ?? "inherit"}. Applies to the next Plan workflow.`
+        );
+        return result.kind === "stay" ? { kind: "to", screen: "settings" } : result;
       },
       "open-tools": async () => ({ kind: "to", screen: "tools" }),
       "set-retention": async ({ ctx: actionCtx, value, signal }) => {
@@ -1067,6 +1114,10 @@ function invalidScreen(settingsPath, state) {
 function retentionFromLabel(value) {
   return IMPLEMENTATION_PLAN_RETENTIONS.find((retention) => retentionLabel(retention) === value);
 }
+function planModelValue(configured, tiers) {
+  if (!configured) return "inherit";
+  return tiers.includes(configured) ? configured : `inherit \xB7 ${configured} unavailable`;
+}
 function implementationModelValue(settings, models) {
   const configured = configuredImplementationModel(settings);
   if (!configured) return "same as plan";
@@ -1162,4 +1213,4 @@ export {
   showReadyPlanMenu,
   showSavedPlanMenu
 };
-//# sourceMappingURL=interactive-ui-AU4WYPXK.ts.map
+//# sourceMappingURL=interactive-ui-P6YRUDPW.ts.map

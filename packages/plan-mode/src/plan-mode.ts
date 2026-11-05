@@ -62,9 +62,11 @@ import {
   reconcileModeContract,
 } from "./mode-contract.js";
 import { createPlanActionController } from "./plan-action-controller.js";
+import type { FreshPlanModel } from "./plan-action-menus.js";
 import { createPlanApprovals } from "./plan-approval.js";
 import { createPlanEditMessage, PLAN_EDIT_SOURCE, reviewEditedPlan } from "./plan-edit.js";
 import { createPlanExportController } from "./plan-export-controller.js";
+import { type PlanModelTier, planModelTarget } from "./plan-model.js";
 import {
   clearPlanModeUi,
   planModeStatusText as formatPlanModeStatusText,
@@ -90,6 +92,7 @@ import {
   configuredImplementationPlanRetention,
   configuredPlanModeToggleShortcut,
   configuredThinkingLevel,
+  type PlanModeFixedThinkingLevel,
   type PlanModeSettings,
   type PlanModeSettingsPatch,
   planModeSettingsPath,
@@ -98,8 +101,10 @@ import {
   updatePlanModeSettings,
 } from "./settings.js";
 import {
+  type ImplementationModelOverride,
   type ImplementationRuntimeSelection,
   type PlanCompletionSource,
+  type PlanModelSwitch,
   type PlanModeState,
   type PlanModeWorkflowToolPolicy,
   restorePlanModeState,
@@ -206,6 +211,14 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   let menuController = new AbortController();
   let settingsWatch: ReturnType<typeof watch> | undefined;
   let settingsReloadTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Bumped by every Plan start, exit and session change so a queued model switch can tell it is stale. */
+  let planModelEpoch = 0;
+  /** Plan model switches run in order; `before_agent_start` awaits the tail so a run never starts mid-switch. */
+  let planModelTransition: Promise<void> = Promise.resolve();
+  /** Pi re-selects thinking inside `setModel`; those events are not manual changes. */
+  let switchingPlanModel = false;
+  /** Source session of an in-flight Start fresh; its shutdown restores the pre-Plan runtime. */
+  let freshSourceSession: ExtensionContext["sessionManager"] | undefined;
   const implementationRetention = createImplementationRetentionCoordinator();
   const finalizationRequest = createFinalizationRequestCoordinator();
   const headlessTurns = createHeadlessTurns(dependencies.headlessTurnStartTimeoutMs);
@@ -226,6 +239,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     // ExtensionContext.thinkingLevel was added after the supported Pi 0.80.6 floor.
     // ExtensionAPI has exposed the same runtime value throughout that compatibility range.
     getThinkingLevel: () => pi.getThinkingLevel(),
+    getFreshPlanModel,
     getSettings: () => settings,
     implementationOutcome,
     getExportDestination: (ctx) => planExports.getDestination(ctx),
@@ -556,6 +570,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     workflowAllowedToolNames = undefined;
     pendingWorkflowToolPolicy = undefined;
     implementationRetention.reset();
+    planModelEpoch += 1;
     settings = { thinkingLevel: "inherit" };
     const branch = ctx.sessionManager.getBranch();
     const restoredState = restorePlanModeState(branch, STATE_ENTRY_TYPE);
@@ -617,8 +632,16 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     await applyPendingImplementationRuntime(ctx);
   });
 
+  pi.on("model_select", (event) => {
+    const modelSwitch = state.planModelSwitch;
+    if (switchingPlanModel || !modelSwitch || sameModel(event.model, modelSwitch.applied)) return;
+    // A manual `/model` during Plan wins: exit leaves it in place.
+    state = { ...state, planModelSwitch: undefined };
+    persistState();
+  });
+
   pi.on("thinking_level_select", (event) => {
-    if (!state.enabled || !state.appliedThinkingLevel) return;
+    if (switchingPlanModel || !state.enabled || !state.appliedThinkingLevel) return;
     if (event.level !== state.appliedThinkingLevel) {
       state = {
         ...state,
@@ -664,8 +687,16 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       return;
     }
     captureManualThinkingLevel();
-    persistState();
-    if (state.enabled) restoreThinkingLevel();
+    if (freshSourceSession === shutdownSession && state.enabled && state.planModelSwitch) {
+      // Start fresh hands the plan off: the source goes back to the model and thinking Plan started from.
+      restorePlanRuntime(ctx);
+      state = { ...state, resumePlanModel: true };
+      persistState();
+      await planModelTransition;
+    } else {
+      persistState();
+      if (state.enabled) restoreThinkingLevel();
+    }
     stopPlanModeSettingsWatch();
     clearUi(ctx);
     releaseWorkflowOwner();
@@ -837,7 +868,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     }
   });
 
-  pi.on("before_agent_start", (event, ctx) => {
+  pi.on("before_agent_start", async (event, ctx) => {
+    await planModelTransition;
     refreshStateForFirstPrompt(ctx);
     // New-session setup arrives after session_start. Restore and announce its approval
     // even when an extension starts the first run, without treating that run as user input.
@@ -959,6 +991,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       beginWorkflowToolPolicy();
       applyPlanThinkingLevel();
       persistState();
+      startPlanModel(ctx);
       updateUi(ctx);
       return true;
     } catch (error: unknown) {
@@ -1005,7 +1038,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       manualThinkingLevel: undefined,
     };
     if (wasEnabled) {
-      restoreThinkingLevel();
+      restorePlanRuntime(ctx);
       state = { ...state, manualThinkingLevel: undefined };
     }
     persistState();
@@ -1274,7 +1307,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       workflowToolPolicy: undefined,
       manualThinkingLevel: undefined,
     };
-    restoreThinkingLevel();
+    restorePlanRuntime(ctx);
     state = { ...state, manualThinkingLevel: undefined };
     persistState();
     updateUi(ctx);
@@ -1287,13 +1320,18 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     menuIsCurrent: () => boolean,
     runtime: ImplementationRuntimeSelection | undefined,
   ) {
-    await startFreshImplementationFromState(ctx, {
-      getState: () => state,
-      menuIsCurrent,
-      retention: configuredImplementationPlanRetention(settings),
-      stateEntryType: STATE_ENTRY_TYPE,
-      runtime,
-    });
+    freshSourceSession = ctx.sessionManager;
+    try {
+      await startFreshImplementationFromState(ctx, {
+        getState: () => state,
+        menuIsCurrent,
+        retention: configuredImplementationPlanRetention(settings),
+        stateEntryType: STATE_ENTRY_TYPE,
+        runtime,
+      });
+    } finally {
+      freshSourceSession = undefined;
+    }
   }
 
   async function startImplementation(ctx: ExtensionContext) {
@@ -1351,7 +1389,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       manualThinkingLevel: undefined,
     };
     if (wasEnabled) {
-      restoreThinkingLevel();
+      restorePlanRuntime(ctx);
       state = { ...state, manualThinkingLevel: undefined };
     }
     // Before the state entry: callers and resume read the newest entry as Plan state.
@@ -1368,12 +1406,15 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       : formatImplementationHandoff(plan);
     const sent = sendPlanModeUserMessage(handoff, ctx);
     if (!sent) {
-      state = previousState;
+      // The queued model restore may already have run, so re-apply the Plan model afresh.
+      state = { ...previousState, planModelSwitch: undefined };
       readyPresentationIntent = previousIntent;
       if (wasEnabled) {
         restoreWorkflowToolPolicy(state.workflowToolPolicy);
         publishModeContract("plan", ctx);
         applyPlanThinkingLevel();
+        // The queued restore resets thinking after this, so the switch re-applies Plan thinking first.
+        startPlanModel(ctx, true);
       }
       persistState();
       updateUi(ctx);
@@ -1831,61 +1872,34 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         };
 
         if (intent.model) {
-          let model: ReturnType<ExtensionContext["modelRegistry"]["find"]>;
-          let resolutionFailed = false;
-          try {
-            model = ctx.modelRegistry.find(intent.model.provider, intent.model.modelId);
-          } catch (error: unknown) {
+          const resolved = await resolveAuthenticatedModel(ctx, intent.model);
+          if (!isCurrent()) return "stale";
+          if ("failure" in resolved) {
             notifyCurrent(
-              `Implementation model ${terminalModelReference(intent.model)} could not be resolved: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default model will continue.`,
+              `Implementation model ${terminalModelReference(intent.model)} ${resolved.failure}. The destination default model will continue.`,
             );
-            resolutionFailed = true;
-            model = undefined;
-          }
-          if (!model && !resolutionFailed) {
-            notifyCurrent(
-              `Implementation model ${terminalModelReference(intent.model)} is no longer available. The destination default model will continue.`,
-            );
-          }
-          if (model) {
-            let authenticated = false;
+          } else {
+            const model = resolved.model;
+            let applied = false;
+            let applicationFailed = false;
+            application.drainOnShutdown = true;
             try {
-              const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-              if (!isCurrent()) return "stale";
-              if (auth.ok) authenticated = true;
-              else {
+              try {
+                applied = await pi.setModel(model);
+              } catch (error: unknown) {
+                applicationFailed = true;
                 notifyCurrent(
-                  `Implementation model ${terminalModelReference(intent.model)} could not be authenticated: ${safeTerminalText(auth.error)}. The destination default model will continue.`,
+                  `Implementation model ${terminalModelReference(intent.model)} could not be applied: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default model will continue.`,
                 );
               }
-            } catch (error: unknown) {
-              notifyCurrent(
-                `Implementation model ${terminalModelReference(intent.model)} could not be authenticated: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default model will continue.`,
-              );
+            } finally {
+              application.drainOnShutdown = false;
             }
             if (!isCurrent()) return "stale";
-            if (authenticated) {
-              let applied = false;
-              let applicationFailed = false;
-              application.drainOnShutdown = true;
-              try {
-                try {
-                  applied = await pi.setModel(model);
-                } catch (error: unknown) {
-                  applicationFailed = true;
-                  notifyCurrent(
-                    `Implementation model ${terminalModelReference(intent.model)} could not be applied: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default model will continue.`,
-                  );
-                }
-              } finally {
-                application.drainOnShutdown = false;
-              }
-              if (!isCurrent()) return "stale";
-              if (!applied && !applicationFailed) {
-                notifyCurrent(
-                  `Implementation model ${terminalModelReference(intent.model)} could not be applied after authentication changed. The destination default model will continue.`,
-                );
-              }
+            if (!applied && !applicationFailed) {
+              notifyCurrent(
+                `Implementation model ${terminalModelReference(intent.model)} could not be applied after authentication changed. The destination default model will continue.`,
+              );
             }
           }
         }
@@ -1977,6 +1991,179 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     state = { ...state, appliedThinkingLevel: undefined, previousThinkingLevel: undefined };
   }
 
+  function queuePlanModelTransition(transition: () => Promise<void>) {
+    planModelTransition = planModelTransition.then(transition);
+  }
+
+  /**
+   * Queue the configured Plan model switch; Plan still starts on the current model if it fails.
+   * `reapplyThinking` re-applies Plan thinking first, after a queued restore reset it.
+   */
+  function startPlanModel(ctx: ExtensionContext, reapplyThinking = false) {
+    const epoch = ++planModelEpoch;
+    if (reapplyThinking) {
+      queuePlanModelTransition(async () => {
+        if (epoch !== planModelEpoch || !state.enabled) return;
+        applyPlanThinkingLevel();
+        persistState();
+      });
+    }
+    const tier = settings.planModel;
+    if (tier) queuePlanModelTransition(() => applyPlanModel(ctx, tier, epoch));
+  }
+
+  /**
+   * A source resumed after Start fresh plans on the Plan model again. Only that hand-off sets the
+   * marker, so `/reload` with a persisted switch and a manual `/model` during Plan are left alone.
+   */
+  function resumePlanModel(ctx: ExtensionContext) {
+    if (!state.resumePlanModel) return;
+    state = { ...state, resumePlanModel: undefined };
+    persistState();
+    startPlanModel(ctx);
+  }
+
+  async function applyPlanModel(ctx: ExtensionContext, tier: PlanModelTier, epoch: number) {
+    const target = planModelTarget(tier);
+    const previous = ctx.model;
+    const isCurrent = () => epoch === planModelEpoch && state.enabled;
+    if (!isCurrent() || !previous || sameModel(previous, target)) return;
+    // Mirrors the fresh implementation row's "...; using the planning model."; here the tier is the planning model.
+    const fallback = (failure: string) =>
+      ctx.ui.notify(
+        `Plan model ${tier} (${terminalModelReference(target)}) ${failure}; using the current model.`,
+        "warning",
+      );
+    const resolved = await resolveAuthenticatedModel(ctx, target);
+    if (!isCurrent()) return;
+    if ("failure" in resolved) {
+      fallback(resolved.failure);
+      return;
+    }
+    const thinkingBefore = pi.getThinkingLevel();
+    try {
+      if (!(await switchModel(resolved.model, thinkingBefore))) {
+        fallback("could not be applied");
+        return;
+      }
+    } catch (error: unknown) {
+      fallback(`could not be applied: ${errorText(error)}`);
+      return;
+    }
+    const modelSwitch: PlanModelSwitch = {
+      applied: target,
+      previous: { provider: previous.provider, modelId: previous.id },
+      thinkingBefore,
+      thinkingAfter: pi.getThinkingLevel(),
+    };
+    if (!isCurrent()) {
+      // Plan ended while the switch was in flight: put the previous model back.
+      await restorePlanModel(ctx, modelSwitch, thinkingBefore);
+      return;
+    }
+    state = {
+      ...state,
+      ...(state.appliedThinkingLevel ? { appliedThinkingLevel: modelSwitch.thinkingAfter } : {}),
+      planModelSwitch: modelSwitch,
+    };
+    persistState();
+  }
+
+  /** Restore thinking and, unless `/model` replaced it during Plan, the model a Plan start switched from. */
+  function restorePlanRuntime(ctx: ExtensionContext) {
+    planModelEpoch += 1;
+    const modelSwitch = state.planModelSwitch;
+    state = { ...state, planModelSwitch: undefined };
+    if (!modelSwitch || !sameModel(ctx.model, modelSwitch.applied)) {
+      restoreThinkingLevel();
+      return;
+    }
+    captureManualThinkingLevel();
+    const current = pi.getThinkingLevel();
+    // Pi re-selects a per-model thinking default on switch; pin the level Plan would restore without one.
+    const thinking =
+      state.previousThinkingLevel ?? (current === modelSwitch.thinkingAfter ? modelSwitch.thinkingBefore : current);
+    state = { ...state, appliedThinkingLevel: undefined, previousThinkingLevel: undefined };
+    queuePlanModelTransition(() => restorePlanModel(ctx, modelSwitch, thinking));
+  }
+
+  async function restorePlanModel(
+    ctx: ExtensionContext,
+    modelSwitch: PlanModelSwitch,
+    thinking: PlanModeFixedThinkingLevel,
+  ) {
+    const resolved = await resolveAuthenticatedModel(ctx, modelSwitch.previous);
+    let failure = "could not be applied";
+    if ("failure" in resolved) failure = resolved.failure;
+    else {
+      try {
+        if (await switchModel(resolved.model, thinking)) return;
+      } catch (error: unknown) {
+        failure = `could not be applied: ${errorText(error)}`;
+      }
+    }
+    if (pi.getThinkingLevel() !== thinking) pi.setThinkingLevel(thinking);
+    ctx.ui.notify(
+      `Previous model ${terminalModelReference(modelSwitch.previous)} ${failure}; Pi stays on ${terminalModelReference(modelSwitch.applied)}.`,
+      "warning",
+    );
+  }
+
+  /** Switch models without letting Pi's per-model thinking default replace `thinking`. */
+  async function switchModel(model: Parameters<ExtensionAPI["setModel"]>[0], thinking: PlanModeFixedThinkingLevel) {
+    switchingPlanModel = true;
+    try {
+      if (!(await pi.setModel(model))) return false;
+      if (pi.getThinkingLevel() !== thinking) pi.setThinkingLevel(thinking);
+      return true;
+    } finally {
+      switchingPlanModel = false;
+    }
+  }
+
+  /**
+   * Find and authenticate `reference` for the Plan and implementation model switches.
+   * A failure reads after the model's name, e.g. "is no longer available".
+   */
+  async function resolveAuthenticatedModel(
+    ctx: ExtensionContext,
+    reference: ImplementationModelOverride,
+  ): Promise<{ model: Parameters<ExtensionAPI["setModel"]>[0] } | { failure: string }> {
+    let model: ReturnType<ExtensionContext["modelRegistry"]["find"]>;
+    try {
+      model = ctx.modelRegistry.find(reference.provider, reference.modelId);
+    } catch (error: unknown) {
+      return { failure: `could not be resolved: ${errorText(error)}` };
+    }
+    if (!model) return { failure: "is no longer available" };
+    try {
+      const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+      return auth.ok ? { model } : { failure: `could not be authenticated: ${safeTerminalText(auth.error)}` };
+    } catch (error: unknown) {
+      return { failure: `could not be authenticated: ${errorText(error)}` };
+    }
+  }
+
+  function errorText(error: unknown) {
+    return safeTerminalText(error instanceof Error ? error.message : String(error));
+  }
+
+  function sameModel(model: { provider: string; id: string } | undefined, reference: ImplementationModelOverride) {
+    return model?.provider === reference.provider && model.id === reference.modelId;
+  }
+
+  /** Like opusplan, Start fresh's "same as plan" implements on the model Plan started from, not on the tier. */
+  function getFreshPlanModel(ctx: ExtensionContext): FreshPlanModel {
+    const modelSwitch = state.enabled ? state.planModelSwitch : undefined;
+    if (modelSwitch && sameModel(ctx.model, modelSwitch.applied)) {
+      return { model: { ...modelSwitch.previous }, label: "previous model" };
+    }
+    return {
+      model: ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : undefined,
+      label: "same as plan",
+    };
+  }
+
   function safeGetActiveTools() {
     try {
       return pi.getActiveTools();
@@ -2021,7 +2208,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       }
       if (wasEnabled && !candidate.enabled) {
         readyPresentationIntent = undefined;
-        restoreThinkingLevel();
+        restorePlanRuntime(ctx);
       }
       state = candidate;
       const policyChanged = state.enabled ? restoreWorkflowToolPolicy(state.workflowToolPolicy) : false;
@@ -2030,8 +2217,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         pendingWorkflowToolPolicy = undefined;
       }
       if (policyChanged) persistState();
-      if (state.enabled) applyPlanThinkingLevel();
-      else if (wasEnabled) releaseWorkflowOwner();
+      if (state.enabled) {
+        applyPlanThinkingLevel();
+        resumePlanModel(ctx);
+      } else if (wasEnabled) releaseWorkflowOwner();
       return true;
     } catch (error: unknown) {
       try {
@@ -2059,7 +2248,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     try {
       if (state.enabled) {
         publishModeContract("normal", ctx);
-        restoreThinkingLevel();
+        restorePlanRuntime(ctx);
       }
     } finally {
       state = previousState;

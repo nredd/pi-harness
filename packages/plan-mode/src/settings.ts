@@ -5,6 +5,7 @@ import { basename, dirname, isAbsolute, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { KeyId } from "@earendil-works/pi-tui";
 import { type ImplementationModelOverride, isPendingImplementationModelIdentifier } from "./implementation-models.js";
+import { normalizePlanModelTier, PLAN_MODEL_TIER_REQUIRED, type PlanModelTier } from "./plan-model.js";
 import type { SafeSubcommands } from "./tool-policy.js";
 
 export const PLAN_MODE_SETTINGS_FILE = "pi-plan-mode.json";
@@ -84,6 +85,8 @@ export type ImplementationPlanRetention = (typeof IMPLEMENTATION_PLAN_RETENTIONS
 export type PlanModeFixedThinkingLevel = (typeof IMPLEMENTATION_THINKING_LEVELS)[number];
 export interface PlanModeSettings {
   thinkingLevel: PlanModeThinkingLevel;
+  /** Router tier Plan turns run on, e.g. `@deep`; omitted inherits the current model. */
+  planModel?: PlanModelTier;
   defaultPlanTools?: string[];
   implementationPlanRetention?: ImplementationPlanRetention;
   defaultImplementationModel?: ImplementationModelOverride;
@@ -96,6 +99,7 @@ export interface PlanModeSettings {
 }
 export interface PlanModeSettingsPatch {
   thinkingLevel?: PlanModeThinkingLevel;
+  planModel?: PlanModelTier | null;
   defaultPlanTools?: readonly string[] | null;
   implementationPlanRetention?: ImplementationPlanRetention;
   defaultImplementationModel?: ImplementationModelOverride | null;
@@ -139,6 +143,11 @@ export function normalizePlanModeSettings(value: unknown): PlanModeSettings | un
   const settings: PlanModeSettings = {
     thinkingLevel: thinkingLevel as PlanModeThinkingLevel,
   };
+  if (Object.hasOwn(value, "planModel")) {
+    const planModel = normalizePlanModelTier(Reflect.get(value, "planModel"));
+    if (!planModel) return undefined;
+    settings.planModel = planModel;
+  }
   if (Object.hasOwn(value, "defaultPlanTools")) {
     const defaultPlanTools = normalizeToolNames(Reflect.get(value, "defaultPlanTools"));
     if (!defaultPlanTools) return undefined;
@@ -327,6 +336,8 @@ export function updatePlanModeSettings(
     const current = await readSettingsDocumentForUpdate(settingsPath, legacySettingsPath);
     const updated: SettingsDocument = { ...current };
     if (patch.thinkingLevel !== undefined) updated.thinkingLevel = patch.thinkingLevel;
+    if (patch.planModel === null) delete updated.planModel;
+    else if (patch.planModel !== undefined) updated.planModel = patch.planModel;
     if (patch.defaultPlanTools === null) delete updated.defaultPlanTools;
     else if (patch.defaultPlanTools !== undefined) {
       updated.defaultPlanTools = [...patch.defaultPlanTools];
@@ -354,7 +365,7 @@ export function updatePlanModeSettings(
       updated.toggleShortcut = patch.toggleShortcut;
     }
     const settings = normalizePlanModeSettings(updated);
-    if (!settings) throw invalidSettingsError(settingsPath, "invalid settings shape");
+    if (!settings) throw invalidSettingsError(settingsPath, invalidSettingsShapeReason(updated));
     await publishSettings(settingsPath, updated, options.signal, options.beforeRename);
     return settings;
   });
@@ -417,7 +428,7 @@ async function readSettingsSnapshot(settingsPath: string): Promise<SettingsSnaps
   }
   const settings = normalizePlanModeSettings(parsed);
   if (!settings || !isSettingsDocument(parsed)) {
-    return { result: { kind: "invalid", reason: "invalid settings shape" } };
+    return { result: { kind: "invalid", reason: invalidSettingsShapeReason(parsed) } };
   }
   return { document: parsed, result: { kind: "loaded", settings } };
 }
@@ -493,6 +504,15 @@ async function pathExists(path: string) {
   } catch (error: unknown) {
     return !(isNodeError(error) && error.code === "ENOENT");
   }
+}
+
+/** Why `normalizePlanModeSettings` rejected `value`, naming `planModel` because #364 forbids concrete ids there. */
+function invalidSettingsShapeReason(value: unknown) {
+  return isSettingsDocument(value) &&
+    Object.hasOwn(value, "planModel") &&
+    !normalizePlanModelTier(Reflect.get(value, "planModel"))
+    ? PLAN_MODEL_TIER_REQUIRED
+    : "invalid settings shape";
 }
 
 function invalidSettingsError(settingsPath: string, reason: string) {
