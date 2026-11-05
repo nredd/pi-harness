@@ -61,6 +61,23 @@ afterEach(() => {
 	rmSync(dir, { recursive: true, force: true });
 });
 
+/**
+ * Fake the timeout clocks and resolve on the next spawned child's first stdout chunk, a shim's readiness
+ * marker, so no deadline can fire before the shim has armed what the test exercises.
+ */
+function fakeClocksUntilFirstStdout(): Promise<void> {
+	vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+	const nativeSpawn = vi.mocked(spawn).getMockImplementation();
+	if (!nativeSpawn) throw new Error("Missing native spawn implementation");
+	return new Promise((resolve) => {
+		vi.mocked(spawn).mockImplementationOnce((...args) => {
+			const child = nativeSpawn(...args);
+			child.stdout?.once("data", () => resolve());
+			return child;
+		});
+	});
+}
+
 function commitAll(msg = "c") {
 	git("add", "-A");
 	git("commit", "-q", "-m", msg);
@@ -256,18 +273,7 @@ describe("runGit / untrackedPatch", () => {
 		chmodSync(shim, 0o755);
 		// `ready` is printed after the trap and after the grandchild forked. Only then admit the timeout
 		// clock: a SIGTERM before the trap, or before the group exists, would not exercise the kill path.
-		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-		let ready!: () => void;
-		const readiness = new Promise<void>((resolve) => {
-			ready = resolve;
-		});
-		const nativeSpawn = vi.mocked(spawn).getMockImplementation();
-		if (!nativeSpawn) throw new Error("Missing native spawn implementation");
-		vi.mocked(spawn).mockImplementationOnce((...args) => {
-			const child = nativeSpawn(...args);
-			child.stdout?.once("data", () => ready());
-			return child;
-		});
+		const readiness = fakeClocksUntilFirstStdout();
 		const running = runGit(["status"], { cwd: dir, cmd: shim, timeoutMs: 20 });
 		await readiness;
 		// SIGTERM at 20ms is ignored by the group; SIGKILL follows the 2s grace.
@@ -288,18 +294,7 @@ describe("runGit / untrackedPatch", () => {
 		chmodSync(shim, 0o755);
 		// Admit timeout/cap clocks only after the real shim has created its resistant descendant.
 		// Its stdout is the readiness handshake, so host scheduling cannot race a 150ms deadline.
-		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-		let ready!: () => void;
-		const readiness = new Promise<void>((resolve) => {
-			ready = resolve;
-		});
-		const nativeSpawn = vi.mocked(spawn).getMockImplementation();
-		if (!nativeSpawn) throw new Error("Missing native spawn implementation");
-		vi.mocked(spawn).mockImplementationOnce((...args) => {
-			const child = nativeSpawn(...args);
-			child.stdout?.once("data", () => ready());
-			return child;
-		});
+		const readiness = fakeClocksUntilFirstStdout();
 		let pid = 0;
 		try {
 			const running = runGit([], {
