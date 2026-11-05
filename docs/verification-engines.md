@@ -106,7 +106,7 @@ spawn-time-home launcher. `session-kit` likewise retains its native subset while
 injected-home canary runs through `scripts/run-vitest.ts bun`. Since #320 `plan-mode` and
 `dev-tools` run their full suites on Bun with the shared guard instead of their native subsets
 and canaries (`tool-policy.test.ts`, `ssh/hosts.test.ts`), every case of which is in the full run. Counts are in the receipt
-[here](../coverage/receipts/bun-enforced.md).
+[here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/bun-enforced.md).
 `session-kit` also runs its home-only factory canary through `scripts/run-vitest.ts node`, and
 leaves it out of its ordinary Node Vitest run and native Bun scenario list. On both engines the
 launcher installs disposable `HOME`/`USERPROFILE` values before the canary imports the SDK, so
@@ -135,10 +135,10 @@ node ../../scripts/run-vitest.ts bun --config .vitest.config.ts   # todo
 
 Keep the sampler's `--maxWorkers=1`. Install the Istanbul provider version compatible with the
 pinned Vitest. Istanbul remains the provider on Bun 1.4.4; do not substitute the V8 provider or
-Bun-native coverage flags. Both `text` and `lcov` reporters are mandatory. Set explicit
-per-signal source inventories and matching instrumentation includes in #162, including
-never-imported files where full-source coverage is claimed; test counts alone are not source
-coverage. Expected reports, relative to the repository root:
+Bun-native coverage flags. Both `text` and `lcov` reporters are mandatory. The per-signal
+source inventory (#162) lives only in `coverage/policy.json`; each config reads it as its
+instrumentation `include`, so never-imported files count wherever full-source coverage is claimed.
+Test counts alone are not source coverage. Expected reports, relative to the repository root:
 
 - `packages/subscription-router/coverage/bun/lcov.info`
 - `packages/preset/coverage/bun/lcov.info`
@@ -149,7 +149,7 @@ Bun signals for `dev-tools`, `plan-mode`, `preset`, `subscription-router` and `t
 **enforced** at 0/0 on both OSes since #320, `resource-sampler` since #375 and `inprocess` since #376; the rest stay **report-only** with their reasons and per-OS references. Primary
 signals stay enforced. Changing producers is not an enforcement promotion, permission to merge engine
 counters, or permission to raise budgets. The five promotions rest on their own PRs' hosted macOS
-and Ubuntu artifacts, recorded [here](../coverage/receipts/bun-enforced.md).
+and Ubuntu artifacts, recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/bun-enforced.md).
 
 On that rebase, #162 must also inventory `scripts/run-vitest.ts` and the new
 `integration/inprocess/verification/*` sources, specifically executable `home-guard.ts` and

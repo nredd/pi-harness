@@ -7,14 +7,16 @@ References:
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from test_coverage_round2 import scope_fixture
+from coverage_fixtures import SCRIPT, scope_fixture
 
 from coverage_accounting import git_read
 
@@ -106,3 +108,49 @@ def test_hostile_git_environment_cannot_redirect_fixture_writes(
     assert not (owned / ".git/hooks").exists()
     assert not injected_index.exists()
     assert not marker.exists()
+
+
+def test_git_commands_capture_stderr(tmp_path: Path) -> None:
+    """Require the subprocess stderr contract on the actual common Git reader.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+    Returns:
+        None: Git is executed with combined output.
+    Raises:
+        AssertionError: The stderr contract regresses.
+    """
+    with patch("coverage_accounting.subprocess.check_output", wraps=subprocess.check_output) as command:
+        assert git_read(tmp_path, ["--version"]).startswith("git version")
+    assert command.call_args.kwargs.get("stderr") == subprocess.STDOUT
+    assert command.call_args.kwargs.get("text") is True
+
+
+def test_failed_git_diagnostics_reach_summary(tmp_path: Path) -> None:
+    """Retain real failed-command diagnostics, not just the command's exit status.
+
+    Parameters:
+        tmp_path (Path): Disposable Git fixture root.
+    Returns:
+        None: The invalid base fails with a diagnostic summary.
+    Raises:
+        AssertionError: Fatal Git output is lost or accepted as success.
+    """
+    scope_fixture(tmp_path)
+    summary = tmp_path / "summary.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--root",
+            str(tmp_path),
+            "--base",
+            "invalid-base",
+            "--summary",
+            str(summary),
+        ],
+        check=False,
+        capture_output=True,
+    )
+    assert result.returncode == 1
+    assert "fatal:" in json.loads(summary.read_text())["errors"][0]

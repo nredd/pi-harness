@@ -115,7 +115,7 @@ Prepare a runnable disposable copy, apply one mutation from the table, then run 
 ```bash
 root="$PWD"
 repo="$root/packages/computer-use"
-# Mirror the monorepo so the copied Vitest config finds its shared home guard.
+# Mirror the monorepo so the copied Vitest config finds its shared home guard and `coverage/policy.json`.
 top=$(mktemp -d /tmp/pr165-mutant.XXXXXX)
 work="$top/packages/computer-use"
 mkdir -p "$work/scripts" "$work/test"
@@ -123,7 +123,7 @@ cp "$repo/scripts/"{check-async,setup-helper,build-native}.mjs "$work/scripts/"
 cp "$repo/test/linux-build-scripts.test.mjs" "$work/test/"
 cp "$repo/vitest.config.ts" "$work/"
 for name in src native docs package.json; do ln -s "$repo/$name" "$work/$name"; done
-for name in node_modules integration; do ln -s "$root/$name" "$top/$name"; done
+for name in node_modules integration coverage; do ln -s "$root/$name" "$top/$name"; done
 # Apply ONE table mutation to "$work/scripts/setup-helper.mjs", never the real module.
 (cd "$work" && node "$root/scripts/run-vitest.ts" node test/linux-build-scripts.test.mjs --coverage.enabled=false)  # Must fail with the table's assertion.
 ```

@@ -11,7 +11,8 @@ import { validateLedger } from "./check-sync-ledger.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repository = path.resolve(root, "../..");
-// The sandbox mirrors the monorepo layout so the copied `vitest.config.ts` resolves its shared home guard.
+// The sandbox mirrors the monorepo layout so the copied `vitest.config.ts` resolves its shared home guard
+// and its coverage inventory, `coverage/policy.json`.
 const sandboxRoot = mkdtempSync(path.join(os.tmpdir(), "cu-sync-reverts-"));
 const sandbox = path.join(sandboxRoot, "packages", "computer-use");
 const nodeModules = path.join(repository, "node_modules");
@@ -270,6 +271,7 @@ try {
 	}
 	symlinkSync(nodeModules, path.join(sandboxRoot, "node_modules"), "dir");
 	symlinkSync(path.join(repository, "integration"), path.join(sandboxRoot, "integration"), "dir");
+	symlinkSync(path.join(repository, "coverage"), path.join(sandboxRoot, "coverage"), "dir");
 	// NO_COLOR keeps Vitest's CI-colored output matchable; each Vitest control gets its own isolated home.
 	const env = {
 		...process.env,

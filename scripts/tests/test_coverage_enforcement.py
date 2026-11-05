@@ -18,6 +18,8 @@ import pytest
 from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from coverage_fixtures import FIXTURES, SCRIPT, commit_base, policy, setup_report
+
 from coverage_accounting import (
     EnforcementChange,
     Policy,
@@ -26,8 +28,6 @@ from coverage_accounting import (
     check_ratchet,
     signal_comparisons,
 )
-from tests.test_coverage_accounting import FIXTURES, SCRIPT, policy, setup_report
-from tests.test_coverage_round2 import commit_base
 
 ROOT = Path(__file__).resolve().parents[2]
 REASON = (
