@@ -338,6 +338,38 @@ describe("settling with in_progress todos", () => {
 		]);
 	});
 
+	it("names free-text owners alongside any blocker details", () => {
+		const state = {
+			tasks: [
+				task(1, { owner: "release-team" }),
+				task(2, { owner: "deploy-team", blockedBy: [4] }),
+				task(3, { owner: "audit-team", blockedBy: [5] }),
+				{ id: 4, subject: "t4", status: "deferred" },
+				{ id: 5, subject: "t5", status: "pending", owner: "worker" },
+				task(6, { owner: "finished", blockedBy: [4] }),
+			],
+			nextId: 7,
+		} as never;
+		const states: Record<string, AgentRunState> = { worker: "running", finished: "done" };
+		const notice = formatInProgressNotice(state, (owner) => states[owner ?? ""]);
+		expect(notice?.text).toContain("#1 t1 (@release-team)");
+		expect(notice?.text).toContain("#2 t2 (@deploy-team; by #4 deferred)");
+		expect(notice?.text).toContain("#3 t3 (@audit-team; by #5)");
+		expect(notice?.text).toContain("#6 t6 (@finished done; by #4 deferred)");
+	});
+
+	it("re-arms an info report when its displayed owner changes", () => {
+		const state = (owner: string) =>
+			({
+				tasks: [task(1, { owner, blockedBy: [2] }), task(2, { owner: "worker" })],
+				nextId: 3,
+			}) as never;
+		const lookup = (owner: string | undefined) => (owner === "worker" ? "running" : undefined);
+		expect(formatInProgressNotice(state("alice"), lookup)?.key).not.toBe(
+			formatInProgressNotice(state("bob"), lookup)?.key,
+		);
+	});
+
 	it("caps each group at three and counts the rest", () => {
 		const state = { tasks: [1, 2, 3, 4, 5].map((id) => task(id)), nextId: 6 } as never;
 		expect(formatInProgressNotice(state)?.text).toBe(

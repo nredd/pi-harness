@@ -211,21 +211,27 @@ function classify(task: Task, byId: ReadonlyMap<number, Task>, lookup: AgentStat
 	return { task, kind: "held", agent, deps: open };
 }
 
-/** One todo's entry: blockers by id (with status when `showDepStatus`), else its owner's agent state. */
+/** One todo's entry: owner and agent state, plus blockers by id and optionally status. */
 function entryText({ task, agent, deps }: Row, showDepStatus: boolean): string {
 	const owner = ownerLabel(task.owner);
-	const detail = deps.length
-		? ` (by ${deps.map((d) => (showDepStatus ? `#${d.id} ${d.status}` : `#${d.id}`)).join(", ")})`
-		: agent && owner
-			? ` (${owner} ${agent})`
-			: "";
+	const details = [];
+	if (owner) details.push(agent ? `${owner} ${agent}` : owner);
+	if (deps.length)
+		details.push(`by ${deps.map((d) => (showDepStatus ? `#${d.id} ${d.status}` : `#${d.id}`)).join(", ")}`);
+	const detail = details.length ? ` (${details.join("; ")})` : "";
 	return `#${task.id} ${sanitizeTerminalText(task.subject)}${detail}`;
 }
 
-/** The dedupe key: every todo's group, owner agent state and the blockers that group names. */
+/** The dedupe key: every todo's group, owner, agent state and the blockers that group names. */
 function reportKey(rows: readonly Row[]): string {
 	return JSON.stringify(
-		rows.map(({ task, kind, agent, deps }) => [task.id, kind, agent ?? null, deps.map((d) => d.id)]),
+		rows.map(({ task, kind, agent, deps }) => [
+			task.id,
+			kind,
+			task.owner ?? null,
+			agent ?? null,
+			deps.map((d) => d.id),
+		]),
 	);
 }
 
