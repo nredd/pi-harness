@@ -40,6 +40,18 @@ describe("parseCargoMessages (cargo 1.99 json-diagnostic-short)", () => {
 		expect(p.unparsed).toEqual(["garbage"]);
 		expect(p.diagnostics[0]).toMatchObject({ code: null, file: null, rendered: "x" });
 	});
+
+	it("drops rustc's failure-note summaries from full --message-format=json", () => {
+		const p = parseCargoMessages(fixture("check-full.jsonl"));
+		expect(p.errors).toBe(3);
+		expect(p.warnings).toBe(0);
+		expect(p.diagnostics.map((d) => d.code)).toEqual(["E0308", "E0308", "E0425"]);
+		expect(JSON.stringify(p.diagnostics)).not.toContain("Some errors have detailed explanations");
+	});
+
+	it("reads a build-finished event that drifted to drop `success` as unknown", () => {
+		expect(parseCargoMessages('{"reason":"build-finished"}\n').success).toBeNull();
+	});
 });
 
 describe("parseJunit (nextest 0.9.148)", () => {
@@ -62,6 +74,24 @@ describe("parseJunit (nextest 0.9.148)", () => {
 		expect(j.failed.map((f) => f.name)).toEqual(["c a", "c b"]);
 		expect(j.failed[1]?.message).toBe("timed out");
 	});
+	it("lists nextest's self-closing timeout and silent-exit failures", () => {
+		const j = parseJunit(fixture("nextest-junit-silent.xml"));
+		expect(j).toMatchObject({ tests: 3, failures: 2, errors: 0, skipped: 0 });
+		expect(j.failed).toEqual([
+			{ name: "good tests::silent_exit", message: "", detail: "" },
+			{ name: "good tests::hangs", message: "", detail: "" },
+		]);
+	});
+	it("defaults missing totals to 0 and an unnamed case to `?`", () => {
+		const j = parseJunit('<testsuites tests="1"><testcase time="0.1"><failure>boom</failure></testcase></testsuites>');
+		expect(j).toEqual({
+			tests: 1,
+			failures: 0,
+			errors: 0,
+			skipped: 0,
+			failed: [{ name: "?", message: "", detail: "boom" }],
+		});
+	});
 	it("handles an empty suite", () => {
 		expect(
 			parseJunit('<testsuites name="x" tests="0" failures="0" errors="0" skipped="0"></testsuites>').failed,
@@ -72,6 +102,11 @@ describe("parseJunit (nextest 0.9.148)", () => {
 describe("parseDoctests", () => {
 	it("counts passes and names failures", () => {
 		expect(parseDoctests(fixture("doctest.txt"))).toEqual({ passed: 1, failed: 0, failedNames: [] });
+		expect(parseDoctests(fixture("doctest-failed.txt"))).toEqual({
+			passed: 0,
+			failed: 1,
+			failedNames: ["good/src/lib.rs - add (line 4)"],
+		});
 		expect(
 			parseDoctests(
 				"test src/lib.rs - add (line 4) ... FAILED\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.1s\n",
@@ -106,6 +141,11 @@ describe("benchEstimate and formatNs", () => {
 		expect(est?.changePct).toBeCloseTo(0.33);
 		expect(benchEstimate("x", "not json", null)).toBeNull();
 		expect(benchEstimate("x", "{}", null)).toBeNull();
+		// A `change/estimates.json` without a mean (e.g. a baseline of a different shape) is no change.
+		const mean = JSON.stringify({
+			mean: { point_estimate: 1, confidence_interval: { lower_bound: 1, upper_bound: 1 } },
+		});
+		expect(benchEstimate("x", mean, "{}")?.changePct).toBeNull();
 	});
 	it("formats durations", () => {
 		expect(formatNs(417.19)).toBe("417.19 ns");
