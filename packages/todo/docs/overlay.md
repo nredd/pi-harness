@@ -87,7 +87,7 @@ the order in which it first heard of each agent. Then:
   exact match last settled. That is a retry under the same name, and of those the
   one started most recently shows instead.
 - With an exact match still `queued` (heard at `created`, never started), the most
-  recently settled `nameBase` match shows instead, if any: a queued spawn may never
+  recently settled `nameBase` match spawned after it shows instead, if any: a queued spawn may never
   run, and a settled sibling says more.
 - With no exact match, the most recently updated `nameBase` match shows.
 

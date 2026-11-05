@@ -165,6 +165,15 @@ function spawnedAfterSettle(candidate: AgentEntry, owner: AgentEntry): boolean {
 	return candidate.firstSeenAt > (owner.settledAt ?? Number.POSITIVE_INFINITY);
 }
 
+/**
+ * Whether `candidate` was spawned after `owner`: by pi-subagents' `spawnSeq` when both carry
+ * it, else by this tracker's order of first events.
+ */
+function spawnedAfter(candidate: AgentEntry, owner: AgentEntry): boolean {
+	if (candidate.spawnSeq !== undefined && owner.spawnSeq !== undefined) return candidate.spawnSeq > owner.spawnSeq;
+	return candidate.firstSeenAt > owner.firstSeenAt;
+}
+
 /** The most recently settled of `entries`, by this tracker's order. */
 function latestSettled(entries: readonly AgentEntry[]): AgentEntry | undefined {
 	type Settled = AgentEntry & { settledAt: number };
@@ -182,8 +191,9 @@ export function agentStateFor(sessionId: string, owner: string | undefined): Age
 	const exact = entries.find((entry) => entry.keys.has(wanted));
 	const byBase = entries.filter((entry) => entry !== exact && entry.nameBase === wanted);
 	if (!exact) return byBase[0]?.state;
-	// A queued exact match may never run; a retry that already settled says more.
-	if (exact.state === "queued") return latestSettled(byBase)?.state ?? exact.state;
+	// A queued exact match may never run; a retry spawned after it that already settled says more.
+	if (exact.state === "queued")
+		return latestSettled(byBase.filter((entry) => spawnedAfter(entry, exact)))?.state ?? exact.state;
 	if (exact.settledAt === undefined) return exact.state;
 	const retries = byBase.filter((entry) => spawnedAfterSettle(entry, exact));
 	retries.sort((a, b) => b.startedAt - a.startedAt);
