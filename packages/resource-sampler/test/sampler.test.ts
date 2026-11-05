@@ -335,6 +335,53 @@ describe("bounded child lifecycle", () => {
 		expect((await command("/nonexistent-resource-sampler-fixture", [], failed)).complete).toBe(false);
 		expect(failed.reasons.has("command-unavailable")).toBe(true);
 	});
+	it("captures stderr limits and nonzero helper exits", async () => {
+		const noisy = await scripted((child) => {
+			child.stderr.emit("data", Buffer.alloc(8192, "x"));
+			child.emit("close", null);
+		});
+		expect(noisy.result).toEqual({ complete: false, text: "" });
+		expect(noisy.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+		expect([...noisy.budget.reasons]).toEqual(["byte-limit"]);
+		const failed = await scripted((child) => child.emit("close", 7));
+		expect(failed.result).toEqual({ complete: false, text: "" });
+		expect([...failed.budget.reasons]).toEqual(["command-failed"]);
+	});
+	it("charges quiet stderr to the budget without truncating a successful helper", async () => {
+		const { budget, kill, result } = await scripted((child) => {
+			child.stderr.emit("data", Buffer.from("warn"));
+			child.stdout.emit("data", Buffer.from("ok\n"));
+			child.emit("close", 0);
+		});
+		expect(result).toEqual({ text: "ok\n", complete: true });
+		expect(kill).not.toHaveBeenCalled();
+		expect({ bytesRead: budget.bytesRead, reasons: [...budget.reasons] }).toEqual({ bytesRead: 7, reasons: [] });
+	});
+
+	/**
+	 * Run `command` against a fake helper child, so no host process start races the deadline.
+	 * @param emit Replays the child's stream events and close code once it is spawned.
+	 * @returns The capture result, the budget it charged and the child's kill spy.
+	 * @sideEffects Mocks `node:child_process` for one fresh `collect.js` import, then restores it.
+	 */
+	async function scripted(emit: (child: EventEmitter & { stderr: EventEmitter; stdout: EventEmitter }) => void) {
+		const kill = vi.fn((_signal: string) => true);
+		const child = Object.assign(new EventEmitter(), { kill, stderr: new EventEmitter(), stdout: new EventEmitter() });
+		const spawn = vi.fn(() => {
+			queueMicrotask(() => emit(child));
+			return child;
+		});
+		vi.resetModules();
+		vi.doMock("node:child_process", () => ({ spawn }));
+		try {
+			const { Budget: FixtureBudget, command: fixtureCommand } = await import("../src/collect.js");
+			const budget = new FixtureBudget(performance.now() + 1000, 4096, 1, new AbortController().signal);
+			return { budget, kill, result: await fixtureCommand("fixture", [], budget) };
+		} finally {
+			vi.doUnmock("node:child_process");
+			vi.resetModules();
+		}
+	}
 });
 
 // Real readlink, except where a test forces a runtime result no real symlink can produce.
@@ -421,24 +468,6 @@ describe("bounded proc reads and Linux process collection", () => {
 		const budget = new Budget(performance.now() + 1000, 4096, 1, new AbortController().signal);
 		expect(await budget.executable("/proc/1/exe")).toBe("");
 		expect(budget.bytesRead).toBe(0);
-	});
-	it("captures stderr limits and nonzero helper exits", async () => {
-		const noisy = new Budget(performance.now() + 1000, 4096, 1, new AbortController().signal);
-		expect(await command(process.execPath, ["-e", "process.stderr.write('x'.repeat(8192))"], noisy)).toMatchObject({
-			complete: false,
-			text: "",
-		});
-		expect([...noisy.reasons]).toContain("byte-limit");
-		const failed = new Budget(performance.now() + 1000, 4096, 1, new AbortController().signal);
-		expect(await command(process.execPath, ["-e", "process.exit(7)"], failed)).toMatchObject({ complete: false });
-		expect([...failed.reasons]).toContain("command-failed");
-	});
-	it("charges quiet stderr to the budget without truncating a successful helper", async () => {
-		const budget = new Budget(performance.now() + 2000, 4096, 1, new AbortController().signal);
-		expect(
-			await command(process.execPath, ["-e", "process.stderr.write('warn'); process.stdout.write('ok\\n')"], budget),
-		).toEqual({ text: "ok\n", complete: true });
-		expect({ bytesRead: budget.bytesRead, reasons: [...budget.reasons] }).toEqual({ bytesRead: 7, reasons: [] });
 	});
 	it("reports malformed Linux PSI as unavailable, never as zero pressure", async () => {
 		const budget = new Budget(performance.now() + 1000, 4096, 1, new AbortController().signal);
