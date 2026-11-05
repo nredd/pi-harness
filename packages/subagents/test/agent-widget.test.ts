@@ -274,9 +274,16 @@ describe("AgentWidget", () => {
 // That happens exactly when the concurrency limit is saturated, i.e. when the
 // queue is the thing the user most needs to see.
 describe("formatTokens", () => {
-  it("switches to millions at a million tokens", () => {
-    expect(formatTokens(999_999)).toBe("1000.0k token");
+  it("switches to millions once the thousands round to 1000", () => {
+    expect(formatTokens(999_949)).toBe("999.9k token");
+    expect(formatTokens(999_950)).toBe("1.0M token");
+    expect(formatTokens(999_999)).toBe("1.0M token");
     expect(formatTokens(1_234_567)).toBe("1.2M token");
+  });
+
+  it("keeps whole counts below a thousand and switches to k at 1000", () => {
+    expect(formatTokens(999)).toBe("999 token");
+    expect(formatTokens(1_000)).toBe("1.0k token");
   });
 });
 

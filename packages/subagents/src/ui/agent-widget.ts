@@ -114,10 +114,14 @@ export function fgPreservingNestedStyles(theme: Theme, color: string, text: stri
   return theme.fg(color, text.replace(/\u001b\[(?:0|39)m/g, reset => `${reset}${styleStart}`));
 }
 
-/** Format a token count compactly: "33.8k token", "1.2M token". */
+/**
+ * Format a token count compactly: "33.8k token", "1.2M token". The unit is
+ * picked against the ROUNDED thousands, so 999,999 reads "1.0M", never "1000.0k".
+ */
 export function formatTokens(count: number): string {
-  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M token`;
-  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k token`;
+  const thousands = Number((count / 1_000).toFixed(1));
+  if (thousands >= 1_000) return `${(count / 1_000_000).toFixed(1)}M token`;
+  if (count >= 1_000) return `${thousands.toFixed(1)}k token`;
   return `${count} token`;
 }
 

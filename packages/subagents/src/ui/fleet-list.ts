@@ -465,8 +465,9 @@ export class FleetList {
         this.widgetRegistered = false;
         this.tui = undefined;
       }
-      // A just-spawned agent with no session yet still counts in `hasRows` (the
-      // summary includes pending starts), so nothing here is starting: stop.
+      // A just-spawned agent with no session yet counts in `hasRows` (the
+      // summary includes pending starts), and that path's `ensureTimer()` keeps
+      // ticking until its session appears. So nothing here is starting: stop.
       if (this.timer) { this.timer.cancel(); this.timer = undefined; }
       this.active = false;
       this.selectedIndex = 0;
