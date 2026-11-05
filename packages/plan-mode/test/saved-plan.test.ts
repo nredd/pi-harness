@@ -411,6 +411,55 @@ test("saved Plan implementation preflight retains state on auth failure or sessi
   assert.equal(latestState(replaced.entries)?.savedPlan?.plan, PLAN);
 });
 
+test("saved Plan implementation stops when the branch changes as preflight returns", async () => {
+  const savedEntry = stateEntry({
+    enabled: false,
+    awaitingAction: false,
+    savedPlan: { plan: PLAN, source: "plan_mode_complete" },
+  });
+  let resolveAuth!: (result: { ok: true }) => void;
+  const authPending = new Promise<{ ok: true }>((resolve) => {
+    resolveAuth = resolve;
+  });
+  let authRequested!: () => void;
+  const authStarted = new Promise<void>((resolve) => {
+    authRequested = resolve;
+  });
+  const mock = createMockPi({ activeTools: ["read", "edit"] });
+  planMode(mock.pi);
+  const context = createMockContext({
+    hasUI: true,
+    model: MODEL,
+    modelRegistry: {
+      getApiKeyAndHeaders: () => {
+        authRequested();
+        return authPending;
+      },
+    },
+    sessionManager: {
+      getSessionId: () => "test-session",
+      getBranch: () => [savedEntry],
+      getEntries: () => [savedEntry],
+    },
+  });
+  await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+  const pendingImplementation = mock.commands.get("plan")?.handler("implement", context.ctx);
+  await authStarted;
+  // Registered after the preflight's own await, so this runs once the preflight has returned
+  // true and before `startImplementation` resumes.
+  let tree: Promise<unknown> | undefined;
+  const branchChanged = authPending.then(() => {
+    tree = Promise.resolve(mock.events.get("session_tree")?.[0]?.({}, context.ctx));
+  });
+  resolveAuth({ ok: true });
+  await branchChanged;
+  await pendingImplementation;
+  await tree;
+  assert.equal(mock.sentUserMessages.length, 0);
+  assert.equal(context.statuses.get("plan-mode"), "plan saved");
+  assert.deepEqual(mock.entries, []);
+});
+
 test("saved Plan survives resume and blocks replacement workflows", async () => {
   const savedEntry = stateEntry({
     enabled: false,

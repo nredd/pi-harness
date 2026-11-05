@@ -12,6 +12,7 @@ import {
   findBlockedSshExecCall,
   isSafeCommand as isPolicySafeCommand,
   isSafePowerShellCommand,
+  readCommand,
 } from "../src/tool-policy.js";
 import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
 
@@ -671,4 +672,103 @@ test("active Plan mode blocks update_plan and blocked built-ins at the tool hook
     block: true,
     reason: "Plan mode blocks tool 'read' because workflow ownership is unavailable.",
   });
+});
+
+test("ssh_exec without a command or configured hosts fails closed", () => {
+  assert.equal(
+    findBlockedSshExecCall({ host: "box", cwd: "/srv" }, { ssh: ["box"] }),
+    "remote command: (empty command)",
+  );
+  assert.equal(readCommand({ command: 42 }), "");
+  assert.equal(findBlockedSshExecCall({ host: "box", command: "ls" }), "host 'box' is not a configured ssh prefix");
+});
+
+test("an unset safe-subcommand entry grants nothing", () => {
+  assert.equal(findBlockedCommandSegment("kubectl get pods", { kubectl: undefined }), "kubectl get pods");
+  assert.equal(isPolicySafeCommand("kubectl get pods", { kubectl: ["get"] }), true);
+});
+
+test("an interpreter reached through a path or .exe is still rejected after a pipe", () => {
+  assert.equal(findBlockedCommandSegment("cat a | /usr/bin/python3 -", {}), "/usr/bin/python3 -");
+  assert.equal(
+    findBlockedPowerShellCommandSegment("Get-ChildItem | C:\\Windows\\System32\\cmd.exe /c dir", {}),
+    "C:\\Windows\\System32\\cmd.exe /c dir",
+  );
+});
+
+test("empty quoted command words are not commands", () => {
+  assert.equal(isPolicySafeCommand("''"), false);
+  assert.equal(isPolicySafeCommand('ls && ""'), false);
+  assert.equal(isSafePowerShellCommand("'' Get-ChildItem"), false);
+  assert.equal(isSafePowerShellCommand("Get-Process ''"), false);
+});
+
+test("unterminated quotes and trailing escapes reject the whole Bash command", () => {
+  for (const command of ['echo "open', "echo 'open", "ls \\"]) {
+    assert.equal(findBlockedCommandSegment(command), command);
+  }
+});
+
+test("curl and gh api value flags consume only their own value", () => {
+  assert.equal(isPolicySafeCommand("curl --silent https://example.com"), true);
+  assert.equal(isPolicySafeCommand("curl -HAccept:json https://example.com"), true);
+  // An attached value must not swallow the following option.
+  assert.equal(isPolicySafeCommand("curl -HAccept:json -o out https://example.com"), false);
+  assert.equal(isPolicySafeCommand("curl -H Accept:json -o out https://example.com"), false);
+  assert.equal(isPolicySafeCommand("gh api -HAccept:json repos/a/b"), true);
+  assert.equal(isPolicySafeCommand("gh api -HAccept:json -f k=v repos/a/b"), false);
+  assert.equal(isPolicySafeCommand("gh api -H Accept:json -f k=v repos/a/b"), false);
+});
+
+test("sort rejects an attached temporary directory", () => {
+  assert.equal(isPolicySafeCommand("sort -T/tmp input.txt"), false);
+  assert.equal(isPolicySafeCommand("sort -r input.txt"), true);
+});
+
+test("tool version probes and package runners need a known read-only subcommand", () => {
+  assert.equal(isPolicySafeCommand("node --version"), true);
+  assert.equal(isPolicySafeCommand("npm -v"), false);
+  assert.equal(isPolicySafeCommand("npm run"), false);
+  assert.equal(isPolicySafeCommand("npm run lint"), true);
+  assert.equal(isPolicySafeCommand("cargo --verbose"), false);
+  assert.equal(isPolicySafeCommand("cargo test"), true);
+});
+
+test("tasklist /M takes a module name only when one follows", () => {
+  const win32 = { platform: "win32" } as const;
+  assert.equal(isPolicySafeCommand("tasklist /M /SVC", {}, win32), true);
+  assert.equal(isPolicySafeCommand("tasklist /M", {}, win32), true);
+  assert.equal(isPolicySafeCommand("tasklist /M /S remote-host", {}, win32), false);
+});
+
+test("PowerShell query options need a value", () => {
+  assert.equal(isSafePowerShellCommand("Get-Process -Name pwsh"), true);
+  assert.equal(isSafePowerShellCommand("Get-Process -Name"), false);
+  assert.equal(isSafePowerShellCommand("Get-Service -Name -Include"), false);
+});
+
+test("git remote lists bare and refuses an option terminator before show remotes", () => {
+  const git = { git: [] };
+  assert.equal(isPolicySafeCommand("git remote -v", git), true);
+  assert.equal(isPolicySafeCommand("git remote show -n origin", git), true);
+  assert.equal(isPolicySafeCommand("git remote show -- origin", git), false);
+});
+
+test("gh paths without a read validator stay blocked", () => {
+  const configured = { gh: ["pr view"] };
+  assert.equal(isPolicySafeCommand("gh pr view 1 --json title", configured), true);
+  assert.equal(isPolicySafeCommand("gh pr list --json title", configured), false);
+  assert.equal(isPolicySafeCommand("gh repo view --json name", configured), false);
+});
+
+test("an ssh prefix that ends inside a quote cannot carry the remote command", () => {
+  assert.equal(isPolicySafeCommand("ssh 'box ls'", { ssh: ["'box"] }), false);
+});
+
+test("gh --json needs a field list", () => {
+  // The doubled space skips the configured-prefix fast path, so the read validator decides.
+  const configured = { gh: ["pr view"] };
+  assert.equal(isPolicySafeCommand("gh pr  view 1 --json number", configured), true);
+  assert.equal(isPolicySafeCommand("gh pr  view 1 --json", configured), false);
+  assert.equal(isPolicySafeCommand("gh pr  view 1 --json --web", configured), false);
 });
