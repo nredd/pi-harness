@@ -4,6 +4,7 @@ import { handleBase } from "../../subagents/src/mention.ts";
 import {
 	STATE_ENTRY_TYPE,
 	SUBAGENT_COMPLETED_EVENT,
+	SUBAGENT_CREATED_EVENT,
 	SUBAGENT_FAILED_EVENT,
 	SUBAGENT_STARTED_EVENT,
 } from "../tool/types.ts";
@@ -34,6 +35,25 @@ describe("applyAgentEvent", () => {
 			apply(SUBAGENT_FAILED_EVENT, { id: "a1", status });
 			expect(stateOf("explore"), String(status)).toBe("failed");
 		}
+	});
+
+	it("reads a first-heard created as queued until it starts", () => {
+		expect(apply(SUBAGENT_CREATED_EVENT, { id: "a1", handle: "explore" })).toBe(true);
+		expect(stateOf("explore")).toBe("queued");
+		expect(apply(SUBAGENT_STARTED_EVENT, { id: "a1" })).toBe(true);
+		expect(stateOf("explore")).toBe("running");
+	});
+
+	it("never lets a re-announcing created override a started or settled agent", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "explore" });
+		expect(apply(SUBAGENT_CREATED_EVENT, { id: "a1", handle: "explore" })).toBe(false);
+		expect(stateOf("explore")).toBe("running");
+		apply(SUBAGENT_COMPLETED_EVENT, { id: "a1" });
+		expect(apply(SUBAGENT_CREATED_EVENT, { id: "a1" })).toBe(false);
+		expect(stateOf("explore")).toBe("done");
+		// A reopened agent's predecessor is known too, so its created is no new queue entry.
+		expect(apply(SUBAGENT_CREATED_EVENT, { id: "a2", previousId: "a1" })).toBe(false);
+		expect(stateOf("explore")).toBe("done");
 	});
 
 	it("reports a change only when state or identity moved", () => {

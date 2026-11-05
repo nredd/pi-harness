@@ -80,6 +80,7 @@ export function overlayStatusGlyph(status: TaskStatus, theme: Theme): string {
 }
 
 const AGENT_STATE_COLOR: Record<AgentRunState, "accent" | "success" | "error" | "muted"> = {
+	queued: "accent",
 	running: "accent",
 	done: "success",
 	failed: "error",

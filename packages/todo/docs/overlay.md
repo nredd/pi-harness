@@ -46,9 +46,12 @@ snapshots are saved.
   Completed and deleted subjects render dim and struck through; deferred ones dim.
 - **Owner** — `@owner`, dim, right after the subject. When the owner names a
   top-level subagent that `pi-subagents` reported to this session on `pi.events`
-  (`subagents:started` / `completed` / `failed`), chosen by the
+  (`subagents:created` / `started` / `completed` / `failed`), chosen by the
   [owner match rule](#owner-match-rule), the agent's last known state follows:
-  `running` (accent), `done` (success), `failed` (error) or `stopped` (muted).
+  `queued` (accent), `running` (accent), `done` (success), `failed` (error) or `stopped` (muted).
+  `queued` is an `Agent`-tool background spawn heard at `subagents:created` before it
+  starts; a `created` for an agent already heard (a detached resume or a foreground
+  handoff) never overrides its state.
   Free text that matches no agent shows only `@owner`. Another session's agents
   never match, so `/new` or `/resume` starts with no states. An `in_progress` todo whose agent
   failed or stopped is marked in the error color, `✗ failed` or `✗ stopped`. The

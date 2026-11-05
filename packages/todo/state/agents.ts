@@ -13,10 +13,19 @@
  */
 
 import { sanitizeTerminalText } from "../tool/sanitize.ts";
-import { SUBAGENT_COMPLETED_EVENT, SUBAGENT_FAILED_EVENT, SUBAGENT_STARTED_EVENT, type Task } from "../tool/types.ts";
+import {
+	SUBAGENT_COMPLETED_EVENT,
+	SUBAGENT_CREATED_EVENT,
+	SUBAGENT_FAILED_EVENT,
+	SUBAGENT_STARTED_EVENT,
+	type Task,
+} from "../tool/types.ts";
 
-/** What a todo row shows for its owner's agent. */
-export type AgentRunState = "running" | "done" | "failed" | "stopped";
+/**
+ * What a todo row shows for its owner's agent. `queued` is an `Agent`-tool background spawn heard
+ * at `subagents:created` before any `started`, so possibly waiting for a concurrency slot.
+ */
+export type AgentRunState = "queued" | "running" | "done" | "failed" | "stopped";
 
 /** Looks up an owner's agent state; injectable so history and tests stay deterministic. */
 export type AgentStateLookup = (owner: string | undefined) => AgentRunState | undefined;
@@ -72,10 +81,12 @@ export function ownerKey(value: unknown): string | undefined {
 }
 
 /**
+ * `subagents:created` reads `queued`; it only ever opens an entry, see `applyAgentEvent`.
  * `subagents:failed` covers error, abort and stop. A stop is someone's
  * decision rather than a fault, so it reads `stopped`; the rest read `failed`.
  */
 function stateFor(channel: string, status: unknown): AgentRunState | undefined {
+	if (channel === SUBAGENT_CREATED_EVENT) return "queued";
 	if (channel === SUBAGENT_STARTED_EVENT) return "running";
 	if (channel === SUBAGENT_COMPLETED_EVENT) return "done";
 	if (channel === SUBAGENT_FAILED_EVENT) return status === "stopped" ? "stopped" : "failed";
@@ -87,7 +98,9 @@ function stateFor(channel: string, status: unknown): AgentRunState | undefined {
  * agent's tracked state or identity changed, so the caller refreshes the
  * overlay only then. A `previousId` (an evicted agent reopened under a new id)
  * folds the old entry into the new one, so an owner set to the old id follows
- * the conversation. Malformed payloads and unknown channels are ignored.
+ * the conversation. A `created` for an id already heard (a detached resume or a foreground
+ * handoff re-announcing it after `started`) changes nothing. Malformed payloads and unknown
+ * channels are ignored.
  */
 export function applyAgentEvent(sessionId: string, channel: string, payload: unknown): boolean {
 	if (!payload || typeof payload !== "object") return false;
@@ -102,6 +115,7 @@ export function applyAgentEvent(sessionId: string, channel: string, payload: unk
 	}
 	const previous = agents.get(data.id);
 	const predecessor = typeof data.previousId === "string" ? agents.get(data.previousId) : undefined;
+	if (state === "queued" && (previous || predecessor)) return false;
 	// A later payload without a field keeps the identity an earlier one gave.
 	const keys = new Set([...(predecessor?.keys ?? []), ...(previous?.keys ?? [])]);
 	for (const value of [data.id, data.previousId, data.handle, data.name]) {
@@ -114,7 +128,7 @@ export function applyAgentEvent(sessionId: string, channel: string, payload: unk
 	const startedAt = restarted || !previous ? ++sequence : previous.startedAt;
 	const firstSeenAt = previous?.firstSeenAt ?? predecessor?.firstSeenAt ?? startedAt;
 	const spawnSeq = previous?.spawnSeq ?? predecessor?.spawnSeq ?? sequenceField(data.spawnSeq);
-	const settled = state !== "running";
+	const settled = state !== "running" && state !== "queued";
 	const repeated = settled && previous?.state === state;
 	const settledAt = !settled ? undefined : repeated ? previous.settledAt : ++sequence;
 	const settleSeq = !settled
