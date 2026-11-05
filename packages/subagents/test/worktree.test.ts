@@ -486,9 +486,9 @@ describe("cleanupWorktree — failure path", () => {
 
     expect(result.hasChanges).toBe(false);
     expect(result.branch).toBeUndefined();
-    // Deliberately left behind: git cannot vouch for the directory, and it
-    // holds the agent's only copy of its uncommitted work, so cleanup leaves
-    // it to inspect rather than deleting it.
+    // Survives only because `git worktree remove` also fails on a worktree
+    // git cannot operate in -- the result carries no `path`, so nobody is
+    // told it is there. Remove it here or every run leaks one.
     expect(existsSync(join(wt.path, "work.txt"))).toBe(true);
     rmSync(wt.path, { recursive: true, force: true });
   });
