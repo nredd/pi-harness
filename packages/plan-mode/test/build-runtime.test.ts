@@ -293,50 +293,86 @@ test("build script import without an invoked script path does not build", async 
 });
 
 test("default-policy builder publishes named entries without requiring lazy chunks", async () => {
-  const builder = await loadMinimalBuilder({ index: "src/index.ts" });
+  const entries = { index: "src/index.ts", extra: "src/tool-availability.ts" };
+  const builder = await loadMinimalBuilder(entries);
   const root = await mkdtemp(join(packageRoot, ".pi-plan-mode-build-test-"));
   try {
     const output = join(root, "dist");
     const metadata = await builder.buildRuntime({ outputDirectory: output });
     const files = await listFiles(output);
-    assert.ok(files.includes("index.ts"));
-    assert.ok(files.includes("index.ts.map"));
-    assert.ok(
-      Object.values(metadata.outputs ?? {}).some((built) => built.entryPoint === "src/index.ts"),
-      "named entries must build the configured entrypoint",
-    );
-    assert.match(await readFile(join(output, "index.ts"), "utf8"), /^\/\/ minimal runtime builder fixture/u);
+    for (const name of Object.keys(entries)) {
+      assert.ok(files.includes(`${name}.ts`), `named entry ${name} must publish ${name}.ts`);
+      assert.ok(files.includes(`${name}.ts.map`), `named entry ${name} must publish ${name}.ts.map`);
+      assert.match(await readFile(join(output, `${name}.ts`), "utf8"), /^\/\/ minimal runtime builder fixture/u);
+    }
+    const entryPoints = Object.values(metadata.outputs ?? {}).map((built) => built.entryPoint);
+    assert.ok(entryPoints.includes("src/tool-availability.ts"), "named entries must build every configured source");
+
+    // Without forbidden eager inputs nothing has to be lazy, so a chunkless runtime is valid.
+    const chunkless = join(root, "chunkless");
+    await mkdir(chunkless);
+    for (const name of Object.keys(entries)) {
+      await writeFile(join(chunkless, `${name}.ts`), `${minimalBanner}\nexport {};\n`);
+      await writeFile(join(chunkless, `${name}.ts.map`), "{}");
+    }
+    await builder.validateGeneratedFiles(chunkless);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
 });
 
-test("eager graph walks shared and absent chunks once and requires the entrypoint", async () => {
+/** Imports the eager walk and the eager-input scan may each read once; a revisit throws instead of spinning. */
+function readTwiceOutput(
+  path: string,
+  imports: Array<{ kind: string; path: string }>,
+  fields: { entryPoint?: string; inputs?: Record<string, unknown> } = {},
+) {
+  let reads = 0;
+  return {
+    ...fields,
+    get imports() {
+      reads += 1;
+      if (reads > 2) throw new Error(`eager walk revisited ${path}`);
+      return imports;
+    },
+  };
+}
+
+test("eager graph walks cyclic, shared and absent chunks once and requires the entrypoint", async () => {
   const builder = await loadMinimalBuilder();
   assert.throws(() => builder.validateEagerGraph({}), /Generated runtime metadata has no src\/index.ts entrypoint/u);
   const { eagerInputs, eagerOutputs } = builder.validateEagerGraph({
     outputs: {
-      "dist/index.ts": {
-        entryPoint: "src/index.ts",
-        imports: [
+      "dist/index.ts": readTwiceOutput(
+        "dist/index.ts",
+        [
           { kind: "import-statement", path: "dist/chunks/shared-parent.ts" },
           { kind: "import-statement", path: "dist/chunks/shared.ts" },
           { kind: "import-statement", path: "dist/chunks/not-emitted.ts" },
+          { kind: "import-statement", path: "dist/chunks/leaf.ts" },
         ],
-        inputs: { "src/index.ts": {} },
-      },
-      "dist/chunks/shared-parent.ts": {
-        imports: [{ kind: "import-statement", path: "dist/chunks/shared.ts" }],
-      },
-      "dist/chunks/shared.ts": { inputs: { "src/shared.ts": {} } },
+        { entryPoint: "src/index.ts", inputs: { "src/index.ts": {} } },
+      ),
+      "dist/chunks/shared-parent.ts": readTwiceOutput("dist/chunks/shared-parent.ts", [
+        { kind: "import-statement", path: "dist/chunks/shared.ts" },
+      ]),
+      // The back-edge makes the graph cyclic; only the visited guard ends the walk.
+      "dist/chunks/shared.ts": readTwiceOutput(
+        "dist/chunks/shared.ts",
+        [{ kind: "import-statement", path: "dist/chunks/shared-parent.ts" }],
+        { inputs: { "src/shared.ts": {} } },
+      ),
+      // An emitted chunk without an `imports` list is a leaf.
+      "dist/chunks/leaf.ts": { inputs: { "src/leaf.ts": {} } },
     },
   });
   assert.deepEqual([...eagerOutputs].sort(), [
+    "dist/chunks/leaf.ts",
     "dist/chunks/shared-parent.ts",
     "dist/chunks/shared.ts",
     "dist/index.ts",
   ]);
-  assert.deepEqual([...eagerInputs].sort(), ["/src/index.ts", "/src/shared.ts"]);
+  assert.deepEqual([...eagerInputs].sort(), ["/src/index.ts", "/src/leaf.ts", "/src/shared.ts"]);
 });
 
 test("generated output rejects retained JavaScript, missing banners, and missing source maps", async () => {
