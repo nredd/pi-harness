@@ -906,11 +906,14 @@ def test_missing_required_rules_and_ambiguous_pr_refuse() -> None:
         gh.gate()
 
 
-def test_main_requires_an_explicit_gh(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_requires_an_explicit_gh(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     """Without `MERGE_PR_GH` or `--gh`, the CLI refuses instead of searching `PATH`.
 
     Parameters:
         monkeypatch (pytest.MonkeyPatch): Clears the executable variable and sets argv.
+        caplog (pytest.LogCaptureFixture): Captures the refusal.
 
     Returns:
         None: Completes after the CLI exits 1.
@@ -918,3 +921,4 @@ def test_main_requires_an_explicit_gh(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MERGE_PR_GH", raising=False)
     monkeypatch.setattr(sys, "argv", ["merge_pr_checks.py", "135", "0" * 40, REPO])
     assert checks.main() == 1
+    assert "Set `MERGE_PR_GH` or `--gh` to the trusted absolute executable" in caplog.text
