@@ -680,7 +680,10 @@ function collectResponseText(session: AgentSession) {
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       text += event.assistantMessageEvent.delta;
     }
-    if (event.type === "tool_execution_end" && text.trim()) laterTool = true;
+    if (event.type === "tool_execution_end") {
+      if (text.trim()) laterTool = true;
+      else if (previousText.trim()) previousLaterTool = true;
+    }
   });
   return { getText: () => text, getPreviousText: () => previousText, hasLaterTool: () => text.trim() ? laterTool : previousLaterTool, unsubscribe };
 }

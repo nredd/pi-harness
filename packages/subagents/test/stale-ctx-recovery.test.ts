@@ -289,6 +289,7 @@ describe("resumeAgent", () => {
       subscribe: (listener: (event: unknown) => void) => { listeners.push(listener); return () => {}; },
       prompt: async () => {
         for (const listener of listeners) listener({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "partial stream" } });
+        for (const listener of listeners) listener({ type: "message_start", message: { role: "assistant" } });
         messages.push({ role: "toolResult", toolName: "bash", isError: false, content: [{ type: "text", text: "secret output" }] });
         for (const listener of listeners) listener({ type: "tool_execution_end" });
         for (const listener of listeners) listener({ type: "message_start", message: { role: "assistant" } });
