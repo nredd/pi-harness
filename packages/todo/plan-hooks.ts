@@ -142,27 +142,78 @@ export interface InProgressNotice {
 	key: string;
 }
 
-/** Blocking statuses: a dependency still open, or deferred, has not delivered. */
-const UNRESOLVED = new Set(["pending", "in_progress", "deferred"]);
+/** Open statuses: a `blockedBy` dependency in one of these has not delivered yet. */
+const OPEN = new Set(["pending", "in_progress", "deferred"]);
 
-/** Group labels, in report order; capped groups name three then count the rest. */
-const GROUPS: ReadonlyArray<{ kind: InProgressKind; label: string; capped: boolean }> = [
-	{ kind: "abandoned", label: "owner agent failed or stopped", capped: false },
-	{ kind: "held", label: "held by the parent", capped: true },
-	{ kind: "blocked", label: "blocked", capped: true },
-	{ kind: "running", label: "agent running", capped: true },
+/**
+ * Groups in report order. `warning` groups need the parent and repeat on every settle; `info`
+ * groups wait on something that will wake it. Capped groups name three then count the rest.
+ */
+const GROUPS: ReadonlyArray<{
+	kind: InProgressKind;
+	label: string;
+	capped: boolean;
+	severity: InProgressNotice["level"];
+}> = [
+	{ kind: "abandoned", label: "owner agent failed or stopped", capped: false, severity: "warning" },
+	{ kind: "held", label: "held by the parent", capped: true, severity: "warning" },
+	{ kind: "blocked", label: "blocked", capped: true, severity: "info" },
+	{ kind: "running", label: "agent running", capped: true, severity: "info" },
 ];
+
+/** One classified `in_progress` todo. `deps` are the open blockers its group is about. */
+interface Row {
+	task: Task;
+	kind: InProgressKind;
+	agent: AgentRunState | undefined;
+	deps: readonly Task[];
+}
+
+/**
+ * Whether an open dependency is being worked: `in_progress` with no failed or stopped owner, or
+ * `pending` with an owner whose agent is running. A deferred or unowned pending one never
+ * delivers on its own, so a todo waiting only on those is the parent's to unblock.
+ */
+function isLive(dep: Task, lookup: AgentStateLookup): boolean {
+	const agent = lookup(dep.owner);
+	if (dep.status === "in_progress") return !isAbandoned(dep, agent);
+	return dep.status === "pending" && agent === "running";
+}
 
 /**
  * Classify one `in_progress` todo. Its owner's failed or stopped agent makes it abandoned; a running
- * one owns it; else an open `blockedBy` dependency makes it wait; anything else, including a todo
- * whose agent is done, waits on the parent.
+ * one owns it; else a live `blockedBy` dependency makes it wait; anything else, including a todo
+ * whose agent is done or whose open blockers are all dead, waits on the parent.
  */
-function classify(task: Task, agent: AgentRunState | undefined, open: ReadonlySet<number>): InProgressKind {
-	if (isAbandoned(task, agent)) return "abandoned";
-	if (agent === "running") return "running";
-	if (task.blockedBy?.some((id) => open.has(id))) return "blocked";
-	return "held";
+function classify(task: Task, byId: ReadonlyMap<number, Task>, lookup: AgentStateLookup): Row {
+	const agent = lookup(task.owner);
+	if (isAbandoned(task, agent)) return { task, kind: "abandoned", agent, deps: [] };
+	if (agent === "running") return { task, kind: "running", agent, deps: [] };
+	const open = (task.blockedBy ?? []).flatMap((id) => {
+		const dep = byId.get(id);
+		return dep && OPEN.has(dep.status) ? [dep] : [];
+	});
+	const live = open.filter((dep) => isLive(dep, lookup));
+	if (live.length) return { task, kind: "blocked", agent, deps: live };
+	return { task, kind: "held", agent, deps: open };
+}
+
+/** One todo's entry: blockers by id (with status when dead), else its owner's agent state. */
+function entryText({ task, kind, agent, deps }: Row): string {
+	const owner = ownerLabel(task.owner);
+	const detail = deps.length
+		? ` (by ${deps.map((d) => (kind === "held" ? `#${d.id} ${d.status}` : `#${d.id}`)).join(", ")})`
+		: agent && owner
+			? ` (${owner} ${agent})`
+			: "";
+	return `#${task.id} ${sanitizeTerminalText(task.subject)}${detail}`;
+}
+
+/** The dedupe key: every todo's group, owner agent state and the blockers that group names. */
+function reportKey(rows: readonly Row[]): string {
+	return JSON.stringify(
+		rows.map(({ task, kind, agent, deps }) => [task.id, kind, agent ?? null, deps.map((d) => d.id)]),
+	);
 }
 
 /**
@@ -171,8 +222,7 @@ function classify(task: Task, agent: AgentRunState | undefined, open: ReadonlySe
  * `Run ended with N <work>, armed: <what wakes the parent>`. Todos arm nothing themselves, so the
  * armed clause says so and defers to those notices for session-wide wakes rather than reading as
  * "nothing is armed". Each todo is then named under one group: failed or stopped owners uncapped,
- * the rest three per group. It warns only when a todo is abandoned or held by the parent; a run
- * whose open todos all wait on running agents or open dependencies is info.
+ * the rest three per group. Its level is the most severe group's.
  */
 export function formatInProgressNotice(
 	state: TaskState,
@@ -180,33 +230,19 @@ export function formatInProgressNotice(
 ): InProgressNotice | undefined {
 	const active = state.tasks.filter((t) => t.status === "in_progress");
 	if (!active.length) return undefined;
-	const open = new Set(state.tasks.filter((t) => UNRESOLVED.has(t.status)).map((t) => t.id));
-	const grouped = new Map<InProgressKind, string[]>();
-	const keys: string[] = [];
-	for (const task of active) {
-		const agent = lookup(task.owner);
-		const kind = classify(task, agent, open);
-		const owner = ownerLabel(task.owner);
-		const deps = kind === "blocked" ? (task.blockedBy ?? []).filter((id) => open.has(id)) : [];
-		const detail = deps.length
-			? ` (by ${deps.map((id) => `#${id}`).join(", ")})`
-			: agent && owner
-				? ` (${owner} ${agent})`
-				: "";
-		grouped.set(kind, [...(grouped.get(kind) ?? []), `#${task.id} ${sanitizeTerminalText(task.subject)}${detail}`]);
-		keys.push(`${task.id}:${kind}:${agent ?? ""}:${deps.join(",")}`);
-	}
-	const parts = GROUPS.flatMap(({ kind, label, capped }) => {
-		const items = grouped.get(kind);
-		if (!items) return [];
+	const byId = new Map(state.tasks.map((t) => [t.id, t]));
+	const rows = active.map((task) => classify(task, byId, lookup));
+	const present = GROUPS.filter(({ kind }) => rows.some((r) => r.kind === kind));
+	const parts = present.map(({ kind, label, capped }) => {
+		const items = rows.filter((r) => r.kind === kind).map(entryText);
 		const shown = capped ? items.slice(0, 3) : items;
 		const more = items.length > shown.length ? `, +${items.length - shown.length} more` : "";
-		return [`${label}: ${shown.join(", ")}${more}`];
+		return `${label}: ${shown.join(", ")}${more}`;
 	});
 	const n = active.length;
 	const text = `Run ended with ${n} in_progress todo${n === 1 ? "" : "s"}, armed: no todo-owned wake (monitor and agent notices list session wakes); ${parts.join("; ")}`;
-	const level = grouped.has("abandoned") || grouped.has("held") ? "warning" : "info";
-	return { text, level, key: keys.join("|") };
+	const level = present.some((g) => g.severity === "warning") ? "warning" : "info";
+	return { text, level, key: reportKey(rows) };
 }
 
 /**
@@ -269,9 +305,12 @@ export function registerPlanHooks(
 	pi.on("agent_before_settle", onSettle);
 
 	// A settle with `in_progress` todos is a stop with owned work pending. The reminder above only
-	// covers plan items and only once, so report the state instead of leaving a quiet prompt. A settle
-	// woken by a monitor or agent notice that changed nothing repeats nothing: the report returns once
-	// a todo changes group, agent state or blockers, or after the next prompt from a person.
+	// covers plan items and only once, so report the state instead of leaving a quiet prompt. A warning
+	// (abandoned or parent-held work) repeats on every settle, so that stop is never silent. An info
+	// report (everything waits on a running agent or a live dependency, which will wake the parent)
+	// is shown once per change: it returns when a todo changes group, agent state or blockers, or
+	// after the next prompt from a person. Monitor and agent wakes arrive via `pi.sendMessage`, which
+	// runs no `input` handlers; extension prompts (`sendUserMessage`) arrive as `extension`.
 	const reported = new Map<string, string>();
 	pi.on("input", (event, ctx) => {
 		if (event.source !== "extension") reported.delete(sid(ctx));
@@ -280,13 +319,11 @@ export function registerPlanHooks(
 		if (isPlanning(ctx, [])) return;
 		const id = sid(ctx);
 		const notice = formatInProgressNotice(getState(id), agentLookup(id));
-		if (!notice) {
-			reported.delete(id);
-			return;
-		}
-		if (reported.get(id) === notice.key) return;
-		reported.set(id, notice.key);
-		ctx.ui.notify(notice.text, notice.level);
+		if (notice?.level === "info") {
+			if (reported.get(id) === notice.key) return;
+			reported.set(id, notice.key);
+		} else reported.delete(id);
+		if (notice) ctx.ui.notify(notice.text, notice.level);
 	});
 
 	pi.on("context", async (event, ctx) => {

@@ -153,15 +153,19 @@ the full list grouped by status.
   items open, the model gets one reminder listing them before it can wrap up.
   Outside Plan mode, a run that settles with `in_progress` todos also reports them
   (`agent_settled` in `plan-hooks.ts`), grouped by why each is still open: `owner agent failed
-  or stopped` (all named), `held by the parent` (no owner, a free-text owner, or an agent that
-  finished without the todo being completed), `blocked` (an open `blockedBy` dependency) and
-  `agent running`, three per group then a count. Its armed clause, `armed: no todo-owned wake
-  (monitor and agent notices list session wakes)`, says only that todos arm nothing themselves;
-  the `subagents` and `session-kit` monitor notices say what does wake the parent. It is a warning
-  when anything is abandoned or parent-held, else info. A settle that changes nothing, e.g. one
-  woken by a monitor or agent notice, repeats nothing: the report returns once a todo changes
-  group, owner agent state or open blockers, or after the next prompt from a person. Todo status
-  never changes on its own, e.g.
+  or stopped` (all named), `held by the parent`, `blocked` and `agent running`, three per group
+  then a count. `blocked` means a live `blockedBy` dependency: one `in_progress` whose owner agent
+  has not failed or stopped, or one `pending` whose owner agent is running. A todo is `held by the
+  parent` when it has no owner, a free-text owner, an agent that finished without the todo being
+  completed, or open blockers that are all dead (`deferred`, unowned `pending`, or abandoned), shown
+  as e.g. `(by #3 deferred)`. A child still queued by pi-subagents emits no lifecycle event until it
+  starts, so its todo reads `held` until then and `agent running` after. Its armed clause, `armed:
+  no todo-owned wake (monitor and agent notices list session wakes)`, says only that todos arm
+  nothing themselves; the `subagents` and `session-kit` monitor notices say what does wake the
+  parent. Abandoned or parent-held work makes it a warning, repeated on every settle, so a stop with
+  owned work pending is never silent. When every todo waits on a running agent or a live dependency
+  it is info, shown once: a settle that changes no todo's group, owner agent state or blockers
+  repeats nothing until the next prompt from a person. Todo status never changes on its own, e.g.
   `Run ended with 2 in_progress todos, armed: no todo-owned wake (monitor and agent notices list session wakes); owner agent failed or stopped: #3 Audit auth (@auth-audit failed); held by the parent: #6 Deploy`.
   Reminders pause while Plan mode is active; old approved todos remain until a
   replacement is approved. Exiting planning without approval resumes the old
