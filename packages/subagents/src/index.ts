@@ -908,7 +908,13 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   }, (record, message) => {
     if (!isTopLevelAgent(record)) return;
     pi.events.emit("subagents:steered", { id: record.id, message });
-  }, clock, options.homeDir);
+  }, clock, options.homeDir, (record) => {
+    // Stopped before it ever started: no result and no notice, but a listener that heard
+    // `subagents:created` must still see it end. Same payload as a settled stop.
+    if (!isTopLevelAgent(record) || detachedSessionFile !== undefined) return;
+    record.settleSeq = manager.nextSequence();
+    pi.events.emit("subagents:failed", buildEventData(record));
+  });
 
   // Expose manager via Symbol.for() global registry for cross-package access.
   // Standard Node.js pattern for cross-package singletons (used by OpenTelemetry, etc.).
