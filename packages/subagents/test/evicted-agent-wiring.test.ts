@@ -94,9 +94,9 @@ describe("evicted agents", () => {
   let prevAgentDir: string | undefined;
   // The extension under test, loaded per case. afterEach shuts it down so a failing
   // case cannot leave the global manager slot claimed for the next (#481).
-  let lifecycle: Map<string, any> | undefined;
+  let lifecycle: ReturnType<typeof makePi>["lifecycle"] | undefined;
 
-  function load(): Map<string, any> {
+  function load(): ReturnType<typeof makePi>["tools"] {
     const made = makePi();
     subagentsExtension(made.pi);
     lifecycle = made.lifecycle;
@@ -113,6 +113,8 @@ describe("evicted agents", () => {
     writeFileSync(join(tmpDir, ".pi", "subagents.json"), JSON.stringify({ schedulingEnabled: false }));
     process.chdir(tmpDir);
     // Only the clock and the GC interval; real timers keep the flush helper working.
+    // The completion outbox's `NOTIFICATION_HOLD_MS` setTimeout stays real too, so a
+    // case must consume a result through the tools before advancing the clock (#481).
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
   });
 
