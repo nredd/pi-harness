@@ -135,16 +135,18 @@ export function parseJunit(xml: string): JunitSummary {
 	};
 	// Self-closing `<testcase .../>` entries are passes; drop them so a lazy match cannot span two cases.
 	const cases = xml.replace(/<testcase\s[^>]*\/>/g, "").matchAll(/<testcase\s([^>]*)>([\s\S]*?)<\/testcase>/g);
-	for (const [, attrs, body] of cases) {
+	for (const c of cases) {
+		const attrs = c[1] as string;
 		// `<failure>` is an assertion or panic, `<error>` a timeout or exec failure; both are red.
-		// `<flakyFailure>` is a retry that eventually passed and does not count.
-		const failure = /<(failure|error)(?:\s+message="([^"]*)")?[^>]*>([\s\S]*?)<\/\1>/.exec(body ?? "");
+		// `<flakyFailure>` is a retry that eventually passed and does not count. nextest writes a
+		// self-closing `<failure type="..."/>` with no message or body for a timeout or a silent exit.
+		const failure = /<(failure|error)\b([^>]*?)(?:\/>|>([\s\S]*?)<\/\1>)/.exec(c[2] as string);
 		if (!failure) continue;
-		const name = /(?:^|\s)name="([^"]*)"/.exec(attrs ?? "")?.[1] ?? "?";
-		const classname = /(?:^|\s)classname="([^"]*)"/.exec(attrs ?? "")?.[1];
+		const name = /(?:^|\s)name="([^"]*)"/.exec(attrs)?.[1] ?? "?";
+		const classname = /(?:^|\s)classname="([^"]*)"/.exec(attrs)?.[1];
 		out.failed.push({
 			name: classname ? `${classname} ${decode(name)}` : decode(name),
-			message: decode(failure[2] ?? ""),
+			message: decode(/(?:^|\s)message="([^"]*)"/.exec(failure[2] as string)?.[1] ?? ""),
 			detail: decode(failure[3] ?? "").trim(),
 		});
 	}
@@ -160,7 +162,7 @@ export interface DoctestSummary {
 /** `cargo test --doc` text: `test path - item (line N) ... ok|FAILED` and the `test result:` line. */
 export function parseDoctests(text: string): DoctestSummary {
 	const out: DoctestSummary = { passed: 0, failed: 0, failedNames: [] };
-	for (const m of text.matchAll(/^test (.+?) \.\.\. FAILED$/gm)) out.failedNames.push(m[1] ?? "");
+	for (const m of text.matchAll(/^test (.+?) \.\.\. FAILED$/gm)) out.failedNames.push(m[1] as string);
 	for (const m of text.matchAll(/^test result: \w+\. (\d+) passed; (\d+) failed;/gm)) {
 		out.passed += Number(m[1]);
 		out.failed += Number(m[2]);
@@ -170,7 +172,7 @@ export function parseDoctests(text: string): DoctestSummary {
 
 /** `cargo fmt --check --color never`: the files with `Diff in <path>:<line>:` blocks. */
 export function fmtDiffFiles(text: string): string[] {
-	return [...new Set([...text.matchAll(/^Diff in (.+?):\d+:$/gm)].map((m) => m[1] ?? ""))];
+	return [...new Set([...text.matchAll(/^Diff in (.+?):\d+:$/gm)].map((m) => m[1] as string))];
 }
 
 export interface BenchEstimate {

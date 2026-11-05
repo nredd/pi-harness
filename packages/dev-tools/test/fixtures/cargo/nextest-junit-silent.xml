@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="3" skipped="0" failures="2" errors="0" uuid="1d9510df-be5e-4974-b367-3a3df1721800" timestamp="2026-11-04T19:27:04.779-08:00" time="1.009">
+    <testsuite name="dep" tests="1" skipped="0" errors="0" failures="0">
+        <testcase name="tests::it_works" classname="dep" timestamp="2026-11-04T19:27:04.780-08:00" time="0.015"/>
+    </testsuite>
+    <testsuite name="good" tests="2" skipped="0" errors="0" failures="2">
+        <testcase name="tests::silent_exit" classname="good" timestamp="2026-11-04T19:27:04.780-08:00" time="0.015">
+            <failure type="test failure with exit code 1"/>
+            <system-out>
+running 1 test
+</system-out>
+            <system-err></system-err>
+        </testcase>
+        <testcase name="tests::hangs" classname="good" timestamp="2026-11-04T19:27:04.780-08:00" time="1.008">
+            <failure type="test timeout"/>
+            <system-out>
+running 1 test
+</system-out>
+            <system-err></system-err>
+        </testcase>
+    </testsuite>
+</testsuites>
