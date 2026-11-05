@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { showPlanModeMenu, showReadyPlanMenu } from "../src/plan-action-menus.js";
 import { editPlanThenReopen } from "../src/plan-edit.js";
 import { showSavedPlanMenu } from "../src/saved-plan-menu.js";
-import { createCustomSelectorHarness, createMockContext } from "./support.js";
+import { createCustomSelectorHarness, createMockContext, showPlanModeMenu, showReadyPlanMenu } from "./support.js";
 
 /**
  * Build a complete menu callback contract, overriding only the outcome under test.

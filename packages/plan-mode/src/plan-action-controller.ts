@@ -1,5 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { findAvailableImplementationModel, snapshotAvailableImplementationModels } from "./implementation-models.js";
+import type { FreshPlanModel } from "./plan-action-menus.js";
 import type { PlanExportDestination } from "./plan-export.js";
 import {
   configuredImplementationModel,
@@ -22,6 +23,8 @@ interface PlanActionControllerOptions {
   captureLifecycle(): MenuLifecycle;
   statusText(): string;
   getThinkingLevel(): PlanModeFixedThinkingLevel | undefined;
+  /** What Start fresh's "same as plan" runs on; the pre-Plan model while a Plan model is applied. */
+  getFreshPlanModel(ctx: ExtensionContext): FreshPlanModel;
   getSettings(): PlanModeSettings;
   implementationOutcome(): string;
   getExportDestination(ctx: ExtensionContext): PlanExportDestination;
@@ -62,7 +65,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
     if (configured.model && !availableModel) {
       ctx.ui.notify("The configured fresh implementation model is unavailable; using the planning model.", "warning");
     }
-    const planModel = ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : undefined;
+    const planModel = options.getFreshPlanModel(ctx).model;
     const model = availableModel ? { provider: availableModel.provider, modelId: availableModel.id } : planModel;
     const thinkingLevel = configured.thinkingLevel ?? options.getThinkingLevel();
     return {
@@ -111,6 +114,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
       if (!isCurrent() || lifecycle.signal.aborted) return;
       await ui.showReadyPlanMenu(ctx, {
         planThinkingLevel: options.getThinkingLevel(),
+        planModel: options.getFreshPlanModel(ctx),
         implementationDefaults: configuredDefaults(),
         implementationOutcome: options.implementationOutcome,
         getExportDestination: () => options.getExportDestination(ctx),
@@ -138,6 +142,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
       await ui.showPlanModeMenu(ctx, {
         statusText: options.statusText(),
         planThinkingLevel: options.getThinkingLevel(),
+        planModel: options.getFreshPlanModel(ctx),
         implementationDefaults: configuredDefaults(),
         hasReadyPlan: options.getState().latestPlan !== undefined,
         implementationOutcome: options.implementationOutcome,

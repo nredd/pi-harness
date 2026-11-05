@@ -1475,6 +1475,25 @@ function longestBacktickRun(text) {
   return Math.max(0, ...(text.match(/`+/gu) ?? []).map((run) => run.length));
 }
 
+// src/plan-model.ts
+var PLAN_MODEL_ROUTER_PROVIDER = "router";
+var TIER_KEY = /^[a-z0-9][a-z0-9._-]*$/u;
+var PLAN_MODEL_TIER_REQUIRED = 'planModel must be a router tier like "@deep", not a concrete model id';
+function normalizePlanModelTier(value) {
+  if (typeof value !== "string") return void 0;
+  const tier = value.trim();
+  return tier.length <= MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH && tier.startsWith("@") && TIER_KEY.test(tier.slice(1)) ? tier : void 0;
+}
+function planModelTarget(tier) {
+  return { provider: PLAN_MODEL_ROUTER_PROVIDER, modelId: tier.slice(1) };
+}
+function availablePlanModelTiers(models) {
+  return models.flatMap((model) => {
+    const tier = model.provider === PLAN_MODEL_ROUTER_PROVIDER ? normalizePlanModelTier(`@${model.id}`) : void 0;
+    return tier ? [tier] : [];
+  });
+}
+
 // src/settings.ts
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
@@ -1568,6 +1587,11 @@ function normalizePlanModeSettings(value) {
   const settings = {
     thinkingLevel
   };
+  if (Object.hasOwn(value, "planModel")) {
+    const planModel = normalizePlanModelTier(Reflect.get(value, "planModel"));
+    if (!planModel) return void 0;
+    settings.planModel = planModel;
+  }
   if (Object.hasOwn(value, "defaultPlanTools")) {
     const defaultPlanTools = normalizeToolNames(Reflect.get(value, "defaultPlanTools"));
     if (!defaultPlanTools) return void 0;
@@ -1715,6 +1739,8 @@ function updatePlanModeSettings(patch, options = {}) {
     const current = await readSettingsDocumentForUpdate(settingsPath, legacySettingsPath);
     const updated = { ...current };
     if (patch.thinkingLevel !== void 0) updated.thinkingLevel = patch.thinkingLevel;
+    if (patch.planModel === null) delete updated.planModel;
+    else if (patch.planModel !== void 0) updated.planModel = patch.planModel;
     if (patch.defaultPlanTools === null) delete updated.defaultPlanTools;
     else if (patch.defaultPlanTools !== void 0) {
       updated.defaultPlanTools = [...patch.defaultPlanTools];
@@ -1742,7 +1768,7 @@ function updatePlanModeSettings(patch, options = {}) {
       updated.toggleShortcut = patch.toggleShortcut;
     }
     const settings = normalizePlanModeSettings(updated);
-    if (!settings) throw invalidSettingsError(settingsPath, "invalid settings shape");
+    if (!settings) throw invalidSettingsError(settingsPath, invalidSettingsShapeReason(updated));
     await publishSettings(settingsPath, updated, options.signal, options.beforeRename);
     return settings;
   });
@@ -1797,7 +1823,7 @@ async function readSettingsSnapshot(settingsPath) {
   }
   const settings = normalizePlanModeSettings(parsed);
   if (!settings || !isSettingsDocument(parsed)) {
-    return { result: { kind: "invalid", reason: "invalid settings shape" } };
+    return { result: { kind: "invalid", reason: invalidSettingsShapeReason(parsed) } };
   }
   return { document: parsed, result: { kind: "loaded", settings } };
 }
@@ -1865,6 +1891,9 @@ async function pathExists(path) {
   } catch (error) {
     return !(isNodeError(error) && error.code === "ENOENT");
   }
+}
+function invalidSettingsShapeReason(value) {
+  return isSettingsDocument(value) && Object.hasOwn(value, "planModel") && !normalizePlanModelTier(Reflect.get(value, "planModel")) ? PLAN_MODEL_TIER_REQUIRED : "invalid settings shape";
 }
 function invalidSettingsError(settingsPath, reason) {
   return new Error(`pi-plan-mode settings at ${settingsPath} are invalid: ${reason}`);
@@ -2509,6 +2538,8 @@ export {
   deferPlanEdit,
   reviewEditedPlan,
   createPlanEditMessage,
+  planModelTarget,
+  availablePlanModelTiers,
   PLAN_MODE_THINKING_LEVELS,
   IMPLEMENTATION_THINKING_LEVELS,
   IMPLEMENTATION_PLAN_RETENTIONS,
@@ -2543,4 +2574,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-VZDACPW4.ts.map
+//# sourceMappingURL=chunk-4SQVAWPB.ts.map

@@ -9,6 +9,7 @@ import {
 } from "./implementation-models.js";
 import { retentionLabel } from "./implementation-retention.js";
 import { planExportDestination } from "./plan-export.js";
+import { availablePlanModelTiers, type PlanModelTier, planModelTarget } from "./plan-model.js";
 import { PLAN_MODE_QUESTION_TOOL_NAME } from "./question-tool.js";
 import {
   configuredImplementationModel,
@@ -52,9 +53,11 @@ export interface PlanModeSettingsMenuOptions {
   onSaved(settings: PlanModeSettings): void;
 }
 
-type Screen = "settings" | "tools" | "implementation-model" | "export" | "shortcut";
+type Screen = "settings" | "plan-model" | "tools" | "implementation-model" | "export" | "shortcut";
 type Action =
   | "set-thinking"
+  | "open-plan-model"
+  | "set-plan-model"
   | "open-tools"
   | "toggle-tool"
   | "reset-tools"
@@ -83,6 +86,7 @@ export async function showPlanModeSettings(
   const implementationModels = snapshotAvailableImplementationModels(ctx);
   const modelItemIds = new Map(implementationModels.map((model, index) => [model, `plan-settings-model:${index}`]));
   const modelsByItemId = new Map(implementationModels.map((model) => [modelItemIds.get(model) as string, model]));
+  const planModelTiers = availablePlanModelTiers(implementationModels);
 
   const loadState = async (): Promise<SettingsMenuState> => {
     const loaded = await readSettings(options.settingsPath);
@@ -166,8 +170,34 @@ export async function showPlanModeSettings(
                   currentValue: configuredPlanModeToggleShortcut(state.settings) ?? "none",
                   action: "open-shortcut",
                 },
+                {
+                  id: "planModel",
+                  label: "Plan model",
+                  description: "Choose the router tier Plan turns run on when the next Plan workflow starts.",
+                  currentValue: planModelValue(state.settings.planModel, planModelTiers),
+                  action: "open-plan-model",
+                },
               ],
             },
+      "plan-model": ({ state }) => ({
+        kind: "choice",
+        title: "Plan model",
+        lines: [
+          "Plan turns run on the chosen router tier; leaving Plan restores the previous model.",
+          "Inherit is the default and the fallback when the tier is unavailable.",
+        ],
+        items: [
+          { id: "inherit", label: "Inherit", description: "Plan on the current model." },
+          ...planModelTiers.map((tier) => ({
+            id: tier,
+            label: tier,
+            description: safeModelReference(planModelTarget(tier)),
+          })),
+        ],
+        action: "set-plan-model",
+        initialItemId: planModelTiers.find((tier) => tier === state.settings.planModel) ?? "inherit",
+        hint: "back",
+      }),
       tools: ({ state }) => ({
         kind: "multiSelect",
         title: "Default Plan policy allowlist",
@@ -246,6 +276,18 @@ export async function showPlanModeSettings(
           signal,
           `Plan mode thinking level: ${value}. Applies to the next Plan workflow.`,
         );
+      },
+      "open-plan-model": async () => ({ kind: "to", screen: "plan-model" }),
+      "set-plan-model": async ({ ctx: actionCtx, itemId, signal }) => {
+        // The only other item is Inherit.
+        const tier = planModelTiers.find((candidate) => candidate === itemId);
+        const result = await savePatch(
+          actionCtx,
+          { planModel: tier ?? null },
+          signal,
+          `Plan model: ${tier ?? "inherit"}. Applies to the next Plan workflow.`,
+        );
+        return result.kind === "stay" ? { kind: "to", screen: "settings" } : result;
       },
       "open-tools": async () => ({ kind: "to", screen: "tools" }),
       "set-retention": async ({ ctx: actionCtx, value, signal }) => {
@@ -419,6 +461,11 @@ function invalidScreen(settingsPath: string, state: SettingsMenuState) {
 
 function retentionFromLabel(value: string | undefined) {
   return IMPLEMENTATION_PLAN_RETENTIONS.find((retention) => retentionLabel(retention) === value);
+}
+
+function planModelValue(configured: PlanModelTier | undefined, tiers: readonly PlanModelTier[]) {
+  if (!configured) return "inherit";
+  return tiers.includes(configured) ? configured : `inherit · ${configured} unavailable`;
 }
 
 function implementationModelValue(settings: PlanModeSettings, models: readonly AvailableImplementationModel[]) {

@@ -142,7 +142,7 @@ test("native callable selection rolls back a failed save and preserves unknown f
   });
 });
 
-test("Plan settings show seven flat workflow rows without materializing a missing file", async () => {
+test("Plan settings show eight flat workflow rows without materializing a missing file", async () => {
   await withSettingsMenu(async ({ settingsPath, tui, ctx, saved }) => {
     const running = showPlanModeSettings(ctx, menuOptions(settingsPath, saved));
     await tui.waitForOpen();
@@ -155,6 +155,7 @@ test("Plan settings show seven flat workflow rows without materializing a missin
     assert.match(frame, /Fresh thinking\s+same as plan/);
     assert.match(frame, /Export destination\s+PLAN\.md/);
     assert.match(frame, /Plan mode shortcut\s+none/);
+    assert.match(frame, /Plan model\s+inherit/);
     assert.ok(tui.render(34).every((line) => visibleWidth(line) <= 34));
     await assert.rejects(access(settingsPath));
 
@@ -609,6 +610,7 @@ test("RPC Settings changes retention and export destination with the same flat n
           "Fresh thinking (same as plan)",
           "Export destination (PLAN.md)",
           "Plan mode shortcut (none)",
+          "Plan model (inherit)",
           "Back",
         ],
         response: "Plan reinjection (Off — conversation history only)",
@@ -623,6 +625,7 @@ test("RPC Settings changes retention and export destination with the same flat n
           "Fresh thinking (same as plan)",
           "Export destination (PLAN.md)",
           "Plan mode shortcut (none)",
+          "Plan model (inherit)",
           "Back",
         ],
         response: "Export destination (PLAN.md)",
@@ -642,6 +645,7 @@ test("RPC Settings changes retention and export destination with the same flat n
           "Fresh thinking (same as plan)",
           "Export destination (rpc/PLAN.md)",
           "Plan mode shortcut (none)",
+          "Plan model (inherit)",
           "Back",
         ],
         response: undefined,
@@ -670,6 +674,7 @@ test("Plan settings adapt to RPC cancellation and disposal aborts an in-flight s
         "Fresh thinking (same as plan)",
         "Export destination (PLAN.md)",
         "Plan mode shortcut (none)",
+        "Plan model (inherit)",
         "Back",
       ],
       response: undefined,

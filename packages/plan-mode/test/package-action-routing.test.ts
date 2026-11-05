@@ -57,6 +57,10 @@ test("action controller forwards saved, ready, and current menu callbacks with t
     captureLifecycle: () => ({ signal: owner.signal, isCurrent: () => current }),
     statusText: () => "ready",
     getThinkingLevel: () => "medium",
+    getFreshPlanModel: (ctx) => ({
+      model: ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : undefined,
+      label: "same as plan",
+    }),
     getSettings: () => ({ thinkingLevel: "inherit" }),
     implementationOutcome: () => "keep",
     getExportDestination: () => destination,

@@ -42,7 +42,7 @@ Use a Codex-like `/plan` mode to explore a codebase, resolve important questions
 - Implements in the planning session or a fresh linked session with the approved plan.
 - Configures persistent or one-shot destination model and thinking choices for fresh implementation.
 - Restores Plan state and one saved plan across resume and compaction.
-- Configures the Plan tool allowlist, reviewed shell commands, user-trusted subcommands, export path, plan reinjection, shortcut, and thinking level.
+- Configures the Plan tool allowlist, reviewed shell commands, user-trusted subcommands, export path, plan reinjection, shortcut, thinking level, and a router-tier Plan model.
 - Publishes statusline state and cooperates anonymously with Workflow Mutex Protocol v1 participants.
 
 ## 📦 Install
@@ -245,10 +245,11 @@ The same flat menu shows **Implement here** and **Start fresh and implement**, e
 Its searchable model list snapshots the session's scoped models when configured, otherwise Pi's currently available models, and shows each provider, model ID, and friendly name.
 Pi 0.80.6–0.82.1 does not expose session model scopes to extensions, so the list uses all currently available models on those releases.
 One-shot provider and model identifiers are limited to 512 characters each; longer custom identifiers are rejected before the source session is replaced.
-The model and thinking rows start from the persistent **Fresh model** and **Fresh thinking** defaults; when either setting is omitted, they show the planning session's current value with **same as plan** and carry it into the fresh session independently.
+The model and thinking rows start from the persistent **Fresh model** and **Fresh thinking** defaults; when either setting is omitted, they show the planning session's current value with **same as plan** (or **previous model** while a Plan model is applied) and carry it into the fresh session independently.
+With a [Plan model](./docs/settings.md#plan-model) applied, the model row shows the pre-Plan model as **previous model** instead of the tier and starts the fresh session on it, and the source session switches back to it; resuming the source plans on the tier again.
 The fixed thinking choices are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
 Back navigation preserves this menu-local draft, while closing and reopening the menu restores both persistent defaults.
-If the configured model is outside the current scope or no longer available, the row reports the fallback and uses **same as plan** without deleting the stored preference.
+If the configured model is outside the current scope or no longer available, the row reports the fallback and uses **same as plan** (or **previous model**) without deleting the stored preference.
 The saved-plan menu keeps its direct fresh-session action without optional rows and applies the same persistent defaults and fallback.
 
 Starting from that settings page waits for the source session to become idle, re-resolves and authenticates an explicit model, creates a new session linked to the persisted source as its parent, and transfers the exact approved plan without copying planning messages, tool results, or compaction/branch summaries.
@@ -355,6 +356,9 @@ Stable schemas preserve a cache-eligible prefix but cannot guarantee a hit becau
 The default `thinkingLevel: "inherit"` avoids a Plan-specific reasoning-parameter change.
 A fixed Plan thinking level remains supported, but changing reasoning parameters can prevent provider-side state reuse even when prompts and tool schemas stay stable.
 
+The default `planModel` is unset, so Plan inherits the current model.
+A configured [Plan model](./docs/settings.md#plan-model) switches models, which costs the provider cache twice: on the first Plan request and again on the first post-Plan request.
+
 ## 🤝 Workflow coexistence
 
 Plan mode is independently installable and keeps its standalone behavior when no other protocol participant is present.
@@ -399,6 +403,7 @@ SDK hosts isolate settings with the `settingsPath` dependency, not `homeDir`: an
 ```json
 {
   "thinkingLevel": "inherit",
+  "planModel": "@deep",
   "implementationPlanRetention": "clear-on-start",
   "defaultImplementationModel": {
     "provider": "anthropic",
@@ -409,7 +414,7 @@ SDK hosts isolate settings with the `settingsPath` dependency, not `homeDir`: an
 }
 ```
 
-By default, Plan mode inherits thinking, allows active safe built-ins, uses the planning model and thinking level for fresh implementation, exports to `PLAN.md`, and relies on ordinary conversation history after implementation starts.
+By default, Plan mode inherits the model and thinking, allows active safe built-ins, uses the planning model and thinking level for fresh implementation, exports to `PLAN.md`, and relies on ordinary conversation history after implementation starts.
 The shortcut is disabled unless configured; enabling, changing, or removing it takes effect after `/reload` or restarting Pi.
 Until then, the current shortcut binding stays unchanged.
 Settings saves apply to later workflows; an active implementation keeps its captured reinjection policy.

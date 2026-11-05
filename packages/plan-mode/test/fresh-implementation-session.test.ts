@@ -7,10 +7,9 @@ import {
   startFreshImplementationFromState,
   startFreshImplementationSession,
 } from "../src/fresh-implementation.js";
-import { showReadyPlanMenu } from "../src/plan-action-menus.js";
 import { PLAN_APPROVAL_ENTRY_TYPE } from "../src/plan-approval.js";
 import planMode from "../src/plan-mode.js";
-import { createCustomSelectorHarness, createMockContext, createMockPi } from "./support.js";
+import { createCustomSelectorHarness, createMockContext, createMockPi, showReadyPlanMenu } from "./support.js";
 
 const PLAN = `# Fresh implementation plan
 
