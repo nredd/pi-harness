@@ -16,9 +16,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from coverage_fixtures import SCRIPT, branch_policy, commit_base, policy, setup_report
+
 from coverage_accounting import git_read
-from tests.test_coverage_accounting import SCRIPT, branch_policy, policy, setup_report
-from tests.test_coverage_round2 import commit_base
 
 ROOT = SCRIPT.parent.parent
 FIXTURE_IDENTITY = [
