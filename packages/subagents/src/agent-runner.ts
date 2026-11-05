@@ -1599,7 +1599,7 @@ export async function runAgent(
     : undefined;
   const failure = stale?.failure ?? finalTurnError(session, startLen) ?? structuredFailure;
   return {
-    responseText: failure ? failureText(session, startLen, text || collector.getPreviousText().trim(), stale?.partial ?? partialProgress(session, startLen), collector.hasLaterTool()) : text,
+    responseText: failure ? failureText(session, startLen, collector.getText().trim() || collector.getPreviousText().trim() || text, stale?.partial ?? partialProgress(session, startLen), collector.hasLaterTool()) : text,
     session,
     aborted: run.aborted,
     steered: run.steered,
@@ -1649,7 +1649,7 @@ export async function resumeAgent(
   const failure = stale?.failure ?? finalTurnError(session, startLen);
   const text = collector.getText().trim() || getLastAssistantText(session, startLen);
   return {
-    text: failure ? failureText(session, startLen, text || collector.getPreviousText().trim(), stale?.partial ?? partialProgress(session, startLen), collector.hasLaterTool()) : text,
+    text: failure ? failureText(session, startLen, collector.getText().trim() || collector.getPreviousText().trim() || text, stale?.partial ?? partialProgress(session, startLen), collector.hasLaterTool()) : text,
     failure,
     aborted: run.aborted,
     steered: run.steered,
