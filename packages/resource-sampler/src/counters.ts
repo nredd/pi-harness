@@ -215,9 +215,11 @@ export function darwinMemory(
 	 * @returns Page count, or null for missing/duplicate/malformed rows.
 	 */
 	const read = (name: string): number | null => {
-		const rows = text.split("\n").filter((line) => line.startsWith(`${name}:`));
-		const [row] = rows;
-		const [, value] = rows.length === VM_COUNTER_OCCURRENCES ? (/^.*:\s+(\d+)\.\s*$/.exec(row ?? "") ?? []) : [];
+		const values = text
+			.split("\n")
+			.filter((line) => line.startsWith(`${name}:`))
+			.map((line) => /^.*:\s+(\d+)\.\s*$/.exec(line)?.[1]);
+		const [value] = values.length === VM_COUNTER_OCCURRENCES ? values : [];
 		const count = value === undefined ? Number.NaN : Number(value);
 		return Number.isSafeInteger(count) && count >= 0 ? count : null;
 	};
