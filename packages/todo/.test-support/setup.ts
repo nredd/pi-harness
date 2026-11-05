@@ -14,6 +14,7 @@ beforeEach(async () => {
 	process.env.XDG_CONFIG_HOME = join(TEST_HOME, ".config");
 	const todo = await import("../todo.ts");
 	todo.__resetState();
+	(await import("../state/agents.ts")).__resetAgents();
 	const i18n = await import("@juicesharp/rpiv-i18n");
 	i18n.__resetState();
 	delete (globalThis as Record<symbol, unknown>)[Symbol.for("rpiv-i18n")];

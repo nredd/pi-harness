@@ -338,6 +338,18 @@ describe("settling with in_progress todos", () => {
 		);
 	});
 
+	it("names every todo whose owner agent failed or stopped, past the three-item cap", () => {
+		const state = {
+			tasks: [1, 2, 3, 4].map((id) => ({ id, subject: `t${id}`, status: "in_progress", owner: `w${id}` })),
+			nextId: 5,
+		} as never;
+		const lookup = (owner: string | undefined) =>
+			owner === "w1" ? "running" : owner === "w2" ? "done" : owner === "w3" ? "stopped" : "failed";
+		expect(formatInProgressNotice(state, lookup)).toBe(
+			"Run ended with 4 in_progress todos (#1 t1, #2 t2, #3 t3, +1 more), armed: no todo wakes the parent; owner agent failed or stopped: #3 t3 (@w3 stopped), #4 t4 (@w4 failed)",
+		);
+	});
+
 	it("strips terminal escapes from the subjects", () => {
 		const state = {
 			tasks: [{ id: 1, subject: "a\u001b[31mred\u001b[0m", status: "in_progress" }],

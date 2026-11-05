@@ -49,6 +49,18 @@ export interface PlanApprovedPayload {
 	sessionId: string;
 }
 
+// ---------------------------------------------------------------------------
+// Subagent integration. pi-subagents emits these top-level lifecycle events on
+// `pi.events` with `id` plus optional `handle`/`name`; `failed` also carries
+// `status` (`error`, `aborted` or `stopped`). Read only to show a todo owner's
+// agent state; neither package imports the other.
+// ---------------------------------------------------------------------------
+
+export const SUBAGENT_STARTED_EVENT = "subagents:started";
+export const SUBAGENT_COMPLETED_EVENT = "subagents:completed";
+export const SUBAGENT_FAILED_EVENT = "subagents:failed";
+export const SUBAGENT_LIFECYCLE_EVENTS = [SUBAGENT_STARTED_EVENT, SUBAGENT_COMPLETED_EVENT, SUBAGENT_FAILED_EVENT];
+
 /**
  * Hidden custom message appended at `agent_before_settle` when the run would
  * end with plan items open. Persisted only as a short marker; the `context`

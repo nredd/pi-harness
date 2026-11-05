@@ -677,6 +677,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       id: record.id,
       type: record.type,
       description: record.description,
+      ...identityFields(record),
       result: record.result,
       error: record.error,
       status: record.status,
@@ -694,6 +695,18 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
    * orphaned) instance; their results are spooled for that session to pick up.
    */
   let detachedSessionFile: string | undefined;
+
+  /**
+   * `handle` (`explore-2`) and `name` (the handle drawn from the spawner's `name`, `auth-audit`)
+   * lifecycle-event fields, each omitted when the record has none, so a listener such as
+   * pi-todo can match an agent by what the parent typed rather than only by its opaque id.
+   */
+  function identityFields(record: AgentRecord | undefined): Record<string, unknown> {
+    return {
+      ...(record?.handle ? { handle: record.handle } : {}),
+      ...(record?.alias ? { name: record.alias } : {}),
+    };
+  }
 
   /** `modelFallback` + `modelNote` event fields, or nothing. Only what is KNOWN when the event fires. */
   function fallbackFields(record: AgentRecord | undefined): Record<string, unknown> {
@@ -828,6 +841,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       id: record.id,
       type: record.type,
       description: record.description,
+      ...identityFields(record),
       ...fallbackFields(record),
     });
   }, (record, info) => {
@@ -837,6 +851,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       id: record.id,
       type: record.type,
       description: record.description,
+      ...identityFields(record),
       reason: info.reason,
       tokensBefore: info.tokensBefore,
       compactionCount: record.compactionCount,
@@ -1463,6 +1478,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
           id,
           type: record.type,
           description: record.description,
+          ...identityFields(record),
           isBackground: true,
           ...fallbackFields(record),
         });
@@ -1866,6 +1882,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       id,
       type: existing.type,
       description: existing.description,
+      ...identityFields(existing),
       isBackground: true,
       ...fallbackFields(existing),
     });
@@ -2734,6 +2751,7 @@ Terse command-style prompts produce shallow, generic work.
           id,
           type: subagentType,
           description: params.description,
+          ...identityFields(manager.getRecord(id)),
           isBackground: true,
           ...fallbackFields(manager.getRecord(id)),
         });
