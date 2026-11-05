@@ -169,6 +169,31 @@ describe("toolDescriptionMode", () => {
     }
   });
 
+  it("names configured tier keys, never their members, in the guideline and the model param", () => {
+    const members = ["router/frontier", "example-provider/example-flagship-a", "example-provider/example-flagship-b"];
+    const tool = setup(undefined, () => {
+      writeFileSync(
+        join(hermeticAgentDir, "subagents.json"),
+        JSON.stringify({ modelTiers: { frontier: [members[0]], cheap: members.slice(1) } }),
+      );
+    }).get("Agent");
+    const expected = "Configured tiers: @cheap, @frontier. Prefer a tier over a model id.";
+    expect(tool.description).toContain(`- Use model to select a tier. ${expected}`);
+    expect(tool.parameters.properties.model.description).toContain(expected);
+    const visible = `${tool.description}\n${JSON.stringify(tool.parameters)}`;
+    for (const member of members) expect(visible).not.toContain(member);
+    expect(visible).not.toContain('"haiku"');
+  });
+
+  it("keeps the generic model guidance when no tiers are configured", () => {
+    const tool = setup().get("Agent");
+    expect(tool.description).not.toContain("Configured tiers:");
+    expect(tool.description).toContain('a fuzzy tool-call input (e.g. "haiku")');
+    expect(tool.parameters.properties.model.description).toBe(
+      'Optional model override. Accepts a configured tier (e.g. "@cheap"), "provider/modelId", or fuzzy name (e.g. "haiku"). Explicit values win over agentModels and the agent definition.',
+    );
+  });
+
   it("every strategy param carries a real description of its own", () => {
     const props = setup().get("Agent").parameters?.properties ?? {};
     for (const name of ["run_in_background", "model", "thinking", "inherit_context"]) {

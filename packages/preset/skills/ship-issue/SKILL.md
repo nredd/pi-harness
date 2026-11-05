@@ -107,6 +107,12 @@ After the gate, use `/skill:code-review` for the separate Standards and Spec axe
 `Parent critic: PENDING`. Keep permissions unchanged. The parent must run its independent
 final-HEAD critic BEFORE merge admission, even if a permitted worker ran one.
 
+Whoever runs a critic spawns `Agent(subagent_type: "critic")` with no `model`; its `agentModels`
+tier picks the model. Only when the issue is design-level (new module or public interface,
+concurrency, persistence or wire format, auth), add a second
+`Agent(subagent_type: "critic", model: "@frontier")`. Name tiers, never model ids. If either route
+is quota-parked, wait; do not silently substitute a model or another tier.
+
 The shared skill selects parent background versus delegated blocking calls, supplies both full SHAs
 and the original whole-PR range, and renews it after a HEAD change. Pass the issue/spec and repo
 rules; do not use the ambiguous `/code-review` workflow command.

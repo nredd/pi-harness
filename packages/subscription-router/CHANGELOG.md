@@ -4,6 +4,7 @@
 
 - Keep `router/*` routing after the session that last registered it is disposed: routes read the model registry, not that session's extension ctx. A background agent no longer dies with a stale ctx when a finished sibling is swept (#294)
 - Refuse missing configured `lint` and `format` paths before calling Biome, whose mixed valid/missing paths otherwise succeed
+- Ship an opt-in balanced `frontier` profile example (Fable 5.1 and GPT 6 Astra, wait policy) for `@frontier`, and parse Anthropic's model-scoped `weekly_scoped` limits (live Fable cap) into `seven_day_<family>` windows (#501)
 - Ship an opt-in `cheap` profile example: ordered Haiku 5.5 then GPT 6 Luna, with the usual wait policy and no implicit profile registration. Real-registry stack tests exercise it through built-in Explore's `@cheap` default
 
 - Score expired snapshots no older than `STALE_GRACE_MS` (15 min after retrieval, about 10 min past the TTL) as measured, flagged `stale`, instead of fallback; fixes balanced routing favouring `chain[0]` when a new child's first route races the background refresh. No network read added before routing

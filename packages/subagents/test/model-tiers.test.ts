@@ -100,10 +100,10 @@ describe("exact model tiers", () => {
     expect(selectModel(request)).toBe("Model tier @claude-haiku-4-5 is unavailable.");
   });
 
-  it("selects the first credentialed static member and lists skips without a router", async () => {
-    setModelTiers({ cheap: ["no-tier-credentials/a", ref("b")] }, {});
-    const outcome = await resolveTier("cheap", { registry, admit: open });
-    expect(outcome).toMatchObject({ kind: "static", tier: "cheap", member: ref("b"), model: { id: "b" },
+  it.each(["cheap", "frontier"])("selects the first credentialed static %s member and lists skips without a router", async tier => {
+    setModelTiers({ [tier]: ["no-tier-credentials/a", ref("b")] }, {});
+    const outcome = await resolveTier(tier, { registry, admit: open });
+    expect(outcome).toMatchObject({ kind: "static", tier, member: ref("b"), model: { id: "b" },
       skipped: [{ ref: "no-tier-credentials/a", why: "no-credentials" }], quotaSignal: false });
   });
 

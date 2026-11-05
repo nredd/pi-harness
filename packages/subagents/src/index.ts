@@ -48,7 +48,7 @@ import { applyModelCallEvent, type ModelCallEvent } from "./model-call.js";
 import { type ModelFallback, type ModelRegistry, setAgentModels, setModelAliases, setModelScopeProvider } from "./model-resolver.js";
 import { isScopeModelsEnabled, setScopeModelsEnabled } from "./model-scope.js";
 import { admitModelSelection, describeSelection, modelRequest, modelSelectionNote, selectModel } from "./model-selection.js";
-import { tierDisclosure } from "./model-tiers.js";
+import { configuredTierNames, tierDisclosure } from "./model-tiers.js";
 import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.js";
 import { clipNotice, DEFAULT_NOTIFICATION_RESULT_CHARS, fairShares, GROUP_PREVIEW_RESULT_CHARS, NOTIFICATION_RESULT_CHARS_CEILING, type NoticeFrame, type NoticeParts, PREVIEW_RESULT_CHARS, previewResult, renderNotice } from "./notification-result.js";
 import { appendModelFallbackEntry, appendModelTierEntry, createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
@@ -2020,6 +2020,28 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     ? `\n- isolation: "worktree" gives the agent its own git worktree (removed on completion); changes land on a branch named in the result. Pass \`cwd\` to isolate a repo other than the session cwd.`
     : "";
 
+  // Tier keys only: members are profile config (router or enterprise manifest),
+  // and teaching fuzzy names here is how model ids leak into calls, where an
+  // explicit `model` beats `agentModels` and bypasses the router.
+  const tierGuidance = (): string | undefined => {
+    const tiers = configuredTierNames();
+    return tiers.length === 0
+      ? undefined
+      : `Configured tiers: ${tiers.map((tier) => `@${tier}`).join(", ")}. Prefer a tier over a model id.`;
+  };
+  const modelGuideline = (): string => {
+    const tiers = tierGuidance();
+    return tiers
+      ? `Use model to select a tier. ${tiers}`
+      : 'Use model to select a configured tier (e.g. "@cheap"), an exact "provider/modelId", or a fuzzy tool-call input (e.g. "haiku").';
+  };
+  const modelParamDescription = (): string => {
+    const tiers = tierGuidance();
+    return tiers
+      ? `Optional model override. ${tiers} "provider/modelId" is also accepted. Explicit values win over agentModels and the agent definition.`
+      : 'Optional model override. Accepts a configured tier (e.g. "@cheap"), "provider/modelId", or fuzzy name (e.g. "haiku"). Explicit values win over agentModels and the agent definition.';
+  };
+
   // Compact Agent tool description (#91, `toolDescriptionMode: "compact"`) —
   // the same load-bearing facts as the full version at ~75% fewer tokens, for
   // small/local models. Per-option details live in the param descriptions.
@@ -2062,7 +2084,7 @@ If the target is already known, use a direct tool — \`read\` for a known path,
 - Use stop_subagent to end an agent or workflow you no longer need, e.g. once a sibling has answered. A steer asking it to stop is read only after its current tool call and can be ignored.
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, etc.), since it is not aware of the user's intent.
 - If an agent's description says it should be used proactively, try to use it without the user having to ask for it first.
-- Use model to select a configured tier (e.g. "@cheap"), an exact "provider/modelId", or a fuzzy tool-call input (e.g. "haiku").
+- ${modelGuideline()}
 - Use thinking to control extended thinking level.
 - Use inherit_context if the agent needs the parent conversation history.${isolationGuideline}${scheduleGuideline}
 
@@ -2163,8 +2185,7 @@ Terse command-style prompts produce shallow, generic work.
       }),
       model: Type.Optional(
         Type.String({
-          description:
-            'Optional model override. Accepts a configured tier (e.g. "@cheap"), "provider/modelId", or fuzzy name (e.g. "haiku"). Explicit values win over agentModels and the agent definition.',
+          description: modelParamDescription(),
         }),
       ),
       thinking: Type.Optional(
