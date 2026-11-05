@@ -212,7 +212,7 @@ def test_benchmark_signal_matches_its_check_benchmark_producer() -> None:
     assert primary["producer"] == "coverage.py"
     assert primary["gate"] == "check-benchmark"
     assert primary["skip_hosts"] == ["linux", "wsl2"]
-    assert primary["max_uncovered"] == {"darwin": {"lines": 0, "functions": 0}}
+    assert primary["max_uncovered"] == {"darwin": {"lines": 0, "functions": 0, "branches": 0}}
 
 
 def test_declared_bun_commands_delegate_coverage_to_the_launcher() -> None:

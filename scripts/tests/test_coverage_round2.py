@@ -575,7 +575,10 @@ def test_independent_counter_budget_is_enforced(
     results, errors = account(tmp_path, policy())
     assert results[0]["uncovered_lines"] == lines
     assert results[0]["uncovered_functions"] == functions
-    assert errors == [f"example/primary: Budget exceeded: {lines} lines, {functions} functions"]
+    assert errors == [
+        f"example/primary: Budget exceeded: {lines} lines, {functions} functions uncovered, "
+        "budget 0 lines, 0 functions"
+    ]
 
 
 def test_valid_raw_report_filters_to_zero_owned_lines(tmp_path: Path) -> None:

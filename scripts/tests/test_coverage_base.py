@@ -17,7 +17,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from coverage_accounting import git_read
-from tests.test_coverage_accounting import SCRIPT, policy, setup_report
+from tests.test_coverage_accounting import SCRIPT, branch_policy, policy, setup_report
 from tests.test_coverage_round2 import commit_base
 
 ROOT = SCRIPT.parent.parent
@@ -176,6 +176,36 @@ def test_explicit_base_is_used_unchanged_on_a_synthetic_merge(tmp_path: Path) ->
     result, errors = gate(tmp_path, "--base", target)
     assert result.returncode == 1
     assert "packages/example/src/newer.ts" in str(errors)
+
+
+def test_dropping_a_branch_cap_against_divergence_ratchets(tmp_path: Path) -> None:
+    """Reject a topic that deletes the `branches` cap its divergence commit declared.
+
+    Parameters:
+        tmp_path (Path): Disposable Git repository.
+    Returns:
+        None: The capped topic passes, and the same topic without the cap fails the ratchet.
+    Raises:
+        AssertionError: Removing a branch cap reads as no change against the real base.
+    """
+    setup_report(tmp_path, "branches.info")
+    cfg = branch_policy(1)
+    cfg.packages["example"].signals["primary"].files = None
+    commit_base(tmp_path, cfg)
+    git_read(tmp_path, ["branch", "-M", "main"])
+    git_read(tmp_path, ["update-ref", "refs/remotes/origin/main", "HEAD"])
+    git_read(tmp_path, ["checkout", "-qb", "topic"])
+    result, errors = gate(tmp_path, "--compare-ref", "origin/main")
+    assert result.returncode == 0, result.stderr
+    assert errors == []
+    path = tmp_path / "coverage/policy.json"
+    data = json.loads(path.read_text())
+    del data["packages"]["example"]["signals"]["primary"]["max_uncovered"][sys.platform]["branches"]
+    path.write_text(json.dumps(data))
+    commit(tmp_path, "Drop the branch cap")
+    result, errors = gate(tmp_path, "--compare-ref", "origin/main")
+    assert result.returncode == 1
+    assert f"Ratchet violation: 'example/primary/{sys.platform}'" in str(errors)
 
 
 @pytest.mark.parametrize(

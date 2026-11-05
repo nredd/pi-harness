@@ -556,6 +556,26 @@ describe("resource_snapshot mapping", () => {
 		expect(mock.text(result)).toContain("\n7 1 3.0% 200 (unknown)\n8 1 1.0% 100 bash");
 	});
 
+	it("prints a process CPU that is not measured by its state, never a number", async () => {
+		// The real-host smoke only reaches this when some host process happens to be warming or unreadable between
+		// its two samples, so its coverage depended on the host; these fixtures always hit it.
+		const mock = createMockPi();
+		const { resolved } = options(fixture("darwin", [proc(7, 200, warming, "node"), proc(8, 100, darwinCpu, "bash")]));
+		registerResourceTools(mock.pi, resolved);
+		const result = await mock.call("resource_snapshot", { process_limit: 2, interval_ms: INTERVAL_MS }, "/tmp");
+		expect(mock.text(result)).toContain("\n7 1 warming 200 node\n8 1 unavailable 100 bash");
+	});
+
+	it("breaks an RSS tie between unmeasured processes by pid", async () => {
+		// The real host only reaches the pid tiebreak when two unmeasured processes share an RSS, so it was host-dependent.
+		const { resolved } = options(
+			fixture("linux", [proc(9, 100, warming), proc(3, 100, warming), proc(5, 100, measured(1))]),
+		);
+		const snapshot = await resourceSnapshot(3, resolved, undefined, INTERVAL_MS);
+		if (snapshot.processes.status !== "available") throw new Error("missing metadata");
+		expect(snapshot.processes.entries.map((entry) => entry.pid)).toEqual([5, 3, 9]);
+	});
+
 	it("bounds 60 entries to the limit and reports incomplete coverage as truncated", async () => {
 		const processes = Array.from({ length: 60 }, (_, i) => proc(i + 1, 10, measured(i)));
 		const coverage = {

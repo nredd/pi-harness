@@ -106,9 +106,8 @@ scenarios remain separate acceptance evidence, not owned-source coverage. To reg
 artifact, run `uv run --locked --project integration python scripts/coverage_accounting.py --measure
 --os linux --reports-root /tmp/cov-linux --summary /tmp/measured-linux.json` (use `darwin` and its
 artifact for macOS). The full download/replay and independent-two-run comparison procedure is
-[here](coverage.md#refresh-floors-from-hosted-artifacts); this command never edits or commits policy. Branches
-are reported only: `Counts`, the accounting budget predicate and the base ratchet enforce only
-lines/functions. Darwin sampler branch variation (#164) changes no floor. Final hosted run
+[here](coverage.md#refresh-floors-from-hosted-artifacts); this command never edits or commits policy. Uncovered
+branches are capped per signal like lines/functions ([here](coverage.md#branch-caps)). Final hosted run
 `40857829296` established zero primary misses for all eight packages on macOS and all except
 resource-sampler on Linux, whose 47 lines / 8 functions in native `darwin.ts` paths went to 0/0
 with #375's fake-host FFI tests; no package has a per-OS allowance. Session-kit now has zero primary misses on both
