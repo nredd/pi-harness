@@ -7,6 +7,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatInProgressNotice } from "../../todo/plan-hooks.ts";
+import { agentLookup, agentStateFor, applyAgentEvent, forgetAgents } from "../../todo/state/agents.ts";
 import type * as AgentRunner from "../src/agent-runner.js";
 
 vi.mock("../src/agent-runner.js", async () => {
@@ -113,6 +115,76 @@ describe("lifecycle event identity", () => {
     ]);
   });
 
+  it.each(["done", "failed"])("tracks a queued background resume after %s without accepting a stale created", async (outcome) => {
+    writeFileSync(join(cwd, "agent-dir", "subagents.json"), JSON.stringify({ maxConcurrent: 1 }));
+    const { pi, tools } = await boot();
+    pi.events.emit.mockImplementation((channel: string, data: unknown) => applyAgentEvent("resume-s1", channel, data));
+    const resolve = runnerResolution();
+    vi.mocked(runAgent).mockImplementationOnce(async (context, type, prompt, options) => {
+      const result = await resolve(context, type, prompt, options);
+      if (outcome === "failed") throw new Error("first run failed");
+      return result;
+    }).mockImplementation(runnerResolution({ hold: true }));
+    const spawn = (name: string) => tools.get("Agent").execute(
+      "tc", { prompt: "go", description: name, subagent_type: "scout", name, run_in_background: true },
+      undefined, undefined, ctx(),
+    );
+    const first = await spawn("Auth Audit");
+    await flush();
+    const id = /Agent ID: (\S+)/.exec(first.content.map((c: { text?: string }) => c.text ?? "").join(""))![1];
+    expect(agentStateFor("resume-s1", "auth-audit")).toBe(outcome);
+    const stale = eventsNamed(pi, "subagents:created").find((e: { id: string }) => e.id === id);
+    pi.events.emit("subagents:created", stale);
+    expect(agentStateFor("resume-s1", "auth-audit")).toBe(outcome);
+    await spawn("Blocker");
+    await flush();
+    const before = eventsNamed(pi, "subagents:created").length;
+    await tools.get("Agent").execute(
+      "resume", { prompt: "again", description: "resume", subagent_type: "scout", resume: id, run_in_background: true },
+      undefined, undefined, ctx(),
+    );
+    const manager = Reflect.get(globalThis, Symbol.for("pi-subagents:manager")) as { getRecord(id: string): { status: string } };
+    expect(manager.getRecord(id).status).toBe("queued");
+    expect(eventsNamed(pi, "subagents:created")).toHaveLength(before + 1);
+    expect(agentStateFor("resume-s1", "auth-audit")).toBe("queued");
+    expect(agentLookup("resume-s1").wakesParent?.("auth-audit")).toBe(true);
+    forgetAgents("resume-s1");
+  });
+
+  it.each([false, true])("classifies actual RPC completion wake eligibility: background=%s", async (isBackground) => {
+    const b = makePi();
+    const handlers = new Map<string, Array<(data: unknown) => void>>();
+    b.pi.events.on.mockImplementation((name: string, handler: (data: unknown) => void) => {
+      handlers.set(name, [...(handlers.get(name) ?? []), handler]);
+      return () => {};
+    });
+    b.pi.events.emit.mockImplementation((name: string, data: unknown) => {
+      applyAgentEvent("rpc-wake", name, data);
+      for (const handler of handlers.get(name) ?? []) handler(data);
+    });
+    subagentsExtension(b.pi);
+    await startSession(b.lifecycle, true, { model: PARENT, modelRegistry: ctx().modelRegistry });
+    let finish!: (result: Awaited<ReturnType<typeof runAgent>>) => void;
+    vi.mocked(runAgent).mockImplementation((_context, _type, _prompt, options) => {
+      const session = { dispose: vi.fn(), messages: [], model: PARENT };
+      options?.onSessionCreated?.(session as never);
+      return new Promise((resolve) => { finish = resolve; });
+    });
+    let id = "";
+    b.pi.events.on("subagents:rpc:spawn:reply:wake", (reply: { data: { id: string } }) => { id = reply.data.id; });
+    b.pi.events.emit("subagents:rpc:spawn", { requestId: "wake", type: "scout", prompt: "go", options: { description: "rpc", isBackground } });
+    await flush();
+    expect(id).not.toBe("");
+    const state = { tasks: [{ id: 1, subject: "Audit", status: "in_progress", owner: id }], nextId: 2 } as never;
+    const notice = formatInProgressNotice(state, agentLookup("rpc-wake"));
+    finish({ responseText: "done", session: { dispose: vi.fn(), messages: [], model: PARENT }, aborted: false, steered: false } as never);
+    await flush();
+    const manager = Reflect.get(globalThis, Symbol.for("pi-subagents:manager")) as { getRecord(id: string): { resultConsumed?: boolean } };
+    expect(Boolean(manager.getRecord(id).resultConsumed)).toBe(!isBackground);
+    expect(notice?.level).toBe(isBackground ? "info" : "warning");
+    forgetAgents("rpc-wake");
+  });
+
   it("omits name for an unnamed spawn and keeps handle on a failure", async () => {
     const { pi } = await boot();
     vi.mocked(runAgent).mockRejectedValue(new Error("boom"));
@@ -164,5 +236,34 @@ describe("lifecycle event identity", () => {
     expect(started.spawnSeq).toBeLessThan(failed.settleSeq);
     expect(eventsNamed(pi, "subagents:started").find((e: any) => e.id === first).spawnSeq).toBeLessThan(started.spawnSeq);
     expect(started).not.toHaveProperty("settleSeq");
+  });
+
+  it("a queued Agent spawn stopped before it starts emits failed with status stopped", async () => {
+    writeFileSync(join(cwd, "agent-dir", "subagents.json"), JSON.stringify({ maxConcurrent: 1 }));
+    const { pi, tools } = await boot();
+    const manager = Reflect.get(globalThis, Symbol.for("pi-subagents:manager")) as { getRecord(id: string): { status: string } };
+    vi.mocked(runAgent).mockImplementation(runnerResolution({ hold: true }));
+    const spawn = (name: string) =>
+      tools.get("Agent").execute(
+        "tc",
+        { prompt: "go", description: name, subagent_type: "scout", name, run_in_background: true },
+        undefined, undefined, ctx(),
+      );
+    await spawn("Blocker");
+    const queued = await spawn("Auth Audit");
+    await flush();
+    const id = /Agent ID: (\S+)/.exec(queued.content.map((c: { text?: string }) => c.text ?? "").join(""))![1];
+    expect(manager.getRecord(id).status).toBe("queued");
+    expect(eventsNamed(pi, "subagents:created").map((e: { id: string }) => e.id)).toContain(id);
+
+    await tools.get("stop_subagent").execute("tc-stop", { agent_id: id }, undefined, undefined, ctx());
+    expect(manager.getRecord(id).status).toBe("stopped");
+
+    const failed = eventsNamed(pi, "subagents:failed").filter((e: { id: string }) => e.id === id);
+    expect(failed).toEqual([
+      expect.objectContaining({ id, status: "stopped", handle: "scout-2", name: "auth-audit", nameBase: "auth-audit" }),
+    ]);
+    expect(typeof failed[0].settleSeq).toBe("number");
+    expect(eventsNamed(pi, "subagents:started").map((e: { id: string }) => e.id)).not.toContain(id);
   });
 });
