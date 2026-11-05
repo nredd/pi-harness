@@ -115,7 +115,7 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		tmp = path.join(scratch, "tmp");
 		fs.mkdirSync(tmp);
 		log = path.join(scratch, "argv.json");
-		for (const name of ["TMPDIR", "FAKE_BROWSER_LOG", "FAKE_BROWSER_IGNORE_SIGTERM", "FAKE_BROWSER_NO_CDP", "PI_COMPUTER_USE_CHROME_EXECUTABLE", "PI_COMPUTER_USE_CDP_PORT"]) saved[name] = process.env[name];
+		for (const name of ["TMPDIR", "FAKE_BROWSER_LOG", "FAKE_BROWSER_IGNORE_SIGTERM", "FAKE_BROWSER_NO_CDP", "FAKE_BROWSER_LAUNCHES", "PI_COMPUTER_USE_CHROME_EXECUTABLE", "PI_COMPUTER_USE_CDP_PORT"]) saved[name] = process.env[name];
 		process.env.TMPDIR = tmp;
 		process.env.FAKE_BROWSER_LOG = log;
 		process.env.PI_COMPUTER_USE_CHROME_EXECUTABLE = FAKE_BROWSER;
@@ -215,6 +215,24 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, undefined, "aborted launch left its CDP port configured");
 	});
 
+	test("a failed launch and session shutdown restore a CDP port the user had configured", async () => {
+		process.env.PI_COMPUTER_USE_CDP_PORT = "9222";
+		try {
+			const controller = new AbortController();
+			controller.abort();
+			await assert.rejects(testing.performLaunchBrowser({}, controller.signal), /aborted/);
+			assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, "9222", "aborted launch did not restore the user's CDP port");
+
+			await testing.performLaunchBrowser({});
+			const { port } = JSON.parse(fs.readFileSync(log, "utf8"));
+			assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, String(port), "launch did not point CDP at the managed browser");
+			await shutdownComputerUseSession();
+			assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, "9222", "session shutdown did not restore the user's CDP port");
+		} finally {
+			delete process.env.PI_COMPUTER_USE_CDP_PORT;
+		}
+	});
+
 	test("an aborted launch SIGKILLs a browser that ignores SIGTERM before it returns", async () => {
 		fs.rmSync(log, { force: true });
 		process.env.FAKE_BROWSER_IGNORE_SIGTERM = "1";
@@ -257,11 +275,101 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 	});
 
 	test("a launch whose spawn throws removes its profile dir and rethrows the spawn error", async () => {
+		// Pins the sync-`spawn` failure path: the profile dir is gone, no CDP port is left set, and the
+		// rejection is the spawn error itself. The masking case, a failed removal, needs the profile
+		// dir to become unremovable between `mkdtemp` and `spawn`, which has no seam, so this test
+		// does not exercise it.
 		const before = new Set(fs.readdirSync(tmp));
 		// The URL passes the scheme check, but `spawn` rejects the NUL byte synchronously.
 		await assert.rejects(testing.performLaunchBrowser({ url: "http://example.test/\0" }), { code: "ERR_INVALID_ARG_VALUE" });
 		assert.deepEqual(fs.readdirSync(tmp).filter((entry) => !before.has(entry)), [], "failed spawn left a profile dir behind");
 		assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, undefined, "failed spawn left a CDP port configured");
+	});
+
+	/**
+	 * Every fake browser recorded in `$FAKE_BROWSER_LAUNCHES` since `launches` was reset.
+	 * @param {string} launches Path of the launch log.
+	 * @returns {{ port: number, profile: string }[]} One entry per started browser.
+	 */
+	function launched(launches) {
+		return fs.existsSync(launches) ? fs.readFileSync(launches, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
+	}
+
+	/**
+	 * Assert that no profile dir created since `before` remains and that none of `browsers` is still
+	 * running. A browser stopped before it logged its launch never listened, and its profile dir is
+	 * still covered by the `before` check.
+	 * @param {Set<string>} before Entries of `tmp` before the test launched anything.
+	 * @param {{ port: number, profile: string }[]} browsers Browsers that logged a launch.
+	 * @param {string} when What just happened, for the assertion message.
+	 * @returns {Promise<void>} Resolves once every browser is checked.
+	 * @throws {import('node:assert').AssertionError} If a browser or a profile dir survived.
+	 */
+	async function assertAllGone(before, browsers, when) {
+		assert.deepEqual(fs.readdirSync(tmp).filter((entry) => !before.has(entry)), [], `${when} left a profile dir behind`);
+		for (const { port, profile } of browsers) {
+			assert(!fs.existsSync(profile), `${when} left profile ${profile} behind`);
+			assert.equal(await portListening(port), false, `${when} left the browser on port ${port} running`);
+		}
+	}
+
+	test("concurrent launches leave one browser, and shutdown stops it", async () => {
+		const launches = path.join(scratch, "launches.jsonl");
+		fs.rmSync(launches, { force: true });
+		process.env.FAKE_BROWSER_LAUNCHES = launches;
+		const before = new Set(fs.readdirSync(tmp));
+		const first = new AbortController();
+		try {
+			await testing.performLaunchBrowser({});
+			const racing = testing.performLaunchBrowser({}, first.signal);
+			const winner = testing.performLaunchBrowser({});
+			// The second launch stops the first one's browser; abort its CDP wait instead of waiting out 15s.
+			await winner;
+			first.abort();
+			await assert.rejects(racing);
+		} finally {
+			delete process.env.FAKE_BROWSER_LAUNCHES;
+		}
+		const browsers = launched(launches);
+		const live = browsers.find(({ port }) => String(port) === process.env.PI_COMPUTER_USE_CDP_PORT);
+		assert(live, "CDP port does not point at a launched browser");
+		assert.equal(await cdpAnswers(live.port), true, "the winning launch's browser is not serving CDP");
+		const liveEntries = fs.readdirSync(tmp).filter((entry) => !before.has(entry));
+		assert.deepEqual(liveEntries, [path.basename(live.profile)], "concurrent launches left more than one profile dir");
+		await assertAllGone(new Set([...before, ...liveEntries]), browsers.filter((entry) => entry !== live), "a concurrent relaunch");
+		await shutdownComputerUseSession();
+		await assertAllGone(before, browsers, "session shutdown");
+		assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, undefined, "session shutdown left a CDP port configured");
+	});
+
+	test("shutdown during a relaunch waits for it, then stops the new browser", async () => {
+		const launches = path.join(scratch, "launches.jsonl");
+		fs.rmSync(launches, { force: true });
+		process.env.FAKE_BROWSER_LAUNCHES = launches;
+		const before = new Set(fs.readdirSync(tmp));
+		const controller = new AbortController();
+		let relaunch;
+		try {
+			process.env.FAKE_BROWSER_IGNORE_SIGTERM = "1";
+			try {
+				await testing.performLaunchBrowser({});
+			} finally {
+				delete process.env.FAKE_BROWSER_IGNORE_SIGTERM;
+			}
+			// The relaunch spends the bridge's 5s SIGTERM grace period stopping the first browser.
+			relaunch = testing.performLaunchBrowser({}, controller.signal);
+			await new Promise((resolve) => setTimeout(resolve, 200));
+			const started = Date.now();
+			await shutdownComputerUseSession();
+			assert(Date.now() - started >= 4_000, "session shutdown did not wait for the in-flight relaunch");
+			await assertAllGone(before, launched(launches), "session shutdown during a relaunch");
+			assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, undefined, "session shutdown left a CDP port configured");
+		} finally {
+			delete process.env.FAKE_BROWSER_LAUNCHES;
+			controller.abort();
+			await Promise.allSettled([relaunch]);
+		}
+		await assertAllGone(before, launched(launches), "the relaunch that lost to shutdown");
 	});
 
 	test("a Pi process that quits right after shutdown leaves no profile dir behind", async () => {
