@@ -1,4 +1,4 @@
-import { ChildProcess, spawn } from "node:child_process";
+import { ChildProcess, spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,7 @@ vi.mock("node:fs", async (original) => {
 	const actual = await original<typeof import("node:fs")>();
 	return {
 		...actual,
+		mkdirSync: vi.fn(actual.mkdirSync),
 		statSync: vi.fn(actual.statSync),
 		writeFileSync: vi.fn(actual.writeFileSync),
 		rmSync: vi.fn(actual.rmSync),
@@ -65,6 +66,23 @@ describe("bounded failure recovery", () => {
 		});
 		await expect(withFileLock(dir, async () => "wrong", { timeoutMs: 0 })).rejects.toThrow("lock-timeout");
 		expect(fs.existsSync(dir)).toBe(true);
+	});
+
+	it("keeps a lock that a live owner took over between the stale judgement and the reclaim guard", async () => {
+		const dir = lock();
+		fs.mkdirSync(dir);
+		// A reaped child's pid: dead, and never one this test did not start.
+		const dead = spawnSync(process.execPath, ["-e", ""]).pid;
+		fs.writeFileSync(join(dir, "owner.json"), JSON.stringify({ pid: dead, startedAt: 0, token: "dead" }));
+		const live = JSON.stringify({ pid: process.pid, startedAt: Date.now(), token: "live" });
+		const actualMkdir = vi.mocked(fs.mkdirSync).getMockImplementation();
+		vi.spyOn(fs, "mkdirSync").mockImplementation((path, options) => {
+			if (String(path) === `${dir}.reclaim`) fs.writeFileSync(join(dir, "owner.json"), live);
+			return actualMkdir?.(path, options);
+		});
+		await expect(withFileLock(dir, async () => "wrong", { timeoutMs: 0 })).rejects.toThrow("lock-timeout");
+		expect(fs.readFileSync(join(dir, "owner.json"), "utf8")).toBe(live);
+		expect(fs.existsSync(`${dir}.reclaim`)).toBe(false);
 	});
 
 	it.each(["publication", "removal"])("retains a stale lock if reclaim %s fails", async (failure) => {

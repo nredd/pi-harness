@@ -62,18 +62,19 @@ export function parsePorcelainV2(text: string): GitStatus {
 			status.untracked.push(token.slice(2));
 			continue;
 		}
-		if (kind === "!") continue;
 		if (kind === "1" || kind === "2" || kind === "u") {
 			const fieldCount = kind === "1" ? 8 : kind === "2" ? 9 : 10;
 			const parts = token.split(" ");
 			const path = parts.slice(fieldCount).join(" ");
-			const code = parts[1] ?? "..";
+			// XY always follows the one-character kind and its space.
+			const code = token.slice(2, 4);
 			const entry: StatusEntry = { path, code };
 			if (kind === "2") {
-				entry.from = tokens[i + 1] ?? undefined;
+				entry.from = tokens[i + 1];
 				i += 1;
 			}
-			const [x = ".", y = "."] = code;
+			const x = code.charAt(0);
+			const y = code.charAt(1);
 			if (kind === "u" || x === "U" || y === "U" || code === "AA" || code === "DD") {
 				status.conflicted.push(entry);
 				continue;
@@ -98,7 +99,7 @@ export function formatStatus(s: GitStatus): string {
 		if (entries.length === 0) return;
 		lines.push(`${label} (${entries.length}):`);
 		for (const e of entries) {
-			const letter = e.code[side] ?? "?";
+			const letter = e.code.charAt(side);
 			lines.push(`  ${letter} ${e.from ? `${e.from} -> ${e.path}` : e.path}`);
 		}
 	};

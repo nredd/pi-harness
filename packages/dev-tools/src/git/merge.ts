@@ -19,14 +19,17 @@ interface Approval {
 	hooks: string;
 }
 
+/** Run one approval query; any failure or truncated output rejects the merge rather than guessing. */
+async function approvalQuery(args: string[], opts: GitRunOptions): Promise<string> {
+	const result = await git(args, opts);
+	const failure = gitFailure(result, "git merge approval");
+	if (failure || result.stdoutDropped) throw new Error(failure ?? "Git merge approval output truncated");
+	return result.stdout;
+}
+
 /** Reject changed merge identity, unresolved entries and every unapproved index endpoint. */
 async function checkMergeIndex(approval: Approval, opts: GitRunOptions): Promise<void> {
-	const query = async (args: string[], cwd = opts.cwd) => {
-		const result = await git(args, { ...opts, cwd });
-		const failure = gitFailure(result, "git merge approval");
-		if (failure || result.stdoutDropped) throw new Error(failure ?? "Git merge approval output truncated");
-		return result.stdout;
-	};
+	const query = (args: string[], cwd = opts.cwd) => approvalQuery(args, { ...opts, cwd });
 	if (
 		readFileSync(approval.mergePath, "utf8") !== approval.mergeHead ||
 		(await query(["rev-parse", "HEAD"])).trim() !== approval.head
@@ -159,12 +162,7 @@ export async function prepareMerge(
 	paths: string[],
 	opts: GitRunOptions,
 ): Promise<{ check: () => Promise<void>; args: string[]; cleanup: () => void } | undefined> {
-	const query = async (args: string[]) => {
-		const result = await git(args, opts);
-		const failure = gitFailure(result, "git merge approval");
-		if (failure || result.stdoutDropped) throw new Error(failure ?? "Git merge approval output truncated");
-		return result.stdout.trimEnd();
-	};
+	const query = async (args: string[]) => (await approvalQuery(args, opts)).trimEnd();
 	let mergePath: string;
 	try {
 		mergePath = await query(["rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD"]);

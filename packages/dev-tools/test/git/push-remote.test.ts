@@ -64,6 +64,28 @@ describe("resolvePushRemote with one failing git call", () => {
 		expect(calls).toEqual([HEAD]);
 	});
 
+	it("names a signal exit and silent stderr instead of printing null or nothing", async () => {
+		const { run } = stub({ [HEAD]: { exitCode: null, stdout: "", stderr: " \n" } });
+		expect(await resolvePushRemote(run)).toEqual({
+			error: "git symbolic-ref failed (exit signal): no output. Do NOT commit again.",
+		});
+	});
+
+	it("treats an empty configured value as unset and falls through", async () => {
+		const { run } = stub({
+			[HEAD]: ok("main\n"),
+			"config --get branch.main.pushRemote": ok("\n"),
+			"config --get remote.pushDefault": ok("fork\n"),
+		});
+		expect(await resolvePushRemote(run)).toEqual({ remote: "fork", setUpstream: false });
+	});
+
+	it("says there are no remotes when none exist", async () => {
+		const { run } = stub({ [HEAD]: ok("main\n"), remote: ok("") });
+		const r = await resolvePushRemote(run);
+		expect("error" in r && r.error).toContain("no push remote for `main` and there are no remotes;");
+	});
+
 	it("does not duplicate stderr in the message", async () => {
 		const { run } = stub({ [HEAD]: ok("main\n"), remote: fail(128, "fatal: not a git repository") });
 		const r = await resolvePushRemote(run);

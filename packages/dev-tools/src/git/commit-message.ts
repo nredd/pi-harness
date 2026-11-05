@@ -33,7 +33,7 @@ export function validateSubject(subject: string): string | undefined {
 	if (DASHES.test(s)) return "subject must not contain an em or en dash";
 	// An area prefix like `rtl:` is fine; the sentence after it must still be capitalized.
 	const body = s.replace(/^[a-z][a-z0-9-]*: /, "");
-	const first = body[0] ?? "";
+	const first = body.charAt(0);
 	if (first !== first.toUpperCase() || first === first.toLowerCase()) {
 		return "subject must start with a capital letter (an `area:` prefix may precede it)";
 	}

@@ -78,10 +78,15 @@ export function gitState(r: RunResult): string {
 	return `exit ${r.exitCode}`;
 }
 
+/** A non-zero git exit as text the model can act on: the named state, then git's own output. */
+export function gitExitText(r: RunResult, what: string): string {
+	return `${what}: ${gitState(r)}\n${(r.stderr || r.stdout).trim()}`;
+}
+
 /** A failed git invocation as text the model can act on, or undefined when git ran normally. */
 export function gitFailure(r: RunResult, what: string): string | undefined {
 	const abnormal = abnormalExit(r, what);
 	if (abnormal) return abnormal;
-	if (r.exitCode !== 0) return `${what}: ${gitState(r)}\n${(r.stderr || r.stdout).trim()}`;
+	if (r.exitCode !== 0) return gitExitText(r, what);
 	return undefined;
 }

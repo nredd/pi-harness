@@ -218,13 +218,14 @@ export function run(opts: RunOptions): Promise<RunResult> {
 		 * after the child exited is just cleanup.
 		 */
 		const terminate = (): boolean => {
-			if (child.pid === undefined) return false;
+			const pid = child.pid;
+			if (pid === undefined) return false;
 			const wasAlive = alive();
-			killTree(child.pid, "SIGTERM");
+			killTree(pid, "SIGTERM");
+			// `finish` clears every timer before anything else, so this never fires once settled.
 			timers.push(
 				setTimeout(() => {
-					if (child.pid === undefined || settled) return;
-					killTree(child.pid, "SIGKILL");
+					killTree(pid, "SIGKILL");
 					timers.push(setTimeout(() => void finish(child.exitCode, child.signalCode), CLOSE_GRACE_MS));
 				}, KILL_GRACE_MS),
 			);
