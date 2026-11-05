@@ -169,7 +169,7 @@ function findBlockedCommandSegment(command, safeSubcommands = {}, {
   const roots = allowedRoots(workingDirectory, trustedDirectories, homeDir);
   let base = workingDirectory;
   for (const [index, segment] of segments.entries()) {
-    if (segment.separator === "|" && isInterpreterCommand(segment.text, INTERPRETERS)) return segment.text;
+    if (segment.separator === "|" && isInterpreterSegment(segment.text, INTERPRETERS)) return segment.text;
     const tokens = shellWords(segment.text);
     if (tokens?.[0] === "cd" && matchConfiguredPrefix(segment.text, safeSubcommands) === void 0) {
       const target = tokens.length === 2 && !hasShellExpansion(segment.text) ? resolveDirectory(tokens[1], base, roots, homeDir) : void 0;
@@ -191,7 +191,7 @@ function findBlockedPowerShellCommandSegment(command, safeSubcommands = {}, { wo
     homeDir
   };
   return segments.find(
-    (segment) => segment.separator === "|" && isInterpreterCommand(segment.text, POWERSHELL_INTERPRETERS) || !isSafePowerShellSegment(segment.text, safeSubcommands, paths)
+    (segment) => segment.separator === "|" && isInterpreterSegment(segment.text, POWERSHELL_INTERPRETERS) || !isSafePowerShellSegment(segment.text, safeSubcommands, paths)
   )?.text;
 }
 var INTERPRETERS = /* @__PURE__ */ new Set([
@@ -234,7 +234,7 @@ var POWERSHELL_INTERPRETERS = /* @__PURE__ */ new Set([
   "invoke-command",
   "start-process"
 ]);
-function isInterpreterCommand(segment, interpreters) {
+function isInterpreterSegment(segment, interpreters) {
   const name = segment.trim().replace(/\s.*$/su, "").replace(/^.*[\\/]/su, "").toLowerCase().replace(/\.exe$/u, "");
   return interpreters.has(name) || /^(?:python|ruby|perl|php|lua)[\d.]*$/u.test(name);
 }
@@ -2569,4 +2569,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-5BB47TLN.ts.map
+//# sourceMappingURL=chunk-5SVBAFRF.ts.map

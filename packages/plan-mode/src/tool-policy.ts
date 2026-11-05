@@ -264,7 +264,7 @@ export function findBlockedCommandSegment(
   const roots = allowedRoots(workingDirectory, trustedDirectories, homeDir);
   let base = workingDirectory;
   for (const [index, segment] of segments.entries()) {
-    if (segment.separator === "|" && isInterpreterCommand(segment.text, INTERPRETERS)) return segment.text;
+    if (segment.separator === "|" && isInterpreterSegment(segment.text, INTERPRETERS)) return segment.text;
     const tokens = shellWords(segment.text);
     if (tokens?.[0] === "cd" && matchConfiguredPrefix(segment.text, safeSubcommands) === undefined) {
       const target =
@@ -303,7 +303,7 @@ export function findBlockedPowerShellCommandSegment(
   };
   return segments.find(
     (segment) =>
-      (segment.separator === "|" && isInterpreterCommand(segment.text, POWERSHELL_INTERPRETERS)) ||
+      (segment.separator === "|" && isInterpreterSegment(segment.text, POWERSHELL_INTERPRETERS)) ||
       !isSafePowerShellSegment(segment.text, safeSubcommands, paths),
   )?.text;
 }
@@ -372,7 +372,7 @@ const POWERSHELL_INTERPRETERS = new Set([
 ]);
 
 /** Whether the segment's first word, by basename and without `.exe`, names an interpreter. */
-function isInterpreterCommand(segment: string, interpreters: ReadonlySet<string>) {
+function isInterpreterSegment(segment: string, interpreters: ReadonlySet<string>) {
   const name = segment
     .trim()
     .replace(/\s.*$/su, "")

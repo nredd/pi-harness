@@ -64,7 +64,7 @@ import {
   snapshotPlanModeSelectedNames,
   updatePlanModeSettings,
   updatePlanModeUi
-} from "./chunks/chunk-5BB47TLN.ts";
+} from "./chunks/chunk-5SVBAFRF.ts";
 
 // src/plan-mode.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
@@ -458,7 +458,7 @@ function restorePlanModeState(entries, stateEntryType) {
     }
   }
   const entry = branch[stateEntryIndex];
-  if (!isRecord(entry?.data)) return { enabled: false, awaitingAction: false };
+  if (!isRecord(entry?.data)) return { enabled: false, awaitingAction: false, declinedPlans: 0 };
   const enabled = entry.data.enabled === true;
   const persistedSource = enabled ? planCompletionSource(entry.data.latestPlanSource) : void 0;
   const persistedPlan = enabled ? normalizePersistedPlan(entry.data.latestPlan) : void 0;
@@ -663,6 +663,7 @@ async function startFreshImplementationSession(ctx, request) {
   const destinationState = activeImplementation || pendingImplementationRuntime ? {
     enabled: false,
     awaitingAction: false,
+    declinedPlans: 0,
     ...activeImplementation ? { activeImplementation } : {},
     ...pendingImplementationRuntime ? { pendingImplementationRuntime } : {}
   } : void 0;
@@ -1156,7 +1157,7 @@ function planMode(pi, dependencies = {}) {
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
     if (!interactiveUiPromise) {
-      interactiveUiPromise = import("./chunks/interactive-ui-FAYETMXJ.ts").catch((error) => {
+      interactiveUiPromise = import("./chunks/interactive-ui-3KLRCEBP.ts").catch((error) => {
         interactiveUiPromise = void 0;
         throw error;
       });
@@ -1164,7 +1165,7 @@ function planMode(pi, dependencies = {}) {
     return interactiveUiPromise;
   };
   const explicitPlanModeSettingsPath = dependencies.settingsPath;
-  let state = { enabled: false, awaitingAction: false };
+  let state = { enabled: false, awaitingAction: false, declinedPlans: 0 };
   let settings = { thinkingLevel: "inherit" };
   let startupToggleShortcut;
   let shortcutInitialized = false;
@@ -1509,7 +1510,7 @@ function planMode(pi, dependencies = {}) {
     const branch = ctx.sessionManager.getBranch();
     const restoredState = restorePlanModeState(branch, STATE_ENTRY_TYPE);
     restoreModeContractTracking(branch, restoredState);
-    state = { enabled: false, awaitingAction: false };
+    state = { enabled: false, awaitingAction: false, declinedPlans: 0 };
     await applyPlanModeSettings(generation, ctx, true);
     if (generation !== menuGeneration || menuController.signal.aborted) return;
     initializePlanModeShortcut();
@@ -1681,7 +1682,8 @@ function planMode(pi, dependencies = {}) {
     if (!allowedToolNames.has(event.toolName)) {
       return {
         block: true,
-        reason: workflowDesiredToolNames().has(event.toolName) ? `Plan mode blocks tool '${event.toolName}' because it was not available when the active Plan workflow froze its tool policy. Exit Plan mode, then start again after the tool is available.` : `Plan mode blocks tool '${event.toolName}' because it is not selected by the Plan policy. Exit Plan mode, then enable it with /plan tools or defaultPlanTools before starting again.`
+        // Entering Plan and restoring an enabled state both set the policy before any tool call.
+        reason: workflowDesiredToolNames(state.workflowToolPolicy).has(event.toolName) ? `Plan mode blocks tool '${event.toolName}' because it was not available when the active Plan workflow froze its tool policy. Exit Plan mode, then start again after the tool is available.` : `Plan mode blocks tool '${event.toolName}' because it is not selected by the Plan policy. Exit Plan mode, then enable it with /plan tools or defaultPlanTools before starting again.`
       };
     }
     if (SUBAGENT_SPAWN_TOOLS.has(event.toolName) && !subagentGateInstalled(pi)) {
@@ -1706,8 +1708,7 @@ function planMode(pi, dependencies = {}) {
     const result = implementationRetention.transformContext(event.messages, state);
     if (result.clearActiveImplementationId) clearActiveImplementation(ctx);
     const messages = state.enabled || modeContractsRelevant ? reconcileModeContract(result.messages, state.enabled ? "plan" : "normal") : result.messages;
-    const declined = state.enabled ? state.declinedPlans ?? 0 : 0;
-    const withDecline = state.enabled && state.reproposalReview === "required" ? [...messages, createDeclineContractMessage(declined, Date.now())] : messages;
+    const withDecline = state.enabled && state.reproposalReview === "required" ? [...messages, createDeclineContractMessage(state.declinedPlans, Date.now())] : messages;
     return { messages: withDecline };
   });
   pi.on("input", async (event, ctx) => {
@@ -2070,7 +2071,7 @@ function planMode(pi, dependencies = {}) {
     } else {
       state = {
         ...state,
-        declinedPlans: (state.declinedPlans ?? 0) + 1,
+        declinedPlans: state.declinedPlans + 1,
         reproposalReview: "required",
         planDeclined: true
       };
@@ -2132,8 +2133,8 @@ function planMode(pi, dependencies = {}) {
   }
   async function startImplementation(ctx) {
     const savedPlan = state.enabled ? void 0 : state.savedPlan;
-    const initialPlan = (state.enabled ? state.latestPlan : savedPlan?.plan)?.trim();
-    if (!initialPlan) {
+    const plan = (state.enabled ? state.latestPlan : savedPlan?.plan)?.trim();
+    if (!plan) {
       ctx.ui.notify("Plan mode disabled. No proposed plan is available to implement.", "warning");
       return;
     }
@@ -2145,7 +2146,6 @@ function planMode(pi, dependencies = {}) {
       if (!await preflightSavedPlanImplementation(ctx, isCurrent) || !isCurrent()) return;
       if (!allowModeTransition(ctx, "start plan implementation")) return;
     }
-    const plan = initialPlan;
     const source = (state.enabled ? state.latestPlanSource : savedPlan?.source) ?? "legacy_proposed_plan";
     const previousState = state;
     const previousIntent = readyPresentationIntent;
@@ -2355,9 +2355,7 @@ function planMode(pi, dependencies = {}) {
   function planModePolicyToolNames() {
     return workflowAllowedToolNames ?? [];
   }
-  function workflowDesiredToolNames() {
-    const policy = state.workflowToolPolicy;
-    if (!state.enabled || !policy) return /* @__PURE__ */ new Set();
+  function workflowDesiredToolNames(policy) {
     return new Set(policy.kind === "automatic" ? automaticPlanModeToolNames() : policy.desiredNames);
   }
   function selectedWorkflowToolPolicy(resolved) {
@@ -2809,7 +2807,7 @@ function planMode(pi, dependencies = {}) {
     if (candidate.enabled && !workflowMutex.isOwner(workflowOwner)) {
       const owner = workflowMutex.acquire();
       if (!owner) {
-        state = { enabled: false, awaitingAction: false };
+        state = { enabled: false, awaitingAction: false, declinedPlans: 0 };
         workflowAllowedToolNames = void 0;
         pendingWorkflowToolPolicy = void 0;
         reportRestoredWorkflowBusy(ctx);
@@ -2822,7 +2820,7 @@ function planMode(pi, dependencies = {}) {
         try {
           assertPlanModeHelperToolsAvailable(safeGetActiveTools());
         } catch {
-          state = { enabled: false, awaitingAction: false };
+          state = { enabled: false, awaitingAction: false, declinedPlans: 0 };
           workflowAllowedToolNames = void 0;
           pendingWorkflowToolPolicy = void 0;
           if (workflowOwner !== previousOwner) {

@@ -124,6 +124,7 @@ export async function startFreshImplementationSession(
       ? {
           enabled: false,
           awaitingAction: false,
+          declinedPlans: 0,
           ...(activeImplementation ? { activeImplementation } : {}),
           ...(pendingImplementationRuntime ? { pendingImplementationRuntime } : {}),
         }

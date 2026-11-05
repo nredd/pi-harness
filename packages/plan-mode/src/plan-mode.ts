@@ -188,7 +188,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     return interactiveUiPromise;
   };
   const explicitPlanModeSettingsPath = dependencies.settingsPath;
-  let state: PlanModeState = { enabled: false, awaitingAction: false };
+  let state: PlanModeState = { enabled: false, awaitingAction: false, declinedPlans: 0 };
   let settings: PlanModeSettings = { thinkingLevel: "inherit" };
   let startupToggleShortcut: ReturnType<typeof configuredPlanModeToggleShortcut>;
   let shortcutInitialized = false;
@@ -575,7 +575,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     const branch = ctx.sessionManager.getBranch();
     const restoredState = restorePlanModeState(branch, STATE_ENTRY_TYPE);
     restoreModeContractTracking(branch, restoredState);
-    state = { enabled: false, awaitingAction: false };
+    state = { enabled: false, awaitingAction: false, declinedPlans: 0 };
     await applyPlanModeSettings(generation, ctx, true);
     if (generation !== menuGeneration || menuController.signal.aborted) return;
     initializePlanModeShortcut();
@@ -778,7 +778,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     if (!allowedToolNames.has(event.toolName)) {
       return {
         block: true,
-        reason: workflowDesiredToolNames().has(event.toolName)
+        // Entering Plan and restoring an enabled state both set the policy before any tool call.
+        reason: workflowDesiredToolNames(state.workflowToolPolicy!).has(event.toolName)
           ? `Plan mode blocks tool '${event.toolName}' because it was not available when the active Plan workflow froze its tool policy. Exit Plan mode, then start again after the tool is available.`
           : `Plan mode blocks tool '${event.toolName}' because it is not selected by the Plan policy. Exit Plan mode, then enable it with /plan tools or defaultPlanTools before starting again.`,
       };
@@ -814,10 +815,9 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       state.enabled || modeContractsRelevant
         ? reconcileModeContract(result.messages, state.enabled ? "plan" : "normal")
         : result.messages;
-    const declined = state.enabled ? (state.declinedPlans ?? 0) : 0;
     const withDecline =
       state.enabled && state.reproposalReview === "required"
-        ? [...messages, createDeclineContractMessage(declined, Date.now())]
+        ? [...messages, createDeclineContractMessage(state.declinedPlans, Date.now())]
         : messages;
     return { messages: withDecline as typeof event.messages };
   });
@@ -1262,7 +1262,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     } else {
       state = {
         ...state,
-        declinedPlans: (state.declinedPlans ?? 0) + 1,
+        declinedPlans: state.declinedPlans + 1,
         reproposalReview: "required",
         planDeclined: true,
       };
@@ -1334,8 +1334,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 
   async function startImplementation(ctx: ExtensionContext) {
     const savedPlan = state.enabled ? undefined : state.savedPlan;
-    const initialPlan = (state.enabled ? state.latestPlan : savedPlan?.plan)?.trim();
-    if (!initialPlan) {
+    const plan = (state.enabled ? state.latestPlan : savedPlan?.plan)?.trim();
+    if (!plan) {
       ctx.ui.notify("Plan mode disabled. No proposed plan is available to implement.", "warning");
       return;
     }
@@ -1349,11 +1349,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         !menuController.signal.aborted &&
         !state.enabled &&
         state.savedPlan === savedPlan;
-      // Re-check after the await: the saved plan, and so `initialPlan`, must still be the one shown.
+      // Re-check after the await: the saved plan, and so `plan`, must still be the one shown.
       if (!(await preflightSavedPlanImplementation(ctx, isCurrent)) || !isCurrent()) return;
       if (!allowModeTransition(ctx, "start plan implementation")) return;
     }
-    const plan = initialPlan;
     const source = (state.enabled ? state.latestPlanSource : savedPlan?.source) ?? "legacy_proposed_plan";
 
     const previousState = state;
@@ -1610,9 +1609,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     return workflowAllowedToolNames ?? [];
   }
 
-  function workflowDesiredToolNames() {
-    const policy = state.workflowToolPolicy;
-    if (!state.enabled || !policy) return new Set<string>();
+  function workflowDesiredToolNames(policy: PlanModeWorkflowToolPolicy) {
     return new Set(policy.kind === "automatic" ? automaticPlanModeToolNames() : policy.desiredNames);
   }
 
@@ -2170,7 +2167,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     if (candidate.enabled && !workflowMutex.isOwner(workflowOwner)) {
       const owner = workflowMutex.acquire();
       if (!owner) {
-        state = { enabled: false, awaitingAction: false };
+        state = { enabled: false, awaitingAction: false, declinedPlans: 0 };
         workflowAllowedToolNames = undefined;
         pendingWorkflowToolPolicy = undefined;
         reportRestoredWorkflowBusy(ctx);
@@ -2184,7 +2181,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         try {
           assertPlanModeHelperToolsAvailable(safeGetActiveTools());
         } catch {
-          state = { enabled: false, awaitingAction: false };
+          state = { enabled: false, awaitingAction: false, declinedPlans: 0 };
           workflowAllowedToolNames = undefined;
           pendingWorkflowToolPolicy = undefined;
           if (workflowOwner !== previousOwner) {

@@ -62,6 +62,8 @@
   `Re-propose now` selection, or `/plan finalize`, permits a replacement proposal.
   Ordinary answers, `Not yet`, cancellation, and custom text stay blocked. Historical
   `declinedPlans`, Escape/Stay, restore, ready-plan review, and custom-message wakes remain intact.
+- Implementing a saved plan re-checks it is still current after the model auth preflight returns.
+  A tree move, session switch or Plan start in that gap no longer hands off the stale saved plan.
 
 ## 0.59.2-nredd.3
 
