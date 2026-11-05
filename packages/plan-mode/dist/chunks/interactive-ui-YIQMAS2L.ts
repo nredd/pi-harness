@@ -225,6 +225,7 @@ var THINKING_LEVEL_DESCRIPTIONS = {
 async function showPlanModeMenu(ctx, options) {
   const freshFlow = createFreshImplementationFlow(
     ctx,
+    options.planModel,
     options.planThinkingLevel,
     options.implementationDefaults,
     options.implementFresh
@@ -342,6 +343,7 @@ async function showReadyPlanMenu(ctx, options) {
 async function runReadyPlanMenu(ctx, options, start) {
   const freshFlow = createFreshImplementationFlow(
     ctx,
+    options.planModel,
     options.planThinkingLevel,
     options.implementationDefaults,
     options.implementFresh
@@ -414,10 +416,18 @@ async function runReadyPlanMenu(ctx, options, start) {
   });
   await deferredEdit.reopenAfter(() => showReadyPlanMenu(ctx, options));
 }
-function createFreshImplementationFlow(ctx, planThinkingLevel, implementationDefaults, implementFresh) {
-  const models = snapshotAvailableModels(ctx);
-  const planModel = ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : void 0;
-  const planModelSummary = ctx.model ? `${safeModelMetadata(ctx.model.id, "unknown model")} [${safeModelMetadata(ctx.model.provider, "unknown provider")}]` : void 0;
+var FRESH_PLAN_MODEL_CHOICES = {
+  "same as plan": "Same as plan",
+  "previous model": "Previous model"
+};
+function createFreshImplementationFlow(ctx, freshPlanModel, planThinkingLevel, implementationDefaults, implementFresh) {
+  const { model: planModel, label: planModelLabel } = freshPlanModel ?? {
+    model: ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : void 0,
+    label: "same as plan"
+  };
+  const models = snapshotAvailableModels(ctx, planModel);
+  const planModelSummary = planModel ? `${safeModelMetadata(planModel.modelId, "unknown model")} [${safeModelMetadata(planModel.provider, "unknown provider")}]` : void 0;
+  const planModelChoice = FRESH_PLAN_MODEL_CHOICES[planModelLabel];
   const configuredModel = implementationDefaults?.model;
   const configuredAvailableModel = findAvailableImplementationModel(
     models.map((choice) => choice.modelInfo),
@@ -433,7 +443,7 @@ function createFreshImplementationFlow(ctx, planThinkingLevel, implementationDef
       title: "Fresh implementation settings",
       lines: [
         "These choices apply once to the new implementation session.",
-        ...unavailableDefaultActive && configuredModel ? [`Configured default ${safeModelReference(configuredModel)} is unavailable; using same as plan.`] : []
+        ...unavailableDefaultActive && configuredModel ? [`Configured default ${safeModelReference(configuredModel)} is unavailable; using ${planModelLabel}.`] : []
       ],
       items: [
         {
@@ -446,7 +456,7 @@ function createFreshImplementationFlow(ctx, planThinkingLevel, implementationDef
         {
           id: "implementation-model",
           label: "Model",
-          description: selectedModel?.summary ?? (planModelSummary ? `${planModelSummary} \xB7 same as plan` : "Same as plan"),
+          description: selectedModel?.summary ?? (planModelSummary ? `${planModelSummary} \xB7 ${planModelLabel}` : planModelChoice),
           to: "models"
         },
         {
@@ -463,7 +473,7 @@ function createFreshImplementationFlow(ctx, planThinkingLevel, implementationDef
       items: [
         {
           id: "same-as-plan",
-          label: "Same as plan",
+          label: planModelChoice,
           ...planModelSummary ? { description: planModelSummary } : {}
         },
         ...models.map((choice) => ({
@@ -511,7 +521,7 @@ function createFreshImplementationFlow(ctx, planThinkingLevel, implementationDef
         selectedModelUsesDefault = false;
         unavailableDefaultActive = true;
         ctx.ui.notify(
-          `Configured default ${safeModelReference(configuredModel)} is unavailable; using same as plan.`,
+          `Configured default ${safeModelReference(configuredModel)} is unavailable; using ${planModelLabel}.`,
           "warning"
         );
       }
@@ -527,12 +537,12 @@ function createFreshImplementationFlow(ctx, planThinkingLevel, implementationDef
     }
   };
 }
-function snapshotAvailableModels(ctx) {
+function snapshotAvailableModels(ctx, planModel) {
   return snapshotAvailableImplementationModels(ctx).map((model, index) => {
     const provider = safeModelMetadata(model.provider, "unknown provider");
     const modelId = safeModelMetadata(model.id, "unknown model");
     const name = safeModelMetadata(model.name, "");
-    const isPlanModel = ctx.model?.provider === model.provider && ctx.model.id === model.id;
+    const isPlanModel = planModel?.provider === model.provider && planModel.modelId === model.id;
     const summary = `${modelId} [${provider}]`;
     return {
       itemId: `model-${index}`,
@@ -1206,4 +1216,4 @@ export {
   showReadyPlanMenu,
   showSavedPlanMenu
 };
-//# sourceMappingURL=interactive-ui-OZLFRBOO.ts.map
+//# sourceMappingURL=interactive-ui-YIQMAS2L.ts.map

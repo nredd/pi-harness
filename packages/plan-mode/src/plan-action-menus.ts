@@ -25,6 +25,8 @@ const THINKING_LEVEL_DESCRIPTIONS: Record<PlanModeFixedThinkingLevel, string> = 
 interface PlanMenuOptions extends PlanEditOption {
   statusText: string;
   planThinkingLevel: PlanModeFixedThinkingLevel | undefined;
+  /** The model Start fresh treats as the plan's; defaults to the current model. */
+  planModel?: FreshPlanModel;
   implementationDefaults?: ImplementationRuntimeSelection;
   hasReadyPlan: boolean;
   implementationOutcome(): string;
@@ -55,6 +57,7 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
     | "exit";
   const freshFlow = createFreshImplementationFlow(
     ctx,
+    options.planModel,
     options.planThinkingLevel,
     options.implementationDefaults,
     options.implementFresh,
@@ -142,6 +145,8 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 
 interface ReadyPlanMenuOptions extends PlanEditOption {
   planThinkingLevel: PlanModeFixedThinkingLevel | undefined;
+  /** The model Start fresh treats as the plan's; defaults to the current model. */
+  planModel?: FreshPlanModel;
   implementationDefaults?: ImplementationRuntimeSelection;
   implementationOutcome(): string;
   getExportDestination: PlanExportDestinationProvider;
@@ -207,6 +212,7 @@ async function runReadyPlanMenu(
     | "exit";
   const freshFlow = createFreshImplementationFlow(
     ctx,
+    options.planModel,
     options.planThinkingLevel,
     options.implementationDefaults,
     options.implementFresh,
@@ -281,6 +287,17 @@ async function runReadyPlanMenu(
   await deferredEdit.reopenAfter(() => showReadyPlanMenu(ctx, options));
 }
 
+/** What Start fresh's "same as plan" runs on, and what the menu calls it. */
+export interface FreshPlanModel {
+  model: ImplementationModelOverride | undefined;
+  label: "same as plan" | "previous model";
+}
+
+const FRESH_PLAN_MODEL_CHOICES: Record<FreshPlanModel["label"], string> = {
+  "same as plan": "Same as plan",
+  "previous model": "Previous model",
+};
+
 interface ModelChoice {
   itemId: string;
   model: ImplementationModelOverride;
@@ -294,15 +311,20 @@ interface ModelChoice {
 
 function createFreshImplementationFlow(
   ctx: ExtensionContext,
+  freshPlanModel: FreshPlanModel | undefined,
   planThinkingLevel: PlanModeFixedThinkingLevel | undefined,
   implementationDefaults: ImplementationRuntimeSelection | undefined,
   implementFresh: (runtime: ImplementationRuntimeSelection, signal: AbortSignal) => void | Promise<void>,
 ) {
-  const models = snapshotAvailableModels(ctx);
-  const planModel = ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : undefined;
-  const planModelSummary = ctx.model
-    ? `${safeModelMetadata(ctx.model.id, "unknown model")} [${safeModelMetadata(ctx.model.provider, "unknown provider")}]`
+  const { model: planModel, label: planModelLabel } = freshPlanModel ?? {
+    model: ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : undefined,
+    label: "same as plan",
+  };
+  const models = snapshotAvailableModels(ctx, planModel);
+  const planModelSummary = planModel
+    ? `${safeModelMetadata(planModel.modelId, "unknown model")} [${safeModelMetadata(planModel.provider, "unknown provider")}]`
     : undefined;
+  const planModelChoice = FRESH_PLAN_MODEL_CHOICES[planModelLabel];
   const configuredModel = implementationDefaults?.model;
   const configuredAvailableModel = findAvailableImplementationModel(
     models.map((choice) => choice.modelInfo),
@@ -321,7 +343,7 @@ function createFreshImplementationFlow(
       lines: [
         "These choices apply once to the new implementation session.",
         ...(unavailableDefaultActive && configuredModel
-          ? [`Configured default ${safeModelReference(configuredModel)} is unavailable; using same as plan.`]
+          ? [`Configured default ${safeModelReference(configuredModel)} is unavailable; using ${planModelLabel}.`]
           : []),
       ],
       items: [
@@ -336,7 +358,7 @@ function createFreshImplementationFlow(
           id: "implementation-model",
           label: "Model",
           description:
-            selectedModel?.summary ?? (planModelSummary ? `${planModelSummary} · same as plan` : "Same as plan"),
+            selectedModel?.summary ?? (planModelSummary ? `${planModelSummary} · ${planModelLabel}` : planModelChoice),
           to: "models" as const,
         },
         {
@@ -354,7 +376,7 @@ function createFreshImplementationFlow(
       items: [
         {
           id: "same-as-plan",
-          label: "Same as plan",
+          label: planModelChoice,
           ...(planModelSummary ? { description: planModelSummary } : {}),
         },
         ...models.map((choice) => ({
@@ -406,7 +428,7 @@ function createFreshImplementationFlow(
         selectedModelUsesDefault = false;
         unavailableDefaultActive = true;
         ctx.ui.notify(
-          `Configured default ${safeModelReference(configuredModel)} is unavailable; using same as plan.`,
+          `Configured default ${safeModelReference(configuredModel)} is unavailable; using ${planModelLabel}.`,
           "warning",
         );
       }
@@ -423,13 +445,16 @@ function createFreshImplementationFlow(
   };
 }
 
-function snapshotAvailableModels(ctx: ExtensionContext): ModelChoice[] {
+function snapshotAvailableModels(
+  ctx: ExtensionContext,
+  planModel: ImplementationModelOverride | undefined,
+): ModelChoice[] {
   return snapshotAvailableImplementationModels(ctx)
     .map((model, index) => {
       const provider = safeModelMetadata(model.provider, "unknown provider");
       const modelId = safeModelMetadata(model.id, "unknown model");
       const name = safeModelMetadata(model.name, "");
-      const isPlanModel = ctx.model?.provider === model.provider && ctx.model.id === model.id;
+      const isPlanModel = planModel?.provider === model.provider && planModel.modelId === model.id;
       const summary = `${modelId} [${provider}]`;
       return {
         itemId: `model-${index}`,

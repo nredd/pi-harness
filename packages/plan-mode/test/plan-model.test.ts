@@ -114,11 +114,19 @@ test("Plan model switch state restores only while Plan is active and well formed
   }
 });
 
-/** Picks Start fresh in the Plan menu, then starts it; closes any menu shown afterwards. */
-function startFreshOnce() {
-  const picks = ["Start fresh and implement", "Start fresh implementation"];
+/**
+ * Picks Start fresh in the Plan menu, picks `model` on its Model screen, then starts;
+ * `modelChoices` records the Model screen's rows.
+ */
+function startFreshOnce(modelChoices: string[], model: string) {
+  const picks = ["Start fresh and implement", "Model", "", "Start fresh implementation"];
   return async (_title: string, options: string[]) => {
     const pick = picks[0];
+    if (pick === "") {
+      modelChoices.push(...options);
+      picks.shift();
+      return model;
+    }
     return pick && options.includes(pick) ? picks.shift() : undefined;
   };
 }
@@ -626,6 +634,7 @@ test("a failed Implement-here handoff keeps a fixed Plan thinking level", async 
 for (const freshModel of [undefined, DEFAULT]) {
   const name = freshModel ? "Fresh model" : "the pre-Plan model";
   test(`Start fresh implements on ${name} and restores the source session`, async () => {
+    const screens: string[] = [];
     const host = createModelHost({
       settings: {
         thinkingLevel: "high",
@@ -634,7 +643,7 @@ for (const freshModel of [undefined, DEFAULT]) {
           : {}),
       },
       switchThinking: { "router/deep": "low" },
-      select: startFreshOnce(),
+      select: startFreshOnce(screens, freshModel ? "default [router]" : "Previous model"),
     });
     await host.sessionStart();
     await host.plan("start");
@@ -654,6 +663,10 @@ for (const freshModel of [undefined, DEFAULT]) {
       modelId: implementedOn.id,
     });
     assert.equal(host.fresh.messages.length, 1, "the fresh session was kicked off");
+    // The default row names the model the fresh session runs on, never the tier.
+    assert.equal(screens[0], "Previous model");
+    assert.ok(screens.includes("✓ claude-sonnet-5-5 [anthropic] · default"), screens.join("\n"));
+    assert.ok(screens.includes("deep [router]"), "the tier stays an explicit choice");
     assert.deepEqual(host.current, PREVIOUS, "the source session is back on the model Plan started from");
     assert.equal(host.mock.thinkingLevel, "medium");
     assert.deepEqual(host.mock.setModels, [DEEP, PREVIOUS]);
@@ -664,9 +677,8 @@ for (const freshModel of [undefined, DEFAULT]) {
 }
 
 test("Start fresh after a manual /model keeps the user's model as the plan model", async () => {
-  const host = createModelHost({
-    select: startFreshOnce(),
-  });
+  const screens: string[] = [];
+  const host = createModelHost({ select: startFreshOnce(screens, "Same as plan") });
   await host.sessionStart();
   await host.plan("start");
   await host.beforeAgentStart();
@@ -678,6 +690,8 @@ test("Start fresh after a manual /model keeps the user's model as the plan model
     | { pendingImplementationRuntime?: { model?: unknown } }
     | undefined;
   assert.deepEqual(destination?.pendingImplementationRuntime?.model, { provider: "router", modelId: "default" });
+  assert.equal(screens[0], "Same as plan");
+  assert.ok(screens.includes("✓ default [router] · default"), screens.join("\n"));
   assert.deepEqual(host.current, DEFAULT);
   assert.deepEqual(host.mock.setModels, [DEEP]);
 });
