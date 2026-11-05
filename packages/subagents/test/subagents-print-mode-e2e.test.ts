@@ -12,10 +12,13 @@
  * (no network). The same runner also drives a real LLM when PI_E2E_LIVE=1 — the
  * `live` describe below is a smoke test for that opt-in path.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { type Context, getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
+import { fauxToolCall } from "@earendil-works/pi-ai/compat";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   agentCall,
@@ -79,6 +82,71 @@ describe.skipIf(LIVE)("subagents print-mode e2e (scripted faux, real pi-mono)", 
     expect(invocation?.modelName).toBe("faux-1");
     expect(typeof invocation?.thinking).toBe("string");
     expect(invocation?.thinking).not.toBe("");
+  });
+
+  it("keeps parent ownership after a discovered child extension starts and shuts down", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "subagents-composition-"));
+    tmpDirs.push(cwd);
+    mkdirSync(join(cwd, ".pi"));
+    const source = resolve(fileURLToPath(new URL("../src", import.meta.url)));
+    const probe = resolve(fileURLToPath(new URL("./fixtures/child-context-probe.mjs", import.meta.url)));
+    const copiedExtension = join(cwd, "copy", "src", "index.ts");
+    // The parent is loaded from the checkout, while discovery in the child
+    // loads a separate package instance. Instrument the real activation guard
+    // so this test proves the child reaches it, rather than merely not loading.
+    cpSync(source, join(cwd, "copy", "src"), { recursive: true });
+    const copiedSource = readFileSync(copiedExtension, "utf8");
+    const guard = "if (inChildSessionContext()) return;";
+    if (!copiedSource.includes(guard)) throw new Error("Missing child-session guard");
+    writeFileSync(copiedExtension, copiedSource.replace(guard, `globalThis[Symbol.for("pi-subagents:copy-entered")] = true;\n${guard}\nglobalThis[Symbol.for("pi-subagents:copy-activated")] = true;`));
+    symlinkSync(resolve(fileURLToPath(new URL("../../../node_modules", import.meta.url))), join(cwd, "node_modules"), "junction");
+    writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({ extensions: [probe] }));
+    const observed: unknown[] = [];
+    const key = Symbol.for("pi-subagents:context-probe");
+    Reflect.set(globalThis, key, (entry: unknown) => observed.push(entry));
+    try {
+      run = await runPrintMode({
+        cwd,
+        prompt: "Delegate a greeting",
+        onParentSession: () => {
+          writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({ extensions: [copiedExtension, probe] }));
+        },
+        respond: context => {
+          if (!getCurrentTools(context.messages).some(tool => tool.name === "get_subagent_result")) return "CHILD DONE";
+          const messages = JSON.stringify(context.messages);
+          if (messages.includes("run-after-shutdown")) {
+            if (messages.includes("Task ID")) return "WORKFLOW STARTED";
+            return fauxToolCall("SubagentWorkflow", { script: 'export const meta = { name: "after", description: "After shutdown" }; return "ok";' }, { id: "wf-after" });
+          }
+          if (messages.includes("Agent started in background")) return "PARENT DONE";
+          return agentCall({ description: "greet", prompt: "Say hello", run_in_background: true });
+        },
+      });
+      expect(Reflect.get(globalThis, Symbol.for("pi-subagents:copy-entered"))).toBe(true);
+      expect(Reflect.get(globalThis, Symbol.for("pi-subagents:copy-activated"))).toBeUndefined();
+      expect(observed).toHaveLength(2);
+      expect(observed[0]).toMatchObject({ event: "start", workflow: { sourceInfo: { source: "cli" } } });
+      expect(observed[1]).toMatchObject({ event: "start", manager: run.manager, workflow: { sourceInfo: { source: "sdk" } } });
+      const result = agentToolResults(run.parentSession)[0];
+      expect(result).toContain("Agent started in background");
+      const id = /Agent ID: (\S+)/.exec(result)?.[1];
+      expect(typeof id).toBe("string");
+      const record = run.manager?.getRecord(id as string) as { session?: AgentSession } | undefined;
+      const child = record?.session;
+      expect(child?.extensionRunner).toBeDefined();
+      // Match the manager's shutdown order while keeping the parent alive.
+      await child?.extensionRunner?.emit({ type: "session_shutdown", reason: "quit" });
+      child?.dispose();
+      expect(observed[2]).toMatchObject({ event: "shutdown", manager: run.manager });
+      expect(Reflect.get(globalThis, Symbol.for("pi-subagents:manager"))).toBe(run.manager);
+      expect(run.parentSession.getActiveToolNames()).toContain("SubagentWorkflow");
+      await run.parentSession.prompt("run-after-shutdown");
+      expect(JSON.stringify(run.parentSession.messages)).toContain("Task ID");
+    } finally {
+      Reflect.deleteProperty(globalThis, key);
+      Reflect.deleteProperty(globalThis, Symbol.for("pi-subagents:copy-activated"));
+      Reflect.deleteProperty(globalThis, Symbol.for("pi-subagents:copy-entered"));
+    }
   });
 
   it("spawns a FOREGROUND subagent and routes its real output back to the parent", async () => {
