@@ -142,6 +142,68 @@ describe("fullscreen conversation observer", () => {
     expect(render().join("\n")).toContain("row-000");
   });
 
+  it("renders nothing on a zero-row terminal rather than a stray footer", () => {
+    const { render, terminal, viewer } = setup();
+    try {
+      terminal.rows = 0;
+      expect(render()).toEqual([]);
+    } finally {
+      viewer.dispose();
+    }
+  });
+
+  it("scrolls one line per arrow key", () => {
+    const { render, viewer } = setup();
+    try {
+      expect(firstRow(render())).toBe("row-084");
+      viewer.handleInput("\x1b[A");
+      expect(firstRow(render())).toBe("row-083");
+    } finally {
+      viewer.dispose();
+    }
+  });
+
+  it("treats a wheel event with no delta as a no-op it still owns", () => {
+    const { render, mouse, viewer } = setup();
+    try {
+      render();
+      mouse({ wheelDelta: -10 }); // off the bottom, so a phantom delta either way would show
+      const before = firstRow(render());
+      expect(before).toBe("row-074");
+      expect(mouse({})).toEqual({ handled: true, render: true });
+      expect(firstRow(render())).toBe(before);
+    } finally {
+      viewer.dispose();
+    }
+  });
+
+  it("drags a thumb that fills the whole track to the top instead of dividing by zero", () => {
+    // Two content rows: Pi's two-row minimum thumb leaves the thumb no travel.
+    const { render, mouse, viewer } = setup(6);
+    try {
+      const lines = render();
+      expect(lines.filter(line => line.endsWith("┃"))).toHaveLength(2);
+      expect(lines.join("\n")).toContain("row-099");
+      expect(mouse({ type: "press", button: "left", x: 99, y: 2 })).toMatchObject({ handled: true, capture: true });
+      expect(mouse({ type: "drag", button: "left", x: 99, y: 1000 })).toEqual({ handled: true, render: true });
+      expect(render().join("\n")).toContain("[User]");
+    } finally {
+      viewer.dispose();
+    }
+  });
+
+  it("owns a footer click that lands between its controls without acting on it", () => {
+    const { render, mouse, terminal, done, stop, viewer } = setup();
+    try {
+      render();
+      expect(mouse({ type: "press", button: "left", x: 0, y: terminal.rows - 1 })).toEqual({ handled: true, render: true });
+      expect(done).not.toHaveBeenCalled();
+      expect(stop).not.toHaveBeenCalled();
+    } finally {
+      viewer.dispose();
+    }
+  });
+
   it("captures scrollbar drags and reaches both ends", () => {
     const { render, mouse } = setup();
     const lines = render();

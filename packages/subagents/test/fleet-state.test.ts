@@ -93,6 +93,37 @@ describe("fleet journal", () => {
     expect(resumed.state.count).toBe(1);
   });
 
+  it("rejects a checkpoint whose alert or transition is not an object, keeping the older valid state", () => {
+    const h = setup();
+    h.report(1);
+    const overflow = { error: 0, aborted: 0, failed: 0, killed: 0 };
+    h.branch.push({ type: "custom", customType: FLEET_STATE_ENTRY, data: { version: 1, collapsed: false, alerts: [null], overflow } });
+    h.branch.push({ type: "custom", customType: FLEET_STATE_ENTRY, data: { version: 1, collapsed: false, alerts: [], overflow, transition: { alert: "a1", acknowledged: true } } });
+    const resumed = setup(h.branch);
+    expect(resumed.state.alerts.map(alert => alert.id)).toEqual(["a1"]);
+    expect(resumed.state.collapsed).toBe(true);
+  });
+
+  it("skips a corrupt transition for the same id and resolves the older valid one", () => {
+    const h = setup();
+    h.report(1);
+    h.state.acknowledge("a1");
+    const unread = fleetAlert(failure(1));
+    if (!unread) throw new Error("Invalid fixture");
+    // Unread and well-formed except for its overflow: trusting it would treat a
+    // newer failure as a replacement of an overflow entry that never existed.
+    h.branch.push({ type: "custom", customType: FLEET_STATE_ENTRY, data: { version: 1, collapsed: true, alerts: [], overflow: { error: -1 }, transition: { alert: unread, acknowledged: false } } });
+    const newer = fleetAlert({ ...failure(1), completedAt: 456 });
+    if (!newer) throw new Error("Invalid fixture");
+    h.state.report(newer);
+    expect(h.state.alerts).toEqual([newer]);
+    expect(h.state.overflowCount).toBe(0);
+  });
+
+  it("accepts only object input as an alert", () => {
+    for (const value of [null, undefined, "a1", 7]) expect(fleetAlert(value)).toBeUndefined();
+  });
+
   it("stores bounded plain metadata, never the record's result/session/usage", () => {
     const record = { ...failure(1), type: "x".repeat(1000), description: "\x1b[31mbroken\n".repeat(1000), session: {}, result: "secret", promise: Promise.resolve(), lifetimeUsage: {} };
     const alert = fleetAlert(record);

@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { registerAgents } from "../src/agent-types.js";
 import type { WidgetMode } from "../src/types.js";
-import { type AgentActivity, AgentWidget, fgPreservingNestedStyles, formatCost, formatSessionTokens } from "../src/ui/agent-widget.js";
+import { type AgentActivity, AgentWidget, fgPreservingNestedStyles, formatCost, formatDuration, formatSessionTokens, formatTokens } from "../src/ui/agent-widget.js";
 
 describe("formatSessionTokens", () => {
   const theme = { fg: (c: string, s: string) => `<${c}>${s}</${c}>`, bold: (s: string) => s };
@@ -234,6 +235,31 @@ describe("AgentWidget", () => {
   });
 
   // "off" hides the widget entirely — even a background agent renders nothing.
+  it("tags a running append-mode agent as twin and leaves a replace-mode finished one untagged", () => {
+    registerAgents(new Map()); // the built-ins: general-purpose appends, Explore replaces
+    const manager = {
+      listAgents: () => [
+        { ...makeRecord("r"), status: "running" },
+        { ...makeRecord("f"), type: "Explore", status: "completed", completedAt: Date.now() },
+      ],
+    };
+    const lines = renderLines(manager, "r").split("\n");
+    expect(lines.find(l => l.includes("r description"))).toContain("(twin)");
+    expect(lines.find(l => l.includes("f description"))).not.toContain("(");
+  });
+
+  it("renders an empty widget when its agents vanish before the next update", () => {
+    let agents = [makeRecord("r")];
+    const widget = new AgentWidget({ listAgents: () => agents } as any, new Map());
+    let factory: any;
+    widget.setUICtx({ setStatus: () => {}, setWidget: (_key, content) => { factory = content; } });
+    widget.update();
+    const component = factory({ terminal: { columns: 120 }, requestRender: () => {} }, theme);
+    expect(component.render()).not.toEqual([]);
+    agents = [];
+    expect(component.render()).toEqual([]);
+  });
+
   it("renders nothing in 'off' mode", () => {
     const manager = { listAgents: () => [makeRecord("background", { isBackground: true })] };
     expect(renderLines(manager, "background", () => "off")).toBe("");
@@ -247,6 +273,25 @@ describe("AgentWidget", () => {
 // footer under-reports and — worse — the queue vanishes from the UI entirely.
 // That happens exactly when the concurrency limit is saturated, i.e. when the
 // queue is the thing the user most needs to see.
+describe("formatTokens", () => {
+  it("switches to millions at a million tokens", () => {
+    expect(formatTokens(999_999)).toBe("1000.0k token");
+    expect(formatTokens(1_234_567)).toBe("1.2M token");
+  });
+});
+
+describe("formatDuration", () => {
+  it("measures a running agent against the wall clock when no time is supplied", () => {
+    vi.useFakeTimers({ now: 10_000 });
+    try {
+      expect(formatDuration(7_500)).toBe("2.5s (running)");
+      expect(formatDuration(7_500, 9_000)).toBe("1.5s");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("formatCost", () => {
   it("keeps the precision that distinguishes one run from another", () => {
     // Rounding to cents would print the same figure for a run that cost four
@@ -275,6 +320,10 @@ describe("formatCost", () => {
     // decimals can show" must not render the same as "never measured".
     expect(formatCost(0.00002)).toBe("<$0.0001");
     expect(formatCost(0)).toBe("");
+  });
+
+  it("rounds a cost just under a dollar up to whole cents", () => {
+    expect(formatCost(0.99996)).toBe("~$1.00");
   });
 
   it("marks the figure as an estimate", () => {

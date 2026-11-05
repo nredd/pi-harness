@@ -235,7 +235,8 @@ export function renderFleetSummary(
       compact.pop();
       flagText = `[${compact.join("")}]`;
     }
-    if (visibleWidth(flagText) > width) flagText = width > 0 ? "!" : "";
+    // `withLeadingFlag` renders nothing at all at zero width.
+    if (visibleWidth(flagText) > width) flagText = "!";
   }
   const flag = theme.fg(failed ? "error" : "warning", flagText);
   const cost = showCost ? formatCost(agents.reduce((sum, agent) => sum + getLifetimeCost(agent.lifetimeUsage), 0)) : "";
@@ -464,12 +465,9 @@ export class FleetList {
         this.widgetRegistered = false;
         this.tui = undefined;
       }
-      // A just-spawned agent has no session until its runner finishes binding
-      // extensions, and nothing else calls update() until the child's first model
-      // event, which a slow first response delays by minutes. Keep ticking while
-      // one is starting so its row appears as soon as the session exists.
-      if (this.enabled && this.hasStartingAgent()) this.ensureTimer();
-      else if (this.timer) { this.timer.cancel(); this.timer = undefined; }
+      // A just-spawned agent with no session yet still counts in `hasRows` (the
+      // summary includes pending starts), so nothing here is starting: stop.
+      if (this.timer) { this.timer.cancel(); this.timer = undefined; }
       this.active = false;
       this.selectedIndex = 0;
       return;
@@ -502,12 +500,6 @@ export class FleetList {
     } else {
       this.tui?.requestRender();
     }
-  }
-
-  /** Whether a top-level agent is live but not yet listable (no session yet). */
-  private hasStartingAgent(): boolean {
-    return this.manager.listAgents().some(a =>
-      isTopLevelAgent(a) && !a.session && (a.status === "running" || a.status === "queued"));
   }
 
   // ---- Roster ----
@@ -629,7 +621,6 @@ export class FleetList {
   private clampSelection(): void {
     const max = this.roster().length - 1;
     if (this.selectedIndex > max) this.selectedIndex = Math.max(0, max);
-    if (this.selectedIndex < 0) this.selectedIndex = 0;
   }
 
   // ---- Key handling ----
@@ -695,7 +686,7 @@ export class FleetList {
       return { consume: true };
     }
     if (matchesKey(data, "escape")) { this.deactivate(); return { consume: true }; }
-    if (matchesKey(data, Key.enter)) { this.openSelected(); return { consume: true }; }
+    if (matchesKey(data, Key.enter)) { this.openSelected(this.ui); return { consume: true }; }
 
     // Any other key cancels navigation and flows to the editor.
     this.deactivate();
@@ -724,7 +715,7 @@ export class FleetList {
     this.update();
   }
 
-  private openSelected(): void {
+  private openSelected(ui: FleetUICtx): void {
     const entry = this.roster()[this.selectedIndex];
     if (!entry || entry.kind === "main") {
       // `main` = return to the prompt; the native transcript is already shown.
@@ -733,7 +724,7 @@ export class FleetList {
     }
     if (entry.kind === "workflow") {
       if (!this.workflowSource?.().some(run => run.id === entry.workflow.id) || !this.openWorkflow) {
-        this.ui?.notify(`workflow: ${entry.workflow.name} (${entry.workflow.status}).`, "error");
+        ui.notify(`workflow: ${entry.workflow.name} (${entry.workflow.status}).`, "error");
         this.acknowledgeFailure(entry.workflow.id);
         this.update();
         return;
@@ -749,17 +740,16 @@ export class FleetList {
       return;
     }
     const record = entry.record;
-    if (!this.ui) return;
     const session = this.options.sessionFor ? this.options.sessionFor(record) : record.session;
     if (!session) {
       if (isOutstandingFailure(record)) {
-        this.ui.notify(record.error ?? `${record.type}: ${record.description} (${record.status}).`, "error");
+        ui.notify(record.error ?? `${record.type}: ${record.description} (${record.status}).`, "error");
         markConsumed(record, this.clock.now());
         this.acknowledgeFailure(record.id);
         this.update();
         return;
       }
-      this.ui.notify(`Agent is ${record.status} — no session available.`, "info");
+      ui.notify(`Agent is ${record.status} — no session available.`, "info");
       return;
     }
     const activity = this.activityFor(record.id);
@@ -767,7 +757,7 @@ export class FleetList {
     this.viewingAgentId = record.id;
     let overlayOptions = getConversationOverlayOptions({ mode: "regular" });
 
-    void this.ui.custom<undefined>(
+    void ui.custom<undefined>(
       (tui, theme, keybindings, done) => {
         overlayOptions = getConversationOverlayOptions(tui);
         this.viewerClose = () => done(undefined);
@@ -888,7 +878,8 @@ export class FleetList {
       lines.push(
         row.kind === "workflow" ?
           this.renderWorkflowRow(a + 1, sel, row.workflow, width, theme)
-        : this.renderAgentRow(a + 1, sel, row.record, width, theme, cells.get(row.record) ?? [], colWidths),
+        // Every agent row's cells were computed above.
+        : this.renderAgentRow(a + 1, sel, row.record, width, theme, cells.get(row.record)!, colWidths),
       );
     }
     if (hiddenBelow > 0) {
@@ -997,8 +988,9 @@ export class FleetList {
     // same cells on every row; an all-empty column is dropped.
     let stats = TAIL_SLOTS.map((slot, i) => {
       if (colWidths[i] === 0) return undefined;
-      const pad = " ".repeat(colWidths[i] - visibleWidth(cells[i] ?? ""));
-      return slot.padEnd ? (cells[i] ?? "") + pad : pad + (cells[i] ?? "");
+      // `tailCells` fills every slot, with "" where a row has no value.
+      const pad = " ".repeat(colWidths[i] - visibleWidth(cells[i]));
+      return slot.padEnd ? cells[i] + pad : pad + cells[i];
     }).filter((c): c is string => c !== undefined).join(" · ");
     let flag = fallbackFlag(theme, record);
     if (flag && visibleWidth(prefix + flag) + 1 + visibleWidth(stats) > width) {

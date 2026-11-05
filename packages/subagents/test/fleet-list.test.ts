@@ -834,6 +834,54 @@ describe("FleetList overlay lifecycle", () => {
   });
 });
 
+describe("FleetList selection and stop edges", () => {
+  it("clamps the selection onto the last row when the selected agent leaves", () => {
+    const agents = [makeRecord({ id: "a1", description: "first" }), makeRecord({ id: "a2", description: "second", startedAt: Date.now() + 1 })];
+    const h = harness(agents);
+    h.press(DOWN); // main
+    h.press(DOWN); // a1
+    h.press(DOWN); // a2
+    agents.splice(1, 1);
+    h.fleet.update();
+    h.press(ENTER);
+    expect(h.overlayOpened()).toBe(true);
+    expect(h.render().find(l => l.includes("first"))).toContain("<accent>●</accent>");
+  });
+
+  it("keeps a valid selection when the viewed agent is gone by the time its viewer closes", async () => {
+    const agents = [makeRecord({ id: "a1", description: "first" }), makeRecord({ id: "a2", description: "second", startedAt: Date.now() + 1 })];
+    const h = harness(agents);
+    h.press(DOWN);
+    h.press(DOWN);
+    h.press(DOWN);
+    h.press(ENTER);
+    agents.splice(1, 1); // evicted while its overlay was up
+    await h.closeOverlay();
+    expect(h.render().find(l => l.includes("first"))).toContain("<accent>●</accent>");
+  });
+
+  it("confirms a viewer stop only when the manager actually stopped the agent", () => {
+    for (const stopped of [true, false]) {
+      const agents = [makeRecord({ description: "target" })];
+      const h = harness(agents);
+      (h.manager as unknown as { abort: () => boolean }).abort = () => stopped;
+      h.press(DOWN);
+      h.press(DOWN);
+      h.press(ENTER);
+      h.overlayComponent()!.handleInput("x");
+      h.overlayComponent()!.handleInput("x");
+      expect(h.notices().some(n => n === 'info: Stopped "target".')).toBe(stopped);
+    }
+  });
+
+  it("keeps a failed run that never settled visible after it leaves the source", () => {
+    const h = harness([]);
+    h.setWorkflows([makeWorkflow({ status: "failed", completedAt: undefined })]);
+    h.setWorkflows([]);
+    expect(h.render().some(l => plain(l).includes("audit-src"))).toBe(true);
+  });
+});
+
 describe("FleetList re-registration after core disposes it", () => {
   function setup() {
     const registered: { render(w: number): string[]; invalidate(): void; dispose?(): void }[] = [];
