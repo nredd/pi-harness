@@ -141,9 +141,8 @@ export async function command(
 		/** @returns Nothing; terminate the helper after shared cancellation. */
 		const abort = () => stop("cancelled");
 		const timer = setTimeout(() => stop("deadline"), budget.remaining());
+		// No abort can land unobserved: `ready()` threw on an aborted signal, and nothing since has yielded.
 		budget.signal.addEventListener("abort", abort, { once: true });
-		// Close the race between the ready check and listener registration.
-		if (budget.signal.aborted) abort();
 		child.stdout.on("data", (data: Buffer) => {
 			if (!complete) return;
 			const remaining = budget.maxBytes - budget.bytesRead;
