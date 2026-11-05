@@ -718,6 +718,7 @@ PLAN_MODE_CONTRACT = PackageContract(
         "src/plan-export.ts",
         "src/plan-launch-menu.ts",
         "src/plan-mode.ts",
+        "src/plan-model.ts",
         "src/presentation.ts",
         "src/prompt.ts",
         "src/question-tool.ts",

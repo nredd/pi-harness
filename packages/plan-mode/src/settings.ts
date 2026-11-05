@@ -5,6 +5,7 @@ import { basename, dirname, isAbsolute, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { KeyId } from "@earendil-works/pi-tui";
 import { type ImplementationModelOverride, isPendingImplementationModelIdentifier } from "./implementation-models.js";
+import { normalizePlanModelTier, type PlanModelTier } from "./plan-model.js";
 import type { SafeSubcommands } from "./tool-policy.js";
 
 export const PLAN_MODE_SETTINGS_FILE = "pi-plan-mode.json";
@@ -84,6 +85,8 @@ export type ImplementationPlanRetention = (typeof IMPLEMENTATION_PLAN_RETENTIONS
 export type PlanModeFixedThinkingLevel = (typeof IMPLEMENTATION_THINKING_LEVELS)[number];
 export interface PlanModeSettings {
   thinkingLevel: PlanModeThinkingLevel;
+  /** Router tier Plan turns run on, e.g. `@deep`; omitted inherits the current model. */
+  planModel?: PlanModelTier;
   defaultPlanTools?: string[];
   implementationPlanRetention?: ImplementationPlanRetention;
   defaultImplementationModel?: ImplementationModelOverride;
@@ -96,6 +99,7 @@ export interface PlanModeSettings {
 }
 export interface PlanModeSettingsPatch {
   thinkingLevel?: PlanModeThinkingLevel;
+  planModel?: PlanModelTier | null;
   defaultPlanTools?: readonly string[] | null;
   implementationPlanRetention?: ImplementationPlanRetention;
   defaultImplementationModel?: ImplementationModelOverride | null;
@@ -139,6 +143,11 @@ export function normalizePlanModeSettings(value: unknown): PlanModeSettings | un
   const settings: PlanModeSettings = {
     thinkingLevel: thinkingLevel as PlanModeThinkingLevel,
   };
+  if (Object.hasOwn(value, "planModel")) {
+    const planModel = normalizePlanModelTier(Reflect.get(value, "planModel"));
+    if (!planModel) return undefined;
+    settings.planModel = planModel;
+  }
   if (Object.hasOwn(value, "defaultPlanTools")) {
     const defaultPlanTools = normalizeToolNames(Reflect.get(value, "defaultPlanTools"));
     if (!defaultPlanTools) return undefined;
@@ -327,6 +336,8 @@ export function updatePlanModeSettings(
     const current = await readSettingsDocumentForUpdate(settingsPath, legacySettingsPath);
     const updated: SettingsDocument = { ...current };
     if (patch.thinkingLevel !== undefined) updated.thinkingLevel = patch.thinkingLevel;
+    if (patch.planModel === null) delete updated.planModel;
+    else if (patch.planModel !== undefined) updated.planModel = patch.planModel;
     if (patch.defaultPlanTools === null) delete updated.defaultPlanTools;
     else if (patch.defaultPlanTools !== undefined) {
       updated.defaultPlanTools = [...patch.defaultPlanTools];
@@ -510,6 +521,10 @@ function safeReadError(error: unknown) {
 
 export function configuredThinkingLevel(settings: PlanModeSettings): PlanModeFixedThinkingLevel | undefined {
   return settings.thinkingLevel === "inherit" ? undefined : settings.thinkingLevel;
+}
+
+export function configuredPlanModel(settings: PlanModeSettings): PlanModelTier | undefined {
+  return settings.planModel;
 }
 
 export function configuredImplementationPlanRetention(settings: PlanModeSettings): ImplementationPlanRetention {

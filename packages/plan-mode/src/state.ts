@@ -47,6 +47,16 @@ export interface PendingImplementationRuntime extends ImplementationRuntimeSelec
 
 export type ReproposalReview = "required" | "confirmed";
 
+/** The model switch a Plan start made, kept until exit restores it or a manual `/model` supersedes it. */
+export interface PlanModelSwitch {
+  applied: ImplementationModelOverride;
+  previous: ImplementationModelOverride;
+  /** Thinking level before the switch, re-applied when Pi's per-model default would replace it. */
+  thinkingBefore: PlanModeFixedThinkingLevel;
+  /** Effective thinking level right after the switch; a different level on exit is a manual change. */
+  thinkingAfter: PlanModeFixedThinkingLevel;
+}
+
 export interface PlanModeWorkflowToolPolicy {
   kind: "automatic" | "explicit";
   desiredNames?: string[];
@@ -74,6 +84,7 @@ export interface PlanModeState {
   previousThinkingLevel?: PlanModeFixedThinkingLevel;
   appliedThinkingLevel?: PlanModeFixedThinkingLevel;
   manualThinkingLevel?: PlanModeFixedThinkingLevel;
+  planModelSwitch?: PlanModelSwitch;
 }
 
 type SessionEntry = {
@@ -136,6 +147,7 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
     previousThinkingLevel: enabled ? fixedThinkingLevel(entry.data.previousThinkingLevel) : undefined,
     appliedThinkingLevel: enabled ? fixedThinkingLevel(entry.data.appliedThinkingLevel) : undefined,
     manualThinkingLevel: enabled ? fixedThinkingLevel(entry.data.manualThinkingLevel) : undefined,
+    planModelSwitch: enabled ? normalizePlanModelSwitch(entry.data.planModelSwitch) : undefined,
   };
 }
 
@@ -180,24 +192,36 @@ function normalizeSavedPlan(value: unknown): SavedPlan | undefined {
   return { plan: normalized.plan, source };
 }
 
+function normalizePlanModelSwitch(value: unknown): PlanModelSwitch | undefined {
+  if (!isRecord(value)) return undefined;
+  const applied = modelReference(value.applied);
+  const previous = modelReference(value.previous);
+  const thinkingBefore = fixedThinkingLevel(value.thinkingBefore);
+  const thinkingAfter = fixedThinkingLevel(value.thinkingAfter);
+  if (!applied || !previous || !thinkingBefore || !thinkingAfter) return undefined;
+  return { applied, previous, thinkingBefore, thinkingAfter };
+}
+
+function modelReference(value: unknown): ImplementationModelOverride | undefined {
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== "provider" && key !== "modelId")) {
+    return undefined;
+  }
+  if (
+    !isPendingImplementationModelIdentifier(value.provider) ||
+    !isPendingImplementationModelIdentifier(value.modelId)
+  ) {
+    return undefined;
+  }
+  return { provider: value.provider, modelId: value.modelId };
+}
+
 function normalizePendingImplementationRuntime(value: unknown): PendingImplementationRuntime | undefined {
   if (!isRecord(value) || value.version !== 1) return undefined;
   if (Object.keys(value).some((key) => key !== "version" && key !== "model" && key !== "thinkingLevel")) {
     return undefined;
   }
-  let model: ImplementationModelOverride | undefined;
-  if (value.model !== undefined) {
-    if (!isRecord(value.model) || Object.keys(value.model).some((key) => key !== "provider" && key !== "modelId")) {
-      return undefined;
-    }
-    if (
-      !isPendingImplementationModelIdentifier(value.model.provider) ||
-      !isPendingImplementationModelIdentifier(value.model.modelId)
-    ) {
-      return undefined;
-    }
-    model = { provider: value.model.provider, modelId: value.model.modelId };
-  }
+  const model = value.model === undefined ? undefined : modelReference(value.model);
+  if (value.model !== undefined && !model) return undefined;
   const thinkingLevel = value.thinkingLevel === undefined ? undefined : fixedThinkingLevel(value.thinkingLevel);
   if (value.thinkingLevel !== undefined && !thinkingLevel) return undefined;
   if (!model && !thinkingLevel) return undefined;
