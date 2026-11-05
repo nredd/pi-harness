@@ -412,9 +412,11 @@ interface SpawnOptions {
   invocation?: AgentInvocation;
   /** Parent abort signal — when aborted, the subagent is also stopped. */
   signal?: AbortSignal;
+  /** Prepare the record before it can be queued or started. A throw rejects the spawn. */
+  onPrepare?: (id: string) => void;
   /**
    * Called synchronously once the record is in the map and its promise is set,
-   * before `onSessionCreated` fires — where callers attach the output file.
+   * before `onSessionCreated` fires.
    *
    * Carried on the options rather than parked on the manager for the duration
    * of a spawn: with a foreground queue, `startAgent` can run at drain time,
@@ -825,6 +827,14 @@ export class AgentManager {
       lease = this.admit(record, waitPool);
     } catch (err) {
       this.agents.delete(id);
+      throw err;
+    }
+    try {
+      options.onPrepare?.(id);
+    } catch (err) {
+      this.agents.delete(id);
+      releaseBudget(lease);
+      this.drainQueue();
       throw err;
     }
     if (lease === undefined) {
@@ -1461,8 +1471,7 @@ export class AgentManager {
    * Returns { id, record } so callers can access the agent ID.
    *
    * @param onSpawned - Called synchronously once the run is kicked off, before
-   *   onSessionCreated fires. Use this to set record.outputFile so
-   *   streamToOutputFile can pick it up.
+   *   onSessionCreated fires.
    */
   async spawnAndWait(
     pi: ExtensionAPI,
