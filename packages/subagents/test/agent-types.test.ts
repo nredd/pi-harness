@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // One shared guard (#505): its planted cases live with it in the preset; keep this path in step.
-import { dataModelLeaks, TIER_REF } from "../../preset/test/model-guard.ts";
+import { dataModelLeaks } from "../../preset/test/model-guard.ts";
 import {
   BUILTIN_TOOL_NAMES,
   getAgentConfig,
@@ -78,7 +78,6 @@ describe("agent type registry", () => {
 
     it("default agents name tiers, never models", () => {
       for (const [name, config] of DEFAULT_AGENTS) {
-        if (config.model !== undefined) expect(config.model, name).toMatch(TIER_REF);
         expect(dataModelLeaks(config), name).toEqual([]);
       }
     });

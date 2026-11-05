@@ -5,13 +5,14 @@
 // YAML/JSON go through a YAML parser, and everything else (prose, inline code, `Agent(...)` call
 // arguments, flow lists and maps, `--model` flags) through a small key/value tokenizer, plus GFM
 // tables with a model-like header column. Every value under a model-like key must be a tier
-// reference, optionally with a thinking suffix (`@review:high`). A separate, best-effort prose scan catches model
+// reference. Only pi's `--model`/`--models` flags may add a thinking suffix (`@review:high`):
+// pi-subagents never parses one, so `model: "@review:high"` would run unmapped on the parent model. A separate, best-effort prose scan catches model
 // ids and family names written without a key.
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
 /** A tier reference, the only model value a skill or agent may name. */
 export const TIER_REF = /^@[a-z0-9][a-z0-9._-]*$/;
-/** A trailing thinking level, as in pi's `--models @review:high`; stripped before the `TIER_REF` check. */
+/** A trailing thinking level, as in pi's `--models @review:high`; stripped from flag values only. */
 const THINKING_SUFFIX = /:(?:off|minimal|low|medium|high|xhigh)$/;
 
 /** A key the tokenizer may read: an identifier, optionally a `-`/`--` flag. Rules out `a/b` prose. */
@@ -59,12 +60,13 @@ interface Token {
 }
 
 /**
- * Newlines, quoted strings, the punctuation `: = , ( ) [ ] { }`, and words. Backticks, `;` and other
- * whitespace separate tokens, so `` `model: opus` `` and `` model: `opus` `` read like `model: opus`.
- * A word may carry an apostrophe (`parent's`) but never start with one.
+ * Newlines, quoted strings, the punctuation `: = , ( ) [ ] { }`, and words. Backticks, `;`, other
+ * whitespace and comment markers (`#`, `//`, `<!--`, `-->`) separate tokens, so `` `model: opus` ``,
+ * `#model: opus` and `<!--model:opus-->` read like `model: opus`. A word may carry an apostrophe
+ * (`parent's`) or an inner `#` (`C#`) but never start with either.
  */
 const TOKEN =
-	/(\n)|"((?:[^"\\\n]|\\.)*)"|'([^'\n]*)'|([:=,()[\]{}])|([^\s"'`:=,;()[\]{}][^\s"`:=,;()[\]{}]*)|[^\S\n]+|[\s\S]/gy;
+	/(\n)|"((?:[^"\\\n]|\\.)*)"|'([^'\n]*)'|([:=,()[\]{}])|#+|\/\/|<!--|-->|((?:(?!-->)[^\s"'`:=,;()[\]{}#])(?:(?!-->)[^\s"`:=,;()[\]{}])*)|[^\S\n]+|[\s\S]/gy;
 
 function tokenize(text: string): Token[] {
 	const tokens: Token[] = [];
@@ -108,28 +110,43 @@ function bracketValues(tokens: Token[], open: number): string[] {
 	return values;
 }
 
+/** The index of the last token of the value starting at `index`, past any joined `:word` parts. */
+function valueEnd(tokens: Token[], index: number): number {
+	let end = index;
+	while (isJoined(tokens, end)) end += 2;
+	return end;
+}
+
 /**
- * The value(s) starting at `index`: a scalar plus any comma-joined scalars with no space around the
- * comma (`@frontier,opus`), every value in a flow list or map, or "" when the value is missing. A
- * `word:word` with no whitespace is one value (`o3:high`, `@review:high`); a scalar followed by `=`,
- * or by a `:` that is not joined that way, is the next key and ends the chain.
+ * The value(s) starting at `index`: a scalar plus any comma-joined scalars, every value in a flow
+ * list or map, or "" when the value is missing. A `word:word` with no whitespace is one value
+ * (`o3:high`, `@review:high`).
  *
- * Known limit: a space after the comma (`model: @frontier, opus`) reads as prose and ends the value,
- * so the guard does not see `opus` there. Flow lists (`[@frontier, opus]`) have no such limit.
+ * With no space around the comma (`@frontier,opus`) the chain goes on until a scalar followed by `=`
+ * or an unjoined `:`, which is the next key. With a space (`@frontier, opus`) the next scalar joins
+ * only when it stands alone, i.e. ends the line or is followed by another comma, so prose such as
+ * `model: @frontier, then run it` ends the value.
  */
 function valuesAt(tokens: Token[], index: number): string[] {
 	const first = tokens[index];
 	if (isPunct(first, "[") || isPunct(first, "{")) return bracketValues(tokens, index);
 	if (!isScalar(first) || (first.kind === "word" && first.text.startsWith("-"))) return [""];
 	const values: string[] = [];
-	for (let i = index; ; ) {
-		let text = (tokens[i] as Token).text;
-		for (; isJoined(tokens, i); i += 2) text += `:${(tokens[i + 2] as Token).text}`;
-		values.push(text);
+	for (let i = index; ; i += 2) {
+		const start = i;
+		i = valueEnd(tokens, i);
+		values.push(
+			tokens
+				.slice(start, i + 1)
+				.map((token) => token.text)
+				.join(""),
+		);
 		const [comma, next] = [tokens[i + 1], tokens[i + 2]];
-		if (!isPunct(comma, ",") || !isScalar(next) || !touches(tokens[i], comma) || !touches(comma, next)) break;
-		if (isAssign(tokens[i + 3]) && !isJoined(tokens, i + 2)) break;
-		i += 2;
+		if (!isPunct(comma, ",") || !isScalar(next)) break;
+		const after = tokens[valueEnd(tokens, i + 2) + 1];
+		if (touches(tokens[i], comma) && touches(comma, next)) {
+			if (isAssign(after)) break;
+		} else if (after !== undefined && after.kind !== "newline" && !isPunct(after, ",")) break;
 	}
 	return values;
 }
@@ -168,18 +185,23 @@ function tableModelValues(text: string): string[] {
 
 /**
  * Every value of a model-like key in free text: `key: v`, `key = v`, `"key": v`, `--model v` and
- * the model column of a GFM table.
+ * the model column of a GFM table. A `--flag` value may carry a thinking suffix, which is dropped.
  */
 function textModelValues(text: string): string[] {
 	const tokens = tokenize(text);
 	const values = tableModelValues(text);
 	tokens.forEach((token, i) => {
 		if (!isScalar(token) || !KEY_SHAPE.test(token.text) || !isModelKey(token.text)) return;
-		if (isAssign(tokens[i + 1])) values.push(...valuesAt(tokens, i + 2));
-		else if (token.text.startsWith("--")) values.push(...valuesAt(tokens, i + 1));
+		const flag = token.kind === "word" && token.text.startsWith("--");
+		const found = isAssign(tokens[i + 1]) ? valuesAt(tokens, i + 2) : flag ? valuesAt(tokens, i + 1) : [];
+		values.push(...(flag ? found.map((value) => value.replace(THINKING_SUFFIX, "")) : found));
 	});
 	return values;
 }
+
+/** The text of every `#` or `//` comment in a data fence; YAML and JSONC parsing drop them. */
+const fenceComments = (source: string): string =>
+	[...source.matchAll(/(?:^|\s)(?:#|\/\/)(.*)$/gm)].map((match) => match[1]).join("\n");
 
 /** Every string inside parsed data, recursively. */
 function strings(data: unknown): string[] {
@@ -192,7 +214,7 @@ function strings(data: unknown): string[] {
  * Every model value in parsed data: each leaf under a model-like key at any depth (`null` reads as
  * ""), plus the model values written inside any string leaf.
  */
-export const dataModelValues = (data: unknown): string[] => nestedModelValues(data, false);
+const dataModelValues = (data: unknown): string[] => nestedModelValues(data, false);
 
 /** `dataModelValues` below one node; `modelled` says whether a model-like key sits above it. */
 function nestedModelValues(data: unknown, modelled: boolean): string[] {
@@ -218,7 +240,7 @@ export function modelValues(text: string): string[] {
 		if (!DATA_FENCES.has(lang.toLowerCase())) return block;
 		const data = parseData(source);
 		if (data === undefined) return block;
-		values.push(...dataModelValues(data));
+		values.push(...dataModelValues(data), ...textModelValues(fenceComments(source)));
 		return "\n";
 	});
 	return [...new Set([...values, ...textModelValues(prose)])];
@@ -228,10 +250,7 @@ export function modelValues(text: string): string[] {
 export const proseModelIds = (text: string): string[] =>
 	MODEL_ID_PATTERNS.flatMap((pattern) => text.match(pattern) ?? []);
 
-/** Whether a value is a tier reference, with or without a thinking suffix. */
-export const isTierRef = (value: string): boolean => TIER_REF.test(value.replace(THINKING_SUFFIX, ""));
-
-const nonTier = (values: string[]): string[] => values.filter((value) => !isTierRef(value));
+const nonTier = (values: string[]): string[] => values.filter((value) => !TIER_REF.test(value));
 
 /** Everything in a Markdown resource that names a model instead of a tier. */
 export const modelLeaks = (text: string): string[] => [
