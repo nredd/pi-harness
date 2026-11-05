@@ -461,12 +461,6 @@ export function leftPaneWidth(width: number): number {
   return Math.max(1, Math.min(LEFT_PANE_WIDTH, Math.floor(available / 3), available - 1));
 }
 
-/** Fill a title out to the cell width with rule, so the corners stay put. */
-function padTitle(line: WorkflowCardLine, width: number, horizontal: string): WorkflowCardLine {
-  const gap = Math.max(0, width - lineWidth(line));
-  return gap > 0 ? [...line, { text: horizontal.repeat(gap), color: "dim" }] : line;
-}
-
 /** One pane row, padded to exactly `width` so the frame stays vertical. */
 function padCell(line: WorkflowCardLine, width: number): WorkflowCardLine {
   const clamped = clampLine(line, width);
@@ -521,9 +515,9 @@ function paneFrame(options: {
   const lines: WorkflowCardLine[] = [];
   lines.push([
     { text: box.topLeft, color: "dim" },
-    ...padTitle(frameTitle(options.leftTitle, left, glyphs), left, box.horizontal),
+    ...frameTitle(options.leftTitle, left, glyphs),
     { text: box.topTee, color: "dim" },
-    ...padTitle(frameTitle(options.rightTitle, right, glyphs), right, box.horizontal),
+    ...frameTitle(options.rightTitle, right, glyphs),
     { text: box.topRight, color: "dim" },
   ]);
 
