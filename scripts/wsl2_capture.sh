@@ -15,7 +15,8 @@ if [ "${1:-}" = cleanup ]; then
   capture_guest_state() {
     local report="$RUNNER_TEMP/guest-state.txt" kernel_log="$RUNNER_TEMP/guest-dmesg.txt" path
     {
-      printf 'WSL guest state after failure status %s at %s (UTC)\n' "$capture_status" "$(date -u +%FT%TZ)"
+      printf 'WSL guest state at %s (UTC): guest status %s, job status %s\n' "$(date -u +%FT%TZ)" \
+        "$capture_status" "${WSL_JOB_STATUS:-unknown}"
       for path in /proc/uptime /proc/loadavg /proc/meminfo /proc/swaps /proc/pressure/cpu \
         /proc/pressure/memory /proc/pressure/io /proc/sys/kernel/dmesg_restrict; do
         printf '\n== %s ==\n' "$path"
@@ -50,7 +51,11 @@ if [ "${1:-}" = cleanup ]; then
       capture_status=$(< "$RUNNER_TEMP/first-failure")
       [[ "$capture_status" =~ ^[0-9]+$ ]] || capture_status=1
     fi
-    [ "$capture_status" -eq 0 ] || capture_guest_state
+    # A timeout or cancel kills the guest step before `wsl2_run.sh` writes first-failure, so the
+    # caller's job status also triggers collection. It never changes capture_status.
+    if [ "$capture_status" -ne 0 ] || [ "${WSL_JOB_STATUS:-success}" != success ]; then
+      capture_guest_state
+    fi
     # The existing helper reads $? on entry, retaining the original guest failure.
     (exit "$capture_status")
     cleanup_wsl2_worktree
