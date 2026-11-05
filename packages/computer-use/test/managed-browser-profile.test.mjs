@@ -356,12 +356,13 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 			} finally {
 				delete process.env.FAKE_BROWSER_IGNORE_SIGTERM;
 			}
+			const [first] = launched(launches);
 			// The relaunch spends the bridge's 5s SIGTERM grace period stopping the first browser.
 			relaunch = testing.performLaunchBrowser({}, controller.signal);
 			await new Promise((resolve) => setTimeout(resolve, 200));
-			const started = Date.now();
+			assert.equal(await portListening(first.port), true, "the relaunch stopped the first browser before shutdown was called");
 			await shutdownComputerUseSession();
-			assert(Date.now() - started >= 4_000, "session shutdown did not wait for the in-flight relaunch");
+			assert.equal(await portListening(first.port), false, "session shutdown returned while the relaunch was still stopping the first browser");
 			await assertAllGone(before, launched(launches), "session shutdown during a relaunch");
 			assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, undefined, "session shutdown left a CDP port configured");
 		} finally {
@@ -370,6 +371,32 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 			await Promise.allSettled([relaunch]);
 		}
 		await assertAllGone(before, launched(launches), "the relaunch that lost to shutdown");
+	});
+
+	test("shutdown called right after a launch starts stops the browser that launch starts", async () => {
+		const launches = path.join(scratch, "launches.jsonl");
+		fs.rmSync(launches, { force: true });
+		process.env.FAKE_BROWSER_LAUNCHES = launches;
+		const before = new Set(fs.readdirSync(tmp));
+		const controller = new AbortController();
+		let launch;
+		try {
+			// No await between the two calls: the launch is still resolving its executable and port.
+			launch = testing.performLaunchBrowser({}, controller.signal);
+			await shutdownComputerUseSession();
+			// A launch that shutdown missed spawns its browser and sets the CDP port within
+			// milliseconds of shutdown returning. Give it that chance before the abort below would
+			// clean it up: one that lost to shutdown instead waits on a dead browser's CDP port.
+			await Promise.race([launch.catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 1_000))]);
+			await assertAllGone(before, launched(launches), "session shutdown right after a launch call");
+			assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, undefined, "session shutdown left a CDP port configured");
+		} finally {
+			delete process.env.FAKE_BROWSER_LAUNCHES;
+			controller.abort();
+			await Promise.allSettled([launch]);
+		}
+		await assertAllGone(before, launched(launches), "the launch that raced shutdown");
+		assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, undefined, "the launch that raced shutdown left a CDP port configured");
 	});
 
 	test("a Pi process that quits right after shutdown leaves no profile dir behind", async () => {

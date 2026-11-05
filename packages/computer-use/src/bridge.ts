@@ -9,7 +9,7 @@ import { debuglog } from "node:util";
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { canRetryInForeground, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, type ActionState, type PreparedAction } from "./actions.ts";
 import { cdpClickForContext, cdpDragForContext, cdpEvaluateForContext, cdpKeypressForContext, cdpMouseForContext, cdpNavigateContext, cdpScrollForContext, cdpSnapshotForContext, cdpTabForWindow, cdpTypeFocusedForContext, cdpTypeForContext, disconnectCdp, listCdpPageContexts, type CdpConsoleEntry, type CdpPageSnapshot } from "./cdp.ts";
-import { getComputerUseConfig, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig } from "./config.ts";
+import { type ComputerUseConfig, getComputerUseConfig, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig } from "./config.ts";
 import { normalizeFindParams } from "./find-params.ts";
 import { noteAfterAct, noteFromLook, noteRegionKeyForRef, renderNote, type WindowNote } from "./note.ts";
 import { controlLine, foldToBudget, graftScopedOutline, nodeByRef, outlineNodeLabel, outlineNodePath, rankedTextMatch, renderInteractiveControls, restoreOutline, searchOutline, searchOutlineRanked, serializeOutline, serializeOutlineNodeShallow, serializeOutlineSearchMatch, type LookResponse, type Outline, type OutlineChange, type OutlineDiff, type OutlineNode, type OutlineSearchMatch, type SerializedOutline, type SerializedOutlineNode, type SerializedOutlineSearchMatch } from "./outline.ts";
@@ -2146,7 +2146,7 @@ async function performAct(params: ActParams, signal?: AbortSignal): Promise<Agen
 	return await performDesktopTransaction(params, actions, signal);
 }
 
-function managedBrowserExecutableCandidates(browser: "helium" | "chrome"): string[] {
+function managedBrowserExecutableCandidates(browser: ComputerUseConfig["managed_browser"]): string[] {
 	const overrideName = browser === "helium" ? "PI_COMPUTER_USE_HELIUM_EXECUTABLE" : "PI_COMPUTER_USE_CHROME_EXECUTABLE";
 	const override = trimOrUndefined(process.env[overrideName]);
 	if (override) return [path.resolve(override)];
@@ -2196,7 +2196,7 @@ function managedBrowserExecutableCandidates(browser: "helium" | "chrome"): strin
 	return [...new Set([...platformCandidates.filter((candidate): candidate is string => Boolean(candidate)), ...pathCandidates])];
 }
 
-async function managedBrowserExecutable(browser: "helium" | "chrome"): Promise<string> {
+async function managedBrowserExecutable(browser: ComputerUseConfig["managed_browser"]): Promise<string> {
 	const candidates = managedBrowserExecutableCandidates(browser);
 	for (const candidate of candidates) {
 		try {
@@ -2382,14 +2382,15 @@ async function releaseManagedBrowser(): Promise<void> {
 /**
  * Stop the previous managed browser, then start a new one with a private profile dir and record it.
  * Call only inside `withManagedBrowserLifecycle`.
- * @param browser Configured managed browser, which names the profile dir.
- * @param executable Browser binary.
- * @param port Free port for `--remote-debugging-port`.
+ * @param browser Configured managed browser, which names the executable and the profile dir.
  * @param url First page to open.
- * @returns The spawned browser, already recorded in `runtimeState`.
- * @throws {Error} If `mkdtemp` or a synchronous `spawn` fails; the new profile dir is removed first.
+ * @returns The spawned browser and its `--remote-debugging-port`, already recorded in `runtimeState`.
+ * @throws {Error} If no executable is found, or `mkdtemp` or a synchronous `spawn` fails; the new
+ * profile dir is removed first.
  */
-async function startManagedBrowser(browser: "helium" | "chrome", executable: string, port: number, url: string): Promise<ChildProcess> {
+async function startManagedBrowser(browser: ComputerUseConfig["managed_browser"], url: string): Promise<{ managedBrowser: ChildProcess; port: number }> {
+	const executable = await managedBrowserExecutable(browser);
+	const port = await freeTcpPort();
 	disconnectCdp();
 	await releaseManagedBrowser();
 	// A fixed name in a shared temp dir can be owned or pre-seeded by another account, so each
@@ -2412,7 +2413,7 @@ async function startManagedBrowser(browser: "helium" | "chrome", executable: str
 	runtimeState.managedBrowser = managedBrowser;
 	runtimeState.managedBrowserCdpPort = String(port);
 	process.env.PI_COMPUTER_USE_CDP_PORT = String(port);
-	return managedBrowser;
+	return { managedBrowser, port };
 }
 
 // Side effects: stops any previous managed browser (SIGTERM, then SIGKILL) and removes its profile,
@@ -2421,12 +2422,12 @@ async function startManagedBrowser(browser: "helium" | "chrome", executable: str
 // PI_COMPUTER_USE_CDP_PORT for subsequent CDP context discovery. Waits for any earlier launch or
 // shutdown to finish its lifecycle step first.
 async function performLaunchBrowser(params: LaunchBrowserParams, signal?: AbortSignal): Promise<AgentToolResult<BrowserObservationDetails>> {
-	const browser = getComputerUseConfig().managed_browser;
-	const executable = await managedBrowserExecutable(browser);
-	const port = await freeTcpPort();
 	const requestedUrl = trimOrUndefined(params.url);
 	if (requestedUrl && !/^https?:\/\//i.test(requestedUrl)) throw new Error("launch_browser.url must be an absolute HTTP(S) URL.");
-	const managedBrowser = await withManagedBrowserLifecycle(async () => await startManagedBrowser(browser, executable, port, requestedUrl ?? "about:blank"));
+	const browser = getComputerUseConfig().managed_browser;
+	// Joins the lifecycle chain before the first `await`, so a shutdown called after this launch
+	// always runs after it and stops the browser it starts.
+	const { managedBrowser, port } = await withManagedBrowserLifecycle(async () => await startManagedBrowser(browser, requestedUrl ?? "about:blank"));
 	try {
 		await waitForCdpPort(port, signal);
 	} catch (error) {
