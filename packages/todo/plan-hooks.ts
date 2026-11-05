@@ -17,7 +17,7 @@ import type {
 	ExtensionAPI,
 	SessionBoundaryDraft,
 } from "@earendil-works/pi-coding-agent";
-import { type AgentStateLookup, agentLookup, isAbandoned, ownerLabel } from "./state/agents.ts";
+import { type AgentStateLookup, agentLookup, isAbandoned, NO_AGENT_STATE, ownerLabel } from "./state/agents.ts";
 import { applyPlanApproval, selectOpenPlanItems, selectPlanProgress } from "./state/plan.ts";
 import type { TaskState } from "./state/state.ts";
 import { commitState, getState, sid } from "./state/store.ts";
@@ -134,7 +134,7 @@ export function formatPlanReminder(state: TaskState): string {
  */
 export function formatInProgressNotice(
 	state: TaskState,
-	lookup: AgentStateLookup = () => undefined,
+	lookup: AgentStateLookup = NO_AGENT_STATE,
 ): string | undefined {
 	const active = state.tasks.filter((t) => t.status === "in_progress");
 	if (!active.length) return undefined;

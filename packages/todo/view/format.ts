@@ -1,6 +1,13 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { type AgentRunState, type AgentStateLookup, agentLookup, isAbandoned, ownerLabel } from "../state/agents.ts";
+import {
+	type AgentRunState,
+	type AgentStateLookup,
+	agentLookup,
+	isAbandoned,
+	NO_AGENT_STATE,
+	ownerLabel,
+} from "../state/agents.ts";
 import { formatStatusLabel } from "../state/i18n-bridge.ts";
 import { selectTaskSubjectById } from "../state/selectors.ts";
 import type { TaskState } from "../state/state.ts";
@@ -143,8 +150,8 @@ export function formatOverlayTaskLine(
  * Format a single task line for the `/todos` slash command (no glyph color,
  * indented bullet prefix). Pre-refactor `todo.ts:670-674`.
  */
-export function formatCommandTaskLine(t: Task, glyph: string, lookup?: AgentStateLookup): string {
-	const owner = ownerChunks(t, lookup ?? (() => undefined))
+export function formatCommandTaskLine(t: Task, glyph: string, lookup: AgentStateLookup = NO_AGENT_STATE): string {
+	const owner = ownerChunks(t, lookup)
 		.map((chunk) => ` ${chunk.text}`)
 		.join("");
 	const form = t.status === "in_progress" && t.activeForm ? ` (${sanitizeTerminalText(t.activeForm)})` : "";

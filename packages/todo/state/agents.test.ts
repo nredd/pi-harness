@@ -105,18 +105,39 @@ describe("agentStateFor", () => {
 		expect(stateOf("a1")).toBe("failed");
 	});
 
+	it("keeps a running owner when a parallel same-name spawn fails", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1", name: "auth-audit", nameBase: "auth-audit" });
+		apply(SUBAGENT_STARTED_EVENT, { id: "a2", name: "auth-audit-2", nameBase: "auth-audit" });
+		apply(SUBAGENT_FAILED_EVENT, { id: "a2", status: "error" });
+		expect(stateOf("@auth-audit")).toBe("running");
+		expect(isAbandoned({ status: "in_progress" }, stateOf("@auth-audit"))).toBe(false);
+		expect(stateOf("auth-audit-2")).toBe("failed");
+	});
+
+	it("keeps a running unnamed agent when a sibling named after its handle fails", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "e1", handle: "explore" });
+		apply(SUBAGENT_STARTED_EVENT, { id: "s1", handle: "scout", name: "explore-2", nameBase: "explore" });
+		apply(SUBAGENT_FAILED_EVENT, { id: "s1", status: "error" });
+		expect(stateOf("@explore")).toBe("running");
+		// Once nothing matching runs, the most recently updated settles it.
+		apply(SUBAGENT_COMPLETED_EVENT, { id: "e1" });
+		expect(stateOf("@explore")).toBe("done");
+	});
+
 	it("returns nothing for free text, a blank owner or no owner", () => {
 		apply(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "explore" });
 		for (const owner of ["Sergii", "", "  @ ", undefined]) expect(stateOf(owner)).toBeUndefined();
 	});
 
-	it("prefers the most recently updated of two agents sharing a name", () => {
+	it("prefers a running agent sharing a name, else the most recently updated", () => {
 		apply(SUBAGENT_STARTED_EVENT, { id: "old", name: "worker" });
 		apply(SUBAGENT_STARTED_EVENT, { id: "new", name: "worker" });
 		apply(SUBAGENT_FAILED_EVENT, { id: "new", status: "error" });
-		expect(stateOf("worker")).toBe("failed");
+		expect(stateOf("worker")).toBe("running");
 		apply(SUBAGENT_COMPLETED_EVENT, { id: "old" });
 		expect(stateOf("worker")).toBe("done");
+		apply(SUBAGENT_FAILED_EVENT, { id: "new", status: "stopped" });
+		expect(stateOf("worker")).toBe("stopped");
 	});
 
 	it("never answers from another session, and forgets a session on demand", () => {
