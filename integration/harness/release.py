@@ -121,6 +121,9 @@ FETCH_ATTEMPTS = 8
 FETCH_RETRY_BACKOFF_SECONDS = 5.0
 FETCH_RETRY_BACKOFF_FACTOR = 2
 FETCH_RETRY_MAX_BACKOFF_SECONDS = 30.0
+# Wall-clock bound on one request's retries: a retry that would start past it is not made. A 5xx blip retries
+# within it; a run of 120s socket timeouts stops after ~3 attempts, not 8 x 120s plus the backoff.
+FETCH_RETRY_DEADLINE_SECONDS = 300.0
 FETCH_RETRY_AFTER_CAP_SECONDS = 30.0
 # `gh attestation verify` builds the Sigstore public-good verifier from its TUF repository on
 # every call; a failed fetch surfaces as exactly this text. It is the only retried failure.
@@ -418,7 +421,10 @@ class FetchError(OSError):
 
 
 def fetch_retry_backoff(attempt: int) -> float:
-    """Return npm's capped doubling backoff after one failed attempt, `min(5s * 2^(n-1), 30s)`.
+    """Return npm's capped doubling backoff after one failed attempt.
+
+    The delay is `FETCH_RETRY_BACKOFF_SECONDS * FETCH_RETRY_BACKOFF_FACTOR^(attempt-1)`, capped at
+    `FETCH_RETRY_MAX_BACKOFF_SECONDS`, the same schedule as the root `.npmrc`.
 
     Parameters:
         attempt (int): 1-based attempt that just failed.
@@ -512,7 +518,8 @@ def fetch_bytes(request: str | Request) -> bytes:
     """Read a complete public response, normalizing HTTP and I/O failures in one place.
 
     A `fetch_retry_delay` failure restarts the whole request from scratch, up to
-    `FETCH_ATTEMPTS` calls with a logged warning per retry; partial bytes are never kept.
+    `FETCH_ATTEMPTS` calls with a logged warning per retry, and never starts a retry past
+    `FETCH_RETRY_DEADLINE_SECONDS` after the first attempt; partial bytes are never kept.
     Callers' checksum verification of the returned bytes stays authoritative.
 
     Parameters:
@@ -525,16 +532,19 @@ def fetch_bytes(request: str | Request) -> bytes:
         FetchError: HTTPException (including IncompleteRead/RemoteDisconnected), OSError
             (including TimeoutError/SSLError), non-HTTPS URL/redirect, invalid Content-Length,
             length mismatch, headers other than `Accept` or response exceeding `MAX_FETCH_BYTES`.
-            A transient failure raises only once `FETCH_ATTEMPTS` are exhausted, with the last
-            attempt's diagnostic.
+            A transient failure raises only once `FETCH_ATTEMPTS` or the deadline are exhausted,
+            with the last attempt's diagnostic.
     """
     url = request.full_url if isinstance(request, Request) else request
+    started = time.monotonic()
     attempt = 1
     while True:
         try:
             return fetch_once(request, url)
         except (HTTPException, OSError, ValueError) as error:
             delay = fetch_retry_delay(error, attempt)
+            if delay is not None and time.monotonic() - started + delay > FETCH_RETRY_DEADLINE_SECONDS:
+                delay = None
             if delay is None:
                 failure = detached_exception(FetchError(url, error), error)
                 break

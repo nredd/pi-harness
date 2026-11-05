@@ -2379,7 +2379,8 @@ def test_docs_list_every_benchmark_input() -> None:
 
 
 SETUP_CI_TOOLS = "./.github/actions/setup-ci-tools"
-NPM_INSTALL_COMMANDS = ("npm ci", "make install-owned")
+# A command that starts a shell line, never one inside a comment or an echoed string.
+NPM_INSTALL_COMMAND = re.compile(r"^\s*(?:npm ci|make install-owned)\b", re.MULTILINE)
 # Jobs that install the root lockfile inside a helper `runs_npm_install` cannot see.
 HIDDEN_NPM_INSTALL_JOBS = {("publish.yml", "verify")}
 
@@ -2393,7 +2394,7 @@ def runs_npm_install(step: dict[str, Any]) -> bool:
     Returns:
         bool: True when the step's `run` script runs `npm ci` anywhere.
     """
-    return any(command in step.get("run", "") for command in NPM_INSTALL_COMMANDS)
+    return NPM_INSTALL_COMMAND.search(step.get("run", "")) is not None
 
 
 def test_setup_ci_tools_restores_the_lockfile_npm_cache_under_its_own_key() -> None:

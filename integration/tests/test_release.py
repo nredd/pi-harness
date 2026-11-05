@@ -1889,6 +1889,40 @@ def test_transient_status_on_every_attempt_fails_with_the_original_message(
     assert len(caplog.messages) == FETCH_ATTEMPTS - 1
 
 
+def test_transient_retries_stop_at_the_wall_clock_deadline(
+    monkeypatch: pytest.MonkeyPatch, no_backoff: list[float]
+) -> None:
+    """Slow transient failures (120s socket timeouts) stop at `FETCH_RETRY_DEADLINE_SECONDS`."""
+    clock = [0.0]
+    monkeypatch.setattr(release.time, "monotonic", lambda: clock[0])
+
+    def timed_out(request: object, timeout: float) -> object:
+        """Spend one full socket timeout, then fail like a stalled CDN.
+
+        Parameters:
+            request (object): ignored request.
+            timeout (float): the per-attempt socket timeout.
+
+        Returns:
+            object: never returns.
+
+        Raises:
+            TimeoutError: always.
+        """
+        clock[0] += timeout
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(release, "urlopen", timed_out)
+    with pytest.raises(release.FetchError, match="timed out"):
+        release.fetch_bytes("https://downloads.example.invalid/core.tgz")
+    # 120s + 5s + 120s + 10s + 120s = 375s: a third retry would start past 300s.
+    assert no_backoff == [release.fetch_retry_backoff(1), release.fetch_retry_backoff(2)]
+    assert (
+        sum(release.fetch_retry_backoff(attempt) for attempt in range(1, FETCH_ATTEMPTS))
+        <= release.FETCH_RETRY_DEADLINE_SECONDS
+    )
+
+
 @pytest.mark.parametrize("status", [400, 401, 403, 404, 408, 410, 500, 501, 505])
 def test_permanent_status_is_never_retried(
     monkeypatch: pytest.MonkeyPatch, no_backoff: list[float], caplog: pytest.LogCaptureFixture, status: int
