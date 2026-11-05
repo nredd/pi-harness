@@ -392,6 +392,8 @@ Individual agent results render Claude Code-style in the conversation:
 
 Completed results can be expanded (ctrl+o in pi) to show the full agent output inline.
 
+For a new `Agent` call, transcript directory and initial entry creation must succeed before the child is queued or started. A setup error fails the call without launching a child; subsequent streaming writes remain best effort. Nested `Agent` calls report the setup error inline.
+
 By default, foreground and background agents each stream their full conversation to a per-subagent transcript — a JSON-lines file at `<os-tmpdir>/pi-subagents-<uid>/<cwd>/<session>/tasks/<agent-id>.output` (owner-only `0700`, cleared on reboot). Set `output_transcript: false` on a custom agent to write no transcript path or file for it, or set `outputTranscript: false` in `subagents.json` to make transcripts opt-in for the whole project (frontmatter overrides the project default). This governs **only** the transcript: it is independent of `persist_session` (the pi session on disk), and it does not affect `isolation: worktree` (which commits the agent's work to a git branch) or `memory:` (durable files) — set those accordingly if the goal is to keep a run off disk entirely. Background agent completion notifications collapse to one line, with pi 1.0 drawing the `▸`/`▾` marker and toggling on click (the renderers draw none of their own):
 
 ```
