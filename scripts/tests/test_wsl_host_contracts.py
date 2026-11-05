@@ -17,10 +17,9 @@ import textwrap
 from pathlib import Path
 
 import pytest
-from test_coverage_round2 import commit_base
+from coverage_fixtures import commit_base, policy
 
 from coverage_accounting import git_read
-from tests.test_coverage_accounting import policy
 
 ROOT = Path(__file__).resolve().parents[2]
 

@@ -427,6 +427,11 @@ reads are disabled. Repository-local configuration/worktree topology remains int
 Git fixtures use this same boundary with empty templates and disabled hooks; a real private decoy
 regression verifies inherited routing/config cannot redirect writes or execute injected hooks.
 
+Its tests are `scripts/tests/test_coverage_*.py`, one file per behavior (`lcov`, `inventory`,
+`floors`, `policy_pins`, plus base, platforms, enforcement, goals, facades, producers and the Git
+boundary), sharing `scripts/tests/coverage_fixtures.py`. A test imports fixtures from there, never
+from another test file.
+
 This consumes reports without executing tests, writes `coverage/summary.json`, and compares
 each independent per-OS budget with `git show <base>:coverage/policy.json`. The default OS is
 `sys.platform`; `--os darwin` or `--os linux` is explicit for artifact replay and tests. Raising

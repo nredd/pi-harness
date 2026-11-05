@@ -14,9 +14,8 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from coverage_fixtures import commit_base, policy, setup_report
 from pydantic import ValidationError
-from test_coverage_accounting import policy, setup_report
-from test_coverage_round2 import commit_base
 
 from coverage_accounting import Exclusion, Policy, check_inventory_ratchet, git_read, inventory
 
