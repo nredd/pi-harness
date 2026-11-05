@@ -28,6 +28,7 @@ import ssl
 import subprocess
 import tarfile
 import tempfile
+import time
 import traceback
 import unicodedata
 from collections.abc import Callable, Iterator, Mapping
@@ -111,6 +112,13 @@ RELEASE_URL_PREFIX = f"https://github.com/{CORE_REPO}/releases/download/"
 ROOT_OVERRIDE_SCOPE = "@earendil-works/"
 ATTESTATIONS_API = "https://api.github.com"
 RATE_LIMIT_STATUSES = frozenset({403, 429})
+# Transient transport failures `fetch_bytes` retries from scratch; nothing else is retried.
+# 429 honors a delta-seconds `Retry-After`, capped so a long server hint cannot stall CI.
+FETCH_RETRY_STATUSES = frozenset({429, 502, 503, 504})
+FETCH_ATTEMPTS = 3
+FETCH_RETRY_BACKOFF_SECONDS = 2.0
+FETCH_RETRY_BACKOFF_FACTOR = 2
+FETCH_RETRY_AFTER_CAP_SECONDS = 30.0
 # Every variable `gh` reads a GitHub token from; only `gh`'s login fallback may see them.
 # https://cli.github.com/manual/gh_help_environment
 GITHUB_TOKEN_VARIABLES = frozenset(
@@ -400,8 +408,85 @@ class FetchError(OSError):
         super().__init__(redact_diagnostic(f"Could not fetch '{url}': {fetch_failure_reason(error)}"))
 
 
+def fetch_retry_delay(error: Exception, attempt: int) -> float | None:
+    """Classify one failed fetch attempt as a transient transport failure worth retrying.
+
+    Only HTTP 429/502/503/504, a connection reset (including `RemoteDisconnected`) and a socket
+    timeout are transient. Every other HTTP status, TLS/DNS/protocol failure and every size,
+    redirect or header refusal fails on the first attempt.
+
+    Parameters:
+        error (Exception): failure raised by one `fetch_once` call.
+        attempt (int): 1-based attempt that just failed.
+
+    Returns:
+        float | None: seconds to wait before the next attempt, or None to fail now.
+
+    Raises:
+        None.
+    """
+    if attempt >= FETCH_ATTEMPTS:
+        return None
+    backoff = FETCH_RETRY_BACKOFF_SECONDS * FETCH_RETRY_BACKOFF_FACTOR ** (attempt - 1)
+    if isinstance(error, HTTPError):
+        if error.code not in FETCH_RETRY_STATUSES:
+            return None
+        # Only 429 honors `Retry-After`; a 5xx keeps the fixed backoff whatever it sends.
+        retry_after = (
+            (error.headers.get("Retry-After") or "").strip() if error.code == 429 and error.headers else ""
+        )
+        if retry_after.isascii() and retry_after.isdigit():
+            return min(float(retry_after), FETCH_RETRY_AFTER_CAP_SECONDS)
+        return backoff
+    cause = error.reason if isinstance(error, URLError) and isinstance(error.reason, Exception) else error
+    return backoff if isinstance(cause, (ConnectionResetError, TimeoutError)) else None
+
+
+def fetch_once(request: str | Request, url: str) -> bytes:
+    """Read one complete public response with no retry and no error translation.
+
+    Parameters:
+        request (str | Request): public URL, optionally with an explicit `Accept` header only.
+        url (str): the request's URL.
+
+    Returns:
+        bytes: complete response body, never a partially consumed response.
+
+    Raises:
+        HTTPException | OSError | ValueError: transport, HTTP status, header or length failure.
+    """
+    # urllib forwards most caller headers across origins, including Authorization and Cookie;
+    # unredirected headers are the only general exception. Public downloads need only Accept.
+    if isinstance(request, Request) and any(key.lower() != "accept" for key, _ in request.header_items()):
+        raise ValueError("Public downloads permit only the `Accept` request header")
+    if urlsplit(url).scheme != "https":
+        raise ValueError("Download requires HTTPS")
+    with urlopen(request, timeout=120) as response:
+        lengths = response.headers.get_all("Content-Length", [])
+        length = None
+        if lengths:
+            if len(lengths) != 1 or CONTENT_LENGTH.fullmatch(lengths[0].strip()) is None:
+                raise ValueError(f"Invalid Content-Length: '{lengths}'")
+            length = int(lengths[0])
+            if length > MAX_FETCH_BYTES:
+                raise ValueError(f"Content-Length exceeds {MAX_FETCH_BYTES} bytes")
+            # urllib requests Connection: close. Read to EOF, not its parsed length, so
+            # both undersized and oversized declarations are checked against actual bytes.
+            response.length = None
+        body = response.read(MAX_FETCH_BYTES + 1)
+        if len(body) > MAX_FETCH_BYTES:
+            raise ValueError(f"Response exceeds {MAX_FETCH_BYTES} bytes")
+        if length is not None and len(body) != length:
+            raise ValueError(f"Content-Length mismatch: expected {length} bytes, received {len(body)}")
+        return body
+
+
 def fetch_bytes(request: str | Request) -> bytes:
     """Read a complete public response, normalizing HTTP and I/O failures in one place.
+
+    A `fetch_retry_delay` failure restarts the whole request from scratch, up to
+    `FETCH_ATTEMPTS` calls with a logged warning per retry; partial bytes are never kept.
+    Callers' checksum verification of the returned bytes stays authoritative.
 
     Parameters:
         request (str | Request): public URL, optionally with an explicit `Accept` header only.
@@ -413,35 +498,28 @@ def fetch_bytes(request: str | Request) -> bytes:
         FetchError: HTTPException (including IncompleteRead/RemoteDisconnected), OSError
             (including TimeoutError/SSLError), non-HTTPS URL/redirect, invalid Content-Length,
             length mismatch, headers other than `Accept` or response exceeding `MAX_FETCH_BYTES`.
+            A transient failure raises only once `FETCH_ATTEMPTS` are exhausted, with the last
+            attempt's diagnostic.
     """
     url = request.full_url if isinstance(request, Request) else request
-    try:
-        # urllib forwards most caller headers across origins, including Authorization and Cookie;
-        # unredirected headers are the only general exception. Public downloads need only Accept.
-        if isinstance(request, Request) and any(key.lower() != "accept" for key, _ in request.header_items()):
-            raise ValueError("Public downloads permit only the `Accept` request header")
-        if urlsplit(url).scheme != "https":
-            raise ValueError("Download requires HTTPS")
-        with urlopen(request, timeout=120) as response:
-            lengths = response.headers.get_all("Content-Length", [])
-            length = None
-            if lengths:
-                if len(lengths) != 1 or CONTENT_LENGTH.fullmatch(lengths[0].strip()) is None:
-                    raise ValueError(f"Invalid Content-Length: '{lengths}'")
-                length = int(lengths[0])
-                if length > MAX_FETCH_BYTES:
-                    raise ValueError(f"Content-Length exceeds {MAX_FETCH_BYTES} bytes")
-                # urllib requests Connection: close. Read to EOF, not its parsed length, so
-                # both undersized and oversized declarations are checked against actual bytes.
-                response.length = None
-            body = response.read(MAX_FETCH_BYTES + 1)
-            if len(body) > MAX_FETCH_BYTES:
-                raise ValueError(f"Response exceeds {MAX_FETCH_BYTES} bytes")
-            if length is not None and len(body) != length:
-                raise ValueError(f"Content-Length mismatch: expected {length} bytes, received {len(body)}")
-            return body
-    except (HTTPException, OSError, ValueError) as error:
-        failure = detached_exception(FetchError(url, error), error)
+    attempt = 1
+    while True:
+        try:
+            return fetch_once(request, url)
+        except (HTTPException, OSError, ValueError) as error:
+            delay = fetch_retry_delay(error, attempt)
+            if delay is None:
+                failure = detached_exception(FetchError(url, error), error)
+                break
+            reason = fetch_failure_reason(error)
+        LOGGER.warning(
+            redact_diagnostic(
+                f"Transient fetch failure for '{url}': {reason} "
+                f"(attempt {attempt}/{FETCH_ATTEMPTS}); retrying in {delay:g}s"
+            )
+        )
+        time.sleep(delay)
+        attempt += 1
     # Raising outside the handler prevents Python attaching the raw error as __context__.
     raise failure from failure.__cause__
 

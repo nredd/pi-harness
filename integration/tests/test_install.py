@@ -72,7 +72,12 @@ from harness.promotion import (
     load_promoted_snapshot,
     stack_bytes,
 )
-from harness.release import GITHUB_TOKEN_VARIABLES, release_asset_url
+from harness.release import (
+    FETCH_ATTEMPTS,
+    FETCH_RETRY_BACKOFF_SECONDS,
+    GITHUB_TOKEN_VARIABLES,
+    release_asset_url,
+)
 from harness.runtime_lock import acquire
 from harness.stack import Stack, install_overrides, package_declarations, source_string
 from scenarios.installer import test_installer as acceptance
@@ -1380,6 +1385,8 @@ def test_http_read_failures_are_clean_verification_failures(
         return BrokenResponse(b"partial")
 
     monkeypatch.setattr(release, "urlopen", open_response)
+    delays: list[float] = []
+    monkeypatch.setattr(release.time, "sleep", delays.append)
     snapshot = real_snapshot()
     artifact = tmp_path / "snapshot.json"
     artifact.write_bytes(FIXTURE.read_bytes())
@@ -1412,7 +1419,10 @@ def test_http_read_failures_are_clean_verification_failures(
 
     monkeypatch.setattr(install, "run", verify)
     assert install.main([SHA]) == ExitCode.VERIFICATION
-    assert len(requests) == 1
+    # A reset or timeout is transient: the whole download restarts, each retry logged once.
+    attempts = FETCH_ATTEMPTS if failure in {"disconnected", "timeout"} else 1
+    assert requests == requests[:1] * attempts
+    assert len(delays) == attempts - 1
     assert requests[0] in caplog.text
     reasons = {
         "truncated": "Incomplete response: received 7 bytes, expected 100 more",
@@ -1424,7 +1434,7 @@ def test_http_read_failures_are_clean_verification_failures(
         "length": "bad Content-Length",
     }
     assert reasons[failure] in caplog.text
-    assert caplog.text.count(requests[0]) == 1
+    assert caplog.text.count(requests[0]) == attempts
     assert "VERIFICATION FAILED, nothing changed" in caplog.text
     assert "Traceback" not in caplog.text
     assert not (tmp_path / "download").exists()
@@ -1492,11 +1502,20 @@ def test_snapshot_fetch_cli_has_one_stable_diagnostic(
         raise failures[kind]
 
     monkeypatch.setattr(release, "urlopen", failed)
+    monkeypatch.setattr(release.time, "sleep", lambda _delay: None)
     monkeypatch.setattr(install, "verify_snapshot", verify_snapshot)
     before = tree(harness.home)
     assert install.main([SHA, "--plan"]) == ExitCode.VERIFICATION
     url = f"https://github.com/nredd/pi-harness/releases/download/stack/{SHA}/stack-snapshot.json"
-    assert caplog.messages == [f"VERIFICATION FAILED, nothing changed: Could not fetch '{url}': {reason}"]
+    retries = [
+        f"Transient fetch failure for '{url}': {reason} (attempt {attempt}/{FETCH_ATTEMPTS}); "
+        f"retrying in {FETCH_RETRY_BACKOFF_SECONDS * 2 ** (attempt - 1):g}s"
+        for attempt in range(1, FETCH_ATTEMPTS if kind in {"429", "timeout"} else 1)
+    ]
+    assert caplog.messages == [
+        *retries,
+        f"VERIFICATION FAILED, nothing changed: Could not fetch '{url}': {reason}",
+    ]
     assert tree(harness.home) == before
 
 
