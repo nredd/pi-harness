@@ -24,8 +24,11 @@ export const STAY_GROUP = `setInterval(() => {
 	if (process.ppid !== ${process.pid}) process.kill(-process.pid, "SIGKILL");
 }, 100);`;
 
-/** Shell condition true while `ownerPid` exists, probed with `ps`, for guarding any other fixture loop. */
-export const aliveSh = (ownerPid: number): string => `/bin/ps -p ${ownerPid} >/dev/null 2>&1`;
+/**
+ * Shell condition true while `ownerPid` exists, probed with `ps`, for guarding any other fixture loop. `ps` is
+ * a seam for `stay.test.ts` to stub the probe's exit status; fixtures keep the default.
+ */
+export const aliveSh = (ownerPid: number, ps = "/bin/ps"): string => `${ps} -p ${ownerPid} >/dev/null 2>&1`;
 
 /**
  * Shell loop for `sh -c` fixtures: runs until `ownerPid` is gone, probed with `ps` (never a signal), so a
@@ -35,8 +38,8 @@ export const aliveSh = (ownerPid: number): string => `/bin/ps -p ${ownerPid} >/d
  * group SIGTERM lands mid-probe. That status means "probe interrupted", not "owner gone", so the loop keeps
  * going on 0 or 143 and stops on anything else (1: no such pid).
  */
-export const stayWhileAlive = (ownerPid: number): string =>
-	`while :; do ${aliveSh(ownerPid)}; case $? in 0|143) sleep 1 ;; *) break ;; esac; done`;
+export const stayWhileAlive = (ownerPid: number, ps?: string): string =>
+	`while :; do ${aliveSh(ownerPid, ps)}; case $? in 0|143) sleep 1 ;; *) break ;; esac; done`;
 
 /** `stayWhileAlive` bound to this worker. */
 export const STAY_SH = stayWhileAlive(process.pid);
