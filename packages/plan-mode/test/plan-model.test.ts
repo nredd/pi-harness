@@ -6,7 +6,12 @@ import type { ToolInfo } from "@earendil-works/pi-coding-agent";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import planMode from "../src/plan-mode.js";
-import { availablePlanModelTiers, normalizePlanModelTier, planModelTarget } from "../src/plan-model.js";
+import {
+  availablePlanModelTiers,
+  normalizePlanModelTier,
+  PLAN_MODEL_TIER_REQUIRED,
+  planModelTarget,
+} from "../src/plan-model.js";
 import {
   normalizePlanModeSettings,
   type PlanModeSettings,
@@ -64,11 +69,19 @@ test("planModel settings validate, save and clear like the other model settings"
     assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), { unknown: true, planModel: "@deep" });
     await assert.rejects(
       updatePlanModeSettings({ planModel: "router/deep" as never }, { settingsPath }),
-      /invalid settings shape/,
+      (error: Error) => error.message.endsWith(PLAN_MODEL_TIER_REQUIRED),
     );
     assert.equal((await updatePlanModeSettings({ planModel: null }, { settingsPath })).planModel, undefined);
     assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), { unknown: true });
-    await writeFile(settingsPath, '{"planModel":"router/deep"}\n');
+    for (const planModel of [
+      '"router/deep"',
+      '"anthropic/claude-opus-5-5"',
+      '{"provider":"router","modelId":"deep"}',
+    ]) {
+      await writeFile(settingsPath, `{"planModel":${planModel}}\n`);
+      assert.deepEqual(await readPlanModeSettings(settingsPath), { kind: "invalid", reason: PLAN_MODEL_TIER_REQUIRED });
+    }
+    await writeFile(settingsPath, '{"planModel":"@deep","thinkingLevel":"loud"}\n');
     assert.deepEqual(await readPlanModeSettings(settingsPath), { kind: "invalid", reason: "invalid settings shape" });
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -101,6 +114,15 @@ test("Plan model switch state restores only while Plan is active and well formed
   }
 });
 
+/** Picks Start fresh in the Plan menu, then starts it; closes any menu shown afterwards. */
+function startFreshOnce() {
+  const picks = ["Start fresh and implement", "Start fresh implementation"];
+  return async (_title: string, options: string[]) => {
+    const pick = picks[0];
+    return pick && options.includes(pick) ? picks.shift() : undefined;
+  };
+}
+
 function createModelHost(
   options: {
     settings?: Partial<PlanModeSettings>;
@@ -111,6 +133,7 @@ function createModelHost(
     switchThinking?: Record<string, string>;
     clampThinkingLevel?: (level: string) => string;
     branch?: unknown[];
+    select?: (title: string, options: string[]) => Promise<string | undefined>;
   } = {},
 ) {
   let current: TestModel | undefined = "model" in options ? options.model : PREVIOUS;
@@ -125,14 +148,44 @@ function createModelHost(
     getApiKeyAndHeaders: async (_model: TestModel): Promise<{ ok: boolean; error?: string }> => ({ ok: true }),
     getAvailable: () => catalogue,
   };
+  /** What the fresh session's setup received, set by the `newSession` stand-in. */
+  const fresh: { entries: Array<{ customType: string; data: unknown }>; messages: string[] } = {
+    entries: [],
+    messages: [],
+  };
   const context = createMockContext({
-    mode: "tui",
+    // RPC drives menus through `select`, like the fresh-implementation session tests.
+    mode: options.select ? "rpc" : "tui",
     hasUI: true,
     modelRegistry: registry,
+    select: options.select,
     sessionManager: {
       getSessionId: () => "plan-model-session",
+      getSessionFile: () => "/sessions/planning.jsonl",
       getBranch: () => options.branch ?? [],
       getEntries: () => options.branch ?? [],
+    },
+    /** Pi's order: the source shuts down, then the fresh session is set up and kicked off. */
+    newSession: async (newSessionOptions: {
+      setup?: (manager: unknown) => Promise<void>;
+      withSession?: (ctx: unknown) => Promise<void>;
+    }) => {
+      await emit("session_shutdown", { reason: "new" });
+      await newSessionOptions.setup?.({
+        appendCustomMessageEntry: () => "contract",
+        appendCustomEntry: (customType: string, data: unknown) => {
+          fresh.entries.push({ customType, data });
+          return "entry";
+        },
+      });
+      await newSessionOptions.withSession?.({
+        sessionManager: { getBranch: () => [] },
+        ui: { notify: () => undefined },
+        sendUserMessage: async (message: string) => {
+          fresh.messages.push(message);
+        },
+      });
+      return { cancelled: false };
     },
   });
   Object.defineProperty(context.ctx, "model", { get: () => current, configurable: true });
@@ -165,6 +218,7 @@ function createModelHost(
   return {
     mock,
     context,
+    fresh,
     registry,
     piSetModel,
     get current() {
@@ -299,21 +353,39 @@ test("unusable tiers warn once and Plan still starts on the current model", asyn
     {
       name: "missing",
       configure: (host) => host.setCatalogue([PREVIOUS]),
-      warning: /^Plan model @deep \(router\/deep\) is unavailable; planning on the current model\.$/,
+      warning: /^Plan model @deep \(router\/deep\) is no longer available; using the current model\.$/,
     },
     {
       name: "unauthenticated",
       configure: (host) => {
         host.registry.getApiKeyAndHeaders = async () => ({ ok: false, error: "no key" });
       },
-      warning: /could not be authenticated: no key\. Planning on the current model\./,
+      warning: /could not be authenticated: no key; using the current model\./,
+    },
+    {
+      name: "authentication throwing",
+      configure: (host) => {
+        host.registry.getApiKeyAndHeaders = async () => {
+          throw new Error("keychain locked");
+        };
+      },
+      warning: /could not be authenticated: keychain locked; using the current model\./,
     },
     {
       name: "refused",
       configure: (host) => {
         host.mock.rawPi.setModel = async () => false;
       },
-      warning: /could not be applied; planning on the current model\./,
+      warning: /could not be applied; using the current model\./,
+    },
+    {
+      name: "switch throwing",
+      configure: (host) => {
+        host.mock.rawPi.setModel = async () => {
+          throw new Error("No API key for router/deep");
+        };
+      },
+      warning: /could not be applied: No API key for router\/deep; using the current model\./,
     },
     {
       name: "throwing",
@@ -322,7 +394,7 @@ test("unusable tiers warn once and Plan still starts on the current model", asyn
           throw new Error("registry exploded");
         };
       },
-      warning: /could not be applied: registry exploded\. Planning on the current model\./,
+      warning: /could not be resolved: registry exploded; using the current model\./,
     },
     {
       name: "throwing a non-Error",
@@ -331,7 +403,7 @@ test("unusable tiers warn once and Plan still starts on the current model", asyn
           throw "registry offline";
         };
       },
-      warning: /could not be applied: registry offline\. Planning on the current model\./,
+      warning: /could not be resolved: registry offline; using the current model\./,
     },
     { name: "no current model", configure: () => undefined, model: undefined },
     { name: "already on the tier", configure: () => undefined, model: DEEP },
@@ -448,7 +520,23 @@ test("a failed restore warns, keeps the tier and still restores thinking", async
       configure: (host) => {
         host.mock.rawPi.setModel = async () => false;
       },
-      warning: /could not be authenticated; Pi stays on router\/deep/,
+      warning: /^Previous model anthropic\/claude-sonnet-5-5 could not be applied; Pi stays on router\/deep\.$/,
+    },
+    {
+      name: "switch throwing",
+      configure: (host) => {
+        host.mock.rawPi.setModel = async () => {
+          throw new Error("No API key for anthropic");
+        };
+      },
+      warning: /could not be applied: No API key for anthropic; Pi stays on router\/deep/,
+    },
+    {
+      name: "unauthenticated",
+      configure: (host) => {
+        host.registry.getApiKeyAndHeaders = async () => ({ ok: false, error: "expired" });
+      },
+      warning: /could not be authenticated: expired; Pi stays on router\/deep/,
     },
     {
       name: "throwing",
@@ -457,7 +545,7 @@ test("a failed restore warns, keeps the tier and still restores thinking", async
           throw new Error("registry exploded");
         };
       },
-      warning: /could not be applied: registry exploded; Pi stays on router\/deep/,
+      warning: /could not be resolved: registry exploded; Pi stays on router\/deep/,
     },
     {
       name: "throwing a non-Error",
@@ -466,7 +554,7 @@ test("a failed restore warns, keeps the tier and still restores thinking", async
           throw "registry offline";
         };
       },
-      warning: /could not be applied: registry offline; Pi stays on router\/deep/,
+      warning: /could not be resolved: registry offline; Pi stays on router\/deep/,
     },
   ];
   for (const scenario of cases) {
@@ -510,6 +598,88 @@ test("a failed Implement-here handoff re-applies the Plan model", async () => {
   assert.deepEqual(host.current, DEEP);
   assert.deepEqual(host.mock.setModels, [DEEP, PREVIOUS, DEEP]);
   assert.ok(host.latestState()?.planModelSwitch);
+});
+
+test("a failed Implement-here handoff keeps a fixed Plan thinking level", async () => {
+  const host = createModelHost({ settings: { thinkingLevel: "xhigh" } });
+  await host.sessionStart();
+  await host.plan("start");
+  await host.beforeAgentStart();
+  assert.equal(host.mock.thinkingLevel, "xhigh");
+  await host.completePlan();
+  host.mock.rawPi.sendUserMessage = () => {
+    throw new Error("handoff failed");
+  };
+  await host.plan("implement");
+  await host.beforeAgentStart();
+
+  assert.deepEqual(host.current, DEEP);
+  assert.equal(host.mock.thinkingLevel, "xhigh", "the queued restore does not leave Plan on the previous thinking");
+  assert.equal(host.latestState()?.planModelSwitch?.thinkingBefore, "xhigh");
+
+  await host.plan("exit");
+  await host.beforeAgentStart();
+  assert.deepEqual(host.current, PREVIOUS);
+  assert.equal(host.mock.thinkingLevel, "medium");
+});
+
+for (const freshModel of [undefined, DEFAULT]) {
+  const name = freshModel ? "Fresh model" : "the pre-Plan model";
+  test(`Start fresh implements on ${name} and restores the source session`, async () => {
+    const host = createModelHost({
+      settings: {
+        thinkingLevel: "high",
+        ...(freshModel
+          ? { defaultImplementationModel: { provider: freshModel.provider, modelId: freshModel.id } }
+          : {}),
+      },
+      switchThinking: { "router/deep": "low" },
+      select: startFreshOnce(),
+    });
+    await host.sessionStart();
+    await host.plan("start");
+    await host.beforeAgentStart();
+    await host.completePlan();
+    assert.deepEqual(host.current, DEEP);
+    assert.equal(host.mock.thinkingLevel, "high");
+
+    await host.plan("");
+
+    const destination = host.fresh.entries.find((entry) => entry.customType === STATE_ENTRY_TYPE)?.data as
+      | { pendingImplementationRuntime?: { model?: unknown; thinkingLevel?: string } }
+      | undefined;
+    const implementedOn = freshModel ?? PREVIOUS;
+    assert.deepEqual(destination?.pendingImplementationRuntime?.model, {
+      provider: implementedOn.provider,
+      modelId: implementedOn.id,
+    });
+    assert.equal(host.fresh.messages.length, 1, "the fresh session was kicked off");
+    assert.deepEqual(host.current, PREVIOUS, "the source session is back on the model Plan started from");
+    assert.equal(host.mock.thinkingLevel, "medium");
+    assert.deepEqual(host.mock.setModels, [DEEP, PREVIOUS]);
+    assert.equal(host.latestState()?.enabled, true, "the source plan stays resumable");
+    assert.equal(host.latestState()?.planModelSwitch, undefined);
+    assert.deepEqual(host.warnings(), []);
+  });
+}
+
+test("Start fresh after a manual /model keeps the user's model as the plan model", async () => {
+  const host = createModelHost({
+    select: startFreshOnce(),
+  });
+  await host.sessionStart();
+  await host.plan("start");
+  await host.beforeAgentStart();
+  await host.completePlan();
+  await host.userSelectsModel(DEFAULT);
+  await host.plan("");
+
+  const destination = host.fresh.entries.find((entry) => entry.customType === STATE_ENTRY_TYPE)?.data as
+    | { pendingImplementationRuntime?: { model?: unknown } }
+    | undefined;
+  assert.deepEqual(destination?.pendingImplementationRuntime?.model, { provider: "router", modelId: "default" });
+  assert.deepEqual(host.current, DEFAULT);
+  assert.deepEqual(host.mock.setModels, [DEEP]);
 });
 
 test("Plan model settings offer router tiers and fall back to inherit", async () => {

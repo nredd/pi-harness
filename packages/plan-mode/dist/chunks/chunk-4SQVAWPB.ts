@@ -1478,6 +1478,7 @@ function longestBacktickRun(text) {
 // src/plan-model.ts
 var PLAN_MODEL_ROUTER_PROVIDER = "router";
 var TIER_KEY = /^[a-z0-9][a-z0-9._-]*$/u;
+var PLAN_MODEL_TIER_REQUIRED = 'planModel must be a router tier like "@deep", not a concrete model id';
 function normalizePlanModelTier(value) {
   if (typeof value !== "string") return void 0;
   const tier = value.trim();
@@ -1767,7 +1768,7 @@ function updatePlanModeSettings(patch, options = {}) {
       updated.toggleShortcut = patch.toggleShortcut;
     }
     const settings = normalizePlanModeSettings(updated);
-    if (!settings) throw invalidSettingsError(settingsPath, "invalid settings shape");
+    if (!settings) throw invalidSettingsError(settingsPath, invalidSettingsShapeReason(updated));
     await publishSettings(settingsPath, updated, options.signal, options.beforeRename);
     return settings;
   });
@@ -1822,7 +1823,7 @@ async function readSettingsSnapshot(settingsPath) {
   }
   const settings = normalizePlanModeSettings(parsed);
   if (!settings || !isSettingsDocument(parsed)) {
-    return { result: { kind: "invalid", reason: "invalid settings shape" } };
+    return { result: { kind: "invalid", reason: invalidSettingsShapeReason(parsed) } };
   }
   return { document: parsed, result: { kind: "loaded", settings } };
 }
@@ -1891,6 +1892,9 @@ async function pathExists(path) {
     return !(isNodeError(error) && error.code === "ENOENT");
   }
 }
+function invalidSettingsShapeReason(value) {
+  return isSettingsDocument(value) && Object.hasOwn(value, "planModel") && !normalizePlanModelTier(Reflect.get(value, "planModel")) ? PLAN_MODEL_TIER_REQUIRED : "invalid settings shape";
+}
 function invalidSettingsError(settingsPath, reason) {
   return new Error(`pi-plan-mode settings at ${settingsPath} are invalid: ${reason}`);
 }
@@ -1903,9 +1907,6 @@ function safeReadError(error) {
 }
 function configuredThinkingLevel(settings) {
   return settings.thinkingLevel === "inherit" ? void 0 : settings.thinkingLevel;
-}
-function configuredPlanModel(settings) {
-  return settings.planModel;
 }
 function configuredImplementationPlanRetention(settings) {
   return settings.implementationPlanRetention ?? "clear-on-start";
@@ -2548,7 +2549,6 @@ export {
   updatePlanModeSettings,
   awaitPlanModeSettingsWrites,
   configuredThinkingLevel,
-  configuredPlanModel,
   configuredImplementationPlanRetention,
   configuredImplementationModel,
   configuredImplementationThinkingLevel,
@@ -2574,4 +2574,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-5F4MQ7V2.ts.map
+//# sourceMappingURL=chunk-4SQVAWPB.ts.map

@@ -13,7 +13,6 @@ import {
   configuredImplementationThinkingLevel,
   configuredPlanExportPath,
   configuredPlanModeToggleShortcut,
-  configuredPlanModel,
   defaultPlanModeToolNames,
   deferPlanEdit,
   editPlanThenReopen,
@@ -28,7 +27,7 @@ import {
   retentionLabel,
   snapshotAvailableImplementationModels,
   updatePlanModeSettings
-} from "./chunk-5F4MQ7V2.ts";
+} from "./chunk-4SQVAWPB.ts";
 
 // src/active-implementation-menu.ts
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
@@ -841,7 +840,7 @@ async function showPlanModeSettings(ctx, options) {
             id: "planModel",
             label: "Plan model",
             description: "Choose the router tier Plan turns run on when the next Plan workflow starts.",
-            currentValue: planModelValue(configuredPlanModel(state.settings), planModelTiers),
+            currentValue: planModelValue(state.settings.planModel, planModelTiers),
             action: "open-plan-model"
           }
         ]
@@ -862,7 +861,7 @@ async function showPlanModeSettings(ctx, options) {
           }))
         ],
         action: "set-plan-model",
-        initialItemId: planModelTiers.find((tier) => tier === configuredPlanModel(state.settings)) ?? "inherit",
+        initialItemId: planModelTiers.find((tier) => tier === state.settings.planModel) ?? "inherit",
         hint: "back"
       }),
       tools: ({ state }) => ({
@@ -1207,4 +1206,4 @@ export {
   showReadyPlanMenu,
   showSavedPlanMenu
 };
-//# sourceMappingURL=interactive-ui-UQO6KS2P.ts.map
+//# sourceMappingURL=interactive-ui-OZLFRBOO.ts.map

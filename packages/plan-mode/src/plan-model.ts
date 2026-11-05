@@ -8,6 +8,9 @@ export const PLAN_MODEL_ROUTER_PROVIDER = "router";
 /** Same key grammar as subscription-router profiles and pi-subagents tiers. */
 const TIER_KEY = /^[a-z0-9][a-z0-9._-]*$/u;
 
+/** Load and save reason for a `planModel` that is not a tier reference. */
+export const PLAN_MODEL_TIER_REQUIRED = 'planModel must be a router tier like "@deep", not a concrete model id';
+
 /** A router tier reference such as `@deep`; never a concrete `provider/modelId`. */
 export type PlanModelTier = `@${string}`;
 
