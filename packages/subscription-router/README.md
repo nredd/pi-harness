@@ -71,7 +71,9 @@ leaves Opus eligible. Anthropic reports some model caps only in its `limits` lis
 `seven_day_fable` key. Each becomes a 7d `seven_day_<family>` window for the lowercased display name
 (skipped when that is not one token, when the top-level key already reported it, or when a non-null
 `scope.surface` or `scope.model.id` narrows the cap), so an
-exhausted Fable cap blocks `claude-fable-*` and leaves Opus and Haiku eligible. A block lasts until the reset the provider reported. Without one it backs off
+exhausted Fable cap blocks `claude-fable-*` and leaves Opus and Haiku eligible. An id- or
+surface-scoped cap is not enforced (fail-open): a 429 against it still falls through the normal
+retry path. A block lasts until the reset the provider reported. Without one it backs off
 5 minutes, doubling up to 60.
 
 Confirmation needs live data read after the failure: a cached or in-flight read from before the
