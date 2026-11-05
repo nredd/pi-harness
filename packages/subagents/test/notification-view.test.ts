@@ -127,6 +127,11 @@ describe("grouped notice", () => {
   it("shows no total with cost off", () => {
     expect(render(group, true, false).join("\n")).not.toContain("in total");
   });
+
+  it("totals the priced members when one carries no cost", () => {
+    const unpriced = { ...details({ description: "a", totalCost: undefined }), others: [details({ id: "b", description: "b" })] };
+    expect(render(unpriced, true).at(-1)).toBe("67.6k token · ~$0.0042 in total");
+  });
 });
 
 describe("expanded notice", () => {

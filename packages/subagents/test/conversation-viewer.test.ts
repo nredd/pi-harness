@@ -537,6 +537,13 @@ describe("ConversationViewer", () => {
       expect(content).toContain("... (truncated, 3 more characters)");
     });
 
+    it("names a single omitted character in the singular", () => {
+      const viewer = viewerFor(result("x".repeat(RESULT_MAX_CHARS + 1)));
+      const content = ((viewer as any).buildContentLines(76) as string[]).map(strip);
+
+      expect(content).toContain("... (truncated, 1 more character)");
+    });
+
     it("abbreviates a large omitted count so the notice fits a narrow frame", () => {
       // The notice goes through truncateToWidth at innerW (width - 4). An exact
       // count runs to seven digits on a multi-megabyte result and pushes the
@@ -772,6 +779,22 @@ describe("ConversationViewer", () => {
 
   describe("stop key", () => {
     const W = 80;
+
+    it("ignores every key once closed, so a late x cannot stop the agent", () => {
+      const done = vi.fn();
+      const onStop = vi.fn();
+      const viewer = new ConversationViewer(
+        mockTui(30, W), mockSession(), mockRecord({ status: "running" }), undefined, ansiTheme(), done, onStop,
+      );
+
+      viewer.handleInput("x");
+      viewer.handleInput("q");
+      viewer.handleInput("x");
+      viewer.handleInput("q");
+
+      expect(done).toHaveBeenCalledOnce();
+      expect(onStop).not.toHaveBeenCalled();
+    });
 
     it("two-press x stops a running agent (first arms, second aborts)", () => {
       const onStop = vi.fn();

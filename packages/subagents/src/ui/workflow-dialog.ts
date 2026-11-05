@@ -61,12 +61,11 @@ import {
   type WorkflowDisplayState,
   type WorkflowEntry,
 } from "../workflow/progress.js";
-import { SPINNER, type Theme } from "./agent-widget.js";
+import { formatCompactTokens, SPINNER, type Theme } from "./agent-widget.js";
 import { boundedWrappedRows, fallbackFlagText, hasFallback, withLeadingFlag } from "./fallback-flag.js";
 import {
   ASCII_GLYPHS,
   clampLine,
-  formatCompactTokens,
   formatModel,
   formatThinking,
   REPLAYED_ANNOTATION,

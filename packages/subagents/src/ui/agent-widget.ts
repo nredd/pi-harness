@@ -114,11 +114,21 @@ export function fgPreservingNestedStyles(theme: Theme, color: string, text: stri
   return theme.fg(color, text.replace(/\u001b\[(?:0|39)m/g, reset => `${reset}${styleStart}`));
 }
 
+/**
+ * Format a token count as a bare magnitude: "950", "18.4k", "1.2M". The unit is
+ * picked against the ROUNDED thousands, so 999,999 reads "1.0M", never "1000.0k".
+ * Every token formatter wraps this one so the boundary is fixed in one place.
+ */
+export function formatCompactTokens(count: number): string {
+  const thousands = Number((count / 1_000).toFixed(1));
+  if (thousands >= 1_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  if (count >= 1_000) return `${thousands.toFixed(1)}k`;
+  return `${count}`;
+}
+
 /** Format a token count compactly: "33.8k token", "1.2M token". */
 export function formatTokens(count: number): string {
-  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M token`;
-  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k token`;
-  return `${count} token`;
+  return `${formatCompactTokens(count)} token`;
 }
 
 /**
@@ -236,9 +246,11 @@ export function compactThinkingTag(tags: readonly string[]): string {
   return (tags.find(tag => tag.startsWith("thinking: ")) ?? "").replace(/^thinking: /, "think:");
 }
 
-/** Truncate text to a single line, max `len` chars. */
+/** Truncate text to its first non-blank line, max `len` chars. */
 function truncateLine(text: string, len = 60): string {
-  const line = text.split("\n").find(l => l.trim())?.trim() ?? "";
+  // Trimming the whole text first drops any leading blank lines, so its first
+  // line is the first non-blank one (or "" for blank text).
+  const line = text.trim().split("\n")[0].trimEnd();
   if (line.length <= len) return line;
   return line.slice(0, len) + "…";
 }
@@ -407,9 +419,9 @@ export class AgentWidget {
   }
 
   /** Render a finished agent line. */
-  private renderFinishedLine(a: { id: string; type: SubagentType; status: string; description: string; toolUses: number; startedAt: number; completedAt?: number; error?: string; lifetimeUsage?: LifetimeUsage; modelFallback?: ModelFallback; modelTier?: TierDisclosure }, theme: Theme): string {
+  private renderFinishedLine(a: { id: string; type: SubagentType; status: string; description: string; toolUses: number; startedAt: number; completedAt: number; error?: string; lifetimeUsage?: LifetimeUsage; modelFallback?: ModelFallback; modelTier?: TierDisclosure }, theme: Theme): string {
     const modeLabel = getPromptModeLabel(a.type);
-    const duration = formatMs((a.completedAt ?? this.clock.now()) - a.startedAt);
+    const duration = formatMs(a.completedAt - a.startedAt);
 
     let icon: string;
     let statusText: string;
@@ -457,8 +469,8 @@ export class AgentWidget {
     const allAgents = this.widgetAgents();
     const running = allAgents.filter(a => a.status === "running");
     const queued = allAgents.filter(a => a.status === "queued");
-    const finished = allAgents.filter(a =>
-      a.status !== "running" && a.status !== "queued" && a.completedAt
+    const finished = allAgents.filter((a): a is typeof a & { completedAt: number } =>
+      a.status !== "running" && a.status !== "queued" && !!a.completedAt
       && this.shouldShowFinished(a.id, a.status),
     );
 
@@ -542,18 +554,15 @@ export class AgentWidget {
       if (queuedLine) lines.push(queuedLine);
 
       // Fix last connector: swap ├─ → └─ and │ → space for activity lines.
-      if (lines.length > 1) {
-        const last = lines.length - 1;
-        lines[last] = lines[last].replace("├─", "└─");
-        // If last item is a running agent activity line, fix indent of that line
-        // and fix the header line above it.
-        if (runningLines.length > 0 && !queuedLine) {
-          // The last two lines are the last running agent's header + activity.
-          if (last >= 2) {
-            lines[last - 1] = lines[last - 1].replace("├─", "└─");
-            lines[last] = lines[last].replace("│  ", "   ");
-          }
-        }
+      // Something is active or finished (checked above), so the body is never
+      // empty and `last` is past the heading.
+      const last = lines.length - 1;
+      lines[last] = lines[last].replace("├─", "└─");
+      // If the last item is a running agent, its header and activity are the
+      // last two lines: fix the header's connector and the activity's indent.
+      if (runningLines.length > 0 && !queuedLine) {
+        lines[last - 1] = lines[last - 1].replace("├─", "└─");
+        lines[last] = lines[last].replace("│  ", "   ");
       }
     } else {
       // Overflow — prioritize: running > queued > finished.

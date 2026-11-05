@@ -86,6 +86,15 @@ describe("embedded conversation outcomes", () => {
     expect(f.requestRender).toHaveBeenCalledTimes(2);
   });
 
+  it("stops repainting once closed, even before the host disposes it", () => {
+    const f = fixture([]);
+    try {
+      f.viewer.handleInput("q");
+      f.clock.advance(1000);
+      expect(f.requestRender).not.toHaveBeenCalled();
+    } finally { f.viewer.dispose(); }
+  });
+
   it("moves down and pages from the first line using the fullscreen viewport height", () => {
     const f = fixture([{ role: "user", content: Array.from({ length: 200 }, (_, i) => `row-${i.toString().padStart(3, "0")}`).join("\n") }], true);
     f.tui.terminal.rows = 20;
@@ -120,6 +129,44 @@ describe("embedded conversation outcomes", () => {
       const before = f.render();
       f.viewer.invalidate();
       expect(f.render()).toBe(before);
+    } finally { f.viewer.dispose(); }
+  });
+
+  it("skips blank entries, names unnamed tool calls, and separates only what it shows", () => {
+    const f = fixture([
+      { role: "user", content: "   " },
+      { role: "toolResult", content: [{ type: "text", text: "  " }] },
+      { role: "assistant", content: [{ type: "toolCall", toolName: "grep" }, { type: "toolCall" }] },
+      { role: "bashExecution", command: "ls", output: "" },
+    ]);
+    try {
+      expect((f.viewer as unknown as { buildContentLines(width: number): string[] }).buildContentLines(96)).toEqual([
+        "<bold>[Assistant]</bold>",
+        "<muted>  [Tool: grep]</muted>",
+        "<muted>  [Tool: unknown]</muted>",
+        "<dim>───</dim>",
+        "<muted>  $ ls</muted>",
+      ]);
+    } finally { f.viewer.dispose(); }
+  });
+
+  it("opens a streaming reply with no separator when nothing before it was shown", () => {
+    const f = fixture([{ role: "user", content: " " }], false, { role: "assistant", content: [{ type: "text", text: "live" }] });
+    try {
+      expect((f.viewer as unknown as { buildContentLines(width: number): string[] }).buildContentLines(96)).toEqual(["<bold>[Assistant]</bold>", "live"]);
+    } finally { f.viewer.dispose(); }
+  });
+
+  it("marks a failed run with a cross, any other settled run with a hollow dot, and counts one tool singly", () => {
+    const f = fixture([]);
+    const header = () => f.viewer.render(240)[1];
+    try {
+      f.record.toolUses = 1;
+      f.record.status = "error";
+      expect(header()).toContain("<error>✗</error>");
+      expect(header()).toContain("1 tool ·");
+      f.record.status = "stopped";
+      expect(header()).toContain("<dim>○</dim>");
     } finally { f.viewer.dispose(); }
   });
 
