@@ -1900,6 +1900,47 @@ def test_guest_adapter_refuses_escaping_directory(tmp_path: Path, directory: str
     assert "escapes guest checkout" in result.stderr
 
 
+def stub_guest_state_commands(
+    commands: Path, *, sudo: bool = False, dmesg: bool = False, kernel: str = ""
+) -> Path:
+    """Stub the guest-state collector's privileged and kernel commands; nothing touches host sudo.
+
+    Parameters:
+        commands (Path): PATH-prepended stub directory, created when absent.
+        sudo (bool): `sudo -n dmesg` succeeds.
+        dmesg (bool): unprivileged `dmesg` succeeds.
+        kernel (str): Extra kernel-log line, e.g. a planted credential.
+
+    Returns:
+        Path: Marker file that records every attempted kernel-log read.
+    """
+    commands.mkdir(exist_ok=True)
+    marker = commands.parent / "kernel-log-attempts"
+    log = f"printf '%s\\n' \"$0 $*\" >> {shlex.quote(str(marker))}\n"
+    stubs = {
+        "sudo": (
+            f"#!/bin/sh\n{log}"
+            '[ "$1" = -n ] && [ "$2" = dmesg ] || exit 90\n'
+            + (f"printf '[    1.0] sudo kernel line\\n{kernel}\\n'\n" if sudo else "exit 1\n")
+        ),
+        "dmesg": (
+            f"#!/bin/sh\n{log}"
+            + (
+                f"printf '[    2.0] unprivileged kernel line\\n{kernel}\\n'\n"
+                if dmesg
+                else "echo 'dmesg: read kernel buffer failed: Operation not permitted' >&2\nexit 1\n"
+            )
+        ),
+        # GitHub's macos-14 image has no coreutils `timeout`; the guest's bounds are not under test here.
+        "timeout": '#!/bin/sh\nshift\nexec "$@"\n',
+        "python3": f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n',
+    }
+    for name, body in stubs.items():
+        (commands / name).write_text(body)
+        (commands / name).chmod(0o755)
+    return marker
+
+
 @pytest.mark.parametrize("export_failure", [False, True])
 def test_capture_retains_first_failure_and_only_explicit_reports(
     tmp_path: Path, export_failure: bool
@@ -1945,6 +1986,7 @@ def test_capture_retains_first_failure_and_only_explicit_reports(
     )
     (commands / "cp").write_text(copy_script)
     (commands / "cp").chmod(0o755)
+    stub_guest_state_commands(commands)
     env["PATH"] = f"{commands}{os.pathsep}{env['PATH']}"
     (ti / "tool-path").write_text(env["PATH"])
     result = subprocess.run(
@@ -1963,6 +2005,96 @@ def test_capture_retains_first_failure_and_only_explicit_reports(
     assert not (host_temp / "secret.txt").exists()
     assert (host_temp / "standalone-startup-diagnostics/SHA256SUMS").is_file() is not export_failure
     assert "status 47" in (host_temp / "wsl2-diagnostics/capture-status.txt").read_text()
+
+
+@pytest.mark.parametrize(
+    ("case", "heading"),
+    [
+        ("sudo", "== dmesg via sudo -n (last 400 lines) =="),
+        ("unprivileged", "== dmesg unprivileged (last 400 lines) =="),
+        ("unavailable", "UNAVAILABLE: neither `sudo -n dmesg` nor unprivileged `dmesg` succeeded"),
+        ("credential", "withheld"),
+        ("no-scanner", "withheld"),
+    ],
+)
+def test_failed_capture_exports_scanned_guest_state(tmp_path: Path, case: str, heading: str) -> None:
+    """Record kernel and memory state after a guest failure (#445), only past the shared credential scan.
+
+    Parameters:
+        tmp_path (Path): Disposable guest and host directories.
+        case (str): Kernel-log source, a planted credential, or a scanner that cannot run.
+        heading (str): Report text proving which path ran.
+    """
+    worktree, env = guest_fixture(tmp_path)
+    ti = worktree / ".ci-temp"
+    (ti / "first-failure").write_text("47\n")
+    (worktree / "scripts").mkdir()
+    shutil.copyfile(ROOT / "scripts/wsl2_cleanup.sh", worktree / "scripts/wsl2_cleanup.sh")
+    if case != "no-scanner":
+        shutil.copytree(
+            ROOT / "integration/harness",
+            worktree / "integration/harness",
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+    credential = "ghp_" + "A" * 36
+    stub_guest_state_commands(
+        tmp_path / "commands",
+        sudo=case in {"sudo", "credential"},
+        dmesg=case in {"unprivileged", "no-scanner"},
+        kernel=credential if case == "credential" else "",
+    )
+    host_temp = tmp_path / "host/temp"
+    (host_temp / "wsl2-diagnostics").mkdir(parents=True)
+    env |= {
+        "WSL_HOST_WORKSPACE": str(tmp_path / "host"),
+        "WSL_HOST_TEMP": str(host_temp),
+        "PATH": f"{tmp_path / 'commands'}{os.pathsep}{env['PATH']}",
+    }
+    (ti / "tool-path").write_text(env["PATH"])
+    result = subprocess.run(
+        ["/bin/bash", str(ROOT / "scripts/wsl2_capture.sh"), "cleanup"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 47
+    assert not worktree.exists()
+    exported = (host_temp / "wsl2-diagnostics/guest-state.txt").read_text()
+    assert heading in exported
+    assert "synthetic-sentinel" not in exported + result.stdout + result.stderr
+    assert credential not in exported + result.stdout + result.stderr
+    if heading != "withheld":
+        assert exported.startswith("WSL guest state after failure status 47 at ")
+        for section in ("/proc/meminfo", "/proc/swaps", "/proc/pressure/memory", "/proc/loadavg"):
+            assert f"== {section} ==" in exported
+        assert "== /proc/vmstat (swap, reclaim, OOM) ==" in exported
+    assert "status 47" in (host_temp / "wsl2-diagnostics/capture-status.txt").read_text()
+
+
+def test_successful_capture_collects_no_guest_state(tmp_path: Path) -> None:
+    """Keep guest-state collection on the failure path: a green guest never reads the kernel log.
+
+    Parameters:
+        tmp_path (Path): Disposable guest and host directories.
+    """
+    worktree, env = guest_fixture(tmp_path)
+    (worktree / "scripts").mkdir()
+    shutil.copyfile(ROOT / "scripts/wsl2_cleanup.sh", worktree / "scripts/wsl2_cleanup.sh")
+    marker = stub_guest_state_commands(tmp_path / "commands", sudo=True, dmesg=True)
+    host_temp = tmp_path / "host/temp"
+    (host_temp / "wsl2-diagnostics").mkdir(parents=True)
+    env |= {
+        "WSL_HOST_WORKSPACE": str(tmp_path / "host"),
+        "WSL_HOST_TEMP": str(host_temp),
+        "PATH": f"{tmp_path / 'commands'}{os.pathsep}{env['PATH']}",
+    }
+    (worktree / ".ci-temp/tool-path").write_text(env["PATH"])
+    command = ["/bin/bash", str(ROOT / "scripts/wsl2_capture.sh"), "cleanup"]
+    subprocess.run(command, env=env, capture_output=True, text=True, check=True)
+    assert not marker.exists()
+    assert not (host_temp / "wsl2-diagnostics/guest-state.txt").exists()
+    assert "status 0" in (host_temp / "wsl2-diagnostics/capture-status.txt").read_text()
 
 
 def test_capture_does_not_publish_partial_startup_evidence(tmp_path: Path) -> None:

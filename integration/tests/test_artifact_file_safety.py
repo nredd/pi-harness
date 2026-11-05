@@ -7,6 +7,9 @@ References:
 from __future__ import annotations
 
 import os
+import runpy
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -15,7 +18,7 @@ import pytest
 
 import conftest
 from harness import files
-from harness.credentials import require_safe_diagnostic
+from harness.credentials import main, require_safe_diagnostic
 from harness.sandbox import build_sandbox
 from tests.test_capture_resilience import fail_with_cleanup
 
@@ -93,6 +96,44 @@ def test_short_explicit_credential_is_refused(payload: bytes) -> None:
 def test_public_metadata_does_not_match_auth_dump_fields(payload: bytes) -> None:
     """Publication is not blocked merely by public metadata keys or an empty credential slot."""
     require_safe_diagnostic(payload)
+
+
+def test_scan_cli_accepts_only_wholly_safe_files(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Shell collectors get the shared verdict as an exit status, without credential values in logs."""
+    safe = tmp_path / "guest-state.txt"
+    safe.write_bytes(b"MemAvailable: 1 kB\n[ 1.0] kernel \xff line\n")
+    planted = tmp_path / "planted.txt"
+    secret = "ghp_" + "B" * 36
+    planted.write_text(f"[ 2.0] {secret}\n")
+    assert main([str(safe)]) == 0
+    assert main([str(safe), str(planted)]) == 1
+    assert main([str(tmp_path / "missing.txt")]) == 1
+    assert secret not in caplog.text
+    assert "Refused diagnostic" in caplog.text
+
+
+def test_scan_cli_runs_as_module(tmp_path: Path) -> None:
+    """Exercise the exact `python -m harness.credentials` entry `scripts/wsl2_capture.sh` invokes."""
+    planted = tmp_path / "planted.txt"
+    planted.write_text("Authorization: Bearer synthetic-value\n")
+    command = [sys.executable, "-m", "harness.credentials", str(planted)]
+    integration = Path(__file__).resolve().parents[1]
+    result = subprocess.run(command, cwd=integration, capture_output=True, text=True, check=False)
+    assert result.returncode == 1
+    assert "synthetic-value" not in result.stdout + result.stderr
+    planted.write_text("MemTotal: 1 kB\n")
+    assert subprocess.run(command, cwd=integration, capture_output=True, check=False).returncode == 0
+
+
+def test_scan_cli_main_guard_exits_with_the_verdict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The module guard turns the scan verdict into the process exit status."""
+    report = tmp_path / "guest-state.txt"
+    report.write_text("SwapFree: 1 kB\n")
+    monkeypatch.setattr(sys, "argv", ["harness.credentials", str(report)])
+    monkeypatch.delitem(sys.modules, "harness.credentials")
+    with pytest.raises(SystemExit) as raised:
+        runpy.run_module("harness.credentials", run_name="__main__")
+    assert raised.value.code == 0
 
 
 @pytest.mark.parametrize("replacement", ["fifo", "symlink"])
