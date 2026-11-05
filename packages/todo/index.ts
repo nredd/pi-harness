@@ -23,6 +23,7 @@ import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding
 import type { KeyId } from "@earendil-works/pi-tui";
 import { COLLAPSE_KEY_OFF, getCollapseOnResume, resolveCollapseKey } from "./config.ts";
 import { registerPlanHooks } from "./plan-hooks.ts";
+import { applyAgentEvent } from "./state/agents.ts";
 import { I18N_NAMESPACE } from "./state/i18n-bridge.ts";
 import { replayFromBranch } from "./state/replay.ts";
 import {
@@ -36,6 +37,7 @@ import {
 } from "./state/store.ts";
 import { registerTodosCommand, registerTodoTool, TOOL_NAME } from "./todo.ts";
 import type { TodoOverlay } from "./todo-overlay.ts";
+import { SUBAGENT_LIFECYCLE_EVENTS } from "./tool/types.ts";
 
 type I18nLoader = {
 	registerLocalesFromDir: (namespace: string, packageUrl: string, options?: { label?: string }) => void;
@@ -154,8 +156,33 @@ export default function (
 		todoOverlay.update();
 	}
 
+	/**
+	 * Refresh after a change outside the plan hooks. A transient overlay-load
+	 * failure only costs this one refresh, and the loader's cleared memo lets the
+	 * next update retry, so it is logged rather than surfaced. The latched
+	 * stale-namespace error still propagates: it never self-heals, and the user
+	 * needs its restart guidance.
+	 */
+	async function refreshTodoOverlay(): Promise<void> {
+		try {
+			await updateTodoOverlay();
+		} catch (e) {
+			if (isStaleOverlayModuleError(e)) throw e;
+			console.warn(`[rpiv-todo] overlay refresh failed (will retry on next update): ${formatError(e)}`);
+		}
+	}
+
 	registerTodoTool(pi, options);
 	registerTodosCommand(pi);
+	// pi-subagents lifecycle -> live owner state on the rows. Display only: no
+	// todo list is read or written here. The bus does not await listeners, so a
+	// latched stale-overlay error is logged instead of becoming an unhandled rejection.
+	for (const channel of SUBAGENT_LIFECYCLE_EVENTS) {
+		pi.events.on(channel, async (data) => {
+			if (!applyAgentEvent(channel, data)) return;
+			await refreshTodoOverlay().catch((e) => console.warn(`[rpiv-todo] ${formatError(e)}`));
+		});
+	}
 	const planHooks = registerPlanHooks(pi, async (sessionId) => {
 		if (sessionId === getActiveRenderSession()) await updateTodoOverlay();
 	});
@@ -287,17 +314,8 @@ export default function (
 	// (branch is stale — message_end runs after tool_execution_end).
 	pi.on("tool_execution_end", async (event) => {
 		if (event.toolName !== TOOL_NAME || event.isError) return;
-		try {
-			await updateTodoOverlay();
-		} catch (e) {
-			// The tool itself succeeded — a transient overlay-load failure only
-			// costs this one refresh, and the loader's cleared memo lets the next
-			// update retry. Don't surface that as an extension error. The latched
-			// stale-namespace error still propagates: it never self-heals, and the
-			// user needs its restart guidance.
-			if (isStaleOverlayModuleError(e)) throw e;
-			console.warn(`[rpiv-todo] overlay refresh failed (will retry on next update): ${formatError(e)}`);
-		}
+		// The tool itself succeeded, so a transient overlay-load failure is not an extension error.
+		await refreshTodoOverlay();
 	});
 
 	// Evaluate the lazy graph after startup while Pi's boot-time dependency paths

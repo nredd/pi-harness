@@ -1,5 +1,12 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import {
+	type AgentRunState,
+	type AgentStateLookup,
+	agentStateForOwner,
+	isAbandoned,
+	ownerLabel,
+} from "../state/agents.ts";
 import { formatStatusLabel } from "../state/i18n-bridge.ts";
 import { selectTaskSubjectById } from "../state/selectors.ts";
 import type { TaskState } from "../state/state.ts";
@@ -70,11 +77,49 @@ export function overlayStatusGlyph(status: TaskStatus, theme: Theme): string {
 	}
 }
 
+const AGENT_STATE_COLOR: Record<AgentRunState, "accent" | "success" | "error" | "muted"> = {
+	running: "accent",
+	done: "success",
+	failed: "error",
+	stopped: "muted",
+};
+
+/** One colored piece of a row's owner segment. */
+interface OwnerChunk {
+	color: "dim" | "accent" | "success" | "error" | "muted";
+	text: string;
+}
+
+/**
+ * The owner segment shared by the overlay and `/todos`: `@owner`, then the
+ * owning subagent's live state when `lookup` knows it. An `in_progress` todo
+ * whose agent failed or stopped is marked `✗ failed`; the todo itself stays
+ * `in_progress` until the parent completes it with evidence.
+ */
+export function ownerChunks(t: Task, lookup: AgentStateLookup): OwnerChunk[] {
+	const owner = ownerLabel(t.owner);
+	if (!owner) return [];
+	const chunks: OwnerChunk[] = [{ color: "dim", text: owner }];
+	const state = lookup(t.owner);
+	if (!state) return chunks;
+	if (isAbandoned(t, state)) {
+		chunks.push({ color: "error", text: state === "failed" ? "✗ failed" : "stopped ✗ failed" });
+	} else {
+		chunks.push({ color: AGENT_STATE_COLOR[state], text: state });
+	}
+	return chunks;
+}
+
 /**
  * Format a single task row for the persistent overlay. The subject color
  * reflects task state while IDs and supporting metadata stay visually quiet.
  */
-export function formatOverlayTaskLine(t: Task, theme: Theme, showId: boolean): string {
+export function formatOverlayTaskLine(
+	t: Task,
+	theme: Theme,
+	showId: boolean,
+	lookup: AgentStateLookup = agentStateForOwner,
+): string {
 	const glyph = overlayStatusGlyph(t.status, theme);
 	const subjectColor =
 		t.status === "in_progress"
@@ -89,6 +134,7 @@ export function formatOverlayTaskLine(t: Task, theme: Theme, showId: boolean): s
 	let line = `${glyph}`;
 	if (showId) line += ` ${theme.fg("dim", `#${t.id}`)}`;
 	line += ` ${subject}`;
+	for (const chunk of ownerChunks(t, lookup)) line += ` ${theme.fg(chunk.color, chunk.text)}`;
 	if (t.status === "in_progress" && t.activeForm) {
 		line += ` ${theme.fg("muted", `(${sanitizeTerminalText(t.activeForm)})`)}`;
 	}
@@ -102,10 +148,13 @@ export function formatOverlayTaskLine(t: Task, theme: Theme, showId: boolean): s
  * Format a single task line for the `/todos` slash command (no glyph color,
  * indented bullet prefix). Pre-refactor `todo.ts:670-674`.
  */
-export function formatCommandTaskLine(t: Task, glyph: string): string {
+export function formatCommandTaskLine(t: Task, glyph: string, lookup: AgentStateLookup = agentStateForOwner): string {
+	const owner = ownerChunks(t, lookup)
+		.map((chunk) => ` ${chunk.text}`)
+		.join("");
 	const form = t.status === "in_progress" && t.activeForm ? ` (${sanitizeTerminalText(t.activeForm)})` : "";
 	const block = t.blockedBy?.length ? `    ⛓ ${t.blockedBy.map((id) => `#${id}`).join(",")}` : "";
-	return `  ${glyph} #${t.id} ${sanitizeTerminalText(t.subject)}${form}${block}`;
+	return `  ${glyph} #${t.id} ${sanitizeTerminalText(t.subject)}${owner}${form}${block}`;
 }
 
 // ---------------------------------------------------------------------------

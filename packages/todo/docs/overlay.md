@@ -29,7 +29,7 @@ snapshots are saved.
 ▾ ● Todos (2 done, 3 open, 1 in progress)
 ├─ ✓ #1 Create DemoTodo domain entity
 ├─ ✓ #2 Create IDemoTodoRepository interface
-├─ ◐ #3 Create DemoTodoRepository (creating the repository)
+├─ ◐ #3 Create DemoTodoRepository @repo-writer running (creating the repository)
 ├─ ○ #4 Register DI bindings
 └─ ○ #5 Add integration tests
 ```
@@ -44,6 +44,14 @@ snapshots are saved.
   `· N/M plan items open`.
 - **Glyphs** — `○` pending, `◐` in_progress, `✓` completed, `⊖` deferred, `✗` deleted.
   Completed and deleted subjects render dim and struck through; deferred ones dim.
+- **Owner** — `@owner`, dim, right after the subject. When the owner equals the
+  id, `handle` or `name` of a top-level subagent that `pi-subagents` reported on
+  `pi.events` (`subagents:started` / `completed` / `failed`), the agent's last
+  known state follows: `running` (accent), `done` (success), `failed` (error) or
+  `stopped` (muted). Matching ignores case and a leading `@`; free text that
+  matches no agent shows only `@owner`. An `in_progress` todo whose agent failed
+  or stopped is marked in the error color, `✗ failed` or `stopped ✗ failed`. The
+  todo's own status never changes: the parent completes it with evidence.
 - **activeForm** — appended dim in parentheses, only while the task is
   `in_progress`.
 - **Dependencies** — appended as `⛓ #1,#2` when the task has a `blockedBy` set.
@@ -97,13 +105,13 @@ row budget and auto-hiding:
   ○ #6 Wire up the HTTP endpoint
   ○ #7 Update the API docs
 ── In Progress ──
-  ◐ #3 Create DemoTodoRepository (creating the repository)
+  ◐ #3 Create DemoTodoRepository @repo-writer running (creating the repository)
 ── Completed ──
   ✓ #1 Create DemoTodo domain entity
   ✓ #2 Create IDemoTodoRepository interface
 ```
 
-The header omits any count that is zero. Sections appear only when they have
+Owners and their agent state print as on the overlay, uncolored. The header omits any count that is zero. Sections appear only when they have
 tasks. Tombstoned tasks are never listed.
 
 - With no tasks: `No todos yet. Ask the agent to add some!`

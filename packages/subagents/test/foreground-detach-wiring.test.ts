@@ -377,7 +377,7 @@ describe("Agent tool — foreground run sent to the background", () => {
 
     const created = pi.events.emit.mock.calls.filter((c: any[]) => c[0] === "subagents:created");
     expect(created).toEqual([["subagents:created", {
-      id: runs.agentId("long job"), type: "general-purpose", description: "long job", isBackground: true,
+      id: runs.agentId("long job"), type: "general-purpose", description: "long job", handle: "general-purpose", isBackground: true,
     }]]);
     runs.finish("long job", "DONE");
   });
