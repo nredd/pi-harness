@@ -106,7 +106,7 @@ describe("owner segment", () => {
 
 	it.each([
 		["failed", "<error>✗ failed</error>"],
-		["stopped", "<error>stopped ✗ failed</error>"],
+		["stopped", "<error>✗ stopped</error>"],
 	] as const)("marks an in_progress todo whose agent %s as failed", (state, painted) => {
 		expect(
 			formatOverlayTaskLine(task({ status: "in_progress", owner: "w" }), recordingTheme, false, lookup(state)),
@@ -119,6 +119,10 @@ describe("owner segment", () => {
 		);
 	});
 
+	it("prints only the owner in /todos when no lookup is given", () => {
+		expect(formatCommandTaskLine(task({ owner: "w" }), "○")).toBe("  ○ #1 quiet task @w");
+	});
+
 	it("omits a blank owner entirely", () => {
 		expect(formatOverlayTaskLine(task({ owner: " " }), recordingTheme, false, lookup("running"))).toBe(
 			"<dim>○</dim> <text>quiet task</text>",
@@ -128,7 +132,7 @@ describe("owner segment", () => {
 	it("prints the same segment uncolored for /todos", () => {
 		expect(
 			formatCommandTaskLine(task({ status: "in_progress", owner: "w", activeForm: "x" }), "◐", lookup("stopped")),
-		).toBe("  ◐ #1 quiet task @w stopped ✗ failed (x)");
+		).toBe("  ◐ #1 quiet task @w ✗ stopped (x)");
 		expect(formatCommandTaskLine(task({ owner: "Sergii" }), "○", lookup(undefined))).toBe(
 			"  ○ #1 quiet task @Sergii",
 		);

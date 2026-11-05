@@ -340,6 +340,8 @@ interface SpawnOptions {
   previousModelTier?: TierDisclosure;
   /** Historical fallback only, never used to label the continuation. */
   previousModelFallback?: ModelFallback;
+  /** Internal, like `reclaim`: the evicted id a reopen continues. */
+  previousId?: string;
 
   maxTurns?: number;
   isolated?: boolean;
@@ -785,6 +787,7 @@ export class AgentManager {
       modelTier: selection.tier ? tierDisclosure(selection.tier) : undefined,
       previousModelTier: options.previousModelTier,
       previousModelFallback: options.previousModelFallback,
+      previousId: options.previousId,
       depth: options.depth ?? 1,
       parentAgentId: options.parentAgentId,
       workflowId: options.workflowId,

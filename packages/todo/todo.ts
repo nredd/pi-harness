@@ -14,6 +14,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadConfig, validateGuidanceFields } from "./config.ts";
+import { agentLookup } from "./state/agents.ts";
 import { formatProgress, t } from "./state/i18n-bridge.ts";
 import { isTaskDetails } from "./state/replay.ts";
 import { selectTasksByStatus, selectVisibleTasks } from "./state/selectors.ts";
@@ -175,7 +176,9 @@ export function registerTodosCommand(pi: ExtensionAPI): void {
 				ctx.ui.notify(t("command.requires_interactive", ERR_REQUIRES_INTERACTIVE), "error");
 				return;
 			}
-			const state = getState(sid(ctx));
+			const id = sid(ctx);
+			const state = getState(id);
+			const owners = agentLookup(id);
 			const visible = selectVisibleTasks(state);
 			if (visible.length === 0) {
 				ctx.ui.notify(t("command.no_todos", MSG_NO_TODOS), "info");
@@ -186,19 +189,19 @@ export function registerTodosCommand(pi: ExtensionAPI): void {
 			const lines: string[] = [formatProgress(state)];
 			if (groups.pending.length > 0) {
 				lines.push(t("command.section.pending", SECTION_PENDING));
-				for (const task of groups.pending) lines.push(formatCommandTaskLine(task, "○"));
+				for (const task of groups.pending) lines.push(formatCommandTaskLine(task, "○", owners));
 			}
 			if (groups.inProgress.length > 0) {
 				lines.push(t("command.section.in_progress", SECTION_IN_PROGRESS));
-				for (const task of groups.inProgress) lines.push(formatCommandTaskLine(task, "◐"));
+				for (const task of groups.inProgress) lines.push(formatCommandTaskLine(task, "◐", owners));
 			}
 			if (groups.completed.length > 0) {
 				lines.push(t("command.section.completed", SECTION_COMPLETED));
-				for (const task of groups.completed) lines.push(formatCommandTaskLine(task, "✓"));
+				for (const task of groups.completed) lines.push(formatCommandTaskLine(task, "✓", owners));
 			}
 			if (groups.deferred.length > 0) {
 				lines.push(t("command.section.deferred", SECTION_DEFERRED));
-				for (const task of groups.deferred) lines.push(formatCommandTaskLine(task, "⊖"));
+				for (const task of groups.deferred) lines.push(formatCommandTaskLine(task, "⊖", owners));
 			}
 
 			ctx.ui.notify(lines.join("\n"), "info");

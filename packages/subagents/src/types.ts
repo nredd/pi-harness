@@ -309,6 +309,11 @@ export interface AgentRecord {
   previousModelTier?: TierDisclosure;
   /** Prior evicted run's fallback, retained separately from the continuation's current disclosure. */
   previousModelFallback?: ModelFallback;
+  /**
+   * The evicted id this record reopened (#330), announced as `previousId` on its
+   * lifecycle events so a listener keyed by the old id follows the conversation.
+   */
+  previousId?: string;
   /** Nesting depth: top-level subagent = 1. */
   depth?: number;
   /**

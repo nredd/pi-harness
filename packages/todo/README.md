@@ -117,10 +117,11 @@ the full list grouped by status.
 - **Task status reflects actual work.** Mark every started task `in_progress`,
   including parallel work; assign `owner` to identify each worker. The owner shows
   on the row as `@auth-audit`; when it names a top-level subagent of this session
-  (its id, `@handle` or `name`, from
+  (its id, `@handle`, `name` or, after a reopen, its previous id, from
   [`pi-subagents`](https://github.com/nredd/pi-harness/tree/main/packages/subagents#events) lifecycle events) the row also
-  shows that agent's live state, `running`, `done`, `failed` or `stopped`. An
-  `in_progress` todo whose agent failed or stopped is marked `✗ failed`; the todo
+  shows that agent's live state, `running`, `done`, `failed` or `stopped`. The owner
+  is slugged like a handle, so `Auth Audit` matches `auth-audit`. An
+  `in_progress` todo whose agent failed or stopped is marked `✗ failed` or `✗ stopped`; the todo
   stays `in_progress` until the parent completes it with evidence. Complete each
   verified task immediately. Atomic batches may record independently verified
   results together, but must not delay individual completions. There is no
@@ -166,8 +167,9 @@ the full list grouped by status.
   tasks, while accepting valid historical tasks without newer evidence fields.
   Owner agent state is display-only: a subagent never reads or writes the
   parent's list, and only the parent completes its todo. Without `pi-subagents`
-  owners render without a state; an evicted agent or a session switch keeps
-  the last known state.
+  owners render without a state. An evicted agent keeps its last known state for
+  the rest of the session; agents are tracked per session, so after `/new` or
+  `/resume` a todo never shows another session's agent.
 - **Historical rows keep their own subjects.** Settled calls render from their
   validated result snapshots, not the current task list, including after reload
   and resize. Live owner agent state appears only on the overlay and `/todos`,
