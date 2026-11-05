@@ -685,7 +685,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       durationMs,
       tokens,
       usage,
-      ...(record.settleSeq !== undefined ? { settleSeq: record.settleSeq } : {}),
+      // Stamped by the only caller, the settle path, just before this runs.
+      settleSeq: record.settleSeq,
     };
   }
 
@@ -696,20 +697,22 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   let detachedSessionFile: string | undefined;
 
   /**
-   * Every lifecycle event's optional fields: identity, then `fallbackFields`. `handle`
-   * (`explore-2`), `name` (the handle drawn from the spawner's `name`, `auth-audit-2`),
-   * `nameBase` (that name before collision numbering, `auth-audit`) and `previousId` (the
-   * evicted id a reopen continues) are each omitted when absent, so a listener such as
-   * pi-todo can match an agent by what the parent typed, not only its id. `spawnSeq`
-   * orders the spawn against other spawns and `settleSeq`s, queued time included.
+   * Every lifecycle event's identity fields, then `fallbackFields`. `handle` (`explore-2`)
+   * and `spawnSeq` are always set: every caller announces a top-level agent, which the
+   * manager gives a handle, and the manager stamps `spawnSeq` on every record it creates.
+   * `name` (the handle drawn from the spawner's `name`, `auth-audit-2`), `nameBase` (that
+   * name before collision numbering, `auth-audit`) and `previousId` (the evicted id a
+   * reopen continues) are each omitted when absent, so a listener such as pi-todo can
+   * match an agent by what the parent typed, not only its id. `spawnSeq` orders the spawn
+   * against other spawns and `settleSeq`s, queued time included.
    */
   function eventFields(record: AgentRecord | undefined): Record<string, unknown> {
     return {
-      ...(record?.handle ? { handle: record.handle } : {}),
+      handle: record?.handle,
       ...(record?.alias ? { name: record.alias } : {}),
       ...(record?.nameBase ? { nameBase: record.nameBase } : {}),
       ...(record?.previousId ? { previousId: record.previousId } : {}),
-      ...(record?.spawnSeq !== undefined ? { spawnSeq: record.spawnSeq } : {}),
+      spawnSeq: record?.spawnSeq,
       ...fallbackFields(record),
     };
   }

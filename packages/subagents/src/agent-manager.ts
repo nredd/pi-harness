@@ -662,7 +662,6 @@ export class AgentManager {
     }
   }
 
-  /** Update the max concurrent background agents limit. */
   /** Spawns and settles, in order: `spawnSeq` / `settleSeq` on lifecycle events. */
   private lifecycleSequence = 0;
 
@@ -671,6 +670,7 @@ export class AgentManager {
     return ++this.lifecycleSequence;
   }
 
+  /** Update the max concurrent background agents limit. */
   setMaxConcurrent(n: number) {
     this.maxConcurrent = Math.max(1, n);
     // Start queued agents if the new limit allows
