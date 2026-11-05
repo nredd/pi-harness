@@ -39,6 +39,9 @@ import pytest
 from harness import install, promotion, release
 from harness.release import (
     ATTESTATION_WORKFLOW,
+    FETCH_ATTEMPTS,
+    FETCH_RETRY_AFTER_CAP_SECONDS,
+    FETCH_RETRY_BACKOFF_SECONDS,
     GITHUB_TOKEN_VARIABLES,
     RELEASE_PACKAGES,
     AttestationRateLimitedError,
@@ -768,6 +771,21 @@ def test_root_overrides_stay_tied_to_the_attested_core_release() -> None:
             assert sha256 == ROOT_OVERRIDE_DIGESTS[asset][0], f"stack and override pins disagree on {asset}"
 
 
+@pytest.fixture
+def no_backoff(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Record retry delays instead of sleeping.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): replace `time.sleep` for the retry loop.
+
+    Returns:
+        list[float]: every requested delay, in order.
+    """
+    delays: list[float] = []
+    monkeypatch.setattr(release.time, "sleep", delays.append)
+    return delays
+
+
 def serve_attestations(monkeypatch: pytest.MonkeyPatch, outcome: bytes | int) -> list[str]:
     """Answer the attestations API with a body or an HTTP status, recording requests.
 
@@ -828,15 +846,21 @@ def test_attestation_bundle_writes_every_bundle_anonymously(
     ],
 )
 def test_attestation_bundle_failures(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, outcome: bytes | int, error: type[Exception]
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    no_backoff: list[float],
+    outcome: bytes | int,
+    error: type[Exception],
 ) -> None:
     """Rate limits are distinguishable; every other failure is a plain verification error."""
     artifact = tmp_path / "a.json"
     artifact.write_bytes(b"snapshot")
-    serve_attestations(monkeypatch, outcome)
+    requests = serve_attestations(monkeypatch, outcome)
     with pytest.raises(error) as caught:
         attestation_bundle("o/r", artifact, tmp_path / "b.jsonl")
     assert (type(caught.value) is AttestationRateLimitedError) == (error is AttestationRateLimitedError)
+    # Only a 429 is a transient fetch failure; a 403 rate limit falls back on the first attempt.
+    assert len(requests) == (FETCH_ATTEMPTS if outcome == 429 else 1)
 
 
 @pytest.mark.parametrize(
@@ -1248,6 +1272,55 @@ def test_make_install_hides_token_from_installers_but_not_preflight(tmp_path: Pa
     ]
 
 
+NPM_FETCH_RETRY = MappingProxyType(
+    {
+        "fetch-retries": "5",
+        "fetch-retry-factor": "2",
+        "fetch-retry-mintimeout": "5000",
+        "fetch-retry-maxtimeout": "30000",
+    }
+)
+
+
+def test_root_npmrc_bounds_npm_fetch_retries_for_every_workspace() -> None:
+    """The one root `.npmrc` pins bounded fetch retries, and npm reads it from a workspace dir too.
+
+    Raises:
+        AssertionError: the pins drift, the worst-case backoff grows, or npm ignores the file.
+    """
+    root = Path(__file__).resolve().parents[2]
+    settings = dict(
+        line.split("=", 1)
+        for line in (root / ".npmrc").read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    )
+    assert settings == NPM_FETCH_RETRY
+    minimum, maximum = int(settings["fetch-retry-mintimeout"]), int(settings["fetch-retry-maxtimeout"])
+    delays = [
+        min(minimum * int(settings["fetch-retry-factor"]) ** n, maximum)
+        for n in range(int(settings["fetch-retries"]))
+    ]
+    assert sum(delays) == 95_000
+    # Ambient `npm_config_*` would override the file; drop it so this observes `.npmrc` alone.
+    env = {key: value for key, value in os.environ.items() if not key.lower().startswith("npm_config_")}
+    seen = subprocess.run(
+        [
+            release.NPM_BIN,
+            "exec",
+            "--offline",
+            "-c",
+            'echo "$npm_config_local_prefix $npm_config_fetch_retries $npm_config_fetch_retry_factor '
+            '$npm_config_fetch_retry_mintimeout $npm_config_fetch_retry_maxtimeout"',
+        ],
+        cwd=root / "packages" / "subagents",
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    assert seen == [str(root.resolve()), *NPM_FETCH_RETRY.values()]
+
+
 def test_cli_verify_flag_reports_failure_and_rejects_prefix(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1279,6 +1352,12 @@ def test_cli_verify_flag_reports_failure_and_rejects_prefix(
         ),
         (HTTPError("https://error.invalid/", 404, "", Message(), None), "HTTP 404 Not Found", 404),
         (HTTPError("https://error.invalid/", 599, "", Message(), None), "HTTP 599 Unknown reason", 599),
+        (HTTPError("https://error.invalid/", 504, "", Message(), None), "HTTP 504 Gateway Timeout", 504),
+        (
+            ConnectionResetError(errno.ECONNRESET, "Connection reset by peer"),
+            "I/O error: Connection reset by peer",
+            None,
+        ),
         (URLError(gaierror(-2, "platform-specific DNS detail")), "DNS lookup failed", None),
         (TimeoutError("platform-specific timeout detail"), "Request timed out", None),
         (URLError(TimeoutError("wrapped timeout detail")), "Request timed out", None),
@@ -1289,6 +1368,7 @@ def test_cli_verify_flag_reports_failure_and_rejects_prefix(
 def test_shared_fetch_diagnostics_are_stable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    no_backoff: list[float],
     *,
     caller: str,
     failure: Exception,
@@ -1300,6 +1380,7 @@ def test_shared_fetch_diagnostics_are_stable(
     Parameters:
         tmp_path (Path): isolated artifact and output paths.
         monkeypatch (pytest.MonkeyPatch): deterministic failed network boundary.
+        no_backoff (list[float]): recorded retry delays; transient failures exhaust every attempt.
         caller (str): shared-fetch consumer under test.
         failure (Exception): concrete urllib/protocol failure.
         reason (str): literal public diagnostic contract, independent of exception repr.
@@ -1367,7 +1448,9 @@ def test_shared_fetch_diagnostics_are_stable(
         calls[caller]()
     assert str(caught.value) == expected
     assert str(caught.value).count(url) == 1
-    assert requests == [url]
+    transient = status in {429, 504} or reason in {"Request timed out", "I/O error: Connection reset by peer"}
+    assert requests == [url] * (FETCH_ATTEMPTS if transient else 1)
+    assert len(no_backoff) == len(requests) - 1
     error = caught.value if isinstance(caught.value, release.FetchError) else caught.value.__cause__
     assert isinstance(error, release.FetchError)
     assert error.status == status
@@ -1543,6 +1626,224 @@ def test_public_fetch_redirect_header_contract(
                 release.fetch_bytes(request)
             assert origin_paths == target_paths == []
             assert received == []
+
+
+WireReply = tuple[int, dict[str, str], bytes]
+
+
+@contextmanager
+def scripted_http(replies: list[WireReply]) -> Iterator[tuple[str, Callable[..., Any], list[str]]]:
+    """Serve successive status/header/body replies from a real loopback HTTP server.
+
+    Request `n` gets `replies[n]`; requests past the end repeat the last reply.
+
+    Parameters:
+        replies (list[WireReply]): status, headers and body per request.
+
+    Yields:
+        tuple[str, Callable[..., Any], list[str]]: logical asset URL, opener and requested paths.
+    """
+    requests: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        """Answer from the script and silence request logs."""
+
+        def do_GET(self) -> None:
+            """Write the next scripted response and close the connection.
+
+            Returns:
+                None: response headers and body were written.
+
+            Raises:
+                OSError: response socket write failed.
+            """
+            requests.append(self.path)
+            status, headers, body = replies[min(len(requests), len(replies)) - 1]
+            self.send_response(status)
+            for key, value in {"Content-Length": str(len(body)), **headers}.items():
+                self.send_header(key, value)
+            self.end_headers()
+            self.wfile.write(body)
+            self.close_connection = True
+
+        def log_message(self, format: str, *args: Any) -> None:
+            """Suppress the fixture's HTTP access log.
+
+            Parameters:
+                format (str): ignored log format.
+                *args (Any): ignored log values.
+
+            Returns:
+                None: no log output is emitted.
+            """
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    opener = build_opener(ProxyHandler({}), LocalHTTPTransport(), release.HTTPSRedirectHandler())
+    try:
+        yield f"https://127.0.0.1:{server.server_port}/asset.tgz", opener.open, requests
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        assert not thread.is_alive()
+
+
+@pytest.mark.parametrize(
+    ("status", "phrase"),
+    [
+        (502, "Bad Gateway"),
+        (503, "Service Unavailable"),
+        (504, "Gateway Timeout"),
+        (429, "Too Many Requests"),
+    ],
+)
+def test_transient_status_is_retried_from_scratch_then_passes(
+    monkeypatch: pytest.MonkeyPatch,
+    no_backoff: list[float],
+    caplog: pytest.LogCaptureFixture,
+    status: int,
+    phrase: str,
+) -> None:
+    """A transient status restarts the whole download; the error body is never kept."""
+    with scripted_http([(status, {}, b"partial"), (200, {}, b"complete")]) as (url, opener, requests):
+        monkeypatch.setattr(release, "urlopen", opener)
+        with caplog.at_level("WARNING", logger=release.LOGGER.name):
+            assert release.fetch_bytes(url) == b"complete"
+    assert requests == ["/asset.tgz"] * 2
+    assert no_backoff == [FETCH_RETRY_BACKOFF_SECONDS]
+    assert caplog.messages == [
+        f"Transient fetch failure for '{url}': HTTP {status} {phrase} "
+        f"(attempt 1/{FETCH_ATTEMPTS}); retrying in {FETCH_RETRY_BACKOFF_SECONDS:g}s"
+    ]
+
+
+def test_transient_status_on_every_attempt_fails_with_the_original_message(
+    monkeypatch: pytest.MonkeyPatch, no_backoff: list[float], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Retries are bounded, back off, and exhausting them reports the last attempt's status."""
+    with scripted_http([(504, {}, b"")]) as (url, opener, requests):
+        monkeypatch.setattr(release, "urlopen", opener)
+        with (
+            caplog.at_level("WARNING", logger=release.LOGGER.name),
+            pytest.raises(release.FetchError) as caught,
+        ):
+            release.fetch_bytes(url)
+    assert str(caught.value) == f"Could not fetch '{url}': HTTP 504 Gateway Timeout"
+    assert caught.value.status == 504
+    assert len(requests) == FETCH_ATTEMPTS
+    assert no_backoff == [FETCH_RETRY_BACKOFF_SECONDS * 2**n for n in range(FETCH_ATTEMPTS - 1)]
+    assert len(caplog.messages) == FETCH_ATTEMPTS - 1
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 408, 410, 500, 501, 505])
+def test_permanent_status_is_never_retried(
+    monkeypatch: pytest.MonkeyPatch, no_backoff: list[float], caplog: pytest.LogCaptureFixture, status: int
+) -> None:
+    """Every status outside the transient set fails on the first attempt with no warning."""
+    with scripted_http([(status, {}, b""), (200, {}, b"complete")]) as (url, opener, requests):
+        monkeypatch.setattr(release, "urlopen", opener)
+        with (
+            caplog.at_level("WARNING", logger=release.LOGGER.name),
+            pytest.raises(release.FetchError) as caught,
+        ):
+            release.fetch_bytes(url)
+    assert caught.value.status == status
+    assert requests == ["/asset.tgz"]
+    assert no_backoff == []
+    assert caplog.messages == []
+
+
+@pytest.mark.parametrize(
+    ("reply", "match"),
+    [
+        ((200, {}, b"wrong bytes"), "Release checksum mismatch"),
+        ((200, {"Content-Length": "99"}, b"short"), "Content-Length mismatch"),
+        ((302, {"Location": "http://127.0.0.1/asset.tgz"}, b""), "Redirect requires HTTPS"),
+    ],
+)
+def test_integrity_refusals_are_never_retried(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    no_backoff: list[float],
+    reply: WireReply,
+    match: str,
+) -> None:
+    """A digest, size or redirect refusal fails once; the sha256 check stays the final word."""
+    with scripted_http([reply, (200, {}, NEW_BYTES)]) as (url, opener, requests):
+        monkeypatch.setattr(release, "urlopen", opener)
+        checksums = {url: hashlib.sha256(NEW_BYTES).hexdigest()}
+        with pytest.raises((release.FetchError, ValueError), match=match):
+            release.download_verified_asset(
+                url, NEW_TAG, checksums, tmp_path / "asset.tgz", provenance=lambda *_: None
+            )
+    assert requests == ["/asset.tgz"]
+    assert no_backoff == []
+
+
+@pytest.mark.parametrize(
+    ("retry_after", "delay"),
+    [
+        ("1", 1.0),
+        ("0", 0.0),
+        ("3600", FETCH_RETRY_AFTER_CAP_SECONDS),
+        ("Wed, 21 Oct 2015 07:28:00 GMT", FETCH_RETRY_BACKOFF_SECONDS),
+        ("-5", FETCH_RETRY_BACKOFF_SECONDS),
+    ],
+)
+def test_rate_limit_honors_capped_retry_after(
+    monkeypatch: pytest.MonkeyPatch, no_backoff: list[float], retry_after: str, delay: float
+) -> None:
+    """429's delta-seconds `Retry-After` replaces the backoff, capped; anything else is ignored."""
+    with scripted_http([(429, {"Retry-After": retry_after}, b""), (200, {}, b"complete")]) as (
+        url,
+        opener,
+        requests,
+    ):
+        monkeypatch.setattr(release, "urlopen", opener)
+        assert release.fetch_bytes(url) == b"complete"
+    assert len(requests) == 2
+    assert no_backoff == [delay]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ConnectionResetError(errno.ECONNRESET, "Connection reset by peer"),
+        URLError(ConnectionResetError(errno.ECONNRESET, "Connection reset by peer")),
+        TimeoutError("The read operation timed out"),
+        URLError(TimeoutError("timed out")),
+    ],
+)
+def test_reset_and_timeout_are_retried(
+    monkeypatch: pytest.MonkeyPatch, no_backoff: list[float], failure: Exception
+) -> None:
+    """A connection reset or socket timeout, raw or urllib-wrapped, restarts the download."""
+    outcomes: list[Exception | bytes] = [failure, b"complete"]
+
+    def flaky(request: Any, **kwargs: Any) -> Any:
+        """Fail once with the selected transport error, then serve the body.
+
+        Parameters:
+            request (Any): ignored URL/request.
+            **kwargs (Any): ignored transport options.
+
+        Returns:
+            Any: the complete response.
+
+        Raises:
+            Exception: the selected transport failure, on the first call only.
+        """
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return HTTPBody(outcome)
+
+    monkeypatch.setattr(release, "urlopen", flaky)
+    assert release.fetch_bytes("https://downloads.example.invalid/core.tgz") == b"complete"
+    assert outcomes == []
+    assert no_backoff == [FETCH_RETRY_BACKOFF_SECONDS]
 
 
 def test_nonlegacy_core_truncation_is_exit_three(

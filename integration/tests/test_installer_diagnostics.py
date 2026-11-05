@@ -495,7 +495,8 @@ def test_new_test_classes_fixtures_and_nested_helpers_have_contracts(module: str
         (
             release,
             "proxy_open urlopen fetch_ssl_context format_exception_redacted detached_exception "
-            "fetch_failure_reason __init__ fetch_bytes redact_diagnostic normalize_percent_escape_case "
+            "fetch_failure_reason __init__ fetch_retry_delay fetch_once fetch_bytes redact_diagnostic "
+            "normalize_percent_escape_case "
             "redact_url_userinfo replace_diagnostic_token connectivity_environment child_environment "
             "gitlink_tag _error_tail verify_attestation verify_public_attestation fetch_release main",
         ),
