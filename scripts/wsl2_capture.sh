@@ -24,7 +24,7 @@ if [ "${1:-}" = cleanup ]; then
         cat "$path" 2>/dev/null || printf 'UNAVAILABLE: not readable\n'
       done
       printf '\n== /proc/vmstat (swap, reclaim, OOM) ==\n'
-      grep -E '^(pswpin|pswpout|pgmajfault|allocstall_[a-z]+|oom_kill) ' /proc/vmstat 2>/dev/null \
+      grep -E '^(pswpin|pswpout|pgmajfault|allocstall_[a-z0-9]+|oom_kill) ' /proc/vmstat 2>/dev/null \
         || printf 'UNAVAILABLE: not readable\n'
       if timeout 20 dmesg >"$kernel_log" 2>/dev/null; then
         printf '\n== dmesg unprivileged (last 400 lines) ==\n'
