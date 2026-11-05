@@ -572,6 +572,14 @@ Flake policy (migration plan section 7):
 - dev-tools real-host `resource_snapshot` child sample on Linux (#499): published sampler `0.2.0` drops
   the whole baseline when a process exits mid-`/proc` scan, so the child reads `warming` or
   `process-collection-unavailable`. Fixed in sampler source, flaky until `0.2.1` is pinned
+- `npm` SIGABRT on the `pi-macos` pool (#542): the job log's shell line reads
+  `<pid> Abort trap: 6  npm ci ...` or `npm install ...`, the step exits 134 with no npm error output,
+  the runner is `pi-macos-*` and no other step failed. Cause: macOS LaunchServices aborts in
+  `_LSApplicationCheckIn` when npm sets `process.title`. Only that exact match allows ONE fresh rerun
+  of the whole job; record each occurrence on #542 (run, job, host crash report name). An abort from any other
+  process, any other runner, or with other output is a new correctness failure and blocks. The
+  allowance lapses when a macOS update removes the `_LSApplicationCheckIn` abort, or when a different
+  signature appears, which blocks
 - Subagents' genuine manager-reload fixture also includes synchronous TypeScript preparation and child
   imports inside its 5 s test deadline. PR #138's macOS failure reported that deadline at 5597 ms
   ([here](https://github.com/nredd/pi-harness/actions/runs/40369078357/job/121734701111)). Controlled
