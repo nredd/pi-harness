@@ -303,6 +303,8 @@
 		"test/desktop-tools.test.mjs",
 		"test/find-params.test.mjs",
 		"test/invariants.test.mjs",
+		"test/support/swift-sdk.mjs",
+		"test/swift-sdk.test.mjs",
 		"test/linux-build-scripts.test.mjs",
 		"test/linux-live.test.mjs",
 		"test/linux-native.test.mjs",
