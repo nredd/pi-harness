@@ -261,6 +261,10 @@ export class LinuxHelperClient {
 		child.stdout.setEncoding("utf8");
 		child.stderr.setEncoding("utf8");
 		child.stdin.setDefaultEncoding("utf8");
+		// A failed write invokes its callback and also emits an error on the stream.
+		child.stdin.on("error", (error) => {
+			if (this.child === child) this.discardChild(error);
+		});
 		child.stdout.on("data", (chunk: string) => this.onStdout(chunk));
 		child.on("exit", (code, signalName) => {
 			if (this.child !== child) return;
