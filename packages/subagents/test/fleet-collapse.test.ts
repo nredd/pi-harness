@@ -207,6 +207,7 @@ describe("collapsed fleet", () => {
     // At genuinely tiny widths, failure outranks every other alert and never reads as fallback.
     expect(stripTerminalSequences(renderFleetSummary(agents, workflows, count, false, 6, theme)).trimEnd()).toBe(`[E${compactCount}]`);
     expect(stripTerminalSequences(renderFleetSummary(agents, workflows, count, false, 1, theme))).toBe("!");
+    expect(stripTerminalSequences(renderFleetSummary(agents, workflows, count, false, 0, theme))).toBe("");
   });
 
   it("restores only valid branch disclosure snapshots and journals explicit toggles, not arrow navigation", () => {
@@ -267,6 +268,17 @@ describe("collapsed fleet", () => {
     expect(h.render()).toHaveLength(5);
     h.fleet.handleKey("\x1b[B");
     expect(h.render()).toHaveLength(5);
+    h.fleet.dispose();
+  });
+
+  it("collapses, never expands, when toggled while arrows have revealed the rows", () => {
+    const h = setup([openable(1)]);
+    h.fleet.handleKey("\x1b[B");
+    expect(h.render()).toHaveLength(5);
+    // The rows were only on loan to navigation; the toggle hands them back.
+    h.fleet.toggleCollapse();
+    expect(h.render()).toHaveLength(1);
+    expect(h.fleet.handleKey("\x1b[A")).toBeUndefined(); // navigation ended with it
     h.fleet.dispose();
   });
 
