@@ -1542,6 +1542,39 @@ describe("AgentManager — abort() state machine", () => {
     expect(manager.abort(queuedId)).toBe(false);
   });
 
+  it("tells onQueuedStop, and not onComplete, about a queued agent it stops", () => {
+    const onComplete = vi.fn();
+    const onQueuedStop = vi.fn();
+    manager = new AgentManager(onComplete, 1, undefined, undefined, undefined, undefined, undefined, undefined, onQueuedStop);
+    vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}));
+
+    const running = manager.spawn(mockPi, mockCtx, "X", "blocker", { description: "block", isBackground: true });
+    const queuedId = manager.spawn(mockPi, mockCtx, "Y", "queued", { description: "q", isBackground: true });
+
+    expect(manager.abort(queuedId, "parent")).toBe(true);
+    expect(onQueuedStop).toHaveBeenCalledTimes(1);
+    expect(onQueuedStop).toHaveBeenCalledWith(expect.objectContaining({ id: queuedId, status: "stopped", stoppedBy: "parent" }));
+    expect(onComplete).not.toHaveBeenCalled();
+    // A running agent settles through onComplete instead.
+    manager.abort(running);
+    expect(onQueuedStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps stopping a queued agent when onQueuedStop throws", () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    manager = new AgentManager(undefined, 1, undefined, undefined, undefined, undefined, undefined, undefined, () => {
+      throw new Error("listener");
+    });
+    vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}));
+    manager.spawn(mockPi, mockCtx, "X", "blocker", { description: "block", isBackground: true });
+    const queuedId = manager.spawn(mockPi, mockCtx, "Y", "queued", { description: "q", isBackground: true });
+
+    expect(manager.abort(queuedId)).toBe(true);
+    expect(manager.getRecord(queuedId)?.status).toBe("stopped");
+    expect(errors).toHaveBeenCalledTimes(1);
+    errors.mockRestore();
+  });
+
   it("aborts a running agent by firing its AbortController and setting status='stopped'", () => {
     manager = new AgentManager();
     let receivedSignal: AbortSignal | undefined;
@@ -1721,6 +1754,17 @@ describe("AgentManager — abortAll", () => {
     expect(manager.getRecord(running)?.status).toBe("stopped");
     expect(manager.getRecord(queued)?.status).toBe("stopped");
     expect(manager.hasRunning()).toBe(false);
+  });
+
+  it("tells onQueuedStop about every queued agent it stops, and only those", () => {
+    const onQueuedStop = vi.fn();
+    manager = new AgentManager(undefined, 1, undefined, undefined, undefined, undefined, undefined, undefined, onQueuedStop);
+    vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}));
+    manager.spawn(mockPi, mockCtx, "X", "r", { description: "r", isBackground: true });
+    const queued = manager.spawn(mockPi, mockCtx, "Y", "q", { description: "q", isBackground: true });
+
+    expect(manager.abortAll()).toBe(2);
+    expect(onQueuedStop.mock.calls.map(([record]) => record.id)).toEqual([queued]);
   });
 
   it("returns 0 when there are no running or queued agents", () => {

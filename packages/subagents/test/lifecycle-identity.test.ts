@@ -165,4 +165,33 @@ describe("lifecycle event identity", () => {
     expect(eventsNamed(pi, "subagents:started").find((e: any) => e.id === first).spawnSeq).toBeLessThan(started.spawnSeq);
     expect(started).not.toHaveProperty("settleSeq");
   });
+
+  it("a queued Agent spawn stopped before it starts emits failed with status stopped", async () => {
+    writeFileSync(join(cwd, "agent-dir", "subagents.json"), JSON.stringify({ maxConcurrent: 1 }));
+    const { pi, tools } = await boot();
+    const manager = (globalThis as any)[Symbol.for("pi-subagents:manager")];
+    vi.mocked(runAgent).mockImplementation(runnerResolution({ hold: true }) as any);
+    const spawn = (name: string) =>
+      tools.get("Agent").execute(
+        "tc",
+        { prompt: "go", description: name, subagent_type: "scout", name, run_in_background: true },
+        undefined, undefined, ctx(),
+      );
+    await spawn("Blocker");
+    const queued = await spawn("Auth Audit");
+    await flush();
+    const id = /Agent ID: (\S+)/.exec(queued.content.map((c: any) => c.text ?? "").join(""))![1];
+    expect(manager.getRecord(id).status).toBe("queued");
+    expect(eventsNamed(pi, "subagents:created").map((e: any) => e.id)).toContain(id);
+
+    await tools.get("stop_subagent").execute("tc-stop", { agent_id: id }, undefined, undefined, ctx());
+    expect(manager.getRecord(id).status).toBe("stopped");
+
+    const failed = eventsNamed(pi, "subagents:failed").filter((e: any) => e.id === id);
+    expect(failed).toEqual([
+      expect.objectContaining({ id, status: "stopped", handle: "scout-2", name: "auth-audit", nameBase: "auth-audit" }),
+    ]);
+    expect(typeof failed[0].settleSeq).toBe("number");
+    expect(eventsNamed(pi, "subagents:started").map((e: any) => e.id)).not.toContain(id);
+  });
 });
