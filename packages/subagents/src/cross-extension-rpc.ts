@@ -16,7 +16,7 @@
 import { isTopLevelAgent } from "./agent-manager.js";
 import type { ModelRegistry } from "./model-resolver.js";
 import { selectModel } from "./model-selection.js";
-import { planningNow, planSteerRefusal } from "./plan-mode-children.js";
+import { planSteerBlocked, planSteerRefusal } from "./plan-mode-children.js";
 import type { AgentRecord } from "./types.js";
 
 /** Minimal event bus interface needed by the RPC handlers. */
@@ -190,11 +190,8 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
     events, "subagents:rpc:steer", ({ agentId, message }) => {
       if (typeof message !== "string" || message.trim().length === 0) throw new Error("Steer message must be a non-empty string");
       const record = assertOwned(agentId);
-      // Same refusal as `steer_subagent`: while the parent plans, a running or queued
-      // agent with no Plan policy would take the steer with its full surface.
-      if ((record.status === "running" || record.status === "queued") && !record.planGate?.policy && planningNow(events)) {
-        throw new Error(planSteerRefusal(agentId));
-      }
+      // Same refusal as `steer_subagent`, so another extension cannot steer a pre-Plan agent into edits.
+      if (planSteerBlocked(record, events)) throw new Error(planSteerRefusal(agentId));
       if (!manager.steer(agentId, message)) throw new Error("Agent is not running");
     },
   );

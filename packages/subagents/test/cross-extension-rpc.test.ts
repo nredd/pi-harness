@@ -405,6 +405,8 @@ describe("cross-extension RPC", () => {
     });
 
     describe("while Plan mode answers on the bus", () => {
+      /** The record the manager reports for `agent-42`. */
+      const withRecord = (record: object) => (manager.getRecord as ReturnType<typeof vi.fn>).mockReturnValue(record);
       /** Answer Plan's state query like pi-plan-mode, active with a policy that refuses `write`. */
       const planning = (active: boolean) =>
         events.on(PLAN_MODE_STATE_QUERY, (data) => {
@@ -422,35 +424,35 @@ describe("cross-extension RPC", () => {
       };
 
       it.each(["running", "queued"])("refuses a %s agent with no Plan policy", async (status) => {
-        (manager.getRecord as ReturnType<typeof vi.fn>).mockReturnValue({ status });
+        withRecord({ status });
         planning(true);
         expect(await steer(`req-p-${status}`)).toEqual({ success: false, error: planSteerRefusal("agent-42") });
         expect(manager.steer).not.toHaveBeenCalled();
       });
 
       it("refuses when Plan answers malformed, which never counts as off", async () => {
-        (manager.getRecord as ReturnType<typeof vi.fn>).mockReturnValue({ status: "running" });
+        withRecord({ status: "running" });
         events.on(PLAN_MODE_STATE_QUERY, (data) => (data as { reply: (state: unknown) => void }).reply({ version: 2, active: false }));
         expect(await steer("req-p-skew")).toEqual({ success: false, error: planSteerRefusal("agent-42") });
         expect(manager.steer).not.toHaveBeenCalled();
       });
 
       it("steers an agent already running under Plan's policy", async () => {
-        (manager.getRecord as ReturnType<typeof vi.fn>).mockReturnValue({ status: "running", planGate: { policy: () => undefined } });
+        withRecord({ status: "running", planGate: { policy: () => undefined } });
         planning(true);
         expect(await steer("req-p-gated")).toEqual({ success: true });
         expect(manager.steer).toHaveBeenCalledWith("agent-42", "EDIT EVERYTHING");
       });
 
       it("steers when Plan answers that it is off", async () => {
-        (manager.getRecord as ReturnType<typeof vi.fn>).mockReturnValue({ status: "running" });
+        withRecord({ status: "running" });
         planning(false);
         expect(await steer("req-p-off")).toEqual({ success: true });
         expect(manager.steer).toHaveBeenCalledOnce();
       });
 
       it("reports a settled agent as not running rather than as a Plan refusal", async () => {
-        (manager.getRecord as ReturnType<typeof vi.fn>).mockReturnValue({ status: "completed" });
+        withRecord({ status: "completed" });
         (manager.steer as ReturnType<typeof vi.fn>).mockReturnValue(false);
         planning(true);
         expect(await steer("req-p-done")).toEqual({ success: false, error: "Agent is not running" });
