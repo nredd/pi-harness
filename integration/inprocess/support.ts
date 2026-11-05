@@ -100,9 +100,14 @@ export async function stopWake(wake: WakeHelper, deadline: Deadline = nativeDead
 		throw new Error(`caffeinate ${wake.pid} survived SIGKILL for ${WAKE_STOP_TIMEOUT_MS} ms`);
 }
 
-/** macOS holds the same process-scoped wake assertions as harness/power.py; other OSes hold none. */
-function holdWake(): WakeHelper | undefined {
-	return process.platform === "darwin"
+/**
+ * macOS holds the same process-scoped wake assertions as harness/power.py; other OSes hold none.
+ *
+ * Parameters:
+ *   platform (NodeJS.Platform): host to hold for; tests pass the other OS.
+ */
+export function holdWake(platform: NodeJS.Platform = process.platform): WakeHelper | undefined {
+	return platform === "darwin"
 		? spawn("/usr/bin/caffeinate", ["-disu", "-w", String(process.pid)], { stdio: "ignore" })
 		: undefined;
 }
@@ -178,7 +183,8 @@ export function isolateResearchPackages(root: string): () => void {
 	);
 	const previous = new Map<string, string | undefined>();
 	for (const [key, value] of Object.entries({
-		PATH: `${bin}:${process.env.PATH ?? ""}`,
+		// An empty entry would put the working directory on PATH.
+		PATH: process.env.PATH ? `${bin}:${process.env.PATH}` : bin,
 		PI_MEMORY_DIR: memory,
 		PI_MEMORY_QMD_UPDATE: "off",
 		PI_MEMORY_NO_SEARCH: "1",
