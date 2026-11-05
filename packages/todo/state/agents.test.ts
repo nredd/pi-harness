@@ -174,6 +174,47 @@ describe("agentStateFor", () => {
 		expect(stateOf("Auth Audit")).toBe("done");
 	});
 
+	it("keeps the owner's failure when a concurrent sibling is later resumed", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1", name: "auth-audit", nameBase: "auth-audit" });
+		apply(SUBAGENT_STARTED_EVENT, { id: "a2", name: "auth-audit-2", nameBase: "auth-audit" });
+		apply(SUBAGENT_FAILED_EVENT, { id: "a1", status: "error" });
+		apply(SUBAGENT_COMPLETED_EVENT, { id: "a2" });
+		expect(stateOf("@auth-audit")).toBe("failed");
+		apply(SUBAGENT_STARTED_EVENT, { id: "a2", name: "auth-audit-2", nameBase: "auth-audit" });
+		expect(stateOf("@auth-audit")).toBe("failed");
+		expect(stateOf("auth-audit-2")).toBe("running");
+	});
+
+	it("keeps the owner's failure when a concurrent sibling is later reopened under a new id", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1", name: "auth-audit", nameBase: "auth-audit" });
+		apply(SUBAGENT_STARTED_EVENT, { id: "a2", name: "auth-audit-2", nameBase: "auth-audit" });
+		apply(SUBAGENT_FAILED_EVENT, { id: "a1", status: "error" });
+		apply(SUBAGENT_COMPLETED_EVENT, { id: "a2" });
+		apply(SUBAGENT_STARTED_EVENT, { id: "a3", previousId: "a2", name: "auth-audit-2", nameBase: "auth-audit" });
+		expect(stateOf("@auth-audit")).toBe("failed");
+		expect(stateOf("a2")).toBe("running");
+	});
+
+	it("still follows a real retry once it is resumed", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1", name: "auth-audit", nameBase: "auth-audit" });
+		apply(SUBAGENT_FAILED_EVENT, { id: "a1", status: "error" });
+		apply(SUBAGENT_STARTED_EVENT, { id: "a2", name: "auth-audit-2", nameBase: "auth-audit" });
+		apply(SUBAGENT_COMPLETED_EVENT, { id: "a2" });
+		apply(SUBAGENT_STARTED_EVENT, { id: "a2" });
+		expect(stateOf("Auth Audit")).toBe("running");
+	});
+
+	it("orders retries by their latest start, so a resumed earlier retry wins", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1", name: "auth-audit", nameBase: "auth-audit" });
+		apply(SUBAGENT_FAILED_EVENT, { id: "a1", status: "error" });
+		apply(SUBAGENT_STARTED_EVENT, { id: "a2", name: "auth-audit-2", nameBase: "auth-audit" });
+		apply(SUBAGENT_COMPLETED_EVENT, { id: "a2" });
+		apply(SUBAGENT_STARTED_EVENT, { id: "a3", name: "auth-audit-3", nameBase: "auth-audit" });
+		apply(SUBAGENT_FAILED_EVENT, { id: "a3", status: "error" });
+		apply(SUBAGENT_STARTED_EVENT, { id: "a2" });
+		expect(stateOf("Auth Audit")).toBe("running");
+	});
+
 	it("falls back to the latest nameBase match when nothing matches exactly", () => {
 		apply(SUBAGENT_STARTED_EVENT, { id: "b1", name: "deploy-2", nameBase: "deploy" });
 		expect(stateOf("deploy")).toBe("running");

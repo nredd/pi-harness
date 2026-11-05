@@ -170,7 +170,8 @@ the full list grouped by status.
   Owner agent state is display-only: a subagent never reads or writes the
   parent's list, and only the parent completes its todo. Without `pi-subagents`
   owners render without a state. An evicted agent keeps its last known state for
-  the rest of the session; agents are tracked per session, so after `/new` or
+  the rest of the session, until 256 more recently updated agents push it out;
+  agents are tracked per session, so after `/new` or
   `/resume` a todo never shows another session's agent.
 - **Historical rows keep their own subjects.** Settled calls render from their
   validated result snapshots, not the current task list, including after reload

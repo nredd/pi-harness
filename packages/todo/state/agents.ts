@@ -27,7 +27,12 @@ interface AgentEntry {
 	/** The spawner `name` before collision numbering; matches only as a fallback, see `agentStateFor`. */
 	nameBase?: string;
 	state: AgentRunState;
-	/** Sequence number of the latest `started`. */
+	/**
+	 * Sequence number of this conversation's first `started`: set once per id and carried
+	 * over a `previousId` fold, so a resume or reopen never makes a sibling look like a retry.
+	 */
+	firstStartedAt: number;
+	/** Sequence number of the latest `started`; orders retries. */
 	startedAt: number;
 	/** Sequence number of the latest settle, unset while running. */
 	settledAt?: number;
@@ -103,10 +108,11 @@ export function applyAgentEvent(sessionId: string, channel: string, payload: unk
 	// A repeated `started` keeps its start; any other transition is a new point in the sequence.
 	const restarted = state === "running" && previous?.state !== "running";
 	const startedAt = restarted || !previous ? ++sequence : previous.startedAt;
+	const firstStartedAt = previous?.firstStartedAt ?? predecessor?.firstStartedAt ?? startedAt;
 	const settledAt = state === "running" ? undefined : previous?.state === state ? previous.settledAt : ++sequence;
 	if (typeof data.previousId === "string") agents.delete(data.previousId);
 	agents.delete(data.id);
-	agents.set(data.id, { keys, nameBase, state, startedAt, settledAt });
+	agents.set(data.id, { keys, nameBase, state, firstStartedAt, startedAt, settledAt });
 	while (agents.size > MAX_TRACKED_AGENTS) {
 		const oldest = agents.keys().next().value as string;
 		agents.delete(oldest);
@@ -119,15 +125,7 @@ export function applyAgentEvent(sessionId: string, channel: string, payload: unk
 	);
 }
 
-/**
- * The state of the agent in `sessionId` that `owner` names. The full rule, with examples,
- * is in `docs/overlay.md` (Owner):
- * - an exact match (slugged id, previous id, `handle` or `name`; the most recently
- *   updated if several) decides, unless a `nameBase`-only match STARTED AFTER it settled,
- *   which is a retry under the same name: then the latest such retry decides;
- * - with no exact match, the most recently updated `nameBase` match decides.
- * So a sibling started while the owner ran never masks the owner's own outcome either way.
- */
+/** The state of the agent in `sessionId` that `owner` names, per `docs/overlay.md#owner-match-rule`. */
 export function agentStateFor(sessionId: string, owner: string | undefined): AgentRunState | undefined {
 	const wanted = ownerKey(owner);
 	const agents = sessions.get(sessionId);
@@ -138,7 +136,7 @@ export function agentStateFor(sessionId: string, owner: string | undefined): Age
 	if (!exact) return byBase[0]?.state;
 	const settledAt = exact.settledAt;
 	if (settledAt === undefined) return exact.state;
-	const retries = byBase.filter((entry) => entry.startedAt > settledAt);
+	const retries = byBase.filter((entry) => entry.firstStartedAt > settledAt);
 	retries.sort((a, b) => b.startedAt - a.startedAt);
 	return retries[0]?.state ?? exact.state;
 }

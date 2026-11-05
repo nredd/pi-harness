@@ -31,7 +31,7 @@ the `npm test` LCOV (`coverage/primary/lcov.info`) on that branch.
 | `plan-hooks.ts` | 72/73 | 73/73 | 17/17 | 17/17 |
 | `todo-overlay.ts` | 104/104 | 104/104 | 22/22 | 22/22 |
 | `todo.ts` | 59/59 | 59/59 | 10/10 | 10/10 |
-| `state/agents.ts` | new in #444 | 57/57 | new in #444 | 15/15 |
+| `state/agents.ts` | new in #444 | 58/58 | new in #444 | 15/15 |
 | `state/i18n-bridge.ts` | 34/35 | 35/35 | 5/6 | 6/6 |
 | `state/invariants.ts` | 3/3 | 3/3 | 1/1 | 1/1 |
 | `state/plan.ts` | 155/155 | 155/155 | 41/41 | 41/41 |
