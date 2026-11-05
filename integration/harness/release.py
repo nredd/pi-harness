@@ -117,6 +117,7 @@ RATE_LIMIT_STATUSES = frozenset({403, 429})
 FETCH_RETRY_STATUSES = frozenset({429, 502, 503, 504})
 FETCH_ATTEMPTS = 3
 FETCH_RETRY_BACKOFF_SECONDS = 2.0
+FETCH_RETRY_BACKOFF_FACTOR = 2
 FETCH_RETRY_AFTER_CAP_SECONDS = 30.0
 # Every variable `gh` reads a GitHub token from; only `gh`'s login fallback may see them.
 # https://cli.github.com/manual/gh_help_environment
@@ -426,11 +427,14 @@ def fetch_retry_delay(error: Exception, attempt: int) -> float | None:
     """
     if attempt >= FETCH_ATTEMPTS:
         return None
-    backoff = FETCH_RETRY_BACKOFF_SECONDS * 2 ** (attempt - 1)
+    backoff = FETCH_RETRY_BACKOFF_SECONDS * FETCH_RETRY_BACKOFF_FACTOR ** (attempt - 1)
     if isinstance(error, HTTPError):
         if error.code not in FETCH_RETRY_STATUSES:
             return None
-        retry_after = (error.headers.get("Retry-After") or "").strip() if error.headers else ""
+        # Only 429 honors `Retry-After`; a 5xx keeps the fixed backoff whatever it sends.
+        retry_after = (
+            (error.headers.get("Retry-After") or "").strip() if error.code == 429 and error.headers else ""
+        )
         if retry_after.isascii() and retry_after.isdigit():
             return min(float(retry_after), FETCH_RETRY_AFTER_CAP_SECONDS)
         return backoff
