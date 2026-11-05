@@ -21,6 +21,8 @@ are retained. Before: 390 tests, 950/965 lines, 217/222 functions. After: 408 te
 Branches: 901/986 -> 917/985 (93.09%), not gated. Statements: 1185/1216 (97.45%),
 not claimed as 100%. Istanbul text's uncovered column can list branch/statement
 gaps despite complete executable lines; the counts below come from LCOV.
+`state/agents.ts` was added later by #444, so it has no before column; its after counts come from
+the `npm test` LCOV (`coverage/primary/lcov.info`) on that branch.
 
 | File | Before lines | After lines | Before functions | After functions |
 | --- | ---: | ---: | ---: | ---: |
@@ -29,6 +31,7 @@ gaps despite complete executable lines; the counts below come from LCOV.
 | `plan-hooks.ts` | 72/73 | 73/73 | 17/17 | 17/17 |
 | `todo-overlay.ts` | 104/104 | 104/104 | 22/22 | 22/22 |
 | `todo.ts` | 59/59 | 59/59 | 10/10 | 10/10 |
+| `state/agents.ts` | new in #444 | 64/64 | new in #444 | 17/17 |
 | `state/i18n-bridge.ts` | 34/35 | 35/35 | 5/6 | 6/6 |
 | `state/invariants.ts` | 3/3 | 3/3 | 1/1 | 1/1 |
 | `state/plan.ts` | 155/155 | 155/155 | 41/41 | 41/41 |
@@ -69,7 +72,7 @@ ln -s /tmp/cov-todo-provider/node_modules/@vitest/coverage-istanbul \
 cd packages/todo
 set --
 for f in config.ts index.ts plan-hooks.ts todo-overlay.ts todo.ts \
-  state/i18n-bridge.ts state/invariants.ts state/plan.ts state/replay.ts \
+  state/agents.ts state/i18n-bridge.ts state/invariants.ts state/plan.ts state/replay.ts \
   state/selectors.ts state/state-reducer.ts state/state.ts state/store.ts \
   state/task-graph.ts tool/response-envelope.ts tool/sanitize.ts tool/types.ts \
   view/format.ts; do

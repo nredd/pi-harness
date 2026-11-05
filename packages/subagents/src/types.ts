@@ -185,6 +185,12 @@ export interface AgentRecord {
    * by its type and `@explore` never comes to mean "start another one".
    */
   alias?: string;
+  /**
+   * `handleBase(name)` before collision numbering: `auth-audit` for an alias of
+   * `auth-audit-2`. Announced as `nameBase` so a listener matching the spawner's
+   * `name` finds a retry rather than the failed first try still holding the name.
+   */
+  nameBase?: string;
   description: string;
   status: "queued" | "running" | "completed" | "steered" | "aborted" | "stopped" | "error";
   /**
@@ -309,6 +315,18 @@ export interface AgentRecord {
   previousModelTier?: TierDisclosure;
   /** Prior evicted run's fallback, retained separately from the continuation's current disclosure. */
   previousModelFallback?: ModelFallback;
+  /**
+   * The evicted id this record reopened (#330), announced as `previousId` on its
+   * lifecycle events so a listener keyed by the old id follows the conversation.
+   */
+  previousId?: string;
+  /**
+   * Order of this record's spawn among the manager's spawns and settles, set once at
+   * creation (before any queueing) and announced as `spawnSeq` on lifecycle events.
+   */
+  spawnSeq?: number;
+  /** Order of this record's latest settle on the same counter, announced as `settleSeq`. */
+  settleSeq?: number;
   /** Nesting depth: top-level subagent = 1. */
   depth?: number;
   /**

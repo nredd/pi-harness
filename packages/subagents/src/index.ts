@@ -677,6 +677,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       id: record.id,
       type: record.type,
       description: record.description,
+      ...eventFields(record),
       result: record.result,
       error: record.error,
       status: record.status,
@@ -684,8 +685,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       durationMs,
       tokens,
       usage,
-      // Present only on a fallback, so the payload keeps its shape otherwise.
-      ...fallbackFields(record),
+      // Stamped by the only caller, the settle path, just before this runs.
+      settleSeq: record.settleSeq,
     };
   }
 
@@ -694,6 +695,27 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
    * orphaned) instance; their results are spooled for that session to pick up.
    */
   let detachedSessionFile: string | undefined;
+
+  /**
+   * Every lifecycle event's identity fields, then `fallbackFields`. `handle` (`explore-2`)
+   * and `spawnSeq` are always set: every caller announces a top-level agent, which the
+   * manager gives a handle, and the manager stamps `spawnSeq` on every record it creates.
+   * `name` (the handle drawn from the spawner's `name`, `auth-audit-2`), `nameBase` (that
+   * name before collision numbering, `auth-audit`) and `previousId` (the evicted id a
+   * reopen continues) are each omitted when absent, so a listener such as pi-todo can
+   * match an agent by what the parent typed, not only its id. `spawnSeq` orders the spawn
+   * against other spawns and `settleSeq`s, queued time included.
+   */
+  function eventFields(record: AgentRecord | undefined): Record<string, unknown> {
+    return {
+      handle: record?.handle,
+      ...(record?.alias ? { name: record.alias } : {}),
+      ...(record?.nameBase ? { nameBase: record.nameBase } : {}),
+      ...(record?.previousId ? { previousId: record.previousId } : {}),
+      spawnSeq: record?.spawnSeq,
+      ...fallbackFields(record),
+    };
+  }
 
   /** `modelFallback` + `modelNote` event fields, or nothing. Only what is KNOWN when the event fires. */
   function fallbackFields(record: AgentRecord | undefined): Record<string, unknown> {
@@ -780,6 +802,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     if (!record.resultConsumed) fleet.ingestFailure(record);
     // Emit lifecycle event based on terminal status
     const isError = record.status === "error" || record.status === "stopped" || record.status === "aborted";
+    record.settleSeq = manager.nextSequence();
     const eventData = buildEventData(record);
     if (isError) {
       pi.events.emit("subagents:failed", eventData);
@@ -828,7 +851,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       id: record.id,
       type: record.type,
       description: record.description,
-      ...fallbackFields(record),
+      ...eventFields(record),
     });
   }, (record, info) => {
     if (!isTopLevelAgent(record)) return;
@@ -840,7 +863,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       reason: info.reason,
       tokensBefore: info.tokensBefore,
       compactionCount: record.compactionCount,
-      ...fallbackFields(record),
+      ...eventFields(record),
     });
   }, (record, usage) => {
     // Every assistant message from every agent — nested included, exactly once.
@@ -956,6 +979,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     // Bypasses handle allocation, so a forged value would duplicate a live
     // agent's name and make `@handle` ambiguous. Same rule: dispatcher only.
     delete safeOptions.reclaim;
+    // Would make the new agent claim an evicted agent's id on lifecycle events.
+    delete safeOptions.previousId;
     // Every spawn through here is DETACHED — the caller gets an id back and
     // awaits nothing. A forged `blocking` would charge it to the foreground
     // pool and could defer it behind a queue whose gate nobody is holding.
@@ -1464,7 +1489,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
           type: record.type,
           description: record.description,
           isBackground: true,
-          ...fallbackFields(record),
+          ...eventFields(record),
         });
       }
     }
@@ -1748,6 +1773,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
         description: entry.description,
         maxTurns: opts.maxTurns,
         reclaim: { handle: entry.handle, alias: entry.alias },
+        previousId: entry.id,
         resumeSessionFile: entry.sessionFile,
         // Historical disclosures never replace the continuation's current selection.
         ...(entry.modelFallback ? { previousModelFallback: entry.modelFallback } : {}),
@@ -1867,7 +1893,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       type: existing.type,
       description: existing.description,
       isBackground: true,
-      ...fallbackFields(existing),
+      ...eventFields(existing),
     });
 
     return record;
@@ -2735,7 +2761,7 @@ Terse command-style prompts produce shallow, generic work.
           type: subagentType,
           description: params.description,
           isBackground: true,
-          ...fallbackFields(manager.getRecord(id)),
+          ...eventFields(manager.getRecord(id)),
         });
 
         return backgroundResult(id, record);

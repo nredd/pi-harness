@@ -172,4 +172,13 @@ describe("the registry spawn strips internal capabilities", () => {
     expect(entry.getRecord(id)).toMatchObject({ handle: "general-purpose", alias: undefined });
     await root.lifecycle.get("session_shutdown")?.();
   });
+
+  it("refuses a forged previousId, which would claim an evicted agent's id on lifecycle events", async () => {
+    const { entry, id, root } = forge({ previousId: "victim-agent-id" });
+
+    expect(entry.getRecord(id).previousId).toBeUndefined();
+    const started = root.pi.events.emit.mock.calls.find((c: any[]) => c[0] === "subagents:started")?.[1];
+    expect(started).not.toHaveProperty("previousId");
+    await root.lifecycle.get("session_shutdown")?.();
+  });
 });

@@ -1100,6 +1100,24 @@ describe("resuming an evicted agent by name", () => {
     expect(manager.getRecord(resumedId).handle).toBe("explore");
   });
 
+  it("announces the reopened run with the evicted id as previousId (#444)", async () => {
+    const { pi, lifecycle, tools } = boot();
+    finishedRun(fakeSession());
+    const oldId = await spawnBackground(tools);
+    await evict(oldId);
+    await flush();
+    heldRun(fakeSession());
+    pi.events.emit.mockClear();
+
+    await send(lifecycle, "@explore anything else?");
+    await flush();
+
+    const started = pi.events.emit.mock.calls.filter((c: any[]) => c[0] === "subagents:started").map((c: any[]) => c[1]);
+    expect(started).toHaveLength(1);
+    expect(started[0]).toMatchObject({ handle: "explore", previousId: oldId });
+    expect(started[0].id).not.toBe(oldId);
+  });
+
   it("stops resolving to the tombstone once the resume has taken the name", async () => {
     // The fork this prevents: every later `@explore` reopening the SAME stale
     // transcript, discarding whatever the resumed agent did in between.

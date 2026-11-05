@@ -29,7 +29,7 @@ snapshots are saved.
 ▾ ● Todos (2 done, 3 open, 1 in progress)
 ├─ ✓ #1 Create DemoTodo domain entity
 ├─ ✓ #2 Create IDemoTodoRepository interface
-├─ ◐ #3 Create DemoTodoRepository (creating the repository)
+├─ ◐ #3 Create DemoTodoRepository @repo-writer running (creating the repository)
 ├─ ○ #4 Register DI bindings
 └─ ○ #5 Add integration tests
 ```
@@ -44,6 +44,15 @@ snapshots are saved.
   `· N/M plan items open`.
 - **Glyphs** — `○` pending, `◐` in_progress, `✓` completed, `⊖` deferred, `✗` deleted.
   Completed and deleted subjects render dim and struck through; deferred ones dim.
+- **Owner** — `@owner`, dim, right after the subject. When the owner names a
+  top-level subagent that `pi-subagents` reported to this session on `pi.events`
+  (`subagents:started` / `completed` / `failed`), chosen by the
+  [owner match rule](#owner-match-rule), the agent's last known state follows:
+  `running` (accent), `done` (success), `failed` (error) or `stopped` (muted).
+  Free text that matches no agent shows only `@owner`. Another session's agents
+  never match, so `/new` or `/resume` starts with no states. An `in_progress` todo whose agent
+  failed or stopped is marked in the error color, `✗ failed` or `✗ stopped`. The
+  todo's own status never changes: the parent completes it with evidence.
 - **activeForm** — appended dim in parentheses, only while the task is
   `in_progress`.
 - **Dependencies** — appended as `⛓ #1,#2` when the task has a `blockedBy` set.
@@ -53,6 +62,42 @@ snapshots are saved.
   always appended below the panel so it is not flush against the input box.
 
 Rows longer than the terminal width are truncated with `…`.
+
+### Owner match rule
+
+Both the owner and every agent key are slugged like a handle (case, a leading `@`,
+spaces and punctuation ignored, so `Auth Audit` matches `auth-audit`). An owner can
+match an agent exactly, by its id, a previous id, its `handle` or its `name`
+(`auth-audit-2` for a numbered retry), or loosely, by its `nameBase` (the spawner's
+`name` before numbering, `auth-audit`). Agents tracked beyond the newest 256 per
+session are forgotten.
+
+Each conversation is dated from its *spawn*, not its start: pi-subagents stamps
+`spawnSeq` when the agent is created, before any time queued, and `settleSeq` on each
+settle, from one counter. The spawn is set once per id and carried to the new id when
+an evicted agent is reopened (`previousId`); the latest start and latest settle move
+with every resume. Without those stamps (an older pi-subagents) pi-todo falls back to
+the order in which it first heard of each agent. Then:
+
+- With an exact match (the most recently updated, if several), that agent's state
+  shows, unless some *other* agent whose `nameBase` matches was spawned after the
+  exact match last settled. That is a retry under the same name, and of those the
+  one started most recently shows instead.
+- With no exact match, the most recently updated `nameBase` match shows.
+
+So for owner `Auth Audit`:
+
+| Sequence | Shows |
+| --- | --- |
+| `auth-audit` fails, then retry `auth-audit-2` starts | `running` (the retry) |
+| `auth-audit` runs, sibling `auth-audit-2` starts and fails | `running` (the owner) |
+| `auth-audit` runs, sibling `auth-audit-2` starts, then `auth-audit` fails | `✗ failed` (the owner) |
+| `auth-audit` runs, sibling `auth-audit-2` starts, then `auth-audit` completes | `done` (the owner) |
+
+A sibling spawned while the owner ran never masks the owner's own outcome, even when
+it sat queued until the owner's settle freed its slot, or is later resumed or reopened. The same holds for an unnamed
+`explore` beside a scout named `Explore` (`explore-2`). A resumed owner is running
+again and decides once more.
 
 ## Scrolling
 
@@ -97,13 +142,13 @@ row budget and auto-hiding:
   ○ #6 Wire up the HTTP endpoint
   ○ #7 Update the API docs
 ── In Progress ──
-  ◐ #3 Create DemoTodoRepository (creating the repository)
+  ◐ #3 Create DemoTodoRepository @repo-writer running (creating the repository)
 ── Completed ──
   ✓ #1 Create DemoTodo domain entity
   ✓ #2 Create IDemoTodoRepository interface
 ```
 
-The header omits any count that is zero. Sections appear only when they have
+Owners and their agent state print as on the overlay, uncolored. The header omits any count that is zero. Sections appear only when they have
 tasks. Tombstoned tasks are never listed.
 
 - With no tasks: `No todos yet. Ask the agent to add some!`

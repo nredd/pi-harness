@@ -340,6 +340,8 @@ interface SpawnOptions {
   previousModelTier?: TierDisclosure;
   /** Historical fallback only, never used to label the continuation. */
   previousModelFallback?: ModelFallback;
+  /** Internal, like `reclaim`: the evicted id a reopen continues. */
+  previousId?: string;
 
   maxTurns?: number;
   isolated?: boolean;
@@ -660,6 +662,14 @@ export class AgentManager {
     }
   }
 
+  /** Spawns and settles, in order: `spawnSeq` / `settleSeq` on lifecycle events. */
+  private lifecycleSequence = 0;
+
+  /** The next lifecycle sequence number; the host stamps `settleSeq` with it at settle. */
+  nextSequence(): number {
+    return ++this.lifecycleSequence;
+  }
+
   /** Update the max concurrent background agents limit. */
   setMaxConcurrent(n: number) {
     this.maxConcurrent = Math.max(1, n);
@@ -768,6 +778,7 @@ export class AgentManager {
       startedAt: this.clock.now(),
       abortController,
       lifetimeUsage: { input: 0, output: 0, cacheWrite: 0, cost: 0 },
+      spawnSeq: this.nextSequence(),
       compactionCount: 0,
       // Raw tri-state (not coerced to a boolean): true = background, false =
       // foreground (has an inline tool-result surface), undefined = caller never
@@ -785,6 +796,7 @@ export class AgentManager {
       modelTier: selection.tier ? tierDisclosure(selection.tier) : undefined,
       previousModelTier: options.previousModelTier,
       previousModelFallback: options.previousModelFallback,
+      previousId: options.previousId,
       depth: options.depth ?? 1,
       parentAgentId: options.parentAgentId,
       workflowId: options.workflowId,
@@ -798,7 +810,8 @@ export class AgentManager {
     // handle — a spawn named after its own type gets `explore-2`, not a
     // duplicate `explore` that would make resolution ambiguous.
     if (record.handle !== undefined && record.alias === undefined && options.name !== undefined) {
-      record.alias = assignHandle(handleBase(options.name), this.takenHandles());
+      record.nameBase = handleBase(options.name);
+      record.alias = assignHandle(record.nameBase, this.takenHandles());
     }
 
     const args: SpawnArgs = { pi, ctx, type, prompt, options };
