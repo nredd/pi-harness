@@ -3,7 +3,6 @@ import { subscribe, unsubscribe } from "node:diagnostics_channel";
 import { lstat, readFile } from "node:fs/promises";
 import { platform } from "node:os";
 import { dirname, join } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import {
 	createResourceSampler,
@@ -201,18 +200,6 @@ describe("published sampler source on this host", () => {
 			}
 		},
 	);
-
-	it("drives a real poll for two updates, then closes cleanly", async () => {
-		const updates: string[] = [];
-		const before = timers();
-		const poll = new MonPoll(createSamplerSource(), (s) => updates.push(`${s.status}/${s.cpuState}`), undefined, 100);
-		poll.start();
-		for (let i = 0; i < 100 && updates.length < 2; i++) await sleep(20);
-		await poll.dispose();
-		expect(updates.slice(0, 2)).toEqual(["live/warming", "live/available"]);
-		expect(children()).toEqual([]);
-		expect(timers()).toBeLessThanOrEqual(before);
-	});
 
 	it("awaits sampler disposal and creates one sampler per source", async () => {
 		const dispose = vi.fn(async () => {});

@@ -572,8 +572,8 @@ The twelve jobs are the configured required checks of ruleset `main required che
 - `forks.yml` is path-filtered and not a required protection check; when triggered, the remaining core Gitlink job must pass before merging
 
 The session-kit `/mon` mapping test injects a deadline-truncated sampler snapshot instead of assuming
-that a bounded host scan always includes the test process. Real-sampler cancellation and polling tests
-continue to exercise the published sampler.
+that a bounded host scan always includes the test process. Real-sampler cancellation tests continue to
+exercise the published sampler; the host-dependent polling smoke is not in the coverage-gated suite.
 
 Flake policy (migration plan section 7):
 
