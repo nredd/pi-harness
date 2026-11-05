@@ -30,7 +30,7 @@ check: check-ts check-scripts check-integration check-benchmark  ## Owned-code g
 	$(MAKE) check-coverage
 
 check-ts:  ## Biome (non-rewriting), tsc, vitest for every npm workspace, or only WORKSPACES (paths, in npm order)
-	npm run check$(foreach workspace,$(WORKSPACES), --workspace=$(workspace))
+	PATH="$$PATH:$${HOME}/.pi/agent/bin" npm run check$(foreach workspace,$(WORKSPACES), --workspace=$(workspace))
 
 check-scripts:  ## Format/lint/type/tests for scripts/ (real disposable git repos)
 	$(call PY_GATE,scripts,--project ../integration,,.)
