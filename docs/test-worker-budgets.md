@@ -95,6 +95,31 @@ RED under 50 self-terminating spinners (load ~90-100, Apple M4, 10 cores):
 the same load peaked at 18172 ms, 9560 ms and 4204 ms (Jiti). The budgets do
 not claim to bound arbitrary host starvation.
 
+## Measured macOS Swift budget (#457)
+
+`computer-use/test/macos-native-pure.test.mjs` compiles the PURE region of
+`native/macos/bridge.swift` with `swiftc -O` and runs it, inside the test. It hit
+the 20 s suite default at 21644 ms on hosted `owned shard (macos-14, ts)` job
+126769877232 (run 41885722658, #433). The whole runner was slow:
+`platform-linux.test.mjs` took 16183 ms there against a 4646 ms green p50.
+
+Hosted figures are this test's Vitest durations across the 72 completed
+`owned shard (macos-14, ts)` jobs on `GitHub Actions` runners (every attempt) of
+the `ci.yml` runs from 41781117332 to 41960624589 (2026-11-04 to 2026-11-05).
+Self-hosted `pi-macos` jobs are excluded.
+
+| Case | Alone | Hosted green (n=67) | Hosted max (job) | Budget |
+| --- | --- | --- | --- | --- |
+| `macos native pure ref store and input helpers` | 2.1 s (Apple M4) | p50 6472 ms, p95 8995 ms, p99 9768 ms | 21644 ms, timed out (126769877232) | 45 s |
+
+Same margin rule as the cold loads above: twice the worst hosted figure. Green
+p99 times the observed ~3.5x runner slowdown is ~34 s, inside it. The compile
+stays in the test; no retry, skip or `testTimeout` change.
+
+Under 50 self-terminating local spinners (load 90-174 on a shared Apple M4) five
+runs took 13.7-27.0 s, two of them past 20 s. That is not a deterministic RED;
+the hosted job is the failing receipt.
+
 ## Remaining external acceptance criterion
 
 Keep #105 open after the worker-cap PR. The historical report does not retain
