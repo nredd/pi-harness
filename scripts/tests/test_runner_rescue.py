@@ -86,6 +86,10 @@ def run(
         ([job("queued", ["pi-macos"], LATE)], STALE, [1]),
         ([job("queued", ["self-hosted", "pi-linux"], LATE)], STALE, [1]),
         ([job("queued", ["pi-macos"], LATE)], {"pi-macos": FRESH}, []),
+        ([job("queued", ["pi-macos"], LATE)], {"pi-macos": f"{FRESH}:2"}, []),
+        ([job("queued", ["pi-macos"], LATE)], {"pi-macos": f"{FRESH}:-3"}, []),
+        # A draining pool beats but starts nothing: its queued job is stranded despite the fresh beat.
+        ([job("queued", ["pi-macos"], LATE)], {"pi-macos": f"{FRESH}:drain"}, [1]),
         ([job("queued", ["pi-macos"], 10)], STALE, []),
         ([job("in_progress", ["pi-macos"], LATE)], STALE, []),
         ([job("queued", ["ubuntu-24.04"], LATE)], STALE, []),

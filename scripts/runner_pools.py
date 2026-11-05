@@ -35,16 +35,22 @@ class Pool:
         label (str): Custom runner label, also the `runs-on` value of its cells.
         variable (str): Repo variable its host writes the heartbeat to.
         slots (int): Jobs the pool runs at once.
+        queue_depth (int): Cells beyond its free slots a run may still queue on the pool. Zero keeps a
+            pool strict; a positive depth pays off where the hosted runner of that OS queues for longer
+            than a slot takes to free up (macOS), and is bounded by the backlog the pool reports.
     """
 
     label: str
     variable: str
     slots: int
+    queue_depth: int = 0
 
 
+# Hosted macOS queues for ~10 minutes (median, 17 jobs), so one waiting cell per pool beats going hosted;
+# hosted Linux queues for seconds, so Linux stays strict.
 POOLS = {
     "pi-linux": Pool("pi-linux", "PI_LINUX_HEARTBEAT", 2),
-    "pi-macos": Pool("pi-macos", "PI_MACOS_HEARTBEAT", 1),
+    "pi-macos": Pool("pi-macos", "PI_MACOS_HEARTBEAT", 2, queue_depth=1),
 }
 
 # Matrix `os` value -> the pool that can run that OS. WSL has no pool and is always hosted.
@@ -64,11 +70,14 @@ CELL_SECONDS: dict[CellKey, int] = {
 MIN_HEAVY_S = 240
 
 
+DRAINING = "drain"
+
+
 def _split_beat(value: str) -> tuple[str, str | None]:
     """Split a heartbeat value into its epoch and optional free-slot parts.
 
     Parameters:
-        value (str): `<epoch>` or `<epoch>:<free>`.
+        value (str): `<epoch>`, `<epoch>:<free>` or `<epoch>:drain`.
 
     Returns:
         tuple[str, str | None]: The epoch text and the free-slot text, None when absent.
@@ -96,8 +105,24 @@ def is_fresh(value: str, now: float, ttl_s: int = HEARTBEAT_TTL_S) -> bool:
     return beat > 0 and -CLOCK_SKEW_S <= now - beat <= ttl_s
 
 
+def pool_is_up(value: str, now: float) -> bool:
+    """Return whether a pool is up AND will start the jobs queued on its label.
+
+    A draining pool beats but starts nothing new, so a job queued on it is stranded until it exits:
+    routing must not send work there and the rescue must not wait for a stale beat to move it.
+
+    Parameters:
+        value (str): The pool's heartbeat value.
+        now (float): Current epoch seconds.
+
+    Returns:
+        bool: True for a fresh beat that is not `<epoch>:drain`.
+    """
+    return is_fresh(value, now) and _split_beat(value)[1] != DRAINING
+
+
 def free_slots(value: str, now: float, pool: Pool) -> int | None:
-    """Return how many jobs a pool can take right now, or None when it is down.
+    """Return a live pool's free slots, negative while jobs wait on it, or None when it is down.
 
     Parameters:
         value (str): The pool's heartbeat value.
@@ -105,20 +130,20 @@ def free_slots(value: str, now: float, pool: Pool) -> int | None:
         pool (Pool): The pool, for its slot count.
 
     Returns:
-        int | None: None for a stale, stopped or garbled beat. A plain epoch (no free count) means one slot.
-            Otherwise the free count clamped to `[0, pool.slots]`; a negative or non-integer count is
-            garbled and counts as down.
+        int | None: None for a stale, stopped, draining or garbled beat. A plain epoch (no count) means
+            one free slot. Otherwise slots minus running minus queued jobs, capped at `pool.slots`; it
+            is negative when more jobs wait than the pool can start, which is how a run knows the
+            queue is already deep.
     """
-    if not is_fresh(value, now):
+    if not pool_is_up(value, now):
         return None
     free = _split_beat(value)[1]
     if free is None:
         return min(1, pool.slots)
     try:
-        count = int(free)
+        return min(int(free), pool.slots)
     except ValueError:
         return None
-    return min(count, pool.slots) if count >= 0 else None
 
 
 def parse_heartbeats(items: Sequence[str]) -> dict[str, str]:
@@ -144,7 +169,7 @@ def parse_heartbeats(items: Sequence[str]) -> dict[str, str]:
 
 
 def pool_capacity(heartbeats: Mapping[str, str], now: float, *, trusted: bool) -> dict[str, int]:
-    """Return each live pool's free slots for this run.
+    """Return how many cells each live pool can take from this run.
 
     Parameters:
         heartbeats (Mapping[str, str]): Pool name -> heartbeat variable value; absent means no heartbeat.
@@ -153,13 +178,17 @@ def pool_capacity(heartbeats: Mapping[str, str], now: float, *, trusted: bool) -
             no pool, whatever the heartbeats say.
 
     Returns:
-        dict[str, int]: Pool name -> free slots for every pool that is up (a live pool with none free maps
-            to 0); empty when `trusted` is false.
+        dict[str, int]: Pool name -> free slots plus the pool's `queue_depth`, floored at 0, for every
+            pool that is up (a live, full pool maps to 0 unless it allows queueing); empty when
+            `trusted` is false. Because the reported free count is negative while jobs already wait,
+            concurrent runs cannot pile more than `queue_depth` cells on a pool between two beats.
     """
     if not trusted:
         return {}
     capacity = {name: free_slots(heartbeats.get(name, ""), now, pool) for name, pool in POOLS.items()}
-    return {name: free for name, free in capacity.items() if free is not None}
+    return {
+        name: max(0, free + POOLS[name].queue_depth) for name, free in capacity.items() if free is not None
+    }
 
 
 def assign_cells(running: Iterable[CellKey], capacity: Mapping[str, int]) -> dict[CellKey, str]:
