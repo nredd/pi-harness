@@ -4,6 +4,11 @@ inputs:
   cleanup:
     description: Remove the disposable guest checkout after capture
     default: ''
+  job-status:
+    description: >-
+      The caller's `job.status`. On cleanup, anything but `success` (a failed, timed-out or cancelled
+      step that never wrote `first-failure`) also collects guest state. It never changes the exit status.
+    default: ''
 runs:
   using: composite
   steps:
@@ -11,10 +16,11 @@ runs:
       shell: pwsh
       env:
         WSL_CAPTURE_MODE: ${{ inputs.cleanup }}
+        WSL_JOB_STATUS: ${{ inputs.job-status }}
       run: |
         $env:WSL_HOST_WORKSPACE = $env:GITHUB_WORKSPACE
         $env:WSL_HOST_TEMP = $env:RUNNER_TEMP
-        $env:WSLENV = 'WSL_HOST_WORKSPACE/p:WSL_HOST_TEMP/p:PI_BIN'
+        $env:WSLENV = 'WSL_HOST_WORKSPACE/p:WSL_HOST_TEMP/p:PI_BIN:WSL_JOB_STATUS'
         $capture = (wsl -d Ubuntu-24.04 --exec wslpath -u "$env:GITHUB_WORKSPACE/scripts/wsl2_capture.sh").Trim()
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         wsl -d Ubuntu-24.04 --user pi-ci --exec bash -euo pipefail "$capture" "$env:WSL_CAPTURE_MODE"
