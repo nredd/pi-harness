@@ -572,16 +572,14 @@ Flake policy (migration plan section 7):
 - dev-tools real-host `resource_snapshot` child sample on Linux (#499): published sampler `0.2.0` drops
   the whole baseline when a process exits mid-`/proc` scan, so the child reads `warming` or
   `process-collection-unavailable`. Fixed in sampler source, flaky until `0.2.1` is pinned
-- `pi-macos` pool only (#542): a Node process dies with `Abort trap: 6` (exit 134) and prints nothing,
-  e.g. `npm ci --ignore-scripts` 140 ms into `Build standalone` on run `42060788242`, job
-  `127362102924`, after the same job's first `npm ci` passed. The host's crash report
-  (`/Library/Logs/DiagnosticReports/node-2026-11-05-080702.ips`, same pid) puts `abort()` inside
-  macOS LaunchServices `_LSApplicationCheckIn`, called from libuv `uv__set_process_title` when npm
-  sets `process.title`. The unified log shows that process checking in twice and getting two different
-  ASNs, where a passing `npm` gets the same one both times. An OS LaunchServices fault under the pool's
-  `ci` users, not npm, its cache, disk or limits; npm has no option to skip the title write, and a
-  preload that stubs `process.title` would diverge from hosted. It is the host's only `node` crash report
-  as of 2026-11-05. Match the signature exactly (no npm error, exit 134, a self-hosted `pi-macos` runner) before the rerun
+- `npm` SIGABRT on the `pi-macos` pool (#542): the job log's shell line reads
+  `<pid> Abort trap: 6  npm ci ...` or `npm install ...`, the step exits 134 with no npm error output,
+  the runner is `pi-macos-*` and no other step failed. Cause: macOS LaunchServices aborts in
+  `_LSApplicationCheckIn` when npm sets `process.title`. Only that exact match allows ONE fresh rerun
+  of the whole job; record each occurrence on #542 (run, job, host crash report name). An abort from any other
+  process, any other runner, or with other output is a new correctness failure and blocks. The
+  allowance lapses when a macOS update removes the `_LSApplicationCheckIn` abort, or when a different
+  signature appears, which blocks
 - Subagents' genuine manager-reload fixture also includes synchronous TypeScript preparation and child
   imports inside its 5 s test deadline. PR #138's macOS failure reported that deadline at 5597 ms
   ([here](https://github.com/nredd/pi-harness/actions/runs/40369078357/job/121734701111)). Controlled
