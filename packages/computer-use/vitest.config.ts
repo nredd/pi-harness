@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { defineConfig } from "vitest/config";
 
+// `computer-use-vitest`: the JS/TS runtime slice these suites measure; `computer-use` also inventories native and docs source.
 const {
 	owned,
 	exclusions,
