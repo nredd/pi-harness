@@ -116,6 +116,13 @@ describe("ps output parsing", () => {
 		expect(await psInfo(123)).toBeUndefined();
 	});
 
+	it("reports session 0 as no session id", async () => {
+		ps.mockResolvedValueOnce({ stdout: "  123     0 Thu Nov  5 07:00:00 2026 test-monitor\n" });
+		expect(await psInfo(123)).toMatchObject({ pgid: 123, sessionId: undefined, command: "test-monitor" });
+		ps.mockResolvedValueOnce({ stdout: "  123   123     0 Thu Nov  5 07:00:00 2026 test-monitor\n" });
+		expect(await psGroup(123)).toEqual([expect.objectContaining({ pid: 123, pgid: 123, sessionId: undefined })]);
+	});
+
 	it("refuses a group snapshot with an undated member", async () => {
 		ps.mockResolvedValueOnce({ stdout: "  123   123   123 Xxx Xxx 99 99:99:99 9999 test-monitor\n" });
 		expect(await psGroup(123)).toBeUndefined();

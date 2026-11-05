@@ -106,6 +106,8 @@ export function register(pi: ExtensionAPI, _config: KitConfig, clock: Clock = re
 					return ctx.ui.notify(lines.length > 0 ? lines.join("\n") : "no loops", "info");
 				}
 				if (command.kind !== "start") {
+					// Fails typecheck when a new command kind reaches this stop/resume path.
+					command.kind satisfies "stop" | "resume";
 					if (command.kind === "resume" && shared.quotaParked.size > 0)
 						return ctx.ui.notify("refused: quota dispatch is still parked. Resolve it before resuming loops", "error");
 					const ids = select(command.target);

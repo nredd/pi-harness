@@ -96,6 +96,7 @@ describe("mon responsive dashboard", () => {
 		});
 		expect(v.render(120).join("\n")).toContain("used (A+W+C)");
 		expect(v.render(120).join("\n")).toContain("free 1.0G swap 3.0G/4.0G");
+		expect(v.render(40).join("\n")).toMatch(/ A\+W\+C \S+\/\S+ /);
 		v.update({ ...snapshot(), memoryBasis: "total-free" });
 		expect(v.render(120).join("\n")).toContain("total-free");
 		expect(v.render(40).join("\n")).toContain("T-F");
