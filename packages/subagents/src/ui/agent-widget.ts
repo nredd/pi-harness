@@ -115,14 +115,20 @@ export function fgPreservingNestedStyles(theme: Theme, color: string, text: stri
 }
 
 /**
- * Format a token count compactly: "33.8k token", "1.2M token". The unit is
+ * Format a token count as a bare magnitude: "950", "18.4k", "1.2M". The unit is
  * picked against the ROUNDED thousands, so 999,999 reads "1.0M", never "1000.0k".
+ * Every token formatter wraps this one so the boundary is fixed in one place.
  */
-export function formatTokens(count: number): string {
+export function formatCompactTokens(count: number): string {
   const thousands = Number((count / 1_000).toFixed(1));
-  if (thousands >= 1_000) return `${(count / 1_000_000).toFixed(1)}M token`;
-  if (count >= 1_000) return `${thousands.toFixed(1)}k token`;
-  return `${count} token`;
+  if (thousands >= 1_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  if (count >= 1_000) return `${thousands.toFixed(1)}k`;
+  return `${count}`;
+}
+
+/** Format a token count compactly: "33.8k token", "1.2M token". */
+export function formatTokens(count: number): string {
+  return `${formatCompactTokens(count)} token`;
 }
 
 /**

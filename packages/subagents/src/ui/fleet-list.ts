@@ -21,7 +21,7 @@ import type { RunningDetached } from "../detached-results.js";
 import { describeModelCall } from "../model-call.js";
 import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal } from "../usage.js";
-import { type AgentActivity, buildInvocationTags, compactThinkingTag, fgPreservingNestedStyles, formatCost, type Theme } from "./agent-widget.js";
+import { type AgentActivity, buildInvocationTags, compactThinkingTag, fgPreservingNestedStyles, formatCompactTokens, formatCost, type Theme } from "./agent-widget.js";
 import { ConversationViewer, getConversationOverlayOptions, type ViewerBackgroundAction } from "./conversation-viewer.js";
 import { fallbackFlag, hasFallback, withLeadingFlag } from "./fallback-flag.js";
 import { FleetJournal, type FleetJournalEntry, type FleetSnapshot, fleetAlert, MAX_COMPACT_ALERT_COUNT } from "./fleet-state.js";
@@ -101,11 +101,7 @@ export function formatFleetElapsed(ms: number): string {
 
 /** `↓ 13.1k tokens` — down-arrow prefix, compact magnitude, plural "tokens". */
 export function formatFleetTokens(count: number): string {
-  let compact: string;
-  if (count >= 1_000_000) compact = `${(count / 1_000_000).toFixed(1)}M`;
-  else if (count >= 1_000) compact = `${(count / 1_000).toFixed(1)}k`;
-  else compact = `${count}`;
-  return `↓ ${compact} tokens`;
+  return `↓ ${formatCompactTokens(count)} tokens`;
 }
 
 /**

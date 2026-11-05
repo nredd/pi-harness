@@ -228,6 +228,14 @@ describe("formatFleetTokens", () => {
     expect(formatFleetTokens(950)).toBe("↓ 950 tokens");
     expect(formatFleetTokens(1_200_000)).toBe("↓ 1.2M tokens");
   });
+
+  it("picks the unit after rounding, so the k/M boundary never reads 1000.0k", () => {
+    expect(formatFleetTokens(999_949)).toBe("↓ 999.9k tokens");
+    expect(formatFleetTokens(999_950)).toBe("↓ 1.0M tokens");
+    expect(formatFleetTokens(999_999)).toBe("↓ 1.0M tokens");
+    expect(formatFleetTokens(999)).toBe("↓ 999 tokens");
+    expect(formatFleetTokens(1_000)).toBe("↓ 1.0k tokens");
+  });
 });
 
 describe("FleetList detached agents", () => {

@@ -6,10 +6,9 @@ import type { AgentManager } from "../src/agent-manager.js";
 import { modelFallbackNote } from "../src/model-resolver.js";
 import type { AgentRecord, NotificationDetails } from "../src/types.js";
 import { AgentCallView, AgentResultView, agentRowSummary, keepRowTicking } from "../src/ui/agent-row.js";
-import { type AgentActivity, type AgentDetails, AgentWidget, describeActivity, type Theme, type UICtx } from "../src/ui/agent-widget.js";
+import { type AgentActivity, type AgentDetails, AgentWidget, describeActivity, formatCompactTokens, type Theme, type UICtx } from "../src/ui/agent-widget.js";
 import { FLEET_STATE_ENTRY, FleetJournal, type FleetJournalEntry, MAX_FLEET_ALERT_DETAILS } from "../src/ui/fleet-state.js";
 import { renderNotification } from "../src/ui/notification-view.js";
-import { formatCompactTokens } from "../src/ui/workflow-card.js";
 import { handleWorkflowDialogKey, initialWorkflowDialogState, resolveWorkflowDialog, WorkflowDialog, type WorkflowDialogState } from "../src/ui/workflow-dialog.js";
 import { FakeClock } from "./helpers/fake-clock.js";
 
@@ -61,6 +60,11 @@ describe("static fleet display contracts", () => {
 
   it("keeps sub-thousand workflow token counts exact", () => {
     expect(formatCompactTokens(99)).toBe("99");
+  });
+
+  it("rounds workflow token counts before picking the k/M unit", () => {
+    expect(formatCompactTokens(999_950)).toBe("1.0M");
+    expect(formatCompactTokens(999_949)).toBe("999.9k");
   });
 
   it("names every unresolved model in a multi-model fallback notice", () => {
