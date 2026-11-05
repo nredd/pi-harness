@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+// One shared guard (#505): its planted cases live with it in the preset; keep this path in step.
 import { dataModelLeaks, TIER_REF } from "../../preset/test/model-guard.ts";
 import {
   BUILTIN_TOOL_NAMES,
@@ -80,10 +81,6 @@ describe("agent type registry", () => {
         if (config.model !== undefined) expect(config.model, name).toMatch(TIER_REF);
         expect(dataModelLeaks(config), name).toEqual([]);
       }
-      expect(dataModelLeaks({ ...getAgentConfig("Explore"), systemPrompt: "Run `pi --model opus`." })).toEqual([
-        "opus",
-      ]);
-      expect(dataModelLeaks({ ...getAgentConfig("Explore"), model: "haiku" })).toEqual(["haiku"]);
     });
 
     it("resolveType returns canonical key or undefined", () => {
