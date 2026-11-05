@@ -2820,13 +2820,12 @@ function planMode(pi, dependencies = {}) {
         try {
           assertPlanModeHelperToolsAvailable(safeGetActiveTools());
         } catch {
+          if (wasEnabled) restorePlanRuntime(ctx);
           state = { enabled: false, awaitingAction: false, declinedPlans: 0 };
           workflowAllowedToolNames = void 0;
           pendingWorkflowToolPolicy = void 0;
-          if (workflowOwner !== previousOwner) {
-            workflowMutex.release(workflowOwner);
-            workflowOwner = previousOwner;
-          }
+          releaseWorkflowOwner();
+          updateUi(ctx);
           reportRestoredHelpersUnavailable(ctx);
           return false;
         }
