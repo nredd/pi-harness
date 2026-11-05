@@ -58,6 +58,10 @@ their platform or opt-in as skipped; this package remains outside the coverage g
 starts, restarts and stops its own helper instance on the test home's socket, never the shared daemon.
 Owner-only smoke commands and rollback are recorded in `UPSTREAM.md`.
 
+`npm run test:linux` uses disposable protocol children, not a native desktop helper. Its closed-stdin
+fixture initializes stdout before closing fd `0` (lazy pipe initialization aborts Node 26.12 on Darwin),
+acknowledges verified closure while alive, and requires real `EPIPE` rejection plus child cleanup.
+
 The harness root `publish.yml` owns releases; nested upstream workflows are dormant reference source.
 Local helper builds and local signing remain unchanged. Source preparation is not activation.
 

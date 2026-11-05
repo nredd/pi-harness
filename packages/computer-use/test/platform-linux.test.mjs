@@ -651,11 +651,15 @@ test("closed helper stdin rejects all requests without an uncaught stream error"
 	await fs.writeFile(
 		helper,
 		`#!/usr/bin/env node
-const readline = require("node:readline");
-readline.createInterface({ input: process.stdin }).on("line", (line) => {
+const fs = require("node:fs");
+const assert = require("node:assert/strict");
+// Initialize stdout before freeing fd 0: lazy pipe initialization aborts Node 26.12 on Darwin otherwise.
+const stdout = process.stdout;
+require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
   if (JSON.parse(line).cmd !== "hold") return;
-  require("node:fs").closeSync(0);
-  process.stdout.write("ready\\n");
+  fs.closeSync(0);
+  assert.throws(() => fs.fstatSync(0), { code: "EBADF" });
+  stdout.write("closed\\n");
 });
 setInterval(() => {}, 1000);
 `,
@@ -664,18 +668,32 @@ setInterval(() => {}, 1000);
 	const client = new LinuxHelperClient({ helperPath: helper });
 	try {
 		const child = await client.startProcess();
-		const ready = once(child.stdout, "data");
+		let stderr = "";
+		child.stderr.on("data", (chunk) => { stderr += chunk; });
 		const exit = once(child, "exit");
+		// A fixture crash must fail at this boundary, not hang awaiting an acknowledgement.
+		const ready = Promise.race([
+			once(child.stdout, "data").then(([chunk]) => {
+				assert.equal(String(chunk), "closed\n");
+				assert.equal(child.exitCode, null);
+				assert.equal(child.signalCode, null);
+				process.kill(child.pid, 0);
+			}),
+			exit.then(([code, signal]) => {
+				throw new Error(`Helper exited before stdin-close acknowledgement: ${code}/${signal}: ${stderr}`);
+			}),
+		]);
 		const controller = new AbortController();
 		const cancelled = client.send(child, "cancel", {}, 5000, controller.signal);
 		controller.abort();
 		await assert.rejects(cancelled, /Operation aborted/);
 		const pending = client.send(child, "hold", {}, 5000);
-		const pendingResult = assert.rejects(pending, { code: "EPIPE" });
-		await ready;
-		await assert.rejects(client.send(child, "test", {}, 5000), { code: "EPIPE" });
-		await pendingResult;
-		await exit;
+		// Attach every assertion immediately, including while the acknowledgement is pending.
+		await Promise.all([
+			assert.rejects(pending, { code: "EPIPE" }),
+			ready.then(() => assert.rejects(client.send(child, "test", {}, 5000), { code: "EPIPE" })),
+			exit,
+		]);
 		assert.equal(client.pending.size, 0);
 		assert.equal(client.child, undefined);
 	} finally {
