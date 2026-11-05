@@ -161,7 +161,7 @@ the full list grouped by status.
   completed, or open blockers that are all dead (`deferred`, unowned `pending`, or abandoned), shown
   as e.g. `(by #3 deferred)`. An `Agent`-tool background spawn is heard at `subagents:created`, so
   it counts as running while still queued; spawns that skip `created` (cross-extension RPC, the
-  scheduler, `@handle`) are first heard at `subagents:started` and read `held` until then. Its armed clause, `armed:
+  scheduler, `@handle`) are first heard at `subagents:started` and read `held` until then (or at `subagents:failed`, as `stopped`, if stopped while still queued). Its armed clause, `armed:
   no todo-owned wake (monitor and agent notices list session wakes)`, says only that todos arm
   nothing themselves; the `subagents` and `session-kit` monitor notices say what does wake the
   parent. Abandoned or parent-held work makes it a warning, repeated on every settle, so a stop with
