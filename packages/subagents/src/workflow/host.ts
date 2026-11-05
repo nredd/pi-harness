@@ -167,10 +167,6 @@ function toSpawnResult(record: AgentRecord, opts: { resumed?: boolean } = {}): W
   return { ...common, ...modelNote, ok: false, error: `${lead}${record.error ?? `Agent ${record.status}.`}` };
 }
 
-/** Shell used to run a `gate` command, mirroring how a user would type it. */
-const GATE_SHELL: readonly [string, string] =
-  process.platform === "win32" ? ["cmd", "/c"] : ["sh", "-c"];
-
 export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
   const { pi, ctx, manager } = deps;
   /** Runtime agent id → the manager record it spawned. Never pruned mid-run. */
@@ -189,7 +185,10 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
    * decided from one behaviour, whichever route the command took.
    */
   async function executeGate(command: string, cwd: string): Promise<WorkflowGateResult> {
-    const result = await pi.exec(GATE_SHELL[0], [GATE_SHELL[1], command], {
+    // The shell a user would type the command into. Read per call rather than
+    // at import, so the choice follows the platform the gate actually runs on.
+    const [shell, flag] = process.platform === "win32" ? ["cmd", "/c"] : ["sh", "-c"];
+    const result = await pi.exec(shell, [flag, command], {
       cwd,
       timeout: deps.gateTimeoutMs ?? DEFAULT_GATE_TIMEOUT_MS,
       ...(deps.signal !== undefined ? { signal: deps.signal } : {}),

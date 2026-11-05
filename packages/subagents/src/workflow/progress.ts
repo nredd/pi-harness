@@ -514,11 +514,12 @@ export function gerund(word: string): string {
 
   // Short consonant-vowel-consonant words double the final consonant: run →
   // running. `w`, `x` and `y` never double.
-  const last = lower.at(-1) ?? "";
+  // GERUND_CANDIDATE guarantees at least three letters, so every index exists.
+  const last = lower[lower.length - 1];
   if (
     lower.length <= 4 &&
-    !VOWELS.includes(lower.at(-3) ?? "") &&
-    VOWELS.includes(lower.at(-2) ?? "") &&
+    !VOWELS.includes(lower[lower.length - 3]) &&
+    VOWELS.includes(lower[lower.length - 2]) &&
     !VOWELS.includes(last) &&
     !"wxy".includes(last)
   ) {

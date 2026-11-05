@@ -186,19 +186,22 @@ export function resumeWorkflowTask(task: WorkflowTask, now = Date.now()): boolea
   if (task.status !== "paused" || task.control === undefined) return false;
   task.control.resume();
   task.status = "running";
-  task.totalPausedMs = (task.totalPausedMs ?? 0) + Math.max(0, now - (task.pausedAt ?? now));
-  task.pausedAt = undefined;
+  bankPause(task, now);
   return true;
+}
+
+/** Close out an open pause into `totalPausedMs`; a no-op when the run is not held. */
+function bankPause(task: WorkflowTask, now: number): void {
+  if (task.pausedAt === undefined) return;
+  task.totalPausedMs += Math.max(0, now - task.pausedAt);
+  task.pausedAt = undefined;
 }
 
 /** Settle a task from the run's own result. */
 export function completeWorkflowTask(task: WorkflowTask, result: WorkflowRunResult): void {
   // Banked before the status moves off "paused": a run that finished while held
   // still spent that time held, and the elapsed figure has to say so.
-  if (task.pausedAt !== undefined) {
-    task.totalPausedMs = (task.totalPausedMs ?? 0) + Math.max(0, Date.now() - task.pausedAt);
-    task.pausedAt = undefined;
-  }
+  bankPause(task, Date.now());
   // Nothing left to control, and holding the handle would let the dialog offer
   // pause on a run that has already stopped.
   task.control = undefined;
