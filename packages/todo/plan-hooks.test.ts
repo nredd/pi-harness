@@ -3,6 +3,7 @@ import { createMockCtx, createMockPi, makeTheme } from "@juicesharp/rpiv-test-ut
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import registerTodo from "./.test-support/home-fixtures.ts";
 import { formatInProgressNotice, PLAN_REMINDER_MARKER, remindedSinceLastPrompt } from "./plan-hooks.ts";
+import type { AgentRunState } from "./state/agents.ts";
 import { replayFromBranch } from "./state/replay.ts";
 import { getState } from "./state/store.ts";
 import { __resetState } from "./todo.ts";
@@ -317,6 +318,13 @@ describe("TaskDetails snapshot", () => {
 
 describe("settling with in_progress todos", () => {
 	const notices = (ctx: { ui: { notify: unknown } }) => (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls;
+	const ARMED = "armed: no todo-owned wake (monitor and agent notices list session wakes)";
+	const task = (id: number, extra: Record<string, unknown> = {}) => ({
+		id,
+		subject: `t${id}`,
+		status: "in_progress",
+		...extra,
+	});
 
 	it("reports the in_progress todos once the run settles", async () => {
 		const { handler, call } = setup();
@@ -326,27 +334,49 @@ describe("settling with in_progress todos", () => {
 		await call(ctx, { action: "update", id: 1, status: "in_progress" });
 		await handler("agent_settled")({ type: "agent_settled" }, ctx);
 		expect(notices(ctx)).toEqual([
-			["Run ended with 1 in_progress todo (#1 Ship the thing), armed: no todo wakes the parent", "warning"],
+			[`Run ended with 1 in_progress todo, ${ARMED}; held by the parent: #1 Ship the thing`, "warning"],
 		]);
 	});
 
-	it("caps the list at three and counts the rest", () => {
-		const task = (id: number, status: string) => ({ id, subject: `t${id}`, status });
-		const state = { tasks: [1, 2, 3, 4, 5].map((id) => task(id, "in_progress")), nextId: 6 } as never;
-		expect(formatInProgressNotice(state)).toBe(
-			"Run ended with 5 in_progress todos (#1 t1, #2 t2, #3 t3, +2 more), armed: no todo wakes the parent",
+	it("caps each group at three and counts the rest", () => {
+		const state = { tasks: [1, 2, 3, 4, 5].map((id) => task(id)), nextId: 6 } as never;
+		expect(formatInProgressNotice(state)?.text).toBe(
+			`Run ended with 5 in_progress todos, ${ARMED}; held by the parent: #1 t1, #2 t2, #3 t3, +2 more`,
 		);
 	});
 
-	it("names every todo whose owner agent failed or stopped, past the three-item cap", () => {
+	it("groups abandoned, held, blocked and running todos, naming every abandoned one", () => {
 		const state = {
-			tasks: [1, 2, 3, 4].map((id) => ({ id, subject: `t${id}`, status: "in_progress", owner: `w${id}` })),
-			nextId: 5,
+			tasks: [
+				task(1, { owner: "w1" }),
+				task(2, { owner: "w2" }),
+				task(3, { owner: "w3" }),
+				task(4, { owner: "w4" }),
+				task(5, { blockedBy: [2, 6] }),
+				{ id: 6, subject: "t6", status: "completed" },
+				task(7, { blockedBy: [6] }),
+				task(8, { owner: "w1", blockedBy: [2] }),
+			],
+			nextId: 9,
 		} as never;
-		const lookup = (owner: string | undefined) =>
-			owner === "w1" ? "running" : owner === "w2" ? "done" : owner === "w3" ? "stopped" : "failed";
-		expect(formatInProgressNotice(state, lookup)).toBe(
-			"Run ended with 4 in_progress todos (#1 t1, #2 t2, #3 t3, +1 more), armed: no todo wakes the parent; owner agent failed or stopped: #3 t3 (@w3 stopped), #4 t4 (@w4 failed)",
+		const states: Record<string, AgentRunState> = { w1: "running", w2: "done", w3: "stopped", w4: "failed" };
+		const lookup = (owner: string | undefined) => states[owner ?? ""];
+		expect(formatInProgressNotice(state, lookup)).toEqual({
+			text: `Run ended with 7 in_progress todos, ${ARMED}; owner agent failed or stopped: #3 t3 (@w3 stopped), #4 t4 (@w4 failed); held by the parent: #2 t2 (@w2 done), #7 t7; blocked: #5 t5 (by #2); agent running: #1 t1 (@w1 running), #8 t8 (@w1 running)`,
+			level: "warning",
+			key: "1:running:running:|2:held:done:|3:abandoned:stopped:|4:abandoned:failed:|5:blocked::2|7:held::|8:running:running:",
+		});
+	});
+
+	it("is info when every todo waits on a running agent or an open dependency", () => {
+		const state = {
+			tasks: [task(1, { owner: "w1" }), task(2, { blockedBy: [3] }), { id: 3, subject: "t3", status: "deferred" }],
+			nextId: 4,
+		} as never;
+		const lookup = (owner: string | undefined) => (owner === "w1" ? "running" : undefined);
+		expect(formatInProgressNotice(state, lookup)?.level).toBe("info");
+		expect(formatInProgressNotice(state, lookup)?.text).toBe(
+			`Run ended with 2 in_progress todos, ${ARMED}; blocked: #2 t2 (by #3); agent running: #1 t1 (@w1 running)`,
 		);
 	});
 
@@ -355,8 +385,8 @@ describe("settling with in_progress todos", () => {
 			tasks: [{ id: 1, subject: "a\u001b[31mred\u001b[0m", status: "in_progress" }],
 			nextId: 2,
 		} as never;
-		expect(formatInProgressNotice(state)).toBe(
-			"Run ended with 1 in_progress todo (#1 ared), armed: no todo wakes the parent",
+		expect(formatInProgressNotice(state)?.text).toBe(
+			`Run ended with 1 in_progress todo, ${ARMED}; held by the parent: #1 ared`,
 		);
 	});
 
