@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import Schema from "typebox/schema";
 import { test } from "vitest";
+import { modelLeaks, modelValues, TIER_REF } from "./model-guard.ts";
 import { frontmatterOf, type Json, manifest, packedFiles, pkgRoot, readJson, readText, walk } from "./support.ts";
 
 const AGENTS = ["architect", "code-reviewer", "critic", "debugger", "general-purpose", "researcher", "verifier"];
@@ -92,90 +93,59 @@ test("agents carry no model or logical-role references (strict roles are not imp
 	}
 });
 
-/** A tier reference, the only `model` value a skill or agent may name (#364, #501). */
-const TIER_REF = /^@[a-z0-9][a-z0-9._-]*$/;
-/**
- * Every `model`-like key's value (`model`, `models`, `*_model`, any case), in YAML, JSON or call form
- * (`model: x`, `"model": "x"`, `model = x`, `models: [x]`), quotes or backticks stripped. A quoted value
- * keeps its spaces; an empty value is returned as "".
- */
-const modelValues = (text: string): string[] =>
-	[
-		...text.matchAll(
-			/["'`]?\b(?:\w*_)?models?["'`]?[ \t]*[:=][ \t]*\[?[ \t]*(?:"([^"\n]*)"|'([^'\n]*)'|`([^`\n]*)`|([^\s,;)}\]]*))/gi,
-		),
-	].map(([, double, single, tick, bare]) => double ?? single ?? tick ?? bare ?? "");
-/**
- * Provider-qualified refs and model-id tokens: the bindings live in router/manifest config, never here.
- * Kept in step with the copy in `packages/subagents/test/agent-types.test.ts`.
- */
-const MODEL_ID_LEAKS = [
-	/\b[a-z][\w-]*\/[\w.-]+/gi,
-	/\bclaude-(?!code\b)[\w.-]+/gi,
-	/\bgpt-\d/gi,
-	/\b(?:gemini|o\d)-[\w.-]*/gi,
-];
-/** Slash-joined prose and tool selectors the preset text uses today; anything else `a/b` must be reviewed here. */
-const NON_MODEL_SLASHES = new Set([
-	"async/await",
-	"before/after",
-	"cargo/clippy",
-	"com/claude-code",
-	"dependency/conflict",
-	"docs/adr",
-	"docs/agents",
-	"error/logging",
-	"hard/judgement",
-	"identities/models",
-	"identity/model",
-	"inputs/state",
-	"issue/spec",
-	"origin/main...HEAD",
-	"owner/repo",
-	"page/repo",
-	"passed/failed",
-	"pi-dev-tools/cargo_test",
-	"pi-dev-tools/git_diff",
-	"pi-dev-tools/git_log",
-	"pi-dev-tools/git_show",
-	"pi-dev-tools/git_status",
-	"pi-dev-tools/py_test",
-	"publish/deploy.",
-	"py_test/cargo_test.",
-	"red/green",
-	"Result/Option",
-	"release/deploy",
-	"shell/ssh",
-	"unwrap/expect",
-	"usr/bin",
-	"uv/ruff",
-	"version/date",
-	"work/plugins",
-]);
-const modelLeaks = (text: string): string[] => [
-	...modelValues(text).filter((value) => !TIER_REF.test(value)),
-	...MODEL_ID_LEAKS.flatMap((pattern) => text.match(pattern) ?? []).filter((match) => !NON_MODEL_SLASHES.has(match)),
-];
-
 test("skills and agents name tiers, never models", () => {
 	for (const file of [...walk("agents"), ...walk("skills")]) assert.deepEqual(modelLeaks(readText(file)), [], file);
 	const ship = readText("skills/ship-issue/SKILL.md");
 	assert.deepEqual(modelValues(ship), ["@frontier"]);
 	assert.match(ship, /If either route\s+is quota-parked, wait; do not silently substitute a model or another tier\./);
+	const fence = (lang: string, body: string): string => `\`\`\`${lang}\n${body}\n\`\`\`\n`;
+	// Structured forms: each must surface a non-tier value without help from the prose scan.
 	for (const planted of [
-		'model: "anthropic/claude-opus-5-5"',
 		'model: "opus"',
 		"model: sonnet",
-		"Route reviews to openai-codex/gpt-6.1-sol.",
-		"Use router/review.",
-		"Prefer claude-fable-5-1.",
-		"Prefer gpt-6-astra.",
 		"model: `opus`",
 		'model: "opus fable"',
 		'model: ""',
 		"model:",
 		'{"model": "opus"}',
 		"model = 'sonnet'",
+		"Model: opus",
+		"models: [opus]",
+		"subagent_model: opus",
+		'models: ["@frontier", "opus"]',
+		"models: [@frontier, opus]",
+		"model: @frontier,opus",
+		"pi --model opus -p x",
+		"claude --model sonnet",
+		"pi --model=opus",
+		"pi --model",
+		"subagentModel: opus",
+		"modelId: opus",
+		"model_id: opus",
+		'modelName: "sonnet"',
+		'agentModels: { critic: "opus" }',
+		'Agent(subagent_type: "critic", model: "opus")',
+		'subagent({ type: "critic", model: "x-large" })',
+		fence("yaml", 'models:\n  - "@review"\n  - opus'),
+		fence("json", '{"agentModels": {"critic": "opus"}}'),
+		fence("sh", "pi --model opus -p review"),
+	]) {
+		assert.notDeepEqual(
+			modelValues(`${ship}\n${planted}\n`).filter((value) => !TIER_REF.test(value)),
+			[],
+			planted,
+		);
+		assert.notDeepEqual(modelLeaks(`${ship}\n${planted}\n`), [], planted);
+	}
+	assert.deepEqual(modelValues("---\nname: x\nmodel: opus\n---\nbody\n"), ["opus"]);
+	assert.deepEqual(modelValues("---\nname: x\nagentModels:\n  critic: [opus, '@review']\n---\n"), ["opus", "@review"]);
+	// Prose ids with no key: the best-effort scan.
+	for (const planted of [
+		'model: "anthropic/claude-opus-5-5"',
+		"Route reviews to openai-codex/gpt-6.1-sol.",
+		"Use router/review.",
+		"Prefer claude-fable-5-1.",
+		"Prefer gpt-6-astra.",
 		"Prefer claude-3-5-sonnet.",
 		"Prefer google/gemini-3-pro.",
 		"Prefer GPT-6.",
@@ -184,15 +154,25 @@ test("skills and agents name tiers, never models", () => {
 		"Prefer gemini-3-pro.",
 		"Prefer o4-mini.",
 		"Prefer claude-fable.",
-		"Model: opus",
-		"models: [opus]",
-		"subagent_model: opus",
+		"Prefer Opus.",
+		"Prefer Fable.",
+		"Prefer Astra.",
+		"Prefer gpt5.",
+		"Prefer GPT 6.",
 	])
 		assert.notDeepEqual(modelLeaks(`${ship}\n${planted}\n`), [], planted);
-	assert.deepEqual(
-		modelLeaks('Agent(subagent_type: "critic", model: "@frontier"), {"model": "@review"} and `@deep`.'),
-		[],
-	);
+	for (const clean of [
+		'Agent(subagent_type: "critic", model: "@frontier"), {"model": "@review"} and `@deep`.',
+		'model: "@frontier"',
+		"models: [@review, @deep]",
+		"pi --model @review -p x",
+		"The parent's critic, then the worker's model: `@frontier`.",
+		"model: @frontier, then the worker reviews.",
+		fence("yaml", 'models:\n  - "@review"\n  - "@deep"'),
+		fence("json", '{"agentModels": {"critic": "@frontier"}}'),
+		"Astral tooling; Pydantic `BaseModel`; identities/models; Claude Code.",
+	])
+		assert.deepEqual(modelLeaks(clean), [], clean);
 });
 
 test("agent extension selectors use short names, never the scoped form", () => {
