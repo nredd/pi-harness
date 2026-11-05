@@ -42,12 +42,12 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 243 }, "linux": { "lines": 0, "functions": 0, "branches": 243 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 116 }, "linux": { "lines": 0, "functions": 0, "branches": 116 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 243 }, "linux": { "lines": 0, "functions": 0, "branches": 243 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 116 }, "linux": { "lines": 0, "functions": 0, "branches": 116 } },
           "enforcement": "enforced",
           "reporters": ["text", "lcov"]
         }
