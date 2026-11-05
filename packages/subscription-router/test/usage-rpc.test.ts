@@ -420,6 +420,25 @@ describe("router usage RPC", () => {
 		});
 	});
 
+	it.each([
+		["the tool is active", ["subscription_usage"], true],
+		["the tool is discoverable through tool search", ["search_tools"], true],
+		["neither the tool nor tool search is selected", ["read"], false],
+	])("names subscription_usage in the prompt section only when %s", async (_label, selectedTools, named) => {
+		const profile: Profile = { id: "default", name: "Default", chain: [{ provider: "anthropic", id: "sonnet" }] };
+		const h = await harness(false, [profile]);
+		const sections: Record<string, string> = {};
+		h.handlers.get("before_agent_start")?.({ systemPrompt: "", systemPromptOptions: { selectedTools, sections } }, {
+			scopedModels: [],
+			ui: { notify: vi.fn() },
+		} as unknown as ExtensionContext);
+		const section = sections.subscription_usage ?? "";
+		expect(section).toContain("- anthropic: ");
+		expect(section).toContain("Treat usage as decision support");
+		expect(section.includes("subscription_usage")).toBe(named);
+		expect(section.includes("tool-search facility")).toBe(named);
+	});
+
 	it("renders active blocks in the tool and executes router command actions", async () => {
 		const profile: Profile = {
 			id: "default",

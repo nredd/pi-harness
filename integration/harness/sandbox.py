@@ -296,7 +296,6 @@ def _configure_fixture_policy(box: Sandbox, stack: Stack) -> None:
                 "git_commit",
                 "git_worktree_list",
                 "ssh_exec",
-                "monitor_read",
                 "search_tools",
                 "memory_read",
                 "memory_write",

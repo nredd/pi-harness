@@ -35,6 +35,10 @@ const SHARED_KEY: unique symbol = Symbol.for("pi-subscription-router.shared");
 const RPC_ADMIT = "router:rpc:admit";
 const RPC_USAGE = "router:rpc:usage";
 const PROMPT_SECTION = "subscription_usage";
+const USAGE_GUIDANCE =
+	"- Treat usage as decision support. Prefer cheaper models for bounded reconnaissance when capacity is low.";
+const USAGE_TOOL_GUIDANCE =
+	"- Before subagent fan-out, check current quota with subscription_usage when available; if deferred, discover it with the available tool-search facility first.";
 /** Custom session entry type carrying one `RouteDecision`. */
 const DECISION_ENTRY = "router:decision";
 /** Decisions kept in memory for `/router status`; the session entries are the full record. */
@@ -84,6 +88,12 @@ function sessionProviders(ctx: ExtensionContext, profiles: readonly Profile[]): 
 	for (const { model } of ctx.scopedModels) providers.add(model.provider);
 	if (ctx.model) providers.add(ctx.model.provider);
 	return [...providers].filter((provider) => COLLECTED_PROVIDERS.includes(provider));
+}
+
+/** Name the usage tool only when this session can call it or discover it through tool search. */
+function usageGuidance(selectedTools: readonly string[]): string[] {
+	const reachable = selectedTools.includes("subscription_usage") || selectedTools.includes("search_tools");
+	return reachable ? [USAGE_GUIDANCE, USAGE_TOOL_GUIDANCE] : [USAGE_GUIDANCE];
 }
 
 /** Warm cold usage caches in the background; never awaited on the hot path. */
@@ -180,7 +190,7 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 			const lines = providers.map((provider) => `- ${provider}: ${usage.formatForPrompt(usage.peek(provider))}`);
 			event.systemPromptOptions.sections[PROMPT_SECTION] = [
 				...lines,
-				"- Treat usage as decision support. Check subscription_usage before subagent fan-out and prefer cheaper models for bounded reconnaissance when capacity is low.",
+				...usageGuidance(event.systemPromptOptions.selectedTools),
 			].join("\n");
 		});
 
