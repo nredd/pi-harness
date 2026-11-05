@@ -355,6 +355,48 @@ describe("UsageService", () => {
 		expect(service.decisionFor({ provider: "anthropic", id: "claude-haiku-5-5" }).block).toBe(false);
 	});
 
+	it("skips surface- and model-id-scoped weekly_scoped limits", async () => {
+		const scoped = (scope: unknown) => ({ kind: "weekly_scoped", percent: 100, resets_at: FUTURE_RESET, scope });
+		const { service } = harness([
+			{
+				body: {
+					seven_day: { utilization: 40, resets_at: FUTURE_RESET },
+					limits: [
+						scoped({ model: { id: null, display_name: "Fable" }, surface: "web" }),
+						scoped({ model: { id: "claude-fable-5-1", display_name: "Fable" }, surface: null }),
+						scoped({ model: { id: null, display_name: "Fable" }, surface: { name: "web" } }),
+					],
+				},
+			},
+		]);
+		const snapshot = await service.get(ctx, "anthropic");
+		expect(snapshot.windows.map((w) => w.name)).toEqual(["seven_day"]);
+		expect(service.decisionFor({ provider: "anthropic", id: "claude-fable-5-1" }).block).toBe(false);
+	});
+
+	it("keeps an unscoped Fable limit after a surface-scoped one", async () => {
+		const scoped = (percent: number, surface: unknown) => ({
+			kind: "weekly_scoped",
+			percent,
+			resets_at: FUTURE_RESET,
+			scope: { model: { display_name: "Fable" }, surface },
+		});
+		const { service } = harness([
+			{
+				body: {
+					seven_day: { utilization: 40, resets_at: FUTURE_RESET },
+					limits: [scoped(100, "web"), scoped(30, null)],
+				},
+			},
+		]);
+		const snapshot = await service.get(ctx, "anthropic");
+		expect(snapshot.windows.map((w) => [w.name, w.usedPercent])).toEqual([
+			["seven_day", 40],
+			["seven_day_fable", 30],
+		]);
+		expect(service.decisionFor({ provider: "anthropic", id: "claude-fable-5-1" }).block).toBe(false);
+	});
+
 	it("matches families as whole tokens", () => {
 		expect(modelMatchesFamily("claude-sonnet-5", "sonnet")).toBe(true);
 		expect(modelMatchesFamily("claude-sonnet-4", "opus")).toBe(false);
