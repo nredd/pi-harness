@@ -299,7 +299,8 @@ export class MonitorManager {
 	}
 
 	private emitBatch(m: Monitor, batch: CoalescedBatch<TaggedLine>): void {
-		if (this.disposed || (batch.items.length === 0 && batch.dropped === 0)) return;
+		// `Coalescer` never flushes an empty batch; a window can still close while disposing.
+		if (this.disposed) return;
 		const wake = m.wake || batch.droppedMatched || batch.items.some((l) => l.matched);
 		if (wake) this.deliver(m, batch, { final: false, wake });
 	}

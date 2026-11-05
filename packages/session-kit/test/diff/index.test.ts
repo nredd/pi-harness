@@ -100,6 +100,12 @@ describe("/diff command", () => {
 		}
 	});
 
+	it("says there are no changes outside the TUI on a clean tree", async () => {
+		const { run, ctx } = setup("rpc");
+		await run("");
+		expect(ctx.ui.notify).toHaveBeenCalledExactlyOnceWith("/diff: no changes", "info");
+	});
+
 	describe("outside the TUI", () => {
 		beforeEach(() => {
 			writeFileSync(join(dir, "a.txt"), "2\n");

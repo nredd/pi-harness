@@ -54,17 +54,6 @@ export function registerMon(pi: ExtensionAPI, options: MonOptions): void {
 								done();
 								return { render: () => [], invalidate: () => {} };
 							}
-							let closed = false;
-							const close = (): Promise<void> => {
-								const cleanup = poll?.dispose() ?? Promise.resolve();
-								if (!closed) {
-									closed = true;
-									done();
-								}
-								return cleanup;
-							};
-							ownClose = close;
-							closeActive = close;
 							const view = new MonView({
 								theme,
 								rows: () => tui.terminal.rows,
@@ -73,8 +62,20 @@ export function registerMon(pi: ExtensionAPI, options: MonOptions): void {
 									void close();
 								},
 							});
-							poll = new MonPoll(options.createSource(), (sample) => view.update(sample), options.clock);
-							poll.start();
+							const active = new MonPoll(options.createSource(), (sample) => view.update(sample), options.clock);
+							poll = active;
+							let closed = false;
+							const close = (): Promise<void> => {
+								const cleanup = active.dispose();
+								if (!closed) {
+									closed = true;
+									done();
+								}
+								return cleanup;
+							};
+							ownClose = close;
+							closeActive = close;
+							active.start();
 							markReady();
 							return {
 								render: (width: number) => {
