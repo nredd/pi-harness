@@ -6,8 +6,9 @@
 // arguments, flow lists and maps, `--model` flags) through a small key/value tokenizer, plus GFM
 // tables with a model-like header column. Every value under a model-like key must be a tier
 // reference. Only pi's `--model`/`--models` flags may add a thinking suffix (`@review:high`):
-// pi-subagents never parses one, so `model: "@review:high"` would run unmapped on the parent model. A separate, best-effort prose scan catches model
-// ids and family names written without a key.
+// pi-subagents never parses one, so `model: "@review:high"` would run unmapped on the parent model.
+// pi's `/model <arg>` slash command reads like the `--model` flag. A separate, best-effort prose scan
+// catches model ids and family names written without a key.
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
 /** A tier reference, the only model value a skill or agent may name. */
@@ -15,8 +16,8 @@ export const TIER_REF = /^@[a-z0-9][a-z0-9._-]*$/;
 /** A trailing thinking level, as in pi's `--models @review:high`; stripped from flag values only. */
 const THINKING_SUFFIX = /:(?:off|minimal|low|medium|high|xhigh)$/;
 
-/** A key the tokenizer may read: an identifier, optionally a `-`/`--` flag. Rules out `a/b` prose. */
-const KEY_SHAPE = /^-{0,2}[A-Za-z_][\w.-]*$/;
+/** A key the tokenizer may read: an identifier, a `-`/`--` flag or a `/command`. Rules out `a/b` prose. */
+const KEY_SHAPE = /^(?:-{0,2}|\/)[A-Za-z_][\w.-]*$/;
 /** Fenced block languages whose body is data, parsed as YAML (a JSON superset). */
 const DATA_FENCES = new Set(["json", "jsonc", "yaml", "yml"]);
 const FENCE = /^[ \t]*(`{3,}|~{3,})[ \t]*([\w+-]*)[^\n]*\n([\s\S]*?)^[ \t]*\1[ \t]*$/gm;
@@ -27,8 +28,25 @@ const FENCE = /^[ \t]*(`{3,}|~{3,})[ \t]*([\w+-]*)[^\n]*\n([\s\S]*?)^[ \t]*\1[ \
  * prefix, since a generic `a/b` rule flags every path; `local/` is left out because it matches
  * `/usr/local/bin`. A keyed value is caught structurally whatever its provider.
  */
+const PROVIDERS = [
+	"anthropic",
+	"openai(?:-codex)?",
+	"google",
+	"openrouter",
+	"router",
+	"bedrock",
+	"vertex",
+	"azure",
+	"xai",
+	"mistral",
+	"deepseek",
+	"groq",
+	"ollama",
+	"together",
+	"meta",
+];
 const MODEL_ID_PATTERNS = [
-	/\b(?:anthropic|openai(?:-codex)?|google|openrouter|router|bedrock|vertex|azure|xai|mistral|deepseek|groq|ollama|together|meta)\/[\w.-]+/gi,
+	new RegExp(String.raw`\b(?:${PROVIDERS.join("|")})\/[\w.-]+`, "gi"),
 	/\bclaude-(?!code\b)[\w.-]+/gi,
 	/\bgpt[- ]?\d[\w.-]*/gi,
 	/\b(?:gemini[\w.-]*|o\d-[\w.-]*)/gi,
@@ -53,31 +71,44 @@ function parseData(source: string): unknown {
 }
 
 interface Token {
-	kind: "newline" | "quoted" | "punct" | "word";
+	kind: "newline" | "quoted" | "punct" | "word" | "comment";
 	text: string;
 	start: number;
 	end: number;
 }
 
 /**
- * Newlines, quoted strings, the punctuation `: = , ( ) [ ] { }`, and words. Backticks, `;`, other
- * whitespace and comment markers (`#`, `//`, `<!--`, `-->`) separate tokens, so `` `model: opus` ``,
- * `#model: opus` and `<!--model:opus-->` read like `model: opus`. A word may carry an apostrophe
- * (`parent's`) or an inner `#` (`C#`) but never start with either.
+ * Newlines, quoted strings, the punctuation `: = , ( ) [ ] { }`, comment markers (`#`, `//`, `<!--`,
+ * `-->`) and words. Backticks, `;` and other whitespace separate tokens, so `` `model: opus` ``,
+ * `#model: opus` and `<!--model:opus-->` read like `model: opus`; a comment marker also ends a
+ * value. A word may carry an apostrophe (`parent's`) or an inner `#` (`C#`) but never start with
+ * either.
  */
-const TOKEN =
-	/(\n)|"((?:[^"\\\n]|\\.)*)"|'([^'\n]*)'|([:=,()[\]{}])|#+|\/\/|<!--|-->|((?:(?!-->)[^\s"'`:=,;()[\]{}#])(?:(?!-->)[^\s"`:=,;()[\]{}])*)|[^\S\n]+|[\s\S]/gy;
+const TOKEN = new RegExp(
+	[
+		String.raw`(\n)`,
+		String.raw`"((?:[^"\\\n]|\\.)*)"`,
+		String.raw`'([^'\n]*)'`,
+		String.raw`([:=,()[\]{}])`,
+		String.raw`(#+|\/\/|<!--|-->)`,
+		String.raw`((?:(?!-->)[^\s"'\`:=,;()[\]{}#])(?:(?!-->)[^\s"\`:=,;()[\]{}])*)`,
+		String.raw`[^\S\n]+`,
+		String.raw`[\s\S]`,
+	].join("|"),
+	"gy",
+);
 
 function tokenize(text: string): Token[] {
 	const tokens: Token[] = [];
 	TOKEN.lastIndex = 0;
 	for (let match = TOKEN.exec(text); match; match = TOKEN.exec(text)) {
-		const [whole, newline, double, single, punct, word] = match;
+		const [whole, newline, double, single, punct, comment, word] = match;
 		const span = { start: match.index, end: match.index + whole.length };
 		if (newline !== undefined) tokens.push({ kind: "newline", text: newline, ...span });
 		else if (double !== undefined) tokens.push({ kind: "quoted", text: double, ...span });
 		else if (single !== undefined) tokens.push({ kind: "quoted", text: single, ...span });
 		else if (punct !== undefined) tokens.push({ kind: "punct", text: punct, ...span });
+		else if (comment !== undefined) tokens.push({ kind: "comment", text: comment, ...span });
 		else if (word !== undefined) tokens.push({ kind: "word", text: word, ...span });
 	}
 	return tokens;
@@ -109,6 +140,13 @@ function bracketValues(tokens: Token[], open: number): string[] {
 	}
 	return values;
 }
+
+/** Whether `token` ends a spaced-comma value: end of text or line, a comma, a closer or a comment. */
+const endsValue = (token: Token | undefined): boolean =>
+	token === undefined ||
+	token.kind === "newline" ||
+	token.kind === "comment" ||
+	(token.kind === "punct" && [",", ")", "]", "}"].includes(token.text));
 
 /** The index of the last token of the value starting at `index`, past any joined `:word` parts. */
 function valueEnd(tokens: Token[], index: number): number {
@@ -146,7 +184,7 @@ function valuesAt(tokens: Token[], index: number): string[] {
 		const after = tokens[valueEnd(tokens, i + 2) + 1];
 		if (touches(tokens[i], comma) && touches(comma, next)) {
 			if (isAssign(after)) break;
-		} else if (after !== undefined && after.kind !== "newline" && !isPunct(after, ",")) break;
+		} else if (!endsValue(after)) break;
 	}
 	return values;
 }
@@ -184,8 +222,9 @@ function tableModelValues(text: string): string[] {
 }
 
 /**
- * Every value of a model-like key in free text: `key: v`, `key = v`, `"key": v`, `--model v` and
- * the model column of a GFM table. A `--flag` value may carry a thinking suffix, which is dropped.
+ * Every value of a model-like key in free text: `key: v`, `key = v`, `"key": v`, `--model v`,
+ * pi's `/model v` and the model column of a GFM table. A `--flag` value may carry a thinking
+ * suffix, which is dropped.
  */
 function textModelValues(text: string): string[] {
 	const tokens = tokenize(text);
@@ -193,7 +232,9 @@ function textModelValues(text: string): string[] {
 	tokens.forEach((token, i) => {
 		if (!isScalar(token) || !KEY_SHAPE.test(token.text) || !isModelKey(token.text)) return;
 		const flag = token.kind === "word" && token.text.startsWith("--");
-		const found = isAssign(tokens[i + 1]) ? valuesAt(tokens, i + 2) : flag ? valuesAt(tokens, i + 1) : [];
+		const command = token.kind === "word" && token.text.startsWith("/");
+		if (!isAssign(tokens[i + 1]) && !flag && !command) return;
+		const found = valuesAt(tokens, isAssign(tokens[i + 1]) ? i + 2 : i + 1);
 		values.push(...(flag ? found.map((value) => value.replace(THINKING_SUFFIX, "")) : found));
 	});
 	return values;

@@ -144,6 +144,13 @@ test("model guard: structured forms surface a non-tier value without the prose s
 		'subagent({ type: "critic", model: "x-large" })',
 		"#model: o3",
 		"<!--model:o3-->",
+		"(model: @frontier, o3)",
+		"[model: @frontier, o3]",
+		"Agent({ model: @frontier, o3 })",
+		"model: @frontier, grok-4)",
+		"model: @frontier, o3 # hard tasks",
+		"Run `/model o3` first.",
+		"/model kestrel",
 		fence("yaml", 'models:\n  - "@review"\n  - opus'),
 		fence("yaml", 'model: "@review"\n# model: o3'),
 		fence("jsonc", '{"model": "@review"} // model: o3'),
@@ -221,8 +228,8 @@ test("model guard: parsed data, as pi-subagents' default-agent test passes it", 
 });
 
 test("model guard: known limits stay documented", () => {
-	// Keyless ids outside `MODEL_ID_PATTERNS` and syntax no shipped skill or pi flag uses.
-	for (const missed of ["Prefer o3.", "Prefer grok-4.", "/model o3", "pi -m o3", 'cfg["model"] = "o3"'])
+	// Keyless ids outside `MODEL_ID_PATTERNS`, and syntax pi does not have (no `-m` flag) or use.
+	for (const missed of ["Prefer o3.", "Prefer grok-4.", "pi -m o3", 'cfg["model"] = "o3"'])
 		assert.deepEqual(modelLeaks(missed), [], missed);
 });
 
