@@ -240,12 +240,16 @@ def test_pi_prepare_records_exact_plan_extension_and_transition_instructions(
 def test_codex_uses_native_read_isolation_without_nested_seatbelt(
     tmp_path: Path,
     generated_workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Run the real pinned Codex sandbox; fails if the exact native CLI is not on `PATH`."""
+    """Exercise the installed Codex sandbox independently of the historical version pin."""
     root = tmp_path / "benchmark"
     root.mkdir()
     subprocess.check_call(["/bin/cp", "-R", str(generated_workspace), str(root / "workspace")])
     spec = next(run for run in generate_matrix() if run.harness is Harness.CODEX)
+    monkeypatch.setattr(
+        "pi_harness_benchmark.prepare._verified_cli_version", lambda _spec, _argv: "test-only"
+    )
     manifest, _ = prepare_run(root, spec)
 
     assert "/usr/bin/sandbox-exec" not in manifest.launch_command
@@ -349,6 +353,16 @@ def test_cli_version_parser_rejects_substring_matches(monkeypatch: pytest.Monkey
 
     with pytest.raises(RuntimeError, match="version mismatch"):
         _verified_cli_version(spec, ["/fake/pi"])
+
+
+def test_codex_version_pin_still_rejects_current_host_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = next(run for run in generate_matrix() if run.harness is Harness.CODEX)
+    monkeypatch.setattr("pi_harness_benchmark.prepare.output", lambda _argv: "codex-cli 0.166.0")
+
+    with pytest.raises(RuntimeError, match=r"expected '0\.154\.0'.*0\.166\.0"):
+        _verified_cli_version(spec, ["/fake/codex"])
 
 
 def test_cli_version_parser_accepts_exact_semantic_version(monkeypatch: pytest.MonkeyPatch) -> None:
