@@ -1,7 +1,7 @@
 /**
  * Last known state of each session's top-level subagents, fed by pi-subagents'
  * lifecycle events on `pi.events`. A todo's free-text `owner` is matched
- * against an agent's id, `handle`, `name` or a reopened agent's previous id,
+ * against an agent's id, `handle`, `name`, `nameBase` or a reopened agent's previous id,
  * purely for display: nothing here reads or writes any todo list, so a child
  * session still cannot touch the parent's tasks.
  *
@@ -33,17 +33,24 @@ export const MAX_TRACKED_AGENTS = 256;
 // Per session, insertion order is update order: every write deletes then re-inserts.
 const sessions = new Map<string, Map<string, AgentEntry>>();
 
+/** pi-subagents' `MAX_HANDLE_LENGTH`; `ownerKey` must cut where `handleBase` does. */
+const MAX_KEY_LENGTH = 64;
+
 /**
- * The comparison key for an owner or an agent identity, slugged the way
- * pi-subagents' `handleBase` turns a spawner `name` into a handle, so the
- * owner `Auth Audit` or `@auth-audit` matches the payload `name` `auth-audit`.
+ * The comparison key for an owner or an agent identity, slugged exactly the way
+ * pi-subagents' `handleBase` turns a spawner `name` into a handle, so the owner
+ * `Auth Audit` or `@auth-audit` matches the payload `nameBase` `auth-audit`.
+ * Unlike `handleBase`, an empty slug is no key rather than `agent`.
+ * `agents.test.ts` pins the two against each other.
  */
-function key(value: unknown): string | undefined {
+export function ownerKey(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const slug = value
 		.toLowerCase()
 		.replace(/[^a-z0-9_-]+/g, "-")
-		.replace(/^-+|-+$/g, "");
+		.replace(/^-+|-+$/g, "")
+		.slice(0, MAX_KEY_LENGTH)
+		.replace(/-+$/, "");
 	return slug || undefined;
 }
 
@@ -80,8 +87,8 @@ export function applyAgentEvent(sessionId: string, channel: string, payload: unk
 	const predecessor = typeof data.previousId === "string" ? agents.get(data.previousId) : undefined;
 	// A later payload without a field keeps the identity an earlier one gave.
 	const keys = new Set([...(predecessor?.keys ?? []), ...(previous?.keys ?? [])]);
-	for (const value of [data.id, data.previousId, data.handle, data.name]) {
-		const k = key(value);
+	for (const value of [data.id, data.previousId, data.handle, data.name, data.nameBase]) {
+		const k = ownerKey(value);
 		if (k) keys.add(k);
 	}
 	if (typeof data.previousId === "string") agents.delete(data.previousId);
@@ -94,9 +101,13 @@ export function applyAgentEvent(sessionId: string, channel: string, payload: unk
 	return previous === undefined || previous.state !== state || previous.keys.size !== keys.size;
 }
 
-/** The state of `sessionId`'s most recently updated agent matching `owner`, by slugged id, handle, name or previous id. */
+/**
+ * The state of `sessionId`'s most recently updated agent matching `owner`, by slugged id,
+ * handle, name, `nameBase` or previous id. Most recent wins, so a retry spawned under the
+ * same name (`auth-audit-2`, `nameBase` `auth-audit`) shadows the failed first try.
+ */
 export function agentStateFor(sessionId: string, owner: string | undefined): AgentRunState | undefined {
-	const wanted = key(owner);
+	const wanted = ownerKey(owner);
 	const agents = sessions.get(sessionId);
 	if (!wanted || !agents) return undefined;
 	const entries = [...agents.values()];

@@ -84,7 +84,7 @@ describe("lifecycle event identity", () => {
 
     for (const name of LIFECYCLE) {
       const [event] = eventsNamed(pi, name);
-      expect(event, name).toMatchObject({ handle: "scout", name: "auth-audit" });
+      expect(event, name).toMatchObject({ handle: "scout", name: "auth-audit", nameBase: "auth-audit" });
     }
   });
 
@@ -125,5 +125,19 @@ describe("lifecycle event identity", () => {
     expect(failed).toMatchObject({ handle: "scout", status: "error" });
     expect(started).not.toHaveProperty("name");
     expect(failed).not.toHaveProperty("name");
+    expect(started).not.toHaveProperty("nameBase");
+  });
+
+  it("a retry under a name still held is numbered, with the unsuffixed nameBase", async () => {
+    const { pi } = await boot();
+    vi.mocked(runAgent).mockImplementation(runnerResolution({ hold: true }) as any);
+    const manager = (globalThis as any)[Symbol.for("pi-subagents:manager")];
+    const first = manager.spawn(pi, ctx(), "scout", "go", { description: "try", name: "Auth Audit" });
+    const retry = manager.spawn(pi, ctx(), "scout", "go", { description: "retry", name: "Auth Audit" });
+    await flush();
+
+    const started = eventsNamed(pi, "subagents:started");
+    expect(started.find((e: any) => e.id === first)).toMatchObject({ name: "auth-audit", nameBase: "auth-audit" });
+    expect(started.find((e: any) => e.id === retry)).toMatchObject({ name: "auth-audit-2", nameBase: "auth-audit" });
   });
 });

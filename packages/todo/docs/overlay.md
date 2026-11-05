@@ -45,13 +45,15 @@ snapshots are saved.
 - **Glyphs** — `○` pending, `◐` in_progress, `✓` completed, `⊖` deferred, `✗` deleted.
   Completed and deleted subjects render dim and struck through; deferred ones dim.
 - **Owner** — `@owner`, dim, right after the subject. When the owner equals the
-  id, `handle`, `name` or `previousId` of a top-level subagent that `pi-subagents`
+  id, `handle`, `name`, `nameBase` or `previousId` of a top-level subagent that `pi-subagents`
   reported to this session on `pi.events` (`subagents:started` / `completed` /
   `failed`), the agent's last
   known state follows: `running` (accent), `done` (success), `failed` (error) or
   `stopped` (muted). Both sides are slugged like a handle (case, a leading `@`,
   spaces and punctuation ignored, so `Auth Audit` matches `auth-audit`); free text
-  that matches no agent shows only `@owner`. Another session's agents never match,
+  that matches no agent shows only `@owner`. When several agents match, the most
+  recently updated wins, so a retry (`auth-audit-2`, `nameBase` `auth-audit`)
+  shadows its failed first try. Another session's agents never match,
   so `/new` or `/resume` starts with no states. An `in_progress` todo whose agent
   failed or stopped is marked in the error color, `✗ failed` or `✗ stopped`. The
   todo's own status never changes: the parent completes it with evidence.

@@ -185,6 +185,12 @@ export interface AgentRecord {
    * by its type and `@explore` never comes to mean "start another one".
    */
   alias?: string;
+  /**
+   * `handleBase(name)` before collision numbering: `auth-audit` for an alias of
+   * `auth-audit-2`. Announced as `nameBase` so a listener matching the spawner's
+   * `name` finds a retry rather than the failed first try still holding the name.
+   */
+  nameBase?: string;
   description: string;
   status: "queued" | "running" | "completed" | "steered" | "aborted" | "stopped" | "error";
   /**
