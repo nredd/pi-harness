@@ -177,8 +177,9 @@ function scanObjectLiteral(source: string, open: number): ScanResult {
  */
 function isRegexPosition(source: string, i: number): boolean {
   let j = i - 1;
-  while (j >= 0 && /\s/.test(source[j])) j--;
-  if (j < 0) return true;
+  // Never runs off the front: the scan starts at the literal's `{`, so the
+  // walk back always stops on it or something after it.
+  while (/\s/.test(source[j])) j--;
   const prev = source[j];
   // Identifier/number/closer before `/` means division.
   return !/[\w$)\]]/.test(prev);
@@ -311,7 +312,7 @@ export function workflowCallName(args: { script?: string; scriptPath?: string; n
   if (source === undefined || source === "") {
     // A path-only call would need a synchronous file read per rebuild to do
     // better than this, and the file name is what the author will recognize.
-    if (args.scriptPath !== undefined) return args.scriptPath.split(/[/\\]/).pop() ?? "workflow";
+    if (args.scriptPath !== undefined) return args.scriptPath.replace(/^[\s\S]*[/\\]/, "");
     // A saved workflow is already named by the caller; no read needed at all.
     return args.name !== undefined && args.name !== "" ? args.name : "workflow";
   }
