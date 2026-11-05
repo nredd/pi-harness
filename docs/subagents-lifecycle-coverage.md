@@ -55,10 +55,12 @@ Remaining lifecycle-owned gaps:
 | `AgentManager.enqueueStart` grant guard; `startResume` session guard; `cancel: () => {}` | 6/1 | `dequeue` withdraws budget waiters; resume requires a session and sweeps skip queued records; initial cancel is overwritten before use. |
 | `observeRun`, `let unsubscribe = () => {}` | 0/1 | Session subscription replaces the initial closure before publication. |
 | `FleetList.openSelected`, "no session available" | 2/0 | The openable roster requires a session for non-failure rows; no await separates selection from the guard. |
-| Workflow boundary `walk`, final non-object check | 1/0 | Earlier `typeof` branches exhaust non-object values. |
 
-These nine lines/two functions remain intact. Reachability conclusions concern
+These eight lines/two functions remain intact. Reachability conclusions concern
 the current call graph, not permission to remove guards or lower denominators.
+The workflow boundary `walk` final non-object check (1/0 here) was deleted in
+#411: every other `typeof` result is handled above it, and `kind satisfies "object"`
+now makes a new unhandled `typeof` result a `tsc` error instead.
 
 Reconciliation with #204 preserves its bounded diagnostic serialization: an unreadable
 thrown-value message getter settles with `Workflow threw an unreadable error.` and no

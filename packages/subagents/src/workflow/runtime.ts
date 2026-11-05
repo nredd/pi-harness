@@ -370,7 +370,8 @@ function walk(value: unknown, path: string, seen: Set<object>): void {
   if (kind === "bigint") throw boundaryError("a BigInt", path);
   if (kind === "symbol") throw boundaryError("a symbol", path);
   if (kind === "function") throw boundaryError("a function", path);
-  if (kind !== "object") throw boundaryError(`a ${kind}`, path);
+  // Every other `typeof` result is handled above; a new one fails `tsc` here.
+  kind satisfies "object";
 
   const object = value as object;
   if (seen.has(object)) throw boundaryError("a circular structure", path);
@@ -752,7 +753,6 @@ export async function runWorkflow(options: RunWorkflowOptions): Promise<Workflow
 
   return await new Promise<WorkflowRunResult>(resolve => {
     const emit = (entries: WorkflowEntry[]) => {
-      if (entries.length === 0) return;
       progress.push(...entries);
       options.onProgress?.(entries);
     };

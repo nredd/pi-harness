@@ -162,10 +162,8 @@ export function resolveWorkflowSource(
     try {
       return { ok: true, script: readFileSync(resolved, "utf-8"), path: resolved };
     } catch (err) {
-      return {
-        ok: false,
-        message: `Could not read workflow script "${resolved}": ${err instanceof Error ? err.message : String(err)}`,
-      };
+      // `readFileSync` only ever throws Node's own `Error`s.
+      return { ok: false, message: `Could not read workflow script "${resolved}": ${(err as Error).message}` };
     }
   }
   const name = ref.name?.trim();

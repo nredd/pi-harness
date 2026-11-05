@@ -51,6 +51,14 @@ export interface NewJobInput {
   quotaParked?: boolean;
 }
 
+/** What `start()` binds, captured by a fire so a later session switch cannot leak into it. */
+interface BoundSession {
+  store: ScheduleStore;
+  pi: ExtensionAPI;
+  ctx: ExtensionContext;
+  manager: AgentManager;
+}
+
 /** Optional in-process scheduling dependencies; omitted clock uses native time. */
 export interface SubagentSchedulerOptions {
   homeDir?: string;
@@ -138,7 +146,7 @@ export class SubagentScheduler {
     }
     const job = this.buildJob(input);
     store.add(job);
-    if (job.enabled) this.scheduleJob(job);
+    this.scheduleJob(job); // buildJob always creates an enabled job
     this.emit({ type: "added", job });
     return job;
   }
@@ -183,8 +191,7 @@ export class SubagentScheduler {
   // ── Scheduling primitives ────────────────────────────────────────────
 
   private scheduleJob(job: ScheduledSubagent): void {
-    const store = this.store;
-    if (!store) return;
+    const store = this.requireStore();
     try {
       if (job.scheduleType === "interval" && job.intervalMs) {
         const t = this.clock.setInterval(() => this.executeJob(job.id), job.intervalMs);
@@ -274,7 +281,7 @@ export class SubagentScheduler {
       void admission.then(block => {
         if (this.store !== store || this.ctx !== ctx) return;
         if (!block) {
-          this.spawnJob(id, selection);
+          this.spawnJob({ store, pi, ctx, manager }, id, selection);
         } else if (mayPark(block) && block.resetAt > this.clock.now()) {
           this.repark(id, block.resetAt);
         } else {
@@ -291,12 +298,15 @@ export class SubagentScheduler {
       });
       return;
     }
-    this.spawnJob(id, selection);
+    this.spawnJob({ store, pi, ctx, manager }, id, selection);
   }
 
-  /** Re-arm a quota-parked one-shot at a later reset instead of starting it. */
+  /**
+   * Re-arm a quota-parked one-shot at a later reset instead of starting it.
+   * A job removed while admission was pending stays removed: `updateJob` is a
+   * no-op for an unknown id.
+   */
   private repark(id: string, resetAt: number): void {
-    if (!this.store?.get(id)) return;
     this.updateJob(id, {
       enabled: true,
       schedule: new Date(resetAt + QUOTA_RESTART_GRACE_MS).toISOString(),
@@ -306,12 +316,7 @@ export class SubagentScheduler {
   }
 
   /** Spawn a fired job (bypassing the concurrency queue) and persist its outcome. */
-  private spawnJob(id: string, selection: ModelSelection): void {
-    const store = this.store;
-    const pi = this.pi;
-    const ctx = this.ctx;
-    const manager = this.manager;
-    if (!store || !pi || !ctx || !manager) return;
+  private spawnJob({ store, pi, ctx, manager }: BoundSession, id: string, selection: ModelSelection): void {
     const job = store.get(id);
     if (!job) return;
 
@@ -447,7 +452,8 @@ export class SubagentScheduler {
       new Cron(expr, () => {});
       return { valid: true };
     } catch (e) {
-      return { valid: false, error: e instanceof Error ? e.message : "Invalid cron expression" };
+      // Croner only throws Error subclasses (TypeError, RangeError).
+      return { valid: false, error: (e as Error).message };
     }
   }
 
