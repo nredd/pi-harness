@@ -138,7 +138,7 @@ Fire-and-forget is the intended use: the reply carries nothing to act on, and th
 
 Consumption is not terminal. An `@handle` steer un-consumes the record (the mention handler, `src/index.ts`) because the agent's reply to that message still needs relaying. A background resume (`AgentManager.resume`) does too, because the record is starting a new run, and so does handing a foreground agent to the background (`AgentManager.sendToBackground`), because its result now has to reach the parent as a notification.
 
-One related thing that lives nowhere else: on every top-level settle, pi-subagents writes a session entry — not an event — via `pi.appendEntry("subagents:record", …)` (the manager's completion callback, `src/index.ts`), carrying `id`, `type`, `description`, `status`, `result`, `error`, `startedAt` and `completedAt`. It exists for cross-extension history reconstruction. It is append-only history, not something to react to.
+One related thing that lives nowhere else: on every top-level settle of an agent that ran (not a queued stop, which never started), pi-subagents writes a session entry — not an event — via `pi.appendEntry("subagents:record", …)` (the manager's completion callback, `src/index.ts`), carrying `id`, `type`, `description`, `status`, `result`, `error`, `startedAt` and `completedAt`. It exists for cross-extension history reconstruction. It is append-only history, not something to react to.
 
 ## Steering a running agent
 
@@ -181,7 +181,7 @@ The consequence is worth stating plainly: **a session that excludes pi-subagents
 
 **Model fallback provenance on events.** The shared spawn path selects before `subagents:started`, even when the RPC names no model. An unresolved configured input runs on the parent, with `modelFallback` and `modelNote` present on `started`, `usage`, `compacted` and `completed`/`failed`. Each reads the same recorded provenance. Callers cannot forge it (see the stripped-fields table).
 
-One more trap on the way in: an RPC-spawned agent emits **no `subagents:created`**. The only three emit sites, all in `src/index.ts`, are the `Agent` tool's `run_in_background` branch, a detached resume (`startBackgroundResume`), and a foreground `Agent` call handed to the background with ctrl+b or the viewer's `b` (`sendForegroundToBackground`) — that one fires after the agent's `subagents:started`, as resume does. Your first event for your own agent is `subagents:started` (the manager's start callback), so key your bookkeeping off the id that `spawn` handed you, not off `subagents:created`.
+One more trap on the way in: an RPC-spawned agent emits **no `subagents:created`**. The only three emit sites, all in `src/index.ts`, are the `Agent` tool's `run_in_background` branch, a detached resume (`startBackgroundResume`), and a foreground `Agent` call handed to the background with ctrl+b or the viewer's `b` (`sendForegroundToBackground`) — that one fires after the agent's `subagents:started`, as resume does. Your first event for your own agent is normally `subagents:started` (the manager's start callback), so key your bookkeeping off the id that `spawn` handed you, not off `subagents:created`. The exception: an agent stopped while still queued (`subagents:rpc:stop`, `stop_subagent`, a session switch or quit) never starts, so `subagents:failed` with `status: "stopped"` and a `settleSeq` is its first and only event, with no completion notice (the manager's queued-stop callback). Resolve an outstanding spawn on `failed` whether or not you saw `started`.
 
 ## What the tests pin
 
