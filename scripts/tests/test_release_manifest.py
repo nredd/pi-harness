@@ -251,6 +251,16 @@ def stub_git_output(monkeypatch: pytest.MonkeyPatch, command: tuple[str, ...], s
     real = rm.run_git
 
     def run_git(repo_root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+        """Return the stubbed output for the intercepted command, delegating every other call to real Git.
+
+        Parameters:
+            repo_root (Path): Repository worktree.
+            *args (str): Arguments after `git -C <repo_root>`.
+            check (bool): Raise on a nonzero Git exit status.
+
+        Returns:
+            subprocess.CompletedProcess[str]: Stubbed or real captured Git output.
+        """
         if args == command:
             return subprocess.CompletedProcess([GIT, *args], 0, stdout, "")
         return real(repo_root, *args, check=check)
