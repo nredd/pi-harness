@@ -25,7 +25,9 @@ test("Linux backend lifecycle and platform contract", async () => {
 		"concurrent-requests",
 		"transactional-batching",
 	];
-	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-computer-use-linux-platform-"));
+	const tempDir = await fs.mkdtemp(
+		path.join(os.tmpdir(), "pi-computer-use-linux-platform-"),
+	);
 	const fakeHelper = path.join(tempDir, "linux-bridge");
 	await fs.writeFile(
 		fakeHelper,
@@ -50,10 +52,11 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 	process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH = fakeHelper;
 
 	try {
-		const [{ platformBackendForRuntime }, { LinuxHelperClient, linuxHelper }] = await Promise.all([
-			import("../src/platform/index.ts"),
-			import("../src/platform/linux/helper.ts"),
-		]);
+		const [{ platformBackendForRuntime }, { LinuxHelperClient, linuxHelper }] =
+			await Promise.all([
+				import("../src/platform/index.ts"),
+				import("../src/platform/linux/helper.ts"),
+			]);
 		linuxHelper.installChecked = true;
 		const linux = platformBackendForRuntime("linux");
 		assert.equal(linux.name, "linux");
@@ -78,7 +81,10 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		const ready = await linux.ensureReady({}, { lastPermissionCheckAt: 0 });
 		assert.equal(ready.helperDiagnostics?.protocolVersion, 4);
 		assert.equal((await linux.listApps())[0]?.appName, "google-chrome-stable");
-		assert.equal((await linux.listRoots({ title: "fixture" }))[0]?.rootRef, "root:1");
+		assert.equal(
+			(await linux.listRoots({ title: "fixture" }))[0]?.rootRef,
+			"root:1",
+		);
 		assert.equal((await linux.getFrontmost()).pid, 42);
 		assert.equal(
 			(
@@ -114,7 +120,13 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 			"worked",
 		);
 		assert.equal((await linux.actBatch([])).performed?.transaction, true);
-		assert.equal(await linux.openBrowserLocation({ appName: "firefox" }, "https://example.com"), true);
+		assert.equal(
+			await linux.openBrowserLocation(
+				{ appName: "firefox" },
+				"https://example.com",
+			),
+			true,
+		);
 		await linux.shutdown?.();
 
 		const concurrentHelper = path.join(tempDir, "concurrent-linux-bridge");
@@ -150,7 +162,9 @@ fs.chmodSync(process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH, 0o755);
 			setupHelperScript: installer,
 		});
 		const results = await Promise.all(
-			Array.from({ length: 24 }, (_, index) => concurrentClient.command("echo", { index })),
+			Array.from({ length: 24 }, (_, index) =>
+				concurrentClient.command("echo", { index }),
+			),
 		);
 		assert.deepEqual(
 			results.map((result) => result.index),
@@ -175,7 +189,10 @@ fs.chmodSync(process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH, 0o755);
 		 * @returns {Promise<string[]>} Nonempty lines, or an empty list when unreadable.
 		 * @throws {never} Missing/unreadable markers are intentionally treated as empty.
 		 */
-		const lines = async (file) => (await fs.readFile(file, "utf8").catch(() => "")).split("\n").filter(Boolean);
+		const lines = async (file) =>
+			(await fs.readFile(file, "utf8").catch(() => ""))
+				.split("\n")
+				.filter(Boolean);
 		let caseIndex = 0;
 		/**
 		 * Generate an executable protocol helper with observable starts/probes.
@@ -252,23 +269,49 @@ ${installs ? `const tmp = process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH + ".tmp"
 			await fs.copyFile(c.good, c.helper);
 			await fs.chmod(c.helper, 0o755);
 			const client = c.client();
-			const results = await Promise.all(Array.from({ length: 12 }, (_, index) => client.command("echo", { index })));
+			const results = await Promise.all(
+				Array.from({ length: 12 }, (_, index) =>
+					client.command("echo", { index }),
+				),
+			);
 			assert.deepEqual(
 				results.map((r) => r.index),
 				Array.from({ length: 12 }, (_, index) => index),
 			);
-			assert.equal((await lines(c.setupCount)).length, 0, "compatible cached helper must not run setup");
-			assert.equal((await lines(c.starts)).length, 1, "the probed helper is the live helper");
+			assert.equal(
+				(await lines(c.setupCount)).length,
+				0,
+				"compatible cached helper must not run setup",
+			);
+			assert.equal(
+				(await lines(c.starts)).length,
+				1,
+				"the probed helper is the live helper",
+			);
 			client.dispose();
 		}
 
 		for (const [label, writeStale] of [
-			["protocol 3", (c) => fs.writeFile(c.helper, helperScript({ protocol: 3, startFile: `${c.starts}.stale` }))],
+			[
+				"protocol 3",
+				(c) =>
+					fs.writeFile(
+						c.helper,
+						helperScript({ protocol: 3, startFile: `${c.starts}.stale` }),
+					),
+			],
 			[
 				"architecture version 2",
-				(c) => fs.writeFile(c.helper, helperScript({ architecture: 2, startFile: `${c.starts}.stale` })),
+				(c) =>
+					fs.writeFile(
+						c.helper,
+						helperScript({ architecture: 2, startFile: `${c.starts}.stale` }),
+					),
 			],
-			["non-executable-format file (ENOEXEC)", (c) => fs.writeFile(c.helper, "\u0000\u0001not an executable\n")],
+			[
+				"non-executable-format file (ENOEXEC)",
+				(c) => fs.writeFile(c.helper, "\u0000\u0001not an executable\n"),
+			],
 			["no file", async () => {}],
 		]) {
 			// Stale/broken/missing -> exactly one setup shared by all callers, then one re-probe and normal use.
@@ -276,30 +319,50 @@ ${installs ? `const tmp = process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH + ".tmp"
 			await writeStale(c);
 			if (label !== "no file") await fs.chmod(c.helper, 0o755);
 			const client = c.client();
-			const results = await Promise.all(Array.from({ length: 8 }, (_, index) => client.command("echo", { index })));
+			const results = await Promise.all(
+				Array.from({ length: 8 }, (_, index) =>
+					client.command("echo", { index }),
+				),
+			);
 			assert.deepEqual(
 				results.map((r) => r.index),
 				Array.from({ length: 8 }, (_, index) => index),
 				label,
 			);
-			assert.equal((await lines(c.setupCount)).length, 1, `${label}: one shared setup`);
+			assert.equal(
+				(await lines(c.setupCount)).length,
+				1,
+				`${label}: one shared setup`,
+			);
 			assert.match(
 				await fs.readFile(c.envFile, "utf8"),
-				new RegExp(`^${c.helper.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} --platform linux --runtime$`),
+				new RegExp(
+					`^${c.helper.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} --platform linux --runtime$`,
+				),
 				`${label}: setup targets the custom helper path`,
 			);
-			assert.equal((await lines(c.starts)).length, 1, `${label}: only the replacement good helper started`);
+			assert.equal(
+				(await lines(c.starts)).length,
+				1,
+				`${label}: only the replacement good helper started`,
+			);
 			client.dispose();
 		}
 
 		{
 			// Stale helper and setup unavailable: actionable error naming both causes; fixing it later recovers (retry).
 			const c = await makeCase({ installs: false });
-			await fs.writeFile(c.helper, helperScript({ protocol: 3, startFile: c.starts }));
+			await fs.writeFile(
+				c.helper,
+				helperScript({ protocol: 3, startFile: c.starts }),
+			);
 			await fs.chmod(c.helper, 0o755);
 			const client = c.client();
 			await assert.rejects(client.command("echo", {}), (error) => {
-				assert.match(error.message, /no prebuilt and PI_COMPUTER_USE_ALLOW_BUILD not set/);
+				assert.match(
+					error.message,
+					/no prebuilt and PI_COMPUTER_USE_ALLOW_BUILD not set/,
+				);
 				assert.match(
 					error.message,
 					/Installed Linux helper .* was rejected: Linux helper protocol mismatch: expected 4, got 3\./,
@@ -323,13 +386,20 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 		{
 			// Setup that "succeeds" but leaves an incompatible helper fails validation instead of looping.
 			const c = await makeCase();
-			await fs.writeFile(c.good, helperScript({ protocol: 3, startFile: c.starts }));
+			await fs.writeFile(
+				c.good,
+				helperScript({ protocol: 3, startFile: c.starts }),
+			);
 			const client = c.client();
 			await assert.rejects(
 				client.command("echo", {}),
 				/installed at .* failed validation: Linux helper protocol mismatch: expected 4, got 3\./,
 			);
-			assert.equal((await lines(c.setupCount)).length, 1, "no recursive or repeated setup within one attempt");
+			assert.equal(
+				(await lines(c.setupCount)).length,
+				1,
+				"no recursive or repeated setup within one attempt",
+			);
 			client.dispose();
 		}
 		/**
@@ -354,7 +424,10 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 		 * @throws {never} Probe failures are classified by `alive`.
 		 */
 		const settled = async (pid, timeoutMs = HELPER_SETTLE_TIMEOUT_MS) => {
-			for (const deadline = Date.now() + timeoutMs; alive(pid) && Date.now() < deadline; )
+			for (
+				const deadline = Date.now() + timeoutMs;
+				alive(pid) && Date.now() < deadline;
+			)
 				await new Promise(
 					/** @returns {NodeJS.Timeout} Schedules a bounded helper-exit probe. @throws {never} No errors. */
 					(r) => setTimeout(r, HELPER_POLL_INTERVAL_MS),
@@ -372,20 +445,38 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 			const [oldPid] = (await lines(c.starts)).map(Number);
 			await fs.rm(c.helper);
 			assert.equal((await client.command("echo", { again: 1 })).again, 1);
-			assert.equal((await lines(c.setupCount)).length, 1, "missing helper runs setup");
-			assert.equal((await lines(c.starts)).length, 2, "old child plus its replacement");
-			assert.equal(await settled(oldPid), true, `replaced helper ${oldPid} leaked`);
+			assert.equal(
+				(await lines(c.setupCount)).length,
+				1,
+				"missing helper runs setup",
+			);
+			assert.equal(
+				(await lines(c.starts)).length,
+				2,
+				"old child plus its replacement",
+			);
+			assert.equal(
+				await settled(oldPid),
+				true,
+				`replaced helper ${oldPid} leaked`,
+			);
 			client.dispose();
 		}
 
 		{
 			// A stale helper's rejection says nothing about restarting Pi: setup is about to replace it.
 			const c = await makeCase({ installs: false });
-			await fs.writeFile(c.helper, helperScript({ protocol: 3, startFile: c.starts }));
+			await fs.writeFile(
+				c.helper,
+				helperScript({ protocol: 3, startFile: c.starts }),
+			);
 			await fs.chmod(c.helper, 0o755);
 			await assert.rejects(c.client().command("echo", {}), (error) => {
 				assert.doesNotMatch(error.message, /Restart Pi/);
-				assert.match(error.message, /was rejected: Linux helper protocol mismatch: expected 4, got 3\./);
+				assert.match(
+					error.message,
+					/was rejected: Linux helper protocol mismatch: expected 4, got 3\./,
+				);
 				return true;
 			});
 		}
@@ -432,8 +523,16 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 				/** @returns {NodeJS.Timeout} Bounds the forbidden-restart observation window. @throws {never} No errors. */
 				(resolve) => setTimeout(resolve, DISPOSE_NO_RESTART_WINDOW_MS),
 			);
-			assert.equal((await lines(c.setupCount)).length, 0, "dispose must not trigger setup");
-			assert.equal((await lines(c.starts)).length, 1, "dispose must not start a second helper");
+			assert.equal(
+				(await lines(c.setupCount)).length,
+				0,
+				"dispose must not trigger setup",
+			);
+			assert.equal(
+				(await lines(c.starts)).length,
+				1,
+				"dispose must not start a second helper",
+			);
 			assert.equal(client.child, undefined, "no child assigned after dispose");
 			assert.equal(await settled(pid), true, "probe child killed by dispose");
 		}
@@ -447,19 +546,38 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 			const [pid] = (await lines(c.starts)).map(Number);
 			client.dispose();
 			assert.equal(await settled(pid), true);
-			await assert.rejects(client.command("echo", {}), /closed because the Pi session ended/);
-			await assert.rejects(client.ensureInstalled(), /closed because the Pi session ended/);
-			await assert.rejects(client.install(), /closed because the Pi session ended/);
+			await assert.rejects(
+				client.command("echo", {}),
+				/closed because the Pi session ended/,
+			);
+			await assert.rejects(
+				client.ensureInstalled(),
+				/closed because the Pi session ended/,
+			);
+			await assert.rejects(
+				client.install(),
+				/closed because the Pi session ended/,
+			);
 			await assert.rejects(client.probe(), /closed because the Pi session ended/);
-			await assert.rejects(client.startProcess(), /closed because the Pi session ended/);
-			assert.equal((await lines(c.starts)).length, 1, "no helper started after dispose");
+			await assert.rejects(
+				client.startProcess(),
+				/closed because the Pi session ended/,
+			);
+			assert.equal(
+				(await lines(c.starts)).length,
+				1,
+				"no helper started after dispose",
+			);
 			assert.equal(client.child, undefined, "no child assigned after dispose");
 		}
 
 		{
 			// dispose() drops the shared install promise so nothing can join an old-generation install.
 			const c = await makeCase();
-			await fs.writeFile(c.setup, `setInterval(() => {}, ${HANGING_SETUP_INTERVAL_MS});\n`); // setup hangs
+			await fs.writeFile(
+				c.setup,
+				`setInterval(() => {}, ${HANGING_SETUP_INTERVAL_MS});\n`,
+			); // setup hangs
 			const client = c.client();
 			const waiter = client.command("echo", {}).then(
 				() => "resolved",
@@ -475,7 +593,11 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 				);
 			assert.ok(client.installPromise, "install in flight");
 			client.dispose();
-			assert.equal(client.installPromise, undefined, "dispose must drop the shared install promise");
+			assert.equal(
+				client.installPromise,
+				undefined,
+				"dispose must drop the shared install promise",
+			);
 			assert.match(await waiter, /closed because the Pi session ended|aborted/);
 		}
 
@@ -483,12 +605,24 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 			// Session shutdown, through the real backend: the old client is disposed and the next session's first command works.
 			const helperModule = await import("../src/platform/linux/helper.ts");
 			const before = helperModule.linuxHelper;
-			assert.equal((await linux.listApps())[0]?.appName, "google-chrome-stable", "first session command");
+			assert.equal(
+				(await linux.listApps())[0]?.appName,
+				"google-chrome-stable",
+				"first session command",
+			);
 			assert.ok(before.child, "the session's helper is live before shutdown");
 			await linux.shutdown?.();
 			const after = helperModule.linuxHelper;
-			assert.notEqual(after, before, "shutdown must install a replacement client");
-			assert.equal(before.child, undefined, "old client's helper killed by shutdown");
+			assert.notEqual(
+				after,
+				before,
+				"shutdown must install a replacement client",
+			);
+			assert.equal(
+				before.child,
+				undefined,
+				"old client's helper killed by shutdown",
+			);
 			await assert.rejects(
 				before.command("listRoots", {}),
 				/closed because the Pi session ended/,
