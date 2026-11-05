@@ -67,8 +67,7 @@ function headerPaths(line: string): { oldPath: string; newPath: string } {
 }
 
 function finishFile(lines: string[], overflow: { lines: number } | undefined, capBytes: number): DiffFile {
-	const first = lines[0] ?? "";
-	const hdr = headerPaths(first);
+	const hdr = headerPaths(lines[0] as string);
 	let status: FileStatus = "modified";
 	let oldPath = hdr.oldPath;
 	let newPath = hdr.newPath;

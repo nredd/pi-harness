@@ -339,7 +339,7 @@ function acquireSweepGuard(path: string): (() => void) | undefined {
 		try {
 			const files = readdirSync(guard);
 			if (files.length !== 1) return undefined;
-			const match = /^(\d+)\.([a-f0-9-]+)$/.exec(files[0] ?? "");
+			const match = /^(\d+)\.([a-f0-9-]+)$/.exec(files[0] as string);
 			return match && Number(match[1]) > 0 ? { pid: Number(match[1]), token: match[2] as string } : undefined;
 		} catch {
 			return undefined;

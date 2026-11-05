@@ -80,7 +80,6 @@ export function runGit(
 			killTree(pid, "SIGTERM");
 			timers.push(
 				setTimeout(() => {
-					if (done) return;
 					killTree(pid, "SIGKILL");
 					escalated = true;
 					if (closed) finish(child.exitCode);
@@ -121,7 +120,7 @@ export type LoadResult =
 const BAD_REF = /^(-|$)|[\s\0]/;
 
 function firstLine(text: string): string {
-	return text.trim().split("\n")[0] ?? "";
+	return text.trim().replace(/\n[\s\S]*$/, "");
 }
 
 /** Resolve the repo root, or explain why this is not a usable work tree. */

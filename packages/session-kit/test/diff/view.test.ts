@@ -45,6 +45,7 @@ describe("window", () => {
 	it("pans by columns and never splits a wide char", () => {
 		expect(window("abcdef", 2, 3)).toBe("cde");
 		expect(window("abc", 5, 4)).toBe("    ");
+		expect(window("abc", 0, 0)).toBe("");
 		for (let from = 0; from < 8; from++) expect(visibleWidth(window("\u4e2d\u6587\u4e2d\u6587abc", from, 5))).toBe(5);
 	});
 });
@@ -56,6 +57,7 @@ describe("fitPathLeft", () => {
 		expect(out.startsWith("\u2026")).toBe(true);
 		expect(out.trimEnd().endsWith("file.ts")).toBe(true);
 		expect(visibleWidth(fitPathLeft("x", 1))).toBe(1);
+		expect(fitPathLeft("long/path.ts", 1)).toBe("\u2026");
 		expect(fitPathLeft("anything", 0)).toBe("");
 	});
 });

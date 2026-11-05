@@ -9,11 +9,13 @@ import {
 	DEFAULT_COLLAPSE_KEY,
 	DEFAULT_MAX_WIDGET_LINES,
 	defaultConfig,
+	FEATURES,
 	isValidKeySpec,
 	loadConfig,
 	parseConfig,
 	resolveCollapseKey,
 } from "../src/config.ts";
+import { createSessionKit } from "../src/index.ts";
 import { fakePi } from "./goal/fake-pi.ts";
 
 vi.mock("node:os", async (importOriginal) => {
@@ -48,6 +50,7 @@ describe("parseConfig", () => {
 	it("preserves malformed titles.model values for fail-closed resolution", () => {
 		expect(parseConfig({ titles: { model: "nope" } }).titleModel).toBe("nope");
 		expect(parseConfig({ titles: { model: "" } }).titleModel).toBe("");
+		expect(parseConfig({ titles: { model: 5 } }).titleModel).toBeUndefined();
 	});
 	it("returns defaults for non-objects and a missing file", () => {
 		expect(parseConfig(null)).toEqual(defaultConfig());
@@ -133,5 +136,16 @@ describe("loadConfig failure paths", () => {
 		expect(loadConfig(mkdtempSync(join(tmpdir(), "kit-config-")))).toEqual(defaultConfig());
 		expect(err).toHaveBeenCalledWith(expect.stringContaining("cannot read"));
 		err.mockRestore();
+	});
+});
+
+describe("createSessionKit", () => {
+	it("loads the agent directory's config when none is injected and registers only enabled features", () => {
+		const dir = mkdtempSync(join(tmpdir(), "kit-agent-"));
+		const disabled = Object.fromEntries(FEATURES.map((feature) => [feature, { enabled: feature === "diff" }]));
+		writeFileSync(join(dir, "pi-session-kit.json"), JSON.stringify(disabled));
+		const fake = fakePi();
+		createSessionKit({ agentDir: dir })(fake.pi);
+		expect([...fake.commands.keys()]).toEqual(["diff"]);
 	});
 });

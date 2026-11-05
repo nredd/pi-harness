@@ -28,6 +28,7 @@ describe("SubagentTracker", () => {
 		const bus = new FakeBus();
 		const tracker = new SubagentTracker();
 		tracker.attach(bus);
+		bus.emit("subagents:created", { id: "fg", isBackground: false });
 		bus.emit("subagents:started", { id: "fg" });
 		bus.emit("subagents:failed", { id: "fg" });
 		expect(tracker.busy()).toBe(0);
@@ -50,6 +51,8 @@ describe("SubagentTracker", () => {
 		tracker.attach(bus);
 		bus.emit("subagents:started", {});
 		bus.emit("subagents:started", null);
+		bus.emit("subagents:created", { isBackground: true });
+		bus.emit("subagents:completed", { id: 7 });
 		expect(tracker.busy()).toBe(0);
 		bus.emit("subagents:started", { id: "a" });
 		tracker.dispose();

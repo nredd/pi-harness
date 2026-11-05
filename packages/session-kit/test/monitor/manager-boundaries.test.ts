@@ -1,7 +1,8 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MonitorManager } from "../../src/monitor/manager.ts";
+import { COALESCE_MS, MonitorManager } from "../../src/monitor/manager.ts";
+import { rootDir } from "../../src/monitor/pidfiles.ts";
 import type { MonitorProcess, SpawnOptions } from "../../src/monitor/process.ts";
 import type { MonitorMessage } from "../../src/monitor/types.ts";
 import { ControlledProcess, ControlledProcesses, deferred, FakeClock } from "../scenarios/support.ts";
@@ -176,6 +177,52 @@ describe("monitor manager spawn failure outcomes", () => {
 		await mgr.dispose();
 		expect(process.listeners("exit")).not.toContain(backstop);
 		expect(existsSync(pidfile(running.id))).toBe(false);
+		expect(clock.pending).toBe(0);
+	});
+});
+
+describe("monitor manager lookups and stop races", () => {
+	it("records under the default per-user root when none is injected", async () => {
+		vi.stubEnv("TMPDIR", tmp.dir);
+		try {
+			const mgr = manager({ root: undefined });
+			await mgr.start({ argv: ["fixture"], name: "default-root" }, tmp.dir);
+			expect(existsSync(pidfile("m1", rootDir()))).toBe(true);
+			await mgr.dispose();
+			expect(existsSync(pidfile("m1", rootDir()))).toBe(false);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("answers info by id or name and nothing for an unknown monitor", async () => {
+		const mgr = manager();
+		await mgr.start({ argv: ["fixture"], name: "known" }, tmp.dir);
+		expect(mgr.info("known")).toMatchObject({ id: "m1", status: "running" });
+		expect(mgr.info("m9")).toBeUndefined();
+	});
+
+	it("terminates once for concurrent stops and returns a finished monitor without signaling it", async () => {
+		const mgr = manager();
+		await mgr.start({ argv: ["fixture"], name: "w" }, tmp.dir);
+		const child = processes.last;
+		const [first, second] = await Promise.all([mgr.stop("w"), mgr.stop("m1")]);
+		expect(child.terminations).toHaveLength(1);
+		expect(first).toMatchObject({ status: "stopped" });
+		expect(second).toMatchObject({ status: "stopped" });
+		expect(await mgr.stop("w")).toMatchObject({ status: "stopped" });
+		expect(child.terminations).toHaveLength(1);
+		expect(sent).toEqual([]);
+	});
+
+	it("drops a matched batch whose coalescing window closes during shutdown", async () => {
+		const mgr = manager();
+		await mgr.start({ argv: ["fixture"], name: "w", match: "ERROR" }, tmp.dir);
+		void processes.last.stdout("ERROR one\n");
+		const disposing = mgr.dispose();
+		clock.advance(COALESCE_MS);
+		await disposing;
+		expect(sent).toEqual([]);
 		expect(clock.pending).toBe(0);
 	});
 });

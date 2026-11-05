@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig } from "../../src/config.ts";
 import { MESSAGE_TYPE, register, TOOL_NAMES } from "../../src/monitor/index.ts";
 import { psInfo, rootDir, writePidfile } from "../../src/monitor/pidfiles.ts";
+import { ControlledProcesses, FakeClock } from "../scenarios/support.ts";
 import { alive, cleanupProcs, deadPid, spawnSleeper, tempDir, waitFor } from "./helpers.ts";
 import { STAY } from "./stay.ts";
 
@@ -302,5 +303,66 @@ describe("monitor extension", () => {
 		await waitFor(() => !alive(dead.pid));
 		expect(alive(live.pid)).toBe(true);
 		await f.emit("session_shutdown", fakeCtx());
+	});
+});
+
+describe("monitor extension with controlled children", () => {
+	async function boot() {
+		const f = fakePi();
+		const clock = new FakeClock(0);
+		const children = new ControlledProcesses(clock);
+		register(f.pi, defaultConfig(), tmp.dir, { clock, spawnMonitor: children.spawn });
+		const ctx = fakeCtx();
+		await f.emit("session_start", ctx);
+		const start = (params: Record<string, unknown>) =>
+			f.tools.get("monitor_start").execute("1", params, undefined, undefined, ctx);
+		return { f, ctx, clock, children, start, cmd: f.commands.get("monitor") };
+	}
+
+	it("is unavailable before a session starts, without throwing", async () => {
+		const f = fakePi();
+		register(f.pi, defaultConfig());
+		const ctx = fakeCtx();
+		for (const [name, params] of [
+			["monitor_read", { id: "m1" }],
+			["monitor_stop", { id: "m1" }],
+		] as const) {
+			expect(await f.tools.get(name).execute("1", params, undefined, undefined, ctx)).toEqual({
+				content: [{ type: "text", text: "monitors are not available in this session" }],
+				details: undefined,
+				isError: true,
+			});
+		}
+		expect(
+			f.commands
+				.get("monitor")
+				.getArgumentCompletions("")
+				.map((c: Any) => c.value),
+		).toEqual(["list", "stop all"]);
+	});
+
+	it("describes exit codes, unknown codes and match triggers in /monitor list", async () => {
+		const { f, ctx, clock, children, start, cmd } = await boot();
+		await start({ argv: ["fixture"], name: "ok", match: "PASS" });
+		const ok = children.last;
+		await start({ argv: ["fixture"], name: "odd", wake: true });
+		const odd = children.last;
+		clock.advance(5_000);
+		ok.exit(0);
+		odd.exit(null);
+		await waitFor(() => f.sendMessage.mock.calls.length === 2);
+		expect(f.sendMessage.mock.calls.map(([, options]: Any[]) => options)).toEqual([
+			{ triggerTurn: true, deliverAs: "followUp" },
+			{ triggerTurn: true, deliverAs: "followUp" },
+		]);
+		await cmd.handler("stop all", ctx);
+		expect(ctx.ui.notify).toHaveBeenLastCalledWith("no running monitors", "info");
+		await cmd.handler("list", ctx);
+		expect(ctx.ui.notify.mock.calls.at(-1)?.[0]).toBe(
+			[
+				'm1 "ok" exited (code 0) after 5s, 0 lines, pid 900000, match /PASS/: fixture',
+				'm2 "odd" exited (code ?) after 5s, 0 lines, pid 900001, wake: fixture',
+			].join("\n"),
+		);
 	});
 });
