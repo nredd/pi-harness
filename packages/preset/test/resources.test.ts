@@ -95,18 +95,26 @@ test("agents carry no model or logical-role references (strict roles are not imp
 /** A tier reference, the only `model` value a skill or agent may name (#364, #501). */
 const TIER_REF = /^@[a-z0-9][a-z0-9._-]*$/;
 /**
- * Every `model` key's value, in YAML, JSON or call form (`model: x`, `"model": "x"`, `model = x`),
- * quotes or backticks stripped. A quoted value keeps its spaces; an empty value is returned as "".
+ * Every `model`-like key's value (`model`, `models`, `*_model`, any case), in YAML, JSON or call form
+ * (`model: x`, `"model": "x"`, `model = x`, `models: [x]`), quotes or backticks stripped. A quoted value
+ * keeps its spaces; an empty value is returned as "".
  */
 const modelValues = (text: string): string[] =>
-	[...text.matchAll(/["'`]?\bmodel["'`]?[ \t]*[:=][ \t]*(?:"([^"\n]*)"|'([^'\n]*)'|`([^`\n]*)`|([^\s,;)}\]]*))/g)].map(
-		([, double, single, tick, bare]) => double ?? single ?? tick ?? bare ?? "",
-	);
+	[
+		...text.matchAll(
+			/["'`]?\b(?:\w*_)?models?["'`]?[ \t]*[:=][ \t]*\[?[ \t]*(?:"([^"\n]*)"|'([^'\n]*)'|`([^`\n]*)`|([^\s,;)}\]]*))/gi,
+		),
+	].map(([, double, single, tick, bare]) => double ?? single ?? tick ?? bare ?? "");
 /**
  * Provider-qualified refs and model-id tokens: the bindings live in router/manifest config, never here.
  * Kept in step with the copy in `packages/subagents/test/agent-types.test.ts`.
  */
-const MODEL_ID_LEAKS = [/\b[a-z][\w-]*\/[\w.-]+/g, /\bclaude-[\w.-]*\d/g, /\bgpt-\d/g];
+const MODEL_ID_LEAKS = [
+	/\b[a-z][\w-]*\/[\w.-]+/gi,
+	/\bclaude-(?!code\b)[\w.-]+/gi,
+	/\bgpt-\d/gi,
+	/\b(?:gemini|o\d)-[\w.-]*/gi,
+];
 /** Slash-joined prose and tool selectors the preset text uses today; anything else `a/b` must be reviewed here. */
 const NON_MODEL_SLASHES = new Set([
 	"async/await",
@@ -135,6 +143,7 @@ const NON_MODEL_SLASHES = new Set([
 	"publish/deploy.",
 	"py_test/cargo_test.",
 	"red/green",
+	"Result/Option",
 	"release/deploy",
 	"shell/ssh",
 	"unwrap/expect",
@@ -169,6 +178,15 @@ test("skills and agents name tiers, never models", () => {
 		"model = 'sonnet'",
 		"Prefer claude-3-5-sonnet.",
 		"Prefer google/gemini-3-pro.",
+		"Prefer GPT-6.",
+		"Prefer Anthropic/Claude-Opus.",
+		"Prefer OpenAI/GPT-6.",
+		"Prefer gemini-3-pro.",
+		"Prefer o4-mini.",
+		"Prefer claude-fable.",
+		"Model: opus",
+		"models: [opus]",
+		"subagent_model: opus",
 	])
 		assert.notDeepEqual(modelLeaks(`${ship}\n${planted}\n`), [], planted);
 	assert.deepEqual(

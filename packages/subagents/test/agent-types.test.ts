@@ -76,7 +76,12 @@ describe("agent type registry", () => {
 
     it("default agents name tiers, never models", () => {
       // Kept in step with `MODEL_ID_LEAKS` in `packages/preset/test/resources.test.ts`.
-      const leaks = [/\b[a-z][\w-]*\/[\w.-]+/g, /\bclaude-[\w.-]*\d/g, /\bgpt-\d/g];
+      const leaks = [
+        /\b[a-z][\w-]*\/[\w.-]+/gi,
+        /\bclaude-(?!code\b)[\w.-]+/gi,
+        /\bgpt-\d/gi,
+        /\b(?:gemini|o\d)-[\w.-]*/gi,
+      ];
       // Path examples in the built-in prompts, not provider refs.
       const paths = new Set(["src/components", "absolute/path", "to/file.ts"]);
       for (const [name, config] of DEFAULT_AGENTS) {
