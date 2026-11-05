@@ -96,6 +96,8 @@ def test_pool_capacity_needs_a_live_beat_and_a_trusted_event() -> None:
     assert runner_pools.pool_capacity(beats, NOW, trusted=True) == {"pi-linux": 2}
     assert runner_pools.pool_capacity(beats, NOW, trusted=False) == {}
     assert runner_pools.pool_capacity({"pi-linux": f"{FRESH}:0"}, NOW, trusted=True) == {"pi-linux": 0}
+    assert runner_pools.pool_capacity({}, NOW, trusted=True) == {}
+    assert runner_pools.pool_capacity({"other": FRESH}, NOW, trusted=True) == {}
 
 
 @pytest.mark.parametrize(
@@ -113,8 +115,48 @@ def test_a_queue_depth_pool_allows_one_waiting_cell_and_no_more(beat: str, capac
     """The macOS pool lets one cell wait beyond its free slots; the backlog the pool reports caps it."""
     got = runner_pools.pool_capacity({"pi-macos": beat}, NOW, trusted=True)
     assert got.get("pi-macos") == capacity
-    assert runner_pools.POOLS["pi-macos"].queue_depth == 1
-    assert runner_pools.POOLS["pi-linux"].queue_depth == 0
+
+
+def test_assign_cells_gives_a_pool_one_cell_beyond_its_free_slots(table: dict[Any, int]) -> None:
+    """With the pool full (capacity 1 from depth alone), the longest macOS cell queues; no more."""
+    running = [("owned", "macos-14", "ts"), ("owned", "macos-14", "python")]
+    full = runner_pools.pool_capacity({"pi-macos": f"{FRESH}:0"}, NOW, trusted=True)
+    assert runner_pools.assign_cells(running, full) == {("owned", "macos-14", "ts"): "pi-macos"}
+    backlog = runner_pools.pool_capacity({"pi-macos": f"{FRESH}:-1"}, NOW, trusted=True)
+    assert runner_pools.assign_cells(running, backlog) == {}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        f"{FRESH}: drain",
+        f"{FRESH}:DRAIN",
+        f"+{FRESH}:2",
+        f"{FRESH}:+2",
+        f"{FRESH}:1_0",
+        f"{FRESH}:2.0",
+        f"{FRESH}:٣",
+        f"{FRESH}:2:3",
+        f"{FRESH}::",
+        ":2",
+        f"{FRESH}:-",
+        f"-{FRESH}",
+    ],
+)
+def test_malformed_beats_are_down_for_routing_and_the_rescue_alike(value: str) -> None:
+    """One strict grammar: anything a writer never sends is down, and both consumers agree."""
+    assert not runner_pools.is_fresh(value, NOW)
+    assert not runner_pools.pool_is_up(value, NOW)
+    assert runner_pools.free_slots(value, NOW, LINUX) is None
+
+
+def test_parse_beat_reads_the_three_forms_and_tolerates_surrounding_whitespace() -> None:
+    """A plain epoch, an epoch with a signed count, and an epoch with `drain`."""
+    assert runner_pools.parse_beat("123") == (123, None)
+    assert runner_pools.parse_beat("123:2") == (123, 2)
+    assert runner_pools.parse_beat("123:-4") == (123, -4)
+    assert runner_pools.parse_beat(" 123:drain\n") == (123, "drain")
+    assert runner_pools.parse_beat("") is None
 
 
 def test_pool_is_up_means_fresh_and_not_draining() -> None:
@@ -124,8 +166,6 @@ def test_pool_is_up_means_fresh_and_not_draining() -> None:
     assert not runner_pools.pool_is_up(f"{FRESH}:drain", NOW)
     assert not runner_pools.pool_is_up("0", NOW)
     assert not runner_pools.pool_is_up(str(int(NOW) - 500), NOW)
-    assert runner_pools.pool_capacity({}, NOW, trusted=True) == {}
-    assert runner_pools.pool_capacity({"other": FRESH}, NOW, trusted=True) == {}
 
 
 def test_parse_heartbeats_accepts_values_and_rejects_typos() -> None:

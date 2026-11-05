@@ -17,6 +17,7 @@ References:
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
@@ -72,37 +73,48 @@ MIN_HEAVY_S = 240
 
 DRAINING = "drain"
 
+# The one grammar of a heartbeat value, ASCII only: `<epoch>`, `<epoch>:<free>` (free may be negative) or
+# `<epoch>:drain`. `int()` alone also takes `+3`, `1_0`, padded text and non-ASCII digits, which a writer
+# never sends; anything else is garbled, and routing and the rescue must agree on that.
+BEAT = re.compile(r"(?P<epoch>[0-9]+)(?::(?P<free>-?[0-9]+|drain))?", re.ASCII)
 
-def _split_beat(value: str) -> tuple[str, str | None]:
-    """Split a heartbeat value into its epoch and optional free-slot parts.
+
+def parse_beat(value: str) -> tuple[int, int | str | None] | None:
+    """Parse a heartbeat value with the strict grammar.
 
     Parameters:
-        value (str): `<epoch>`, `<epoch>:<free>` or `<epoch>:drain`.
+        value (str): The variable's value, surrounding whitespace allowed (as GitHub may store it).
 
     Returns:
-        tuple[str, str | None]: The epoch text and the free-slot text, None when absent.
+        tuple[int, int | str | None] | None: `(epoch, free)` where free is None for a plain epoch, an int,
+            or `DRAINING`; None when the value does not match, which counts as down.
     """
-    epoch, sep, free = value.strip().partition(":")
-    return epoch, free if sep else None
+    match = BEAT.fullmatch(value.strip())
+    if match is None:
+        return None
+    free = match["free"]
+    if free is None:
+        return int(match["epoch"]), None
+    return int(match["epoch"]), free if free == DRAINING else int(free)
 
 
 def is_fresh(value: str, now: float, ttl_s: int = HEARTBEAT_TTL_S) -> bool:
     """Return whether a heartbeat value says its pool is up.
 
     Parameters:
-        value (str): The variable's value; `<epoch>`, `<epoch>:<free>`, `0`, empty or garbage.
+        value (str): The variable's value; `<epoch>`, `<epoch>:<free>`, `<epoch>:drain`, `0`, empty or
+            garbage.
         now (float): Current epoch seconds.
         ttl_s (int): Maximum age in seconds.
 
     Returns:
-        bool: True for a positive integer epoch that is neither older than `ttl_s` nor ahead by more than
-            the skew allowance. The free-slot part is not judged here.
+        bool: True for a well-formed value whose epoch is positive and neither older than `ttl_s` nor ahead
+            by more than the skew allowance.
     """
-    try:
-        beat = int(_split_beat(value)[0])
-    except ValueError:
+    parsed = parse_beat(value)
+    if parsed is None:
         return False
-    return beat > 0 and -CLOCK_SKEW_S <= now - beat <= ttl_s
+    return parsed[0] > 0 and -CLOCK_SKEW_S <= now - parsed[0] <= ttl_s
 
 
 def pool_is_up(value: str, now: float) -> bool:
@@ -116,9 +128,10 @@ def pool_is_up(value: str, now: float) -> bool:
         now (float): Current epoch seconds.
 
     Returns:
-        bool: True for a fresh beat that is not `<epoch>:drain`.
+        bool: True for a well-formed, fresh beat that is not `<epoch>:drain`.
     """
-    return is_fresh(value, now) and _split_beat(value)[1] != DRAINING
+    parsed = parse_beat(value)
+    return parsed is not None and is_fresh(value, now) and parsed[1] != DRAINING
 
 
 def free_slots(value: str, now: float, pool: Pool) -> int | None:
@@ -135,15 +148,13 @@ def free_slots(value: str, now: float, pool: Pool) -> int | None:
             is negative when more jobs wait than the pool can start, which is how a run knows the
             queue is already deep.
     """
-    if not pool_is_up(value, now):
+    parsed = parse_beat(value)
+    if parsed is None or not pool_is_up(value, now):
         return None
-    free = _split_beat(value)[1]
+    free = parsed[1]
     if free is None:
         return min(1, pool.slots)
-    try:
-        return min(int(free), pool.slots)
-    except ValueError:
-        return None
+    return min(int(free), pool.slots)
 
 
 def parse_heartbeats(items: Sequence[str]) -> dict[str, str]:
@@ -192,15 +203,16 @@ def pool_capacity(heartbeats: Mapping[str, str], now: float, *, trusted: bool) -
 
 
 def assign_cells(running: Iterable[CellKey], capacity: Mapping[str, int]) -> dict[CellKey, str]:
-    """Hand the longest running cells to the pools that have free slots.
+    """Hand the longest running cells to the pools that will take them.
 
     Parameters:
         running (Iterable[CellKey]): Cells this run actually executes, with their full work.
-        capacity (Mapping[str, int]): Pool name -> free slots, from `pool_capacity`.
+        capacity (Mapping[str, int]): Pool name -> cells it will take, from `pool_capacity` (free
+            slots plus its queue depth).
 
     Returns:
         dict[CellKey, str]: Cell -> pool for each cell sent to a pool. Cells that are short, unlisted, on an
-            OS with no pool, or past a pool's free slots stay hosted.
+            OS with no pool, or past a pool's capacity stay hosted.
     """
     free = dict(capacity)
     heavy = sorted(
