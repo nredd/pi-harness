@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { access } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -316,7 +316,7 @@ const runtimeState: RuntimeState = {
 
 const savedStates = new SavedStates();
 /** Test seam: lets scripts run bridge internals inside an operation state. */
-export const testing = { runInOperation: <T>(fn: () => T, state: OperationState = {}): T => savedStates.operations.run(state, fn), buildToolResult, browserObservationResult, waitForViewText, performSearchUi };
+export const testing = { runInOperation: <T>(fn: () => T, state: OperationState = {}): T => savedStates.operations.run(state, fn), buildToolResult, browserObservationResult, waitForViewText, performSearchUi, performLaunchBrowser };
 let resourceScheduler = new ResourceScheduler();
 
 function operationState(): OperationState {
@@ -2256,7 +2256,9 @@ async function performLaunchBrowser(params: LaunchBrowserParams, signal?: AbortS
 	const requestedUrl = trimOrUndefined(params.url);
 	if (requestedUrl && !/^https?:\/\//i.test(requestedUrl)) throw new Error("launch_browser.url must be an absolute HTTP(S) URL.");
 	const url = requestedUrl ?? "about:blank";
-	const profileDir = path.join(os.tmpdir(), `pi-${browser}-cdp-${port}`);
+	// A fixed name in a shared temp dir can be owned or pre-seeded by another account, so each
+	// launch gets a private profile dir that lives exactly as long as its browser process.
+	const profileDir = await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`));
 	disconnectCdp();
 	runtimeState.managedBrowser?.kill("SIGTERM");
 	const args = [
@@ -2269,7 +2271,17 @@ async function performLaunchBrowser(params: LaunchBrowserParams, signal?: AbortS
 	if (runtimeState.previousCdpPort === undefined && runtimeState.managedBrowserCdpPort === undefined) {
 		runtimeState.previousCdpPort = process.env.PI_COMPUTER_USE_CDP_PORT;
 	}
-	const managedBrowser = spawn(executable, args, { stdio: "ignore", detached: false });
+	let managedBrowser: ChildProcess;
+	try {
+		managedBrowser = spawn(executable, args, { stdio: "ignore", detached: false });
+	} catch (error) {
+		await rm(profileDir, { recursive: true, force: true });
+		throw error;
+	}
+	// `close` also fires after an async spawn failure, so the profile never outlives the process.
+	managedBrowser.once("close", () => {
+		void rm(profileDir, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
+	});
 	managedBrowser.unref();
 	runtimeState.managedBrowser = managedBrowser;
 	runtimeState.managedBrowserCdpPort = String(port);
