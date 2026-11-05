@@ -57,12 +57,10 @@ export interface PlanModelSwitch {
   thinkingAfter: PlanModeFixedThinkingLevel;
 }
 
-export interface PlanModeWorkflowToolPolicy {
-  kind: "automatic" | "explicit";
-  desiredNames?: string[];
-  allowedNames: string[];
-  resolved: boolean;
-}
+/** An explicit policy keeps the names the user chose; an automatic one re-derives them. */
+export type PlanModeWorkflowToolPolicy =
+  | { kind: "automatic"; desiredNames?: undefined; allowedNames: string[]; resolved: boolean }
+  | { kind: "explicit"; desiredNames: string[]; allowedNames: string[]; resolved: boolean };
 
 export interface PlanModeState {
   enabled: boolean;

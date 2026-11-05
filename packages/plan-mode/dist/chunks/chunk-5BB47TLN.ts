@@ -169,7 +169,7 @@ function findBlockedCommandSegment(command, safeSubcommands = {}, {
   const roots = allowedRoots(workingDirectory, trustedDirectories, homeDir);
   let base = workingDirectory;
   for (const [index, segment] of segments.entries()) {
-    if (segment.separator === "|" && isInterpreterCommand(firstWord(segment.text), INTERPRETERS)) return segment.text;
+    if (segment.separator === "|" && isInterpreterCommand(segment.text, INTERPRETERS)) return segment.text;
     const tokens = shellWords(segment.text);
     if (tokens?.[0] === "cd" && matchConfiguredPrefix(segment.text, safeSubcommands) === void 0) {
       const target = tokens.length === 2 && !hasShellExpansion(segment.text) ? resolveDirectory(tokens[1], base, roots, homeDir) : void 0;
@@ -191,7 +191,7 @@ function findBlockedPowerShellCommandSegment(command, safeSubcommands = {}, { wo
     homeDir
   };
   return segments.find(
-    (segment) => segment.separator === "|" && isInterpreterCommand(firstWord(segment.text), POWERSHELL_INTERPRETERS) || !isSafePowerShellSegment(segment.text, safeSubcommands, paths)
+    (segment) => segment.separator === "|" && isInterpreterCommand(segment.text, POWERSHELL_INTERPRETERS) || !isSafePowerShellSegment(segment.text, safeSubcommands, paths)
   )?.text;
 }
 var INTERPRETERS = /* @__PURE__ */ new Set([
@@ -234,11 +234,8 @@ var POWERSHELL_INTERPRETERS = /* @__PURE__ */ new Set([
   "invoke-command",
   "start-process"
 ]);
-function firstWord(segment) {
-  return segment.trim().split(/\s+/u, 1)[0] ?? "";
-}
-function isInterpreterCommand(word, interpreters) {
-  const name = (word.split(/[\\/]/u).pop() ?? "").toLowerCase().replace(/\.exe$/u, "");
+function isInterpreterCommand(segment, interpreters) {
+  const name = segment.trim().replace(/\s.*$/su, "").replace(/^.*[\\/]/su, "").toLowerCase().replace(/\.exe$/u, "");
   return interpreters.has(name) || /^(?:python|ruby|perl|php|lua)[\d.]*$/u.test(name);
 }
 function matchConfiguredPrefix(segment, safeSubcommands) {
@@ -330,8 +327,8 @@ function splitPowerShellSegments(command) {
 function isSafePowerShellSegment(segment, safeSubcommands, paths) {
   if (matchConfiguredPrefix(segment, safeSubcommands) !== void 0) return true;
   const tokens = powerShellWords(segment);
-  if (!tokens || tokens.length === 0 || tokens.includes("--%")) return false;
-  const command = tokens[0]?.toLowerCase();
+  if (tokens.includes("--%")) return false;
+  const command = tokens[0].toLowerCase();
   if (!command) return false;
   const args = tokens.slice(1);
   if (READ_ONLY_POWERSHELL_COMMANDS.has(command)) return true;
@@ -377,8 +374,7 @@ function powerShellWords(segment) {
       hasWord = true;
     }
   }
-  if (quote) return void 0;
-  if (hasWord) words.push(word);
+  words.push(word);
   return words;
 }
 function splitShellSegments(command) {
@@ -431,9 +427,8 @@ function splitShellSegments(command) {
 function isSafeSegment(segment, safeSubcommands, paths, platform) {
   const prefix = matchConfiguredPrefix(segment, safeSubcommands);
   const tokens = shellWords(segment);
-  if (!tokens || tokens.length === 0) return false;
-  const command = tokens[0]?.toLowerCase();
-  if (!command) return false;
+  const command = tokens?.[0]?.toLowerCase();
+  if (!tokens || !command) return false;
   const args = tokens.slice(1);
   if (command === "ssh") return prefix !== void 0 && isSafeSshSegment(segment, prefix, safeSubcommands, platform);
   if (command === "curl") return !hasShellExpansion(segment) && isSafeCurlArguments(args);
@@ -487,8 +482,8 @@ function isSafeCurlArguments(args) {
     return args[index];
   };
   for (; index < args.length; index += 1) {
-    const argument = args[index] ?? "";
-    const name = argument.split("=", 1)[0] ?? "";
+    const argument = args[index];
+    const name = argument.split("=", 1)[0];
     if (argument.startsWith("--") && name.length >= 5 && "--request".startsWith(name)) {
       const method = argument.includes("=") ? argument.slice(argument.indexOf("=") + 1) : takeNext();
       if (method?.toUpperCase() !== "GET") return false;
@@ -498,7 +493,7 @@ function isSafeCurlArguments(args) {
       }
     } else if (argument.startsWith("-") && argument.length > 1) {
       for (let position = 1; position < argument.length; position += 1) {
-        const flag = argument[position] ?? "";
+        const flag = argument[position];
         if (CURL_FORBIDDEN_SHORT.has(flag)) return false;
         if (flag === "X") {
           const attached = argument.slice(position + 1);
@@ -523,7 +518,7 @@ function isSafeGhApiArguments(args) {
     return args[index];
   };
   for (; index < args.length; index += 1) {
-    const argument = args[index] ?? "";
+    const argument = args[index];
     if (argument === "graphql") return false;
     if (argument === "--method" || argument.startsWith("--method=")) {
       if (!isGet(argument.includes("=") ? argument.slice(argument.indexOf("=") + 1) : takeNext())) return false;
@@ -539,7 +534,7 @@ function isSafeGhApiArguments(args) {
           if (!isGet(argument.slice(position + 1) || takeNext())) return false;
           break;
         }
-        if ("Hqpt".includes(flag ?? "")) {
+        if ("Hqpt".includes(flag)) {
           if (position === argument.length - 1) index += 1;
           break;
         }
@@ -682,7 +677,7 @@ function isSafeStructuredCommand(command, args, safeSubcommands, paths) {
   const subcommandArgs = subcommandIndex >= 0 ? args.slice(subcommandIndex + 1) : [];
   if (command === "sed") {
     const script = args.find((argument) => !argument.startsWith("-"));
-    return Boolean(script) && (args.includes("-n") || args.some((argument) => /^-[^-]*n[^-]*$/.test(argument))) && /^\d+(,\d+)?p$/.test(script ?? "");
+    return script !== void 0 && (args.includes("-n") || args.some((argument) => /^-[^-]*n[^-]*$/.test(argument))) && /^\d+(,\d+)?p$/.test(script);
   }
   if (["node", "python", "python3", "tsc", "biome", "ruff", "ty"].includes(command)) {
     if (args.includes("--version")) return true;
@@ -704,8 +699,8 @@ function isSafeStructuredCommand(command, args, safeSubcommands, paths) {
 }
 function isSafeTasklistArguments(args) {
   for (let index = 0; index < args.length; index += 1) {
-    const argument = args[index]?.toLowerCase();
-    if (["/v", "/nh", "/svc"].includes(argument ?? "")) continue;
+    const argument = args[index].toLowerCase();
+    if (["/v", "/nh", "/svc"].includes(argument)) continue;
     if (argument === "/fo") {
       const format = args[index + 1]?.toLowerCase();
       if (!format || !["table", "list", "csv"].includes(format)) return false;
@@ -802,7 +797,7 @@ function isSafeGitGrepArguments(args) {
   );
 }
 function matchesLongOptionPrefix(argument, option, shortest) {
-  const optionName = argument.split("=", 1)[0] ?? "";
+  const optionName = argument.split("=", 1)[0];
   return optionName.length >= shortest.length && option.startsWith(optionName);
 }
 function isSafeGitBranchArguments(args) {
@@ -827,9 +822,9 @@ function isSafeGhCommand(args, safeSubcommands) {
   const action = args[1]?.toLowerCase();
   if (!group || !action || group.startsWith("-") || action.startsWith("-")) return false;
   const path = `${group} ${action}`;
-  if (!safeSubcommands.gh?.includes(path)) return false;
   const validator = GH_VALIDATORS[path];
-  return validator?.(args.slice(2)) ?? false;
+  if (!validator || !safeSubcommands.gh?.includes(path)) return false;
+  return validator(args.slice(2));
 }
 function isSafeGhReadArguments(args) {
   return !args.some(isUnsafeGhReadArgument) && hasGhJsonOutput(args);
@@ -1101,7 +1096,7 @@ function parseProposedPlan(text) {
   if (openingCount !== 1 || closingCount !== 1) return { kind: "malformed" };
   const matches = Array.from(text.matchAll(PROPOSED_PLAN_PATTERN));
   if (matches.length !== 1) return { kind: "malformed" };
-  const plan = matches[0]?.[1]?.trim() ?? "";
+  const plan = matches[0][1].trim();
   return plan ? { kind: "valid", plan } : { kind: "empty" };
 }
 function invalidPlanMessage(kind) {
@@ -2574,4 +2569,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-4SQVAWPB.ts.map
+//# sourceMappingURL=chunk-5BB47TLN.ts.map
