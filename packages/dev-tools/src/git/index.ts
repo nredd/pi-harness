@@ -176,12 +176,14 @@ export function registerGitTools(pi: ExtensionAPI): void {
 			const r = await git(args, { cwd, signal, timeoutMs: readTimeout(params) });
 			const failure = gitFailure(r, "git log");
 			if (failure) return failed(failure);
-			const records = oneline ? r.stdout.split("\n") : r.stdout.split("\0");
+			const split = oneline ? r.stdout.split("\n") : r.stdout.split("\0");
+			// Truncation keeps the head, so only the last record can be cut mid-field: drop it, `bound` reports the cut.
+			const records = r.stdoutDropped ? split.slice(0, -1) : split;
 			const commits = records
 				.map((rec) => rec.replace(/^\n/, ""))
 				.filter((rec) => rec.trim() !== "")
 				.map((rec) => {
-					// `split` always yields one element, and the format's three literal tabs yield four fields.
+					// `split` always yields one element, and every complete record has the format's three literal tabs.
 					const [head, ...bodyLines] = rec.split("\n") as [string, ...string[]];
 					const [sha, author, date, ...subject] = head.split("\t") as [string, string, string, ...string[]];
 					return { sha, author, date, subject: subject.join("\t"), body: bodyLines.join("\n").trim() };
