@@ -263,7 +263,7 @@
           "report": "coverage/primary/lcov.info",
           "enforcement": "report-only",
           "reason": "Report-only at first under the owner's computer-use coverage exclusion: https://github.com/nredd/pi-harness/issues/347.",
-          "max_uncovered": { "darwin": { "lines": 2061, "functions": 539 }, "linux": { "lines": 2088, "functions": 548 } },
+          "max_uncovered": { "darwin": { "lines": 1979, "functions": 517 }, "linux": { "lines": 2088, "functions": 548 } },
           "reporters": ["text", "lcov"]
         }
       }
