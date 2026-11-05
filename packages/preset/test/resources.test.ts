@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import Schema from "typebox/schema";
 import { test } from "vitest";
-import { modelLeaks, modelValues, TIER_REF } from "./model-guard.ts";
+import { dataModelLeaks, isTierRef, modelLeaks, modelValues } from "./model-guard.ts";
 import { frontmatterOf, type Json, manifest, packedFiles, pkgRoot, readJson, readText, walk } from "./support.ts";
 
 const AGENTS = ["architect", "code-reviewer", "critic", "debugger", "general-purpose", "researcher", "verifier"];
@@ -115,6 +115,12 @@ test("skills and agents name tiers, never models", () => {
 		'models: ["@frontier", "opus"]',
 		"models: [@frontier, opus]",
 		"model: @frontier,opus",
+		"pi --models @review,o3:high -p x",
+		"pi --models @review:high,grok-4",
+		"pi --models @review:high,o3",
+		"model: @frontier,kimi-k2:high",
+		"| agent | model |\n|---|---|\n| critic | o3 |",
+		"| agent | `Model` |\n| :-- | --: |\n| critic | `@review` |\n| worker | kimi-k2 |",
 		"pi --model opus -p x",
 		"claude --model sonnet",
 		"pi --model=opus",
@@ -131,7 +137,7 @@ test("skills and agents name tiers, never models", () => {
 		fence("sh", "pi --model opus -p review"),
 	]) {
 		assert.notDeepEqual(
-			modelValues(`${ship}\n${planted}\n`).filter((value) => !TIER_REF.test(value)),
+			modelValues(`${ship}\n${planted}\n`).filter((value) => !isTierRef(value)),
 			[],
 			planted,
 		);
@@ -159,6 +165,11 @@ test("skills and agents name tiers, never models", () => {
 		"Prefer Astra.",
 		"Prefer gpt5.",
 		"Prefer GPT 6.",
+		"Prefer Opus5.",
+		"Prefer opus_5.",
+		"Prefer gemini3pro.",
+		"Prefer groq/llama-4.",
+		"Prefer ollama/qwen3.",
 	])
 		assert.notDeepEqual(modelLeaks(`${ship}\n${planted}\n`), [], planted);
 	for (const clean of [
@@ -166,6 +177,10 @@ test("skills and agents name tiers, never models", () => {
 		'model: "@frontier"',
 		"models: [@review, @deep]",
 		"pi --model @review -p x",
+		"pi --models @review:high,@deep:low -p x",
+		"model: @frontier:high",
+		"| agent | model |\n|---|---|\n| critic | @review |\n| worker | `@deep:high` |",
+		"| agent | tools |\n|---|---|\n| critic | read, grep |",
 		"The parent's critic, then the worker's model: `@frontier`.",
 		"model: @frontier, then the worker reviews.",
 		fence("yaml", 'models:\n  - "@review"\n  - "@deep"'),
@@ -173,6 +188,13 @@ test("skills and agents name tiers, never models", () => {
 		"Astral tooling; Pydantic `BaseModel`; identities/models; Claude Code.",
 	])
 		assert.deepEqual(modelLeaks(clean), [], clean);
+	// Known limit (see `valuesAt`): a spaced comma ends a non-bracket value, so `o3` is not seen.
+	assert.deepEqual(modelLeaks("model: @frontier, o3"), []);
+	assert.deepEqual(modelLeaks("Prefer gemini-3-pro."), ["gemini-3-pro."]);
+	// Parsed data, as pi-subagents' default-agent test passes it.
+	assert.deepEqual(dataModelLeaks({ model: "@review", systemPrompt: "Run `pi --model opus`." }), ["opus"]);
+	assert.deepEqual(dataModelLeaks({ name: "critic", model: "haiku" }), ["haiku"]);
+	assert.deepEqual(dataModelLeaks({ model: "@review:high", tools: ["read"] }), []);
 });
 
 test("agent extension selectors use short names, never the scoped form", () => {
@@ -319,7 +341,7 @@ const missingCriticGate = (policy: string): string[] => {
 /** A forced model is any `model:` value that is not a tier reference. */
 const assertNoForcedModel = (text: string): void =>
 	assert.deepEqual(
-		modelValues(text).filter((value) => !TIER_REF.test(value)),
+		modelValues(text).filter((value) => !isTierRef(value)),
 		[],
 	);
 

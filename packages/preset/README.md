@@ -157,8 +157,9 @@ config (dotfiles on personal, the enterprise manifest on work), not preset conte
 ship the same skill text. A quota-parked tier waits (or fails under its policy); it never silently
 falls back to another tier.
 `test/resources.test.ts` parses `agents/` and `skills/` (frontmatter, fenced YAML/JSON, `key: value`
-and call arguments, flow lists and maps, `--model` flags) and fails on any non-tier value under a
-model-like key (`model`, `models`, `subagentModel`, `model_id`, `agentModels`, ...). A best-effort
+and call arguments, flow lists and maps, `--model` flags, tables with a `model` column) and fails on
+any non-tier value under a model-like key (`model`, `models`, `subagentModel`, `model_id`,
+`agentModels`, ...). A thinking suffix is allowed (`@review:high`). A best-effort
 prose scan also fails on provider-qualified refs, model ids and family names. The guard lives in
 `test/model-guard.ts`; pi-subagents' default-agent test shares it.
 
