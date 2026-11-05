@@ -1892,7 +1892,7 @@ def test_transient_status_on_every_attempt_fails_with_the_original_message(
 def test_transient_retries_stop_at_the_wall_clock_deadline(
     monkeypatch: pytest.MonkeyPatch, no_backoff: list[float]
 ) -> None:
-    """Slow transient failures (120s socket timeouts) stop at `FETCH_RETRY_DEADLINE_SECONDS`."""
+    """Slow transient failures (`FETCH_TIMEOUT_SECONDS` stalls) stop at `FETCH_RETRY_DEADLINE_SECONDS`."""
     clock = [0.0]
     monkeypatch.setattr(release.time, "monotonic", lambda: clock[0])
 
@@ -1916,6 +1916,7 @@ def test_transient_retries_stop_at_the_wall_clock_deadline(
     with pytest.raises(release.FetchError, match="timed out"):
         release.fetch_bytes("https://downloads.example.invalid/core.tgz")
     # 120s + 5s + 120s + 10s + 120s = 375s: a third retry would start past 300s.
+    assert release.FETCH_TIMEOUT_SECONDS == 120
     assert no_backoff == [release.fetch_retry_backoff(1), release.fetch_retry_backoff(2)]
     assert (
         sum(release.fetch_retry_backoff(attempt) for attempt in range(1, FETCH_ATTEMPTS))

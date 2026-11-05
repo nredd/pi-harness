@@ -2392,7 +2392,7 @@ def runs_npm_install(step: dict[str, Any]) -> bool:
         step (dict[str, Any]): One workflow step.
 
     Returns:
-        bool: True when the step's `run` script runs `npm ci` anywhere.
+        bool: True when a line of the step's `run` script starts with `npm ci` or `make install-owned`.
     """
     return NPM_INSTALL_COMMAND.search(step.get("run", "")) is not None
 

@@ -121,9 +121,11 @@ FETCH_ATTEMPTS = 8
 FETCH_RETRY_BACKOFF_SECONDS = 5.0
 FETCH_RETRY_BACKOFF_FACTOR = 2
 FETCH_RETRY_MAX_BACKOFF_SECONDS = 30.0
-# Wall-clock bound on one request's retries: a retry that would start past it is not made. A 5xx blip retries
-# within it; a run of 120s socket timeouts stops after ~3 attempts, not 8 x 120s plus the backoff.
+# Wall-clock bound on one request's retries: a retry that would start past it is not made. A 5xx blip
+# retries within it; a run of `FETCH_TIMEOUT_SECONDS` socket timeouts stops after ~3 attempts, not 8.
 FETCH_RETRY_DEADLINE_SECONDS = 300.0
+# Per-attempt socket timeout of one public download.
+FETCH_TIMEOUT_SECONDS = 120
 FETCH_RETRY_AFTER_CAP_SECONDS = 30.0
 # `gh attestation verify` builds the Sigstore public-good verifier from its TUF repository on
 # every call; a failed fetch surfaces as exactly this text. It is the only retried failure.
@@ -494,7 +496,7 @@ def fetch_once(request: str | Request, url: str) -> bytes:
         raise ValueError("Public downloads permit only the `Accept` request header")
     if urlsplit(url).scheme != "https":
         raise ValueError("Download requires HTTPS")
-    with urlopen(request, timeout=120) as response:
+    with urlopen(request, timeout=FETCH_TIMEOUT_SECONDS) as response:
         lengths = response.headers.get_all("Content-Length", [])
         length = None
         if lengths:
