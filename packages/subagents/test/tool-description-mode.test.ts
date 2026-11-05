@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { formatToolsSuffix } from "../src/index.js";
 import { setWorktreeIsolationEnabled } from "../src/worktree.js";
 import { type SessionStartHandler, startSession } from "./helpers/boot-extension.js";
 import subagentsExtension from "./helpers/home-extension.js";
@@ -462,6 +463,13 @@ describe("toolDescriptionMode", () => {
       const desc: string = tools.get("Agent").description;
       expect(desc).toContain("- extonly: extonly agent. (Tools: no built-ins, extension tools only; no built-in shell: cannot run bash commands)");
       expect(desc).not.toContain("- extonly: extonly agent. (Tools: *)");
+    });
+
+    it("a config with no `builtinToolNames` (all built-ins) subtracts `disallowedTools` from the full set", () => {
+      // The built-in general-purpose definition omits builtinToolNames; a
+      // programmatic registration can pair that with a denylist.
+      expect(formatToolsSuffix({ name: "denied", description: "denied", systemPrompt: "", promptMode: "append", extensions: true, skills: true, disallowedTools: ["bash", "write"] }))
+        .toBe("read, edit, grep, find, ls + extension tools; no built-in shell: cannot run bash commands");
     });
 
     it("compact mode shares the suffix builder and must not diverge", async () => {

@@ -1372,10 +1372,11 @@ src/
   detached-results.ts # Session-scoped spool and registry for background agents surviving reload/switch
   group-join.ts       # `group` join mode: one notification per turn's batch, with timeout
   status-note.ts      # Honest status note + salvaged partial output for non-normal outcomes
+  error-message.ts    # The text a caught value reports: an Error's message, else String(value)
   usage.ts            # Token usage shapes, accumulators, session-stats readers
 
   # Invocation surface
-  invocation-config.ts # Shared tool-parameter schemas (isolation, join, thinking, ...)
+  invocation-config.ts # Shared tool-parameter schemas (isolation, cwd, thinking, ...)
   model-selection.ts  # Shared precedence, scope and resolution outcome; stored on the agent record
   model-tiers.ts      # Exact static/routed tiers, admission, policy and durable disclosure
   model-resolver.ts   # Model matching: exact provider/modelId, aliases, fuzzy fallback ranked by version

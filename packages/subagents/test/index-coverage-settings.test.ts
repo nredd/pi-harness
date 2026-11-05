@@ -124,6 +124,18 @@ describe("settings callbacks", () => {
     expect(context.ui.custom).toHaveBeenCalledTimes(2);
     expect(notify).toHaveBeenLastCalledWith(expect.any(String), "info");
   });
+  it.each([
+    ["maxConcurrent", "0"], ["maxConcurrentForeground", "-1"], ["defaultMaxTurns", "-1"],
+    ["graceTurns", "0"], ["maxSubagentDepth", "-1"],
+  ] as const)("ignores out-of-range %s=%s, keeps the saved value and reopens settings", async (key, input) => {
+    const before = saved()[key];
+    selectRow(key); inputs.push(input);
+    await command();
+    expect(saved()[key]).toBe(before);
+    expect(context.ui.custom).toHaveBeenCalledTimes(2);
+    expect(boot.pi.events.emit).not.toHaveBeenCalledWith("subagents:settings_changed", expect.anything());
+    expect(notify).not.toHaveBeenCalled();
+  });
   it("ignores notice result chars above the ceiling and keeps the default", async () => {
     selectRow("notificationResultChars"); inputs.push("1000001");
     await command();

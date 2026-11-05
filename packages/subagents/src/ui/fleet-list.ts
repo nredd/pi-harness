@@ -530,7 +530,7 @@ export class FleetList {
       const live = records.get(alert.id);
       if (!live || !isOutstandingFailure(live)) records.set(`fleet-alert:${alert.id}`, {
         id: alert.id, type: alert.type, description: alert.description, status: alert.state,
-        startedAt: alert.timestamp, completedAt: alert.timestamp, toolUses: 0, compactionCount: 0,
+        startedAt: alert.timestamp, completedAt: alert.timestamp, toolUses: 0, compactionCount: 0, depth: 1,
         lifetimeUsage: { input: 0, output: 0, cacheWrite: 0, cost: 0 },
       });
     }

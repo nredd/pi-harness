@@ -39,9 +39,10 @@ import {
   watchDetached,
 } from "./detached-results.js";
 import { readEnabledModels, resolveEnabledModels } from "./enabled-models.js";
+import { errorMessage } from "./error-message.js";
 import { GroupJoinManager } from "./group-join.js";
 import { resolveAgentDir } from "./home-paths.js";
-import { cwdParam, isolationParam, resolveAgentInvocationConfig, resolveCwdParam, resolveJoinMode } from "./invocation-config.js";
+import { cwdParam, isolationParam, resolveAgentInvocationConfig, resolveCwdParam } from "./invocation-config.js";
 import { describeMention, handleBase, isReservedHandle, parseMention, resolveHandleToType, stripAgentPrefix } from "./mention.js";
 import { runMentionClone } from "./mention-clone.js";
 import { applyModelCallEvent, type ModelCallEvent } from "./model-call.js";
@@ -118,7 +119,7 @@ function formatLifetimeTokens(o: { lifetimeUsage: LifetimeUsage }): string {
  * Create an AgentActivity state and spawn callbacks for tracking tool usage.
  * Used by both foreground and background paths to avoid duplication.
  */
-function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => void, clock: Clock = realClock) {
+function createActivityTracker(maxTurns: number | undefined, onStreamUpdate: (() => void) | undefined, clock: Clock) {
   const state: AgentActivity = {
     activeTools: new Map(),
     toolUses: 0,
@@ -189,7 +190,7 @@ function getStatusLabel(status: string, error?: string): string {
  * Format a structured task notification matching Claude Code's <task-notification> XML.
  * Everything but the `<result>` is read now; `renderNotice` fills that in.
  */
-function formatTaskNotification(record: AgentRecord, showCost = false): NoticeFrame {
+function formatTaskNotification(record: AgentRecord, showCost: boolean): NoticeFrame {
   const status = getStatusLabel(record.status, record.error);
   const durationMs = record.completedAt ? record.completedAt - record.startedAt : 0;
   const totalTokens = getLifetimeTotal(record.lifetimeUsage);
@@ -401,7 +402,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   try {
     getBudgetPolicy();
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     if (!StartupError) throw new Error(message + " This host also lacks ExtensionStartupError; upgrade pi before retrying.", { cause: error });
     pi.on("session_start", async () => { throw new StartupError(message, { cause: error }); });
     return;
@@ -900,7 +901,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       // can show `low (asked minimal)` instead of silently relabelling.
       ...(invocation?.requestedThinking !== undefined ? { requestedThinking: invocation.requestedThinking } : {}),
       ...fallbackFields(record),
-      depth: record.depth ?? 1,
+      depth: record.depth,
       ...(record.parentAgentId !== undefined ? { parentAgentId: record.parentAgentId } : {}),
       ...(record.workflowId !== undefined ? { workflowId: record.workflowId } : {}),
       usage: reported,
@@ -1084,7 +1085,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       reloadCustomAgents(strictLoad);
     } catch (err) {
       if (strictLoad && StartupError) {
-        throw new StartupError(err instanceof Error ? err.message : String(err), { cause: err });
+        throw new StartupError(errorMessage(err), { cause: err });
       }
       throw err;
     }
@@ -1322,7 +1323,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
             ctx.ui.notify(`Started ${label} directly — ${result.error}`, "warning");
           } catch (err) {
             ctx.ui.notify(
-              `Could not start ${label}: ${err instanceof Error ? err.message : String(err)}`,
+              `Could not start ${label}: ${errorMessage(err)}`,
               "error",
             );
           }
@@ -1346,7 +1347,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       await manager.awaitStartup(id);
       ctx.ui.notify(`Started @${handleBase(type)}`, "info");
     } catch (err) {
-      ctx.ui.notify(`Could not start @${handleBase(type)}: ${err instanceof Error ? err.message : String(err)}`, "error");
+      ctx.ui.notify(`Could not start @${handleBase(type)}: ${errorMessage(err)}`, "error");
     }
     return { action: "handled" };
   });
@@ -1481,17 +1482,16 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       wake();
       sent++;
       // It is a background agent from here on, so announce it as one — as a
-      // detached resume re-announces an existing id.
-      const record = manager.getRecord(id);
-      if (record) {
-        pi.events.emit("subagents:created", {
-          id,
-          type: record.type,
-          description: record.description,
-          isBackground: true,
-          ...eventFields(record),
-        });
-      }
+      // detached resume re-announces an existing id. `sendToBackground` only
+      // hands off a record it holds.
+      const record = manager.getRecord(id)!;
+      pi.events.emit("subagents:created", {
+        id,
+        type: record.type,
+        description: record.description,
+        isBackground: true,
+        ...eventFields(record),
+      });
     }
     if (sent > 0) {
       widget.ensureTimer();
@@ -1796,7 +1796,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       // failure: a strict worktree-isolation error, an unusable cwd.
       // A run that never started is no successor: the old id reopens again next time.
       if (id !== undefined) manager.unlinkSuccessor(entry.id);
-      return { ok: false, failure: { reason: "spawn-failed", message: err instanceof Error ? err.message : String(err) } };
+      return { ok: false, failure: { reason: "spawn-failed", message: errorMessage(err) } };
     }
   }
 
@@ -1819,13 +1819,14 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     opts: { outputTranscript: boolean; maxTurns?: number; toolCallId?: string },
   ): Promise<AgentRecord | undefined> {
     const id = existing.id;
-    const joinMode = resolveJoinMode(defaultJoinMode, true);
+    // A resume always runs detached, and a detached run joins by the default mode.
+    const joinMode = defaultJoinMode;
     // Assigned unconditionally: the completion notification carries this as
     // `<tool-use-id>`, so a mention-resume (which passes none) has to CLEAR the
     // id left by the spawn that created the record. Keeping it would point the
     // orchestrator's new result at a tool call that was answered runs ago.
     existing.toolCallId = opts.toolCallId;
-    if (joinMode) existing.joinMode = joinMode;
+    existing.joinMode = joinMode;
     // Reuse the agent's transcript rather than starting a fresh one: the
     // path is deterministic per agent+session, so writing an initial entry
     // would truncate the previous run's turns (see ensureOutputFile).
@@ -1839,7 +1840,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     // Anchor streaming past the turns already on disk, captured BEFORE the
     // run starts. The resumed prompt lands as an ordinary user message at
     // this index, so it is written exactly once.
-    const transcriptAnchor = existing.session?.messages.length ?? 0;
+    // Both callers resume only a record that still holds its session.
+    const transcriptAnchor = existing.session!.messages.length;
 
     const { state: bgState, callbacks: bgCallbacks } = createActivityTracker(normalizeMaxTurns(opts.maxTurns), undefined, clock);
     // resumeAgent has no onSessionCreated — the session predates this run —
@@ -2159,7 +2161,7 @@ Terse command-style prompts produce shallow, generic work.
         if (text) return renderToolDescriptionTemplate(text);
         console.warn(`[pi-subagents] ${path} is empty — ignoring`);
       } catch (err) {
-        console.warn(`[pi-subagents] failed to read ${path}: ${err instanceof Error ? err.message : String(err)}`);
+        console.warn(`[pi-subagents] failed to read ${path}: ${errorMessage(err)}`);
       }
     }
     return undefined;
@@ -2504,7 +2506,7 @@ Terse command-style prompts produce shallow, generic work.
             `Manage via /agents → Scheduled jobs.`,
           );
         } catch (err) {
-          return textResult(err instanceof Error ? err.message : String(err));
+          return textResult(errorMessage(err));
         }
       }
 
@@ -2733,13 +2735,12 @@ Terse command-style prompts produce shallow, generic work.
 
         // Set output file + join mode synchronously after spawn, before the
         // event loop yields — onSessionCreated is async so this is safe.
-        const joinMode = resolveJoinMode(defaultJoinMode, true);
-        const record = manager.getRecord(id);
-        if (record && joinMode) {
-          record.joinMode = joinMode;
-          record.toolCallId = toolCallId;
-          attachTranscript(record, id);
-        }
+        const joinMode = defaultJoinMode;
+        // `spawn` registered the record before returning its id.
+        const record = manager.getRecord(id)!;
+        record.joinMode = joinMode;
+        record.toolCallId = toolCallId;
+        attachTranscript(record, id);
 
         // With isolation: "worktree" the agent isn't running yet — the repo
         // copy is an awaited git call. Wait for it here, after the synchronous
@@ -3073,7 +3074,7 @@ Terse command-style prompts produce shallow, generic work.
       });
       completeWorkflowTask(task, result);
     } catch (err) {
-      failWorkflowTask(task, err instanceof Error ? err.message : String(err));
+      failWorkflowTask(task, errorMessage(err));
     }
   }
 
@@ -3221,7 +3222,7 @@ Terse command-style prompts produce shallow, generic work.
       try {
         meta = extractMeta(resolved.script).meta;
       } catch (err) {
-        return textResult(err instanceof Error ? err.message : String(err));
+        return textResult(errorMessage(err));
       }
 
       const runId = workflowRunId();
@@ -3239,7 +3240,7 @@ Terse command-style prompts produce shallow, generic work.
       } catch (err) {
         savedPath = undefined;
         journalPath = undefined;
-        console.warn(`[pi-subagents] could not persist workflow script: ${err instanceof Error ? err.message : String(err)}`);
+        console.warn(`[pi-subagents] could not persist workflow script: ${errorMessage(err)}`);
       }
 
       const replay = resumeFrom !== undefined ? readJournal(resumeFrom.journalPath) : undefined;
@@ -3399,7 +3400,7 @@ Terse command-style prompts produce shallow, generic work.
     try {
       script = readFileSync(path, "utf-8");
     } catch (err) {
-      report(`Could not read ${path}: ${err instanceof Error ? err.message : String(err)}`, "warning");
+      report(`Could not read ${path}: ${errorMessage(err)}`, "warning");
       return;
     }
 
@@ -3407,7 +3408,7 @@ Terse command-style prompts produce shallow, generic work.
     try {
       meta = extractMeta(script).meta;
     } catch (err) {
-      report(err instanceof Error ? err.message : String(err), "warning");
+      report(errorMessage(err), "warning");
       return;
     }
 
@@ -3604,7 +3605,7 @@ Terse command-style prompts produce shallow, generic work.
           `Current state: ${stateParts.join(" · ")}`,
         );
       } catch (err) {
-        return textResult(`Failed to steer agent: ${err instanceof Error ? err.message : String(err)}`);
+        return textResult(`Failed to steer agent: ${errorMessage(err)}`);
       }
     },
   }));
@@ -4798,7 +4799,8 @@ Write the file using the write tool. Only write the file, nothing else.`;
         const enabled = value === "on";
         setRememberAgents(enabled);
         notifyApplied(ctx, `Remember agents ${enabled ? "enabled" : "disabled"}`);
-      } else if (id === "widgetMode") {
+      } else {
+        // widgetMode, the last row: every id `buildItems` offers has an arm.
         setWidgetMode(value as WidgetMode);
         notifyApplied(ctx, `Widget set to ${value}`);
       }
