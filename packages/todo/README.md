@@ -115,7 +115,14 @@ the full list grouped by status.
   window over the whole list: scroll it with the mouse wheel, and `↑ N above` /
   `↓ N below` hints say what is out of view. Nothing is ever hidden.
 - **Task status reflects actual work.** Mark every started task `in_progress`,
-  including parallel work; assign `owner` to identify each worker. Complete each
+  including parallel work; assign `owner` to identify each worker. The owner shows
+  on the row as `@auth-audit`; when it names a top-level subagent of this session
+  (from [`pi-subagents`](https://github.com/nredd/pi-harness/tree/main/packages/subagents#events)
+  lifecycle events, per the [owner match rule](./docs/overlay.md#owner-match-rule))
+  the row also shows that agent's live state, `running`, `done`, `failed` or
+  `stopped`. An
+  `in_progress` todo whose agent failed or stopped is marked `✗ failed` or `✗ stopped`; the todo
+  stays `in_progress` until the parent completes it with evidence. Complete each
   verified task immediately. Atomic batches may record independently verified
   results together, but must not delay individual completions. There is no
   global single-active-task limit. Plan text, completion evidence, and deferral
@@ -146,7 +153,9 @@ the full list grouped by status.
   items open, the model gets one reminder listing them before it can wrap up.
   Outside Plan mode, a run that settles with `in_progress` todos also shows a warning
   naming them (first three, then a count) and `armed: no todo wakes the parent`, so a stop with
-  owned work pending is never silent and never reads as resumable.
+  owned work pending is never silent and never reads as resumable. Todos whose owner
+  agent failed or stopped are then all named, e.g.
+  `; owner agent failed or stopped: #3 Audit auth (@auth-audit failed)`.
   Reminders pause while Plan mode is active; old approved todos remain until a
   replacement is approved. Exiting planning without approval resumes the old
   obligations. Details in the
@@ -156,9 +165,16 @@ the full list grouped by status.
   Stale shutdowns use captured session identity and never assume ownership of
   the foreground. Replay skips malformed snapshots rather than replacing valid
   tasks, while accepting valid historical tasks without newer evidence fields.
+  Owner agent state is display-only: a subagent never reads or writes the
+  parent's list, and only the parent completes its todo. Without `pi-subagents`
+  owners render without a state. An evicted agent keeps its last known state for
+  the rest of the session, until 256 more recently updated agents push it out;
+  agents are tracked per session, so after `/new` or
+  `/resume` a todo never shows another session's agent.
 - **Historical rows keep their own subjects.** Settled calls render from their
   validated result snapshots, not the current task list, including after reload
-  and resize. Partial results and renderer probes do not change cached history.
+  and resize. Live owner agent state appears only on the overlay and `/todos`,
+  never in a tool result or a settled row. Partial results and renderer probes do not change cached history.
 - **Localized UI, no setup required.** Nine locales ship with the package and are
   served by [`@juicesharp/rpiv-i18n`](https://www.npmjs.com/package/@juicesharp/rpiv-i18n),
   a regular dependency.

@@ -1,6 +1,7 @@
 import { buildSessionEntries, createMockCtx, createMockPi, makeTodoToolResult } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { TEST_HOME } from "./.test-support/setup.ts";
+import { SUBAGENT_STARTED_EVENT } from "./tool/types.ts";
 
 const overlayMock = vi.hoisted(() => ({
 	importGate: undefined as Promise<void> | undefined,
@@ -282,4 +283,40 @@ it("tool_execution_end still propagates the latched stale-namespace restart erro
 	await expect(lifecycle.toolEnd({ toolName: "todo", isError: false } as never, ctx as never)).rejects.toThrow(
 		"module cache is stale; restart Pi",
 	);
+});
+
+it("a subagent lifecycle event logs the latched stale-namespace error instead of rejecting", async () => {
+	// The events bus does not await listeners, so a rejected listener promise
+	// would escape as an unhandled rejection rather than reach the user.
+	const listeners = new Map<string, (data: unknown) => unknown>();
+	const { default: registerTodo } = await import("./index.ts");
+	const { pi, captured } = createMockPi({
+		events: {
+			emit: vi.fn(),
+			on: vi.fn((channel: string, handler: (data: unknown) => unknown) => {
+				listeners.set(channel, handler);
+				return () => {};
+			}),
+		},
+	} as never);
+	const staleModule = { TodoOverlay: undefined } as unknown as typeof import("./todo-overlay.ts");
+	registerTodo(pi, async () => staleModule, { homeDir: TEST_HOME });
+	const start = captured.events.get("session_start")?.[0];
+	const tool = captured.tools.get("todo");
+	const started = listeners.get(SUBAGENT_STARTED_EVENT);
+	if (!start || !tool || !started) throw new Error("todo lifecycle was not registered");
+	const ctx = createMockCtx({ hasUI: true, sessionId: "stale-agent" });
+	await start({} as never, ctx as never);
+	await tool.execute?.(
+		"tc",
+		{ action: "create", subject: "stale task", owner: "auditor" } as never,
+		undefined as never,
+		undefined as never,
+		ctx as never,
+	);
+
+	const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+	await expect(started({ id: "a1", name: "auditor" })).resolves.toBeUndefined();
+	expect(warn).toHaveBeenCalledTimes(1);
+	expect(warn.mock.calls[0]?.[0]).toMatch(/^\[rpiv-todo\] Todo overlay module cache is stale; restart Pi/);
 });

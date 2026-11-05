@@ -1,8 +1,9 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { describe, expect, it } from "vitest";
+import type { AgentRunState } from "../state/agents.ts";
 import type { Task } from "../tool/types.ts";
-import { formatOverlayTaskLine, overlayStatusGlyph, STATUS_GLYPH } from "./format.ts";
+import { formatCommandTaskLine, formatOverlayTaskLine, overlayStatusGlyph, STATUS_GLYPH } from "./format.ts";
 
 const recordingTheme = makeTheme({
 	fg: (color, text) => `<${color}>${text}</${color}>`,
@@ -72,5 +73,68 @@ describe("formatOverlayTaskLine — terminal control characters", () => {
 				false,
 			),
 		).toBe("<warning>◐</warning> <accent>quiettask</accent> <muted>(Working)</muted>");
+	});
+});
+
+describe("owner segment", () => {
+	const lookup = (state: AgentRunState | undefined) => () => state;
+
+	it("renders the owner dim after the subject, before activeForm", () => {
+		expect(
+			formatOverlayTaskLine(
+				task({ status: "in_progress", owner: "auth-audit", activeForm: "auditing" }),
+				recordingTheme,
+				false,
+				lookup(undefined),
+			),
+		).toBe("<warning>◐</warning> <accent>quiet task</accent> <dim>@auth-audit</dim> <muted>(auditing)</muted>");
+	});
+
+	it.each([
+		["running", "<accent>running</accent>"],
+		["done", "<success>done</success>"],
+	] as const)("shows a live %s agent without touching the todo status", (state, painted) => {
+		expect(
+			formatOverlayTaskLine(
+				task({ status: "in_progress", owner: "@auth-audit" }),
+				recordingTheme,
+				false,
+				lookup(state),
+			),
+		).toBe(`<warning>◐</warning> <accent>quiet task</accent> <dim>@auth-audit</dim> ${painted}`);
+	});
+
+	it.each([
+		["failed", "<error>✗ failed</error>"],
+		["stopped", "<error>✗ stopped</error>"],
+	] as const)("marks an in_progress todo whose agent %s as failed", (state, painted) => {
+		expect(
+			formatOverlayTaskLine(task({ status: "in_progress", owner: "w" }), recordingTheme, false, lookup(state)),
+		).toBe(`<warning>◐</warning> <accent>quiet task</accent> <dim>@w</dim> ${painted}`);
+	});
+
+	it("shows a stopped agent plainly once its todo is no longer in_progress", () => {
+		expect(formatOverlayTaskLine(task({ owner: "w" }), recordingTheme, false, lookup("stopped"))).toBe(
+			"<dim>○</dim> <text>quiet task</text> <dim>@w</dim> <muted>stopped</muted>",
+		);
+	});
+
+	it("prints only the owner in /todos when no lookup is given", () => {
+		expect(formatCommandTaskLine(task({ owner: "w" }), "○")).toBe("  ○ #1 quiet task @w");
+	});
+
+	it("omits a blank owner entirely", () => {
+		expect(formatOverlayTaskLine(task({ owner: " " }), recordingTheme, false, lookup("running"))).toBe(
+			"<dim>○</dim> <text>quiet task</text>",
+		);
+	});
+
+	it("prints the same segment uncolored for /todos", () => {
+		expect(
+			formatCommandTaskLine(task({ status: "in_progress", owner: "w", activeForm: "x" }), "◐", lookup("stopped")),
+		).toBe("  ◐ #1 quiet task @w ✗ stopped (x)");
+		expect(formatCommandTaskLine(task({ owner: "Sergii" }), "○", lookup(undefined))).toBe(
+			"  ○ #1 quiet task @Sergii",
+		);
 	});
 });

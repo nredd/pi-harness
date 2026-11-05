@@ -17,6 +17,7 @@ import type {
 	ExtensionAPI,
 	SessionBoundaryDraft,
 } from "@earendil-works/pi-coding-agent";
+import { type AgentStateLookup, agentLookup, isAbandoned, NO_AGENT_STATE, ownerLabel } from "./state/agents.ts";
 import { applyPlanApproval, selectOpenPlanItems, selectPlanProgress } from "./state/plan.ts";
 import type { TaskState } from "./state/state.ts";
 import { commitState, getState, sid } from "./state/store.ts";
@@ -128,13 +129,24 @@ export function formatPlanReminder(state: TaskState): string {
  * Same shape as the `subagents` and `session-kit` monitor settle notices,
  * `Run ended with N <work>, armed: <what wakes the parent>`, naming only todos. Todos arm nothing:
  * no todo wakes the parent, so the report says so rather than leaving the stop to read as resumable.
+ * Every todo whose owning subagent failed or stopped is then named, uncapped: that work has no
+ * worker left, so it is the part the parent must act on.
  */
-export function formatInProgressNotice(state: TaskState): string | undefined {
+export function formatInProgressNotice(
+	state: TaskState,
+	lookup: AgentStateLookup = NO_AGENT_STATE,
+): string | undefined {
 	const active = state.tasks.filter((t) => t.status === "in_progress");
 	if (!active.length) return undefined;
 	const shown = active.slice(0, 3).map((t) => `#${t.id} ${sanitizeTerminalText(t.subject)}`);
 	const more = active.length > shown.length ? `, +${active.length - shown.length} more` : "";
-	return `Run ended with ${active.length} in_progress todo${active.length === 1 ? "" : "s"} (${shown.join(", ")}${more}), armed: no todo wakes the parent`;
+	const notice = `Run ended with ${active.length} in_progress todo${active.length === 1 ? "" : "s"} (${shown.join(", ")}${more}), armed: no todo wakes the parent`;
+	const abandoned = active.flatMap((t) => {
+		const agent = lookup(t.owner);
+		if (!isAbandoned(t, agent)) return [];
+		return [`#${t.id} ${sanitizeTerminalText(t.subject)} (${ownerLabel(t.owner)} ${agent})`];
+	});
+	return abandoned.length ? `${notice}; owner agent failed or stopped: ${abandoned.join(", ")}` : notice;
 }
 
 /**
@@ -200,7 +212,8 @@ export function registerPlanHooks(
 	// covers plan items and only once, so report the state instead of leaving a quiet prompt.
 	pi.on("agent_settled", (_event, ctx) => {
 		if (isPlanning(ctx, [])) return;
-		const message = formatInProgressNotice(getState(sid(ctx)));
+		const id = sid(ctx);
+		const message = formatInProgressNotice(getState(id), agentLookup(id));
 		if (message) ctx.ui.notify(message, "warning");
 	});
 
