@@ -24,6 +24,46 @@ describe("SubagentTracker", () => {
 		tracker.announced();
 		expect(tracker.busy()).toBe(0);
 	});
+	it("does not wait for a queued background agent stopped before it starts", () => {
+		const bus = new FakeBus();
+		const tracker = new SubagentTracker();
+		tracker.attach(bus);
+		bus.emit("subagents:created", { id: "queued", isBackground: true });
+		expect(tracker.busy()).toBe(1);
+		bus.emit("subagents:failed", { id: "queued", status: "stopped" });
+		expect(tracker.busy()).toBe(0);
+	});
+	it("still waits for a started background agent stopped after handoff", () => {
+		const bus = new FakeBus();
+		const tracker = new SubagentTracker();
+		tracker.attach(bus);
+		bus.emit("subagents:started", { id: "a" });
+		bus.emit("subagents:created", { id: "a", isBackground: true });
+		bus.emit("subagents:failed", { id: "a", status: "stopped" });
+		expect(tracker.busy()).toBe(1);
+		tracker.announced();
+		expect(tracker.busy()).toBe(0);
+	});
+	it("clears started state before the same id is queued and stopped again", () => {
+		const bus = new FakeBus();
+		const tracker = new SubagentTracker();
+		tracker.attach(bus);
+		bus.emit("subagents:created", { id: "a", isBackground: true });
+		bus.emit("subagents:started", { id: "a" });
+		bus.emit("subagents:completed", { id: "a" });
+		tracker.announced();
+		bus.emit("subagents:created", { id: "a", isBackground: true });
+		bus.emit("subagents:failed", { id: "a", status: "stopped" });
+		expect(tracker.busy()).toBe(0);
+	});
+	it("retains a background failure without a stopped status for notice delivery", () => {
+		const bus = new FakeBus();
+		const tracker = new SubagentTracker();
+		tracker.attach(bus);
+		bus.emit("subagents:created", { id: "a", isBackground: true });
+		bus.emit("subagents:failed", { id: "a", status: "error" });
+		expect(tracker.busy()).toBe(1);
+	});
 	it("never waits for a foreground agent's notice (it has none)", () => {
 		const bus = new FakeBus();
 		const tracker = new SubagentTracker();
