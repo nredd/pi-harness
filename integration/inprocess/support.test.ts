@@ -243,7 +243,8 @@ for (const path of ["/usr/bin:/bin", undefined]) {
 			expect(process.env.PATH).toBe(path);
 			expect("PATH" in process.env).toBe(path !== undefined);
 		} finally {
-			process.env.PATH = previous;
+			if (previous === undefined) delete process.env.PATH;
+			else process.env.PATH = previous;
 			rmSync(root, { recursive: true, force: true });
 		}
 	});

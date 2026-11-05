@@ -142,7 +142,7 @@ mocks. Vite's module runner pins `import.meta.main` false, so the `import.meta.m
 `run-vitest.ts` and `import_audit.ts` are the signal's only uncovered branches (#418): a test of
 ordinary, member and look-alike `require` calls covers the non-import call, and the syntax-error
 location no longer branches on the diagnostic's optional `fileName`, since diagnostics are requested
-per file. The signal is 0 uncovered lines (115) and functions (16), 2 of 100 branches, on darwin.
+per file. The signal is 0 uncovered lines (114) and functions (16), 2 of 100 branches, on darwin.
 `import-audit` and `probes` are in the goal and enforced at 0/0. Since #377 `probes` measures every
 executable probe in process under `check-probes`: `transcript-types.ts`, `render.ts` (its
 `/harness-probe` command against a recording TUI), the `pi -e` extensions `latency.ts`,
@@ -572,8 +572,8 @@ host. The real `caffeinate` sleep-assertion test still runs on macOS only. Since
 takes its platform, so every OS asserts no helper off macOS, and a host without
 `/usr/bin/caffeinate` asserts the macOS spawn failure fails the fixture; a spawner returning no
 helper, unset Pi/XDG/PATH variables, a real interval cleared through the frozen `clearInterval`, a
-stackless timer origin, `StackUsage` reads and a refused `rowOf` cover the remaining branches. Darwin
-primary and Bun are 0 uncovered branches.
+stackless timer origin, `StackUsage` reads and a refused `rowOf` cover the remaining branches. Primary
+and Bun are 0 uncovered branches on darwin and on linux (ubuntu-24.04 and wsl2, hosted run `42047972267`).
 
 The in-process `@nredd/pi-stack-tests` reviewer suite executes real Pi `grep`/`find` tools
 under both Node and Bun. Each launcher gets a fresh disposable home, so a managed binary
