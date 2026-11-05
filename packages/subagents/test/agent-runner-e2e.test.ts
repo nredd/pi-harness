@@ -137,6 +137,29 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
     return active;
   }
 
+  it("does not initialize a second subagents extension in an SDK child", async () => {
+    const originalCwd = cwd;
+    const hermetic = hermeticDir();
+    const homeDir = realpathSync(mkdtempSync(join(tmpdir(), "subagents-e2e-home-")));
+    cwd = hermetic.dir;
+    const agentDir = process.env.PI_CODING_AGENT_DIR;
+    if (!agentDir) throw new Error("hermeticDir must define PI_CODING_AGENT_DIR");
+    const extension = resolve(fileURLToPath(new URL("../src/index.ts", import.meta.url)));
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ extensions: [extension] }));
+    try {
+      await activeToolsFor({ extensions: true }, true, { homeDir });
+      const loaded = lastSession.resourceLoader.getExtensions().extensions;
+      const subagents = loaded.find((entry: { resolvedPath: string }) => entry.resolvedPath === extension);
+      expect(subagents).toBeDefined();
+      expect(subagents.handlers.size).toBe(0);
+      expect(subagents.tools.size).toBe(0);
+    } finally {
+      cwd = originalCwd;
+      hermetic.restore();
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("real pi-mono admits an extension-registered tool when it's in the allowlist (#47)", async () => {
     const active = await activeToolsFor({ extensions: [FIXTURE] });
     // The extension actually loaded and its tool reached the live session.
