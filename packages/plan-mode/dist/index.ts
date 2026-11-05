@@ -3,6 +3,7 @@
 import {
   IMPLEMENTATION_PLAN_RETENTIONS,
   MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH,
+  PLAN_EDIT_SOURCE,
   PLAN_HISTORY_IMPLEMENTATION_PROMPT,
   PLAN_MESSAGE_TYPE,
   PLAN_MODE_COMPLETE_PARAMS,
@@ -24,6 +25,7 @@ import {
   configuredPlanModeToggleShortcut,
   configuredThinkingLevel,
   createImplementationRetentionCoordinator,
+  createPlanEditMessage,
   exportStoredPlan,
   filterAvailableSelectedToolNames,
   findAvailableImplementationModel,
@@ -55,12 +57,13 @@ import {
   renderPlanModeCompletionCall,
   renderPlanModeQuestion,
   renderPlanModeQuestionCall,
+  reviewEditedPlan,
   showStoredPlan,
   snapshotAvailableImplementationModels,
   snapshotPlanModeSelectedNames,
   updatePlanModeSettings,
   updatePlanModeUi
-} from "./chunks/chunk-THD3EC5R.ts";
+} from "./chunks/chunk-VZDACPW4.ts";
 
 // src/plan-mode.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
@@ -567,7 +570,7 @@ function latestCompletionPlan(entries) {
   return void 0;
 }
 function planCompletionSource(value) {
-  return value === PLAN_MODE_COMPLETE_TOOL_NAME || value === "legacy_proposed_plan" ? value : void 0;
+  return value === PLAN_MODE_COMPLETE_TOOL_NAME || value === "legacy_proposed_plan" || value === PLAN_EDIT_SOURCE ? value : void 0;
 }
 function fixedThinkingLevel(value) {
   return typeof value === "string" && value !== "inherit" && PLAN_MODE_THINKING_LEVELS.includes(value) ? value : void 0;
@@ -927,6 +930,7 @@ function createPlanActionController(options) {
         signal: lifecycle.signal,
         isCurrent: lifecycle.isCurrent,
         show: () => options.show(ctx),
+        edit: () => options.edit(ctx, lifecycle.isCurrent),
         implementHere: () => options.implementHere(ctx),
         implementFresh: (signal) => freshAction(ctx, lifecycle, signal, effectiveDefaults(ctx)),
         exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
@@ -949,6 +953,7 @@ function createPlanActionController(options) {
         signal: lifecycle.signal,
         isCurrent,
         show: () => options.show(ctx),
+        edit: () => options.edit(ctx, isCurrent),
         implementHere: () => options.implementHere(ctx),
         implementFresh: (runtime, signal) => freshAction(ctx, lifecycle, signal, runtime),
         exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, isCurrent),
@@ -975,6 +980,7 @@ function createPlanActionController(options) {
         getExportDestination: () => options.getExportDestination(ctx),
         ...lifecycle,
         show: () => options.show(ctx),
+        edit: () => options.edit(ctx, lifecycle.isCurrent),
         finalize: () => options.finalize(ctx),
         implementHere: () => options.implementHere(ctx),
         implementFresh: (runtime, signal) => freshAction(ctx, lifecycle, signal, runtime),
@@ -1135,7 +1141,7 @@ function planMode(pi, dependencies = {}) {
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
     if (!interactiveUiPromise) {
-      interactiveUiPromise = import("./chunks/interactive-ui-OCQTYYJ3.ts").catch((error) => {
+      interactiveUiPromise = import("./chunks/interactive-ui-AU4WYPXK.ts").catch((error) => {
         interactiveUiPromise = void 0;
         throw error;
       });
@@ -1152,6 +1158,7 @@ function planMode(pi, dependencies = {}) {
   let publishedContractMode;
   let modeContractsRelevant = false;
   let readyPresentationIntent;
+  let unappliedPlanEdit;
   let readyPresentationInFlightNonce;
   let nextReadyPresentationNonce = 0;
   let menuGeneration = 0;
@@ -1188,6 +1195,7 @@ function planMode(pi, dependencies = {}) {
     implementationOutcome,
     getExportDestination: (ctx) => planExports.getDestination(ctx),
     show: (ctx) => showStoredPlan(pi, ctx, state),
+    edit: editPlan,
     finalize: requestFinalPlan,
     implementHere: startImplementation,
     implementFresh: startFreshImplementation,
@@ -1932,7 +1940,71 @@ function planMode(pi, dependencies = {}) {
     return state.enabled && workflowMutex.isOwner(workflowOwner) && state.awaitingAction && state.latestPlan === intent.plan && state.latestPlanSource === intent.source;
   }
   function readyPresentationIsCurrent(intent) {
-    return completedPlanIsCurrent(intent) && readyPresentationIntent?.nonce === intent.nonce;
+    const current = readyPresentationIntent;
+    return current?.nonce === intent.nonce && completedPlanIsCurrent(current);
+  }
+  function planEditBlockedByRun(ctx) {
+    if (ctx.isIdle() && !ctx.hasPendingMessages()) return false;
+    ctx.ui.notify(
+      "Cannot edit the plan while an agent run is active. Wait for the run to settle, then retry.",
+      "warning"
+    );
+    return true;
+  }
+  async function editPlan(ctx, isCurrent) {
+    const enabled = state.enabled;
+    const savedPlan = enabled ? void 0 : state.savedPlan;
+    const before = enabled ? state.latestPlan : savedPlan?.plan;
+    if (!before || planEditBlockedByRun(ctx)) return;
+    const generation = menuGeneration;
+    const kept = unappliedPlanEdit;
+    const restored = kept?.before === before && kept.enabled === enabled && kept.sessionGeneration === generation ? kept.text : void 0;
+    unappliedPlanEdit = void 0;
+    const edited = await ctx.ui.editor(enabled ? "Edit proposed plan" : "Edit saved plan", restored ?? before);
+    const review = reviewEditedPlan(before, edited);
+    if (review.kind === "unchanged") return;
+    if (review.kind === "cancelled") {
+      if (restored !== void 0) unappliedPlanEdit = kept;
+      return;
+    }
+    const keepEdit = (reason, level = "warning") => {
+      if (generation !== menuGeneration) {
+        ctx.ui.notify(`${reason} The edit was not applied.`, level);
+        return;
+      }
+      unappliedPlanEdit = { before, enabled, sessionGeneration: generation, text: edited };
+      ctx.ui.notify(`${reason} The edit was not applied; Edit plan\u2026 reopens it while this plan is current.`, level);
+    };
+    if (!ctx.isIdle() || ctx.hasPendingMessages()) {
+      keepEdit("An agent run started while the editor was open.");
+      return;
+    }
+    const unchangedWhileEditing = isCurrent() && state.enabled === enabled && (enabled ? state.latestPlan === before : state.savedPlan === savedPlan);
+    if (!unchangedWhileEditing) {
+      keepEdit("The plan changed while the editor was open.");
+      return;
+    }
+    if (review.kind === "rejected") {
+      keepEdit(`Edited plan rejected: ${review.error}.`);
+      return;
+    }
+    try {
+      pi.sendMessage(createPlanEditMessage(before, review.plan), { triggerTurn: false });
+    } catch (error) {
+      const detail = safeTerminalText(error instanceof Error ? error.message : String(error));
+      keepEdit(`Unable to record the plan edit: ${detail}.`, "error");
+      return;
+    }
+    if (enabled) {
+      const presentation = readyPresentationIntent && completedPlanIsCurrent(readyPresentationIntent) ? readyPresentationIntent : void 0;
+      state = { ...state, latestPlan: review.plan, latestPlanSource: PLAN_EDIT_SOURCE };
+      if (presentation) readyPresentationIntent = { ...presentation, plan: review.plan, source: PLAN_EDIT_SOURCE };
+    } else {
+      state = { ...state, savedPlan: { plan: review.plan, source: PLAN_EDIT_SOURCE } };
+    }
+    persistState();
+    updateUi(ctx);
+    ctx.ui.notify("Plan updated.", "info");
   }
   function togglePlanMode(ctx) {
     if (state.enabled) {
@@ -2073,7 +2145,7 @@ function planMode(pi, dependencies = {}) {
     planApprovals.record(ctx, plan);
     persistState();
     updateUi(ctx);
-    const handoff = usesConversationHistory ? wasEnabled ? formatHistoryImplementationPrompt() : formatTransferredPlanPrompt(plan, false) : formatImplementationHandoff(plan);
+    const handoff = usesConversationHistory ? wasEnabled && source !== PLAN_EDIT_SOURCE ? formatHistoryImplementationPrompt() : formatTransferredPlanPrompt(plan, false) : formatImplementationHandoff(plan);
     const sent = sendPlanModeUserMessage(handoff, ctx);
     if (!sent) {
       state = previousState;

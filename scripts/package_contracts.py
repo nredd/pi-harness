@@ -712,6 +712,7 @@ PLAN_MODE_CONTRACT = PackageContract(
         "src/plan-action-controller.ts",
         "src/plan-action-menus.ts",
         "src/plan-approval.ts",
+        "src/plan-edit.ts",
         "src/plan-export-controller.ts",
         "src/plan-export-screen.ts",
         "src/plan-export.ts",

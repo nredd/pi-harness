@@ -1,13 +1,12 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
+import { deferPlanEdit, type PlanEditOption } from "./plan-edit.js";
 import { type PlanExportDestinationProvider, planExportInputScreen } from "./plan-export-screen.js";
 
-interface SavedPlanMenuOptions {
+interface SavedPlanMenuOptions extends PlanEditOption {
   statusText: string;
   implementationOutcome(): string;
   getExportDestination: PlanExportDestinationProvider;
-  signal: AbortSignal;
-  isCurrent(): boolean;
   show(): void;
   implementHere(): void | Promise<void>;
   implementFresh(signal: AbortSignal): void | Promise<void>;
@@ -16,12 +15,13 @@ interface SavedPlanMenuOptions {
   clear(): void;
 }
 
-export async function showSavedPlanMenu(ctx: ExtensionContext, options: SavedPlanMenuOptions) {
+export async function showSavedPlanMenu(ctx: ExtensionContext, options: SavedPlanMenuOptions): Promise<void> {
   if (!ctx.hasUI) {
     throw new Error(`${options.statusText} Use /plan show, /plan implement, /plan export, or /plan exit.`);
   }
   type Screen = "saved" | "export";
-  type Action = "show" | "implement-here" | "implement-fresh" | "export" | "settings" | "clear";
+  type Action = "show" | "edit" | "implement-here" | "implement-fresh" | "export" | "settings" | "clear";
+  const deferredEdit = deferPlanEdit(options);
   const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
     start: "saved",
     screens: {
@@ -50,6 +50,12 @@ export async function showSavedPlanMenu(ctx: ExtensionContext, options: SavedPla
             busyLabel: "Starting fresh implementation session…",
           },
           { id: "export", label: "Export plan…", to: "export" },
+          {
+            id: "edit",
+            label: "Edit plan…",
+            description: "Open the saved plan in your editor.",
+            action: "edit",
+          },
           { id: "settings", label: "Settings", action: "settings" },
           { id: "clear", label: "Clear saved plan", action: "clear" },
         ],
@@ -62,6 +68,7 @@ export async function showSavedPlanMenu(ctx: ExtensionContext, options: SavedPla
         options.show();
         return { kind: "close" };
       },
+      edit: deferredEdit.action,
       "implement-here": async () => {
         await options.implementHere();
         return { kind: "close" };
@@ -88,4 +95,5 @@ export async function showSavedPlanMenu(ctx: ExtensionContext, options: SavedPla
     signal: options.signal,
     isCurrent: options.isCurrent,
   });
+  await deferredEdit.reopenAfter(() => showSavedPlanMenu(ctx, options));
 }

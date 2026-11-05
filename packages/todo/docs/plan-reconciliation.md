@@ -1,5 +1,8 @@
 # Plan reconciliation
 
+Seeding reads the plan from `pi-plan-mode:plan-approved` verbatim. When the user edited the plan
+with `Edit plan…` before implementing, that payload is the edited text.
+
 Approving a revised plan replaces only the todos with `source: "plan"`. Agent-created
 items remain in place. If an agent-created item was blocked by a removed plan item, that
 removed id is dropped from its `blockedBy` list. This is the existing dependency behavior:

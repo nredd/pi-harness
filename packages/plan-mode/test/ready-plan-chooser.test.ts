@@ -68,3 +68,19 @@ test("ready plan chooser is unavailable outside the interactive TUI", async () =
   const context = createMockContext({ mode: "rpc", hasUI: true });
   assert.equal(await chooseReadyPlanAction(context.ctx), undefined);
 });
+
+test("ready plan chooser offers Edit plan and binds Ctrl+G to it", async () => {
+  for (const keys of [["\u0007"], [...Array<string>(4).fill("tui.select.down"), "tui.select.confirm"]]) {
+    const context = createMockContext({
+      mode: "tui",
+      hasUI: true,
+      custom: async (factory: unknown) => {
+        const harness = createCustomSelectorHarness(factory, 120);
+        assert.match(harness.render().join("\n"), /Show latest proposed plan \].*\[ Edit plan… \]/u);
+        for (const key of keys) harness.handleInput(key);
+        return harness.resultPromise;
+      },
+    });
+    assert.equal(await chooseReadyPlanAction(context.ctx), "edit");
+  }
+});
