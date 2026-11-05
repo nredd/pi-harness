@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Skip Anthropic `weekly_scoped` limits narrowed by a non-null `scope.surface` or `scope.model.id`, so a single-surface cap no longer blocks every `claude-<family>-*` caller (#511)
 - Name `subscription_usage` in the `subscription_usage` prompt section only when the session can call it or discover it through `search_tools`, and tell a deferred session to discover it first, so the tool can stay deferred (#291)
 - Keep `router/*` routing after the session that last registered it is disposed: routes read the model registry, not that session's extension ctx. A background agent no longer dies with a stale ctx when a finished sibling is swept (#294)
 - Refuse missing configured `lint` and `format` paths before calling Biome, whose mixed valid/missing paths otherwise succeed

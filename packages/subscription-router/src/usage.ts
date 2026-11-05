@@ -192,7 +192,10 @@ export function parseAnthropic(payload: unknown): ParsedUsage | undefined {
  * Model-scoped weekly windows Anthropic reports only in its `limits` list, e.g. Fable's
  * `{ kind: "weekly_scoped", scope: { model: { display_name: "Fable" } } }`. Each becomes a
  * `seven_day_<family>` window gating the lowercased display name; names that are not one
- * family token are skipped rather than guessed.
+ * family token are skipped rather than guessed. Entries narrowed by a non-null `scope.surface`
+ * or `scope.model.id` are skipped too: a cap on one surface or one model id must not block
+ * the whole family. That fails open: an id- or surface-scoped cap is not enforced, and a 429
+ * against it still falls through the normal retry path.
  */
 function anthropicScopedLimits(limits: unknown): UsageWindow[] {
 	if (!Array.isArray(limits)) return [];
@@ -200,7 +203,10 @@ function anthropicScopedLimits(limits: unknown): UsageWindow[] {
 	for (const entry of limits) {
 		const item = asRecord(entry);
 		if (item?.kind !== "weekly_scoped") continue;
-		const displayName = asRecord(asRecord(item.scope)?.model)?.display_name;
+		const scope = asRecord(item.scope);
+		const model = asRecord(scope?.model);
+		if (scope?.surface != null || model?.id != null) continue;
+		const displayName = model?.display_name;
 		const family = typeof displayName === "string" ? displayName.trim().toLowerCase() : "";
 		if (!/^[a-z0-9]+$/.test(family)) continue;
 		const usedPercent = percentage(item.percent);
