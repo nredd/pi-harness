@@ -870,3 +870,55 @@ def test_explicit_binary_validation(binary: str) -> None:
     """
     with pytest.raises(checks.CheckError, match="trusted"):
         checks.GitHub(Path(binary))
+
+
+def test_unstartable_gh_and_missing_rest_collection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An executable that cannot start and a page without its collection key both refuse.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Replaces the replayed page response.
+
+    Returns:
+        None: Completes after both CLI-boundary failures are refused.
+    """
+    gh = Replay()
+    with pytest.raises(checks.CheckError, match="Cannot execute `gh`"):
+        checks.GitHub.command(gh, "api", "repos/example")
+    monkeypatch.setattr(gh, "page_response", lambda _endpoint: [{}])
+    with pytest.raises(checks.CheckError, match="Missing REST collection: 'check_runs'"):
+        gh.gate()
+
+
+def test_missing_required_rules_and_ambiguous_pr_refuse() -> None:
+    """No required-check ruleset and a run without exactly one PR both refuse admission.
+
+    Returns:
+        None: Completes after both evidence gaps are refused.
+    """
+    gh = Replay()
+    gh.data["rules"] = []
+    with pytest.raises(checks.CheckError, match="No required check rules found"):
+        gh.gate()
+    gh = Replay()
+    for run in [*gh.data["runs"], gh.old_run]:
+        run["pull_requests"] = []
+    with pytest.raises(checks.CheckError, match="exactly one associated PR"):
+        gh.gate()
+
+
+def test_main_requires_an_explicit_gh(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Without `MERGE_PR_GH` or `--gh`, the CLI refuses instead of searching `PATH`.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Clears the executable variable and sets argv.
+        caplog (pytest.LogCaptureFixture): Captures the refusal.
+
+    Returns:
+        None: Completes after the CLI exits 1.
+    """
+    monkeypatch.delenv("MERGE_PR_GH", raising=False)
+    monkeypatch.setattr(sys, "argv", ["merge_pr_checks.py", "135", "0" * 40, REPO])
+    assert checks.main() == 1
+    assert "Set `MERGE_PR_GH` or `--gh` to the trusted absolute executable" in caplog.text

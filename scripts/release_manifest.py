@@ -250,8 +250,6 @@ def gitlinks(repo_root: Path) -> list[ForkIdentity]:
     done = run_git(repo_root, "submodule", "status")
     forks: list[ForkIdentity] = []
     for line in done.stdout.splitlines():
-        if not line:
-            continue
         match = SUBMODULE_STATUS.fullmatch(line)
         if match is None:
             raise ManifestError(f"Malformed `git submodule status` entry: '{line}'")

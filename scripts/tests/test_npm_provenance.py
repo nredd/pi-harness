@@ -200,7 +200,7 @@ def write_signature_install_tree(project: Path, identity: nr.Identity, case: str
         "version": "other" if case == "wrong-version" else identity.target.version,
         "integrity": "wrong" if case == "wrong-integrity" else identity.integrity,
     }
-    packages = {"": {}, subject_key: entry}
+    packages = {"": {}} if case == "missing-entry" else {"": {}, subject_key: entry}
     if case in {"runtime-dependency", "unattested-subject"}:
         packages["node_modules/attested-dependency"] = {"version": "4.5.6", "integrity": identity.integrity}
         packages["node_modules/attested-dependency/node_modules/nested"] = {
@@ -232,6 +232,7 @@ def write_signature_install_tree(project: Path, identity: nr.Identity, case: str
         "audit-failed",
         "wrong-integrity",
         "wrong-version",
+        "missing-entry",
         "runtime-dependency",
         "unattested-subject",
         "altered-root-bytes",
@@ -319,10 +320,14 @@ def test_npm_signature_audit_fails_closed(
     monkeypatch.setattr(nr, "command", command)
     if case in {"valid", "runtime-dependency"}:
         nr.verify_signatures(identity)
+    elif case == "missing-entry":
+        with pytest.raises(nr.ReleaseError, match="lacks a valid 'node_modules/@nredd/pi-session-kit' entry"):
+            nr.verify_signatures(identity)
     else:
         with pytest.raises((nr.ReleaseError, subprocess.CalledProcessError)):
             nr.verify_signatures(identity)
-    assert calls == (["install"] if case in {"wrong-integrity", "wrong-version"} else ["install", "audit"])
+    refused = {"wrong-integrity", "wrong-version", "missing-entry"}
+    assert calls == (["install"] if case in refused else ["install", "audit"])
     assert all(not project.exists() for project in projects)
 
 

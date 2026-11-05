@@ -7,6 +7,9 @@ References:
 from __future__ import annotations
 
 import hashlib
+import json
+import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -232,3 +235,195 @@ def test_schema_rejects_each_constraint(tmp_path: Path, mutation: dict[str, obje
     rm.ReleaseManifest.model_validate(document)
     with pytest.raises(ValidationError):
         rm.ReleaseManifest.model_validate({**document, **mutation})
+
+
+def stub_git_output(monkeypatch: pytest.MonkeyPatch, command: tuple[str, ...], stdout: str) -> None:
+    """Replace one Git command's output with a line real Git never emits, keeping every other call real.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Restores `run_git` after the test.
+        command (tuple[str, ...]): Exact Git arguments to intercept.
+        stdout (str): Replacement standard output.
+
+    Returns:
+        None: `rm.run_git` is patched for the test.
+    """
+    real = rm.run_git
+
+    def run_git(repo_root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+        """Return the stubbed output for the intercepted command, delegating every other call to real Git.
+
+        Parameters:
+            repo_root (Path): Repository worktree.
+            *args (str): Arguments after `git -C <repo_root>`.
+            check (bool): Raise on a nonzero Git exit status.
+
+        Returns:
+            subprocess.CompletedProcess[str]: Stubbed or real captured Git output.
+        """
+        if args == command:
+            return subprocess.CompletedProcess([GIT, *args], 0, stdout, "")
+        return real(repo_root, *args, check=check)
+
+    monkeypatch.setattr(rm, "run_git", run_git)
+
+
+def test_git_must_be_on_path_and_startable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing or unstartable Git executable is a `ManifestError`, not a raw OS error."""
+    rm.locate_git.cache_clear()
+    monkeypatch.setenv("PATH", str(tmp_path))
+    try:
+        with pytest.raises(rm.ManifestError, match="`git` not found on PATH"):
+            rm.locate_git()
+    finally:
+        rm.locate_git.cache_clear()
+    monkeypatch.setattr(rm, "locate_git", lambda: tmp_path / "missing-git")
+    with pytest.raises(rm.ManifestError, match="could not start"):
+        rm.run_git(tmp_path, "status")
+
+
+def test_sha256_refuses_a_directory(tmp_path: Path) -> None:
+    """Only regular files are hashed."""
+    with pytest.raises(rm.ManifestError, match="Path is not a regular file"):
+        rm.sha256_file(tmp_path)
+
+
+def test_repository_without_gitmodules_has_no_forks(tmp_path: Path) -> None:
+    """A parent without `.gitmodules` records no Gitlinks rather than failing."""
+    repo = make_repo(tmp_path)
+    git(repo, "rm", "-q", "--cached", "forks/fake")
+    git(repo, "rm", "-q", ".gitmodules")
+    git(repo, "commit", "-q", "-m", "drop fork")
+    shutil.rmtree(repo / "forks")
+    assert rm.build_manifest(repo, "no-forks", {}, {}, {}).forks == []
+
+
+def test_untagged_fork_commit_records_no_tag(tmp_path: Path) -> None:
+    """An initialized fork whose indexed commit has no exact local tag records `tag: null`."""
+    repo = make_repo(tmp_path)
+    git(repo / "forks" / "fake", "tag", "-d", "v0.1.0")
+    assert rm.build_manifest(repo, "untagged", {}, {}, {}).forks[0].tag is None
+
+
+@pytest.mark.parametrize(
+    ("gitmodules", "message"),
+    [
+        ('[submodule "a"]\n\tpath\n', "Malformed `.gitmodules` entry: 'submodule.a.path'"),
+        ('[submodule "a"]\n\tpath = forks/a\n', "requires both `path` and `url`"),
+        (
+            '[submodule "a"]\n\tpath = forks/a\n\turl = u\n[submodule "b"]\n\tpath = forks/a\n\turl = u\n',
+            "Duplicate `.gitmodules` path 'forks/a'",
+        ),
+    ],
+)
+def test_malformed_gitmodules_are_refused(tmp_path: Path, gitmodules: str, message: str) -> None:
+    """Incomplete, valueless or duplicate `.gitmodules` declarations fail loudly."""
+    repo = init_repo(tmp_path / "repo")
+    (repo / ".gitmodules").write_text(gitmodules, encoding="utf-8")
+    with pytest.raises(rm.ManifestError, match=re.escape(message)):
+        rm.submodule_urls(repo)
+
+
+@pytest.mark.parametrize(
+    ("command", "stdout", "message"),
+    [
+        (("submodule", "status"), "garbage\n", "Malformed `git submodule status` entry: 'garbage'"),
+        (("submodule", "status"), f" {'1' * 40} forks/other\n", "Gitlink 'forks/other' has no URL"),
+        (("ls-files", "-s"), "", "reports 'forks/fake' but the index has no Gitlink for it"),
+        (("ls-files", "-s"), "160000 short 0\tforks/fake\n", "Malformed index Gitlink entry"),
+    ],
+)
+def test_inconsistent_git_output_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: tuple[str, ...], stdout: str, message: str
+) -> None:
+    """Status and index output that disagree with `.gitmodules` or each other fail closed."""
+    repo = make_repo(tmp_path)
+    stub_git_output(monkeypatch, command, stdout)
+    with pytest.raises(rm.ManifestError, match=message):
+        rm.gitlinks(repo)
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        (None, "Cannot read package manifest"),
+        ("{", "Cannot read package manifest"),
+        ('{"version":"1.0.0"}', "needs string `name` and `version`"),
+    ],
+)
+def test_unreadable_or_incomplete_package_manifest_is_refused(
+    tmp_path: Path, content: str | None, message: str
+) -> None:
+    """A missing, non-JSON or nameless owned package manifest fails loudly."""
+    repo = make_repo(tmp_path)
+    path = repo / "packages" / rm.OWNED_PACKAGE_DIRECTORIES[0] / "package.json"
+    if content is None:
+        path.unlink()
+    else:
+        path.write_text(content, encoding="utf-8")
+    with pytest.raises(rm.ManifestError, match=message):
+        rm.owned_packages(repo)
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [("{", "Cannot read root lockfile"), ('{"lockfileVersion":"3"}', "needs integer `lockfileVersion`")],
+)
+def test_malformed_root_lockfile_is_refused(tmp_path: Path, content: str, message: str) -> None:
+    """A non-JSON root lockfile or a non-integer `lockfileVersion` fails loudly."""
+    (tmp_path / "package-lock.json").write_text(content, encoding="utf-8")
+    with pytest.raises(rm.ManifestError, match=message):
+        rm.third_party_identity(tmp_path)
+
+
+def test_artifact_url_requires_an_artifact() -> None:
+    """A URL for an undeclared artifact is refused before any hashing."""
+    with pytest.raises(rm.ManifestError, match="`--artifact-url` has no matching `--artifact`: ghost"):
+        rm.artifacts({}, {"ghost": "https://example.invalid/ghost"})
+
+
+def test_main_writes_the_default_output_and_refuses_dirty_trees(tmp_path: Path) -> None:
+    """`main` writes `releases/<id>.json` for a clean tree and exits 1 on a dirty one."""
+    repo = make_repo(tmp_path)
+    artifact = tmp_path / "candidate.bin"
+    artifact.write_bytes(b"candidate\n")
+    argv = [
+        "cli",
+        "--repo-root",
+        str(repo),
+        "--artifact",
+        f"candidate={artifact}",
+        "--artifact-url",
+        "candidate=https://example.invalid/candidate.bin",
+        "--evidence",
+        "gate=green",
+    ]
+    assert rm.main(argv) == 0
+    written = json.loads((repo / "releases" / "cli.json").read_text(encoding="utf-8"))
+    assert written["release"]["id"] == "cli"
+    assert written["evidence"] == {"gate": "green"}
+    assert written["artifacts"][0]["url"] == "https://example.invalid/candidate.bin"
+    assert rm.main(["dirty", "--repo-root", str(repo)]) == 1
+    output = tmp_path / "out" / "dirty.json"
+    assert rm.main(["dirty", "--repo-root", str(repo), "--allow-dirty", "--output", str(output)]) == 0
+    assert json.loads(output.read_text(encoding="utf-8"))["release"]["dirty"] is True
+
+
+def test_main_rejects_malformed_pairs(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """A malformed `NAME=VALUE` option exits 1 on a clean repository that would otherwise succeed."""
+    repo = make_repo(tmp_path)
+    assert rm.main(["bad", "--repo-root", str(repo), "--evidence", "novalue"]) == 1
+    assert "FAILED: `--evidence` must be NAME=VALUE, got 'novalue'" in caplog.text
+    assert not (repo / "releases").exists()
+
+
+def test_script_entry_point_exits_with_main_status(tmp_path: Path) -> None:
+    """Running the module as a script exits with `main`'s status code."""
+    done = subprocess.run(
+        [sys.executable, str(Path(rm.__file__)), "plain", "--repo-root", str(tmp_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 1
+    assert "FAILED:" in done.stderr
