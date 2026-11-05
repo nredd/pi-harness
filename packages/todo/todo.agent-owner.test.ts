@@ -252,50 +252,62 @@ describe("repeated settles during background work (#448)", () => {
 		return notify.mock.calls;
 	};
 
-	it("reports once, stays quiet on unchanged wakes, and reports again on every state change", async () => {
+	it("repeats a warning on every settle and an unchanged info report only once", async () => {
 		const h = setup();
 		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
 		await orchestration(h, ctx);
 
+		// Parent-held work warns on every settle: nothing else will move it.
+		const held = [
+			`Run ended with 4 in_progress todos, ${ARMED}; held by the parent: #3 Deploy under CI monitor, #4 Recover stale branch; blocked: #2 Admit TV scope (by #1); agent running: #1 Audit auth (@scout running)`,
+			"warning",
+		];
+		expect(await settle(h, ctx)).toEqual([held]);
+		expect(await settle(h, ctx)).toEqual([held]);
+
+		// Once only the child and its dependent are open, a wake that changed nothing settles silently.
+		await h.call(ctx, { action: "update", id: 3, status: "completed", evidence: "CI green, deployed" });
+		await h.call(ctx, { action: "update", id: 4, status: "completed", evidence: "branch deleted" });
 		expect(await settle(h, ctx)).toEqual([
 			[
-				`Run ended with 4 in_progress todos, ${ARMED}; held by the parent: #3 Deploy under CI monitor, #4 Recover stale branch; blocked: #2 Admit TV scope (by #1); agent running: #1 Audit auth (@scout running)`,
-				"warning",
+				`Run ended with 2 in_progress todos, ${ARMED}; blocked: #2 Admit TV scope (by #1); agent running: #1 Audit auth (@scout running)`,
+				"info",
 			],
 		]);
-		// A monitor or agent wake that changed nothing settles silently, however often.
 		expect(await settle(h, ctx)).toEqual([]);
 		expect(await settle(h, ctx)).toEqual([]);
 
-		// The stale task is completed with evidence: the smaller set is reported once.
-		await h.call(ctx, { action: "update", id: 4, status: "completed", evidence: "branch deleted" });
-		expect((await settle(h, ctx))[0]?.[0]).toBe(
-			`Run ended with 3 in_progress todos, ${ARMED}; held by the parent: #3 Deploy under CI monitor; blocked: #2 Admit TV scope (by #1); agent running: #1 Audit auth (@scout running)`,
-		);
-		expect(await settle(h, ctx)).toEqual([]);
-
-		// The child fails: its todo is abandoned and the warning returns.
+		// The child fails: its todo is abandoned, #2's only blocker is dead, and both warn every settle.
 		await h.emit(SUBAGENT_FAILED_EVENT, { id: "a1", status: "error" });
-		expect((await settle(h, ctx))[0]).toEqual([
-			`Run ended with 3 in_progress todos, ${ARMED}; owner agent failed or stopped: #1 Audit auth (@scout failed); held by the parent: #3 Deploy under CI monitor; blocked: #2 Admit TV scope (by #1)`,
+		const failed = [
+			`Run ended with 2 in_progress todos, ${ARMED}; owner agent failed or stopped: #1 Audit auth (@scout failed); held by the parent: #2 Admit TV scope (by #1 in_progress)`,
 			"warning",
-		]);
+		];
+		expect(await settle(h, ctx)).toEqual([failed]);
+		expect(await settle(h, ctx)).toEqual([failed]);
+
+		// A retry under the same name revives the dependency: info again, once.
+		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a2", handle: "scout" });
+		expect((await settle(h, ctx))[0]?.[1]).toBe("info");
 		expect(await settle(h, ctx)).toEqual([]);
 
 		// The dependency resolves: #2 is no longer blocked, so it is reported as parent-held.
-		await h.call(ctx, { action: "update", id: 1, status: "completed", evidence: "re-ran audit inline" });
-		expect((await settle(h, ctx))[0]?.[0]).toBe(
-			`Run ended with 2 in_progress todos, ${ARMED}; held by the parent: #2 Admit TV scope, #3 Deploy under CI monitor`,
-		);
+		await h.call(ctx, { action: "update", id: 1, status: "completed", evidence: "re-ran audit" });
+		expect((await settle(h, ctx))[0]).toEqual([
+			`Run ended with 1 in_progress todo, ${ARMED}; held by the parent: #2 Admit TV scope`,
+			"warning",
+		]);
 	});
 
-	it("reports again after a person prompts, but not after an extension wake", async () => {
+	it("shows an unchanged info report again after a person prompts, not after an extension prompt", async () => {
 		const h = setup();
 		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
 		await orchestration(h, ctx);
+		for (const id of [3, 4]) await h.call(ctx, { action: "update", id, status: "completed", evidence: "done" });
 		expect(await settle(h, ctx)).toHaveLength(1);
 
-		await h.handler("input")({ type: "input", text: "monitor m8 fired", source: "extension" }, ctx);
+		// Monitor and agent wakes run no input handlers at all; `/loop` and `/goal` prompts are `extension`.
+		await h.handler("input")({ type: "input", text: "goal nudge", source: "extension" }, ctx);
 		expect(await settle(h, ctx)).toEqual([]);
 
 		await h.handler("input")({ type: "input", text: "status?", source: "interactive" }, ctx);
@@ -319,7 +331,9 @@ describe("repeated settles during background work (#448)", () => {
 		const h = setup();
 		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
 		await ownedTodo(h, ctx, "scout");
+		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "scout" });
 		expect(await settle(h, ctx)).toHaveLength(1);
+		expect(await settle(h, ctx)).toEqual([]);
 		await h.call(ctx, { action: "update", id: 1, status: "pending" });
 		expect(await settle(h, ctx)).toEqual([]);
 		await h.call(ctx, { action: "update", id: 1, status: "in_progress" });
@@ -328,6 +342,7 @@ describe("repeated settles during background work (#448)", () => {
 		await h.handler("session_shutdown")({}, ctx);
 		const resumed = createMockCtx({ sessionId: "s1", hasUI: true });
 		await ownedTodo(h, resumed, "scout");
+		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "scout" });
 		expect(await settle(h, resumed)).toHaveLength(1);
 	});
 });

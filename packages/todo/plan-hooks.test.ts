@@ -364,20 +364,51 @@ describe("settling with in_progress todos", () => {
 		expect(formatInProgressNotice(state, lookup)).toEqual({
 			text: `Run ended with 7 in_progress todos, ${ARMED}; owner agent failed or stopped: #3 t3 (@w3 stopped), #4 t4 (@w4 failed); held by the parent: #2 t2 (@w2 done), #7 t7; blocked: #5 t5 (by #2); agent running: #1 t1 (@w1 running), #8 t8 (@w1 running)`,
 			level: "warning",
-			key: "1:running:running:|2:held:done:|3:abandoned:stopped:|4:abandoned:failed:|5:blocked::2|7:held::|8:running:running:",
+			key: expect.any(String),
 		});
 	});
 
-	it("is info when every todo waits on a running agent or an open dependency", () => {
+	it("is info when every todo waits on a running agent or a live dependency", () => {
 		const state = {
-			tasks: [task(1, { owner: "w1" }), task(2, { blockedBy: [3] }), { id: 3, subject: "t3", status: "deferred" }],
-			nextId: 4,
+			tasks: [
+				task(1, { owner: "w1" }),
+				task(2, { blockedBy: [1] }),
+				task(3, { blockedBy: [4] }),
+				{ id: 4, subject: "t4", status: "pending", owner: "w1" },
+			],
+			nextId: 5,
 		} as never;
 		const lookup = (owner: string | undefined) => (owner === "w1" ? "running" : undefined);
-		expect(formatInProgressNotice(state, lookup)?.level).toBe("info");
-		expect(formatInProgressNotice(state, lookup)?.text).toBe(
-			`Run ended with 2 in_progress todos, ${ARMED}; blocked: #2 t2 (by #3); agent running: #1 t1 (@w1 running)`,
-		);
+		expect(formatInProgressNotice(state, lookup)).toEqual({
+			text: `Run ended with 3 in_progress todos, ${ARMED}; blocked: #2 t2 (by #1), #3 t3 (by #4); agent running: #1 t1 (@w1 running)`,
+			level: "info",
+			key: expect.any(String),
+		});
+	});
+
+	it.each([
+		["deferred", { status: "deferred" }],
+		["unowned pending", { status: "pending" }],
+		["pending with a finished owner", { status: "pending", owner: "w2" }],
+		["abandoned in_progress", { status: "in_progress", owner: "w3" }],
+	])("warns when a todo's only open dependency is %s", (_name, dep) => {
+		const state = { tasks: [task(1, { blockedBy: [2] }), { id: 2, subject: "t2", ...dep }], nextId: 3 } as never;
+		const states: Record<string, AgentRunState> = { w2: "done", w3: "failed" };
+		const notice = formatInProgressNotice(state, (owner) => states[owner ?? ""]);
+		expect(notice?.level).toBe("warning");
+		expect(notice?.text).toContain(`held by the parent: #1 t1 (by #2 ${(dep as { status: string }).status})`);
+	});
+
+	it("keys a report by group, agent state and blockers", () => {
+		const state = (dep: string) =>
+			({
+				tasks: [task(1, { blockedBy: [2] }), { id: 2, subject: "t2", status: dep, owner: "w" }],
+				nextId: 3,
+			}) as never;
+		const key = (dep: string, agent?: AgentRunState) => formatInProgressNotice(state(dep), () => agent)?.key;
+		expect(key("pending", "running")).toBe(key("pending", "running"));
+		expect(key("pending", "running")).not.toBe(key("in_progress", "running"));
+		expect(key("pending", "running")).not.toBe(key("pending"));
 	});
 
 	it("strips terminal escapes from the subjects", () => {
