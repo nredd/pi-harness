@@ -807,6 +807,32 @@ def discovery_context(root: Path, sandbox: pc.Sandbox) -> pc.Context:
     return pc.Context(Path("pi"), sandbox, root / "a" / "b" / "installed", artifact, root, ())
 
 
+@pytest.mark.parametrize("exited", [True, False])
+def test_stop_hostile_child_kills_only_a_live_child(*, exited: bool) -> None:
+    """Reap an already-exited marker without signalling it, and kill a live one.
+
+    Which arm the startup-failure cases reach depended on whether the marker's exit status was
+    collected before cleanup ran; this pins both with a child this test owns.
+
+    Parameters:
+        exited (bool): Whether the child exits on its own before cleanup.
+    """
+    program = "pass" if exited else "import time; time.sleep(60)"
+    child = subprocess.Popen([sys.executable, "-c", program], stdout=subprocess.PIPE)
+    try:
+        if exited:
+            child.wait(timeout=10)
+        pc.stop_hostile_child(child)
+        assert child.returncode == (0 if exited else -9)
+        assert child.stdout is not None
+        assert child.stdout.closed
+    finally:
+        # This test spawned `child`, so it may signal it; a failed assert must not leak the sleep.
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=10)
+
+
 @pytest.mark.parametrize(
     ("script", "message", "status", "expires"),
     [

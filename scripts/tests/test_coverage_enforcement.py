@@ -420,7 +420,8 @@ def test_current_bun_policy_is_explicit_and_links_migration() -> None:
     Parameters:
         None.
     Returns:
-        None: Promoted signals enforce 0/0 on both OSes; the rest carry an explicit mode and #160 rationale.
+        None: Promoted signals enforce 0/0 lines/functions plus a branch cap on both OSes; the rest carry
+            an explicit mode and #160 rationale.
     Raises:
         AssertionError: A signal defaults to enforcement, lacks its reason or loosens a promoted floor.
     """
@@ -432,8 +433,10 @@ def test_current_bun_policy_is_explicit_and_links_migration() -> None:
         if name in ENFORCED_BUN_PACKAGES:
             assert signal["enforcement"] == "enforced", name
             assert "files" not in signal, name
-            zero = {"lines": 0, "functions": 0}
-            assert signal["max_uncovered"] == {"darwin": zero, "linux": zero}, name
+            assert signal["max_uncovered"].keys() == {"darwin", "linux"}, name
+            for counts in signal["max_uncovered"].values():
+                # Branch caps (#403) are driven to 0 separately by #404-#425; lines/functions stay 0/0.
+                assert (counts["lines"], counts["functions"], type(counts["branches"])) == (0, 0, int), name
         else:
             assert signal["enforcement"] == "report-only", name
             assert "https://github.com/nredd/pi-harness/issues/160" in signal["reason"]

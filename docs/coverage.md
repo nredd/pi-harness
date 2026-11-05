@@ -44,16 +44,52 @@ opt-in: ordinary workflows never inspect or transport `globalThis.__coverage__`.
 merges VM counters into Vitest 5's `__VITEST_COVERAGE__` store; the ordinary primary suite keeps its
 `src`-only report separate. These source-complete reports can still contain uncovered paths, not an
 invented 100% result. Their local zero-floor measurement enables enforcement; clean hosted macOS and
-Linux final-HEAD receipts remain required acceptance evidence. The measured per-OS primary floors are enforced now; branches stay
-report-only, and Bun signals follow their own declared enforcement (see below). The conflict-resolution decisions and exact
+Linux final-HEAD receipts remain required acceptance evidence. The measured per-OS primary floors are enforced now; uncovered
+branches are capped per signal ([branch caps](#branch-caps)), and Bun signals follow their own declared enforcement (see below). The conflict-resolution decisions and exact
 base-relative facade ledger regression for the `b51e177` main merge are recorded
 [here](../coverage/receipts/tier-main-merge.md).
 
 The target is **100% of owned executable source lines AND functions**, measured by each
-package's primary runner. Branches are reported, not gated. This is source coverage, not
+package's primary runner. Uncovered branches are gated by per-signal caps on their way to 0 (below). This is source coverage, not
 proof that every behavior is asserted. Every subsequently closed gap needs a test that fails
 without the change. Phase 0 adds accounting; the final integration also tests worker-error settlement and remaining
 cross-platform collector paths without removing guards.
+
+### Branch caps
+
+`max_uncovered.<os>.branches` is each signal's uncovered-branch cap, with the same semantics as
+`lines`/`functions`: an enforced signal fails on excess (`Budget exceeded: <measured> uncovered, budget
+<cap>` names all three counters), a report-only signal logs the reference and the signed delta, and the
+JSON `signals` map carries the branch delta. The base ratchet treats it like lines: a cap can only go
+down, and dropping a `branches` key the base had is a weakening. While `target.branches` is unset, a
+100-percent primary signal is held to its own branch cap under the global target; #425 sets it to 0.
+
+It fails closed both ways. A signal whose report has branch records (`BRDA`) needs a cap on that OS
+(`Missing branch cap`), and a capped signal whose report has executable lines but no branch records
+fails (`Branch producer missing`), so a producer that silently stops emitting `BRDA` can't read as 0.
+Carve-outs: the native `bun test` subset signals (session-kit, subagents `/bun`) write no branch records
+and declare no cap until #320 moves them to Vitest-on-Bun Istanbul, which then adds one (dev-tools and
+plan-mode moved in #433 and #362 and are capped); `computer-use-vitest` is owner-excluded (`goal: excluded`), the only
+goal that may carry branch records without a cap.
+
+Branch units differ by producer: Istanbul and Bun count AST arms (including an implicit `else` and each
+logical operand), coverage.py counts jump arcs, so caps are only comparable within one signal. Both
+fail-closed checks are aggregate per signal, not per file: `Branch producer missing` needs the whole
+report to have zero `BRDA` rows.
+
+Python measures branches: `PY_GATE` in the `Makefile` passes `--cov-branch`, so both coverage.py
+producers emit `BRDA` rows like the benchmark's `branch = true` producer already did (`-` for a branch whose line never ran, named targets such as `jump to line 9`).
+`test_real_coveragepy_branch_report_parses` runs real coverage.py to pin that shape.
+
+Starting caps are the counts measured on this policy's introducing PR, per OS, from the hosted
+artifacts of its final HEAD (WSL folded into `linux` as the max). A cap is never a max over runs: a branch
+whose coverage changed between runs on an unchanged tree gets a deterministic test first. #429 found three,
+each reached only by the real host: `formatMetric`'s non-`available` arm and `rankProcesses`'s pid
+tiebreak in `packages/dev-tools/src/resource/index.ts`, and `stop_hostile_child()`'s already-exited arm in
+`scripts/package_contracts.py` (whether the marker's exit status was collected before cleanup). Fixture
+tests now pin all three. Caps are references on the way down, not waivers: #404-#424 each
+lower their own signal's cap toward 0 and never raise one, then #425 locks every cap and `target.branches`
+at 0.
 
 `coverage/policy.json` is the reviewed inventory and the only threshold policy. Its target is
 zero uncovered lines/functions. Schema version 2 keys each signal's transitional `max_uncovered`
@@ -163,7 +199,8 @@ without calling absent source covered. Every report is still required, parsed an
 missing/empty/malformed reports, missing expected files and inventory losses still fail closed.
 Counts and signed deltas from the stored per-OS references appear in logs and the JSON `signals`
 map. Report-only excess never fails accounting; its reference-number changes are not a budget
-ratchet. Per-OS reference membership is still required, and branches remain report-only everywhere.
+ratchet. Per-OS reference membership is still required. Branch caps follow the signal's enforcement
+like its lines/functions ([branch caps](#branch-caps)).
 
 Flip a package's Bun signal to `enforced` **only when its full suite runs under Bun on both owned
 OSes and its Bun inventory covers every owned executable source file**, including never-imported
@@ -183,8 +220,8 @@ manifests pass only package arguments. Do not remove
 enforces integer budgets for `enforced` signals only; producer declarations and the real pinned-Bun
 threshold-enforcement reproduction remain mandatory in either mode.
 LCOV producers may emit aggregate-only function totals; those must be internally consistent.
-Signed branch hit counts are retained as reported-only diagnostics, never used to gate lines or
-functions. Missing/empty reports, inconsistent counters, zero total owned lines, unknown files
+Branch records are validated like every other counter and gated by the signal's branch cap
+([branch caps](#branch-caps)). Missing/empty reports, inconsistent counters, zero total owned lines, unknown files
 and absent expected source all fail closed.
 
 ## Inventory and exclusions
@@ -377,8 +414,8 @@ regression verifies inherited routing/config cannot redirect writes or execute i
 This consumes reports without executing tests, writes `coverage/summary.json`, and compares
 each independent per-OS budget with `git show <base>:coverage/policy.json`. The default OS is
 `sys.platform`; `--os darwin` or `--os linux` is explicit for artifact replay and tests. Raising
-either uncovered counter of an enforced-to-enforced signal on **any** OS, removing any previously
-declared OS reference/floor or measured package/signal, or disabling an enabled global target fails. The base ratchet checks both OSes,
+any uncovered counter (lines, functions, branches) of an enforced-to-enforced signal on **any** OS,
+removing a `branches` cap or any previously declared OS reference/floor or measured package/signal, or disabling an enabled global target fails. The base ratchet checks both OSes,
 not just the host running accounting. A missing selected-OS floor never falls back to the other OS. Only
 the initial addition of a policy has no base counterpart; invalid Git bases still fail.
 
@@ -454,7 +491,8 @@ uv run --locked --project integration python scripts/coverage_accounting.py --me
 
 Use a checkout matching the artifact's production source and inventory. `--reports-root` reads the
 artifact's repository-relative report paths while ownership validation uses that checkout. JSON
-`measured_floors` contains each `package/signal -> OS -> {lines, functions}`; the logged unified diff
+`measured_floors` contains each `package/signal -> OS -> {lines, functions, branches}` (`branches` only
+when the report has branch records); the logged unified diff
 proposes only that OS's measured counters. Review it and edit the policy manually; it is never
 written or auto-committed. `--measure` rejects `--base` so it cannot be confused with ratchet evidence.
 Replay the artifact as a gate by dropping `--measure` and adding `--base origin/main`; the summary's
@@ -485,10 +523,9 @@ guard (`if (!complete) return` in the stdout `data` handler of `src/collect.ts`)
 when stream delivery raced cancellation. The controlled cancellation/data-event fixture in
 `packages/resource-sampler/test/sampler.test.ts` now forces that branch by emitting late stdout
 after cancellation. Whether hosted Darwin counts stay stable is not yet measured (issue
-[here](https://github.com/nredd/pi-harness/issues/164)). **No branch floor is added or changed.**
-`Counts` contains only `lines` and `functions`; both `account()`'s budget predicate and
-`check_ratchet()` compare only those two counters. Branch totals/misses remain JSON diagnostics,
-never enforced thresholds; the existing branch-only LCOV regression explicitly passes.
+[here](https://github.com/nredd/pi-harness/issues/164)). That race-dependent branch is why the
+sampler's starting branch caps come from hosted counts rather than a single local run; #417 drives them
+to 0 ([branch caps](#branch-caps)).
 
 `inprocess` is `enforced` at 0/0 lines/functions on darwin and linux for both `primary` and `bun`
 since #376, with nothing excluded. Its inventory is every fixture module the suites run:
