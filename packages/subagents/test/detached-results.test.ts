@@ -151,14 +151,16 @@ describe("AgentManager.detach", () => {
     const onQueuedStop = vi.fn();
     const manager = new AgentManager(() => {}, undefined, undefined, undefined, undefined, undefined, undefined, undefined, onQueuedStop);
     const entry = (id: string) => ({ id, pool: "background", cancel: vi.fn(), release: vi.fn() });
-    (manager as any).agents.set("q", { id: "q", status: "queued", isBackground: true });
-    (manager as any).agents.set("child", { id: "child", status: "queued", parentAgentId: "bg" });
-    (manager as any).queue.push(entry("q"), entry("child"));
+    const agents = Reflect.get(manager, "agents") as Map<string, { id: string; status: string; isBackground?: boolean; parentAgentId?: string }>;
+    const queue = Reflect.get(manager, "queue") as Array<ReturnType<typeof entry>>;
+    agents.set("q", { id: "q", status: "queued", isBackground: true });
+    agents.set("child", { id: "child", status: "queued", parentAgentId: "bg" });
+    queue.push(entry("q"), entry("child"));
 
     expect(manager.detach()).toBe(0);
     expect(onQueuedStop.mock.calls.map(([record]) => [record.id, record.status])).toEqual([["q", "stopped"]]);
-    expect((manager as any).agents.get("child").status).toBe("queued");
-    expect((manager as any).queue.map((e: { id: string }) => e.id)).toEqual(["child"]);
+    expect(agents.get("child")?.status).toBe("queued");
+    expect((Reflect.get(manager, "queue") as Array<ReturnType<typeof entry>>).map((e) => e.id)).toEqual(["child"]);
   });
 });
 
