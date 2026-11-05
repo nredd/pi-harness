@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { CONFIG_FILE, loadConfig, parseConfig } from "../src/config.js";
 
 describe("parseConfig", () => {
-	it("ships a valid opt-in ordered cheap profile rather than registering implicit defaults", async () => {
+	it("ships valid opt-in cheap and frontier profiles rather than registering implicit defaults", async () => {
 		const raw = JSON.parse(await readFile(new URL("../examples/subscription-router.json", import.meta.url), "utf8"));
 		expect(parseConfig(raw)).toEqual([
 			{
@@ -16,6 +16,16 @@ describe("parseConfig", () => {
 				chain: [
 					{ provider: "anthropic", id: "claude-haiku-5-5" },
 					{ provider: "openai-codex", id: "gpt-6-luna" },
+				],
+			},
+			{
+				id: "frontier",
+				name: "Router frontier",
+				strategy: "balanced",
+				exhaustion: { policy: "wait" },
+				chain: [
+					{ provider: "anthropic", id: "claude-fable-5-1" },
+					{ provider: "openai-codex", id: "gpt-6-astra" },
 				],
 			},
 		]);

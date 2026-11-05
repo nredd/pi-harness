@@ -304,6 +304,57 @@ describe("UsageService", () => {
 		expect(blocked("claude-sonnet-5")).toBe(false);
 	});
 
+	it("gates Fable on its weekly_scoped limit from the live limits list", async () => {
+		// Redacted shape of a live /api/oauth/usage reply (2026-11-04): no seven_day_fable key,
+		// the Fable cap only appears as a model-scoped entry in `limits`.
+		const scoped = (display_name: unknown, percent: unknown) => ({
+			kind: "weekly_scoped",
+			group: "weekly",
+			percent,
+			resets_at: FUTURE_RESET,
+			scope: { model: { id: null, display_name }, surface: null },
+			is_active: false,
+		});
+		const { service } = harness([
+			{
+				body: {
+					five_hour: null,
+					seven_day: { utilization: 40, resets_at: FUTURE_RESET },
+					seven_day_opus: { utilization: 5 },
+					seven_day_fable: null,
+					limits: [
+						{ kind: "weekly_all", group: "weekly", percent: 40, resets_at: FUTURE_RESET, scope: null },
+						scoped("Fable", 100),
+						scoped("Opus", 100),
+						scoped("Claude Haiku", 100),
+						scoped(null, 100),
+						scoped("Sonnet", "n/a"),
+						"junk",
+					],
+				},
+			},
+		]);
+		const snapshot = await service.get(ctx, "anthropic");
+		expect(snapshot.windows.map((w) => [w.name, w.usedPercent])).toEqual([
+			["seven_day", 40],
+			["seven_day_opus", 5],
+			["seven_day_fable", 100],
+		]);
+		expect(snapshot.windows[2]).toMatchObject({
+			scope: "model",
+			families: ["fable"],
+			resetAt: FUTURE_RESET_MS,
+			durationMs: 604_800_000,
+		});
+		expect(service.decisionFor({ provider: "anthropic", id: "claude-fable-5-1" })).toMatchObject({
+			block: true,
+			window: "seven_day_fable",
+			families: ["fable"],
+		});
+		expect(service.decisionFor({ provider: "anthropic", id: "claude-opus-5-5" }).block).toBe(false);
+		expect(service.decisionFor({ provider: "anthropic", id: "claude-haiku-5-5" }).block).toBe(false);
+	});
+
 	it("matches families as whole tokens", () => {
 		expect(modelMatchesFamily("claude-sonnet-5", "sonnet")).toBe(true);
 		expect(modelMatchesFamily("claude-sonnet-4", "opus")).toBe(false);
