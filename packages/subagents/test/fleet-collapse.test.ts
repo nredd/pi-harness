@@ -91,6 +91,19 @@ describe("collapsed fleet", () => {
     h.fleet.dispose();
   });
 
+  it.each(["running", "queued"] as const)("keeps ticking while a sessionless %s agent is starting, and stops once it is gone", status => {
+    // No session means no openable row, only the summary; the refresh timer is
+    // what picks the row up once the session binds, so it must stay armed.
+    const agents = [record(1, status)];
+    const h = setup(agents);
+    expect(agents[0].session).toBeUndefined();
+    expect(h.clock.pending).toBe(1);
+    agents.length = 0;
+    h.clock.advance(200);
+    expect(h.clock.pending).toBe(0);
+    h.fleet.dispose();
+  });
+
   it("surfaces quota-parked work with no record and refreshes when it clears", () => {
     const h = setup();
     let parked = 2;
