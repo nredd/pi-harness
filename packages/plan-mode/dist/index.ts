@@ -64,7 +64,7 @@ import {
   snapshotPlanModeSelectedNames,
   updatePlanModeSettings,
   updatePlanModeUi
-} from "./chunks/chunk-4SQVAWPB.ts";
+} from "./chunks/chunk-5BB47TLN.ts";
 
 // src/plan-mode.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
@@ -1156,7 +1156,7 @@ function planMode(pi, dependencies = {}) {
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
     if (!interactiveUiPromise) {
-      interactiveUiPromise = import("./chunks/interactive-ui-P6YRUDPW.ts").catch((error) => {
+      interactiveUiPromise = import("./chunks/interactive-ui-FAYETMXJ.ts").catch((error) => {
         interactiveUiPromise = void 0;
         throw error;
       });
@@ -1474,8 +1474,7 @@ function planMode(pi, dependencies = {}) {
     try {
       const directory = dirname(pathToWatch);
       const fileName = basename(pathToWatch);
-      const watcher = watch(directory, { persistent: false }, (event, changedFile) => {
-        if (event !== "rename" && event !== "change") return;
+      const watcher = watch(directory, { persistent: false }, (_event, changedFile) => {
         if (!changedFile || changedFile.toString() !== fileName) return;
         schedulePlanModeSettingsReload(generation);
       });
@@ -1705,9 +1704,7 @@ function planMode(pi, dependencies = {}) {
   pi.on("context", async (event, ctx) => {
     resolvePendingWorkflowToolPolicy(ctx);
     const result = implementationRetention.transformContext(event.messages, state);
-    if (result.clearActiveImplementationId) {
-      clearActiveImplementation(result.clearActiveImplementationId, ctx);
-    }
+    if (result.clearActiveImplementationId) clearActiveImplementation(ctx);
     const messages = state.enabled || modeContractsRelevant ? reconcileModeContract(result.messages, state.enabled ? "plan" : "normal") : result.messages;
     const declined = state.enabled ? state.declinedPlans ?? 0 : 0;
     const withDecline = state.enabled && state.reproposalReview === "required" ? [...messages, createDeclineContractMessage(declined, Date.now())] : messages;
@@ -1795,7 +1792,7 @@ function planMode(pi, dependencies = {}) {
   });
   pi.on("agent_settled", async (_event, ctx) => {
     const settledImplementationId = implementationRetention.implementationSettled(state.activeImplementation);
-    if (settledImplementationId) clearActiveImplementation(settledImplementationId, ctx);
+    if (settledImplementationId) clearActiveImplementation(ctx);
     if (finalizationRequest.hasPendingRequest() && state.enabled && workflowMutex.isOwner(workflowOwner)) {
       if (!ctx.isIdle() || ctx.hasPendingMessages()) return;
       const action = finalizationRequest.settle(workflowGeneration);
@@ -1925,7 +1922,7 @@ function planMode(pi, dependencies = {}) {
       modeContractsRelevant = true;
       return true;
     } catch (error) {
-      const detail = safeTerminalText(error instanceof Error ? error.message : String(error));
+      const detail = errorText(error);
       const notification = `Unable to publish the ${mode === "plan" ? "Plan" : "Normal"} mode contract: ${detail}`;
       if (!ctx.hasUI) throw new Error(notification, { cause: error });
       ctx.ui.notify(notification, "error");
@@ -1939,7 +1936,7 @@ function planMode(pi, dependencies = {}) {
       headlessTurns.messageSent();
       return true;
     } catch (error) {
-      const detail = safeTerminalText(error instanceof Error ? error.message : String(error));
+      const detail = errorText(error);
       ctx.ui.notify(`Unable to send Plan-mode message: ${detail}`, "error");
       return false;
     }
@@ -2027,7 +2024,7 @@ function planMode(pi, dependencies = {}) {
     try {
       pi.sendMessage(createPlanEditMessage(before, review.plan), { triggerTurn: false });
     } catch (error) {
-      const detail = safeTerminalText(error instanceof Error ? error.message : String(error));
+      const detail = errorText(error);
       keepEdit(`Unable to record the plan edit: ${detail}.`, "error");
       return;
     }
@@ -2145,12 +2142,11 @@ function planMode(pi, dependencies = {}) {
       const sessionGeneration = menuGeneration;
       const planWorkflowGeneration = workflowGeneration;
       const isCurrent = () => sessionGeneration === menuGeneration && planWorkflowGeneration === workflowGeneration && !menuController.signal.aborted && !state.enabled && state.savedPlan === savedPlan;
-      if (!await preflightSavedPlanImplementation(ctx, isCurrent)) return;
+      if (!await preflightSavedPlanImplementation(ctx, isCurrent) || !isCurrent()) return;
       if (!allowModeTransition(ctx, "start plan implementation")) return;
     }
-    const plan = (state.enabled ? state.latestPlan : savedPlan?.plan)?.trim();
+    const plan = initialPlan;
     const source = (state.enabled ? state.latestPlanSource : savedPlan?.source) ?? "legacy_proposed_plan";
-    if (!plan) return;
     const previousState = state;
     const previousIntent = readyPresentationIntent;
     const wasEnabled = state.enabled;
@@ -2203,13 +2199,11 @@ function planMode(pi, dependencies = {}) {
     }
     if (wasEnabled) releaseWorkflowOwner();
   }
-  function clearActiveImplementation(id, ctx) {
-    if (state.activeImplementation?.id !== id) return false;
+  function clearActiveImplementation(ctx) {
     advanceWorkflowGeneration();
     state = { ...state, activeImplementation: void 0 };
     persistState();
     updateUi(ctx);
-    return true;
   }
   async function exportPlan(ctx, path, signal, isCurrent) {
     const exitsReadyPlan = state.enabled && Boolean(state.latestPlan?.trim());
@@ -2326,7 +2320,7 @@ function planMode(pi, dependencies = {}) {
         if (!isCurrent()) return;
         settings = saved;
       },
-      ...dependencies.readSettings ? { readSettings: async () => dependencies.readSettings?.() ?? { kind: "missing" } } : {}
+      ...dependencies.readSettings ? { readSettings: readPlanModeRuntimeSettings } : {}
     });
     return result.kind === "closed" && "reason" in result && result.reason === "close";
   }
@@ -2364,21 +2358,18 @@ function planMode(pi, dependencies = {}) {
   function workflowDesiredToolNames() {
     const policy = state.workflowToolPolicy;
     if (!state.enabled || !policy) return /* @__PURE__ */ new Set();
-    return new Set(policy.kind === "automatic" ? automaticPlanModeToolNames() : policy.desiredNames ?? []);
+    return new Set(policy.kind === "automatic" ? automaticPlanModeToolNames() : policy.desiredNames);
   }
-  function beginWorkflowToolPolicy() {
-    const kind = toolPolicySelectionIsExplicit() ? "explicit" : "automatic";
+  function selectedWorkflowToolPolicy(resolved) {
     const desiredNames = desiredPlanModeToolNames();
     const allowedNames = resolvePlanModePolicyToolNames(desiredNames);
-    const policy = {
-      kind,
-      ...kind === "explicit" ? { desiredNames } : {},
-      allowedNames,
-      resolved: false
-    };
+    return toolPolicySelectionIsExplicit() ? { kind: "explicit", desiredNames, allowedNames, resolved } : { kind: "automatic", allowedNames, resolved };
+  }
+  function beginWorkflowToolPolicy() {
+    const policy = selectedWorkflowToolPolicy(false);
     state = { ...state, workflowToolPolicy: policy };
     pendingWorkflowToolPolicy = { generation: workflowGeneration, mode: "resolve" };
-    workflowAllowedToolNames = allowedNames;
+    workflowAllowedToolNames = policy.allowedNames;
   }
   function resolvePendingWorkflowToolPolicy(ctx) {
     const pending = pendingWorkflowToolPolicy;
@@ -2416,7 +2407,7 @@ function planMode(pi, dependencies = {}) {
   }
   function resolveWorkflowToolPolicy(policy) {
     return resolvePlanModePolicyToolNames(
-      policy.kind === "automatic" ? automaticPlanModeToolNames() : policy.desiredNames ?? []
+      policy.kind === "automatic" ? automaticPlanModeToolNames() : policy.desiredNames
     );
   }
   function revalidateFrozenWorkflowToolPolicy(policy) {
@@ -2428,14 +2419,7 @@ function planMode(pi, dependencies = {}) {
   function restoreWorkflowToolPolicy(policy) {
     let nextPolicy;
     if (!policy) {
-      const kind = toolPolicySelectionIsExplicit() ? "explicit" : "automatic";
-      const desiredNames = desiredPlanModeToolNames();
-      nextPolicy = {
-        kind,
-        ...kind === "explicit" ? { desiredNames } : {},
-        allowedNames: resolvePlanModePolicyToolNames(desiredNames),
-        resolved: true
-      };
+      nextPolicy = selectedWorkflowToolPolicy(true);
     } else if (policy.resolved) {
       nextPolicy = policy;
     } else {
@@ -2560,7 +2544,7 @@ function planMode(pi, dependencies = {}) {
           }
         } catch (error) {
           notifyCurrent2(
-            `Implementation thinking ${intent.thinkingLevel} could not be applied: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default will continue.`
+            `Implementation thinking ${intent.thinkingLevel} could not be applied: ${errorText(error)}. The destination default will continue.`
           );
         }
       };
@@ -2582,7 +2566,7 @@ function planMode(pi, dependencies = {}) {
             } catch (error) {
               applicationFailed = true;
               notifyCurrent2(
-                `Implementation model ${terminalModelReference(intent.model)} could not be applied: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The destination default model will continue.`
+                `Implementation model ${terminalModelReference(intent.model)} could not be applied: ${errorText(error)}. The destination default model will continue.`
               );
             }
           } finally {
@@ -2596,7 +2580,6 @@ function planMode(pi, dependencies = {}) {
           }
         }
       }
-      if (!isCurrent()) return "stale";
       applyThinking();
       if (!isCurrent()) return "stale";
       state = { ...state, pendingImplementationRuntime: void 0 };
@@ -2615,7 +2598,7 @@ function planMode(pi, dependencies = {}) {
         } catch {
         }
         notifyCurrent2(
-          `Unable to apply fresh implementation settings because their one-shot state could not be consumed: ${safeTerminalText(error instanceof Error ? error.message : String(error))}. The implementation request was not sent; retry after session persistence is available.`
+          `Unable to apply fresh implementation settings because their one-shot state could not be consumed: ${errorText(error)}. The implementation request was not sent; retry after session persistence is available.`
         );
         return "blocked";
       }
@@ -2885,10 +2868,8 @@ function planMode(pi, dependencies = {}) {
     const activatedOwner = workflowOwner;
     readyPresentationIntent = void 0;
     try {
-      if (state.enabled) {
-        publishModeContract("normal", ctx);
-        restorePlanRuntime(ctx);
-      }
+      publishModeContract("normal", ctx);
+      restorePlanRuntime(ctx);
     } finally {
       state = previousState;
       workflowAllowedToolNames = void 0;
@@ -2897,10 +2878,8 @@ function planMode(pi, dependencies = {}) {
         persistState();
         updateUi(ctx);
       } finally {
-        if (activatedOwner !== previousOwner) {
-          workflowMutex.release(activatedOwner);
-          workflowOwner = previousOwner;
-        }
+        workflowMutex.release(activatedOwner);
+        workflowOwner = previousOwner;
       }
     }
   }
@@ -2911,9 +2890,8 @@ function planMode(pi, dependencies = {}) {
     workflowMutex.bindSession(ctx.sessionManager);
   }
   function releaseWorkflowOwner() {
-    const owner = workflowOwner;
-    workflowMutex.release(owner);
-    if (!workflowMutex.isOwner(owner)) workflowOwner = void 0;
+    workflowMutex.release(workflowOwner);
+    workflowOwner = void 0;
   }
   function reportWorkflowBusy(ctx) {
     const message = "Another workflow is active in this session. End it before starting Plan mode.";
@@ -2936,7 +2914,7 @@ function planMode(pi, dependencies = {}) {
     );
   }
   function reportHelperActivationFailure(ctx, error) {
-    const detail = safeTerminalText(error instanceof Error ? error.message : String(error));
+    const detail = errorText(error);
     const message = `Cannot start Plan mode: ${detail}.`;
     if (!ctx.hasUI) throw new Error(message, { cause: error });
     ctx.ui.notify(message, "error");
@@ -2966,12 +2944,12 @@ function planMode(pi, dependencies = {}) {
     return safe.length > 120 ? `${safe.slice(0, 119)}\u2026` : safe;
   }
   function terminalModelReference(model) {
-    const safe = safeTerminalText(`${model.provider}/${model.modelId}`) || "(unnamed model)";
+    const safe = safeTerminalText(`${model.provider}/${model.modelId}`);
     return safe.length > 160 ? `${safe.slice(0, 159)}\u2026` : safe;
   }
   function safeTerminalText(value) {
     return [...stripVTControlCharacters2(value)].map((character) => {
-      const codePoint = character.codePointAt(0) ?? 0;
+      const codePoint = character.charCodeAt(0);
       return codePoint <= 31 || codePoint >= 127 && codePoint <= 159 || codePoint >= 8234 && codePoint <= 8238 || codePoint >= 8294 && codePoint <= 8297 ? " " : character;
     }).join("").trim();
   }
