@@ -59,6 +59,44 @@ function managerWithClock(onStart?: ConstructorParameters<typeof AgentManager>[2
 }
 
 describe("retained manager safety guards", () => {
+  it("rolls back failed preparation and pumps a reentrant waiter", async () => {
+    const f = managerWithClock();
+    budget.setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
+    let waiting = "";
+    try {
+      expect(() => f.manager.spawn(pi, ctx, "general-purpose", "failure", {
+        description: "failure", isBackground: true,
+        onPrepare: () => {
+          waiting = f.manager.spawn(pi, ctx, "general-purpose", "waiting", { description: "waiting", isBackground: true });
+          expect(f.manager.getRecord(waiting)?.status).toBe("queued");
+          throw new Error("EPERM spool");
+        },
+      })).toThrow("EPERM spool");
+      await f.manager.waitForAll();
+      expect(f.manager.listAgents().map(record => record.id)).toEqual([waiting]);
+      expect(f.manager.getRecord(waiting)?.status).toBe("completed");
+      expect(runAgent).toHaveBeenCalledTimes(1);
+      expect(budget.budgetUsage()).toMatchObject({ active: 0, pending: 0 });
+    } finally {
+      budget.setBudgetPolicy({ maxActive: 0, nestedReserve: 0, maxDepth: 1 });
+    }
+  });
+
+  it("does not enqueue a child whose preparation fails while its pool is full", async () => {
+    const f = managerWithClock();
+    const held = deferred<Awaited<ReturnType<typeof runAgent>>>();
+    vi.mocked(runAgent).mockReturnValueOnce(held.promise);
+    const running = f.manager.spawn(pi, ctx, "general-purpose", "running", { description: "running", isBackground: true });
+    expect(() => f.manager.spawn(pi, ctx, "general-purpose", "failure", {
+      description: "failure", isBackground: true, onPrepare: () => { throw new Error("EPERM spool"); },
+    })).toThrow("EPERM spool");
+    expect(f.manager.listAgents().map(record => record.id)).toEqual([running]);
+    expect(budget.budgetUsage()).toMatchObject({ active: 1, pending: 0 });
+    held.resolve({ responseText: "done", session, aborted: false, steered: false });
+    await f.manager.waitForAll();
+    expect(runAgent).toHaveBeenCalledTimes(1);
+    expect(budget.budgetUsage()).toMatchObject({ active: 0, pending: 0 });
+  });
   it("returns a late budget grant after a faulty cancellation without starting the stopped child", async () => {
     const f = managerWithClock();
     const held = deferred<Awaited<ReturnType<typeof runAgent>>>();
