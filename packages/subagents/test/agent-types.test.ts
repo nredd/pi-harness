@@ -75,11 +75,15 @@ describe("agent type registry", () => {
     });
 
     it("default agents name tiers, never models", () => {
+      // Kept in step with `MODEL_ID_LEAKS` in `packages/preset/test/resources.test.ts`.
+      const leaks = [/\b[a-z][\w-]*\/[\w.-]+/g, /\bclaude-[\w.-]*\d/g, /\bgpt-\d/g];
+      // Path examples in the built-in prompts, not provider refs.
+      const paths = new Set(["src/components", "absolute/path", "to/file.ts"]);
       for (const [name, config] of DEFAULT_AGENTS) {
         if (config.model !== undefined) expect(config.model, name).toMatch(/^@[a-z0-9][a-z0-9._-]*$/);
-        const text = JSON.stringify(config);
-        for (const leak of [/\b(?:anthropic|openai-codex|openai|router)\/[\w.-]+/, /\bclaude-[a-z]+-\d/, /\bgpt-\d/])
-          expect(text, name).not.toMatch(leak);
+        const text = Object.values(config).flat().filter((value) => typeof value === "string").join("\n");
+        const found = leaks.flatMap((pattern) => text.match(pattern) ?? []).filter((match) => !paths.has(match));
+        expect(found, name).toEqual([]);
       }
     });
 

@@ -27,6 +27,9 @@ const FAILURE_BACKOFF_MS = [60_000, 2 * 60_000, 5 * 60_000, 15 * 60_000] as cons
 const RETRY_AFTER_CEILING_MS = 60 * 60_000;
 /** Numeric reset times below this are Unix seconds, above it milliseconds (1e11 s is the year 5138). */
 const SECONDS_VS_MS_THRESHOLD = 100_000_000_000;
+/** Reported 5h and 7d quota-window spans. */
+const FIVE_HOURS_MS = 5 * 60 * 60_000;
+const WEEK_MS = 7 * 24 * 60 * 60_000;
 /** Beta flag the Anthropic usage endpoint requires for OAuth bearer tokens. */
 const ANTHROPIC_OAUTH_BETA = "oauth-2025-04-20";
 /** Requests without a claude-code User-Agent land in an aggressively 429'd bucket (anthropics/claude-code#31637). */
@@ -173,7 +176,7 @@ export function parseAnthropic(payload: unknown): ParsedUsage | undefined {
 			name: key,
 			usedPercent,
 			resetAt: timestamp(item.resets_at ?? item.reset_at),
-			durationMs: key === "five_hour" ? 18_000_000 : 604_800_000,
+			durationMs: key === "five_hour" ? FIVE_HOURS_MS : WEEK_MS,
 			spanSource: "reported",
 			scope: families ? "model" : "provider",
 			families: families ? [...families] : undefined,
@@ -206,7 +209,7 @@ function anthropicScopedLimits(limits: unknown): UsageWindow[] {
 			name: `seven_day_${family}`,
 			usedPercent,
 			resetAt: timestamp(item.resets_at),
-			durationMs: 604_800_000,
+			durationMs: WEEK_MS,
 			spanSource: "reported",
 			scope: "model",
 			families: [family],
@@ -239,7 +242,7 @@ export function parseCodex(payload: unknown): ParsedUsage | undefined {
 			usedPercent,
 			resetAt: timestamp(item.reset_at),
 			scope: "provider",
-			durationMs: duration && duration > 0 ? duration * 1000 : key === "primary_window" ? 18_000_000 : 604_800_000,
+			durationMs: duration && duration > 0 ? duration * 1000 : key === "primary_window" ? FIVE_HOURS_MS : WEEK_MS,
 			spanSource: duration && duration > 0 ? "reported" : "assumed",
 		});
 	}
