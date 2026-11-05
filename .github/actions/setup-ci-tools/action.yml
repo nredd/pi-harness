@@ -42,6 +42,8 @@ runs:
       with:
         path: ${{ steps.npm-cache.outputs.dir }}
         key: npm-ci-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
+        # A lockfile change still starts warm: unchanged tarballs (usually the core ones) come from the previous entry.
+        restore-keys: npm-ci-${{ runner.os }}-${{ runner.arch }}-
     - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       if: inputs.guest != 'wsl2' && inputs.owned == 'true'
       with:

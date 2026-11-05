@@ -2380,6 +2380,8 @@ def test_docs_list_every_benchmark_input() -> None:
 
 SETUP_CI_TOOLS = "./.github/actions/setup-ci-tools"
 NPM_INSTALL_COMMANDS = ("npm ci", "make install-owned")
+# Jobs that install the root lockfile inside a helper `runs_npm_install` cannot see.
+HIDDEN_NPM_INSTALL_JOBS = {("publish.yml", "verify")}
 
 
 def runs_npm_install(step: dict[str, Any]) -> bool:
@@ -2389,7 +2391,7 @@ def runs_npm_install(step: dict[str, Any]) -> bool:
         step (dict[str, Any]): One workflow step.
 
     Returns:
-        bool: True when the step's `run` script installs from the root lockfile.
+        bool: True when the step's `run` script runs `npm ci` anywhere.
     """
     return any(command in step.get("run", "") for command in NPM_INSTALL_COMMANDS)
 
@@ -2414,10 +2416,11 @@ def test_setup_ci_tools_restores_the_lockfile_npm_cache_under_its_own_key() -> N
     assert re.fullmatch(r"actions/cache@[0-9a-f]{40}", steps[cache]["uses"])
     gate = "inputs.guest != 'wsl2' && inputs.npm-cache == 'true'"
     assert steps[locate]["if"] == steps[cache]["if"] == gate
-    # Exact key, no restore-keys: a lockfile change starts a fresh cache instead of growing an old one.
+    # The prefix restore keeps a lockfile-changing run warm for every tarball the change did not touch.
     assert steps[cache]["with"] == {
         "path": "${{ steps.npm-cache.outputs.dir }}",
         "key": "npm-ci-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}",
+        "restore-keys": "npm-ci-${{ runner.os }}-${{ runner.arch }}-",
     }
 
 
@@ -2432,9 +2435,9 @@ def test_every_npm_ci_job_restores_the_npm_cache_and_no_other_job_saves_one() ->
             installing.add(name)
             assert setups, name
             assert setups[0] < installs[0], name
-            assert all(steps[i]["with"].get("npm-cache", "true") == "true" for i in setups), name
+            assert all(steps[i].get("with", {}).get("npm-cache", "true") == "true" for i in setups), name
         else:
-            assert all(steps[i]["with"].get("npm-cache") == "false" for i in setups), name
+            assert all(steps[i].get("with", {}).get("npm-cache") == "false" for i in setups), name
     assert {*OWNED_SHARD_JOBS.values(), "contracts", "stack"} <= installing
 
 
@@ -2442,15 +2445,18 @@ def test_every_npm_ci_job_restores_the_npm_cache_and_no_other_job_saves_one() ->
     "workflow", sorted((ROOT / ".github/workflows").glob("*.yml")), ids=lambda path: path.name
 )
 def test_setup_node_without_npm_ci_never_saves_an_npm_cache(workflow: Path) -> None:
-    """A setup-node step in a job that runs no `npm ci` disables setup-node's implicit npm cache.
+    """A setup-node step in a job that runs no `npm ci` saves no npm cache, implicit or explicit.
+
+    `publish.yml`'s `verify` installs inside `npm_release.py verify` (`HIDDEN_NPM_INSTALL_JOBS`).
 
     Parameters:
         workflow (Path): One workflow file.
     """
     for name, job in yaml.safe_load(workflow.read_text())["jobs"].items():
         steps = job.get("steps", [])
-        if any(runs_npm_install(step) for step in steps):
+        if (workflow.name, name) in HIDDEN_NPM_INSTALL_JOBS or any(runs_npm_install(step) for step in steps):
             continue
         for step in steps:
-            if "actions/setup-node@" in step.get("uses", "") and "cache" not in step.get("with", {}):
-                assert step["with"].get("package-manager-cache") is False, f"{workflow.name}:{name}"
+            if "actions/setup-node@" in step.get("uses", ""):
+                assert "cache" not in step.get("with", {}), f"{workflow.name}:{name}"
+                assert step.get("with", {}).get("package-manager-cache") is False, f"{workflow.name}:{name}"

@@ -115,9 +115,12 @@ RATE_LIMIT_STATUSES = frozenset({403, 429})
 # Transient transport failures `fetch_bytes` retries from scratch; nothing else is retried.
 # 429 honors a delta-seconds `Retry-After`, capped so a long server hint cannot stall CI.
 FETCH_RETRY_STATUSES = frozenset({429, 502, 503, 504})
-FETCH_ATTEMPTS = 3
-FETCH_RETRY_BACKOFF_SECONDS = 2.0
+# The same bounded window as the root `.npmrc` (`fetch_retry_backoff`): 5s, 10s, 20s, then 30s, at most
+# 155s of waiting per request, so a ~2 minute release-CDN blip does not fail `--verify-root-overrides` (#531).
+FETCH_ATTEMPTS = 8
+FETCH_RETRY_BACKOFF_SECONDS = 5.0
 FETCH_RETRY_BACKOFF_FACTOR = 2
+FETCH_RETRY_MAX_BACKOFF_SECONDS = 30.0
 FETCH_RETRY_AFTER_CAP_SECONDS = 30.0
 # `gh attestation verify` builds the Sigstore public-good verifier from its TUF repository on
 # every call; a failed fetch surfaces as exactly this text. It is the only retried failure.
@@ -414,6 +417,24 @@ class FetchError(OSError):
         super().__init__(redact_diagnostic(f"Could not fetch '{url}': {fetch_failure_reason(error)}"))
 
 
+def fetch_retry_backoff(attempt: int) -> float:
+    """Return npm's capped doubling backoff after one failed attempt, `min(5s * 2^(n-1), 30s)`.
+
+    Parameters:
+        attempt (int): 1-based attempt that just failed.
+
+    Returns:
+        float: seconds to wait before the next attempt.
+
+    Raises:
+        None.
+    """
+    return min(
+        FETCH_RETRY_BACKOFF_SECONDS * FETCH_RETRY_BACKOFF_FACTOR ** (attempt - 1),
+        FETCH_RETRY_MAX_BACKOFF_SECONDS,
+    )
+
+
 def fetch_retry_delay(error: Exception, attempt: int) -> float | None:
     """Classify one failed fetch attempt as a transient transport failure worth retrying.
 
@@ -433,7 +454,7 @@ def fetch_retry_delay(error: Exception, attempt: int) -> float | None:
     """
     if attempt >= FETCH_ATTEMPTS:
         return None
-    backoff = FETCH_RETRY_BACKOFF_SECONDS * FETCH_RETRY_BACKOFF_FACTOR ** (attempt - 1)
+    backoff = fetch_retry_backoff(attempt)
     if isinstance(error, HTTPError):
         if error.code not in FETCH_RETRY_STATUSES:
             return None
