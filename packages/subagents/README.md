@@ -1249,8 +1249,8 @@ A child started while the parent session is in [`pi-plan-mode`](../plan-mode/REA
 - The decision is per run. A child spawned during Plan keeps the restriction after you approve and leave Plan, since it was briefed as a planner; resuming it after Plan gets its normal surface back, and resuming any agent during Plan restricts that run. Both hold for `Agent` `resume` and for `steer_subagent` on a finished agent, which resumes through the same path. An agent started before Plan keeps its surface while it runs
 - `isolation: "worktree"` is refused while planning: a worktree exists to make edits
 - Nothing Plan's model starts may outlive Plan unrestricted: `Agent` with `schedule` is refused while planning, and so is parking a quota-blocked background dispatch (it fails with the reset instead). Both would fire as fresh spawns after Plan
-- `steer_subagent` is refused while planning for a running or queued agent that runs without Plan's restrictions (one started before Plan), so a steer cannot drive it into edits. Its running gate is never changed underneath it: wait for it to finish and steer it then (that resumes it read-only), stop it with `stop_subagent` (Plan admits it and never asks the gate), or leave Plan first. An agent already running under Plan stays steerable
-- A malformed answer to the state query (wrong version, no boolean `active`) never counts as Plan being off: it restricts like an unusable one
+- `steer_subagent` and the `subagents:rpc:steer` channel are refused while planning for a running or queued agent that runs without Plan's restrictions (one started before Plan), so a steer from Plan's model or another extension's tool cannot drive it into edits. Its running gate is never changed underneath it: wait for it to finish and steer it then (that resumes it read-only), stop it with `stop_subagent` (Plan admits it and never asks the gate), or leave Plan first. An agent already running under Plan stays steerable
+- A malformed answer to the state query (wrong version, no boolean `active`) never counts as Plan being off: it restricts like an unusable one. That is how a version-skewed `pi-plan-mode` (a future v2) or another extension answering `pi-plan-mode:state-query` shows up: the child is limited to `read`, `grep`, `find` and `ls`, its other calls fail with `Plan mode is active and sent no tool policy this subagent understands`, and schedules, parking and steers of pre-Plan agents are refused, even with Plan off
 - The child's prompt says it is in Plan mode, and its expanded `Agent` row and conversation viewer tags read `plan`
 - Extension tools are classified from the child's own tool metadata (`sourceInfo`): a tool the planner selected is admitted only from the same source path, so a project-scope copy, or a project-scope `readOnlyHint`, stays blocked
 - An answer saying Plan is active but carrying no policy this extension understands fails closed to `read`, `grep`, `find` and `ls`. Without `pi-plan-mode` nothing answers and nothing changes
@@ -1260,7 +1260,8 @@ What Plan does not reach:
 
 - A child queued before Plan starts later with its full surface: the decision was made when it was spawned. Plan's model cannot steer it meanwhile
 - A schedule created before Plan fires during Plan as a fresh spawn, and is restricted then like any other
-- Steering from `/agents`, the conversation viewer, `@handle` and RPC is not Plan's model and is not refused
+- Steering from `/agents`, the conversation viewer and `@handle` is the user, not Plan's model, and is not refused
+- The handshake is hardening, not a sandbox. Every extension shares `pi.events`, and a well-formed `{ version: 1, active: false }` reply from one of them cannot be told apart from Plan's own. Any active answer still wins, but a spoofed one hides a Plan that stayed silent, so the child runs unrestricted. Extension code runs in-process with full access anyway
 - A nested child of a pre-Plan owner is restricted when Plan is on at its own spawn
 
 ## Worktree Isolation

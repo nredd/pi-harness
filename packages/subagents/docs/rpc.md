@@ -95,6 +95,7 @@ Every failure reaches the caller as `{ success: false, error }`, where `error` i
 | `Agent not found or still running` | consume handler |
 | `Steer message must be a non-empty string` | steer handler — `message` missing, not a string, or whitespace |
 | `Agent not found` / `Agent is owned by another agent or workflow` / `Agent is not running` | steer handler — same lookup, ownership guard and settled check as stop |
+| `Cannot steer agent "<id>" while Plan mode is active: ...` | steer handler — `planSteerRefusal` in `src/plan-mode-children.ts`, the same refusal `steer_subagent` gives. The agent is running or queued without Plan's restrictions while the parent plans |
 
 Three things the table cannot show:
 
@@ -143,7 +144,7 @@ One related thing that lives nowhere else: on every top-level settle, pi-subagen
 
 `subagents:rpc:steer` `{ requestId, agentId, message }` delivers `message` into a running or queued agent's conversation, the bus-side half of the `steer_subagent` tool. It exists for the caller that spawned an agent over the bus and then learns something that agent needs mid-run — a second CI failure on the head it is already fixing, a review that landed while it works — and would otherwise have to choose between spawning a duplicate agent for the same work and dropping the fact.
 
-It takes an id only, enforces the same top-level ownership guard as stop, and answers `Agent is not running` for a record that has settled. A message queued before the agent's session exists is flushed when the session is created, exactly as the tool's steer is. A successful steer emits `subagents:steered` `{ id, message }`, as every steer path does. Like `consume`, it is outside the `ping` version handshake: an older build has no handler and the request times out on your side, so give it a timeout and treat expiry as "not available here".
+It takes an id only, enforces the same top-level ownership guard as stop, and answers `Agent is not running` for a record that has settled. While the parent session is in `pi-plan-mode`'s Plan mode, it refuses a running or queued agent that runs without Plan's restrictions (one started before Plan), exactly as `steer_subagent` does, so your tool cannot steer that agent into edits; see README's [Plan mode](../README.md#plan-mode). A message queued before the agent's session exists is flushed when the session is created, exactly as the tool's steer is. A successful steer emits `subagents:steered` `{ id, message }`, as every steer path does. Like `consume`, it is outside the `ping` version handshake: an older build has no handler and the request times out on your side, so give it a timeout and treat expiry as "not available here".
 
 ## The manager registry
 
