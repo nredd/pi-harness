@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -640,5 +641,87 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 		console.log("Linux platform checks passed");
 	} finally {
 		await fs.rm(tempDir, { recursive: true, force: true });
+	}
+});
+
+test("closed helper stdin rejects all requests without an uncaught stream error", async () => {
+	const { LinuxHelperClient } = await import("../src/platform/linux/helper.ts");
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "linux-transport-"));
+	const helper = path.join(dir, "helper");
+	await fs.writeFile(
+		helper,
+		`#!/usr/bin/env node
+const fs = require("node:fs");
+const assert = require("node:assert/strict");
+// Initialize stdout before freeing fd 0: lazy pipe initialization aborts Node 26.12 on Darwin otherwise.
+const stdout = process.stdout;
+require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+  if (JSON.parse(line).cmd !== "hold") return;
+  fs.closeSync(0);
+  assert.throws(() => fs.fstatSync(0), { code: "EBADF" });
+  stdout.write("closed\\n");
+});
+setInterval(() => {}, 1000);
+`,
+		{ mode: 0o755 },
+	);
+	const client = new LinuxHelperClient({ helperPath: helper });
+	try {
+		const child = await client.startProcess();
+		let stderr = "";
+		child.stderr.on("data", (chunk) => { stderr += chunk; });
+		const exit = once(child, "exit");
+		// A fixture crash must fail at this boundary, not hang awaiting an acknowledgement.
+		const ready = Promise.race([
+			once(child.stdout, "data").then(([chunk]) => {
+				assert.equal(String(chunk), "closed\n");
+				assert.equal(child.exitCode, null);
+				assert.equal(child.signalCode, null);
+				process.kill(child.pid, 0);
+			}),
+			exit.then(([code, signal]) => {
+				throw new Error(`Helper exited before stdin-close acknowledgement: ${code}/${signal}: ${stderr}`);
+			}),
+		]);
+		const controller = new AbortController();
+		const cancelled = client.send(child, "cancel", {}, 5000, controller.signal);
+		controller.abort();
+		await assert.rejects(cancelled, /Operation aborted/);
+		const pending = client.send(child, "hold", {}, 5000);
+		// Attach every assertion immediately, including while the acknowledgement is pending.
+		await Promise.all([
+			assert.rejects(pending, { code: "EPIPE" }),
+			ready.then(() => assert.rejects(client.send(child, "test", {}, 5000), { code: "EPIPE" })),
+			exit,
+		]);
+		assert.equal(client.pending.size, 0);
+		assert.equal(client.child, undefined);
+	} finally {
+		client.dispose();
+		await fs.rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("other stdin stream errors reject pending requests and stop the helper", async () => {
+	const { LinuxHelperClient } = await import("../src/platform/linux/helper.ts");
+	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "linux-transport-"));
+	const helper = path.join(dir, "helper");
+	await fs.writeFile(helper, "#!/usr/bin/env node\nprocess.stdin.resume(); setInterval(() => {}, 1000);\n", {
+		mode: 0o755,
+	});
+	const client = new LinuxHelperClient({ helperPath: helper });
+	try {
+		const child = await client.startProcess();
+		const exit = once(child, "exit");
+		const pending = client.send(child, "hold", {}, 5000);
+		const rejection = assert.rejects(pending, /fixture stream failure/);
+		child.stdin.destroy(new Error("fixture stream failure"));
+		await rejection;
+		await exit;
+		assert.equal(client.pending.size, 0);
+		assert.equal(client.child, undefined);
+	} finally {
+		client.dispose();
+		await fs.rm(dir, { recursive: true, force: true });
 	}
 });
