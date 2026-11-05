@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+// pi-subagents' own slugger, imported from source so the two cannot drift unnoticed.
+import { handleBase } from "../../subagents/src/mention.ts";
 import {
 	STATE_ENTRY_TYPE,
 	SUBAGENT_COMPLETED_EVENT,
@@ -12,6 +14,7 @@ import {
 	forgetAgents,
 	isAbandoned,
 	MAX_TRACKED_AGENTS,
+	ownerKey,
 	ownerLabel,
 } from "./agents.ts";
 
@@ -93,6 +96,15 @@ describe("agentStateFor", () => {
 		expect(stateOf("authaudit")).toBeUndefined();
 	});
 
+	it("prefers a retry spawned under the same name over the failed first try", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1", name: "auth-audit", nameBase: "auth-audit" });
+		apply(SUBAGENT_FAILED_EVENT, { id: "a1", status: "error" });
+		// The first try still holds `auth-audit`, so the retry is numbered.
+		apply(SUBAGENT_STARTED_EVENT, { id: "a2", name: "auth-audit-2", nameBase: "auth-audit" });
+		expect(stateOf("Auth Audit")).toBe("running");
+		expect(stateOf("a1")).toBe("failed");
+	});
+
 	it("returns nothing for free text, a blank owner or no owner", () => {
 		apply(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "explore" });
 		for (const owner of ["Sergii", "", "  @ ", undefined]) expect(stateOf(owner)).toBeUndefined();
@@ -134,5 +146,31 @@ describe("ownerLabel and isAbandoned", () => {
 		expect(isAbandoned({ status: "in_progress" }, "done")).toBe(false);
 		expect(isAbandoned({ status: "in_progress" }, undefined)).toBe(false);
 		expect(isAbandoned({ status: "pending" }, "failed")).toBe(false);
+	});
+});
+
+describe("ownerKey parity with pi-subagents handleBase", () => {
+	it.each([
+		"auth-audit",
+		"Auth Audit",
+		"@auth-audit",
+		"  Auth  Audit!  ",
+		"--Auth.Audit--",
+		"snake_case_name",
+		"Ünïcödé Nämé",
+		"a/b\\c:d",
+		"x".repeat(70),
+		`${"a".repeat(63)}-b`,
+		`${"a".repeat(63)}!!!b`,
+		"MiXeD-123_ok",
+	])("slugs %j the same way", (name) => {
+		expect(ownerKey(name)).toBe(handleBase(name));
+	});
+
+	it("diverges only where handleBase falls back to `agent`", () => {
+		for (const name of ["", "!!!", " @ "]) {
+			expect(handleBase(name)).toBe("agent");
+			expect(ownerKey(name)).toBeUndefined();
+		}
 	});
 });

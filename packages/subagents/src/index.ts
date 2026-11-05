@@ -696,14 +696,16 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 
   /**
    * Every lifecycle event's optional fields: identity, then `fallbackFields`. `handle`
-   * (`explore-2`), `name` (the handle drawn from the spawner's `name`, `auth-audit`) and
-   * `previousId` (the evicted id a reopen continues) are each omitted when absent, so a
-   * listener such as pi-todo can match an agent by what the parent typed, not only its id.
+   * (`explore-2`), `name` (the handle drawn from the spawner's `name`, `auth-audit-2`),
+   * `nameBase` (that name before collision numbering, `auth-audit`) and `previousId` (the
+   * evicted id a reopen continues) are each omitted when absent, so a listener such as
+   * pi-todo can match an agent by what the parent typed, not only its id.
    */
   function eventFields(record: AgentRecord | undefined): Record<string, unknown> {
     return {
       ...(record?.handle ? { handle: record.handle } : {}),
       ...(record?.alias ? { name: record.alias } : {}),
+      ...(record?.nameBase ? { nameBase: record.nameBase } : {}),
       ...(record?.previousId ? { previousId: record.previousId } : {}),
       ...fallbackFields(record),
     };

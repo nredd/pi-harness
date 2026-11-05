@@ -801,7 +801,8 @@ export class AgentManager {
     // handle — a spawn named after its own type gets `explore-2`, not a
     // duplicate `explore` that would make resolution ambiguous.
     if (record.handle !== undefined && record.alias === undefined && options.name !== undefined) {
-      record.alias = assignHandle(handleBase(options.name), this.takenHandles());
+      record.nameBase = handleBase(options.name);
+      record.alias = assignHandle(record.nameBase, this.takenHandles());
     }
 
     const args: SpawnArgs = { pi, ctx, type, prompt, options };
