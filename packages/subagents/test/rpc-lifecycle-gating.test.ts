@@ -300,3 +300,95 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
     }
   });
 });
+
+// #526: the spawn's own `options.signal` is a queued-stop trigger, and a signal that is already
+// aborted when a spawn would queue settles the record before any listener could hear of it.
+describe("issue #526: RPC spawn signal aborts while queued", () => {
+  const MANAGER_KEY = Symbol.for("pi-subagents:manager");
+  let tmpDir: string;
+  let agentDir: string;
+  let prevCwd: string;
+  let prevAgentDir: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "pi-526-"));
+    agentDir = mkdtempSync(join(tmpdir(), "pi-526-agentdir-"));
+    prevAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    prevCwd = process.cwd();
+    writeFileSync(join(agentDir, "subagents.json"), JSON.stringify({ maxConcurrent: 1, schedulingEnabled: false }));
+    process.chdir(tmpDir);
+    // Earlier tests leave their activation registered, and the first activation wins the slot.
+    delete (globalThis as any)[MANAGER_KEY];
+    vi.mocked(runAgent).mockReset();
+    vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}) as any); // the blocker never settles
+  });
+
+  afterEach(() => {
+    process.chdir(prevCwd);
+    if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
+    rmSync(tmpDir, { recursive: true, force: true });
+    rmSync(agentDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  /** Boot the extension and saturate its single slot, so the next spawn queues. */
+  async function saturated() {
+    const booted = makePi();
+    subagentsExtension(booted.pi);
+    await booted.lifecycle.get("session_start")({}, ctx());
+    await spawnOver(booted, "blocker", undefined);
+    return booted;
+  }
+
+  async function spawnOver({ pi, busHandlers }: ReturnType<typeof makePi>, requestId: string, signal: AbortSignal | undefined): Promise<string> {
+    await busHandlers.get("subagents:rpc:spawn")!({
+      requestId,
+      type: "general-purpose",
+      prompt: requestId,
+      options: { description: requestId, isBackground: true, signal },
+    });
+    const reply = pi.events.emit.mock.calls.find((c: any[]) => c[0] === `subagents:rpc:spawn:reply:${requestId}`);
+    expect(reply![1].success, JSON.stringify(reply![1])).toBe(true);
+    return reply![1].data.id;
+  }
+
+  const eventsFor = (pi: any, id: string): [string, any][] =>
+    pi.events.emit.mock.calls.filter((c: any[]) => /^subagents:[a-z]+$/.test(c[0]) && c[1]?.id === id);
+  const recordOf = (id: string) => (globalThis as any)[MANAGER_KEY].getRecord(id);
+
+  it("aborting the spawn's signal while it is queued emits one subagents:failed with status stopped", async () => {
+    const booted = await saturated();
+    try {
+      const ac = new AbortController();
+      const id = await spawnOver(booted, "queued", ac.signal);
+      expect(recordOf(id).status).toBe("queued");
+      expect(eventsFor(booted.pi, id)).toEqual([]);
+
+      ac.abort();
+
+      expect(recordOf(id).status).toBe("stopped");
+      const events = eventsFor(booted.pi, id);
+      expect(events.map(([name]) => name)).toEqual(["subagents:failed"]);
+      expect(events[0][1]).toMatchObject({ id, status: "stopped" });
+      expect(typeof events[0][1].settleSeq).toBe("number");
+      expect(runAgent).toHaveBeenCalledTimes(1);
+    } finally {
+      await booted.lifecycle.get("session_shutdown")();
+    }
+  });
+
+  it("an already-aborted signal on a spawn that would queue returns an id that is already stopped, with no events", async () => {
+    const booted = await saturated();
+    try {
+      const id = await spawnOver(booted, "pre-aborted", AbortSignal.abort());
+
+      expect(recordOf(id).status).toBe("stopped");
+      expect(eventsFor(booted.pi, id)).toEqual([]);
+      expect(runAgent).toHaveBeenCalledTimes(1);
+    } finally {
+      await booted.lifecycle.get("session_shutdown")();
+    }
+  });
+});
