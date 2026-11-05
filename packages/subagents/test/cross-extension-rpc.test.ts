@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type EventBus, PROTOCOL_VERSION, type RpcDeps, registerRpcHandlers, type SpawnCapable } from "../src/cross-extension-rpc.js";
 import { isScopeModelsEnabled, setScopeModelsEnabled } from "../src/model-scope.js";
+import { PLAN_MODE_STATE_QUERY, planSteerRefusal } from "../src/plan-mode-children.js";
 
 /** Simple in-process event bus for testing. */
 function createEventBus(): EventBus {
@@ -401,6 +402,61 @@ describe("cross-extension RPC", () => {
       await vi.waitFor(() => expect(reply).toHaveBeenCalled());
       expect(reply).toHaveBeenCalledWith({ success: false, error: "Steer message must be a non-empty string" });
       expect(manager.steer).not.toHaveBeenCalled();
+    });
+
+    describe("while Plan mode answers on the bus", () => {
+      /** The record the manager reports for `agent-42`. */
+      const withRecord = (record: object) => (manager.getRecord as ReturnType<typeof vi.fn>).mockReturnValue(record);
+      /** Answer Plan's state query like pi-plan-mode, active with a policy that refuses `write`. */
+      const planning = (active: boolean) =>
+        events.on(PLAN_MODE_STATE_QUERY, (data) => {
+          (data as { reply: (state: unknown) => void }).reply({
+            version: 1, active, sessionId: "s", evaluate: ({ toolName }: { toolName: string }) => (toolName === "write" ? "blocked" : undefined),
+          });
+        });
+      const steer = async (requestId: string) => {
+        registerRpcHandlers(deps);
+        const reply = vi.fn();
+        events.on(`subagents:rpc:steer:reply:${requestId}`, reply);
+        events.emit("subagents:rpc:steer", { requestId, agentId: "agent-42", message: "EDIT EVERYTHING" });
+        await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+        return reply.mock.calls[0]?.[0];
+      };
+
+      it.each(["running", "queued"])("refuses a %s agent with no Plan policy", async (status) => {
+        withRecord({ status });
+        planning(true);
+        expect(await steer(`req-p-${status}`)).toEqual({ success: false, error: planSteerRefusal("agent-42") });
+        expect(manager.steer).not.toHaveBeenCalled();
+      });
+
+      it("refuses when Plan answers malformed, which never counts as off", async () => {
+        withRecord({ status: "running" });
+        events.on(PLAN_MODE_STATE_QUERY, (data) => (data as { reply: (state: unknown) => void }).reply({ version: 2, active: false }));
+        expect(await steer("req-p-skew")).toEqual({ success: false, error: planSteerRefusal("agent-42") });
+        expect(manager.steer).not.toHaveBeenCalled();
+      });
+
+      it("steers an agent already running under Plan's policy", async () => {
+        withRecord({ status: "running", planGate: { policy: () => undefined } });
+        planning(true);
+        expect(await steer("req-p-gated")).toEqual({ success: true });
+        expect(manager.steer).toHaveBeenCalledWith("agent-42", "EDIT EVERYTHING");
+      });
+
+      it("steers when Plan answers that it is off", async () => {
+        withRecord({ status: "running" });
+        planning(false);
+        expect(await steer("req-p-off")).toEqual({ success: true });
+        expect(manager.steer).toHaveBeenCalledOnce();
+      });
+
+      it("reports a settled agent as not running rather than as a Plan refusal", async () => {
+        withRecord({ status: "completed" });
+        (manager.steer as ReturnType<typeof vi.fn>).mockReturnValue(false);
+        planning(true);
+        expect(await steer("req-p-done")).toEqual({ success: false, error: "Agent is not running" });
+      });
     });
 
     it("unsub stops responding to steer requests", async () => {

@@ -53,7 +53,7 @@ import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.js";
 import { clipNotice, DEFAULT_NOTIFICATION_RESULT_CHARS, fairShares, GROUP_PREVIEW_RESULT_CHARS, NOTIFICATION_RESULT_CHARS_CEILING, type NoticeFrame, type NoticeParts, PREVIEW_RESULT_CHARS, previewResult, renderNotice } from "./notification-result.js";
 import { appendModelFallbackEntry, appendModelTierEntry, createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
 import { getPackageAgentsGate, getPackageWorkflowsGate, invalidatePackageCache, isProjectTrusted, packageNameForPath, setPackageAgentsGate, setPackageWorkflowsGate, setProjectTrusted } from "./package-resources.js";
-import { answerPlanGateQueries, PLAN_PARK_REFUSAL, PLAN_SCHEDULE_REFUSAL, planningNow, planSteerRefusal } from "./plan-mode-children.js";
+import { answerPlanGateQueries, PLAN_PARK_REFUSAL, PLAN_SCHEDULE_REFUSAL, planningNow, planSteerBlocked, planSteerRefusal } from "./plan-mode-children.js";
 import { getBudgetPolicy, setBudgetPolicy } from "./process-budget.js";
 import { checkAdmission, describeBlock, mayPark, modelRef, QUOTA_RESTART_GRACE_MS } from "./quota-admission.js";
 import { SubagentScheduler } from "./schedule.js";
@@ -3572,7 +3572,7 @@ Terse command-style prompts produce shallow, generic work.
         }, signal, onUpdate, ctx);
       }
       // Running or queued under no Plan policy: a steer from a planning parent would drive edits.
-      if (!record.planGate?.policy && planningNow(pi.events)) return textResult(planSteerRefusal(record.id));
+      if (planSteerBlocked(record, pi.events)) return textResult(planSteerRefusal(record.id));
       if (!record.session) {
         // Queued for a concurrency slot, or running with its session still
         // being built: either way the manager flushes `pendingSteers` into the
