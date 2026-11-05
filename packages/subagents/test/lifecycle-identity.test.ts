@@ -131,9 +131,9 @@ describe("lifecycle event identity", () => {
     );
     const first = await spawn("Auth Audit");
     await flush();
-    const id = /Agent ID: (\S+)/.exec(first.content.map((c: any) => c.text ?? "").join(""))![1];
+    const id = /Agent ID: (\S+)/.exec(first.content.map((c: { text?: string }) => c.text ?? "").join(""))![1];
     expect(agentStateFor("resume-s1", "auth-audit")).toBe(outcome);
-    const stale = eventsNamed(pi, "subagents:created").find((e: any) => e.id === id);
+    const stale = eventsNamed(pi, "subagents:created").find((e: { id: string }) => e.id === id);
     pi.events.emit("subagents:created", stale);
     expect(agentStateFor("resume-s1", "auth-audit")).toBe(outcome);
     await spawn("Blocker");
@@ -143,7 +143,8 @@ describe("lifecycle event identity", () => {
       "resume", { prompt: "again", description: "resume", subagent_type: "scout", resume: id, run_in_background: true },
       undefined, undefined, ctx(),
     );
-    expect((globalThis as any)[Symbol.for("pi-subagents:manager")].getRecord(id).status).toBe("queued");
+    const manager = Reflect.get(globalThis, Symbol.for("pi-subagents:manager")) as { getRecord(id: string): { status: string } };
+    expect(manager.getRecord(id).status).toBe("queued");
     expect(eventsNamed(pi, "subagents:created")).toHaveLength(before + 1);
     expect(agentStateFor("resume-s1", "auth-audit")).toBe("queued");
     expect(agentLookup("resume-s1").wakesParent?.("auth-audit")).toBe(true);
@@ -240,7 +241,7 @@ describe("lifecycle event identity", () => {
   it("a queued Agent spawn stopped before it starts emits failed with status stopped", async () => {
     writeFileSync(join(cwd, "agent-dir", "subagents.json"), JSON.stringify({ maxConcurrent: 1 }));
     const { pi, tools } = await boot();
-    const manager = (globalThis as any)[Symbol.for("pi-subagents:manager")];
+    const manager = Reflect.get(globalThis, Symbol.for("pi-subagents:manager")) as { getRecord(id: string): { status: string } };
     vi.mocked(runAgent).mockImplementation(runnerResolution({ hold: true }));
     const spawn = (name: string) =>
       tools.get("Agent").execute(
@@ -251,18 +252,18 @@ describe("lifecycle event identity", () => {
     await spawn("Blocker");
     const queued = await spawn("Auth Audit");
     await flush();
-    const id = /Agent ID: (\S+)/.exec(queued.content.map((c: any) => c.text ?? "").join(""))![1];
+    const id = /Agent ID: (\S+)/.exec(queued.content.map((c: { text?: string }) => c.text ?? "").join(""))![1];
     expect(manager.getRecord(id).status).toBe("queued");
-    expect(eventsNamed(pi, "subagents:created").map((e: any) => e.id)).toContain(id);
+    expect(eventsNamed(pi, "subagents:created").map((e: { id: string }) => e.id)).toContain(id);
 
     await tools.get("stop_subagent").execute("tc-stop", { agent_id: id }, undefined, undefined, ctx());
     expect(manager.getRecord(id).status).toBe("stopped");
 
-    const failed = eventsNamed(pi, "subagents:failed").filter((e: any) => e.id === id);
+    const failed = eventsNamed(pi, "subagents:failed").filter((e: { id: string }) => e.id === id);
     expect(failed).toEqual([
       expect.objectContaining({ id, status: "stopped", handle: "scout-2", name: "auth-audit", nameBase: "auth-audit" }),
     ]);
     expect(typeof failed[0].settleSeq).toBe("number");
-    expect(eventsNamed(pi, "subagents:started").map((e: any) => e.id)).not.toContain(id);
+    expect(eventsNamed(pi, "subagents:started").map((e: { id: string }) => e.id)).not.toContain(id);
   });
 });
