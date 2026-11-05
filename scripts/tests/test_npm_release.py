@@ -764,17 +764,14 @@ def test_toolchain_minima(
             nr.assert_toolchain(repo)
 
 
-@pytest.fixture
-def verified(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, nr.Identity]:
-    """Pack a real fixture once; substitute only the Pi exercise, retaining manifest/git/hash operations.
+def substitute_pi_and_package_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Substitute only the Pi exercise and install/check, retaining manifest/git/pack/hash operations.
 
     Parameters:
-        repo (Path): Clean fixture.
-        tmp_path (Path): Artifact parent.
-        monkeypatch (pytest.MonkeyPatch): Prevents any local Pi invocation.
+        monkeypatch (pytest.MonkeyPatch): Prevents any local Pi invocation or package install.
 
     Returns:
-        tuple[Path, Identity]: Artifact directory and verified identity.
+        None: `pc.run_gate` and `nr.command` are patched for the test.
     """
 
     def exercise(
@@ -835,6 +832,21 @@ def verified(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tup
         return original_command(root, tool, *args, timeout=timeout)
 
     monkeypatch.setattr(nr, "command", skip_package_check)
+
+
+@pytest.fixture
+def verified(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, nr.Identity]:
+    """Pack a real fixture once; substitute only the Pi exercise, retaining manifest/git/hash operations.
+
+    Parameters:
+        repo (Path): Clean fixture.
+        tmp_path (Path): Artifact parent.
+        monkeypatch (pytest.MonkeyPatch): Prevents any local Pi invocation.
+
+    Returns:
+        tuple[Path, Identity]: Artifact directory and verified identity.
+    """
+    substitute_pi_and_package_checks(monkeypatch)
     output = tmp_path / "artifacts"
     identity = nr.verify(repo, nr.resolve_target(repo, TAG), output)
     return output, identity
@@ -1343,3 +1355,232 @@ def test_command_overlays_environment_overrides(tmp_path: Path) -> None:
     output = nr.command(tmp_path, "env", env={"NPM_CONFIG_USERCONFIG": os.devnull})
     assert f"NPM_CONFIG_USERCONFIG={os.devnull}" in output.splitlines()
     assert os.environ.get("NPM_CONFIG_USERCONFIG") != os.devnull
+
+
+INTEGRITY = "sha512-" + "B" * 86 + "=="
+
+
+def test_descriptor_for_refuses_an_unregistered_target() -> None:
+    """A target whose name has no descriptor cannot select release data.
+
+    Returns:
+        None: The unknown package is refused.
+    """
+    target = nr.Target(tag="@nredd/unknown@1.2.3", name="@nredd/unknown", version="1.2.3", directory="x")
+    with pytest.raises(nr.ReleaseError, match="No release descriptor for '@nredd/unknown'"):
+        nr.descriptor_for(target)
+
+
+def test_resolve_refuses_invalid_manifest_and_contract_skew(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A versionless workspace manifest and a descriptor whose contract names another package both refuse.
+
+    Parameters:
+        repo (Path): Disposable descriptor repository.
+        monkeypatch (pytest.MonkeyPatch): Replaces the immutable descriptor registry for this test only.
+
+    Returns:
+        None: Both inconsistent identities are refused.
+    """
+    path = repo / "packages/session-kit/package.json"
+    original = path.read_text()
+    path.write_text(json.dumps({"name": "@nredd/pi-session-kit"}))
+    with pytest.raises(
+        nr.ReleaseError, match="Invalid descriptor package manifest for '@nredd/pi-session-kit'"
+    ):
+        nr.resolve_target(repo, TAG)
+    path.write_text(original)
+    descriptor = rd.descriptor_for("@nredd/pi-session-kit")
+    assert descriptor is not None
+    skewed = replace(descriptor, contract=replace(descriptor.contract, name="@nredd/pi-other"))
+    monkeypatch.setattr(rd, "DESCRIPTORS", (skewed,))
+    with pytest.raises(nr.ReleaseError, match="Descriptor contract disagrees with package name"):
+        nr.resolve_target(repo, TAG)
+
+
+def test_release_workspace_requires_a_safe_package_directory(repo: Path) -> None:
+    """An escaping descriptor workspace and a directory without `package.json` both refuse.
+
+    Parameters:
+        repo (Path): Disposable descriptor repository.
+
+    Returns:
+        None: Both invalid workspaces are refused.
+    """
+    descriptor = rd.descriptor_for("@nredd/pi-session-kit")
+    assert descriptor is not None
+    with pytest.raises(nr.ReleaseError, match="unsafe workspace"):
+        nr.release_workspace(repo, replace(descriptor, workspace=PurePosixPath("../outside")))
+    (repo / "packages/session-kit/package.json").unlink()
+    with pytest.raises(nr.ReleaseError, match="Release workspace is not a package: 'packages/session-kit'"):
+        nr.release_workspace(repo, descriptor)
+
+
+def test_workspace_symlink_cannot_escape_the_repository(repo: Path, tmp_path: Path) -> None:
+    """A syntactically safe workspace that resolves outside the checkout is refused.
+
+    Parameters:
+        repo (Path): Disposable descriptor repository.
+        tmp_path (Path): Holds the outside link target.
+
+    Returns:
+        None: The escaping workspace is refused.
+    """
+    descriptor = rd.descriptor_for("@nredd/pi-session-kit")
+    assert descriptor is not None
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (repo / "packages/linked").symlink_to(outside)
+    with pytest.raises(ValueError, match="workspace escapes repository: 'packages/linked'"):
+        rd.resolve_workspace(repo, replace(descriptor, workspace=PurePosixPath("packages/linked")))
+
+
+def test_native_matches_refuse_an_unsafe_pattern(repo: Path) -> None:
+    """A traversing native-artifact pattern is refused before any match.
+
+    Parameters:
+        repo (Path): Disposable descriptor repository.
+
+    Returns:
+        None: The unsafe pattern is refused.
+    """
+    descriptor = rd.descriptor_for("@nredd/pi-session-kit")
+    assert descriptor is not None
+    unsafe = replace(descriptor, native_artifacts=(PurePosixPath("../helper"),))
+    with pytest.raises(nr.ReleaseError, match=r"unsafe native artifact: '\.\./helper'"):
+        nr.native_matches(repo / "packages/session-kit", unsafe)
+
+
+def test_registry_dist_parses_metadata_and_refuses_non_json_failure(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Published metadata parses; a failure whose output is not npm JSON is never absence.
+
+    Parameters:
+        repo (Path): Disposable descriptor repository.
+        monkeypatch (pytest.MonkeyPatch): Injects npm output.
+
+    Returns:
+        None: Success returns the distribution, a non-JSON failure refuses.
+    """
+    target = nr.resolve_target(repo, TAG)
+    monkeypatch.setattr(nr, "command", lambda *_args, **_kwargs: json.dumps({"integrity": INTEGRITY}))
+    assert nr.registry_dist(repo, target) == nr.Distribution(integrity=INTEGRITY)
+
+    def fail(*_args: object, **_kwargs: object) -> str:
+        """Simulate npm failing with plain-text diagnostics.
+
+        Parameters:
+            *_args (object): Ignored command arguments.
+            **_kwargs (object): Ignored command options.
+
+        Returns:
+            str: Never returned.
+
+        Raises:
+            subprocess.CalledProcessError: Always, with non-JSON output.
+        """
+        raise subprocess.CalledProcessError(1, ["npm"], "npm ERR! network down")
+
+    monkeypatch.setattr(nr, "command", fail)
+    with pytest.raises(nr.ReleaseError, match="Registry lookup failed: npm ERR! network down"):
+        nr.registry_dist(repo, target)
+
+
+def test_emit_outputs_refuses_multiline_values(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A newline in a step output could inject another output and is refused.
+
+    Parameters:
+        tmp_path (Path): GitHub output file parent.
+        monkeypatch (pytest.MonkeyPatch): Sets `GITHUB_OUTPUT`.
+
+    Returns:
+        None: The multiline value is refused.
+    """
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "outputs"))
+    with pytest.raises(nr.ReleaseError, match="Multiline output 'tarball' is forbidden"):
+        nr.emit_outputs(tarball="a\npublish=true")
+
+
+def test_verify_refuses_a_packed_version_that_differs_from_the_tag(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real packed bytes whose version differs from the target refuse before any artifact is recorded.
+
+    Parameters:
+        repo (Path): Disposable descriptor repository.
+        tmp_path (Path): Artifact parent.
+        monkeypatch (pytest.MonkeyPatch): Substitutes only Pi and install/check.
+
+    Returns:
+        None: The version skew is refused.
+    """
+    substitute_pi_and_package_checks(monkeypatch)
+    target = nr.resolve_target(repo, TAG).model_copy(update={"version": "9.9.9"})
+    with pytest.raises(nr.ReleaseError, match="Packed version differs from release tag"):
+        nr.verify(repo, target, tmp_path / "artifacts")
+
+
+def test_artifact_for_another_package_is_refused(repo: Path, verified: tuple[Path, nr.Identity]) -> None:
+    """Verified bytes for one package cannot be published under another package's tag.
+
+    Parameters:
+        repo (Path): Disposable descriptor repository.
+        verified (tuple[Path, Identity]): Real packed session-kit fixture.
+
+    Returns:
+        None: The cross-package artifact is refused.
+    """
+    output, _ = verified
+    other = next(contract.name for contract in nr.CONTRACTS if contract.name != "@nredd/pi-session-kit")
+    with pytest.raises(nr.ReleaseError, match="Artifact target differs from release tag"):
+        nr.check_artifact(repo, f"{other}@1.2.3", output)
+
+
+def test_main_preflight_and_verify_stages(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`preflight` emits workspace outputs, `verify` writes the identity, and missing options exit 1.
+
+    Parameters:
+        repo (Path): Disposable tagged descriptor repository.
+        tmp_path (Path): Artifact and output-file parent.
+        monkeypatch (pytest.MonkeyPatch): Substitutes registry, Pi and install/check only.
+
+    Returns:
+        None: Each stage runs in process with its exact exit status.
+    """
+    root = ["--repo-root", str(repo)]
+    assert nr.main(["preflight", *root]) == 1
+    assert nr.main(["verify", "--tag", TAG, *root]) == 1
+    assert nr.main(["native-check", *root]) == 1
+    outputs = tmp_path / "outputs"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(outputs))
+    monkeypatch.setattr(nr, "registry_dist", lambda *_: None)
+    assert nr.main(["preflight", "--tag", TAG, *root]) == 0
+    assert outputs.read_text() == "workspace=@nredd/pi-session-kit\ndirectory=session-kit\n"
+    substitute_pi_and_package_checks(monkeypatch)
+    output = tmp_path / "artifacts"
+    assert nr.main(["verify", "--tag", TAG, *root, "--artifact-dir", str(output)]) == 0
+    identity = nr.Identity.model_validate_json((output / "identity.json").read_text())
+    assert identity.target == nr.resolve_target(repo, TAG)
+
+
+def test_script_entry_point_exits_with_main_status(repo: Path) -> None:
+    """Running the module as a script exits with `main`'s status code.
+
+    Parameters:
+        repo (Path): Disposable descriptor repository.
+
+    Returns:
+        None: A stage without its required tag exits 1.
+    """
+    done = subprocess.run(
+        [sys.executable, nr.__file__, "preflight", "--repo-root", str(repo)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 1
+    assert "This stage requires `--tag`" in done.stderr
