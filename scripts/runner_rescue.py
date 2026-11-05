@@ -27,7 +27,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
-from runner_pools import POOLS, is_fresh, parse_heartbeats
+from runner_pools import POOLS, parse_heartbeats, pool_is_up
 
 LOGGER = logging.getLogger(__name__)
 
@@ -105,7 +105,7 @@ def stranded_runs(
             if (
                 job["status"] == "queued"
                 and waited > MIN_QUEUED_S
-                and any(not is_fresh(heartbeats.get(pool, ""), now) for pool in pools)
+                and any(not pool_is_up(heartbeats.get(pool, ""), now) for pool in pools)
             ):
                 picked.append(run["id"])
                 break

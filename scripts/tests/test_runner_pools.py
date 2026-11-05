@@ -73,7 +73,10 @@ MACOS = runner_pools.POOLS["pi-macos"]
         (f"{FRESH}:1", MACOS, 1),
         (FRESH, LINUX, 1),
         (FRESH, MACOS, 1),
-        (f"{FRESH}:-1", LINUX, None),
+        (f"{FRESH}:-1", LINUX, -1),
+        (f"{FRESH}:-7", MACOS, -7),
+        (f"{FRESH}:drain", LINUX, None),
+        (f"{FRESH}:drain", MACOS, None),
         (f"{FRESH}:x", LINUX, None),
         (f"{FRESH}:", LINUX, None),
         ("0", LINUX, None),
@@ -82,16 +85,45 @@ MACOS = runner_pools.POOLS["pi-macos"]
     ],
 )
 def test_free_slots(value: str, pool: runner_pools.Pool, free: int | None) -> None:
-    """A stale, stopped or garbled beat is down (None); a live one reports its clamped free count."""
+    """A stale, stopped, draining or garbled beat is down (None); a live one reports its free count,
+    negative while jobs wait, capped at the pool's slots."""
     assert runner_pools.free_slots(value, NOW, pool) == free
 
 
 def test_pool_capacity_needs_a_live_beat_and_a_trusted_event() -> None:
-    """Never offer a pool to a fork PR; a live pool with no room maps to 0, a dead one is absent."""
+    """Never offer a pool to a fork PR; a dead one is absent; a strict full pool maps to 0."""
     beats = {"pi-linux": f"{FRESH}:2", "pi-macos": "0"}
     assert runner_pools.pool_capacity(beats, NOW, trusted=True) == {"pi-linux": 2}
     assert runner_pools.pool_capacity(beats, NOW, trusted=False) == {}
-    assert runner_pools.pool_capacity({"pi-macos": f"{FRESH}:0"}, NOW, trusted=True) == {"pi-macos": 0}
+    assert runner_pools.pool_capacity({"pi-linux": f"{FRESH}:0"}, NOW, trusted=True) == {"pi-linux": 0}
+
+
+@pytest.mark.parametrize(
+    ("beat", "capacity"),
+    [
+        (f"{FRESH}:2", 3),  # two free plus the one queued cell the pool allows
+        (f"{FRESH}:0", 1),  # full, but one may wait
+        (f"{FRESH}:-1", 0),  # one already waits: the allowed queue is taken
+        (f"{FRESH}:-5", 0),  # deeper backlog never goes negative
+        (f"{FRESH}:drain", None),  # draining: starts nothing, so nothing may be queued on it
+        ("0", None),
+    ],
+)
+def test_a_queue_depth_pool_allows_one_waiting_cell_and_no_more(beat: str, capacity: int | None) -> None:
+    """The macOS pool lets one cell wait beyond its free slots; the backlog the pool reports caps it."""
+    got = runner_pools.pool_capacity({"pi-macos": beat}, NOW, trusted=True)
+    assert got.get("pi-macos") == capacity
+    assert runner_pools.POOLS["pi-macos"].queue_depth == 1
+    assert runner_pools.POOLS["pi-linux"].queue_depth == 0
+
+
+def test_pool_is_up_means_fresh_and_not_draining() -> None:
+    """A draining pool still beats, but its queued jobs are stranded, so it does not count as up."""
+    assert runner_pools.pool_is_up(f"{FRESH}:2", NOW)
+    assert runner_pools.pool_is_up(FRESH, NOW)
+    assert not runner_pools.pool_is_up(f"{FRESH}:drain", NOW)
+    assert not runner_pools.pool_is_up("0", NOW)
+    assert not runner_pools.pool_is_up(str(int(NOW) - 500), NOW)
     assert runner_pools.pool_capacity({}, NOW, trusted=True) == {}
     assert runner_pools.pool_capacity({"other": FRESH}, NOW, trusted=True) == {}
 
@@ -296,7 +328,7 @@ def test_main_routes_with_fresh_beats_and_never_with_no_pools(tmp_path: Path) ->
     stale = plan_with(tmp_path, "c", "--pool-heartbeat", "pi-macos=0", "--pool-heartbeat", "pi-linux=")
     assert set(cell_runners(stale, "owned (macos-14)").values()) == {"xcode-27"}
     full = plan_with(
-        tmp_path, "e", "--pool-heartbeat", f"pi-linux={beat}:0", "--pool-heartbeat", f"pi-macos={beat}:0"
+        tmp_path, "e", "--pool-heartbeat", f"pi-linux={beat}:0", "--pool-heartbeat", f"pi-macos={beat}:-1"
     )
     assert full == stale == blocked == plan_with(tmp_path, "d")
 
