@@ -571,6 +571,11 @@ The twelve jobs are the configured required checks of ruleset `main required che
   publishing packages, or activating live configuration
 - `forks.yml` is path-filtered and not a required protection check; when triggered, the remaining core Gitlink job must pass before merging
 
+The dev-tools real-host `resource_snapshot` smoke requires process metadata and includes the producer's
+unavailable reason in its failure. Separate controls exercise registry sampler `0.2.0` through the tool
+schema with an injected Linux enumeration failure and a genuinely exhausted scan budget. The injected
+Linux path on macOS is not a native Linux run.
+
 Flake policy (migration plan section 7):
 
 - A new correctness failure blocks
