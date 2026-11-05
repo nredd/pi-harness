@@ -19,7 +19,8 @@ Linux ships its locked Rust crate source, not a binary. Run inside the graphical
 session. Source builds are opt-in with `PI_COMPUTER_USE_ALLOW_BUILD=1`, use the user's cache rather
 than the npm install directory, and need Cargo plus a C linker. See the
 [Linux guide](./docs/content/docs/how-to-guides/linux.mdx). Windows source remains in the repository;
-Windows helpers and crate sources are not packed.
+Windows helpers and crate sources are not packed. If the Linux helper's input stream fails, in-flight
+requests are rejected and the helper is stopped; a later request starts a fresh helper.
 
 ## Tools
 
