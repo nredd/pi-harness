@@ -44,16 +44,13 @@ snapshots are saved.
   `· N/M plan items open`.
 - **Glyphs** — `○` pending, `◐` in_progress, `✓` completed, `⊖` deferred, `✗` deleted.
   Completed and deleted subjects render dim and struck through; deferred ones dim.
-- **Owner** — `@owner`, dim, right after the subject. When the owner equals the
-  id, `handle`, `name`, `nameBase` or `previousId` of a top-level subagent that `pi-subagents`
-  reported to this session on `pi.events` (`subagents:started` / `completed` /
-  `failed`), the agent's last
-  known state follows: `running` (accent), `done` (success), `failed` (error) or
-  `stopped` (muted). Both sides are slugged like a handle (case, a leading `@`,
-  spaces and punctuation ignored, so `Auth Audit` matches `auth-audit`); free text
-  that matches no agent shows only `@owner`. Which agent decides is set by the
-  [owner match rule](#owner-match-rule). Another session's agents never match,
-  so `/new` or `/resume` starts with no states. An `in_progress` todo whose agent
+- **Owner** — `@owner`, dim, right after the subject. When the owner names a
+  top-level subagent that `pi-subagents` reported to this session on `pi.events`
+  (`subagents:started` / `completed` / `failed`), chosen by the
+  [owner match rule](#owner-match-rule), the agent's last known state follows:
+  `running` (accent), `done` (success), `failed` (error) or `stopped` (muted).
+  Free text that matches no agent shows only `@owner`. Another session's agents
+  never match, so `/new` or `/resume` starts with no states. An `in_progress` todo whose agent
   failed or stopped is marked in the error color, `✗ failed` or `✗ stopped`. The
   todo's own status never changes: the parent completes it with evidence.
 - **activeForm** — appended dim in parentheses, only while the task is
@@ -68,14 +65,22 @@ Rows longer than the terminal width are truncated with `…`.
 
 ### Owner match rule
 
-An owner can match an agent exactly, by its id, a previous id, its `handle` or its
-`name` (`auth-audit-2` for a numbered retry), or loosely, by its `nameBase` (the
-spawner's `name` before numbering, `auth-audit`). pi-todo orders each agent's latest
-start and settle in one sequence, then:
+Both the owner and every agent key are slugged like a handle (case, a leading `@`,
+spaces and punctuation ignored, so `Auth Audit` matches `auth-audit`). An owner can
+match an agent exactly, by its id, a previous id, its `handle` or its `name`
+(`auth-audit-2` for a numbered retry), or loosely, by its `nameBase` (the spawner's
+`name` before numbering, `auth-audit`). Agents tracked beyond the newest 256 per
+session are forgotten.
+
+pi-todo orders starts and settles in one sequence. Each conversation keeps its
+*first* start, set once per id and carried to the new id when an evicted agent is
+reopened (`previousId`); its latest start and latest settle move with every resume.
+Then:
 
 - With an exact match (the most recently updated, if several), that agent's state
-  shows, unless a `nameBase`-only match *started after* it settled. That is a retry
-  under the same name, and the latest-started such retry shows instead.
+  shows, unless some *other* agent whose `nameBase` matches first started after the
+  exact match last settled. That is a retry under the same name, and of those the
+  one started most recently shows instead.
 - With no exact match, the most recently updated `nameBase` match shows.
 
 So for owner `Auth Audit`:
@@ -87,9 +92,10 @@ So for owner `Auth Audit`:
 | `auth-audit` runs, sibling `auth-audit-2` starts, then `auth-audit` fails | `✗ failed` (the owner) |
 | `auth-audit` runs, sibling `auth-audit-2` starts, then `auth-audit` completes | `done` (the owner) |
 
-A sibling started while the owner ran never masks the owner's own outcome. The
-same holds for an unnamed `explore` beside a scout named `Explore` (`explore-2`).
-A resumed owner is running again and decides once more.
+A sibling first started while the owner ran never masks the owner's own outcome,
+even when that sibling is later resumed or reopened. The same holds for an unnamed
+`explore` beside a scout named `Explore` (`explore-2`). A resumed owner is running
+again and decides once more.
 
 ## Scrolling
 
