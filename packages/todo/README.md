@@ -167,7 +167,7 @@ the full list grouped by status.
   nothing themselves; the `subagents` and `session-kit` monitor notices say what does wake the
   parent. Only a lifecycle event explicitly confirming an agent completion notice makes that owner a verified wake; foreground, silent RPC and older unknown agents warn on every settle. Abandoned or parent-held work also makes it a warning, repeated on every settle, so a stop with
   owned work pending is never silent. When every todo waits on a running agent or a live dependency
-  it is info, shown once: a settle that changes no todo's group, owner, owner agent state, wake eligibility or blockers
+  it is info, shown once: a settle that changes no todo's group, owner, owner agent state, wake eligibility or blocker identity, status, owner or owner agent state
   repeats nothing until the next prompt from a person. Todo status never changes on its own, e.g.
   `Run ended with 2 in_progress todos, armed: no todo-owned wake (monitor and agent notices list session wakes); owner agent failed or stopped: #3 Audit auth (@auth-audit failed); held by the parent: #6 Deploy`.
   Reminders pause while Plan mode is active; old approved todos remain until a
