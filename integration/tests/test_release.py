@@ -1920,7 +1920,12 @@ def test_transient_status_on_every_attempt_fails_with_the_original_message(
 def test_transient_retries_stop_at_the_wall_clock_deadline(
     monkeypatch: pytest.MonkeyPatch, no_backoff: list[float]
 ) -> None:
-    """Slow transient failures (`FETCH_TIMEOUT_SECONDS` stalls) stop at `FETCH_RETRY_DEADLINE_SECONDS`."""
+    """Slow transient failures (`FETCH_TIMEOUT_SECONDS` stalls) stop at `FETCH_RETRY_DEADLINE_SECONDS`.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Replace clock and transport.
+        no_backoff (list[float]): Recorded retry delays.
+    """
     clock = [0.0]
     monkeypatch.setattr(release.time, "monotonic", lambda: clock[0])
 

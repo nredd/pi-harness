@@ -2441,7 +2441,14 @@ def test_every_npm_ci_job_restores_the_npm_cache_and_no_other_job_saves_one() ->
 
 
 def lexical_path(path: str) -> Path:
-    """Normalize a workflow path lexically without resolving symlinks or accessing the filesystem."""
+    """Normalize a workflow path lexically without resolving symlinks or accessing the filesystem.
+
+    Parameters:
+        path (str): Workflow path to normalize.
+
+    Returns:
+        Path: Lexically normalized path.
+    """
     source = Path(path)
     parts: list[str] = []
     for part in source.parts:
@@ -2465,7 +2472,12 @@ def lexical_path(path: str) -> Path:
     ],
 )
 def test_lexical_path(value: str, expected: str) -> None:
-    """Normalize dot segments without following filesystem links."""
+    """Normalize dot segments without following filesystem links.
+
+    Parameters:
+        value (str): Workflow path to normalize.
+        expected (str): Expected normalized path.
+    """
     assert lexical_path(value) == Path(expected)
 
 
