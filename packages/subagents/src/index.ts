@@ -706,6 +706,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
    * match an agent by what the parent typed, not only its id. `spawnSeq` orders the spawn
    * against other spawns and `settleSeq`s, queued time included.
    */
+  const lifecycleRuns = new WeakMap<AgentRecord, number>();
   function eventFields(record: AgentRecord | undefined): Record<string, unknown> {
     return {
       handle: record?.handle,
@@ -713,6 +714,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       ...(record?.nameBase ? { nameBase: record.nameBase } : {}),
       ...(record?.previousId ? { previousId: record.previousId } : {}),
       spawnSeq: record?.spawnSeq,
+      ...(record && lifecycleRuns.has(record) ? { runSeq: lifecycleRuns.get(record) } : {}),
+      wakesParent: record?.isBackground === true,
       ...fallbackFields(record),
     };
   }
@@ -846,6 +849,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       fleet.ensureTimer();
       fleet.update();
     }
+    // Bind later handoff announcements to this exact run.
+    lifecycleRuns.set(record, manager.nextSequence());
     // Emit started event when agent transitions to running (including from queue)
     pi.events.emit("subagents:started", {
       id: record.id,
@@ -908,7 +913,13 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   }, (record, message) => {
     if (!isTopLevelAgent(record)) return;
     pi.events.emit("subagents:steered", { id: record.id, message });
-  }, clock, options.homeDir);
+  }, clock, options.homeDir, (record) => {
+    // Stopped before it ever started: no result and no notice, but a listener that heard
+    // `subagents:created` must still see it end. Same payload as a settled stop.
+    if (!isTopLevelAgent(record) || detachedSessionFile !== undefined) return;
+    record.settleSeq = manager.nextSequence();
+    pi.events.emit("subagents:failed", buildEventData(record));
+  });
 
   // Expose manager via Symbol.for() global registry for cross-package access.
   // Standard Node.js pattern for cross-package singletons (used by OpenTelemetry, etc.).
@@ -1489,6 +1500,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
           type: record.type,
           description: record.description,
           isBackground: true,
+          backgroundHandoff: true,
           ...eventFields(record),
         });
       }
@@ -1819,6 +1831,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     opts: { outputTranscript: boolean; maxTurns?: number; toolCallId?: string },
   ): Promise<AgentRecord | undefined> {
     const id = existing.id;
+    const priorSettleSeq = existing.settleSeq;
+    const resumeSeq = manager.nextSequence();
     const joinMode = resolveJoinMode(defaultJoinMode, true);
     // Assigned unconditionally: the completion notification carries this as
     // `<tool-use-id>`, so a mention-resume (which passes none) has to CLEAR the
@@ -1893,6 +1907,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       type: existing.type,
       description: existing.description,
       isBackground: true,
+      ...(record.status === "queued" && priorSettleSeq !== undefined ? { queuedAfterSettleSeq: priorSettleSeq, queuedResumeSeq: resumeSeq } : {}),
       ...eventFields(existing),
     });
 
