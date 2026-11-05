@@ -14,10 +14,29 @@ import { getCollapseOnResume, getMaxWidgetLines, loadConfig, resolveCollapseKey 
 import registerTodo from "./index.ts";
 import { registerTodoTool } from "./todo.ts";
 
-afterEach(() => {
+/**
+ * `existsSync` probes under the real home, excluding the injected `TEST_HOME`. The injected home
+ * may itself live under the real home (e.g. `TMPDIR=$HOME/tmp`), so its subtree is not a leak.
+ */
+function realHomeProbes(): string[] {
+	const within = (path: string, root: string) => path === root || path.startsWith(root + sep);
 	const realHome = resolve(homedir());
+	const injected = resolve(TEST_HOME);
 	const paths = vi.mocked(fs.existsSync).mock.calls.map(([path]) => resolve(String(path)));
-	expect(paths.filter((path) => path === realHome || path.startsWith(realHome + sep))).toEqual([]);
+	return paths.filter((path) => within(path, realHome) && !within(path, injected));
+}
+
+afterEach(() => {
+	expect(realHomeProbes()).toEqual([]);
+});
+
+it("detects a probe of the real home even while an injected home is active", () => {
+	vi.mocked(fs.existsSync).mockClear();
+	process.env.XDG_CONFIG_HOME = "";
+	// Omitting `homeDir` falls back to the native home, which the guard must catch.
+	loadConfig();
+	expect(realHomeProbes()).toContain(resolve(homedir(), ".config", "rpiv-todo", "config.json"));
+	vi.mocked(fs.existsSync).mockClear();
 });
 
 it("never probes the real legacy home when an isolated XDG config is missing", () => {
