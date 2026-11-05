@@ -187,8 +187,8 @@ export async function command(
  * Scan Linux sequentially over a names-only `/proc` listing.
  *
  * Names only, never `opendir` Dirents: `/proc` reports a PID that exits mid-listing as `DT_UNKNOWN`, and
- * Node's `Dir` then `lstat`s it, so its ENOENT rejected the whole iteration and discarded every row
- * (`process-collection-unavailable`). A vanished PID must instead fail its own stat read and be skipped.
+ * Node's `Dir` then `lstat`s it, and that ENOENT rejects the iterator with its batch, which cannot resume, so
+ * the whole scan was lost (`process-collection-unavailable`). A vanished PID must fail its own stat read instead.
  * @param budget Shared scan limits and cancellation.
  * @param hz Host CLK_TCK rate in ticks per second.
  * @returns Validated identity-bracketed process counters; aborts propagate.

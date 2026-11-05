@@ -452,9 +452,7 @@ describe("bounded proc reads and Linux process collection", () => {
 		expect(changed.skipped).toBe(1);
 	});
 	it("skips a PID that exits mid-listing instead of failing the whole Linux scan", async () => {
-		// `/proc` lists a PID that exits mid-listing as DT_UNKNOWN, and Node's `opendir` Dirents then `lstat` it:
-		// that ENOENT used to reject the iteration and empty the scan. A names-only listing leaves it to the PID's
-		// own stat read, so it is one skipped row and the live process after it is still sampled.
+		// Names-only listing, see `linuxProcesses`: the vanished PID is one skipped row, the live one after it is kept.
 		vi.mocked(readdir).mockResolvedValueOnce(["11", "12"] as never);
 		const fields = Array<string>(22).fill("0");
 		fields[0] = "S";
