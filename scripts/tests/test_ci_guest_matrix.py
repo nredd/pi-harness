@@ -31,6 +31,9 @@ import merge_pr_checks
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/ci.yml"
+SETUP_CI_TOOLS = "./.github/actions/setup-ci-tools"
+# A command that starts a shell line, never one inside a comment or an echoed string.
+NPM_INSTALL_COMMAND = re.compile(r"^\s*(?:npm ci|make install-owned)\b", re.MULTILINE)
 PLATFORMS = {
     "ubuntu-24.04": ("ubuntu-24.04", "linux", "linux-x64"),
     "macos-14": ("xcode-27", "macos", "darwin-arm64"),
@@ -2376,11 +2379,6 @@ def test_docs_list_every_benchmark_input() -> None:
     )
     for entry in sorted(ci_paths.BENCHMARK_INPUT_FILES) + list(ci_paths.BENCHMARK_INPUT_PREFIXES):
         assert f"`{entry}`" in bullet
-
-
-SETUP_CI_TOOLS = "./.github/actions/setup-ci-tools"
-# A command that starts a shell line, never one inside a comment or an echoed string.
-NPM_INSTALL_COMMAND = re.compile(r"^\s*(?:npm ci|make install-owned)\b", re.MULTILINE)
 
 
 def runs_npm_install(step: dict[str, Any]) -> bool:
