@@ -1096,6 +1096,19 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   }
 
   /**
+   * Core defers `sendMessage` during a run while `persistState` writes at once, so the edit
+   * message could land after a newer plan the run proposes. Edits apply only when idle.
+   */
+  function planEditBlockedByRun(ctx: ExtensionContext) {
+    if (ctx.isIdle() && !ctx.hasPendingMessages()) return false;
+    ctx.ui.notify(
+      "Cannot edit the plan while an agent run is active. Wait for the run to settle, then retry.",
+      "warning",
+    );
+    return true;
+  }
+
+  /**
    * Replaces the ready or saved plan with the user's editor text. Editing is not a decline:
    * the decline counters and re-proposal gate stay as they were.
    */
@@ -1103,10 +1116,12 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     const enabled = state.enabled;
     const savedPlan = enabled ? undefined : state.savedPlan;
     const before = enabled ? state.latestPlan : savedPlan?.plan;
-    if (!before) return;
+    if (!before || planEditBlockedByRun(ctx)) return;
     const edited = await ctx.ui.editor(enabled ? "Edit proposed plan" : "Edit saved plan", before);
     const review = reviewEditedPlan(before, edited);
     if (review.kind === "cancelled" || review.kind === "unchanged") return;
+    // A run that started while the editor was open would defer the edit message past newer output.
+    if (planEditBlockedByRun(ctx)) return;
     const unchangedWhileEditing =
       isCurrent() &&
       state.enabled === enabled &&

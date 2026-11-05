@@ -37,7 +37,7 @@ The stored plan and ready state remain intact until the selected action complete
 
 `Edit plan…` in the ready-plan chooser, the `/plan` ready menu, and the saved-plan menu opens the plan in Pi's editor (`ctx.ui.editor`, so `externalEditor`/`$VISUAL`/`$EDITOR`; RPC uses its `editor` dialog). Saving applies the `plan_mode_complete` limits (trimmed, non-empty, at most 50,000 characters), replaces the ready or saved plan with source `user_edit`, persists it with the Plan state, and reopens the same menu. The next model request carries one hidden `plan-mode-plan-edit` message with a unified diff from the earlier version. Implement here, Start fresh, export, `/plan show`, and `pi-plan-mode:plan-approved` use the edited text; under **Off — conversation history only**, Implement here sends the edited plan in its prompt instead of `Implement the plan.`, and Start fresh transfers only the edited plan.
 
-Cancelling the editor or saving unchanged text changes nothing. An empty or oversized edit, or one whose plan changed while the editor was open, is reported and changes nothing. Editing is not a decline. Print and JSON modes have no editor and reach none of these menus.
+Editing is refused with a warning while an agent run is active, both before the editor opens and when it closes, because a deferred edit message could land after a newer plan. Cancelling the editor or saving unchanged text changes nothing. An empty or oversized edit, or one whose plan changed while the editor was open, is reported and changes nothing. Editing is not a decline. Print and JSON modes have no editor and reach none of these menus.
 
 ## Busy transitions and recovery
 

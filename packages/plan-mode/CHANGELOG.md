@@ -8,7 +8,7 @@
   opens the plan in Pi's editor. A saved edit replaces the stored plan as source `user_edit`, persists
   it with the Plan state, reopens the menu, and tells the model once through a hidden
   `plan-mode-plan-edit` message with a unified diff. Implementation, export, todo seeding and fresh
-  sessions use the edited text. Editing is not a decline.
+  sessions use the edited text. Editing is refused while a run is active and is not a decline.
 
 ### Changed
 
