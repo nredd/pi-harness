@@ -31,19 +31,6 @@ process.stdout.write(JSON.stringify({ profile, existsAfterShutdown: fs.existsSyn
 `;
 
 /**
- * Wait until a path no longer exists.
- * @param {string} target Path expected to disappear.
- * @param {number} timeoutMs Failure backstop.
- * @returns {Promise<void>} Resolves once `target` is gone.
- * @throws {import('node:assert').AssertionError} If `target` still exists at the deadline.
- */
-async function waitForRemoval(target, timeoutMs) {
-	const deadline = Date.now() + timeoutMs;
-	while (fs.existsSync(target) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
-	assert(!fs.existsSync(target), `managed browser profile ${target} outlived the browser`);
-}
-
-/**
  * Run `CHILD_SCRIPT` under tsx and return what it printed.
  * @param {string} script Path of the written child script.
  * @param {"shutdown"|"exit"} mode How the child quits.
@@ -78,6 +65,45 @@ async function cdpAnswers(port) {
 	}
 }
 
+/**
+ * Whether anything still accepts TCP connections on `port`, for a fake browser that serves no CDP.
+ * @param {number} port The browser's debugging port.
+ * @returns {Promise<boolean>} True if a connection was accepted.
+ * @throws {never} Connection failures resolve false.
+ */
+function portListening(port) {
+	return new Promise((resolve) => {
+		const socket = net.connect({ port, host: "127.0.0.1" });
+		socket.setTimeout(1_000);
+		socket.once("connect", () => {
+			socket.destroy();
+			resolve(true);
+		});
+		socket.once("error", () => resolve(false));
+		socket.once("timeout", () => {
+			socket.destroy();
+			resolve(false);
+		});
+	});
+}
+
+/**
+ * Poll until `check` resolves true.
+ * @param {() => Promise<boolean> | boolean} check Condition to wait for.
+ * @param {string} message Assertion message at the deadline.
+ * @param {number} timeoutMs Failure backstop.
+ * @returns {Promise<void>} Resolves once `check` passes.
+ * @throws {import('node:assert').AssertionError} If `check` never passes before the deadline.
+ */
+async function waitUntil(check, message, timeoutMs) {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (await check()) return;
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+	assert.fail(message);
+}
+
 describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 	const saved = {};
 	let scratch;
@@ -89,7 +115,7 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		tmp = path.join(scratch, "tmp");
 		fs.mkdirSync(tmp);
 		log = path.join(scratch, "argv.json");
-		for (const name of ["TMPDIR", "FAKE_BROWSER_LOG", "FAKE_BROWSER_IGNORE_SIGTERM", "PI_COMPUTER_USE_CHROME_EXECUTABLE", "PI_COMPUTER_USE_CDP_PORT"]) saved[name] = process.env[name];
+		for (const name of ["TMPDIR", "FAKE_BROWSER_LOG", "FAKE_BROWSER_IGNORE_SIGTERM", "FAKE_BROWSER_NO_CDP", "PI_COMPUTER_USE_CHROME_EXECUTABLE", "PI_COMPUTER_USE_CDP_PORT"]) saved[name] = process.env[name];
 		process.env.TMPDIR = tmp;
 		process.env.FAKE_BROWSER_LOG = log;
 		process.env.PI_COMPUTER_USE_CHROME_EXECUTABLE = FAKE_BROWSER;
@@ -185,10 +211,57 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		const controller = new AbortController();
 		controller.abort();
 		await assert.rejects(testing.performLaunchBrowser({}, controller.signal), /aborted/);
-		const created = fs.readdirSync(tmp).filter((entry) => !before.has(entry));
-		assert.equal(created.length, 1, `expected one new profile dir, got ${created.join(", ")}`);
+		assert.deepEqual(fs.readdirSync(tmp).filter((entry) => !before.has(entry)), [], "aborted launch returned before removing the profile dir");
 		assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, undefined, "aborted launch left its CDP port configured");
-		await waitForRemoval(path.join(tmp, created[0]), 5_000);
+	});
+
+	test("an aborted launch SIGKILLs a browser that ignores SIGTERM before it returns", async () => {
+		fs.rmSync(log, { force: true });
+		process.env.FAKE_BROWSER_IGNORE_SIGTERM = "1";
+		process.env.FAKE_BROWSER_NO_CDP = "1";
+		const controller = new AbortController();
+		let launch;
+		try {
+			launch = testing.performLaunchBrowser({}, controller.signal);
+			await waitUntil(() => fs.existsSync(log), "fake browser never started", 5_000);
+		} finally {
+			delete process.env.FAKE_BROWSER_IGNORE_SIGTERM;
+			delete process.env.FAKE_BROWSER_NO_CDP;
+		}
+		const { port, profile } = JSON.parse(fs.readFileSync(log, "utf8"));
+		await waitUntil(() => portListening(port), "fake browser never listened", 5_000);
+		controller.abort();
+		// Waits out the bridge's 5s SIGTERM grace period before it escalates.
+		await assert.rejects(launch, /aborted/);
+		assert(!fs.existsSync(profile), "aborted launch returned before removing the profile dir");
+		assert.equal(await portListening(port), false, "aborted launch left a SIGTERM-ignoring browser running");
+	});
+
+	test("relaunch SIGKILLs a previous browser that ignores SIGTERM and removes its profile", async () => {
+		process.env.FAKE_BROWSER_IGNORE_SIGTERM = "1";
+		try {
+			await testing.performLaunchBrowser({});
+		} finally {
+			delete process.env.FAKE_BROWSER_IGNORE_SIGTERM;
+		}
+		const first = JSON.parse(fs.readFileSync(log, "utf8"));
+		// Waits out the bridge's 5s SIGTERM grace period before it escalates.
+		await testing.performLaunchBrowser({});
+		const second = JSON.parse(fs.readFileSync(log, "utf8"));
+		assert.notEqual(second.profile, first.profile);
+		assert(!fs.existsSync(first.profile), "relaunch left the previous profile dir behind");
+		assert.equal(await cdpAnswers(first.port), false, "relaunch left a SIGTERM-ignoring browser running");
+		assert.equal(await cdpAnswers(second.port), true, "relaunched browser is not serving CDP");
+		await shutdownComputerUseSession();
+		assert(!fs.existsSync(second.profile), "session shutdown returned before removing the profile dir");
+	});
+
+	test("a launch whose spawn throws removes its profile dir and rethrows the spawn error", async () => {
+		const before = new Set(fs.readdirSync(tmp));
+		// The URL passes the scheme check, but `spawn` rejects the NUL byte synchronously.
+		await assert.rejects(testing.performLaunchBrowser({ url: "http://example.test/\0" }), { code: "ERR_INVALID_ARG_VALUE" });
+		assert.deepEqual(fs.readdirSync(tmp).filter((entry) => !before.has(entry)), [], "failed spawn left a profile dir behind");
+		assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, undefined, "failed spawn left a CDP port configured");
 	});
 
 	test("a Pi process that quits right after shutdown leaves no profile dir behind", async () => {
