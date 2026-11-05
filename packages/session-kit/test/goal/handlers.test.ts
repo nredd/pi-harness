@@ -411,6 +411,14 @@ describe("background subagents", () => {
 		fake.emit("message_end", { message: { role: "custom", customType: "subagent-notification" } });
 		expect((await fake.settle())?.continue).toBe(true);
 	});
+	it("nudges after a queued background agent is stopped before starting", async () => {
+		const fake = await boot();
+		await goalCmd(fake, "ship it");
+		fake.events.emit("subagents:created", { id: "queued", isBackground: true });
+		expect(await fake.settle()).toBeUndefined();
+		fake.events.emit("subagents:failed", { id: "queued", status: "stopped" });
+		expect((await fake.settle())?.continue).toBe(true);
+	});
 	it("wakes itself when a finished agent's notice never comes", async () => {
 		const fake = await boot();
 		await goalCmd(fake, "ship it");
