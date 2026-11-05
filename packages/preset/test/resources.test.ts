@@ -307,7 +307,7 @@ const missingDriveClauses = (policy: string): string[] => {
 			/A 403, plan-gated error, unknown, or uncertain bypass eligibility is NOT protected/.test(drive),
 		"caller cannot bypass": drive.includes("the merging caller cannot bypass them"),
 		"no --admin": drive.includes("Never use `--admin` or any bypass"),
-		"native monitor": drive.includes("monitor_start"),
+		"native monitor": drive.includes("Start `monitor_start` (discover via `search_tools` if deferred)"),
 		"next PR loop": drive.includes("return to step 3 for the next unblocked PR"),
 		"whole list": drive.includes("every requested PR is merged"),
 		"no parent handoff": !/hand(?:s)? (?:the|it to the) parent/i.test(drive),
@@ -453,6 +453,7 @@ test("get-it-merged parent drives the whole list; negative controls", () => {
 		["the merging caller cannot bypass them", "the merging caller can bypass them", ["caller cannot bypass"]],
 		["Never use `--admin` or any bypass", "", ["no --admin"]],
 		["monitor_start", "poll", ["native monitor"]],
+		["Start `monitor_start` (discover via `search_tools` if deferred)", "Start `monitor_start`", ["native monitor"]],
 		["return to step 3 for the next unblocked PR", "stop", ["next PR loop"]],
 		["every requested PR is merged", "one PR is merged", ["whole list"]],
 		[drive, `${drive}\n- Hand the parent the PR URL and stop.`, ["no parent handoff"]],
@@ -721,7 +722,9 @@ const missingReviewPolicy = ({ review, ship, merge }: ShippingSkills): string[] 
 		"frozen combined gate before publish/deploy": /frozen combined gate immediately before\s+publish\/deploy/.test(
 			merge,
 		),
-		"parent-only native monitors": merge.includes("Parent only: use native session-kit monitors (`monitor_start`)"),
+		"parent-only native monitors": merge.includes(
+			"Parent only: use native session-kit monitors (`monitor_start`, discover via `search_tools` if deferred)",
+		),
 		"no EnterWorktree tool": ship.includes("Do NOT use the `EnterWorktree` tool"),
 		"no ambiguous /code-review command":
 			ship.includes("use `/skill:code-review` for the separate Standards") &&
@@ -802,6 +805,7 @@ test("shipping skills keep the #269 review, train and release clauses; negative 
 			["frozen combined gate before publish/deploy"],
 		],
 		["merge", "Parent only: use native session-kit monitors", "Use shell sleep loops", ["parent-only native monitors"]],
+		["merge", ", discover via `search_tools` if deferred)", ")", ["parent-only native monitors"]],
 		[
 			"review",
 			"and no `model` override.",

@@ -108,7 +108,7 @@ fallback when absent). Older or third-party snapshots without durations still sc
 
 Surfaces:
 
-- `subscription_usage` tool: windows plus active blocks. Usage buckets are also added to the system prompt as a `subscription_usage` section
+- `subscription_usage` tool: windows plus active blocks. Usage buckets are also added to the system prompt as a `subscription_usage` section. Its guidance names the tool only when the session can call it or discover it through `search_tools` (deferred: discover it first)
 - Child sessions share the parent's model runtime and re-register `router/*` into it, so one activation's route serves every session on that runtime. Routing reads only the model registry, never that activation's extension ctx, so it survives the disposal of whichever child loaded last
 - `router:decision` entries go to the session that last registered the route, not the session that requested it: core's `route` carries no requester identity. Once that session is disposed they are dropped
 - `router:decision` session entries: one per profile's first scored pick in a session and each later change of chosen model, not every route. This slows growth but is not a hard bound: entries are never pruned, flapping between models and every session restart still append (profile, reason, chosen model, each candidate's score, limiting window, stale flag and data age, ineligible entries). Sticky continuations and repeat picks of the same model are not persisted; status still lists the last five. Read them from the session file to prove why a model was picked
