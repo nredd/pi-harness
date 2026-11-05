@@ -310,15 +310,12 @@ const COLLECTORS: Readonly<Record<string, Collector>> = {
 /** Providers with a usage collector. */
 export const COLLECTED_PROVIDERS: readonly string[] = Object.keys(COLLECTORS);
 
-/**
- * `Retry-After` as milliseconds from `now`: delta-seconds or an HTTP-date. A zero or
- * past value comes back as is; `recordFailure` never waits less than its backoff step.
- */
+/** `Retry-After` as milliseconds from `now`: delta-seconds or an HTTP-date. */
 function retryAfterMs(header: string | null, now: number): number | undefined {
 	if (!header) return undefined;
 	const trimmed = header.trim();
 	const ms = /^\d+$/.test(trimmed) ? Number(trimmed) * 1000 : Date.parse(trimmed) - now;
-	return Number.isFinite(ms) ? ms : undefined;
+	return Number.isFinite(ms) && ms > 0 ? ms : undefined;
 }
 
 interface FetchOutcome {
@@ -639,7 +636,9 @@ function waitForCaller(
 	signal: AbortSignal | undefined,
 	onTimeout: () => UsageSnapshot | undefined,
 ): Promise<UsageSnapshot | undefined> {
-	// `get` already answered an aborted signal, so only a later abort reaches `abort`.
+	// The credential lookup runs synchronously inside `refresh` and may abort the signal
+	// before the listener below exists; an `abort` listener added afterwards never fires.
+	if (signal?.aborted) return Promise.resolve(undefined);
 	return new Promise((resolve) => {
 		let settled = false;
 		const finish = (snapshot?: UsageSnapshot) => {

@@ -444,6 +444,7 @@ export function createQuotaPoller(deps: PollerDeps): QuotaPoller {
 	 * Arm a timer for the earliest upcoming expiry of a fresh reading in `current`.
 	 * Only `settle` (never after `dispose`, which drops the in-flight token) and this
 	 * timer (cleared by `settle` and `dispose`) call it, so `current` is always the live state.
+	 * The timer re-arms only while live, since its `onChange` may dispose the poller.
 	 */
 	function scheduleExpiry(current: QuotaState): void {
 		clearExpiry();
@@ -458,7 +459,7 @@ export function createQuotaPoller(deps: PollerDeps): QuotaPoller {
 			() => {
 				expiryTimer = undefined;
 				deps.onChange();
-				scheduleExpiry(current);
+				if (!disposed) scheduleExpiry(current);
 			},
 			Math.min(next - t, MAX_TIMER_MS),
 		);

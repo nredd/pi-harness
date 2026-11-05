@@ -75,6 +75,29 @@ describe("usage read ownership", () => {
 			}
 		},
 	);
+	it("answers a signal aborted during the credential lookup as cancelled at once", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(T0);
+		try {
+			const controller = new AbortController();
+			const service = new UsageService({
+				now: () => Date.now(),
+				getAccessToken: () => {
+					controller.abort();
+					return new Promise<string>(() => {});
+				},
+				fetch: () => Promise.reject(new Error("no fetch expected")),
+			});
+			const result = service.get(ctx, "anthropic", { signal: controller.signal });
+			await vi.advanceTimersByTimeAsync(0);
+			const settled = await Promise.race([result, Promise.resolve("pending")]);
+			expect(settled).toMatchObject({ status: "error", message: "Usage request was cancelled." });
+			await vi.runAllTimersAsync();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("keeps each caller's deadline across a chain and uses its newest completed evidence", async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(T0);
