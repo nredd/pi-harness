@@ -301,8 +301,10 @@ on (level, code, primary span, message) because cargo emits one copy per target,
   `CARGO_TARGET_DIR`, Cargo's `build.target-dir` and nextest's `[store].dir` (nextest's store
   does not follow Cargo's target directory). A repo override of the `pi-dev-tools` profile's
   junit path is reported as missing output. `<failure>` and `<error>` both count, including nextest's
-  self-closing ones with no message or body (a timeout or a silent nonzero exit); flaky retries do not;
-  then `cargo test --doc --no-fail-fast`, skipped (and said so) when a `filter` is set. A
+  self-closing ones with no message or body (a timeout or a silent nonzero exit); flaky retries do not.
+  Failure reasons use the decoded `message` attribute, falling back to decoded `type` only when
+  `message` is absent, so nextest's timeouts and silent exits still have a reason. Explicit empty
+  messages remain empty. Then `cargo test --doc --no-fail-fast`, skipped (and said so) when a `filter` is set. A
   filterset expression (any of `( ) | & !` or a leading `not`) goes to `-E`, a bare string is
   a substring match.
   nextest's exits map to `passed`, `failed` (100), `no-tests` (4), `compile-error` (101).
