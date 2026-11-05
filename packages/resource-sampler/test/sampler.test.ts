@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, open, opendir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, open, readdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { type CpuInfo, tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -329,7 +329,7 @@ describe("bounded child lifecycle", () => {
 // Real readlink, except where a test forces a runtime result no real symlink can produce.
 vi.mock("node:fs/promises", async (original) => {
 	const actual = await original<typeof import("node:fs/promises")>();
-	return { ...actual, open: vi.fn(actual.open), opendir: vi.fn(actual.opendir), readlink: vi.fn(actual.readlink) };
+	return { ...actual, open: vi.fn(actual.open), readdir: vi.fn(actual.readdir), readlink: vi.fn(actual.readlink) };
 });
 
 describe("bounded executable links", () => {
@@ -407,12 +407,7 @@ describe("bounded proc reads and Linux process collection", () => {
 		});
 	});
 	it("keeps valid Linux identity-bracketed rows and skips changed rows", async () => {
-		const entries = [{ name: "not-a-pid" }, { name: "12" }, { name: "13" }];
-		vi.mocked(opendir).mockResolvedValueOnce({
-			async *[Symbol.asyncIterator]() {
-				yield* entries;
-			},
-		} as never);
+		vi.mocked(readdir).mockResolvedValueOnce(["not-a-pid", "12", "13"] as never);
 		const fields = Array<string>(22).fill("0");
 		fields[0] = "S";
 		fields[1] = "1";
@@ -435,20 +430,12 @@ describe("bounded proc reads and Linux process collection", () => {
 		expect([...budget.reasons]).toContain("process-unreadable-or-changed");
 	});
 	it("stops enumeration at the PID cap and rejects a changed second identity", async () => {
-		vi.mocked(opendir).mockResolvedValueOnce({
-			async *[Symbol.asyncIterator]() {
-				yield { name: "12" };
-			},
-		} as never);
+		vi.mocked(readdir).mockResolvedValueOnce(["12"] as never);
 		const capped = new Budget(performance.now() + 1000, 4096, 0, new AbortController().signal);
 		expect(await linuxProcesses(capped, 100)).toEqual([]);
 		expect([...capped.reasons]).toContain("pid-limit");
 
-		vi.mocked(opendir).mockResolvedValueOnce({
-			async *[Symbol.asyncIterator]() {
-				yield { name: "12" };
-			},
-		} as never);
+		vi.mocked(readdir).mockResolvedValueOnce(["12"] as never);
 		const fields = Array<string>(22).fill("0");
 		fields[0] = "S";
 		fields[1] = "1";
@@ -463,6 +450,31 @@ describe("bounded proc reads and Linux process collection", () => {
 		vi.spyOn(changed, "executable").mockResolvedValue("node");
 		expect(await linuxProcesses(changed, 100)).toEqual([]);
 		expect(changed.skipped).toBe(1);
+	});
+	it("skips a PID that exits mid-listing instead of failing the whole Linux scan", async () => {
+		// `/proc` lists a PID that exits mid-listing as DT_UNKNOWN, and Node's `opendir` Dirents then `lstat` it:
+		// that ENOENT used to reject the iteration and empty the scan. A names-only listing leaves it to the PID's
+		// own stat read, so it is one skipped row and the live process after it is still sampled.
+		vi.mocked(readdir).mockResolvedValueOnce(["11", "12"] as never);
+		const fields = Array<string>(22).fill("0");
+		fields[0] = "S";
+		fields[1] = "1";
+		fields[19] = "77";
+		const stat = `12 (name) ${fields.join(" ")}`;
+		const budget = new Budget(performance.now() + 1000, 8192, 2, new AbortController().signal);
+		vi.spyOn(budget, "read")
+			.mockRejectedValueOnce(Object.assign(new Error("ENOENT: /proc/11/stat"), { code: "ENOENT" }))
+			.mockResolvedValueOnce(stat)
+			.mockResolvedValueOnce("VmRSS:\t42 kB\n")
+			.mockResolvedValueOnce(stat);
+		vi.spyOn(budget, "executable").mockResolvedValueOnce("node");
+		expect(await linuxProcesses(budget, 100)).toEqual([expect.objectContaining({ pid: 12, identity: "12:77" })]);
+		expect(readdir).toHaveBeenLastCalledWith("/proc");
+		expect({ enumerated: budget.enumerated, skipped: budget.skipped, reasons: [...budget.reasons] }).toEqual({
+			enumerated: 2,
+			skipped: 1,
+			reasons: ["process-unreadable-or-changed"],
+		});
 	});
 });
 
@@ -509,14 +521,7 @@ describe("platform dispatch", () => {
 			[`/proc/${FIXTURE_PID}/stat`, [FIXTURE_STAT, FIXTURE_STAT]],
 			[`/proc/${FIXTURE_PID}/status`, [FIXTURE_STATUS]],
 		]);
-		vi.mocked(opendir).mockImplementation(
-			async () =>
-				({
-					async *[Symbol.asyncIterator]() {
-						yield { name: String(FIXTURE_PID) };
-					},
-				}) as never,
-		);
+		vi.mocked(readdir).mockImplementation(async () => [String(FIXTURE_PID)] as never);
 		vi.mocked(readlink).mockResolvedValue(Buffer.from(FIXTURE_EXE));
 		vi.mocked(open).mockImplementation(async (path) => {
 			const values = contents.get(String(path));
@@ -563,7 +568,7 @@ describe("platform dispatch", () => {
 	afterEach(async () => {
 		const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
 		vi.mocked(open).mockImplementation(actual.open);
-		vi.mocked(opendir).mockImplementation(actual.opendir);
+		vi.mocked(readdir).mockImplementation(actual.readdir);
 		vi.mocked(readlink).mockImplementation(actual.readlink);
 		vi.doUnmock("node:child_process");
 		vi.doUnmock("node:os");
@@ -647,7 +652,7 @@ describe("platform dispatch", () => {
 	});
 	it("reports both unavailable Linux pressure and process collection failures", async () => {
 		vi.mocked(open).mockRejectedValue(new Error("fixture proc unavailable"));
-		vi.mocked(opendir).mockRejectedValue(new Error("fixture proc unavailable"));
+		vi.mocked(readdir).mockRejectedValue(new Error("fixture proc unavailable"));
 		const sampler = await samplerFor("linux", helper(FIXTURE_CLK_TCK));
 		try {
 			const snapshot = await sampler.sample();
