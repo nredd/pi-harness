@@ -662,18 +662,27 @@ export interface RunResult {
  */
 function collectResponseText(session: AgentSession) {
   let text = "";
+  let laterTool = false;
+  let previousText = "";
+  let previousLaterTool = false;
   const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
     // message_start also fires for user and toolResult messages — resetting on
     // those would wipe assistant text already collected. Reset only when a new
     // ASSISTANT message begins, so getText() is the last assistant message's text.
     if (event.type === "message_start" && event.message.role === "assistant") {
+      if (text.trim()) {
+        previousText = text;
+        previousLaterTool = laterTool;
+      }
       text = "";
+      laterTool = false;
     }
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       text += event.assistantMessageEvent.delta;
     }
+    if (event.type === "tool_execution_end" && text.trim()) laterTool = true;
   });
-  return { getText: () => text, unsubscribe };
+  return { getText: () => text, getPreviousText: () => previousText, hasLaterTool: () => text.trim() ? laterTool : previousLaterTool, unsubscribe };
 }
 
 /**
@@ -878,7 +887,7 @@ function partialProgress(session: AgentSession, startIndex: number): string {
 }
 
 /** Mark prose as earlier progress when subsequent tool results exist. */
-function failureText(session: AgentSession, startIndex: number, text: string, partial: string): string {
+function failureText(session: AgentSession, startIndex: number, text: string, partial: string, laterTool: boolean): string {
   if (!text) return partial;
   for (let i = session.messages.length - 1; i >= startIndex; i--) {
     const msg = session.messages[i];
@@ -888,7 +897,7 @@ function failureText(session: AgentSession, startIndex: number, text: string, pa
         : text;
     }
   }
-  return text;
+  return laterTool ? `Earlier progress:\n${text}\n\n${partial}` : text;
 }
 
 /**
@@ -1587,7 +1596,7 @@ export async function runAgent(
     : undefined;
   const failure = stale?.failure ?? finalTurnError(session, startLen) ?? structuredFailure;
   return {
-    responseText: failure ? failureText(session, startLen, text, stale?.partial ?? partialProgress(session, startLen)) : text,
+    responseText: failure ? failureText(session, startLen, text || collector.getPreviousText().trim(), stale?.partial ?? partialProgress(session, startLen), collector.hasLaterTool()) : text,
     session,
     aborted: run.aborted,
     steered: run.steered,
@@ -1637,7 +1646,7 @@ export async function resumeAgent(
   const failure = stale?.failure ?? finalTurnError(session, startLen);
   const text = collector.getText().trim() || getLastAssistantText(session, startLen);
   return {
-    text: failure ? failureText(session, startLen, text, stale?.partial ?? partialProgress(session, startLen)) : text,
+    text: failure ? failureText(session, startLen, text || collector.getPreviousText().trim(), stale?.partial ?? partialProgress(session, startLen), collector.hasLaterTool()) : text,
     failure,
     aborted: run.aborted,
     steered: run.steered,

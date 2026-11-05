@@ -289,12 +289,15 @@ describe("resumeAgent", () => {
       subscribe: (listener: (event: unknown) => void) => { listeners.push(listener); return () => {}; },
       prompt: async () => {
         for (const listener of listeners) listener({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "partial stream" } });
+        messages.push({ role: "toolResult", toolName: "bash", isError: false, content: [{ type: "text", text: "secret output" }] });
+        for (const listener of listeners) listener({ type: "tool_execution_end" });
+        for (const listener of listeners) listener({ type: "message_start", message: { role: "assistant" } });
         messages.push({ role: "assistant", stopReason: "error", errorMessage: "This extension ctx is stale after session replacement or reload", content: [] });
       },
       abort: async () => {},
     } as unknown as AgentSession;
     const result = await resumeAgent(session, "go", { type: "general-purpose", staleRetryDelaysMs: [] });
-    expect(result.text).toBe("partial stream");
+    expect(result.text).toBe("Earlier progress:\npartial stream\n\nLatest activity: bash (completed).");
     expect(result.failure).toContain("This extension ctx is stale");
   });
 
