@@ -94,6 +94,36 @@ describe("run", () => {
 		expect(r.spawnError).toBeUndefined();
 	});
 
+	it("ignores an abort that lands before a missing binary's spawn error", async () => {
+		const ac = new AbortController();
+		const p = run({ cmd: "definitely-not-a-binary-zz", args: [], signal: ac.signal });
+		ac.abort();
+		const r = await p;
+		expect(r.aborted).toBe(false);
+		expect(r.exitCode).toBeNull();
+		expect(r.spawnError).toBeDefined();
+	});
+
+	it("does not call an abort after the child exited an abort when a grandchild holds the pipes", async () => {
+		const ac = new AbortController();
+		const p = run({
+			cmd: "sh",
+			args: ["-c", "(sleep 5 &); echo ready >&2; exit 0"],
+			signal: ac.signal,
+			onStderrLine: (l) => {
+				if (l === "ready") setTimeout(() => ac.abort(), 200);
+			},
+		});
+		const r = await p;
+		expect(r.exitCode).toBe(0);
+		expect(r.aborted).toBe(false);
+	});
+
+	it("never times out with timeoutMs 0", async () => {
+		const r = await run({ cmd: "sh", args: ["-c", "sleep 0.3; echo done"], timeoutMs: 0 });
+		expect(r).toMatchObject({ exitCode: 0, timedOut: false, stdout: "done\n" });
+	});
+
 	it("reports a missing binary as a spawn error", async () => {
 		const r = await run({ cmd: "definitely-not-a-binary-zz", args: [] });
 		expect(r.exitCode).toBeNull();

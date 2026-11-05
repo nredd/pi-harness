@@ -117,6 +117,23 @@ describe("withFileLock", () => {
 		await expect(withFileLock(dir, async () => "ok", { timeoutMs: 1000 })).resolves.toBe("ok");
 	});
 
+	it.each([
+		{ pid: "1", startedAt: 0, token: "t" },
+		{ pid: 1.5, startedAt: 0, token: "t" },
+		{ pid: 0, startedAt: 0, token: "t" },
+		{ pid: 1, startedAt: "0", token: "t" },
+		{ pid: 1, startedAt: 0, token: 7 },
+	])("treats a malformed owner file %j as ownerless: kept while fresh, reclaimed once old", async (owner) => {
+		const dir = tmp();
+		mkdirSync(dir);
+		writeFileSync(join(dir, "owner.json"), JSON.stringify(owner));
+		await expect(withFileLock(dir, async () => "no", { timeoutMs: 0 })).rejects.toBeInstanceOf(FileLockTimeoutError);
+		expect(existsSync(join(dir, "owner.json"))).toBe(true);
+		const old = new Date(Date.now() - 60_000);
+		utimesSync(dir, old, old);
+		await expect(withFileLock(dir, async () => "ok", { timeoutMs: 1000 })).resolves.toBe("ok");
+	});
+
 	it("times out with a live holder, names it, and leaves the holder's lock alone", async () => {
 		const dir = tmp();
 		plant(dir, { pid: process.pid, startedAt: Date.now() });
