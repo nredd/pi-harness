@@ -381,10 +381,6 @@ export async function runCancellable(command, commandArgs, { kill = process.kill
 	});
 }
 
-function moduleCachePath(arch) {
-	return path.join(os.tmpdir(), `pi-computer-use-swift-module-cache-${arch}`);
-}
-
 async function commandOutput(command, commandArgs) {
 	const { stdout } = await execFile(command, commandArgs, { encoding: "utf8" });
 	return stdout;
@@ -712,18 +708,25 @@ async function buildHelper(arch, outputPath) {
 	}
 
 	await fs.mkdir(path.dirname(outputPath), { recursive: true });
+	// A private, owned module cache: a fixed name in a shared `os.tmpdir()` (`/tmp` for several
+	// accounts on one host) is owned by whoever built first and denies everyone else.
+	const moduleCachePath = await fs.mkdtemp(path.join(os.tmpdir(), "pi-computer-use-swift-module-cache-"));
 	const swiftArgs = [
 		"swiftc",
 		"-target",
 		`${archTriples[arch]}${deploymentTarget}`,
 		"-module-cache-path",
-		moduleCachePath(arch),
+		moduleCachePath,
 		"-O",
 	];
 	for (const framework of frameworks) swiftArgs.push("-framework", framework);
 	swiftArgs.push(...helperSourcePaths, "-o", outputPath);
 
-	await run("xcrun", swiftArgs);
+	try {
+		await run("xcrun", swiftArgs);
+	} finally {
+		await fs.rm(moduleCachePath, { recursive: true, force: true });
+	}
 	await fs.chmod(outputPath, 0o755);
 	await signHelper(outputPath);
 }

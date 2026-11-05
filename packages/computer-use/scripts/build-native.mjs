@@ -69,17 +69,13 @@ function defaultOutputPath(arch) {
 	return path.join(rootDir, "prebuilt", "macos", arch, "bridge");
 }
 
-function moduleCachePath(arch) {
-	return path.join(os.tmpdir(), `pi-computer-use-swift-module-cache-${arch}`);
-}
-
-function swiftArgsForArch(arch, outputPath) {
+function swiftArgsForArch(arch, outputPath, moduleCachePath) {
 	const args = [
 		"swiftc",
 		"-target",
 		`${archTriples[arch]}${deploymentTarget}`,
 		"-module-cache-path",
-		moduleCachePath(arch),
+		moduleCachePath,
 		"-O",
 	];
 	for (const framework of frameworks) args.push("-framework", framework);
@@ -110,7 +106,14 @@ async function signBinary(outputPath) {
 async function buildForArch(arch, outputPath) {
 	await fs.mkdir(path.dirname(outputPath), { recursive: true });
 	console.log(`Building native helper for ${arch}...`);
-	await run("xcrun", swiftArgsForArch(arch, outputPath));
+	// A private, owned module cache: a fixed name in a shared `os.tmpdir()` (`/tmp` for several
+	// accounts on one host) is owned by whoever built first and denies everyone else.
+	const moduleCachePath = await fs.mkdtemp(path.join(os.tmpdir(), "pi-computer-use-swift-module-cache-"));
+	try {
+		await run("xcrun", swiftArgsForArch(arch, outputPath, moduleCachePath));
+	} finally {
+		await fs.rm(moduleCachePath, { recursive: true, force: true });
+	}
 	await fs.chmod(outputPath, 0o755);
 	await signBinary(outputPath);
 	console.log(`Built helper at ${outputPath}`);

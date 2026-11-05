@@ -6,7 +6,7 @@ import path from "node:path";
 import { noteAfterAct, noteFromLook } from "../src/note.ts";
 import { countOutlineNodes, foldToBudget, graftScopedOutline, nodeByRef, parseLookResponse, renderInteractiveControls } from "../src/outline.ts";
 import { shouldPreferForegroundModalWindow } from "../src/root-selection.ts";
-import { test } from "vitest";
+import { afterAll, beforeAll, describe, test } from "vitest";
 
 const root = path.resolve(new URL("..", import.meta.url).pathname);
 const swift = fs.readFileSync(path.join(root, "native/macos/bridge.swift"), "utf8");
@@ -300,36 +300,71 @@ test("INV-20 bounded broad root discovery", () => {
 });
 
 // NOT RUN elsewhere (requires macOS xcrun): Vitest reports the skip, never a pass.
-const testMacosOnly = test.skipIf(process.platform !== "darwin");
+const describeMacosOnly = describe.skipIf(process.platform !== "darwin");
 
-// Both swiftc cases start with an empty `-module-cache-path` on a fresh hosted runner, so swiftc
-// rebuilds the AppKit/SwiftUI framework modules first. Warm local runs take ~2 s; budgets are ~2x
-// the cold `owned (macos-14)` cost (3-core M1) from job 126326304071, not the suite default.
-testMacosOnly("INV-8 swift typecheck", { timeout: 90_000 /* cold CI: 43532 ms */ }, () => {
-	const triple = process.arch === "x64" ? "x86_64-apple-macosx14.0" : "arm64-apple-macosx14.0";
-	execFileSync("xcrun", [
-		"swiftc", "-target", triple, "-parse-as-library",
-		"-module-cache-path", path.join(os.tmpdir(), `pi-computer-use-swift-typecheck-${process.arch}`),
-		"-framework", "ApplicationServices",
-		"-framework", "AppKit",
-		"-framework", "ScreenCaptureKit",
-		"-framework", "Foundation",
-		"-framework", "SwiftUI",
-		"-typecheck",
-		"native/macos/activity_glow.swift",
-		"native/macos/agent_cursor.swift",
-		"native/macos/agent_cursor_motion.swift",
-		"native/macos/bridge.swift",
-	], { cwd: root, stdio: "pipe" });
-});
+// The fixed `os.tmpdir()` names these cases once passed as `-module-cache-path`. On a host running
+// several self-hosted runner accounts, `os.tmpdir()` is the shared `/tmp`: the first account owned
+// the dir and every other account failed with `Permission denied` (nredd/pi-harness#506).
+const retiredSharedCacheNames = [
+	`pi-computer-use-swift-typecheck-${process.arch}`,
+	`pi-computer-use-cursor-test-cache-${process.arch}`,
+];
 
-testMacosOnly("INV-17 macOS agent cursor lifecycle", { timeout: 50_000 /* cold CI: 23953 ms */ }, () => {
-	const triple = process.arch === "x64" ? "x86_64-apple-macosx14.0" : "arm64-apple-macosx14.0";
-	const binary = path.join(os.tmpdir(), `pi-computer-use-cursor-tests-${process.pid}`);
-	try {
+describeMacosOnly("swiftc", () => {
+	let scratch;
+	let moduleCache;
+	let savedTmpdir;
+
+	// One private, owned scratch dir per file run. Both swiftc cases share its module cache, and
+	// `TMPDIR` points at it so `os.tmpdir()` holds an unwritable squat at every retired shared name:
+	// a case that falls back to a fixed shared path fails here exactly as it did on the shared host.
+	beforeAll(() => {
+		scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-computer-use-swift-"));
+		moduleCache = path.join(scratch, "module-cache");
+		fs.mkdirSync(moduleCache);
+		for (const name of retiredSharedCacheNames) {
+			const squat = path.join(scratch, name);
+			fs.mkdirSync(squat, { mode: 0o555 });
+			assert(!isWritable(squat), `${squat} is writable, so the shared-cache squat proves nothing (running as root?)`);
+		}
+		savedTmpdir = process.env.TMPDIR;
+		process.env.TMPDIR = scratch;
+	});
+
+	afterAll(() => {
+		if (savedTmpdir === undefined) delete process.env.TMPDIR;
+		else process.env.TMPDIR = savedTmpdir;
+		if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
+	});
+
+	// INV-8 starts with an empty module cache, so swiftc rebuilds the AppKit/SwiftUI framework modules
+	// first; INV-17 then reuses that cache warm. Warm local runs take ~2 s; budgets are ~2x the cold
+	// `owned (macos-14)` cost (3-core M1) from job 126326304071, not the suite default. INV-17 keeps
+	// its cold budget because `-t` can run it alone.
+	test("INV-8 swift typecheck", { timeout: 90_000 /* cold CI: 43532 ms */ }, () => {
+		const triple = process.arch === "x64" ? "x86_64-apple-macosx14.0" : "arm64-apple-macosx14.0";
 		execFileSync("xcrun", [
 			"swiftc", "-target", triple, "-parse-as-library",
-			"-module-cache-path", path.join(os.tmpdir(), `pi-computer-use-cursor-test-cache-${process.arch}`),
+			"-module-cache-path", moduleCache,
+			"-framework", "ApplicationServices",
+			"-framework", "AppKit",
+			"-framework", "ScreenCaptureKit",
+			"-framework", "Foundation",
+			"-framework", "SwiftUI",
+			"-typecheck",
+			"native/macos/activity_glow.swift",
+			"native/macos/agent_cursor.swift",
+			"native/macos/agent_cursor_motion.swift",
+			"native/macos/bridge.swift",
+		], { cwd: root, stdio: "pipe" });
+	});
+
+	test("INV-17 macOS agent cursor lifecycle", { timeout: 50_000 /* cold CI: 23953 ms */ }, () => {
+		const triple = process.arch === "x64" ? "x86_64-apple-macosx14.0" : "arm64-apple-macosx14.0";
+		const binary = path.join(scratch, "cursor-tests");
+		execFileSync("xcrun", [
+			"swiftc", "-target", triple, "-parse-as-library",
+			"-module-cache-path", moduleCache,
 			"-framework", "AppKit",
 			"-framework", "SwiftUI",
 			"native/macos/agent_cursor.swift",
@@ -338,10 +373,17 @@ testMacosOnly("INV-17 macOS agent cursor lifecycle", { timeout: 50_000 /* cold C
 			"-o", binary,
 		], { cwd: root, stdio: "pipe" });
 		execFileSync(binary, [], { cwd: root, stdio: "pipe" });
-	} finally {
-		fs.rmSync(binary, { force: true });
-	}
+	});
 });
+
+function isWritable(dir) {
+	try {
+		fs.accessSync(dir, fs.constants.W_OK);
+		return true;
+	} catch {
+		return false;
+	}
+}
 
 function call(socketPath, payload, timeoutMs = 10000) {
 	return new Promise((resolve, reject) => {
