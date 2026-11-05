@@ -163,7 +163,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes tmux
       - name: Install tmux (macOS)
         if: runner.os == 'macOS' && contains(matrix.gates, 'check-integration')
-        run: brew install tmux
+        run: command -v tmux >/dev/null || brew install tmux
       # Verifies the root core overrides before `npm ci`; the read-only token is for `gh attestation verify`.
       - name: Install
         id: install
@@ -588,7 +588,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes tmux
       - name: Install tmux (macOS)
         if: steps.plan.outputs.run == 'true' && runner.os == 'macOS'
-        run: brew install tmux
+        run: command -v tmux >/dev/null || brew install tmux
       - name: Verify root core overrides before install
         if: steps.plan.outputs.run == 'true'
         env:
