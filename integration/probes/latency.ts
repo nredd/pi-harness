@@ -32,8 +32,8 @@ const DEFAULT_INTERVAL_MS = 5000;
 const MAX_STALLS = 50;
 const MAX_INPUT_SAMPLES = 200;
 
+/** The `q` quantile of ascending `sorted`; 0 for an empty window, whose index clamps to the absent 0. */
 function percentile(sorted: number[], q: number): number {
-	if (sorted.length === 0) return 0;
 	const index = Math.min(sorted.length - 1, Math.ceil(q * sorted.length) - 1);
 	return sorted[Math.max(0, index)] ?? 0;
 }

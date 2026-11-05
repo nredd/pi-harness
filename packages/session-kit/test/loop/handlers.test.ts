@@ -118,6 +118,13 @@ describe("/loop list, stop, resume", () => {
 		await loopCmd(fake, "stop 9");
 		expect(fake.notices.at(-1)).toMatchObject({ type: "error", message: "no loop 9" });
 	});
+	it("reports that there is nothing to stop or resume", async () => {
+		const fake = await boot();
+		await loopCmd(fake, "stop");
+		expect(fake.notices.at(-1)).toMatchObject({ type: "error", message: "no loops" });
+		await loopCmd(fake, "resume all");
+		expect(fake.notices.at(-1)).toMatchObject({ type: "error", message: "no loops" });
+	});
 });
 
 describe("suspension", () => {
@@ -204,6 +211,14 @@ describe("lifetime and isolation", () => {
 		expect(fake.commands.has("loop")).toBe(false);
 		expect(fake.sent).toHaveLength(0);
 		expect(fake.notices).toHaveLength(0);
+	});
+	it("ignores /loop after the session renames itself into a child", async () => {
+		const fake = await boot();
+		fake.state.sessionName = "general-purpose#1a2b3c4d";
+		await loopCmd(fake, "30s ping");
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(fake.notices).toHaveLength(0);
+		expect(fake.sent).toHaveLength(0);
 	});
 	it("stops quietly when the context went stale", async () => {
 		const fake = await boot();

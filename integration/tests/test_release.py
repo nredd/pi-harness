@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from email.message import Message
@@ -779,14 +780,41 @@ def no_backoff(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     """Record retry delays instead of sleeping.
 
     Parameters:
-        monkeypatch (pytest.MonkeyPatch): replace `time.sleep` for the retry loop.
+        monkeypatch (pytest.MonkeyPatch): replace `release.retry_sleep`, never the global `time.sleep`.
 
     Returns:
         list[float]: every requested delay, in order.
     """
     delays: list[float] = []
-    monkeypatch.setattr(release.time, "sleep", delays.append)
+    monkeypatch.setattr(release, "retry_sleep", delays.append)
     return delays
+
+
+def test_no_backoff_ignores_subprocess_timed_wait_polling(no_backoff: list[float]) -> None:
+    """A slow child under a timed wait never lands in the recorded retry delays (#544).
+
+    `subprocess`'s timed wait polls with `time.sleep`; patching that globally recorded hundreds of
+    polls whenever a scripted `gh` child was slow to exit.
+
+    Parameters:
+        no_backoff (list[float]): recorded retry delays.
+
+    Returns:
+        None.
+    """
+    subprocess.run([sys.executable, "-c", "import time; time.sleep(0.2)"], check=True, timeout=30)
+    assert no_backoff == []
+
+
+def test_retry_sleep_really_waits() -> None:
+    """The unpatched seam waits at least the requested backoff.
+
+    Returns:
+        None.
+    """
+    started = time.monotonic()
+    release.retry_sleep(0.05)
+    assert time.monotonic() - started >= 0.05
 
 
 def serve_attestations(monkeypatch: pytest.MonkeyPatch, outcome: bytes | int) -> list[str]:

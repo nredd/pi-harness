@@ -557,10 +557,25 @@ def fetch_bytes(request: str | Request) -> bytes:
                 f"(attempt {attempt}/{FETCH_ATTEMPTS}); retrying in {delay:g}s"
             )
         )
-        time.sleep(delay)
+        retry_sleep(delay)
         attempt += 1
     # Raising outside the handler prevents Python attaching the raw error as __context__.
     raise failure from failure.__cause__
+
+
+def retry_sleep(delay: float) -> None:
+    """Wait out one retry backoff of `fetch_bytes` or `verify_attestation`.
+
+    The one seam tests patch to record backoffs. Patching `time.sleep` instead would replace it
+    process-wide and also capture `subprocess`'s timed-wait polling (#544).
+
+    Parameters:
+        delay (float): seconds to wait.
+
+    Returns:
+        None.
+    """
+    time.sleep(delay)
 
 
 class AttestationRateLimitedError(RuntimeError):
@@ -1100,7 +1115,7 @@ def verify_attestation(
             ATTESTATION_VERIFY_ATTEMPTS,
             delay,
         )
-        time.sleep(delay)
+        retry_sleep(delay)
         attempt += 1
     raise failure from failure.__cause__
 

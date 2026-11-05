@@ -32,16 +32,16 @@ type SafeRecord = {
 	truncated?: boolean;
 };
 
+/** One block's allowlisted label, or `unknown`. */
+function blockType(block: unknown): string {
+	if (!block || typeof block !== "object" || !("type" in block)) return "unknown";
+	return typeof block.type === "string" && BLOCK_TYPES.has(block.type) ? block.type : "unknown";
+}
+
 /** Project only allowlisted labels. Never stringify an input event or message. */
 export function blockTypes(content: unknown): Pick<SafeRecord, "blocks" | "truncated"> {
 	if (!Array.isArray(content)) return { blocks: [], truncated: false };
-	return {
-		blocks: content.slice(0, MAX_BLOCKS).map((block: unknown) => {
-			if (!block || typeof block !== "object" || !("type" in block)) return "unknown";
-			return typeof block.type === "string" && BLOCK_TYPES.has(block.type) ? block.type : "unknown";
-		}),
-		truncated: content.length > MAX_BLOCKS,
-	};
+	return { blocks: content.slice(0, MAX_BLOCKS).map(blockType), truncated: content.length > MAX_BLOCKS };
 }
 
 /** Bounded projection of provider events; one delta label per block/type per request. */
@@ -81,12 +81,11 @@ export class TypeTrace {
 			return;
 		}
 		if (data.type === "content_block_start" && "content_block" in data) {
-			const block = blockTypes([data.content_block]).blocks?.[0] ?? "unknown";
 			this.emit({
 				stage: "raw_block",
 				request: this.request,
 				index: data.index,
-				block,
+				block: blockType(data.content_block),
 			});
 		} else if (data.type === "content_block_delta" && "delta" in data) {
 			const delta = data.delta;

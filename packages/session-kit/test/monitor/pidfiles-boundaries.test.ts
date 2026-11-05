@@ -15,7 +15,10 @@ import {
 	ensureRoot,
 	type PidRecord,
 	psGroup,
+	psInfo,
+	rootDir,
 	type SweepDeps,
+	sessionDirName,
 	sweepOrphans,
 	writePidfile,
 } from "../../src/monitor/pidfiles.ts";
@@ -87,7 +90,110 @@ function expectRetained(original: string, deps: Partial<SweepDeps>): void {
 	expect(deps.signal).not.toHaveBeenCalled();
 }
 
+describe("pidfile naming", () => {
+	it("names an unusable session id generically", () => {
+		expect(sessionDirName("", 42)).toBe("session.42");
+		expect(sessionDirName("a/b", 42)).toBe("a_b.42");
+	});
+
+	it("uses uid 0 where the platform has no getuid", () => {
+		const getuid = process.getuid;
+		try {
+			Object.defineProperty(process, "getuid", { value: undefined, configurable: true, writable: true });
+			expect(rootDir(undefined, "/base")).toBe("/base/pi-monitors-0");
+		} finally {
+			Object.defineProperty(process, "getuid", { value: getuid, configurable: true, writable: true });
+		}
+		expect(rootDir(undefined, "/base")).toBe(`/base/pi-monitors-${process.getuid?.()}`);
+	});
+});
+
+describe("ps output parsing", () => {
+	it("treats unrecognised or undated ps output as no process", async () => {
+		ps.mockResolvedValueOnce({ stdout: "" });
+		expect(await psInfo(123)).toBeUndefined();
+		ps.mockResolvedValueOnce({ stdout: "  123   123 Xxx Xxx 99 99:99:99 9999 test-monitor\n" });
+		expect(await psInfo(123)).toBeUndefined();
+	});
+
+	it("reports session 0 as no session id", async () => {
+		ps.mockResolvedValueOnce({ stdout: "  123     0 Thu Nov  5 07:00:00 2026 test-monitor\n" });
+		expect(await psInfo(123)).toMatchObject({ pgid: 123, sessionId: undefined, command: "test-monitor" });
+		ps.mockResolvedValueOnce({ stdout: "  123   123     0 Thu Nov  5 07:00:00 2026 test-monitor\n" });
+		expect(await psGroup(123)).toEqual([expect.objectContaining({ pid: 123, pgid: 123, sessionId: undefined })]);
+	});
+
+	it("refuses a group snapshot with an undated member", async () => {
+		ps.mockResolvedValueOnce({ stdout: "  123   123   123 Xxx Xxx 99 99:99:99 9999 test-monitor\n" });
+		expect(await psGroup(123)).toBeUndefined();
+	});
+});
+
 describe("pidfile recovery failure boundaries", () => {
+	it.each([
+		["a non-positive owner pid", { ownerPid: 0 }],
+		["a non-string command", { command: 7 }],
+	])("retains a fresh record with %s", async (_name, patch) => {
+		const record = JSON.parse(readFileSync(path, "utf8"));
+		writeFileSync(path, JSON.stringify({ ...record, ...patch }));
+		setFixtureAge(0);
+		const original = readFileSync(path, "utf8");
+		const deps = sweepDeps();
+		expect(await sweepOrphans(tmp.dir, "me", deps)).toEqual({ killed: [], removed: [], skippedLive: [], failed: [] });
+		expectRetained(original, deps);
+	});
+
+	it("keeps a stale malformed record whose unlink is denied", async () => {
+		malformedRecord(86_400_001);
+		vi.mocked(unlinkSync).mockImplementationOnce(() => {
+			throw new Error("record unlink denied");
+		});
+		expect((await sweepOrphans(tmp.dir, "me", sweepDeps())).removed).toEqual([]);
+		expect(existsSync(path)).toBe(true);
+	});
+
+	it("does not report a vanished empty group's record as removed when unlink fails", async () => {
+		vi.mocked(unlinkSync).mockImplementationOnce(() => {
+			throw new Error("record unlink denied");
+		});
+		const deps = sweepDeps({ procInfo: async () => undefined, groupMembers: async () => [] });
+		expect(await sweepOrphans(tmp.dir, "me", deps)).toEqual({ killed: [], removed: [], skippedLive: [], failed: [] });
+		expect(existsSync(path)).toBe(true);
+		expect(deps.killGroup).not.toHaveBeenCalled();
+	});
+
+	it("does not treat a leader in another login session as the recorded monitor", async () => {
+		const original = readFileSync(path, "utf8");
+		const deps = sweepDeps({ procInfo: async () => ({ ...MEMBER, sessionId: 456 }) });
+		expect((await sweepOrphans(tmp.dir, "me", deps)).failed).toEqual([path]);
+		expectRetained(original, deps);
+	});
+
+	it("does not signal when the persisted member changed before the default kill", async () => {
+		let probes = 0;
+		const deps = sweepDeps({ procInfo: async () => (++probes <= 2 ? MEMBER : { ...MEMBER, command: "reused" }) });
+		delete deps.killGroup;
+		const result = await sweepOrphans(tmp.dir, "me", deps);
+		expect(result.failed).toEqual([path]);
+		expect(deps.signal).not.toHaveBeenCalled();
+		expect(JSON.parse(readFileSync(path, "utf8")).members).toEqual([MEMBER]);
+	});
+
+	it.each([
+		["empty", []],
+		["shared", ["1.abc", "2.def"]],
+		["zero-pid", ["0.abc"]],
+		["unrecognised", ["owner"]],
+	])("refuses an %s guard it cannot attribute to one dead owner", async (_kind, owners) => {
+		mkdirSync(`${path}.sweep`);
+		for (const owner of owners) writeFileSync(join(`${path}.sweep`, owner), "");
+		const original = readFileSync(path, "utf8");
+		const deps = sweepDeps();
+		expect((await sweepOrphans(tmp.dir, "me", deps)).failed).toEqual([path]);
+		expectRetained(original, deps);
+		expect(readdirSync(`${path}.sweep`).sort()).toEqual([...owners].sort());
+	});
+
 	it("retains recovery when process enumeration fails", async () => {
 		ps.mockRejectedValueOnce(new Error("ps unavailable"));
 		expect(await psGroup(123)).toBeUndefined();

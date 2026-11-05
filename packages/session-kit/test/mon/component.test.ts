@@ -2,7 +2,7 @@ import { stripVTControlCharacters } from "node:util";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { MonView } from "../../src/mon/component.ts";
-import { sortProcesses, sparkline, timeHistory, timeHistoryRows } from "../../src/mon/model.ts";
+import { share, sortProcesses, sparkline, timeHistory, timeHistoryRows } from "../../src/mon/model.ts";
 import { snapshot } from "./fixtures.ts";
 
 const theme = { fg: (_color: string, s: string) => s, bg: (_color: string, s: string) => s, bold: (s: string) => s };
@@ -96,6 +96,7 @@ describe("mon responsive dashboard", () => {
 		});
 		expect(v.render(120).join("\n")).toContain("used (A+W+C)");
 		expect(v.render(120).join("\n")).toContain("free 1.0G swap 3.0G/4.0G");
+		expect(v.render(40).join("\n")).toMatch(/ A\+W\+C \S+\/\S+ /);
 		v.update({ ...snapshot(), memoryBasis: "total-free" });
 		expect(v.render(120).join("\n")).toContain("total-free");
 		expect(v.render(40).join("\n")).toContain("T-F");
@@ -337,5 +338,77 @@ describe("mon responsive dashboard", () => {
 		).toEqual([1001, 1002]);
 		expect(sortProcesses(processes, "pid")[0]?.pid).toBe(1000);
 		expect(sparkline([null, 0, 100], 3)).toBe("·▁█");
+	});
+
+	it("breaks a same-PID tie by identity", () => {
+		const [a, b] = snapshot().processes;
+		if (!a || !b) throw new Error("fixture too small");
+		const reused = [
+			{ ...a, identity: "1000:start-2" },
+			{ ...b, pid: a.pid, identity: "1000:start-1", cpuPercent: a.cpuPercent },
+		];
+		expect(sortProcesses(reused, "cpu").map((p) => p.identity)).toEqual(["1000:start-1", "1000:start-2"]);
+	});
+
+	it("does not invent a RAM share without a usable total", () => {
+		expect(share(null, 1024)).toBe("--");
+		expect(share(512, null)).toBe("--");
+		expect(share(512, 0)).toBe("--");
+		expect(share(512, 1024)).toBe("50.0");
+	});
+
+	it("drops a sample stamped after the newest one instead of drawing past the right edge", () => {
+		const history = [
+			{ sampledAtMs: 0, value: 10 },
+			{ sampledAtMs: 200, value: 100 },
+			{ sampledAtMs: 50, value: 20 },
+		];
+		// The typical 200ms step puts the first and last samples in the newest column; the later wins.
+		expect(timeHistory(history, 3)).toBe(`  ${sparkline([20], 1)}`);
+	});
+
+	it("sorts before the first sample without failing", () => {
+		const options = { theme, rows: () => 10, requestRender: vi.fn(), onClose: vi.fn() };
+		const v = new MonView(options);
+		v.handleInput("m");
+		expect(v.state).toMatchObject({ sort: "rss", selected: undefined });
+		expect(options.requestRender).toHaveBeenCalledOnce();
+	});
+
+	it("shows unknown RAM in the compact summary while waiting for the first sample", () => {
+		const v = new MonView({ theme, rows: () => 10, requestRender: vi.fn(), onClose: vi.fn() });
+		const text = v.render(60).join("\n");
+		expect(text).toContain("WAITING");
+		expect(text).toContain("RAM --/--");
+	});
+
+	it("shows unknown load averages as --", () => {
+		const { v } = view(40);
+		v.update({ ...snapshot(), load: [] });
+		expect(v.render(100).join("\n")).toMatch(/load --/);
+		v.update({ ...snapshot(), load: [Number.NaN, 1, 0.5] });
+		expect(v.render(100).join("\n")).toMatch(/load -- 1\.00 0\.50/);
+	});
+
+	it("scrolls help back up with k", () => {
+		const { v } = view(12);
+		v.handleInput("?");
+		v.render(40);
+		v.handleInput("j");
+		v.handleInput("j");
+		expect(v.render(40)[1]).toMatch(/HELP 3-/);
+		v.handleInput("k");
+		expect(v.render(40)[1]).toMatch(/HELP 2-/);
+	});
+
+	it.each([
+		[40, 20],
+		[80, 7],
+	])("shortens a partial-list notice without a reason at %ix%i", (width, height) => {
+		const { v } = view(height);
+		v.update({ ...snapshot(), notice: "Partial list: 40 of 50 seen" });
+		expect(v.render(width).join("\n")).toContain("▲ Partial: list incomplete");
+		v.update({ ...snapshot(), notice: "Host CPU unavailable" });
+		expect(v.render(width).join("\n")).toContain("▲ Host CPU unavailable");
 	});
 });

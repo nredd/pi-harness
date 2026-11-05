@@ -103,6 +103,22 @@ describe("quota admission coordination", () => {
 		expect(goal(fake)?.status).toBe("active");
 	});
 
+	it("keeps parked jobs when a release names no job id", async () => {
+		const fake = await boot();
+		parked(fake, "a");
+		fake.events.emit("subagents:scheduled", { type: "removed", jobId: 5 });
+		expect([...coordination(fake.pi).quotaParked]).toEqual(["a"]);
+	});
+
+	it("records parking but does not pause after the session renames itself into a child", async () => {
+		const fake = await boot();
+		await command(fake, "goal", "ship it");
+		fake.state.sessionName = "general-purpose#1a2b3c4d";
+		parked(fake);
+		expect([...coordination(fake.pi).quotaParked]).toEqual(["quota-job"]);
+		expect(goal(fake)?.status).toBe("active");
+	});
+
 	it("pauses both on the canonical direct Agent admission refusal, not generic tool errors", async () => {
 		const fake = await boot();
 		await command(fake, "goal", "ship it");

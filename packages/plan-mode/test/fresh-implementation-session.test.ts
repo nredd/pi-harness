@@ -159,6 +159,7 @@ test("fresh selection fails closed when automatic readiness has no command conte
   const state = {
     enabled: true,
     awaitingAction: true,
+    declinedPlans: 0,
     latestPlan: PLAN,
     latestPlanSource: "plan_mode_complete" as const,
   };
@@ -362,6 +363,7 @@ test("saved plans can start fresh without consuming the source session state", a
   assert.deepEqual(destinationState, {
     enabled: false,
     awaitingAction: false,
+    declinedPlans: 0,
     pendingImplementationRuntime: {
       version: 1,
       model: { provider: target.provider, modelId: target.id },

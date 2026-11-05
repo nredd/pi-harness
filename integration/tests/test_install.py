@@ -1385,7 +1385,7 @@ def test_http_read_failures_are_clean_verification_failures(
 
     monkeypatch.setattr(release, "urlopen", open_response)
     delays: list[float] = []
-    monkeypatch.setattr(release.time, "sleep", delays.append)
+    monkeypatch.setattr(release, "retry_sleep", delays.append)
     snapshot = real_snapshot()
     artifact = tmp_path / "snapshot.json"
     artifact.write_bytes(FIXTURE.read_bytes())
@@ -1501,7 +1501,7 @@ def test_snapshot_fetch_cli_has_one_stable_diagnostic(
         raise failures[kind]
 
     monkeypatch.setattr(release, "urlopen", failed)
-    monkeypatch.setattr(release.time, "sleep", lambda _delay: None)
+    monkeypatch.setattr(release, "retry_sleep", lambda _delay: None)
     monkeypatch.setattr(install, "verify_snapshot", verify_snapshot)
     before = tree(harness.home)
     assert install.main([SHA, "--plan"]) == ExitCode.VERIFICATION

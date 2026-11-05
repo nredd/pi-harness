@@ -167,7 +167,6 @@ describe("child-safe nested Agent tools", () => {
         maxSubagentDepth: 2,
         configCwd: cwd,
       }),
-      expect.any(Function), // onSpawned — attaches the child's transcript
     );
   });
 
@@ -558,8 +557,7 @@ describe("child-safe nested Agent tools", () => {
     expect(result.isError).toBe(false);
     expect(spawnAndWait).toHaveBeenCalledWith(
       expect.anything(), expect.anything(), "scout", "Do work",
-      expect.objectContaining({ depth: 2, maxSubagentDepth: 3 }),
-      expect.any(Function),
+      expect.objectContaining({ depth: 2, maxSubagentDepth: 3, onPrepare: expect.any(Function) }),
     );
   });
 
@@ -662,10 +660,10 @@ describe("child-safe nested Agent tools", () => {
 
   it("files a nested transcript under the root session, honoring output_transcript", async () => {
     records.set("parent-1", { id: "parent-1", status: "running", rootSessionId: "root-session" });
-    spawnAndWait.mockImplementation(async (_pi, _ctx, type, _prompt, options, onSpawned) => {
+    spawnAndWait.mockImplementation(async (_pi, _ctx, type, _prompt, options) => {
       const record = { id: "child-1", type, status: "completed", result: "done", parentAgentId: options.parentAgentId };
       records.set("child-1", record);
-      onSpawned?.("child-1");
+      options.onPrepare?.("child-1");
       return { id: "child-1", record };
     });
 

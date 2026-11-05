@@ -40,6 +40,25 @@ npm run check
 
 This runs TypeScript, generated documentation checks, tool-schema compatibility checks, architecture invariants, and native helper checks available on the current platform. After changing a tool definition or a source-owned `PI_DOCS_REFERENCE` block, run `npm run docs:generate` and commit the regenerated pages.
 
+On macOS, the Swift invariants first prepare SDK imports in a private per-run module cache.
+This is an explicit failing gate phase, not a skipped or cached source verdict: SDK compilation
+has a 240s child deadline, identity probes have 10s each, and the setup hook has a 300s cap
+including bounded process-group cleanup. Logs name the compiler, SDK, target, identity key,
+cache path and preparation outcome. A failed preparation publishes no ready receipt and fails
+the suite. The cache and receipt are removed after the file run, including on failure.
+
+`INV-8` still has its 90s source-validation deadline; its compiler child has 65s plus bounded
+cleanup. `INV-17` retains 50s, with 20s compilation and 5s binary execution budgets. Both reuse
+only their own prepared SDK cache and recheck compiler-file/SDK-settings identity. Real invalid
+Swift must fail even with a warm cache; concurrent valid/invalid compilations and a corrected
+source at the same path guard against caching source verdicts. Each run still squats the retired
+shared cache names as unwritable. There is no cross-run cache or shared gate lock. These checks
+establish run separation and ordinary account ownership, not protection against malicious same-UID
+filesystem changes. Compiler/SDK identity is a diagnostic consistency check, not artifact authentication.
+The SDK orchestration fixtures run on macOS and Linux only: their executable POSIX shebangs,
+UID ownership and process-group assertions are NOT RUN on native Windows (reported as skipped).
+Real Swift invariants remain macOS-only; Linux fixtures do not establish native Swift behavior.
+
 On macOS, rebuild the native helper after Swift changes:
 
 ```bash

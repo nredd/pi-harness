@@ -2440,18 +2440,47 @@ def test_every_npm_ci_job_restores_the_npm_cache_and_no_other_job_saves_one() ->
     assert {*OWNED_SHARD_JOBS.values(), "contracts", "stack"} <= installing
 
 
-def installed_lockfiles(job: dict[str, Any]) -> set[str]:
+def lexical_path(path: str) -> Path:
+    """Normalize a workflow path lexically without resolving symlinks or accessing the filesystem."""
+    source = Path(path)
+    parts: list[str] = []
+    for part in source.parts:
+        if part == source.anchor:
+            continue
+        if part == ".." and parts and parts[-1] != "..":
+            parts.pop()
+        elif part != ".." or not source.anchor:
+            parts.append(part)
+    return Path(source.anchor, *parts)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("./a//b/../package-lock.json", "a/package-lock.json"),
+        ("a/../../package-lock.json", "../package-lock.json"),
+        ("/../../a/../package-lock.json", "/package-lock.json"),
+        ("//a/../package-lock.json", "//package-lock.json"),
+        ("a/..", "."),
+    ],
+)
+def test_lexical_path(value: str, expected: str) -> None:
+    """Normalize dot segments without following filesystem links."""
+    assert lexical_path(value) == Path(expected)
+
+
+def installed_lockfiles(job: dict[str, Any]) -> set[Path]:
     """Return the lockfile each `npm ci` step of a job installs, from its working directory.
 
     Parameters:
         job (dict[str, Any]): One workflow job.
 
     Returns:
-        set[str]: repo-relative `package-lock.json` paths.
+        set[Path]: Lexically normalized `package-lock.json` paths.
     """
     default = job.get("defaults", {}).get("run", {}).get("working-directory", ".")
     return {
-        os.path.normpath(f"{step.get('working-directory', default)}/package-lock.json")
+        lexical_path(f"{step.get('working-directory', default)}/package-lock.json")
         for step in job.get("steps", [])
         if runs_npm_install(step)
     }
@@ -2476,7 +2505,7 @@ def test_setup_node_caches_only_the_lockfile_its_job_installs(workflow: Path) ->
             options = step.get("with", {})
             if "cache" not in options and options.get("package-manager-cache") is False:
                 continue
-            lockfile = os.path.normpath(options.get("cache-dependency-path", "package-lock.json"))
+            lockfile = lexical_path(options.get("cache-dependency-path", "package-lock.json"))
             assert lockfile in installed_lockfiles(job), f"{workflow.name}:{name}"
 
 
