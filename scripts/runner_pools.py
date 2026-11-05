@@ -65,7 +65,12 @@ CellKey = tuple[str, str, str]
 # and at least `MIN_HEAVY_S` long is ever sent to a pool: a self-hosted job pays ~25 s to clone and boot a
 # VM, so short jobs lose, and an unlisted cell is not known to pass on the pool images.
 CELL_SECONDS: dict[CellKey, int] = {
+    # Every macOS cell that does real work. Hosted macOS is the longest pole (median queue ~10 min), and
+    # `pi-macos` has two slots plus one queued cell, so one PR can fill both slots on its own.
     ("owned", "macos-14", "ts"): 937,
+    ("stack", "macos-14", "local"): 711,
+    ("owned", "macos-14", "python"): 462,
+    ("contracts", "macos-14", ""): 331,
     ("owned", "ubuntu-24.04", "ts"): 428,
 }
 MIN_HEAVY_S = 240
