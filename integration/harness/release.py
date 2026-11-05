@@ -119,6 +119,12 @@ FETCH_ATTEMPTS = 3
 FETCH_RETRY_BACKOFF_SECONDS = 2.0
 FETCH_RETRY_BACKOFF_FACTOR = 2
 FETCH_RETRY_AFTER_CAP_SECONDS = 30.0
+# `gh attestation verify` builds the Sigstore public-good verifier from its TUF repository on
+# every call; a failed fetch surfaces as exactly this text. It is the only retried failure.
+# https://github.com/cli/cli/blob/trunk/pkg/cmd/attestation/verification/sigstore.go
+VERIFIER_INIT_FAILURE = "public good verifier is not available (initialization may have failed)"
+ATTESTATION_VERIFY_ATTEMPTS = 3
+ATTESTATION_RETRY_BACKOFF_SECONDS = 2.0
 # Every variable `gh` reads a GitHub token from; only `gh`'s login fallback may see them.
 # https://cli.github.com/manual/gh_help_environment
 GITHUB_TOKEN_VARIABLES = frozenset(
@@ -974,6 +980,21 @@ def attestation_bundle(repo: str, path: Path, destination: Path) -> Path:
     return destination
 
 
+def verifier_unavailable(output: str) -> bool:
+    """Classify `gh attestation verify` output as a transient Sigstore verifier-initialization failure.
+
+    Only this failure is retried: it means `gh` could not load the public-good trust root, so no
+    verification happened. Signer, ref, digest and missing-attestation failures never match.
+
+    Parameters:
+        output (str): combined `gh` output of one failed verification.
+
+    Returns:
+        bool: True only for the public-good verifier initialization failure.
+    """
+    return VERIFIER_INIT_FAILURE in output
+
+
 def verify_attestation(
     path: Path,
     repo: str,
@@ -984,6 +1005,10 @@ def verify_attestation(
     gh_bin: str | None = None,
 ) -> None:
     """Require GitHub build provenance for one artifact from an exact repository, workflow and ref.
+
+    Every Python `gh attestation verify` caller lands here. Only a `verifier_unavailable` exit is
+    retried, up to `ATTESTATION_VERIFY_ATTEMPTS` calls with doubling backoff and a logged warning
+    per retry; every other failure, and the last attempt, fails closed with `gh`'s own output.
 
     Parameters:
         path (Path): artifact to verify.
@@ -1002,38 +1027,48 @@ def verify_attestation(
         raise FileNotFoundError(f"Attestation verification requires `gh` at '{gh_bin}'")
     # A local bundle needs no GitHub API call, so `gh` gets a token only when it must fetch.
     env = child_environment(os.environ, github_tokens=bundle is None)
-    try:
-        subprocess.check_output(
-            [
-                gh_bin,
-                "attestation",
-                "verify",
-                str(path),
-                *(["--bundle", str(bundle)] if bundle is not None else []),
-                "--repo",
-                repo,
-                "--signer-workflow",
-                signer_workflow,
-                "--source-ref",
-                source_ref,
-                "--deny-self-hosted-runners",
-            ],
-            env=env,
-            text=True,
-            stderr=subprocess.STDOUT,
-            timeout=120,
+    command = [
+        gh_bin,
+        "attestation",
+        "verify",
+        str(path),
+        *(["--bundle", str(bundle)] if bundle is not None else []),
+        "--repo",
+        repo,
+        "--signer-workflow",
+        signer_workflow,
+        "--source-ref",
+        source_ref,
+        "--deny-self-hosted-runners",
+    ]
+    attempt = 1
+    while True:
+        try:
+            subprocess.check_output(command, env=env, text=True, stderr=subprocess.STDOUT, timeout=120)
+        except (OSError, subprocess.SubprocessError) as error:
+            detail = (
+                _error_tail(error)
+                if isinstance(error, (subprocess.CalledProcessError, subprocess.TimeoutExpired))
+                else str(error)
+            )
+            transient = isinstance(error, subprocess.CalledProcessError) and verifier_unavailable(detail)
+            if not transient or attempt >= ATTESTATION_VERIFY_ATTEMPTS:
+                failure = detached_exception(
+                    RuntimeError(f"GitHub provenance verification failed for '{path}': {detail}"), error
+                )
+                break
+        else:
+            return
+        delay = ATTESTATION_RETRY_BACKOFF_SECONDS * 2 ** (attempt - 1)
+        LOGGER.warning(
+            "Sigstore verifier initialization failed verifying '%s' (attempt %d/%d); retrying in %gs",
+            path.name,
+            attempt,
+            ATTESTATION_VERIFY_ATTEMPTS,
+            delay,
         )
-    except (OSError, subprocess.SubprocessError) as error:
-        detail = (
-            _error_tail(error)
-            if isinstance(error, (subprocess.CalledProcessError, subprocess.TimeoutExpired))
-            else str(error)
-        )
-        failure = detached_exception(
-            RuntimeError(f"GitHub provenance verification failed for '{path}': {detail}"), error
-        )
-    else:
-        return
+        time.sleep(delay)
+        attempt += 1
     raise failure from failure.__cause__
 
 
