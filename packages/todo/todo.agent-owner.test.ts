@@ -1,7 +1,8 @@
 /**
  * Todo owners and their pi-subagents state (#444), through the real extension:
  * the lifecycle bus, the live overlay, `/todos`, the settle notice, session
- * switches, child isolation and immutable history.
+ * switches, child isolation and immutable history; then repeated settles
+ * during background work (#448).
  */
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { createMockCtx, createMockPi, makeTheme } from "@juicesharp/rpiv-test-utils";
@@ -103,7 +104,7 @@ describe("owner matches a subagent", () => {
 
 		await h.handler("agent_settled")({ type: "agent_settled" }, ctx);
 		expect((ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls.at(-1)).toEqual([
-			"Run ended with 1 in_progress todo (#1 Audit auth), armed: no todo wakes the parent; owner agent failed or stopped: #1 Audit auth (@explore failed)",
+			"Run ended with 1 in_progress todo, armed: no todo-owned wake (monitor and agent notices list session wakes); owner agent failed or stopped: #1 Audit auth (@explore failed)",
 			"warning",
 		]);
 	});
@@ -221,5 +222,112 @@ describe("isolation and history", () => {
 			.render(200)
 			.join("\n");
 		expect(row).not.toMatch(/failed|@a1/);
+	});
+});
+
+describe("repeated settles during background work (#448)", () => {
+	const ARMED = "armed: no todo-owned wake (monitor and agent notices list session wakes)";
+
+	/** Four in_progress todos: an agent's, one blocked on it, a monitored deploy, a stale recovery. */
+	async function orchestration(h: ReturnType<typeof setup>, ctx: Ctx) {
+		await h.handler("session_start")({ reason: "startup" }, ctx);
+		await h.call(ctx, {
+			ops: [
+				{ action: "create", subject: "Audit auth", owner: "scout" },
+				{ action: "create", subject: "Admit TV scope" },
+				{ action: "create", subject: "Deploy under CI monitor" },
+				{ action: "create", subject: "Recover stale branch" },
+			],
+		});
+		await h.call(ctx, { action: "update", id: 2, addBlockedBy: [1] });
+		for (const id of [1, 2, 3, 4]) await h.call(ctx, { action: "update", id, status: "in_progress" });
+		await h.toolEnd();
+		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "scout" });
+	}
+
+	const settle = async (h: ReturnType<typeof setup>, ctx: Ctx) => {
+		const notify = ctx.ui.notify as ReturnType<typeof vi.fn>;
+		notify.mockClear();
+		await h.handler("agent_settled")({ type: "agent_settled" }, ctx);
+		return notify.mock.calls;
+	};
+
+	it("reports once, stays quiet on unchanged wakes, and reports again on every state change", async () => {
+		const h = setup();
+		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		await orchestration(h, ctx);
+
+		expect(await settle(h, ctx)).toEqual([
+			[
+				`Run ended with 4 in_progress todos, ${ARMED}; held by the parent: #3 Deploy under CI monitor, #4 Recover stale branch; blocked: #2 Admit TV scope (by #1); agent running: #1 Audit auth (@scout running)`,
+				"warning",
+			],
+		]);
+		// A monitor or agent wake that changed nothing settles silently, however often.
+		expect(await settle(h, ctx)).toEqual([]);
+		expect(await settle(h, ctx)).toEqual([]);
+
+		// The stale task is completed with evidence: the smaller set is reported once.
+		await h.call(ctx, { action: "update", id: 4, status: "completed", evidence: "branch deleted" });
+		expect((await settle(h, ctx))[0]?.[0]).toBe(
+			`Run ended with 3 in_progress todos, ${ARMED}; held by the parent: #3 Deploy under CI monitor; blocked: #2 Admit TV scope (by #1); agent running: #1 Audit auth (@scout running)`,
+		);
+		expect(await settle(h, ctx)).toEqual([]);
+
+		// The child fails: its todo is abandoned and the warning returns.
+		await h.emit(SUBAGENT_FAILED_EVENT, { id: "a1", status: "error" });
+		expect((await settle(h, ctx))[0]).toEqual([
+			`Run ended with 3 in_progress todos, ${ARMED}; owner agent failed or stopped: #1 Audit auth (@scout failed); held by the parent: #3 Deploy under CI monitor; blocked: #2 Admit TV scope (by #1)`,
+			"warning",
+		]);
+		expect(await settle(h, ctx)).toEqual([]);
+
+		// The dependency resolves: #2 is no longer blocked, so it is reported as parent-held.
+		await h.call(ctx, { action: "update", id: 1, status: "completed", evidence: "re-ran audit inline" });
+		expect((await settle(h, ctx))[0]?.[0]).toBe(
+			`Run ended with 2 in_progress todos, ${ARMED}; held by the parent: #2 Admit TV scope, #3 Deploy under CI monitor`,
+		);
+	});
+
+	it("reports again after a person prompts, but not after an extension wake", async () => {
+		const h = setup();
+		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		await orchestration(h, ctx);
+		expect(await settle(h, ctx)).toHaveLength(1);
+
+		await h.handler("input")({ type: "input", text: "monitor m8 fired", source: "extension" }, ctx);
+		expect(await settle(h, ctx)).toEqual([]);
+
+		await h.handler("input")({ type: "input", text: "status?", source: "interactive" }, ctx);
+		expect(await settle(h, ctx)).toHaveLength(1);
+	});
+
+	it("is info while every todo waits on a running agent, and warns when it finishes unconsumed", async () => {
+		const h = setup();
+		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		await ownedTodo(h, ctx, "scout");
+		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "scout" });
+		expect((await settle(h, ctx))[0]?.[1]).toBe("info");
+		await h.emit(SUBAGENT_COMPLETED_EVENT, { id: "a1", status: "completed" });
+		expect((await settle(h, ctx))[0]).toEqual([
+			`Run ended with 1 in_progress todo, ${ARMED}; held by the parent: #1 Audit auth (@scout done)`,
+			"warning",
+		]);
+	});
+
+	it("reports again once the list empties and refills, and forgets a shut-down session", async () => {
+		const h = setup();
+		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		await ownedTodo(h, ctx, "scout");
+		expect(await settle(h, ctx)).toHaveLength(1);
+		await h.call(ctx, { action: "update", id: 1, status: "pending" });
+		expect(await settle(h, ctx)).toEqual([]);
+		await h.call(ctx, { action: "update", id: 1, status: "in_progress" });
+		expect(await settle(h, ctx)).toHaveLength(1);
+
+		await h.handler("session_shutdown")({}, ctx);
+		const resumed = createMockCtx({ sessionId: "s1", hasUI: true });
+		await ownedTodo(h, resumed, "scout");
+		expect(await settle(h, resumed)).toHaveLength(1);
 	});
 });
