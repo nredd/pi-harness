@@ -802,10 +802,8 @@ def verify_signatures(identity: PublishedIdentity) -> None:
             or installed.integrity != identity.integrity
         ):
             raise ReleaseError("Signature audit installed bytes differ from the verified tarball")
-        raw_lock = json.loads(lock_path.read_text(encoding="utf-8"))
-        raw_entry = raw_lock.get("packages", {}).get(key) if isinstance(raw_lock, dict) else None
-        if not isinstance(raw_entry, dict):
-            raise ReleaseError("Signature audit lock lacks the selected package entry")
+        # `read_lockfile` validated this entry as a `LockEntry` object, so the raw lookup cannot miss.
+        raw_entry = json.loads(lock_path.read_text(encoding="utf-8"))["packages"][key]
         subject = project / "subject"
         package = subject / key
         package.parent.mkdir(parents=True)

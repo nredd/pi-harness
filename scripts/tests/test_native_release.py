@@ -18,6 +18,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import npm_release as nr
+import package_contracts as pc
 import release_descriptors as rd
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -83,6 +84,56 @@ def test_native_staging(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
         nr.build_native_workspace(tmp_path, descriptor, other)
     plain = replace(descriptor, native_build_commands=())
     assert nr.build_native_workspace(tmp_path, plain, other) == workspace
+
+
+def test_native_check_packs_compiled_helpers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pack the real computer-use workspace with fresh Mach-O payloads, in process and via `main`.
+
+    Parameters:
+        tmp_path (Path): External artifact parents.
+        monkeypatch (pytest.MonkeyPatch): Substitute only the Swift compiler and host platform.
+
+    Returns:
+        None: Both compiled architectures pass the packed contract; invalid destinations refuse.
+    """
+    descriptor = rd.descriptor_for("@nredd/pi-computer-use")
+    assert descriptor is not None
+    monkeypatch.setattr(sys, "platform", "darwin")
+    compiled: list[Path] = []
+
+    def compile_fixture(cwd: Path, *cmd: str, timeout: int) -> str:
+        """Write thin 64-bit Mach-O headers for each architecture, as the real compiler would.
+
+        Parameters:
+            cwd (Path): Disposable staged workspace.
+            *cmd (str): Descriptor build invocation.
+            timeout (int): Required build deadline.
+
+        Returns:
+            str: Synthetic compiler diagnostics.
+        """
+        assert cmd == descriptor.native_build_commands[0]
+        assert timeout == 1200
+        for arch, cpu in pc.MACHO_CPU_TYPES.items():
+            payload = cwd / "prebuilt/macos" / arch / "bridge"
+            payload.write_bytes(pc.MACHO_MAGIC_64 + cpu.to_bytes(4, "little") + bytes(24))
+            payload.chmod(0o755)
+        compiled.append(cwd)
+        return "compiled"
+
+    monkeypatch.setattr(nr, "command", compile_fixture)
+    output = tmp_path / "artifacts"
+    nr.native_check(ROOT, output)
+    assert len(compiled) == 1
+    assert len(list(output.glob("nredd-pi-computer-use-*.tgz"))) == 1
+    with pytest.raises(nr.ReleaseError, match="must be new and outside the checkout"):
+        nr.native_check(ROOT, output)
+    with pytest.raises(nr.ReleaseError, match="must be new and outside the checkout"):
+        nr.native_check(ROOT, ROOT / "artifacts")
+    assert nr.main(["native-check", "--repo-root", str(ROOT), "--artifact-dir", str(tmp_path / "cli")]) == 0
+    monkeypatch.setattr(rd, "DESCRIPTORS", ())
+    with pytest.raises(nr.ReleaseError, match="Missing computer-use descriptor"):
+        nr.native_check(ROOT, tmp_path / "missing")
 
 
 def test_packed_compiler_bytes(tmp_path: Path) -> None:
