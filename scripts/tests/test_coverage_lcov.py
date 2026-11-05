@@ -28,6 +28,7 @@ from coverage_accounting import (
     account,
     git_read,
     parse_lcov,
+    scoped_records,
 )
 
 
@@ -458,3 +459,75 @@ def test_valid_raw_report_filters_to_zero_owned_lines(tmp_path: Path) -> None:
     report.write_text(helper + owned)
     assert sum(counter.lines for counter in parse_lcov(report.read_text()).values()) == 2
     assert account(tmp_path, policy())[1] == ["example/primary: Zero total owned lines"]
+
+
+@pytest.mark.parametrize(
+    ("row", "message"),
+    [
+        ("BOGUS", "Malformed LCOV row: 'BOGUS'"),
+        ("LF:x", "Malformed or duplicate LCOV summary: 'LF:x'"),
+        ("DA:1", "Malformed line counter: 'DA:1'"),
+        ("XX:1", "Unsupported LCOV row: 'XX:1'"),
+        ("FN:1,answer\nFN:2,answer", "Duplicate function counter: '2,answer'"),
+    ],
+)
+def test_parse_lcov_names_each_rejected_row(row: str, message: str) -> None:
+    """Name the exact malformed, unsupported or duplicate LCOV row.
+
+    Parameters:
+        row (str): Invalid row(s) placed inside an otherwise open source record.
+        message (str): Exact parser refusal.
+    Returns:
+        None: Parsing raises the named refusal.
+    Raises:
+        AssertionError: An invalid row is accepted or misreported.
+    """
+    with pytest.raises(ValueError, match=re.escape(message)):
+        parse_lcov(f"SF:src/index.ts\n{row}\nend_of_record\n")
+
+
+def test_report_rejects_two_spellings_of_one_source(tmp_path: Path) -> None:
+    """Reject two LCOV records that normalize to the same package-relative source.
+
+    Parameters:
+        tmp_path (Path): Disposable source and report root.
+    Returns:
+        None: Accounting reports the duplicate instead of merging or overwriting counters.
+    Raises:
+        AssertionError: A second spelling of one file is silently accepted.
+    """
+    report = setup_report(tmp_path)
+    text = report.read_text()
+    report.write_text(text + text.replace("SF:src/index.ts", "SF:./src/index.ts"))
+    assert account(tmp_path, policy())[1] == ["example/primary: Duplicate normalized source: 'src/index.ts'"]
+
+
+def test_report_skips_sibling_owned_source_and_test_helpers(tmp_path: Path) -> None:
+    """Skip another package's owned source and this package's named test helpers in a report.
+
+    Parameters:
+        tmp_path (Path): Disposable source and report root.
+    Returns:
+        None: Only the signal's own expected source is accounted.
+    Raises:
+        AssertionError: Reviewed sibling or helper records are rejected or counted.
+    """
+    report = setup_report(tmp_path)
+    other = tmp_path / "packages/other"
+    (other / "src").mkdir(parents=True)
+    (other / "src/index.ts").write_text("export const other = 1;\n")
+    helper = tmp_path / "packages/example/support/helper.ts"
+    helper.parent.mkdir()
+    helper.write_text("export const helper = 1;\n")
+    text = report.read_text()
+    report.write_text(
+        text
+        + text.replace("src/index.ts", "../other/src/index.ts")
+        + text.replace("src/index.ts", "support/helper.ts")
+    )
+    data = policy().model_dump()
+    data["packages"]["example"]["test_helpers"] = ["support/helper.ts"]
+    data["packages"]["other"] = data["packages"]["example"] | {"root": "packages/other", "test_helpers": []}
+    cfg = Policy.model_validate(data)
+    package = cfg.packages["example"]
+    assert scoped_records(tmp_path, cfg, package, package.signals["primary"]).keys() == {"src/index.ts"}
