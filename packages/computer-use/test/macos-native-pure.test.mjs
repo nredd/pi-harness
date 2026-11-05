@@ -5,8 +5,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "vitest";
 
+// Each run compiles real Swift. Measured on 72 hosted `owned shard (macos-14, ts)` jobs (`ci.yml`
+// runs 41781117332-41960624589): green p50 6472 ms, p99 9844 ms (n=67); slowest 21644 ms on a
+// ~3.5x-degraded runner (job 126769877232), which overran the 20 s suite default. The budget is
+// ~2x that, as in `docs/test-worker-budgets.md` (#457).
+const SWIFT_COMPILE_AND_RUN_BUDGET_MS = 45_000;
+
 // NOT RUN elsewhere (requires macOS swiftc): Vitest reports the skip, never a pass.
-test.skipIf(process.platform !== "darwin")("macOS native pure ref store and input helpers", async () => {
+test.skipIf(process.platform !== "darwin")("macOS native pure ref store and input helpers", { timeout: SWIFT_COMPILE_AND_RUN_BUDGET_MS }, async () => {
 	const source = readFileSync(new URL("../native/macos/bridge.swift", import.meta.url), "utf8");
 	const match = source.match(/\/\/ BEGIN PURE[^\n]*\n([\s\S]*?)\/\/ END PURE/);
 	if (!match) throw new Error("PURE region not found in bridge.swift");
