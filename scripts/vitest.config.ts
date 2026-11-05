@@ -3,13 +3,13 @@ import { defineConfig } from "vitest/config";
 // Match `integration/inprocess`. Explicit files, no glob: `tests/` is the pytest suite.
 export default defineConfig({
 	test: {
-		include: ["check-biome-paths.test.mjs", "import_audit.test.ts"],
+		include: ["check-biome-paths.test.mjs", "import_audit.test.ts", "router_contract.test.mjs", "run-vitest.test.ts"],
 		coverage: {
 			provider: "v8",
 			reporter: ["text", "lcov"],
 			reportsDirectory: "coverage/primary",
 			reportOnFailure: true,
-			include: ["import_audit.ts"],
+			include: ["check-biome-paths.mjs", "import_audit.ts", "router_contract.mjs", "run-vitest.ts"],
 		},
 		pool: "forks",
 		maxWorkers: 2,

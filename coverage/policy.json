@@ -22,11 +22,9 @@
     { "path": "packages/computer-use/scripts/check-sync-reverts.mjs", "reason": "Non-shipped disposable patch-drop controls prove carried behaviors remain necessary." },
     { "path": "packages/computer-use/scripts/check-upstream-sync.mjs", "reason": "Non-shipped pinned-upstream source comparison rejects undeclared drift." },
     { "path": "packages/computer-use/scripts/check-async.mjs", "reason": "Non-shipped readiness and bounded subprocess helpers used only by verification check harnesses." },
-    { "path": "scripts/run-vitest.ts", "reason": "Verification-only launcher creates disposable test homes and forwards runner arguments; never shipped as a product entrypoint." },
-    { "path": "scripts/check-biome-paths.mjs", "reason": "Verification-only lint-path preflight for workspace development commands; package tarballs contain only each package's declared files." },
     { "path": "scripts/check-biome-paths.test.mjs", "reason": "Non-shipped regression test exercises real Biome valid/missing-path behavior and preflight rejection; verification only, not a runtime entrypoint." },
+    { "path": "scripts/router_contract.test.mjs", "reason": "Non-shipped Vitest suite runs the packed-router contract fixture in process against virtual mocks of its placeholder imports; verification only, not a runtime entrypoint." },
     { "path": "integration/inprocess/verification/home-setup.ts", "reason": "Vitest setup entry that only calls the measured `installHomeGuard` in `home-guard.ts`; Vitest hard-excludes a config's own `setupFiles` from coverage, so no producer can measure it. Never shipped." },
-    { "path": "scripts/router_contract.mjs", "reason": "Stock-Pi packed-router contract fixture with synthetic usage and template imports; verification only, not a shipped router entrypoint." },
     { "path": "packages/computer-use/scripts/check-commit-messages.mjs", "reason": "Repository commit-message policy checker, not runtime code or a published package file." },
     { "path": "packages/computer-use/scripts/check-linux-live.mjs", "reason": "Opt-in D-Bus session launcher for the live Linux Vitest scenario in test/linux-live.test.mjs; holds no assertions and is absent from published files." },
     { "path": "packages/computer-use/scripts/check-package-assets.mjs", "reason": "Packed-asset and package-manifest verification harness, including Linux source checks from #150; not shipped." },
@@ -380,10 +378,10 @@
     },
     "import-audit": {
       "root": "scripts",
-      "owned": ["import_audit.ts"],
+      "owned": ["check-biome-paths.mjs", "import_audit.ts", "router_contract.mjs", "run-vitest.ts"],
       "exclusions": [],
       "status": "measured",
-      "note": "Node verification utility measured by `check-import-audit` against the real tsgo parser; joins the 100-percent goal at 0/0. Python tooling retains its existing gates.",
+      "note": "Root Node verification scripts measured in process by `check-import-audit`: the import audit against the real tsgo parser, the Vitest launcher, the Biome path preflight and the packed-router contract fixture. Joins the 100-percent goal at 0/0. Python tooling retains its existing gates.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",

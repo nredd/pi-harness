@@ -3,6 +3,22 @@ import { createSubscriptionRouter } from "PACKED_ROUTER_INDEX";
 import { UsageService } from "PACKED_ROUTER_USAGE";
 
 const mode = "CONTRACT_MODE";
+
+/**
+ * Synthetic subscription utilization the contract's usage collector reports.
+ *
+ * @param {string} scenario `fallback` exhausts both subscriptions, `recovery` exhausts anthropic from
+ *   its second read on, and any other scenario (`balanced`) leaves openai-codex the less used.
+ * @param {string} provider `anthropic` or `openai-codex`.
+ * @param {number} read 1-based count of this provider's usage reads.
+ * @returns {number} Utilization percent, 0 to 100.
+ */
+export function syntheticUsedPercent(scenario, provider, read) {
+	if (scenario === "fallback") return 100;
+	if (scenario === "recovery") return provider === "anthropic" && read > 1 ? 100 : 0;
+	return provider === "anthropic" ? 90 : 20;
+}
+
 const reads = new Map();
 const usage = new UsageService({
 	now: Date.now,
@@ -11,16 +27,7 @@ const usage = new UsageService({
 		const provider = url.includes("anthropic") ? "anthropic" : "openai-codex";
 		const count = (reads.get(provider) ?? 0) + 1;
 		reads.set(provider, count);
-		const used =
-			mode === "fallback"
-				? 100
-				: mode === "recovery"
-					? provider === "anthropic" && count > 1
-						? 100
-						: 0
-					: provider === "anthropic"
-						? 90
-						: 20;
+		const used = syntheticUsedPercent(mode, provider, count);
 		return new Response(
 			JSON.stringify(
 				provider === "anthropic"

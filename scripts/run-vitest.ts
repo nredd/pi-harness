@@ -50,12 +50,23 @@ export function toolchainHomeEnv(env: NodeJS.ProcessEnv): Record<string, string>
 	};
 }
 
-// Isolate before imports: Bun caches os.homedir(), and Pi can read global model policy.
-if (import.meta.main) {
-	const [, , engine, ...packageArgs] = process.argv;
+/**
+ * Run Vitest once under `engine` with a disposable home, then remove it and report the timing.
+ *
+ * The child gets the home before any import: Bun caches `os.homedir()`, and Pi can read global model
+ * policy. A canary that disables coverage must not overwrite another signal's report, so only the
+ * exact `--coverage.enabled=false` argument opts out of the Bun signal's appended coverage arguments;
+ * every current canary passes it verbatim (subagents, session-kit).
+ *
+ * @param argv The engine, `node` or `bun`, then the arguments Vitest's `run` receives.
+ * @param env The environment the child inherits under the isolated home; also where
+ *   `GITHUB_STEP_SUMMARY` is read.
+ * @returns The child's exit status, or 1 when it was killed by a signal.
+ * @throws When the engine is neither `node` nor `bun`, or the child cannot be spawned.
+ */
+export function main(argv: readonly string[], env: NodeJS.ProcessEnv): number {
+	const [engine, ...packageArgs] = argv;
 	if (engine !== "bun" && engine !== "node") throw new Error("Expected engine: node or bun");
-	// A canary that disables coverage must not overwrite another signal's report. Only this exact
-	// argument opts out; every current canary passes it verbatim (subagents, session-kit).
 	const vitestArgs =
 		engine === "bun" && !packageArgs.includes(COVERAGE_DISABLED_ARG)
 			? [...packageArgs, ...BUN_COVERAGE_ARGS]
@@ -74,7 +85,7 @@ if (import.meta.main) {
 			],
 			{
 				stdio: "inherit",
-				env: { ...process.env, ...toolchainHomeEnv(process.env), ...isolatedHomeEnv(home), ...TEST_JITI_ENV },
+				env: { ...env, ...toolchainHomeEnv(env), ...isolatedHomeEnv(home), ...TEST_JITI_ENV },
 			},
 		);
 		if (result.error) throw result.error;
@@ -83,8 +94,10 @@ if (import.meta.main) {
 		rmSync(home, { recursive: true, force: true });
 		const timing = `${process.platform} | ${basename(process.cwd())} | ${((performance.now() - start) / MILLISECONDS_PER_SECOND).toFixed(TIMING_DECIMAL_PLACES)} s | exit ${status}`;
 		console.log(`${engine} Vitest timing: ${timing}`);
-		if (process.env.GITHUB_STEP_SUMMARY)
-			appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n${engine} Vitest timing: ${timing}\n`);
+		if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `\n${engine} Vitest timing: ${timing}\n`);
 	}
-	process.exitCode = status;
+	return status;
 }
+
+// Vite's module runner pins `import.meta.main` false, so only the subprocess tests reach this line.
+if (import.meta.main) process.exitCode = main(process.argv.slice(2), process.env);
