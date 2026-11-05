@@ -44,8 +44,8 @@ initializers, then executed by the real worker/VM with nested scripts sharing co
 opt-in: ordinary workflows never inspect or transport `globalThis.__coverage__`. The dedicated producer
 merges VM counters into Vitest 5's `__VITEST_COVERAGE__` store; the ordinary primary suite keeps its
 `src`-only report separate. These source-complete reports can still contain uncovered paths, not an
-invented 100% result. Their local zero-floor measurement enables enforcement; clean hosted macOS and
-Linux final-HEAD receipts remain required acceptance evidence. The measured per-OS primary floors are enforced now; uncovered
+invented 100% result. Their local zero-floor measurement enables enforcement; required CI enforces it at 0/0 on
+macOS and Linux. The measured per-OS primary floors are enforced now; uncovered
 branches are capped per signal ([branch caps](#branch-caps)), and Bun signals follow their own declared enforcement (see below). The conflict-resolution decisions and exact
 base-relative facade ledger regression for the `b51e177` main merge are recorded
 [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/tier-main-merge.md).
