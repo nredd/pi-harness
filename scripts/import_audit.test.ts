@@ -138,9 +138,16 @@ test("nested imports inside functions and classes are found", () => {
 	assert.deepEqual(found.specifiers, ["deep"]);
 });
 
+test("ordinary calls, member requires and require look-alikes are not imports", () => {
+	const found = one(['foo("a");', 'obj.require("b");', 'requireX("c");', 'new Function("d")();'].join("\n"));
+	assert.deepEqual(found, { specifiers: [], diagnostics: [] });
+});
+
 test("a file that does not parse is reported, not trusted", () => {
 	const found = one('import x from "ok";\nconst = ;\n');
-	assert.ok(found.diagnostics.some((d) => d.startsWith("pkg/a.ts:") && d.includes("syntax error")));
+	assert.deepEqual(found.specifiers, ["ok"]);
+	assert.ok(found.diagnostics.length > 0);
+	for (const diagnostic of found.diagnostics) assert.match(diagnostic, /^pkg\/a\.ts:2:\d+: syntax error: /);
 });
 
 test("the CLI batches several files and prints one JSON document", () => {

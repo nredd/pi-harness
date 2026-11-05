@@ -140,8 +140,8 @@ export function auditFiles(root: string, files: readonly string[]): AuditResult 
 			}
 			const found = collectImports(file, name);
 			for (const issue of project.program.getSyntacticDiagnostics(absolute)) {
-				const at = issue.fileName === undefined ? name : locate(file, name, issue.pos);
-				found.diagnostics.push(`${at}: syntax error: ${issue.text}`);
+				// Requested per file, so every position is in `file` whatever `fileName` says.
+				found.diagnostics.push(`${locate(file, name, issue.pos)}: syntax error: ${issue.text}`);
 			}
 			result.files[name] = found;
 		}
