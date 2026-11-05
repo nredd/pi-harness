@@ -54,7 +54,7 @@ The retired `toolVisibility` key is ignored and preserved as unknown data when a
 `planModel` runs Plan turns on a subscription-router tier, like Claude Code's `opusplan`: plan on `@deep`, implement on whatever you were using.
 Omit it, or choose **Inherit**, to plan on the current model; that is the default.
 The value is a tier reference, `@` plus a router profile key matching `^[a-z0-9][a-z0-9._-]*$` (at most 512 characters), and selects the router's `router/<tier>` virtual model.
-A concrete `provider/modelId` is rejected and invalidates the settings file: profile differences live in the router's tier mapping, not here.
+A concrete `provider/modelId` is rejected and invalidates the settings file with `planModel must be a router tier like "@deep", not a concrete model id`: profile differences live in the router's tier mapping, not here.
 Settings lists the `router/*` models in the current scoped or available catalogue.
 
 When a Plan workflow starts, Plan mode remembers the current model and switches to the tier before the first Plan request.
@@ -62,9 +62,10 @@ Pi's per-model thinking default does not replace the current or configured Plan 
 **Implement here**, **Export plan…**, **Save for later**, and `/plan exit` switch back to the remembered model and thinking before the next request.
 A `/model` change during Plan wins and stays after exit, as does a manual thinking change.
 The switch is persisted with Plan state, so `/reload` and resume keep planning on the tier and still restore the previous model on exit.
-**Start fresh and implement** uses **Fresh model** when set; otherwise the fresh session inherits the planning model, and the source session keeps its Plan state and tier.
+**Start fresh and implement** uses **Fresh model** when set; otherwise **same as plan** means the remembered pre-Plan model, not the tier.
+Either way, once Pi replaces the source session, the source switches back to the remembered model and thinking; its plan stays resumable.
 
-An unregistered or unauthenticated tier warns once and Plan starts on the current model; the stored preference is kept.
+An unregistered or unauthenticated tier warns once (`... is no longer available; using the current model.`) and Plan starts on the current model; the stored preference is kept.
 Quota exhaustion is the router's business: its exhaustion policy waits or fails, and Plan mode never substitutes another tier or model.
 A workflow-mutex refusal changes nothing.
 Saving applies to the next Plan workflow.

@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { KeyId } from "@earendil-works/pi-tui";
 import { type ImplementationModelOverride, isPendingImplementationModelIdentifier } from "./implementation-models.js";
-import { normalizePlanModelTier, type PlanModelTier } from "./plan-model.js";
+import { normalizePlanModelTier, PLAN_MODEL_TIER_REQUIRED, type PlanModelTier } from "./plan-model.js";
 import type { SafeSubcommands } from "./tool-policy.js";
 
 export const PLAN_MODE_SETTINGS_FILE = "pi-plan-mode.json";
@@ -365,7 +365,7 @@ export function updatePlanModeSettings(
       updated.toggleShortcut = patch.toggleShortcut;
     }
     const settings = normalizePlanModeSettings(updated);
-    if (!settings) throw invalidSettingsError(settingsPath, "invalid settings shape");
+    if (!settings) throw invalidSettingsError(settingsPath, invalidSettingsShapeReason(updated));
     await publishSettings(settingsPath, updated, options.signal, options.beforeRename);
     return settings;
   });
@@ -428,7 +428,7 @@ async function readSettingsSnapshot(settingsPath: string): Promise<SettingsSnaps
   }
   const settings = normalizePlanModeSettings(parsed);
   if (!settings || !isSettingsDocument(parsed)) {
-    return { result: { kind: "invalid", reason: "invalid settings shape" } };
+    return { result: { kind: "invalid", reason: invalidSettingsShapeReason(parsed) } };
   }
   return { document: parsed, result: { kind: "loaded", settings } };
 }
@@ -506,6 +506,15 @@ async function pathExists(path: string) {
   }
 }
 
+/** Why `normalizePlanModeSettings` rejected `value`, naming `planModel` because #364 forbids concrete ids there. */
+function invalidSettingsShapeReason(value: unknown) {
+  return isSettingsDocument(value) &&
+    Object.hasOwn(value, "planModel") &&
+    !normalizePlanModelTier(Reflect.get(value, "planModel"))
+    ? PLAN_MODEL_TIER_REQUIRED
+    : "invalid settings shape";
+}
+
 function invalidSettingsError(settingsPath: string, reason: string) {
   return new Error(`pi-plan-mode settings at ${settingsPath} are invalid: ${reason}`);
 }
@@ -521,10 +530,6 @@ function safeReadError(error: unknown) {
 
 export function configuredThinkingLevel(settings: PlanModeSettings): PlanModeFixedThinkingLevel | undefined {
   return settings.thinkingLevel === "inherit" ? undefined : settings.thinkingLevel;
-}
-
-export function configuredPlanModel(settings: PlanModeSettings): PlanModelTier | undefined {
-  return settings.planModel;
 }
 
 export function configuredImplementationPlanRetention(settings: PlanModeSettings): ImplementationPlanRetention {
