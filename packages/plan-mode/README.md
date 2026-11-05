@@ -245,11 +245,11 @@ The same flat menu shows **Implement here** and **Start fresh and implement**, e
 Its searchable model list snapshots the session's scoped models when configured, otherwise Pi's currently available models, and shows each provider, model ID, and friendly name.
 Pi 0.80.6–0.82.1 does not expose session model scopes to extensions, so the list uses all currently available models on those releases.
 One-shot provider and model identifiers are limited to 512 characters each; longer custom identifiers are rejected before the source session is replaced.
-The model and thinking rows start from the persistent **Fresh model** and **Fresh thinking** defaults; when either setting is omitted, they show the planning session's current value with **same as plan** and carry it into the fresh session independently.
-With a [Plan model](./docs/settings.md#plan-model) applied, the model row shows the pre-Plan model as **previous model** instead of the tier and starts the fresh session on it, and the source session switches back to it.
+The model and thinking rows start from the persistent **Fresh model** and **Fresh thinking** defaults; when either setting is omitted, they show the planning session's current value with **same as plan** (or **previous model** while a Plan model is applied) and carry it into the fresh session independently.
+With a [Plan model](./docs/settings.md#plan-model) applied, the model row shows the pre-Plan model as **previous model** instead of the tier and starts the fresh session on it, and the source session switches back to it; resuming the source plans on the tier again.
 The fixed thinking choices are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
 Back navigation preserves this menu-local draft, while closing and reopening the menu restores both persistent defaults.
-If the configured model is outside the current scope or no longer available, the row reports the fallback and uses **same as plan** without deleting the stored preference.
+If the configured model is outside the current scope or no longer available, the row reports the fallback and uses **same as plan** (or **previous model**) without deleting the stored preference.
 The saved-plan menu keeps its direct fresh-session action without optional rows and applies the same persistent defaults and fallback.
 
 Starting from that settings page waits for the source session to become idle, re-resolves and authenticates an explicit model, creates a new session linked to the persisted source as its parent, and transfers the exact approved plan without copying planning messages, tool results, or compaction/branch summaries.

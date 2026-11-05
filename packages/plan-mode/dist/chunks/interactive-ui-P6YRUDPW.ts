@@ -421,10 +421,7 @@ var FRESH_PLAN_MODEL_CHOICES = {
   "previous model": "Previous model"
 };
 function createFreshImplementationFlow(ctx, freshPlanModel, planThinkingLevel, implementationDefaults, implementFresh) {
-  const { model: planModel, label: planModelLabel } = freshPlanModel ?? {
-    model: ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : void 0,
-    label: "same as plan"
-  };
+  const { model: planModel, label: planModelLabel } = freshPlanModel;
   const models = snapshotAvailableModels(ctx, planModel);
   const planModelSummary = planModel ? `${safeModelMetadata(planModel.modelId, "unknown model")} [${safeModelMetadata(planModel.provider, "unknown provider")}]` : void 0;
   const planModelChoice = FRESH_PLAN_MODEL_CHOICES[planModelLabel];
@@ -1216,4 +1213,4 @@ export {
   showReadyPlanMenu,
   showSavedPlanMenu
 };
-//# sourceMappingURL=interactive-ui-YIQMAS2L.ts.map
+//# sourceMappingURL=interactive-ui-P6YRUDPW.ts.map

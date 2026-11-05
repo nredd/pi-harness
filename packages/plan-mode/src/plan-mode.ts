@@ -690,6 +690,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     if (freshSourceSession === shutdownSession && state.enabled && state.planModelSwitch) {
       // Start fresh hands the plan off: the source goes back to the model and thinking Plan started from.
       restorePlanRuntime(ctx);
+      state = { ...state, resumePlanModel: true };
       persistState();
       await planModelTransition;
     } else {
@@ -2011,12 +2012,23 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     if (tier) queuePlanModelTransition(() => applyPlanModel(ctx, tier, epoch));
   }
 
+  /**
+   * A source resumed after Start fresh plans on the Plan model again. Only that hand-off sets the
+   * marker, so `/reload` with a persisted switch and a manual `/model` during Plan are left alone.
+   */
+  function resumePlanModel(ctx: ExtensionContext) {
+    if (!state.resumePlanModel) return;
+    state = { ...state, resumePlanModel: undefined };
+    persistState();
+    startPlanModel(ctx);
+  }
+
   async function applyPlanModel(ctx: ExtensionContext, tier: PlanModelTier, epoch: number) {
     const target = planModelTarget(tier);
     const previous = ctx.model;
     const isCurrent = () => epoch === planModelEpoch && state.enabled;
     if (!isCurrent() || !previous || sameModel(previous, target)) return;
-    // Same fallback wording as the fresh implementation row.
+    // Mirrors the fresh implementation row's "...; using the planning model."; here the tier is the planning model.
     const fallback = (failure: string) =>
       ctx.ui.notify(
         `Plan model ${tier} (${terminalModelReference(target)}) ${failure}; using the current model.`,
@@ -2028,7 +2040,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       fallback(resolved.failure);
       return;
     }
-    const thinkingBefore = pi.getThinkingLevel() as PlanModeFixedThinkingLevel;
+    const thinkingBefore = pi.getThinkingLevel();
     try {
       if (!(await switchModel(resolved.model, thinkingBefore))) {
         fallback("could not be applied");
@@ -2042,7 +2054,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       applied: target,
       previous: { provider: previous.provider, modelId: previous.id },
       thinkingBefore,
-      thinkingAfter: pi.getThinkingLevel() as PlanModeFixedThinkingLevel,
+      thinkingAfter: pi.getThinkingLevel(),
     };
     if (!isCurrent()) {
       // Plan ended while the switch was in flight: put the previous model back.
@@ -2067,7 +2079,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       return;
     }
     captureManualThinkingLevel();
-    const current = pi.getThinkingLevel() as PlanModeFixedThinkingLevel;
+    const current = pi.getThinkingLevel();
     // Pi re-selects a per-model thinking default on switch; pin the level Plan would restore without one.
     const thinking =
       state.previousThinkingLevel ?? (current === modelSwitch.thinkingAfter ? modelSwitch.thinkingBefore : current);
@@ -2205,8 +2217,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         pendingWorkflowToolPolicy = undefined;
       }
       if (policyChanged) persistState();
-      if (state.enabled) applyPlanThinkingLevel();
-      else if (wasEnabled) releaseWorkflowOwner();
+      if (state.enabled) {
+        applyPlanThinkingLevel();
+        resumePlanModel(ctx);
+      } else if (wasEnabled) releaseWorkflowOwner();
       return true;
     } catch (error: unknown) {
       try {

@@ -8,7 +8,8 @@
   like Claude Code's `opusplan`. Plan start remembers the current model and thinking, and Implement
   here, Export, Save and exit restore them; a `/model` change during Plan wins. The switch persists
   with Plan state across reload and resume. Start fresh implements on **Fresh model** or the pre-Plan
-  model, never the tier, and switches the source session back. An unavailable or unauthenticated tier
+  model, never the tier, and switches the source session back; resuming that source plans on the tier
+  again. An unavailable or unauthenticated tier
   warns once and plans on the current model. Concrete model ids are rejected with a reason naming
   `planModel`; the default stays inherit to keep the provider cache warm.
 

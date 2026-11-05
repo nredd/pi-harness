@@ -26,7 +26,7 @@ interface PlanMenuOptions extends PlanEditOption {
   statusText: string;
   planThinkingLevel: PlanModeFixedThinkingLevel | undefined;
   /** The model Start fresh treats as the plan's; defaults to the current model. */
-  planModel?: FreshPlanModel;
+  planModel: FreshPlanModel;
   implementationDefaults?: ImplementationRuntimeSelection;
   hasReadyPlan: boolean;
   implementationOutcome(): string;
@@ -146,7 +146,7 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 interface ReadyPlanMenuOptions extends PlanEditOption {
   planThinkingLevel: PlanModeFixedThinkingLevel | undefined;
   /** The model Start fresh treats as the plan's; defaults to the current model. */
-  planModel?: FreshPlanModel;
+  planModel: FreshPlanModel;
   implementationDefaults?: ImplementationRuntimeSelection;
   implementationOutcome(): string;
   getExportDestination: PlanExportDestinationProvider;
@@ -311,15 +311,12 @@ interface ModelChoice {
 
 function createFreshImplementationFlow(
   ctx: ExtensionContext,
-  freshPlanModel: FreshPlanModel | undefined,
+  freshPlanModel: FreshPlanModel,
   planThinkingLevel: PlanModeFixedThinkingLevel | undefined,
   implementationDefaults: ImplementationRuntimeSelection | undefined,
   implementFresh: (runtime: ImplementationRuntimeSelection, signal: AbortSignal) => void | Promise<void>,
 ) {
-  const { model: planModel, label: planModelLabel } = freshPlanModel ?? {
-    model: ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : undefined,
-    label: "same as plan",
-  };
+  const { model: planModel, label: planModelLabel } = freshPlanModel;
   const models = snapshotAvailableModels(ctx, planModel);
   const planModelSummary = planModel
     ? `${safeModelMetadata(planModel.modelId, "unknown model")} [${safeModelMetadata(planModel.provider, "unknown provider")}]`
