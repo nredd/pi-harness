@@ -49,37 +49,49 @@ describe("model-tier/router stack", () => {
 		);
 	}
 
+	/** What each shipped example profile must parse to before the test substitutes faux members. */
+	const SHIPPED = {
+		cheap: {
+			strategy: "ordered",
+			chain: [
+				{ provider: "anthropic", id: "claude-haiku-5-5" },
+				{ provider: "openai-codex", id: "gpt-6-luna" },
+			],
+		},
+		frontier: {
+			strategy: "balanced",
+			chain: [
+				{ provider: "anthropic", id: "claude-fable-5-1" },
+				{ provider: "openai-codex", id: "gpt-6-astra" },
+			],
+		},
+	} as const;
+
 	/**
-	 * Build the real router extension from the shipped `cheap` profile.
+	 * Build the real router extension from a shipped example profile, selected by id.
 	 *
 	 * @param policy - Exhaustion policy to substitute into the profile for this scenario.
+	 * @param id - Shipped profile to route; its real chain is swapped for the faux `CHAIN`.
 	 * @returns An extension factory backed by this stack's real router dependencies.
 	 */
-	function router(policy: "wait" | "fail" = "wait"): ExtensionFactory {
-		const [cheap] = parseConfig(
+	function router(policy: "wait" | "fail" = "wait", id: keyof typeof SHIPPED = "cheap"): ExtensionFactory {
+		const shipped = parseConfig(
 			JSON.parse(
 				readFileSync(
 					new URL("../../packages/subscription-router/examples/subscription-router.json", import.meta.url),
 					"utf8",
 				),
 			),
-		);
-		if (!cheap) throw new Error("Missing shipped cheap profile");
-		expect(cheap).toMatchObject({
-			id: "cheap",
-			strategy: "ordered",
-			exhaustion: { policy: "wait" },
-			chain: [
-				{ provider: "anthropic", id: "claude-haiku-5-5" },
-				{ provider: "openai-codex", id: "gpt-6-luna" },
-			],
-		});
+		).find((profile) => profile.id === id);
+		if (!shipped) throw new Error(`Missing shipped ${id} profile`);
+		expect(shipped).toMatchObject({ id, exhaustion: { policy: "wait" }, ...SHIPPED[id] });
 		const options: SubscriptionRouterOptions = {
 			config: {
 				ok: true,
 				profiles: [
-					{ ...cheap, chain: CHAIN, exhaustion: { policy } },
+					{ ...shipped, chain: CHAIN, exhaustion: { policy } },
 					{ id: "default", name: "Default must never run", strategy: "ordered", chain: [CHAIN[0]] },
+					{ id: "deep", name: "Deep must never run", strategy: "ordered", chain: [CHAIN[1]] },
 				],
 			},
 			usage: stack.usage,
@@ -656,5 +668,109 @@ describe("model-tier/router stack", () => {
 		expect(admissions).toEqual(["router/cheap", "router/cheap"]);
 		expect(physical.map((provider) => provider.state.callCount)).toEqual([0, 1]);
 		await h.session.waitForIdle();
+	});
+
+	it("routes @frontier to the unblocked member inside its balanced profile", async () => {
+		stack = await GoalStack.create();
+		configure(undefined, { modelTiers: { frontier: ["router/frontier"] }, agentModels: {} });
+		const physical = stack.registerPhysical(CHAIN);
+		stack.usage.set(CHAIN[0]?.provider, 100);
+		const admissions: string[] = [];
+		const h = await stack.start(
+			[
+				await stack.subagents(),
+				router("wait", "frontier"),
+				(pi) => {
+					pi.events.on("router:rpc:admit", (raw) => admissions.push((raw as { model: string }).model));
+				},
+			],
+			{ useModelRuntimeStream: true },
+		);
+		physical[1]?.setResponses([fauxAssistantMessage("FRONTIER ANSWER")]);
+		h.setResponses([
+			tool("Agent", {
+				subagent_type: "general-purpose",
+				description: "frontier tier",
+				prompt: "answer",
+				model: "@frontier",
+				run_in_background: false,
+			}),
+			fauxAssistantMessage("DRIVER DONE"),
+		]);
+		await h.session.prompt("run the tier");
+		const result = outcomes(h, "Agent")[0];
+		expect(result?.isError).toBe(false);
+		expect(result?.text).toContain(`Model: @frontier -> ${ref(1)} via router/frontier`);
+		expect(result?.text).toContain("FRONTIER ANSWER");
+		expect(admissions).toEqual(["router/frontier"]);
+		expect(physical.map((provider) => provider.state.callCount)).toEqual([0, 1]);
+	});
+
+	it("parks an exhausted @frontier instead of borrowing router/deep or router/default", async () => {
+		stack = await GoalStack.create();
+		configure(undefined, { modelTiers: { frontier: ["router/frontier"] }, agentModels: {} });
+		const physical = stack.registerPhysical(CHAIN, 100);
+		const jobs: { type: string; job?: { model?: string; quotaParked?: boolean } }[] = [];
+		const admissions: string[] = [];
+		const h = await stack.start(
+			[
+				await stack.subagents(),
+				router("wait", "frontier"),
+				(pi) => {
+					pi.events.on("subagents:scheduled", (event) => jobs.push(event as (typeof jobs)[number]));
+					pi.events.on("router:rpc:admit", (raw) => admissions.push((raw as { model: string }).model));
+				},
+			],
+			{ useModelRuntimeStream: true },
+		);
+		h.setResponses([
+			tool("Agent", {
+				subagent_type: "general-purpose",
+				description: "park frontier",
+				prompt: "answer",
+				model: "@frontier",
+				run_in_background: true,
+			}),
+			fauxAssistantMessage("DRIVER DONE"),
+		]);
+		await h.session.prompt("run the tier");
+		const result = outcomes(h, "Agent")[0];
+		expect(result?.isError).toBe(false);
+		expect(result?.text).toContain("router/frontier is exhausted");
+		expect(result?.text).not.toMatch(/router\/(deep|default)/);
+		expect(admissions).toEqual(["router/frontier"]);
+		expect(jobs).toMatchObject([{ type: "added", job: { model: "@frontier", quotaParked: true } }]);
+		expect(physical.map((provider) => provider.state.callCount)).toEqual([0, 0]);
+	});
+
+	it.each(["error", "inherit"] as const)("an unbound @frontier follows onUnmapped=%s", async (policy) => {
+		stack = await GoalStack.create();
+		configure(undefined, { agentModels: {}, modelResolution: { onUnmapped: policy, onUnavailable: "error" } });
+		const physical = stack.registerPhysical(CHAIN);
+		const h = await stack.start([await stack.subagents(), router("wait", "frontier")], {
+			useModelRuntimeStream: true,
+		});
+		h.setResponses([
+			tool("Agent", {
+				subagent_type: "general-purpose",
+				description: "unbound frontier",
+				prompt: "answer",
+				model: "@frontier",
+				run_in_background: false,
+			}),
+			fauxAssistantMessage("PARENT INHERITED"),
+			fauxAssistantMessage("DRIVER DONE"),
+		]);
+		await h.session.prompt("run the tier");
+		const result = outcomes(h, "Agent")[0];
+		expect(physical.map((provider) => provider.state.callCount)).toEqual([0, 0]);
+		if (policy === "error") {
+			expect(result?.isError, JSON.stringify(result)).toBe(true);
+			expect(result?.text).toContain("@frontier is unmapped");
+			return;
+		}
+		expect(result?.isError).toBe(false);
+		expect(result?.text).toContain("Note: model tier @frontier is unmapped; inheriting the parent model.");
+		expect(result?.text).toContain("PARENT INHERITED");
 	});
 });

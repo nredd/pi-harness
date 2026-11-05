@@ -38,6 +38,8 @@ no virtual models. An invalid file is rejected whole and reported on session sta
 
 The shipped [cheap profile](examples/subscription-router.json) is opt-in: merge its `profiles.cheap` into this file to register `router/cheap`. It uses `strategy: "ordered"`, Haiku 5.5 then GPT 6 Luna, and `exhaustionPolicy: "wait"`. This keeps dispatch inside the inexpensive model class and prefers the first healthy entry, rather than letting headroom reorder the chain. It never borrows `default`, `deep` or `review`; if both are exhausted admission parks or fails under the ordinary policy. Models and pricing are explicit configuration, not a live price catalog. Nothing is installed or registered just by importing the router.
 
+The shipped [frontier profile](examples/subscription-router.json) is opt-in the same way: merge `profiles.frontier` to register `router/frontier` for the hardest design and architecture work, which skills and agents reach as `@frontier`, never by model id. It uses `strategy: "balanced"`, Fable 5.1 and GPT 6 Astra, `exhaustionPolicy: "wait"`, no `maxWaitMinutes` and no `thinking` pin. The two are peers, so headroom picks rather than chain order. It never borrows `deep`, `default` or `review`; if both are exhausted admission parks or fails under the ordinary policy. Fable is not free headroom: it spends the provider-wide Anthropic `five_hour` / `seven_day` windows that `default` and `deep` share, and is also capped by its own Fable-scoped weekly window (`seven_day_fable`, below).
+
 - `strategy` (`"ordered"` default, or `"balanced"`) selects chain-order routing or reset-aware balancing. Opt in per profile, e.g. `"strategy": "balanced"`; arbitrary chain lengths and providers work, unknown collectors remain usable fallbacks
 - `exhaustionPolicy` (`"wait"` default, or `"fail"`) says what a dispatcher that can wait (pi-subagents background jobs) does when every quota-eligible entry is exhausted: park until the earliest reset, or fail now. `maxWaitMinutes` (default unlimited) caps how far ahead a reset may be waited for, and a reset that is unknown always fails. Foreground requests cannot wait and fail either way
 - `thinking` pins that entry's level. Without it the selected level passes through
@@ -64,7 +66,11 @@ cached usage already shows its window exhausted, or when it has no credentials. 
 usage fails open, except stale data whose known reset is still ahead.
 
 Blocks are per `(provider, family)`: the Anthropic `seven_day_sonnet` window blocks Sonnet and
-leaves Opus eligible. A block lasts until the reset the provider reported. Without one it backs off
+leaves Opus eligible. Anthropic reports some model caps only in its `limits` list, e.g. Fable as
+`{ "kind": "weekly_scoped", "scope": { "model": { "display_name": "Fable" } } }` with no
+`seven_day_fable` key. Each becomes a 7d `seven_day_<family>` window for the lowercased display name
+(skipped when that is not one token, or when the top-level key already reported it), so an
+exhausted Fable cap blocks `claude-fable-*` and leaves Opus and Haiku eligible. A block lasts until the reset the provider reported. Without one it backs off
 5 minutes, doubling up to 60.
 
 Confirmation needs live data read after the failure: a cached or in-flight read from before the

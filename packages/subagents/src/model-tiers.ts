@@ -69,6 +69,11 @@ export function setModelTiers(tiers: Record<string, string[]> | undefined, resol
   policy = { ...resolution };
 }
 
+/** Configured tier keys, sorted, for prompt guidance. Never the members: those are profile config. */
+export function configuredTierNames(): string[] {
+  return Object.keys(bindings).sort();
+}
+
 /** Return a snapshot; missing policies mean inherit with disclosure. */
 export function getModelResolution(): ModelResolution {
   return { ...policy };

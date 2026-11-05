@@ -148,7 +148,18 @@ Local overrides shadow these packaged definitions; update their managed source s
 
 ## Models and roles
 
-Agents and workflow skills carry no forced model. `code-review` captures the original PR merge-base
+Agents carry no `model:`. Skills name tiers only, never model ids or `router/*` profiles:
+`code-review` spawns `code-reviewer` with no `model`, so `agentModels` routes it (personally to
+`@review`), and `ship-issue` adds a second `critic` on `@frontier` only for design-level issues (new
+module or public interface, concurrency, persistence or wire format, auth). `agentModels` binds agent
+types to tiers; `modelTiers` binds tiers to a router profile or exact members. Both are profile
+config (dotfiles on personal, the enterprise manifest on work), not preset content, so both profiles
+ship the same skill text. A quota-parked tier waits (or fails under its policy); it never silently
+falls back to another tier.
+`test/resources.test.ts` fails on any non-tier `model:` value, provider-qualified ref or model-id
+token in `agents/` or `skills/`.
+
+`code-review` captures the original PR merge-base
 and one full reviewed HEAD, binds both axis diffs and prompts to that entire range, and discards both
 reports if HEAD changes. Renewed axes retain the original base through the new final HEAD; corrective
 deltas are supplemental only. Top-level parents
