@@ -17,6 +17,10 @@ test("stale Plan actions do not load interactive UI", async () => {
     }),
     statusText: () => "off",
     getThinkingLevel: () => "medium",
+    getFreshPlanModel: (ctx) => ({
+      model: ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : undefined,
+      label: "same as plan",
+    }),
     getSettings: () => ({ thinkingLevel: "inherit" }),
     implementationOutcome: () => "",
     getExportDestination: () => ({ configuredPath: "plan.md", resolvedPath: "/tmp/plan.md" }),
@@ -72,6 +76,10 @@ test("user-opened fresh actions stop after menu disposal", async () => {
     }),
     statusText: () => "ready",
     getThinkingLevel: () => "medium",
+    getFreshPlanModel: (ctx) => ({
+      model: ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : undefined,
+      label: "same as plan",
+    }),
     getSettings: () => ({ thinkingLevel: "inherit" }),
     implementationOutcome: () => "",
     getExportDestination: () => ({ configuredPath: "plan.md", resolvedPath: "/tmp/plan.md" }),
@@ -136,6 +144,10 @@ test("saved-plan fresh actions use persistent defaults and fall back from missin
       }),
       statusText: () => "saved",
       getThinkingLevel: () => "medium",
+      getFreshPlanModel: (ctx) => ({
+        model: ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : undefined,
+        label: "same as plan",
+      }),
       getSettings: () => ({
         thinkingLevel: "inherit",
         defaultImplementationModel: {

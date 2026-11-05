@@ -62,7 +62,7 @@ Pi's per-model thinking default does not replace the current or configured Plan 
 **Implement here**, **Export plan…**, **Save for later**, and `/plan exit` switch back to the remembered model and thinking before the next request.
 A `/model` change during Plan wins and stays after exit, as does a manual thinking change.
 The switch is persisted with Plan state, so `/reload` and resume keep planning on the tier and still restore the previous model on exit.
-**Start fresh and implement** uses **Fresh model** when set; otherwise **same as plan** means the remembered pre-Plan model, not the tier.
+**Start fresh and implement** uses **Fresh model** when set; otherwise its model row shows and uses the remembered pre-Plan model as **previous model**, not the tier.
 Either way, once Pi replaces the source session, the source switches back to the remembered model and thinking; its plan stays resumable.
 
 An unregistered or unauthenticated tier warns once (`... is no longer available; using the current model.`) and Plan starts on the current model; the stored preference is kept.

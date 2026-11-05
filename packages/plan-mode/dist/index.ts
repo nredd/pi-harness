@@ -916,7 +916,7 @@ function createPlanActionController(options) {
     if (configured.model && !availableModel) {
       ctx.ui.notify("The configured fresh implementation model is unavailable; using the planning model.", "warning");
     }
-    const planModel = ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : void 0;
+    const planModel = options.getFreshPlanModel(ctx).model;
     const model = availableModel ? { provider: availableModel.provider, modelId: availableModel.id } : planModel;
     const thinkingLevel = configured.thinkingLevel ?? options.getThinkingLevel();
     return {
@@ -959,6 +959,7 @@ function createPlanActionController(options) {
       if (!isCurrent() || lifecycle.signal.aborted) return;
       await ui.showReadyPlanMenu(ctx, {
         planThinkingLevel: options.getThinkingLevel(),
+        planModel: options.getFreshPlanModel(ctx),
         implementationDefaults: configuredDefaults(),
         implementationOutcome: options.implementationOutcome,
         getExportDestination: () => options.getExportDestination(ctx),
@@ -986,6 +987,7 @@ function createPlanActionController(options) {
       await ui.showPlanModeMenu(ctx, {
         statusText: options.statusText(),
         planThinkingLevel: options.getThinkingLevel(),
+        planModel: options.getFreshPlanModel(ctx),
         implementationDefaults: configuredDefaults(),
         hasReadyPlan: options.getState().latestPlan !== void 0,
         implementationOutcome: options.implementationOutcome,
@@ -1153,7 +1155,7 @@ function planMode(pi, dependencies = {}) {
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
     if (!interactiveUiPromise) {
-      interactiveUiPromise = import("./chunks/interactive-ui-OZLFRBOO.ts").catch((error) => {
+      interactiveUiPromise = import("./chunks/interactive-ui-YIQMAS2L.ts").catch((error) => {
         interactiveUiPromise = void 0;
         throw error;
       });
@@ -1207,6 +1209,7 @@ function planMode(pi, dependencies = {}) {
     // ExtensionContext.thinkingLevel was added after the supported Pi 0.80.6 floor.
     // ExtensionAPI has exposed the same runtime value throughout that compatibility range.
     getThinkingLevel: () => pi.getThinkingLevel(),
+    getFreshPlanModel,
     getSettings: () => settings,
     implementationOutcome,
     getExportDestination: (ctx) => planExports.getDestination(ctx),
@@ -2115,8 +2118,6 @@ function planMode(pi, dependencies = {}) {
     ctx.ui.notify("Plan saved for later. Plan mode disabled.", "info");
   }
   async function startFreshImplementation(ctx, menuIsCurrent, runtime) {
-    const modelSwitch = state.enabled ? state.planModelSwitch : void 0;
-    const freshRuntime = runtime?.model && modelSwitch && sameModel(ctx.model, modelSwitch.applied) && sameReference(runtime.model, modelSwitch.applied) ? { ...runtime, model: { ...modelSwitch.previous } } : runtime;
     freshSourceSession = ctx.sessionManager;
     try {
       await startFreshImplementationFromState(ctx, {
@@ -2124,7 +2125,7 @@ function planMode(pi, dependencies = {}) {
         menuIsCurrent,
         retention: configuredImplementationPlanRetention(settings),
         stateEntryType: STATE_ENTRY_TYPE,
-        runtime: freshRuntime
+        runtime
       });
     } finally {
       freshSourceSession = void 0;
@@ -2791,8 +2792,15 @@ function planMode(pi, dependencies = {}) {
   function sameModel(model, reference) {
     return model?.provider === reference.provider && model.id === reference.modelId;
   }
-  function sameReference(left, right) {
-    return left.provider === right.provider && left.modelId === right.modelId;
+  function getFreshPlanModel(ctx) {
+    const modelSwitch = state.enabled ? state.planModelSwitch : void 0;
+    if (modelSwitch && sameModel(ctx.model, modelSwitch.applied)) {
+      return { model: { ...modelSwitch.previous }, label: "previous model" };
+    }
+    return {
+      model: ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : void 0,
+      label: "same as plan"
+    };
   }
   function safeGetActiveTools() {
     try {

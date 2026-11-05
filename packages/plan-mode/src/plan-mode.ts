@@ -62,6 +62,7 @@ import {
   reconcileModeContract,
 } from "./mode-contract.js";
 import { createPlanActionController } from "./plan-action-controller.js";
+import type { FreshPlanModel } from "./plan-action-menus.js";
 import { createPlanApprovals } from "./plan-approval.js";
 import { createPlanEditMessage, PLAN_EDIT_SOURCE, reviewEditedPlan } from "./plan-edit.js";
 import { createPlanExportController } from "./plan-export-controller.js";
@@ -238,6 +239,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     // ExtensionContext.thinkingLevel was added after the supported Pi 0.80.6 floor.
     // ExtensionAPI has exposed the same runtime value throughout that compatibility range.
     getThinkingLevel: () => pi.getThinkingLevel(),
+    getFreshPlanModel,
     getSettings: () => settings,
     implementationOutcome,
     getExportDestination: (ctx) => planExports.getDestination(ctx),
@@ -1317,15 +1319,6 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     menuIsCurrent: () => boolean,
     runtime: ImplementationRuntimeSelection | undefined,
   ) {
-    const modelSwitch = state.enabled ? state.planModelSwitch : undefined;
-    // Like opusplan, "same as plan" implements on the model Plan started from, not on the Plan tier.
-    const freshRuntime =
-      runtime?.model &&
-      modelSwitch &&
-      sameModel(ctx.model, modelSwitch.applied) &&
-      sameReference(runtime.model, modelSwitch.applied)
-        ? { ...runtime, model: { ...modelSwitch.previous } }
-        : runtime;
     freshSourceSession = ctx.sessionManager;
     try {
       await startFreshImplementationFromState(ctx, {
@@ -1333,7 +1326,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         menuIsCurrent,
         retention: configuredImplementationPlanRetention(settings),
         stateEntryType: STATE_ENTRY_TYPE,
-        runtime: freshRuntime,
+        runtime,
       });
     } finally {
       freshSourceSession = undefined;
@@ -2147,8 +2140,16 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     return model?.provider === reference.provider && model.id === reference.modelId;
   }
 
-  function sameReference(left: ImplementationModelOverride, right: ImplementationModelOverride) {
-    return left.provider === right.provider && left.modelId === right.modelId;
+  /** Like opusplan, Start fresh's "same as plan" implements on the model Plan started from, not on the tier. */
+  function getFreshPlanModel(ctx: ExtensionContext): FreshPlanModel {
+    const modelSwitch = state.enabled ? state.planModelSwitch : undefined;
+    if (modelSwitch && sameModel(ctx.model, modelSwitch.applied)) {
+      return { model: { ...modelSwitch.previous }, label: "previous model" };
+    }
+    return {
+      model: ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : undefined,
+      label: "same as plan",
+    };
   }
 
   function safeGetActiveTools() {
