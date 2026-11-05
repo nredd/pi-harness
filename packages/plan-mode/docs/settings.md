@@ -63,7 +63,7 @@ Pi's per-model thinking default does not replace the current or configured Plan 
 A `/model` change during Plan wins and stays after exit, as does a manual thinking change.
 The switch is persisted with Plan state, so `/reload` and resume keep planning on the tier and still restore the previous model on exit.
 **Start fresh and implement** uses **Fresh model** when set; otherwise its model row shows and uses the remembered pre-Plan model as **previous model**, not the tier.
-Either way, once Pi replaces the source session, the source switches back to the remembered model and thinking; its plan stays resumable.
+Either way, once Pi replaces the source session, the source switches back to the remembered model and thinking; its plan stays resumable, and resuming it, including after a partial start, plans on the tier again.
 
 An unregistered or unauthenticated tier warns once (`... is no longer available; using the current model.`) and Plan starts on the current model; the stored preference is kept.
 Quota exhaustion is the router's business: its exhaustion policy waits or fails, and Plan mode never substitutes another tier or model.
@@ -166,12 +166,13 @@ Conversation-history-only implementation has no active Plan-mode state to show, 
 ### Fresh implementation runtime
 
 Omit `defaultImplementationModel` and `defaultImplementationThinkingLevel` to use **same as plan**, the default.
+While a [Plan model](#plan-model) is applied, the model row shows **previous model** instead and uses the pre-Plan model, not the tier.
 A configured model is an object with non-empty `provider` and `modelId` strings of at most 512 characters each.
 `defaultImplementationThinkingLevel` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; use omission rather than `inherit` for **same as plan**.
 Choosing **Same as plan** in Settings removes the corresponding field.
 
 The model picker snapshots the current session's scoped models when a non-empty scope exists, otherwise Pi's currently available models.
-A configured model outside that catalogue remains stored but is ineffective for that handoff: Settings and the ready-plan fresh screen report that it is unavailable and fall back to the planning session model.
+A configured model outside that catalogue remains stored but is ineffective for that handoff: Settings and the ready-plan fresh screen report that it is unavailable and fall back to the planning session model (or **previous model** while a Plan model is applied).
 The preference becomes effective again if the model returns to the applicable catalogue.
 This fallback also protects a persistent default that disappears while the ready-plan fresh screen is open.
 Authentication and one-shot model races still use the normal fresh-handoff preflight and recovery behavior.

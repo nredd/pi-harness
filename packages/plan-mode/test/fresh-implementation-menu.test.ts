@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { showReadyPlanMenu } from "../src/plan-action-menus.js";
-import { createCustomSelectorHarness, createMockContext } from "./support.js";
+import { createCustomSelectorHarness, createMockContext, showReadyPlanMenu } from "./support.js";
 
 function menuOptions(overrides: Record<string, unknown> = {}) {
   return {

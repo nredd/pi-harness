@@ -489,7 +489,8 @@ function restorePlanModeState(entries, stateEntryType) {
     previousThinkingLevel: enabled ? fixedThinkingLevel(entry.data.previousThinkingLevel) : void 0,
     appliedThinkingLevel: enabled ? fixedThinkingLevel(entry.data.appliedThinkingLevel) : void 0,
     manualThinkingLevel: enabled ? fixedThinkingLevel(entry.data.manualThinkingLevel) : void 0,
-    planModelSwitch: enabled ? normalizePlanModelSwitch(entry.data.planModelSwitch) : void 0
+    planModelSwitch: enabled ? normalizePlanModelSwitch(entry.data.planModelSwitch) : void 0,
+    resumePlanModel: enabled && entry.data.resumePlanModel === true ? true : void 0
   };
 }
 function restoreReproposalReview(value, legacyGate, declinedPlans, latestPlan) {
@@ -1155,7 +1156,7 @@ function planMode(pi, dependencies = {}) {
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
     if (!interactiveUiPromise) {
-      interactiveUiPromise = import("./chunks/interactive-ui-YIQMAS2L.ts").catch((error) => {
+      interactiveUiPromise = import("./chunks/interactive-ui-P6YRUDPW.ts").catch((error) => {
         interactiveUiPromise = void 0;
         throw error;
       });
@@ -1610,6 +1611,7 @@ function planMode(pi, dependencies = {}) {
     captureManualThinkingLevel();
     if (freshSourceSession === shutdownSession && state.enabled && state.planModelSwitch) {
       restorePlanRuntime(ctx);
+      state = { ...state, resumePlanModel: true };
       persistState();
       await planModelTransition;
     } else {
@@ -2688,6 +2690,12 @@ function planMode(pi, dependencies = {}) {
     const tier = settings.planModel;
     if (tier) queuePlanModelTransition(() => applyPlanModel(ctx, tier, epoch));
   }
+  function resumePlanModel(ctx) {
+    if (!state.resumePlanModel) return;
+    state = { ...state, resumePlanModel: void 0 };
+    persistState();
+    startPlanModel(ctx);
+  }
   async function applyPlanModel(ctx, tier, epoch) {
     const target = planModelTarget(tier);
     const previous = ctx.model;
@@ -2853,8 +2861,10 @@ function planMode(pi, dependencies = {}) {
         pendingWorkflowToolPolicy = void 0;
       }
       if (policyChanged) persistState();
-      if (state.enabled) applyPlanThinkingLevel();
-      else if (wasEnabled) releaseWorkflowOwner();
+      if (state.enabled) {
+        applyPlanThinkingLevel();
+        resumePlanModel(ctx);
+      } else if (wasEnabled) releaseWorkflowOwner();
       return true;
     } catch (error) {
       try {

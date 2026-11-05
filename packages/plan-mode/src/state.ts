@@ -85,6 +85,8 @@ export interface PlanModeState {
   appliedThinkingLevel?: PlanModeFixedThinkingLevel;
   manualThinkingLevel?: PlanModeFixedThinkingLevel;
   planModelSwitch?: PlanModelSwitch;
+  /** Start fresh switched this source back to the pre-Plan model; resuming the Plan re-applies the Plan model. */
+  resumePlanModel?: true;
 }
 
 type SessionEntry = {
@@ -148,6 +150,7 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
     appliedThinkingLevel: enabled ? fixedThinkingLevel(entry.data.appliedThinkingLevel) : undefined,
     manualThinkingLevel: enabled ? fixedThinkingLevel(entry.data.manualThinkingLevel) : undefined,
     planModelSwitch: enabled ? normalizePlanModelSwitch(entry.data.planModelSwitch) : undefined,
+    resumePlanModel: enabled && entry.data.resumePlanModel === true ? true : undefined,
   };
 }
 

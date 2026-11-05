@@ -266,7 +266,12 @@ function createModelHost(
     },
     latestState() {
       return mock.entries.filter((entry) => entry.customType === STATE_ENTRY_TYPE).at(-1)?.data as
-        | { enabled?: boolean; planModelSwitch?: PlanModelSwitch; manualThinkingLevel?: string }
+        | {
+            enabled?: boolean;
+            planModelSwitch?: PlanModelSwitch;
+            manualThinkingLevel?: string;
+            resumePlanModel?: boolean;
+          }
         | undefined;
     },
     warnings() {
@@ -673,6 +678,31 @@ for (const freshModel of [undefined, DEFAULT]) {
     assert.equal(host.latestState()?.enabled, true, "the source plan stays resumable");
     assert.equal(host.latestState()?.planModelSwitch, undefined);
     assert.deepEqual(host.warnings(), []);
+
+    // Resuming the source plans on the tier again, and a later reload does not switch twice.
+    const branch = host.mock.entries.map((entry) => ({ type: "custom", ...entry }));
+    const resumed = createModelHost({ settings: { thinkingLevel: "high" }, branch });
+    await resumed.sessionStart("resume");
+    await resumed.beforeAgentStart();
+    assert.deepEqual(resumed.current, DEEP);
+    assert.equal(resumed.mock.thinkingLevel, "high");
+    assert.deepEqual(resumed.mock.setModels, [DEEP]);
+    assert.ok(resumed.latestState()?.planModelSwitch);
+    assert.equal(resumed.latestState()?.resumePlanModel, undefined);
+    await resumed.shutdown();
+
+    const reloaded = createModelHost({
+      settings: { thinkingLevel: "high" },
+      model: DEEP,
+      branch: [...branch, ...resumed.mock.entries.map((entry) => ({ type: "custom", ...entry }))],
+    });
+    await reloaded.sessionStart("reload");
+    await reloaded.beforeAgentStart();
+    assert.deepEqual(reloaded.current, DEEP);
+    assert.deepEqual(reloaded.mock.setModels, []);
+    await reloaded.plan("exit");
+    await reloaded.beforeAgentStart();
+    assert.deepEqual(reloaded.current, PREVIOUS);
   });
 }
 
@@ -694,6 +724,13 @@ test("Start fresh after a manual /model keeps the user's model as the plan model
   assert.ok(screens.includes("✓ default [router] · default"), screens.join("\n"));
   assert.deepEqual(host.current, DEFAULT);
   assert.deepEqual(host.mock.setModels, [DEEP]);
+
+  const branch = host.mock.entries.map((entry) => ({ type: "custom", ...entry }));
+  const resumed = createModelHost({ model: DEFAULT, branch });
+  await resumed.sessionStart("resume");
+  await resumed.beforeAgentStart();
+  assert.deepEqual(resumed.current, DEFAULT, "resume keeps the manual /model");
+  assert.deepEqual(resumed.mock.setModels, []);
 });
 
 test("Plan model settings offer router tiers and fall back to inherit", async () => {
