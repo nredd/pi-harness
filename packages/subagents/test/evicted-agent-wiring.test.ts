@@ -92,6 +92,16 @@ describe("evicted agents", () => {
   let agentDir: string;
   let prevCwd: string;
   let prevAgentDir: string | undefined;
+  // The extension under test, loaded per case. afterEach shuts it down so a failing
+  // case cannot leave the global manager slot claimed for the next (#481).
+  let lifecycle: Map<string, any> | undefined;
+
+  function load(): Map<string, any> {
+    const made = makePi();
+    subagentsExtension(made.pi);
+    lifecycle = made.lifecycle;
+    return made.tools;
+  }
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), "pi-evicted-"));
@@ -106,7 +116,9 @@ describe("evicted agents", () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await lifecycle?.get("session_shutdown")?.({}, ctx());
+    lifecycle = undefined;
     vi.useRealTimers();
     process.chdir(prevCwd);
     if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
@@ -117,8 +129,7 @@ describe("evicted agents", () => {
   });
 
   it("get_subagent_result and steer_subagent say it was evicted, not that it was never there", async () => {
-    const { pi, tools, lifecycle } = makePi();
-    subagentsExtension(pi);
+    const tools = load();
     const id = await spawnCompletedBackgroundAgent(tools);
 
     const read = await tools.get("get_subagent_result").execute("tc-read", { agent_id: id }, undefined, undefined, ctx());
@@ -136,8 +147,6 @@ describe("evicted agents", () => {
       expect(out).toMatch(/completed, evicted after \d+ min/);
       expect(out).not.toContain("Agent not found");
     }
-
-    await lifecycle.get("session_shutdown")?.({}, ctx());
   });
 
   it.each([
@@ -146,14 +155,16 @@ describe("evicted agents", () => {
   ] as const)("keeps an evicted %s child unreachable from get_subagent_result and steer_subagent", async (_kind, owner) => {
     // Live, an owned child answers "Agent not found" to the top-level tools;
     // eviction must not turn its description and transcript into an answer.
-    const { pi, tools, lifecycle } = makePi();
-    subagentsExtension(pi);
+    const tools = load();
     const id = await spawnCompletedBackgroundAgent(tools);
     const record = (globalThis as any)[Symbol.for("pi-subagents:manager")].getRecord(id);
     expect(record.status).toBe("completed");
+    // Consume it while it is still top-level: that stamps consumedAt on the fake
+    // clock AND cancels the held completion notice. Left pending, the notice's
+    // real-time 200ms hold can fire mid-advance and re-stamp consumedAt past the
+    // sweep this test waits for (#481).
+    await tools.get("get_subagent_result").execute("tc-read", { agent_id: id }, undefined, undefined, ctx());
     Object.assign(record, owner);
-    record.resultConsumed = true;
-    record.consumedAt = Date.now();
 
     expect(record.session).toBeDefined();
     await vi.advanceTimersByTimeAsync(11 * 60_000 + 60_000);
@@ -167,13 +178,10 @@ describe("evicted agents", () => {
       const out = textOf(await tools.get(name).execute("tc", params, undefined, undefined, ctx()));
       expect(out).toBe(`Agent not found: "${id}". It may have been cleaned up.`);
     }
-
-    await lifecycle.get("session_shutdown")?.({}, ctx());
   });
 
   it("keeps an unread result fetchable well past ten minutes", async () => {
-    const { pi, tools, lifecycle } = makePi();
-    subagentsExtension(pi);
+    const tools = load();
     const id = await spawnCompletedBackgroundAgent(tools);
 
     vi.advanceTimersByTime(45 * 60_000);
@@ -181,13 +189,10 @@ describe("evicted agents", () => {
 
     const out = textOf(await tools.get("get_subagent_result").execute("tc", { agent_id: id }, undefined, undefined, ctx()));
     expect(out).toContain("THE-RESULT-PAYLOAD");
-
-    await lifecycle.get("session_shutdown")?.({}, ctx());
   });
 
   it("still says not found for an id it never issued", async () => {
-    const { pi, tools, lifecycle } = makePi();
-    subagentsExtension(pi);
+    const tools = load();
     const out = textOf(await tools.get("get_subagent_result").execute("tc", { agent_id: "nope" }, undefined, undefined, ctx()));
     expect(out).toContain('Agent not found: "nope"');
     // Nothing was evicted under that id, so a resume has no note to explain (#442).
@@ -196,6 +201,5 @@ describe("evicted agents", () => {
       const text = textOf(await tools.get(name).execute("tc", params, undefined, undefined, ctx()));
       expect(text).toBe('Agent not found: "nope". It may have been cleaned up.');
     }
-    await lifecycle.get("session_shutdown")?.({}, ctx());
   });
 });
