@@ -1,0 +1,6 @@
+Diff in /private/tmp/ws/dep/src/lib.rs:1:
+-pub fn x( ) ->u32{ 1 }
++pub fn x() -> u32 {
++    1
++}
+ 

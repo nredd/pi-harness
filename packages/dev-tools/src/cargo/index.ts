@@ -198,7 +198,9 @@ export function registerCargoTools(pi: ExtensionAPI, options: CargoToolOptions =
 			return failed(`${what}: cargo exited ${r.exitCode} with no compiler errors\n${tail.text}`);
 		}
 		const state = parsed.errors > 0 ? "errors" : parsed.warnings > 0 ? "warnings" : "clean";
-		const sorted = [...parsed.diagnostics].sort((a, b) => (a.level === b.level ? 0 : a.level === "error" ? -1 : 1));
+		// Errors first; a stable sort keeps cargo's order within a level.
+		const rank = (d: { level: string }) => (d.level === "error" ? 0 : 1);
+		const sorted = [...parsed.diagnostics].sort((a, b) => rank(a) - rank(b));
 		const { kept, dropped } = capList(sorted, limit);
 		const lines = [
 			`${what}: ${state === "clean" ? "clean" : `${parsed.errors} error${parsed.errors === 1 ? "" : "s"}, ${parsed.warnings} warning${parsed.warnings === 1 ? "" : "s"}`} in ${seconds(r.durationMs)}`,
@@ -462,9 +464,9 @@ export function registerCargoTools(pi: ExtensionAPI, options: CargoToolOptions =
 					const total = junit.tests;
 					const bad = junit.failures + junit.errors;
 					lines.push(
-						`cargo test: ${state} (${total - bad}/${total} passed${junit?.skipped ? `, ${junit.skipped} skipped` : ""}${junit?.errors ? `, ${junit.errors} errored` : ""}) in ${seconds(r.durationMs)}`,
+						`cargo test: ${state} (${total - bad}/${total} passed${junit.skipped ? `, ${junit.skipped} skipped` : ""}${junit.errors ? `, ${junit.errors} errored` : ""}) in ${seconds(r.durationMs)}`,
 					);
-					for (const f of junit?.failed ?? []) {
+					for (const f of junit.failed) {
 						lines.push(`  FAIL ${f.name}: ${f.message}`);
 						const detail = tailLines(f.detail, 25);
 						if (detail) lines.push(detail.replace(/^/gm, "    "));
