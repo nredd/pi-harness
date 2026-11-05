@@ -336,7 +336,9 @@ def test_ported_computer_suites_are_conventional_tests() -> None:
     cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
     helpers = {helper.path for helper in cfg.verification_helpers}
     suites = sorted((ROOT / "packages/computer-use/test").glob("*.test.mjs"))
-    assert len(suites) == 26
+    # The 26 ported suites plus #551's SDK preparation regression suite.
+    assert len(suites) == 27
+    assert (ROOT / "packages/computer-use/test/swift-sdk.test.mjs") in suites
     for suite in suites:
         assert is_test_path(suite.relative_to(ROOT))
     for moved in [
