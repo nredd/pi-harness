@@ -35,6 +35,11 @@ function harness(replies: Reply[], token = "token") {
 
 const ctx = {} as never;
 
+/** A `weekly_scoped` Anthropic `limits` entry; `percent` defaults to an exhausted 100. */
+function scopedLimit({ percent = 100, scope }: { percent?: number; scope: unknown }) {
+	return { kind: "weekly_scoped", percent, resets_at: FUTURE_RESET, scope };
+}
+
 function jwt(payload: unknown): string {
 	return `h.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.sig`;
 }
@@ -355,16 +360,14 @@ describe("UsageService", () => {
 		expect(service.decisionFor({ provider: "anthropic", id: "claude-haiku-5-5" }).block).toBe(false);
 	});
 
-	it("skips surface- and model-id-scoped weekly_scoped limits", async () => {
-		const scoped = (scope: unknown) => ({ kind: "weekly_scoped", percent: 100, resets_at: FUTURE_RESET, scope });
+	it("skips surface-scoped weekly_scoped limits", async () => {
 		const { service } = harness([
 			{
 				body: {
 					seven_day: { utilization: 40, resets_at: FUTURE_RESET },
 					limits: [
-						scoped({ model: { id: null, display_name: "Fable" }, surface: "web" }),
-						scoped({ model: { id: "claude-fable-5-1", display_name: "Fable" }, surface: null }),
-						scoped({ model: { id: null, display_name: "Fable" }, surface: { name: "web" } }),
+						scopedLimit({ scope: { model: { id: null, display_name: "Fable" }, surface: "web" } }),
+						scopedLimit({ scope: { model: { id: null, display_name: "Fable" }, surface: { name: "web" } } }),
 					],
 				},
 			},
@@ -374,18 +377,46 @@ describe("UsageService", () => {
 		expect(service.decisionFor({ provider: "anthropic", id: "claude-fable-5-1" }).block).toBe(false);
 	});
 
-	it("keeps an unscoped Fable limit after a surface-scoped one", async () => {
-		const scoped = (percent: number, surface: unknown) => ({
-			kind: "weekly_scoped",
-			percent,
-			resets_at: FUTURE_RESET,
-			scope: { model: { display_name: "Fable" }, surface },
-		});
+	it("skips a model-id-scoped weekly_scoped limit with a null surface", async () => {
 		const { service } = harness([
 			{
 				body: {
 					seven_day: { utilization: 40, resets_at: FUTURE_RESET },
-					limits: [scoped(100, "web"), scoped(30, null)],
+					limits: [scopedLimit({ scope: { model: { id: "claude-fable-5-1", display_name: "Fable" }, surface: null } })],
+				},
+			},
+		]);
+		const snapshot = await service.get(ctx, "anthropic");
+		expect(snapshot.windows.map((w) => w.name)).toEqual(["seven_day"]);
+		expect(service.decisionFor({ provider: "anthropic", id: "claude-fable-5-1" }).block).toBe(false);
+	});
+
+	it("uses a weekly_scoped limit with a null model id and no surface key", async () => {
+		const { service } = harness([
+			{
+				body: {
+					seven_day: { utilization: 40, resets_at: FUTURE_RESET },
+					limits: [scopedLimit({ scope: { model: { id: null, display_name: "Fable" } } })],
+				},
+			},
+		]);
+		const snapshot = await service.get(ctx, "anthropic");
+		expect(snapshot.windows.map((w) => [w.name, w.usedPercent])).toEqual([
+			["seven_day", 40],
+			["seven_day_fable", 100],
+		]);
+		expect(service.decisionFor({ provider: "anthropic", id: "claude-fable-5-1" }).block).toBe(true);
+	});
+
+	it("keeps an unscoped Fable limit after a surface-scoped one", async () => {
+		const { service } = harness([
+			{
+				body: {
+					seven_day: { utilization: 40, resets_at: FUTURE_RESET },
+					limits: [
+						scopedLimit({ scope: { model: { display_name: "Fable" }, surface: "web" } }),
+						scopedLimit({ percent: 30, scope: { model: { display_name: "Fable" }, surface: null } }),
+					],
 				},
 			},
 		]);

@@ -194,7 +194,8 @@ export function parseAnthropic(payload: unknown): ParsedUsage | undefined {
  * `seven_day_<family>` window gating the lowercased display name; names that are not one
  * family token are skipped rather than guessed. Entries narrowed by a non-null `scope.surface`
  * or `scope.model.id` are skipped too: a cap on one surface or one model id must not block
- * the whole family.
+ * the whole family. That fails open: an id- or surface-scoped cap is not enforced, and a 429
+ * against it still falls through the normal retry path.
  */
 function anthropicScopedLimits(limits: unknown): UsageWindow[] {
 	if (!Array.isArray(limits)) return [];
