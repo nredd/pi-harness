@@ -24,6 +24,9 @@ from harness.sandbox import build_sandbox
 if TYPE_CHECKING:
     from pathlib import Path
 
+# Bound on a pipe-holder leader's two interpreter launches; generous for loaded self-hosted runners.
+LEADER_EXIT_TIMEOUT_S = 30.0
+
 
 def test_both_pipes_are_drained_without_a_deadlock(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Drain stderr exceeding pipe capacity while still decoding stdout events.
@@ -117,6 +120,23 @@ def leader_is_unreaped(pid: int) -> bool:
     except ChildProcessError:
         return False
     return True
+
+
+def wait_for_unreaped_exit(pid: int, timeout_s: float) -> None:
+    """Wait until child `pid` has exited, without reaping it, so it still anchors its group number.
+
+    Parameters:
+        pid (int): child process id.
+        timeout_s (float): longest wait.
+
+    Raises:
+        TimeoutError: the child is still running after `timeout_s`.
+    """
+    end = time.monotonic() + timeout_s
+    while os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is None:
+        if time.monotonic() > end:
+            raise TimeoutError(f"Child '{pid}' still running after {timeout_s}s")
+        time.sleep(0.01)
 
 
 @dataclass
@@ -473,15 +493,18 @@ def test_inherited_pipe_kill_keeps_the_leader_as_pgid_anchor(
 def spawn_pipe_holder(tmp_path: Path, hold_s: float) -> tuple[subprocess.Popen[str], Path]:
     """Start a leader whose descendant, in its own session, holds stdout until released or `hold_s`.
 
-    The leader exits once the holder is ready. The holder exits by itself when the test creates
-    the release file, so cleanup never needs a signal.
+    The leader exits once the holder is ready, and this returns only after that exit, leaving the
+    leader unreaped. Otherwise two interpreter launches race the caller's deadline: on a loaded
+    runner the deadline kill fires first, and a holder still open after the post-kill drain gets
+    the documented second kill (#502). The holder exits by itself when the test creates the
+    release file, so cleanup never needs a signal.
 
     Parameters:
         tmp_path (Path): readiness and release markers.
         hold_s (float): longest the holder keeps the pipe open.
 
     Returns:
-        tuple[subprocess.Popen[str], Path]: the leader and the release file.
+        tuple[subprocess.Popen[str], Path]: the exited, unreaped leader and the release file.
     """
     ready = tmp_path / "ready"
     release = tmp_path / "release"
@@ -494,7 +517,9 @@ def spawn_pipe_holder(tmp_path: Path, hold_s: float) -> tuple[subprocess.Popen[s
         f"subprocess.Popen([sys.executable,'-c',{holder!r}],start_new_session=True)\n"
         f"while not os.path.exists({str(ready)!r}): time.sleep(0.01)\n"
     )
-    return spawn_session(leader), release
+    process = spawn_session(leader)
+    wait_for_unreaped_exit(process.pid, LEADER_EXIT_TIMEOUT_S)
+    return process, release
 
 
 def test_pipes_held_past_the_join_are_reported(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
