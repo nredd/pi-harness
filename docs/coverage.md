@@ -546,8 +546,8 @@ when stream delivery raced cancellation. The controlled cancellation/data-event 
 `packages/resource-sampler/test/sampler.test.ts` now forces that branch by emitting late stdout
 after cancellation. Whether hosted Darwin counts stay stable is not yet measured (issue
 [here](https://github.com/nredd/pi-harness/issues/164)). That race-dependent branch is why the
-sampler's starting branch caps come from hosted counts rather than a single local run; #417 drives them
-to 0 ([branch caps](#branch-caps)).
+sampler's starting branch caps came from hosted counts rather than a single local run; #417 drove them
+to 0 on darwin and linux, primary and Bun ([branch caps](#branch-caps)).
 
 `inprocess` is `enforced` at 0/0 lines/functions on darwin and linux for both `primary` and `bun`
 since #376, with nothing excluded. Its inventory is every fixture module the suites run:

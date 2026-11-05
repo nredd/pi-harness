@@ -101,17 +101,17 @@
       "owned": ["src/**/*.ts"],
       "exclusions": [{ "path": "src/types.ts", "kind": "type-only", "reason": "Only TypeScript declarations; emits no executable JavaScript." }],
       "status": "measured",
-      "note": "Primary and Bun 0/0 on darwin and linux. Both Darwin FFI adapters and the per-PID loop run on every OS through an injected host and fake NativeCalls (#375); macOS also exercises the real libproc path.",
+      "note": "Primary and Bun 0/0/0 on darwin and linux. Both Darwin FFI adapters, the per-PID loop and every platform dispatch (Linux proc/getconf, Darwin helpers and injected NativeCalls, win32, unsupported) run on every OS through injected hosts (#375, #417); macOS also exercises the real libproc path.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 17 }, "linux": { "lines": 0, "functions": 0, "branches": 19 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
 
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 18 }, "linux": { "lines": 0, "functions": 0, "branches": 20 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
           "enforcement": "enforced",
           "reporters": ["text", "lcov"]
         }
