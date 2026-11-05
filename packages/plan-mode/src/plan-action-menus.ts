@@ -16,6 +16,18 @@ interface MenuLifecycle {
   isCurrent(): boolean;
 }
 
+interface PlanEditOption extends MenuLifecycle {
+  /** Opens the plan in the host editor; the caller reopens its menu afterwards. */
+  edit(): Promise<void>;
+}
+
+/** Runs the deferred edit once the menu has closed; true when the menu should reopen. */
+export async function editPlanThenReopen(options: PlanEditOption) {
+  if (options.signal.aborted || !options.isCurrent()) return false;
+  await options.edit();
+  return !options.signal.aborted && options.isCurrent();
+}
+
 const THINKING_LEVEL_DESCRIPTIONS: Record<PlanModeFixedThinkingLevel, string> = {
   off: "No reasoning",
   minimal: "Very brief reasoning (~1k tokens)",
@@ -26,7 +38,7 @@ const THINKING_LEVEL_DESCRIPTIONS: Record<PlanModeFixedThinkingLevel, string> = 
   max: "Maximum reasoning",
 };
 
-interface PlanMenuOptions extends MenuLifecycle {
+interface PlanMenuOptions extends PlanEditOption {
   statusText: string;
   planThinkingLevel: PlanModeFixedThinkingLevel | undefined;
   implementationDefaults?: ImplementationRuntimeSelection;
@@ -43,10 +55,11 @@ interface PlanMenuOptions extends MenuLifecycle {
   exit(): void;
 }
 
-export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuOptions) {
+export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuOptions): Promise<void> {
   type Screen = "main" | "fresh" | "models" | "thinking" | "export";
   type Action =
     | "show"
+    | "edit"
     | "finalize"
     | "implement-here"
     | "select-model"
@@ -62,6 +75,7 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
     options.implementationDefaults,
     options.implementFresh,
   );
+  let editRequested = false;
   const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
     start: "main",
     screens: {
@@ -75,6 +89,7 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
               { id: "implement-here", label: "Implement here", action: "implement-here" },
               { id: "implement-fresh", label: "Start fresh and implement", to: "fresh" },
               { id: "export", label: "Export plan…", to: "export" },
+              { id: "edit", label: "Edit plan…", action: "edit" },
               { id: "save", label: "Save for later", action: "save" },
               { id: "stay", label: "Stay in Plan mode", action: "stay" },
               { id: "exit", label: "Discard plan and exit", action: "exit" },
@@ -94,6 +109,10 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
     actions: {
       show: async () => {
         options.show();
+        return { kind: "close" };
+      },
+      edit: async () => {
+        editRequested = true;
         return { kind: "close" };
       },
       finalize: async () => {
@@ -137,9 +156,10 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
     signal: options.signal,
     isCurrent: options.isCurrent,
   });
+  if (editRequested && (await editPlanThenReopen(options))) await showPlanModeMenu(ctx, options);
 }
 
-interface ReadyPlanMenuOptions extends MenuLifecycle {
+interface ReadyPlanMenuOptions extends PlanEditOption {
   planThinkingLevel: PlanModeFixedThinkingLevel | undefined;
   implementationDefaults?: ImplementationRuntimeSelection;
   implementationOutcome(): string;
@@ -153,10 +173,15 @@ interface ReadyPlanMenuOptions extends MenuLifecycle {
   exit(): void;
 }
 
-export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPlanMenuOptions) {
+export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPlanMenuOptions): Promise<void> {
+  let start: "ready" | "fresh" | "export" = "ready";
   if (ctx.mode === "tui" && ctx.hasUI) {
     const action = await chooseReadyPlanAction(ctx);
     if (!action || options.signal.aborted || !options.isCurrent()) return;
+    if (action === "edit") {
+      if (await editPlanThenReopen(options)) await showReadyPlanMenu(ctx, options);
+      return;
+    }
     if (action === "show") {
       options.show();
       return;
@@ -177,20 +202,22 @@ export async function showReadyPlanMenu(ctx: ExtensionContext, options: ReadyPla
       options.exit();
       return;
     }
-    await runReadyPlanMenu(ctx, options, action === "implement-fresh" ? "fresh" : "export");
-    return;
+    start = action === "implement-fresh" ? "fresh" : "export";
   }
-  await runReadyPlanMenu(ctx, options, "ready");
+  if ((await runReadyPlanMenu(ctx, options, start)) && (await editPlanThenReopen(options))) {
+    await showReadyPlanMenu(ctx, options);
+  }
 }
 
 async function runReadyPlanMenu(
   ctx: ExtensionContext,
   options: ReadyPlanMenuOptions,
   start: "ready" | "fresh" | "export",
-) {
+): Promise<boolean> {
   type Screen = "ready" | "fresh" | "models" | "thinking" | "export";
   type Action =
     | "show"
+    | "edit"
     | "implement-here"
     | "select-model"
     | "select-thinking"
@@ -205,6 +232,7 @@ async function runReadyPlanMenu(
     options.implementationDefaults,
     options.implementFresh,
   );
+  let editRequested = false;
   const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
     start,
     screens: {
@@ -216,6 +244,7 @@ async function runReadyPlanMenu(
           { id: "implement-here", label: "Implement here", action: "implement-here" },
           { id: "implement-fresh", label: "Start fresh and implement", to: "fresh" },
           { id: "export", label: "Export plan…", to: "export" },
+          { id: "edit", label: "Edit plan…", action: "edit" },
           { id: "save", label: "Save for later", action: "save" },
           { id: "stay", label: "Stay in Plan mode", action: "stay" },
           { id: "exit", label: "Discard plan and exit", action: "exit" },
@@ -230,6 +259,10 @@ async function runReadyPlanMenu(
     actions: {
       show: async () => {
         options.show();
+        return { kind: "close" };
+      },
+      edit: async () => {
+        editRequested = true;
         return { kind: "close" };
       },
       "implement-here": async () => {
@@ -269,6 +302,7 @@ async function runReadyPlanMenu(
     signal: options.signal,
     isCurrent: options.isCurrent,
   });
+  return editRequested;
 }
 
 interface ModelChoice {

@@ -10,6 +10,7 @@ function menuOptions(overrides: Record<string, unknown> = {}) {
     implementationOutcome: () => "The plan remains available until implementation ends.",
     planThinkingLevel: undefined,
     getExportDestination: () => ({ configuredPath: "PLAN.md", resolvedPath: "/tmp/PLAN.md" }),
+    edit: async () => undefined,
     show: () => undefined,
     implementHere: () => undefined,
     implementFresh: () => undefined,

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { showPlanModeMenu, showReadyPlanMenu } from "../src/plan-action-menus.js";
+import { editPlanThenReopen, showPlanModeMenu, showReadyPlanMenu } from "../src/plan-action-menus.js";
+import { showSavedPlanMenu } from "../src/saved-plan-menu.js";
 import { createCustomSelectorHarness, createMockContext } from "./support.js";
 
 /**
@@ -17,6 +18,7 @@ function menuOptions(overrides: Record<string, unknown> = {}) {
     planThinkingLevel: "medium" as const,
     implementationOutcome: () => "The plan remains available until implementation ends.",
     getExportDestination: () => ({ configuredPath: "PLAN.md", resolvedPath: "/tmp/PLAN.md" }),
+    edit: async () => undefined,
     show: () => undefined,
     finalize: () => undefined,
     implementHere: () => undefined,
@@ -289,8 +291,8 @@ test("Ready-plan full menu applies selected model and exports submitted paths", 
 test("Ready-plan chooser renders at narrow widths and routes explicit choices", async () => {
   for (const [moves, expected] of [
     [0, "show"],
-    [4, "save"],
-    [6, "exit"],
+    [5, "save"],
+    [7, "exit"],
   ] as const) {
     const actions: string[] = [];
     const context = createMockContext({
@@ -358,4 +360,138 @@ test("Ready-plan chooser distinguishes Escape from Ctrl-C cancellation", async (
 
     assert.deepEqual(actions, expected);
   }
+});
+
+test("Edit plan in every ready and saved menu edits after closing, then reopens the menu", async () => {
+  const ready: string[] = [];
+  await showReadyPlanMenu(
+    rpcContext(["Edit plan…", "Implement here"]).ctx,
+    menuOptions({
+      edit: async () => {
+        ready.push("edit");
+      },
+      implementHere: () => ready.push("implementHere"),
+    }),
+  );
+  assert.deepEqual(ready, ["edit", "implementHere"]);
+
+  const current: string[] = [];
+  await showPlanModeMenu(
+    rpcContext(["Edit plan…", "Stay in Plan mode"]).ctx,
+    menuOptions({
+      edit: async () => {
+        current.push("edit");
+      },
+      stay: () => current.push("stay"),
+    }),
+  );
+  assert.deepEqual(current, ["edit", "stay"]);
+
+  const saved: string[] = [];
+  const titles: string[] = [];
+  await showSavedPlanMenu(
+    createMockContext({
+      mode: "rpc",
+      hasUI: true,
+      select: async (title: string, options: string[]) => {
+        titles.push(title);
+        assert.ok(options.includes("Edit plan…"));
+        return titles.length === 1 ? "Edit plan…" : "Show saved plan";
+      },
+    }).ctx,
+    {
+      statusText: "Saved plan ready.",
+      implementationOutcome: () => "Plan reinjection: Until /plan exit.",
+      getExportDestination: () => ({ configuredPath: "PLAN.md", resolvedPath: "/tmp/PLAN.md" }),
+      signal: new AbortController().signal,
+      isCurrent: () => true,
+      show: () => saved.push("show"),
+      edit: async () => {
+        saved.push("edit");
+      },
+      implementHere: () => assert.fail("unexpected implementHere"),
+      implementFresh: () => assert.fail("unexpected implementFresh"),
+      exportPlan: async () => assert.fail("unexpected export"),
+      settings: async () => assert.fail("unexpected settings"),
+      clear: () => assert.fail("unexpected clear"),
+    },
+  );
+  assert.deepEqual(saved, ["edit", "show"]);
+  assert.equal(titles.length, 2);
+});
+
+test("Ctrl+G in the ready chooser edits, then reopens the chooser on the edited plan", async () => {
+  const actions: string[] = [];
+  let opened = 0;
+  const context = createMockContext({
+    mode: "tui",
+    hasUI: true,
+    custom: async (factory: unknown) => {
+      opened += 1;
+      const harness = createCustomSelectorHarness(factory);
+      harness.handleInput(opened === 1 ? "\u0007" : "tui.select.cancel");
+      return harness.resultPromise;
+    },
+  });
+  await showReadyPlanMenu(
+    context.ctx,
+    menuOptions({
+      edit: async () => {
+        actions.push("edit");
+      },
+      stay: () => actions.push("stay"),
+    }),
+  );
+  assert.equal(opened, 2);
+  assert.deepEqual(actions, ["edit", "stay"]);
+});
+
+test("A menu does not reopen after its edit leaves the plan stale", async () => {
+  let current = true;
+  let opened = 0;
+  const context = createMockContext({
+    mode: "tui",
+    hasUI: true,
+    custom: async (factory: unknown) => {
+      opened += 1;
+      const harness = createCustomSelectorHarness(factory);
+      harness.handleInput("\u0007");
+      return harness.resultPromise;
+    },
+  });
+  await showReadyPlanMenu(
+    context.ctx,
+    menuOptions({
+      isCurrent: () => current,
+      edit: async () => {
+        current = false;
+      },
+    }),
+  );
+  assert.equal(opened, 1);
+
+  let edits = 0;
+  const aborted = new AbortController();
+  aborted.abort();
+  assert.equal(
+    await editPlanThenReopen({
+      signal: aborted.signal,
+      isCurrent: () => true,
+      edit: async () => {
+        edits += 1;
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    await editPlanThenReopen({
+      signal: new AbortController().signal,
+      isCurrent: () => false,
+      edit: async () => {
+        edits += 1;
+      },
+    }),
+    false,
+  );
+  assert.equal(edits, 0);
 });

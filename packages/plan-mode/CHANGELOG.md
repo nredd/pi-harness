@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- `Edit plan…` in the ready-plan chooser (also `Ctrl+G`), the `/plan` ready menu and the saved-plan menu
+  opens the plan in Pi's editor. A saved edit replaces the stored plan as source `user_edit`, persists
+  it with the Plan state, reopens the menu, and tells the model once through a hidden
+  `plan-mode-plan-edit` message with a unified diff. Implementation, export, todo seeding and fresh
+  sessions use the edited text. Editing is not a decline.
+
 ### Changed
 
 - Add a `homeDir` dependency for SDK hosts: Bash and PowerShell policy expand `~/` in trusted

@@ -26,6 +26,8 @@ interface PlanActionControllerOptions {
   implementationOutcome(): string;
   getExportDestination(ctx: ExtensionContext): PlanExportDestination;
   show(ctx: ExtensionContext): void;
+  /** Edits the ready or saved plan; `isCurrent` is the opening menu's lifecycle. */
+  edit(ctx: ExtensionContext, isCurrent: () => boolean): Promise<void>;
   finalize(ctx: ExtensionContext): void;
   implementHere(ctx: ExtensionContext): void | Promise<void>;
   implementFresh(
@@ -92,6 +94,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
         signal: lifecycle.signal,
         isCurrent: lifecycle.isCurrent,
         show: () => options.show(ctx),
+        edit: () => options.edit(ctx, lifecycle.isCurrent),
         implementHere: () => options.implementHere(ctx),
         implementFresh: (signal) => freshAction(ctx, lifecycle, signal, effectiveDefaults(ctx)),
         exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
@@ -114,6 +117,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
         signal: lifecycle.signal,
         isCurrent,
         show: () => options.show(ctx),
+        edit: () => options.edit(ctx, isCurrent),
         implementHere: () => options.implementHere(ctx),
         implementFresh: (runtime, signal) => freshAction(ctx, lifecycle, signal, runtime),
         exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, isCurrent),
@@ -140,6 +144,7 @@ export function createPlanActionController(options: PlanActionControllerOptions)
         getExportDestination: () => options.getExportDestination(ctx),
         ...lifecycle,
         show: () => options.show(ctx),
+        edit: () => options.edit(ctx, lifecycle.isCurrent),
         finalize: () => options.finalize(ctx),
         implementHere: () => options.implementHere(ctx),
         implementFresh: (runtime, signal) => freshAction(ctx, lifecycle, signal, runtime),

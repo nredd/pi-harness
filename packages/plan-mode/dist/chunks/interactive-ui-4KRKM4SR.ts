@@ -103,6 +103,7 @@ var READY_PLAN_ACTIONS = [
   "implement-here",
   "implement-fresh",
   "export",
+  "edit",
   "save",
   "stay",
   "exit"
@@ -112,6 +113,7 @@ var READY_PLAN_LABELS = {
   "implement-here": "Implement here",
   "implement-fresh": "Start fresh and implement",
   export: "Export plan\u2026",
+  edit: "Edit plan\u2026",
   save: "Save for later",
   stay: "Stay in Plan mode",
   exit: "Discard plan and exit"
@@ -174,6 +176,10 @@ async function chooseReadyPlanAction(ctx) {
           finish(void 0);
           return;
         }
+        if (matchesKey(data, Key.ctrl("g"))) {
+          finish("edit");
+          return;
+        }
         if (keybindings.matches(data, "tui.select.cancel")) {
           finish("stay");
           return;
@@ -203,6 +209,11 @@ async function chooseReadyPlanAction(ctx) {
 }
 
 // src/plan-action-menus.ts
+async function editPlanThenReopen(options) {
+  if (options.signal.aborted || !options.isCurrent()) return false;
+  await options.edit();
+  return !options.signal.aborted && options.isCurrent();
+}
 var THINKING_LEVEL_DESCRIPTIONS = {
   off: "No reasoning",
   minimal: "Very brief reasoning (~1k tokens)",
@@ -219,6 +230,7 @@ async function showPlanModeMenu(ctx, options) {
     options.implementationDefaults,
     options.implementFresh
   );
+  let editRequested = false;
   const menu = defineMenu2({
     start: "main",
     screens: {
@@ -231,6 +243,7 @@ async function showPlanModeMenu(ctx, options) {
           { id: "implement-here", label: "Implement here", action: "implement-here" },
           { id: "implement-fresh", label: "Start fresh and implement", to: "fresh" },
           { id: "export", label: "Export plan\u2026", to: "export" },
+          { id: "edit", label: "Edit plan\u2026", action: "edit" },
           { id: "save", label: "Save for later", action: "save" },
           { id: "stay", label: "Stay in Plan mode", action: "stay" },
           { id: "exit", label: "Discard plan and exit", action: "exit" }
@@ -249,6 +262,10 @@ async function showPlanModeMenu(ctx, options) {
     actions: {
       show: async () => {
         options.show();
+        return { kind: "close" };
+      },
+      edit: async () => {
+        editRequested = true;
         return { kind: "close" };
       },
       finalize: async () => {
@@ -291,11 +308,17 @@ async function showPlanModeMenu(ctx, options) {
     signal: options.signal,
     isCurrent: options.isCurrent
   });
+  if (editRequested && await editPlanThenReopen(options)) await showPlanModeMenu(ctx, options);
 }
 async function showReadyPlanMenu(ctx, options) {
+  let start = "ready";
   if (ctx.mode === "tui" && ctx.hasUI) {
     const action = await chooseReadyPlanAction(ctx);
     if (!action || options.signal.aborted || !options.isCurrent()) return;
+    if (action === "edit") {
+      if (await editPlanThenReopen(options)) await showReadyPlanMenu(ctx, options);
+      return;
+    }
     if (action === "show") {
       options.show();
       return;
@@ -316,10 +339,11 @@ async function showReadyPlanMenu(ctx, options) {
       options.exit();
       return;
     }
-    await runReadyPlanMenu(ctx, options, action === "implement-fresh" ? "fresh" : "export");
-    return;
+    start = action === "implement-fresh" ? "fresh" : "export";
   }
-  await runReadyPlanMenu(ctx, options, "ready");
+  if (await runReadyPlanMenu(ctx, options, start) && await editPlanThenReopen(options)) {
+    await showReadyPlanMenu(ctx, options);
+  }
 }
 async function runReadyPlanMenu(ctx, options, start) {
   const freshFlow = createFreshImplementationFlow(
@@ -328,6 +352,7 @@ async function runReadyPlanMenu(ctx, options, start) {
     options.implementationDefaults,
     options.implementFresh
   );
+  let editRequested = false;
   const menu = defineMenu2({
     start,
     screens: {
@@ -339,6 +364,7 @@ async function runReadyPlanMenu(ctx, options, start) {
           { id: "implement-here", label: "Implement here", action: "implement-here" },
           { id: "implement-fresh", label: "Start fresh and implement", to: "fresh" },
           { id: "export", label: "Export plan\u2026", to: "export" },
+          { id: "edit", label: "Edit plan\u2026", action: "edit" },
           { id: "save", label: "Save for later", action: "save" },
           { id: "stay", label: "Stay in Plan mode", action: "stay" },
           { id: "exit", label: "Discard plan and exit", action: "exit" }
@@ -353,6 +379,10 @@ async function runReadyPlanMenu(ctx, options, start) {
     actions: {
       show: async () => {
         options.show();
+        return { kind: "close" };
+      },
+      edit: async () => {
+        editRequested = true;
         return { kind: "close" };
       },
       "implement-here": async () => {
@@ -391,6 +421,7 @@ async function runReadyPlanMenu(ctx, options, start) {
     signal: options.signal,
     isCurrent: options.isCurrent
   });
+  return editRequested;
 }
 function createFreshImplementationFlow(ctx, planThinkingLevel, implementationDefaults, implementFresh) {
   const models = snapshotAvailableModels(ctx);
@@ -646,6 +677,7 @@ async function showSavedPlanMenu(ctx, options) {
   if (!ctx.hasUI) {
     throw new Error(`${options.statusText} Use /plan show, /plan implement, /plan export, or /plan exit.`);
   }
+  let editRequested = false;
   const menu = defineMenu4({
     start: "saved",
     screens: {
@@ -674,6 +706,12 @@ async function showSavedPlanMenu(ctx, options) {
             busyLabel: "Starting fresh implementation session\u2026"
           },
           { id: "export", label: "Export plan\u2026", to: "export" },
+          {
+            id: "edit",
+            label: "Edit plan\u2026",
+            description: "Open the saved plan in your editor.",
+            action: "edit"
+          },
           { id: "settings", label: "Settings", action: "settings" },
           { id: "clear", label: "Clear saved plan", action: "clear" }
         ],
@@ -684,6 +722,10 @@ async function showSavedPlanMenu(ctx, options) {
     actions: {
       show: async () => {
         options.show();
+        return { kind: "close" };
+      },
+      edit: async () => {
+        editRequested = true;
         return { kind: "close" };
       },
       "implement-here": async () => {
@@ -711,6 +753,7 @@ async function showSavedPlanMenu(ctx, options) {
     signal: options.signal,
     isCurrent: options.isCurrent
   });
+  if (editRequested && await editPlanThenReopen(options)) await showSavedPlanMenu(ctx, options);
 }
 
 // src/settings-menu.ts
@@ -1133,4 +1176,4 @@ export {
   showReadyPlanMenu,
   showSavedPlanMenu
 };
-//# sourceMappingURL=interactive-ui-OCQTYYJ3.ts.map
+//# sourceMappingURL=interactive-ui-4KRKM4SR.ts.map

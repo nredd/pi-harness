@@ -442,6 +442,126 @@ function createPlanApprovals(pi) {
   };
 }
 
+// src/plan-edit.ts
+var PLAN_EDIT_SOURCE = "user_edit";
+var PLAN_EDIT_MESSAGE_TYPE = "plan-mode-plan-edit";
+var PLAN_EDIT_VERSION = 1;
+var DIFF_CONTEXT_LINES = 3;
+var MAX_LCS_CELLS = 4e6;
+function reviewEditedPlan(current, edited) {
+  if (edited === void 0) return { kind: "cancelled" };
+  const normalized = normalizePlanModeCompletion({ plan: edited });
+  if (!normalized.ok) return { kind: "rejected", error: normalized.error };
+  if (normalized.plan === current) return { kind: "unchanged" };
+  return { kind: "edited", plan: normalized.plan };
+}
+function createPlanEditMessage(before, after) {
+  const diff = unifiedPlanDiff(before, after);
+  const fence = "`".repeat(Math.max(3, longestBacktickRun(diff) + 1));
+  return {
+    customType: PLAN_EDIT_MESSAGE_TYPE,
+    content: [
+      "[PLAN EDITED BY USER]",
+      "The user edited the plan in their editor. The edited plan replaces the earlier version; follow the edited version.",
+      "Unified diff from the earlier version:",
+      "",
+      `${fence}diff`,
+      diff,
+      fence
+    ].join("\n"),
+    display: false,
+    details: { version: PLAN_EDIT_VERSION, source: PLAN_EDIT_SOURCE, plan: after }
+  };
+}
+function unifiedPlanDiff(before, after) {
+  const lines = diffLines(before.split("\n"), after.split("\n"));
+  return ["--- earlier plan", "+++ edited plan", ...formatHunks(lines)].join("\n");
+}
+function diffLines(before, after) {
+  let start = 0;
+  while (start < before.length && start < after.length && before[start] === after[start]) start += 1;
+  let beforeEnd = before.length;
+  let afterEnd = after.length;
+  while (beforeEnd > start && afterEnd > start && before[beforeEnd - 1] === after[afterEnd - 1]) {
+    beforeEnd -= 1;
+    afterEnd -= 1;
+  }
+  return [
+    ...before.slice(0, start).map(unchanged),
+    ...diffMiddle(before.slice(start, beforeEnd), after.slice(start, afterEnd)),
+    ...before.slice(beforeEnd).map(unchanged)
+  ];
+}
+function diffMiddle(before, after) {
+  const removed = before.map((text) => ({ kind: "-", text }));
+  const added = after.map((text) => ({ kind: "+", text }));
+  if (before.length * after.length > MAX_LCS_CELLS) return [...removed, ...added];
+  const width = after.length + 1;
+  const lcs = new Uint32Array((before.length + 1) * width);
+  for (let i2 = before.length - 1; i2 >= 0; i2 -= 1) {
+    for (let j2 = after.length - 1; j2 >= 0; j2 -= 1) {
+      lcs[i2 * width + j2] = before[i2] === after[j2] ? lcs[(i2 + 1) * width + j2 + 1] + 1 : Math.max(lcs[(i2 + 1) * width + j2], lcs[i2 * width + j2 + 1]);
+    }
+  }
+  const lines = [];
+  let i = 0;
+  let j = 0;
+  while (i < before.length && j < after.length) {
+    if (before[i] === after[j]) {
+      lines.push(unchanged(before[i]));
+      i += 1;
+      j += 1;
+    } else if (lcs[(i + 1) * width + j] >= lcs[i * width + j + 1]) {
+      lines.push(removed[i]);
+      i += 1;
+    } else {
+      lines.push(added[j]);
+      j += 1;
+    }
+  }
+  return [...lines, ...removed.slice(i), ...added.slice(j)];
+}
+function formatHunks(lines) {
+  const oldBefore = [];
+  const newBefore = [];
+  let oldLine = 0;
+  let newLine = 0;
+  for (const line of lines) {
+    oldBefore.push(oldLine);
+    newBefore.push(newLine);
+    if (line.kind !== "+") oldLine += 1;
+    if (line.kind !== "-") newLine += 1;
+  }
+  const changed = lines.flatMap((line, index) => line.kind === " " ? [] : [index]);
+  const output = [];
+  let next = 0;
+  while (next < changed.length) {
+    const first = changed[next];
+    let last = first;
+    while (next + 1 < changed.length && changed[next + 1] - last <= DIFF_CONTEXT_LINES * 2 + 1) {
+      next += 1;
+      last = changed[next];
+    }
+    next += 1;
+    const start = Math.max(0, first - DIFF_CONTEXT_LINES);
+    const end = Math.min(lines.length, last + DIFF_CONTEXT_LINES + 1);
+    const hunk = lines.slice(start, end);
+    const oldCount = hunk.filter((line) => line.kind !== "+").length;
+    const newCount = hunk.filter((line) => line.kind !== "-").length;
+    output.push(
+      `@@ -${oldBefore[start] + 1},${oldCount} +${newBefore[start] + 1},${newCount} @@`,
+      ...hunk.map((line) => `${line.kind}${line.text}`)
+    );
+  }
+  return output;
+}
+function unchanged(text) {
+  return { kind: " ", text };
+}
+function longestBacktickRun(text) {
+  return Math.max(0, ...(text.match(/`+/gu) ?? []).map((run) => run.length));
+}
+
 // src/state.ts
 function restorePlanModeState(entries, stateEntryType) {
   const branch = entries;
@@ -567,7 +687,7 @@ function latestCompletionPlan(entries) {
   return void 0;
 }
 function planCompletionSource(value) {
-  return value === PLAN_MODE_COMPLETE_TOOL_NAME || value === "legacy_proposed_plan" ? value : void 0;
+  return value === PLAN_MODE_COMPLETE_TOOL_NAME || value === "legacy_proposed_plan" || value === PLAN_EDIT_SOURCE ? value : void 0;
 }
 function fixedThinkingLevel(value) {
   return typeof value === "string" && value !== "inherit" && PLAN_MODE_THINKING_LEVELS.includes(value) ? value : void 0;
@@ -927,6 +1047,7 @@ function createPlanActionController(options) {
         signal: lifecycle.signal,
         isCurrent: lifecycle.isCurrent,
         show: () => options.show(ctx),
+        edit: () => options.edit(ctx, lifecycle.isCurrent),
         implementHere: () => options.implementHere(ctx),
         implementFresh: (signal) => freshAction(ctx, lifecycle, signal, effectiveDefaults(ctx)),
         exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, lifecycle.isCurrent),
@@ -949,6 +1070,7 @@ function createPlanActionController(options) {
         signal: lifecycle.signal,
         isCurrent,
         show: () => options.show(ctx),
+        edit: () => options.edit(ctx, isCurrent),
         implementHere: () => options.implementHere(ctx),
         implementFresh: (runtime, signal) => freshAction(ctx, lifecycle, signal, runtime),
         exportPlan: (path, signal) => options.exportPlan(ctx, path, signal, isCurrent),
@@ -975,6 +1097,7 @@ function createPlanActionController(options) {
         getExportDestination: () => options.getExportDestination(ctx),
         ...lifecycle,
         show: () => options.show(ctx),
+        edit: () => options.edit(ctx, lifecycle.isCurrent),
         finalize: () => options.finalize(ctx),
         implementHere: () => options.implementHere(ctx),
         implementFresh: (runtime, signal) => freshAction(ctx, lifecycle, signal, runtime),
@@ -1135,7 +1258,7 @@ function planMode(pi, dependencies = {}) {
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
     if (!interactiveUiPromise) {
-      interactiveUiPromise = import("./chunks/interactive-ui-OCQTYYJ3.ts").catch((error) => {
+      interactiveUiPromise = import("./chunks/interactive-ui-4KRKM4SR.ts").catch((error) => {
         interactiveUiPromise = void 0;
         throw error;
       });
@@ -1188,6 +1311,7 @@ function planMode(pi, dependencies = {}) {
     implementationOutcome,
     getExportDestination: (ctx) => planExports.getDestination(ctx),
     show: (ctx) => showStoredPlan(pi, ctx, state),
+    edit: editPlan,
     finalize: requestFinalPlan,
     implementHere: startImplementation,
     implementFresh: startFreshImplementation,
@@ -1932,7 +2056,43 @@ function planMode(pi, dependencies = {}) {
     return state.enabled && workflowMutex.isOwner(workflowOwner) && state.awaitingAction && state.latestPlan === intent.plan && state.latestPlanSource === intent.source;
   }
   function readyPresentationIsCurrent(intent) {
-    return completedPlanIsCurrent(intent) && readyPresentationIntent?.nonce === intent.nonce;
+    const current = readyPresentationIntent;
+    return current?.nonce === intent.nonce && completedPlanIsCurrent(current);
+  }
+  async function editPlan(ctx, isCurrent) {
+    const enabled = state.enabled;
+    const savedPlan = enabled ? void 0 : state.savedPlan;
+    const before = enabled ? state.latestPlan : savedPlan?.plan;
+    if (!before) return;
+    const edited = await ctx.ui.editor(enabled ? "Edit proposed plan" : "Edit saved plan", before);
+    const review = reviewEditedPlan(before, edited);
+    if (review.kind === "cancelled" || review.kind === "unchanged") return;
+    const unchangedWhileEditing = isCurrent() && state.enabled === enabled && (enabled ? state.latestPlan === before : state.savedPlan === savedPlan);
+    if (!unchangedWhileEditing) {
+      ctx.ui.notify("The plan changed while the editor was open. The edit was discarded.", "warning");
+      return;
+    }
+    if (review.kind === "rejected") {
+      ctx.ui.notify(`Edited plan rejected: ${review.error}. The plan is unchanged.`, "warning");
+      return;
+    }
+    try {
+      pi.sendMessage(createPlanEditMessage(before, review.plan), { triggerTurn: false });
+    } catch (error) {
+      const detail = safeTerminalText(error instanceof Error ? error.message : String(error));
+      ctx.ui.notify(`Unable to record the plan edit: ${detail}`, "error");
+      return;
+    }
+    if (enabled) {
+      const presentation = readyPresentationIntent && completedPlanIsCurrent(readyPresentationIntent) ? readyPresentationIntent : void 0;
+      state = { ...state, latestPlan: review.plan, latestPlanSource: PLAN_EDIT_SOURCE };
+      if (presentation) readyPresentationIntent = { ...presentation, plan: review.plan, source: PLAN_EDIT_SOURCE };
+    } else {
+      state = { ...state, savedPlan: { plan: review.plan, source: PLAN_EDIT_SOURCE } };
+    }
+    persistState();
+    updateUi(ctx);
+    ctx.ui.notify("Plan updated.", "info");
   }
   function togglePlanMode(ctx) {
     if (state.enabled) {
@@ -2073,7 +2233,7 @@ function planMode(pi, dependencies = {}) {
     planApprovals.record(ctx, plan);
     persistState();
     updateUi(ctx);
-    const handoff = usesConversationHistory ? wasEnabled ? formatHistoryImplementationPrompt() : formatTransferredPlanPrompt(plan, false) : formatImplementationHandoff(plan);
+    const handoff = usesConversationHistory ? wasEnabled && source !== PLAN_EDIT_SOURCE ? formatHistoryImplementationPrompt() : formatTransferredPlanPrompt(plan, false) : formatImplementationHandoff(plan);
     const sent = sendPlanModeUserMessage(handoff, ctx);
     if (!sent) {
       state = previousState;
