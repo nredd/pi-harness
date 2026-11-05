@@ -1292,7 +1292,7 @@ class Journal:
         step: dict[str, Any] = {"target": str(target), "backup": str(backup) if backup else None}
         if backup is not None:
             info = target.lstat()
-            step |= {"pending": True, "original": [info.st_dev, info.st_ino, info.st_ctime_ns]}
+            step |= {"pending": True, "original": list(entry_identity(info))}
         self.steps.append(step)
         self.persist()
         return backup
@@ -1511,6 +1511,25 @@ class RestoreAside:
         return result
 
 
+#: `stat.S_IFMT` values of the entry kinds a journaled target or backup may hold.
+ENTRY_FORMATS = {"file": stat.S_IFREG, "directory": stat.S_IFDIR, "symlink": stat.S_IFLNK}
+
+#: Device, inode, ctime and `stat.S_IFMT` file type of one original entry.
+type EntryIdentity = tuple[int, int, int, int]
+
+
+def entry_identity(info: os.stat_result) -> EntryIdentity:
+    """Fingerprint an entry so a same-tick replacement that reuses its inode is still a mismatch.
+
+    Parameters:
+        info (os.stat_result): `lstat` of the entry.
+
+    Returns:
+        EntryIdentity: device, inode, ctime and file type.
+    """
+    return info.st_dev, info.st_ino, info.st_ctime_ns, stat.S_IFMT(info.st_mode)
+
+
 @dataclass(frozen=True)
 class Step:
     """One validated journal step: a path the switch replaced and where its original is kept."""
@@ -1518,21 +1537,21 @@ class Step:
     target: Path
     backup: Path | None
     pending: bool = False
-    original: tuple[int, int, int] | None = None
+    original: EntryIdentity | None = None
     restored: bool = False
     restoring: RestoreIdentity | None = None
     replacement: RestoreIdentity | None = None
     replacement_known: bool = False
     aside: RestoreAside | None = None
 
-    def live_identity(self) -> tuple[int, int, int] | None:
-        """Return the live entry's device/inode/ctime, or absence, without following links.
+    def live_identity(self) -> EntryIdentity | None:
+        """Return the live entry's device/inode/ctime/file type, or absence, without following links.
 
         Returns:
-            tuple[int, int, int] | None: identity used to validate pending and completed steps.
+            EntryIdentity | None: identity used to validate pending and completed steps.
         """
         info = self.target.lstat() if self.target.exists(follow_symlinks=False) else None
-        return (info.st_dev, info.st_ino, info.st_ctime_ns) if info else None
+        return entry_identity(info) if info else None
 
     def record(self) -> dict[str, Any]:
         """Serialize validated progress for the next atomic journal rewrite.
@@ -1764,29 +1783,42 @@ def cleanup_manifest(value: object) -> dict[str, RestoreIdentity] | None:
     return result
 
 
-def pending_identity(raw: dict[str, Any], target: Path) -> tuple[bool, tuple[int, int, int] | None]:
-    """Validate a pending/saved original identity without widening its historical contract.
+def pending_identity(
+    raw: dict[str, Any], target: Path, kinds: frozenset[str]
+) -> tuple[bool, EntryIdentity | None]:
+    """Validate a pending/saved original identity, including the original's file type.
+
+    Older journals record only device/inode/ctime. Their file type defaults to the one kind the
+    target can hold; a target that can hold several kinds has no safe default and fails closed.
 
     Parameters:
         raw (dict[str, Any]): journal step.
         target (Path): validated target, for diagnostics.
+        kinds (frozenset[str]): entry kinds the target may hold.
 
     Returns:
-        tuple[bool, tuple[int, int, int] | None]: pending flag and original identity.
+        tuple[bool, EntryIdentity | None]: pending flag and original identity.
 
     Raises:
-        ValueError: pending/original metadata is malformed.
+        ValueError: pending/original metadata is malformed, or a legacy identity is ambiguous.
     """
     if "pending" not in raw:
         return False, None
     identity = raw["original"]
-    if not isinstance(raw["pending"], bool) or not isinstance(identity, list) or len(identity) != 3:
+    if not isinstance(raw["pending"], bool) or not isinstance(identity, list) or len(identity) not in {3, 4}:
         raise ValueError(f"step for '{target}' has invalid pending/original metadata")
     if any(type(value) is not int or value < 0 for value in identity):
-        raise ValueError(f"step for '{target}' has invalid original device/inode/ctime")
+        raise ValueError(f"step for '{target}' has invalid original device/inode/ctime/type")
     if raw["backup"] is None:
         raise ValueError(f"step for '{target}' has original metadata without a backup")
-    return raw["pending"], (identity[0], identity[1], identity[2])
+    formats = {ENTRY_FORMATS[kind] for kind in kinds}
+    if len(identity) == 3:
+        if len(formats) != 1:
+            raise ValueError(f"step for '{target}' has a legacy original identity without its file type")
+        identity = [*identity, *formats]
+    if identity[3] not in formats:
+        raise ValueError(f"step for '{target}' has an original file type it cannot hold")
+    return raw["pending"], (identity[0], identity[1], identity[2], identity[3])
 
 
 def validate_journal(layout: Layout, document: object) -> list[Step]:
@@ -1834,7 +1866,7 @@ def validate_journal(layout: Layout, document: object) -> list[Step]:
         if any(step.target == target for step in steps):
             raise ValueError(f"step target '{target}' is recorded twice")
         backup = backups / name
-        pending, original = pending_identity(raw, target)
+        pending, original = pending_identity(raw, target, kinds)
         restored = raw.get("restored", False)
         if type(restored) is not bool:
             raise ValueError(f"step for '{target}' has invalid restored metadata")
