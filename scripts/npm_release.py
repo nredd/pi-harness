@@ -792,20 +792,16 @@ def verify_signatures(identity: PublishedIdentity) -> None:
                 "--registry=https://registry.npmjs.org",
             )
         )
-        lock_path = project / "package-lock.json"
-        lock = pc.read_lockfile(lock_path)
         key = f"node_modules/{identity.target.name}"
-        installed = lock.packages.get(key)
-        if (
-            installed is None
-            or installed.version != identity.target.version
-            or installed.integrity != identity.integrity
-        ):
+        # The subject lock copies npm's raw entry verbatim; `LockEntry` ignores fields npm still reads.
+        try:
+            raw_lock = json.loads((project / "package-lock.json").read_text(encoding="utf-8"))
+            raw_entry = raw_lock["packages"][key]
+            installed = pc.LockEntry.model_validate(raw_entry)
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            raise ReleaseError(f"Signature audit lock lacks a valid '{key}' entry: {e}") from e
+        if installed.version != identity.target.version or installed.integrity != identity.integrity:
             raise ReleaseError("Signature audit installed bytes differ from the verified tarball")
-        raw_lock = json.loads(lock_path.read_text(encoding="utf-8"))
-        raw_entry = raw_lock.get("packages", {}).get(key) if isinstance(raw_lock, dict) else None
-        if not isinstance(raw_entry, dict):
-            raise ReleaseError("Signature audit lock lacks the selected package entry")
         subject = project / "subject"
         package = subject / key
         package.parent.mkdir(parents=True)

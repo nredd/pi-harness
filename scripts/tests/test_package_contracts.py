@@ -1610,6 +1610,17 @@ def test_faux_provider_replays_script_and_records_requests() -> None:
     assert provider.requests[1].roles == ("user", "assistant", "tool")
 
 
+def test_faux_provider_streams_a_scripted_error_step() -> None:
+    """An `ErrorStep` turn streams one provider error frame, then `[DONE]`."""
+    with fp.FauxProvider([fp.ErrorStep("quota exhausted")]) as provider:
+        body = post(provider.base_url, {"model": "m", "messages": [{"role": "user"}]})
+    frames = [line.removeprefix("data: ") for line in body.split("\n\n") if line]
+    assert frames[-1] == "[DONE]"
+    assert json.loads(frames[0]) == {
+        "error": {"message": "quota exhausted", "type": "insufficient_quota", "code": "insufficient_quota"}
+    }
+
+
 def test_faux_provider_rejects_empty_script_and_unknown_path() -> None:
     """An empty script is a caller bug; other paths 404."""
     with pytest.raises(ValueError, match="at least one step"):
@@ -2997,6 +3008,18 @@ def test_shared_runner_unknown_package_exits_before_packing(
 
     monkeypatch.setattr(nr, "run_stock_contract", boom)
     assert spc.main(["--package", "@nredd/nope", "--stock-prefix", str(tmp_path)]) == 1
+
+
+def test_shared_runner_script_exits_with_main_status(tmp_path: Path) -> None:
+    """Running the shared runner as a script exits with `main`'s status code."""
+    done = subprocess.run(
+        [sys.executable, spc.__file__, "--package", "@nredd/nope", "--stock-prefix", str(tmp_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 1
+    assert "no release descriptor for '@nredd/nope'" in done.stderr
 
 
 def test_audit_files_computer_use_exact_payload() -> None:

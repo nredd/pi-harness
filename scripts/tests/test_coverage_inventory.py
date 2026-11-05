@@ -6,7 +6,10 @@ References:
 
 from __future__ import annotations
 
+import json
+import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -17,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from coverage_fixtures import (
     FIXTURES,
     JS_SUFFIXES,
+    SCRIPT,
     commit_base,
     policy,
     scope_fixture,
@@ -33,7 +37,9 @@ from coverage_accounting import (
     account,
     audit_inventory,
     check_inventory_ratchet,
+    git_read,
     inventory,
+    inventory_scopes,
     repository_files,
 )
 
@@ -596,3 +602,137 @@ def test_classified_report_helpers_do_not_pollute_production_counters(tmp_path: 
     assert not errors
     assert len(results) == 1
     assert results[0]["lines"] == 2
+
+
+@pytest.mark.parametrize(
+    ("package", "signal", "message"),
+    [
+        ({}, {"files": []}, "Duplicate signal files"),
+        ({}, {"files": ["src/index.ts", "src/index.ts"]}, "Duplicate signal files"),
+        (
+            {"status": "pending", "note": " ", "signals": {}},
+            {},
+            "Pending package requires a note and no invented measurements",
+        ),
+        (
+            {"status": "pending", "note": "Later."},
+            {},
+            "Pending package requires a note and no invented measurements",
+        ),
+    ],
+)
+def test_policy_rejects_invalid_signal_files_and_pending_status(
+    package: dict[str, object], signal: dict[str, object], message: str
+) -> None:
+    """Reject empty or duplicated expected files and pending packages without a note or with measurements.
+
+    Parameters:
+        package (dict[str, object]): Package fields to override.
+        signal (dict[str, object]): Primary signal fields to override.
+        message (str): Exact validator refusal.
+    Returns:
+        None: Policy validation raises the named refusal.
+    Raises:
+        AssertionError: An invalid declaration validates.
+    """
+    data = policy().model_dump()
+    data["packages"]["example"] |= package
+    if signal:
+        data["packages"]["example"]["signals"]["primary"] |= signal
+    with pytest.raises(ValidationError, match=re.escape(message)):
+        Policy.model_validate(data)
+
+
+def test_measured_package_requires_a_primary_signal() -> None:
+    """Reject a measured package whose only signal is not the primary one.
+
+    Parameters:
+        None.
+    Returns:
+        None: Policy validation raises the named refusal.
+    Raises:
+        AssertionError: A measured package validates without primary enforcement.
+    """
+    data = policy().model_dump()
+    signals = data["packages"]["example"]["signals"]
+    signals["runtime"] = signals.pop("primary")
+    with pytest.raises(ValidationError, match="Measured package requires a primary signal"):
+        Policy.model_validate(data)
+
+
+def test_unowned_declaration_exclusion_is_rejected(tmp_path: Path) -> None:
+    """Reject a type-only exclusion naming a file the inventory does not own.
+
+    Parameters:
+        tmp_path (Path): Disposable source root.
+    Returns:
+        None: Inventory expansion raises the named refusal.
+    Raises:
+        AssertionError: A stale declaration exclusion is accepted.
+    """
+    setup_report(tmp_path)
+    data = policy().model_dump()
+    data["packages"]["example"]["exclusions"] = [
+        {"path": "src/types.ts", "kind": "type-only", "reason": "Types only."},
+    ]
+    with pytest.raises(ValueError, match=re.escape("Exclusion is not in owned inventory: 'src/types.ts'")):
+        inventory(tmp_path, Policy.model_validate(data).packages["example"])
+
+
+def test_signal_files_outside_owned_inventory_are_rejected(tmp_path: Path) -> None:
+    """Reject primary and compatibility signals that name files outside ownership.
+
+    Parameters:
+        tmp_path (Path): Disposable source and report root.
+    Returns:
+        None: Accounting and scope expansion both raise their named refusals.
+    Raises:
+        AssertionError: A signal measures source the package does not own.
+    """
+    setup_report(tmp_path)
+    (tmp_path / "packages/example/lib.js").write_text("export const lib = 1;\n")
+    cfg = policy()
+    primary = cfg.packages["example"].signals["primary"]
+    primary.files = ["lib.js"]
+    assert account(tmp_path, cfg)[1] == ["example/primary: Signal files are outside owned inventory"]
+    primary.files = ["src/index.ts"]
+    runtime = primary.model_copy(deep=True)
+    runtime.files = ["lib.js"]
+    cfg.packages["example"].signals["runtime"] = runtime
+    with pytest.raises(ValueError, match=re.escape("Signal is outside owned inventory: 'example/runtime'")):
+        inventory_scopes(tmp_path, cfg)
+
+
+@pytest.mark.parametrize(
+    ("path", "message"),
+    [
+        ("packages/extra/package.json", "Workspaces missing from policy: '['packages/extra']'"),
+        ("packages/example/lib.ts", "Executable source missing from policy: '['packages/example/lib.ts']'"),
+    ],
+)
+def test_cli_rejects_unowned_workspaces_and_source(tmp_path: Path, path: str, message: str) -> None:
+    """Fail the CLI when a workspace or executable file is absent from the reviewed policy.
+
+    Parameters:
+        tmp_path (Path): Disposable Git working tree.
+        path (str): Unreviewed file to add.
+        message (str): Exact summary error.
+    Returns:
+        None: The CLI exits 1 and records the refusal in its summary.
+    Raises:
+        AssertionError: Unreviewed workspaces or source pass the inventory audit.
+    """
+    setup_report(tmp_path)
+    (tmp_path / "coverage").mkdir()
+    (tmp_path / "coverage/policy.json").write_text(policy().model_dump_json())
+    (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / path).write_text("{}\n")
+    git_read(tmp_path, ["init", "-q", "--template="])
+    summary = tmp_path / "summary.json"
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--root", str(tmp_path), "--measure", "--summary", str(summary)],
+        check=False,
+        capture_output=True,
+    )
+    assert result.returncode == 1
+    assert json.loads(summary.read_text())["errors"] == [message]
