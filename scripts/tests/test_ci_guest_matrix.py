@@ -2381,8 +2381,6 @@ def test_docs_list_every_benchmark_input() -> None:
 SETUP_CI_TOOLS = "./.github/actions/setup-ci-tools"
 # A command that starts a shell line, never one inside a comment or an echoed string.
 NPM_INSTALL_COMMAND = re.compile(r"^\s*(?:npm ci|make install-owned)\b", re.MULTILINE)
-# Jobs that install the root lockfile inside a helper `runs_npm_install` cannot see.
-HIDDEN_NPM_INSTALL_JOBS = {("publish.yml", "verify")}
 
 
 def runs_npm_install(step: dict[str, Any]) -> bool:
@@ -2442,22 +2440,60 @@ def test_every_npm_ci_job_restores_the_npm_cache_and_no_other_job_saves_one() ->
     assert {*OWNED_SHARD_JOBS.values(), "contracts", "stack"} <= installing
 
 
+def installed_lockfiles(job: dict[str, Any]) -> set[str]:
+    """Return the lockfile each `npm ci` step of a job installs, from its working directory.
+
+    Parameters:
+        job (dict[str, Any]): One workflow job.
+
+    Returns:
+        set[str]: repo-relative `package-lock.json` paths.
+    """
+    default = job.get("defaults", {}).get("run", {}).get("working-directory", ".")
+    return {
+        os.path.normpath(f"{step.get('working-directory', default)}/package-lock.json")
+        for step in job.get("steps", [])
+        if runs_npm_install(step)
+    }
+
+
 @pytest.mark.parametrize(
     "workflow", sorted((ROOT / ".github/workflows").glob("*.yml")), ids=lambda path: path.name
 )
-def test_setup_node_without_npm_ci_never_saves_an_npm_cache(workflow: Path) -> None:
-    """A setup-node step in a job that runs no `npm ci` saves no npm cache, implicit or explicit.
+def test_setup_node_caches_only_the_lockfile_its_job_installs(workflow: Path) -> None:
+    """A setup-node npm cache is keyed on a lockfile its own job's `npm ci` installs, or is off.
 
-    `publish.yml`'s `verify` installs inside `npm_release.py verify` (`HIDDEN_NPM_INSTALL_JOBS`).
+    A job with no `npm ci` would save an empty cache (`installer.yml`), and one keyed on another lockfile
+    would save its dependencies under a key a root install restores (`forks.yml`) (#531).
 
     Parameters:
         workflow (Path): One workflow file.
     """
     for name, job in yaml.safe_load(workflow.read_text())["jobs"].items():
-        steps = job.get("steps", [])
-        if (workflow.name, name) in HIDDEN_NPM_INSTALL_JOBS or any(runs_npm_install(step) for step in steps):
-            continue
-        for step in steps:
-            if "actions/setup-node@" in step.get("uses", ""):
-                assert "cache" not in step.get("with", {}), f"{workflow.name}:{name}"
-                assert step.get("with", {}).get("package-manager-cache") is False, f"{workflow.name}:{name}"
+        for step in job.get("steps", []):
+            if "actions/setup-node@" not in step.get("uses", ""):
+                continue
+            options = step.get("with", {})
+            if "cache" not in options and options.get("package-manager-cache") is False:
+                continue
+            lockfile = os.path.normpath(options.get("cache-dependency-path", "package-lock.json"))
+            assert lockfile in installed_lockfiles(job), f"{workflow.name}:{name}"
+
+
+def test_release_verify_restores_the_ci_npm_cache_without_saving() -> None:
+    """`publish.yml` `verify` restores the `setup-ci-tools` npm cache before its root `npm ci`, read-only."""
+    action = yaml.safe_load((ROOT / ".github/actions/setup-ci-tools/action.yml").read_text())
+    ci_cache = next(
+        step for step in action["runs"]["steps"] if step.get("uses", "").startswith("actions/cache@")
+    )
+    steps = yaml.safe_load((ROOT / ".github/workflows/publish.yml").read_text())["jobs"]["verify"]["steps"]
+    assert not any(step.get("uses", "").startswith("actions/cache@") for step in steps)
+    pin = next(i for i, step in enumerate(steps) if step.get("name") == "Pin npm to packageManager")
+    locate = next(i for i, step in enumerate(steps) if step.get("id") == "npm-cache")
+    restore = next(
+        i for i, step in enumerate(steps) if step.get("uses", "").startswith("actions/cache/restore@")
+    )
+    install = next(i for i, step in enumerate(steps) if "npm_release.py verify" in step.get("run", ""))
+    assert pin < locate < restore < install
+    assert steps[restore]["uses"].split("@")[1] == ci_cache["uses"].split("@")[1]
+    assert steps[restore]["with"] == ci_cache["with"]
