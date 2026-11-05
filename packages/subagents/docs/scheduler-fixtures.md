@@ -37,5 +37,23 @@ node ../../scripts/run-vitest.ts node test/config-model-fallback-spawn.test.ts t
 node ../../scripts/run-vitest.ts bun test/config-model-fallback-spawn.test.ts test/injected-clock.test.ts test/schedule.test.ts --coverage.enabled=false --maxWorkers=1
 ```
 
+The eviction/reopen cases in `test/config-model-fallback-provenance.test.ts`
+also inject `FakeClock` through the real extension. A held runner establishes
+completion readiness before either ordering is exercised: result read before
+notice delivery, or notice delivery before result read. A fixture event bus
+answers admission synchronously so clock advancement controls completion delivery
+and GC, not a missing router's timeout. As in `evicted-agent-wiring.test.ts`
+(#481), consume through `get_subagent_result` to stamp `consumedAt` and cancel the
+held notice, then advance the existing TTL and sweep. Never hand-set consumption
+or backdate `completedAt`: a delivered notice correctly starts retention from
+`consumedAt` (#569). `afterEach` shuts down the extension even on assertion failure.
+
+Run the related extension fixtures with one worker:
+
+```sh
+node ../../scripts/run-vitest.ts node test/config-model-fallback-provenance.test.ts test/evicted-agent-wiring.test.ts --coverage.enabled=false --maxWorkers=1
+node ../../scripts/run-vitest.ts bun test/config-model-fallback-provenance.test.ts test/evicted-agent-wiring.test.ts --coverage.enabled=false --maxWorkers=1
+```
+
 The package gate is `npm run check --workspace @nredd/pi-subagents` from the
 repository root. Focused tests are not a substitute for that gate or root CI.
