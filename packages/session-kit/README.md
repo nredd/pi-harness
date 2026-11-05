@@ -262,7 +262,9 @@ pid; production commands and leader/descendant probes are not modified.
 Shell fixtures that outlive their test (`trap "" TERM` descendants, `sh -c` leaders with a background
 descendant in `manager.test.ts`, `pidfiles.test.ts`, `diff/git.test.ts`) loop on `STAY_SH`, which
 probes the worker's pid with `ps` and exits once it is gone, so an aborted gate leaves nothing
-behind. Other shell waits (the diff shim's readiness loop) also stop on `WORKER_ALIVE_SH`, so a timed
+behind. A probe that exits 143 (procps `ps` catches a group SIGTERM despite `trap "" TERM`) counts as
+alive, so a kill-path test cannot see its TERM-resistant descendant exit early. The diff kill-path
+shims print a readiness marker after their trap and fork, and only then admit fake timeout clocks. Other shell waits (the diff shim's readiness loop) also stop on `WORKER_ALIVE_SH`, so a timed
 out test whose temp dir is gone cannot spin forever. Fixtures one level down (the `sweep-child.ts`
 cleaner, the `stay.test.ts` owners) `STAY` on their own parent via `stayFor`. `stay.test.ts` covers
 both guards.

@@ -30,8 +30,13 @@ export const aliveSh = (ownerPid: number): string => `/bin/ps -p ${ownerPid} >/d
 /**
  * Shell loop for `sh -c` fixtures: runs until `ownerPid` is gone, probed with `ps` (never a signal), so a
  * `SIGKILL`ed worker cannot leave a `trap "" TERM` descendant running forever. Test fixtures only.
+ *
+ * procps `ps` installs its own SIGTERM handler, overriding an inherited `trap "" TERM`, and exits 143 when a
+ * group SIGTERM lands mid-probe. That status means "probe interrupted", not "owner gone", so the loop keeps
+ * going on 0 or 143 and stops on anything else (1: no such pid).
  */
-export const stayWhileAlive = (ownerPid: number): string => `while ${aliveSh(ownerPid)}; do sleep 1; done`;
+export const stayWhileAlive = (ownerPid: number): string =>
+	`while :; do ${aliveSh(ownerPid)}; case $? in 0|143) sleep 1 ;; *) break ;; esac; done`;
 
 /** `stayWhileAlive` bound to this worker. */
 export const STAY_SH = stayWhileAlive(process.pid);
