@@ -118,6 +118,15 @@ test("template with substitutions, sibling templates and computed paths are reje
 	assert.match(found.diagnostics[5] ?? "", /^pkg\/a\.ts:6:10: `import\(\)` type specifier /);
 });
 
+test("a long computed specifier is shown truncated to its first 80 characters", () => {
+	const computed = `"./" + ${"segment + ".repeat(10)}name`;
+	const found = one(`const a = import(${computed});`);
+	assert.deepEqual(found.specifiers, []);
+	assert.deepEqual(found.diagnostics, [
+		`pkg/a.ts:1:11: dynamic \`import()\` specifier is not a string literal: \`${computed.slice(0, 80)}...\``,
+	]);
+});
+
 test("parenthesized literal specifiers are unwrapped and classified", () => {
 	const found = one(['const a = import(("a"));', 'const b = require((("b")));', "const c = import((`c`));"].join("\n"));
 	assert.deepEqual(found.specifiers, ["a", "b", "c"]);

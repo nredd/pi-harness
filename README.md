@@ -91,7 +91,8 @@ so check `powerd` sleep/wake logs when real-time assertions overrun. Do not rela
   `@nredd/pi-subscription-router@0.4.0`, `@nredd/pi-preset@0.2.0`; `@nredd/pi-todo@2.13.10` is pending its first CI-attested release)
 - `check-scripts`: ruff, ty, pytest for `scripts/` (real disposable git repositories), then `check-import-audit`
 - `check-import-audit`: Biome, strict `tsc` and Vitest (V8 coverage, `scripts/vitest.config.ts`) for `scripts/import_audit.ts`, the package-contract
-  import parser (installed TypeScript 7 `unstable/sync` API; real parses, the only mock forces a project lookup miss), enforced at 0/0
+  import parser (installed TypeScript 7 `unstable/sync` API; real parses, the only mock forces a project lookup miss), plus the
+  root `scripts/run-vitest.ts` launcher, `scripts/check-biome-paths.mjs` preflight and `scripts/router_contract.mjs` fixture, all enforced at 0/0
 - `check-integration`: ruff, ty, unit tests for `integration/` (needs `tmux`: the live-session drivers run against a stub pi on private servers), then `check-probes` and `check-providers`
 - `check-probes`: Biome and strict `tsc` for every `integration/probes` source and test (real `dev-tools` and
   `session-kit` runner sources; Biome only for `anthropic-block-types.mjs`), then Vitest with V8 coverage over

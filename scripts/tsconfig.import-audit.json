@@ -10,5 +10,5 @@
     "allowImportingTsExtensions": true,
     "types": ["node"]
   },
-  "files": ["import_audit.ts", "import_audit.test.ts", "run-vitest.ts", "vitest.config.ts"]
+  "files": ["import_audit.ts", "import_audit.test.ts", "run-vitest.ts", "run-vitest.test.ts", "vitest.config.ts"]
 }

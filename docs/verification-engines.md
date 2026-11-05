@@ -19,7 +19,7 @@ The separate approved D7 toolchain upgrade selects Bun 1.4.4; evidence and remai
 | `todo` | Full Vitest + guard | Full Vitest + guard |
 | `subagents` | Full Vitest + guard | Native-scenario subset + guarded real-loader gate; full suite pending [#320](https://github.com/nredd/pi-harness/issues/320) |
 | `computer-use` | Full Vitest + guard, one file at a time, including the platform/opt-in-gated native and live suites (#347); `check-linux-live.mjs` only starts the D-Bus session its Vitest scenario runs in | Not run |
-| `integration/probes`, `scripts/import_audit.test.ts`, `scripts/check-biome-paths.test.mjs` | Vitest + guard, V8 coverage (#347) | Not run (import audit remains Node-only) |
+| `integration/probes`, `scripts/import_audit.test.ts`, `scripts/check-biome-paths.test.mjs`, `scripts/run-vitest.test.ts`, `scripts/router_contract.test.mjs` | Vitest + guard, V8 coverage (#347) | Not run (import audit remains Node-only) |
 
 Owned Vitest configs cap workers at two (sampler and computer-use: one), including direct Node/Bun
 Vitest runs. These are per-gate defaults, not a host-wide concurrency limit.

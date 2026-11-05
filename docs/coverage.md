@@ -2,7 +2,8 @@
 
 Owner scope: the 100% line/function goal covers `subagents`, `plan-mode`, `todo`,
 `session-kit`, `resource-sampler`, `subscription-router`, `preset` and `dev-tools`, plus the
-`runtime-build-tooling`, `workflow-examples`, `import-audit` (`scripts/import_audit.ts`, 0/0 since #321),
+`runtime-build-tooling`, `workflow-examples`, `import-audit` (`scripts/import_audit.ts`, 0/0 since #321, plus the root
+`run-vitest.ts`, `check-biome-paths.mjs` and `router_contract.mjs` helpers since #379),
 `probes` (every executable `integration/probes` source, 0/0 since #377) and
 `inprocess` (every in-process stack fixture module, 0/0 on both engines since #376) signals,
 and `python-benchmarks` (`benchmarks/comparison`, darwin only, 0/0 since #387).
@@ -127,7 +128,20 @@ runs the measured source itself, so Node's compile cache no longer reaches it: t
 `NODE_DISABLE_COMPILE_CACHE=1` that c8 needed (#321) is gone, and the measured counters are unchanged with
 `NODE_COMPILE_CACHE` exported. Vitest coverage does not follow child processes, which c8 did, so the
 import-audit CLI runs in process through `main()` as well as through the real subprocess; the
-one-line `import.meta.main` dispatch is asserted only by the subprocess tests.
+one-line `import.meta.main` dispatch is asserted only by the subprocess tests. Since #379 the same
+signal owns the other three root Node scripts, formerly `verification_helpers` rows, measured the
+same way. `run-vitest.ts` exports `main(argv, env)`; `run-vitest.test.ts` fakes only `spawnSync` and
+asserts engine selection, the appended Bun coverage arguments and the exact opt-out, real home
+creation and removal, toolchain homes, the step summary, and rejection of a bad engine. Its
+`import.meta.main` dispatch stays with the subprocess tests in `launcher.test.ts` and
+`test_coverage_producers.py`. `check-biome-paths.mjs` stays a top-level CLI that its test re-imports
+per case with its own argv, like `anthropic-block-types.mjs`, against real Biome, faking `spawnSync`
+only for a spawn error and a signal-killed child. `router_contract.mjs` exports the per-scenario
+synthetic utilization so every scenario runs in process; its two placeholder imports are virtual
+mocks. Vite's module runner pins `import.meta.main` false, so `run-vitest.ts`' dispatch is a fourth
+uncovered branch beside `import_audit.ts`' three; a new test of `import_audit.ts`' 80-character
+snippet truncation covers the branch that kept the budget at 4. The signal is 0 uncovered lines (115)
+and functions (16), 4 of 102 branches, on darwin.
 `import-audit` and `probes` are in the goal and enforced at 0/0. Since #377 `probes` measures every
 executable probe in process under `check-probes`: `transcript-types.ts`, `render.ts` (its
 `/harness-probe` command against a recording TUI), the `pi -e` extensions `latency.ts`,
@@ -271,14 +285,14 @@ each file. Blanket globs, missing files, duplicate entries and overlap with owne
 source fail. Classification also applies to imported LCOV records. A verification label does
 not waive the base-tree ratchet: moving previously owned production into this classification
 still requires a reasoned `reclassifications` entry. Root-level `.test.mjs` files such as
-`scripts/check-biome-paths.test.mjs` need their own verification-helper entry; classifying the
+`scripts/check-biome-paths.test.mjs` and `scripts/router_contract.test.mjs` need their own verification-helper entry; classifying the
 implementation helper does not implicitly classify its regression test.
 
 Shipped runtime code is NEVER a verification helper. In particular, computer-use's published
 `setup-helper.mjs`, `build-native.mjs` and `src/platform/macos/helper-path.mjs` remain owned,
 measurement-pending production source because computer-use has no standard coverage runner.
 Its non-shipped `check-*.mjs` assertion scripts and `pi-cubench-agent.mjs` benchmark harness have
-individual verification reasons, as does `scripts/router_contract.mjs`. Runtime builder scripts
+individual verification reasons. Runtime builder scripts
 and runnable workflow examples are explicitly pending source, not verification exemptions.
 The generated stats CLI bundle has a reasoned generated-artifact exclusion; its original
 `src/stats/cli.ts` remains owned and measured.
