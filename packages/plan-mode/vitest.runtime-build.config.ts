@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { defineConfig } from "vitest/config";
 
+// `runtime-build-tooling`: plan-mode's `scripts/*.mjs` runtime builders that `test:dist` measures, not `src/`.
 const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] } = JSON.parse(
   readFileSync(new URL("../../coverage/policy.json", import.meta.url), "utf8"),
 ).packages["runtime-build-tooling"];
