@@ -110,7 +110,7 @@ Self-hosted `pi-macos` jobs are excluded.
 
 | Case | Alone | Hosted green (n=67) | Hosted max (job) | Budget |
 | --- | --- | --- | --- | --- |
-| `macos native pure ref store and input helpers` | 2.1 s (Apple M4) | p50 6472 ms, p95 8995 ms, p99 9768 ms | 21644 ms, timed out (126769877232) | 45 s |
+| `macOS native pure ref store and input helpers` | 2.1 s (Apple M4) | p50 6472 ms, p95 8995 ms, p99 9844 ms, green max 9844 ms | 21644 ms, timed out (126769877232) | 45 s |
 
 Same margin rule as the cold loads above: twice the worst hosted figure. Green
 p99 times the observed ~3.5x runner slowdown is ~34 s, inside it. The compile
