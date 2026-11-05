@@ -280,7 +280,8 @@ export function registerPyTools(pi: ExtensionAPI, options: PyToolOptions = {}): 
 			if (r.exitCode !== 0 && r.exitCode !== 1)
 				return failed(`ruff format: tool error (exit ${r.exitCode})\n${tailLines(r.stderr.trim(), 30)}`);
 			if (mode === "apply") {
-				const m = /^(\d+) files? reformatted/m.exec(`${r.stdout}\n${r.stderr}`);
+				// ruff prints the reformatted count only when it is nonzero, else `N files left unchanged`.
+				const m = /^([1-9]\d*) files? reformatted/m.exec(`${r.stdout}\n${r.stderr}`);
 				if (!m) {
 					if (/left unchanged/.test(`${r.stdout}\n${r.stderr}`))
 						return toolResult({
@@ -294,7 +295,7 @@ export function registerPyTools(pi: ExtensionAPI, options: PyToolOptions = {}): 
 				const reformatted = Number(m[1]);
 				return toolResult({
 					text: `ruff format: ${reformatted} file${reformatted === 1 ? "" : "s"} reformatted`,
-					structured: { state: reformatted === 0 ? "clean" : "reformatted", files: [], reformatted },
+					structured: { state: "reformatted", files: [], reformatted },
 				});
 			}
 			const files = formatDiffFiles(r.stdout);
@@ -389,7 +390,9 @@ export function registerPyTools(pi: ExtensionAPI, options: PyToolOptions = {}): 
 				4: "usage-error",
 				5: "no-tests",
 			};
-			const state = states[r.exitCode ?? -1];
+			// `abnormalExit` already returned for a null exit code.
+			const exit = r.exitCode as number;
+			const state = states[exit];
 			if (!state)
 				return failed(`pytest: unexpected exit ${r.exitCode}\n${tailLines(`${r.stdout}\n${r.stderr}`.trim(), 30)}`);
 			const stoppedEarly = (parsed.counts.failed ?? 0) >= maxfail || /stopping after \d+ failures/.test(r.stdout);
@@ -401,7 +404,7 @@ export function registerPyTools(pi: ExtensionAPI, options: PyToolOptions = {}): 
 				if (cov) lines.push(cov[0]);
 			} else if (state === "failed") {
 				for (const f of parsed.failures) lines.push(`  ${f.nodeid}: ${f.message}`);
-				const detail = r.stdout.split(/^=+ short test summary info =+$/m)[0] ?? r.stdout;
+				const detail = r.stdout.split(/^=+ short test summary info =+$/m)[0] as string;
 				const tail = await bound(`${detail.trimEnd()}\n${r.stderr.trim()}`.trimEnd(), {
 					keep: "tail",
 					label: "py-test",
@@ -420,7 +423,7 @@ export function registerPyTools(pi: ExtensionAPI, options: PyToolOptions = {}): 
 				text: lines.join("\n"),
 				structured: {
 					state,
-					exit: r.exitCode ?? -1,
+					exit,
 					counts: parsed.counts,
 					failures: parsed.failures,
 					summary: parsed.summary,

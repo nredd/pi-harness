@@ -36,12 +36,12 @@ export function parseRuffConcise(text: string): ParsedDiagnostics {
 		const m = RUFF_LINE.exec(line);
 		if (m) {
 			out.diagnostics.push({
-				file: m[1] ?? "",
+				file: m[1] as string,
 				line: Number(m[2]),
 				col: Number(m[3]),
-				code: m[4] ?? "",
+				code: m[4] as string,
 				fixable: m[5] !== undefined,
-				message: m[6] ?? "",
+				message: m[6] as string,
 			});
 		} else if (RUFF_TRAILER.test(line)) out.trailer.push(line);
 		else out.unparsed.push(line);
@@ -61,12 +61,12 @@ export function parseTyConcise(text: string): ParsedDiagnostics {
 		const m = TY_LINE.exec(line);
 		if (m) {
 			out.diagnostics.push({
-				file: m[1] ?? "",
+				file: m[1] as string,
 				line: Number(m[2]),
 				col: Number(m[3]),
 				severity: m[4] as "error" | "warning",
-				code: m[5] ?? "",
-				message: m[6] ?? "",
+				code: m[5] as string,
+				message: m[6] as string,
 			});
 		} else if (TY_TRAILER.test(line)) out.trailer.push(line);
 		else out.unparsed.push(line);
@@ -97,17 +97,14 @@ export function parsePytest(text: string): PytestSummary {
 	const shortStart = lines.findIndex((l) => /short test summary info/.test(l));
 	for (const raw of shortStart >= 0 ? lines.slice(shortStart + 1) : []) {
 		const m = PYTEST_SHORT.exec(raw.trimEnd());
-		if (m) out.failures.push({ nodeid: m[2] ?? "", message: m[3] ?? m[1] ?? "" });
+		if (m) out.failures.push({ nodeid: m[2] as string, message: m[3] ?? (m[1] as string) });
 	}
-	for (let i = lines.length - 1; i >= 0; i--) {
-		const line = lines[i]?.trim() ?? "";
+	for (const raw of [...lines].reverse()) {
+		const line = raw.trim();
 		const m = PYTEST_SUMMARY.exec(line);
 		if (!m) continue;
 		out.summary = line.replace(/^=+ | =+$/g, "");
-		for (const part of (m[1] ?? "").split(", ")) {
-			const [n, label] = part.trim().split(" ");
-			if (n && label) out.counts[label] = Number(n);
-		}
+		for (const [, n, label] of (m[1] as string).matchAll(/(\d+) ([a-z]+)/g)) out.counts[label as string] = Number(n);
 		break;
 	}
 	return out;
@@ -115,7 +112,7 @@ export function parsePytest(text: string): PytestSummary {
 
 /** `ruff format --diff`: the files that would change, from `---`/`+++` header pairs. */
 export function formatDiffFiles(diff: string): string[] {
-	return [...diff.matchAll(/^--- (.+)\n\+\+\+ /gm)].map((m) => m[1] ?? "").filter((f) => f !== "");
+	return [...diff.matchAll(/^--- (.+)\n\+\+\+ /gm)].map((m) => m[1] as string);
 }
 
 /** `path:line:col CODE message` lines, capped. */

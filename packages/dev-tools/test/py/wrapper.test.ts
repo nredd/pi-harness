@@ -1,4 +1,5 @@
-import { existsSync, realpathSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withLock } from "../../src/core/index.ts";
@@ -17,6 +18,16 @@ function setup() {
 	registerPyTools(mock.pi, { uvBin: fixture.bin });
 	return { ...fixture, ...mock };
 }
+const fixture = (name: string) => readFileSync(join(import.meta.dirname, "..", "fixtures", "py", name), "utf8");
+/** `/bin/sh` body that appends its argv, one argument per line and a blank line after each call. */
+const RECORD_ARGV = `for a in "$@"; do printf '%s\\n' "$a"; done >> argv.log; echo >> argv.log`;
+const argvLog = (root: string): string[][] =>
+	readFileSync(join(root, "argv.log"), "utf8")
+		.trimEnd()
+		.split("\n\n")
+		.map((call) => call.split("\n"));
+const TOOLS = ["py_lint", "py_format", "py_typecheck", "py_test", "py_uv"] as const;
+const minimal = (name: string) => (name === "py_uv" ? { action: "sync" } : {});
 
 describe("uv executable boundary", () => {
 	it("reports unknown output, tool errors, and mixed parsed/unparsed findings", async () => {
@@ -113,6 +124,118 @@ describe("uv executable boundary", () => {
 			expect(await pending).toMatchObject({ isError: true });
 		});
 		expect(JSON.stringify(updates)).toContain("waiting for another uv run");
+		expect(existsSync(join(f.root, "started"))).toBe(false);
+	});
+
+	it("names a missing project from either cwd without starting uv", async () => {
+		const f = setup();
+		f.script("touch started", "/bin/sh");
+		// `tmpdir()` has no pyproject.toml at or above it, so both the explicit and the session cwd miss.
+		const message = `no pyproject.toml found at or above ${tmpdir()} (within the repository)`;
+		for (const name of TOOLS) {
+			expect(f.text(await f.call(name, { ...minimal(name), cwd: tmpdir() }, f.root)), name).toBe(message);
+			expect(f.text(await f.call(name, minimal(name), tmpdir())), name).toBe(message);
+		}
+		expect(existsSync(join(f.root, "started"))).toBe(false);
+	});
+
+	it("stops the project walk at a repository boundary", () => {
+		const repo = mkdtempSync(join(tmpdir(), "dev-tools-git-boundary-"));
+		try {
+			mkdirSync(join(repo, ".git"));
+			mkdirSync(join(repo, "pkg", "src"), { recursive: true });
+			expect(findProjectRoot(join(repo, "pkg", "src"))).toBeUndefined();
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
+	it("maps paths and every optional flag to uv's argv", async () => {
+		const f = setup();
+		f.script(`${RECORD_ARGV}; echo 'All checks passed!'`, "/bin/sh");
+		const lint = await f.call("py_lint", { paths: ["a.py"], fix: true }, f.root);
+		// ruff prints no `(N fixed, M remaining)` trailer when there was nothing to fix.
+		expect(lint.structuredContent).toEqual({ state: "clean", count: 0, diagnostics: [], unparsed: [] });
+		await f.call("py_format", { paths: ["a.py"] }, f.root);
+		await f.call("py_typecheck", { paths: ["a.py"] }, f.root);
+		await f.call("py_test", { last_failed: true, markers: "slow", coverage: true }, f.root);
+		await f.call("py_uv", { action: "sync", all_extras: false, all_groups: false }, f.root);
+		await f.call("py_uv", { action: "add", packages: ["fixture"] }, f.root);
+		expect(argvLog(f.root)).toEqual([
+			[
+				"run",
+				"--frozen",
+				"ruff",
+				"check",
+				"--output-format",
+				"concise",
+				"--no-cache",
+				"--fix",
+				"--ignore-noqa",
+				"--",
+				"a.py",
+			],
+			["run", "--frozen", "ruff", "format", "--no-cache", "--diff", "--", "a.py"],
+			["run", "--frozen", "ty", "check", "--output-format", "concise", "--", "a.py"],
+			[
+				"run",
+				"--frozen",
+				"pytest",
+				"--verbosity=-1",
+				"--tb=short",
+				"--lf",
+				"--maxfail=5",
+				"-m=slow",
+				"--cov=src",
+				"--cov-report=term-missing",
+			],
+			["sync"],
+			["add", "--", "fixture"],
+		]);
+	});
+
+	it("shows stdout for a tool error that wrote nothing to stderr", async () => {
+		const f = setup();
+		f.script("echo \"error: unexpected argument '--bogus' found\"; exit 2", "/bin/sh");
+		const result = await f.call("py_typecheck", {}, f.root);
+		expect(f.text(result)).toBe("ty check: tool error (exit 2)\nerror: unexpected argument '--bogus' found");
+	});
+
+	it("reads ruff format's single-file summaries", async () => {
+		const f = setup();
+		f.script("echo '1 file reformatted, 2 files left unchanged' >&2", "/bin/sh");
+		const applied = await f.call("py_format", { mode: "apply" }, f.root);
+		expect(f.text(applied)).toBe("ruff format: 1 file reformatted");
+		expect(applied.structuredContent).toEqual({ state: "reformatted", files: [], reformatted: 1 });
+		f.script(
+			`process.stdout.write(${JSON.stringify(fixture("ruff-format-diff-one.txt"))}); console.error("1 file would be reformatted, 2 files already formatted"); process.exit(1);`,
+		);
+		const check = await f.call("py_format", {}, f.root);
+		expect(f.text(check)).toBe("ruff format: 1 file would be reformatted\n  src/pt/good.py");
+		expect(check.structuredContent).toEqual({ state: "would-reformat", files: ["src/pt/good.py"] });
+	});
+
+	it("keeps pytest-cov's TOTAL line on a passing run", async () => {
+		const f = setup();
+		f.script(`process.stdout.write(${JSON.stringify(fixture("pytest-cov-passed.txt"))});`);
+		const result = await f.call("py_test", { coverage: true }, f.root);
+		expect(f.text(result)).toMatch(/^pytest: passed \(1 passed in 0\.02s\) in \d+\.\ds\nTOTAL {20}2 {6}0 {3}100%$/);
+		expect(result.structuredContent).toMatchObject({ state: "passed", exit: 0, counts: { passed: 1 } });
+	});
+
+	it("reports a uv run that changed nothing without an empty summary", async () => {
+		const f = setup();
+		f.script("echo 'Checked 9 packages in 0.56ms' >&2", "/bin/sh");
+		const result = await f.call("py_uv", { action: "sync" }, f.root);
+		expect(f.text(result)).toMatch(/^uv sync: ok in \d+\.\ds$/);
+		expect(result.structuredContent).toEqual({ action: "sync", state: "ok", summary: "" });
+	});
+
+	it("propagates a spawn failure that is not a lock abort", async () => {
+		const f = setup();
+		f.script("touch started", "/bin/sh");
+		// Node and Bun both reject NUL in argv synchronously, before any process exists.
+		await expect(f.call("py_test", { k: "a\0b" }, f.root)).rejects.toThrow(/null bytes|NUL|\\0/i);
 		expect(existsSync(join(f.root, "started"))).toBe(false);
 	});
 });
