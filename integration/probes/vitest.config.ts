@@ -6,7 +6,7 @@ const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] }
 ).packages.probes;
 
 // Match `integration/inprocess`: forks, because `process-lifecycle.test.ts` spawns and signals real
-// process groups through the production runners. Explicit files, no glob.
+// process groups through the production runners. Explicit test files, no glob.
 export default defineConfig({
 	test: {
 		include: [

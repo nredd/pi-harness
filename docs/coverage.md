@@ -245,7 +245,7 @@ the entire expanded inventory after justified exclusions. `coverage/policy.json`
 that inventory: every Vitest coverage producer reads it with `readFileSync` and passes its package's
 `owned` as `coverage.include` and `exclusions[].path` as `coverage.exclude`. A never-imported module
 matched by a glob lands in the report uncovered and fails accounting; a report missing an expected
-file fails accounting too, so no test re-checks the configs against the policy.
+file fails accounting too. `test_coverage_producers.py` asserts each config reads its own policy entry.
 Tests and dedicated test-helper directories are outside production scope by definition, not
 coverage exclusions. Non-directory test fixture/assertion helpers use explicit `test-helper`
 exclusions with reasons. The legacy `test_helpers` field remains readable for old base policies,
