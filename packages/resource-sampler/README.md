@@ -94,8 +94,13 @@ Semantics:
 Bounds:
 
 - Default scan budget 250ms, 2048 PIDs, 2MiB captured bytes; options allow at most 5s, 16384 PIDs,
-  16MiB. Linux proc files read sequentially (concurrency one), at most 8KiB each. Directory iteration
-  stops at the budget; Darwin output stops at the PID/output budget and reaps the fixed helper. Native reads charge
+  16MiB. Linux proc files read sequentially (concurrency one), at most 8KiB each. Linux lists `/proc`
+  names only, never `opendir` Dirents: a PID that exits mid-listing comes back `DT_UNKNOWN`, the
+  runtime `lstat`s it and the ENOENT rejected the whole listing, so `0.2.0` reported an empty
+  `process-collection-unavailable` scan (and every next-scan process warming) whenever any process
+  exited mid-listing. Now that PID fails its own stat read and is one skipped row. The names list
+  is read whole (one short string per process) before the PID cap applies; per-PID reads stop at
+  the budget; Darwin output stops at the PID/output budget and reaps the fixed helper. Native reads charge
   8 bytes for the timebase and 328 bytes per admitted PID (two 96-byte rusage buffers and one 136-byte
   metadata buffer), including failed calls, to that SAME byte budget. Only `pbi_comm` and numeric
   fields are inspected; `pbi_name`, arguments and environment are never decoded or exported. Native
