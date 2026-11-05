@@ -28,6 +28,8 @@ it("heading click hides and restores tasks", async () => {
 		await click(host, 6, rowOf(host, EXPANDED));
 		const collapsedRow = rowOf(host, COLLAPSED);
 		const collapsed = host.viewport().join("\n");
+		// A heading that is no longer painted is refused, never resolved to an arbitrary row.
+		expect(() => rowOf(host, EXPANDED)).toThrow(`Missing row ${EXPANDED}:\n${collapsed}`);
 		tasksListed(collapsed, false);
 		// The widget's only row after its heading is its existing blank spacer.
 		expect(host.viewport()[collapsedRow + 1]?.trim()).toBe("");

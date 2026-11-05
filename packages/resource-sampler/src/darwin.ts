@@ -278,7 +278,7 @@ export function darwinNativeProcesses(
 	}
 	if (!lib) return rows;
 	try {
-		for (let i = 0; i < rows.length; i++) {
+		for (const [i, row] of rows.entries()) {
 			if (!budget.ready()) break;
 			if (budget.maxBytes - budget.bytesRead < DARWIN_NATIVE_READ_BYTES) {
 				budget.bytesRead = budget.maxBytes;
@@ -286,8 +286,6 @@ export function darwinNativeProcesses(
 				break;
 			}
 			budget.bytesRead += DARWIN_NATIVE_READ_BYTES;
-			const row = rows[i];
-			if (!row) continue;
 			const before = Buffer.alloc(DARWIN_ABI.usage.bytes);
 			const bsd = Buffer.alloc(DARWIN_ABI.bsd.bytes);
 			const after = Buffer.alloc(DARWIN_ABI.usage.bytes);

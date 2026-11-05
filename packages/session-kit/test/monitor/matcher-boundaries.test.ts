@@ -109,3 +109,34 @@ it("runs every deadline on the injected clock, so host time alone never fails a 
 	expect(worker.terminate).toHaveBeenCalledOnce();
 	expect(vi.getTimerCount()).toBe(0);
 });
+
+it("ignores a late online or answer from a worker it already gave up on", async () => {
+	vi.useFakeTimers();
+	const matcher = new BoundedMatcher("READY");
+	const worker = workers.instances[0];
+	if (!worker) throw new Error("Expected worker boundary");
+	const outcomes: boolean[] = [];
+	matcher.test("first", (matched) => outcomes.push(matched));
+	await matcher.close();
+	expect(outcomes).toEqual([true]);
+	worker.emit("online");
+	worker.emit("message", false);
+	expect(worker.postMessage).not.toHaveBeenCalled();
+	expect(outcomes).toEqual([true]);
+	expect(vi.getTimerCount()).toBe(0);
+});
+
+it("ignores an unsolicited answer while no line is in flight", () => {
+	vi.useFakeTimers();
+	const matcher = new BoundedMatcher("READY");
+	const worker = workers.instances[0];
+	if (!worker) throw new Error("Expected worker boundary");
+	worker.emit("online");
+	worker.emit("message", true);
+	const outcomes: boolean[] = [];
+	matcher.test("line", (matched) => outcomes.push(matched));
+	expect(worker.postMessage).toHaveBeenCalledExactlyOnceWith("line");
+	worker.emit("message", false);
+	expect(outcomes).toEqual([false]);
+	void matcher.close();
+});

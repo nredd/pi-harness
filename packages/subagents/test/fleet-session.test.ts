@@ -38,6 +38,35 @@ async function start(description: string) {
   return { h, host, stream, row };
 }
 
+it("renders an overflowing expanded fleet without a blank row after main (#552)", async () => {
+  fixture = new ScenarioSession();
+  const streams = Array.from({ length: 6 }, (_, i) => fixture.holdStream(
+    fixture.physical(`gapchild${i}`, "child", [answer("CHILD DONE")]),
+  ));
+  const h = await fixture.start({ terminal: true });
+  h.setResponses([
+    calls(...streams.map((_, i) => spawn(`gap child ${i}`, { model: `gapchild${i}/child` }))),
+    answer("SPAWNED"),
+  ]);
+  await h.session.prompt("go");
+  await Promise.all(streams.map(stream => stream.entered));
+  const host = fixture.host;
+  if (!host) throw new Error("No terminal host");
+  fixture.clock.advance(200);
+  await host.settle();
+  expect(host.viewport().join("\n")).toContain("agents: 6 running");
+  host.input(TOGGLE);
+  await host.settle();
+  const lines = host.viewport();
+  const main = lines.findIndex(line => /^\s+[●○] main\s*$/.test(line));
+  expect(main).toBeGreaterThanOrEqual(0);
+  expect(lines[main + 1]).toContain("gap child 0");
+  expect(lines[main + 2]).toContain("gap child 1");
+  expect(lines[main + 3]).toContain("gap child 2");
+  expect(lines[main + 4]).toContain("↓ 3 more: 3 running");
+  for (const stream of streams) stream.release();
+});
+
 it("running fleet re-registers after core reload", async () => {
   const { h, host, stream, row } = await start("probe child");
   const id = h.session.messages.filter(m => m.role === "toolResult" && m.toolName === "Agent").flatMap(m => m.content).find(p => p.type === "text")?.text.match(/Agent ID: (\S+)/)?.[1];

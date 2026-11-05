@@ -65,7 +65,8 @@ Plan mode freezes its tool selection at `/plan`, so it reaches `monitor_read` on
   This is a self-report, not an independent verifier; it does not replace tests or todo evidence.
 - The settle nudge respects existing continuations, background-agent delivery and Plan permissions.
   Abort, settled provider error, budgets and a Plan-mode excursion pause/stop it. Resume restores a
-  goal paused. Quota recovery is left to the router; a parked dispatch or direct refusal pauses
+  goal paused. A background agent stopped while still queued has no completion notice, so it no longer
+  holds the goal busy; a stopped agent that started still waits for its notice. Quota recovery is left to the router; a parked dispatch or direct refusal pauses
   goals and loops, cancels goal wake timers, and requires explicit resume. Goal resume is refused
   while a quota-parked dispatch remains. A settled provider failure also pauses rather than spinning.
 - `/loop <interval> <prompt> [--max N]`: repeat a prompt in the current conversation, unlike

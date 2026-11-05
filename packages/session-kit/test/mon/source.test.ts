@@ -327,6 +327,37 @@ describe("sampler snapshot mapping", () => {
 		expect(broken.cpuPercent).toBeNull();
 	});
 
+	it("keeps free memory unknown when the reading is missing or negative", () => {
+		for (const freeBytes of [Number.NaN, -1]) {
+			const mapped = toMonSnapshot(raw({ memory: { totalBytes: 1024 ** 3, freeBytes } }));
+			expect(mapped.memoryFreeBytes).toBeNull();
+			expect(mapped.memoryUsedBytes).toBeNull();
+		}
+	});
+
+	it("says an incomplete list without reasons has an unknown cause", () => {
+		const partial = toMonSnapshot(
+			raw({ coverage: { complete: false, enumerated: 50, sampled: 40, skipped: 0, bytesRead: 1, reasons: [] } }),
+		);
+		expect(partial.notice).toBe("Partial list: 40 of 50 seen (unknown)");
+	});
+
+	it("names one unknown process name in the singular", () => {
+		const processes = resourceFixture().processes.map((p, i) => ({ ...p, name: i === 0 ? "" : p.name }));
+		expect(toMonSnapshot(raw({ processes })).hint).toBe("1 name unknown (no access, e.g. other users)");
+	});
+
+	it.each([
+		["linux", "Process CPU unavailable"],
+		["darwin", "macOS: process CPU unavailable (see ?)"],
+	] as const)("explains %s process CPU that is unavailable for every row", (platform, hint) => {
+		const processes = resourceFixture().processes.map((p) => ({
+			...p,
+			cpu: { state: "unavailable" as const, reason: "no counters" },
+		}));
+		expect(toMonSnapshot(raw({ platform, processes })).hint).toBe(hint);
+	});
+
 	it("explains partial coverage with bounded sampler reasons", () => {
 		const partial = toMonSnapshot(
 			raw({

@@ -15,6 +15,7 @@ function setup(mode = "tui") {
 	const notify = vi.fn();
 	const fg = vi.fn((_c: string, s: string) => s);
 	const messages = vi.fn();
+	const done = vi.fn();
 	registerMon(
 		{
 			on: (event: string, callback: () => void) => events.set(event, callback),
@@ -32,7 +33,10 @@ function setup(mode = "tui") {
 					{ terminal: { rows: 20 }, requestRender: vi.fn() },
 					{ fg, bg: (_c: string, s: string) => s, bold: (s: string) => s },
 					{},
-					resolve,
+					() => {
+						done();
+						resolve();
+					},
 				);
 			}),
 	);
@@ -44,6 +48,7 @@ function setup(mode = "tui") {
 		notify,
 		custom,
 		messages,
+		done,
 		fg,
 		render: () => view.render(80),
 		run: () => handler("", { mode, ui: { custom, notify } }),
@@ -75,6 +80,19 @@ describe("mon interaction lifecycle", () => {
 		expect(h.dispose).toHaveBeenCalledOnce();
 		expect(vi.getTimerCount()).toBe(0);
 		expect(h.messages).not.toHaveBeenCalled();
+	});
+
+	it("finishes the interaction once when close keys repeat", async () => {
+		vi.useFakeTimers();
+		const h = setup();
+		const run = h.run();
+		await vi.advanceTimersByTimeAsync(0);
+		h.input("q");
+		h.input("q");
+		await run;
+		expect(h.done).toHaveBeenCalledOnce();
+		expect(h.dispose).toHaveBeenCalledOnce();
+		expect(vi.getTimerCount()).toBe(0);
 	});
 
 	it("closes and reaps probes when the renderer throws", async () => {

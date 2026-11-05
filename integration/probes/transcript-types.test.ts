@@ -343,3 +343,84 @@ test("a restarted session gets a fresh byte budget and a fresh file", () => {
 		h.cleanup();
 	}
 });
+
+test("other indexed events record nothing and a malformed delta is labelled unknown", () => {
+	const records: unknown[] = [];
+	const trace = new TypeTrace((record) => records.push(record));
+	trace.raw({ type: "message_start" });
+	trace.raw({ type: "content_block_stop", index: 0 });
+	trace.raw({ type: "content_block_start", index: 0 });
+	trace.raw({ type: "content_block_delta", index: 0 });
+	for (const [index, delta] of [null, secret, { text: secret }, { type: 7 }].entries()) {
+		trace.raw({ type: "content_block_delta", index, delta });
+	}
+	assert.equal(JSON.stringify(records).includes(secret), false);
+	assert.deepEqual(records, [
+		{ stage: "raw_start", request: 1 },
+		...[0, 1, 2, 3].map((index) => ({ stage: "raw_delta", request: 1, index, block: "unknown" })),
+	]);
+});
+
+test("only Anthropic assistant traffic is traced and only it arms the settle snapshot", () => {
+	const branch: unknown[] = [];
+	const h = harness("pi-type-probe-foreign-", { getBranch: () => branch });
+	const anthropic = { role: "assistant", api: "anthropic-messages", content: [{ type: "text", text: secret }] };
+	const foreign = [
+		{ role: "user", api: "anthropic-messages", content: [{ type: "text", text: secret }] },
+		{ role: "assistant", api: "openai-responses", content: [{ type: "text", text: secret }] },
+	];
+	try {
+		h.register();
+		// Before session_start there is no trace to write to.
+		h.emit("message_update", { message: anthropic });
+		h.emit("session_start");
+		h.emit("provider_stream_event", { api: "openai-responses", data: { type: "message_start" } });
+		for (const message of foreign) {
+			h.emit("message_update", { message });
+			h.emit("message_end", { message });
+		}
+		branch.push({ type: "message", message: anthropic });
+		h.emit("agent_settled");
+		// An Anthropic message arms the snapshot, but the branch's latest assistant is foreign or absent.
+		for (const latest of [[{ type: "message", message: foreign[1] }], [{ type: "message", message: foreign[0] }]]) {
+			h.emit("message_end", { message: anthropic });
+			branch.splice(0, branch.length, ...latest);
+			h.emit("agent_settled");
+		}
+		h.emit("session_shutdown");
+		const stages = readFileSync(onlyFile(h.directory), "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line).stage);
+		assert.deepEqual(stages, ["start", "message_end", "message_end"]);
+		assert.deepEqual(h.notices, []);
+	} finally {
+		h.cleanup();
+	}
+});
+
+test("a close failure at the size limit still stops capture and says so", () => {
+	const h = harness("pi-type-probe-limit-close-");
+	const originalClose = fs.closeSync;
+	let closeMock: MockInstance | undefined;
+	try {
+		h.register();
+		h.emit("session_start");
+		closeMock = vi.spyOn(fs, "closeSync").mockImplementation((fd: number) => {
+			originalClose(fd);
+			throw new Error(secret);
+		});
+		syncBuiltinESMExports();
+		for (let i = 0; i < 2500; i++) h.emit("message_end", { message: wideMessage });
+		closeMock.mockRestore();
+		syncBuiltinESMExports();
+		assert.deepEqual(h.notices, ["Transcript type capture stopped after a close failure"]);
+		const content = readFileSync(onlyFile(h.directory), "utf8");
+		assert.equal(content.includes(secret), false);
+		assert.match(content, /\n\{"stage":"capture_limit"\}\n$/);
+	} finally {
+		closeMock?.mockRestore();
+		syncBuiltinESMExports();
+		h.cleanup();
+	}
+});

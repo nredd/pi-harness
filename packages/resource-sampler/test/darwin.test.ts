@@ -314,6 +314,16 @@ describe("Darwin native identity and counters", () => {
 		expect(row?.name).toBe("�");
 		expect(row?.identity).toMatch(/:ff$/);
 	});
+	it("keeps a full 16-byte p_comm with no NUL terminator, never reading into the adjacent pbi_name", () => {
+		const b = buffers();
+		// MAXCOMLEN = 16: a maximal p_comm fills [48, 64) with no terminator; pbi_name starts at byte 64.
+		const comm = "sixteen-byte-cmd";
+		b.bsd.write(comm, 48, "latin1");
+		b.bsd.write("adjacent-pbi_name", 64, "latin1");
+		const row = darwinNativeCounter(captured.pid, b.before, b.bsd, b.after, BASELINE_AT_MS, 1);
+		expect(row?.name).toBe(comm);
+		expect(row?.identity).toMatch(new RegExp(`:${Buffer.from(comm).toString("hex")}$`));
+	});
 	it("does not call FFI beyond the native-read byte budget or deadline", () => {
 		const load = vi.fn(() => undefined);
 		const budget = new Budget(performance.now() - 1, TEST_BUDGET_BYTES, 1, new AbortController().signal);

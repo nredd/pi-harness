@@ -138,10 +138,11 @@ creation and removal, toolchain homes, the step summary, and rejection of a bad 
 per case with its own argv, like `anthropic-block-types.mjs`, against real Biome, faking `spawnSync`
 only for a spawn error and a signal-killed child. `router_contract.mjs` exports the per-scenario
 synthetic utilization so every scenario runs in process; its two placeholder imports are virtual
-mocks. Vite's module runner pins `import.meta.main` false, so `run-vitest.ts`' dispatch is a fourth
-uncovered branch beside `import_audit.ts`' three; a new test of `import_audit.ts`' 80-character
-snippet truncation covers the branch that kept the budget at 4. The signal is 0 uncovered lines (115)
-and functions (16), 4 of 102 branches, on darwin.
+mocks. Vite's module runner pins `import.meta.main` false, so the `import.meta.main` dispatches of
+`run-vitest.ts` and `import_audit.ts` are the signal's only uncovered branches (#418): a test of
+ordinary, member and look-alike `require` calls covers the non-import call, and the syntax-error
+location no longer branches on the diagnostic's optional `fileName`, since diagnostics are requested
+per file. The signal is 0 uncovered lines (114) and functions (16), 2 of 100 branches, on darwin.
 `import-audit` and `probes` are in the goal and enforced at 0/0. Since #377 `probes` measures every
 executable probe in process under `check-probes`: `transcript-types.ts`, `render.ts` (its
 `/harness-probe` command against a recording TUI), the `pi -e` extensions `latency.ts`,
@@ -158,7 +159,10 @@ are gone. The counters changed with the producer, the floors did not: c8 counted
 physical line and only the functions V8 reported (`transcript-types.ts` 207 lines / 8 functions,
 `import_audit.ts` 161 / 7), Vitest's AST-based V8 remap counts statement lines and every function
 including anonymous callbacks (`transcript-types.ts` 103 / 15, `import_audit.ts` 63 / 8 with the new
-`main`). Both are 0 uncovered on darwin and linux before and after.
+`main`). Both are 0 uncovered on darwin and linux before and after. Since #418 `probes` branches are
+0 as well: tests cover foreign-API and non-assistant traffic, unindexed and malformed deltas, a close
+failure at the size limit and the default agent dir under a set and an unset `HOME`, and the dead
+`?? "unknown"` and empty-window guards are folded into `blockType()` and `percentile()`.
 `providers` is in the goal and enforced at 0/0 since #378: `check-providers` runs `integration/providers/vitest.config.ts`
 (forks, the shared home guard) over all seven sources. `faux.ts` and `usage_fixture.ts` stream every
 scripted step shape against a recording registry with a fake clock, `extension_inventory.ts` reads a
@@ -310,7 +314,9 @@ instead of dropping out. It stays
 `goal: "excluded"` and report-only, with no 100% claim; subprocess-run scripts count only what the
 suites import. First references: macOS **2061 lines / 539 functions** uncovered (local
 `npm test` on `9aad6172`, unchanged when re-measured with the glob `include` on the #353 follow-up), Linux **2088 / 548** (hosted `coverage-ubuntu-24.04` artifact, run
-`41748291074`, same commit). The native and
+`41748291074`, same commit). Current caps: macOS **1975 / 517** (measured, local `npm test` with coverage on the #523 branch
+after its launch/shutdown serialization fix), Linux **2006 / 528** (cap, not measured on the #523 branch; the
+#508 head `37672471` measured it in hosted run `42035244330`). The native and
 live suites (`linux-native`, `macos-helper-live`, `linux-live`) also run under Vitest now; skipped off
 their platform or opt-in, and `linux-native` counts only the `src/platform/linux/helper.ts` client it imports. Its TS entries and
 native sources stay in inventory. The owner explicitly excludes this package from coverage maintenance, so it does not block
@@ -546,8 +552,8 @@ when stream delivery raced cancellation. The controlled cancellation/data-event 
 `packages/resource-sampler/test/sampler.test.ts` now forces that branch by emitting late stdout
 after cancellation. Whether hosted Darwin counts stay stable is not yet measured (issue
 [here](https://github.com/nredd/pi-harness/issues/164)). That race-dependent branch is why the
-sampler's starting branch caps come from hosted counts rather than a single local run; #417 drives them
-to 0 ([branch caps](#branch-caps)).
+sampler's starting branch caps came from hosted counts rather than a single local run; #417 drove them
+to 0 on darwin and linux, primary and Bun ([branch caps](#branch-caps)).
 
 `inprocess` is `enforced` at 0/0 lines/functions on darwin and linux for both `primary` and `bun`
 since #376, with nothing excluded. Its inventory is every fixture module the suites run:
@@ -564,7 +570,12 @@ SIGTERM-exits, SIGKILL-exits, survives-SIGKILL and the spawn failure with a fake
 a default factory, a memory entry without its reset seams, a fatal `session_start` in `startStack`,
 the offline usage transport and a physical transport core cannot authenticate. Bun's missing
 `resolveHost` Node branch is exercised by checking both engines' resolvers agree on a dual-format
-host. The real `caffeinate` sleep-assertion test still runs on macOS only.
+host. The real `caffeinate` sleep-assertion test still runs on macOS only. Since #418 `holdWake()`
+takes its platform, so every OS asserts no helper off macOS, and a host without
+`/usr/bin/caffeinate` asserts the macOS spawn failure fails the fixture; a spawner returning no
+helper, unset Pi/XDG/PATH variables, a real interval cleared through the frozen `clearInterval`, a
+stackless timer origin, `StackUsage` reads and a refused `rowOf` cover the remaining branches. Primary
+and Bun are 0 uncovered branches on darwin and on linux (ubuntu-24.04 and wsl2, hosted run `42047972267`).
 
 The in-process `@nredd/pi-stack-tests` reviewer suite executes real Pi `grep`/`find` tools
 under both Node and Bun. Each launcher gets a fresh disposable home, so a managed binary

@@ -133,7 +133,7 @@ export function formatPlanReminder(state: TaskState): string {
 }
 
 /** Why an `in_progress` todo is still open at a settle, most actionable first. */
-export type InProgressKind = "abandoned" | "held" | "blocked" | "running";
+export type InProgressKind = "abandoned" | "held" | "silent" | "blocked" | "running";
 
 /** A settle report: the line, its severity and a key that changes whenever the classification does. */
 export interface InProgressNotice {
@@ -165,6 +165,13 @@ const GROUPS: ReadonlyArray<{
 		showDepStatus: false,
 	},
 	{ kind: "held", label: "held by the parent", capped: true, severity: "warning", showDepStatus: true },
+	{
+		kind: "silent",
+		label: "agent running without a completion notice",
+		capped: true,
+		severity: "warning",
+		showDepStatus: false,
+	},
 	{ kind: "blocked", label: "blocked", capped: true, severity: "info", showDepStatus: false },
 	{ kind: "running", label: "agent running", capped: true, severity: "info", showDepStatus: false },
 ];
@@ -177,31 +184,32 @@ interface Row {
 	deps: readonly Task[];
 }
 
-/** A running or queued agent: either will deliver and wake the parent. */
+/** Whether an agent is still running or queued, regardless of its wake eligibility. */
 function isWorking(agent: AgentRunState | undefined): boolean {
 	return agent === "running" || agent === "queued";
 }
 
 /**
  * Whether an open dependency is being worked: `in_progress` with no failed or stopped owner, or
- * `pending` with an owner whose agent is running or queued. A deferred or unowned pending one never
+ * `pending` with a running or queued owner whose completion notice wakes the parent. A deferred or unowned pending one never
  * delivers on its own, so a todo waiting only on those is the parent's to unblock.
  */
 function isLive(dep: Task, lookup: AgentStateLookup): boolean {
 	const agent = lookup(dep.owner);
 	if (dep.status === "in_progress") return !isAbandoned(dep, agent);
-	return dep.status === "pending" && isWorking(agent);
+	return dep.status === "pending" && isWorking(agent) && lookup.wakesParent?.(dep.owner) === true;
 }
 
 /**
  * Classify one `in_progress` todo. Its owner's failed or stopped agent makes it abandoned; a running
- * or queued one owns it; else a live `blockedBy` dependency makes it wait; anything else, including a todo
+ * or queued one either has a verified wake or warns as silent; else a live `blockedBy` dependency makes it wait; anything else, including a todo
  * whose agent is done or whose open blockers are all dead, waits on the parent.
  */
 function classify(task: Task, byId: ReadonlyMap<number, Task>, lookup: AgentStateLookup): Row {
 	const agent = lookup(task.owner);
 	if (isAbandoned(task, agent)) return { task, kind: "abandoned", agent, deps: [] };
-	if (isWorking(agent)) return { task, kind: "running", agent, deps: [] };
+	if (isWorking(agent))
+		return { task, kind: lookup.wakesParent?.(task.owner) === true ? "running" : "silent", agent, deps: [] };
 	const open = (task.blockedBy ?? []).flatMap((id) => {
 		const dep = byId.get(id);
 		return dep && OPEN.has(dep.status) ? [dep] : [];

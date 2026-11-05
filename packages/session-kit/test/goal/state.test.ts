@@ -106,6 +106,10 @@ describe("state machine", () => {
 		expect(resumeGoal(goal({ status: "complete" }))).toMatchObject({ ok: false });
 		expect(resumeGoal(goal({ status: "budget", reason: "turns budget exhausted" }))).toMatchObject({ ok: false });
 		expect(resumeGoal(goal({ status: "paused", turns: 3 }))).toMatchObject({ ok: false });
+		expect(resumeGoal(goal({ status: "budget" }))).toEqual({
+			ok: false,
+			error: "budget exhausted; start a new one with /goal <objective> --turns N",
+		});
 	});
 	it("drops the pause reason on resume", () => {
 		const result = resumeGoal(goal({ status: "paused", reason: "plan mode" }));
@@ -156,12 +160,17 @@ describe("restoreGoal", () => {
 	it("restores an active goal as paused", () => {
 		expect(restoreGoal([entry(newGoal("x"))])).toMatchObject({ status: "paused", reason: "session restored" });
 	});
+	it("restores the optional token cap and evidence", () => {
+		const done = { ...newGoal("x", 30, 5_000), status: "complete", evidence: "make test: ok" };
+		expect(restoreGoal([entry(done)])).toEqual(done);
+	});
 	it("keeps finished goals as they were", () => {
 		expect(restoreGoal([entry({ ...newGoal("x"), status: "blocked" })])).toMatchObject({ status: "blocked" });
 	});
 	it("honours a clear (null) and ignores malformed data", () => {
 		expect(restoreGoal([entry(newGoal("x")), entry(null)])).toBeUndefined();
 		expect(restoreGoal([entry({ objective: 3 })])).toBeUndefined();
+		expect(restoreGoal([entry("not a goal")])).toBeUndefined();
 		expect(restoreGoal([])).toBeUndefined();
 	});
 	it.each([
@@ -237,9 +246,14 @@ describe("text", () => {
 		expect(chipText({ ...newGoal("x", 30), turns: 3, tokens: 12_400 })).toBe("goal 3/30 12.4k tok");
 		expect(chipText({ ...newGoal("x"), status: "paused" })).toBe("goal 0/30 paused");
 		expect(chipText(newGoal("x"), 2)).toBe("goal 0/30 (waiting on 2 agents)");
+		expect(chipText(newGoal("x"), 1)).toBe("goal 0/30 (waiting on 1 agent)");
+		expect(chipText({ ...newGoal("x", 30, 2_000_000), tokens: 1_250_000 })).toBe("goal 0/30 1.3m/2m tok");
 	});
 	it("describes no goal and a finished one", () => {
 		expect(describeGoal(undefined)).toContain("no goal");
 		expect(describeGoal({ ...newGoal("x"), status: "complete", evidence: "proof" })).toContain("evidence: proof");
+		expect(describeGoal({ ...newGoal("x"), status: "paused", reason: "plan mode" })).toBe(
+			"goal (paused): x\ngoal 0/30 paused\nreason: plan mode",
+		);
 	});
 });
