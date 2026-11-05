@@ -553,6 +553,37 @@ def test_providers_are_measured_in_the_goal_at_zero() -> None:
     assert not any(path.startswith("integration/providers/") for path in helpers)
 
 
+def test_root_script_helpers_are_measured_by_import_audit_at_zero() -> None:
+    """Hold the root `scripts/` Node helpers to the enforced import-audit 0/0 goal (#379).
+
+    Parameters:
+        None.
+    Returns:
+        None: The launcher, path preflight and router fixture are owned, measured and not helpers.
+    Raises:
+        AssertionError: A root script falls back to a verification-helper row or leaves the goal.
+    """
+    cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
+    audit = cfg.packages["import-audit"]
+    assert inventory(ROOT, audit) == {
+        "check-biome-paths.mjs",
+        "import_audit.ts",
+        "router_contract.mjs",
+        "run-vitest.ts",
+    }
+    assert audit.goal == "100-percent"
+    primary = audit.signals["primary"]
+    assert primary.enforcement == "enforced"
+    assert {os: (budget.lines, budget.functions) for os, budget in primary.max_uncovered.items()} == {
+        "darwin": (0, 0),
+        "linux": (0, 0),
+    }
+    helpers = {helper.path for helper in cfg.verification_helpers}
+    assert {"scripts/check-biome-paths.test.mjs", "scripts/router_contract.test.mjs"} == {
+        path for path in helpers if path.startswith("scripts/") and "/" not in path.removeprefix("scripts/")
+    }
+
+
 @pytest.mark.parametrize(
     ("fixture", "lines", "functions"), [("function-only.info", 0, 1), ("line-only.info", 1, 0)]
 )

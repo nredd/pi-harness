@@ -305,7 +305,6 @@ def test_unshipped_computer_checks_have_individual_verification_reasons() -> Non
 @pytest.mark.parametrize(
     "path",
     [
-        "scripts/router_contract.mjs",
         "packages/computer-use/scripts/pi-cubench-agent.mjs",
         "packages/computer-use/scripts/check-linux-live.mjs",
         "packages/computer-use/scripts/check-package-assets.mjs",
