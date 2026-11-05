@@ -277,7 +277,7 @@
       "signals": {
         "primary": {
           "report": "coverage/runtime-build-tooling/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 17 }, "linux": { "lines": 0, "functions": 0, "branches": 17 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
           "reporters": ["text", "lcov"]
         }
       }
@@ -291,7 +291,7 @@
       "signals": {
         "primary": {
           "report": "coverage/workflow-examples/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 1 }, "linux": { "lines": 0, "functions": 0, "branches": 1 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
           "reporters": ["text", "lcov"]
         }
       }

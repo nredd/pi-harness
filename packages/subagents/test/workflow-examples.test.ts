@@ -314,6 +314,21 @@ describe("shipped example workflows", () => {
       expect(spawns).toEqual([]);
     });
 
+    it("count-child scans src/ when run on its own without a root", async () => {
+      const { host, spawns } = stubHost();
+      const result = await runWorkflow({
+        script: readExample(LIB_DIR, "count-child.js"),
+        host,
+        onScriptCoverage: collectCoverage,
+        transformScriptBody,
+      });
+
+      expect(result.value).toEqual({ ok: true, count: 2 });
+      expect(spawns.map(spawn => spawn.prompt)).toEqual([
+        "List every source file under src/. One path per line, nothing else.",
+      ]);
+    });
+
     it("review-panel returns a null verdict when every reviewer fails", async () => {
       const { host, spawns } = stubHost({
         failsFor: ["review:correctness", "review:security", "review:performance"],
