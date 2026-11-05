@@ -147,18 +147,26 @@ const OPEN = new Set(["pending", "in_progress", "deferred"]);
 
 /**
  * Groups in report order. `warning` groups need the parent and repeat on every settle; `info`
- * groups wait on something that will wake it. Capped groups name three then count the rest.
+ * groups wait on something that will wake it. Capped groups name three then count the rest;
+ * `showDepStatus` groups name each blocker's status, since those blockers are why nothing moves.
  */
 const GROUPS: ReadonlyArray<{
 	kind: InProgressKind;
 	label: string;
 	capped: boolean;
 	severity: InProgressNotice["level"];
+	showDepStatus: boolean;
 }> = [
-	{ kind: "abandoned", label: "owner agent failed or stopped", capped: false, severity: "warning" },
-	{ kind: "held", label: "held by the parent", capped: true, severity: "warning" },
-	{ kind: "blocked", label: "blocked", capped: true, severity: "info" },
-	{ kind: "running", label: "agent running", capped: true, severity: "info" },
+	{
+		kind: "abandoned",
+		label: "owner agent failed or stopped",
+		capped: false,
+		severity: "warning",
+		showDepStatus: false,
+	},
+	{ kind: "held", label: "held by the parent", capped: true, severity: "warning", showDepStatus: true },
+	{ kind: "blocked", label: "blocked", capped: true, severity: "info", showDepStatus: false },
+	{ kind: "running", label: "agent running", capped: true, severity: "info", showDepStatus: false },
 ];
 
 /** One classified `in_progress` todo. `deps` are the open blockers its group is about. */
@@ -203,11 +211,11 @@ function classify(task: Task, byId: ReadonlyMap<number, Task>, lookup: AgentStat
 	return { task, kind: "held", agent, deps: open };
 }
 
-/** One todo's entry: blockers by id (with status when dead), else its owner's agent state. */
-function entryText({ task, kind, agent, deps }: Row): string {
+/** One todo's entry: blockers by id (with status when `showDepStatus`), else its owner's agent state. */
+function entryText({ task, agent, deps }: Row, showDepStatus: boolean): string {
 	const owner = ownerLabel(task.owner);
 	const detail = deps.length
-		? ` (by ${deps.map((d) => (kind === "held" ? `#${d.id} ${d.status}` : `#${d.id}`)).join(", ")})`
+		? ` (by ${deps.map((d) => (showDepStatus ? `#${d.id} ${d.status}` : `#${d.id}`)).join(", ")})`
 		: agent && owner
 			? ` (${owner} ${agent})`
 			: "";
@@ -238,8 +246,8 @@ export function formatInProgressNotice(
 	const byId = new Map(state.tasks.map((t) => [t.id, t]));
 	const rows = active.map((task) => classify(task, byId, lookup));
 	const present = GROUPS.filter(({ kind }) => rows.some((r) => r.kind === kind));
-	const parts = present.map(({ kind, label, capped }) => {
-		const items = rows.filter((r) => r.kind === kind).map(entryText);
+	const parts = present.map(({ kind, label, capped, showDepStatus }) => {
+		const items = rows.filter((r) => r.kind === kind).map((r) => entryText(r, showDepStatus));
 		const shown = capped ? items.slice(0, 3) : items;
 		const more = items.length > shown.length ? `, +${items.length - shown.length} more` : "";
 		return `${label}: ${shown.join(", ")}${more}`;

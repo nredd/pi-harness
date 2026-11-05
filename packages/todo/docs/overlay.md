@@ -86,6 +86,9 @@ the order in which it first heard of each agent. Then:
   shows, unless some *other* agent whose `nameBase` matches was spawned after the
   exact match last settled. That is a retry under the same name, and of those the
   one started most recently shows instead.
+- With an exact match still `queued` (heard at `created`, never started), the most
+  recently settled `nameBase` match shows instead, if any: a queued spawn may never
+  run, and a settled sibling says more.
 - With no exact match, the most recently updated `nameBase` match shows.
 
 So for owner `Auth Audit`:
@@ -96,6 +99,7 @@ So for owner `Auth Audit`:
 | `auth-audit` runs, sibling `auth-audit-2` starts and fails | `running` (the owner) |
 | `auth-audit` runs, sibling `auth-audit-2` starts, then `auth-audit` fails | `✗ failed` (the owner) |
 | `auth-audit` runs, sibling `auth-audit-2` starts, then `auth-audit` completes | `done` (the owner) |
+| `auth-audit` queued, sibling `auth-audit-2` starts and fails | `✗ failed` (the sibling) |
 
 A sibling spawned while the owner ran never masks the owner's own outcome, even when
 it sat queued until the owner's settle freed its slot, or is later resumed or reopened. The same holds for an unnamed

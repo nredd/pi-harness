@@ -356,6 +356,39 @@ describe("repeated settles during background work (#448)", () => {
 		expect(await settle(h, ctx)).toEqual([done]);
 	});
 
+	it("warns when a numbered retry fails while the named owner is still queued", async () => {
+		const h = setup();
+		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		await ownedTodo(h, ctx, "auth-audit");
+		await h.emit(SUBAGENT_CREATED_EVENT, { id: "a1", name: "auth-audit", nameBase: "auth-audit" });
+		expect((await settle(h, ctx))[0]?.[1]).toBe("info");
+		expect(await settle(h, ctx)).toEqual([]);
+		expect(await settle(h, ctx)).toEqual([]);
+		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a2", name: "auth-audit-2", nameBase: "auth-audit" });
+		await h.emit(SUBAGENT_FAILED_EVENT, { id: "a2", status: "error" });
+		const failed = [
+			`Run ended with 1 in_progress todo, ${ARMED}; owner agent failed or stopped: #1 Audit auth (@auth-audit failed)`,
+			"warning",
+		];
+		expect(await settle(h, ctx)).toEqual([failed]);
+		expect(await settle(h, ctx)).toEqual([failed]);
+	});
+
+	it("warns once pi-subagents reports a queued owner stopped before it started", async () => {
+		const h = setup();
+		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		await ownedTodo(h, ctx, "scout");
+		await h.emit(SUBAGENT_CREATED_EVENT, { id: "a1", handle: "scout", isBackground: true });
+		expect((await settle(h, ctx))[0]?.[1]).toBe("info");
+		await h.emit(SUBAGENT_FAILED_EVENT, { id: "a1", handle: "scout", status: "stopped" });
+		const stopped = [
+			`Run ended with 1 in_progress todo, ${ARMED}; owner agent failed or stopped: #1 Audit auth (@scout stopped)`,
+			"warning",
+		];
+		expect(await settle(h, ctx)).toEqual([stopped]);
+		expect(await settle(h, ctx)).toEqual([stopped]);
+	});
+
 	it("reports again once the list empties and refills, and forgets a shut-down session", async () => {
 		const h = setup();
 		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
