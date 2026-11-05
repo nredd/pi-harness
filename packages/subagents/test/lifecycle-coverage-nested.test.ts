@@ -1,11 +1,15 @@
 /** Nested control failures and queued waits, scoped to the parent that owns them. */
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AgentManager } from "../src/agent-manager.js";
+import { runAgent } from "../src/agent-runner.js";
 import { createNestedSubagentTools, type NestedAgentManager } from "../src/nested-tools.js";
 import type { AgentRecord } from "../src/types.js";
+
+vi.mock("../src/agent-runner.js", () => ({ runAgent: vi.fn(), resumeAgent: vi.fn() }));
 
 let dir: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "lifecycle-nested-")); vi.stubEnv("PI_CODING_AGENT_DIR", join(dir, "agent")); });
@@ -28,12 +32,32 @@ function fixture() {
 }
 
 describe("nested lifecycle boundaries", () => {
+  it("reports an unwritable transcript root without launching a nested child", async () => {
+    const f = fixture();
+    const real = new AgentManager(() => {}, 1);
+    const blocked = join(dir, "not-a-directory");
+    writeFileSync(blocked, "");
+    vi.stubEnv("TMPDIR", blocked);
+    const manager = {
+      getRecord: (id: string) => id === f.parent.id ? f.parent : real.getRecord(id),
+      spawnAndWait: real.spawnAndWait.bind(real),
+    } as unknown as NestedAgentManager;
+    const tools = createNestedSubagentTools({ homeDir: dir, manager, pi: {} as ExtensionAPI, parentAgentId: f.parent.id, depth: 1, maxSubagentDepth: 2, allowedSubagents: "all", configCwd: dir, projectTrusted: false });
+    try {
+      const agent = tools.find(tool => tool.name === "Agent")!;
+      const result = await agent.execute("call", { prompt: "p", description: "d", subagent_type: "general-purpose" }, undefined, undefined, f.ctx);
+      expect(result.isError).toBe(true);
+      expect(result.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("ENOTDIR") });
+      expect(runAgent).not.toHaveBeenCalled();
+      expect(real.listAgents()).toEqual([]);
+    } finally { await real.dispose(); }
+  });
   it("attaches a real nested transcript before session creation and flushes the child's answer", async () => {
     const f = fixture();
     const unsubscribe = vi.fn();
     const session = { messages: [{ role: "user", content: "p" }, { role: "assistant", content: [{ type: "text", text: "child transcript answer" }] }], subscribe: vi.fn(() => unsubscribe) } as unknown as AgentSession;
-    f.spawnAndWait.mockImplementation(async (_pi, _ctx, _type, _prompt, options, onSpawned) => {
-      onSpawned?.(f.child.id);
+    f.spawnAndWait.mockImplementation(async (_pi, _ctx, _type, _prompt, options) => {
+      options.onPrepare?.(f.child.id);
       options.onSessionCreated?.(session);
       f.child.status = "completed";
       return { id: f.child.id, record: f.child };
