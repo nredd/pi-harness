@@ -1712,7 +1712,7 @@ function planMode(pi, dependencies = {}) {
     return { messages: withDecline };
   });
   pi.on("input", async (event, ctx) => {
-    if (shuttingDownSession === ctx.sessionManager) {
+    if (shuttingDownSession === ctx.sessionManager || currentSession && currentSession !== ctx.sessionManager) {
       recoverRuntimeAdmissionInput({ ...event, sessionManager: ctx.sessionManager });
       return { action: "handled" };
     }
