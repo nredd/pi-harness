@@ -5,7 +5,7 @@ const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] }
 	readFileSync(new URL("../coverage/policy.json", import.meta.url), "utf8"),
 ).packages["import-audit"];
 
-// Match `integration/inprocess`. Explicit files, no glob: `tests/` is the pytest suite.
+// Match `integration/inprocess`. Explicit test files, no glob: `tests/` is the pytest suite.
 export default defineConfig({
 	test: {
 		include: ["check-biome-paths.test.mjs", "import_audit.test.ts", "router_contract.test.mjs", "run-vitest.test.ts"],

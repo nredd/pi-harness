@@ -273,7 +273,7 @@
       "owned": ["scripts/*.mjs"],
       "exclusions": [],
       "status": "measured",
-      "note": "`test:dist` emits a complete primary report for both runtime builder scripts; required CI records fresh macOS and Linux final-HEAD receipts.",
+      "note": "`test:dist` emits a complete primary report for both runtime builder scripts; required CI enforces it at 0/0 on macOS and Linux.",
       "signals": {
         "primary": {
           "report": "coverage/runtime-build-tooling/lcov.info",
@@ -287,7 +287,7 @@
       "owned": ["examples/**/*.js"],
       "exclusions": [],
       "status": "measured",
-      "note": "`test:workflow-examples` emits a complete primary report for all six example scripts; required CI records fresh macOS and Linux final-HEAD receipts.",
+      "note": "`test:workflow-examples` emits a complete primary report for all six example scripts; required CI enforces it at 0/0 on macOS and Linux.",
       "signals": {
         "primary": {
           "report": "coverage/workflow-examples/lcov.info",
