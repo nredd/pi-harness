@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Name `subscription_usage` in the `subscription_usage` prompt section only when the session can call it or discover it through `search_tools`, and tell a deferred session to discover it first, so the tool can stay deferred (#291)
 - Keep `router/*` routing after the session that last registered it is disposed: routes read the model registry, not that session's extension ctx. A background agent no longer dies with a stale ctx when a finished sibling is swept (#294)
 - Refuse missing configured `lint` and `format` paths before calling Biome, whose mixed valid/missing paths otherwise succeed
 - Ship an opt-in `cheap` profile example: ordered Haiku 5.5 then GPT 6 Luna, with the usual wait policy and no implicit profile registration. Real-registry stack tests exercise it through built-in Explore's `@cheap` default

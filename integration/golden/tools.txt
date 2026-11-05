@@ -16,7 +16,6 @@ ls
 memory_read
 memory_search
 memory_write
-monitor_read
 plan_mode_complete
 plan_mode_question
 read

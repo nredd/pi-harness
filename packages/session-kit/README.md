@@ -53,7 +53,8 @@ ring, coalescer, regex worker and host follow-up queue still run. The regex work
 per-line and drain deadlines use the same `clock`. Controlled stdout callbacks resolve
 after matching/ingestion; native pipe events need not await them. Omitted options keep the CLI defaults. No daemon or
 persistent cron is installed. Deferred-tool configurations need `goal_update` in `neverDefer`
-(without forcing it active), and `monitor_read` in `alwaysActive` and `neverDefer` for Plan mode.
+(without forcing it active). `monitor_*` need no pin and can stay deferred behind `search_tools` (#291);
+Plan mode freezes its tool selection at `/plan`, so it reaches `monitor_read` only when that tool was active before `/plan`.
 
 ## Goal and loop
 
