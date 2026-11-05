@@ -63,6 +63,7 @@ import {
 } from "./mode-contract.js";
 import { createPlanActionController } from "./plan-action-controller.js";
 import { createPlanApprovals } from "./plan-approval.js";
+import { createPlanEditMessage, PLAN_EDIT_SOURCE, reviewEditedPlan } from "./plan-edit.js";
 import { createPlanExportController } from "./plan-export-controller.js";
 import {
   clearPlanModeUi,
@@ -122,6 +123,13 @@ interface ReadyPresentationIntent {
   nonce: number;
   plan: string;
   source: PlanCompletionSource;
+}
+interface UnappliedPlanEdit {
+  /** The plan the text was edited from; a different current plan drops the text. */
+  before: string;
+  enabled: boolean;
+  sessionGeneration: number;
+  text: string;
 }
 interface PendingWorkflowToolPolicy {
   generation: number;
@@ -184,6 +192,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   let publishedContractMode: PlanModeContract | undefined;
   let modeContractsRelevant = false;
   let readyPresentationIntent: ReadyPresentationIntent | undefined;
+  /** Editor text that was not applied, restored when the same plan is edited again. */
+  let unappliedPlanEdit: UnappliedPlanEdit | undefined;
   let readyPresentationInFlightNonce: number | undefined;
   let nextReadyPresentationNonce = 0;
   let menuGeneration = 0;
@@ -220,6 +230,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     implementationOutcome,
     getExportDestination: (ctx) => planExports.getDestination(ctx),
     show: (ctx) => showStoredPlan(pi, ctx, state),
+    edit: editPlan,
     finalize: requestFinalPlan,
     implementHere: startImplementation,
     implementFresh: startFreshImplementation,
@@ -1087,8 +1098,96 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     );
   }
 
+  /** Keyed by nonce: an edit replaces the presented plan without retiring its presentation. */
   function readyPresentationIsCurrent(intent: ReadyPresentationIntent) {
-    return completedPlanIsCurrent(intent) && readyPresentationIntent?.nonce === intent.nonce;
+    const current = readyPresentationIntent;
+    return current?.nonce === intent.nonce && completedPlanIsCurrent(current);
+  }
+
+  /**
+   * Core defers `sendMessage` during a run while `persistState` writes at once, so the edit
+   * message could land after a newer plan the run proposes. Edits apply only when idle.
+   */
+  function planEditBlockedByRun(ctx: ExtensionContext) {
+    if (ctx.isIdle() && !ctx.hasPendingMessages()) return false;
+    ctx.ui.notify(
+      "Cannot edit the plan while an agent run is active. Wait for the run to settle, then retry.",
+      "warning",
+    );
+    return true;
+  }
+
+  /**
+   * Replaces the ready or saved plan with the user's editor text. Editing is not a decline:
+   * the decline counters and re-proposal gate stay as they were.
+   */
+  async function editPlan(ctx: ExtensionContext, isCurrent: () => boolean) {
+    const enabled = state.enabled;
+    const savedPlan = enabled ? undefined : state.savedPlan;
+    const before = enabled ? state.latestPlan : savedPlan?.plan;
+    if (!before || planEditBlockedByRun(ctx)) return;
+    // A tree move or session switch while the editor is open must not carry the draft across.
+    const generation = menuGeneration;
+    const kept = unappliedPlanEdit;
+    const restored =
+      kept?.before === before && kept.enabled === enabled && kept.sessionGeneration === generation
+        ? kept.text
+        : undefined;
+    unappliedPlanEdit = undefined;
+    const edited = await ctx.ui.editor(enabled ? "Edit proposed plan" : "Edit saved plan", restored ?? before);
+    const review = reviewEditedPlan(before, edited);
+    if (review.kind === "unchanged") return;
+    if (review.kind === "cancelled") {
+      // Closing the editor keeps a restored draft for the next edit of the same plan.
+      if (restored !== undefined) unappliedPlanEdit = kept;
+      return;
+    }
+    const keepEdit = (reason: string, level: "warning" | "error" = "warning") => {
+      if (generation !== menuGeneration) {
+        ctx.ui.notify(`${reason} The edit was not applied.`, level);
+        return;
+      }
+      unappliedPlanEdit = { before, enabled, sessionGeneration: generation, text: edited as string };
+      ctx.ui.notify(`${reason} The edit was not applied; Edit plan… reopens it while this plan is current.`, level);
+    };
+    // A run that started while the editor was open would defer the edit message past newer output.
+    if (!ctx.isIdle() || ctx.hasPendingMessages()) {
+      keepEdit("An agent run started while the editor was open.");
+      return;
+    }
+    const unchangedWhileEditing =
+      isCurrent() &&
+      state.enabled === enabled &&
+      (enabled ? state.latestPlan === before : state.savedPlan === savedPlan);
+    if (!unchangedWhileEditing) {
+      keepEdit("The plan changed while the editor was open.");
+      return;
+    }
+    if (review.kind === "rejected") {
+      keepEdit(`Edited plan rejected: ${review.error}.`);
+      return;
+    }
+    try {
+      // Before the state entry, so a tree move to this point still restores the earlier plan.
+      pi.sendMessage(createPlanEditMessage(before, review.plan), { triggerTurn: false });
+    } catch (error: unknown) {
+      const detail = safeTerminalText(error instanceof Error ? error.message : String(error));
+      keepEdit(`Unable to record the plan edit: ${detail}.`, "error");
+      return;
+    }
+    if (enabled) {
+      const presentation =
+        readyPresentationIntent && completedPlanIsCurrent(readyPresentationIntent)
+          ? readyPresentationIntent
+          : undefined;
+      state = { ...state, latestPlan: review.plan, latestPlanSource: PLAN_EDIT_SOURCE };
+      if (presentation) readyPresentationIntent = { ...presentation, plan: review.plan, source: PLAN_EDIT_SOURCE };
+    } else {
+      state = { ...state, savedPlan: { plan: review.plan, source: PLAN_EDIT_SOURCE } };
+    }
+    persistState();
+    updateUi(ctx);
+    ctx.ui.notify("Plan updated.", "info");
   }
 
   function togglePlanMode(ctx: ExtensionContext) {
@@ -1260,8 +1359,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     persistState();
     updateUi(ctx);
 
+    // The generic history kickoff points at the proposal in history, so an edited plan,
+    // like a saved one, carries its own text.
     const handoff = usesConversationHistory
-      ? wasEnabled
+      ? wasEnabled && source !== PLAN_EDIT_SOURCE
         ? formatHistoryImplementationPrompt()
         : formatTransferredPlanPrompt(plan, false)
       : formatImplementationHandoff(plan);

@@ -65,7 +65,7 @@ async function fixture(readyChoice: "tui.select.cancel" | "stay" | "\u0003" = "s
       if (questionPending) return questionTui.custom(factory as never);
       const harness = createCustomSelectorHarness(factory, 80);
       if (readyChoice === "stay") {
-        for (let index = 0; index < 5; index += 1) harness.handleInput("tui.select.down");
+        for (let index = 0; index < 6; index += 1) harness.handleInput("tui.select.down");
         harness.handleInput("tui.select.confirm");
       } else harness.handleInput(readyChoice);
       return harness.resultPromise;

@@ -4,6 +4,7 @@ import {
   planFromCompletionDetails,
 } from "./completion-tool.js";
 import { type ImplementationModelOverride, isPendingImplementationModelIdentifier } from "./implementation-models.js";
+import { PLAN_EDIT_SOURCE } from "./plan-edit.js";
 import {
   IMPLEMENTATION_PLAN_RETENTIONS,
   type ImplementationPlanRetention,
@@ -17,7 +18,10 @@ export {
   MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH,
 } from "./implementation-models.js";
 
-export type PlanCompletionSource = typeof PLAN_MODE_COMPLETE_TOOL_NAME | "legacy_proposed_plan";
+export type PlanCompletionSource =
+  | typeof PLAN_MODE_COMPLETE_TOOL_NAME
+  | "legacy_proposed_plan"
+  | typeof PLAN_EDIT_SOURCE;
 
 export interface ActiveImplementationPlan {
   id: string;
@@ -238,7 +242,9 @@ function latestCompletionPlan(entries: SessionEntry[]) {
 }
 
 function planCompletionSource(value: unknown): PlanCompletionSource | undefined {
-  return value === PLAN_MODE_COMPLETE_TOOL_NAME || value === "legacy_proposed_plan" ? value : undefined;
+  return value === PLAN_MODE_COMPLETE_TOOL_NAME || value === "legacy_proposed_plan" || value === PLAN_EDIT_SOURCE
+    ? value
+    : undefined;
 }
 
 function fixedThinkingLevel(value: unknown): PlanModeFixedThinkingLevel | undefined {
