@@ -178,6 +178,11 @@ it("uses USERPROFILE then the OS home when HOME is empty", () => {
 	expect(formatCwd("/private/fixture/project", "", { HOME: "/private/fixture" })).toBe("/private/fixture/project");
 });
 
+it("abbreviates the home directory itself to a bare tilde", () => {
+	expect(formatCwd("/private/fixture", "/private/fixture")).toBe("~");
+	expect(formatCwd("/private/fixture/", "/private/fixture")).toBe("~");
+});
+
 it("keeps a cwd outside the home, including a sibling that shares its prefix, unabbreviated", () => {
 	// Pinned explicitly: scenario cwds under `os.tmpdir()` may or may not sit inside the real home.
 	expect(formatCwd("/private/elsewhere/project", "/private/fixture")).toBe("/private/elsewhere/project");
@@ -240,6 +245,30 @@ it("model thinking and provider labels adapt without overflow", async () => {
 		for (const width of [1, 10, 25, 60, 120, 240]) {
 			for (const line of f.component.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 		}
+	} finally {
+		f.component.dispose?.();
+	}
+});
+
+it("renders a session with no model as no-model, zero window, no subscription cost", async () => {
+	const f = await mount();
+	try {
+		(f.ctx as { model?: unknown }).model = undefined;
+		const stats = f.component.render(240)[1];
+		expect(stats).toContain("ctx ?/0 (auto)");
+		expect(stats).toContain("no-model");
+		expect(stats).not.toContain("(sub)");
+		expect(stats).not.toContain("thinking");
+	} finally {
+		f.component.dispose?.();
+	}
+});
+
+it("reads an unset thinking level on a reasoning model as thinking off", async () => {
+	const f = await mount();
+	try {
+		(f.ctx as { thinkingLevel?: string }).thinkingLevel = undefined;
+		expect(f.component.render(240)[1]).toContain("example • thinking off");
 	} finally {
 		f.component.dispose?.();
 	}

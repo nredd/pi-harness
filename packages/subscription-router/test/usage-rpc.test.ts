@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadConfig, type Profile } from "../src/config.js";
+import { type ConfigResult, loadConfig, type Profile } from "../src/config.js";
 import { ExhaustionTracker } from "../src/exhaustion.js";
 import subscriptionRouter from "../src/index.js";
 import { UsageService, type UsageSnapshot } from "../src/usage.js";
@@ -18,8 +18,8 @@ const T0 = 1_700_000_000_000;
 const EXHAUSTED_RESET = T0 + MINUTE;
 
 /** Exercise the registered event-bus RPC with the real cache and injected transport. */
-async function harness(startSession = true, profiles: Profile[] = []) {
-	vi.mocked(loadConfig).mockResolvedValue({ ok: true, profiles });
+async function harness(startSession = true, profiles: Profile[] = [], config: ConfigResult = { ok: true, profiles }) {
+	vi.mocked(loadConfig).mockResolvedValue(config);
 	let now = T0;
 	let fail = false;
 	const fetch = vi.fn(async (url: string) => {
@@ -67,8 +67,16 @@ async function harness(startSession = true, profiles: Profile[] = []) {
 		if (!registration) throw new Error("router command not registered");
 		await registration[1].handler(action, ctx);
 	};
+	const tool = async (params: Record<string, unknown>, ctx: ExtensionContext) => {
+		const registration = vi.mocked(pi.registerTool).mock.calls.find(([t]) => t.name === "subscription_usage");
+		if (!registration) throw new Error("subscription_usage registration missing");
+		const result = await registration[0].execute("tool-id", params as never, undefined, () => {}, ctx as never);
+		return (result.content[0] as { text: string }).text;
+	};
 	return {
 		pi,
+		events,
+		tool,
 		handlers,
 		rpc,
 		admit,
@@ -475,6 +483,100 @@ describe("router usage RPC", () => {
 		expect(vi.mocked(ctx.ui.notify)).toHaveBeenLastCalledWith(
 			expect.stringContaining('unknown action "invalid"'),
 			"error",
+		);
+	});
+
+	it("ignores a rejected config: no router models, and session start says why", async () => {
+		const h = await harness(false, [], { ok: false, error: "bad.json: profiles: expected an object" });
+		expect(h.pi.registerVirtualModel).not.toHaveBeenCalled();
+		const notify = vi.fn();
+		h.handlers.get("session_start")?.({}, { scopedModels: [], ui: { notify } } as unknown as ExtensionContext);
+		expect(notify).toHaveBeenCalledWith(
+			"subscription-router: ignoring config. bad.json: profiles: expected an object",
+			"error",
+		);
+	});
+
+	it("drops RPC requests without a string requestId instead of replying or reading usage", async () => {
+		const h = await harness();
+		const stray = vi.fn();
+		h.events.on("router:rpc:usage:reply:7", stray);
+		h.events.on("router:rpc:usage:reply:undefined", stray);
+		const read = vi.spyOn(h.usage, "peek");
+		for (const payload of [undefined, null, "refresh", { refresh: true }, { requestId: 7, refresh: true }]) {
+			h.events.emit("router:rpc:usage", payload);
+		}
+		await new Promise((resolve) => setImmediate(resolve));
+		expect(stray).not.toHaveBeenCalled();
+		expect(read).not.toHaveBeenCalled();
+		expect(h.fetch).not.toHaveBeenCalled();
+		// The channel still serves well-formed requests.
+		expect((await h.rpc()).success).toBe(true);
+	});
+
+	it("returns a non-Error rejection as its string form", async () => {
+		const h = await harness();
+		vi.spyOn(h.usage, "get").mockRejectedValue("collector down");
+		expect(await h.rpc({ refresh: true })).toMatchObject({ success: false, error: "collector down" });
+	});
+
+	it("admits a dispatch whose model is not a string as an unknown ref, never coercing it", async () => {
+		const profile: Profile = { id: "default", name: "Default", chain: [{ provider: "anthropic", id: "sonnet" }] };
+		const h = await harness(true, [profile]);
+		h.tracker.mark(
+			{ provider: "anthropic", id: "sonnet" },
+			{ block: true, window: "five_hour", resetAt: EXHAUSTED_RESET },
+		);
+		expect((await h.admit({ model: "anthropic/sonnet" })).data).toMatchObject({ ok: false });
+		expect((await h.admit({ model: 42 })).data).toEqual({ ok: true });
+		// `String(["anthropic/sonnet"])` would name the blocked model.
+		expect((await h.admit({ model: ["anthropic/sonnet"] })).data).toEqual({ ok: true });
+	});
+
+	it("tool reads every session provider when none is named, and says when there are none", async () => {
+		const notify = vi.fn();
+		const empty = await harness(true, []);
+		expect(await empty.tool({}, { scopedModels: [], ui: { notify } } as unknown as ExtensionContext)).toBe(
+			"No subscription providers in use.",
+		);
+		const profile: Profile = { id: "default", name: "Default", chain: [{ provider: "anthropic", id: "sonnet" }] };
+		const h = await harness(true, [profile]);
+		const ctx = {
+			scopedModels: [{ model: { provider: "openai-codex" } }],
+			ui: { notify },
+		} as unknown as ExtensionContext;
+		const text = await h.tool({}, ctx);
+		expect(text.split("\n").map((line) => line.split(":")[0])).toEqual(["anthropic", "openai-codex"]);
+		expect(h.fetch).toHaveBeenCalledTimes(2);
+	});
+
+	it("tool names the families of a model-scoped block", async () => {
+		const h = await harness(true, []);
+		h.tracker.mark(
+			{ provider: "anthropic", id: "claude-opus-5-5" },
+			{ block: true, window: "seven_day_opus", scope: "model", families: ["opus"], resetAt: Date.now() + MINUTE },
+		);
+		const text = await h.tool({ provider: "anthropic" }, {
+			scopedModels: [],
+			ui: { notify: vi.fn() },
+		} as unknown as ExtensionContext);
+		expect(text).toContain("blocked anthropic opus: seven_day_opus until ");
+	});
+
+	it("treats a blank /router argument as status and reports a chain without credentials as exhausted", async () => {
+		const profile: Profile = { id: "default", name: "Default", chain: [{ provider: "anthropic", id: "sonnet" }] };
+		const h = await harness(false, [profile]);
+		const notify = vi.fn();
+		const ctx = {
+			scopedModels: [],
+			ui: { notify },
+			modelRegistry: { find: (provider: string, id: string) => ({ provider, id }), hasConfiguredAuth: () => false },
+		} as unknown as ExtensionCommandContext;
+		await h.status(ctx, "   ");
+		expect(h.fetch).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledWith(
+			"router/default (ordered) -> exhausted\n  anthropic/sonnet: not available (unknown model or no credentials)",
+			"info",
 		);
 	});
 });

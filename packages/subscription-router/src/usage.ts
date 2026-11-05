@@ -126,6 +126,11 @@ function errorSnapshot(provider: string, status: "error" | "unavailable", now: n
 	return { provider, status, windows: [], retrievedAt: now, expiresAt: now, message };
 }
 
+/** `cached` with its last-known windows, marked stale and expired as of `now`. */
+function staleSnapshot(cached: UsageSnapshot, now: number, message: string | undefined): UsageSnapshot {
+	return { ...cached, status: "stale", expiresAt: now, message };
+}
+
 function finiteNumber(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -272,7 +277,8 @@ function codexAccountId(token: string): string | undefined {
 	try {
 		const payload = asRecord(JSON.parse(Buffer.from(parts[1], "base64url").toString("utf-8")));
 		const accountId = asRecord(payload?.[CODEX_JWT_CLAIM_PATH])?.chatgpt_account_id;
-		return typeof accountId === "string" && accountId ? accountId : undefined;
+		// An empty id comes back as is; the header builder omits it like a missing one.
+		return typeof accountId === "string" ? accountId : undefined;
 	} catch {
 		return undefined;
 	}
@@ -304,12 +310,15 @@ const COLLECTORS: Readonly<Record<string, Collector>> = {
 /** Providers with a usage collector. */
 export const COLLECTED_PROVIDERS: readonly string[] = Object.keys(COLLECTORS);
 
-/** `Retry-After` as milliseconds from `now`: delta-seconds or an HTTP-date. */
+/**
+ * `Retry-After` as milliseconds from `now`: delta-seconds or an HTTP-date. A zero or
+ * past value comes back as is; `recordFailure` never waits less than its backoff step.
+ */
 function retryAfterMs(header: string | null, now: number): number | undefined {
 	if (!header) return undefined;
 	const trimmed = header.trim();
 	const ms = /^\d+$/.test(trimmed) ? Number(trimmed) * 1000 : Date.parse(trimmed) - now;
-	return Number.isFinite(ms) && ms > 0 ? ms : undefined;
+	return Number.isFinite(ms) ? ms : undefined;
 }
 
 interface FetchOutcome {
@@ -491,14 +500,8 @@ export class UsageService {
 			.join("; ");
 	}
 
-	private withStale(
-		cached: UsageSnapshot | undefined,
-		provider: string,
-		now: number,
-		message: string | undefined,
-	): UsageSnapshot {
-		if (!cached) return errorSnapshot(provider, "error", now, message ?? "No cached usage data.");
-		return { ...cached, status: "stale", expiresAt: now, message };
+	private withStale(cached: UsageSnapshot | undefined, provider: string, now: number, message: string): UsageSnapshot {
+		return cached ? staleSnapshot(cached, now, message) : errorSnapshot(provider, "error", now, message);
 	}
 
 	private refresh(ctx: RegistryContext, provider: string, now: number, notBefore?: number): UsageRead {
@@ -536,7 +539,7 @@ export class UsageService {
 				}
 				const cached = this.cache.get(provider);
 				if (outcome.snapshot.status !== "available" && cached) {
-					const stale = this.withStale(cached, provider, this.transport.now(), outcome.snapshot.message);
+					const stale = staleSnapshot(cached, this.transport.now(), outcome.snapshot.message);
 					this.cache.set(provider, stale);
 					return stale;
 				}
@@ -553,7 +556,8 @@ export class UsageService {
 
 	private recordFailure(provider: string, retryAfter: number | undefined): void {
 		const failures = (this.backoff.get(provider)?.failures ?? 0) + 1;
-		const step = FAILURE_BACKOFF_MS[Math.min(failures, FAILURE_BACKOFF_MS.length) - 1] ?? 0;
+		// The ladder ascends, so its largest reached step is the step for this failure count.
+		const step = Math.max(...FAILURE_BACKOFF_MS.slice(0, failures));
 		const delay = Math.min(Math.max(step, retryAfter ?? 0), RETRY_AFTER_CEILING_MS);
 		this.backoff.set(provider, { failures, until: this.transport.now() + delay });
 	}
@@ -635,7 +639,7 @@ function waitForCaller(
 	signal: AbortSignal | undefined,
 	onTimeout: () => UsageSnapshot | undefined,
 ): Promise<UsageSnapshot | undefined> {
-	if (signal?.aborted) return Promise.resolve(undefined);
+	// `get` already answered an aborted signal, so only a later abort reaches `abort`.
 	return new Promise((resolve) => {
 		let settled = false;
 		const finish = (snapshot?: UsageSnapshot) => {
@@ -647,7 +651,7 @@ function waitForCaller(
 		};
 		const abort = () => finish();
 		// One credential lookup plus one fetch, regardless of supersession count.
-		const timer = setTimeout(() => finish(signal?.aborted ? undefined : onTimeout()), 2 * REQUEST_TIMEOUT_MS);
+		const timer = setTimeout(() => finish(onTimeout()), 2 * REQUEST_TIMEOUT_MS);
 		signal?.addEventListener("abort", abort, { once: true });
 		void refresh.then(finish);
 	});

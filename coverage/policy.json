@@ -84,13 +84,13 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 10 }, "linux": { "lines": 0, "functions": 0, "branches": 10 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
 
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 10 }, "linux": { "lines": 0, "functions": 0, "branches": 10 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
           "enforcement": "enforced",
           "reporters": ["text", "lcov"]
         }
@@ -207,13 +207,13 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 36 }, "linux": { "lines": 0, "functions": 0, "branches": 36 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
 
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 36 }, "linux": { "lines": 0, "functions": 0, "branches": 36 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
           "enforcement": "enforced",
           "reporters": ["text", "lcov"]
         }

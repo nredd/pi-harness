@@ -89,6 +89,11 @@ describe("parseConfig", () => {
 		[{}, /profiles: expected an object/],
 		[{ profiles: { "Bad Id": { chain: [{ model: "a/b" }] } } }, /profiles.Bad Id: id must match/],
 		[{ profiles: { a: { chain: [] } } }, /profiles.a.chain: expected a non-empty array/],
+		[{ profiles: { a: null } }, /profiles.a: expected an object/],
+		[{ profiles: { a: [] } }, /profiles.a: expected an object/],
+		[{ profiles: { a: { chain: ["a/b"] } } }, /chain\[0\]: expected an object/],
+		[{ profiles: { a: { chain: [null] } } }, /chain\[0\]: expected an object/],
+		[{ profiles: { a: { chain: [{ model: 3 }] } } }, /chain\[0\].model: expected "provider\/model-id"/],
 		[{ profiles: { a: { chain: [{ model: "nomodel" }] } } }, /chain\[0\].model: expected "provider\/model-id"/],
 		[{ profiles: { a: { chain: [{ model: "a/" }] } } }, /chain\[0\].model/],
 		[{ profiles: { a: { chain: [{ model: "router/b" }] } } }, /cannot name another router model/],
@@ -120,6 +125,15 @@ describe("loadConfig", () => {
 		await mkdir(join(dir, CONFIG_FILE));
 		const result = await loadConfig(dir);
 		expect(result.ok).toBe(false);
-		if (!result.ok) expect(result.error).toContain(join(dir, CONFIG_FILE));
+		if (!result.ok) expect(result.error.startsWith(`${join(dir, CONFIG_FILE)}: EISDIR`)).toBe(true);
+	});
+
+	it("reports a well-formed document that fails validation with the path and the validation error", async () => {
+		dir = await mkdtemp(join(tmpdir(), "router-config-"));
+		await writeFile(join(dir, CONFIG_FILE), JSON.stringify({ profiles: { a: { chain: [] } } }));
+		expect(await loadConfig(dir)).toEqual({
+			ok: false,
+			error: `${join(dir, CONFIG_FILE)}: profiles.a.chain: expected a non-empty array`,
+		});
 	});
 });
