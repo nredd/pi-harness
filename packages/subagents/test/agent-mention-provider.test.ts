@@ -260,6 +260,21 @@ describe("agents that have never run", () => {
       .toBe("resume · completed · find flaky tests");
   });
 
+  it("summarizes a type description with no sentence end, and clips a long first sentence", async () => {
+    const long = `${"word ".repeat(20).trim()}. Second sentence.`;
+    const provider = createMentionProvider(
+      builtIn(),
+      () => mentionRoster(managerWith(), [{ name: "Plan", description: "Plans work" }, { name: "Review", description: long }]),
+      () => true,
+    );
+    const rows = agentRows(await suggest(provider, "@"));
+
+    expect(rows.map(r => r.description)).toEqual([
+      "start agent · Plans work",
+      `start agent · ${"word ".repeat(12).trim()}…`,
+    ]);
+  });
+
   it("lists live agents before startable types", async () => {
     const provider = createMentionProvider(
       builtIn(),
@@ -478,6 +493,20 @@ describe("insertion and trigger plumbing", () => {
     expect(provider.shouldTriggerFileCompletion?.(["/model"], 0, 6)).toBe(false);
   });
 
+  it("opens file completion when the wrapped provider has no gate of its own", () => {
+    const { shouldTriggerFileCompletion: _gate, ...gateless } = builtIn();
+    const provider = createMentionProvider(gateless, () => mentionRoster(managerWith(), []), () => true);
+
+    expect(provider.shouldTriggerFileCompletion?.(["/model"], 0, 6)).toBe(true);
+  });
+
+  it("answers with pi's rows when the cursor line does not exist", async () => {
+    const current = builtIn();
+    const provider = createMentionProvider(current, () => mentionRoster(managerWith(record({ handle: "explore" })), []), () => true);
+
+    await expect(provider.getSuggestions([], 0, 0, { signal: new AbortController().signal })).resolves.toEqual(FILE_SUGGESTIONS);
+  });
+
   it("declares @ and nothing else", () => {
     // `#` is pi's other default trigger, not ours — and the editor seeds its
     // own set from DEFAULT_AUTOCOMPLETE_TRIGGER_CHARACTERS (editor.js:1849)
@@ -558,6 +587,18 @@ describe("named agents and evicted ones", () => {
     );
 
     expect(roster.map(t => t.handle)).toEqual(["auth-audit"]);
+  });
+
+  it("lists one row when a live agent and an evicted one share a handle", () => {
+    // The live agent owns `@explore`; the evicted conversation is not reachable
+    // by that name, so listing it would advertise a resume that cannot happen.
+    const manager = {
+      listAgents: () => [record({ handle: "explore", type: "Explore", status: "running" })],
+      listTombstones: () => [tombstone({ handle: "Explore" })],
+    } as unknown as AgentManager;
+    const roster = mentionRoster(manager, []);
+
+    expect(roster.map(t => `${t.kind}:${t.handle}`)).toEqual(["record:explore"]);
   });
 
   it("does not offer a startable type whose handle a tombstone still holds", () => {

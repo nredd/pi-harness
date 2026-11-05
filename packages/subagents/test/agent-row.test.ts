@@ -223,4 +223,28 @@ describe("keepRowTicking", () => {
     expect(isRowLive(makeDetails({ status: "running" }), live(undefined))).toBe(true);
     expect(isRowLive(makeDetails({ status: "background" }), live(undefined))).toBe(false);
   });
+
+  it("isRowLive reads only the details when the run has no agent id yet", () => {
+    // A lookup by an absent id must not borrow some other run's settled record.
+    const settled = live(makeRecord({ status: "completed" }));
+    expect(isRowLive(makeDetails({ agentId: undefined, status: "running" }), settled)).toBe(true);
+    expect(isRowLive(makeDetails({ agentId: undefined, status: "completed" }), settled)).toBe(false);
+  });
+});
+
+describe("agentRowSummary without a record", () => {
+  it("names an error with no message as unknown rather than printing undefined", () => {
+    const line = agentRowSummary(makeDetails({ status: "error", error: undefined }), live(undefined), theme, NOW);
+    expect(line).toContain("error: unknown");
+  });
+
+  it("prices an evicted run from the details, and shows nothing when they carry no cost", () => {
+    expect(agentRowSummary(makeDetails({ status: "completed", cost: 0.5 }), live(undefined, undefined, true), theme, NOW)).toContain("~$0.50");
+    expect(agentRowSummary(makeDetails({ status: "completed", cost: undefined }), live(undefined, undefined, true), theme, NOW)).not.toContain("$");
+  });
+
+  it("leads the unclamped summary with the fallback flag", () => {
+    const details = makeDetails({ status: "completed", modelFallback: { input: "ghost", used: "anthropic/x" } });
+    expect(agentRowSummary(details, live(undefined), theme, NOW)).toMatch(/^✓ \[fallback\] done/);
+  });
 });

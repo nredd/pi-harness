@@ -546,7 +546,8 @@ export class ConversationViewer implements Component, Focusable {
     if (this.composer) {
       // Composer row: the Input renders its own `> ` prompt and cursor.
       this.composer.focused = this.focused;
-      lines.push(row(this.composer.render(innerW)[0] ?? ""));
+      // Input always renders exactly one row.
+      lines.push(row(this.composer.render(innerW)[0]));
       footerActions.push({ label: "Enter send", key: "\r" }, { label: "Esc cancel", key: "\x1b" });
       const composeHint = th.fg("dim", "Enter send · Esc cancel");
       const composeLeft = th.fg("accent", "✎ steer");
@@ -590,7 +591,8 @@ export class ConversationViewer implements Component, Focusable {
       return lines;
     }
     // Keep the footer on screen even in a terminal shorter than the chrome.
-    const footer = lines.pop() ?? row("");
+    // Never empty: the header and footer rows were pushed above.
+    const footer = lines.pop()!;
     const output = rows > 0 ? [...lines.slice(0, rows - 1), footer] : [];
     const footerText = stripTerminalSequences(footer);
     for (const action of footerActions) {
