@@ -129,15 +129,73 @@ describe("agentStateFor", () => {
 		for (const owner of ["Sergii", "", "  @ ", undefined]) expect(stateOf(owner)).toBeUndefined();
 	});
 
-	it("prefers a running agent sharing a name, else the most recently updated", () => {
+	it("takes the most recently updated of two exact matches", () => {
 		apply(SUBAGENT_STARTED_EVENT, { id: "old", name: "worker" });
 		apply(SUBAGENT_STARTED_EVENT, { id: "new", name: "worker" });
 		apply(SUBAGENT_FAILED_EVENT, { id: "new", status: "error" });
-		expect(stateOf("worker")).toBe("running");
+		expect(stateOf("worker")).toBe("failed");
 		apply(SUBAGENT_COMPLETED_EVENT, { id: "old" });
 		expect(stateOf("worker")).toBe("done");
-		apply(SUBAGENT_FAILED_EVENT, { id: "new", status: "stopped" });
-		expect(stateOf("worker")).toBe("stopped");
+	});
+
+	it("reports the owner's own failure while a same-name sibling still runs", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1", name: "auth-audit", nameBase: "auth-audit" });
+		apply(SUBAGENT_STARTED_EVENT, { id: "a2", name: "auth-audit-2", nameBase: "auth-audit" });
+		apply(SUBAGENT_FAILED_EVENT, { id: "a1", status: "error" });
+		expect(stateOf("@auth-audit")).toBe("failed");
+		expect(isAbandoned({ status: "in_progress" }, stateOf("@auth-audit"))).toBe(true);
+		expect(stateOf("auth-audit-2")).toBe("running");
+	});
+
+	it("flips the owner to done while a same-name sibling still runs", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1", name: "auth-audit", nameBase: "auth-audit" });
+		apply(SUBAGENT_STARTED_EVENT, { id: "a2", name: "auth-audit-2", nameBase: "auth-audit" });
+		apply(SUBAGENT_COMPLETED_EVENT, { id: "a1" });
+		expect(stateOf("@auth-audit")).toBe("done");
+	});
+
+	it("reports an unnamed agent's failure while a sibling named after its handle runs", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "e1", handle: "explore" });
+		apply(SUBAGENT_STARTED_EVENT, { id: "s1", handle: "scout", name: "explore-2", nameBase: "explore" });
+		apply(SUBAGENT_FAILED_EVENT, { id: "e1", status: "error" });
+		expect(stateOf("@explore")).toBe("failed");
+	});
+
+	it("follows the latest of several retries started after the owner settled", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1", name: "auth-audit", nameBase: "auth-audit" });
+		apply(SUBAGENT_FAILED_EVENT, { id: "a1", status: "error" });
+		apply(SUBAGENT_STARTED_EVENT, { id: "a2", name: "auth-audit-2", nameBase: "auth-audit" });
+		apply(SUBAGENT_FAILED_EVENT, { id: "a2", status: "error" });
+		apply(SUBAGENT_STARTED_EVENT, { id: "a3", name: "auth-audit-3", nameBase: "auth-audit" });
+		expect(stateOf("Auth Audit")).toBe("running");
+		apply(SUBAGENT_COMPLETED_EVENT, { id: "a3" });
+		// a2 updated last but started before a3: the latest-started retry decides.
+		apply(SUBAGENT_FAILED_EVENT, { id: "a2", status: "error" });
+		expect(stateOf("Auth Audit")).toBe("done");
+	});
+
+	it("falls back to the latest nameBase match when nothing matches exactly", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "b1", name: "deploy-2", nameBase: "deploy" });
+		expect(stateOf("deploy")).toBe("running");
+		apply(SUBAGENT_FAILED_EVENT, { id: "b1", status: "stopped" });
+		expect(stateOf("deploy")).toBe("stopped");
+	});
+
+	it("restarts an owner resumed after settling, ignoring an earlier retry", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1", name: "auth-audit", nameBase: "auth-audit" });
+		apply(SUBAGENT_FAILED_EVENT, { id: "a1", status: "error" });
+		apply(SUBAGENT_STARTED_EVENT, { id: "a2", name: "auth-audit-2", nameBase: "auth-audit" });
+		apply(SUBAGENT_FAILED_EVENT, { id: "a2", status: "error" });
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1" });
+		expect(stateOf("auth-audit")).toBe("running");
+		apply(SUBAGENT_COMPLETED_EVENT, { id: "a1" });
+		expect(stateOf("auth-audit")).toBe("done");
+	});
+
+	it("reports a nameBase change as a change", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1" });
+		expect(apply(SUBAGENT_STARTED_EVENT, { id: "a1", nameBase: "auth-audit" })).toBe(true);
+		expect(apply(SUBAGENT_STARTED_EVENT, { id: "a1" })).toBe(false);
 	});
 
 	it("never answers from another session, and forgets a session on demand", () => {
