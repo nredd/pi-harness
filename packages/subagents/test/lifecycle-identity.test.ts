@@ -119,11 +119,11 @@ describe("lifecycle event identity", () => {
     const { pi, tools } = await boot();
     pi.events.emit.mockImplementation((channel: string, data: unknown) => applyAgentEvent("resume-s1", channel, data));
     const resolve = runnerResolution();
-    vi.mocked(runAgent).mockImplementationOnce((async (...args: any[]) => {
-      const result = await (resolve as any)(...args);
+    vi.mocked(runAgent).mockImplementationOnce(async (context, type, prompt, options) => {
+      const result = await resolve(context, type, prompt, options);
       if (outcome === "failed") throw new Error("first run failed");
       return result;
-    }) as any).mockImplementation(runnerResolution({ hold: true }) as any);
+    }).mockImplementation(runnerResolution({ hold: true }));
     const spawn = (name: string) => tools.get("Agent").execute(
       "tc", { prompt: "go", description: name, subagent_type: "scout", name, run_in_background: true },
       undefined, undefined, ctx(),
