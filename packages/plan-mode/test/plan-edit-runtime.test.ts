@@ -409,3 +409,85 @@ test("refused editor text is dropped once the plan it was based on changes", asy
   assert.deepEqual(prefills, [PLAN, "# Replacement\n\n- New step."]);
   assert.equal(latestState(mock).latestPlan, "# Replacement\n\n- New step.");
 });
+
+/** RPC context whose session branch is the mock's persisted entries, so tree moves restore real state. */
+function branchBackedEditContext(mock: Mock, editor: (prefill?: string) => Promise<string | undefined>) {
+  let opened = 0;
+  const branch = () => mock.entries.map((entry) => ({ type: "custom", ...entry }));
+  return createMockContext({
+    mode: "rpc",
+    hasUI: true,
+    sessionManager: {
+      getSessionId: () => "test-session",
+      getSessionName: () => undefined,
+      getBranch: branch,
+      getEntries: branch,
+    },
+    select: async (_title: string, options: string[]) => {
+      opened += 1;
+      return opened % 2 === 1 && options.includes("Edit plan…") ? "Edit plan…" : undefined;
+    },
+    editor: async (_title: string, prefill?: string) => editor(prefill),
+  });
+}
+
+const OVERSIZED = `${PLAN}\n${"x".repeat(50_000)}`;
+
+test("a kept draft is dropped by a tree move before the next edit", async () => {
+  const mock = createMockPi({ activeTools: ["read"] });
+  planMode(mock.pi, MISSING_SETTINGS);
+  const results = [OVERSIZED, undefined];
+  const prefills: Array<string | undefined> = [];
+  const context = branchBackedEditContext(mock, async (prefill) => {
+    prefills.push(prefill);
+    return results.shift();
+  });
+  await readyPlan(mock, context.ctx);
+  await mock.commands.get("plan")?.handler("", context.ctx);
+  await mock.events.get("session_tree")?.[0]?.({}, context.ctx);
+  await mock.commands.get("plan")?.handler("", context.ctx);
+
+  assert.deepEqual(prefills, [PLAN, PLAN]);
+});
+
+test("an edit refused across a tree move made while the editor was open is not kept", async () => {
+  const mock = createMockPi({ activeTools: ["read"] });
+  planMode(mock.pi, MISSING_SETTINGS);
+  const prefills: Array<string | undefined> = [];
+  let ctx: unknown;
+  const context = branchBackedEditContext(mock, async (prefill) => {
+    prefills.push(prefill);
+    if (prefills.length > 1) return undefined;
+    await mock.events.get("session_tree")?.[0]?.({}, ctx);
+    return OVERSIZED;
+  });
+  ctx = context.ctx;
+  await readyPlan(mock, context.ctx);
+  // The tree move retires the first menu, so it does not reopen; the helper's next open only closes.
+  for (let open = 0; open < 3; open += 1) await mock.commands.get("plan")?.handler("", context.ctx);
+
+  assert.deepEqual(prefills, [PLAN, PLAN]);
+  assert.ok(
+    context.notifications.some(
+      ({ message }) => message === "The plan changed while the editor was open. The edit was not applied.",
+    ),
+  );
+});
+
+test("a draft kept on the ready plan does not prefill the same text once it is saved for later", async () => {
+  const mock = createMockPi({ activeTools: ["read"] });
+  planMode(mock.pi, MISSING_SETTINGS);
+  const results = [OVERSIZED, undefined];
+  const prefills: Array<string | undefined> = [];
+  const context = branchBackedEditContext(mock, async (prefill) => {
+    prefills.push(prefill);
+    return results.shift();
+  });
+  await readyPlan(mock, context.ctx);
+  await mock.commands.get("plan")?.handler("", context.ctx);
+  await mock.commands.get("plan")?.handler("save", context.ctx);
+  assert.equal(latestState(mock).savedPlan?.plan, PLAN);
+  await mock.commands.get("plan")?.handler("", context.ctx);
+
+  assert.deepEqual(prefills, [PLAN, PLAN]);
+});

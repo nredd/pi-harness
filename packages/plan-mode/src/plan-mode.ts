@@ -1126,9 +1126,11 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     const savedPlan = enabled ? undefined : state.savedPlan;
     const before = enabled ? state.latestPlan : savedPlan?.plan;
     if (!before || planEditBlockedByRun(ctx)) return;
+    // A tree move or session switch while the editor is open must not carry the draft across.
+    const generation = menuGeneration;
     const kept = unappliedPlanEdit;
     const restored =
-      kept?.before === before && kept.enabled === enabled && kept.sessionGeneration === menuGeneration
+      kept?.before === before && kept.enabled === enabled && kept.sessionGeneration === generation
         ? kept.text
         : undefined;
     unappliedPlanEdit = undefined;
@@ -1141,7 +1143,11 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       return;
     }
     const keepEdit = (reason: string, level: "warning" | "error" = "warning") => {
-      unappliedPlanEdit = { before, enabled, sessionGeneration: menuGeneration, text: edited as string };
+      if (generation !== menuGeneration) {
+        ctx.ui.notify(`${reason} The edit was not applied.`, level);
+        return;
+      }
+      unappliedPlanEdit = { before, enabled, sessionGeneration: generation, text: edited as string };
       ctx.ui.notify(`${reason} The edit was not applied; Edit plan… reopens it while this plan is current.`, level);
     };
     // A run that started while the editor was open would defer the edit message past newer output.

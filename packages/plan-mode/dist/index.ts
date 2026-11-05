@@ -1956,8 +1956,9 @@ function planMode(pi, dependencies = {}) {
     const savedPlan = enabled ? void 0 : state.savedPlan;
     const before = enabled ? state.latestPlan : savedPlan?.plan;
     if (!before || planEditBlockedByRun(ctx)) return;
+    const generation = menuGeneration;
     const kept = unappliedPlanEdit;
-    const restored = kept?.before === before && kept.enabled === enabled && kept.sessionGeneration === menuGeneration ? kept.text : void 0;
+    const restored = kept?.before === before && kept.enabled === enabled && kept.sessionGeneration === generation ? kept.text : void 0;
     unappliedPlanEdit = void 0;
     const edited = await ctx.ui.editor(enabled ? "Edit proposed plan" : "Edit saved plan", restored ?? before);
     const review = reviewEditedPlan(before, edited);
@@ -1967,7 +1968,11 @@ function planMode(pi, dependencies = {}) {
       return;
     }
     const keepEdit = (reason, level = "warning") => {
-      unappliedPlanEdit = { before, enabled, sessionGeneration: menuGeneration, text: edited };
+      if (generation !== menuGeneration) {
+        ctx.ui.notify(`${reason} The edit was not applied.`, level);
+        return;
+      }
+      unappliedPlanEdit = { before, enabled, sessionGeneration: generation, text: edited };
       ctx.ui.notify(`${reason} The edit was not applied; Edit plan\u2026 reopens it while this plan is current.`, level);
     };
     if (!ctx.isIdle() || ctx.hasPendingMessages()) {
