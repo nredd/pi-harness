@@ -608,6 +608,10 @@ test("a tree move onto an enabled Plan without helpers turns the current Plan of
   assert.match(context.notifications.at(-1)?.message ?? "", /helper tools are unavailable/u);
   const gate = await emit(mock, "tool_call", { toolName: "read", input: {} }, context);
   assert.equal(gate, undefined, "Plan no longer gates tools");
+  assert.equal(context.statuses.get("plan-mode"), undefined);
+  mock.rawPi.setActiveTools(["read", "plan_mode_question", "plan_mode_complete"]);
+  await command(mock, context, "start");
+  assert.equal(context.statuses.get("plan-mode"), "plan active");
 });
 
 const RUNTIME_MODEL = { provider: "runtime-provider", id: "runtime-model" };
