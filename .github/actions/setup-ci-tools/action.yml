@@ -7,6 +7,11 @@ inputs:
   owned:
     description: Install the native owned-gate toolchain
     default: 'false'
+  npm-cache:
+    description: >-
+      Restore the npm cache for the root lockfile, and save it when the job succeeds. Only a job that runs `npm ci`
+      may leave this on, or it saves an empty cache under the key every other job restores
+    default: 'true'
 runs:
   using: composite
   steps:
@@ -18,11 +23,25 @@ runs:
       if: inputs.guest != 'wsl2'
       with:
         node-version-file: .node-version
-        cache: npm
+        # setup-node's own npm cache key is shared with every workflow that calls setup-node, including ones that
+        # never run `npm ci` and so save an empty cache under it (#531). The explicit cache below replaces it.
+        package-manager-cache: false
     - name: Pin npm to packageManager
       if: inputs.guest != 'wsl2'
       shell: bash
       run: npm install --global "$(node -p 'require("./package.json").packageManager')"
+    - name: Locate the npm cache
+      id: npm-cache
+      if: inputs.guest != 'wsl2' && inputs.npm-cache == 'true'
+      shell: bash
+      run: echo "dir=$(npm config get cache)" >>"$GITHUB_OUTPUT"
+    # Release-asset core tarballs then come from the cache instead of the release CDN. npm still checks every cached
+    # tarball against its lockfile `integrity` (docs/releases.md).
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      if: inputs.guest != 'wsl2' && inputs.npm-cache == 'true'
+      with:
+        path: ${{ steps.npm-cache.outputs.dir }}
+        key: npm-ci-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
     - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       if: inputs.guest != 'wsl2' && inputs.owned == 'true'
       with:

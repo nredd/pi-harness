@@ -2376,3 +2376,81 @@ def test_docs_list_every_benchmark_input() -> None:
     )
     for entry in sorted(ci_paths.BENCHMARK_INPUT_FILES) + list(ci_paths.BENCHMARK_INPUT_PREFIXES):
         assert f"`{entry}`" in bullet
+
+
+SETUP_CI_TOOLS = "./.github/actions/setup-ci-tools"
+NPM_INSTALL_COMMANDS = ("npm ci", "make install-owned")
+
+
+def runs_npm_install(step: dict[str, Any]) -> bool:
+    """Report whether a workflow step runs `npm ci`, directly or through `make install-owned`.
+
+    Parameters:
+        step (dict[str, Any]): One workflow step.
+
+    Returns:
+        bool: True when the step's `run` script installs from the root lockfile.
+    """
+    return any(command in step.get("run", "") for command in NPM_INSTALL_COMMANDS)
+
+
+def test_setup_ci_tools_restores_the_lockfile_npm_cache_under_its_own_key() -> None:
+    """Pin the explicit npm cache that keeps release-CDN tarball fetches out of every `npm ci` (#531).
+
+    setup-node's implicit npm cache key is shared with workflows that never run `npm ci`, which saved an empty
+    cache that every hosted macOS cell then restored.
+    """
+    action = yaml.safe_load((ROOT / ".github/actions/setup-ci-tools/action.yml").read_text())
+    assert action["inputs"]["npm-cache"]["default"] == "true"
+    steps = action["runs"]["steps"]
+    node = next(i for i, step in enumerate(steps) if "actions/setup-node@" in step.get("uses", ""))
+    assert steps[node]["with"]["package-manager-cache"] is False
+    assert "cache" not in steps[node]["with"]
+    pin = next(i for i, step in enumerate(steps) if step.get("name") == "Pin npm to packageManager")
+    locate = next(i for i, step in enumerate(steps) if step.get("id") == "npm-cache")
+    assert steps[locate]["run"] == 'echo "dir=$(npm config get cache)" >>"$GITHUB_OUTPUT"'
+    cache = next(i for i, step in enumerate(steps) if step.get("uses", "").startswith("actions/cache@"))
+    assert node < pin < locate < cache
+    assert re.fullmatch(r"actions/cache@[0-9a-f]{40}", steps[cache]["uses"])
+    gate = "inputs.guest != 'wsl2' && inputs.npm-cache == 'true'"
+    assert steps[locate]["if"] == steps[cache]["if"] == gate
+    # Exact key, no restore-keys: a lockfile change starts a fresh cache instead of growing an old one.
+    assert steps[cache]["with"] == {
+        "path": "${{ steps.npm-cache.outputs.dir }}",
+        "key": "npm-ci-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}",
+    }
+
+
+def test_every_npm_ci_job_restores_the_npm_cache_and_no_other_job_saves_one() -> None:
+    """Every ci.yml job that runs `npm ci` restores the npm cache first; any other job turns it off."""
+    installing: set[str] = set()
+    for name, job in jobs().items():
+        steps = job.get("steps", [])
+        setups = [i for i, step in enumerate(steps) if step.get("uses") == SETUP_CI_TOOLS]
+        installs = [i for i, step in enumerate(steps) if runs_npm_install(step)]
+        if installs:
+            installing.add(name)
+            assert setups, name
+            assert setups[0] < installs[0], name
+            assert all(steps[i]["with"].get("npm-cache", "true") == "true" for i in setups), name
+        else:
+            assert all(steps[i]["with"].get("npm-cache") == "false" for i in setups), name
+    assert {*OWNED_SHARD_JOBS.values(), "contracts", "stack"} <= installing
+
+
+@pytest.mark.parametrize(
+    "workflow", sorted((ROOT / ".github/workflows").glob("*.yml")), ids=lambda path: path.name
+)
+def test_setup_node_without_npm_ci_never_saves_an_npm_cache(workflow: Path) -> None:
+    """A setup-node step in a job that runs no `npm ci` disables setup-node's implicit npm cache.
+
+    Parameters:
+        workflow (Path): One workflow file.
+    """
+    for name, job in yaml.safe_load(workflow.read_text())["jobs"].items():
+        steps = job.get("steps", [])
+        if any(runs_npm_install(step) for step in steps):
+            continue
+        for step in steps:
+            if "actions/setup-node@" in step.get("uses", "") and "cache" not in step.get("with", {}):
+                assert step["with"].get("package-manager-cache") is False, f"{workflow.name}:{name}"
