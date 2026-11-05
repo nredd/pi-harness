@@ -6,12 +6,14 @@ import {
   PLAN_MODE_COMPLETE_TOOL_NAME,
   PLAN_MODE_QUESTION_TOOL_NAME,
   PLAN_MODE_THINKING_LEVELS,
+  availablePlanModelTiers,
   canSelectToolInPlanMode,
   configuredImplementationModel,
   configuredImplementationPlanRetention,
   configuredImplementationThinkingLevel,
   configuredPlanExportPath,
   configuredPlanModeToggleShortcut,
+  configuredPlanModel,
   defaultPlanModeToolNames,
   deferPlanEdit,
   editPlanThenReopen,
@@ -21,11 +23,12 @@ import {
   planModeSettingsPath,
   planModeToolAvailability,
   planModeToolSelection,
+  planModelTarget,
   readPlanModeSettings,
   retentionLabel,
   snapshotAvailableImplementationModels,
   updatePlanModeSettings
-} from "./chunk-VZDACPW4.ts";
+} from "./chunk-5F4MQ7V2.ts";
 
 // src/active-implementation-menu.ts
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
@@ -757,6 +760,7 @@ async function showPlanModeSettings(ctx, options) {
   const implementationModels = snapshotAvailableImplementationModels(ctx);
   const modelItemIds = new Map(implementationModels.map((model, index) => [model, `plan-settings-model:${index}`]));
   const modelsByItemId = new Map(implementationModels.map((model) => [modelItemIds.get(model), model]));
+  const planModelTiers = availablePlanModelTiers(implementationModels);
   const loadState = async () => {
     const loaded = await readSettings(options.settingsPath);
     if (loaded.kind === "invalid") {
@@ -832,9 +836,35 @@ async function showPlanModeSettings(ctx, options) {
             description: "Saved TUI shortcut. Changes require /reload or restarting Pi; the current binding stays unchanged.",
             currentValue: configuredPlanModeToggleShortcut(state.settings) ?? "none",
             action: "open-shortcut"
+          },
+          {
+            id: "planModel",
+            label: "Plan model",
+            description: "Choose the router tier Plan turns run on when the next Plan workflow starts.",
+            currentValue: planModelValue(configuredPlanModel(state.settings), planModelTiers),
+            action: "open-plan-model"
           }
         ]
       },
+      "plan-model": ({ state }) => ({
+        kind: "choice",
+        title: "Plan model",
+        lines: [
+          "Plan turns run on the chosen router tier; leaving Plan restores the previous model.",
+          "Inherit is the default and the fallback when the tier is unavailable."
+        ],
+        items: [
+          { id: "inherit", label: "Inherit", description: "Plan on the current model." },
+          ...planModelTiers.map((tier) => ({
+            id: tier,
+            label: tier,
+            description: safeModelReference2(planModelTarget(tier))
+          }))
+        ],
+        action: "set-plan-model",
+        initialItemId: planModelTiers.find((tier) => tier === configuredPlanModel(state.settings)) ?? "inherit",
+        hint: "back"
+      }),
       tools: ({ state }) => ({
         kind: "multiSelect",
         title: "Default Plan policy allowlist",
@@ -913,6 +943,17 @@ async function showPlanModeSettings(ctx, options) {
           signal,
           `Plan mode thinking level: ${value}. Applies to the next Plan workflow.`
         );
+      },
+      "open-plan-model": async () => ({ kind: "to", screen: "plan-model" }),
+      "set-plan-model": async ({ ctx: actionCtx, itemId, signal }) => {
+        const tier = planModelTiers.find((candidate) => candidate === itemId);
+        const result = await savePatch(
+          actionCtx,
+          { planModel: tier ?? null },
+          signal,
+          `Plan model: ${tier ?? "inherit"}. Applies to the next Plan workflow.`
+        );
+        return result.kind === "stay" ? { kind: "to", screen: "settings" } : result;
       },
       "open-tools": async () => ({ kind: "to", screen: "tools" }),
       "set-retention": async ({ ctx: actionCtx, value, signal }) => {
@@ -1067,6 +1108,10 @@ function invalidScreen(settingsPath, state) {
 function retentionFromLabel(value) {
   return IMPLEMENTATION_PLAN_RETENTIONS.find((retention) => retentionLabel(retention) === value);
 }
+function planModelValue(configured, tiers) {
+  if (!configured) return "inherit";
+  return tiers.includes(configured) ? configured : `inherit \xB7 ${configured} unavailable`;
+}
 function implementationModelValue(settings, models) {
   const configured = configuredImplementationModel(settings);
   if (!configured) return "same as plan";
@@ -1162,4 +1207,4 @@ export {
   showReadyPlanMenu,
   showSavedPlanMenu
 };
-//# sourceMappingURL=interactive-ui-AU4WYPXK.ts.map
+//# sourceMappingURL=interactive-ui-UQO6KS2P.ts.map

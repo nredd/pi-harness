@@ -2,6 +2,7 @@
 
 [Back to README](../README.md)
 
+- [Plan model](#plan-model)
 - [Default Plan policy tools](#default-plan-policy-tools)
 - [Enable inactive built-in search tools in Pi](#enable-inactive-built-in-search-tools-in-pi)
 - [Plan reinjection](#plan-reinjection)
@@ -13,7 +14,7 @@
 
 ## ⚙️ Settings
 
-Run `/plan settings` or open **Settings** from an inactive `/plan` menu to edit **Plan thinking**, **Plan policy tools**, **Plan reinjection**, **Fresh model**, **Fresh thinking**, **Export destination**, and **Plan mode shortcut**.
+Run `/plan settings` or open **Settings** from an inactive `/plan` menu to edit **Plan thinking**, **Plan policy tools**, **Plan reinjection**, **Fresh model**, **Fresh thinking**, **Export destination**, **Plan mode shortcut**, and **Plan model**.
 You can also edit `$PI_CODING_AGENT_DIR/pi-plan-mode.json` (normally `~/.pi/agent/pi-plan-mode.json`) manually.
 `safeSubcommands` and `trustedDirectories` are JSON-only, and are read from this global file only (there are no project-level plan-mode settings, so a repository cannot widen its own shell policy).
 The optional file is read at session start, watched for changes, and created only by an explicit Settings save or manual edit.
@@ -21,6 +22,7 @@ The shortcut is disabled when `toggleShortcut` is omitted.
 ```json
 {
   "thinkingLevel": "inherit",
+  "planModel": "@deep",
   "defaultPlanTools": ["read", "bash", "grep", "find", "ls"],
   "implementationPlanRetention": "clear-on-start",
   "defaultImplementationModel": {
@@ -46,6 +48,27 @@ Plan helper schemas are stable from extension registration onward, and Plan mode
 Tool visibility alone is not Plan activation.
 Only the latest effective active Plan contract authorizes `plan_mode_question` or `plan_mode_complete`; ordinary planning and the `writing-plans` skill use their own workflow instead.
 The retired `toolVisibility` key is ignored and preserved as unknown data when another setting is saved or a legacy settings file is migrated.
+
+### Plan model
+
+`planModel` runs Plan turns on a subscription-router tier, like Claude Code's `opusplan`: plan on `@deep`, implement on whatever you were using.
+Omit it, or choose **Inherit**, to plan on the current model; that is the default.
+The value is a tier reference, `@` plus a router profile key matching `^[a-z0-9][a-z0-9._-]*$` (at most 512 characters), and selects the router's `router/<tier>` virtual model.
+A concrete `provider/modelId` is rejected and invalidates the settings file: profile differences live in the router's tier mapping, not here.
+Settings lists the `router/*` models in the current scoped or available catalogue.
+
+When a Plan workflow starts, Plan mode remembers the current model and switches to the tier before the first Plan request.
+Pi's per-model thinking default does not replace the current or configured Plan thinking level during the switch.
+**Implement here**, **Export plan…**, **Save for later**, and `/plan exit` switch back to the remembered model and thinking before the next request.
+A `/model` change during Plan wins and stays after exit, as does a manual thinking change.
+The switch is persisted with Plan state, so `/reload` and resume keep planning on the tier and still restore the previous model on exit.
+**Start fresh and implement** uses **Fresh model** when set; otherwise the fresh session inherits the planning model, and the source session keeps its Plan state and tier.
+
+An unregistered or unauthenticated tier warns once and Plan starts on the current model; the stored preference is kept.
+Quota exhaustion is the router's business: its exhaustion policy waits or fails, and Plan mode never substitutes another tier or model.
+A workflow-mutex refusal changes nothing.
+Saving applies to the next Plan workflow.
+See [cache-stable mode transitions](../README.md#-cache-stable-mode-transitions) for the cache cost of switching.
 
 ### Default Plan policy tools
 

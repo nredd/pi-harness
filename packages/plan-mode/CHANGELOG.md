@@ -4,6 +4,13 @@
 
 ### Added
 
+- `planModel` (`/plan settings` -> **Plan model**) runs Plan turns on a router tier such as `@deep`,
+  like Claude Code's `opusplan`. Plan start remembers the current model and thinking, and Implement
+  here, Export, Save and exit restore them; a `/model` change during Plan wins. The switch persists
+  with Plan state across reload and resume. An unavailable or unauthenticated tier warns once and
+  plans on the current model. Concrete model ids are rejected; the default stays inherit to keep the
+  provider cache warm.
+
 - `Edit plan…` in the ready-plan chooser (also `Ctrl+G`), the `/plan` ready menu and the saved-plan menu
   opens the plan in Pi's editor. A saved edit replaces the stored plan as source `user_edit`, persists
   it with the Plan state, reopens the menu, and tells the model once through a hidden

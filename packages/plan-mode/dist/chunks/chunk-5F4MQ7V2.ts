@@ -1475,6 +1475,24 @@ function longestBacktickRun(text) {
   return Math.max(0, ...(text.match(/`+/gu) ?? []).map((run) => run.length));
 }
 
+// src/plan-model.ts
+var PLAN_MODEL_ROUTER_PROVIDER = "router";
+var TIER_KEY = /^[a-z0-9][a-z0-9._-]*$/u;
+function normalizePlanModelTier(value) {
+  if (typeof value !== "string") return void 0;
+  const tier = value.trim();
+  return tier.length <= MAX_PENDING_IMPLEMENTATION_MODEL_IDENTIFIER_LENGTH && tier.startsWith("@") && TIER_KEY.test(tier.slice(1)) ? tier : void 0;
+}
+function planModelTarget(tier) {
+  return { provider: PLAN_MODEL_ROUTER_PROVIDER, modelId: tier.slice(1) };
+}
+function availablePlanModelTiers(models) {
+  return models.flatMap((model) => {
+    const tier = model.provider === PLAN_MODEL_ROUTER_PROVIDER ? normalizePlanModelTier(`@${model.id}`) : void 0;
+    return tier ? [tier] : [];
+  });
+}
+
 // src/settings.ts
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
@@ -1568,6 +1586,11 @@ function normalizePlanModeSettings(value) {
   const settings = {
     thinkingLevel
   };
+  if (Object.hasOwn(value, "planModel")) {
+    const planModel = normalizePlanModelTier(Reflect.get(value, "planModel"));
+    if (!planModel) return void 0;
+    settings.planModel = planModel;
+  }
   if (Object.hasOwn(value, "defaultPlanTools")) {
     const defaultPlanTools = normalizeToolNames(Reflect.get(value, "defaultPlanTools"));
     if (!defaultPlanTools) return void 0;
@@ -1715,6 +1738,8 @@ function updatePlanModeSettings(patch, options = {}) {
     const current = await readSettingsDocumentForUpdate(settingsPath, legacySettingsPath);
     const updated = { ...current };
     if (patch.thinkingLevel !== void 0) updated.thinkingLevel = patch.thinkingLevel;
+    if (patch.planModel === null) delete updated.planModel;
+    else if (patch.planModel !== void 0) updated.planModel = patch.planModel;
     if (patch.defaultPlanTools === null) delete updated.defaultPlanTools;
     else if (patch.defaultPlanTools !== void 0) {
       updated.defaultPlanTools = [...patch.defaultPlanTools];
@@ -1878,6 +1903,9 @@ function safeReadError(error) {
 }
 function configuredThinkingLevel(settings) {
   return settings.thinkingLevel === "inherit" ? void 0 : settings.thinkingLevel;
+}
+function configuredPlanModel(settings) {
+  return settings.planModel;
 }
 function configuredImplementationPlanRetention(settings) {
   return settings.implementationPlanRetention ?? "clear-on-start";
@@ -2509,6 +2537,8 @@ export {
   deferPlanEdit,
   reviewEditedPlan,
   createPlanEditMessage,
+  planModelTarget,
+  availablePlanModelTiers,
   PLAN_MODE_THINKING_LEVELS,
   IMPLEMENTATION_THINKING_LEVELS,
   IMPLEMENTATION_PLAN_RETENTIONS,
@@ -2518,6 +2548,7 @@ export {
   updatePlanModeSettings,
   awaitPlanModeSettingsWrites,
   configuredThinkingLevel,
+  configuredPlanModel,
   configuredImplementationPlanRetention,
   configuredImplementationModel,
   configuredImplementationThinkingLevel,
@@ -2543,4 +2574,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-VZDACPW4.ts.map
+//# sourceMappingURL=chunk-5F4MQ7V2.ts.map
