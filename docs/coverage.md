@@ -22,11 +22,11 @@ A package cannot leave `ratchet` except to graduate to `100-percent`, an enforce
 signal. The rule keeping `excluded`/`report-only` signals report-only is unchanged. A floor is a new
 enforced signal, not an allowance or waiver: it is the measured count on a named commit and OS.
 
-The initial integration checkpoint is recorded [here](../coverage/receipts/main-integration.md).
+The initial integration checkpoint is recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/main-integration.md).
 Facade validation and the actual hosted producer failure diagnosis are recorded
-[here](../coverage/receipts/facade-followup.md). Git fixture isolation, both hosted artifacts and the
-#155 -> #195 dev-tools dependency decision are recorded [here](../coverage/receipts/git-isolation.md).
-Final hosted closure and per-OS receipts are recorded [here](../coverage/receipts/final-closure.md).
+[here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/facade-followup.md). Git fixture isolation, both hosted artifacts and the
+#155 -> #195 dev-tools dependency decision are recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/git-isolation.md).
+Final hosted closure and per-OS receipts are recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/final-closure.md).
 All eight primary packages have zero uncovered lines/functions on macOS and Linux. Until #375,
 Linux missed 47 lines / 8 functions in resource-sampler's native `darwin.ts` paths under a
 `target_allowances` entry. `nativeCalls` now takes an injectable host (`platform`, `arch`,
@@ -44,11 +44,11 @@ initializers, then executed by the real worker/VM with nested scripts sharing co
 opt-in: ordinary workflows never inspect or transport `globalThis.__coverage__`. The dedicated producer
 merges VM counters into Vitest 5's `__VITEST_COVERAGE__` store; the ordinary primary suite keeps its
 `src`-only report separate. These source-complete reports can still contain uncovered paths, not an
-invented 100% result. Their local zero-floor measurement enables enforcement; clean hosted macOS and
-Linux final-HEAD receipts remain required acceptance evidence. The measured per-OS primary floors are enforced now; uncovered
+invented 100% result. Their local zero-floor measurement enables enforcement; required CI enforces it at 0/0 on
+macOS and Linux. The measured per-OS primary floors are enforced now; uncovered
 branches are capped per signal ([branch caps](#branch-caps)), and Bun signals follow their own declared enforcement (see below). The conflict-resolution decisions and exact
 base-relative facade ledger regression for the `b51e177` main merge are recorded
-[here](../coverage/receipts/tier-main-merge.md).
+[here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/tier-main-merge.md).
 
 The target is **100% of owned executable source lines AND functions**, measured by each
 package's primary runner. Uncovered branches are gated by per-signal caps on their way to 0 (below). This is source coverage, not
@@ -111,15 +111,15 @@ Eligible pending packages then fail, too; owner-excluded/report-only domains do 
 ## Independent signals
 
 Clean local counts, report hashes and the measured +26-second (8.5%) serial runtime sample are
-recorded [here](../coverage/receipts/phase0-macos.md). These local receipts are advisory evidence,
+recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/phase0-macos.md). These local receipts are advisory evidence,
 not hosted floors or a hosted-CI timing claim. Hosted artifact measurements and their independent
-run comparison are recorded [here](../coverage/receipts/hosted-platforms.md).
+run comparison are recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/hosted-platforms.md).
 
 The accounting script consumes LCOV, not runner APIs. Primary reports use Istanbul for `subagents`, `plan-mode`, `todo` and `preset`.
 Real Pi/Jiti reloads collide with Vitest-generated scripts at identical source URLs and corrupt
 V8 attribution. The preset and todo diagnoses demonstrate false misses and false hits; preserve
 real-loader tests rather than deleting assertions to repair counters. Istanbul credits instrumented
-Vitest transforms, not independent Jiti-only execution. Dev-tools also uses Istanbul, following #195, with all 23 executable modules explicitly included.
+Vitest transforms, not independent Jiti-only execution. Dev-tools also uses Istanbul, following #195, over all 23 executable modules.
 Its static `src/core/index.ts` facade is validated by real source/emitted-ESM instrumentation.
 Other primary producers retain V8. Since #347 that includes the import-audit and probe helpers:
 `scripts/vitest.config.ts` and `integration/probes/vitest.config.ts` replace c8 + `node --test`, run
@@ -173,7 +173,7 @@ Every declared `test:bun` command also emits an independent `bun` LCOV signal. N
 are measured. `dev-tools`, `plan-mode`, `preset`, `subscription-router` and `todo` are `enforced` at
 0/0 on darwin and linux since [#320](https://github.com/nredd/pi-harness/issues/320): full suite, full primary
 inventory, 0/0 in their own PRs' hosted macos-14 and ubuntu-24.04 artifacts (receipts
-[here](../coverage/receipts/bun-enforced.md)). `resource-sampler` is `enforced` at 0/0 on
+[here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/bun-enforced.md)). `resource-sampler` is `enforced` at 0/0 on
 darwin and linux since [#375](https://github.com/nredd/pi-harness/issues/375), which closed its
 darwin 8/4 and linux 47/8 Bun misses with the same fake-host FFI tests as primary. `inprocess` joins them since
 [#376](https://github.com/nredd/pi-harness/issues/376), see below. The other two
@@ -184,7 +184,7 @@ Their stored `max_uncovered` values are advisory references, not enforced budget
 rely on that default. Native `bun test` subset measurements are NOT the owned-source denominator:
 Bun 1.3.14 native coverage omits never-imported files. Full Vitest-on-Bun producers now use
 Istanbul for router, preset, sampler, todo, plan-mode, dev-tools and inprocess through `scripts/run-vitest.ts bun`.
-They inherit the full explicit primary instrumentation inventory (no `files` subset). The launcher's
+They inherit the full primary instrumentation inventory (no `files` subset). The launcher's
 `bun` engine appends the provider, the `text` and `lcov` reporters (Vitest's dotted options) and
 `coverage/bun`, so each `test:bun` passes only package arguments. The sampler retains one
 worker.
@@ -220,7 +220,7 @@ Flip a package's Bun signal to `enforced` **only when its full suite runs under 
 OSes and its Bun inventory covers every owned executable source file**, including never-imported
 modules through explicit import-all/instrumentation. A green compatibility subset alone is not
 that evidence, even when its test count matches primary. Follow #160's reviewed migration spec;
-record complete-source receipts before establishing enforced Bun floors. Accounting rejects an
+cite complete-source hosted run ids before establishing enforced Bun floors. Accounting rejects an
 enforced Bun signal whose file subset omits owned source. Enforced-to-enforced budgets ratchet;
 a report-only-to-enforced promotion establishes the new complete-source floor.
 
@@ -241,8 +241,11 @@ and absent expected source all fail closed.
 ## Inventory and exclusions
 
 Each package lists owned source files or source globs. A signal without a `files` subset expects
-the entire expanded inventory after justified exclusions. Primary instrumentation includes must cover that inventory, including never-imported
-modules. New source matched by a glob fails until instrumentation includes are updated.
+the entire expanded inventory after justified exclusions. `coverage/policy.json` is the only copy of
+that inventory: every Vitest coverage producer reads it with `readFileSync` and passes its package's
+`owned` as `coverage.include` and `exclusions[].path` as `coverage.exclude`. A never-imported module
+matched by a glob lands in the report uncovered and fails accounting; a report missing an expected
+file fails accounting too. `test_coverage_producers.py` asserts each config reads its own policy entry.
 Tests and dedicated test-helper directories are outside production scope by definition, not
 coverage exclusions. Non-directory test fixture/assertion helpers use explicit `test-helper`
 exclusions with reasons. The legacy `test_helpers` field remains readable for old base policies,
@@ -301,9 +304,9 @@ The generated stats CLI bundle has a reasoned generated-artifact exclusion; its 
 documentation site. Since #347 its suites run under Vitest, and the separate `computer-use-vitest`
 policy entry (same root) measures the 33 executable JS/TS runtime modules with Istanbul: `src`,
 `extensions`, `setup-helper.mjs`, `build-native.mjs`, `rust-coverage.mjs` and the documentation
-generators, with the declaration-only `src/platform/types.ts` excluded as type-only. The Vitest
-`include` globs `src/**` and `extensions/**` and `exclude`s only `types.ts`, so a new module joins
-the report instead of dropping out; `scripts/tests/test_coverage_producers.py` binds both to the policy. It stays
+generators, with the declaration-only `src/platform/types.ts` excluded as type-only. Its Vitest
+config reads both from the policy like every other producer, so a new module joins the report
+instead of dropping out. It stays
 `goal: "excluded"` and report-only, with no 100% claim; subprocess-run scripts count only what the
 suites import. First references: macOS **2061 lines / 539 functions** uncovered (local
 `npm test` on `9aad6172`, unchanged when re-measured with the glob `include` on the #353 follow-up), Linux **2088 / 548** (hosted `coverage-ubuntu-24.04` artifact, run
@@ -383,15 +386,14 @@ eight-package zero target; its two measured signals are the enforced `ratchet` f
 
 - Check that the new file matches its package's `owned` inventory; otherwise add it explicitly.
   Do not mark shipped runtime code as verification just because it lives under `scripts/`.
-- For a measured package, update the primary producer's explicit includes so never-imported source
-  still counts. For #161's `packages/subagents/src/model-selection.ts`, `src/**/*.ts` already owns
-  the file, but the explicit list in `packages/subagents/vitest.config.ts` must include it too.
+- Do not edit a measured package's Vitest config: it reads `owned` and `exclusions` from the policy,
+  so a never-imported file is reported uncovered and fails accounting until a test covers it.
 - Update an independent compatibility `files` list only when that declared suite actually reports
   the new file. Do not fabricate a report or merge compatibility counters with primary counters.
-- Run `make check-scripts` to check source classification and producer inventory consistency;
+- Run `make check-scripts` to check source classification and producer wiring;
   run the affected package's existing primary/declared compatibility invocations, then
-  `make check-coverage`. Missing expected source fails closed. Keep fresh clean
-  receipts and never raise uncovered budgets to accommodate new untested behavior.
+  `make check-coverage`. Missing expected source fails closed. Cite the clean
+  hosted run ids in the PR and never raise uncovered budgets to accommodate new untested behavior.
 - For a genuine non-shipped verification harness, add one exact `verification_helpers` entry with
   its own reason. For source removal, rename or role changes, follow the reclassification ledger
   below, including affected compatibility scopes.
@@ -424,6 +426,11 @@ alternate index/object paths and injected config entries are removed, and global
 reads are disabled. Repository-local configuration/worktree topology remains intact. Disposable
 Git fixtures use this same boundary with empty templates and disabled hooks; a real private decoy
 regression verifies inherited routing/config cannot redirect writes or execute injected hooks.
+
+Its tests are `scripts/tests/test_coverage_*.py`, one file per behavior (`lcov`, `inventory`,
+`floors`, `policy_pins`, plus base, platforms, enforcement, goals, facades, producers and the Git
+boundary), sharing `scripts/tests/coverage_fixtures.py`. A test imports fixtures from there, never
+from another test file.
 
 This consumes reports without executing tests, writes `coverage/summary.json`, and compares
 each independent per-OS budget with `git show <base>:coverage/policy.json`. The default OS is
@@ -484,9 +491,10 @@ Reduce budgets only to clean-producer measured values. Missing reports or failed
 cannot establish floors. The initial hosted accounting failure exposed wrong local floors; its
 complete reports came from successful test producers, so they establish the initial per-OS policy
 before this PR introduces that policy to main. This is not permission to raise an existing main
-floor. Keep measurement receipts with the policy update. A new package needs an owned inventory,
-justified declaration exclusions, complete primary includes, text+LCOV producer wiring,
-independent runtime signal if declared, and clean-run receipts before its budgets are accepted.
+floor. Cite the measuring hosted run ids in the package `note`; receipts live in git history and
+the PR, not in the tree. A new package needs an owned inventory,
+justified declaration exclusions, a primary producer reading that inventory, text+LCOV wiring,
+independent runtime signal if declared, and clean hosted runs before its budgets are accepted.
 The command also rejects npm workspaces missing from policy.
 
 ## Refresh floors from hosted artifacts

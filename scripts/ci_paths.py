@@ -40,6 +40,8 @@ TOOLCHAIN_INPUTS = frozenset(
 )
 WSL_INPUT_FILES = TOOLCHAIN_INPUTS | {
     ".gitattributes",
+    # The guest's probes and import-audit Vitest configs read their coverage inventory from it.
+    "coverage/policy.json",
     "package-lock.json",
     "integration/pyproject.toml",
     "integration/uv.lock",

@@ -1,4 +1,9 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vitest/config";
+
+const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] } = JSON.parse(
+	readFileSync(new URL("../../coverage/policy.json", import.meta.url), "utf8"),
+).packages.inprocess;
 
 // Match dev-tools: extensions run on the main thread in Pi, never a worker thread.
 export default defineConfig({
@@ -8,14 +13,8 @@ export default defineConfig({
 			reporter: ["text", "lcov"],
 			reportsDirectory: "coverage/primary",
 			reportOnFailure: true,
-			include: [
-				"agents-support.ts",
-				"goal-support.ts",
-				"native-timers.ts",
-				"support.ts",
-				"todo-support.ts",
-				"verification/home-guard.ts",
-			],
+			include: owned,
+			exclude: exclusions.map(({ path }) => path),
 		},
 		pool: "forks",
 		maxWorkers: 2,

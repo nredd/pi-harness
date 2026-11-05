@@ -15,9 +15,9 @@ import pytest
 from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from coverage_fixtures import SCRIPT, commit_base, policy, setup_report
+
 from coverage_accounting import Counts, Policy, account, base_policy, check_ratchet
-from tests.test_coverage_accounting import SCRIPT, policy, setup_report
-from tests.test_coverage_round2 import commit_base
 
 
 @pytest.mark.parametrize("runner_os", ["darwin", "linux"])

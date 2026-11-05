@@ -36,7 +36,7 @@
       "owned": ["src/**/*.ts"],
       "exclusions": [{ "path": "src/core/index.ts", "kind": "non-executable-facade", "reason": "Only static named ESM re-exports; no executable statements or functions. Strict facade validation rejects executable additions; every target module remains owned and instrumented." }],
       "status": "measured",
-      "note": "Primary Istanbul follows #195. Floors/references come from complete hosted runs 40852918834 and 40857829296; see coverage/receipts/final-closure.md.",
+      "note": "Primary Istanbul follows #195. Floors/references come from complete hosted runs 40852918834 and 40857829296.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
@@ -273,7 +273,7 @@
       "owned": ["scripts/*.mjs"],
       "exclusions": [],
       "status": "measured",
-      "note": "`test:dist` emits a complete primary report for both runtime builder scripts; required CI records fresh macOS and Linux final-HEAD receipts.",
+      "note": "`test:dist` emits a complete primary report for both runtime builder scripts; required CI enforces it at 0/0 on macOS and Linux.",
       "signals": {
         "primary": {
           "report": "coverage/runtime-build-tooling/lcov.info",
@@ -287,7 +287,7 @@
       "owned": ["examples/**/*.js"],
       "exclusions": [],
       "status": "measured",
-      "note": "`test:workflow-examples` emits a complete primary report for all six example scripts; required CI records fresh macOS and Linux final-HEAD receipts.",
+      "note": "`test:workflow-examples` emits a complete primary report for all six example scripts; required CI enforces it at 0/0 on macOS and Linux.",
       "signals": {
         "primary": {
           "report": "coverage/workflow-examples/lcov.info",

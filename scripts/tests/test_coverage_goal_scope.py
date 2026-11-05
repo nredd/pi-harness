@@ -9,8 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from coverage_fixtures import policy, setup_report
 from pydantic import ValidationError
-from test_coverage_accounting import policy, setup_report
 
 from coverage_accounting import Policy, account, check_ratchet
 

@@ -1,4 +1,9 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vitest/config";
+
+const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] } = JSON.parse(
+	readFileSync(new URL("../../coverage/policy.json", import.meta.url), "utf8"),
+).packages["subscription-router"];
 
 export default defineConfig({
 	test: {
@@ -8,16 +13,8 @@ export default defineConfig({
 			reporter: ["text", "lcov"],
 			reportsDirectory: "coverage/primary",
 			reportOnFailure: true,
-			include: [
-				"src/config.ts",
-				"src/exhaustion.ts",
-				"src/index.ts",
-				"src/model-ref.ts",
-				"src/recovery.ts",
-				"src/router.ts",
-				"src/selection.ts",
-				"src/usage.ts",
-			],
+			include: owned,
+			exclude: exclusions.map(({ path }) => path),
 		},
 		setupFiles: ["../../integration/inprocess/verification/home-setup.ts"],
 	},

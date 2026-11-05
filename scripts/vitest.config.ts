@@ -1,6 +1,11 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vitest/config";
 
-// Match `integration/inprocess`. Explicit files, no glob: `tests/` is the pytest suite.
+const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] } = JSON.parse(
+	readFileSync(new URL("../coverage/policy.json", import.meta.url), "utf8"),
+).packages["import-audit"];
+
+// Match `integration/inprocess`. Explicit test files, no glob: `tests/` is the pytest suite.
 export default defineConfig({
 	test: {
 		include: ["check-biome-paths.test.mjs", "import_audit.test.ts", "router_contract.test.mjs", "run-vitest.test.ts"],
@@ -9,7 +14,8 @@ export default defineConfig({
 			reporter: ["text", "lcov"],
 			reportsDirectory: "coverage/primary",
 			reportOnFailure: true,
-			include: ["check-biome-paths.mjs", "import_audit.ts", "router_contract.mjs", "run-vitest.ts"],
+			include: owned,
+			exclude: exclusions.map(({ path }) => path),
 		},
 		pool: "forks",
 		maxWorkers: 2,
