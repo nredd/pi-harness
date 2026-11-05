@@ -6,7 +6,7 @@ import path from "node:path";
 import { test } from "vitest";
 
 // Each run compiles real Swift. Measured on 72 hosted `owned shard (macos-14, ts)` jobs (`ci.yml`
-// runs 41781117332-41960624589): green p50 6472 ms, p99 9768 ms (n=67); slowest 21644 ms on a
+// runs 41781117332-41960624589): green p50 6472 ms, p99 9844 ms (n=67); slowest 21644 ms on a
 // ~3.5x-degraded runner (job 126769877232), which overran the 20 s suite default. The budget is
 // ~2x that, as in `docs/test-worker-budgets.md` (#457).
 const SWIFT_COMPILE_AND_RUN_BUDGET_MS = 45_000;
