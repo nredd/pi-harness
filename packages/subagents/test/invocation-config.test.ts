@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveAgentInvocationConfig, resolveCwdParam, resolveJoinMode } from "../src/invocation-config.js";
+import { resolveAgentInvocationConfig, resolveCwdParam } from "../src/invocation-config.js";
 import type { AgentConfig } from "../src/types.js";
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
@@ -132,18 +132,6 @@ describe("resolveAgentInvocationConfig", () => {
   it("keeps worktree isolation when the project allows it", () => {
     const resolved = resolveAgentInvocationConfig(makeConfig({ isolation: "worktree" }), {}, { worktreeAllowed: true });
     expect(resolved.isolation).toBe("worktree");
-  });
-});
-
-describe("resolveJoinMode", () => {
-  it("returns the global default for background agents", () => {
-    expect(resolveJoinMode("smart", true)).toBe("smart");
-    expect(resolveJoinMode("async", true)).toBe("async");
-  });
-
-  it("ignores join mode for foreground agents", () => {
-    expect(resolveJoinMode("smart", false)).toBeUndefined();
-    expect(resolveJoinMode("group", false)).toBeUndefined();
   });
 });
 

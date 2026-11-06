@@ -328,7 +328,7 @@ export interface AgentRecord {
   /** Order of this record's latest settle on the same counter, announced as `settleSeq`. */
   settleSeq?: number;
   /** Nesting depth: top-level subagent = 1. */
-  depth?: number;
+  depth: number;
   /**
    * The validated `StructuredOutput` payload, as canonical JSON.
    *

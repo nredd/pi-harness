@@ -6,6 +6,8 @@ import { ExhaustionTracker } from "../src/exhaustion.js";
 import { refKey } from "../src/model-ref.js";
 import {
 	ChainExhaustedError,
+	formatDecision,
+	hasPartialOutput,
 	isoSeconds,
 	isQuotaError,
 	type RouteDecision,
@@ -419,6 +421,52 @@ describe("isQuotaError", () => {
 		expect(isQuotaError({ stopReason: "error", errorMessage: "overloaded_error" })).toBe(false);
 		expect(isQuotaError({ stopReason: "error", errorMessage: "request took 4290ms" })).toBe(false);
 		expect(isQuotaError({ stopReason: "aborted", errorMessage: "429" })).toBe(false);
+		expect(isQuotaError({ stopReason: "error" })).toBe(false);
+	});
+});
+
+describe("hasPartialOutput", () => {
+	it("counts non-empty text or thinking and any tool call as output", () => {
+		const of = (...content: unknown[]) => hasPartialOutput({ content } as Parameters<typeof hasPartialOutput>[0]);
+		expect(of()).toBe(false);
+		expect(of({ type: "text", text: "" }, { type: "thinking", thinking: "" })).toBe(false);
+		expect(of({ type: "text", text: "partial" })).toBe(true);
+		expect(of({ type: "thinking", thinking: "partial" })).toBe(true);
+		expect(of({ type: "toolCall", id: "t", name: "read", arguments: {} })).toBe(true);
+	});
+});
+
+describe("Router.blockedBy", () => {
+	it("names the window a usage block reports, or quota when it reports none", () => {
+		const { router, cached } = harness();
+		cached.anthropic = { block: true, window: "five_hour", resetAt: T0 + MINUTE };
+		expect(router.blockedBy(SONNET_55)).toEqual({ reason: "five_hour exhausted", resetAt: T0 + MINUTE });
+		cached.anthropic = { block: true };
+		expect(router.blockedBy(SONNET_55)).toEqual({ reason: "quota exhausted", resetAt: undefined });
+		expect(router.blockedBy(TERRA)).toBeUndefined();
+	});
+});
+
+describe("formatDecision", () => {
+	it("renders candidate data age, or no data for a candidate scored without a snapshot", () => {
+		const text = formatDecision({
+			at: Date.UTC(2026, 8, 30, 18, 50, 3, 500),
+			profile: "default",
+			strategy: "ordered",
+			reason: "user",
+			chosen: refKey(SONNET_55),
+			candidates: [
+				{ model: refKey(SONNET_55), quota: { kind: "fallback", reason: "usage missing" }, ageMs: 3 * MINUTE + 59_000 },
+				{ model: refKey(TERRA), quota: { kind: "fallback", reason: "usage missing" } },
+			],
+			blocked: [{ model: refKey(SONNET_5), reason: "5h exhausted" }],
+		});
+		expect(text.split("\n")).toEqual([
+			"2026-09-30T18:50:03Z router/default user -> anthropic/claude-sonnet-5-5 (ordered)",
+			"    anthropic/claude-sonnet-5-5: fallback: usage missing, data 3m old",
+			"    openai-codex/gpt-5.6-terra: fallback: usage missing, no data",
+			"    anthropic/claude-sonnet-5: 5h exhausted",
+		]);
 	});
 });
 
@@ -489,5 +537,16 @@ describe("isoSeconds", () => {
 		expect(isoSeconds(Date.UTC(2026, 8, 30, 18, 50, 3, 500))).toBe("2026-09-30T18:50:03Z");
 		const error = new ChainExhaustedError("default", [], Date.UTC(2026, 8, 30, 18, 50, 3, 503));
 		expect(error.message).not.toMatch(/50[023]/);
+	});
+
+	it("says an exhausted chain resets at an unknown time when no reset is known", () => {
+		const error = new ChainExhaustedError(
+			"default",
+			[{ entry: SONNET_55, reason: "quota exhausted", quota: true }],
+			undefined,
+		);
+		expect(error.message).toBe(
+			"router/default: every model is unavailable (anthropic/claude-sonnet-5-5: quota exhausted). Earliest reset an unknown time.",
+		);
 	});
 });

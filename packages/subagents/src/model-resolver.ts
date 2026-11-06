@@ -219,6 +219,13 @@ function scopedCandidates<T extends { entry: ModelEntry }>(
   return scoped.length > 0 ? scoped : candidates;
 }
 
+/** Stable tie-breaker independent of registry insertion order and locale. */
+function compareModelIdentity(a: ModelEntry, b: ModelEntry): number {
+  const left = `${a.provider}/${a.id}`;
+  const right = `${b.provider}/${b.id}`;
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function rankFuzzy(
   matches: { entry: ModelEntry; score: number }[],
   registry: ModelRegistry,
@@ -226,8 +233,13 @@ function rankFuzzy(
 ): ModelEntry | undefined {
   const ranked = scopedCandidates(matches, registry, context)
     .map(c => ({ ...c, version: parseModelVersion(c.entry.id) }))
-    .sort((a, b) => compareVersionsDesc(a.version, b.version) || b.score - a.score);
+    .sort((a, b) => compareVersionsDesc(a.version, b.version) || b.score - a.score || compareModelIdentity(a.entry, b.entry));
   return ranked[0]?.entry;
+}
+
+/** Numeric runs stay ordered and contiguous: `5-5` cannot reuse the `5` in `4-5`. */
+function versionRuns(value: string): string[] {
+  return [...value.replace(/-\d{8}$/, "").matchAll(/(?:^|[\s-])(\d+(?:[\s-]+\d+)*)(?=$|[\s-])/g)].map(match => (match[1] ?? "").replace(/\s+/g, "-"));
 }
 
 /** Resolve an exact or fuzzy provider/model request without consulting aliases. */
@@ -256,6 +268,7 @@ function resolveCanonicalModel(
   // "claude-haiku-4-5" (dot vs dash in the version) resolve to the same model.
   const normalize = (s: string) => s.toLowerCase().replace(/\./g, "-");
   const query = normalize(input);
+  const requestedVersions = versionRuns(query.slice(slashIdx + 1));
 
   // Score each model: prefer exact id match > id contains > name contains > provider+id contains
   const matches: { entry: ModelEntry; score: number }[] = [];
@@ -264,6 +277,12 @@ function resolveCanonicalModel(
     const id = normalize(m.id);
     const name = normalize(m.name);
     const full = normalize(`${m.provider}/${m.id}`);
+    const idVersions = versionRuns(id);
+    const versions = idVersions.length > 0 ? idVersions : versionRuns(name);
+    // Filter before scope/ranking, including substring and name matches. A
+    // major-only input can select a newer minor, but never another major or
+    // a minor token masquerading as the requested major.
+    if (!requestedVersions.every(requested => versions.some(version => version === requested || version.startsWith(`${requested}-`)))) continue;
 
     let score = 0;
     if (id === query || full === query) {
@@ -288,8 +307,9 @@ function resolveCanonicalModel(
 
   // An exact id (or provider/id) is the caller naming a model, not describing
   // one: it wins outright, whatever the scope or any newer sibling.
-  const exact = matches.find(c => c.score === 100);
-  const bestMatch = exact?.entry ?? rankFuzzy(matches, registry, context);
+  const exact = matches.filter(c => c.score === 100);
+  const exactBest = exact.sort((a, b) => compareModelIdentity(a.entry, b.entry))[0];
+  const bestMatch = exactBest ? exactBest.entry : rankFuzzy(matches, registry, context);
   if (bestMatch) {
     const found = registry.find(bestMatch.provider, bestMatch.id);
     if (found) return found;
