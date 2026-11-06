@@ -29,9 +29,20 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
-          cache: npm
+          # No root `npm ci` writes setup-node's own key; restore CI's `setup-ci-tools` npm cache instead (#531).
+          package-manager-cache: false
       - name: Pin npm to packageManager
         run: npm install --global "$(node -p 'require("./package.json").packageManager')"
+      - name: Locate the npm cache
+        id: npm-cache
+        run: echo "dir=$(npm config get cache)" >>"$GITHUB_OUTPUT"
+      # Restore only: a tag run reads `main`'s entry; the release workflow never writes a cache. npm still checks
+      # every cached tarball against its lockfile `integrity`.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.npm-cache.outputs.dir }}
+          key: npm-ci-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: npm-ci-${{ runner.os }}-${{ runner.arch }}-
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version

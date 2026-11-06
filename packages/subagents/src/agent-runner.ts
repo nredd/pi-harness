@@ -662,18 +662,30 @@ export interface RunResult {
  */
 function collectResponseText(session: AgentSession) {
   let text = "";
+  let laterTool = false;
+  let previousText = "";
+  let previousLaterTool = false;
   const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
     // message_start also fires for user and toolResult messages — resetting on
     // those would wipe assistant text already collected. Reset only when a new
     // ASSISTANT message begins, so getText() is the last assistant message's text.
     if (event.type === "message_start" && event.message.role === "assistant") {
+      if (text.trim()) {
+        previousText = text;
+        previousLaterTool = laterTool;
+      }
       text = "";
+      laterTool = false;
     }
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       text += event.assistantMessageEvent.delta;
     }
+    if (event.type === "tool_execution_end") {
+      if (text.trim()) laterTool = true;
+      else if (previousText.trim()) previousLaterTool = true;
+    }
   });
-  return { getText: () => text, unsubscribe };
+  return { getText: () => text, getPreviousText: () => previousText, hasLaterTool: () => text.trim() ? laterTool : previousLaterTool, unsubscribe };
 }
 
 /**
@@ -805,9 +817,6 @@ const STALE_CTX_RETRY_DELAYS_MS: readonly number[] = [1_000, 3_000, 9_000];
 /** Sent when the session's last step died on a stale ctx; the transcript already holds the work so far. */
 const STALE_CTX_RETRY_PROMPT = "Your previous step was interrupted by a session reload before it produced output. Continue the task from where you left off.";
 
-/** Longest tool output echoed into a partial result. */
-const PARTIAL_TOOL_OUTPUT_CHARS = 1_500;
-
 /**
  * Resolve after `ms`, or as soon as `signal` aborts. Never rejects.
  */
@@ -868,26 +877,29 @@ function mayFollowUp(session: AgentSession, startIndex: number, signal: AbortSig
   return !signal?.aborted && staleCtxOutcome(session, startIndex) === undefined;
 }
 
-/**
- * What a run that died on a stale ctx had done: the last tool calls with the
- * last tool output, so the parent can see side effects (a pushed branch, an
- * opened PR) instead of "No output". Empty when the run did nothing.
- */
+/** Bounded activity only: tool arguments, results and unknown names are never copied. */
 function partialProgress(session: AgentSession, startIndex: number): string {
   const calls: string[] = [];
-  let lastOutput = "";
   for (let i = session.messages.length - 1; i >= startIndex && calls.length < 5; i--) {
     const msg = session.messages[i];
-    if (msg.role === "toolResult" && !lastOutput) lastOutput = extractText(msg.content).trim();
-    if (msg.role === "assistant") {
-      for (const part of [...msg.content].reverse()) {
-        if (part.type === "toolCall" && calls.length < 5) calls.unshift(part.name);
-      }
-    }
+    if (msg.role !== "toolResult") continue;
+    const name = BUILTIN_TOOL_NAMES.includes(msg.toolName) ? msg.toolName : "other tool";
+    calls.unshift(`${name} (${msg.isError ? "failed" : "completed"})`);
   }
-  if (calls.length === 0) return "";
-  const clipped = lastOutput.length > PARTIAL_TOOL_OUTPUT_CHARS ? `${lastOutput.slice(0, PARTIAL_TOOL_OUTPUT_CHARS)}...` : lastOutput;
-  return `Last tool calls: ${calls.join(", ")}.${clipped ? `\nLast tool output:\n${clipped}` : ""}`;
+  return calls.length ? `Latest activity: ${calls.join(", ")}.` : "";
+}
+
+/** Mark prose as earlier progress when subsequent tool results exist. */
+function failureText(session: AgentSession, startIndex: number, text: string, partial: string, laterTool: boolean, streamed: boolean): string {
+  if (!text) return partial;
+  if (streamed) return laterTool ? `Earlier progress:\n${text}\n\n${partial}` : text;
+  let hasLaterResult = false;
+  for (let i = session.messages.length - 1; i >= startIndex; i--) {
+    const msg = session.messages[i];
+    if (msg.role === "assistant" && extractText(msg.content).trim() === text) break;
+    if (msg.role === "toolResult") hasLaterResult = true;
+  }
+  return hasLaterResult ? `Earlier progress:\n${text}\n\n${partial}` : text;
 }
 
 /**
@@ -898,7 +910,7 @@ export function staleCtxOutcome(session: AgentSession, startIndex: number): { fa
   const error = finalTurnError(session, startIndex);
   if (!isStaleCtxError(error)) return undefined;
   return {
-    failure: "interrupted by a session reload or replacement; the agent's model runtime went stale and retries did not recover it",
+    failure: `interrupted by a session reload or replacement; the agent's model runtime went stale and retries did not recover it: ${error}`,
     partial: partialProgress(session, startIndex),
   };
 }
@@ -1575,7 +1587,7 @@ export async function runAgent(
   }
 
   const stale = staleCtxOutcome(session, startLen);
-  const responseText = collector.getText().trim() || getLastAssistantText(session, startLen) || stale?.partial || "";
+  const text = collector.getText().trim() || getLastAssistantText(session, startLen);
   // A child asked for structured output that never gave any has failed, however
   // articulate its prose was. Reported through `failure` so it travels the same
   // path as a provider error rather than arriving as a successful empty answer.
@@ -1584,12 +1596,14 @@ export async function runAgent(
       ? `The agent's StructuredOutput call did not match the required schema: ${structuredCapture.lastError}`
       : "The agent did not report its answer through StructuredOutput."
     : undefined;
+  const failure = stale?.failure ?? finalTurnError(session, startLen) ?? structuredFailure;
+  const streamed = collector.getText().trim() || collector.getPreviousText().trim();
   return {
-    responseText,
+    responseText: failure ? failureText(session, startLen, streamed || text, stale?.partial ?? partialProgress(session, startLen), collector.hasLaterTool(), Boolean(streamed)) : text,
     session,
     aborted: run.aborted,
     steered: run.steered,
-    failure: stale?.failure ?? finalTurnError(session, startLen) ?? structuredFailure,
+    failure,
     ...(structuredCapture?.json !== undefined ? { structuredJson: structuredCapture.json } : {}),
     ...(structuredRetried ? { structuredRetried } : {}),
   };
@@ -1632,9 +1646,12 @@ export async function resumeAgent(
   }
 
   const stale = staleCtxOutcome(session, startLen);
+  const failure = stale?.failure ?? finalTurnError(session, startLen);
+  const text = collector.getText().trim() || getLastAssistantText(session, startLen);
+  const streamed = collector.getText().trim() || collector.getPreviousText().trim();
   return {
-    text: collector.getText().trim() || getLastAssistantText(session, startLen) || stale?.partial || "",
-    failure: stale?.failure ?? finalTurnError(session, startLen),
+    text: failure ? failureText(session, startLen, streamed || text, stale?.partial ?? partialProgress(session, startLen), collector.hasLaterTool(), Boolean(streamed)) : text,
+    failure,
     aborted: run.aborted,
     steered: run.steered,
   };

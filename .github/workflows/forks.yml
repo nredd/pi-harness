@@ -37,6 +37,9 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
+          # Key the cache on the lockfile this job's `npm ci` installs, never the root one (#531).
+          cache: npm
+          cache-dependency-path: forks/pi/package-lock.json
       - name: System dependencies (upstream CI's list)
         run: |
           sudo apt-get update

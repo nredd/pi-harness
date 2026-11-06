@@ -1451,7 +1451,7 @@ def test_make_install_hides_token_from_installers_but_not_preflight(tmp_path: Pa
 
 NPM_FETCH_RETRY = MappingProxyType(
     {
-        "fetch-retries": "5",
+        "fetch-retries": "7",
         "fetch-retry-factor": "2",
         "fetch-retry-mintimeout": "5000",
         "fetch-retry-maxtimeout": "30000",
@@ -1477,7 +1477,10 @@ def test_root_npmrc_bounds_npm_fetch_retries_for_every_workspace() -> None:
         min(minimum * int(settings["fetch-retry-factor"]) ** n, maximum)
         for n in range(int(settings["fetch-retries"]))
     ]
-    assert sum(delays) == 95_000
+    assert sum(delays) == 155_000
+    # One window for npm and `release.fetch_bytes` (#531).
+    assert int(settings["fetch-retries"]) == FETCH_ATTEMPTS - 1
+    assert delays == [release.fetch_retry_backoff(attempt) * 1000 for attempt in range(1, FETCH_ATTEMPTS)]
     # Ambient `npm_config_*` would override the file; drop it so this observes `.npmrc` alone.
     env = {key: value for key, value in os.environ.items() if not key.lower().startswith("npm_config_")}
     seen = subprocess.run(
@@ -1910,8 +1913,48 @@ def test_transient_status_on_every_attempt_fails_with_the_original_message(
     assert str(caught.value) == f"Could not fetch '{url}': HTTP 504 Gateway Timeout"
     assert caught.value.status == 504
     assert len(requests) == FETCH_ATTEMPTS
-    assert no_backoff == [FETCH_RETRY_BACKOFF_SECONDS * 2**n for n in range(FETCH_ATTEMPTS - 1)]
+    assert no_backoff == [release.fetch_retry_backoff(attempt) for attempt in range(1, FETCH_ATTEMPTS)]
     assert len(caplog.messages) == FETCH_ATTEMPTS - 1
+
+
+def test_transient_retries_stop_at_the_wall_clock_deadline(
+    monkeypatch: pytest.MonkeyPatch, no_backoff: list[float]
+) -> None:
+    """Slow transient failures (`FETCH_TIMEOUT_SECONDS` stalls) stop at `FETCH_RETRY_DEADLINE_SECONDS`.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Replace clock and transport.
+        no_backoff (list[float]): Recorded retry delays.
+    """
+    clock = [0.0]
+    monkeypatch.setattr(release.time, "monotonic", lambda: clock[0])
+
+    def timed_out(request: object, timeout: float) -> object:
+        """Spend one full socket timeout, then fail like a stalled CDN.
+
+        Parameters:
+            request (object): ignored request.
+            timeout (float): the per-attempt socket timeout.
+
+        Returns:
+            object: never returns.
+
+        Raises:
+            TimeoutError: always.
+        """
+        clock[0] += timeout
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(release, "urlopen", timed_out)
+    with pytest.raises(release.FetchError, match="timed out"):
+        release.fetch_bytes("https://downloads.example.invalid/core.tgz")
+    # 120s + 5s + 120s + 10s + 120s = 375s: a third retry would start past 300s.
+    assert release.FETCH_TIMEOUT_SECONDS == 120
+    assert no_backoff == [release.fetch_retry_backoff(1), release.fetch_retry_backoff(2)]
+    assert (
+        sum(release.fetch_retry_backoff(attempt) for attempt in range(1, FETCH_ATTEMPTS))
+        <= release.FETCH_RETRY_DEADLINE_SECONDS
+    )
 
 
 @pytest.mark.parametrize("status", [400, 401, 403, 404, 408, 410, 500, 501, 505])
@@ -1994,7 +2037,7 @@ def test_server_error_ignores_retry_after(
         with pytest.raises(release.FetchError):
             release.fetch_bytes(url)
     assert len(requests) == FETCH_ATTEMPTS
-    assert no_backoff == [FETCH_RETRY_BACKOFF_SECONDS * 2**n for n in range(FETCH_ATTEMPTS - 1)]
+    assert no_backoff == [release.fetch_retry_backoff(attempt) for attempt in range(1, FETCH_ATTEMPTS)]
 
 
 @pytest.mark.parametrize(

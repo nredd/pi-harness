@@ -74,7 +74,6 @@ from harness.promotion import (
 )
 from harness.release import (
     FETCH_ATTEMPTS,
-    FETCH_RETRY_BACKOFF_SECONDS,
     GITHUB_TOKEN_VARIABLES,
     release_asset_url,
 )
@@ -1509,7 +1508,7 @@ def test_snapshot_fetch_cli_has_one_stable_diagnostic(
     url = f"https://github.com/nredd/pi-harness/releases/download/stack/{SHA}/stack-snapshot.json"
     retries = [
         f"Transient fetch failure for '{url}': {reason} (attempt {attempt}/{FETCH_ATTEMPTS}); "
-        f"retrying in {FETCH_RETRY_BACKOFF_SECONDS * 2 ** (attempt - 1):g}s"
+        f"retrying in {release.fetch_retry_backoff(attempt):g}s"
         for attempt in range(1, FETCH_ATTEMPTS if kind in {"429", "timeout"} else 1)
     ]
     assert caplog.messages == [
