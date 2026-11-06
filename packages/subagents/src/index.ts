@@ -2428,7 +2428,8 @@ Terse command-style prompts produce shallow, generic work.
         return note ? `${note}\n\n` : "";
       };
       const fallbackNoteFor = (rec: AgentRecord | undefined): string => {
-        const modelNote = [modelNoteOf(rec), modelIdentityNote(rec ?? { modelSelection: selection })].filter(Boolean).join("\n");
+        // No record means a schedule or quota park, reselected at fire time: no identity claim.
+        const modelNote = [modelNoteOf(rec), modelIdentityNote(rec)].filter(Boolean).join("\n");
         return typeNote + (modelNote ? `${modelNote}\n\n` : "");
       };
       const detailBase = {

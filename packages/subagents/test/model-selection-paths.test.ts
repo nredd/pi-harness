@@ -500,3 +500,23 @@ it("retains the record's original selection on resume despite changed config", a
   expect(record!.session?.model).toBe(parent);
   expect(runner.resumeAgent).toHaveBeenCalled();
 });
+
+describe("schedule and quota-park results claim no resolved identity", () => {
+  const call = (params: Record<string, unknown>) =>
+    boot.tools.get("Agent").execute("claim", { subagent_type: "scout", description: "claim", prompt: "go", ...params }, undefined, undefined, context);
+
+  it.each([ref("explicit"), "@cheap"])("omits it on a scheduled result: %s", async model => {
+    setModelTiers({ cheap: [ref("typed"), ref("explicit")] }, {});
+    const result = await call({ model, schedule: "+1h" });
+    expect(result.content[0].text).toContain("Scheduled");
+    expect(result.content[0].text).not.toContain("Resolved model:");
+  });
+
+  it.each([ref("explicit"), "@cheap"])("omits it on a quota-park result: %s", async model => {
+    setModelTiers({ cheap: [ref("typed"), ref("explicit")] }, {});
+    blockedUntil = clock.now() + 60_000;
+    const result = await call({ model, run_in_background: true });
+    expect(result.content[0].text).toContain("Queued");
+    expect(result.content[0].text).not.toContain("Resolved model:");
+  });
+});

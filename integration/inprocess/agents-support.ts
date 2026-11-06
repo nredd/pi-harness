@@ -1,4 +1,5 @@
 /** Package-discovered preset agents and genuine child sessions sharing the parent's faux transport. */
+import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -118,8 +119,8 @@ export async function ask(
 	expect(h.getPendingResponseCount(), text).toBe(0);
 	// Skip any model-disclosure lead-in plus the "Agent completed in ..." status line.
 	const status = /(?:^|\n\n)Agent completed[^\n]*\n\n/.exec(text);
-	expect(status, text).not.toBeNull();
-	return text.slice((status?.index ?? 0) + (status?.[0].length ?? 0));
+	assert.ok(status, text);
+	return text.slice(status.index + status[0].length);
 }
 
 /** Abort and drain unfinished turns before shutting down child resources and disposing the host. */
