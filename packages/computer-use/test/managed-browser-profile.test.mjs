@@ -6,7 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, test, vi } from "vitest";
-import { shutdownComputerUseSession, testing } from "../src/bridge.ts";
+import { executeFind, executeLaunchBrowser, shutdownComputerUseSession, testing } from "../src/bridge.ts";
+import { currentPlatformBackend } from "../src/platform/index.ts";
+import { ResourceScheduler } from "../src/runtime.ts";
+import { deferred, within } from "../scripts/check-async.mjs";
 
 const PACKAGE_DIR = fileURLToPath(new URL("..", import.meta.url));
 const FAKE_BROWSER = fileURLToPath(new URL("./fixtures/fake-browser.mjs", import.meta.url));
@@ -115,7 +118,7 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		tmp = path.join(scratch, "tmp");
 		fs.mkdirSync(tmp);
 		log = path.join(scratch, "argv.json");
-		for (const name of ["TMPDIR", "FAKE_BROWSER_LOG", "FAKE_BROWSER_IGNORE_SIGTERM", "FAKE_BROWSER_NO_CDP", "FAKE_BROWSER_LAUNCHES", "PI_COMPUTER_USE_CHROME_EXECUTABLE", "PI_COMPUTER_USE_CDP_PORT"]) saved[name] = process.env[name];
+		for (const name of ["TMPDIR", "FAKE_BROWSER_LOG", "FAKE_BROWSER_IGNORE_SIGTERM", "FAKE_BROWSER_SIGTERM_LOG", "FAKE_BROWSER_NO_CDP", "FAKE_BROWSER_LAUNCHES", "PI_COMPUTER_USE_CHROME_EXECUTABLE", "PI_COMPUTER_USE_CDP_PORT"]) saved[name] = process.env[name];
 		process.env.TMPDIR = tmp;
 		process.env.FAKE_BROWSER_LOG = log;
 		process.env.PI_COMPUTER_USE_CHROME_EXECUTABLE = FAKE_BROWSER;
@@ -342,14 +345,122 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, undefined, "session shutdown left a CDP port configured");
 	});
 
+	test("aborting a queued launch never starts another browser", async () => {
+		const launches = path.join(scratch, "queued-launches.jsonl");
+		fs.rmSync(launches, { force: true });
+		process.env.FAKE_BROWSER_LAUNCHES = launches;
+		process.env.FAKE_BROWSER_IGNORE_SIGTERM = "1";
+		const controller = new AbortController();
+		const stoppingController = new AbortController();
+		let stopping;
+		let queued;
+		try {
+			await testing.performLaunchBrowser({});
+			delete process.env.FAKE_BROWSER_IGNORE_SIGTERM;
+			const createServer = net.createServer.bind(net);
+			let portProbes = 0;
+			vi.spyOn(net, "createServer").mockImplementation((...args) => {
+				portProbes++;
+				return createServer(...args);
+			});
+			stopping = testing.performLaunchBrowser({}, stoppingController.signal);
+			queued = testing.performLaunchBrowser({}, controller.signal);
+			controller.abort();
+			await assert.rejects(queued, /aborted/);
+			stoppingController.abort();
+			await Promise.allSettled([stopping]);
+			assert.equal(portProbes, 1, "aborted queued launch began starting another browser");
+		} finally {
+			controller.abort();
+			stoppingController.abort();
+			vi.restoreAllMocks();
+			delete process.env.FAKE_BROWSER_IGNORE_SIGTERM;
+			delete process.env.FAKE_BROWSER_LAUNCHES;
+			await Promise.allSettled([stopping, queued]);
+			await shutdownComputerUseSession();
+		}
+	});
+
+	test("tool launch enters the lifecycle before readiness is released to shutdown", async () => {
+		const before = new Set(fs.readdirSync(tmp));
+		const shutdownDone = deferred();
+		const resumeTool = deferred();
+		const controller = new AbortController();
+		const read = ResourceScheduler.prototype.read;
+		const createServer = net.createServer.bind(net);
+		let portProbes = 0;
+		let shutdown;
+		vi.spyOn(currentPlatformBackend, "ensureReady").mockResolvedValue({ lastPermissionCheckAt: 0 });
+		vi.spyOn(currentPlatformBackend, "shutdown").mockResolvedValue();
+		vi.spyOn(net, "createServer").mockImplementation((...args) => {
+			portProbes++;
+			return createServer(...args);
+		});
+		vi.spyOn(ResourceScheduler.prototype, "read").mockImplementation(function (key, work) {
+			const scheduled = read.call(this, key, work);
+			if (key !== "session-lifecycle") return scheduled;
+			return scheduled.then(async (result) => {
+				shutdown = shutdownComputerUseSession();
+				await shutdown;
+				shutdownDone.resolve();
+				await resumeTool.promise;
+				return result;
+			});
+		});
+		const launch = executeLaunchBrowser("queued", {}, controller.signal, undefined, { cwd: PACKAGE_DIR });
+		try {
+			await within(shutdownDone.promise, "shutdown after tool readiness", 10_000);
+			assert.equal(portProbes, 1, "shutdown overtook the admitted tool launch");
+			assert.deepEqual(fs.readdirSync(tmp).filter((entry) => !before.has(entry)), []);
+			assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, undefined);
+		} finally {
+			controller.abort();
+			resumeTool.resolve();
+			await Promise.allSettled([launch, shutdown]);
+			vi.restoreAllMocks();
+			await shutdownComputerUseSession();
+		}
+	});
+
+	test("tool readiness does not serialize unrelated operations", async () => {
+		const firstEntered = deferred();
+		const releaseFirst = deferred();
+		const secondEntered = deferred();
+		let calls = 0;
+		vi.spyOn(currentPlatformBackend, "ensureReady").mockResolvedValue({ lastPermissionCheckAt: 0 });
+		vi.spyOn(currentPlatformBackend, "listApps").mockImplementation(async () => {
+			calls++;
+			if (calls === 1) {
+				firstEntered.resolve();
+				await releaseFirst.promise;
+			} else secondEntered.resolve();
+			return [];
+		});
+		const ctx = { cwd: PACKAGE_DIR };
+		const first = executeFind("first", { app: "first" }, undefined, undefined, ctx);
+		let second;
+		try {
+			await within(firstEntered.promise, "first tool entering backend");
+			second = executeFind("second", { app: "second" }, undefined, undefined, ctx);
+			await within(secondEntered.promise, "second tool entering while first is blocked");
+		} finally {
+			releaseFirst.resolve();
+			await Promise.allSettled([first, second]);
+			vi.restoreAllMocks();
+		}
+	});
+
 	test("shutdown during a relaunch waits for it, then stops the new browser", async () => {
 		const launches = path.join(scratch, "launches.jsonl");
 		fs.rmSync(launches, { force: true });
 		process.env.FAKE_BROWSER_LAUNCHES = launches;
 		const before = new Set(fs.readdirSync(tmp));
 		const controller = new AbortController();
+		const termLog = path.join(scratch, "relaunch-sigterm");
+		fs.rmSync(termLog, { force: true });
 		let relaunch;
 		try {
+			process.env.FAKE_BROWSER_SIGTERM_LOG = termLog;
 			process.env.FAKE_BROWSER_IGNORE_SIGTERM = "1";
 			try {
 				await testing.performLaunchBrowser({});
@@ -359,7 +470,7 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 			const [first] = launched(launches);
 			// The relaunch spends the bridge's 5s SIGTERM grace period stopping the first browser.
 			relaunch = testing.performLaunchBrowser({}, controller.signal);
-			await new Promise((resolve) => setTimeout(resolve, 200));
+			await waitUntil(() => fs.existsSync(termLog), "first browser did not receive SIGTERM", 5_000);
 			assert.equal(await portListening(first.port), true, "the relaunch stopped the first browser before shutdown was called");
 			await shutdownComputerUseSession();
 			assert.equal(await portListening(first.port), false, "session shutdown returned while the relaunch was still stopping the first browser");
@@ -367,6 +478,7 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 			assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, undefined, "session shutdown left a CDP port configured");
 		} finally {
 			delete process.env.FAKE_BROWSER_LAUNCHES;
+			delete process.env.FAKE_BROWSER_SIGTERM_LOG;
 			controller.abort();
 			await Promise.allSettled([relaunch]);
 		}
@@ -380,20 +492,24 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		const before = new Set(fs.readdirSync(tmp));
 		const controller = new AbortController();
 		let launch;
+		const createServer = net.createServer.bind(net);
+		let portProbes = 0;
+		vi.spyOn(net, "createServer").mockImplementation((...args) => {
+			portProbes++;
+			return createServer(...args);
+		});
 		try {
 			// No await between the two calls: the launch is still resolving its executable and port.
 			launch = testing.performLaunchBrowser({}, controller.signal);
 			await shutdownComputerUseSession();
-			// A launch that shutdown missed spawns its browser and sets the CDP port within
-			// milliseconds of shutdown returning. Give it that chance before the abort below would
-			// clean it up: one that lost to shutdown instead waits on a dead browser's CDP port.
-			await Promise.race([launch.catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 1_000))]);
+			assert.equal(portProbes, 1, "shutdown returned before the launch entered the lifecycle");
 			await assertAllGone(before, launched(launches), "session shutdown right after a launch call");
 			assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, undefined, "session shutdown left a CDP port configured");
 		} finally {
 			delete process.env.FAKE_BROWSER_LAUNCHES;
 			controller.abort();
 			await Promise.allSettled([launch]);
+			vi.restoreAllMocks();
 		}
 		await assertAllGone(before, launched(launches), "the launch that raced shutdown");
 		assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, undefined, "the launch that raced shutdown left a CDP port configured");

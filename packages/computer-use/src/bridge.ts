@@ -2385,8 +2385,8 @@ async function releaseManagedBrowser(): Promise<void> {
  * @param browser Configured managed browser, which names the executable and the profile dir.
  * @param url First page to open.
  * @returns The spawned browser and its `--remote-debugging-port`, already recorded in `runtimeState`.
- * @throws {Error} If no executable is found, or `mkdtemp` or a synchronous `spawn` fails; the new
- * profile dir is removed first.
+ * @throws {Error} If no executable is found, or `mkdtemp` or a synchronous `spawn` fails; a
+ * failed spawn attempts to remove the new profile dir first.
  */
 async function startManagedBrowser(browser: ComputerUseConfig["managed_browser"], url: string): Promise<{ managedBrowser: ChildProcess; port: number }> {
 	const executable = await managedBrowserExecutable(browser);
@@ -2427,7 +2427,10 @@ async function performLaunchBrowser(params: LaunchBrowserParams, signal?: AbortS
 	const browser = getComputerUseConfig().managed_browser;
 	// Joins the lifecycle chain before the first `await`, so a shutdown called after this launch
 	// always runs after it and stops the browser it starts.
-	const { managedBrowser, port } = await withManagedBrowserLifecycle(async () => await startManagedBrowser(browser, requestedUrl ?? "about:blank"));
+	const { managedBrowser, port } = await withManagedBrowserLifecycle(async () => {
+		throwIfAborted(signal);
+		return await startManagedBrowser(browser, requestedUrl ?? "about:blank");
+	});
 	try {
 		await waitForCdpPort(port, signal);
 	} catch (error) {
@@ -2492,9 +2495,17 @@ async function executeTool<P, T>(ctx: ExtensionContext, params: P, signal: Abort
 	}
 	const operation = savedStates.hydrate(stateRecord);
 	return await savedStates.operations.run(operation, async () => {
-		await resourceScheduler.read("session-lifecycle", async () => await ensureReady(ctx, signal));
-		throwIfAborted(signal);
-		const result = await run();
+		const { value: pending } = await resourceScheduler.read("session-lifecycle", async () => {
+			await ensureReady(ctx, signal);
+			throwIfAborted(signal);
+			// Start the tool before releasing readiness: launch_browser joins its lifecycle
+			// synchronously, so shutdown cannot drain readiness and overtake that launch.
+			// Do not await the tool here; unrelated operations must still overlap.
+			const result = run();
+			void result.catch(() => undefined);
+			return { result };
+		});
+		const result = await pending.result;
 		persistOperation(operation);
 		return result;
 	});
