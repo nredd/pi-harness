@@ -140,7 +140,9 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
     expect(final.lastRun).toBeDefined();
   });
 
-  it("one-shot job survives a stall between choosing its time and adding it", async () => {
+  // Harness guard, not a scheduler guarantee: with the production clock a target already past at `addJob` is
+  // correctly rejected. This pins that the fixture's frozen `now` keeps test targets valid across a stall.
+  it("pinned clock keeps one-shot targets valid across a test-process stall", async () => {
     const manager = makeFaithfulManager("completed");
     scheduler.start(makePi(), makeCtx(), manager, store);
 
@@ -153,6 +155,8 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
 
     await waitFor(() => scheduler.list().find(j => j.id === job.id)?.lastStatus === "success");
     expect(manager.spawn).toHaveBeenCalledTimes(1);
+    // `now` is frozen, so the recorded run time is the pinned base, not real time after the stall.
+    expect(scheduler.list().find(j => j.id === job.id)?.lastRun).toBe(isoAfter(0));
   });
 
   it("one-shot job that errors: store records lastStatus error (regression — bug #1)", async () => {
