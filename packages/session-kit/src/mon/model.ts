@@ -115,17 +115,18 @@ function historyBuckets(
 	history: readonly MonHistoryPoint[],
 	width: number,
 ): { blank: number; buckets: (number | null)[] } {
-	const first = history[0];
-	const last = history.at(-1);
-	if (!first || !last || width < 1) return { blank: Math.max(0, width), buckets: [] };
+	// Callers return early for an empty history or no columns.
+	const first = history[0] as MonHistoryPoint;
+	const last = history.at(-1) as MonHistoryPoint;
 	const span = last.sampledAtMs - first.sampledAtMs;
 	if (span <= 0) return { blank: width - 1, buckets: [last.value] };
 	const deltas = history
 		.slice(1)
-		.map((point, i) => point.sampledAtMs - (history[i]?.sampledAtMs ?? point.sampledAtMs))
+		.map((point, i) => point.sampledAtMs - (history[i] as MonHistoryPoint).sampledAtMs)
 		.filter((delta) => delta > 0)
 		.sort((a, b) => a - b);
-	const typical = deltas[Math.floor((deltas.length - 1) / 2)] ?? span;
+	// A positive span needs at least one positive step, so `deltas` is never empty here.
+	const typical = deltas[Math.floor((deltas.length - 1) / 2)] as number;
 	const step = Math.max(typical, span / Math.max(1, width - 1));
 	const buckets: (number | null)[] = Array.from({ length: width }, () => null);
 	let oldest = width - 1;
@@ -176,7 +177,7 @@ export function timeHistoryRows(history: readonly MonHistoryPoint[], width: numb
 			const fill = level - floor;
 			const bottom = row === rows - 1;
 			lines[row] +=
-				level < 0 ? (bottom ? "·" : " ") : fill >= 8 ? "█" : fill > 0 ? (ticks[fill - 1] ?? " ") : bottom ? "▁" : " ";
+				level < 0 ? (bottom ? "·" : " ") : fill >= 8 ? "█" : fill > 0 ? ticks.charAt(fill - 1) : bottom ? "▁" : " ";
 		}
 	}
 	return lines;

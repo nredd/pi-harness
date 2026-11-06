@@ -50,7 +50,7 @@ export class RingBuffer {
 		const after = Math.max(0, Math.floor(Number.isFinite(since) ? since : 0));
 		const first = Math.max(this.firstLine, after + 1);
 		const lines: NumberedLine[] = [];
-		for (let n = first; n <= this.total; n++) lines.push({ n, text: this.slots[(n - 1) % this.capacity] ?? "" });
+		for (let n = first; n <= this.total; n++) lines.push({ n, text: this.slots[(n - 1) % this.capacity] as string });
 		const missed = Math.max(0, this.firstLine - (after + 1));
 		return { lines, missed };
 	}

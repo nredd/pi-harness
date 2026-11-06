@@ -64,9 +64,9 @@ const MODIFIERS = new Set(["ctrl", "shift", "alt", "super"]);
  */
 export function isValidKeySpec(spec: string): boolean {
 	if (!spec || spec.startsWith("+") || spec.endsWith("+") || spec.includes("++")) return false;
-	const parts = spec.split("+");
-	const base = parts[parts.length - 1] ?? "";
-	const modifiers = parts.slice(0, -1);
+	const split = spec.lastIndexOf("+");
+	const base = spec.slice(split + 1);
+	const modifiers = split < 0 ? [] : spec.slice(0, split).split("+");
 	if (modifiers.length !== new Set(modifiers).size || !modifiers.every((m) => MODIFIERS.has(m))) return false;
 	return base.length === 1 ? /[a-z0-9_\-!@#$%^&*()|~`'":;,./<>?[\]{}=\\]/.test(base) : SPECIAL_KEYS.has(base);
 }

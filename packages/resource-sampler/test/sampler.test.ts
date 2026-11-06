@@ -20,7 +20,8 @@ import {
 	psi,
 	safeName,
 } from "../src/counters.js";
-import { createResourceSampler } from "../src/index.js";
+import type { NativeCalls } from "../src/darwin.js";
+import { createResourceSampler, type SamplerOptions } from "../src/index.js";
 
 /**
  * Build one synthetic logical core with all non-user/idle counters zero.
@@ -69,6 +70,11 @@ describe("honest counters", () => {
 		expect(hostCpu([core(2, 2)], [core(1, 10)]).state).toBe("warming");
 		expect(hostCpu([core(2, 2)], [core(2, 2)]).state).toBe("warming");
 		expect(hostCpu([core(2, 2)], [core(Number.NaN, 2)]).state).toBe("warming");
+		// Same core count, different hardware: a hot-swapped or migrated host is not one interval.
+		expect(hostCpu([core(1, 1)], [{ ...core(2, 2), model: "replacement" }])).toEqual({
+			state: "warming",
+			reason: "CPU topology changed",
+		});
 	});
 	it("normalizes aggregate CPU but preserves multi-core process CPU", () => {
 		expect(hostCpu([core(0, 0), core(0, 0)], [core(100, 100), core(0, 200)])).toEqual({
@@ -147,6 +153,8 @@ describe("privacy-safe native parsers", () => {
 		expect(safeName("\u{1F9A9}".repeat(200))).toHaveLength(256);
 		expect(linuxRss("VmRSS:\t42 kB\n")).toBe(43008);
 		expect(linuxRss("no RSS")).toBeNull();
+		// 2^53 KiB is beyond safe-integer bytes; an imprecise RSS is dropped, never rounded.
+		expect(linuxRss(`VmRSS:\t${2 ** 53} kB\n`)).toBeNull();
 		expect(linuxStat("12 malformed", 100, 1)).toBeNull();
 		expect(linuxStat(`0 (name) ${fields.join(" ")}`, 100, 1)).toBeNull();
 		expect(linuxStat(`12 (name) ${fields.join(" ")}`, 0, 1)).toBeNull();
@@ -160,6 +168,7 @@ describe("privacy-safe native parsers", () => {
 		});
 		expect(darwinProcess("48488 48487 Thu Oct 22 20:28:58 2026 0:00.41 14384 ", 12)?.name).toBe("");
 		expect(darwinProcess("truncated row", 1)).toBeNull();
+		expect(darwinProcess(`${"9".repeat(20)} 1 Sat Oct  3 01:49:05 2026 0:00.41 14384 node`, 1)).toBeNull();
 		expect(safeName("/bin/test\u001b[2J")).toBe("test?[2J");
 	});
 	it("keeps native PSI semantics and rejects impossible or malformed values", () => {
@@ -168,6 +177,8 @@ describe("privacy-safe native parsers", () => {
 		).toEqual({ avg10: 1.25, avg60: 0, avg300: 0.05, total: 42 });
 		expect(psi("some avg10=101 avg60=0 avg300=0 total=2")).toBeNull();
 		expect(psi("unknown")).toBeNull();
+		// `full` alone is not a reading: `some` is the required memory pressure row.
+		expect(psi("full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n")).toBeNull();
 	});
 });
 
@@ -324,6 +335,53 @@ describe("bounded child lifecycle", () => {
 		expect((await command("/nonexistent-resource-sampler-fixture", [], failed)).complete).toBe(false);
 		expect(failed.reasons.has("command-unavailable")).toBe(true);
 	});
+	it("captures stderr limits and nonzero helper exits", async () => {
+		const noisy = await scripted((child) => {
+			child.stderr.emit("data", Buffer.alloc(8192, "x"));
+			child.emit("close", null);
+		});
+		expect(noisy.result).toEqual({ complete: false, text: "" });
+		expect(noisy.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+		expect([...noisy.budget.reasons]).toEqual(["byte-limit"]);
+		const failed = await scripted((child) => child.emit("close", 7));
+		expect(failed.result).toEqual({ complete: false, text: "" });
+		expect([...failed.budget.reasons]).toEqual(["command-failed"]);
+	});
+	it("charges quiet stderr to the budget without truncating a successful helper", async () => {
+		const { budget, kill, result } = await scripted((child) => {
+			child.stderr.emit("data", Buffer.from("warn"));
+			child.stdout.emit("data", Buffer.from("ok\n"));
+			child.emit("close", 0);
+		});
+		expect(result).toEqual({ text: "ok\n", complete: true });
+		expect(kill).not.toHaveBeenCalled();
+		expect({ bytesRead: budget.bytesRead, reasons: [...budget.reasons] }).toEqual({ bytesRead: 7, reasons: [] });
+	});
+
+	/**
+	 * Run `command` against a fake helper child, so no host process start races the deadline.
+	 * @param emit Replays the child's stream events and close code once it is spawned.
+	 * @returns The capture result, the budget it charged and the child's kill spy.
+	 * @sideEffects Mocks `node:child_process` for one fresh `collect.js` import, then restores it.
+	 */
+	async function scripted(emit: (child: EventEmitter & { stderr: EventEmitter; stdout: EventEmitter }) => void) {
+		const kill = vi.fn((_signal: string) => true);
+		const child = Object.assign(new EventEmitter(), { kill, stderr: new EventEmitter(), stdout: new EventEmitter() });
+		const spawn = vi.fn(() => {
+			queueMicrotask(() => emit(child));
+			return child;
+		});
+		vi.resetModules();
+		vi.doMock("node:child_process", () => ({ spawn }));
+		try {
+			const { Budget: FixtureBudget, command: fixtureCommand } = await import("../src/collect.js");
+			const budget = new FixtureBudget(performance.now() + 1000, 4096, 1, new AbortController().signal);
+			return { budget, kill, result: await fixtureCommand("fixture", [], budget) };
+		} finally {
+			vi.doUnmock("node:child_process");
+			vi.resetModules();
+		}
+	}
 });
 
 // Real readlink, except where a test forces a runtime result no real symlink can produce.
@@ -353,6 +411,14 @@ describe("bounded executable links", () => {
 			await rm(dir, { recursive: true, force: true });
 		}
 	});
+	it("does not readlink once the scan budget is exhausted", async () => {
+		vi.mocked(readlink).mockClear();
+		const budget = new Budget(performance.now() + 2000, 4096, 10, new AbortController().signal);
+		budget.bytesRead = 4096;
+		expect(await budget.executable("/proc/1/exe")).toBe("");
+		expect(readlink).not.toHaveBeenCalled();
+		expect([...budget.reasons]).toEqual(["byte-limit"]);
+	});
 	it("drops a target that fills Node's PATH_MAX readlink buffer, which may be truncated", async () => {
 		vi.mocked(readlink).mockResolvedValueOnce(Buffer.alloc(4096, "a"));
 		const budget = new Budget(performance.now() + 2000, 1 << 20, 10, new AbortController().signal);
@@ -381,22 +447,35 @@ describe("bounded proc reads and Linux process collection", () => {
 			await rm(dir, { recursive: true, force: true });
 		}
 	});
+	it("closes a proc file whose open outlived the deadline without reading it", async () => {
+		const close = vi.fn(async () => {});
+		const read = vi.fn();
+		const budget = new Budget(performance.now() + 20, 4096, 1, new AbortController().signal);
+		vi.mocked(open).mockImplementationOnce(async () => {
+			while (performance.now() <= budget.deadline) await delay(5);
+			return { close, read } as never;
+		});
+		await expect(budget.read("/proc/1/stat")).rejects.toThrow("budget exhausted while opening proc file");
+		expect(read).not.toHaveBeenCalled();
+		expect(close).toHaveBeenCalledOnce();
+		expect({ bytesRead: budget.bytesRead, reasons: [...budget.reasons] }).toEqual({
+			bytesRead: 0,
+			reasons: ["deadline"],
+		});
+	});
 	it("drops an unreadable executable link without leaking its failure", async () => {
 		vi.mocked(readlink).mockRejectedValueOnce(new Error("ptrace denied"));
 		const budget = new Budget(performance.now() + 1000, 4096, 1, new AbortController().signal);
 		expect(await budget.executable("/proc/1/exe")).toBe("");
 		expect(budget.bytesRead).toBe(0);
 	});
-	it("captures stderr limits and nonzero helper exits", async () => {
-		const noisy = new Budget(performance.now() + 1000, 4096, 1, new AbortController().signal);
-		expect(await command(process.execPath, ["-e", "process.stderr.write('x'.repeat(8192))"], noisy)).toMatchObject({
-			complete: false,
-			text: "",
+	it("reports malformed Linux PSI as unavailable, never as zero pressure", async () => {
+		const budget = new Budget(performance.now() + 1000, 4096, 1, new AbortController().signal);
+		vi.spyOn(budget, "read").mockResolvedValue("some avg10=garbage\n");
+		expect(await pressure(budget, "linux")).toEqual({
+			source: "linux-psi",
+			memory: { state: "unavailable", reason: "PSI absent, invalid or scan budget exhausted" },
 		});
-		expect([...noisy.reasons]).toContain("byte-limit");
-		const failed = new Budget(performance.now() + 1000, 4096, 1, new AbortController().signal);
-		expect(await command(process.execPath, ["-e", "process.exit(7)"], failed)).toMatchObject({ complete: false });
-		expect([...failed.reasons]).toContain("command-failed");
 	});
 	it("returns parsed Linux PSI instead of a fabricated unavailable metric", async () => {
 		const budget = new Budget(performance.now() + 1000, 4096, 1, new AbortController().signal);
@@ -428,6 +507,17 @@ describe("bounded proc reads and Linux process collection", () => {
 		]);
 		expect(budget.skipped).toBe(1);
 		expect([...budget.reasons]).toContain("process-unreadable-or-changed");
+	});
+	it("admits no PID once the scan deadline has passed", async () => {
+		vi.mocked(readdir).mockResolvedValueOnce(["12"] as never);
+		const budget = new Budget(performance.now() - 1, 4096, 1, new AbortController().signal);
+		const read = vi.spyOn(budget, "read");
+		expect(await linuxProcesses(budget, 100)).toEqual([]);
+		expect(read).not.toHaveBeenCalled();
+		expect({ enumerated: budget.enumerated, reasons: [...budget.reasons] }).toEqual({
+			enumerated: 0,
+			reasons: ["deadline"],
+		});
 	});
 	it("stops enumeration at the PID cap and rejects a changed second identity", async () => {
 		vi.mocked(readdir).mockResolvedValueOnce(["12"] as never);
@@ -489,20 +579,23 @@ describe("platform dispatch", () => {
 	const FIXTURE_STATUS = "VmRSS:\t42 kB\n";
 	const FIXTURE_PSI = "some avg10=1.25 avg60=0 avg300=0 total=42\n";
 	/**
-	 * Provide one deterministic fixed-output helper child.
-	 * @param output Complete C-locale stdout fixture.
+	 * Provide deterministic fixed-output helper children.
+	 * @param output Complete C-locale stdout fixture, or one per fixed helper executable path.
 	 * @returns Spawn fake recording the executable and fixed arguments.
+	 * @throws For an executable with no fixture, so an unexpected helper fails the test.
 	 * @sideEffects Schedules `data` and `close` events on the returned child.
 	 */
-	function helper(output: string) {
-		return vi.fn((_executable: string, _args: string[]) => {
+	function helper(output: string | Readonly<Record<string, string>>) {
+		return vi.fn((executable: string, _args: string[]) => {
+			const text = typeof output === "string" ? output : output[executable];
+			if (text === undefined) throw new Error(`unexpected fixture helper: ${executable}`);
 			const child = Object.assign(new EventEmitter(), {
 				kill: () => true,
 				stderr: new EventEmitter(),
 				stdout: new EventEmitter(),
 			});
 			queueMicrotask(() => {
-				child.stdout.emit("data", Buffer.from(output));
+				child.stdout.emit("data", Buffer.from(text));
 				child.emit("close", 0);
 			});
 			return child;
@@ -510,14 +603,17 @@ describe("platform dispatch", () => {
 	}
 	/**
 	 * Configure fixed Linux proc and getconf boundaries, never reading the host `/proc`.
+	 * @param samples Number of complete scans the proc fixtures must answer.
 	 * @returns Spawn fake for asserting fixed `getconf CLK_TCK` invocation.
 	 * @sideEffects Replaces mocked filesystem boundaries for the next dynamically imported sampler.
 	 */
-	function linuxBoundaries() {
+	function linuxBoundaries(samples = 1) {
+		/** @returns One scan's reads of `text`, repeated for every scan. */
+		const perScan = (...text: string[]) => Array.from({ length: samples }, () => text).flat();
 		const contents = new Map([
-			["/proc/pressure/memory", [FIXTURE_PSI]],
-			[`/proc/${FIXTURE_PID}/stat`, [FIXTURE_STAT, FIXTURE_STAT]],
-			[`/proc/${FIXTURE_PID}/status`, [FIXTURE_STATUS]],
+			["/proc/pressure/memory", perScan(FIXTURE_PSI)],
+			[`/proc/${FIXTURE_PID}/stat`, perScan(FIXTURE_STAT, FIXTURE_STAT)],
+			[`/proc/${FIXTURE_PID}/status`, perScan(FIXTURE_STATUS)],
 		]);
 		vi.mocked(readdir).mockImplementation(async () => [String(FIXTURE_PID)] as never);
 		vi.mocked(readlink).mockResolvedValue(Buffer.from(FIXTURE_EXE));
@@ -540,10 +636,19 @@ describe("platform dispatch", () => {
 	 * Load a sampler with fixed platform and optional fixed-helper boundaries.
 	 * @param platformName Platform reported by the mocked `node:os` module.
 	 * @param spawn Fake child launcher, if the platform path uses a helper.
+	 * @param options Sampler limits; `null` constructs with no options argument at all.
 	 * @returns Fresh sampler with no shared baselines.
 	 * @sideEffects Resets modules and installs per-test runtime mocks.
 	 */
-	async function samplerFor(platformName: string, spawn?: ReturnType<typeof helper>) {
+	async function samplerFor(
+		platformName: string,
+		spawn?: ReturnType<typeof helper>,
+		options: SamplerOptions | null = {
+			maxBytes: FIXTURE_MAX_BYTES,
+			maxDurationMs: FIXTURE_DURATION_MS,
+			maxPids: FIXTURE_PID_LIMIT,
+		},
+	) {
 		vi.resetModules();
 		vi.doMock("node:os", async () => {
 			const actual = await vi.importActual<typeof import("node:os")>("node:os");
@@ -557,11 +662,8 @@ describe("platform dispatch", () => {
 			};
 		});
 		if (spawn) vi.doMock("node:child_process", () => ({ spawn }));
-		return (await import("../src/index.js")).createResourceSampler({
-			maxBytes: FIXTURE_MAX_BYTES,
-			maxDurationMs: FIXTURE_DURATION_MS,
-			maxPids: FIXTURE_PID_LIMIT,
-		});
+		const { createResourceSampler: create } = await import("../src/index.js");
+		return options === null ? create() : create(options);
 	}
 	afterEach(async () => {
 		const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
@@ -570,6 +672,7 @@ describe("platform dispatch", () => {
 		vi.mocked(readlink).mockImplementation(actual.readlink);
 		vi.doUnmock("node:child_process");
 		vi.doUnmock("node:os");
+		vi.doUnmock("../src/darwin.js");
 		vi.resetModules();
 	});
 	it("collects a complete fixed Linux snapshot through mocked proc and getconf boundaries", async () => {
@@ -674,6 +777,134 @@ describe("platform dispatch", () => {
 				source: "unsupported",
 				reason: "no comparable native PSI metric on this platform",
 			});
+		} finally {
+			await sampler.dispose();
+		}
+	});
+	it("reports no Windows load average instead of Node's fabricated zeros", async () => {
+		const sampler = await samplerFor("win32");
+		try {
+			const snapshot = await sampler.sample();
+			expect(snapshot.loadAverage).toEqual([]);
+			expect(snapshot.coverage.reasons).toEqual(["unsupported-platform"]);
+		} finally {
+			await sampler.dispose();
+		}
+	});
+	it("flags an overrun scan and refuses a non-advancing monotonic interval under default limits", async () => {
+		const sampler = await samplerFor("freebsd", undefined, null);
+		const now = vi.spyOn(performance, "now");
+		try {
+			// The default 250 ms scan starts at 1000 and finishes 1 ms past its deadline.
+			now.mockReturnValueOnce(1000).mockReturnValue(1251);
+			const overrun = await sampler.sample();
+			expect(overrun.durationMs).toBe(251);
+			expect(overrun.coverage).toMatchObject({ complete: false, reasons: ["unsupported-platform", "deadline"] });
+			// A clock that did not advance since the last start is no interval, even though cores look idle.
+			now.mockReturnValue(1000);
+			expect((await sampler.sample()).cpu).toEqual({ state: "warming", reason: "invalid monotonic interval" });
+		} finally {
+			now.mockRestore();
+			await sampler.dispose();
+		}
+	});
+	it("looks up CLK_TCK once per sampler and measures Linux process CPU from the second scan", async () => {
+		const spawn = linuxBoundaries(2);
+		const sampler = await samplerFor("linux", spawn);
+		try {
+			await sampler.sample();
+			const second = await sampler.sample();
+			// Fixture stat reports 20 + 30 ticks both times: an authenticated, idle interval.
+			expect(second.processes).toEqual([
+				expect.objectContaining({ pid: FIXTURE_PID, identity: "12:77", cpu: { state: "available", value: 0 } }),
+			]);
+			expect(second.coverage).toMatchObject({ complete: true, reasons: [] });
+			expect(spawn).toHaveBeenCalledOnce();
+		} finally {
+			await sampler.dispose();
+		}
+	});
+	it("reports Darwin memory, swap, footprint and native CPU through fixed helpers and injected FFI on any host", async () => {
+		const FIXTURE_DARWIN_PID = 2147483647;
+		const FIXTURE_PAGE_BYTES = 4096;
+		const FIXTURE_RSS_BYTES = 8192;
+		const FIXTURE_FOOTPRINT_BYTES = 12288;
+		const close = vi.fn();
+		// Independent LP64 layouts: rusage_info_v0 resident 64, footprint 72, start ticks 80;
+		// proc_bsdinfo pid 12, ppid 16, p_comm 48, start seconds 120, sizeof 136.
+		const native: NativeCalls = {
+			close,
+			timebase: (buffer) => {
+				buffer.writeUInt32LE(1, 0);
+				buffer.writeUInt32LE(1, 4);
+				return 0;
+			},
+			usage: (_pid, buffer) => {
+				buffer.writeBigUInt64LE(BigInt(FIXTURE_RSS_BYTES), 64);
+				buffer.writeBigUInt64LE(BigInt(FIXTURE_FOOTPRINT_BYTES), 72);
+				buffer.writeBigUInt64LE(5n, 80);
+				return 0;
+			},
+			bsd: (pid, buffer) => {
+				buffer.writeUInt32LE(pid, 12);
+				buffer.writeUInt32LE(1, 16);
+				buffer.write("fixture", 48, "latin1");
+				buffer.writeBigUInt64LE(1_700_000_000n, 120);
+				return 136;
+			},
+		};
+		vi.doMock("../src/darwin.js", async () => {
+			const actual = await vi.importActual<typeof import("../src/darwin.js")>("../src/darwin.js");
+			return {
+				...actual,
+				darwinNativeProcesses: (rows: ProcessCounter[], budget: Budget) =>
+					actual.darwinNativeProcesses(rows, budget, () => native),
+			};
+		});
+		const spawn = helper({
+			"/bin/ps": `${FIXTURE_DARWIN_PID} 1 Sat Oct  3 01:49:05 2026 0:01.25 42 fixture\n`,
+			"/usr/bin/vm_stat": [
+				`Mach Virtual Memory Statistics: (page size of ${FIXTURE_PAGE_BYTES} bytes)`,
+				"Anonymous pages:                                  2.",
+				"Pages purgeable:                                  0.",
+				"Pages wired down:                                 1.",
+				"Pages occupied by compressor:                     0.",
+				"",
+			].join("\n"),
+			"/usr/sbin/sysctl": "vm.swapusage: total = 1024.00M  used = 256.00M  free = 768.00M  (encrypted)\n",
+		});
+		const sampler = await samplerFor("darwin", spawn);
+		try {
+			const first = await sampler.sample();
+			// (2 anonymous - 0 purgeable + 1 wired + 0 compressor) pages * 4096 bytes/page.
+			expect(first.memory).toEqual({
+				totalBytes: FIXTURE_MEMORY_TOTAL_BYTES,
+				freeBytes: FIXTURE_MEMORY_FREE_BYTES,
+				usage: { state: "available", value: { usedBytes: 12288, availableBytes: 4096, basis: "app+wired+compressed" } },
+				swap: { state: "available", value: { usedBytes: 256 * 1024 ** 2, totalBytes: 1024 * 1024 ** 2 } },
+			});
+			expect(first.processes).toEqual([
+				{
+					pid: FIXTURE_DARWIN_PID,
+					parentPid: 1,
+					name: "fixture",
+					identity: expect.stringContaining(`${FIXTURE_DARWIN_PID}:native:5:1700000000:0:1:`),
+					rssBytes: FIXTURE_RSS_BYTES,
+					footprint: { state: "available", value: FIXTURE_FOOTPRINT_BYTES },
+					cpu: { state: "warming", reason: "initial sample or PID reused" },
+				},
+			]);
+			expect(first.coverage).toMatchObject({ complete: true, reasons: [] });
+			expect((await sampler.sample()).processes[0]?.cpu).toEqual({ state: "available", value: 0 });
+			expect(close).toHaveBeenCalledTimes(2);
+			expect(spawn.mock.calls.map(([executable]) => executable)).toEqual([
+				"/usr/bin/vm_stat",
+				"/usr/sbin/sysctl",
+				"/bin/ps",
+				"/usr/bin/vm_stat",
+				"/usr/sbin/sysctl",
+				"/bin/ps",
+			]);
 		} finally {
 			await sampler.dispose();
 		}

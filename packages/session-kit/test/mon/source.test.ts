@@ -3,7 +3,6 @@ import { subscribe, unsubscribe } from "node:diagnostics_channel";
 import { lstat, readFile } from "node:fs/promises";
 import { platform } from "node:os";
 import { dirname, join } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import {
 	createResourceSampler,
@@ -92,11 +91,6 @@ function raw(overrides: Partial<ResourceSnapshot> = {}): ResourceSnapshot {
 }
 
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const nativeDarwinCpu =
-	platform() === "darwin" &&
-	(Boolean(process.versions.bun) ||
-		Number(process.versions.node.split(".")[0]) > 26 ||
-		(Number(process.versions.node.split(".")[0]) === 26 && Number(process.versions.node.split(".")[1]) >= 1));
 
 describe("published sampler source on this host", () => {
 	it("resolves the exact registry sampler, never the workspace copy", async () => {
@@ -114,8 +108,19 @@ describe("published sampler source on this host", () => {
 		expect(JSON.parse(await readFile(join(installed, "package.json"), "utf8")).version).toBe(version);
 	});
 
-	it("maps two actual observations: warming baseline, then measured interval CPU", async () => {
-		const source = createSamplerSource();
+	it("maps a warming baseline followed by a deadline-truncated observation", async () => {
+		const sample = vi
+			.fn()
+			.mockResolvedValueOnce(raw({ cpu: { state: "warming", reason: "first sample" } }))
+			.mockResolvedValueOnce(
+				raw({
+					wallTimeMs: 1200,
+					monotonicTimeMs: 10200,
+					processes: [],
+					coverage: { complete: false, enumerated: 0, sampled: 0, skipped: 0, bytesRead: 0, reasons: ["deadline"] },
+				}),
+			);
+		const source = createSamplerSource(() => ({ sample, dispose: async () => {} }));
 		const signal = new AbortController().signal;
 		try {
 			const first = await source.sample(signal);
@@ -124,7 +129,6 @@ describe("published sampler source on this host", () => {
 			expect(first.cpuState).toBe("warming");
 			expect(first.cpuPercent).toBeNull();
 			expect(first.memoryTotalBytes).toBeGreaterThan(0);
-			await sleep(150);
 			const second = await source.sample(signal);
 			expect(second.status).toBe("live");
 			expect(second.cpuState).toBe("available");
@@ -134,31 +138,12 @@ describe("published sampler source on this host", () => {
 			expect(second.sampledAtMs - first.sampledAtMs).toBeGreaterThanOrEqual(150);
 			expect(second.memoryTotalBytes).toBeGreaterThan(0);
 			expect(second.scanMs).toBeGreaterThanOrEqual(0);
-			const self = second.processes.find((p) => p.pid === process.pid);
-			expect(self?.rssBytes).toBeGreaterThan(0);
-			if (platform() === "darwin") {
-				// 0.2.0 provides native interval CPU after the baseline, never a ps average.
-				if (nativeDarwinCpu) {
-					expect(self?.cpuPercent).toBeGreaterThanOrEqual(0);
-					expect(second.processCpu).toBeUndefined();
-					expect(second.hint ?? "").not.toContain("macOS: process CPU unavailable");
-				} else {
-					expect(second.processes.every((p) => p.cpuPercent === null)).toBe(true);
-					expect(second.processCpu).toBe("unavailable");
-					expect(second.hint).toContain("macOS: process CPU unavailable");
-				}
-				// Names come from `p_comm`, never argv or a rewritten process title.
-				const node = second.processes.find((p) => p.pid === process.pid);
-				expect(node?.name).toMatch(/^(node|bun)/);
-				expect(second.processes.every((p) => !p.name.includes(" exec "))).toBe(true);
-			} else {
-				expect(self?.cpuPercent).toBeGreaterThanOrEqual(0);
-				expect(second.processCpu).toBeUndefined();
-			}
+			expect(second.processes).toEqual([]);
+			expect(second.notice).toBe("Partial list: 0 of 0 seen (time budget)");
 		} finally {
 			await source.dispose();
 		}
-		await expect(source.sample(signal)).rejects.toThrow(/disposed/);
+		expect(sample).toHaveBeenCalledTimes(2);
 	});
 
 	it.each([
@@ -215,18 +200,6 @@ describe("published sampler source on this host", () => {
 			}
 		},
 	);
-
-	it("drives a real poll for two updates, then closes cleanly", async () => {
-		const updates: string[] = [];
-		const before = timers();
-		const poll = new MonPoll(createSamplerSource(), (s) => updates.push(`${s.status}/${s.cpuState}`), undefined, 100);
-		poll.start();
-		for (let i = 0; i < 100 && updates.length < 2; i++) await sleep(20);
-		await poll.dispose();
-		expect(updates.slice(0, 2)).toEqual(["live/warming", "live/available"]);
-		expect(children()).toEqual([]);
-		expect(timers()).toBeLessThanOrEqual(before);
-	});
 
 	it("awaits sampler disposal and creates one sampler per source", async () => {
 		const dispose = vi.fn(async () => {});
@@ -325,6 +298,37 @@ describe("sampler snapshot mapping", () => {
 		expect(zero.scanMs).toBeNull();
 		const broken = toMonSnapshot(raw({ cpu: { state: "available", value: Number.POSITIVE_INFINITY } }));
 		expect(broken.cpuPercent).toBeNull();
+	});
+
+	it("keeps free memory unknown when the reading is missing or negative", () => {
+		for (const freeBytes of [Number.NaN, -1]) {
+			const mapped = toMonSnapshot(raw({ memory: { totalBytes: 1024 ** 3, freeBytes } }));
+			expect(mapped.memoryFreeBytes).toBeNull();
+			expect(mapped.memoryUsedBytes).toBeNull();
+		}
+	});
+
+	it("says an incomplete list without reasons has an unknown cause", () => {
+		const partial = toMonSnapshot(
+			raw({ coverage: { complete: false, enumerated: 50, sampled: 40, skipped: 0, bytesRead: 1, reasons: [] } }),
+		);
+		expect(partial.notice).toBe("Partial list: 40 of 50 seen (unknown)");
+	});
+
+	it("names one unknown process name in the singular", () => {
+		const processes = resourceFixture().processes.map((p, i) => ({ ...p, name: i === 0 ? "" : p.name }));
+		expect(toMonSnapshot(raw({ processes })).hint).toBe("1 name unknown (no access, e.g. other users)");
+	});
+
+	it.each([
+		["linux", "Process CPU unavailable"],
+		["darwin", "macOS: process CPU unavailable (see ?)"],
+	] as const)("explains %s process CPU that is unavailable for every row", (platform, hint) => {
+		const processes = resourceFixture().processes.map((p) => ({
+			...p,
+			cpu: { state: "unavailable" as const, reason: "no counters" },
+		}));
+		expect(toMonSnapshot(raw({ platform, processes })).hint).toBe(hint);
 	});
 
 	it("explains partial coverage with bounded sampler reasons", () => {

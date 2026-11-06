@@ -89,21 +89,23 @@ export function register(
 			ctx.ui.notify(`/monitor: cannot create ${root}: ${(error as Error).message}`, "warning");
 			return;
 		}
-		const w = new MonitorWidget(() => manager?.list() ?? [], { maxLines: maxWidgetLines, collapseKey });
-		w.attach(ctx);
-		widget = w;
-		manager = new MonitorManager({
+		const m: MonitorManager = new MonitorManager({
 			...runtime,
 			sessionId,
 			root,
+			// The manager sends only wakes (match, `wake`, exit, timeout); passive output stays in its ring.
 			send: (message) => {
 				pi.sendMessage(
 					{ customType: MESSAGE_TYPE, content: message.text, display: true, details: message.details },
-					message.wake ? { triggerTurn: true, deliverAs: "followUp" } : { triggerTurn: false },
+					{ triggerTurn: true, deliverAs: "followUp" },
 				);
 			},
 			onChange: () => w.refresh(),
 		});
+		const w = new MonitorWidget(() => m.list(), { maxLines: maxWidgetLines, collapseKey });
+		w.attach(ctx);
+		widget = w;
+		manager = m;
 		// Fire and forget: never delay startup on the sweep, and never let it throw into pi.
 		sweepOrphans(root, sessionDirName(sessionId, process.pid))
 			.then((result) => {

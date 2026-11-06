@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatDuration, formatMessage, formatPendingMonitors } from "../../src/monitor/messages.ts";
 import type { MonitorInfo } from "../../src/monitor/types.ts";
 
@@ -49,6 +49,20 @@ describe("formatMessage", () => {
 			});
 			expect(message.text).toContain(expected);
 		}
+	});
+
+	it("says the exit code is unknown when neither a code nor a signal was reported", () => {
+		const message = formatMessage(info({ status: "exited", endedAt: 3_000 }), [], { final: true, wake: true });
+		expect(message.text).toContain("exited with code ? after 3s");
+	});
+
+	describe("without an end time", () => {
+		afterEach(() => vi.useRealTimers());
+		it("measures a final event up to now", () => {
+			vi.useFakeTimers({ now: 7_000 });
+			const message = formatMessage(info({ status: "stopped" }), [], { final: true, wake: false });
+			expect(message.text).toContain("stopped after 7s");
+		});
 	});
 
 	it("sorts retained and dropped matches by line number without mutating the batch", () => {
@@ -112,6 +126,12 @@ describe("formatPendingMonitors", () => {
 		const match = "a\u001b[31mred\u001b[0m\u001b]8;;http://x\u0007link\u001b]8;;\u0007\nnext\u202e\u2066z\u009b2J";
 		expect(formatPendingMonitors([info({ match })])).toBe(
 			'Run ended with 1 monitor running, armed: m1 "build" on /aredlink nextz/ or exit',
+		);
+	});
+
+	it("turns carriage returns and tabs into spaces and drops other C0 controls in a match", () => {
+		expect(formatPendingMonitors([info({ match: "a\rb\tc\u0001d\u007fe" })])).toBe(
+			'Run ended with 1 monitor running, armed: m1 "build" on /a b cde/ or exit',
 		);
 	});
 

@@ -673,7 +673,7 @@ def test_fetch_traceback_and_context_are_redacted(
 
     monkeypatch.setattr(release, "urlopen", failed)
     # `RemoteDisconnected` is a transient reset; its retry warnings must be redacted too.
-    monkeypatch.setattr(release.time, "sleep", lambda _delay: None)
+    monkeypatch.setattr(release, "retry_sleep", lambda _delay: None)
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
     LOGGER.addHandler(handler)

@@ -17,7 +17,14 @@ import type {
 	ExtensionAPI,
 	SessionBoundaryDraft,
 } from "@earendil-works/pi-coding-agent";
-import { type AgentStateLookup, agentLookup, isAbandoned, NO_AGENT_STATE, ownerLabel } from "./state/agents.ts";
+import {
+	type AgentRunState,
+	type AgentStateLookup,
+	agentLookup,
+	isAbandoned,
+	NO_AGENT_STATE,
+	ownerLabel,
+} from "./state/agents.ts";
 import { applyPlanApproval, selectOpenPlanItems, selectPlanProgress } from "./state/plan.ts";
 import type { TaskState } from "./state/state.ts";
 import { commitState, getState, sid } from "./state/store.ts";
@@ -28,6 +35,7 @@ import {
 	PLAN_REMINDER_MESSAGE_TYPE,
 	type PlanApprovedPayload,
 	STATE_ENTRY_TYPE,
+	type Task,
 	type TaskSnapshot,
 } from "./tool/types.ts";
 
@@ -124,29 +132,144 @@ export function formatPlanReminder(state: TaskState): string {
 	return lines.join("\n");
 }
 
+/** Why an `in_progress` todo is still open at a settle, most actionable first. */
+export type InProgressKind = "abandoned" | "held" | "silent" | "blocked" | "running";
+
+/** A settle report: the line, its severity and a key that changes whenever the classification does. */
+export interface InProgressNotice {
+	text: string;
+	level: "info" | "warning";
+	key: string;
+}
+
+/** Open statuses: a `blockedBy` dependency in one of these has not delivered yet. */
+const OPEN = new Set(["pending", "in_progress", "deferred"]);
+
 /**
- * One-line report of `in_progress` todos a run stopped with, or `undefined` when there are none.
+ * Groups in report order. `warning` groups need the parent and repeat on every settle; `info`
+ * groups wait on something that will wake it. Capped groups name three then count the rest;
+ * `showDepStatus` groups name each blocker's status, since those blockers are why nothing moves.
+ */
+const GROUPS: ReadonlyArray<{
+	kind: InProgressKind;
+	label: string;
+	capped: boolean;
+	severity: InProgressNotice["level"];
+	showDepStatus: boolean;
+}> = [
+	{
+		kind: "abandoned",
+		label: "owner agent failed or stopped",
+		capped: false,
+		severity: "warning",
+		showDepStatus: false,
+	},
+	{ kind: "held", label: "held by the parent", capped: true, severity: "warning", showDepStatus: true },
+	{
+		kind: "silent",
+		label: "agent running without a completion notice",
+		capped: true,
+		severity: "warning",
+		showDepStatus: false,
+	},
+	{ kind: "blocked", label: "blocked", capped: true, severity: "info", showDepStatus: false },
+	{ kind: "running", label: "agent running", capped: true, severity: "info", showDepStatus: false },
+];
+
+/** One classified `in_progress` todo. `deps` are the open blockers its group is about. */
+interface Row {
+	task: Task;
+	kind: InProgressKind;
+	agent: AgentRunState | undefined;
+	deps: readonly Task[];
+}
+
+/** Whether an agent is still running or queued, regardless of its wake eligibility. */
+function isWorking(agent: AgentRunState | undefined): boolean {
+	return agent === "running" || agent === "queued";
+}
+
+/**
+ * Whether an open dependency is being worked: `in_progress` with no failed or stopped owner, or
+ * `pending` with a running or queued owner whose completion notice wakes the parent. A deferred or unowned pending one never
+ * delivers on its own, so a todo waiting only on those is the parent's to unblock.
+ */
+function isLive(dep: Task, lookup: AgentStateLookup): boolean {
+	const agent = lookup(dep.owner);
+	if (dep.status === "in_progress") return !isAbandoned(dep, agent);
+	return dep.status === "pending" && isWorking(agent) && lookup.wakesParent?.(dep.owner) === true;
+}
+
+/**
+ * Classify one `in_progress` todo. Its owner's failed or stopped agent makes it abandoned; a running
+ * or queued one either has a verified wake or warns as silent; else a live `blockedBy` dependency makes it wait; anything else, including a todo
+ * whose agent is done or whose open blockers are all dead, waits on the parent.
+ */
+function classify(task: Task, byId: ReadonlyMap<number, Task>, lookup: AgentStateLookup): Row {
+	const agent = lookup(task.owner);
+	if (isAbandoned(task, agent)) return { task, kind: "abandoned", agent, deps: [] };
+	if (isWorking(agent))
+		return { task, kind: lookup.wakesParent?.(task.owner) === true ? "running" : "silent", agent, deps: [] };
+	const open = (task.blockedBy ?? []).flatMap((id) => {
+		const dep = byId.get(id);
+		return dep && OPEN.has(dep.status) ? [dep] : [];
+	});
+	const live = open.filter((dep) => isLive(dep, lookup));
+	if (live.length) return { task, kind: "blocked", agent, deps: live };
+	return { task, kind: "held", agent, deps: open };
+}
+
+/** One todo's entry: owner and agent state, plus blockers by id and optionally status. */
+function entryText({ task, agent, deps }: Row, showDepStatus: boolean): string {
+	const owner = ownerLabel(task.owner);
+	const details = [];
+	if (owner) details.push(agent ? `${owner} ${agent}` : owner);
+	if (deps.length)
+		details.push(`by ${deps.map((d) => (showDepStatus ? `#${d.id} ${d.status}` : `#${d.id}`)).join(", ")}`);
+	const detail = details.length ? ` (${details.join("; ")})` : "";
+	return `#${task.id} ${sanitizeTerminalText(task.subject)}${detail}`;
+}
+
+/** The dedupe key: every todo's group, owner, agent state and the blockers that group names. */
+function reportKey(rows: readonly Row[], lookup: AgentStateLookup): string {
+	return JSON.stringify(
+		rows.map(({ task, kind, agent, deps }) => [
+			task.id,
+			kind,
+			task.owner ?? null,
+			agent ?? null,
+			deps.map((d) => [d.id, d.status, d.owner ?? null, lookup(d.owner) ?? null]),
+		]),
+	);
+}
+
+/**
+ * The report of `in_progress` todos a run stopped with, or `undefined` when there are none.
  * Same shape as the `subagents` and `session-kit` monitor settle notices,
- * `Run ended with N <work>, armed: <what wakes the parent>`, naming only todos. Todos arm nothing:
- * no todo wakes the parent, so the report says so rather than leaving the stop to read as resumable.
- * Every todo whose owning subagent failed or stopped is then named, uncapped: that work has no
- * worker left, so it is the part the parent must act on.
+ * `Run ended with N <work>, armed: <what wakes the parent>`. Todos arm nothing themselves, so the
+ * armed clause says so and defers to those notices for session-wide wakes rather than reading as
+ * "nothing is armed". Each todo is then named under one group: failed or stopped owners uncapped,
+ * the rest three per group. Its level is the most severe group's.
  */
 export function formatInProgressNotice(
 	state: TaskState,
 	lookup: AgentStateLookup = NO_AGENT_STATE,
-): string | undefined {
+): InProgressNotice | undefined {
 	const active = state.tasks.filter((t) => t.status === "in_progress");
 	if (!active.length) return undefined;
-	const shown = active.slice(0, 3).map((t) => `#${t.id} ${sanitizeTerminalText(t.subject)}`);
-	const more = active.length > shown.length ? `, +${active.length - shown.length} more` : "";
-	const notice = `Run ended with ${active.length} in_progress todo${active.length === 1 ? "" : "s"} (${shown.join(", ")}${more}), armed: no todo wakes the parent`;
-	const abandoned = active.flatMap((t) => {
-		const agent = lookup(t.owner);
-		if (!isAbandoned(t, agent)) return [];
-		return [`#${t.id} ${sanitizeTerminalText(t.subject)} (${ownerLabel(t.owner)} ${agent})`];
+	const byId = new Map(state.tasks.map((t) => [t.id, t]));
+	const rows = active.map((task) => classify(task, byId, lookup));
+	const present = GROUPS.filter(({ kind }) => rows.some((r) => r.kind === kind));
+	const parts = present.map(({ kind, label, capped, showDepStatus }) => {
+		const items = rows.filter((r) => r.kind === kind).map((r) => entryText(r, showDepStatus));
+		const shown = capped ? items.slice(0, 3) : items;
+		const more = items.length > shown.length ? `, +${items.length - shown.length} more` : "";
+		return `${label}: ${shown.join(", ")}${more}`;
 	});
-	return abandoned.length ? `${notice}; owner agent failed or stopped: ${abandoned.join(", ")}` : notice;
+	const n = active.length;
+	const text = `Run ended with ${n} in_progress todo${n === 1 ? "" : "s"}, armed: no todo-owned wake (monitor and agent notices list session wakes); ${parts.join("; ")}`;
+	const level = present.some((g) => g.severity === "warning") ? "warning" : "info";
+	return { text, level, key: reportKey(rows, lookup) };
 }
 
 /**
@@ -209,12 +332,25 @@ export function registerPlanHooks(
 	pi.on("agent_before_settle", onSettle);
 
 	// A settle with `in_progress` todos is a stop with owned work pending. The reminder above only
-	// covers plan items and only once, so report the state instead of leaving a quiet prompt.
+	// covers plan items and only once, so report the state instead of leaving a quiet prompt. A warning
+	// (abandoned or parent-held work) repeats on every settle, so that stop is never silent. An info
+	// report (everything waits on a running agent or a live dependency, which will wake the parent)
+	// is shown once per change: it returns when a todo changes group, agent state or blockers, or
+	// after the next prompt from a person. Monitor and agent wakes arrive via `pi.sendMessage`, which
+	// runs no `input` handlers; extension prompts (`sendUserMessage`) arrive as `extension`.
+	const reported = new Map<string, string>();
+	pi.on("input", (event, ctx) => {
+		if (event.source !== "extension") reported.delete(sid(ctx));
+	});
 	pi.on("agent_settled", (_event, ctx) => {
 		if (isPlanning(ctx, [])) return;
 		const id = sid(ctx);
-		const message = formatInProgressNotice(getState(id), agentLookup(id));
-		if (message) ctx.ui.notify(message, "warning");
+		const notice = formatInProgressNotice(getState(id), agentLookup(id));
+		if (notice?.level === "info") {
+			if (reported.get(id) === notice.key) return;
+			reported.set(id, notice.key);
+		} else reported.delete(id);
+		if (notice) ctx.ui.notify(notice.text, notice.level);
 	});
 
 	pi.on("context", async (event, ctx) => {
@@ -240,6 +376,7 @@ export function registerPlanHooks(
 		},
 		sessionEnded(sessionId) {
 			live.delete(sessionId);
+			reported.delete(sessionId);
 		},
 	};
 }

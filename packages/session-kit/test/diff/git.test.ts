@@ -258,6 +258,23 @@ describe("loadStat", () => {
 	});
 });
 
+describe("loadStat refs and empty output", () => {
+	it("rejects option-like refs before running git diff", async () => {
+		commitAllEmpty();
+		expect(await loadStat(dir, "-x")).toEqual({ ok: false, error: 'invalid ref "-x"' });
+	});
+
+	it("is empty on a clean tree, lists only untracked files when nothing tracked changed", async () => {
+		write("a.txt", "1\n");
+		commitAll();
+		expect(await loadStat(dir)).toEqual({ ok: true, text: "" });
+		write("u.txt", "u\n");
+		expect(await loadStat(dir)).toEqual({ ok: true, text: "?? u.txt" });
+		expect(await loadStat(dir, "HEAD")).toEqual({ ok: true, text: "?? u.txt" });
+		expect(await loadStat(dir, "HEAD..HEAD")).toEqual({ ok: true, text: "" });
+	});
+});
+
 describe("runGit / untrackedPatch", () => {
 	it("stops git at the byte cap and flags truncation", async () => {
 		write("a.txt", "x\n");

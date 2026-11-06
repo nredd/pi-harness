@@ -707,6 +707,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
    * match an agent by what the parent typed, not only its id. `spawnSeq` orders the spawn
    * against other spawns and `settleSeq`s, queued time included.
    */
+  const lifecycleRuns = new WeakMap<AgentRecord, number>();
   function eventFields(record: AgentRecord | undefined): Record<string, unknown> {
     return {
       handle: record?.handle,
@@ -714,6 +715,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       ...(record?.nameBase ? { nameBase: record.nameBase } : {}),
       ...(record?.previousId ? { previousId: record.previousId } : {}),
       spawnSeq: record?.spawnSeq,
+      ...(record && lifecycleRuns.has(record) ? { runSeq: lifecycleRuns.get(record) } : {}),
+      wakesParent: record?.isBackground === true,
       ...fallbackFields(record),
     };
   }
@@ -847,6 +850,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       fleet.ensureTimer();
       fleet.update();
     }
+    // Bind later handoff announcements to this exact run.
+    lifecycleRuns.set(record, manager.nextSequence());
     // Emit started event when agent transitions to running (including from queue)
     pi.events.emit("subagents:started", {
       id: record.id,
@@ -909,7 +914,13 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   }, (record, message) => {
     if (!isTopLevelAgent(record)) return;
     pi.events.emit("subagents:steered", { id: record.id, message });
-  }, clock, options.homeDir);
+  }, clock, options.homeDir, (record) => {
+    // Stopped before it ever started: no result and no notice, but a listener that heard
+    // `subagents:created` must still see it end. Same payload as a settled stop.
+    if (!isTopLevelAgent(record) || detachedSessionFile !== undefined) return;
+    record.settleSeq = manager.nextSequence();
+    pi.events.emit("subagents:failed", buildEventData(record));
+  });
 
   // Expose manager via Symbol.for() global registry for cross-package access.
   // Standard Node.js pattern for cross-package singletons (used by OpenTelemetry, etc.).
@@ -1490,6 +1501,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
         type: record.type,
         description: record.description,
         isBackground: true,
+        backgroundHandoff: true,
         ...eventFields(record),
       });
     }
@@ -1819,6 +1831,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     opts: { outputTranscript: boolean; maxTurns?: number; toolCallId?: string },
   ): Promise<AgentRecord | undefined> {
     const id = existing.id;
+    const priorSettleSeq = existing.settleSeq;
+    const resumeSeq = manager.nextSequence();
     // A resume always runs detached, and a detached run joins by the default mode.
     const joinMode = defaultJoinMode;
     // Assigned unconditionally: the completion notification carries this as
@@ -1895,6 +1909,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       type: existing.type,
       description: existing.description,
       isBackground: true,
+      ...(record.status === "queued" && priorSettleSeq !== undefined ? { queuedAfterSettleSeq: priorSettleSeq, queuedResumeSeq: resumeSeq } : {}),
       ...eventFields(existing),
     });
 
@@ -2701,8 +2716,7 @@ Terse command-style prompts produce shallow, generic work.
         const { state: bgState, callbacks: bgCallbacks } = createActivityTracker(effectiveMaxTurns, undefined, clock);
 
         // Wrap onSessionCreated to wire output file streaming.
-        // The callback lazily reads record.outputFile (set right after spawn)
-        // rather than closing over a value that doesn't exist yet.
+        // The callback reads record.outputFile prepared before launch.
         let id: string;
         const origBgOnSession = bgCallbacks.onSessionCreated;
         bgCallbacks.onSessionCreated = (session: any) => {
@@ -2730,17 +2744,17 @@ Terse command-style prompts produce shallow, generic work.
           cwd,
           invocation: agentInvocation,
           rootSessionId: ctx.sessionManager.getSessionId(),
+          onPrepare: (agentId) => attachTranscript(manager.getRecord(agentId), agentId),
           ...bgCallbacks,
         });
 
-        // Set output file + join mode synchronously after spawn, before the
+        // Set join mode synchronously after spawn, before the
         // event loop yields — onSessionCreated is async so this is safe.
         const joinMode = defaultJoinMode;
         // `spawn` registered the record before returning its id.
         const record = manager.getRecord(id)!;
         record.joinMode = joinMode;
         record.toolCallId = toolCallId;
-        attachTranscript(record, id);
 
         // With isolation: "worktree" the agent isn't running yet — the repo
         // copy is an awaited git call. Wait for it here, after the synchronous
@@ -2821,8 +2835,7 @@ Terse command-style prompts produce shallow, generic work.
       const { state: fgState, callbacks: fgCallbacks } = createActivityTracker(effectiveMaxTurns, streamUpdate, clock);
 
       // Wire session creation: register in widget + stream to output file.
-      // The output file path is set synchronously after spawn (below),
-      // before onSessionCreated fires — same pattern as background agents.
+      // The output file path is prepared before launch, as for background agents.
       const origOnSession = fgCallbacks.onSessionCreated;
       fgCallbacks.onSessionCreated = (session: any) => {
         origOnSession(session);
@@ -2888,12 +2901,11 @@ Terse command-style prompts produce shallow, generic work.
           // widget and the `finally` cleanup below, none of which should see an
           // agent that has no session and may never get one.
           onQueued: (_id, ahead) => { queuedAhead = ahead; streamUpdate(); },
+          onPrepare: (agentId) => attachTranscript(manager.getRecord(agentId), agentId),
           ...fgCallbacks,
         }, (fgAgentId) => {
-          // onSpawned: called synchronously after spawn, before onSessionCreated fires.
-          // Set up the output file so streamToOutputFile can pick it up.
+          // onSpawned fires after the run promise exists, before onSessionCreated.
           const fgRec = manager.getRecord(fgAgentId);
-          attachTranscript(fgRec, fgAgentId);
           // Fires once the run promise exists, i.e. the agent is running. From
           // here until this call returns, the run can be handed off.
           handoffId = fgAgentId;

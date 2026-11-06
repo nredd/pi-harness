@@ -7,6 +7,8 @@ import { noteAfterAct, noteFromLook } from "../src/note.ts";
 import { countOutlineNodes, foldToBudget, graftScopedOutline, nodeByRef, parseLookResponse, renderInteractiveControls } from "../src/outline.ts";
 import { shouldPreferForegroundModalWindow } from "../src/root-selection.ts";
 import { afterAll, beforeAll, describe, test } from "vitest";
+import { runCheckCommand } from "../scripts/check-async.mjs";
+import { prepareSwiftSdk, runPreparedSwift, SDK_HOOK_TIMEOUT_MS, SDK_IMPORTS } from "./support/swift-sdk.mjs";
 
 const root = path.resolve(new URL("..", import.meta.url).pathname);
 const swift = fs.readFileSync(path.join(root, "native/macos/bridge.swift"), "utf8");
@@ -312,24 +314,23 @@ const retiredSharedCacheNames = [
 
 describeMacosOnly("swiftc", () => {
 	let scratch;
-	let moduleCache;
+	let prepared;
 	let savedTmpdir;
 
 	// One private, owned scratch dir per file run. Both swiftc cases share its module cache, and
 	// `TMPDIR` points at it so `os.tmpdir()` holds an unwritable squat at every retired shared name:
 	// a case that falls back to a fixed shared path fails here exactly as it did on the shared host.
-	beforeAll(() => {
+	beforeAll(async () => {
+		savedTmpdir = process.env.TMPDIR;
 		scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-computer-use-swift-"));
-		moduleCache = path.join(scratch, "module-cache");
-		fs.mkdirSync(moduleCache);
 		for (const name of retiredSharedCacheNames) {
 			const squat = path.join(scratch, name);
 			fs.mkdirSync(squat, { mode: 0o555 });
 			assert(!isWritable(squat), `${squat} is writable, so the shared-cache squat proves nothing (running as root?)`);
 		}
-		savedTmpdir = process.env.TMPDIR;
 		process.env.TMPDIR = scratch;
-	});
+		prepared = await prepareSwiftSdk({ scratch, target: process.arch === "x64" ? "x86_64-apple-macosx14.0" : "arm64-apple-macosx14.0" });
+	}, SDK_HOOK_TIMEOUT_MS);
 
 	afterAll(() => {
 		if (savedTmpdir === undefined) delete process.env.TMPDIR;
@@ -337,15 +338,13 @@ describeMacosOnly("swiftc", () => {
 		if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
 	});
 
-	// INV-8 starts with an empty module cache, so swiftc rebuilds the AppKit/SwiftUI framework modules
-	// first; INV-17 then reuses that cache warm. Warm local runs take ~2 s; budgets are ~2x the cold
-	// `owned (macos-14)` cost (3-core M1) from job 126326304071, not the suite default. INV-17 keeps
-	// its cold budget because `-t` can run it alone.
-	test("INV-8 swift typecheck", { timeout: 90_000 /* cold CI: 43532 ms */ }, () => {
-		const triple = process.arch === "x64" ? "x86_64-apple-macosx14.0" : "arm64-apple-macosx14.0";
-		execFileSync("xcrun", [
-			"swiftc", "-target", triple, "-parse-as-library",
-			"-module-cache-path", moduleCache,
+	// SDK-only preparation is bounded and reported separately; it never compiles repository source.
+	// Keep the 90s INV-8 source deadline. The child budget leaves room for bounded group cleanup.
+	test("INV-8 swift typecheck", { timeout: 90_000 }, async () => {
+		for (const text of [swift, agentCursorSwift, activityGlowSwift, fs.readFileSync(path.join(root, "native/macos/agent_cursor_motion.swift"), "utf8")]) {
+			for (const match of text.matchAll(/^import (\w+)$/gm)) assert(SDK_IMPORTS.includes(match[1]), `SDK preparation omits ${match[1]}`);
+		}
+		await runPreparedSwift(prepared, [
 			"-framework", "ApplicationServices",
 			"-framework", "AppKit",
 			"-framework", "ScreenCaptureKit",
@@ -356,23 +355,32 @@ describeMacosOnly("swiftc", () => {
 			"native/macos/agent_cursor.swift",
 			"native/macos/agent_cursor_motion.swift",
 			"native/macos/bridge.swift",
-		], { cwd: root, stdio: "pipe" });
+		], { cwd: root, label: "INV-8 Swift source typecheck", timeoutMs: 65_000 });
 	});
 
-	test("INV-17 macOS agent cursor lifecycle", { timeout: 50_000 /* cold CI: 23953 ms */ }, () => {
-		const triple = process.arch === "x64" ? "x86_64-apple-macosx14.0" : "arm64-apple-macosx14.0";
+	test("INV-8 prepared cache validates changed and invalid sources concurrently", { timeout: 90_000 }, async () => {
+		const valid = path.join(scratch, "valid-control.swift");
+		const changed = path.join(scratch, "changed-control.swift");
+		fs.writeFileSync(valid, "import SwiftUI\nlet value: Int = 1\n");
+		fs.writeFileSync(changed, "import SwiftUI\nlet value: PiInv8Undefined = 1\n");
+		const results = await Promise.allSettled([valid, changed].map((source) => runPreparedSwift(prepared, ["-typecheck", source], { cwd: root, label: "INV-8 source control", timeoutMs: 25_000 })));
+		assert(results[0].status === "fulfilled", `valid Swift rejected: ${results[0].reason}`);
+		assert(results[1].status === "rejected" && /cannot find type 'PiInv8Undefined'/.test(results[1].reason.message), "warm SDK cache accepted invalid Swift or failed for the wrong reason");
+		fs.writeFileSync(changed, "import SwiftUI\nlet value: Int = 1\n");
+		await runPreparedSwift(prepared, ["-typecheck", changed], { cwd: root, label: "INV-8 corrected source control", timeoutMs: 25_000 });
+	});
+
+	test("INV-17 macOS agent cursor lifecycle", { timeout: 50_000 }, async () => {
 		const binary = path.join(scratch, "cursor-tests");
-		execFileSync("xcrun", [
-			"swiftc", "-target", triple, "-parse-as-library",
-			"-module-cache-path", moduleCache,
+		await runPreparedSwift(prepared, [
 			"-framework", "AppKit",
 			"-framework", "SwiftUI",
 			"native/macos/agent_cursor.swift",
 			"native/macos/agent_cursor_motion.swift",
 			"native/macos/agent_cursor_tests.swift",
 			"-o", binary,
-		], { cwd: root, stdio: "pipe" });
-		execFileSync(binary, [], { cwd: root, stdio: "pipe" });
+		], { cwd: root, label: "INV-17 Swift source compile", timeoutMs: 20_000 });
+		await runCheckCommand(binary, [], { cwd: root, label: "INV-17 cursor lifecycle binary", timeoutMs: 5000 });
 	});
 });
 

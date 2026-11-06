@@ -211,6 +211,40 @@ test("elsewhere it falls back to the platform, tolerates a missing agent dir and
 	assert.deepEqual(summary.fs, { type: process.platform, stat_ms: -1, fsync_ms: -1 });
 });
 
+for (const home of ["set", "unset"] as const) {
+	test(`without PI_CODING_AGENT_DIR it times the default agent dir under a ${home} HOME`, async () => {
+		const out = join(root, "latency.jsonl");
+		process.env.PI_LATENCY_PROBE = out;
+		const previousHome = process.env.HOME;
+		// Unset, HOME falls back to the working directory: `.pi/agent`, relative and absent here.
+		const agentDir = home === "set" ? join(root, ".pi", "agent") : join(".pi", "agent");
+		if (home === "set") {
+			process.env.HOME = root;
+			fs.mkdirSync(agentDir, { recursive: true });
+		} else {
+			delete process.env.HOME;
+			assert.equal(fs.existsSync(agentDir), false);
+		}
+		proc.files.set(
+			"/proc/self/mountinfo",
+			["22 1 8:1 / / rw - ext4 /dev/sda rw", `40 22 0:5 / ${agentDir} rw - agentfs none rw`].join("\n"),
+		);
+		try {
+			const start = register().get("session_start");
+			assert.ok(start);
+			await start({}, context(undefined));
+		} finally {
+			if (previousHome === undefined) delete process.env.HOME;
+			else process.env.HOME = previousHome;
+		}
+		const [first] = records(out);
+		assert.ok(first);
+		const timed = home === "set" ? 0 : -1;
+		assert.deepEqual(first.fs, { type: "agentfs", stat_ms: timed, fsync_ms: timed });
+		if (home === "set") assert.deepEqual(fs.readdirSync(agentDir), []);
+	});
+}
+
 test("summarises every five seconds by default, with percentiles over the window's ticks", async () => {
 	const out = join(root, "latency.jsonl");
 	process.env.PI_LATENCY_PROBE = out;

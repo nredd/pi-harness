@@ -106,3 +106,29 @@ it("ignores post-spawn errors but still drains output, settles exit and reaps th
 	expect(child.stderr.destroyed).toBe(true);
 	expect(vi.getTimerCount()).toBe(0);
 });
+
+it("terminates once, hard-resolves past a held pipe, and ignores the leader's late exit and close", async () => {
+	vi.useFakeTimers();
+	const child = new Child();
+	vi.mocked(spawn).mockReturnValueOnce(child as unknown as ChildProcess);
+	const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+	const starting = spawnMonitor(["fixture"], { cwd: "/fixture", onStdout: vi.fn(), onStderr: vi.fn() });
+	child.emit("spawn");
+	const monitor = await starting;
+	monitor.terminate(100);
+	monitor.terminate(100);
+	expect(kill.mock.calls).toEqual([[-child.pid, "SIGTERM"]]);
+	await vi.advanceTimersByTimeAsync(100);
+	expect(kill.mock.calls.at(-1)).toEqual([-child.pid, "SIGKILL"]);
+	await vi.advanceTimersByTimeAsync(1_000);
+	expect(await monitor.exited).toEqual({ exitCode: null, signal: null });
+	const signals = kill.mock.calls.length;
+	child.signalCode = "SIGKILL";
+	child.emit("exit", null, "SIGKILL");
+	await vi.advanceTimersByTimeAsync(250);
+	child.emit("close", null, "SIGKILL");
+	monitor.terminate();
+	expect(kill).toHaveBeenCalledTimes(signals);
+	expect(await monitor.exited).toEqual({ exitCode: null, signal: null });
+	expect(vi.getTimerCount()).toBe(0);
+});

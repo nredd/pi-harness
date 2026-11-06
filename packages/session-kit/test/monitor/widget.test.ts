@@ -228,11 +228,30 @@ describe("MonitorWidget", () => {
 		const component = t.mount();
 		expect(component.handleMouse({ type: "wheel", wheelDelta: -1 })).toBeUndefined();
 		component.render(60);
+		expect(component.handleMouse({ type: "wheel" })).toBeUndefined();
 		expect(component.handleMouse({ type: "wheel", wheelDelta: 2 })).toEqual({ handled: true });
 		expect(component.render(60).some((l) => l.includes("↑ 2 more"))).toBe(true);
 		t.widget.toggle();
 		expect(component.handleMouse({ type: "wheel", wheelDelta: 2 })).toBeUndefined();
 		t.widget.dispose();
+	});
+
+	it("ticks elapsed time while expanded and stays quiet while collapsed", () => {
+		vi.useFakeTimers();
+		try {
+			const t = setup([monitor()]);
+			t.widget.refresh();
+			t.mount();
+			vi.advanceTimersByTime(1_000);
+			expect(t.requestRender).toHaveBeenCalledOnce();
+			t.widget.toggle();
+			t.requestRender.mockClear();
+			vi.advanceTimersByTime(3_000);
+			expect(t.requestRender).not.toHaveBeenCalled();
+			t.widget.dispose();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("keeps content rows at the cap as the mutable list crosses it", () => {

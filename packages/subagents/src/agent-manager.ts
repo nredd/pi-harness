@@ -75,6 +75,12 @@ function relabelFromResponse(record: AgentRecord, message: AssistantMessageInfo 
 export type OnAgentComplete = (record: AgentRecord) => void;
 export type OnAgentStart = (record: AgentRecord) => void;
 /**
+ * Fired when `abort`, `detach` or `abortAll` stops a record that was still queued. Such a record
+ * never reaches `onComplete` (it never ran, so there is no result to announce), but a listener
+ * that heard it spawn needs to learn it ended.
+ */
+export type OnAgentQueuedStop = (record: AgentRecord) => void;
+/**
  * Fired by `steer()` once a message is delivered or queued. Every steer path
  * goes through it except the steer tools (`steer_subagent` in index.ts, and its
  * nested twin in nested-tools.ts), which await the session directly.
@@ -423,9 +429,11 @@ interface SpawnOptions {
   invocation?: AgentInvocation;
   /** Parent abort signal — when aborted, the subagent is also stopped. */
   signal?: AbortSignal;
+  /** Prepare the record before it can be queued or started. A throw rejects the spawn. */
+  onPrepare?: (id: string) => void;
   /**
    * Called synchronously once the record is in the map and its promise is set,
-   * before `onSessionCreated` fires — where callers attach the output file.
+   * before `onSessionCreated` fires.
    *
    * Carried on the options rather than parked on the manager for the duration
    * of a spawn: with a foreground queue, `startAgent` can run at drain time,
@@ -575,6 +583,7 @@ export class AgentManager {
   private readonly unreadTtlMs = retentionMs("PI_SUBAGENTS_UNREAD_TTL_MIN", UNCONSUMED_RECORD_TTL_MS);
   private onComplete?: OnAgentComplete;
   private onStart?: OnAgentStart;
+  private onQueuedStop?: OnAgentQueuedStop;
   private onCompact?: OnAgentCompact;
   private onUsage?: OnAgentUsage;
   private onSteered?: OnAgentSteered;
@@ -640,9 +649,11 @@ export class AgentManager {
     onSteered?: OnAgentSteered,
     private readonly clock: Clock = realClock,
     private readonly homeDir?: string,
+    onQueuedStop?: OnAgentQueuedStop,
   ) {
     this.onComplete = onComplete;
     this.onStart = onStart;
+    this.onQueuedStop = guardObserver("queued stop", onQueuedStop);
     this.onCompact = guardObserver("compaction", onCompact);
     this.onUsage = guardObserver("usage", onUsage);
     this.onSteered = onSteered;
@@ -836,6 +847,14 @@ export class AgentManager {
       lease = this.admit(record, waitPool);
     } catch (err) {
       this.agents.delete(id);
+      throw err;
+    }
+    try {
+      options.onPrepare?.(id);
+    } catch (err) {
+      this.agents.delete(id);
+      releaseBudget(lease);
+      this.drainQueue();
       throw err;
     }
     if (lease === undefined) {
@@ -1462,8 +1481,7 @@ export class AgentManager {
    * Returns { id, record } so callers can access the agent ID.
    *
    * @param onSpawned - Called synchronously once the run is kicked off, before
-   *   onSessionCreated fires. Use this to set record.outputFile so
-   *   streamToOutputFile can pick it up.
+   *   onSessionCreated fires.
    */
   async spawnAndWait(
     pi: ExtensionAPI,
@@ -1971,9 +1989,8 @@ export class AgentManager {
     // done; a blocking caller learns of the stop from its own tool result.
     if (record.status === "queued") {
       this.dequeue(q => q.id === id);
-      record.status = "stopped";
       record.stoppedBy = by;
-      record.completedAt = this.clock.now();
+      this.stopQueued(record);
       return true;
     }
 
@@ -1984,6 +2001,13 @@ export class AgentManager {
     record.status = "stopped";
     record.completedAt = this.clock.now();
     return true;
+  }
+
+  /** Mark a dequeued record stopped and tell `onQueuedStop`; the queue entry is already gone. */
+  private stopQueued(record: AgentRecord): void {
+    record.status = "stopped";
+    record.completedAt = this.clock.now();
+    this.onQueuedStop?.(record);
   }
 
   /** Dispose a record's session and remove it from the map. */
@@ -2161,12 +2185,9 @@ export class AgentManager {
   detach(): number {
     const keepQueued = ({ record }: QueueEntry): boolean =>
       record.parentAgentId !== undefined && record.workflowId === undefined;
-    for (const queued of this.queue) {
-      if (keepQueued(queued)) continue;
-      queued.record.status = "stopped";
-      queued.record.completedAt = this.clock.now();
-    }
+    const dropped = this.queue.filter(entry => !keepQueued(entry)).map(({ record }) => record);
     this.dequeue(entry => !keepQueued(entry));
+    for (const record of dropped) this.stopQueued(record);
     let survivors = 0;
     for (const record of this.agents.values()) {
       if (record.status !== "running") continue;
@@ -2186,12 +2207,12 @@ export class AgentManager {
   abortAll(): number {
     let count = 0;
     // Clear queued agents first
-    for (const { record } of this.queue) {
-      record.status = "stopped";
-      record.completedAt = this.clock.now();
+    const dropped = this.queue.map(({ record }) => record);
+    this.dequeue(() => true);
+    for (const record of dropped) {
+      this.stopQueued(record);
       count++;
     }
-    this.dequeue(() => true);
     // Abort running agents
     for (const record of this.agents.values()) {
       if (record.status === "running") {
