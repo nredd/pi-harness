@@ -32,7 +32,7 @@ this exact filter against the real resource loader, without invoking a Pi binary
 
 **If pi-subagents is installed**, also set `"packageAgents": false` in `subagents.json` when
 agents remain locally managed. Its package-agent discovery is separate from Pi's four resource
-filters and otherwise still discovers this package's seven agents. This disables *all* packaged
+filters and otherwise still discovers this package's eight agents. This disables *all* packaged
 agents, not local/global/project agents. If you need other packaged agents, use pi-subagents'
 `packageAgents` allowlist naming only those packages, excluding `pi-preset`. Do not claim that
 `skills: []` or `extensions` alone filters agents. Local agent precedence is not an exclusion.
