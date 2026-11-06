@@ -83,9 +83,9 @@ async function shutdown(bound: Bound, reason: "reload" | "quit" | "fork") {
   await bound.boot.lifecycle.get("session_shutdown")?.({ type: "session_shutdown", reason }, bound.context);
   bound.stopped = true;
 }
-async function spawn(bound: Bound, prompt: string) {
+async function spawn(bound: Bound, prompt: string, name?: string) {
   const result = await bound.boot.tools.get("Agent").execute(`call-${prompt}`, {
-    subagent_type: "general-purpose", prompt, description: prompt, run_in_background: true,
+    subagent_type: "general-purpose", prompt, description: prompt, run_in_background: true, ...(name ? { name } : {}),
   }, undefined, undefined, bound.context);
   return result.details.agentId as string;
 }
@@ -624,6 +624,39 @@ describe("index detached survivor lifecycle events", () => {
     const third = await bind({}, {}, false, { reason: "reload", previousSessionFile: forkFile });
     expect(emitted(third, "subagents:started")).toMatchObject([{ id: b, wakesParent: true }]);
     expect(emitted(third, "subagents:other_session_survivor")).toMatchObject([{ id: a, sessionFile: parentFile }]);
+    holdA.release(); holdB.release();
+  });
+
+  it.each(["reload", "new"] as const)(
+    "gives a spawn after %s a handle no live survivor holds, so lifecycle events cannot mix them up",
+    async (reason) => {
+      const parentFile = sessionFile;
+      const holdA = heldResponse("a result"); const holdB = heldResponse("b result");
+      provider.setResponses([holdA.response, holdB.response]);
+      const first = await bind(); const a = await spawn(first, "survivor a"); await holdA.entered;
+      const survivorHandle = first.registry.getRecord(a)?.handle;
+      expect(survivorHandle).toBe("general-purpose");
+      await shutdown(first, "reload");
+      if (reason === "new") { sessionFile = join(env.dir, "new.jsonl"); writeFileSync(sessionFile, ""); }
+      const next = await bind({}, {}, false, { reason, previousSessionFile: parentFile });
+      const b = await spawn(next, "newer"); await holdB.entered;
+      const newHandle = next.registry.getRecord(b)?.handle;
+      expect(newHandle).toBeDefined();
+      expect(newHandle).not.toBe(survivorHandle);
+      holdA.release(); holdB.release();
+    },
+  );
+
+  it("gives a spawn after reload an alias no live survivor holds either", async () => {
+    const holdA = heldResponse("a result"); const holdB = heldResponse("b result");
+    provider.setResponses([holdA.response, holdB.response]);
+    const first = await bind(); const a = await spawn(first, "named survivor", "audit"); await holdA.entered;
+    expect(first.registry.getRecord(a)?.alias).toBe("audit");
+    await shutdown(first, "reload");
+    const next = await bind();
+    const b = await spawn(next, "named newer", "audit"); await holdB.entered;
+    expect(next.registry.getRecord(b)?.alias).toBeDefined();
+    expect(next.registry.getRecord(b)?.alias).not.toBe("audit");
     holdA.release(); holdB.release();
   });
 

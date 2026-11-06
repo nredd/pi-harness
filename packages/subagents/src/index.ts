@@ -966,6 +966,11 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     pi.events.emit("subagents:failed", buildEventData(record));
   });
 
+  // A live survivor of an orphaned manager keeps its handle: reusing it would make a lifecycle listener
+  // that keys by handle read this manager's newer agent and the survivor as one.
+  manager.reservedHandles = () =>
+    listAllRunningDetached().flatMap(({ agent }) => [agent.record.handle, agent.record.alias].filter((h): h is string => !!h));
+
   // Expose manager via Symbol.for() global registry for cross-package access.
   // Standard Node.js pattern for cross-package singletons (used by OpenTelemetry, etc.).
   // Documented for callers in docs/rpc.md ("The manager registry").
