@@ -416,12 +416,14 @@ describe("worktree", () => {
         { code: 1, killed: false },
       );
 
-      const result = await cleanupWorktree(failing, repoDir, wt, "removal fails");
-
-      expect(result.path).toBe(wt.path);
-      expect(result.error).toBe("boom");
-      expect(existsSync(wt.path)).toBe(true);
-      try { execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir, stdio: "pipe" }); } catch { /* ignore */ }
+      try {
+        const result = await cleanupWorktree(failing, repoDir, wt, "removal fails");
+        expect(result.path).toBe(wt.path);
+        expect(result.error).toBe("boom");
+        expect(existsSync(wt.path)).toBe(true);
+      } finally {
+        if (existsSync(wt.path)) execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir });
+      }
     });
   });
 
@@ -476,9 +478,8 @@ describe("cleanupWorktree — failure path", () => {
     // Break the worktree's link back to the repo.
     writeFileSync(join(wt.path, ".git"), "gitdir: /nonexistent/path/that/is/not/a/repo");
 
-    const result = await cleanupWorktree(pi, repoDir, wt, "corrupted agent");
-
     try {
+      const result = await cleanupWorktree(pi, repoDir, wt, "corrupted agent");
       expect(result.path).toBe(wt.path);
       expect(existsSync(join(wt.path, "work.txt"))).toBe(true);
     } finally {
@@ -492,14 +493,13 @@ describe("cleanupWorktree — failure path", () => {
     const wt = (await createWorktree(pi, repoDir, "commit-fails"))!;
     writeFileSync(join(wt.path, "work.txt"), "agent output");
 
-    const result = await cleanupWorktree(
-      failingPi(args => args[0] === "commit", { code: 1, killed: false }),
-      repoDir,
-      wt,
-      "commit fails",
-    );
-
     try {
+      const result = await cleanupWorktree(
+        failingPi(args => args[0] === "commit", { code: 1, killed: false }),
+        repoDir,
+        wt,
+        "commit fails",
+      );
       expect(result.hasChanges).toBe(true);
       expect(result.path).toBe(wt.path);
       expect(existsSync(join(wt.path, "work.txt"))).toBe(true);
@@ -517,7 +517,7 @@ describe("cleanupWorktree — failure path", () => {
       expect(result.error).toBe("status unavailable");
       expect(existsSync(wt.path)).toBe(true);
     } finally {
-      execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir });
+      if (existsSync(wt.path)) execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir });
     }
   });
 
@@ -529,7 +529,7 @@ describe("cleanupWorktree — failure path", () => {
       expect(result.path).toBe(wt.path);
       expect(result.error).toBe("Unknown git failure");
     } finally {
-      execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir });
+      if (existsSync(wt.path)) execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir });
     }
   });
 
@@ -543,7 +543,7 @@ describe("cleanupWorktree — failure path", () => {
       expect(result.branch).toBeUndefined();
       expect(execFileSync("git", ["show", "HEAD:work.txt"], { cwd: wt.path, encoding: "utf8" })).toBe("agent output");
     } finally {
-      execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir });
+      if (existsSync(wt.path)) execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir });
     }
   });
 
@@ -557,7 +557,7 @@ describe("cleanupWorktree — failure path", () => {
       expect(result.error).toBe("boom");
       expect(execFileSync("git", ["show", `${wt.branch}:work.txt`], { cwd: repoDir, encoding: "utf8" })).toBe("agent output");
     } finally {
-      execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir });
+      if (existsSync(wt.path)) execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir });
     }
   });
 
@@ -575,7 +575,7 @@ describe("cleanupWorktree — failure path", () => {
       expect(result.error).toBeDefined();
       expect(existsSync(join(wt.path, "late.txt"))).toBe(true);
     } finally {
-      execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir });
+      if (existsSync(wt.path)) execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir });
     }
   });
 
