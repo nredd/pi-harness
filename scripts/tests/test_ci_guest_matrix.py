@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, replace
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any
 
 import pytest
@@ -2438,16 +2438,15 @@ def test_every_npm_ci_job_restores_the_npm_cache_and_no_other_job_saves_one() ->
     assert {*OWNED_SHARD_JOBS.values(), "contracts", "stack"} <= installing
 
 
-def lexical_path(path: str) -> Path:
+def lexical_path[PathType: PurePath](source: PathType) -> PathType:
     """Normalize a workflow path lexically without resolving symlinks or accessing the filesystem.
 
     Parameters:
-        path (str): Workflow path to normalize.
+        source (PathType): Workflow path to normalize.
 
     Returns:
-        Path: Lexically normalized path.
+        PathType: Lexically normalized path of the same flavour.
     """
-    source = Path(path)
     parts: list[str] = []
     for part in source.parts:
         if part == source.anchor:
@@ -2456,7 +2455,7 @@ def lexical_path(path: str) -> Path:
             parts.pop()
         elif part != ".." or not source.anchor:
             parts.append(part)
-    return Path(source.anchor, *parts)
+    return type(source)(source.anchor, *parts)
 
 
 @pytest.mark.parametrize(
@@ -2465,7 +2464,6 @@ def lexical_path(path: str) -> Path:
         ("./a//b/../package-lock.json", "a/package-lock.json"),
         ("a/../../package-lock.json", "../package-lock.json"),
         ("/../../a/../package-lock.json", "/package-lock.json"),
-        ("//a/../package-lock.json", "//package-lock.json"),
         ("a/..", "."),
     ],
 )
@@ -2476,7 +2474,29 @@ def test_lexical_path(value: str, expected: str) -> None:
         value (str): Workflow path to normalize.
         expected (str): Expected normalized path.
     """
-    assert lexical_path(value) == Path(expected)
+    assert lexical_path(Path(value)) == Path(expected)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (PurePosixPath("//a/../package-lock.json"), PurePosixPath("//package-lock.json")),
+        (PureWindowsPath("//a/../package-lock.json"), PureWindowsPath("//a/../package-lock.json")),
+        (
+            PureWindowsPath("//server/share/a/../package-lock.json"),
+            PureWindowsPath("//server/share/package-lock.json"),
+        ),
+        (PureWindowsPath("C:/../../a/../package-lock.json"), PureWindowsPath("C:/package-lock.json")),
+    ],
+)
+def test_lexical_path_flavours(value: PurePath, expected: PurePath) -> None:
+    """Preserve POSIX roots and Windows drive and UNC anchors.
+
+    Parameters:
+        value (PurePath): Workflow path to normalize.
+        expected (PurePath): Expected normalized path.
+    """
+    assert lexical_path(value) == expected
 
 
 def installed_lockfiles(job: dict[str, Any]) -> set[Path]:
@@ -2490,7 +2510,7 @@ def installed_lockfiles(job: dict[str, Any]) -> set[Path]:
     """
     default = job.get("defaults", {}).get("run", {}).get("working-directory", ".")
     return {
-        lexical_path(f"{step.get('working-directory', default)}/package-lock.json")
+        lexical_path(Path(f"{step.get('working-directory', default)}/package-lock.json"))
         for step in job.get("steps", [])
         if runs_npm_install(step)
     }
@@ -2515,7 +2535,7 @@ def test_setup_node_caches_only_the_lockfile_its_job_installs(workflow: Path) ->
             options = step.get("with", {})
             if "cache" not in options and options.get("package-manager-cache") is False:
                 continue
-            lockfile = lexical_path(options.get("cache-dependency-path", "package-lock.json"))
+            lockfile = lexical_path(Path(options.get("cache-dependency-path", "package-lock.json")))
             assert lockfile in installed_lockfiles(job), f"{workflow.name}:{name}"
 
 
