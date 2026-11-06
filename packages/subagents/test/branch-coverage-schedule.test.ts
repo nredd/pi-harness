@@ -198,7 +198,7 @@ describe("scheduler branches", () => {
     await flush();
     expect(f.spawn).not.toHaveBeenCalled();
     expect(next.events).toEqual([]);
-    expect(f.scheduler.list().find(j => j.id === job.id)?.lastStatus).toBe("running");
+    expect(f.scheduler.list().find(j => j.id === job.id)?.lastStatus).toBeUndefined();
   });
 
   it("ignores an admission failure that lands after the session switched", async () => {
@@ -224,7 +224,7 @@ describe("scheduler branches", () => {
     await flush();
     expect(next.events).toEqual([]);
     expect(f.events.filter(e => e.type === "error")).toEqual([]);
-    expect(f.scheduler.list().find(j => j.id === job.id)?.lastStatus).toBe("running");
+    expect(f.scheduler.list().find(j => j.id === job.id)?.lastStatus).toBeUndefined();
   });
 
   it("reports a non-Error admission failure as its string", async () => {
@@ -300,8 +300,10 @@ describe("scheduler branches", () => {
     f.reply({ success: true, data: { ok: true } });
     await flush();
     expect(f.spawn).not.toHaveBeenCalled();
+    expect(f.store.get(job.id)?.lastStatus).toBeUndefined();
     expect(f.store.get(job.id)?.lastStatus).not.toBe("error");
     expect(f.events.filter(e => e.type === "error")).toEqual([]);
+    expect(f.store.get(job.id)?.lastStatus).toBeUndefined();
     f.clock.advance(1000);
     f.reply({ success: true, data: { ok: true } });
     await flush();
@@ -341,8 +343,48 @@ describe("scheduler branches", () => {
     expect(f.spawn).not.toHaveBeenCalled();
     expect(f.store.get(job.id)?.enabled).toBe(true);
     expect(f.clock.pending).toBe(1);
+    expect(f.store.get(job.id)?.lastStatus).toBeUndefined();
     expect(f.store.get(job.id)?.lastStatus).not.toBe("error");
     expect(f.events.filter(e => e.type === "error")).toEqual([]);
+  });
+
+  it("cancels overlapping admissions without clobbering a newer fire's running status", async () => {
+    setModelTiers({ cheap: ["fixture/model"] }, undefined);
+    const f = setup();
+    const job = f.scheduler.addJob({ ...input, model: "@cheap" });
+    f.store.update(job.id, { lastStatus: "success" });
+    f.clock.advance(1000);
+    f.clock.advance(1000);
+    expect(f.admits).toHaveLength(2);
+    expect(f.store.get(job.id)?.lastStatus).toBe("running");
+    f.scheduler.updateJob(job.id, { enabled: false });
+    expect(f.store.get(job.id)?.lastStatus).toBe("success");
+    await flush();
+    expect(f.store.get(job.id)?.lastStatus).toBe("success");
+    expect(f.spawn).not.toHaveBeenCalled();
+  });
+
+  it("keeps a status another writer set before a pending admission is cancelled", async () => {
+    const f = setup();
+    const job = f.scheduler.addJob({ ...input, model: "fixture/model", quotaParked: true });
+    f.clock.advance(1000);
+    f.store.update(job.id, { lastStatus: "error" });
+    f.scheduler.updateJob(job.id, { enabled: false });
+    await flush();
+    expect(f.store.get(job.id)?.lastStatus).toBe("error");
+  });
+
+  it("leaves a newer pending admission owning running when an older one settles", async () => {
+    setModelTiers({ cheap: ["fixture/model"] }, undefined);
+    const f = setup();
+    const job = f.scheduler.addJob({ ...input, model: "@cheap" });
+    f.clock.advance(1000);
+    f.clock.advance(1000);
+    f.reply({ success: true, data: { ok: true } });
+    await flush();
+    expect(f.spawn).toHaveBeenCalledTimes(1);
+    f.scheduler.updateJob(job.id, { enabled: false });
+    expect(f.store.get(job.id)?.lastStatus).toBe("success");
   });
 
   it("does not spawn a resolved admission disabled before its microtask runs", async () => {
@@ -353,6 +395,7 @@ describe("scheduler branches", () => {
     f.scheduler.updateJob(job.id, { enabled: false });
     await flush();
     expect(f.spawn).not.toHaveBeenCalled();
+    expect(f.store.get(job.id)?.lastStatus).toBeUndefined();
     expect(f.store.get(job.id)?.lastStatus).not.toBe("error");
     expect(f.events.filter(e => e.type === "error")).toEqual([]);
   });
@@ -366,6 +409,7 @@ describe("scheduler branches", () => {
     f.scheduler.start(f.pi, f.ctx, f.manager, f.store);
     await flush();
     expect(f.spawn).not.toHaveBeenCalled();
+    expect(f.store.get(job.id)?.lastStatus).toBeUndefined();
     expect(f.store.get(job.id)?.lastStatus).not.toBe("error");
     expect(f.events.filter(e => e.type === "error")).toEqual([]);
   });
