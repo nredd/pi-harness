@@ -88,6 +88,15 @@ Evidence given up to cut queue time (issue #297):
 - `main` no longer runs standalone `local`: it moved into the `local` cells, which the selective smoke skips on a push. The non-strict ruleset means a merged tree can differ from the PR head that proved it
 - WSL distribution packages are no longer upgraded (`update: 'false'`); `additional-packages` still refreshes apt and installs the current packages
 
+Computer-use's macOS Swift invariants explicitly prepare SDK-only imports in their private per-run
+module cache before checking repository sources (#551). Cold preparation is visible and bounded:
+240s compilation, 10s per identity probe and a 300s setup-hook cap, with bounded child-group cleanup.
+Failure fails the suite; it never authorizes source validation. `INV-8` retains its 90s test deadline,
+`INV-17` its 50s deadline. Compiler-file/SDK-settings identity, real invalid/corrected Swift and
+concurrent caller controls verify reuse of SDK modules, not reuse of source verdicts. No persistent
+cross-run cache, shared gate lock or retry is introduced; #506's private caches and unwritable
+retired-name controls remain. Details: [develop and validate](../packages/computer-use/docs/content/docs/how-to-guides/develop-and-validate.mdx).
+
 In the `owned` cells, `@nredd/pi-computer-use`'s macOS-only checks are not passes on Linux: Vitest reports `test:invariants` INV-8/INV-17, `test:macos-native` and `test:desktop`'s helper wire mapping and gating as skipped, and so are `macos-helper-live.test.mjs` (also opt-in) and `linux-live.test.mjs` (opt-in, Linux). Conversely, `linux-native.test.mjs` (`test:linux-native`) runs headless on the Ubuntu and WSL cells (`NOT RUN` on macOS): the crate's `cargo test --locked`, a source build from the *packed* tarball into a user-cache target dir, the built x64 helper's real `diagnostics` (protocol 4, shared architecture invariants), the cargo-missing hint and compiler cleanup on `SIGTERM`. The aarch64 target (`rustup target add`) is `cargo check --locked` compile-only; ARM64 runtime, desktop/display and live UI are NOT RUN. This is coverage inside the `owned` cells' computer-use shards' `npm test`, not a new required check (Vitest reports it passed on Ubuntu and skipped on macOS; the ARM64 case is skipped unless `PI_CU_LINUX_ARM64_CHECK=1`). `windows-build-scripts.test.mjs` stays opt-in like the script it replaced: it is skipped unless `PI_CU_WINDOWS_SCRIPTS=1`, which `npm run test:windows-scripts` sets. Its two macOS helper builds took 10-56 s each locally and passed the scripts' 120 s deadline under fleet load.
 
 Phase 0 coverage runs inside the existing primary and declared Bun test invocations, never a
@@ -561,6 +570,11 @@ The twelve jobs are the configured required checks of ruleset `main required che
   only after that reviewed merge. This procedure does not authorize merging router PR135,
   publishing packages, or activating live configuration
 - `forks.yml` is path-filtered and not a required protection check; when triggered, the remaining core Gitlink job must pass before merging
+
+The dev-tools real-host `resource_snapshot` smoke requires process metadata and includes the producer's
+unavailable reason in its failure. Separate controls exercise registry sampler `0.2.0` through the tool
+schema with an injected Linux enumeration failure and a genuinely exhausted scan budget. The injected
+Linux path on macOS is not a native Linux run.
 
 Flake policy (migration plan section 7):
 

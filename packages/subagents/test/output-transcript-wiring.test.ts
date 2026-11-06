@@ -133,6 +133,23 @@ describe("output_transcript agent wiring", () => {
     await lifecycle.get("session_shutdown")?.({}, makeCtx(cwd));
   });
 
+  it.each([true, false])("refuses transcript setup errors before starting a child (background=%s)", async (background) => {
+    const { pi, tools, lifecycle } = makePi();
+    subagentsExtension(pi);
+    for (const failing of [createOutputFilePath, writeInitialEntry]) {
+      vi.mocked(failing).mockImplementationOnce(() => { throw new Error("EPERM spool"); });
+      await expect(tools.get("Agent").execute(
+        "tool-call",
+        { prompt: "ordinary work", description: "Do ordinary work", subagent_type: "general-purpose", run_in_background: background },
+        undefined,
+        undefined,
+        makeCtx(cwd),
+      )).rejects.toThrow("EPERM spool");
+      expect(runAgent).not.toHaveBeenCalled();
+    }
+    await lifecycle.get("session_shutdown")?.({}, makeCtx(cwd));
+  });
+
   it("keeps transcript creation as the default", async () => {
     const { pi, tools, lifecycle } = makePi();
     subagentsExtension(pi);
