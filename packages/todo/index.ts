@@ -23,8 +23,15 @@ import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding
 import type { KeyId } from "@earendil-works/pi-tui";
 import { COLLAPSE_KEY_OFF, getCollapseOnResume, resolveCollapseKey } from "./config.ts";
 import { registerPlanHooks } from "./plan-hooks.ts";
-import { applyAgentEvent, applyOtherSessionSurvivor, clearElsewhere, forgetAgents } from "./state/agents.ts";
+import {
+	applyAgentEvent,
+	applyOtherSessionSurvivor,
+	clearElsewhere,
+	forgetAgents,
+	setForkLineage,
+} from "./state/agents.ts";
 import { I18N_NAMESPACE } from "./state/i18n-bridge.ts";
+import { forkAncestry } from "./state/lineage.ts";
 import { applyMonitorEvent, forgetMonitors } from "./state/monitors.ts";
 import { replayFromBranch } from "./state/replay.ts";
 import {
@@ -262,6 +269,7 @@ export default function (
 			managerSessions.set(ctx.sessionManager, id);
 			// Every session replays into its OWN data slot (Phase 1 isolation).
 			replaceState(id, replayFromBranch(ctx));
+			setForkLineage(id, forkAncestry(ctx.sessionManager));
 		} catch (e) {
 			// Parity with compact/tree/shutdown: session_start is the fresh-ctx event
 			// so the stale risk is low, but a stale/throwing ctx has nothing to bind —

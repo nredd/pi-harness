@@ -64,6 +64,8 @@ interface AgentEntry {
 interface ElsewhereEntry {
 	keys: Set<string>;
 	nameBase?: string;
+	/** The session file whose spool the agent's result wakes. */
+	sessionFile: string;
 }
 
 /** Bound memory in a long session; the oldest-updated agents drop first. */
@@ -74,6 +76,9 @@ const sessions = new Map<string, Map<string, AgentEntry>>();
 // Per session: agents running for some other session, as of the last announcement. Never armed.
 // Rebuilt on every bind and settle (`clearElsewhere`), so bounded by the running agents of the process.
 const elsewhere = new Map<string, Map<string, ElsewhereEntry>>();
+// Per session: the session files it was forked from. Only an agent registered under one of them runs for this
+// session's ancestry; one under any other file belongs to an unrelated session, which says nothing of this owner.
+const lineages = new Map<string, ReadonlySet<string>>();
 // Orders starts and settles across every agent; only comparisons matter, never values.
 let sequence = 0;
 
@@ -126,7 +131,10 @@ export function applyOtherSessionSurvivor(sessionId: string, payload: unknown): 
 		if (k) keys.add(k);
 	}
 	const agents = elsewhere.get(sessionId) ?? new Map<string, ElsewhereEntry>();
-	agents.set(data.id, { keys, nameBase: ownerKey(data.nameBase) });
+	// Without the file there is no telling whose agent it is, so it can never match.
+	if (typeof data.sessionFile !== "string") return;
+	const sessionFile = data.sessionFile;
+	agents.set(data.id, { keys, nameBase: ownerKey(data.nameBase), sessionFile });
 	elsewhere.set(sessionId, agents);
 }
 
@@ -135,12 +143,22 @@ export function clearElsewhere(sessionId: string): void {
 	elsewhere.delete(sessionId);
 }
 
-/** Whether `owner` names an agent running for a session other than `sessionId`. */
+/** Record the session files `sessionId` was forked from, see `forkAncestry`. */
+export function setForkLineage(sessionId: string, ancestors: ReadonlySet<string>): void {
+	lineages.set(sessionId, ancestors);
+}
+
+/**
+ * Whether `owner` names an agent running for an ancestor of `sessionId`. A same-named agent
+ * registered under an unrelated session file does not count: handles are per manager, so
+ * that name says nothing about this session's owner.
+ */
 export function isRunningElsewhere(sessionId: string, owner: string | undefined): boolean {
 	const wanted = ownerKey(owner);
 	if (!wanted) return false;
+	const ancestors = lineages.get(sessionId);
 	for (const entry of elsewhere.get(sessionId)?.values() ?? [])
-		if (entry.keys.has(wanted) || entry.nameBase === wanted) return true;
+		if (ancestors?.has(entry.sessionFile) && (entry.keys.has(wanted) || entry.nameBase === wanted)) return true;
 	return false;
 }
 
@@ -195,6 +213,17 @@ export function applyAgentEvent(sessionId: string, channel: string, payload: unk
 		if (k) keys.add(k);
 	}
 	const nameBase = ownerKey(data.nameBase) ?? previous?.nameBase ?? predecessor?.nameBase;
+	// A survivor is re-announced at every settle. An identical `started` for an agent already running changes
+	// nothing, and must not reinsert it as the newest match for its handle over a newer same-named agent.
+	if (
+		state === "running" &&
+		previous?.state === "running" &&
+		previous.nameBase === nameBase &&
+		previous.wakesParent === (data.wakesParent === true) &&
+		previous.runSeq === sequenceField(data.runSeq) &&
+		keys.size === previous.keys.size
+	)
+		return false;
 	// A repeated `started` keeps its start; any other transition is a new point in the sequence.
 	const restarted = state === "running" && previous?.state !== "running";
 	const startedAt = restarted || !previous ? ++sequence : previous.startedAt;
@@ -315,6 +344,7 @@ export function hasArmedAgent(sessionId: string): boolean {
 export function forgetAgents(sessionId: string): void {
 	sessions.delete(sessionId);
 	elsewhere.delete(sessionId);
+	lineages.delete(sessionId);
 }
 
 /** `@owner` for display (terminal-safe, one leading `@`), or `undefined` for a blank owner. */
@@ -334,5 +364,6 @@ export function isAbandoned(task: Pick<Task, "status">, state: AgentRunState | u
 export function __resetAgents(): void {
 	sessions.clear();
 	elsewhere.clear();
+	lineages.clear();
 	sequence = 0;
 }

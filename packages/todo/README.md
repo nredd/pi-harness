@@ -177,11 +177,13 @@ the full list grouped by status.
   On every `session_start`, and on `subagents:announce_survivors` (which this extension sends once the session is bound and again
   at every settle), pi-subagents announces ALL running detached survivors in the process. Those registered under this session's
   file (after `/reload`, or a `/resume` back into the session that spawned them) arrive as `subagents:started` and are `running` and
-  armed, with `subagents:completed` / `:failed` replayed when their results are delivered. Every other one, whatever switch left it
-  (`/fork`, a fork of a fork, `/resume` of another session, `/new`), arrives as `subagents:other_session_survivor`: its result
-  spools to the session it was registered under, so it wakes that one, not this. A todo it owns reads
-  `agent running for another session, which it wakes instead of this one` (info, once), is never armed here and never triggers the
-  held-work reminder. The set is rebuilt from each announcement, so a `/reload` loses nothing and a survivor that finished
+  armed, with `subagents:completed` / `:failed` replayed when their results are delivered. Every other one arrives as `subagents:other_session_survivor` with the `sessionFile` it wakes: its result
+  spools there, not here. Only one registered under a file this session was forked from (its header's `parentSession`, then that
+  file's own, so a `/fork`, a fork of a fork, or a `/reload` in either) makes a todo it owns read
+  `agent running for another session, which it wakes instead of this one` (info, once); it is never armed here and never triggers the
+  held-work reminder. Handles are per manager, so a same-named survivor of an unrelated session (`/new`, `/resume` of another session)
+  proves nothing about this owner: that todo is `held` (or lost) and reminds as usual. A repeated `started` for an agent already
+  running with the same identity changes nothing, so re-announcing a survivor never outranks a newer same-named agent. The set is rebuilt from each announcement, so a `/reload` loses nothing and a survivor that finished
   (even while this session was inactive) drops out at the next settle. An owner nobody names is `held`, never lost. A free-text owner (a person or team) is indistinguishable from a dead
   agent handle, so it lands there too until it is reassigned. Parent-held work warns only when nothing
   is armed: a running monitor (`session-kit:monitor:started` / `:stopped` on `pi.events`, payload
