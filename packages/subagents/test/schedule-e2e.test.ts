@@ -15,6 +15,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { type Clock, realClock } from "../src/clock.js";
 import { SubagentScheduler } from "../src/schedule.js";
 import { ScheduleStore } from "../src/schedule-store.js";
 
@@ -58,6 +59,25 @@ function makeCtx() {
   } as any;
 }
 
+/**
+ * Real timers, frozen `now`. A one-shot target is derived from the same instant the
+ * scheduler validates it against, so a stall between the test's read and `addJob`
+ * (CPU starvation under parallel gates) cannot make the job dead on arrival.
+ */
+function pinnedClock(): { clock: Clock; isoAfter(ms: number): string } {
+  const base = Date.now();
+  return {
+    clock: { ...realClock, now: () => base },
+    isoAfter: ms => new Date(base + ms).toISOString(),
+  };
+}
+
+/** Block the thread, standing in for a starved test process. */
+function stall(ms: number): void {
+  const end = Date.now() + ms;
+  while (Date.now() < end) { /* spin */ }
+}
+
 /** Wait for a predicate, polling at 5ms intervals, with a deadline. */
 async function waitFor(predicate: () => boolean, timeoutMs = 1500): Promise<void> {
   const start = Date.now();
@@ -73,11 +93,14 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
   let tmp: string;
   let store: ScheduleStore;
   let scheduler: SubagentScheduler;
+  let isoAfter: (ms: number) => string;
 
   beforeEach(() => {
     tmp = mkdtempSync(join(tmpdir(), "schedule-e2e-"));
     store = new ScheduleStore(join(tmp, "schedules.json"));
-    scheduler = new SubagentScheduler();
+    const pinned = pinnedClock();
+    isoAfter = pinned.isoAfter;
+    scheduler = new SubagentScheduler({ clock: pinned.clock });
   });
 
   afterEach(() => {
@@ -92,7 +115,7 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
 
     // Fire ~100ms in the future. detectSchedule normalizes "+100ms" — but our
     // parser only accepts s/m/h/d, so use a near-future ISO timestamp instead.
-    const future = new Date(Date.now() + 100).toISOString();
+    const future = isoAfter(100);
     const job = scheduler.addJob({
       name: "e2e-once",
       description: "test",
@@ -114,12 +137,27 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
     expect(final.lastRun).toBeDefined();
   });
 
+  it("one-shot job survives a stall between choosing its time and adding it", async () => {
+    const manager = makeFaithfulManager("completed");
+    scheduler.start(makePi(), makeCtx(), manager, store);
+
+    const future = isoAfter(100);
+    stall(250);  // longer than the 100ms headroom: a wall-clock `now` would call this past
+    const job = scheduler.addJob({
+      name: "e2e-stalled", description: "test", schedule: future,
+      subagent_type: "general-purpose", prompt: "hello",
+    });
+
+    await waitFor(() => scheduler.list().find(j => j.id === job.id)?.lastStatus === "success");
+    expect(manager.spawn).toHaveBeenCalledTimes(1);
+  });
+
   it("one-shot job that errors: store records lastStatus error (regression — bug #1)", async () => {
     const manager = makeFaithfulManager("error");  // Agent terminates with error status
     const pi = makePi();
     scheduler.start(pi, makeCtx(), manager, store);
 
-    const future = new Date(Date.now() + 100).toISOString();
+    const future = isoAfter(100);
     const job = scheduler.addJob({
       name: "e2e-fail",
       description: "test",
@@ -167,7 +205,7 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
     const pi = makePi();
     scheduler.start(pi, makeCtx(), manager, store);
 
-    const future = new Date(Date.now() + 60_000).toISOString();  // far enough not to fire
+    const future = isoAfter(60_000);  // far enough not to fire
     const job = scheduler.addJob({
       name: "persistent",
       description: "x",
@@ -214,7 +252,7 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
     const pi = makePi();
     scheduler.start(pi, makeCtx(), manager, store);
 
-    const future = new Date(Date.now() + 100).toISOString();
+    const future = isoAfter(100);
     const job = scheduler.addJob({
       name: "events", description: "x", schedule: future,
       subagent_type: "general-purpose", prompt: "x",
