@@ -2748,8 +2748,8 @@ Terse command-style prompts produce shallow, generic work.
           ...bgCallbacks,
         });
 
-        // Set join mode synchronously after spawn, before the
-        // event loop yields — onSessionCreated is async so this is safe.
+        // `spawn` has not yielded yet, so the join mode and tool-call id are set before the
+        // record's session starts.
         const joinMode = defaultJoinMode;
         // `spawn` registered the record before returning its id.
         const record = manager.getRecord(id)!;
