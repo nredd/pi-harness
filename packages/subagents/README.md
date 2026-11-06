@@ -1278,7 +1278,7 @@ Agent({ subagent_type: "refactor", prompt: "...", isolation: "worktree" })
 
 The agent gets a full, isolated copy of the repository. On successful cleanup the worktree directory is removed; whether a branch is left behind depends on the work:
 - **No changes:** worktree is cleaned up automatically, no branch
-- **Changes made:** changes are committed to a new branch (`pi-agent-<id>`), and the result names the branch and the `git merge` command for it. The branch is the only artifact — the worktree path is gone, so nothing points into it
+- **Changes made:** changes are committed to a new branch (`pi-agent-<id>`), and the result names the branch and the `git merge` command for it. After successful cleanup the branch is the only artifact — the worktree path is gone, so nothing points into it
 - **Agent committed its own work:** the branch is created at the agent's HEAD, preserving its commits (uncommitted leftovers are committed on top first)
 
 If Git cannot inspect, commit, create the branch, or remove the worktree, cleanup stops without force-removing it. The result reports the error and worktree path (and the branch if already created); inspect and recover the tree before removing it. A failed status check does not establish whether changes exist. Git removal also refuses uncommitted work that appears after the status check. A cleanup failure marks a normally successful agent as failed, including a structured workflow child; a stopped agent stays stopped and reports the failure.

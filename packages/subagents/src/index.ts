@@ -2058,7 +2058,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     : "";
 
   const isolationCompactGuideline = isWorktreeIsolationEnabled()
-    ? `\n- isolation: "worktree" gives the agent its own git worktree (removed on completion); changes land on a branch named in the result. Pass \`cwd\` to isolate a repo other than the session cwd.`
+    ? `\n- isolation: "worktree" gives the agent its own git worktree (removed unless cleanup fails); changes land on a branch named in the result. Pass \`cwd\` to isolate a repo other than the session cwd.`
     : "";
 
   // Tier keys only: members are profile config (router or enterprise manifest),
