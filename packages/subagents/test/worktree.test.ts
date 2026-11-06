@@ -13,6 +13,9 @@ import {
   WorktreeError,
 } from "../src/worktree.js";
 
+/** `git worktree remove`, wherever `-c` options put it in argv. */
+const isWorktreeRemove = (args: string[]) => args.includes("worktree") && args.includes("remove");
+
 /** Every worktree path this file created, checked for leaks once the file finishes. */
 const createdWorktreePaths: string[] = [];
 
@@ -412,7 +415,7 @@ describe("worktree", () => {
     it("reports the retained path when `git worktree remove` fails", async () => {
       const wt = (await createWorktree(pi, repoDir, "remove-fails"))!;
       const failing = failingPi(
-        args => args[0] === "worktree" && args[1] === "remove",
+        args => isWorktreeRemove(args),
         { code: 1, killed: false },
       );
 
@@ -551,7 +554,7 @@ describe("cleanupWorktree — failure path", () => {
     const wt = await createWorktree(pi, repoDir, "remove-dirty");
     writeFileSync(join(wt.path, "work.txt"), "agent output");
     try {
-      const result = await cleanupWorktree(failingPi(args => args[0] === "worktree" && args[1] === "remove", { code: 1, killed: false }), repoDir, wt, "remove fails");
+      const result = await cleanupWorktree(failingPi(args => isWorktreeRemove(args), { code: 1, killed: false }), repoDir, wt, "remove fails");
       expect(result.path).toBe(wt.path);
       expect(result.branch).toBe(wt.branch);
       expect(result.error).toBe("boom");
@@ -565,7 +568,7 @@ describe("cleanupWorktree — failure path", () => {
     const wt = await createWorktree(pi, repoDir, "late-change");
     const late = {
       exec: async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
-        if (args[0] === "worktree" && args[1] === "remove") writeFileSync(join(wt.path, "late.txt"), "late work");
+        if (isWorktreeRemove(args)) writeFileSync(join(wt.path, "late.txt"), "late work");
         return pi.exec(command, args, options);
       },
     } as unknown as ExtensionAPI;
@@ -674,7 +677,7 @@ describe("cleanupWorktree — submodules", () => {
     const late = {
       exec: async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
         const result = await pi.exec(command, args, options);
-        if (args[0] === "worktree" && args[1] === "remove") writeFileSync(join(wt.path, "late.txt"), "late");
+        if (isWorktreeRemove(args)) writeFileSync(join(wt.path, "late.txt"), "late");
         return result;
       },
     } as unknown as ExtensionAPI;
@@ -825,7 +828,7 @@ describe("cleanupWorktree — nested repositories git refuses to remove", () => 
     const german = {
       exec: async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
         const result = await pi.exec(command, args, options);
-        if (args[0] === "worktree" && args[1] === "remove" && result.code !== 0) {
+        if (isWorktreeRemove(args) && result.code !== 0) {
           return { ...result, stderr: "fatal: Arbeitsverzeichnisse mit Submodulen koennen nicht verschoben werden" };
         }
         return result;
@@ -838,7 +841,7 @@ describe("cleanupWorktree — nested repositories git refuses to remove", () => 
   it("rethrows a removal failure that has nothing to do with submodules", async () => {
     const wt = await createWorktree(pi, repoDir, "plain-failure");
     cleanups.push(wt.path);
-    const result = await cleanupWorktree(failingPi(a => a[0] === "worktree" && a[1] === "remove", { code: 1, killed: false }), repoDir, wt, "plain");
+    const result = await cleanupWorktree(failingPi(isWorktreeRemove, { code: 1, killed: false }), repoDir, wt, "plain");
     expect(result).toMatchObject({ path: wt.path, error: "boom" });
   });
 
@@ -851,7 +854,7 @@ describe("cleanupWorktree — nested repositories git refuses to remove", () => 
     const late = {
       exec: async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
         const result = await pi.exec(command, args, options);
-        if (args[0] === "worktree" && args[1] === "remove") writeFileSync(join(wt.path, "late.txt"), "late");
+        if (isWorktreeRemove(args)) writeFileSync(join(wt.path, "late.txt"), "late");
         return result;
       },
     } as unknown as ExtensionAPI;
@@ -895,7 +898,128 @@ describe("cleanupWorktree — nested repositories git refuses to remove", () => 
     run(subDir, "checkout", main);
     run(sub, "fetch", "--tags");
     expect(run(sub, "rev-list", "--tags", "--not", "--remotes")).not.toBe("");
-    expect(await cleanupWorktree(pi, repoDir, wt, "tag")).toEqual({ hasChanges: false });
+    const result = await cleanupWorktree(pi, repoDir, wt, "tag");
+    expect(result.error).toMatch(/submodule work would be lost/);
+    expect(existsSync(wt.path)).toBe(true);
+  });
+
+  it("keeps the worktree when a nested clone holds a commit only a local tag reaches", async () => {
+    const { wt, dep, sha } = await worktreeWithLocalOnlyNestedRepo("local-tag");
+    const branch = run(dep, "rev-parse", "--abbrev-ref", "HEAD");
+    run(dep, "tag", "--no-sign", "-m", "keep", "precious");
+    run(dep, "checkout", "--detach", "HEAD~1");
+    run(dep, "branch", "-D", branch);
+    expect(run(dep, "rev-list", "--branches", "HEAD", "--not", "--remotes")).toBe("");
+    run(wt.path, "add", "-A");
+    const result = await cleanupWorktree(pi, repoDir, wt, "local tag");
+    expect(result.error).toMatch(/submodule work would be lost/);
+    expect(run(dep, "cat-file", "-t", sha)).toBe("commit");
+    expect(existsSync(wt.path)).toBe(true);
+  });
+
+  it("keeps the worktree when a gitignored nested clone holds an unpushed commit", async () => {
+    writeFileSync(join(repoDir, ".gitignore"), "vendor/\n");
+    run(repoDir, "add", ".gitignore");
+    run(repoDir, "commit", "-m", "ignore vendor");
+    const wt = await createWorktree(pi, repoDir, "ignored-clone");
+    cleanups.push(wt.path);
+    mkdirSync(join(wt.path, "vendor"));
+    run(join(wt.path, "vendor"), "clone", subDir, "dep");
+    const dep = join(wt.path, "vendor", "dep");
+    writeFileSync(join(dep, "precious.txt"), "unpublished");
+    run(dep, "add", "precious.txt");
+    run(dep, "commit", "-m", "local only");
+    expect(run(wt.path, "status", "--porcelain")).toBe("");
+    const result = await cleanupWorktree(pi, repoDir, wt, "ignored clone");
+    expect(result.error).toMatch(/submodule work would be lost[\s\S]*vendor\/dep/);
+    expect(existsSync(join(dep, "precious.txt"))).toBe(true);
+  });
+
+  it("removes a clean worktree with a gitignored nested clone holding nothing unpublished", async () => {
+    writeFileSync(join(repoDir, ".gitignore"), "vendor/\n");
+    run(repoDir, "add", ".gitignore");
+    run(repoDir, "commit", "-m", "ignore vendor");
+    const wt = await createWorktree(pi, repoDir, "ignored-clean");
+    cleanups.push(wt.path);
+    mkdirSync(join(wt.path, "vendor"));
+    run(join(wt.path, "vendor"), "clone", subDir, "dep");
+    expect(await cleanupWorktree(pi, repoDir, wt, "ignored clean")).toEqual({ hasChanges: false });
+    expect(existsSync(wt.path)).toBe(false);
+  });
+
+  it("removes a clean worktree whose deinitialized submodule is pinned to a sha-fetched commit", async () => {
+    run(subDir, "config", "uploadpack.allowAnySHA1InWant", "true");
+    run(repoDir, "submodule", "add", subDir, "sub");
+    const main = run(subDir, "rev-parse", "--abbrev-ref", "HEAD");
+    run(subDir, "checkout", "--detach");
+    writeFileSync(join(subDir, "side.txt"), "side");
+    run(subDir, "add", "side.txt");
+    run(subDir, "commit", "-m", "unreachable from any branch");
+    const side = run(subDir, "rev-parse", "HEAD");
+    run(subDir, "checkout", main);
+    run(repoDir, "update-index", "--cacheinfo", `160000,${side},sub`);
+    run(repoDir, "commit", "-m", "add submodule at side commit");
+    const wt = await createWorktree(pi, repoDir, "deinit-by-sha");
+    cleanups.push(wt.path);
+    run(wt.path, "submodule", "update", "--init", "--recursive");
+    run(wt.path, "submodule", "deinit", "-f", "sub");
+    expect(await cleanupWorktree(pi, repoDir, wt, "deinit by sha")).toEqual({ hasChanges: false });
+    expect(existsSync(wt.path)).toBe(false);
+  });
+});
+
+describe("cleanupWorktree — status.showUntrackedFiles=no", () => {
+  let repoDir: string;
+  let pi: ExtensionAPI;
+  beforeEach(() => {
+    pi = mockPi();
+    repoDir = initGitRepo();
+    execFileSync("git", ["config", "status.showUntrackedFiles", "no"], { cwd: repoDir });
+  });
+  afterEach(() => rmSync(repoDir, { recursive: true, force: true }));
+
+  it("preserves a worktree whose only change is an untracked file", async () => {
+    const wt = await createWorktree(pi, repoDir, "untracked-hidden");
+    writeFileSync(join(wt.path, "new.txt"), "agent work");
+    const result = await cleanupWorktree(pi, repoDir, wt, "untracked hidden");
+    expect(result.hasChanges).toBe(true);
+    expect(result.error).toBeUndefined();
+    expect(result.branch).toBeDefined();
+    const kept = execFileSync("git", ["show", `${result.branch}:new.txt`], { cwd: repoDir }).toString();
+    expect(kept).toBe("agent work");
+    expect(existsSync(wt.path)).toBe(false);
+  });
+
+  it("refuses to remove an untracked file written after the status check", async () => {
+    const wt = await createWorktree(pi, repoDir, "late-untracked");
+    const late = {
+      exec: async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
+        if (isWorktreeRemove(args)) writeFileSync(join(wt.path, "late.txt"), "late work");
+        return pi.exec(command, args, options);
+      },
+    } as unknown as ExtensionAPI;
+    const result = await cleanupWorktree(late, repoDir, wt, "late untracked");
+    expect(result.path).toBe(wt.path);
+    expect(result.error).toBeDefined();
+    expect(existsSync(join(wt.path, "late.txt"))).toBe(true);
+    execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir });
+  });
+
+  it("keeps a nested clone whose only dirt is an untracked file", async () => {
+    const subDir = initGitRepo();
+    try {
+      const wt = await createWorktree(pi, repoDir, "nested-untracked");
+      const git = (cwd: string, ...a: string[]) => execFileSync("git", a, { cwd, stdio: "pipe" });
+      git(wt.path, "clone", subDir, "dep");
+      git(join(wt.path, "dep"), "config", "status.showUntrackedFiles", "no");
+      writeFileSync(join(wt.path, "dep", "scratch.txt"), "agent work");
+      const result = await cleanupWorktree(pi, repoDir, wt, "nested untracked");
+      expect(result.error).toMatch(/submodule work would be lost[\s\S]*scratch\.txt/);
+      expect(existsSync(join(wt.path, "dep", "scratch.txt"))).toBe(true);
+      execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir });
+    } finally {
+      rmSync(subDir, { recursive: true, force: true });
+    }
   });
 });
 

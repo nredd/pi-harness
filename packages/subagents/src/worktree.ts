@@ -165,7 +165,7 @@ export async function cleanupWorktree(
     // Submodule state lives in the worktree's private git dir and is deleted with it.
     await assertSubmodulesDisposable(pi, worktree.path, worktree.baseSha);
     // Check for uncommitted changes in the worktree
-    const status = await git(pi, worktree.path, ["status", "--porcelain"], 10000);
+    const status = await dirtyState(pi, worktree.path);
 
     if (status) {
       // Changes exist — stage, commit, and create a branch
@@ -218,6 +218,15 @@ export async function cleanupWorktree(
   }
 }
 
+/**
+ * Uncommitted state of `repo`, untracked files included. `status.showUntrackedFiles=no`
+ * in user or repo config would otherwise hide new files from `status`, and a
+ * clean-looking tree gets removed with them.
+ */
+async function dirtyState(pi: ExtensionAPI, repo: string): Promise<string> {
+  return await git(pi, repo, ["status", "--porcelain", "--untracked-files=all"], 10000);
+}
+
 const GITLINK_MODE = "160000";
 
 /**
@@ -238,11 +247,41 @@ async function gitlinks(pi: ExtensionAPI, repo: string, rev?: string): Promise<M
   return links;
 }
 
-/** What removing a repository would destroy: stashes and commits no remote-tracking ref (or `published`) contains. */
-async function unpublished(pi: ExtensionAPI, gitArgs: string[], cwd: string, published: string[]): Promise<string> {
+/** What removing a repository would destroy: stashes and commits (branch, tag or HEAD) no remote-tracking ref (or `published`) contains. */
+async function unpublished(pi: ExtensionAPI, gitArgs: string[], cwd: string, published: Iterable<string>): Promise<string> {
   const stash = await git(pi, cwd, [...gitArgs, "stash", "list"], 10000);
-  const commits = await git(pi, cwd, [...gitArgs, "rev-list", "--branches", "HEAD", "--not", "--remotes", ...published], 30000);
+  // `--not` with an object this repository lacks would fail the whole listing.
+  const known: string[] = [];
+  for (const sha of published) {
+    const probe = await pi.exec("git", [...gitArgs, "cat-file", "-e", `${sha}^{commit}`], { cwd, timeout: 5000 });
+    if (!probe.killed && probe.code === 0) known.push(sha);
+  }
+  // Tags count: a local tag can be the only ref holding a commit. Offline there is
+  // no telling a fetched tag from a local one, so an unpublished tagged commit fails safe.
+  const commits = await git(pi, cwd, [...gitArgs, "rev-list", "--branches", "--tags", "HEAD", "--not", "--remotes", ...known], 30000);
   return [stash, commits].filter(Boolean).join("\n");
+}
+
+/**
+ * Inspect the nested repository at `dir`, then the ones behind its own gitlinks.
+ * `recorded` is the sha a trusted baseline pins it at (when any).
+ */
+async function inspectRepo(
+  pi: ExtensionAPI,
+  dir: string,
+  label: string,
+  recorded: string | undefined,
+  trusted: Set<string>,
+  seen: Set<string>,
+  problems: string[],
+): Promise<void> {
+  seen.add(realpathSync(await git(pi, dir, ["rev-parse", "--absolute-git-dir"], 5000)));
+  const dirty = await dirtyState(pi, dir);
+  const lost = await unpublished(pi, [], dir, recorded ? [recorded] : []);
+  const detail = [dirty, lost].filter(Boolean).join("\n");
+  if (detail) problems.push(`${label}:\n${detail}`);
+  const head = await git(pi, dir, ["rev-parse", "HEAD"], 5000);
+  await inspectGitlinks(pi, dir, head === recorded ? "HEAD" : undefined, trusted, seen, problems);
 }
 
 /**
@@ -251,27 +290,36 @@ async function unpublished(pi: ExtensionAPI, gitArgs: string[], cwd: string, pub
  * commit the worktree was created from): a nested HEAD at exactly that recorded
  * sha, e.g. fetched by sha during `submodule update`, is not at risk. A gitlink
  * the agent introduced has no baseline, so only remote-tracking refs vouch for it.
+ * Every baseline sha seen is added to `trusted`, for repositories no gitlink reaches.
  */
 async function inspectGitlinks(
   pi: ExtensionAPI,
   repo: string,
   baseRev: string | undefined,
+  trusted: Set<string>,
   seen: Set<string>,
   problems: string[],
 ): Promise<void> {
   const base = baseRev ? await gitlinks(pi, repo, baseRev) : new Map<string, string>();
+  for (const sha of base.values()) trusted.add(sha);
   for (const path of (await gitlinks(pi, repo)).keys()) {
     const dir = join(repo, path);
-    if (!existsSync(join(dir, ".git"))) continue;
-    seen.add(realpathSync(await git(pi, dir, ["rev-parse", "--absolute-git-dir"], 5000)));
-    const recorded = base.get(path);
-    const dirty = await git(pi, dir, ["status", "--porcelain"], 10000);
-    const lost = await unpublished(pi, [], dir, recorded ? [recorded] : []);
-    const detail = [dirty, lost].filter(Boolean).join("\n");
-    if (detail) problems.push(`${path}:\n${detail}`);
-    const head = await git(pi, dir, ["rev-parse", "HEAD"], 5000);
-    await inspectGitlinks(pi, dir, head === recorded ? "HEAD" : undefined, seen, problems);
+    if (existsSync(join(dir, ".git"))) await inspectRepo(pi, dir, path, base.get(path), trusted, seen, problems);
   }
+}
+
+/**
+ * Nested repositories under gitignored paths: `add -A` skips them, so no gitlink
+ * records them, yet plain removal deletes their ignored content.
+ */
+async function ignoredRepoDirs(pi: ExtensionAPI, worktreePath: string): Promise<string[]> {
+  const out = await git(pi, worktreePath, ["status", "--porcelain", "-z", "--ignored", "--untracked-files=all"], 30000);
+  // With `--untracked-files=all` git lists an ignored nested repository as its own `!! dir/` entry.
+  return out
+    .split("\0")
+    .filter(entry => entry.startsWith("!! ") && entry.endsWith("/"))
+    .map(entry => join(worktreePath, entry.slice(3)))
+    .filter(dir => existsSync(join(dir, ".git")));
 }
 
 /** Git dirs under a `modules` directory, including those nested in other submodule git dirs. */
@@ -299,12 +347,18 @@ async function modulesDir(pi: ExtensionAPI, worktreePath: string): Promise<strin
  */
 async function assertSubmodulesDisposable(pi: ExtensionAPI, worktreePath: string, baseSha: string): Promise<void> {
   const seen = new Set<string>();
+  const trusted = new Set<string>();
   const problems: string[] = [];
-  await inspectGitlinks(pi, worktreePath, baseSha, seen, problems);
+  await inspectGitlinks(pi, worktreePath, baseSha, trusted, seen, problems);
+  for (const dir of await ignoredRepoDirs(pi, worktreePath)) {
+    if (!seen.has(realpathSync(await git(pi, dir, ["rev-parse", "--absolute-git-dir"], 5000)))) {
+      await inspectRepo(pi, dir, relative(worktreePath, dir), undefined, trusted, seen, problems);
+    }
+  }
   const modules = await modulesDir(pi, worktreePath);
   for (const gitDir of modules ? moduleGitDirs(modules) : []) {
     if (seen.has(realpathSync(gitDir))) continue;
-    const lost = await unpublished(pi, ["--git-dir", gitDir], worktreePath, []);
+    const lost = await unpublished(pi, ["--git-dir", gitDir], worktreePath, trusted);
     if (lost) problems.push(`${gitDir}:\n${lost}`);
   }
   if (problems.length) throw new Error(`submodule work would be lost on removal; worktree kept:\n${problems.join("\n")}`);
@@ -325,10 +379,11 @@ async function hasSubmoduleState(pi: ExtensionAPI, worktreePath: string): Promis
  */
 async function removeWorktree(pi: ExtensionAPI, cwd: string, worktreePath: string, baseSha: string): Promise<void> {
   try {
-    await git(pi, cwd, ["worktree", "remove", worktreePath], 10000);
+    // Git's own clean check honors `status.showUntrackedFiles`; pin it so config cannot hide new files.
+    await git(pi, cwd, ["-c", "status.showUntrackedFiles=all", "worktree", "remove", worktreePath], 10000);
   } catch (error) {
     if (!(await hasSubmoduleState(pi, worktreePath))) throw error;
-    if (await git(pi, worktreePath, ["status", "--porcelain"], 10000)) throw error;
+    if (await dirtyState(pi, worktreePath)) throw error;
     await assertSubmodulesDisposable(pi, worktreePath, baseSha);
     await git(pi, cwd, ["worktree", "remove", "--force", worktreePath], 10000);
   }
