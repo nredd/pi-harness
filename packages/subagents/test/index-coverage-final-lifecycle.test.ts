@@ -77,7 +77,7 @@ async function bind(ui: Record<string, unknown> = {}, flags: Record<string, bool
   else await startSession(boot.lifecycle, true, context);
   return bound;
 }
-async function shutdown(bound: Bound, reason: "reload" | "quit") {
+async function shutdown(bound: Bound, reason: "reload" | "quit" | "fork") {
   await bound.boot.lifecycle.get("session_shutdown")?.({ type: "session_shutdown", reason }, bound.context);
   bound.stopped = true;
 }
@@ -583,7 +583,7 @@ describe("index detached survivor lifecycle events", () => {
     const parentFile = sessionFile;
     const hold = heldResponse("parent result"); provider.setResponses([hold.response]);
     const first = await bind(); const id = await spawn(first, "forked survivor"); await hold.entered;
-    await shutdown(first, "reload");
+    await shutdown(first, "fork");
     // pi's fork: a new session file, teardown already registered the survivor under the old one.
     sessionFile = join(env.dir, "fork.jsonl"); writeFileSync(sessionFile, "");
     const next = await bind({}, {}, false, { reason: "fork", previousSessionFile: parentFile });

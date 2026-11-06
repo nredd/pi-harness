@@ -71,7 +71,8 @@ export const MAX_TRACKED_AGENTS = 256;
 
 // Per session, insertion order is update order: every write deletes then re-inserts.
 const sessions = new Map<string, Map<string, AgentEntry>>();
-// Per session: agents of the session it was forked from, still running there. Never armed.
+// Per session: agents of the session it was forked from, still running there. Never armed. Bounded by
+// that parent's running agents, which a fork announces once per id.
 const elsewhere = new Map<string, Map<string, ElsewhereEntry>>();
 // Orders starts and settles across every agent; only comparisons matter, never values.
 let sequence = 0;
