@@ -162,6 +162,8 @@ export async function cleanupWorktree(
 
   let branch: string | undefined;
   try {
+    // Submodule state lives in the worktree's private git dir and is deleted with it.
+    await assertSubmodulesDisposable(pi, worktree.path);
     // Check for uncommitted changes in the worktree
     const status = await git(pi, worktree.path, ["status", "--porcelain"], 10000);
 
@@ -216,9 +218,46 @@ export async function cleanupWorktree(
   }
 }
 
-/** Remove only a clean worktree; git refuses newly appeared uncommitted work. */
+/**
+ * Shell run inside every submodule: prints anything removal would destroy.
+ * Uncommitted files, stashes, and commits on local branches/tags or HEAD that no
+ * remote-tracking ref contains.
+ */
+const SUBMODULE_WORK_SCRIPT =
+  "git status --porcelain; git stash list; git rev-list --branches --tags HEAD --not --remotes";
+
+/**
+ * Throw unless every initialized submodule holds nothing but already-published
+ * state. Git deletes submodule git dirs with the worktree, so unpushed commits or
+ * uncommitted files there would be lost even after the outer repo is branched.
+ */
+async function assertSubmodulesDisposable(pi: ExtensionAPI, worktreePath: string): Promise<void> {
+  if (!existsSync(join(worktreePath, ".gitmodules"))) return;
+  const work = await git(
+    pi,
+    worktreePath,
+    ["submodule", "foreach", "--recursive", "--quiet", SUBMODULE_WORK_SCRIPT],
+    30000,
+  );
+  if (work) throw new Error(`submodule work would be lost on removal; worktree kept:\n${work}`);
+}
+
+/**
+ * Remove only a clean worktree; git refuses newly appeared uncommitted work.
+ *
+ * Git also refuses any worktree with a populated submodule, clean or not. Only
+ * that refusal is retried with `--force`, and only after the outer tree and every
+ * submodule re-verify as holding nothing unpublished.
+ */
 async function removeWorktree(pi: ExtensionAPI, cwd: string, worktreePath: string): Promise<void> {
-  await git(pi, cwd, ["worktree", "remove", worktreePath], 10000);
+  try {
+    await git(pi, cwd, ["worktree", "remove", worktreePath], 10000);
+  } catch (error) {
+    if (!/submodules cannot be moved or removed/.test(error instanceof Error ? error.message : "")) throw error;
+    if (await git(pi, worktreePath, ["status", "--porcelain"], 10000)) throw error;
+    await assertSubmodulesDisposable(pi, worktreePath);
+    await git(pi, cwd, ["worktree", "remove", "--force", worktreePath], 10000);
+  }
 }
 
 /**

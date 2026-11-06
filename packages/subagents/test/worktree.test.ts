@@ -605,6 +605,90 @@ describe("cleanupWorktree — failure path", () => {
   });
 });
 
+describe("cleanupWorktree — submodules", () => {
+  let repoDir: string;
+  let subDir: string;
+  let pi: ExtensionAPI;
+
+  const run = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-c", "protocol.file.allow=always", ...args], { cwd, stdio: "pipe" }).toString();
+
+  beforeEach(() => {
+    pi = mockPi();
+    subDir = initGitRepo();
+    repoDir = initGitRepo();
+    run(repoDir, "submodule", "add", subDir, "sub");
+    run(repoDir, "commit", "-m", "add submodule");
+    // Worktree submodules clone via the file transport, same as the fixture above.
+    run(repoDir, "config", "protocol.file.allow", "always");
+  });
+
+  afterEach(() => {
+    rmSync(repoDir, { recursive: true, force: true });
+    rmSync(subDir, { recursive: true, force: true });
+  });
+
+  async function populatedWorktree(id: string) {
+    const wt = await createWorktree(pi, repoDir, id);
+    run(wt.path, "submodule", "update", "--init", "--recursive");
+    return wt;
+  }
+
+  it("removes a clean worktree whose submodule is populated", async () => {
+    const wt = await populatedWorktree("clean-sub");
+    const result = await cleanupWorktree(pi, repoDir, wt, "clean sub");
+    expect(result).toEqual({ hasChanges: false });
+    expect(existsSync(wt.path)).toBe(false);
+  });
+
+  it("keeps the worktree with a distinct error when a submodule has uncommitted work", async () => {
+    const wt = await populatedWorktree("dirty-sub");
+    writeFileSync(join(wt.path, "sub", "agent.txt"), "unsaved");
+    try {
+      const result = await cleanupWorktree(pi, repoDir, wt, "dirty sub");
+      expect(result.path).toBe(wt.path);
+      expect(result.error).toMatch(/submodule work would be lost/);
+      expect(existsSync(join(wt.path, "sub", "agent.txt"))).toBe(true);
+    } finally {
+      if (existsSync(wt.path)) execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir });
+    }
+  });
+
+  it("keeps the worktree when a submodule holds an unpushed commit", async () => {
+    const wt = await populatedWorktree("unpushed-sub");
+    const sub = join(wt.path, "sub");
+    writeFileSync(join(sub, "x.txt"), "x");
+    run(sub, "add", "x.txt");
+    run(sub, "-c", "user.email=t@t.com", "-c", "user.name=T", "commit", "-m", "local only");
+    try {
+      const result = await cleanupWorktree(pi, repoDir, wt, "unpushed sub");
+      expect(result.path).toBe(wt.path);
+      expect(result.error).toMatch(/submodule work would be lost/);
+    } finally {
+      if (existsSync(wt.path)) execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir });
+    }
+  });
+
+  it("keeps the worktree when outer work appears before the forced submodule removal", async () => {
+    const wt = await populatedWorktree("late-sub");
+    const late = {
+      exec: async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
+        const result = await pi.exec(command, args, options);
+        if (args[0] === "worktree" && args[1] === "remove") writeFileSync(join(wt.path, "late.txt"), "late");
+        return result;
+      },
+    } as unknown as ExtensionAPI;
+    try {
+      const result = await cleanupWorktree(late, repoDir, wt, "late sub");
+      expect(result.path).toBe(wt.path);
+      expect(result.error).toBeDefined();
+      expect(existsSync(join(wt.path, "late.txt"))).toBe(true);
+    } finally {
+      if (existsSync(wt.path)) execFileSync("git", ["worktree", "remove", "--force", wt.path], { cwd: repoDir });
+    }
+  });
+});
+
 /**
  * The project switch itself (`worktreeIsolation`, #184). Its consumers —
  * agent-manager, both tool schemas, the invocation resolver — all mock this
