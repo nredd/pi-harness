@@ -263,7 +263,7 @@ test("declared subagent agents resolve inside the package and parse with Pi's fr
 	const dir = resolve(pkgRoot, pi.subagents.agents[0] ?? "");
 	assert.ok(dir.startsWith(`${pkgRoot}/`));
 	const files = readdirSync(dir).filter((f) => f.endsWith(".md"));
-	assert.equal(files.length, 7);
+	assert.equal(files.length, 8);
 	for (const file of files) {
 		const { frontmatter } = parseFrontmatter(readFileSync(join(dir, file), "utf8"));
 		assert.equal(frontmatter.name, file.replace(/\.md$/, ""));

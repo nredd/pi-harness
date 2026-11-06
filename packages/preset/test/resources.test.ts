@@ -10,7 +10,16 @@ import { test } from "vitest";
 import { dataModelLeaks, modelLeaks, modelValues, TIER_REF } from "./model-guard.ts";
 import { frontmatterOf, type Json, manifest, packedFiles, pkgRoot, readJson, readText, walk } from "./support.ts";
 
-const AGENTS = ["architect", "code-reviewer", "critic", "debugger", "general-purpose", "researcher", "verifier"];
+const AGENTS = [
+	"architect",
+	"code-reviewer",
+	"critic",
+	"debugger",
+	"general-purpose",
+	"principal-investigator",
+	"researcher",
+	"verifier",
+];
 const SKILLS = ["code-review", "coding-like-redd", "get-it-merged", "ship-issue"];
 const THEMES = ["belafonte-day", "tokyonight-storm"];
 const AGENT_KEYS = new Set([
@@ -50,7 +59,7 @@ function must<T>(value: T | undefined): T {
 }
 const external = () => manifest().piPreset.externalResources;
 
-test("exactly the seven agents ship, each a well-formed definition", () => {
+test("exactly the eight agents ship, each a well-formed definition", () => {
 	assert.deepEqual(
 		walk("agents").map((p) => p.replace(/^agents\/|\.md$/g, "")),
 		AGENTS,
@@ -70,7 +79,7 @@ test("shell-less agents disclose their limits in the first sentence and stop on 
 		const { frontmatter, body } = frontmatterOf(`agents/${agent}.md`);
 		const description = String(frontmatter.description);
 		const firstSentence = description.split(/[.!?](?:\s|$)/)[0] ?? "";
-		if (["architect", "code-reviewer", "critic", "researcher"].includes(agent)) {
+		if (["architect", "code-reviewer", "critic", "principal-investigator", "researcher"].includes(agent)) {
 			assert.ok(firstSentence.includes("no shell/ssh: cannot run commands"), agent);
 			assert.ok(body.includes("FIRST turn, before any tool calls"), agent);
 			assert.ok(body.includes("stop rather than spending a run on partial substitutes"), agent);
@@ -78,11 +87,41 @@ test("shell-less agents disclose their limits in the first sentence and stop on 
 			assert.ok(!description.includes("no shell/ssh"), agent);
 		}
 	}
-	assert.ok(
-		String(frontmatterOf("agents/critic.md").frontmatter.description).includes(
-			"except existing tests via py_test/cargo_test",
-		),
-	);
+	for (const agent of ["critic", "principal-investigator"]) {
+		assert.ok(
+			String(frontmatterOf(`agents/${agent}.md`).frontmatter.description).includes(
+				"except existing tests via py_test/cargo_test",
+			),
+			agent,
+		);
+	}
+});
+
+test("principal-investigator is a read-only, unpinned judge with a fixed output template", () => {
+	const { frontmatter, body } = frontmatterOf("agents/principal-investigator.md");
+	assert.deepEqual(csv(frontmatter.tools), [
+		"read",
+		"grep",
+		"find",
+		"ext:pi-dev-tools/git_diff",
+		"ext:pi-dev-tools/git_show",
+		"ext:pi-dev-tools/git_log",
+		"ext:pi-dev-tools/git_status",
+		"ext:pi-dev-tools/py_test",
+		"ext:pi-dev-tools/cargo_test",
+		"ext:pi-web-access",
+	]);
+	assert.deepEqual(list(frontmatter.extensions), ["pi-dev-tools", "pi-web-access"]);
+	for (const key of ["model", "thinking", "allowed_subagents", "disallowed_tools"]) {
+		assert.ok(!(key in frontmatter), `principal-investigator: no ${key}`);
+	}
+	assert.ok(!csv(frontmatter.tools).some((t) => /bash|edit|write|ssh/.test(t)));
+	assert.match(String(frontmatter.description), /^Read-only principal investigator, no shell\/ssh/);
+	assert.ok(String(frontmatter.description).includes("at most 3 acceptance items"));
+	for (const part of ["Reviewed:", "Not checked:", "Reproduced:", "Satisfied? YES|NO", "Factual concerns:"]) {
+		assert.ok(body.includes(part), part);
+	}
+	assert.ok(body.includes("caller-supplied"));
 });
 
 test("agents carry no model or logical-role references (strict roles are not implemented yet)", () => {

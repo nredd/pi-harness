@@ -93,8 +93,8 @@ See [the behavior comparison](../../docs/footer-port.md) for source references a
 
 ## Contents
 
-- `agents/`: `architect`, `code-reviewer`, `critic`, `debugger`, `general-purpose`, `researcher`,
-  `verifier`. Declared in `pi.subagents.agents`, found through pi-subagents' package-agent
+- `agents/`: `architect`, `code-reviewer`, `critic`, `debugger`, `general-purpose`,
+  `principal-investigator`, `researcher`, `verifier`. Declared in `pi.subagents.agents`, found through pi-subagents' package-agent
   discovery (the pinned fork; stock Pi ignores the key)
 - `skills/`: `code-review`, `ship-issue`, `get-it-merged`, `coding-like-redd`. Discovered by Pi
   through `pi.skills`. `coding-like-redd` is explicitly opinionated (Python/Rust conventions of the
@@ -130,7 +130,8 @@ Declared in `package.json` under `piPreset.externalResources`, enforced by tests
 - Skills `codebase-design` (agent `architect`) and `diagnosing-bugs` (agent `debugger`), from
   `mattpocock/skills` (MIT) at the pinned revision. The package never ships them
 - Extension `pi-dev-tools` (`@nredd/pi-dev-tools`), used by `architect`, `code-reviewer`, `critic`,
-  `verifier`; and `pi-web-access`, used by `researcher`
+  `principal-investigator`, `verifier`; and `pi-web-access`, used by `principal-investigator` and
+  `researcher`
 - `code-review` mentions `/setup-matt-pocock-skills` and `docs/agents/issue-tracker.md`, both
   optional repo-local context
 
@@ -142,7 +143,7 @@ scoped selector.
 
 ## Agent command limits
 
-`researcher`, `architect`, `critic` and `code-reviewer` have no shell/SSH and cannot run commands. Their descriptions say so in the first sentence, which survives pi-subagents compact listings. `critic` can run existing tests via `py_test`/`cargo_test`, not arbitrary shell commands. Each prompt requires a FIRST-turn explanation before tool calls when requested commands are unavailable, then a handoff to the caller or a shell-capable agent. Use `general-purpose`/`debugger` for command investigations or `verifier` for gates. There is no per-call tool-override flag.
+`researcher`, `architect`, `critic`, `code-reviewer` and `principal-investigator` have no shell/SSH and cannot run commands. Their descriptions say so in the first sentence, which survives pi-subagents compact listings. `critic` and `principal-investigator` can run existing tests via `py_test`/`cargo_test`, not arbitrary shell commands. Each prompt requires a FIRST-turn explanation before tool calls when requested commands are unavailable, then a handoff to the caller or a shell-capable agent. Use `general-purpose`/`debugger` for command investigations or `verifier` for gates. There is no per-call tool-override flag.
 
 Local overrides shadow these packaged definitions; update their managed source separately. This change does not activate a preset or alter tool grants.
 
@@ -156,6 +157,11 @@ types to tiers; `modelTiers` binds tiers to a router profile or exact members. B
 config (dotfiles on personal, the enterprise manifest on work), not preset content, so both profiles
 ship the same skill text. A quota-parked tier waits (or fails under its policy); it never silently
 falls back to another tier.
+`principal-investigator` (a multi-round judge of findings, not diffs) is unpinned too; route it with
+`agentModels["principal-investigator"] = "@deep"` next to `code-reviewer` -> `@review`, and pass
+`Agent({ model: "@frontier" })` per call for a final acceptance round and `thinking: high` per
+dispatch. The same tier rules apply: a parked tier waits, never substitutes. The binding itself is
+profile config, not preset content.
 `test/resources.test.ts` parses `agents/` and `skills/` (frontmatter, fenced YAML/JSON, `key: value`
 and call arguments, flow lists and maps, `--model` flags and pi's `/model` command, tables with a
 `model` column) and fails on any non-tier value under a model-like key (`model`, `models`,

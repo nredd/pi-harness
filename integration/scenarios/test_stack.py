@@ -139,7 +139,15 @@ def test_preset_resource_selection(sandbox: Sandbox) -> None:
     available = re.search(r"Available types: (.*?)\.", description)
     assert available, description
     types = {value.strip() for value in available[1].split(",")}
-    specialists = {"architect", "code-reviewer", "critic", "debugger", "researcher", "verifier"}
+    specialists = {
+        "architect",
+        "code-reviewer",
+        "critic",
+        "debugger",
+        "principal-investigator",
+        "researcher",
+        "verifier",
+    }
     if name == "personal":
         assert types == {"general-purpose", "Explore", "Plan"}, types
     else:
