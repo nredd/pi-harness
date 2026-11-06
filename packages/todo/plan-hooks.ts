@@ -184,7 +184,7 @@ const GROUPS: ReadonlyArray<{
 	},
 	{
 		kind: "elsewhere",
-		label: "agent started in the forked-from session, which it wakes instead of this one",
+		label: "agent running for another session, which it wakes instead of this one",
 		capped: true,
 		severity: "info",
 		showDepStatus: false,
@@ -249,7 +249,7 @@ function classify(task: Task, byId: ReadonlyMap<number, Task>, lookup: AgentStat
 	const owner = ownerKey(task.owner);
 	if (agent === undefined && owner !== undefined && resumed.get(task.id) === owner)
 		return { task, kind: "lost", agent, deps: [] };
-	// Forked from a session whose agent started there: not ours to take over or wait on.
+	// Running for another session, which it wakes: not ours to take over or wait on.
 	if (agent === undefined && lookup.elsewhere?.(task.owner) === true)
 		return { task, kind: "elsewhere", agent, deps: [] };
 	if (isWorking(agent))
@@ -366,6 +366,8 @@ export interface PlanSessionHooks {
 export function registerPlanHooks(
 	pi: ExtensionAPI,
 	onStateChange: (sessionId: string) => Promise<void>,
+	/** Called at every settle: re-ask where other sessions' survivors stand before classifying. */
+	refreshSurvivors: (sessionId: string) => void,
 ): PlanSessionHooks {
 	// Sessions this extension instance is bound to. An approval for another
 	// session (a child, a stale emitter) waits until that session starts here.
@@ -420,6 +422,7 @@ export function registerPlanHooks(
 		const messages = event.context.contextMessages;
 		if (event.outcome !== "completed" || isPlanning(ctx, messages)) return undefined;
 		const id = sid(ctx);
+		refreshSurvivors(id);
 		if (!remindedSinceLastPrompt(messages)) {
 			const open = selectOpenPlanItems(getState(id));
 			if (open.length)
@@ -449,6 +452,7 @@ export function registerPlanHooks(
 	pi.on("agent_settled", (_event, ctx) => {
 		if (isPlanning(ctx, [])) return;
 		const id = sid(ctx);
+		refreshSurvivors(id);
 		const notice = formatInProgressNotice(getState(id), agentLookup(id), settleFacts(id));
 		if (notice?.level === "info") {
 			if (reported.get(id) === notice.key) return;
@@ -462,6 +466,7 @@ export function registerPlanHooks(
 		const last = event.messages[event.messages.length - 1] as SettleMessage | undefined;
 		const id = sid(ctx);
 		const state = getState(id);
+		if (isReminder(last, HELD_REMINDER_MESSAGE_TYPE)) refreshSurvivors(id);
 		let content: string;
 		if (isReminder(last)) {
 			if (!selectOpenPlanItems(state).length) return undefined;

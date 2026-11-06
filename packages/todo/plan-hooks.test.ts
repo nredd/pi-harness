@@ -21,7 +21,7 @@ import {
 	PLAN_REMINDER_MESSAGE_TYPE,
 	STATE_ENTRY_TYPE,
 	SUBAGENT_ANNOUNCE_SURVIVORS_EVENT,
-	SUBAGENT_PARENT_SURVIVOR_EVENT,
+	SUBAGENT_OTHER_SESSION_SURVIVOR_EVENT,
 	SUBAGENT_STARTED_EVENT,
 	type TaskDetails,
 } from "./tool/types.ts";
@@ -518,7 +518,6 @@ describe("settling with nothing armed to wake the parent", () => {
 		snapshot: ReturnType<typeof tasks>,
 		reason = "resume",
 		beforeStart?: (bus: Map<string, Handler[]>) => void,
-		sessionFiles?: { previous: string },
 	) {
 		const s = setup();
 		beforeStart?.(s.bus);
@@ -526,38 +525,45 @@ describe("settling with nothing armed to wake the parent", () => {
 			sessionId: "s1",
 			branch: [{ type: "custom", customType: STATE_ENTRY_TYPE, data: snapshot }] as never,
 		});
-		await s.handler("session_start")({ reason, previousSessionFile: sessionFiles?.previous }, ctx);
+		await s.handler("session_start")({ reason }, ctx);
 		return { ...s, ctx };
 	}
 	const CURRENT_FILE = "current.jsonl";
 	/**
-	 * A stand-in for pi-subagents holding a detached survivor, keyed by the session file it was
-	 * registered under (see `packages/subagents/test/index-coverage-final-lifecycle.test.ts` for the
-	 * real emitter). Like it, the announce request answers from the CURRENT file with
-	 * `subagents:started` and, after a fork from `forkedFrom`, from that file with
-	 * `subagents:parent_survivor`; a survivor under any other file is never announced.
+	 * A stand-in for pi-subagents' process-wide registry of detached survivors, each registered under
+	 * the session file whose spool it wakes (see `packages/subagents/test/index-coverage-final-lifecycle.test.ts`
+	 * for the real emitter). Like it, an announce request answers for EVERY live survivor: from the
+	 * CURRENT file as `subagents:started`, from any other as `subagents:other_session_survivor`.
 	 */
-	const survivorPeer =
-		(handle: string, registeredUnder = CURRENT_FILE, forkedFrom?: string) =>
-		(bus: Map<string, Handler[]>) => {
-			const announce = (channel: string, file: string, wakesParent: boolean) => {
-				if (registeredUnder !== file) return;
-				for (const h of bus.get(channel) ?? [])
-					void h({
-						id: "a1",
-						handle,
-						type: "general-purpose",
-						description: "d",
-						...(wakesParent ? { wakesParent } : {}),
-					});
-			};
-			bus.set(SUBAGENT_ANNOUNCE_SURVIVORS_EVENT, [
-				() => {
-					announce(SUBAGENT_STARTED_EVENT, CURRENT_FILE, true);
-					if (forkedFrom) announce(SUBAGENT_PARENT_SURVIVOR_EVENT, forkedFrom, false);
-				},
-			]);
-		};
+	interface Survivor {
+		nameBase?: string;
+		handle: string;
+		file: string;
+		live: boolean;
+	}
+	const survivorPeer = (survivors: Survivor[]) => (bus: Map<string, Handler[]>) => {
+		bus.set(SUBAGENT_ANNOUNCE_SURVIVORS_EVENT, [
+			() => {
+				for (const [i, { handle, file, live, nameBase }] of survivors.entries()) {
+					if (!live) continue;
+					const own = file === CURRENT_FILE;
+					const channel = own ? SUBAGENT_STARTED_EVENT : SUBAGENT_OTHER_SESSION_SURVIVOR_EVENT;
+					for (const h of bus.get(channel) ?? [])
+						void h({
+							id: `a${i + 1}`,
+							handle,
+							...(nameBase ? { nameBase } : {}),
+							type: "general-purpose",
+							description: "d",
+							...(own ? { wakesParent: true } : { sessionFile: file }),
+						});
+				}
+			},
+		]);
+	};
+	const alive = (handle: string, file = CURRENT_FILE): Survivor => ({ handle, file, live: true });
+	const ELSEWHERE_NOTICE =
+		"Run ended with 1 in_progress todo, armed: no todo-owned wake (monitor and agent notices list session wakes); agent running for another session, which it wakes instead of this one: #1 t1 (@worker)";
 	const monitor = (bus: Map<string, Handler[]>, channel: string, id = "m1", sessionId = "s1") => {
 		for (const h of bus.get(channel) ?? []) void h({ sessionId, id, name: "ci" });
 	};
@@ -718,7 +724,7 @@ describe("settling with nothing armed to wake the parent", () => {
 	);
 
 	it.each(["resume", "reload"])("neither warns nor reminds for a live detached survivor after %s", async (reason) => {
-		const { handler, ctx } = await start(tasks({ id: 1, owner: "worker" }), reason, survivorPeer("worker"));
+		const { handler, ctx } = await start(tasks({ id: 1, owner: "worker" }), reason, survivorPeer([alive("worker")]));
 		await handler("agent_settled")({ type: "agent_settled" }, ctx);
 		expect(notices(ctx)).toEqual([
 			[
@@ -729,30 +735,63 @@ describe("settling with nothing armed to wake the parent", () => {
 		expect(await handler("agent_before_settle")(settleEvent([user, assistant]), ctx)).toBeUndefined();
 	});
 
-	it("shows a forked-from session's survivor as started there, and never reminds", async () => {
-		// pi's fork: teardown registered the survivor under the PARENT file; this session is new.
-		const { handler, ctx } = await start(
-			tasks({ id: 1, owner: "worker" }),
-			"fork",
-			survivorPeer("worker", "parent.jsonl", "parent.jsonl"),
-			{ previous: "parent.jsonl" },
+	const settleNotice = async (h: { handler: (n: string) => (...a: never[]) => unknown; ctx: unknown }) => {
+		notices(h.ctx as never).length = 0;
+		await (h.handler("agent_settled") as (...a: unknown[]) => Promise<void>)({ type: "agent_settled" }, h.ctx);
+		return notices(h.ctx as never)[0]?.[0];
+	};
+	const remind = async (h: { handler: (n: string) => (...a: never[]) => unknown; ctx: unknown }) =>
+		(h.handler("agent_before_settle") as (...a: unknown[]) => Promise<unknown>)(
+			settleEvent([user, assistant]),
+			h.ctx,
 		);
-		await handler("agent_settled")({ type: "agent_settled" }, ctx);
-		expect(notices(ctx)).toEqual([
-			[
-				"Run ended with 1 in_progress todo, armed: no todo-owned wake (monitor and agent notices list session wakes); agent started in the forked-from session, which it wakes instead of this one: #1 t1 (@worker)",
-				"info",
-			],
-		]);
-		expect(await handler("agent_before_settle")(settleEvent([user, assistant]), ctx)).toBeUndefined();
+	/** Another start of the same session id, as `/reload` or a switch back and forth: shutdown, then session_start. */
+	const restart = async (h: Awaited<ReturnType<typeof start>>, reason: string) => {
+		await h.handler("session_shutdown")({ reason }, h.ctx);
+		await h.handler("session_start")({ reason }, h.ctx);
+	};
+
+	it.each(["fork", "new", "resume", "reload"])(
+		"shows a survivor registered under another file as running for it after %s, and never reminds",
+		async (reason) => {
+			const h = await start(
+				tasks({ id: 1, owner: "worker" }),
+				reason,
+				survivorPeer([alive("worker", "parent.jsonl")]),
+			);
+			expect(await settleNotice(h)).toBe(ELSEWHERE_NOTICE);
+			expect(notices(h.ctx)[0][1]).toBe("info");
+			expect(await remind(h)).toBeUndefined();
+		},
+	);
+
+	it("keeps the survivor elsewhere after a /reload in the fork, not held", async () => {
+		const h = await start(tasks({ id: 1, owner: "worker" }), "fork", survivorPeer([alive("worker", "a.jsonl")]));
+		expect(await settleNotice(h)).toBe(ELSEWHERE_NOTICE);
+		await restart(h, "reload");
+		expect(await settleNotice(h)).toBe(ELSEWHERE_NOTICE);
+		expect(await remind(h)).toBeUndefined();
 	});
 
-	it("does not arm a forked-from survivor, so another owner's held todo still reminds", async () => {
+	it("keeps the survivor elsewhere after a fork of a fork", async () => {
+		const h = await start(tasks({ id: 1, owner: "worker" }), "fork", survivorPeer([alive("worker", "a.jsonl")]));
+		await restart(h, "fork");
+		expect(await settleNotice(h)).toBe(ELSEWHERE_NOTICE);
+		expect(await remind(h)).toBeUndefined();
+	});
+
+	it("keeps the survivor elsewhere after resuming A and then B", async () => {
+		const h = await start(tasks({ id: 1, owner: "worker" }), "resume", survivorPeer([alive("worker", "a.jsonl")]));
+		await restart(h, "resume");
+		expect(await settleNotice(h)).toBe(ELSEWHERE_NOTICE);
+		expect(await remind(h)).toBeUndefined();
+	});
+
+	it("does not arm an other-session survivor, so another owner's held todo still reminds", async () => {
 		const { handler, ctx } = await start(
 			tasks({ id: 1, owner: "worker" }, { id: 2 }),
 			"fork",
-			survivorPeer("worker", "parent.jsonl", "parent.jsonl"),
-			{ previous: "parent.jsonl" },
+			survivorPeer([alive("worker", "parent.jsonl")]),
 		);
 		const result = (await handler("agent_before_settle")(settleEvent([user, assistant]), ctx)) as {
 			entries: Array<{ details: { held: number[] } }>;
@@ -760,42 +799,61 @@ describe("settling with nothing armed to wake the parent", () => {
 		expect(result.entries[0].details.held).toEqual([2]);
 	});
 
-	it("treats a survivor registered under neither file as unheard after a fork", async () => {
-		const { handler, ctx } = await start(
-			tasks({ id: 1, owner: "worker" }),
-			"fork",
-			survivorPeer("worker", "unrelated.jsonl", "parent.jsonl"),
-			{ previous: "parent.jsonl" },
-		);
-		await handler("agent_settled")({ type: "agent_settled" }, ctx);
-		expect(notices(ctx)[0][0]).toContain("held by the parent: #1 t1 (@worker)");
+	it("drops the entry when the survivor completed, even though its result went to the other session", async () => {
+		const peer = [alive("worker", "a.jsonl")];
+		const h = await start(tasks({ id: 1, owner: "worker" }), "fork", survivorPeer(peer));
+		expect(await settleNotice(h)).toBe(ELSEWHERE_NOTICE);
+		// Re-query at settle: the registry no longer lists it.
+		peer[0].live = false;
+		expect(await settleNotice(h)).toContain("held by the parent: #1 t1 (@worker)");
+		expect(await remind(h)).toBeDefined();
 	});
 
-	it("prefers this session's own agent state over a forked-from survivor of the same owner", async () => {
+	it("reads a survivor's replayed terminal event as that agent's own state, not as running elsewhere", async () => {
+		const h = await start(tasks({ id: 1, owner: "worker" }), "fork", survivorPeer([alive("worker", "a.jsonl")]));
+		// The registry still lists it (a stale peer); the terminal event is the newer, own-session fact.
+		for (const hd of h.bus.get("subagents:completed") ?? [])
+			void hd({ id: "a1", handle: "worker", status: "completed" });
+		expect(await settleNotice(h)).toContain("held by the parent: #1 t1 (@worker done)");
+	});
+
+	it("treats a survivor that finished while this session was inactive as held, with no announcement", async () => {
+		const h = await start(
+			tasks({ id: 1, owner: "worker" }),
+			"resume",
+			survivorPeer([{ handle: "worker", file: "a.jsonl", live: false }]),
+		);
+		expect(await settleNotice(h)).toContain("held by the parent: #1 t1 (@worker)");
+		expect(await remind(h)).toBeDefined();
+	});
+
+	it("prefers this session's own agent state over an other-session survivor of the same owner", async () => {
 		const { handler, ctx } = await start(
 			tasks({ id: 1, owner: "worker" }),
 			"fork",
-			survivorPeer("worker", "parent.jsonl", "parent.jsonl"),
-			{ previous: "parent.jsonl" },
+			survivorPeer([alive("worker", "parent.jsonl")]),
 		);
 		applyAgentEvent("s1", SUBAGENT_STARTED_EVENT, { id: "b1", handle: "worker", wakesParent: true });
 		await handler("agent_settled")({ type: "agent_settled" }, ctx);
 		expect(notices(ctx)[0][0]).toContain("agent running: #1 t1 (@worker running)");
 	});
 
-	it("matches a forked-from survivor by its unnumbered spawner name, and ignores one heard before binding", async () => {
+	it("matches an other-session survivor by its unnumbered spawner name, and ignores one heard before binding", async () => {
 		const early = setup();
-		for (const h of early.bus.get(SUBAGENT_PARENT_SURVIVOR_EVENT) ?? []) void h({ id: "a1", handle: "worker" });
-		const { handler, ctx, bus } = await start(tasks({ id: 1, owner: "Auth Audit" }), "fork");
-		for (const h of bus.get(SUBAGENT_PARENT_SURVIVOR_EVENT) ?? [])
-			void h({ id: "a1", handle: "auth-audit-2", name: "auth-audit-2", nameBase: "auth-audit" });
+		for (const h of early.bus.get(SUBAGENT_OTHER_SESSION_SURVIVOR_EVENT) ?? [])
+			void h({ id: "a1", handle: "worker" });
+		const { handler, ctx } = await start(
+			tasks({ id: 1, owner: "Auth Audit" }),
+			"fork",
+			survivorPeer([{ ...alive("auth-audit-2", "a.jsonl"), nameBase: "auth-audit" }]),
+		);
 		await handler("agent_settled")({ type: "agent_settled" }, ctx);
-		expect(notices(ctx)[0][0]).toContain("forked-from session");
+		expect(notices(ctx)[0][0]).toContain("running for another session");
 	});
 
-	it("ignores a malformed parent-survivor payload", async () => {
+	it("ignores a malformed other-session survivor payload", async () => {
 		const { handler, ctx, bus } = await start(tasks({ id: 1, owner: "worker" }), "fork");
-		for (const h of bus.get(SUBAGENT_PARENT_SURVIVOR_EVENT) ?? []) {
+		for (const h of bus.get(SUBAGENT_OTHER_SESSION_SURVIVOR_EVENT) ?? []) {
 			void h(undefined);
 			void h({ id: "", handle: "worker" });
 		}
@@ -805,7 +863,7 @@ describe("settling with nothing armed to wake the parent", () => {
 
 	it("hears a survivor re-announced before the session bound, via the announce request", async () => {
 		const { handler, ctx, bus } = await start(tasks({ id: 1, owner: "worker" }), "reload", (b) => {
-			survivorPeer("worker")(b);
+			survivorPeer([alive("worker")])(b);
 			// pi-subagents' session_start ran first: nothing was bound to hear it yet.
 			for (const h of b.get(SUBAGENT_STARTED_EVENT) ?? []) void h({ id: "a1", handle: "worker", wakesParent: true });
 		});
@@ -814,12 +872,26 @@ describe("settling with nothing armed to wake the parent", () => {
 	});
 
 	it("falls back to the held reminder once a survivor's delivered result settles it", async () => {
-		const { handler, ctx, bus } = await start(tasks({ id: 1, owner: "worker" }), "resume", survivorPeer("worker"));
+		const peer = [alive("worker")];
+		const { handler, ctx, bus } = await start(tasks({ id: 1, owner: "worker" }), "resume", survivorPeer(peer));
 		const settle = handler("agent_before_settle");
 		expect(await settle(settleEvent([user, assistant]), ctx)).toBeUndefined();
+		peer[0].live = false; // the registry drops a settled survivor
 		for (const h of bus.get("subagents:completed") ?? []) void h({ id: "a1", handle: "worker", status: "completed" });
 		const result = (await settle(settleEvent([user, assistant]), ctx)) as { entries: unknown[] };
 		expect(result.entries).toHaveLength(1);
+	});
+
+	it("re-asks for survivors at a settle of the bound session, never of a child", async () => {
+		const asks = vi.fn();
+		const { handler, ctx } = await start(tasks({ id: 1 }), "resume", (b) =>
+			b.set(SUBAGENT_ANNOUNCE_SURVIVORS_EVENT, [asks]),
+		);
+		expect(asks).toHaveBeenCalledTimes(1);
+		await handler("agent_settled")({ type: "agent_settled" }, ctx);
+		expect(asks).toHaveBeenCalledTimes(2);
+		await handler("agent_settled")({ type: "agent_settled" }, createMockCtx({ sessionId: "child" }));
+		expect(asks).toHaveBeenCalledTimes(2);
 	});
 
 	it("asks for survivors once for the bound headless session, never for a child", async () => {

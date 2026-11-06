@@ -23,7 +23,7 @@ import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding
 import type { KeyId } from "@earendil-works/pi-tui";
 import { COLLAPSE_KEY_OFF, getCollapseOnResume, resolveCollapseKey } from "./config.ts";
 import { registerPlanHooks } from "./plan-hooks.ts";
-import { applyAgentEvent, applyParentSurvivor, forgetAgents } from "./state/agents.ts";
+import { applyAgentEvent, applyOtherSessionSurvivor, clearElsewhere, forgetAgents } from "./state/agents.ts";
 import { I18N_NAMESPACE } from "./state/i18n-bridge.ts";
 import { applyMonitorEvent, forgetMonitors } from "./state/monitors.ts";
 import { replayFromBranch } from "./state/replay.ts";
@@ -42,7 +42,7 @@ import {
 	MONITOR_LIFECYCLE_EVENTS,
 	SUBAGENT_ANNOUNCE_SURVIVORS_EVENT,
 	SUBAGENT_LIFECYCLE_EVENTS,
-	SUBAGENT_PARENT_SURVIVOR_EVENT,
+	SUBAGENT_OTHER_SESSION_SURVIVOR_EVENT,
 } from "./tool/types.ts";
 
 type I18nLoader = {
@@ -192,15 +192,26 @@ export default function (
 			await refreshTodoOverlay().catch((e) => console.warn(`[rpiv-todo] ${formatError(e)}`));
 		});
 	}
-	// A forked session's parent still runs these: shown as held elsewhere, never armed here.
-	pi.events.on(SUBAGENT_PARENT_SURVIVOR_EVENT, (data) => {
-		if (agentSession !== undefined) applyParentSurvivor(agentSession, data);
+	// Agents running for another session wake that one: shown as such, never armed here.
+	pi.events.on(SUBAGENT_OTHER_SESSION_SURVIVOR_EVENT, (data) => {
+		if (agentSession !== undefined) applyOtherSessionSurvivor(agentSession, data);
 	});
+	// What other sessions' survivors are doing is only known by asking: rebuild it from a fresh snapshot.
+	// Used at every bind and settle, since a survivor can finish while its session is inactive.
+	const requeryOtherSurvivors = (sessionId: string): void => {
+		if (sessionId !== agentSession) return;
+		clearElsewhere(sessionId);
+		pi.events.emit(SUBAGENT_ANNOUNCE_SURVIVORS_EVENT, {});
+	};
 	// session-kit monitor lifecycle -> whether a wake is armed at a settle. Carries its own session id.
 	for (const channel of MONITOR_LIFECYCLE_EVENTS) pi.events.on(channel, (data) => applyMonitorEvent(channel, data));
-	const planHooks = registerPlanHooks(pi, async (sessionId) => {
-		if (sessionId === getActiveRenderSession()) await updateTodoOverlay();
-	});
+	const planHooks = registerPlanHooks(
+		pi,
+		async (sessionId) => {
+			if (sessionId === getActiveRenderSession()) await updateTodoOverlay();
+		},
+		requeryOtherSurvivors,
+	);
 
 	// Collapse/expand hotkey for the todo overlay. The key is resolved once at
 	// factory scope from config (register-once contract: a config change needs
@@ -268,7 +279,7 @@ export default function (
 		if (!ctx.hasUI) {
 			agentSession ??= id;
 			// Not `agentSession`: a child session must not ask on the parent's behalf.
-			if (agentSession === id) pi.events.emit(SUBAGENT_ANNOUNCE_SURVIVORS_EVENT, {});
+			if (agentSession === id) requeryOtherSurvivors(id);
 			return;
 		}
 		// First UI-bearing session_start claims the foreground (the interactive
@@ -278,7 +289,7 @@ export default function (
 		// (distinct sid) is skipped — does not rebind to a relay/stale ui.
 		if (id !== getActiveRenderSession()) return;
 		agentSession = id;
-		pi.events.emit(SUBAGENT_ANNOUNCE_SURVIVORS_EVENT, {});
+		requeryOtherSurvivors(id);
 		const generation = ++lifecycleGeneration;
 		uiCtx = ctx.ui;
 		collapseOnBind = event.reason === "resume" && getCollapseOnResume(options.homeDir);

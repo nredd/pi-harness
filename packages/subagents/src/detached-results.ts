@@ -133,6 +133,11 @@ export function unregisterRunningDetached(sessionFile: string, id: string): void
   if (byId?.size === 0) running().delete(sessionFile);
 }
 
+/** Every orphan still running in the process with the session file it is registered (and wakes) under. */
+export function listAllRunningDetached(): Array<{ sessionFile: string; agent: RunningDetached }> {
+  return [...running()].flatMap(([sessionFile, byId]) => [...byId.values()].map((agent) => ({ sessionFile, agent })));
+}
+
 /** Orphans still running for `sessionFile`, in registration order. */
 export function listRunningDetached(sessionFile: string | undefined): RunningDetached[] {
   if (sessionFile === undefined) return [];

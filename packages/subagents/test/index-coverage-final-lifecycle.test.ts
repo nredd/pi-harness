@@ -581,30 +581,50 @@ describe("index detached survivor lifecycle events", () => {
     hold.release();
   });
 
-  it("announces a forked-from survivor as the parent's, never as this session's own", async () => {
+  it.each(["fork", "new", "resume", "reload"] as const)(
+    "announces a survivor registered under another file as other-session after %s, never as this session's own",
+    async (reason) => {
+      const parentFile = sessionFile;
+      const hold = heldResponse("parent result"); provider.setResponses([hold.response]);
+      const first = await bind(); const id = await spawn(first, "other survivor"); await hold.entered;
+      await shutdown(first, reason === "fork" ? "fork" : "reload");
+      // pi's switch: a different session file; teardown registered the survivor under the old one.
+      sessionFile = join(env.dir, `${reason}.jsonl`); writeFileSync(sessionFile, "");
+      const next = await bind({}, {}, false, { reason, previousSessionFile: parentFile });
+      expect(emitted(next, "subagents:started")).toEqual([]);
+      const [event, ...rest] = emitted(next, "subagents:other_session_survivor");
+      expect(rest).toEqual([]);
+      expect(event).toMatchObject({ id, type: "general-purpose", sessionFile: parentFile });
+      expect(event).not.toHaveProperty("wakesParent");
+      expect(event).not.toHaveProperty("spawnSeq");
+      next.boot.pi.events.emit("subagents:announce_survivors", {});
+      expect(emitted(next, "subagents:other_session_survivor")).toHaveLength(2);
+      expect(emitted(next, "subagents:started")).toEqual([]);
+      // Results stay with the original file's spool.
+      hold.release(); await first.registry.waitForAll(); await flush();
+      expect(emitted(next, "subagents:completed")).toEqual([]);
+      // A settled survivor is no longer announced.
+      next.boot.pi.events.emit("subagents:announce_survivors", {});
+      expect(emitted(next, "subagents:other_session_survivor")).toHaveLength(2);
+    },
+  );
+
+  it("announces own and other-session survivors together, each under its own channel, with no parent chain", async () => {
     const parentFile = sessionFile;
-    const hold = heldResponse("parent result"); provider.setResponses([hold.response]);
-    const first = await bind(); const id = await spawn(first, "forked survivor"); await hold.entered;
+    const holdA = heldResponse("a result"); const holdB = heldResponse("b result");
+    provider.setResponses([holdA.response, holdB.response]);
+    const first = await bind(); const a = await spawn(first, "survivor a"); await holdA.entered;
     await shutdown(first, "fork");
-    // pi's fork: a new session file, teardown already registered the survivor under the old one.
-    sessionFile = join(env.dir, "fork.jsonl"); writeFileSync(sessionFile, "");
-    const next = await bind({}, {}, false, { reason: "fork", previousSessionFile: parentFile });
-    expect(emitted(next, "subagents:started")).toEqual([]);
-    const [event, ...rest] = emitted(next, "subagents:parent_survivor");
-    expect(rest).toEqual([]);
-    expect(event).toMatchObject({ id, type: "general-purpose" });
-    expect(event).not.toHaveProperty("wakesParent");
-    expect(event).not.toHaveProperty("spawnSeq");
-    next.boot.pi.events.emit("subagents:announce_survivors", {});
-    expect(emitted(next, "subagents:parent_survivor")).toHaveLength(2);
-    expect(emitted(next, "subagents:started")).toEqual([]);
-    // A later non-fork start has no parent to speak for.
-    await next.boot.lifecycle.get("session_start")?.({ type: "session_start", reason: "reload", previousSessionFile: parentFile }, next.context);
-    next.boot.pi.events.emit("subagents:announce_survivors", {});
-    expect(emitted(next, "subagents:parent_survivor")).toHaveLength(2);
-    // Results stay with the parent's spool.
-    hold.release(); await first.registry.waitForAll(); await flush();
-    expect(emitted(next, "subagents:completed")).toEqual([]);
+    const forkFile = join(env.dir, "fork-b.jsonl"); writeFileSync(forkFile, "");
+    sessionFile = forkFile;
+    const second = await bind({}, {}, false, { reason: "fork", previousSessionFile: parentFile });
+    const b = await spawn(second, "survivor b"); await holdB.entered;
+    await shutdown(second, "reload");
+    // Reload in B: B's own survivor is armed, A's (a fork-of-a-fork ancestor) is another session's.
+    const third = await bind({}, {}, false, { reason: "reload", previousSessionFile: forkFile });
+    expect(emitted(third, "subagents:started")).toMatchObject([{ id: b, wakesParent: true }]);
+    expect(emitted(third, "subagents:other_session_survivor")).toMatchObject([{ id: a, sessionFile: parentFile }]);
+    holdA.release(); holdB.release();
   });
 
   it("emits the settle event, without orphan sequence numbers, when a survivor's result is delivered", async () => {

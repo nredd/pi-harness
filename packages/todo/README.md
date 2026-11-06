@@ -153,7 +153,7 @@ the full list grouped by status.
   items open, the model gets one reminder listing them before it can wrap up.
   Outside Plan mode, a run that settles with `in_progress` todos also reports them
   (`agent_settled` in `plan-hooks.ts`), grouped by why each is still open: `owner agent failed
-  or stopped` (all named), `owner agent not found after resume`, `agent started in the forked-from session`, `held by the parent`, `agent running without a completion notice`, `blocked` and `agent running`, three per group
+  or stopped` (all named), `owner agent not found after resume`, `agent running for another session`, `held by the parent`, `agent running without a completion notice`, `blocked` and `agent running`, three per group
   then a count. `agent running` includes an owner agent still `queued`. `blocked` means a live
   `blockedBy` dependency: one `in_progress` whose owner agent has not failed or stopped, or one
   `pending` whose owner agent is running or queued with a verified completion notice. A todo is `held by the
@@ -174,14 +174,15 @@ the full list grouped by status.
   that no `subagents` event has named since is `owner agent not found after resume` (warning, every
   settle, all named): children die with the process, so it is not parent-held. `/new`, `/resume`,
   `/fork` and `/reload` are not that boundary: pi-subagents detaches still-running background agents.
-  After a `/reload`, or a `/resume` back into the session that spawned them, it re-announces them with `subagents:started` on the next `session_start` (and on
-  `subagents:announce_survivors`, which this extension sends once the session is bound) and replays
-  `subagents:completed` / `:failed` when their results are delivered, so a live survivor is `running` and armed, and an owner
-  nobody names is `held`, never lost. `/fork` starts a new session file but the survivor's result still spools to the parent
-  session's, so it wakes that session, not the fork: pi-subagents announces it with `subagents:parent_survivor`, and a todo
-  it owns reads `agent started in the forked-from session, which it wakes instead of this one` (info, once). It is never
-  armed here and never triggers the held-work reminder; the entry is as of the fork, since the fork hears nothing more about
-  that agent. A free-text owner (a person or team) is indistinguishable from a dead
+  On every `session_start`, and on `subagents:announce_survivors` (which this extension sends once the session is bound and again
+  at every settle), pi-subagents announces ALL running detached survivors in the process. Those registered under this session's
+  file (after `/reload`, or a `/resume` back into the session that spawned them) arrive as `subagents:started` and are `running` and
+  armed, with `subagents:completed` / `:failed` replayed when their results are delivered. Every other one, whatever switch left it
+  (`/fork`, a fork of a fork, `/resume` of another session, `/new`), arrives as `subagents:other_session_survivor`: its result
+  spools to the session it was registered under, so it wakes that one, not this. A todo it owns reads
+  `agent running for another session, which it wakes instead of this one` (info, once), is never armed here and never triggers the
+  held-work reminder. The set is rebuilt from each announcement, so a `/reload` loses nothing and a survivor that finished
+  (even while this session was inactive) drops out at the next settle. An owner nobody names is `held`, never lost. A free-text owner (a person or team) is indistinguishable from a dead
   agent handle, so it lands there too until it is reassigned. Parent-held work warns only when nothing
   is armed: a running monitor (`session-kit:monitor:started` / `:stopped` on `pi.events`, payload
   `{ sessionId, id, name }`) or a background agent with a verified completion notice makes it an info

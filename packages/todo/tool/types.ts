@@ -68,10 +68,11 @@ export const SUBAGENT_FAILED_EVENT = "subagents:failed";
  */
 export const SUBAGENT_ANNOUNCE_SURVIVORS_EVENT = "subagents:announce_survivors";
 /**
- * A background agent still running in the session this one was forked from (`/fork`): its result
- * spools to that session, so it wakes that session and never this one. Same payload as `started`.
+ * A background agent still running for a different session than this one (any switch: `/fork`,
+ * `/resume`, `/new`, `/reload`): its result spools to that session, so it wakes that one and never
+ * this one. Same payload as `started`, plus `sessionFile`.
  */
-export const SUBAGENT_PARENT_SURVIVOR_EVENT = "subagents:parent_survivor";
+export const SUBAGENT_OTHER_SESSION_SURVIVOR_EVENT = "subagents:other_session_survivor";
 
 export const SUBAGENT_LIFECYCLE_EVENTS = [
 	SUBAGENT_CREATED_EVENT,

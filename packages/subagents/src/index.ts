@@ -32,6 +32,7 @@ import { loadCustomAgents } from "./custom-agents.js";
 import {
   type DetachedResult,
   drainDetached,
+  listAllRunningDetached,
   listRunningDetached,
   registerRunningDetached,
   spoolDetached,
@@ -782,32 +783,29 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     for (const result of drainDetached(sessionFile)) deliverDetachedResult(result);
   }
 
-  /** The session file this session was forked from, while it is the current start; else undefined. */
-  let forkParentFile: string | undefined;
-
   /**
-   * Re-announce agents still running in an orphaned manager, which this session never
-   * heard spawn, so lifecycle listeners (e.g. pi-todo) see their owners alive and armed
-   * instead of lost. Also answers `subagents:announce_survivors`, for a listener that
-   * bound after this `session_start`. After a `/fork` the survivors registered under the
-   * parent's file are announced as `subagents:parent_survivor`: their results spool to the
-   * parent, so they wake the parent session and arm nothing here.
+   * Announce every agent still running in an orphaned manager, which this session never
+   * heard spawn, so lifecycle listeners (e.g. pi-todo) see their owners alive instead of lost.
+   * Runs at every `session_start` and on `subagents:announce_survivors`, for a listener that
+   * bound after it. Survivors registered under the current session file are announced as
+   * `subagents:started` (armed: their results spool here and wake this session). All others,
+   * whatever switch left them (`/fork`, `/resume`, `/new`, `/reload`), are announced as
+   * `subagents:other_session_survivor` with the `sessionFile` they wake instead, and arm nothing here.
    */
   function announceSurvivors() {
-    const announce = (channel: string, sessionFile: string | undefined, wakes: boolean) => {
-      for (const { record } of listRunningDetached(sessionFile)) {
-        const { wakesParent: _wakes, ...fields } = eventFields(record);
-        pi.events.emit(channel, survivorEventData({
-          id: record.id,
-          type: record.type,
-          description: record.description,
-          ...fields,
-          ...(wakes ? { wakesParent: true } : {}),
-        }));
-      }
-    };
-    announce("subagents:started", currentCtx?.sessionManager?.getSessionFile?.(), true);
-    if (forkParentFile) announce("subagents:parent_survivor", forkParentFile, false);
+    const current = currentCtx?.sessionManager?.getSessionFile?.();
+    for (const { sessionFile, agent } of listAllRunningDetached()) {
+      const { record } = agent;
+      const own = sessionFile === current;
+      const { wakesParent: _wakes, ...fields } = eventFields(record);
+      pi.events.emit(own ? "subagents:started" : "subagents:other_session_survivor", survivorEventData({
+        id: record.id,
+        type: record.type,
+        description: record.description,
+        ...fields,
+        ...(own ? { wakesParent: true } : { sessionFile }),
+      }));
+    }
   }
 
   function deliverDetachedResult(result: DetachedResult) {
@@ -1124,8 +1122,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   // Capture ctx from session_start for RPC spawn handler + start the scheduler.
   // This also wires the RPC handlers and broadcasts readiness — on the first
   // bound session_start, so a filtered-out activation never advertises (#142).
-  pi.on("session_start", async (event, ctx) => {
-    forkParentFile = event.reason === "fork" ? event.previousSessionFile : undefined;
+  pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
     restoreFleetDisclosure(ctx);
     // Pi resolves project trust before the first session starts, so this is the
@@ -1163,8 +1160,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       unwatchDetached?.();
       unwatchDetached = watchDetached(sessionFile, () => deliverDetached(sessionFile));
       deliverDetached(sessionFile);
-      announceSurvivors();
     }
+    announceSurvivors();
     unwatchAnnounce ??= pi.events.on("subagents:announce_survivors", announceSurvivors);
     // Orphans from the previous instance are already registered; show them now.
     fleet.update();
