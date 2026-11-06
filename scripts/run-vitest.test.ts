@@ -31,7 +31,7 @@ vi.mock("node:child_process", () => ({
 	},
 }));
 
-const { isolatedHomeEnv, main, toolchainHomeEnv } = await import("./run-vitest.ts");
+const { dispatch, isolatedHomeEnv, main, toolchainHomeEnv } = await import("./run-vitest.ts");
 
 const VITEST = fileURLToPath(new URL("../node_modules/vitest/vitest.mjs", import.meta.url));
 const BUN_COVERAGE = [
@@ -62,6 +62,32 @@ function onlyCall(): SpawnCall {
 	assert.equal(existsSync(call.env.HOME ?? ""), false, "the isolated home must be removed afterwards");
 	return call;
 }
+
+test("entry dispatch launches only for the entry module and propagates the status", () => {
+	const argv = process.argv;
+	const exitCode = process.exitCode;
+	// `dispatch` passes the real environment; never append a fake timing to a real CI job summary.
+	const dir = mkdtempSync(join(tmpdir(), "pi-run-vitest-dispatch-"));
+	const summary = join(dir, "summary.md");
+	vi.stubEnv("GITHUB_STEP_SUMMARY", summary);
+	try {
+		process.argv = ["node", "run-vitest.ts", "node"];
+		process.exitCode = 0;
+		spawn.result = { status: CHILD_STATUS, signal: null };
+		dispatch(false);
+		assert.equal(spawn.calls.length, 0);
+		assert.equal(process.exitCode, 0);
+		dispatch(true);
+		assert.equal(process.exitCode, CHILD_STATUS);
+		assert.equal(onlyCall().command, process.execPath);
+		assert.match(readFileSync(summary, "utf8"), new RegExp(`node Vitest timing: .* \\| exit ${CHILD_STATUS}\\n$`));
+	} finally {
+		process.argv = argv;
+		process.exitCode = exitCode;
+		vi.unstubAllEnvs();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
 
 test("node runs Vitest under the current Node with the package arguments unchanged", () => {
 	spawn.result = { status: CHILD_STATUS, signal: null };

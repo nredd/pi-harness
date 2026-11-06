@@ -99,5 +99,9 @@ export function main(argv: readonly string[], env: NodeJS.ProcessEnv): number {
 	return status;
 }
 
-// Vite's module runner pins `import.meta.main` false, so only the subprocess tests reach this line.
-if (import.meta.main) process.exitCode = main(process.argv.slice(2), process.env);
+/** Dispatch only when invoked as the entry module. */
+export function dispatch(isMain: boolean): void {
+	if (isMain) process.exitCode = main(process.argv.slice(2), process.env);
+}
+
+dispatch(import.meta.main);
