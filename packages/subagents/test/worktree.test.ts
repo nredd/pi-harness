@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -945,6 +945,89 @@ describe("cleanupWorktree — nested repositories git refuses to remove", () => 
     run(join(wt.path, "vendor"), "clone", subDir, "dep");
     expect(await cleanupWorktree(pi, repoDir, wt, "ignored clean")).toEqual({ hasChanges: false });
     expect(existsSync(wt.path)).toBe(false);
+  });
+
+  /** Commit a `.gitignore` in the nested-repo source, before anything clones it. */
+  function ignoreInSource(patterns: string): void {
+    writeFileSync(join(subDir, ".gitignore"), patterns);
+    run(subDir, "add", ".gitignore");
+    run(subDir, "commit", "-m", "ignore");
+  }
+
+  /** Register `subDir` as submodule `sub` of the outer repo. */
+  function addSubmodule(): void {
+    run(repoDir, "submodule", "add", subDir, "sub");
+    run(repoDir, "commit", "-m", "add submodule");
+  }
+
+  async function populatedWorktree(id: string) {
+    const wt = await createWorktree(pi, repoDir, id);
+    cleanups.push(wt.path);
+    run(wt.path, "submodule", "update", "--init", "--recursive");
+    return wt;
+  }
+
+  it("keeps the worktree when a gitignored nested clone inside a submodule holds an unpushed commit", async () => {
+    ignoreInSource("vendor/\n");
+    addSubmodule();
+    const wt = await populatedWorktree("ignored-in-sub");
+    const vendor = join(wt.path, "sub", "vendor");
+    mkdirSync(vendor);
+    run(vendor, "clone", subDir, "x");
+    const x = join(vendor, "x");
+    writeFileSync(join(x, "precious.txt"), "unpublished");
+    run(x, "add", "precious.txt");
+    run(x, "commit", "-m", "local only");
+    expect(run(wt.path, "status", "--porcelain")).toBe("");
+    expect(run(join(wt.path, "sub"), "status", "--porcelain")).toBe("");
+    const result = await cleanupWorktree(pi, repoDir, wt, "ignored in sub");
+    expect(result.error).toMatch(/submodule work would be lost[\s\S]*vendor\/x/);
+    expect(existsSync(join(x, "precious.txt"))).toBe(true);
+  });
+
+  it("keeps the worktree when a gitignored clone nested inside a gitignored clone holds an unpushed commit", async () => {
+    ignoreInSource("build/\n");
+    writeFileSync(join(repoDir, ".gitignore"), "vendor/\n");
+    run(repoDir, "add", ".gitignore");
+    run(repoDir, "commit", "-m", "ignore vendor");
+    const wt = await createWorktree(pi, repoDir, "ignored-in-ignored");
+    cleanups.push(wt.path);
+    mkdirSync(join(wt.path, "vendor"));
+    run(join(wt.path, "vendor"), "clone", subDir, "a");
+    const build = join(wt.path, "vendor", "a", "build");
+    mkdirSync(build);
+    run(build, "clone", subDir, "b");
+    const b = join(build, "b");
+    writeFileSync(join(b, "precious.txt"), "unpublished");
+    run(b, "add", "precious.txt");
+    run(b, "commit", "-m", "local only");
+    expect(run(join(wt.path, "vendor", "a"), "status", "--porcelain")).toBe("");
+    const result = await cleanupWorktree(pi, repoDir, wt, "ignored in ignored");
+    expect(result.error).toMatch(/submodule work would be lost[\s\S]*build\/b/);
+    expect(existsSync(join(b, "precious.txt"))).toBe(true);
+  });
+
+  it("does not let submodule ignore=all hide a bumped gitlink", async () => {
+    addSubmodule();
+    writeFileSync(join(repoDir, ".gitmodules"), `${readFileSync(join(repoDir, ".gitmodules"), "utf8")}\tignore = all\n`);
+    run(repoDir, "add", ".gitmodules");
+    run(repoDir, "commit", "-m", "ignore all");
+    const wt = await populatedWorktree("ignore-all");
+    const sub = join(wt.path, "sub");
+    writeFileSync(join(subDir, "next.txt"), "next");
+    run(subDir, "add", "next.txt");
+    run(subDir, "commit", "-m", "published next");
+    run(sub, "fetch", "-q", "origin");
+    run(sub, "checkout", "-q", "FETCH_HEAD");
+    const next = run(sub, "rev-parse", "HEAD").trim();
+    expect(run(wt.path, "status", "--porcelain")).toBe("");
+    const result = await cleanupWorktree(pi, repoDir, wt, "ignore all");
+    expect(result.hasChanges).toBe(true);
+    expect(result.branch).toBeUndefined();
+    expect(result.path).toBe(wt.path);
+    expect(result.error).toMatch(/could not be staged[\s\S]*sub/);
+    expect(existsSync(wt.path)).toBe(true);
+    expect(run(join(wt.path, "sub"), "rev-parse", "HEAD")).toBe(next);
   });
 
   it("removes a clean worktree whose deinitialized submodule is pinned to a sha-fetched commit", async () => {

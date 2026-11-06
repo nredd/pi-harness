@@ -170,6 +170,11 @@ export async function cleanupWorktree(
     if (status) {
       // Changes exist — stage, commit, and create a branch
       await git(pi, worktree.path, ["add", "-A"], 10000);
+      // `add -A` skips a moved gitlink hidden by `submodule.<name>.ignore = all`; an empty
+      // commit would fail opaquely, so say why and keep the worktree.
+      if (!(await git(pi, worktree.path, ["diff", "--cached", "--name-only"], 10000))) {
+        throw new Error(`uncommitted changes could not be staged (a submodule \`ignore\` setting can hide a moved gitlink); worktree kept:\n${status}`);
+      }
       // Truncate description for commit message (no shell sanitization needed — pi.exec uses argv)
       const safeDesc = agentDescription.slice(0, 200);
       const commitMsg = `pi-agent: ${safeDesc}`;
@@ -219,12 +224,13 @@ export async function cleanupWorktree(
 }
 
 /**
- * Uncommitted state of `repo`, untracked files included. `status.showUntrackedFiles=no`
- * in user or repo config would otherwise hide new files from `status`, and a
- * clean-looking tree gets removed with them.
+ * Uncommitted state of `repo`, untracked files and submodule changes included.
+ * `status.showUntrackedFiles=no` in user or repo config would otherwise hide new
+ * files from `status`, and `submodule.<name>.ignore` / `diff.ignoreSubmodules`
+ * would hide a moved gitlink; a clean-looking tree gets removed with them.
  */
 async function dirtyState(pi: ExtensionAPI, repo: string): Promise<string> {
-  return await git(pi, repo, ["status", "--porcelain", "--untracked-files=all"], 10000);
+  return await git(pi, repo, ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"], 10000);
 }
 
 const GITLINK_MODE = "160000";
@@ -282,6 +288,26 @@ async function inspectRepo(
   if (detail) problems.push(`${label}:\n${detail}`);
   const head = await git(pi, dir, ["rev-parse", "HEAD"], 5000);
   await inspectGitlinks(pi, dir, head === recorded ? "HEAD" : undefined, trusted, seen, problems);
+  await inspectIgnoredRepos(pi, dir, dir, trusted, seen, problems);
+}
+
+/**
+ * Inspect nested repositories under gitignored paths of `repo` not already
+ * `seen`. Labels are relative to `root`, the worktree.
+ */
+async function inspectIgnoredRepos(
+  pi: ExtensionAPI,
+  repo: string,
+  root: string,
+  trusted: Set<string>,
+  seen: Set<string>,
+  problems: string[],
+): Promise<void> {
+  for (const dir of await ignoredRepoDirs(pi, repo)) {
+    if (!seen.has(realpathSync(await git(pi, dir, ["rev-parse", "--absolute-git-dir"], 5000)))) {
+      await inspectRepo(pi, dir, relative(root, dir), undefined, trusted, seen, problems);
+    }
+  }
 }
 
 /**
@@ -313,7 +339,7 @@ async function inspectGitlinks(
  * records them, yet plain removal deletes their ignored content.
  */
 async function ignoredRepoDirs(pi: ExtensionAPI, worktreePath: string): Promise<string[]> {
-  const out = await git(pi, worktreePath, ["status", "--porcelain", "-z", "--ignored", "--untracked-files=all"], 30000);
+  const out = await git(pi, worktreePath, ["status", "--porcelain", "-z", "--ignored", "--untracked-files=all", "--ignore-submodules=none"], 30000);
   // With `--untracked-files=all` git lists an ignored nested repository as its own `!! dir/` entry.
   return out
     .split("\0")
@@ -350,11 +376,7 @@ async function assertSubmodulesDisposable(pi: ExtensionAPI, worktreePath: string
   const trusted = new Set<string>();
   const problems: string[] = [];
   await inspectGitlinks(pi, worktreePath, baseSha, trusted, seen, problems);
-  for (const dir of await ignoredRepoDirs(pi, worktreePath)) {
-    if (!seen.has(realpathSync(await git(pi, dir, ["rev-parse", "--absolute-git-dir"], 5000)))) {
-      await inspectRepo(pi, dir, relative(worktreePath, dir), undefined, trusted, seen, problems);
-    }
-  }
+  await inspectIgnoredRepos(pi, worktreePath, worktreePath, trusted, seen, problems);
   const modules = await modulesDir(pi, worktreePath);
   for (const gitDir of modules ? moduleGitDirs(modules) : []) {
     if (seen.has(realpathSync(gitDir))) continue;
