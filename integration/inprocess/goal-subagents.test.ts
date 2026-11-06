@@ -7,6 +7,7 @@ import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
+import { SubagentTracker } from "../../packages/session-kit/src/goal/subagents.ts";
 import { complete, deferred, GoalStack, goalStates, nudges, outcomes, spoken, tick, tool } from "./goal-support.ts";
 
 /** A real Agent request, not a replacement manager/runner. */
@@ -29,7 +30,7 @@ describe("goal and real subagent sessions", () => {
 	});
 
 	/** Load the kit through the child's actual resource loader as well as the parent factory. */
-	async function start(extra: ExtensionFactory[] = []) {
+	async function start(extra: ExtensionFactory[] = [], maxConcurrent?: number) {
 		stack = await GoalStack.create();
 		const agentDir = join(stack.home.root, "agent");
 		mkdirSync(agentDir, { recursive: true });
@@ -42,7 +43,10 @@ describe("goal and real subagent sessions", () => {
 				packages: [],
 			}),
 		);
-		writeFileSync(join(agentDir, "subagents.json"), JSON.stringify({ rememberAgents: true }));
+		writeFileSync(
+			join(agentDir, "subagents.json"),
+			JSON.stringify({ rememberAgents: true, ...(maxConcurrent === undefined ? {} : { maxConcurrent }) }),
+		);
 		writeFileSync(
 			join(agentDir, "pi-session-kit.json"),
 			JSON.stringify(
@@ -57,6 +61,55 @@ describe("goal and real subagent sessions", () => {
 		);
 		return { h, child };
 	}
+
+	it("drops a real queued stop without waiting for a nonexistent notice", async () => {
+		const entered = deferred<void>();
+		const release = deferred<void>();
+		releases.push(() => release.resolve());
+		const tracker = new SubagentTracker();
+		const created: string[] = [];
+		const started: string[] = [];
+		const failed: { id: string; status: string }[] = [];
+		const { h, child } = await start(
+			[
+				(pi) => {
+					tracker.attach(pi.events);
+					pi.events.on("subagents:created", (event) => created.push((event as { id: string }).id));
+					pi.events.on("subagents:started", (event) => started.push((event as { id: string }).id));
+					pi.events.on("subagents:failed", (event) => failed.push(event as { id: string; status: string }));
+				},
+			],
+			1,
+		);
+		child.setResponses([
+			async () => {
+				entered.resolve();
+				await release.promise;
+				return fauxAssistantMessage("finished");
+			},
+		]);
+		h.setResponses([
+			agent(true),
+			agent(true),
+			() => {
+				const id = created[1];
+				if (!id) throw new Error("Second child was not created");
+				return tool("stop_subagent", { agent_id: id });
+			},
+			fauxAssistantMessage("waiting"),
+		]);
+		await h.session.prompt("/goal watch the children");
+		await h.session.prompt("go");
+		await entered.promise;
+		expect(created).toHaveLength(2);
+		expect(started).toEqual([created[0]]);
+		expect(failed).toEqual([expect.objectContaining({ id: created[1], status: "stopped" })]);
+		expect(outcomes(h, "stop_subagent")[0]?.isError).toBe(false);
+		expect(tracker.runningCount()).toBe(1);
+		expect(tracker.busy()).toBe(1);
+		expect(nudges(h)).toEqual([]);
+		tracker.dispose();
+	});
 
 	it("foreground child is isolated from parent goal accounting", async () => {
 		const { h, child } = await start();

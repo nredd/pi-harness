@@ -288,16 +288,16 @@ console.log(${JSON.stringify(JSON.stringify(diagnostic("error", "error")))});`);
 		f.script(nextest(fixture("nextest-junit-silent.xml"), 100, doctests));
 		const result = await f.call("cargo_test", {}, f.root);
 		expect(f.text(result)).toMatch(/^cargo test: failed \(1\/3 passed\) in \d+\.\ds\n/);
-		// Neither failure has a message or a body, so no indented detail follows either FAIL line.
+		// The failure type names the reason; absent bodies still add no indented detail.
 		expect(f.text(result)).toContain(
-			"  FAIL good tests::silent_exit: \n  FAIL good tests::hangs: \ndoctests: 0 passed, 1 failed\n  good/src/lib.rs - add (line 4)",
+			"  FAIL good tests::silent_exit: test failure with exit code 1\n  FAIL good tests::hangs: test timeout\ndoctests: 0 passed, 1 failed\n  good/src/lib.rs - add (line 4)",
 		);
 		expect(result.structuredContent).toMatchObject({
 			state: "failed",
 			failures: 2,
 			failed: [
-				{ name: "good tests::silent_exit", message: "" },
-				{ name: "good tests::hangs", message: "" },
+				{ name: "good tests::silent_exit", message: "test failure with exit code 1" },
+				{ name: "good tests::hangs", message: "test timeout" },
 			],
 			doctests: { passed: 0, failed: 1, failedNames: ["good/src/lib.rs - add (line 4)"] },
 		});
