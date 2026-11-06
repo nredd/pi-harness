@@ -729,7 +729,7 @@ describe("settling with nothing armed to wake the parent", () => {
 		expect(await handler("agent_before_settle")(settleEvent([user, assistant]), ctx)).toBeUndefined();
 	});
 
-	it("shows a forked-from session's live survivor as running there, and never reminds", async () => {
+	it("shows a forked-from session's survivor as started there, and never reminds", async () => {
 		// pi's fork: teardown registered the survivor under the PARENT file; this session is new.
 		const { handler, ctx } = await start(
 			tasks({ id: 1, owner: "worker" }),

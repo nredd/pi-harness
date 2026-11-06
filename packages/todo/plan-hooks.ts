@@ -249,7 +249,7 @@ function classify(task: Task, byId: ReadonlyMap<number, Task>, lookup: AgentStat
 	const owner = ownerKey(task.owner);
 	if (agent === undefined && owner !== undefined && resumed.get(task.id) === owner)
 		return { task, kind: "lost", agent, deps: [] };
-	// Forked from a session whose agent is still running there: not ours to take over or wait on.
+	// Forked from a session whose agent started there: not ours to take over or wait on.
 	if (agent === undefined && lookup.elsewhere?.(task.owner) === true)
 		return { task, kind: "elsewhere", agent, deps: [] };
 	if (isWorking(agent))
