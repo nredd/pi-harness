@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import subagentsExtension from "../src/index.js";
 
 function agentTool() {
+  return registeredTool("Agent");
+}
+
+function registeredTool(name: string) {
   const tools = new Map<string, any>();
   const pi = {
     registerMessageRenderer: vi.fn(),
@@ -16,7 +20,7 @@ function agentTool() {
     sendMessage: vi.fn(),
   } as any;
   subagentsExtension(pi);
-  return tools.get("Agent");
+  return tools.get(name);
 }
 
 const theme = {
@@ -43,6 +47,14 @@ describe("Agent tool invocation error rendering", () => {
 
     expect(output).toContain('Cannot run with isolation: "worktree" — Git probe failed.');
     expect(output).not.toContain("Aborted (max turns exceeded)");
+  });
+
+  it("renders an empty row for an error result that carries no text content", () => {
+    expect(render(agentTool(), { content: [], isError: true, details: {} }).trim()).toBe("");
+  });
+
+  it("renders a workflow error with no text and no task as an empty row, not a card", () => {
+    expect(render(registeredTool("SubagentWorkflow"), { content: [], isError: true, details: undefined }).trim()).toBe("");
   });
 
   it.each([

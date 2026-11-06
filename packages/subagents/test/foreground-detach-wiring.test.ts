@@ -237,6 +237,41 @@ describe("Agent tool — foreground run sent to the background", () => {
     runs.finish("bg job", "BG");
   });
 
+  it("ctrl+b right after a stop hands nothing off and says nothing, but still claims the key", async () => {
+    const runs = controllableRuns();
+    const { tools, lifecycle } = boot();
+    const { ui, press } = terminalUi();
+    await lifecycle.get("tool_execution_start")({}, ctx({ ui }));
+
+    const execution = runAgentTool(tools, "stopped job");
+    await flush();
+    const stopped = await tools.get("stop_subagent").execute(
+      "tc-stop", { agent_id: runs.agentId("stopped job") }, undefined, undefined, ctx(),
+    );
+    expect(textOf(stopped)).toContain("stopped");
+    // The stop lands before the run settles, so the handoff is still registered.
+    expect(press(CTRL_B)).toBe(true);
+    expect(ui.notify).not.toHaveBeenCalledWith(expect.stringContaining("to the background"), "info");
+
+    runs.finish("stopped job", "LATE");
+    expect(textOf(await execution)).not.toContain("Agent started in background.");
+  });
+
+  it("the viewer's `b` on a run already handed off sends nothing more", async () => {
+    const runs = controllableRuns();
+    const { tools } = boot();
+
+    const handed = runAgentTool(tools, "once job");
+    await flush();
+    const notify = vi.fn();
+    const action = backgroundActionFor!(registry().getRecord(runs.agentId("once job")), notify);
+    action.send();
+    expect(textOf(await handed)).toContain("Agent started in background.");
+    action.send();
+    expect(notify).toHaveBeenCalledTimes(1);
+    runs.finish("once job", "ONCE");
+  });
+
   it("the viewer's `b` hands off just that run", async () => {
     const runs = controllableRuns();
     const { tools } = boot();
