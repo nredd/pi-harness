@@ -173,10 +173,15 @@ the full list grouped by status.
   After a process restart (`session_start` reason `startup`), an `in_progress` todo whose `owner` was already set when the session started and
   that no `subagents` event has named since is `owner agent not found after resume` (warning, every
   settle, all named): children die with the process, so it is not parent-held. `/new`, `/resume`,
-  `/fork` and `/reload` are not that boundary: pi-subagents detaches still-running background agents,
-  re-announces them with `subagents:started` on the next `session_start` (and on `subagents:announce_survivors`, which this
-  extension sends once the session is bound) and replays `subagents:completed` / `:failed` when their
-  results are delivered, so a live survivor is `running` and armed, and an owner nobody names is `held`, never lost. A free-text owner (a person or team) is indistinguishable from a dead
+  `/fork` and `/reload` are not that boundary: pi-subagents detaches still-running background agents.
+  After a `/reload`, or a `/resume` back into the session that spawned them, it re-announces them with `subagents:started` on the next `session_start` (and on
+  `subagents:announce_survivors`, which this extension sends once the session is bound) and replays
+  `subagents:completed` / `:failed` when their results are delivered, so a live survivor is `running` and armed, and an owner
+  nobody names is `held`, never lost. `/fork` starts a new session file but the survivor's result still spools to the parent
+  session's, so it wakes that session, not the fork: pi-subagents announces it with `subagents:parent_survivor`, and a todo
+  it owns reads `agent running in the forked-from session, which it wakes instead of this one` (info, once). It is never
+  armed here and never triggers the held-work reminder; the entry is as of the fork, since the fork hears nothing more about
+  that agent. A free-text owner (a person or team) is indistinguishable from a dead
   agent handle, so it lands there too until it is reassigned. Parent-held work warns only when nothing
   is armed: a running monitor (`session-kit:monitor:started` / `:stopped` on `pi.events`, payload
   `{ sessionId, id, name }`) or a background agent with a verified completion notice makes it an info

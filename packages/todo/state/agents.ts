@@ -31,6 +31,8 @@ export type AgentRunState = "queued" | "running" | "done" | "failed" | "stopped"
 /** Looks up an owner's agent state; injectable so history and tests stay deterministic. */
 export type AgentStateLookup = ((owner: string | undefined) => AgentRunState | undefined) & {
 	wakesParent?: (owner: string | undefined) => boolean;
+	/** Whether `owner` names an agent that runs for the session this one was forked from. */
+	elsewhere?: (owner: string | undefined) => boolean;
 };
 
 interface AgentEntry {
@@ -58,11 +60,19 @@ interface AgentEntry {
 	runSeq?: number;
 }
 
+/** Match keys of an agent running for another session, see `applyParentSurvivor`. */
+interface ElsewhereEntry {
+	keys: Set<string>;
+	nameBase?: string;
+}
+
 /** Bound memory in a long session; the oldest-updated agents drop first. */
 export const MAX_TRACKED_AGENTS = 256;
 
 // Per session, insertion order is update order: every write deletes then re-inserts.
 const sessions = new Map<string, Map<string, AgentEntry>>();
+// Per session: agents of the session it was forked from, still running there. Never armed.
+const elsewhere = new Map<string, Map<string, ElsewhereEntry>>();
 // Orders starts and settles across every agent; only comparisons matter, never values.
 let sequence = 0;
 
@@ -98,6 +108,34 @@ function stateFor(channel: string, status: unknown): AgentRunState | undefined {
 	if (channel === SUBAGENT_COMPLETED_EVENT) return "done";
 	if (channel === SUBAGENT_FAILED_EVENT) return status === "stopped" ? "stopped" : "failed";
 	return undefined;
+}
+
+/**
+ * Record a `subagents:parent_survivor`: an agent still running for the session `sessionId` was
+ * forked from. Its result wakes that session, so it is matched like an owner but never armed
+ * and never counted as this session's own agent. Malformed payloads are ignored.
+ */
+export function applyParentSurvivor(sessionId: string, payload: unknown): void {
+	if (!payload || typeof payload !== "object") return;
+	const data = payload as Record<string, unknown>;
+	if (typeof data.id !== "string" || data.id.length === 0) return;
+	const keys = new Set<string>();
+	for (const value of [data.id, data.previousId, data.handle, data.name]) {
+		const k = ownerKey(value);
+		if (k) keys.add(k);
+	}
+	const agents = elsewhere.get(sessionId) ?? new Map<string, ElsewhereEntry>();
+	agents.set(data.id, { keys, nameBase: ownerKey(data.nameBase) });
+	elsewhere.set(sessionId, agents);
+}
+
+/** Whether `owner` names an agent running for the session `sessionId` was forked from. */
+export function isRunningElsewhere(sessionId: string, owner: string | undefined): boolean {
+	const wanted = ownerKey(owner);
+	if (!wanted) return false;
+	for (const entry of elsewhere.get(sessionId)?.values() ?? [])
+		if (entry.keys.has(wanted) || entry.nameBase === wanted) return true;
+	return false;
 }
 
 /**
@@ -256,6 +294,7 @@ export const NO_AGENT_STATE: AgentStateLookup = () => undefined;
 export function agentLookup(sessionId: string): AgentStateLookup {
 	return Object.assign((owner: string | undefined) => agentStateFor(sessionId, owner), {
 		wakesParent: (owner: string | undefined) => agentEntryFor(sessionId, owner)?.wakesParent === true,
+		elsewhere: (owner: string | undefined) => isRunningElsewhere(sessionId, owner),
 	});
 }
 
@@ -269,6 +308,7 @@ export function hasArmedAgent(sessionId: string): boolean {
 /** Drop everything `sessionId` tracked; called when that session shuts down. */
 export function forgetAgents(sessionId: string): void {
 	sessions.delete(sessionId);
+	elsewhere.delete(sessionId);
 }
 
 /** `@owner` for display (terminal-safe, one leading `@`), or `undefined` for a blank owner. */
@@ -287,5 +327,6 @@ export function isAbandoned(task: Pick<Task, "status">, state: AgentRunState | u
 /** Test-only: forget every tracked agent in every session. */
 export function __resetAgents(): void {
 	sessions.clear();
+	elsewhere.clear();
 	sequence = 0;
 }

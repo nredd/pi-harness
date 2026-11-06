@@ -67,6 +67,11 @@ export const SUBAGENT_FAILED_EVENT = "subagents:failed";
  * switch or `/reload`; sent once this session is bound, in case pi-subagents' own `session_start` ran first.
  */
 export const SUBAGENT_ANNOUNCE_SURVIVORS_EVENT = "subagents:announce_survivors";
+/**
+ * A background agent still running in the session this one was forked from (`/fork`): its result
+ * spools to that session, so it wakes that session and never this one. Same payload as `started`.
+ */
+export const SUBAGENT_PARENT_SURVIVOR_EVENT = "subagents:parent_survivor";
 
 export const SUBAGENT_LIFECYCLE_EVENTS = [
 	SUBAGENT_CREATED_EVENT,

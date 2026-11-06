@@ -56,7 +56,7 @@ afterEach(async () => {
   } finally { provider.unregister(); Reflect.deleteProperty(globalThis, managerKey); env.restore(); }
 });
 
-async function bind(ui: Record<string, unknown> = {}, flags: Record<string, boolean | string> = {}, competingWorkflow = false): Promise<Bound> {
+async function bind(ui: Record<string, unknown> = {}, flags: Record<string, boolean | string> = {}, competingWorkflow = false, sessionStart?: { reason: string; previousSessionFile?: string }): Promise<Bound> {
   const boot = makePi(flags); const bus = new EventEmitter();
   boot.pi.getAllTools = vi.fn(() => [...boot.tools.values()]);
   if (competingWorkflow) boot.pi.registerTool({ name: "Workflow", description: "Fixture competing orchestrator" });
@@ -73,7 +73,8 @@ async function bind(ui: Record<string, unknown> = {}, flags: Record<string, bool
   });
   const bound = { bus, boot, context, registry: Reflect.get(globalThis, managerKey) as Registry, stopped: false };
   bindings.push(bound);
-  await startSession(boot.lifecycle, true, context);
+  if (sessionStart) await boot.lifecycle.get("session_start")?.({ type: "session_start", ...sessionStart }, context);
+  else await startSession(boot.lifecycle, true, context);
   return bound;
 }
 async function shutdown(bound: Bound, reason: "reload" | "quit") {
@@ -576,6 +577,32 @@ describe("index detached survivor lifecycle events", () => {
     await shutdown(next, "reload");
     expect(next.bus.listenerCount("subagents:announce_survivors")).toBe(0);
     hold.release();
+  });
+
+  it("announces a forked-from survivor as the parent's, never as this session's own", async () => {
+    const parentFile = sessionFile;
+    const hold = heldResponse("parent result"); provider.setResponses([hold.response]);
+    const first = await bind(); const id = await spawn(first, "forked survivor"); await hold.entered;
+    await shutdown(first, "reload");
+    // pi's fork: a new session file, teardown already registered the survivor under the old one.
+    sessionFile = join(env.dir, "fork.jsonl"); writeFileSync(sessionFile, "");
+    const next = await bind({}, {}, false, { reason: "fork", previousSessionFile: parentFile });
+    expect(emitted(next, "subagents:started")).toEqual([]);
+    const [event, ...rest] = emitted(next, "subagents:parent_survivor");
+    expect(rest).toEqual([]);
+    expect(event).toMatchObject({ id, type: "general-purpose" });
+    expect(event).not.toHaveProperty("wakesParent");
+    expect(event).not.toHaveProperty("spawnSeq");
+    next.boot.pi.events.emit("subagents:announce_survivors", {});
+    expect(emitted(next, "subagents:parent_survivor")).toHaveLength(2);
+    expect(emitted(next, "subagents:started")).toEqual([]);
+    // A later non-fork start has no parent to speak for.
+    await next.boot.lifecycle.get("session_start")?.({ type: "session_start", reason: "reload", previousSessionFile: parentFile }, next.context);
+    next.boot.pi.events.emit("subagents:announce_survivors", {});
+    expect(emitted(next, "subagents:parent_survivor")).toHaveLength(2);
+    // Results stay with the parent's spool.
+    hold.release(); await first.registry.waitForAll(); await flush();
+    expect(emitted(next, "subagents:completed")).toEqual([]);
   });
 
   it("emits the settle event, without orphan sequence numbers, when a survivor's result is delivered", async () => {

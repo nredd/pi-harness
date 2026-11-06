@@ -144,7 +144,7 @@ export function formatPlanReminder(state: TaskState): string {
 }
 
 /** Why an `in_progress` todo is still open at a settle, most actionable first. */
-export type InProgressKind = "abandoned" | "lost" | "held" | "silent" | "blocked" | "running";
+export type InProgressKind = "abandoned" | "lost" | "elsewhere" | "held" | "silent" | "blocked" | "running";
 
 /** A settle report: the line, its severity and a key that changes whenever the classification does. */
 export interface InProgressNotice {
@@ -180,6 +180,13 @@ const GROUPS: ReadonlyArray<{
 		label: "owner agent not found after resume",
 		capped: false,
 		severity: "warning",
+		showDepStatus: false,
+	},
+	{
+		kind: "elsewhere",
+		label: "agent running in the forked-from session, which it wakes instead of this one",
+		capped: true,
+		severity: "info",
 		showDepStatus: false,
 	},
 	{ kind: "held", label: "held by the parent", capped: true, severity: "warning", showDepStatus: true },
@@ -242,6 +249,9 @@ function classify(task: Task, byId: ReadonlyMap<number, Task>, lookup: AgentStat
 	const owner = ownerKey(task.owner);
 	if (agent === undefined && owner !== undefined && resumed.get(task.id) === owner)
 		return { task, kind: "lost", agent, deps: [] };
+	// Forked from a session whose agent is still running there: not ours to take over or wait on.
+	if (agent === undefined && lookup.elsewhere?.(task.owner) === true)
+		return { task, kind: "elsewhere", agent, deps: [] };
 	if (isWorking(agent))
 		return { task, kind: lookup.wakesParent?.(task.owner) === true ? "running" : "silent", agent, deps: [] };
 	const open = (task.blockedBy ?? []).flatMap((id) => {

@@ -23,7 +23,7 @@ import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding
 import type { KeyId } from "@earendil-works/pi-tui";
 import { COLLAPSE_KEY_OFF, getCollapseOnResume, resolveCollapseKey } from "./config.ts";
 import { registerPlanHooks } from "./plan-hooks.ts";
-import { applyAgentEvent, forgetAgents } from "./state/agents.ts";
+import { applyAgentEvent, applyParentSurvivor, forgetAgents } from "./state/agents.ts";
 import { I18N_NAMESPACE } from "./state/i18n-bridge.ts";
 import { applyMonitorEvent, forgetMonitors } from "./state/monitors.ts";
 import { replayFromBranch } from "./state/replay.ts";
@@ -42,6 +42,7 @@ import {
 	MONITOR_LIFECYCLE_EVENTS,
 	SUBAGENT_ANNOUNCE_SURVIVORS_EVENT,
 	SUBAGENT_LIFECYCLE_EVENTS,
+	SUBAGENT_PARENT_SURVIVOR_EVENT,
 } from "./tool/types.ts";
 
 type I18nLoader = {
@@ -191,6 +192,10 @@ export default function (
 			await refreshTodoOverlay().catch((e) => console.warn(`[rpiv-todo] ${formatError(e)}`));
 		});
 	}
+	// A forked session's parent still runs these: shown as held elsewhere, never armed here.
+	pi.events.on(SUBAGENT_PARENT_SURVIVOR_EVENT, (data) => {
+		if (agentSession !== undefined) applyParentSurvivor(agentSession, data);
+	});
 	// session-kit monitor lifecycle -> whether a wake is armed at a settle. Carries its own session id.
 	for (const channel of MONITOR_LIFECYCLE_EVENTS) pi.events.on(channel, (data) => applyMonitorEvent(channel, data));
 	const planHooks = registerPlanHooks(pi, async (sessionId) => {
