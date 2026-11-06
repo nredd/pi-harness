@@ -69,12 +69,23 @@ export const SUBAGENT_LIFECYCLE_EVENTS = [
 	SUBAGENT_FAILED_EVENT,
 ];
 
+/** `session-kit` monitor lifecycle, payload `{ sessionId, id, name }`; read only to see whether a wake is armed. */
+export const MONITOR_STARTED_EVENT = "session-kit:monitor:started";
+export const MONITOR_STOPPED_EVENT = "session-kit:monitor:stopped";
+export const MONITOR_LIFECYCLE_EVENTS = [MONITOR_STARTED_EVENT, MONITOR_STOPPED_EVENT];
+
 /**
  * Hidden custom message appended at `agent_before_settle` when the run would
  * end with plan items open. Persisted only as a short marker; the `context`
  * hook swaps in the open-item list for the one request that follows it.
  */
 export const PLAN_REMINDER_MESSAGE_TYPE = "rpiv-todo-plan-reminder";
+
+/**
+ * Same shape for parent-held todos with nothing armed to wake the parent: persisted marker only,
+ * expanded by the `context` hook into the live list for the one request that follows it.
+ */
+export const HELD_REMINDER_MESSAGE_TYPE = "rpiv-todo-held-reminder";
 
 // ---------------------------------------------------------------------------
 // Public domain types

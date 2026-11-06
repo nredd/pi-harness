@@ -15,6 +15,7 @@ beforeEach(async () => {
 	const todo = await import("../todo.ts");
 	todo.__resetState();
 	(await import("../state/agents.ts")).__resetAgents();
+	(await import("../state/monitors.ts")).__resetMonitors();
 	const i18n = await import("@juicesharp/rpiv-i18n");
 	i18n.__resetState();
 	delete (globalThis as Record<symbol, unknown>)[Symbol.for("rpiv-i18n")];

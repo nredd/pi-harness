@@ -259,6 +259,13 @@ export function agentLookup(sessionId: string): AgentStateLookup {
 	});
 }
 
+/** Whether any agent of `sessionId` is running or queued with a completion notice that will wake the parent. */
+export function hasArmedAgent(sessionId: string): boolean {
+	for (const entry of sessions.get(sessionId)?.values() ?? [])
+		if ((entry.state === "running" || entry.state === "queued") && entry.wakesParent) return true;
+	return false;
+}
+
 /** Drop everything `sessionId` tracked; called when that session shuts down. */
 export function forgetAgents(sessionId: string): void {
 	sessions.delete(sessionId);

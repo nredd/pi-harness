@@ -170,6 +170,18 @@ the full list grouped by status.
   it is info, shown once: a settle that changes no todo's group, owner, owner agent state, wake eligibility or blocker identity, status, owner or owner agent state
   repeats nothing until the next prompt from a person. Todo status never changes on its own, e.g.
   `Run ended with 2 in_progress todos, armed: no todo-owned wake (monitor and agent notices list session wakes); owner agent failed or stopped: #3 Audit auth (@auth-audit failed); held by the parent: #6 Deploy`.
+  After a resume, an `in_progress` todo whose `owner` was already set when the session started and
+  that no `subagents` event has named since is `owner agent not found after resume` (warning, every
+  settle, all named): children die with the process, so it is not parent-held. A `/reload` keeps its
+  agents and has no such group. A free-text owner (a person or team) is indistinguishable from a dead
+  agent handle, so it lands there too until it is reassigned. Parent-held work warns only when nothing
+  is armed: a running monitor (`session-kit:monitor:started` / `:stopped` on `pi.events`, payload
+  `{ sessionId, id, name }`) or a background agent with a verified completion notice makes it an info
+  report, shown once like the other waiting groups. Abandoned, lost and silent work always warn.
+  When todos are held or lost and nothing is armed, nothing can wake the parent, so `agent_before_settle`
+  appends one hidden `rpiv-todo-held-reminder` and requests one more request, once per prompt from a
+  person (a plan reminder is independent). The `context` hook swaps the live list for the marker on that
+  request only, like the plan reminder; it fires only if the todos are still held and unarmed then.
   Reminders pause while Plan mode is active; old approved todos remain until a
   replacement is approved. Exiting planning without approval resumes the old
   obligations. Details in the

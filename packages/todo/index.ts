@@ -25,6 +25,7 @@ import { COLLAPSE_KEY_OFF, getCollapseOnResume, resolveCollapseKey } from "./con
 import { registerPlanHooks } from "./plan-hooks.ts";
 import { applyAgentEvent, forgetAgents } from "./state/agents.ts";
 import { I18N_NAMESPACE } from "./state/i18n-bridge.ts";
+import { applyMonitorEvent, forgetMonitors } from "./state/monitors.ts";
 import { replayFromBranch } from "./state/replay.ts";
 import {
 	clearActiveRenderSession,
@@ -37,7 +38,7 @@ import {
 } from "./state/store.ts";
 import { registerTodosCommand, registerTodoTool, TOOL_NAME } from "./todo.ts";
 import type { TodoOverlay } from "./todo-overlay.ts";
-import { SUBAGENT_LIFECYCLE_EVENTS } from "./tool/types.ts";
+import { MONITOR_LIFECYCLE_EVENTS, SUBAGENT_LIFECYCLE_EVENTS } from "./tool/types.ts";
 
 type I18nLoader = {
 	registerLocalesFromDir: (namespace: string, packageUrl: string, options?: { label?: string }) => void;
@@ -186,6 +187,8 @@ export default function (
 			await refreshTodoOverlay().catch((e) => console.warn(`[rpiv-todo] ${formatError(e)}`));
 		});
 	}
+	// session-kit monitor lifecycle -> whether a wake is armed at a settle. Carries its own session id.
+	for (const channel of MONITOR_LIFECYCLE_EVENTS) pi.events.on(channel, (data) => applyMonitorEvent(channel, data));
 	const planHooks = registerPlanHooks(pi, async (sessionId) => {
 		if (sessionId === getActiveRenderSession()) await updateTodoOverlay();
 	});
@@ -248,7 +251,7 @@ export default function (
 		}
 		// On top of the replayed state: an approval announced before this
 		// session started here lands now.
-		await planHooks.sessionStarted(id);
+		await planHooks.sessionStarted(id, event.reason !== "reload");
 		// The session this activation's subagents report to: a headless run's
 		// only session, or the UI foreground (a child session never rebinds it).
 		if (!ctx.hasUI) agentSession ??= id;
@@ -296,6 +299,7 @@ export default function (
 		// The shutting-down session's own data slot is always evicted.
 		evictSession(s);
 		forgetAgents(s);
+		forgetMonitors(s);
 		if (agentSession === s) agentSession = undefined;
 		planHooks.sessionEnded(s);
 		// Overlay teardown is sid-gated: a child shutdown (distinct sid) must not

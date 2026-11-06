@@ -294,13 +294,14 @@ describe("repeated settles during background work (#448)", () => {
 		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
 		await orchestration(h, ctx);
 
-		// Parent-held work warns on every settle: nothing else will move it.
+		// Parent-held work only warns when nothing is armed. The running child's completion notice
+		// will wake the parent (#586), so the report is info and shown once.
 		const held = [
 			`Run ended with 4 in_progress todos, ${ARMED}; held by the parent: #3 Deploy under CI monitor, #4 Recover stale branch; blocked: #2 Admit TV scope (by #1); agent running: #1 Audit auth (@scout running)`,
-			"warning",
+			"info",
 		];
 		expect(await settle(h, ctx)).toEqual([held]);
-		expect(await settle(h, ctx)).toEqual([held]);
+		expect(await settle(h, ctx)).toEqual([]);
 
 		// Once only the child and its dependent are open, a wake that changed nothing settles silently.
 		await h.call(ctx, { action: "update", id: 3, status: "completed", evidence: "CI green, deployed" });
@@ -328,8 +329,9 @@ describe("repeated settles during background work (#448)", () => {
 		expect((await settle(h, ctx))[0]?.[1]).toBe("info");
 		expect(await settle(h, ctx)).toEqual([]);
 
-		// The dependency resolves: #2 is no longer blocked, so it is reported as parent-held.
+		// The dependency resolves and the retry finishes: #2 is parent-held with nothing armed.
 		await h.call(ctx, { action: "update", id: 1, status: "completed", evidence: "re-ran audit" });
+		await h.emit(SUBAGENT_COMPLETED_EVENT, { id: "a2" });
 		expect((await settle(h, ctx))[0]).toEqual([
 			`Run ended with 1 in_progress todo, ${ARMED}; held by the parent: #2 Admit TV scope`,
 			"warning",

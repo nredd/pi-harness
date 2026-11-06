@@ -2,12 +2,27 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { createMockCtx, createMockPi, makeTheme } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import registerTodo from "./.test-support/home-fixtures.ts";
-import { formatInProgressNotice, PLAN_REMINDER_MARKER, remindedSinceLastPrompt } from "./plan-hooks.ts";
-import type { AgentRunState } from "./state/agents.ts";
+import {
+	formatHeldReminder,
+	formatInProgressNotice,
+	HELD_REMINDER_MARKER,
+	PLAN_REMINDER_MARKER,
+	remindedSinceLastPrompt,
+} from "./plan-hooks.ts";
+import { type AgentRunState, applyAgentEvent } from "./state/agents.ts";
 import { replayFromBranch } from "./state/replay.ts";
 import { getState } from "./state/store.ts";
 import { __resetState } from "./todo.ts";
-import { PLAN_APPROVED_EVENT, PLAN_REMINDER_MESSAGE_TYPE, STATE_ENTRY_TYPE, type TaskDetails } from "./tool/types.ts";
+import {
+	HELD_REMINDER_MESSAGE_TYPE,
+	MONITOR_STARTED_EVENT,
+	MONITOR_STOPPED_EVENT,
+	PLAN_APPROVED_EVENT,
+	PLAN_REMINDER_MESSAGE_TYPE,
+	STATE_ENTRY_TYPE,
+	SUBAGENT_STARTED_EVENT,
+	type TaskDetails,
+} from "./tool/types.ts";
 import { renderTodoResult } from "./view/format.ts";
 
 const PLAN = `# Add widgets
@@ -476,5 +491,220 @@ describe("settling with in_progress todos", () => {
 		await call(ctx, { action: "create", subject: "Later" });
 		await handler("agent_settled")({ type: "agent_settled" }, ctx);
 		expect(notices(ctx)).toEqual([]);
+	});
+});
+
+describe("settling with nothing armed to wake the parent", () => {
+	const user = { role: "user", content: "go" };
+	const assistant = { role: "assistant", content: [] };
+	const marker = { role: "custom", customType: HELD_REMINDER_MESSAGE_TYPE, content: HELD_REMINDER_MARKER };
+	const settleEvent = (contextMessages: unknown[], outcome = "completed") => ({
+		type: "agent_before_settle",
+		outcome,
+		entries: [],
+		continue: false,
+		context: { contextMessages },
+	});
+	const notices = (ctx: { ui: { notify: unknown } }) => (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls;
+	const tasks = (...rows: Array<{ id: number; owner?: string }>) => ({
+		persistenceVersion: 1,
+		nextId: rows.length + 1,
+		tasks: rows.map((r) => ({ subject: `t${r.id}`, status: "in_progress", ...r })),
+	});
+	/** Start a session whose branch already holds `snapshot`, i.e. a resume. */
+	async function start(snapshot: ReturnType<typeof tasks>, reason = "resume") {
+		const s = setup();
+		const ctx = createMockCtx({
+			sessionId: "s1",
+			branch: [{ type: "custom", customType: STATE_ENTRY_TYPE, data: snapshot }] as never,
+		});
+		await s.handler("session_start")({ reason }, ctx);
+		return { ...s, ctx };
+	}
+	const monitor = (bus: Map<string, Handler[]>, channel: string, id = "m1", sessionId = "s1") => {
+		for (const h of bus.get(channel) ?? []) void h({ sessionId, id, name: "ci" });
+	};
+
+	it("reminds once per prompt when todos are held and nothing is armed, and expands the list", async () => {
+		const { handler, ctx } = await start(tasks({ id: 1 }, { id: 2, owner: "release-team" }));
+		const settle = handler("agent_before_settle");
+		const result = (await settle(settleEvent([user, assistant]), ctx)) as {
+			entries: Array<Record<string, unknown>>;
+			continue: boolean;
+		};
+		expect(result.continue).toBe(true);
+		expect(result.entries[0]).toMatchObject({
+			type: "custom_message",
+			customType: HELD_REMINDER_MESSAGE_TYPE,
+			content: HELD_REMINDER_MARKER,
+			display: false,
+		});
+		// Same prompt: already reminded. A new prompt reminds again. Aborted runs are the user's call.
+		expect(await settle(settleEvent([user, assistant, marker, assistant]), ctx)).toBeUndefined();
+		expect(await settle(settleEvent([user, assistant, marker, assistant, user, assistant]), ctx)).toBeDefined();
+		expect(await settle(settleEvent([user, assistant], "aborted"), ctx)).toBeUndefined();
+
+		const expanded = (await handler("context")({ messages: [user, assistant, marker] }, ctx)) as {
+			messages: Array<{ content: string }>;
+		};
+		const reminder = expanded.messages[2].content;
+		expect(reminder).toContain("Nothing is armed to wake you");
+		expect(reminder).toContain("- #1 t1\n");
+		expect(reminder).toContain("- #2 t2 (@release-team)");
+		// Only the request right after the marker sees the list.
+		expect(await handler("context")({ messages: [user, marker, assistant] }, ctx)).toBeUndefined();
+	});
+
+	it("stays out of the way when a running monitor or background agent will wake the parent", async () => {
+		const { handler, ctx, bus } = await start(tasks({ id: 1 }));
+		const settle = handler("agent_before_settle");
+		monitor(bus, MONITOR_STARTED_EVENT);
+		expect(await settle(settleEvent([user, assistant]), ctx)).toBeUndefined();
+		expect(await handler("context")({ messages: [user, marker] }, ctx)).toBeUndefined();
+		// A stop for another monitor or session leaves it armed; its own stop disarms.
+		monitor(bus, MONITOR_STOPPED_EVENT, "m2");
+		monitor(bus, MONITOR_STOPPED_EVENT, "m1", "other");
+		expect(await settle(settleEvent([user, assistant]), ctx)).toBeUndefined();
+		monitor(bus, MONITOR_STOPPED_EVENT);
+		expect(await settle(settleEvent([user, assistant]), ctx)).toBeDefined();
+
+		applyAgentEvent("s1", SUBAGENT_STARTED_EVENT, { id: "a1", handle: "other-worker", wakesParent: true });
+		expect(await settle(settleEvent([user, assistant]), ctx)).toBeUndefined();
+	});
+
+	it("does not count a running agent without a completion notice as armed", async () => {
+		const { handler, ctx } = await start(tasks({ id: 1 }));
+		applyAgentEvent("s1", SUBAGENT_STARTED_EVENT, { id: "a1", handle: "worker" });
+		expect(await handler("agent_before_settle")(settleEvent([user, assistant]), ctx)).toBeDefined();
+	});
+
+	it("ignores malformed monitor payloads and unrelated channels", async () => {
+		const { handler, ctx, bus } = await start(tasks({ id: 1 }));
+		for (const h of bus.get(MONITOR_STARTED_EVENT) ?? []) {
+			void h(undefined);
+			void h({ sessionId: "s1" });
+			void h({ sessionId: "s1", id: "" });
+			void h({ sessionId: 1, id: "m1" });
+		}
+		expect(await handler("agent_before_settle")(settleEvent([user, assistant]), ctx)).toBeDefined();
+	});
+
+	it("forgets a session's monitors when it shuts down", async () => {
+		const { handler, ctx, bus } = await start(tasks({ id: 1 }));
+		monitor(bus, MONITOR_STARTED_EVENT);
+		await handler("session_shutdown")({ reason: "quit" }, ctx);
+		await handler("session_start")({ reason: "startup" }, ctx);
+		expect(await handler("agent_before_settle")(settleEvent([user, assistant]), ctx)).toBeDefined();
+	});
+
+	it("leaves a plan reminder first, and suppresses neither", async () => {
+		const { handler, announce, ctx } = await start(tasks({ id: 1 }));
+		await announce(approval("p1"));
+		const settle = handler("agent_before_settle");
+		const planMarker = { role: "custom", customType: PLAN_REMINDER_MESSAGE_TYPE, content: PLAN_REMINDER_MARKER };
+		const first = (await settle(settleEvent([user, assistant]), ctx)) as { entries: Array<{ customType: string }> };
+		expect(first.entries[0].customType).toBe(PLAN_REMINDER_MESSAGE_TYPE);
+		const second = (await settle(settleEvent([user, assistant, planMarker, assistant]), ctx)) as {
+			entries: Array<{ customType: string }>;
+		};
+		expect(second.entries[0].customType).toBe(HELD_REMINDER_MESSAGE_TYPE);
+		expect(
+			await settle(settleEvent([user, assistant, planMarker, assistant, marker, assistant]), ctx),
+		).toBeUndefined();
+	});
+
+	it("does not remind in Plan mode or with nothing in_progress", async () => {
+		const { handler, ctx } = await start({
+			...tasks({ id: 1 }),
+			tasks: [{ id: 1, subject: "t1", status: "pending" }],
+		});
+		expect(await handler("agent_before_settle")(settleEvent([user, assistant]), ctx)).toBeUndefined();
+		const planning = await start(tasks({ id: 1 }));
+		const planningMessage = {
+			role: "custom",
+			customType: "plan-mode-transition",
+			details: { version: 1, mode: "plan" },
+		};
+		expect(
+			await planning.handler("agent_before_settle")(settleEvent([planningMessage, user, assistant]), planning.ctx),
+		).toBeUndefined();
+	});
+
+	it("reports an owner unknown after resume as lost, naming it, on every settle", async () => {
+		const { handler, ctx } = await start(tasks({ id: 1, owner: "0a1b2c3d-4e5f-6a7" }, { id: 2, owner: "alive" }));
+		applyAgentEvent("s1", SUBAGENT_STARTED_EVENT, { id: "a1", handle: "alive", wakesParent: true });
+		await handler("agent_settled")({ type: "agent_settled" }, ctx);
+		await handler("agent_settled")({ type: "agent_settled" }, ctx);
+		const text =
+			"Run ended with 2 in_progress todos, armed: no todo-owned wake (monitor and agent notices list session wakes); owner agent not found after resume: #1 t1 (@0a1b2c3d-4e5f-6a7); agent running: #2 t2 (@alive running)";
+		expect(notices(ctx)).toEqual([
+			[text, "warning"],
+			[text, "warning"],
+		]);
+		// The live agent is armed, so no reminder: the parent will be woken anyway.
+		expect(await handler("agent_before_settle")(settleEvent([user, assistant]), ctx)).toBeUndefined();
+	});
+
+	it("does not call an owner lost when it was set after resume, changed, or heard again", async () => {
+		const { handler, ctx, call } = await start(tasks({ id: 1, owner: "old-worker" }));
+		await call(ctx, { action: "create", subject: "fresh" });
+		await call(ctx, { action: "update", id: 2, status: "in_progress", owner: "new-worker" });
+		await call(ctx, { action: "update", id: 1, owner: "reassigned" });
+		await handler("agent_settled")({ type: "agent_settled" }, ctx);
+		expect(notices(ctx)[0][0]).not.toContain("not found after resume");
+		await call(ctx, { action: "update", id: 1, owner: "old-worker" });
+		applyAgentEvent("s1", SUBAGENT_STARTED_EVENT, { id: "a1", handle: "old-worker", wakesParent: true });
+		notices(ctx).length = 0;
+		await handler("agent_settled")({ type: "agent_settled" }, ctx);
+		expect(notices(ctx)[0][0]).not.toContain("not found after resume");
+	});
+
+	it("keeps a reload's owners out of the lost group", async () => {
+		const { handler, ctx } = await start(tasks({ id: 1, owner: "worker" }), "reload");
+		await handler("agent_settled")({ type: "agent_settled" }, ctx);
+		expect(notices(ctx)[0][0]).toContain("held by the parent: #1 t1 (@worker)");
+	});
+
+	it("shows held work once while a wake is armed, and warns again when it is not", async () => {
+		const { handler, ctx, bus } = await start(tasks(...Array.from({ length: 10 }, (_, i) => ({ id: i + 1 }))));
+		monitor(bus, MONITOR_STARTED_EVENT);
+		applyAgentEvent("s1", SUBAGENT_STARTED_EVENT, { id: "a1", handle: "worker", wakesParent: true });
+		const settled = () => handler("agent_settled")({ type: "agent_settled" }, ctx);
+		await settled();
+		await settled();
+		await settled();
+		expect(notices(ctx)).toHaveLength(1);
+		expect(notices(ctx)[0][1]).toBe("info");
+		// Disarming warns, repeatedly; a person's prompt resets the armed dedupe.
+		applyAgentEvent("s1", "subagents:completed", { id: "a1" });
+		monitor(bus, MONITOR_STOPPED_EVENT);
+		await settled();
+		await settled();
+		expect(notices(ctx).map((n) => n[1])).toEqual(["info", "warning", "warning"]);
+		monitor(bus, MONITOR_STARTED_EVENT);
+		await settled();
+		await settled();
+		expect(notices(ctx).map((n) => n[1])).toEqual(["info", "warning", "warning", "info"]);
+		await handler("input")({ source: "interactive" }, ctx);
+		await settled();
+		expect(notices(ctx).map((n) => n[1])).toEqual(["info", "warning", "warning", "info", "info"]);
+	});
+
+	it("keeps abandoned and silent work a warning even with a wake armed", () => {
+		const state = { tasks: [{ id: 1, subject: "t1", status: "in_progress", owner: "dead" }], nextId: 2 } as never;
+		const lookup = (owner: string | undefined) => (owner === "dead" ? "failed" : undefined);
+		expect(formatInProgressNotice(state, lookup, { armed: true })?.level).toBe("warning");
+		const silent = { tasks: [{ id: 1, subject: "t1", status: "in_progress", owner: "w" }], nextId: 2 } as never;
+		expect(formatInProgressNotice(silent, () => "running", { armed: true })?.level).toBe("warning");
+	});
+
+	it("formats the reminder with sanitized subjects and optional owners", () => {
+		const out = formatHeldReminder([
+			{ id: 1, subject: "a\u001b[31mb", status: "in_progress" },
+			{ id: 2, subject: "c", status: "in_progress", owner: "bob" },
+		] as never);
+		expect(out).toContain("- #1 a");
+		expect(out).not.toContain("\u001b");
+		expect(out).toContain("- #2 c (@bob)");
 	});
 });
