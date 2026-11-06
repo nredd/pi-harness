@@ -740,7 +740,7 @@ describe("settling with nothing armed to wake the parent", () => {
 		await handler("agent_settled")({ type: "agent_settled" }, ctx);
 		expect(notices(ctx)).toEqual([
 			[
-				"Run ended with 1 in_progress todo, armed: no todo-owned wake (monitor and agent notices list session wakes); agent running in the forked-from session, which it wakes instead of this one: #1 t1 (@worker)",
+				"Run ended with 1 in_progress todo, armed: no todo-owned wake (monitor and agent notices list session wakes); agent started in the forked-from session, which it wakes instead of this one: #1 t1 (@worker)",
 				"info",
 			],
 		]);

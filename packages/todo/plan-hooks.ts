@@ -184,7 +184,7 @@ const GROUPS: ReadonlyArray<{
 	},
 	{
 		kind: "elsewhere",
-		label: "agent running in the forked-from session, which it wakes instead of this one",
+		label: "agent started in the forked-from session, which it wakes instead of this one",
 		capped: true,
 		severity: "info",
 		showDepStatus: false,

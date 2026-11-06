@@ -153,7 +153,7 @@ the full list grouped by status.
   items open, the model gets one reminder listing them before it can wrap up.
   Outside Plan mode, a run that settles with `in_progress` todos also reports them
   (`agent_settled` in `plan-hooks.ts`), grouped by why each is still open: `owner agent failed
-  or stopped` (all named), `owner agent not found after resume`, `agent running in the forked-from session`, `held by the parent`, `agent running without a completion notice`, `blocked` and `agent running`, three per group
+  or stopped` (all named), `owner agent not found after resume`, `agent started in the forked-from session`, `held by the parent`, `agent running without a completion notice`, `blocked` and `agent running`, three per group
   then a count. `agent running` includes an owner agent still `queued`. `blocked` means a live
   `blockedBy` dependency: one `in_progress` whose owner agent has not failed or stopped, or one
   `pending` whose owner agent is running or queued with a verified completion notice. A todo is `held by the
@@ -179,7 +179,7 @@ the full list grouped by status.
   `subagents:completed` / `:failed` when their results are delivered, so a live survivor is `running` and armed, and an owner
   nobody names is `held`, never lost. `/fork` starts a new session file but the survivor's result still spools to the parent
   session's, so it wakes that session, not the fork: pi-subagents announces it with `subagents:parent_survivor`, and a todo
-  it owns reads `agent running in the forked-from session, which it wakes instead of this one` (info, once). It is never
+  it owns reads `agent started in the forked-from session, which it wakes instead of this one` (info, once). It is never
   armed here and never triggers the held-work reminder; the entry is as of the fork, since the fork hears nothing more about
   that agent. A free-text owner (a person or team) is indistinguishable from a dead
   agent handle, so it lands there too until it is reassigned. Parent-held work warns only when nothing
