@@ -61,7 +61,7 @@ import {
   SessionManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { runInChildSessionContext } from "./child-context.js";
+import { bindChildResourceLoader, runInChildSessionContext } from "./child-context.js";
 import { resolveAgentDir } from "./home-paths.js";
 import { agentMentionReminder } from "./mention.js";
 import { createHomeResourceLoader } from "./resource-loader.js";
@@ -154,7 +154,7 @@ export async function runMentionClone(opts: MentionCloneOptions): Promise<Mentio
       systemPromptOverride: (base: string | undefined) => systemPrompt || base,
       appendSystemPromptOverride: () => [],
     }, opts.homeDir);
-    await runInChildSessionContext(() => loader.reload());
+    await bindChildResourceLoader(loader).reload();
     const created = await runInChildSessionContext(() =>
       createAgentSession({
         cwd: ctx.cwd,

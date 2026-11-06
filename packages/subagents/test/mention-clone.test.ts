@@ -30,7 +30,9 @@ vi.mock("@earendil-works/pi-coding-agent", async () => {
     createAgentSession,
     // Records its options; a real one would read the user's agent dir.
     DefaultResourceLoader: class {
-      reload = vi.fn(async () => {});
+      // `runMentionClone` rebinds `reload`, so keep the underlying spy reachable.
+      reloaded = vi.fn(async () => {});
+      reload = this.reloaded;
       constructor(public options: any) {
         loaders.push(this);
       }
@@ -202,7 +204,7 @@ describe("cloning the conversation", () => {
     await runMentionClone(opts());
 
     expect(loaders).toHaveLength(1);
-    expect(loaders[0].reload).toHaveBeenCalled();
+    expect(loaders[0].reloaded).toHaveBeenCalled();
     expect(createAgentSession.mock.calls[0][0].resourceLoader).toBe(loaders[0]);
     expect(loaders[0].options.systemPromptOverride("from SYSTEM.md")).toBe("the live system prompt");
   });
