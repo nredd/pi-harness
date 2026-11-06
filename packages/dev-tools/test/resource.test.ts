@@ -298,7 +298,7 @@ describe("resource_snapshot on the real host through the published sampler", () 
 			cwd: PACKAGE_ROOT,
 		});
 		const output = JSON.parse(stdout);
-		expect(output.samples).toHaveLength(2);
+		expect(output.samples).toHaveLength(4);
 		for (const sample of output.samples) {
 			expect(sample.processes).toBe(0);
 			expect(sample.coverage.reasons).toContain("process-collection-unavailable");
@@ -364,6 +364,62 @@ describe("resource_snapshot on the real host through the published sampler", () 
 			expect(fake.state.disposed).toBe(1);
 		},
 	);
+
+	describe("transient process-collection failures", () => {
+		const interrupted = {
+			complete: false,
+			enumerated: 0,
+			sampled: 0,
+			skipped: 0,
+			bytesRead: 0,
+			reasons: ["process-collection-unavailable"],
+		};
+		/** Scripted sampler: sample N yields `script[N]` (`true` = healthy scan, `false` = interrupted scan). */
+		function scripted(script: boolean[]) {
+			const state = { samples: 0, disposed: 0 };
+			const createSampler = (): ResourceSampler => ({
+				async sample() {
+					const healthy = script[Math.min(state.samples, script.length - 1)];
+					const at = state.samples++ * 120;
+					return healthy
+						? fixture("linux", [proc(7, 100, measured(5))])(at)
+						: fixture("linux", [], { coverage: interrupted })(at);
+				},
+				async dispose() {
+					state.disposed++;
+				},
+			});
+			return { state, createSampler };
+		}
+
+		it.each([
+			["the second scan", [true, false, true, true], 4],
+			["the baseline scan", [false, true, true], 3],
+		])("resamples after an interrupted %s instead of losing process metadata", async (_name, script, count) => {
+			const fake = scripted(script);
+			const snapshot = await resourceSnapshot(5, { createSampler: fake.createSampler }, undefined, INTERVAL_MS);
+			expect(fake.state.samples).toBe(count);
+			expect(snapshot.processes.status).toBe("available");
+			if (snapshot.processes.status === "available") expect(snapshot.processes.entries.map((e) => e.pid)).toEqual([7]);
+			expect(fake.state.disposed).toBe(1);
+		});
+
+		it("stops after a bounded number of resamples and reports the producer's reason", async () => {
+			const fake = scripted([true, false]);
+			const snapshot = await resourceSnapshot(5, { createSampler: fake.createSampler }, undefined, INTERVAL_MS);
+			expect(fake.state.samples).toBe(4);
+			expect(snapshot.processes).toEqual({
+				status: "unavailable",
+				reason: "process metadata unavailable (process-collection-unavailable)",
+			});
+		});
+
+		it("does not resample a healthy host", async () => {
+			const fake = scripted([true]);
+			await resourceSnapshot(5, { createSampler: fake.createSampler }, undefined, INTERVAL_MS);
+			expect(fake.state.samples).toBe(2);
+		});
+	});
 
 	it("smokes the real host through tool execution and output schema validation", async () => {
 		const mock = createMockPi();

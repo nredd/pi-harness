@@ -21,6 +21,11 @@ const MIN_INTERVAL_MS = 100;
 const MAX_INTERVAL_MS = 5_000;
 /** Per-scan sampler budget. Generous so a loaded host still reports complete coverage when it can. */
 const SAMPLE_BUDGET_MS = 1_000;
+/**
+ * Extra sample rounds after a scan lost its process listing. Published sampler `0.2.0` fails a whole `/proc` scan
+ * when any PID exits mid-listing (#499); the next scan on a live host almost always succeeds.
+ */
+const MAX_RESAMPLES = 2;
 const COMMAND_TIMEOUT_MS = 3_000;
 const COMMAND_MAX_BYTES = 128 * 1024;
 const RESOURCE_PROMPT_SECTION = "resource_awareness";
@@ -207,6 +212,10 @@ export async function resourceSnapshot(
 	return snapshot;
 }
 
+function lostListing(snapshot: ResourceSnapshot): boolean {
+	return snapshot.coverage.reasons.includes("process-collection-unavailable");
+}
+
 /** Two samples `intervalMs` apart plus optional memory figures. Disposal is the caller's job. */
 async function collectSnapshot(
 	sampler: ResourceSampler,
@@ -215,9 +224,16 @@ async function collectSnapshot(
 	intervalMs: number,
 	signal?: AbortSignal,
 ): Promise<Snapshot> {
-	const first = await sampler.sample(signal);
+	let first = await sampler.sample(signal);
 	await delay(intervalMs, undefined, { signal });
-	const second = await sampler.sample(signal);
+	let second = await sampler.sample(signal);
+	// A scan that lost its listing leaves no processes, and as a baseline leaves every process warming. Slide the
+	// window and resample, a bounded number of times, rather than report a host race as missing metadata.
+	for (let retry = 0; retry < MAX_RESAMPLES && (lostListing(first) || lostListing(second)); retry++) {
+		first = second;
+		await delay(intervalMs, undefined, { signal });
+		second = await sampler.sample(signal);
+	}
 	// Optional probes swallow their own failures, including an abort; never return a snapshot after cancellation.
 	const extras = await memoryExtras(options, second, signal);
 	signal?.throwIfAborted();
