@@ -61,6 +61,8 @@ export interface WorktreeCleanupResult {
   branch?: string;
   /** Worktree path if it was kept. */
   path?: string;
+  /** Cleanup failure; the worktree may contain uncommitted or unreachable work. */
+  error?: string;
 }
 
 /**
@@ -157,6 +159,7 @@ export async function cleanupWorktree(
     return { hasChanges: false };
   }
 
+  let branch: string | undefined;
   try {
     // Check for uncommitted changes in the worktree
     const status = await git(pi, worktree.path, ["status", "--porcelain"], 10000);
@@ -190,6 +193,7 @@ export async function cleanupWorktree(
     }
     // Update branch name in worktree info for the caller
     worktree.branch = branchName;
+    branch = branchName;
 
     // Remove the worktree (branch persists in main repo)
     await removeWorktree(pi, cwd, worktree.path);
@@ -197,27 +201,23 @@ export async function cleanupWorktree(
     return {
       hasChanges: true,
       branch: worktree.branch,
-      path: worktree.path,
     };
-  } catch {
-    // Best effort cleanup on error
-    try { await removeWorktree(pi, cwd, worktree.path); } catch { /* ignore */ }
-    return { hasChanges: false };
+  } catch (error) {
+    // A failed status means the contents are unknown, not clean. Never remove
+    // the tree after a failed preservation step: even committed HEAD may have
+    // no reachable branch yet.
+    return {
+      hasChanges: true,
+      ...(branch ? { branch } : {}),
+      path: worktree.path,
+      error: (error instanceof Error ? error.message : String(error)) || "Unknown git failure",
+    };
   }
 }
 
-/**
- * Force-remove a worktree.
- */
+/** Remove only a clean worktree; git refuses newly appeared uncommitted work. */
 async function removeWorktree(pi: ExtensionAPI, cwd: string, worktreePath: string): Promise<void> {
-  try {
-    await git(pi, cwd, ["worktree", "remove", "--force", worktreePath], 10000);
-  } catch {
-    // If git worktree remove fails, try pruning
-    try {
-      await git(pi, cwd, ["worktree", "prune"], 5000);
-    } catch { /* ignore */ }
-  }
+  await git(pi, cwd, ["worktree", "remove", worktreePath], 10000);
 }
 
 /**
