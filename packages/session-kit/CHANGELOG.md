@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Stop counting a background agent stopped before it starts as awaiting a completion notice ([#525](https://github.com/nredd/pi-harness/issues/525)); started background agents still wait for their notices
+
 - Report a run that settles with monitors running, naming what each is armed to wake the parent on: `every batch`, its `/match/` (terminal controls stripped), or exit ([#292](https://github.com/nredd/pi-harness/issues/292))
 - Add a `homeDir` option to `createSessionKit`: config, rules, title aliases and stats session/cache defaults derive from it when no `agentDir` is given; `PI_CODING_AGENT_DIR` still wins
 - Remove the `agentDir` re-exports from `src/config.ts` and `src/stats/load.ts`; deep imports now use `src/agent-dir.ts`. The rules `register` takes `{ agentDir, homeDir }` like titles and stats and resolves the user rule directory at use time

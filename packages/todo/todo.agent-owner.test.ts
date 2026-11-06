@@ -8,6 +8,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { createMockCtx, createMockPi, makeTheme } from "@juicesharp/rpiv-test-utils";
 import { describe, expect, it, vi } from "vitest";
 import registerTodo from "./.test-support/home-fixtures.ts";
+import { agentLookup } from "./state/agents.ts";
 import { getState } from "./state/store.ts";
 import {
 	SUBAGENT_COMPLETED_EVENT,
@@ -234,6 +235,35 @@ describe("isolation and history", () => {
 
 describe("repeated settles during background work (#448)", () => {
 	const ARMED = "armed: no todo-owned wake (monitor and agent notices list session wakes)";
+
+	it("renotifies when a pending dependency changes its waking owner or agent state", async () => {
+		const h = setup();
+		const ctx = createMockCtx({ sessionId: "dependency-key", hasUI: true });
+		await h.handler("session_start")({ reason: "startup" }, ctx);
+		await h.call(ctx, { action: "create", subject: "Blocker", owner: "a" });
+		await h.call(ctx, { action: "create", subject: "Waiting", blockedBy: [1] });
+		await h.call(ctx, { action: "update", id: 2, status: "in_progress" });
+		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a", handle: "a" });
+		await h.emit(SUBAGENT_CREATED_EVENT, { id: "b", handle: "b", status: "queued" });
+		expect(agentLookup("dependency-key")("b")).toBe("queued");
+		const settle = () => h.handler("agent_settled")({ type: "agent_settled" }, ctx);
+		const notify = ctx.ui.notify as ReturnType<typeof vi.fn>;
+		await settle();
+		expect(notify).toHaveBeenCalledTimes(1);
+		expect(notify.mock.calls[0][1]).toBe("info");
+		await settle();
+		expect(notify).toHaveBeenCalledTimes(1);
+		await h.call(ctx, { action: "update", id: 1, owner: "b" });
+		expect(getState("dependency-key").tasks[0].owner).toBe("b");
+		await settle();
+		expect(notify).toHaveBeenCalledTimes(2);
+		await h.emit(SUBAGENT_STARTED_EVENT, { id: "b", handle: "b" });
+		expect(agentLookup("dependency-key")("b")).toBe("running");
+		await settle();
+		expect(notify).toHaveBeenCalledTimes(3);
+		await settle();
+		expect(notify).toHaveBeenCalledTimes(3);
+	});
 
 	/** Four in_progress todos: an agent's, one blocked on it, a monitored deploy, a stale recovery. */
 	async function orchestration(h: ReturnType<typeof setup>, ctx: Ctx) {

@@ -2181,13 +2181,12 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         try {
           assertPlanModeHelperToolsAvailable(safeGetActiveTools());
         } catch {
+          if (wasEnabled) restorePlanRuntime(ctx);
           state = { enabled: false, awaitingAction: false, declinedPlans: 0 };
           workflowAllowedToolNames = undefined;
           pendingWorkflowToolPolicy = undefined;
-          if (workflowOwner !== previousOwner) {
-            workflowMutex.release(workflowOwner);
-            workflowOwner = previousOwner;
-          }
+          releaseWorkflowOwner();
+          updateUi(ctx);
           reportRestoredHelpersUnavailable(ctx);
           return false;
         }

@@ -231,14 +231,14 @@ function entryText({ task, agent, deps }: Row, showDepStatus: boolean): string {
 }
 
 /** The dedupe key: every todo's group, owner, agent state and the blockers that group names. */
-function reportKey(rows: readonly Row[]): string {
+function reportKey(rows: readonly Row[], lookup: AgentStateLookup): string {
 	return JSON.stringify(
 		rows.map(({ task, kind, agent, deps }) => [
 			task.id,
 			kind,
 			task.owner ?? null,
 			agent ?? null,
-			deps.map((d) => d.id),
+			deps.map((d) => [d.id, d.status, d.owner ?? null, lookup(d.owner) ?? null]),
 		]),
 	);
 }
@@ -269,7 +269,7 @@ export function formatInProgressNotice(
 	const n = active.length;
 	const text = `Run ended with ${n} in_progress todo${n === 1 ? "" : "s"}, armed: no todo-owned wake (monitor and agent notices list session wakes); ${parts.join("; ")}`;
 	const level = present.some((g) => g.severity === "warning") ? "warning" : "info";
-	return { text, level, key: reportKey(rows) };
+	return { text, level, key: reportKey(rows, lookup) };
 }
 
 /**
