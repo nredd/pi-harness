@@ -4,6 +4,7 @@
  * Creates a temporary git worktree so the agent works on an isolated copy of the repo.
  * On completion, if no changes were made, the worktree is cleaned up.
  * If changes exist, a branch is created and returned in the result.
+ * If git cannot inspect, commit or remove, the worktree is kept and the result carries `error` and `path`.
  *
  * Every git call goes through `pi.exec` (async) rather than `execFileSync`: a
  * worktree copy can take seconds, and a session that spawns several isolated
