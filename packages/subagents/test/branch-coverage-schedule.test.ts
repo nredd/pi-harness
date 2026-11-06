@@ -300,8 +300,6 @@ describe("scheduler branches", () => {
     f.reply({ success: true, data: { ok: true } });
     await flush();
     expect(f.spawn).not.toHaveBeenCalled();
-    expect(f.store.get(job.id)?.lastStatus).toBeUndefined();
-    expect(f.store.get(job.id)?.lastStatus).not.toBe("error");
     expect(f.events.filter(e => e.type === "error")).toEqual([]);
     expect(f.store.get(job.id)?.lastStatus).toBeUndefined();
     f.clock.advance(1000);
@@ -344,7 +342,6 @@ describe("scheduler branches", () => {
     expect(f.store.get(job.id)?.enabled).toBe(true);
     expect(f.clock.pending).toBe(1);
     expect(f.store.get(job.id)?.lastStatus).toBeUndefined();
-    expect(f.store.get(job.id)?.lastStatus).not.toBe("error");
     expect(f.events.filter(e => e.type === "error")).toEqual([]);
   });
 
@@ -396,7 +393,6 @@ describe("scheduler branches", () => {
     await flush();
     expect(f.spawn).not.toHaveBeenCalled();
     expect(f.store.get(job.id)?.lastStatus).toBeUndefined();
-    expect(f.store.get(job.id)?.lastStatus).not.toBe("error");
     expect(f.events.filter(e => e.type === "error")).toEqual([]);
   });
 
@@ -410,7 +406,6 @@ describe("scheduler branches", () => {
     await flush();
     expect(f.spawn).not.toHaveBeenCalled();
     expect(f.store.get(job.id)?.lastStatus).toBeUndefined();
-    expect(f.store.get(job.id)?.lastStatus).not.toBe("error");
     expect(f.events.filter(e => e.type === "error")).toEqual([]);
   });
 
