@@ -59,6 +59,9 @@ function makeCtx() {
   } as any;
 }
 
+/** How far ahead one-shot jobs are scheduled; the stall case outlasts it. */
+const HEADROOM_MS = 100;
+
 /**
  * Real timers, frozen `now`. A one-shot target is derived from the same instant the
  * scheduler validates it against, so a stall between the test's read and `addJob`
@@ -115,7 +118,7 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
 
     // Fire ~100ms in the future. detectSchedule normalizes "+100ms" — but our
     // parser only accepts s/m/h/d, so use a near-future ISO timestamp instead.
-    const future = isoAfter(100);
+    const future = isoAfter(HEADROOM_MS);
     const job = scheduler.addJob({
       name: "e2e-once",
       description: "test",
@@ -141,8 +144,8 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
     const manager = makeFaithfulManager("completed");
     scheduler.start(makePi(), makeCtx(), manager, store);
 
-    const future = isoAfter(100);
-    stall(250);  // longer than the 100ms headroom: a wall-clock `now` would call this past
+    const future = isoAfter(HEADROOM_MS);
+    stall(HEADROOM_MS * 2.5);  // outlasts the headroom: a wall-clock `now` would call this past
     const job = scheduler.addJob({
       name: "e2e-stalled", description: "test", schedule: future,
       subagent_type: "general-purpose", prompt: "hello",
@@ -157,7 +160,7 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
     const pi = makePi();
     scheduler.start(pi, makeCtx(), manager, store);
 
-    const future = isoAfter(100);
+    const future = isoAfter(HEADROOM_MS);
     const job = scheduler.addJob({
       name: "e2e-fail",
       description: "test",
@@ -252,7 +255,7 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
     const pi = makePi();
     scheduler.start(pi, makeCtx(), manager, store);
 
-    const future = isoAfter(100);
+    const future = isoAfter(HEADROOM_MS);
     const job = scheduler.addJob({
       name: "events", description: "x", schedule: future,
       subagent_type: "general-purpose", prompt: "x",
