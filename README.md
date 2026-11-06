@@ -86,10 +86,13 @@ so check `powerd` sleep/wake logs when real-time assertions overrun. Do not rela
 `make check` runs, without rewriting files:
 
 - `check-ts`: Biome, `tsc --noEmit`, Vitest for `packages/*`, plus the private
-  `integration/inprocess/` stack suite under Vitest and Bun (published packages:
+  `integration/inprocess/` stack suite under Vitest and Bun. The gate appends `$HOME/.pi/agent/bin` to
+  its child `PATH` so a Pi-provisioned `fd` is available without shell setup; otherwise install `fd`
+  on `PATH` as in CI. It does not download `fd` (published packages:
   `@nredd/pi-dev-tools@0.5.1`, `@nredd/pi-session-kit@0.7.0`,
   `@nredd/pi-subscription-router@0.4.0`, `@nredd/pi-preset@0.2.0`; `@nredd/pi-todo@2.13.10` is pending its first CI-attested release)
-- `check-scripts`: ruff, ty, pytest for `scripts/` (real disposable git repositories), then `check-import-audit`
+- `check-scripts`: ruff, ty, pytest for `scripts/` (real disposable git repositories), then `check-import-audit`. Git ignores
+  coverage.py's `.coverage` and parallel `.coverage.*` data files
 - `check-import-audit`: Biome, strict `tsc` and Vitest (V8 coverage, `scripts/vitest.config.ts`) for `scripts/import_audit.ts`, the package-contract
   import parser (installed TypeScript 7 `unstable/sync` API; real parses, the only mock forces a project lookup miss), plus the
   root `scripts/run-vitest.ts` launcher, `scripts/check-biome-paths.mjs` preflight and `scripts/router_contract.mjs` fixture, all enforced at 0/0

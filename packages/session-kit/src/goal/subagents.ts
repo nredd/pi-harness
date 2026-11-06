@@ -4,6 +4,7 @@
  *
  * - `running`: between `created`/`started` and `completed`/`failed`.
  * - `unannounced`: a background agent finished but its completion notice has not been delivered.
+ *   A queued stop before `started` has no notice and is not held here.
  *   pi-subagents queues notices in an outbox and flushes them at `agent_end`, i.e. AFTER the
  *   settle boundary, so a nudge sent at settle would run a turn in front of the notice.
  *
@@ -22,6 +23,7 @@ function idOf(data: unknown): string | undefined {
 
 export class SubagentTracker {
 	private readonly running = new Set<string>();
+	private readonly started = new Set<string>();
 	private readonly unannounced = new Set<string>();
 	private readonly background = new Set<string>();
 	private detach: (() => void)[] = [];
@@ -39,17 +41,23 @@ export class SubagentTracker {
 			}),
 			events.on("subagents:started", (data) => {
 				const id = idOf(data);
-				if (id) this.running.add(id);
+				if (id) {
+					this.running.add(id);
+					this.started.add(id);
+				}
 			}),
 			events.on("subagents:completed", (data) => this.finish(idOf(data))),
-			events.on("subagents:failed", (data) => this.finish(idOf(data))),
+			events.on("subagents:failed", (data) =>
+				this.finish(idOf(data), (data as { status?: unknown } | null)?.status === "stopped"),
+			),
 		);
 	}
 
-	private finish(id: string | undefined): void {
+	private finish(id: string | undefined, stopped = false): void {
 		if (!id) return;
 		this.running.delete(id);
-		if (this.background.delete(id)) this.unannounced.add(id);
+		const started = this.started.delete(id);
+		if (this.background.delete(id) && (!stopped || started)) this.unannounced.add(id);
 		if (this.running.size === 0) this.onIdle();
 	}
 
@@ -71,6 +79,7 @@ export class SubagentTracker {
 		for (const off of this.detach) off();
 		this.detach = [];
 		this.running.clear();
+		this.started.clear();
 		this.unannounced.clear();
 		this.background.clear();
 	}
