@@ -78,8 +78,18 @@ describe("parseJunit (nextest 0.9.148)", () => {
 		const j = parseJunit(fixture("nextest-junit-silent.xml"));
 		expect(j).toMatchObject({ tests: 3, failures: 2, errors: 0, skipped: 0 });
 		expect(j.failed).toEqual([
-			{ name: "good tests::silent_exit", message: "", detail: "" },
-			{ name: "good tests::hangs", message: "", detail: "" },
+			{ name: "good tests::silent_exit", message: "test failure with exit code 1", detail: "" },
+			{ name: "good tests::hangs", message: "test timeout", detail: "" },
+		]);
+	});
+	it.each(["failure", "error"])("decodes a missing %s message's type without replacing explicit messages", (tag) => {
+		const j = parseJunit(`<testsuites><testcase name="typed"><${tag} type="timeout &amp; &quot;exit&quot;"/></testcase>
+<testcase name="message"><${tag} message="specific &lt;reason&gt;" type="ignored"/></testcase>
+<testcase name="empty"><${tag} message="" type="ignored"/></testcase></testsuites>`);
+		expect(j.failed).toEqual([
+			{ name: "typed", message: 'timeout & "exit"', detail: "" },
+			{ name: "message", message: "specific <reason>", detail: "" },
+			{ name: "empty", message: "", detail: "" },
 		]);
 	});
 	it("defaults missing totals to 0 and an unnamed case to `?`", () => {

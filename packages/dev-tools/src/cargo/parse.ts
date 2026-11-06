@@ -97,7 +97,7 @@ export function parseCargoMessages(stdout: string): CargoMessages {
 
 export interface TestFailure {
 	name: string;
-	/** `<failure message>`: the panic headline. */
+	/** Failure/error `message`, or nextest's `type` when the message is absent. */
 	message: string;
 	/** Trimmed failure body. */
 	detail: string;
@@ -146,7 +146,11 @@ export function parseJunit(xml: string): JunitSummary {
 		const classname = /(?:^|\s)classname="([^"]*)"/.exec(attrs)?.[1];
 		out.failed.push({
 			name: classname ? `${classname} ${decode(name)}` : decode(name),
-			message: decode(/(?:^|\s)message="([^"]*)"/.exec(failure[2] as string)?.[1] ?? ""),
+			message: decode(
+				/(?:^|\s)message="([^"]*)"/.exec(failure[2] as string)?.[1] ??
+					/(?:^|\s)type="([^"]*)"/.exec(failure[2] as string)?.[1] ??
+					"",
+			),
 			detail: decode(failure[3] ?? "").trim(),
 		});
 	}

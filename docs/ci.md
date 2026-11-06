@@ -575,6 +575,11 @@ The session-kit `/mon` mapping test injects a deadline-truncated sampler snapsho
 that a bounded host scan always includes the test process. Real-sampler cancellation tests continue to
 exercise the published sampler; the host-dependent polling smoke is not in the coverage-gated suite.
 
+The dev-tools real-host `resource_snapshot` smoke requires process metadata and includes the producer's
+unavailable reason in its failure. Separate controls exercise registry sampler `0.2.0` through the tool
+schema with an injected Linux enumeration failure and a genuinely exhausted scan budget. The injected
+Linux path on macOS is not a native Linux run.
+
 Flake policy (migration plan section 7):
 
 - A new correctness failure blocks

@@ -6,6 +6,7 @@
  * the persisted history entry and completion event in
  * config-model-fallback-wiring.test.ts.)
  */
+import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,9 +20,12 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import { registerAgents } from "../src/agent-types.js";
+import { NOTIFICATION_HOLD_MS } from "../src/completion-outbox.js";
 import { setAgentModels } from "../src/model-resolver.js";
+import { ADMIT_CHANNEL } from "../src/quota-admission.js";
 import { flush, makePi, startSession, textOf } from "./helpers/boot-extension.js";
-import subagentsExtension from "./helpers/home-extension.js";
+import { FakeClock } from "./helpers/fake-clock.js";
+import subagentsExtension, { createSubagentsExtension } from "./helpers/home-extension.js";
 import { runnerResolution } from "./helpers/runner-resolution.js";
 
 const PARENT = { provider: "anthropic", id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" };
@@ -31,6 +35,7 @@ const FALLBACK = { input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5
 let cwd: string;
 let saved: { cwd: string; agentDir?: string };
 let sessionFile: string;
+let activeLifecycle: ReturnType<typeof makePi>["lifecycle"] | undefined;
 
 function ctx() {
   return {
@@ -57,7 +62,9 @@ beforeEach(() => {
   vi.mocked(resumeAgent).mockReset();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await activeLifecycle?.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, ctx());
+  activeLifecycle = undefined;
   vi.useRealTimers();
   setAgentModels(undefined);
   delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
@@ -68,31 +75,74 @@ afterEach(() => {
   rmSync(cwd, { recursive: true, force: true });
 });
 
-async function boot() {
+async function boot(clock?: FakeClock) {
   const b = makePi();
-  subagentsExtension(b.pi);
+  activeLifecycle = b.lifecycle;
+  if (clock) {
+    const events = new EventEmitter();
+    b.pi.events.on.mockImplementation((name: string, handler: (data: unknown) => void) => {
+      events.on(name, handler);
+      return () => events.off(name, handler);
+    });
+    b.pi.events.emit.mockImplementation((name: string, data: unknown) => events.emit(name, data));
+    events.on(ADMIT_CHANNEL, ({ requestId }: { requestId: string }) => {
+      events.emit(`${ADMIT_CHANNEL}:reply:${requestId}`, { success: true, data: { ok: true } });
+    });
+    createSubagentsExtension({ clock })(b.pi);
+  } else subagentsExtension(b.pi);
   await startSession(b.lifecycle, true);
   return b;
 }
 
 describe("eviction, tombstone and @handle reopen", () => {
-  it("an evicted id discloses its failure while a reopened @handle uses current selection", async () => {
-    vi.useFakeTimers({ toFake: ["setInterval", "Date"] });
-    const { tools, lifecycle } = await boot();
-    vi.mocked(runAgent).mockImplementation(runnerResolution() as any);
+  it.each(["read before notice", "notice before read"] as const)("an evicted id discloses its failure while a reopened @handle uses current selection (%s)", async (order) => {
+    const clock = new FakeClock();
+    const { pi, tools, lifecycle } = await boot(clock);
+    let finish!: () => void;
+    const completion = new Promise<void>(resolve => { finish = resolve; });
+    vi.mocked(runAgent).mockImplementation(async (...args) => {
+      await completion;
+      return runnerResolution()(...args);
+    });
     const started = await tools.get("Agent").execute(
       "tc", { prompt: "go", description: "d", subagent_type: "scout", run_in_background: true }, undefined, undefined, ctx(),
     );
     const id = started.details.agentId;
     await flush();
     const manager = (globalThis as any)[Symbol.for("pi-subagents:manager")];
-    expect(manager.getRecord(id).modelFallback).toEqual(FALLBACK);
-    // Age it past the cutoff and let the real GC evict it (as agent-mention-wiring does).
     const record = manager.getRecord(id);
+    expect(record.status).toBe("running");
+    expect(record.resultConsumed).toBeFalsy();
+    // No notice exists until the runner really completes, regardless of clock age.
+    clock.advance(NOTIFICATION_HOLD_MS);
+    expect(pi.sendMessage).not.toHaveBeenCalled();
+    finish();
+    await manager.waitForAll();
+    await flush();
+    expect(record.status).toBe("completed");
+    expect(record.completedAt).toBe(clock.now());
+    expect(record.modelFallback).toEqual(FALLBACK);
     record.sessionFile = sessionFile;
-    record.resultConsumed = true;
-    record.completedAt = Date.now() - 11 * 60_000;
-    await vi.advanceTimersByTimeAsync(60_000);
+    expect(record.consumedAt).toBeUndefined();
+
+    if (order === "notice before read") {
+      clock.advance(NOTIFICATION_HOLD_MS);
+      expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+      expect(record.consumedAt).toBe(clock.now());
+    }
+    // As in evicted-agent-wiring (#481), read through the real tool: it stamps
+    // consumedAt AND cancels the held notice. Backdating completedAt alone races
+    // delivery, which correctly starts retention from consumedAt instead (#569).
+    const read = await tools.get("get_subagent_result").execute("tc-read", { agent_id: id }, undefined, undefined, ctx());
+    expect(textOf(read)).toContain(NOTE);
+    expect(record.resultConsumed).toBe(true);
+    const consumedAt = clock.now();
+    expect(record.consumedAt).toBe(consumedAt);
+    clock.advance(NOTIFICATION_HOLD_MS);
+    expect(pi.sendMessage).toHaveBeenCalledTimes(order === "notice before read" ? 1 : 0);
+    expect(record.consumedAt).toBe(consumedAt);
+    // Advance the existing consumed TTL and sweep, not the record's timestamps.
+    clock.advance(11 * 60_000 + 60_000);
     expect(manager.getRecord(id)).toBeUndefined();
 
     // 1. the evicted id's lookup text
@@ -112,7 +162,6 @@ describe("eviction, tombstone and @handle reopen", () => {
     expect(handled).toEqual({ action: "handled" });
     const reopened = await tools.get("get_subagent_result").execute("tc3", { agent_id: "scout" }, undefined, undefined, ctx());
     expect(textOf(reopened)).not.toContain(NOTE);
-    vi.useRealTimers();
   });
 });
 
