@@ -399,6 +399,8 @@ describe("resource_snapshot on the real host through the published sampler", () 
 			const fake = scripted(script);
 			const snapshot = await resourceSnapshot(5, { createSampler: fake.createSampler }, undefined, INTERVAL_MS);
 			expect(fake.state.samples).toBe(count);
+			// The window slides to the latest pair, 120 ms apart in the fixture clock.
+			expect(snapshot.interval.measuredMs).toBe(120);
 			expect(snapshot.processes.status).toBe("available");
 			if (snapshot.processes.status === "available") expect(snapshot.processes.entries.map((e) => e.pid)).toEqual([7]);
 			expect(fake.state.disposed).toBe(1);
@@ -412,6 +414,25 @@ describe("resource_snapshot on the real host through the published sampler", () 
 				status: "unavailable",
 				reason: "process metadata unavailable (process-collection-unavailable)",
 			});
+		});
+
+		it("rejects when cancelled during a resample and still disposes", async () => {
+			const controller = new AbortController();
+			const fake = scripted([true, false]);
+			const createSampler = (): ResourceSampler => {
+				const inner = fake.createSampler();
+				return {
+					sample: async (signal) => {
+						if (fake.state.samples === 2) controller.abort(new Error("cancelled"));
+						signal?.throwIfAborted();
+						return inner.sample(signal);
+					},
+					dispose: () => inner.dispose(),
+				};
+			};
+			await expect(resourceSnapshot(5, { createSampler }, controller.signal, INTERVAL_MS)).rejects.toThrow("cancelled");
+			expect(fake.state.samples).toBe(2);
+			expect(fake.state.disposed).toBe(1);
 		});
 
 		it("does not resample a healthy host", async () => {
