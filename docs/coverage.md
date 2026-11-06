@@ -337,6 +337,8 @@ deliberately not `coverage/primary`, which is import-audit's report. The `--cov`
 root (`.` and `harness`), so the policy `owned` globs stay the only copy of the inventory.
 `scripts/pyproject.toml` sets coverage's `patch = ["subprocess"]` so the CLI tests that spawn
 `coverage_accounting.py` count. `pytest-cov` is locked in `integration/pyproject.toml`.
+Measurement can report an OS with no reference floor; enforcement still requires one. Summary totals
+consume the integer counters emitted by `account`, not the package, signal, OS or file labels.
 `parse_lcov` accepts coverage.py's `FN:<line>,<end>,<name>` rows. Only a signal declaring
 `producer: "coverage.py"` may contain the bare `SF`/`end_of_record` record coverage.py writes for a
 file with no executable lines; for any other producer a bare record is a truncated report and fails. The same

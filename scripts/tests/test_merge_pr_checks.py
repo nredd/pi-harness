@@ -145,6 +145,22 @@ def test_captured_superseded_placeholders() -> None:
     assert len(gh.data["rules"][0]["parameters"]["required_status_checks"]) == 9
 
 
+def test_non_harness_repository_skips_harness_context_requirements(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Do not require this repository's matrix for other repositories."""
+    gh = Replay()
+    gh.data["checks"] = [{"name": "other", "state": "SUCCESS", "link": "https://example.com"}]
+    original_command = gh.command
+
+    def command(*args: str) -> Any:
+        """Route the alternate repository's PR lookup to the captured PR."""
+        if args[-1] == "repos/other/repo/pulls/135":
+            return gh.data["pr"]
+        return original_command(*args)
+
+    monkeypatch.setattr(gh, "command", command)
+    checks.gate(gh, "other/repo", "135", gh.data["pr"]["head"]["sha"])
+
+
 def test_main_advance_does_not_invalidate_reviewed_head() -> None:
     """Accept unchanged final HEAD evidence after unrelated main advancement.
 

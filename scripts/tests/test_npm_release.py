@@ -1503,6 +1503,18 @@ def test_emit_outputs_refuses_multiline_values(tmp_path: Path, monkeypatch: pyte
         nr.emit_outputs(tarball="a\npublish=true")
 
 
+def test_emit_outputs_outside_actions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skip output when the GitHub Actions output path is not set."""
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+
+    def reject_open(*_args: object, **_kwargs: object) -> None:
+        """Reject any attempt to write without an Actions output file."""
+        pytest.fail("Unexpected output file access")
+
+    monkeypatch.setattr(Path, "open", reject_open)
+    nr.emit_outputs(tarball="example.tgz")
+
+
 def test_verify_refuses_a_packed_version_that_differs_from_the_tag(
     repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
