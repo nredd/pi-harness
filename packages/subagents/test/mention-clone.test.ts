@@ -14,6 +14,7 @@
  * rejection would instead lose the mention entirely.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { inChildSessionContext } from "../src/child-context.js";
 
 // Hoisted: vi.mock's factory is lifted above the imports, so it cannot close
 // over ordinary top-level consts.
@@ -31,7 +32,7 @@ vi.mock("@earendil-works/pi-coding-agent", async () => {
     // Records its options; a real one would read the user's agent dir.
     DefaultResourceLoader: class {
       // `runMentionClone` rebinds `reload`, so keep the underlying spy reachable.
-      reloaded = vi.fn(async () => {});
+      reloaded = vi.fn(async () => inChildSessionContext());
       reload = this.reloaded;
       constructor(public options: any) {
         loaders.push(this);
@@ -207,6 +208,16 @@ describe("cloning the conversation", () => {
     expect(loaders[0].reloaded).toHaveBeenCalled();
     expect(createAgentSession.mock.calls[0][0].resourceLoader).toBe(loaders[0]);
     expect(loaders[0].options.systemPromptOverride("from SYSTEM.md")).toBe("the live system prompt");
+  });
+
+  it("reloads the clone's loader in the child session context, also after construction (#548)", async () => {
+    // A session reload re-runs extension factories; they must still see the marker.
+    cloneSession(callsAgent());
+
+    await runMentionClone(opts());
+    expect(await loaders[0].reload()).toBe(true);
+    expect(loaders[0].reloaded).toHaveBeenCalledTimes(2);
+    expect(inChildSessionContext()).toBe(false);
   });
 
   it("adds nothing the live prompt already contains", async () => {
