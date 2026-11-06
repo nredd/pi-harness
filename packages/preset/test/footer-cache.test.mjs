@@ -138,6 +138,14 @@ test("cache write counts toward the prompt", () => {
 	assert.equal(analyze([write], 1).hitRate, 0);
 });
 
+test("missing usage counters read as zero", () => {
+	// Only cacheRead: a 100% hit; only input: 0%; only cacheWrite: 0%.
+	assert.equal(analyze([turn(0, 0, { usage: { cacheRead: 500 } })], 1).hitRate, 100);
+	assert.equal(analyze([turn(0, 0, { usage: { input: 500 } })], 1).hitRate, 0);
+	assert.equal(analyze([turn(0, 0, { usage: { cacheWrite: 500 } })], 1).hitRate, 0);
+	assert.deepEqual(analyze([turn(0, 0, { usage: {} })], 1), {});
+});
+
 test("assistant without usage and non-message entries are ignored", () => {
 	const noUsage = turn(5, 0, { usage: undefined });
 	const status = analyze([turn(0, 95), noUsage, { type: "usage" }, { type: "model_change" }], 6);

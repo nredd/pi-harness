@@ -440,13 +440,17 @@ export function createQuotaPoller(deps: PollerDeps): QuotaPoller {
 		expiryTimer = undefined;
 	}
 
-	/** Arm a timer for the earliest upcoming expiry of a fresh reading. */
-	function scheduleExpiry(): void {
+	/**
+	 * Arm a timer for the earliest upcoming expiry of a fresh reading in `current`.
+	 * Only `settle` (never after `dispose`, which drops the in-flight token) and this
+	 * timer (cleared by `settle` and `dispose`) call it, so `current` is always the live state.
+	 * The timer re-arms only while live, since its `onChange` may dispose the poller.
+	 */
+	function scheduleExpiry(current: QuotaState): void {
 		clearExpiry();
-		if (disposed || !state) return;
 		const t = now();
 		let next = Number.POSITIVE_INFINITY;
-		for (const quota of Object.values(state)) {
+		for (const quota of Object.values(current)) {
 			if (!quota.stale && typeof quota.expiresAt === "number" && quota.expiresAt > t)
 				next = Math.min(next, quota.expiresAt);
 		}
@@ -454,9 +458,8 @@ export function createQuotaPoller(deps: PollerDeps): QuotaPoller {
 		expiryTimer = setT(
 			() => {
 				expiryTimer = undefined;
-				if (disposed) return;
 				deps.onChange();
-				scheduleExpiry();
+				if (!disposed) scheduleExpiry(current);
 			},
 			Math.min(next - t, MAX_TIMER_MS),
 		);
@@ -470,7 +473,7 @@ export function createQuotaPoller(deps: PollerDeps): QuotaPoller {
 		if (next) state = next;
 		else if (state) state = markStale(state);
 		else return;
-		scheduleExpiry();
+		scheduleExpiry(state);
 		deps.onChange();
 	}
 
