@@ -94,8 +94,8 @@ See [the behavior comparison](../../docs/footer-port.md) for source references a
 ## Contents
 
 - `agents/`: `architect`, `code-reviewer`, `critic`, `debugger`, `general-purpose`,
-  `principal-investigator`, `researcher`, `verifier`. Declared in `pi.subagents.agents`, found through pi-subagents' package-agent
-  discovery (the pinned fork; stock Pi ignores the key)
+  `principal-investigator`, `researcher`, `verifier`. Declared in `pi.subagents.agents`, found
+  through pi-subagents' package-agent discovery (the pinned fork; stock Pi ignores the key)
 - `skills/`: `code-review`, `ship-issue`, `get-it-merged`, `coding-like-redd`. Discovered by Pi
   through `pi.skills`. `coding-like-redd` is explicitly opinionated (Python/Rust conventions of the
   author) and is public, opt-in content
@@ -157,11 +157,13 @@ types to tiers; `modelTiers` binds tiers to a router profile or exact members. B
 config (dotfiles on personal, the enterprise manifest on work), not preset content, so both profiles
 ship the same skill text. A quota-parked tier waits (or fails under its policy); it never silently
 falls back to another tier.
+
 `principal-investigator` (a multi-round judge of findings, not diffs) is unpinned too; route it with
 `agentModels["principal-investigator"] = "@deep"` next to `code-reviewer` -> `@review`, and pass
 `Agent({ model: "@frontier" })` per call for a final acceptance round and `thinking: high` per
 dispatch. The same tier rules apply: a parked tier waits, never substitutes. The binding itself is
 profile config, not preset content.
+
 `test/resources.test.ts` parses `agents/` and `skills/` (frontmatter, fenced YAML/JSON, `key: value`
 and call arguments, flow lists and maps, `--model` flags and pi's `/model` command, tables with a
 `model` column) and fails on any non-tier value under a model-like key (`model`, `models`,

@@ -378,7 +378,16 @@ describe("toolDescriptionMode", () => {
     it(`${mode} discloses every preset shell restriction without mislabeling shell-capable agents`, () => {
       const tools = setup({ toolDescriptionMode: mode }, () => {
         mkdirSync(join(hermeticAgentDir, "agents"));
-        for (const name of ["researcher", "architect", "critic", "code-reviewer", "general-purpose", "debugger", "verifier"]) {
+        for (const name of [
+          "researcher",
+          "architect",
+          "critic",
+          "code-reviewer",
+          "principal-investigator",
+          "general-purpose",
+          "debugger",
+          "verifier",
+        ]) {
           writeFileSync(
             join(hermeticAgentDir, "agents", `${name}.md`),
             readFileSync(new URL(`../../preset/agents/${name}.md`, import.meta.url), "utf8"),
@@ -389,7 +398,7 @@ describe("toolDescriptionMode", () => {
         }
       });
       const desc: string = tools.get("Agent").description;
-      for (const name of ["researcher", "architect", "critic", "code-reviewer"]) {
+      for (const name of ["researcher", "architect", "critic", "code-reviewer", "principal-investigator"]) {
         const line = desc.split("\n").find((line) => line.startsWith(`- ${name}:`));
         expect(line).toContain("no shell/ssh: cannot run commands");
         expect(line).toContain("no built-in shell: cannot run bash commands");
