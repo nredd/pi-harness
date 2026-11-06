@@ -98,6 +98,7 @@
             "agents/architect.md",
             "agents/code-reviewer.md",
             "agents/critic.md",
+            "agents/principal-investigator.md",
             "agents/verifier.md"
           ],
           "package": "@nredd/pi-dev-tools",
@@ -106,6 +107,7 @@
         {
           "name": "pi-web-access",
           "requiredBy": [
+            "agents/principal-investigator.md",
             "agents/researcher.md"
           ],
           "package": "pi-web-access",

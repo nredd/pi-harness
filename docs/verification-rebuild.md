@@ -165,7 +165,7 @@ Orchestrator adjudication, 2026-10-18 (verdicts reviewed row by row against `PLA
 | Test | Invariant | Dest | Replacement / doubles |
 | --- | --- | --- | --- |
 | `test_agent_tool_surface` | Five specialists expose their required tools and exclude forbidden tools. | `A-stack` | DONE: `integration/inprocess/specialists.test.ts` / `specialists expose their declared surfaces: %s`; all five real package-discovered preset agents, real child/dev-tools factories, inert web/memory declarations, faux provider captures current transcript schemas. Scope is enforced by `pi-subagents`, not a stub. |
-| `test_read_only_agent_rejects_write` | Read-only specialists cannot execute an undeclared write or alter the target. | `A-stack` | DONE: `integration/inprocess/specialists.test.ts` / `read-only specialists reject explicit writes: %s`; architect/critic/researcher make real undeclared child calls, unavailable-tool errors and unchanged sentinel bytes. |
+| `test_read_only_agent_rejects_write` | Read-only specialists cannot execute an undeclared write or alter the target. | `A-stack` | DONE: `integration/inprocess/specialists.test.ts` / `read-only specialists reject explicit writes: %s`; architect/critic/principal-investigator/researcher make real undeclared child calls, unavailable-tool errors and unchanged sentinel bytes. |
 | `test_debugger_cannot_commit` | A debugger's explicit exclusion beats always-active commit registration. | `A-stack` | DONE: `integration/inprocess/specialists.test.ts` / `debugger excludes commit despite always-active defaults`; real subagents/preset/dev-tools, explicit child commit call fails at registry lookup (`Tool git_commit not found`), before execution. |
 
 - File: `scenarios/integration/test_agent_worktree.py`

@@ -22,6 +22,10 @@ const SURFACES: Record<string, { required: string[]; forbidden: string[] }> = {
 	"code-reviewer": { required: [...READS, ...GIT_READS], forbidden: [...MUTATIONS, ...WEB] },
 	architect: { required: [...READS, ...GIT_READS], forbidden: [...MUTATIONS, ...WEB] },
 	critic: { required: [...READS, ...GIT_READS, "py_test", "cargo_test"], forbidden: [...MUTATIONS, ...WEB] },
+	"principal-investigator": {
+		required: [...READS, ...GIT_READS, ...WEB, "py_test", "cargo_test"],
+		forbidden: MUTATIONS,
+	},
 	researcher: { required: [...READS, ...WEB], forbidden: [...MUTATIONS, ...GIT_READS] },
 	verifier: {
 		required: [...READS, "bash", "git_status", "git_log", "git_diff"],
@@ -78,14 +82,17 @@ it.each(Object.keys(SURFACES))("specialists expose their declared surfaces: %s",
 	for (const tool of surface.forbidden) expect(offered, `${type} offered ${tool}`).not.toContain(tool);
 });
 
-it.each(["architect", "critic", "researcher"])("read-only specialists reject explicit writes: %s", async (type) => {
-	const path = join(home.root, "protected.txt");
-	const original = "MUST NOT CHANGE\n";
-	writeFileSync(path, original);
-	const answer = await ask(h, type, [call("write", { path, content: "CORRUPTED\n" }), report]);
-	expect(answer).toContain("Tool write not found");
-	expect(readFileSync(path, "utf8")).toBe(original);
-});
+it.each(["architect", "critic", "principal-investigator", "researcher"])(
+	"read-only specialists reject explicit writes: %s",
+	async (type) => {
+		const path = join(home.root, "protected.txt");
+		const original = "MUST NOT CHANGE\n";
+		writeFileSync(path, original);
+		const answer = await ask(h, type, [call("write", { path, content: "CORRUPTED\n" }), report]);
+		expect(answer).toContain("Tool write not found");
+		expect(readFileSync(path, "utf8")).toBe(original);
+	},
+);
 
 it("debugger excludes commit despite always-active defaults", async () => {
 	const answer = await ask(h, "debugger", [

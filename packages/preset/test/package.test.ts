@@ -16,6 +16,7 @@ const EXPECTED_FILES = [
 	"agents/critic.md",
 	"agents/debugger.md",
 	"agents/general-purpose.md",
+	"agents/principal-investigator.md",
 	"agents/researcher.md",
 	"agents/verifier.md",
 	"extensions/expanded-footer.ts",
