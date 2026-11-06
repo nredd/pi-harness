@@ -146,6 +146,22 @@ describe("AgentManager.detach", () => {
     expect((manager as any).agents.get("fg").status).toBe("stopped");
     expect((manager as any).agents.get("bg").status).toBe("running");
   });
+
+  it("stops a queued top-level agent through onQueuedStop and keeps a queued nested child", () => {
+    const onQueuedStop = vi.fn();
+    const manager = new AgentManager(() => {}, undefined, undefined, undefined, undefined, undefined, undefined, undefined, onQueuedStop);
+    const entry = (id: string) => ({ id, pool: "background", cancel: vi.fn(), release: vi.fn() });
+    const agents = Reflect.get(manager, "agents") as Map<string, { id: string; status: string; isBackground?: boolean; parentAgentId?: string }>;
+    const queue = Reflect.get(manager, "queue") as Array<ReturnType<typeof entry>>;
+    agents.set("q", { id: "q", status: "queued", isBackground: true });
+    agents.set("child", { id: "child", status: "queued", parentAgentId: "bg" });
+    queue.push(entry("q"), entry("child"));
+
+    expect(manager.detach()).toBe(0);
+    expect(onQueuedStop.mock.calls.map(([record]) => [record.id, record.status])).toEqual([["q", "stopped"]]);
+    expect(agents.get("child")?.status).toBe("queued");
+    expect((Reflect.get(manager, "queue") as Array<ReturnType<typeof entry>>).map((e) => e.id)).toEqual(["child"]);
+  });
 });
 
 describe("session switch with a running background agent", () => {

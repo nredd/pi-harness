@@ -169,8 +169,16 @@ describe("Agent tool — foreground run sent to the background", () => {
     const second = runAgentTool(tools, "second job");
     await flush();
 
+    const started = pi.events.emit.mock.calls.filter((call: unknown[]) => call[0] === "subagents:started");
     expect(press(CTRL_B)).toBe(true);
     expect(ui.notify).toHaveBeenCalledWith("Sent 2 agents to the background.", "info");
+    const handoffs = pi.events.emit.mock.calls.filter((call: unknown[]) => call[0] === "subagents:created");
+    expect(handoffs).toHaveLength(2);
+    for (const [, event] of handoffs) {
+      const prior = started.find(([, payload]: [string, { id: string }]) => payload.id === event.id)?.[1];
+      expect(prior).toMatchObject({ wakesParent: false, runSeq: expect.any(Number) });
+      expect(event).toMatchObject({ wakesParent: true, backgroundHandoff: true, runSeq: prior.runSeq });
+    }
 
     for (const [execution, prompt] of [[first, "first job"], [second, "second job"]] as const) {
       const result = await execution;
@@ -377,7 +385,7 @@ describe("Agent tool — foreground run sent to the background", () => {
 
     const created = pi.events.emit.mock.calls.filter((c: any[]) => c[0] === "subagents:created");
     expect(created).toEqual([["subagents:created", {
-      id: runs.agentId("long job"), type: "general-purpose", description: "long job", handle: "general-purpose", isBackground: true, spawnSeq: expect.any(Number),
+      id: runs.agentId("long job"), type: "general-purpose", description: "long job", handle: "general-purpose", isBackground: true, spawnSeq: expect.any(Number), runSeq: expect.any(Number), wakesParent: true, backgroundHandoff: true,
     }]]);
     runs.finish("long job", "DONE");
   });
