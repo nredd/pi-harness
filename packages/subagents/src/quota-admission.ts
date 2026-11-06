@@ -72,20 +72,19 @@ export function admissionOutcome(
   if (signal?.aborted) return Promise.reject(new DOMException("Admission cancelled", "AbortError"));
   const requestId = nanoid();
   return new Promise((resolve, reject) => {
-    let done = false;
+    // Every step is idempotent and a promise settles once, so no `done` latch is needed.
     const cleanup = () => {
-      if (done) return false;
-      done = true;
       timer.cancel();
       unsubscribe();
       signal?.removeEventListener("abort", abort);
-      return true;
     };
     const abort = () => {
-      if (cleanup()) reject(new DOMException("Admission cancelled", "AbortError"));
+      cleanup();
+      reject(new DOMException("Admission cancelled", "AbortError"));
     };
     const finish = (outcome: TierAdmission) => {
-      if (cleanup()) resolve(outcome);
+      cleanup();
+      resolve(outcome);
     };
     const unsubscribe = events.on(`${ADMIT_CHANNEL}:reply:${requestId}`, raw => {
       const reply = raw as { success?: unknown; data?: { ok?: unknown; resolvedModel?: unknown; resetAt?: unknown; wait?: unknown } } | undefined;

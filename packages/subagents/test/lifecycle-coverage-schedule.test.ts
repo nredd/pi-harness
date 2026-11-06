@@ -37,6 +37,16 @@ function setup() {
 const input = { name: "job", description: "job", schedule: "1s", subagent_type: "general-purpose", prompt: "work" };
 
 describe("scheduler lifecycle failures", () => {
+  it("ignores a fire for a job that holds no live schedule token", () => {
+    const f = setup();
+    const job = { ...input, id: "stale", enabled: true, scheduleType: "interval", intervalMs: 1000, createdAt: 0, runCount: 0 };
+    f.store.add(job as never);
+    const execute = (scheduler as unknown as { executeJob(id: string): void }).executeJob.bind(scheduler);
+    execute(job.id);
+    expect(f.store.get(job.id)?.lastStatus).toBeUndefined();
+    expect(f.spawn).not.toHaveBeenCalled();
+  });
+
   it("rejects an invalid six-field cron expression with the library diagnostic", () => {
     const result = SubagentScheduler.validateCronExpression("99 99 99 * * *");
     expect(result.valid).toBe(false);
