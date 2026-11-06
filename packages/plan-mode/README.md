@@ -377,7 +377,7 @@ A rejected selected-tool launch does not save its draft choices.
 Restored active Plan state acquires before restoring restrictive tools, thinking, status, or model hooks.
 If restoration is busy, Plan mode stays non-running, leaves persisted history and active tools untouched, and requires a later reload or explicit new start after the other workflow ends.
 Planning-session cancellation during a fresh implementation preflight keeps the source Plan and its ownership.
-Successful session replacement relies on source-session shutdown to clean up and release; the destination's ordinary active implementation does not acquire the Plan mutex.
+Successful session replacement relies on source-session shutdown to clean up and release; the destination's ordinary active implementation does not acquire the Plan mutex. A prompt dispatched late to a replaced session is displayed as recovered input, without starting a turn in the destination.
 
 The coexistence guarantee is cooperative and applies only when every contender implements v1 on the characterized Pi runtime and shares its event bus and session-manager identity.
 A pre-v1, mixed-version, non-participating, forked, or otherwise uncharacterized counterpart remains unsupported for mutual exclusion.

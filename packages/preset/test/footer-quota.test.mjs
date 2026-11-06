@@ -365,6 +365,30 @@ test("poller: staleness progresses with the clock while a request is pending", (
 	assert.equal(env.live(5_000).length + env.live(4_000).length, 0);
 });
 
+test("poller: an expiry onChange that disposes the poller leaves no timer armed", () => {
+	const env = fakeEnv();
+	let disposeOnChange = false;
+	const poller = q.createQuotaPoller({
+		...env.deps,
+		onChange: () => {
+			if (disposeOnChange) poller.dispose();
+		},
+	});
+	poller.start();
+	env.handlers.get("router:rpc:usage:reply:id1")(
+		reply([
+			ok({ expiresAt: NOW + 5_000 }),
+			snap("openai-codex", [win("5h", 18), win("7d", 37)], { expiresAt: NOW + 9_000 }),
+		]),
+	);
+	const expiry = env.live(5_000);
+	assert.equal(expiry.length, 1);
+	disposeOnChange = true;
+	env.clock.now = NOW + 5_000;
+	expiry[0].fn();
+	assert.equal(env.timers.filter((t) => t.live).length, 0); // without the guard, a 4s expiry re-arms
+});
+
 test("poller: late replies are ignored after dispose, timeout and supersession", () => {
 	const env = fakeEnv();
 	let tick;

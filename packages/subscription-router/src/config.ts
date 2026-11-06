@@ -150,12 +150,15 @@ export async function loadConfig(agentDir: string): Promise<ConfigResult> {
 	try {
 		text = await readFile(path, "utf-8");
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ok: true, profiles: [] };
-		return { ok: false, error: `${path}: ${error instanceof Error ? error.message : String(error)}` };
+		// `readFile` rejects only with a Node system error.
+		const { code, message } = error as NodeJS.ErrnoException;
+		if (code === "ENOENT") return { ok: true, profiles: [] };
+		return { ok: false, error: `${path}: ${message}` };
 	}
 	try {
 		return { ok: true, profiles: parseConfig(JSON.parse(text)) };
 	} catch (error) {
-		return { ok: false, error: `${path}: ${error instanceof Error ? error.message : String(error)}` };
+		// `JSON.parse` throws a `SyntaxError` and `parseConfig` an `Error`.
+		return { ok: false, error: `${path}: ${(error as Error).message}` };
 	}
 }

@@ -668,10 +668,14 @@ test("a tree move during model application suppresses its warning and keeps the 
   await modelStarted.opened;
 
   const tree = emit(mock, "session_tree", {}, context);
+  const follower = emit(mock, "input", { text: "after tree", source: "rpc" }, context);
   modelGate.open();
 
   assert.deepEqual(await input, { action: "handled" });
+  assert.deepEqual(await follower, { action: "handled" });
   await tree;
+  await emit(mock, "agent_start", {}, context);
+  assert.deepEqual(mock.sentUserMessages, [], "the stale queued input is removed");
   assert.deepEqual(context.notifications, []);
   assert.deepEqual(mock.entries, [], "the one-shot intent was not consumed");
 });
@@ -903,7 +907,7 @@ test("a Plan exit before a failed implementation's re-applied thinking runs keep
   assert.deepEqual(mock.setModels, []);
 });
 
-test("a late prompt for a replaced session is handled once and not recovered again at its shutdown", async () => {
+test("a late prompt for a replaced session is surfaced once without starting a turn", async () => {
   const mock = createMockPi();
   planMode(mock.pi, { readSettings: MISSING });
   const authGate = gate();
@@ -922,11 +926,22 @@ test("a late prompt for a replaced session is handled once and not recovered aga
   const leading = emit(mock, "input", { text: "lead", source: "rpc" }, old);
   await authStarted.opened;
   await emit(mock, "session_start", { reason: "startup" }, createMockContext());
-  const late = emit(mock, "input", { text: "late", source: "rpc" }, old);
+  const image = { type: "image" as const, data: "late-image", mimeType: "image/png" };
+  const late = emit(mock, "input", { text: "late", images: [image], source: "rpc" }, old);
   authGate.open();
 
   assert.deepEqual(await Promise.all([leading, late]), [{ action: "handled" }, { action: "handled" }]);
   await emit(mock, "session_shutdown", { reason: "quit" }, old);
-  assert.deepEqual(mock.sentMessages, []);
+  assert.deepEqual(mock.sentMessages, [
+    {
+      message: {
+        customType: "plan-mode-recovered-input",
+        content: [{ type: "text", text: "late" }, image],
+        display: true,
+        details: { source: "rpc" },
+      },
+      options: { triggerTurn: false },
+    },
+  ]);
   assert.deepEqual(mock.sentUserMessages, []);
 });

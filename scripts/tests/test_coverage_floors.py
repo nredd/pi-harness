@@ -55,6 +55,28 @@ def test_branch_cap_met(tmp_path: Path, cap: int, errors: list[str]) -> None:
     assert (results[0]["branches"], results[0]["uncovered_branches"]) == (2, 1)
 
 
+def test_measure_without_platform_reference(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Measure a producer before its platform reference is declared.
+
+    Parameters:
+        tmp_path (Path): Disposable report root.
+        caplog (pytest.LogCaptureFixture): Captured accounting log.
+    Returns:
+        None: Measurement succeeds without a reference or reference log.
+    Raises:
+        AssertionError: The unreferenced measurement fails or logs a reference.
+    """
+    setup_report(tmp_path, "branches.info")
+    cfg = branch_policy(1)
+    signal = cfg.packages["example"].signals["primary"]
+    signal.max_uncovered.pop(sys.platform)
+    caplog.set_level(logging.INFO)
+    results, errors = account(tmp_path, cfg, measure=True)
+    assert not errors
+    assert results[0]["uncovered_branches"] == 1
+    assert "reference lines=" not in caplog.text
+
+
 def test_branch_cap_exceeded(tmp_path: Path) -> None:
     """Fail an enforced signal on one uncovered branch over its cap, naming every counter.
 

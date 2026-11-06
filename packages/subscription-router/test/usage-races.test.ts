@@ -7,7 +7,7 @@ const ctx = {} as never;
 const body = (used: number) => new Response(JSON.stringify({ five_hour: { utilization: used } }));
 
 describe("usage read ownership", () => {
-	it.each(["deadline", "timely", "abort", "too-old"] as const)(
+	it.each(["deadline", "timely", "abort", "stopped-abort", "too-old"] as const)(
 		"handles overlapping lookup/fetch at the outer deadline: %s",
 		async (ending) => {
 			vi.useFakeTimers();
@@ -28,6 +28,9 @@ describe("usage read ownership", () => {
 						}),
 				});
 				const controller = new AbortController();
+				// A foreign listener that stops the event hides the abort from `waitForCaller`.
+				if (ending === "stopped-abort")
+					controller.signal.addEventListener("abort", (event) => event.stopImmediatePropagation());
 				const addListener = vi.spyOn(controller.signal, "addEventListener");
 				const removeListener = vi.spyOn(controller.signal, "removeEventListener");
 				const early = service.get(ctx, "anthropic", {
@@ -42,13 +45,13 @@ describe("usage read ownership", () => {
 				pending[0]?.(body(100)); // R2 already owns the read when R1 completes at t=6s.
 				await vi.advanceTimersByTimeAsync(13_000);
 				if (ending === "timely") pending[1]?.(body(25));
-				if (ending === "abort") controller.abort();
+				if (ending === "abort" || ending === "stopped-abort") controller.abort();
 				await vi.advanceTimersByTimeAsync(1_000);
 				expect(Date.now() - T0).toBe(20_000);
 				expect(pending).toHaveLength(2); // R2 fetch starts at t=14s and aborts at t=24s.
-				if (ending === "abort" || ending === "too-old") {
+				if (ending === "abort" || ending === "stopped-abort" || ending === "too-old") {
 					expect((await early).message).toBe(
-						ending === "abort" ? "Usage request was cancelled." : "Usage request timed out.",
+						ending === "too-old" ? "Usage request timed out." : "Usage request was cancelled.",
 					);
 				} else {
 					expect(await early).toMatchObject({
@@ -75,6 +78,29 @@ describe("usage read ownership", () => {
 			}
 		},
 	);
+	it("answers a signal aborted during the credential lookup as cancelled at once", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(T0);
+		try {
+			const controller = new AbortController();
+			const service = new UsageService({
+				now: () => Date.now(),
+				getAccessToken: () => {
+					controller.abort();
+					return new Promise<string>(() => {});
+				},
+				fetch: () => Promise.reject(new Error("no fetch expected")),
+			});
+			const result = service.get(ctx, "anthropic", { signal: controller.signal });
+			await vi.advanceTimersByTimeAsync(0);
+			const settled = await Promise.race([result, Promise.resolve("pending")]);
+			expect(settled).toMatchObject({ status: "error", message: "Usage request was cancelled." });
+			await vi.runAllTimersAsync();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("keeps each caller's deadline across a chain and uses its newest completed evidence", async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(T0);
