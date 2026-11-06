@@ -5024,6 +5024,33 @@ def test_pending_step_with_digest_restores_a_present_backup(
         document["steps"][0]["replacement"] = matrix_content_identity(target, b"REPLACEMENT")
 
     edit_journal(harness, record_replacement)
+    real_replace = os.replace
+
+    def refuse_backup_rename(src: Any, dst: Any, **kwargs: Any) -> None:
+        """Fail the backup-to-live rename, which comes after the restoring intent is persisted.
+
+        Parameters:
+            src (Any): rename source.
+            dst (Any): rename destination.
+            **kwargs (Any): descriptor-relative rename options.
+
+        Returns:
+            None: unrelated renames complete.
+
+        Raises:
+            PermissionError: the restore rename onto the target was denied.
+        """
+        if rename_path(dst, kwargs, "dst_dir_fd") == target:
+            raise PermissionError(errno.EACCES, "restore rename refused")
+        real_replace(src, dst, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", refuse_backup_rename)
+        with pytest.raises(RollbackError):
+            rollback(harness.layout)
+    persisted = json.loads(harness.layout.journal.read_text())["steps"][0]
+    assert "restoring" in persisted
+    assert "original_sha256" not in persisted
     assert rollback(harness.layout) == [str(target)]
     assert target.read_text() == "ORIGINAL"
     assert not harness.layout.journal.exists()
