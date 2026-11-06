@@ -4940,6 +4940,165 @@ def test_pending_step_records_the_original_file_type(tmp_path: Path, monkeypatch
         assert step["original"][3] == stat.S_IFMT(entry.lstat().st_mode)
 
 
+def pending_reuse_journal(harness: Harness, target: Path, kind: str, *, recorded: bytes, live: bytes) -> Path:
+    """Journal a pending step whose live entry reuses the original's exact device/inode/ctime/type.
+
+    The reuse is injected: the original fingerprint is the live entry's own, which is what a
+    same-kind `unlink` and recreate within one coarse ctime tick would reproduce.
+
+    Parameters:
+        harness (Harness): isolated installer.
+        target (Path): journaled target.
+        kind (str): `file` or `symlink`, the live (and recorded) kind.
+        recorded (bytes): contents the journal's original digest was taken from.
+        live (bytes): contents of the live entry now.
+
+    Returns:
+        Path: the (absent) backup of the pending rename.
+    """
+    layout = harness.layout
+    recovery_entry(target, kind, live.decode())
+    backups = layout.backups / "reuse"
+    backups.mkdir(parents=True)
+    name, _ = install.journaled_path(layout, target)
+    step = {
+        "target": str(target),
+        "backup": str(backups / name),
+        "pending": True,
+        "original": list(install.entry_identity(target.lstat())),
+        "original_sha256": hashlib.sha256(recorded).hexdigest(),
+    }
+    install.write_atomic(
+        layout.journal, json.dumps({"backups": str(backups), "steps": [step]}), mode=install.JOURNAL_MODE
+    )
+    return backups / name
+
+
+@pytest.mark.parametrize("kind", ["file", "symlink"])
+def test_same_kind_inode_reuse_with_other_content_is_not_the_original(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """Issue 486: an identical four-field fingerprint with a different digest keeps the journal."""
+    harness = Harness(tmp_path, monkeypatch)
+    target = harness.layout.state if kind == "file" else harness.layout.link
+    pending_reuse_journal(harness, target, kind, recorded=b"ORIGINAL", live=b"RECREATED")
+    before = tree(harness.home)
+    with pytest.raises(RollbackError, match=r"Expected backup.*missing"):
+        rollback(harness.layout)
+    assert tree(harness.home) == before
+    assert harness.layout.journal.exists()
+
+
+@pytest.mark.parametrize("kind", ["file", "symlink"])
+def test_same_kind_original_with_matching_digest_rolls_back_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """The never-moved original still matches fingerprint AND digest, so the journal is dropped."""
+    harness = Harness(tmp_path, monkeypatch)
+    target = harness.layout.state if kind == "file" else harness.layout.link
+    pending_reuse_journal(harness, target, kind, recorded=b"ORIGINAL", live=b"ORIGINAL")
+    assert rollback(harness.layout) == []
+    assert not harness.layout.journal.exists()
+    assert target.exists(follow_symlinks=False)
+
+
+def test_pending_step_with_digest_restores_a_present_backup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pending step that did rename keeps restoring; its digest is dropped once intent is journaled."""
+    harness = Harness(tmp_path, monkeypatch)
+    target = harness.layout.state
+    backup = pending_reuse_journal(harness, target, "file", recorded=b"ORIGINAL", live=b"ORIGINAL")
+    backup.write_text("ORIGINAL")
+    target.write_text("REPLACEMENT")
+
+    def record_replacement(document: dict[str, Any]) -> None:
+        """Journal the replacement's identity, as the switch does before renaming it in.
+
+        Parameters:
+            document (dict[str, Any]): decoded journal, edited in place.
+
+        Returns:
+            None: the journal now names the replacement.
+        """
+        document["steps"][0]["replacement"] = matrix_content_identity(target, b"REPLACEMENT")
+
+    edit_journal(harness, record_replacement)
+    assert rollback(harness.layout) == [str(target)]
+    assert target.read_text() == "ORIGINAL"
+    assert not harness.layout.journal.exists()
+
+
+def test_switch_records_the_digest_of_file_and_link_originals_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`record` hashes small file and symlink originals; trees keep the four-field fingerprint."""
+    harness = Harness(tmp_path, monkeypatch)
+    seed_existing(harness.home)
+    layout = harness.layout
+    state_text = layout.state.read_bytes() if layout.state.exists() else None
+    with AnchoredStore() as anchors:
+        journal = Journal(layout, layout.backups / "digest", anchors=anchors)
+        with journal.open_backups(create=True):
+            journal.record(layout.state, "installed.json")
+            journal.record(layout.agent_dir / "npm", "npm")
+    steps = {Path(step["target"]).name: step for step in journal.steps}
+    if state_text is not None:
+        assert steps["installed.json"]["original_sha256"] == hashlib.sha256(state_text).hexdigest()
+    assert "original_sha256" not in steps["npm"]
+
+
+@pytest.mark.parametrize("digest", ["", "f" * 63, "G" * 64, 7, None])
+def test_malformed_original_digest_is_refused(tmp_path: Path, digest: object) -> None:
+    """A pending digest must be 64 lowercase hex characters."""
+    layout = fixture_layout(tmp_path)
+    backups = layout.backups / "run"
+    step = {
+        "target": str(layout.state),
+        "backup": str(backups / layout.state.name),
+        "pending": True,
+        "original": [1, 2, 3, stat.S_IFREG],
+        "original_sha256": digest,
+    }
+    with pytest.raises(ValueError, match="invalid original digest"):
+        install.validate_journal(layout, {"backups": str(backups), "steps": [step]})
+
+
+def test_original_digest_on_a_saved_step_is_refused(tmp_path: Path) -> None:
+    """Only a pending step carries a digest; a saved one must not smuggle one in."""
+    layout = fixture_layout(tmp_path)
+    backups = layout.backups / "run"
+    step = {
+        "target": str(layout.state),
+        "backup": str(backups / layout.state.name),
+        "pending": False,
+        "original": [1, 2, 3, stat.S_IFREG],
+        "original_sha256": "a" * 64,
+    }
+    with pytest.raises(ValueError, match="invalid original digest"):
+        install.validate_journal(layout, {"backups": str(backups), "steps": [step]})
+
+
+@pytest.mark.parametrize("source", ["restoring", "backup"])
+def test_legacy_multi_kind_original_takes_its_kind_from_restoring_or_backup(
+    tmp_path: Path, source: str
+) -> None:
+    """Issue 486 sidenote: a three-field original recovers its type when the kind is proven."""
+    layout = fixture_layout(tmp_path)
+    target = layout.agent_dir / "npm"
+    backups = layout.backups / "run"
+    backups.mkdir(parents=True)
+    step: dict[str, Any] = {"target": str(target), "backup": str(backups / "npm"), "original": [1, 2, 3]}
+    if source == "restoring":
+        step |= {"pending": False, "restoring": identity_record(kind="symlink")}
+    else:
+        step["pending"] = True
+        (backups / "npm").mkdir()
+    (validated,) = install.validate_journal(layout, {"backups": str(backups), "steps": [step]})
+    expected = stat.S_IFLNK if source == "restoring" else stat.S_IFDIR
+    assert validated.original == (1, 2, 3, expected)
+
+
 def test_legacy_original_of_a_multi_kind_target_is_refused(tmp_path: Path) -> None:
     """A three-field original cannot default its type for a tree that may be a directory or symlink."""
     layout = fixture_layout(tmp_path)

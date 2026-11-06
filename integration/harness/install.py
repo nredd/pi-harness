@@ -1223,6 +1223,7 @@ class Journal:
         self.anchors.rename(live, backup)
         self.anchors.check()
         self.steps[-1]["pending"] = False
+        self.steps[-1].pop("original_sha256", None)
         self.persist()
 
     def place(self, source: Path | None, target: Path) -> None:
@@ -1293,6 +1294,8 @@ class Journal:
         if backup is not None:
             info = target.lstat()
             step |= {"pending": True, "original": list(entry_identity(info))}
+            if stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                step["original_sha256"] = RestoreHasher().identity(target).sha256
         self.steps.append(step)
         self.persist()
         return backup
@@ -1543,6 +1546,24 @@ class Step:
     replacement: RestoreIdentity | None = None
     replacement_known: bool = False
     aside: RestoreAside | None = None
+    original_sha256: str | None = None
+
+    def untouched(self, live: RestoreIdentity | None) -> bool:
+        """Report whether a pending step's live entry is still its never-moved original.
+
+        Device, inode, ctime and type can all repeat when a same-kind entry is recreated within one
+        coarse ctime tick, so a recorded content digest must match too. Journals without one (older
+        builds, and directory trees, which are not hashed at record time) rely on the four fields.
+
+        Parameters:
+            live (RestoreIdentity | None): content identity of the live target, or absence.
+
+        Returns:
+            bool: the rename never started.
+        """
+        if not self.pending or self.original is None or self.live_identity() != self.original:
+            return False
+        return self.original_sha256 is None or (live is not None and live.sha256 == self.original_sha256)
 
     def live_identity(self) -> EntryIdentity | None:
         """Return the live entry's device/inode/ctime/file type, or absence, without following links.
@@ -1565,6 +1586,8 @@ class Step:
         }
         if self.original is not None:
             result |= {"pending": self.pending, "original": list(self.original)}
+            if self.pending and self.original_sha256 is not None:
+                result["original_sha256"] = self.original_sha256
         if self.restored:
             result["restored"] = True
         if self.restoring is not None:
@@ -1783,18 +1806,35 @@ def cleanup_manifest(value: object) -> dict[str, RestoreIdentity] | None:
     return result
 
 
+def legacy_kind(raw: object, backup: Path) -> str | None:
+    """Recover the entry kind of a legacy original from `restoring` intent or its backup.
+
+    Parameters:
+        raw (object): serialized `restoring` identity, if any.
+        backup (Path): where the original is kept.
+
+    Returns:
+        str | None: the recorded kind, else the backup's kind, else unknown.
+    """
+    if isinstance(raw, dict) and raw.get("kind") in ENTRY_FORMATS:
+        return raw["kind"]
+    return entry_kind(backup)
+
+
 def pending_identity(
-    raw: dict[str, Any], target: Path, kinds: frozenset[str]
+    raw: dict[str, Any], target: Path, kinds: frozenset[str], known: str | None = None
 ) -> tuple[bool, EntryIdentity | None]:
     """Validate a pending/saved original identity, including the original's file type.
 
     Older journals record only device/inode/ctime. Their file type defaults to the one kind the
-    target can hold; a target that can hold several kinds has no safe default and fails closed.
+    target can hold; a target that can hold several kinds takes the kind that `restoring` intent or
+    the backup proves, and fails closed only while that stays unknown.
 
     Parameters:
         raw (dict[str, Any]): journal step.
         target (Path): validated target, for diagnostics.
         kinds (frozenset[str]): entry kinds the target may hold.
+        known (str | None): kind proven by `restoring` intent or the backup, for legacy identities.
 
     Returns:
         tuple[bool, EntryIdentity | None]: pending flag and original identity.
@@ -1812,6 +1852,8 @@ def pending_identity(
     if raw["backup"] is None:
         raise ValueError(f"step for '{target}' has original metadata without a backup")
     formats = {ENTRY_FORMATS[kind] for kind in kinds}
+    if len(identity) == 3 and known in kinds:
+        formats = {ENTRY_FORMATS[known]}
     if len(identity) == 3:
         if len(formats) != 1:
             raise ValueError(f"step for '{target}' has a legacy original identity without its file type")
@@ -1819,6 +1861,27 @@ def pending_identity(
     if identity[3] not in formats:
         raise ValueError(f"step for '{target}' has an original file type it cannot hold")
     return raw["pending"], (identity[0], identity[1], identity[2], identity[3])
+
+
+def original_digest(raw: dict[str, Any], target: Path) -> str | None:
+    """Validate the optional content digest recorded beside a pending original's identity.
+
+    Parameters:
+        raw (dict[str, Any]): journal step.
+        target (Path): validated target, for diagnostics.
+
+    Returns:
+        str | None: lowercase SHA-256 of the original, or `None` for journals without one.
+
+    Raises:
+        ValueError: the digest is malformed or the step is not pending.
+    """
+    if "original_sha256" not in raw:
+        return None
+    digest = raw["original_sha256"]
+    if raw.get("pending") is not True or not isinstance(digest, str) or SHA256_HEX.fullmatch(digest) is None:
+        raise ValueError(f"step for '{target}' has invalid original digest metadata")
+    return digest
 
 
 def validate_journal(layout: Layout, document: object) -> list[Step]:
@@ -1852,7 +1915,12 @@ def validate_journal(layout: Layout, document: object) -> list[Step]:
         raise ValueError(f"'{backups}' is not owned by the current user")
     steps: list[Step] = []
     for raw in raw_steps:
-        if not isinstance(raw, dict) or set(raw) - {"restoring", "replacement", "aside"} not in (
+        if not isinstance(raw, dict) or set(raw) - {
+            "restoring",
+            "replacement",
+            "aside",
+            "original_sha256",
+        } not in (
             {"target", "backup"},
             {"target", "backup", "pending", "original"},
             {"target", "backup", "restored"},
@@ -1866,7 +1934,8 @@ def validate_journal(layout: Layout, document: object) -> list[Step]:
         if any(step.target == target for step in steps):
             raise ValueError(f"step target '{target}' is recorded twice")
         backup = backups / name
-        pending, original = pending_identity(raw, target, kinds)
+        pending, original = pending_identity(raw, target, kinds, legacy_kind(raw.get("restoring"), backup))
+        original_sha256 = original_digest(raw, target)
         restored = raw.get("restored", False)
         if type(restored) is not bool:
             raise ValueError(f"step for '{target}' has invalid restored metadata")
@@ -1888,7 +1957,20 @@ def validate_journal(layout: Layout, document: object) -> list[Step]:
         kind = entry_kind(backup)
         if kind is not None and kind not in kinds:
             raise ValueError(f"backup '{backup}' is a {kind}, expected {' or '.join(sorted(kinds))}")
-        steps.append(Step(target, backup, pending, original, restored, restoring, replacement, known, aside))
+        steps.append(
+            Step(
+                target,
+                backup,
+                pending,
+                original,
+                restored,
+                restoring,
+                replacement,
+                known,
+                aside,
+                original_sha256,
+            )
+        )
     return steps
 
 
@@ -2022,9 +2104,7 @@ def check_restore_step(journal: Journal, step: Step) -> bool:
     try:
         info = os.stat(step.backup.name, dir_fd=journal.backup_fd, follow_symlinks=False)
     except FileNotFoundError as error:
-        if (step.restoring is not None and live == step.restoring) or (
-            step.pending and step.original is not None and step.live_identity() == step.original
-        ):
+        if (step.restoring is not None and live == step.restoring) or step.untouched(live):
             return True
         raise OSError(f"Expected backup '{step.backup}' is missing; restore by hand") from error
     if info.st_dev != step.target.parent.stat().st_dev or (live is not None and live.device != info.st_dev):
