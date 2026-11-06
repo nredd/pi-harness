@@ -19,7 +19,8 @@ Linux ships its locked Rust crate source, not a binary. Run inside the graphical
 session. Source builds are opt-in with `PI_COMPUTER_USE_ALLOW_BUILD=1`, use the user's cache rather
 than the npm install directory, and need Cargo plus a C linker. See the
 [Linux guide](./docs/content/docs/how-to-guides/linux.mdx). Windows source remains in the repository;
-Windows helpers and crate sources are not packed.
+Windows helpers and crate sources are not packed. If the Linux helper's input stream fails, in-flight
+requests are rejected and the helper is stopped; a later request starts a fresh helper.
 
 ## Tools
 
@@ -56,6 +57,10 @@ their platform or opt-in as skipped; this package remains outside the coverage g
 `test:macos-live` on an occupied desktop: it manipulates fixture windows, apps, and the clipboard. It
 starts, restarts and stops its own helper instance on the test home's socket, never the shared daemon.
 Owner-only smoke commands and rollback are recorded in `UPSTREAM.md`.
+
+`npm run test:linux` uses disposable protocol children, not a native desktop helper. Its closed-stdin
+fixture initializes stdout before closing fd `0` (lazy pipe initialization aborts Node 26.12 on Darwin),
+acknowledges verified closure while alive, and requires real `EPIPE` rejection plus child cleanup.
 
 The harness root `publish.yml` owns releases; nested upstream workflows are dormant reference source.
 Local helper builds and local signing remain unchanged. Source preparation is not activation.
