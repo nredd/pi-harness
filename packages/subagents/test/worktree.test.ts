@@ -884,7 +884,7 @@ describe("cleanupWorktree — nested repositories git refuses to remove", () => 
     expect(existsSync(wt.path)).toBe(false);
   });
 
-  it("removes a clean worktree whose submodule carries a fetched tag on a commit no remote branch holds", async () => {
+  it("keeps the worktree when a submodule carries a tag on a commit no remote branch holds (fails safe offline)", async () => {
     run(repoDir, "submodule", "add", subDir, "sub");
     run(repoDir, "commit", "-m", "add submodule");
     const wt = await createWorktree(pi, repoDir, "tag");
