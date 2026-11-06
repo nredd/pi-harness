@@ -867,3 +867,106 @@ describe("Anthropic snapshots without a 5h window", () => {
 		expect(service.decisionFor(SONNET)).toEqual({ block: false });
 	});
 });
+
+describe("UsageService payload shapes", () => {
+	it.each([
+		["a non-object Anthropic body", "anthropic", "maintenance"],
+		["a Codex body without rate_limit", "openai-codex", { credits: { has_credits: true } }],
+		["a Codex body whose windows carry no used_percent", "openai-codex", { rate_limit: { primary_window: {} } }],
+	])("treats %s as an unsupported shape", async (_label, provider, body) => {
+		const { service } = harness([{ body }]);
+		expect(await service.get(ctx, provider)).toMatchObject({
+			status: "error",
+			message: "Usage response had an unsupported shape.",
+		});
+	});
+
+	it("skips a Codex window without used_percent and keeps the other", async () => {
+		const { service } = harness([
+			{ body: { rate_limit: { primary_window: { used_percent: "18" }, secondary_window: { used_percent: 37 } } } },
+		]);
+		const snapshot = await service.get(ctx, "openai-codex");
+		expect(snapshot.windows.map(({ name, usedPercent }) => ({ name, usedPercent }))).toEqual([
+			{ name: "7d", usedPercent: 37 },
+		]);
+	});
+
+	it.each([
+		["no chatgpt_account_id", {}],
+		["an empty chatgpt_account_id", { chatgpt_account_id: "" }],
+	])("omits the Codex account id when the token's auth claim has %s", async (_label, claim) => {
+		const body = { rate_limit: { primary_window: { used_percent: 1 } } };
+		const { service, requests } = harness([{ body }], jwt({ "https://api.openai.com/auth": claim }));
+		await service.get(ctx, "openai-codex");
+		expect(requests[0]?.headers).toEqual({ Authorization: `Bearer ${jwt({ "https://api.openai.com/auth": claim })}` });
+	});
+
+	it.each(["0", "soon", new Date(T0 - MINUTE).toUTCString()])(
+		"falls back to the backoff step when Retry-After is %s",
+		async (retryAfter) => {
+			const { service, clock, requests } = harness([
+				{ body: "slow down", status: 429, headers: { "Retry-After": retryAfter } },
+				{ body: { five_hour: { utilization: 1 } } },
+			]);
+			await service.get(ctx, "anthropic");
+			clock.now += MINUTE - 1;
+			expect((await service.get(ctx, "anthropic")).message).toMatch(/Backing off/);
+			expect(requests).toHaveLength(1);
+			clock.now += 1;
+			expect((await service.get(ctx, "anthropic")).status).toBe("available");
+			expect(requests).toHaveLength(2);
+		},
+	);
+
+	it("reports a transport AbortError that the request timeout did not cause as a cancellation", async () => {
+		const service = new UsageService({
+			fetch: async () => {
+				throw new DOMException("The operation was aborted.", "AbortError");
+			},
+			now: () => T0,
+			getAccessToken: async () => "token",
+		});
+		expect(await service.get(ctx, "anthropic")).toMatchObject({
+			status: "error",
+			message: "Usage request was cancelled.",
+		});
+	});
+});
+
+describe("UsageService.format", () => {
+	const service = new UsageService({ fetch: vi.fn(), now: () => T0, getAccessToken: async () => "token" });
+
+	it("says when usage was never checked", () => {
+		expect(service.format(undefined)).toBe("usage unavailable (not checked)");
+	});
+
+	it("names a non-available status with its message, or not available without one", () => {
+		const base = { provider: "anthropic", windows: [], retrievedAt: T0, expiresAt: T0 };
+		expect(service.format({ ...base, status: "error", message: "Usage request failed." })).toBe(
+			"usage error: Usage request failed.",
+		);
+		expect(service.format({ ...base, status: "unavailable" })).toBe("usage unavailable: not available");
+	});
+
+	it("renders each window's rounded use and a local reset time only when the reset is known", () => {
+		const text = service.format({
+			provider: "anthropic",
+			status: "available",
+			retrievedAt: T0,
+			expiresAt: T0 + 5 * MINUTE,
+			windows: [
+				{
+					name: "five_hour",
+					usedPercent: 24.6,
+					resetAt: FUTURE_RESET_MS,
+					durationMs: 5 * 60 * MINUTE,
+					scope: "provider",
+				},
+				{ name: "seven_day", usedPercent: 42.4, durationMs: 7 * 24 * 60 * MINUTE, scope: "provider" },
+			],
+		});
+		expect(text).toBe(
+			`five_hour 25% used, resets ${new Date(FUTURE_RESET_MS).toLocaleTimeString()}; seven_day 42% used`,
+		);
+	});
+});

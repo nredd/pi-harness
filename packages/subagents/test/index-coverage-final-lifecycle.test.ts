@@ -10,9 +10,11 @@ import { initTheme, ModelRegistry, ModelRuntime } from "@earendil-works/pi-codin
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentManager } from "../src/agent-manager.js";
+import { setFallbackSubagent } from "../src/agent-types.js";
 import { detachedDir, listRunningDetached } from "../src/detached-results.js";
 import { createSubagentsExtension, WORKFLOW_FILE_FLAG } from "../src/index.js";
 import { sessionTaskDir } from "../src/output-file.js";
+import { resetBudgetForTests } from "../src/process-budget.js";
 import { resolveStorePath, ScheduleStore } from "../src/schedule-store.js";
 import type { AgentRecord } from "../src/types.js";
 import { WorkflowDialog } from "../src/ui/workflow-dialog.js";
@@ -53,7 +55,7 @@ afterEach(async () => {
     for (const bound of bindings) await bound.registry.waitForAll();
     await flush();
     for (const bound of [...bindings].reverse()) if (!bound.stopped) await shutdown(bound, "quit");
-  } finally { provider.unregister(); Reflect.deleteProperty(globalThis, managerKey); env.restore(); }
+  } finally { provider.unregister(); Reflect.deleteProperty(globalThis, managerKey); resetBudgetForTests(); env.restore(); }
 });
 
 async function bind(ui: Record<string, unknown> = {}, flags: Record<string, boolean | string> = {}, competingWorkflow = false): Promise<Bound> {
@@ -681,5 +683,78 @@ describe("index retained lifecycle callbacks", () => {
     expect(first.registry.getRecord(id)).toBeUndefined(); // The settled detached manager releases retained sessions/records.
     expect(first.boot.pi.sendMessage).not.toHaveBeenCalled();
     expect(next.boot.pi.sendMessage).not.toHaveBeenCalled(); // Never deliver the old run into the replacement context.
+  });
+});
+
+describe("index completion notices and mention resumes", () => {
+  it("delivers a held completion at a turn end whose message is not the assistant's", async () => {
+    provider.setResponses([answer("private result")]);
+    const bound = await bind();
+    await spawn(bound, "user turn child"); await bound.registry.waitForAll();
+    expect(bound.boot.pi.sendMessage).not.toHaveBeenCalled();
+    await bound.boot.lifecycle.get("turn_end")?.({ type: "turn_end", message: { role: "user", content: "next" } } as never, bound.context);
+    expect(bound.boot.pi.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("private result") }), expect.anything());
+  });
+
+  it("previews an empty result as No output when notices carry no result chars", async () => {
+    configure({ notificationResultChars: 0, defaultJoinMode: "smart" });
+    provider.setResponses([answer("")]);
+    const bound = await bind();
+    await spawn(bound, "silent child"); await bound.registry.waitForAll();
+    await turnEnd(bound);
+    expect(bound.boot.pi.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining("<result>No output.</result>") }), expect.anything());
+  });
+
+  it("names the process-wide budget in a queued spawn's position line", async () => {
+    configure({ maxConcurrent: 1 });
+    // A process-wide policy is read from the global file only.
+    writeFileSync(join(process.env.PI_CODING_AGENT_DIR!, "subagents.json"), JSON.stringify({ maxActiveSubagents: 4, nestedSubagentReserve: 1 }));
+    const hold = heldResponse("blocking result");
+    provider.setResponses([hold.response, answer("queued result")]);
+    const bound = await bind();
+    await spawn(bound, "pool blocker"); await hold.entered;
+    const queued = await bound.boot.tools.get("Agent").execute("queued-call", {
+      subagent_type: "general-purpose", prompt: "queued", description: "queued", run_in_background: true,
+    }, undefined, undefined, bound.context);
+    expect(queued.content[0].text).toContain("Position: queued (max 1 concurrent, 4 process-wide)");
+    hold.release(); await bound.registry.waitForAll();
+  });
+
+  it("answers an inline resume that produced no text with No output", async () => {
+    provider.setResponses([answer("original private result"), answer("")]);
+    const bound = await bind();
+    const id = await spawn(bound, "quiet resumable"); await bound.registry.waitForAll();
+    const result = await bound.boot.tools.get("Agent").execute("inline-empty-resume", {
+      resume: id, prompt: "say nothing", description: "empty resume", subagent_type: "general-purpose", run_in_background: false,
+    }, undefined, undefined, bound.context);
+    expect(result.content[0].text).toMatch(/No output\.$/);
+  });
+
+  it("names the hardcoded fallback when an unknown type falls back to an unregistered default", async () => {
+    configure({ disableDefaultAgents: true });
+    provider.setResponses([answer("fallback private result")]);
+    const bound = await bind();
+    // Unset: the permissive tier, which targets general-purpose even when it is not registered.
+    setFallbackSubagent(undefined);
+    const result = await bound.boot.tools.get("Agent").execute("unknown-type", {
+      subagent_type: "no-such-agent", prompt: "work", description: "unknown type", run_in_background: false,
+    }, undefined, undefined, bound.context);
+    expect(result.content[0].text).toContain('Note: Unknown agent type "no-such-agent" — using the fallback agent config.');
+    expect(result.content[0].text).toContain("fallback private result");
+  });
+
+  it("warns when the manager refuses a mention's resume", async () => {
+    configure({ agentMentions: "direct" });
+    provider.setResponses([answer("original private result")]);
+    const notify = vi.fn();
+    const bound = await bind({ notify });
+    const id = await spawn(bound, "mentioned child"); await bound.registry.waitForAll();
+    const handle = bound.registry.getRecord(id)?.handle;
+    const resume = vi.spyOn(AgentManager.prototype, "resume").mockResolvedValueOnce(undefined);
+    try {
+      await bound.boot.lifecycle.get("input")?.({ type: "input", text: `@${handle} again`, source: "interactive" } as never, bound.context);
+    } finally { resume.mockRestore(); }
+    expect(notify).toHaveBeenCalledWith(`Could not resume @${handle} — it is still running.`, "warning");
+    expect(provider.state.callCount).toBe(1);
   });
 });

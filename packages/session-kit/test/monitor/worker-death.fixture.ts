@@ -26,7 +26,8 @@ it("starts a monitor then fails or waits to be killed", async () => {
 				process.execPath,
 				"-e",
 				// The target spawns an in-group descendant (published first) so group reaping is observable.
-				`const fs = require("node:fs"); const child = require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000) // ${token}"], { stdio: "ignore" }); fs.writeFileSync(process.env.MONITOR_WORKER_CHILD, String(child.pid)); fs.writeFileSync(process.env.MONITOR_WORKER_TARGET, String(process.pid)); ${STAY_GROUP} // ${token}`,
+				// The target PID is renamed into place: `existsSync` can see a plain write's empty file.
+				`const fs = require("node:fs"); const child = require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000) // ${token}"], { stdio: "ignore" }); const target = process.env.MONITOR_WORKER_TARGET; fs.writeFileSync(process.env.MONITOR_WORKER_CHILD, String(child.pid)); fs.writeFileSync(target + ".tmp", String(process.pid)); fs.renameSync(target + ".tmp", target); ${STAY_GROUP} // ${token}`,
 			],
 			name: "worker-killed",
 		},

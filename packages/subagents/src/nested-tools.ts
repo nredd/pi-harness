@@ -17,7 +17,7 @@ import {
 } from "./agent-types.js";
 import { loadCustomAgents } from "./custom-agents.js";
 import { isolationParam, resolveAgentInvocationConfig } from "./invocation-config.js";
-import { type ModelSelection, modelSelectionNote, selectModel } from "./model-selection.js";
+import { type ModelSelection, modelIdentityNote, modelSelectionNote, selectModel } from "./model-selection.js";
 import {
   createOutputFilePath,
   getOutputTranscriptDefault,
@@ -166,7 +166,7 @@ type ResultPosition = "inline" | "fetched";
 function formatRecord(record: AgentRecord, position: ResultPosition): string {
   // Read off the record, so a fetched or resumed child reports what ran, not
   // what the current call would have configured.
-  const note = modelSelectionNote(record);
+  const note = [modelSelectionNote(record), modelIdentityNote(record)].filter(Boolean).join("\n");
   return note ? `${note}\n\n${formatOutcome(record, position)}` : formatOutcome(record, position);
 }
 

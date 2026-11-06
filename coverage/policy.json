@@ -84,13 +84,13 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 10 }, "linux": { "lines": 0, "functions": 0, "branches": 10 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
 
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 10 }, "linux": { "lines": 0, "functions": 0, "branches": 10 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
           "enforcement": "enforced",
           "reporters": ["text", "lcov"]
         }
@@ -165,7 +165,7 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 277 }, "linux": { "lines": 0, "functions": 0, "branches": 277 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 183 }, "linux": { "lines": 0, "functions": 0, "branches": 183 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
@@ -175,7 +175,7 @@
             "src/agent-runner.ts", "src/agent-source-badge.ts", "src/agent-types.ts", "src/child-context.ts",
             "src/clock.ts", "src/completion-outbox.ts", "src/context.ts", "src/cross-extension-rpc.ts",
             "src/custom-agents.ts", "src/default-agents.ts", "src/detached-results.ts", "src/enabled-models.ts",
-            "src/enterprise-local.ts", "src/env.ts", "src/group-join.ts", "src/home-paths.ts", "src/index.ts",
+            "src/enterprise-local.ts", "src/env.ts", "src/error-message.ts", "src/group-join.ts", "src/home-paths.ts", "src/index.ts",
             "src/invocation-config.ts", "src/memory.ts", "src/mention-clone.ts", "src/mention.ts",
             "src/model-call.ts", "src/model-resolver.ts", "src/model-selection.ts", "src/model-scope.ts", "src/model-tiers.ts", "src/nested-tools.ts",
             "src/notification-result.ts", "src/output-file.ts", "src/package-resources.ts", "src/plan-mode-children.ts", "src/process-budget.ts", "src/prompts.ts",
@@ -207,13 +207,13 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 36 }, "linux": { "lines": 0, "functions": 0, "branches": 36 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
           "reporters": ["text", "lcov"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
 
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 36 }, "linux": { "lines": 0, "functions": 0, "branches": 36 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
           "enforcement": "enforced",
           "reporters": ["text", "lcov"]
         }

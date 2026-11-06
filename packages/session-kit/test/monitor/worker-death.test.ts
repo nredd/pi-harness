@@ -1,12 +1,12 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, watch, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { isolatedHomeEnv } from "../../../../scripts/run-vitest.ts";
 import { psInfo } from "../../src/monitor/pidfiles.ts";
 import { signalGroup } from "../../src/monitor/process.ts";
-import { running, tempDir, waitFor } from "./helpers.ts";
+import { published, running, tempDir, waitFor } from "./helpers.ts";
 
 interface WorkerReady {
 	workerPid: number;
@@ -30,33 +30,6 @@ async function killOwned(pid: number, pgid: number, token: string): Promise<void
 		throw new Error(`refusing to kill unowned process ${pid} in group ${pgid}`);
 	signalGroup(pgid, "SIGKILL");
 	await waitFor(async () => !(await running(pid)));
-}
-
-/**
- * Resolve once the nested run publishes `path` (an atomic rename into its directory), or reject when
- * that run exits first. Its cold Vitest start takes seconds under load, so the run's own lifecycle,
- * not a wall-clock budget, ends the wait; the test's timeout still bounds it.
- */
-function published(path: string, child: ChildProcess): Promise<void> {
-	return new Promise((resolve, reject) => {
-		let settled = false;
-		const watcher = watch(dirname(path), () => {
-			if (existsSync(path)) settle();
-		});
-		const exited = (code: number | null, signal: NodeJS.Signals | null) =>
-			settle(new Error(`worker fixture exited before publishing readiness: ${code ?? signal}`));
-		function settle(error?: Error): void {
-			if (settled) return;
-			settled = true;
-			watcher.close();
-			child.off("exit", exited);
-			if (error) reject(error);
-			else resolve();
-		}
-		child.once("exit", exited);
-		if (existsSync(path)) settle();
-		else if (child.exitCode !== null || child.signalCode !== null) exited(child.exitCode, child.signalCode);
-	});
 }
 
 async function stopOwnedMonitor(): Promise<void> {
@@ -102,7 +75,8 @@ describe("monitor worker death", () => {
 						MONITOR_WORKER_TOKEN: token,
 						MONITOR_WORKER_FAIL: failure === "assertion failure" ? "1" : "0",
 					},
-					stdio: "ignore",
+					// Piped so `published` can report why the nested run exited early.
+					stdio: ["ignore", "pipe", "pipe"],
 				});
 				await published(readyPath, runner);
 				ready = JSON.parse(readFileSync(readyPath, "utf8")) as WorkerReady;
