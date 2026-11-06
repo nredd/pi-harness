@@ -1007,6 +1007,48 @@ describe("cleanupWorktree — nested repositories git refuses to remove", () => 
     expect(existsSync(join(b, "precious.txt"))).toBe(true);
   });
 
+  it("ignores a stray file in the modules dir while checking submodule git dirs", async () => {
+    addSubmodule();
+    const wt = await populatedWorktree("stray-module-file");
+    const modules = run(wt.path, "rev-parse", "--path-format=absolute", "--git-path", "modules");
+    writeFileSync(join(modules, "stray.txt"), "not a git dir");
+    expect(await cleanupWorktree(pi, repoDir, wt, "stray")).toEqual({ hasChanges: false });
+    expect(existsSync(wt.path)).toBe(false);
+  });
+
+  it("does not count a recorded submodule sha against an ignored clone that lacks the object", async () => {
+    addSubmodule();
+    const otherDir = initGitRepo();
+    try {
+      // Identical fixtures can hash to the same commit within one second; rewrite the root so the shas differ.
+      run(otherDir, "commit", "--amend", "--allow-empty", "-m", "unrelated root");
+      writeFileSync(join(repoDir, ".gitignore"), "vendor/\n");
+      run(repoDir, "add", ".gitignore");
+      run(repoDir, "commit", "-m", "ignore vendor");
+      const wt = await populatedWorktree("unknown-published");
+      mkdirSync(join(wt.path, "vendor"));
+      run(join(wt.path, "vendor"), "clone", "--no-local", otherDir, "dep");
+      const subSha = run(join(wt.path, "sub"), "rev-parse", "HEAD").trim();
+      const dep = join(wt.path, "vendor", "dep");
+      expect(() => run(dep, "cat-file", "-e", `${subSha}^{commit}`)).toThrow();
+      expect(await cleanupWorktree(pi, repoDir, wt, "unknown published")).toEqual({ hasChanges: false });
+      expect(existsSync(wt.path)).toBe(false);
+    } finally {
+      rmSync(otherDir, { recursive: true, force: true });
+    }
+  });
+
+  it("inspects an ignored directory that points at an already inspected git dir only once", async () => {
+    ignoreInSource("alias/\n");
+    addSubmodule();
+    const wt = await populatedWorktree("ignored-alias");
+    const gitDir = run(join(wt.path, "sub"), "rev-parse", "--absolute-git-dir").trim();
+    mkdirSync(join(wt.path, "sub", "alias"));
+    writeFileSync(join(wt.path, "sub", "alias", ".git"), `gitdir: ${gitDir}\n`);
+    expect(await cleanupWorktree(pi, repoDir, wt, "ignored alias")).toEqual({ hasChanges: false });
+    expect(existsSync(wt.path)).toBe(false);
+  });
+
   it("does not let submodule ignore=all hide a bumped gitlink", async () => {
     addSubmodule();
     writeFileSync(join(repoDir, ".gitmodules"), `${readFileSync(join(repoDir, ".gitmodules"), "utf8")}\tignore = all\n`);
