@@ -59,7 +59,7 @@ beforeEach(async () => {
   registry = new ModelRegistry(runtime);
   registry.registerProvider("selection-path", {
     api: "openai-completions", baseUrl: "http://localhost:1", apiKey: "fixture-not-a-secret",
-    models: ["parent", "definition", "wildcard", "typed", "explicit"].map(id => ({
+    models: ["parent", "definition", "wildcard", "typed", "explicit", "claude-4-5-sonnet", "claude-5-sonnet", "claude-5-5-sonnet", "claude-5-6-sonnet"].map(id => ({
       id, name: id, reasoning: false, input: ["text"], contextWindow: 1000, maxTokens: 100,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     })),
@@ -142,6 +142,12 @@ describe.each(paths)("%s model selection parity", path => {
     expect(invocation?.[3].model).toMatchObject({ provider: "selection-path", id: "typed" });
     expect(record?.modelTier).toMatchObject({ kind: "static", tier: "cheap", member: ref("typed"), skipped: [] });
     expect(record?.modelSelection).toMatchObject({ requested: "@cheap", source: "agentModels:type" });
+  });
+
+  if (path !== "mention") it("preserves a fuzzy explicit version through the shared selection path", async () => {
+    const { invocation, record } = await invoke(path, "sonnet-5-5");
+    expect(invocation?.[3].model).toMatchObject({ provider: "selection-path", id: "claude-5-5-sonnet" });
+    expect(record?.modelSelection).toMatchObject({ requested: "sonnet-5-5", source: "param" });
   });
 
   if (path !== "mention") it("honors an explicit tier over agentModels", async () => {
@@ -243,6 +249,22 @@ describe.each(paths)("%s model selection parity", path => {
     expect(invocation?.[3].model).toMatchObject({ id: "explicit" });
     expect(record?.modelSelection).toMatchObject({ requested: ref("explicit"), source: "param" });
   });
+});
+
+it.each([ref("claude-5-5-sonnet"), "router/default"])("echoes safe resolved identity at spawn and completion: %s", async model => {
+  const result = await boot.tools.get("Agent").execute("identity", {
+    subagent_type: "scout", description: "identity", prompt: "go", model, run_in_background: true,
+  }, undefined, undefined, context);
+  const expected = model === "router/default"
+    ? "Resolved model: router/default (routing alias; physical response model: unknown)."
+    : `Resolved model: ${model}.`;
+  expect(result.content[0].text).toContain(expected);
+  expect(result.details.modelNote).toBeUndefined();
+  await flush();
+  clock.advance(200);
+  const notices = vi.mocked(boot.pi.sendMessage).mock.calls.map(args => JSON.stringify(args[0]));
+  expect(notices.some(notice => notice.includes(expected))).toBe(true);
+  expect(notices.join("\n")).not.toContain("fixture-not-a-secret");
 });
 
 it("reserves the concurrency slot before awaiting tier admission", async () => {
@@ -495,4 +517,24 @@ it("retains the record's original selection on resume despite changed config", a
   expect(record!.modelSelection).toBe(selection);
   expect(record!.session?.model).toBe(parent);
   expect(runner.resumeAgent).toHaveBeenCalled();
+});
+
+describe("schedule and quota-park results claim no resolved identity", () => {
+  const call = (params: Record<string, unknown>) =>
+    boot.tools.get("Agent").execute("claim", { subagent_type: "scout", description: "claim", prompt: "go", ...params }, undefined, undefined, context);
+
+  it.each([ref("explicit"), "@cheap"])("omits it on a scheduled result: %s", async model => {
+    setModelTiers({ cheap: [ref("typed"), ref("explicit")] }, {});
+    const result = await call({ model, schedule: "+1h" });
+    expect(result.content[0].text).toContain("Scheduled");
+    expect(result.content[0].text).not.toContain("Resolved model:");
+  });
+
+  it.each([ref("explicit"), "@cheap"])("omits it on a quota-park result: %s", async model => {
+    setModelTiers({ cheap: [ref("typed"), ref("explicit")] }, {});
+    blockedUntil = clock.now() + 60_000;
+    const result = await call({ model, run_in_background: true });
+    expect(result.content[0].text).toContain("Queued");
+    expect(result.content[0].text).not.toContain("Resolved model:");
+  });
 });
