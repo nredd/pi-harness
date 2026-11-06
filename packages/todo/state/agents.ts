@@ -215,6 +215,7 @@ export function applyAgentEvent(sessionId: string, channel: string, payload: unk
 	const nameBase = ownerKey(data.nameBase) ?? previous?.nameBase ?? predecessor?.nameBase;
 	// A survivor is re-announced at every settle. An identical `started` for an agent already running changes
 	// nothing, and must not reinsert it as the newest match for its handle over a newer same-named agent.
+	// `keys` is a superset of the previous keys, so an equal size means an equal set.
 	if (
 		state === "running" &&
 		previous?.state === "running" &&

@@ -53,7 +53,7 @@ snapshots are saved.
   starts. A queued resume identifies the exact preceding `settleSeq` and its new
   `queuedResumeSeq`; stale re-announcements or foreground handoffs cannot override a later state.
   Free text that matches no agent shows only `@owner`. Another session's agents
-  never match, so `/new`, `/fork` or `/resume` starts with no states; only a `/reload`, or a `/resume` back into the session that spawned them, hears that session's detached survivors again (survivors registered under a session file this one was forked from are heard as running for that session, with no state; those of unrelated sessions are ignored). An `in_progress` todo whose agent
+  never match, so `/new`, `/fork` or `/resume` starts with no states; only a `/reload`, or a `/resume` back into the session that spawned them, hears that session's detached survivors again (survivors registered under a session file this one was forked from are heard as running for that session, with no state; those of any other session, e.g. a sibling fork or a descendant, are ignored). An `in_progress` todo whose agent
   failed or stopped is marked in the error color, `✗ failed` or `✗ stopped`. The
   todo's own status never changes: the parent completes it with evidence.
 - **activeForm** — appended dim in parentheses, only while the task is

@@ -181,8 +181,10 @@ the full list grouped by status.
   spools there, not here. Only one registered under a file this session was forked from (its header's `parentSession`, then that
   file's own, so a `/fork`, a fork of a fork, or a `/reload` in either) makes a todo it owns read
   `agent running for another session, which it wakes instead of this one` (info, once); it is never armed here and never triggers the
-  held-work reminder. Handles are per manager, so a same-named survivor of an unrelated session (`/new`, `/resume` of another session)
-  proves nothing about this owner: that todo is `held` (or lost) and reminds as usual. A repeated `started` for an agent already
+  held-work reminder. Only ancestors count, compared by the exact paths pi wrote (no normalization; an unreadable or moved ancestor ends the chain): a
+  survivor of any other session (`/new`, `/resume` of another session, a sibling fork, or a descendant of this session) is not
+  matched, because handles are per manager and a same-named dead owner must not hide behind it. That todo is `held` (or lost)
+  and reminds as usual, the safe direction. A repeated `started` for an agent already
   running with the same identity changes nothing, so re-announcing a survivor never outranks a newer same-named agent. The set is rebuilt from each announcement, so a `/reload` loses nothing and a survivor that finished
   (even while this session was inactive) drops out at the next settle. An owner nobody names is `held`, never lost. A free-text owner (a person or team) is indistinguishable from a dead
   agent handle, so it lands there too until it is reassigned. Parent-held work warns only when nothing
