@@ -538,6 +538,7 @@ describe("settling with nothing armed to wake the parent", () => {
 			customType: HELD_REMINDER_MESSAGE_TYPE,
 			content: HELD_REMINDER_MARKER,
 			display: false,
+			details: { held: [1, 2] },
 		});
 		// Same prompt: already reminded. A new prompt reminds again. Aborted runs are the user's call.
 		expect(await settle(settleEvent([user, assistant, marker, assistant]), ctx)).toBeUndefined();

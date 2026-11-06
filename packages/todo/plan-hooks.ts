@@ -278,7 +278,7 @@ function reportKey(rows: readonly Row[], lookup: AgentStateLookup, armed: boolea
 	]);
 }
 
-function classifyAll(state: TaskState, lookup: AgentStateLookup, resumed: Owners): Row[] {
+function classifyAll(state: TaskState, lookup: AgentStateLookup, resumed: Owners = new Map()): Row[] {
 	const byId = new Map(state.tasks.map((t) => [t.id, t]));
 	return state.tasks.filter((t) => t.status === "in_progress").map((task) => classify(task, byId, lookup, resumed));
 }
@@ -289,7 +289,7 @@ function classifyAll(state: TaskState, lookup: AgentStateLookup, resumed: Owners
  */
 export function unarmedHeld(state: TaskState, lookup: AgentStateLookup, facts: SettleFacts): Task[] {
 	if (facts.armed) return [];
-	return classifyAll(state, lookup, facts.resumed ?? new Map())
+	return classifyAll(state, lookup, facts.resumed)
 		.filter((r) => r.kind === "held" || r.kind === "lost")
 		.map((r) => r.task);
 }
@@ -319,7 +319,7 @@ export function formatInProgressNotice(
 	lookup: AgentStateLookup = NO_AGENT_STATE,
 	facts: SettleFacts = {},
 ): InProgressNotice | undefined {
-	const rows = classifyAll(state, lookup, facts.resumed ?? new Map());
+	const rows = classifyAll(state, lookup, facts.resumed);
 	if (!rows.length) return undefined;
 	const armed = facts.armed === true;
 	const present = GROUPS.filter(({ kind }) => rows.some((r) => r.kind === kind));
@@ -394,14 +394,14 @@ export function registerPlanHooks(
 		event: AgentBeforeSettleEvent,
 		customType: string,
 		content: string,
-		ids: readonly number[],
+		details: Record<string, readonly number[]>,
 	): AgentBeforeSettleEventResult => {
 		const draft: SessionBoundaryDraft = {
 			type: "custom_message",
 			customType,
 			content,
 			display: false,
-			details: { open: ids },
+			details,
 		};
 		return { entries: [...event.entries, draft], continue: true };
 	};
@@ -413,23 +413,15 @@ export function registerPlanHooks(
 		if (!remindedSinceLastPrompt(messages)) {
 			const open = selectOpenPlanItems(getState(id));
 			if (open.length)
-				return reminderDraft(
-					event,
-					PLAN_REMINDER_MESSAGE_TYPE,
-					PLAN_REMINDER_MARKER,
-					open.map((t) => t.id),
-				);
+				return reminderDraft(event, PLAN_REMINDER_MESSAGE_TYPE, PLAN_REMINDER_MARKER, {
+					open: open.map((t) => t.id),
+				});
 		}
 		// Held work with nothing armed can never wake the parent: remind once per prompt, not every settle.
 		if (remindedSinceLastPrompt(messages, HELD_REMINDER_MESSAGE_TYPE)) return undefined;
 		const held = unarmedHeld(getState(id), agentLookup(id), settleFacts(id));
 		if (!held.length) return undefined;
-		return reminderDraft(
-			event,
-			HELD_REMINDER_MESSAGE_TYPE,
-			HELD_REMINDER_MARKER,
-			held.map((t) => t.id),
-		);
+		return reminderDraft(event, HELD_REMINDER_MESSAGE_TYPE, HELD_REMINDER_MARKER, { held: held.map((t) => t.id) });
 	};
 	pi.on("agent_before_settle", onSettle);
 
