@@ -315,7 +315,7 @@ function retryAfterMs(header: string | null, now: number): number | undefined {
 	if (!header) return undefined;
 	const trimmed = header.trim();
 	const ms = /^\d+$/.test(trimmed) ? Number(trimmed) * 1000 : Date.parse(trimmed) - now;
-	return Number.isFinite(ms) && ms > 0 ? ms : undefined;
+	return Number.isFinite(ms) ? ms : undefined;
 }
 
 interface FetchOutcome {
