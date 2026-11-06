@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -1016,21 +1016,21 @@ describe("cleanupWorktree — nested repositories git refuses to remove", () => 
     expect(existsSync(wt.path)).toBe(false);
   });
 
-  it("does not count a recorded submodule sha against an ignored clone that lacks the object", async () => {
+  it("does not count another submodule's sha against a deinitialized git dir that lacks the object", async () => {
     addSubmodule();
     const otherDir = initGitRepo();
     try {
       // Identical fixtures can hash to the same commit within one second; rewrite the root so the shas differ.
       run(otherDir, "commit", "--amend", "--allow-empty", "-m", "unrelated root");
-      writeFileSync(join(repoDir, ".gitignore"), "vendor/\n");
-      run(repoDir, "add", ".gitignore");
-      run(repoDir, "commit", "-m", "ignore vendor");
+      run(repoDir, "submodule", "add", otherDir, "other");
+      run(repoDir, "commit", "-m", "add second submodule");
       const wt = await populatedWorktree("unknown-published");
-      mkdirSync(join(wt.path, "vendor"));
-      run(join(wt.path, "vendor"), "clone", "--no-local", otherDir, "dep");
-      const subSha = run(join(wt.path, "sub"), "rev-parse", "HEAD").trim();
-      const dep = join(wt.path, "vendor", "dep");
-      expect(() => run(dep, "cat-file", "-e", `${subSha}^{commit}`)).toThrow();
+      const otherSha = run(join(wt.path, "other"), "rev-parse", "HEAD").trim();
+      run(wt.path, "submodule", "deinit", "-f", "sub");
+      // `sub` keeps its git dir under `modules` but is no longer inspected through a gitlink,
+      // so it is probed against the trusted sha of `other`, an object it does not hold.
+      const orphan = join(run(wt.path, "rev-parse", "--path-format=absolute", "--git-path", "modules").trim(), "sub");
+      expect(() => run(wt.path, "--git-dir", orphan, "cat-file", "-e", `${otherSha}^{commit}`)).toThrow();
       expect(await cleanupWorktree(pi, repoDir, wt, "unknown published")).toEqual({ hasChanges: false });
       expect(existsSync(wt.path)).toBe(false);
     } finally {
@@ -1043,10 +1043,21 @@ describe("cleanupWorktree — nested repositories git refuses to remove", () => 
     addSubmodule();
     const wt = await populatedWorktree("ignored-alias");
     const gitDir = run(join(wt.path, "sub"), "rev-parse", "--absolute-git-dir").trim();
-    mkdirSync(join(wt.path, "sub", "alias"));
-    writeFileSync(join(wt.path, "sub", "alias", ".git"), `gitdir: ${gitDir}\n`);
+    const alias = join(wt.path, "sub", "alias");
+    mkdirSync(alias);
+    writeFileSync(join(alias, ".git"), `gitdir: ${gitDir}\n`);
+    const inAlias: string[][] = [];
+    const real = pi.exec.bind(pi);
+    pi.exec = (async (command: string, args: string[], options?: { cwd?: string }) => {
+      if (options?.cwd && resolve(options.cwd) === alias) inAlias.push(args);
+      return await real(command, args, options as never);
+    }) as typeof pi.exec;
     expect(await cleanupWorktree(pi, repoDir, wt, "ignored alias")).toEqual({ hasChanges: false });
     expect(existsSync(wt.path)).toBe(false);
+    // Only the identity lookup that finds it already `seen` (once per disposability pass: before
+    // the commit check and again before the forced removal); never status, probe or `HEAD`.
+    expect(inAlias.length).toBeGreaterThan(0);
+    expect(inAlias.every(args => args.join(" ") === "rev-parse --absolute-git-dir")).toBe(true);
   });
 
   it("does not let submodule ignore=all hide a bumped gitlink", async () => {
