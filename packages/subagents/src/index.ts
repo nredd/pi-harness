@@ -751,6 +751,12 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     return rest;
   }
 
+  /** The terminal lifecycle channel for a settled record; shared by the live and the detached path. */
+  function lifecycleChannel(record: AgentRecord): "subagents:failed" | "subagents:completed" {
+    return record.status === "error" || record.status === "stopped" || record.status === "aborted"
+      ? "subagents:failed" : "subagents:completed";
+  }
+
   function spoolDetachedResult(sessionFile: string, record: AgentRecord) {
     if (record.resultConsumed) return;
     const footer = record.outputFile ? `\nFull transcript available at: ${record.outputFile}` : "";
@@ -762,8 +768,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
         details: notice.details,
         record: historyRecord(record),
         lifecycle: {
-          channel: record.status === "error" || record.status === "stopped" || record.status === "aborted"
-            ? "subagents:failed" : "subagents:completed",
+          channel: lifecycleChannel(record),
           data: survivorEventData(buildEventData(record)),
         },
         ...(notice.parts ? { notice: { ...notice.parts, footer } } : {}),
@@ -840,14 +845,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 
     if (!record.resultConsumed) fleet.ingestFailure(record);
     // Emit lifecycle event based on terminal status
-    const isError = record.status === "error" || record.status === "stopped" || record.status === "aborted";
     record.settleSeq = manager.nextSequence();
-    const eventData = buildEventData(record);
-    if (isError) {
-      pi.events.emit("subagents:failed", eventData);
-    } else {
-      pi.events.emit("subagents:completed", eventData);
-    }
+    pi.events.emit(lifecycleChannel(record), buildEventData(record));
 
     // Persist final record for cross-extension history reconstruction
     pi.appendEntry("subagents:record", historyRecord(record));

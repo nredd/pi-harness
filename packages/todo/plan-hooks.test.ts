@@ -733,14 +733,14 @@ describe("settling with nothing armed to wake the parent", () => {
 		expect(result.entries).toHaveLength(1);
 	});
 
-	it("only the bound session asks for survivors", async () => {
-		const { handler, bus } = await start(tasks({ id: 1 }), "resume", (b) => {
-			b.set(SUBAGENT_ANNOUNCE_SURVIVORS_EVENT, []);
-		});
+	it("asks for survivors once for the bound headless session, never for a child", async () => {
 		const asks = vi.fn();
-		bus.set(SUBAGENT_ANNOUNCE_SURVIVORS_EVENT, [asks]);
+		const { handler } = await start(tasks({ id: 1 }), "resume", (b) =>
+			b.set(SUBAGENT_ANNOUNCE_SURVIVORS_EVENT, [asks]),
+		);
+		expect(asks).toHaveBeenCalledTimes(1);
 		await handler("session_start")({ reason: "startup" }, createMockCtx({ sessionId: "child" }));
-		expect(asks).not.toHaveBeenCalled();
+		expect(asks).toHaveBeenCalledTimes(1);
 	});
 
 	it("shows held work once while a wake is armed, and warns again when it is not", async () => {
