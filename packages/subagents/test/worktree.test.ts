@@ -689,6 +689,216 @@ describe("cleanupWorktree — submodules", () => {
   });
 });
 
+describe("cleanupWorktree — nested repositories git refuses to remove", () => {
+  let repoDir: string;
+  let subDir: string;
+  let pi: ExtensionAPI;
+  const cleanups: string[] = [];
+
+  const run = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-c", "protocol.file.allow=always", "-c", "user.email=t@t.com", "-c", "user.name=T", ...args], {
+      cwd,
+      stdio: "pipe",
+    })
+      .toString()
+      .trim();
+
+  beforeEach(() => {
+    pi = mockPi();
+    subDir = initGitRepo();
+    repoDir = initGitRepo();
+    run(repoDir, "config", "protocol.file.allow", "always");
+  });
+
+  afterEach(() => {
+    for (const path of cleanups.splice(0)) {
+      if (existsSync(path)) execFileSync("git", ["worktree", "remove", "--force", path], { cwd: repoDir });
+    }
+    rmSync(repoDir, { recursive: true, force: true });
+    rmSync(subDir, { recursive: true, force: true });
+  });
+
+  /** A worktree holding a nested clone `dep` with a commit that exists nowhere else. */
+  async function worktreeWithLocalOnlyNestedRepo(id: string) {
+    const wt = await createWorktree(pi, repoDir, id);
+    cleanups.push(wt.path);
+    run(wt.path, "clone", subDir, "dep");
+    const dep = join(wt.path, "dep");
+    writeFileSync(join(dep, "precious.txt"), "unpublished");
+    run(dep, "add", "precious.txt");
+    run(dep, "commit", "-m", "local only");
+    return { wt, dep, sha: run(dep, "rev-parse", "HEAD") };
+  }
+
+  it("keeps a worktree whose agent recorded a nested clone as a gitlink with no .gitmodules", async () => {
+    const { wt, dep, sha } = await worktreeWithLocalOnlyNestedRepo("gitlink-committed");
+    run(wt.path, "add", "-A");
+    run(wt.path, "commit", "-m", "record dep");
+    expect(run(wt.path, "status", "--porcelain")).toBe("");
+    const result = await cleanupWorktree(pi, repoDir, wt, "gitlink");
+    expect(result.path).toBe(wt.path);
+    expect(result.error).toMatch(/submodule work would be lost/);
+    expect(run(dep, "rev-parse", "HEAD")).toBe(sha);
+  });
+
+  it("keeps a worktree when its own preservation commit records the nested clone", async () => {
+    const { wt, dep, sha } = await worktreeWithLocalOnlyNestedRepo("gitlink-uncommitted");
+    const result = await cleanupWorktree(pi, repoDir, wt, "gitlink");
+    expect(result.path).toBe(wt.path);
+    expect(result.error).toMatch(/submodule work would be lost/);
+    expect(run(dep, "rev-parse", "HEAD")).toBe(sha);
+  });
+
+  async function worktreeWithSubmodule(id: string) {
+    run(repoDir, "submodule", "add", subDir, "sub");
+    run(repoDir, "commit", "-m", "add submodule");
+    const wt = await createWorktree(pi, repoDir, id);
+    cleanups.push(wt.path);
+    run(wt.path, "submodule", "update", "--init", "--recursive");
+    const sub = join(wt.path, "sub");
+    writeFileSync(join(sub, "precious.txt"), "unpublished");
+    run(sub, "add", "precious.txt");
+    run(sub, "commit", "-m", "local only");
+    return { wt, sub, sha: run(sub, "rev-parse", "HEAD") };
+  }
+
+  it("keeps the worktree when the agent deleted .gitmodules over a submodule with unpushed commits", async () => {
+    const { wt, sub, sha } = await worktreeWithSubmodule("no-gitmodules");
+    rmSync(join(wt.path, ".gitmodules"));
+    const result = await cleanupWorktree(pi, repoDir, wt, "gitmodules gone");
+    expect(result.path).toBe(wt.path);
+    expect(result.error).toMatch(/submodule work would be lost/);
+    expect(run(sub, "rev-parse", "HEAD")).toBe(sha);
+  });
+
+  it("keeps the worktree when a deinitialized submodule leaves unpushed commits in the modules dir", async () => {
+    const { wt } = await worktreeWithSubmodule("deinit");
+    run(wt.path, "submodule", "deinit", "-f", "sub");
+    const result = await cleanupWorktree(pi, repoDir, wt, "deinit");
+    expect(result.path).toBe(wt.path);
+    expect(result.error).toMatch(/submodule work would be lost/);
+    const modules = run(wt.path, "rev-parse", "--path-format=absolute", "--git-path", "modules/sub");
+    expect(existsSync(modules)).toBe(true);
+  });
+
+  it("removes a deinitialized submodule that holds nothing unpublished", async () => {
+    run(repoDir, "submodule", "add", subDir, "sub");
+    run(repoDir, "commit", "-m", "add submodule");
+    const wt = await createWorktree(pi, repoDir, "deinit-clean");
+    cleanups.push(wt.path);
+    run(wt.path, "submodule", "update", "--init", "--recursive");
+    run(wt.path, "submodule", "deinit", "-f", "sub");
+    expect(await cleanupWorktree(pi, repoDir, wt, "deinit clean")).toEqual({ hasChanges: false });
+    expect(existsSync(wt.path)).toBe(false);
+  });
+
+  it("keeps the worktree when a submodule nested inside a submodule holds an unpushed commit", async () => {
+    const innerDir = initGitRepo();
+    try {
+      run(subDir, "submodule", "add", innerDir, "inner");
+      run(subDir, "commit", "-m", "add inner");
+      run(repoDir, "submodule", "add", subDir, "sub");
+      run(repoDir, "commit", "-m", "add sub");
+      const wt = await createWorktree(pi, repoDir, "nested-nested");
+      cleanups.push(wt.path);
+      run(wt.path, "submodule", "update", "--init", "--recursive");
+      const inner = join(wt.path, "sub", "inner");
+      writeFileSync(join(inner, "precious.txt"), "unpublished");
+      run(inner, "add", "precious.txt");
+      run(inner, "commit", "-m", "local only");
+      const sha = run(inner, "rev-parse", "HEAD");
+      const result = await cleanupWorktree(pi, repoDir, wt, "nested nested");
+      expect(result.path).toBe(wt.path);
+      expect(result.error).toMatch(/inner/);
+      expect(run(inner, "rev-parse", "HEAD")).toBe(sha);
+    } finally {
+      rmSync(innerDir, { recursive: true, force: true });
+    }
+  });
+
+  it("decides the forced removal structurally, not from git's English message", async () => {
+    run(repoDir, "submodule", "add", subDir, "sub");
+    run(repoDir, "commit", "-m", "add submodule");
+    const wt = await createWorktree(pi, repoDir, "locale");
+    cleanups.push(wt.path);
+    run(wt.path, "submodule", "update", "--init", "--recursive");
+    const german = {
+      exec: async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
+        const result = await pi.exec(command, args, options);
+        if (args[0] === "worktree" && args[1] === "remove" && result.code !== 0) {
+          return { ...result, stderr: "fatal: Arbeitsverzeichnisse mit Submodulen koennen nicht verschoben werden" };
+        }
+        return result;
+      },
+    } as unknown as ExtensionAPI;
+    expect(await cleanupWorktree(german, repoDir, wt, "locale")).toEqual({ hasChanges: false });
+    expect(existsSync(wt.path)).toBe(false);
+  });
+
+  it("rethrows a removal failure that has nothing to do with submodules", async () => {
+    const wt = await createWorktree(pi, repoDir, "plain-failure");
+    cleanups.push(wt.path);
+    const result = await cleanupWorktree(failingPi(a => a[0] === "worktree" && a[1] === "remove", { code: 1, killed: false }), repoDir, wt, "plain");
+    expect(result).toMatchObject({ path: wt.path, error: "boom" });
+  });
+
+  it("refuses the forced removal when the outer tree is dirty", async () => {
+    run(repoDir, "submodule", "add", subDir, "sub");
+    run(repoDir, "commit", "-m", "add submodule");
+    const wt = await createWorktree(pi, repoDir, "late-dirty");
+    cleanups.push(wt.path);
+    run(wt.path, "submodule", "update", "--init", "--recursive");
+    const late = {
+      exec: async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
+        const result = await pi.exec(command, args, options);
+        if (args[0] === "worktree" && args[1] === "remove") writeFileSync(join(wt.path, "late.txt"), "late");
+        return result;
+      },
+    } as unknown as ExtensionAPI;
+    const result = await cleanupWorktree(late, repoDir, wt, "late");
+    expect(result.path).toBe(wt.path);
+    expect(existsSync(join(wt.path, "late.txt"))).toBe(true);
+  });
+
+  it("removes a clean worktree whose submodule HEAD was fetched by sha and no remote ref contains", async () => {
+    run(subDir, "config", "uploadpack.allowAnySHA1InWant", "true");
+    run(repoDir, "submodule", "add", subDir, "sub");
+    const main = run(subDir, "rev-parse", "--abbrev-ref", "HEAD");
+    run(subDir, "checkout", "--detach");
+    writeFileSync(join(subDir, "side.txt"), "side");
+    run(subDir, "add", "side.txt");
+    run(subDir, "commit", "-m", "unreachable from any branch");
+    const side = run(subDir, "rev-parse", "HEAD");
+    run(subDir, "checkout", main);
+    run(repoDir, "update-index", "--cacheinfo", `160000,${side},sub`);
+    run(repoDir, "commit", "-m", "add submodule at side commit");
+    const wt = await createWorktree(pi, repoDir, "by-sha");
+    cleanups.push(wt.path);
+    run(wt.path, "submodule", "update", "--init", "--recursive");
+    expect(run(join(wt.path, "sub"), "rev-parse", "HEAD")).toBe(side);
+    expect(run(join(wt.path, "sub"), "branch", "-r", "--contains", side)).toBe("");
+    expect(await cleanupWorktree(pi, repoDir, wt, "by sha")).toEqual({ hasChanges: false });
+    expect(existsSync(wt.path)).toBe(false);
+  });
+
+  it("removes a clean worktree whose submodule carries a fetched tag on a commit no remote branch holds", async () => {
+    run(repoDir, "submodule", "add", subDir, "sub");
+    run(repoDir, "commit", "-m", "add submodule");
+    const wt = await createWorktree(pi, repoDir, "tag");
+    cleanups.push(wt.path);
+    run(wt.path, "submodule", "update", "--init", "--recursive");
+    const sub = join(wt.path, "sub");
+    const main = run(subDir, "rev-parse", "--abbrev-ref", "HEAD");
+    run(subDir, "checkout", "--detach");
+    run(subDir, "commit", "--allow-empty", "-m", "tagged, on no branch");
+    run(subDir, "tag", "--no-sign", "-m", "release", "v1");
+    run(subDir, "checkout", main);
+    run(sub, "fetch", "--tags");
+    expect(run(sub, "rev-list", "--tags", "--not", "--remotes")).not.toBe("");
+    expect(await cleanupWorktree(pi, repoDir, wt, "tag")).toEqual({ hasChanges: false });
+  });
+});
+
 /**
  * The project switch itself (`worktreeIsolation`, #184). Its consumers —
  * agent-manager, both tool schemas, the invocation resolver — all mock this

@@ -12,9 +12,9 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export interface WorktreeInfo {
@@ -163,7 +163,7 @@ export async function cleanupWorktree(
   let branch: string | undefined;
   try {
     // Submodule state lives in the worktree's private git dir and is deleted with it.
-    await assertSubmodulesDisposable(pi, worktree.path);
+    await assertSubmodulesDisposable(pi, worktree.path, worktree.baseSha);
     // Check for uncommitted changes in the worktree
     const status = await git(pi, worktree.path, ["status", "--porcelain"], 10000);
 
@@ -179,7 +179,7 @@ export async function cleanupWorktree(
 
       if (currentSha === worktree.baseSha) {
         // No changes — remove worktree
-        await removeWorktree(pi, cwd, worktree.path);
+        await removeWorktree(pi, cwd, worktree.path, worktree.baseSha);
         return { hasChanges: false };
       }
     }
@@ -199,7 +199,7 @@ export async function cleanupWorktree(
     branch = branchName;
 
     // Remove the worktree (branch persists in main repo)
-    await removeWorktree(pi, cwd, worktree.path);
+    await removeWorktree(pi, cwd, worktree.path, worktree.baseSha);
 
     return {
       hasChanges: true,
@@ -218,44 +218,118 @@ export async function cleanupWorktree(
   }
 }
 
-/**
- * Shell run inside every submodule: prints anything removal would destroy.
- * Uncommitted files, stashes, and commits on local branches/tags or HEAD that no
- * remote-tracking ref contains.
- */
-const SUBMODULE_WORK_SCRIPT =
-  "git status --porcelain; git stash list; git rev-list --branches --tags HEAD --not --remotes";
+const GITLINK_MODE = "160000";
 
 /**
- * Throw unless every initialized submodule holds nothing but already-published
- * state. Git deletes submodule git dirs with the worktree, so unpushed commits or
- * uncommitted files there would be lost even after the outer repo is branched.
+ * Gitlinks (mode 160000) of `repo` as path -> sha: the index when `rev` is
+ * omitted, else the tree of `rev`. Independent of `.gitmodules`: git refuses to
+ * remove a worktree on the gitlink, not on the config file.
  */
-async function assertSubmodulesDisposable(pi: ExtensionAPI, worktreePath: string): Promise<void> {
-  if (!existsSync(join(worktreePath, ".gitmodules"))) return;
-  const work = await git(
-    pi,
-    worktreePath,
-    ["submodule", "foreach", "--recursive", "--quiet", SUBMODULE_WORK_SCRIPT],
-    30000,
-  );
-  if (work) throw new Error(`submodule work would be lost on removal; worktree kept:\n${work}`);
+async function gitlinks(pi: ExtensionAPI, repo: string, rev?: string): Promise<Map<string, string>> {
+  const out = await git(pi, repo, rev ? ["ls-tree", "-r", "-z", rev] : ["ls-files", "-s", "-z"], 30000);
+  const links = new Map<string, string>();
+  for (const entry of out.split("\0")) {
+    const tab = entry.indexOf("\t");
+    if (tab < 0) continue;
+    // ls-files: `<mode> <sha> <stage>`; ls-tree: `<mode> <type> <sha>`.
+    const [mode, second, third] = entry.slice(0, tab).split(" ");
+    if (mode === GITLINK_MODE) links.set(entry.slice(tab + 1), rev ? (third as string) : (second as string));
+  }
+  return links;
+}
+
+/** What removing a repository would destroy: stashes and commits no remote-tracking ref (or `published`) contains. */
+async function unpublished(pi: ExtensionAPI, gitArgs: string[], cwd: string, published: string[]): Promise<string> {
+  const stash = await git(pi, cwd, [...gitArgs, "stash", "list"], 10000);
+  const commits = await git(pi, cwd, [...gitArgs, "rev-list", "--branches", "HEAD", "--not", "--remotes", ...published], 30000);
+  return [stash, commits].filter(Boolean).join("\n");
+}
+
+/**
+ * Inspect the nested repository behind every gitlink of `repo`, recursively.
+ * `baseRev` is a revision whose gitlinks are already trusted as published (the
+ * commit the worktree was created from): a nested HEAD at exactly that recorded
+ * sha, e.g. fetched by sha during `submodule update`, is not at risk. A gitlink
+ * the agent introduced has no baseline, so only remote-tracking refs vouch for it.
+ */
+async function inspectGitlinks(
+  pi: ExtensionAPI,
+  repo: string,
+  baseRev: string | undefined,
+  seen: Set<string>,
+  problems: string[],
+): Promise<void> {
+  const base = baseRev ? await gitlinks(pi, repo, baseRev) : new Map<string, string>();
+  for (const path of (await gitlinks(pi, repo)).keys()) {
+    const dir = join(repo, path);
+    if (!existsSync(join(dir, ".git"))) continue;
+    seen.add(realpathSync(await git(pi, dir, ["rev-parse", "--absolute-git-dir"], 5000)));
+    const recorded = base.get(path);
+    const dirty = await git(pi, dir, ["status", "--porcelain"], 10000);
+    const lost = await unpublished(pi, [], dir, recorded ? [recorded] : []);
+    const detail = [dirty, lost].filter(Boolean).join("\n");
+    if (detail) problems.push(`${path}:\n${detail}`);
+    const head = await git(pi, dir, ["rev-parse", "HEAD"], 5000);
+    await inspectGitlinks(pi, dir, head === recorded ? "HEAD" : undefined, seen, problems);
+  }
+}
+
+/** Git dirs under a `modules` directory, including those nested in other submodule git dirs. */
+function moduleGitDirs(dir: string): string[] {
+  if (existsSync(join(dir, "HEAD")) && existsSync(join(dir, "objects"))) {
+    const nested = join(dir, "modules");
+    return [dir, ...(existsSync(nested) ? moduleGitDirs(nested) : [])];
+  }
+  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => (entry.isDirectory() ? moduleGitDirs(join(dir, entry.name)) : []));
+}
+
+/** Absolute `modules` directory of the worktree's private git dir, when present. */
+async function modulesDir(pi: ExtensionAPI, worktreePath: string): Promise<string | undefined> {
+  const dir = resolve(worktreePath, await git(pi, worktreePath, ["rev-parse", "--git-path", "modules"], 5000));
+  return existsSync(dir) ? dir : undefined;
+}
+
+/**
+ * Throw unless every nested repository the removal would delete holds nothing
+ * but already-published state. Git deletes submodule git dirs with the worktree,
+ * so unpushed commits or uncommitted files there would be lost even after the
+ * outer repo is branched. Covers every gitlink in the index, registered in
+ * `.gitmodules` or not, plus any leftover repository in the worktree's `modules`
+ * dir (e.g. after the agent deleted `.gitmodules`).
+ */
+async function assertSubmodulesDisposable(pi: ExtensionAPI, worktreePath: string, baseSha: string): Promise<void> {
+  const seen = new Set<string>();
+  const problems: string[] = [];
+  await inspectGitlinks(pi, worktreePath, baseSha, seen, problems);
+  const modules = await modulesDir(pi, worktreePath);
+  for (const gitDir of modules ? moduleGitDirs(modules) : []) {
+    if (seen.has(realpathSync(gitDir))) continue;
+    const lost = await unpublished(pi, ["--git-dir", gitDir], worktreePath, []);
+    if (lost) problems.push(`${gitDir}:\n${lost}`);
+  }
+  if (problems.length) throw new Error(`submodule work would be lost on removal; worktree kept:\n${problems.join("\n")}`);
+}
+
+/** Whether git would refuse plain removal for submodule state: any gitlink in the index or a `modules` dir. */
+async function hasSubmoduleState(pi: ExtensionAPI, worktreePath: string): Promise<boolean> {
+  return (await gitlinks(pi, worktreePath)).size > 0 || (await modulesDir(pi, worktreePath)) !== undefined;
 }
 
 /**
  * Remove only a clean worktree; git refuses newly appeared uncommitted work.
  *
- * Git also refuses any worktree with a populated submodule, clean or not. Only
- * that refusal is retried with `--force`, and only after the outer tree and every
- * submodule re-verify as holding nothing unpublished.
+ * Git also refuses any worktree with submodule state, clean or not. Whether that
+ * is why removal failed is decided structurally (gitlinks, `modules` dir), never
+ * from git's locale-dependent message. Only then is `--force` used, and only after
+ * the outer tree and every nested repository re-verify as holding nothing unpublished.
  */
-async function removeWorktree(pi: ExtensionAPI, cwd: string, worktreePath: string): Promise<void> {
+async function removeWorktree(pi: ExtensionAPI, cwd: string, worktreePath: string, baseSha: string): Promise<void> {
   try {
     await git(pi, cwd, ["worktree", "remove", worktreePath], 10000);
   } catch (error) {
-    if (!/submodules cannot be moved or removed/.test(error instanceof Error ? error.message : "")) throw error;
+    if (!(await hasSubmoduleState(pi, worktreePath))) throw error;
     if (await git(pi, worktreePath, ["status", "--porcelain"], 10000)) throw error;
-    await assertSubmodulesDisposable(pi, worktreePath);
+    await assertSubmodulesDisposable(pi, worktreePath, baseSha);
     await git(pi, cwd, ["worktree", "remove", "--force", worktreePath], 10000);
   }
 }
