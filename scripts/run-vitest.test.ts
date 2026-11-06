@@ -66,6 +66,10 @@ function onlyCall(): SpawnCall {
 test("entry dispatch launches only for the entry module and propagates the status", () => {
 	const argv = process.argv;
 	const exitCode = process.exitCode;
+	// `dispatch` passes the real environment; never append a fake timing to a real CI job summary.
+	const dir = mkdtempSync(join(tmpdir(), "pi-run-vitest-dispatch-"));
+	const summary = join(dir, "summary.md");
+	vi.stubEnv("GITHUB_STEP_SUMMARY", summary);
 	try {
 		process.argv = ["node", "run-vitest.ts", "node"];
 		process.exitCode = 0;
@@ -76,9 +80,12 @@ test("entry dispatch launches only for the entry module and propagates the statu
 		dispatch(true);
 		assert.equal(process.exitCode, CHILD_STATUS);
 		assert.equal(onlyCall().command, process.execPath);
+		assert.match(readFileSync(summary, "utf8"), new RegExp(`node Vitest timing: .* \\| exit ${CHILD_STATUS}\\n$`));
 	} finally {
 		process.argv = argv;
 		process.exitCode = exitCode;
+		vi.unstubAllEnvs();
+		rmSync(dir, { recursive: true, force: true });
 	}
 });
 
