@@ -97,4 +97,30 @@ describe("published", () => {
 			tmp.cleanup();
 		}
 	});
+
+	it("rejects for a child that already exited before the call", async () => {
+		const tmp = tempDir();
+		try {
+			const proc = child("process.exit(4);");
+			await new Promise((r) => proc.once("close", r));
+			await expect(published(join(tmp.dir, "ready.json"), proc)).rejects.toThrow(
+				"exited before publishing readiness: 4",
+			);
+		} finally {
+			tmp.cleanup();
+		}
+	});
+
+	it("resolves when the path exists even if the child already exited", async () => {
+		const tmp = tempDir();
+		const path = join(tmp.dir, "ready.json");
+		try {
+			writeFileSync(path, "{}");
+			const proc = child("process.exit(0);");
+			await new Promise((r) => proc.once("close", r));
+			await published(path, proc);
+		} finally {
+			tmp.cleanup();
+		}
+	});
 });

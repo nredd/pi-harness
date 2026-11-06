@@ -83,6 +83,7 @@ export async function published(path: string, child: ChildProcess): Promise<void
 		status = String(code ?? signal);
 	};
 	child.once("close", closed);
+	if (child.exitCode !== null || child.signalCode !== null) closed(child.exitCode, child.signalCode);
 	try {
 		while (!existsSync(path)) {
 			if (status !== undefined)
