@@ -1,5 +1,5 @@
-import { execFile } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { type ChildProcess, execFile } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -62,6 +62,37 @@ export async function waitFor(cond: () => boolean | Promise<boolean>, ms = 5000)
 		await new Promise((r) => setTimeout(r, 25));
 	}
 	throw new Error("waitFor timed out");
+}
+
+/**
+ * Resolve once `child` publishes `path`, or reject with its exit status and stdout/stderr when it
+ * closes first. Polls instead of using `fs.watch`: macOS FSEvents can deliver a directory event seconds
+ * late under load, long enough for a waiting fixture to give up after it already published. The
+ * child's lifecycle ends the wait, not a wall-clock budget; the caller's test timeout bounds it. Call it
+ * right after spawning: it must observe `close`, and it keeps draining piped output afterwards.
+ */
+export async function published(path: string, child: ChildProcess): Promise<void> {
+	let output = "";
+	const collect = (chunk: Buffer) => {
+		output += chunk.toString();
+	};
+	child.stdout?.on("data", collect);
+	child.stderr?.on("data", collect);
+	let status: string | undefined;
+	const closed = (code: number | null, signal: NodeJS.Signals | null) => {
+		status = String(code ?? signal);
+	};
+	child.once("close", closed);
+	if (child.exitCode !== null || child.signalCode !== null) closed(child.exitCode, child.signalCode);
+	try {
+		while (!existsSync(path)) {
+			if (status !== undefined)
+				throw new Error(`worker fixture exited before publishing readiness: ${status}\n${output}`);
+			await new Promise((r) => setTimeout(r, 25));
+		}
+	} finally {
+		child.off("close", closed);
+	}
 }
 
 /** Spawn a long-lived group leader (killed by `cleanupProcs`). */
