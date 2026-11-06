@@ -28,6 +28,7 @@ import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-wor
 import { type AssistantMessageInfo, resumeAgent, runAgent, type ToolActivity } from "./agent-runner.js";
 import { getAgentConfig } from "./agent-types.js";
 import { type Clock, realClock, type TimerHandle } from "./clock.js";
+import { errorMessage } from "./error-message.js";
 import { assignHandle, handleBase } from "./mention.js";
 import type { ModelCallEvent } from "./model-call.js";
 import { describeModel, describePhysicalModel, describeVirtualModel, isVirtualModel, type ModelFallback } from "./model-resolver.js";
@@ -229,6 +230,14 @@ export interface OwnedPending {
   silent: number;
 }
 
+/** A record whose run is over. Every settle and stop stamps `completedAt`; only a (re)start clears it. */
+type SettledRecord = AgentRecord & { completedAt: number };
+
+/** Whether `record` is past its run (neither running nor queued), and so carries `completedAt`. */
+function isSettled(record: AgentRecord): record is SettledRecord {
+  return record.status !== "running" && record.status !== "queued";
+}
+
 /**
  * Whether a record occupies one of the `maxConcurrent` background slots.
  * Nested children don't: their parent already holds a slot, so counting (and
@@ -292,6 +301,8 @@ function occupiesForegroundSlot(
 /** A start waiting in `AgentManager.queue`; see there. */
 interface QueueEntry {
   id: string;
+  /** The queued record; it stays in `agents` while queued, since only settled records are evicted. */
+  record: AgentRecord;
   /** The pool it needs room in, or undefined when it waits on the budget alone. */
   pool?: Pool;
   start: () => Promise<void>;
@@ -854,7 +865,7 @@ export class AgentManager {
       record.status = "queued";
       // A queued record never reaches startAgent's signal wiring, so arm the
       // parent abort here or Esc could not release the position.
-      if (!this.armQueuedAbort(id, options.signal)) return id;
+      if (!this.armQueuedAbort(record, options.signal)) return id;
       let release!: () => void;
       record.startGate = new Promise<void>(resolve => { release = resolve; });
       // Failure bookkeeping keys on whether an inline caller gets the throw,
@@ -884,18 +895,14 @@ export class AgentManager {
    * replaces it with its own, and `sendToBackground` must be able to take it
    * off, or the caller that armed it could stop a run it no longer owns.
    */
-  private armQueuedAbort(id: string, signal?: AbortSignal): boolean {
+  private armQueuedAbort(record: AgentRecord, signal?: AbortSignal): boolean {
     if (signal === undefined) return true;
     if (signal.aborted) {
-      const record = this.agents.get(id);
-      if (record) {
-        record.status = "stopped";
-        record.completedAt = this.clock.now();
-      }
+      record.status = "stopped";
+      record.completedAt = this.clock.now();
       return false;
     }
-    const record = this.agents.get(id);
-    if (record) this.armParentAbort(record, signal);
+    this.armParentAbort(record, signal);
     return true;
   }
 
@@ -925,9 +932,8 @@ export class AgentManager {
    * budget's wait queue is full.
    */
   private admit(record: AgentRecord, pool: Pool | undefined): BudgetLease | undefined {
-    const depth = record.depth ?? 1;
-    assertWithinBudgetDepth(depth);
-    const lease = pool === undefined || this.poolHasRoom(pool) ? tryAcquireBudget(depth) : undefined;
+    assertWithinBudgetDepth(record.depth);
+    const lease = pool === undefined || this.poolHasRoom(pool) ? tryAcquireBudget(record.depth) : undefined;
     if (lease === undefined && !budgetHasPendingRoom()) throw new Error(BUDGET_QUEUE_FULL_ERROR);
     return lease;
   }
@@ -955,6 +961,7 @@ export class AgentManager {
     const left = new Promise<void>(resolve => { markLeft = resolve; });
     const entry: QueueEntry = {
       id,
+      record,
       pool,
       start,
       release: () => {
@@ -964,7 +971,7 @@ export class AgentManager {
       // enqueueBudget only registers; grant cannot run until the next pump,
       // after this entry has been initialized and published in the queue.
       cancel: enqueueBudget({
-        depth: record.depth ?? 1,
+        depth: record.depth,
         ready: () => pool === undefined || this.poolHasRoom(pool),
         grant: (lease) => {
           this.queue = this.queue.filter(e => e !== entry);
@@ -1019,7 +1026,7 @@ export class AgentManager {
             // session about it — the same failure reported twice.
             if (failAs === "foreground") markConsumed(record, this.clock.now());
             record.status = "error";
-            record.error = err instanceof Error ? err.message : String(err);
+            record.error = errorMessage(err);
             record.completedAt = this.clock.now();
             try { this.onComplete?.(record); } catch { /* the startup failure is the error worth reporting */ }
           } else {
@@ -1094,7 +1101,8 @@ export class AgentManager {
     try {
       if (options.modelSelection?.tierBinding && !options.modelSelection.tierAdmitted) {
         const block = await admitModelSelection(options.modelSelection, ctx.modelRegistry, pi.events);
-        record.modelTier = options.modelSelection.tier ? tierDisclosure(options.modelSelection.tier) : undefined;
+        // Admitting an unadmitted binding always resolves its `tier`.
+        record.modelTier = tierDisclosure(options.modelSelection.tier!);
         record.modelFallback = options.modelSelection.fallback;
         if (block) throw new Error(`${modelSelectionNote(record)} ${describeBlock(block)} The agent was not started.`);
         if (record.abortController?.signal.aborted || options.signal?.aborted) throw new Error("Agent aborted during model admission.");
@@ -1133,7 +1141,7 @@ export class AgentManager {
         wt = await createWorktree(pi, baseCwd, id);
       } catch (err) {
         this.chargePool(record.chargedPool, -1);
-        const cause = err instanceof Error ? err.message : String(err);
+        const cause = errorMessage(err);
         // Only a parent-cwd spawn can be fixed by pointing `cwd` elsewhere.
         const hint = customCwd === undefined
           ? " To isolate another repo, pass its path as the `Agent` tool's `cwd`; or omit `isolation`."
@@ -1240,7 +1248,7 @@ export class AgentManager {
       nestedRuntime: {
         manager: this,
         parentAgentId: id,
-        depth: record.depth ?? 1,
+        depth: record.depth,
         maxSubagentDepth: record.maxSubagentDepth,
       },
       onSessionCreated: (session) => {
@@ -1332,7 +1340,7 @@ export class AgentManager {
             // Appended to the prose only. A structured child's caller parses
             // `structuredJson`, which stays untouched — but `result` is also
             // what a human reads, so the note still belongs on it.
-            record.result = (record.result ?? "") +
+            record.result = responseText +
               `\n\n---\nChanges saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git merge ${wtResult.branch}\`${customCwd !== undefined ? ` (run in \`${repo}\`)` : ""}`;
           }
         }
@@ -1347,7 +1355,7 @@ export class AgentManager {
         if (record.status !== "stopped") {
           record.status = "error";
         }
-        record.error = err instanceof Error ? err.message : String(err);
+        record.error = errorMessage(err);
         record.completedAt ??= this.clock.now();
 
         detach();
@@ -1407,16 +1415,9 @@ export class AgentManager {
     // Nobody waits on a settled run; a later foreground resume must not look
     // like a spawn `sendToBackground` could hand off.
     record.blocking = false;
-    const pool = record.chargedPool;
-    this.chargePool(pool, -1);
-    // The isBackground half reproduces the pre-pool condition exactly — a
-    // background settle has always drained, even for a nested child that held
-    // no slot — so that path is unchanged whether or not the foreground pool is
-    // on. The `pool` half only adds the drain a freed FOREGROUND slot needs.
-    // A drain with nothing freed is a no-op anyway, but "no-op" is a claim
-    // about reachability, and matching the old condition needs no such claim.
-    // The lease half: a freed budget slot may start work in any manager.
-    const drain = record.isBackground || pool !== undefined || record.budgetLease !== undefined;
+    this.chargePool(record.chargedPool, -1);
+    // Every run that reaches here holds a budget lease (each start takes one),
+    // so every settle frees a slot some queued start, in any manager, may need.
     this.releaseLease(record);
 
     try {
@@ -1429,7 +1430,7 @@ export class AgentManager {
       // Drained even when an unguarded `onComplete` throws: the slot and lease
       // are already free, and a waiter that misses this drain may be the child
       // a running parent is blocked on, with nothing else left to pump.
-      if (drain) this.drainQueue();
+      this.drainQueue();
     }
   }
 
@@ -1528,7 +1529,7 @@ export class AgentManager {
     // one contract rather than letting queue pressure decide whether a strict
     // worktree failure throws or returns as a result.
     if (record.promise === undefined && record.status === "error") {
-      throw new Error(record.error ?? "Agent failed to start");
+      throw new Error(record.error);
     }
     return { id, record };
   }
@@ -1595,7 +1596,8 @@ export class AgentManager {
     // same tick is refused too. The caller decides whether to wait or steer.
     if (record.status === "running" || record.status === "queued") return undefined;
     // Decided per run: a resume after the parent left Plan gets its full surface back.
-    if (record.planQuery) this.decidePlanGate(record, record.planQuery);
+    // `spawn` sets `planQuery` on every record this manager holds.
+    this.decidePlanGate(record, record.planQuery!);
 
     // Background resume: settle asynchronously and notify on completion exactly
     // like a background spawn, returning immediately with the record still
@@ -1627,7 +1629,7 @@ export class AgentManager {
           if (occupiesPoolSlot(record)) this.runningBackground--;
           this.releaseLease(record);
           record.status = "error";
-          record.error = err instanceof Error ? err.message : String(err);
+          record.error = errorMessage(err);
           record.completedAt = this.clock.now();
           this.drainQueue();
           throw err;
@@ -1773,7 +1775,7 @@ export class AgentManager {
   private failResume(record: AgentRecord, err: unknown): void {
     if (record.status !== "stopped") {
       record.status = "error";
-      record.error = err instanceof Error ? err.message : String(err);
+      record.error = errorMessage(err);
     }
     record.completedAt ??= this.clock.now();
   }
@@ -1922,23 +1924,19 @@ export class AgentManager {
   }
 
   /**
-   * Resolve an `@name` from the prompt. Matches a top-level agent's handle
-   * case-insensitively, preferring one that can still be steered and otherwise
-   * the most recently started (which is the one a resume should continue), then
-   * falls back to an exact agent id so `@<agentId>` works too.
+   * Resolve an `@name` from the prompt. Matches a top-level agent's handle or
+   * alias case-insensitively, then falls back to an exact agent id so
+   * `@<agentId>` works too.
    */
   resolveMention(name: string): MentionResolution | undefined {
     const wanted = name.toLowerCase();
-    let fallback: AgentRecord | undefined;
     for (const record of this.agents.values()) {
       if (record.parentAgentId !== undefined) continue;
-      // Handle and alias share one namespace, so at most one agent answers a
-      // name and it makes no difference which of the two matched.
-      if (record.handle?.toLowerCase() !== wanted && record.alias?.toLowerCase() !== wanted) continue;
-      if (record.status === "running" || record.status === "queued") return { kind: "live", record };
-      if (!fallback || record.startedAt > fallback.startedAt) fallback = record;
+      // Handle and alias share one lowercase namespace (`takenHandles`, and a
+      // reopen reclaims the evicted record's own names), so at most one agent
+      // answers a name and it makes no difference which of the two matched.
+      if (record.handle === wanted || record.alias === wanted) return { kind: "live", record };
     }
-    if (fallback) return { kind: "live", record: fallback };
     const byId = this.agents.get(name);
     if (byId?.parentAgentId === undefined && byId !== undefined) return { kind: "live", record: byId };
     // Only once nothing live answers: a tombstone is a conversation to reopen,
@@ -2013,7 +2011,7 @@ export class AgentManager {
   }
 
   /** Dispose a record's session and remove it from the map. */
-  private removeRecord(id: string, record: AgentRecord): void {
+  private removeRecord(id: string, record: SettledRecord): void {
     this.tombstone(record);
     this.noteEviction(record);
     const session = record.session;
@@ -2036,7 +2034,7 @@ export class AgentManager {
    * addressed by and a session file to reopen — an in-memory session leaves no
    * transcript, so the mention would have nothing to continue from.
    */
-  private tombstone(record: AgentRecord): void {
+  private tombstone(record: SettledRecord): void {
     if (!record.handle || !record.sessionFile) return;
     this.tombstones.set(record.handle, {
       handle: record.handle,
@@ -2045,7 +2043,7 @@ export class AgentManager {
       type: record.type,
       description: record.description,
       sessionFile: record.sessionFile,
-      completedAt: record.completedAt ?? this.clock.now(),
+      completedAt: record.completedAt,
       ...(record.modelTier ? { modelTier: record.modelTier } : {}),
       ...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
     });
@@ -2058,11 +2056,11 @@ export class AgentManager {
   }
 
   /** Remember that `record` existed, so its id still answers with something better than "not found". */
-  private noteEviction(record: AgentRecord): void {
+  private noteEviction(record: SettledRecord): void {
     // Only the top-level tools read notes, and an owned child (nested or a
     // workflow's) must stay unreachable from them after eviction as before it.
     if (!isTopLevelAgent(record)) return;
-    const completedAt = record.completedAt ?? this.clock.now();
+    const { completedAt } = record;
     this.evictedNotes.delete(record.id);
     this.evictedNotes.set(record.id, {
       id: record.id,
@@ -2074,9 +2072,9 @@ export class AgentManager {
       ...(record.modelTier ? { modelTier: record.modelTier } : {}),
       ...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
     });
-    while (this.evictedNotes.size > MAX_EVICTED_NOTES) {
-      const oldest = this.evictedNotes.keys().next().value;
-      if (oldest === undefined) break;
+    // Insertion order is age order (the note was just re-inserted above).
+    for (const oldest of this.evictedNotes.keys()) {
+      if (this.evictedNotes.size <= MAX_EVICTED_NOTES) break;
       this.evictedNotes.delete(oldest);
     }
   }
@@ -2116,8 +2114,8 @@ export class AgentManager {
   private cleanup() {
     const now = this.clock.now();
     for (const [id, record] of this.agents) {
-      if (record.status === "running" || record.status === "queued") continue;
-      const completedAt = record.completedAt ?? 0;
+      if (!isSettled(record)) continue;
+      const { completedAt } = record;
       const expired = record.resultConsumed
         ? now - (record.consumedAt ?? completedAt) >= this.consumedTtlMs
         : now - completedAt >= this.unreadTtlMs;
@@ -2133,7 +2131,7 @@ export class AgentManager {
    */
   clearCompleted(skipUnconsumed = false): void {
     for (const [id, record] of this.agents) {
-      if (record.status === "running" || record.status === "queued") continue;
+      if (!isSettled(record)) continue;
       if (skipUnconsumed && !record.resultConsumed) continue;
       this.removeRecord(id, record);
     }
@@ -2185,13 +2183,11 @@ export class AgentManager {
    * @returns how many agents keep running.
    */
   detach(): number {
-    const keepQueued = (id: string): boolean => {
-      const record = this.agents.get(id);
-      return record !== undefined && record.parentAgentId !== undefined && record.workflowId === undefined;
-    };
-    const dropped = this.queue.filter(entry => !keepQueued(entry.id)).map(entry => this.agents.get(entry.id));
-    this.dequeue(entry => !keepQueued(entry.id));
-    for (const record of dropped) if (record) this.stopQueued(record);
+    const keepQueued = ({ record }: QueueEntry): boolean =>
+      record.parentAgentId !== undefined && record.workflowId === undefined;
+    const dropped = this.queue.filter(entry => !keepQueued(entry)).map(({ record }) => record);
+    this.dequeue(entry => !keepQueued(entry));
+    for (const record of dropped) this.stopQueued(record);
     let survivors = 0;
     for (const record of this.agents.values()) {
       if (record.status !== "running") continue;
@@ -2211,10 +2207,9 @@ export class AgentManager {
   abortAll(): number {
     let count = 0;
     // Clear queued agents first
-    const dropped = this.queue.map(entry => this.agents.get(entry.id));
+    const dropped = this.queue.map(({ record }) => record);
     this.dequeue(() => true);
     for (const record of dropped) {
-      if (!record) continue;
       this.stopQueued(record);
       count++;
     }

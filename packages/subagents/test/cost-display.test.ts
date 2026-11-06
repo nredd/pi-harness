@@ -185,6 +185,12 @@ describe("cost display", () => {
       totalTokens, totalCost, durationMs: 1000, resultPreview: "done",
     });
 
+    it("renders nothing for a notification entry that carries no details", () => {
+      const { pi } = boot({ showCost: true });
+      const [, renderer] = pi.registerMessageRenderer.mock.calls[0];
+      expect(renderer({ details: undefined }, { expanded: true }, { fg: (_c: string, s: string) => s, bold: (s: string) => s })).toBeUndefined();
+    });
+
     it("totals a group, so nobody adds four figures by hand", () => {
       const { pi } = boot({ showCost: true });
       const out = render(pi, { ...agent("first", 1000, 0.01), others: [agent("second", 3000, 0.02)] });

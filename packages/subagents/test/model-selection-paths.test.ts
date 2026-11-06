@@ -315,6 +315,24 @@ it("updates workflow resolution from the admitted model to the answering model",
   expect(describeEvicted(evicted)).toContain(`Model: @cheap -> ${ref("explicit")}`);
 });
 
+it("relabels the answering model on a tier record that writes no transcript", async () => {
+  setModelTiers({ cheap: ["router/default"] }, {});
+  setAgentModels({ scout: "@cheap" });
+  admittedModel = ref("typed");
+  vi.mocked(runner.runAgent).mockImplementationOnce(async (_ctx, _type, _prompt, options) => {
+    const session = { model: options.model, dispose: vi.fn(), sessionManager: { getSessionFile: () => undefined } } as unknown as AgentSession;
+    options.onSessionCreated?.(session);
+    options.onAssistantUsage?.({ input: 1, output: 1, cacheWrite: 0, cost: 0 }, { api: "openai-completions", provider: "selection-path", model: "explicit" });
+    return { responseText: "answer", session, aborted: false, steered: false };
+  });
+  const id = manager.spawn(boot.pi, context, "scout", "go", { description: "no transcript", isBackground: true });
+  await manager.waitForAll();
+  const record = manager.getRecord(id)!;
+  expect(record.outputFile).toBeUndefined();
+  expect(record.modelTier).toMatchObject({ kind: "routed", admitted: ref("typed"), answered: ref("explicit") });
+  expect(record.invocation?.modelId).toBe(ref("explicit"));
+});
+
 it("shows the same configured model in the agents menu instead of the definition default", async () => {
   setAgentModels({ scout: "router/default" });
   initTheme("dark", false);
