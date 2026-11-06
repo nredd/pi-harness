@@ -2056,11 +2056,11 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   // With no per-result note by design, the model would have every reason to go
   // on reporting a `pi-agent-*` branch that was never created.
   const isolationGuideline = isWorktreeIsolationEnabled()
-    ? `\n- Use isolation: "worktree" to give the agent its own git worktree (safe parallel file modifications); leave it unset, or pass "off", for none. The worktree is removed when the agent finishes; if it made changes, they are committed to a branch and the branch is named in the result. The worktree is made from the repo containing \`cwd\` (default: the session cwd); when the target repo is not the session cwd, pass its path as \`cwd\`.`
+    ? `\n- Use isolation: "worktree" to give the agent its own git worktree (safe parallel file modifications); leave it unset, or pass "off", for none. The worktree is removed when the agent finishes unless cleanup fails (the result then names the retained path); if it made changes, they are committed to a branch and the branch is named in the result. The worktree is made from the repo containing \`cwd\` (default: the session cwd); when the target repo is not the session cwd, pass its path as \`cwd\`.`
     : "";
 
   const isolationCompactGuideline = isWorktreeIsolationEnabled()
-    ? `\n- isolation: "worktree" gives the agent its own git worktree (removed on completion); changes land on a branch named in the result. Pass \`cwd\` to isolate a repo other than the session cwd.`
+    ? `\n- isolation: "worktree" gives the agent its own git worktree (removed unless cleanup fails); changes land on a branch named in the result. Pass \`cwd\` to isolate a repo other than the session cwd.`
     : "";
 
   // Tier keys only: members are profile config (router or enterprise manifest),

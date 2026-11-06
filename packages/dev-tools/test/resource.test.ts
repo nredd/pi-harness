@@ -138,13 +138,20 @@ function options(make: (monotonicTimeMs: number) => ResourceSnapshot, extra: Res
 }
 
 /** Spy on the real published sampler: its raw samples, and its disposal. */
-function realSampler() {
+function realSampler(lose: ReadonlySet<number> = new Set()) {
 	const state = { disposed: 0, samples: [] as ResourceSnapshot[] };
 	const createSampler = (samplerOptions: SamplerOptions): ResourceSampler => {
 		const sampler = createResourceSampler(samplerOptions);
 		return {
 			async sample(signal) {
-				const sample = await sampler.sample(signal);
+				const real = await sampler.sample(signal);
+				const sample = lose.has(state.samples.length)
+					? {
+							...real,
+							processes: [],
+							coverage: { ...real.coverage, complete: false, reasons: ["process-collection-unavailable"] },
+						}
+					: real;
 				state.samples.push(sample);
 				return sample;
 			},
@@ -155,6 +162,67 @@ function realSampler() {
 		};
 	};
 	return { state, createSampler };
+}
+
+/**
+ * Spawn a real idle child and check the tool's window against the sampler's own full scans. `lose` holds 0-based scan
+ * indexes whose listing is replaced by a `process-collection-unavailable` scan, as a PID exiting mid-listing does.
+ */
+async function checkRealChildDiscovery(lose: ReadonlySet<number>): Promise<void> {
+	// Idle and small: inclusion is asserted against the sampler's full unranked scan, not a host-dependent top-50
+	// rank. The scan need not be complete (a process exiting mid-scan marks it partial); the known child must be
+	// in it, and a miss reports the coverage so a truncated scan is never mistaken for a missing child.
+	const child = spawn(process.execPath, ["-e", "console.log('ready'); setInterval(() => {}, 1 << 30)"], {
+		stdio: ["ignore", "pipe", "ignore"],
+	});
+	await supervise(child, 5000, async () => {
+		const pid = child.pid;
+		if (pid === undefined) throw new Error("child did not start");
+		const real = realSampler(lose);
+		const snapshot = await resourceSnapshot(50, { createSampler: real.createSampler }, undefined, 200);
+		// Resampling slides the reported window to the last two scans; earlier scans may be the lost ones.
+		const baseline = real.state.samples.at(-2);
+		const raw = real.state.samples.at(-1);
+		if (baseline === undefined || raw === undefined || snapshot.processes.status !== "available")
+			throw new Error("missing process metadata");
+		const earlier = JSON.stringify(real.state.samples.slice(0, -2).map((sample) => sample.coverage));
+		expect(lose.size === 0 || real.state.samples.length > 2, "injected loss did not force a resample").toBe(true);
+		// A failed baseline collection leaves every end-scan process warming; name that cause, not the symptom.
+		// Published 0.2.0 still hits it when any PID exits mid-listing (#499, sampler README).
+		expect(baseline.coverage.reasons, `baseline of the reported window; earlier scans ${earlier}`).not.toContain(
+			"process-collection-unavailable",
+		);
+		expect(raw.coverage.reasons, `end scan of the reported window; earlier scans ${earlier}`).not.toContain(
+			"process-collection-unavailable",
+		);
+		const found = raw.processes.find((entry) => entry.pid === pid);
+		expect(
+			found,
+			`child ${pid} absent from ${raw.processes.length} sampled processes, coverage ${JSON.stringify(raw.coverage)}, earlier scans ${earlier}`,
+		).toBeDefined();
+		expect(found?.parentPid).toBe(process.pid);
+		// The kernel's executable basename (`node`), not Linux comm (`node-MainThread`) or a path.
+		expect(found?.name).toBe(EXECUTABLE);
+		const ps = await execFileAsync("/bin/ps", ["-o", "ppid=", "-p", String(pid)], { env: { LC_ALL: "C" } });
+		expect(Number(ps.stdout.trim())).toBe(found?.parentPid);
+		// Native samplers measure the known child after a baseline; unsupported Darwin retains the RSS fallback.
+		expect(found?.cpu.state).toBe(process.platform === "linux" || nativeDarwinCpu ? "available" : "unavailable");
+		// The bounded tool output is exactly a projection of that same scan.
+		const { entries } = snapshot.processes;
+		expect(entries).toHaveLength(Math.min(50, raw.processes.length));
+		const byPid = new Map(raw.processes.map((entry) => [entry.pid, entry]));
+		for (const entry of entries) {
+			const source = byPid.get(entry.pid);
+			expect(entry).toEqual({
+				pid: source?.pid,
+				parentPid: source?.parentPid,
+				cpu: source?.cpu,
+				rssBytes: source?.rssBytes,
+				executable: source?.name,
+			});
+		}
+		if (raw.processes.length <= 50) expect(entries.map((entry) => entry.pid)).toContain(pid);
+	});
 }
 
 /** Wait for this exact child's exit status, never a reusable PID probe, for at most `ms`. */
@@ -298,7 +366,7 @@ describe("resource_snapshot on the real host through the published sampler", () 
 			cwd: PACKAGE_ROOT,
 		});
 		const output = JSON.parse(stdout);
-		expect(output.samples).toHaveLength(2);
+		expect(output.samples).toHaveLength(4);
 		for (const sample of output.samples) {
 			expect(sample.processes).toBe(0);
 			expect(sample.coverage.reasons).toContain("process-collection-unavailable");
@@ -320,7 +388,8 @@ describe("resource_snapshot on the real host through the published sampler", () 
 				return {
 					async sample(signal) {
 						const pending = sampler.sample(signal);
-						if (++count === 2) {
+						// Hold every scan after the baseline: a resample (lost listing) must still end on an over-budget scan.
+						if (++count >= 2) {
 							const deadline = performance.now() + 30;
 							while (performance.now() < deadline) {
 								/* Hold the event loop past the producer budget. */
@@ -336,9 +405,9 @@ describe("resource_snapshot on the real host through the published sampler", () 
 		});
 		const result = await mock.call("resource_snapshot", { process_limit: 50, interval_ms: INTERVAL_MS }, "/tmp");
 		const snapshot = result.structuredContent as Awaited<ReturnType<typeof resourceSnapshot>>;
-		expect(samples).toHaveLength(2);
-		expect(samples[1]?.coverage.complete).toBe(false);
-		expect(samples[1]?.coverage.reasons).toContain("deadline");
+		const final = samples.at(-1);
+		expect(final?.coverage.complete).toBe(false);
+		expect(final?.coverage.reasons).toContain("deadline");
 		if (snapshot.processes.status === "unavailable") expect(snapshot.processes.reason).toContain("deadline");
 		else {
 			expect(snapshot.processes.truncated).toBe(true);
@@ -364,6 +433,83 @@ describe("resource_snapshot on the real host through the published sampler", () 
 			expect(fake.state.disposed).toBe(1);
 		},
 	);
+
+	describe("transient process-collection failures", () => {
+		const interrupted = {
+			complete: false,
+			enumerated: 0,
+			sampled: 0,
+			skipped: 0,
+			bytesRead: 0,
+			reasons: ["process-collection-unavailable"],
+		};
+		/** Scripted sampler: sample N yields `script[N]` (`true` = healthy scan, `false` = interrupted scan). */
+		function scripted(script: boolean[]) {
+			const state = { samples: 0, disposed: 0 };
+			const createSampler = (): ResourceSampler => ({
+				async sample() {
+					const healthy = script[Math.min(state.samples, script.length - 1)];
+					const at = state.samples++ * 120;
+					return healthy
+						? fixture("linux", [proc(7, 100, measured(5))])(at)
+						: fixture("linux", [], { coverage: interrupted })(at);
+				},
+				async dispose() {
+					state.disposed++;
+				},
+			});
+			return { state, createSampler };
+		}
+
+		it.each([
+			["the second scan", [true, false, true, true], 4],
+			["the baseline scan", [false, true, true], 3],
+		])("resamples after an interrupted %s instead of losing process metadata", async (_name, script, count) => {
+			const fake = scripted(script);
+			const snapshot = await resourceSnapshot(5, { createSampler: fake.createSampler }, undefined, INTERVAL_MS);
+			expect(fake.state.samples).toBe(count);
+			// The window slides to the latest pair, 120 ms apart in the fixture clock.
+			expect(snapshot.interval.measuredMs).toBe(120);
+			expect(snapshot.processes.status).toBe("available");
+			if (snapshot.processes.status === "available") expect(snapshot.processes.entries.map((e) => e.pid)).toEqual([7]);
+			expect(fake.state.disposed).toBe(1);
+		});
+
+		it("stops after a bounded number of resamples and reports the producer's reason", async () => {
+			const fake = scripted([true, false]);
+			const snapshot = await resourceSnapshot(5, { createSampler: fake.createSampler }, undefined, INTERVAL_MS);
+			expect(fake.state.samples).toBe(4);
+			expect(snapshot.processes).toEqual({
+				status: "unavailable",
+				reason: "process metadata unavailable (process-collection-unavailable)",
+			});
+		});
+
+		it("rejects when cancelled during a resample and still disposes", async () => {
+			const controller = new AbortController();
+			const fake = scripted([true, false]);
+			const createSampler = (): ResourceSampler => {
+				const inner = fake.createSampler();
+				return {
+					sample: async (signal) => {
+						if (fake.state.samples === 2) controller.abort(new Error("cancelled"));
+						signal?.throwIfAborted();
+						return inner.sample(signal);
+					},
+					dispose: () => inner.dispose(),
+				};
+			};
+			await expect(resourceSnapshot(5, { createSampler }, controller.signal, INTERVAL_MS)).rejects.toThrow("cancelled");
+			expect(fake.state.samples).toBe(2);
+			expect(fake.state.disposed).toBe(1);
+		});
+
+		it("does not resample a healthy host", async () => {
+			const fake = scripted([true]);
+			await resourceSnapshot(5, { createSampler: fake.createSampler }, undefined, INTERVAL_MS);
+			expect(fake.state.samples).toBe(2);
+		});
+	});
 
 	it("smokes the real host through tool execution and output schema validation", async () => {
 		const mock = createMockPi();
@@ -393,54 +539,16 @@ describe("resource_snapshot on the real host through the published sampler", () 
 
 	it.runIf(process.platform === "darwin" || process.platform === "linux")(
 		"discovers a real child under its real parent in the full sample, matching an independent ps read",
-		async () => {
-			// Idle and small: inclusion is asserted against the sampler's full unranked scan, not a host-dependent top-50
-			// rank. The scan need not be complete (a process exiting mid-scan marks it partial); the known child must be
-			// in it, and a miss reports the coverage so a truncated scan is never mistaken for a missing child.
-			const child = spawn(process.execPath, ["-e", "console.log('ready'); setInterval(() => {}, 1 << 30)"], {
-				stdio: ["ignore", "pipe", "ignore"],
-			});
-			await supervise(child, 5000, async () => {
-				const pid = child.pid;
-				if (pid === undefined) throw new Error("child did not start");
-				const real = realSampler();
-				const snapshot = await resourceSnapshot(50, { createSampler: real.createSampler }, undefined, 200);
-				const [baseline, raw] = real.state.samples;
-				if (baseline === undefined || raw === undefined || snapshot.processes.status !== "available")
-					throw new Error("missing process metadata");
-				// A failed baseline collection leaves every end-scan process warming; name that cause, not the symptom.
-				// Published 0.2.0 still hits it when any PID exits mid-listing (#499, sampler README).
-				expect(baseline.coverage.reasons).not.toContain("process-collection-unavailable");
-				expect(raw.coverage.reasons).not.toContain("process-collection-unavailable");
-				const found = raw.processes.find((entry) => entry.pid === pid);
-				expect(
-					found,
-					`child ${pid} absent from ${raw.processes.length} sampled processes, coverage ${JSON.stringify(raw.coverage)}`,
-				).toBeDefined();
-				expect(found?.parentPid).toBe(process.pid);
-				// The kernel's executable basename (`node`), not Linux comm (`node-MainThread`) or a path.
-				expect(found?.name).toBe(EXECUTABLE);
-				const ps = await execFileAsync("/bin/ps", ["-o", "ppid=", "-p", String(pid)], { env: { LC_ALL: "C" } });
-				expect(Number(ps.stdout.trim())).toBe(found?.parentPid);
-				// Native samplers measure the known child after a baseline; unsupported Darwin retains the RSS fallback.
-				expect(found?.cpu.state).toBe(process.platform === "linux" || nativeDarwinCpu ? "available" : "unavailable");
-				// The bounded tool output is exactly a projection of that same scan.
-				const { entries } = snapshot.processes;
-				expect(entries).toHaveLength(Math.min(50, raw.processes.length));
-				const byPid = new Map(raw.processes.map((entry) => [entry.pid, entry]));
-				for (const entry of entries) {
-					const source = byPid.get(entry.pid);
-					expect(entry).toEqual({
-						pid: source?.pid,
-						parentPid: source?.parentPid,
-						cpu: source?.cpu,
-						rssBytes: source?.rssBytes,
-						executable: source?.name,
-					});
-				}
-				if (raw.processes.length <= 50) expect(entries.map((entry) => entry.pid)).toContain(pid);
-			});
-		},
+		() => checkRealChildDiscovery(new Set()),
+		20_000,
+	);
+
+	it.runIf(process.platform === "darwin" || process.platform === "linux").each([
+		["baseline", 0],
+		["second", 1],
+	])(
+		"discovers the child in the reported window after the %s scan loses its listing",
+		(_name, index) => checkRealChildDiscovery(new Set([index])),
 		20_000,
 	);
 

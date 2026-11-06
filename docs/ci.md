@@ -580,6 +580,11 @@ unavailable reason in its failure. Separate controls exercise registry sampler `
 schema with an injected Linux enumeration failure and a genuinely exhausted scan budget. The injected
 Linux path on macOS is not a native Linux run.
 
+`resource_snapshot` also resamples, at most twice more, when either scan of the window reports
+`process-collection-unavailable` (#557), sliding the window to the latest pair of scans. Failures that
+outlast the two resamples still report the producer's reason (or leave a lost baseline's entries `warming`). This works around
+published sampler `0.2.0` without a pin bump; the sampler source fix (#499) still needs its release.
+
 Flake policy (migration plan section 7):
 
 - A new correctness failure blocks

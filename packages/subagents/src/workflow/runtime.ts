@@ -153,8 +153,8 @@ export interface WorkflowSpawnResult {
    * verifies the wrong working copy. Left unset, a gate runs wherever the host
    * runs commands by default.
    *
-   * Usually unset for a worktree child even so: the copy is removed during the
-   * child's own settle, so it no longer exists by the time this is read. That
+   * Usually unset for a worktree child even so: the copy is normally removed during
+   * the child's own settle, so it no longer exists by the time this is read. That
    * is what {@link gate} is for.
    */
   cwd?: string;

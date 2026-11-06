@@ -19,3 +19,15 @@ export function inChildSessionContext(): boolean {
 export function runInChildSessionContext<T>(fn: () => Promise<T>): Promise<T> {
   return childSessionContext.run(true, fn);
 }
+
+/**
+ * Make every future `reload()` of a child session's loader run in the child
+ * context. A session reload (e.g. an extension calling `ctx.reload()`) calls
+ * `loader.reload()` again and re-runs each extension factory, long after the
+ * construction-time {@link runInChildSessionContext} has exited.
+ */
+export function bindChildResourceLoader<T extends { reload(): Promise<void> }>(loader: T): T {
+  const reload = loader.reload.bind(loader);
+  loader.reload = () => runInChildSessionContext(reload);
+  return loader;
+}

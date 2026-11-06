@@ -51,7 +51,7 @@ import { isStaleCtxError } from "./stale-ctx.js";
 import type { AgentInvocation, AgentRecord, AgentTombstone, IsolationMode, MentionResolution, Pool, SubagentType, ThinkingLevel } from "./types.js";
 import { addUsage, type LifetimeUsage } from "./usage.js";
 import type { CompiledSchema } from "./workflow/json-schema.js";
-import { cleanupWorktree, createWorktree, isWorktreeIsolationEnabled, pruneWorktrees, type WorktreeInfo } from "./worktree.js";
+import { cleanupWorktree, createWorktree, isWorktreeIsolationEnabled, pruneWorktrees, type WorktreeCleanupResult, type WorktreeInfo } from "./worktree.js";
 
 /**
  * Relabel a record's model from the response that just finished. A virtual
@@ -70,6 +70,16 @@ function relabelFromResponse(record: AgentRecord, message: AssistantMessageInfo 
     record.modelTier = { ...record.modelTier, answered: physical.modelId };
     if (record.outputFile) appendModelTierEntry(record.outputFile, record.id, record.modelTier);
   }
+}
+
+/** Keep a cleanup failure visible on every result, including errors and stopped workflows. */
+function recordWorktreeCleanup(record: AgentRecord, result: WorktreeCleanupResult): void {
+  record.worktreeResult = result;
+  if (!result.error) return;
+  const note = `Worktree cleanup failed: ${result.error}. Worktree retained at \`${result.path}\`${result.branch ? `; branch \`${result.branch}\` was created` : ""}. Inspect and recover it before removing it.`;
+  record.error = record.error ? `${record.error}\n${note}` : note;
+  record.result = record.result ? `${record.result}\n\n${note}` : note;
+  if (record.status !== "stopped") record.status = "error";
 }
 
 export type OnAgentComplete = (record: AgentRecord) => void;
@@ -1169,7 +1179,11 @@ export class AgentManager {
       // definition unchanged) worktree instead.
       if (record.status !== "running") {
         this.chargePool(record.chargedPool, -1);
-        record.worktreeResult = await cleanupWorktree(pi, baseCwd, wt, options.description);
+        recordWorktreeCleanup(record, await cleanupWorktree(pi, baseCwd, wt, options.description));
+        if (record.worktreeResult?.error) {
+          if (!record.isBackground) markConsumed(record, this.clock.now());
+          try { this.onComplete?.(record); } catch { /* do not strand the lease */ }
+        }
         // After the cleanup, not before: the copy is still being removed until here.
         this.releaseLease(record);
         this.drainQueue();
@@ -1186,8 +1200,12 @@ export class AgentManager {
       this.chargePool(record.chargedPool, -1);
       if (record.worktree) {
         try {
-          record.worktreeResult = await cleanupWorktree(pi, baseCwd, record.worktree, options.description);
-        } catch { /* ignore cleanup errors */ }
+          recordWorktreeCleanup(record, await cleanupWorktree(pi, baseCwd, record.worktree, options.description));
+        } catch { /* ignore unexpected cleanup errors */ }
+      }
+      if (record.worktreeResult?.error) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(`${message}\n${record.error}`);
       }
       throw err;
     }
@@ -1330,8 +1348,8 @@ export class AgentManager {
             } catch { /* ignore — never block cleanup */ }
           }
           const wtResult = await cleanupWorktree(pi, baseCwd, record.worktree, options.description);
-          record.worktreeResult = wtResult;
-          if (wtResult.hasChanges && wtResult.branch) {
+          recordWorktreeCleanup(record, wtResult);
+          if (!wtResult.error && wtResult.hasChanges && wtResult.branch) {
             // With a caller-supplied cwd the branch lives in THAT repo, not the
             // parent session's — say so, or the orchestrator merges in the wrong repo.
             // Named by its toplevel: the cwd may be a subdirectory of it.
@@ -1370,7 +1388,7 @@ export class AgentManager {
         if (record.worktree) {
           try {
             const wtResult = await cleanupWorktree(pi, baseCwd, record.worktree, options.description);
-            record.worktreeResult = wtResult;
+            recordWorktreeCleanup(record, wtResult);
           } catch { /* ignore cleanup errors */ }
         }
 
