@@ -242,7 +242,13 @@ def test_codex_uses_native_read_isolation_without_nested_seatbelt(
     generated_workspace: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Exercise the installed Codex sandbox independently of the historical version pin."""
+    """Exercise the installed Codex sandbox independently of the historical version pin.
+
+    Parameters:
+        tmp_path (Path): Temporary benchmark root.
+        generated_workspace (Path): Generated benchmark workspace.
+        monkeypatch (pytest.MonkeyPatch): Override the historical version check.
+    """
     root = tmp_path / "benchmark"
     root.mkdir()
     subprocess.check_call(["/bin/cp", "-R", str(generated_workspace), str(root / "workspace")])
