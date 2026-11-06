@@ -116,9 +116,10 @@ export async function ask(
 	const text = getMessageText(end.result);
 	expect(end.isError, text).toBe(false);
 	expect(h.getPendingResponseCount(), text).toBe(0);
-	const separator = text.indexOf("\n\n");
-	expect(separator, text).toBeGreaterThanOrEqual(0);
-	return text.slice(separator + 2);
+	// Skip any model-disclosure lead-in plus the "Agent completed in ..." status line.
+	const status = /(?:^|\n\n)Agent completed[^\n]*\n\n/.exec(text);
+	expect(status, text).not.toBeNull();
+	return text.slice((status?.index ?? 0) + (status?.[0].length ?? 0));
 }
 
 /** Abort and drain unfinished turns before shutting down child resources and disposing the host. */

@@ -129,6 +129,16 @@ export function describeSelection(selection: ModelSelection | undefined, registr
   return model ? isVirtualModel(model) ? describeVirtualModel(model) : describeModel(model) : {};
 }
 
+/** Resolved selection identity for model-facing text, not an actionable fallback warning. */
+export function modelIdentityNote(carrier: { modelSelection?: ModelSelection; modelTier?: TierDisclosure } | undefined): string {
+  const selected = carrier?.modelSelection?.model;
+  // Tier notes already carry admission/answer provenance. Literal virtual
+  // selections have no such evidence, so never claim their alias is a leaf.
+  return selected && !carrier?.modelTier
+    ? `Resolved model: ${selected.provider}/${selected.id}${isVirtualModel(selected) ? " (routing alias; physical response model: unknown)" : ""}.`
+    : "";
+}
+
 /** One disclosure for records, persisted details, workflows and notices. */
 export function modelSelectionNote(carrier: { modelTier?: TierDisclosure; modelFallback?: ModelFallback; invocation?: { modelId?: string } } | undefined): string {
   const tier = carrier?.modelTier;

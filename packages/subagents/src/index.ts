@@ -47,7 +47,7 @@ import { runMentionClone } from "./mention-clone.js";
 import { applyModelCallEvent, type ModelCallEvent } from "./model-call.js";
 import { type ModelFallback, type ModelRegistry, setAgentModels, setModelAliases, setModelScopeProvider } from "./model-resolver.js";
 import { isScopeModelsEnabled, setScopeModelsEnabled } from "./model-scope.js";
-import { admitModelSelection, describeSelection, modelRequest, modelSelectionNote, selectModel } from "./model-selection.js";
+import { admitModelSelection, describeSelection, modelIdentityNote, modelRequest, modelSelectionNote, selectModel } from "./model-selection.js";
 import { configuredTierNames, tierDisclosure } from "./model-tiers.js";
 import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.js";
 import { clipNotice, DEFAULT_NOTIFICATION_RESULT_CHARS, fairShares, GROUP_PREVIEW_RESULT_CHARS, NOTIFICATION_RESULT_CHARS_CEILING, type NoticeFrame, type NoticeParts, PREVIEW_RESULT_CHARS, previewResult, renderNotice } from "./notification-result.js";
@@ -201,7 +201,7 @@ function formatTaskNotification(record: AgentRecord, showCost = false): NoticeFr
   const cost = showCost ? getLifetimeCost(record.lifetimeUsage) : 0;
   const costXml = cost > 0 ? `<estimated_cost_usd>${cost.toFixed(4)}</estimated_cost_usd>` : "";
 
-  const modelNote = modelSelectionNote(record);
+  const modelNote = [modelSelectionNote(record), modelIdentityNote(record)].filter(Boolean).join("\n");
   const hint = resumeHint(record);
 
   const head = [
@@ -2424,11 +2424,11 @@ Terse command-style prompts produce shallow, generic work.
         rec ? rec.modelFallback : modelFallback;
       /** A resume's lead-in: the record's note only (the type note describes a spawn, not a resume). */
       const resumeNoteFor = (rec: AgentRecord): string => {
-        const note = modelNoteOf(rec);
+        const note = [modelNoteOf(rec), modelIdentityNote(rec)].filter(Boolean).join("\n");
         return note ? `${note}\n\n` : "";
       };
       const fallbackNoteFor = (rec: AgentRecord | undefined): string => {
-        const modelNote = modelNoteOf(rec);
+        const modelNote = [modelNoteOf(rec), modelIdentityNote(rec ?? { modelSelection: selection })].filter(Boolean).join("\n");
         return typeNote + (modelNote ? `${modelNote}\n\n` : "");
       };
       const detailBase = {
