@@ -4,6 +4,7 @@ import { handleBase } from "../../subagents/src/mention.ts";
 import {
 	STATE_ENTRY_TYPE,
 	SUBAGENT_COMPLETED_EVENT,
+	SUBAGENT_CREATED_EVENT,
 	SUBAGENT_FAILED_EVENT,
 	SUBAGENT_STARTED_EVENT,
 } from "../tool/types.ts";
@@ -34,6 +35,82 @@ describe("applyAgentEvent", () => {
 			apply(SUBAGENT_FAILED_EVENT, { id: "a1", status });
 			expect(stateOf("explore"), String(status)).toBe("failed");
 		}
+	});
+
+	it("reads a first-heard created as queued until it starts", () => {
+		expect(apply(SUBAGENT_CREATED_EVENT, { id: "a1", handle: "explore" })).toBe(true);
+		expect(stateOf("explore")).toBe("queued");
+		expect(apply(SUBAGENT_STARTED_EVENT, { id: "a1" })).toBe(true);
+		expect(stateOf("explore")).toBe("running");
+	});
+
+	it("never lets a re-announcing created override a started or settled agent", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "explore" });
+		expect(apply(SUBAGENT_CREATED_EVENT, { id: "a1", handle: "explore" })).toBe(false);
+		expect(stateOf("explore")).toBe("running");
+		apply(SUBAGENT_COMPLETED_EVENT, { id: "a1" });
+		expect(apply(SUBAGENT_CREATED_EVENT, { id: "a1" })).toBe(false);
+		expect(stateOf("explore")).toBe("done");
+		// A reopened agent's predecessor is known too, so its created is no new queue entry.
+		expect(apply(SUBAGENT_CREATED_EVENT, { id: "a2", previousId: "a1" })).toBe(false);
+		expect(stateOf("explore")).toBe("done");
+	});
+
+	it("accepts only a queued resume bound to the most recent settle", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "resume", handle: "resume" });
+		apply(SUBAGENT_FAILED_EVENT, { id: "resume", status: "error", settleSeq: 10 });
+		const queued = { id: "resume", queuedAfterSettleSeq: 10, queuedResumeSeq: 11 };
+		expect(apply(SUBAGENT_CREATED_EVENT, queued)).toBe(true);
+		expect(stateOf("resume")).toBe("queued");
+		expect(apply(SUBAGENT_CREATED_EVENT, queued)).toBe(false);
+		apply(SUBAGENT_STARTED_EVENT, { id: "resume" });
+		expect(apply(SUBAGENT_CREATED_EVENT, queued)).toBe(false);
+		apply(SUBAGENT_COMPLETED_EVENT, { id: "resume", settleSeq: 20 });
+		expect(apply(SUBAGENT_CREATED_EVENT, queued)).toBe(false);
+		expect(stateOf("resume")).toBe("done");
+		expect(apply(SUBAGENT_CREATED_EVENT, { id: "resume", queuedAfterSettleSeq: 20, queuedResumeSeq: 21 })).toBe(true);
+		expect(stateOf("resume")).toBe("queued");
+	});
+
+	it("does not let an older settled retry mask a newly queued resume", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1", name: "auth-audit", nameBase: "auth-audit", spawnSeq: 1 });
+		apply(SUBAGENT_FAILED_EVENT, { id: "a1", status: "error", settleSeq: 2 });
+		apply(SUBAGENT_STARTED_EVENT, { id: "a2", name: "auth-audit-2", nameBase: "auth-audit", spawnSeq: 3 });
+		apply(SUBAGENT_COMPLETED_EVENT, { id: "a2", settleSeq: 4 });
+		apply(SUBAGENT_CREATED_EVENT, { id: "a1", queuedAfterSettleSeq: 2, queuedResumeSeq: 5 });
+		expect(stateOf("auth-audit")).toBe("queued");
+		apply(SUBAGENT_STARTED_EVENT, { id: "a3", name: "auth-audit-3", nameBase: "auth-audit", spawnSeq: 6 });
+		apply(SUBAGENT_FAILED_EVENT, { id: "a3", status: "error", settleSeq: 7 });
+		expect(stateOf("auth-audit")).toBe("failed");
+	});
+
+	it("lets a settled nameBase retry outrank an owner still queued", () => {
+		apply(SUBAGENT_CREATED_EVENT, { id: "a1", name: "auth-audit", nameBase: "auth-audit" });
+		apply(SUBAGENT_STARTED_EVENT, { id: "a2", name: "auth-audit-2", nameBase: "auth-audit" });
+		// A running sibling does not outrank the queued owner; a settled one does.
+		expect(stateOf("auth-audit")).toBe("queued");
+		apply(SUBAGENT_FAILED_EVENT, { id: "a2", status: "error" });
+		expect(stateOf("auth-audit")).toBe("failed");
+		apply(SUBAGENT_STARTED_EVENT, { id: "a3", name: "auth-audit-3", nameBase: "auth-audit" });
+		apply(SUBAGENT_COMPLETED_EVENT, { id: "a3" });
+		expect(stateOf("auth-audit")).toBe("done");
+	});
+
+	it("keeps a fresh queued owner over an older settled nameBase sibling", () => {
+		const fields = (id: string, name: string, spawnSeq: number) => ({ id, name, nameBase: "auth-audit", spawnSeq });
+		apply(SUBAGENT_CREATED_EVENT, fields("a1", "auth-audit", 1));
+		apply(SUBAGENT_STARTED_EVENT, fields("a1", "auth-audit", 1));
+		apply(SUBAGENT_CREATED_EVENT, fields("a2", "auth-audit-2", 2));
+		apply(SUBAGENT_STARTED_EVENT, fields("a2", "auth-audit-2", 2));
+		apply(SUBAGENT_COMPLETED_EVENT, { ...fields("a1", "auth-audit", 1), settleSeq: 3 });
+		apply(SUBAGENT_COMPLETED_EVENT, { ...fields("a2", "auth-audit-2", 2), settleSeq: 4 });
+		// The bare name is free again and a fresh owner queues: the old sibling says nothing about it.
+		apply(SUBAGENT_CREATED_EVENT, fields("a9", "auth-audit", 50));
+		expect(stateOf("auth-audit")).toBe("queued");
+		// A retry spawned after it still outranks it once settled.
+		apply(SUBAGENT_STARTED_EVENT, fields("a10", "auth-audit-2", 51));
+		apply(SUBAGENT_FAILED_EVENT, { ...fields("a10", "auth-audit-2", 51), status: "error", settleSeq: 52 });
+		expect(stateOf("auth-audit")).toBe("failed");
 	});
 
 	it("reports a change only when state or identity moved", () => {

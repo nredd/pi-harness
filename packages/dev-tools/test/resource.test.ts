@@ -291,6 +291,80 @@ describe("resource_snapshot on the real host through the published sampler", () 
 		expect(JSON.parse(await readFile(join(installed, "package.json"), "utf8")).version).toBe("0.2.0");
 	});
 
+	it("reports a real registry producer's interrupted Linux enumeration through the tool schema", async () => {
+		// The disposable Node process forces Linux and injects an ENOENT from the published producer's
+		// /proc iterator. On macOS this models the Linux path; it is not a native Linux execution.
+		const { stdout } = await execFileAsync("node", [join(PACKAGE_ROOT, "test", "resource-producer-fixture.mjs")], {
+			cwd: PACKAGE_ROOT,
+		});
+		const output = JSON.parse(stdout);
+		expect(output.samples).toHaveLength(2);
+		for (const sample of output.samples) {
+			expect(sample.processes).toBe(0);
+			expect(sample.coverage.reasons).toContain("process-collection-unavailable");
+		}
+		expect(output.result.processes).toEqual({
+			status: "unavailable",
+			reason: "process metadata unavailable (process-collection-unavailable)",
+		});
+		expect(output.text).toContain("process metadata unavailable (process-collection-unavailable)");
+	});
+
+	it("reports a real registry producer's exhausted scan budget through the tool schema", async () => {
+		const samples: ResourceSnapshot[] = [];
+		const mock = createMockPi();
+		registerResourceTools(mock.pi, {
+			createSampler() {
+				const sampler = createResourceSampler({ maxDurationMs: 10 });
+				let count = 0;
+				return {
+					async sample(signal) {
+						const pending = sampler.sample(signal);
+						if (++count === 2) {
+							const deadline = performance.now() + 30;
+							while (performance.now() < deadline) {
+								/* Hold the event loop past the producer budget. */
+							}
+						}
+						const sample = await pending;
+						samples.push(sample);
+						return sample;
+					},
+					dispose: () => sampler.dispose(),
+				};
+			},
+		});
+		const result = await mock.call("resource_snapshot", { process_limit: 50, interval_ms: INTERVAL_MS }, "/tmp");
+		const snapshot = result.structuredContent as Awaited<ReturnType<typeof resourceSnapshot>>;
+		expect(samples).toHaveLength(2);
+		expect(samples[1]?.coverage.complete).toBe(false);
+		expect(samples[1]?.coverage.reasons).toContain("deadline");
+		if (snapshot.processes.status === "unavailable") expect(snapshot.processes.reason).toContain("deadline");
+		else {
+			expect(snapshot.processes.truncated).toBe(true);
+			expect(snapshot.processes.coverage.reasons).toContain("deadline");
+		}
+		expect(mock.text(result)).toContain(snapshot.processes.status === "unavailable" ? "deadline" : "truncated=true");
+	});
+
+	it.each(["process-collection-unavailable", "deadline"])(
+		"reports %s through tool execution and output schema",
+		async (reason) => {
+			const fake = fakeSampler(
+				fixture("linux", [], {
+					coverage: { complete: false, enumerated: 0, sampled: 0, skipped: 0, bytesRead: 0, reasons: [reason] },
+				}),
+			);
+			const mock = createMockPi();
+			registerResourceTools(mock.pi, { createSampler: fake.createSampler });
+			const result = await mock.call("resource_snapshot", { process_limit: 50, interval_ms: INTERVAL_MS }, "/tmp");
+			const snapshot = result.structuredContent as Awaited<ReturnType<typeof resourceSnapshot>>;
+			expect(snapshot.processes).toEqual({ status: "unavailable", reason: `process metadata unavailable (${reason})` });
+			expect(mock.text(result)).toContain(`process metadata unavailable (${reason})`);
+			expect(fake.state.disposed).toBe(1);
+		},
+	);
+
 	it("smokes the real host through tool execution and output schema validation", async () => {
 		const mock = createMockPi();
 		registerResourceTools(mock.pi);
@@ -302,7 +376,8 @@ describe("resource_snapshot on the real host through the published sampler", () 
 		expect(snapshot.interval.measuredMs).toBeGreaterThanOrEqual(INTERVAL_MS - 1);
 		expect(snapshot.cpu.utilization.state).toBe("available");
 		if (process.platform !== "darwin" && process.platform !== "linux") return;
-		if (snapshot.processes.status !== "available") throw new Error("missing process metadata");
+		if (snapshot.processes.status !== "available")
+			throw new Error(`missing process metadata: ${snapshot.processes.reason}`);
 		expect(snapshot.processes.entries.length).toBeGreaterThan(0);
 		expect(snapshot.processes.entries.length).toBeLessThanOrEqual(50);
 		expect(snapshot.processes.ranking).toBe(process.platform === "linux" || nativeDarwinCpu ? "interval-cpu" : "rss");

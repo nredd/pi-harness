@@ -848,8 +848,8 @@ export class FleetList {
     const start = selRow < visible ? 0 : selRow - visible + 1;
     const hiddenBelow = rows.length - (start + visible);
 
-    // Both indicator slots remain in the row block, blank at an edge, so every
-    // overflowing roster has the same height.
+    // Keep both indicator slots in the row-block budget. Empty edge slots go
+    // below the visible content, never between main and the first child.
     // Column widths come from EVERY agent row, not the window, so scrolling
     // never shifts a column; a column too wide for the terminal is dropped
     // lowest-value first, never state, elapsed, tokens or cost.
@@ -869,7 +869,7 @@ export class FleetList {
     );
     if (start > 0) {
       lines.push(rightAlign("", theme.fg("dim", `↑ ${start} more: ${summarizeHidden(rows.slice(0, start))}`), width));
-    } else if (overflow) lines.push("");
+    }
     for (let a = start; a < start + visible; a++) {
       const row = rows[a];
       lines.push(
@@ -882,6 +882,7 @@ export class FleetList {
     if (hiddenBelow > 0) {
       lines.push(rightAlign("", theme.fg("dim", `↓ ${hiddenBelow} more: ${summarizeHidden(rows.slice(start + visible))}`), width));
     } else if (overflow) lines.push("");
+    if (start === 0 && overflow) lines.push("");
     // pi stacks below-editor widgets directly on its footer with no spacer (#351).
     lines.push("");
 
