@@ -180,4 +180,9 @@ export function main(
 	return 0;
 }
 
-if (import.meta.main) process.exitCode = main(process.argv.slice(2));
+/** Dispatch only when invoked as the entry module. */
+export function dispatch(isMain: boolean): void {
+	if (isMain) process.exitCode = main(process.argv.slice(2));
+}
+
+dispatch(import.meta.main);

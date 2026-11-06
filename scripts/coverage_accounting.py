@@ -17,7 +17,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -1352,9 +1352,8 @@ def main() -> int:
         label = f"{result['package']}/{result['signal']}"
         counters = totals.setdefault(label, {})
         for metric in FileCoverage.__dataclass_fields__:
-            value = result[metric]
-            if isinstance(value, int):
-                counters[metric] = counters.get(metric, 0) + value
+            value = cast(int, result[metric])
+            counters[metric] = counters.get(metric, 0) + value
     # A producer without branch records proposes no branch cap; `check_branch_cap` would reject one.
     floors = {
         label: {

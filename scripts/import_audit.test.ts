@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { API } from "typescript/unstable/sync";
 import { test, vi } from "vitest";
-import { type AuditResult, auditFiles, main } from "./import_audit.ts";
+import { type AuditResult, auditFiles, dispatch, main } from "./import_audit.ts";
 
 /** Write `sources` under `<root>/pkg/` and audit them in one batch. */
 function audit(sources: Record<string, string>): AuditResult {
@@ -43,6 +43,38 @@ function one(source: string, name = "a.ts"): { specifiers: string[]; diagnostics
 	assert.ok(found, "file missing from the audit result");
 	return found;
 }
+
+test("real Node imports do not dispatch either CLI", () => {
+	for (const name of ["import_audit.ts", "run-vitest.ts"]) {
+		const script = join(dirname(fileURLToPath(import.meta.url)), name);
+		const run = spawnSync(process.execPath, ["--input-type=module", "-e", "await import(process.argv[1])", script], {
+			encoding: "utf8",
+		});
+		assert.equal(run.status, 0);
+		assert.equal(run.stdout, "");
+		assert.equal(run.stderr, "");
+	}
+});
+
+test("entry dispatch runs the CLI only for the entry module", () => {
+	const argv = process.argv;
+	const exitCode = process.exitCode;
+	const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+	try {
+		process.argv = ["node", "import_audit.ts"];
+		process.exitCode = 0;
+		dispatch(false);
+		assert.equal(process.exitCode, 0);
+		assert.equal(stderr.mock.calls.length, 0);
+		dispatch(true);
+		assert.equal(process.exitCode, 2);
+		assert.match(String(stderr.mock.calls[0]?.[0]), /usage: node import_audit/);
+	} finally {
+		process.argv = argv;
+		process.exitCode = exitCode;
+		stderr.mockRestore();
+	}
+});
 
 test("static imports, re-exports, type imports and import-equals are collected in order", () => {
 	const found = one(

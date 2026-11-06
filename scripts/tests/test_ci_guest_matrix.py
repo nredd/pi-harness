@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, replace
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any
 
 import pytest
@@ -31,6 +31,9 @@ import merge_pr_checks
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/ci.yml"
+SETUP_CI_TOOLS = "./.github/actions/setup-ci-tools"
+# A command that starts a shell line, never one inside a comment or an echoed string.
+NPM_INSTALL_COMMAND = re.compile(r"^\s*(?:npm ci|make install-owned)\b", re.MULTILINE)
 PLATFORMS = {
     "ubuntu-24.04": ("ubuntu-24.04", "linux", "linux-x64"),
     "macos-14": ("xcode-27", "macos", "darwin-arm64"),
@@ -2376,3 +2379,180 @@ def test_docs_list_every_benchmark_input() -> None:
     )
     for entry in sorted(ci_paths.BENCHMARK_INPUT_FILES) + list(ci_paths.BENCHMARK_INPUT_PREFIXES):
         assert f"`{entry}`" in bullet
+
+
+def runs_npm_install(step: dict[str, Any]) -> bool:
+    """Report whether a workflow step runs `npm ci`, directly or through `make install-owned`.
+
+    Parameters:
+        step (dict[str, Any]): One workflow step.
+
+    Returns:
+        bool: True when a line of the step's `run` script starts with `npm ci` or `make install-owned`.
+    """
+    return NPM_INSTALL_COMMAND.search(step.get("run", "")) is not None
+
+
+def test_setup_ci_tools_restores_the_lockfile_npm_cache_under_its_own_key() -> None:
+    """Pin the explicit npm cache that keeps release-CDN tarball fetches out of every `npm ci` (#531).
+
+    setup-node's implicit npm cache key is shared with workflows that never run `npm ci`, which saved an empty
+    cache that every hosted macOS cell then restored.
+    """
+    action = yaml.safe_load((ROOT / ".github/actions/setup-ci-tools/action.yml").read_text())
+    assert action["inputs"]["npm-cache"]["default"] == "true"
+    steps = action["runs"]["steps"]
+    node = next(i for i, step in enumerate(steps) if "actions/setup-node@" in step.get("uses", ""))
+    assert steps[node]["with"]["package-manager-cache"] is False
+    assert "cache" not in steps[node]["with"]
+    pin = next(i for i, step in enumerate(steps) if step.get("name") == "Pin npm to packageManager")
+    locate = next(i for i, step in enumerate(steps) if step.get("id") == "npm-cache")
+    assert steps[locate]["run"] == 'echo "dir=$(npm config get cache)" >>"$GITHUB_OUTPUT"'
+    cache = next(i for i, step in enumerate(steps) if step.get("uses", "").startswith("actions/cache@"))
+    assert node < pin < locate < cache
+    assert re.fullmatch(r"actions/cache@[0-9a-f]{40}", steps[cache]["uses"])
+    gate = "inputs.guest != 'wsl2' && inputs.npm-cache == 'true'"
+    assert steps[locate]["if"] == steps[cache]["if"] == gate
+    # The prefix restore keeps a lockfile-changing run warm for every tarball the change did not touch.
+    assert steps[cache]["with"] == {
+        "path": "${{ steps.npm-cache.outputs.dir }}",
+        "key": "npm-ci-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json') }}",
+        "restore-keys": "npm-ci-${{ runner.os }}-${{ runner.arch }}-",
+    }
+
+
+def test_every_npm_ci_job_restores_the_npm_cache_and_no_other_job_saves_one() -> None:
+    """Every ci.yml job that runs `npm ci` restores the npm cache first; any other job turns it off."""
+    installing: set[str] = set()
+    for name, job in jobs().items():
+        steps = job.get("steps", [])
+        setups = [i for i, step in enumerate(steps) if step.get("uses") == SETUP_CI_TOOLS]
+        installs = [i for i, step in enumerate(steps) if runs_npm_install(step)]
+        if installs:
+            installing.add(name)
+            assert setups, name
+            assert setups[0] < installs[0], name
+            assert all(steps[i].get("with", {}).get("npm-cache", "true") == "true" for i in setups), name
+        else:
+            assert all(steps[i].get("with", {}).get("npm-cache") == "false" for i in setups), name
+    assert {*OWNED_SHARD_JOBS.values(), "contracts", "stack"} <= installing
+
+
+def lexical_path[PathType: PurePath](source: PathType) -> PathType:
+    """Normalize a workflow path lexically without resolving symlinks or accessing the filesystem.
+
+    Parameters:
+        source (PathType): Workflow path to normalize.
+
+    Returns:
+        PathType: Lexically normalized path of the same flavour.
+    """
+    parts: list[str] = []
+    for part in source.parts:
+        if part == source.anchor:
+            continue
+        if part == ".." and parts and parts[-1] != "..":
+            parts.pop()
+        elif part != ".." or not source.anchor:
+            parts.append(part)
+    return type(source)(source.anchor, *parts)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("./a//b/../package-lock.json", "a/package-lock.json"),
+        ("a/../../package-lock.json", "../package-lock.json"),
+        ("/../../a/../package-lock.json", "/package-lock.json"),
+        ("a/..", "."),
+    ],
+)
+def test_lexical_path(value: str, expected: str) -> None:
+    """Normalize dot segments without following filesystem links.
+
+    Parameters:
+        value (str): Workflow path to normalize.
+        expected (str): Expected normalized path.
+    """
+    assert lexical_path(Path(value)) == Path(expected)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (PurePosixPath("//a/../package-lock.json"), PurePosixPath("//package-lock.json")),
+        (PureWindowsPath("//a/../package-lock.json"), PureWindowsPath("//a/../package-lock.json")),
+        (
+            PureWindowsPath("//server/share/a/../package-lock.json"),
+            PureWindowsPath("//server/share/package-lock.json"),
+        ),
+        (PureWindowsPath("C:/../../a/../package-lock.json"), PureWindowsPath("C:/package-lock.json")),
+    ],
+)
+def test_lexical_path_flavours(value: PurePath, expected: PurePath) -> None:
+    """Preserve POSIX roots and Windows drive and UNC anchors.
+
+    Parameters:
+        value (PurePath): Workflow path to normalize.
+        expected (PurePath): Expected normalized path.
+    """
+    assert lexical_path(value) == expected
+
+
+def installed_lockfiles(job: dict[str, Any]) -> set[Path]:
+    """Return the lockfile each `npm ci` step of a job installs, from its working directory.
+
+    Parameters:
+        job (dict[str, Any]): One workflow job.
+
+    Returns:
+        set[Path]: Lexically normalized `package-lock.json` paths.
+    """
+    default = job.get("defaults", {}).get("run", {}).get("working-directory", ".")
+    return {
+        lexical_path(Path(f"{step.get('working-directory', default)}/package-lock.json"))
+        for step in job.get("steps", [])
+        if runs_npm_install(step)
+    }
+
+
+@pytest.mark.parametrize(
+    "workflow", sorted((ROOT / ".github/workflows").glob("*.yml")), ids=lambda path: path.name
+)
+def test_setup_node_caches_only_the_lockfile_its_job_installs(workflow: Path) -> None:
+    """A setup-node npm cache is keyed on a lockfile its own job's `npm ci` installs, or is off.
+
+    A job with no `npm ci` would save an empty cache (`installer.yml`), and one keyed on another lockfile
+    would save its dependencies under a key a root install restores (`forks.yml`) (#531).
+
+    Parameters:
+        workflow (Path): One workflow file.
+    """
+    for name, job in yaml.safe_load(workflow.read_text())["jobs"].items():
+        for step in job.get("steps", []):
+            if "actions/setup-node@" not in step.get("uses", ""):
+                continue
+            options = step.get("with", {})
+            if "cache" not in options and options.get("package-manager-cache") is False:
+                continue
+            lockfile = lexical_path(Path(options.get("cache-dependency-path", "package-lock.json")))
+            assert lockfile in installed_lockfiles(job), f"{workflow.name}:{name}"
+
+
+def test_release_verify_restores_the_ci_npm_cache_without_saving() -> None:
+    """`publish.yml` `verify` restores the `setup-ci-tools` npm cache before its root `npm ci`, read-only."""
+    action = yaml.safe_load((ROOT / ".github/actions/setup-ci-tools/action.yml").read_text())
+    ci_cache = next(
+        step for step in action["runs"]["steps"] if step.get("uses", "").startswith("actions/cache@")
+    )
+    steps = yaml.safe_load((ROOT / ".github/workflows/publish.yml").read_text())["jobs"]["verify"]["steps"]
+    assert not any(step.get("uses", "").startswith("actions/cache@") for step in steps)
+    pin = next(i for i, step in enumerate(steps) if step.get("name") == "Pin npm to packageManager")
+    locate = next(i for i, step in enumerate(steps) if step.get("id") == "npm-cache")
+    restore = next(
+        i for i, step in enumerate(steps) if step.get("uses", "").startswith("actions/cache/restore@")
+    )
+    install = next(i for i, step in enumerate(steps) if "npm_release.py verify" in step.get("run", ""))
+    assert pin < locate < restore < install
+    assert steps[restore]["uses"].split("@")[1] == ci_cache["uses"].split("@")[1]
+    assert steps[restore]["with"] == ci_cache["with"]

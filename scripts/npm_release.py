@@ -743,7 +743,8 @@ def wait_for_registry(repo: Path, identity: Identity) -> None:
     Raises:
         ReleaseError: If bytes differ immediately, or metadata is still absent after ten minutes.
     """
-    for attempt in range(REGISTRY_POLL_ATTEMPTS):
+    attempt = 0
+    while True:
         dist = registry_dist(repo, identity.target)
         if dist is not None and dist.integrity != identity.integrity:
             raise ReleaseError("Registry integrity differs from verified tarball; refusing recovery")
@@ -754,6 +755,7 @@ def wait_for_registry(repo: Path, identity: Identity) -> None:
             if attempt == REGISTRY_POLL_ATTEMPTS - 1:
                 raise
             time.sleep(REGISTRY_POLL_INTERVAL_S)
+            attempt += 1
 
 
 def verify_signatures(identity: PublishedIdentity) -> None:

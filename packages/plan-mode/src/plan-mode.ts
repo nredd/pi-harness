@@ -823,8 +823,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   });
 
   pi.on("input", async (event, ctx) => {
-    // A host may still dispatch input while shutdown awaits model/settings writes.
-    if (shuttingDownSession === ctx.sessionManager) {
+    // A host may dispatch old-session input after replacement or while shutdown awaits writes.
+    if (shuttingDownSession === ctx.sessionManager || (currentSession && currentSession !== ctx.sessionManager)) {
       recoverRuntimeAdmissionInput({ ...event, sessionManager: ctx.sessionManager });
       return { action: "handled" };
     }

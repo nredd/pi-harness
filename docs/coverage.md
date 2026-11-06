@@ -127,23 +127,24 @@ through `scripts/run-vitest.ts node --coverage` with the shared home guard. Vite
 runs the measured source itself, so Node's compile cache no longer reaches it: the
 `NODE_DISABLE_COMPILE_CACHE=1` that c8 needed (#321) is gone, and the measured counters are unchanged with
 `NODE_COMPILE_CACHE` exported. Vitest coverage does not follow child processes, which c8 did, so the
-import-audit CLI runs in process through `main()` as well as through the real subprocess; the
-one-line `import.meta.main` dispatch is asserted only by the subprocess tests. Since #379 the same
+import-audit CLI runs in process through `main()` as well as through the real subprocess. The
+entry dispatch in both `import_audit.ts` and `run-vitest.ts` is exercised in process for both
+entry and import cases, with real subprocess tests retaining the CLI boundary. Since #379 the same
 signal owns the other three root Node scripts, formerly `verification_helpers` rows, measured the
 same way. `run-vitest.ts` exports `main(argv, env)`; `run-vitest.test.ts` fakes only `spawnSync` and
 asserts engine selection, the appended Bun coverage arguments and the exact opt-out, real home
 creation and removal, toolchain homes, the step summary, and rejection of a bad engine. Its
-`import.meta.main` dispatch stays with the subprocess tests in `launcher.test.ts` and
-`test_coverage_producers.py`. `check-biome-paths.mjs` stays a top-level CLI that its test re-imports
+`dispatch(isMain)` is asserted in process for both arms, and the real entry stays with the subprocess
+tests in `launcher.test.ts` and `test_coverage_producers.py`. `check-biome-paths.mjs` stays a top-level CLI that its test re-imports
 per case with its own argv, like `anthropic-block-types.mjs`, against real Biome, faking `spawnSync`
 only for a spawn error and a signal-killed child. `router_contract.mjs` exports the per-scenario
 synthetic utilization so every scenario runs in process; its two placeholder imports are virtual
-mocks. Vite's module runner pins `import.meta.main` false, so the `import.meta.main` dispatches of
-`run-vitest.ts` and `import_audit.ts` are the signal's only uncovered branches (#418): a test of
-ordinary, member and look-alike `require` calls covers the non-import call, and the syntax-error
-location no longer branches on the diagnostic's optional `fileName`, since diagnostics are requested
-per file. The signal is 0 uncovered lines (114) and functions (16), 2 of 100 branches, on darwin.
-`import-audit` and `probes` are in the goal and enforced at 0/0. Since #377 `probes` measures every
+mocks. Vite's module runner pins `import.meta.main` false, so the dispatches of `run-vitest.ts` and
+`import_audit.ts` were the signal's last two uncovered branches (#418, #539): each is now an exported
+`dispatch(isMain)` whose arms are called directly. A test of ordinary, member and look-alike `require`
+calls covers the non-import call, and the syntax-error location no longer branches on the diagnostic's
+optional `fileName`, since diagnostics are requested per file. The import-audit signal enforces zero uncovered lines, functions, and branches on darwin
+and linux. `import-audit` and `probes` are in the goal and enforced at 0/0. Since #377 `probes` measures every
 executable probe in process under `check-probes`: `transcript-types.ts`, `render.ts` (its
 `/harness-probe` command against a recording TUI), the `pi -e` extensions `latency.ts`,
 `session-kit-child-scope.ts` and `stack-resources.ts` registered against recording `ExtensionAPI`
@@ -337,6 +338,8 @@ deliberately not `coverage/primary`, which is import-audit's report. The `--cov`
 root (`.` and `harness`), so the policy `owned` globs stay the only copy of the inventory.
 `scripts/pyproject.toml` sets coverage's `patch = ["subprocess"]` so the CLI tests that spawn
 `coverage_accounting.py` count. `pytest-cov` is locked in `integration/pyproject.toml`.
+Measurement can report an OS with no reference floor; enforcement still requires one. Summary totals
+consume the integer counters emitted by `account`, not the package, signal, OS or file labels.
 `parse_lcov` accepts coverage.py's `FN:<line>,<end>,<name>` rows. Only a signal declaring
 `producer: "coverage.py"` may contain the bare `SF`/`end_of_record` record coverage.py writes for a
 file with no executable lines; for any other producer a bare record is a truncated report and fails. The same
