@@ -20,6 +20,7 @@ import {
 	PLAN_APPROVED_EVENT,
 	PLAN_REMINDER_MESSAGE_TYPE,
 	STATE_ENTRY_TYPE,
+	SUBAGENT_ANNOUNCE_SURVIVORS_EVENT,
 	SUBAGENT_STARTED_EVENT,
 	type TaskDetails,
 } from "./tool/types.ts";
@@ -512,8 +513,13 @@ describe("settling with nothing armed to wake the parent", () => {
 		tasks: rows.map((r) => ({ subject: `t${r.id}`, status: "in_progress", ...r })),
 	});
 	/** Start a session whose branch already holds `snapshot`, i.e. a resume. */
-	async function start(snapshot: ReturnType<typeof tasks>, reason = "resume") {
+	async function start(
+		snapshot: ReturnType<typeof tasks>,
+		reason = "resume",
+		beforeStart?: (bus: Map<string, Handler[]>) => void,
+	) {
 		const s = setup();
+		beforeStart?.(s.bus);
 		const ctx = createMockCtx({
 			sessionId: "s1",
 			branch: [{ type: "custom", customType: STATE_ENTRY_TYPE, data: snapshot }] as never,
@@ -521,6 +527,19 @@ describe("settling with nothing armed to wake the parent", () => {
 		await s.handler("session_start")({ reason }, ctx);
 		return { ...s, ctx };
 	}
+	/**
+	 * A stand-in for pi-subagents holding a detached survivor: answers the announce request with the
+	 * `subagents:started` payload its `session_start` re-announcement emits (see
+	 * `packages/subagents/test/index-coverage-final-lifecycle.test.ts` for the real emitter).
+	 */
+	const survivorPeer = (handle: string) => (bus: Map<string, Handler[]>) => {
+		bus.set(SUBAGENT_ANNOUNCE_SURVIVORS_EVENT, [
+			() => {
+				for (const h of bus.get(SUBAGENT_STARTED_EVENT) ?? [])
+					void h({ id: "a1", handle, type: "general-purpose", description: "d", wakesParent: true });
+			},
+		]);
+	};
 	const monitor = (bus: Map<string, Handler[]>, channel: string, id = "m1", sessionId = "s1") => {
 		for (const h of bus.get(channel) ?? []) void h({ sessionId, id, name: "ci" });
 	};
@@ -632,7 +651,10 @@ describe("settling with nothing armed to wake the parent", () => {
 	});
 
 	it("reports an owner unknown after resume as lost, naming it, on every settle", async () => {
-		const { handler, ctx } = await start(tasks({ id: 1, owner: "0a1b2c3d-4e5f-6a7" }, { id: 2, owner: "alive" }));
+		const { handler, ctx } = await start(
+			tasks({ id: 1, owner: "0a1b2c3d-4e5f-6a7" }, { id: 2, owner: "alive" }),
+			"startup",
+		);
 		applyAgentEvent("s1", SUBAGENT_STARTED_EVENT, { id: "a1", handle: "alive", wakesParent: true });
 		await handler("agent_settled")({ type: "agent_settled" }, ctx);
 		await handler("agent_settled")({ type: "agent_settled" }, ctx);
@@ -647,7 +669,7 @@ describe("settling with nothing armed to wake the parent", () => {
 	});
 
 	it("does not call an owner lost when it was set after resume, changed, or heard again", async () => {
-		const { handler, ctx, call } = await start(tasks({ id: 1, owner: "old-worker" }));
+		const { handler, ctx, call } = await start(tasks({ id: 1, owner: "old-worker" }), "startup");
 		await call(ctx, { action: "create", subject: "fresh" });
 		await call(ctx, { action: "update", id: 2, status: "in_progress", owner: "new-worker" });
 		await call(ctx, { action: "update", id: 1, owner: "reassigned" });
@@ -660,10 +682,65 @@ describe("settling with nothing armed to wake the parent", () => {
 		expect(notices(ctx)[0][0]).not.toContain("not found after resume");
 	});
 
-	it("keeps a reload's owners out of the lost group", async () => {
-		const { handler, ctx } = await start(tasks({ id: 1, owner: "worker" }), "reload");
+	it("treats only a startup with an unnamed owner as lost, and still reminds", async () => {
+		const { handler, ctx } = await start(tasks({ id: 1, owner: "worker" }), "startup");
 		await handler("agent_settled")({ type: "agent_settled" }, ctx);
-		expect(notices(ctx)[0][0]).toContain("held by the parent: #1 t1 (@worker)");
+		expect(notices(ctx)[0][0]).toContain("owner agent not found after resume: #1 t1 (@worker)");
+		expect(await handler("agent_before_settle")(settleEvent([user, assistant]), ctx)).toBeDefined();
+	});
+
+	it.each(["resume", "reload", "fork", "new"])(
+		"keeps an unheard owner after %s out of the lost group",
+		async (reason) => {
+			const { handler, ctx } = await start(tasks({ id: 1, owner: "worker" }), reason);
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			expect(notices(ctx)[0][0]).toContain("held by the parent: #1 t1 (@worker)");
+			expect(notices(ctx)[0][0]).not.toContain("not found after resume");
+		},
+	);
+
+	it.each(["resume", "reload", "fork"])(
+		"neither warns nor reminds for a live detached survivor after %s",
+		async (reason) => {
+			const { handler, ctx } = await start(tasks({ id: 1, owner: "worker" }), reason, survivorPeer("worker"));
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			expect(notices(ctx)).toEqual([
+				[
+					"Run ended with 1 in_progress todo, armed: no todo-owned wake (monitor and agent notices list session wakes); agent running: #1 t1 (@worker running)",
+					"info",
+				],
+			]);
+			expect(await handler("agent_before_settle")(settleEvent([user, assistant]), ctx)).toBeUndefined();
+		},
+	);
+
+	it("hears a survivor re-announced before the session bound, via the announce request", async () => {
+		const { handler, ctx, bus } = await start(tasks({ id: 1, owner: "worker" }), "reload", (b) => {
+			survivorPeer("worker")(b);
+			// pi-subagents' session_start ran first: nothing was bound to hear it yet.
+			for (const h of b.get(SUBAGENT_STARTED_EVENT) ?? []) void h({ id: "a1", handle: "worker", wakesParent: true });
+		});
+		expect(bus.get(SUBAGENT_ANNOUNCE_SURVIVORS_EVENT)).toHaveLength(1);
+		expect(await handler("agent_before_settle")(settleEvent([user, assistant]), ctx)).toBeUndefined();
+	});
+
+	it("falls back to the held reminder once a survivor's delivered result settles it", async () => {
+		const { handler, ctx, bus } = await start(tasks({ id: 1, owner: "worker" }), "resume", survivorPeer("worker"));
+		const settle = handler("agent_before_settle");
+		expect(await settle(settleEvent([user, assistant]), ctx)).toBeUndefined();
+		for (const h of bus.get("subagents:completed") ?? []) void h({ id: "a1", handle: "worker", status: "completed" });
+		const result = (await settle(settleEvent([user, assistant]), ctx)) as { entries: unknown[] };
+		expect(result.entries).toHaveLength(1);
+	});
+
+	it("only the bound session asks for survivors", async () => {
+		const { handler, bus } = await start(tasks({ id: 1 }), "resume", (b) => {
+			b.set(SUBAGENT_ANNOUNCE_SURVIVORS_EVENT, []);
+		});
+		const asks = vi.fn();
+		bus.set(SUBAGENT_ANNOUNCE_SURVIVORS_EVENT, [asks]);
+		await handler("session_start")({ reason: "startup" }, createMockCtx({ sessionId: "child" }));
+		expect(asks).not.toHaveBeenCalled();
 	});
 
 	it("shows held work once while a wake is armed, and warns again when it is not", async () => {

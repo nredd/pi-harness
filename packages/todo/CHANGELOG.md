@@ -7,6 +7,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- A live background agent that survives `/resume`, `/fork` or `/reload` is no longer reported lost or held, and no longer triggers the held-work reminder. Only a process `startup` marks an unnamed owner lost; the session asks pi-subagents to re-announce survivors.
+
 ### Changed
 
 - First CI-attested release; no code change.

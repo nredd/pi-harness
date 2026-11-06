@@ -62,6 +62,12 @@ export const SUBAGENT_CREATED_EVENT = "subagents:created";
 export const SUBAGENT_STARTED_EVENT = "subagents:started";
 export const SUBAGENT_COMPLETED_EVENT = "subagents:completed";
 export const SUBAGENT_FAILED_EVENT = "subagents:failed";
+/**
+ * Asks pi-subagents to re-emit `subagents:started` for background agents that survived a session
+ * switch or `/reload`; sent once this session is bound, in case pi-subagents' own `session_start` ran first.
+ */
+export const SUBAGENT_ANNOUNCE_SURVIVORS_EVENT = "subagents:announce_survivors";
+
 export const SUBAGENT_LIFECYCLE_EVENTS = [
 	SUBAGENT_CREATED_EVENT,
 	SUBAGENT_STARTED_EVENT,

@@ -11,6 +11,7 @@ import registerTodo from "./.test-support/home-fixtures.ts";
 import { agentLookup } from "./state/agents.ts";
 import { getState } from "./state/store.ts";
 import {
+	SUBAGENT_ANNOUNCE_SURVIVORS_EVENT,
 	SUBAGENT_COMPLETED_EVENT,
 	SUBAGENT_CREATED_EVENT,
 	SUBAGENT_FAILED_EVENT,
@@ -25,9 +26,10 @@ const plainTheme = makeTheme({ fg: (_c, text) => text, strikethrough: (text) => 
 
 function setup() {
 	const bus = new Map<string, Handler[]>();
+	const emitSpy = vi.fn();
 	const { pi, captured } = createMockPi({
 		events: {
-			emit: vi.fn(),
+			emit: emitSpy,
 			on: vi.fn((channel: string, handler: Handler) => {
 				bus.set(channel, [...(bus.get(channel) ?? []), handler]);
 				return () => {};
@@ -73,7 +75,7 @@ function setup() {
 		const calls = (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls;
 		return String(calls[calls.length - 1]?.[0]);
 	};
-	return { bus, handler, emit, call, toolEnd, rows, mount, todos };
+	return { bus, emitSpy, handler, emit, call, toolEnd, rows, mount, todos };
 }
 
 async function ownedTodo(h: ReturnType<typeof setup>, ctx: Ctx, owner: string) {
@@ -155,6 +157,14 @@ describe("owner matches a subagent", () => {
 		const resumed = createMockCtx({ sessionId: "s1", hasUI: true });
 		await ownedTodo(h, resumed, "scout");
 		expect(h.rows(resumed)).toEqual(["└─ ◐ #1 Audit auth @scout"]);
+	});
+
+	it("asks pi-subagents for survivors once the foreground UI session is bound, never for a child", async () => {
+		const h = setup();
+		await h.handler("session_start")({ reason: "reload" }, createMockCtx({ sessionId: "s1", hasUI: true }));
+		expect(h.emitSpy.mock.calls.filter(([c]) => c === SUBAGENT_ANNOUNCE_SURVIVORS_EVENT)).toHaveLength(1);
+		await h.handler("session_start")({ reason: "startup" }, createMockCtx({ sessionId: "child", hasUI: true }));
+		expect(h.emitSpy.mock.calls.filter(([c]) => c === SUBAGENT_ANNOUNCE_SURVIVORS_EVENT)).toHaveLength(1);
 	});
 
 	it("repaints the live overlay when an owner's agent changes state", async () => {

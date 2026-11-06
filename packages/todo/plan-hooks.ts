@@ -346,7 +346,7 @@ export function formatInProgressNotice(
 export interface PlanSessionHooks {
 	/**
 	 * Call from `session_start` after replay: binds the session and applies a pending approval.
-	 * `resumed` is false for a `/reload`, which keeps the running agents and so has no lost owners.
+	 * `resumed` is true only for a process `startup`: `/new`, `/resume`, `/fork` and `/reload` detach live agents instead, so no owner is provably lost.
 	 */
 	sessionStarted(sessionId: string, resumed: boolean): Promise<void>;
 	/** Call from `session_shutdown`. */

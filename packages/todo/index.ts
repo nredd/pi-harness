@@ -38,7 +38,11 @@ import {
 } from "./state/store.ts";
 import { registerTodosCommand, registerTodoTool, TOOL_NAME } from "./todo.ts";
 import type { TodoOverlay } from "./todo-overlay.ts";
-import { MONITOR_LIFECYCLE_EVENTS, SUBAGENT_LIFECYCLE_EVENTS } from "./tool/types.ts";
+import {
+	MONITOR_LIFECYCLE_EVENTS,
+	SUBAGENT_ANNOUNCE_SURVIVORS_EVENT,
+	SUBAGENT_LIFECYCLE_EVENTS,
+} from "./tool/types.ts";
 
 type I18nLoader = {
 	registerLocalesFromDir: (namespace: string, packageUrl: string, options?: { label?: string }) => void;
@@ -251,11 +255,17 @@ export default function (
 		}
 		// On top of the replayed state: an approval announced before this
 		// session started here lands now.
-		await planHooks.sessionStarted(id, event.reason !== "reload");
+		// Only a process restart provably kills every child; /new, /resume, /fork and /reload
+		// detach live agents that pi-subagents re-announces below.
+		await planHooks.sessionStarted(id, event.reason === "startup");
 		// The session this activation's subagents report to: a headless run's
 		// only session, or the UI foreground (a child session never rebinds it).
-		if (!ctx.hasUI) agentSession ??= id;
-		if (!ctx.hasUI) return;
+		if (!ctx.hasUI) {
+			agentSession ??= id;
+			// Not `agentSession`: a child session must not ask on the parent's behalf.
+			if (agentSession === id) pi.events.emit(SUBAGENT_ANNOUNCE_SURVIVORS_EVENT, {});
+			return;
+		}
 		// First UI-bearing session_start claims the foreground (the interactive
 		// launcher, by spawn-ordering) without eagerly loading the overlay.
 		if (getActiveRenderSession() === "") setActiveRenderSession(id);
@@ -263,6 +273,7 @@ export default function (
 		// (distinct sid) is skipped — does not rebind to a relay/stale ui.
 		if (id !== getActiveRenderSession()) return;
 		agentSession = id;
+		pi.events.emit(SUBAGENT_ANNOUNCE_SURVIVORS_EVENT, {});
 		const generation = ++lifecycleGeneration;
 		uiCtx = ctx.ui;
 		collapseOnBind = event.reason === "resume" && getCollapseOnResume(options.homeDir);

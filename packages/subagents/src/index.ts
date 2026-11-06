@@ -740,6 +740,17 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     };
   }
 
+  /**
+   * A survivor's lifecycle payload for a session that never heard its spawn: the
+   * orphaned manager's own `spawnSeq`/`runSeq`/`settleSeq` count a different sequence
+   * than this one, so they are dropped rather than compared. Only background runs
+   * survive a switch (`AgentManager.detach`), so `wakesParent` is already true.
+   */
+  function survivorEventData(data: Record<string, unknown>): Record<string, unknown> {
+    const { spawnSeq: _spawn, runSeq: _run, settleSeq: _settle, ...rest } = data;
+    return rest;
+  }
+
   function spoolDetachedResult(sessionFile: string, record: AgentRecord) {
     if (record.resultConsumed) return;
     const footer = record.outputFile ? `\nFull transcript available at: ${record.outputFile}` : "";
@@ -750,6 +761,11 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
         content: notice.render().text + footer,
         details: notice.details,
         record: historyRecord(record),
+        lifecycle: {
+          channel: record.status === "error" || record.status === "stopped" || record.status === "aborted"
+            ? "subagents:failed" : "subagents:completed",
+          data: survivorEventData(buildEventData(record)),
+        },
         ...(notice.parts ? { notice: { ...notice.parts, footer } } : {}),
       });
     } catch { /* spool unwritable: the transcript file still has the result */ }
@@ -760,8 +776,27 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     for (const result of drainDetached(sessionFile)) deliverDetachedResult(result);
   }
 
+  /**
+   * Re-announce agents still running in an orphaned manager, which this session never
+   * heard spawn, so lifecycle listeners (e.g. pi-todo) see their owners alive and armed
+   * instead of lost. Also answers `subagents:announce_survivors`, for a listener that
+   * bound after this `session_start`.
+   */
+  function announceSurvivors() {
+    for (const { record } of listRunningDetached(currentCtx?.sessionManager?.getSessionFile?.())) {
+      pi.events.emit("subagents:started", survivorEventData({
+        id: record.id,
+        type: record.type,
+        description: record.description,
+        ...eventFields(record),
+      }));
+    }
+  }
+
   function deliverDetachedResult(result: DetachedResult) {
     try {
+      // Before the notice: a listener must see the owner settle, not stay "running".
+      if (result.lifecycle) pi.events.emit(result.lifecycle.channel, result.lifecycle.data);
       if (result.record) {
         pi.appendEntry("subagents:record", result.record);
         fleet.ingestFailure(result.record);
@@ -782,6 +817,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   }
 
   let unwatchDetached: (() => void) | undefined;
+  let unwatchAnnounce: (() => void) | undefined;
 
   // At load, before pi-plan-mode's session_start ask: Plan admits `Agent` only with this gate (#437).
   answerPlanGateQueries(pi.events);
@@ -1115,7 +1151,9 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       unwatchDetached?.();
       unwatchDetached = watchDetached(sessionFile, () => deliverDetached(sessionFile));
       deliverDetached(sessionFile);
+      announceSurvivors();
     }
+    unwatchAnnounce ??= pi.events.on("subagents:announce_survivors", announceSurvivors);
     // Orphans from the previous instance are already registered; show them now.
     fleet.update();
     // Guard mirrors the `!scheduler.isActive()` pattern below: session_start
@@ -1378,6 +1416,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     const sessionFile = currentCtx?.sessionManager?.getSessionFile?.();
     unwatchDetached?.();
     unwatchDetached = undefined;
+    unwatchAnnounce?.();
+    unwatchAnnounce = undefined;
     rpcHandle?.unsubSpawn();
     rpcHandle?.unsubStop();
     rpcHandle?.unsubPing();

@@ -22,7 +22,7 @@ import { FakeClock } from "./helpers/fake-clock.js";
 import { answer, barrier, calls } from "./helpers/scenario-session.js";
 
 interface Registry { waitForAll(): Promise<void>; getRecord(id: string): AgentRecord | undefined }
-interface Bound { boot: BootedPi; context: ExtensionCommandContext; registry: Registry; stopped: boolean }
+interface Bound { bus: EventEmitter; boot: BootedPi; context: ExtensionCommandContext; registry: Registry; stopped: boolean }
 let env: Hermetic;
 let provider: FauxProviderRegistration;
 let registry: ModelRegistry;
@@ -71,7 +71,7 @@ async function bind(ui: Record<string, unknown> = {}, flags: Record<string, bool
     sessionManager: { getSessionId: () => "index-final-parent", getBranch: () => [], getSessionFile: () => sessionFile },
     ui: { ...ctx().ui, onTerminalInput: vi.fn(() => () => {}), getEditorText: () => "", ...ui },
   });
-  const bound = { boot, context, registry: Reflect.get(globalThis, managerKey) as Registry, stopped: false };
+  const bound = { bus, boot, context, registry: Reflect.get(globalThis, managerKey) as Registry, stopped: false };
   bindings.push(bound);
   await startSession(boot.lifecycle, true, context);
   return bound;
@@ -550,6 +550,57 @@ describe("index retained defensive guards", () => {
     expect(bound.registry.getRecord(id)?.result).toBe("survivor result");
     // A rejected wait deliberately did not dispose; explicitly close the fixture's manager.
     await shutdown(bound, "quit");
+  });
+});
+
+describe("index detached survivor lifecycle events", () => {
+  const emitted = (bound: Bound, channel: string) =>
+    (bound.boot.pi.events.emit as ReturnType<typeof vi.fn>).mock.calls.filter(([c]) => c === channel).map(([, data]) => data);
+
+  it("re-announces a live survivor as a waking started event on the reloaded session", async () => {
+    const hold = heldResponse("survivor result"); provider.setResponses([hold.response]);
+    const first = await bind(); const id = await spawn(first, "live survivor"); await hold.entered;
+    await shutdown(first, "reload");
+    const next = await bind();
+    const [event, ...rest] = emitted(next, "subagents:started");
+    expect(rest).toEqual([]);
+    expect(event).toMatchObject({ id, type: "general-purpose", wakesParent: true });
+    expect(event).not.toHaveProperty("spawnSeq");
+    expect(event).not.toHaveProperty("runSeq");
+    // A listener that bound after session_start asks again, once per request however often the session restarts.
+    next.boot.pi.events.emit("subagents:announce_survivors", {});
+    expect(emitted(next, "subagents:started")).toHaveLength(2);
+    await startSession(next.boot.lifecycle, true, next.context);
+    expect(next.bus.listenerCount("subagents:announce_survivors")).toBe(1);
+    // A shut-down instance leaves no listener on the shared bus.
+    await shutdown(next, "reload");
+    expect(next.bus.listenerCount("subagents:announce_survivors")).toBe(0);
+    hold.release();
+  });
+
+  it("emits the settle event, without orphan sequence numbers, when a survivor's result is delivered", async () => {
+    const hold = heldResponse("late result"); provider.setResponses([hold.response]);
+    const first = await bind(); const id = await spawn(first, "late survivor"); await hold.entered;
+    await shutdown(first, "reload");
+    hold.release(); await first.registry.waitForAll(); await flush();
+    const next = await bind();
+    const [done, ...rest] = emitted(next, "subagents:completed");
+    expect(rest).toEqual([]);
+    expect(done).toMatchObject({ id, status: "completed", wakesParent: true, result: "late result" });
+    expect(done).not.toHaveProperty("settleSeq");
+    expect(emitted(next, "subagents:started")).toEqual([]);
+    expect(emitted(next, "subagents:failed")).toEqual([]);
+  });
+
+  it("emits subagents:failed for a survivor that errored while detached", async () => {
+    const hold = heldResponse("unused"); provider.setResponses([hold.response]);
+    const first = await bind(); const id = await spawn(first, "doomed survivor"); await hold.entered;
+    await shutdown(first, "reload");
+    listRunningDetached(sessionFile).find(entry => entry.record.id === id)?.abort("parent");
+    hold.release(); await first.registry.waitForAll(); await flush();
+    const next = await bind();
+    expect(emitted(next, "subagents:failed")).toMatchObject([{ id, wakesParent: true }]);
+    expect(emitted(next, "subagents:completed")).toEqual([]);
   });
 });
 

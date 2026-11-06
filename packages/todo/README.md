@@ -170,10 +170,13 @@ the full list grouped by status.
   it is info, shown once: a settle that changes no todo's group, owner, owner agent state, wake eligibility or blocker identity, status, owner or owner agent state
   repeats nothing until the next prompt from a person. Todo status never changes on its own, e.g.
   `Run ended with 2 in_progress todos, armed: no todo-owned wake (monitor and agent notices list session wakes); owner agent failed or stopped: #3 Audit auth (@auth-audit failed); held by the parent: #6 Deploy`.
-  After a resume, an `in_progress` todo whose `owner` was already set when the session started and
+  After a process restart (`session_start` reason `startup`), an `in_progress` todo whose `owner` was already set when the session started and
   that no `subagents` event has named since is `owner agent not found after resume` (warning, every
-  settle, all named): children die with the process, so it is not parent-held. A `/reload` keeps its
-  agents and has no such group. A free-text owner (a person or team) is indistinguishable from a dead
+  settle, all named): children die with the process, so it is not parent-held. `/new`, `/resume`,
+  `/fork` and `/reload` are not that boundary: pi-subagents detaches still-running background agents,
+  re-announces them with `subagents:started` on the next `session_start` (and on `subagents:announce_survivors`, which this
+  extension sends once the session is bound) and replays `subagents:completed` / `:failed` when their
+  results are delivered, so a live survivor is `running` and armed, and an owner nobody names is `held`, never lost. A free-text owner (a person or team) is indistinguishable from a dead
   agent handle, so it lands there too until it is reassigned. Parent-held work warns only when nothing
   is armed: a running monitor (`session-kit:monitor:started` / `:stopped` on `pi.events`, payload
   `{ sessionId, id, name }`) or a background agent with a verified completion notice makes it an info
