@@ -60,7 +60,7 @@ interface AgentEntry {
 	runSeq?: number;
 }
 
-/** Match keys of an agent running for another session, see `applyParentSurvivor`. */
+/** Match keys of an agent running for another session, see `applyOtherSessionSurvivor`. */
 interface ElsewhereEntry {
 	keys: Set<string>;
 	nameBase?: string;
