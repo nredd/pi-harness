@@ -139,6 +139,24 @@ describe("scheduler branches", () => {
     expect(f.spawn).not.toHaveBeenCalled();
   });
 
+  it("keeps no admission token for a job that never armed", () => {
+    class FullClock extends FakeClock {
+      override setInterval(): never { throw "timer table full"; }
+    }
+    const tokens = (s: SubagentScheduler) => (s as unknown as { scheduled: Map<string, object> }).scheduled;
+    const full = setup({ clock: new FullClock(), path: join(dir, "full.json") });
+    full.scheduler.addJob(input);
+    expect(tokens(full.scheduler).size).toBe(0);
+    const f = setup({ path: join(dir, "armed.json") });
+    f.scheduler.addJob({ ...input, schedule: "5m" });
+    expect(tokens(f.scheduler).size).toBe(1);
+    f.store.add({ ...f.scheduler.buildJob({ ...input, name: "past-job" }), id: "past", scheduleType: "once", schedule: new Date(f.clock.now() - 1000).toISOString() });
+    f.scheduler.stop();
+    f.scheduler.start(f.pi, f.ctx, f.manager, f.store);
+    expect(tokens(f.scheduler).size).toBe(1);
+    expect(f.store.get("past")?.lastStatus).toBe("error");
+  });
+
   it("reports a non-Error timer failure as its string", () => {
     class FullClock extends FakeClock {
       override setInterval(): never { throw "timer table full"; }

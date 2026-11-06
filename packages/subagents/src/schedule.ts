@@ -220,6 +220,7 @@ export class SubagentScheduler {
           this.intervals.set(job.id, t);
         } else {
           // Past timestamp — disable, mark error, never fire
+          this.scheduled.delete(job.id);
           store.update(job.id, { enabled: false, lastStatus: "error" });
           this.emit({ type: "error", jobId: job.id, error: `Scheduled time ${job.schedule} is in the past` });
         }
@@ -228,6 +229,8 @@ export class SubagentScheduler {
         this.jobs.set(job.id, cron);
       }
     } catch (err) {
+      // Nothing armed, so no token: a stale entry would admit a fire for a job with no timer.
+      this.scheduled.delete(job.id);
       this.emit({ type: "error", jobId: job.id, error: err instanceof Error ? err.message : String(err) });
     }
   }
