@@ -300,6 +300,8 @@ describe("scheduler branches", () => {
     f.reply({ success: true, data: { ok: true } });
     await flush();
     expect(f.spawn).not.toHaveBeenCalled();
+    expect(f.store.get(job.id)?.lastStatus).not.toBe("error");
+    expect(f.events.filter(e => e.type === "error")).toEqual([]);
     f.clock.advance(1000);
     f.reply({ success: true, data: { ok: true } });
     await flush();
@@ -339,6 +341,33 @@ describe("scheduler branches", () => {
     expect(f.spawn).not.toHaveBeenCalled();
     expect(f.store.get(job.id)?.enabled).toBe(true);
     expect(f.clock.pending).toBe(1);
+    expect(f.store.get(job.id)?.lastStatus).not.toBe("error");
+    expect(f.events.filter(e => e.type === "error")).toEqual([]);
+  });
+
+  it("does not spawn a resolved admission disabled before its microtask runs", async () => {
+    const f = setup();
+    const job = f.scheduler.addJob({ ...input, model: "fixture/model", quotaParked: true });
+    f.clock.advance(1000);
+    f.reply({ success: true, data: { ok: true } });
+    f.scheduler.updateJob(job.id, { enabled: false });
+    await flush();
+    expect(f.spawn).not.toHaveBeenCalled();
+    expect(f.store.get(job.id)?.lastStatus).not.toBe("error");
+    expect(f.events.filter(e => e.type === "error")).toEqual([]);
+  });
+
+  it("does not spawn a resolved admission stopped and restarted before its microtask runs", async () => {
+    const f = setup();
+    const job = f.scheduler.addJob({ ...input, model: "fixture/model", quotaParked: true });
+    f.clock.advance(1000);
+    f.reply({ success: true, data: { ok: true } });
+    f.scheduler.stop();
+    f.scheduler.start(f.pi, f.ctx, f.manager, f.store);
+    await flush();
+    expect(f.spawn).not.toHaveBeenCalled();
+    expect(f.store.get(job.id)?.lastStatus).not.toBe("error");
+    expect(f.events.filter(e => e.type === "error")).toEqual([]);
   });
 
   it("fails a fire whose agent type was disabled while admission was pending", async () => {
