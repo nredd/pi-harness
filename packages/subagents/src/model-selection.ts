@@ -1,5 +1,6 @@
 /** One selection policy for every dispatch, independent of its transport. */
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { type Clock, realClock } from "./clock.js";
 import { describeModel, describeVirtualModel, getAgentModels, getModelAliases, isVirtualModel, type ModelFallback, type ModelRegistry, modelFallbackNote, modelFallbackTo, resolveModel } from "./model-resolver.js";
 import { checkModelScope } from "./model-scope.js";
 import { exactTierModel, getModelResolution, parseTierBinding, resolveTier, type TierBinding, type TierDisclosure, type TierOutcome, tierBinding, tierNote } from "./model-tiers.js";
@@ -138,10 +139,10 @@ export function modelSelectionNote(carrier: { modelTier?: TierDisclosure; modelF
 }
 
 /** Admission for tiers is made once and is shared by every transport. */
-export async function admitModelSelection(selection: ModelSelection, registry: ModelRegistry, events: AdmissionEvents): Promise<QuotaBlock | undefined> {
+export async function admitModelSelection(selection: ModelSelection, registry: ModelRegistry, events: AdmissionEvents, clock: Clock = realClock, signal?: AbortSignal): Promise<QuotaBlock | undefined> {
   if (!selection.tierBinding || selection.tierAdmitted) return selection.tier?.kind === "exhausted" ? selection.tier.block : undefined;
   selection.tier = await resolveTier(selection.tierBinding.tier, {
-    registry, binding: selection.tierBinding, admit: ref => admissionOutcome(events, ref),
+    registry, binding: selection.tierBinding, admit: ref => admissionOutcome(events, ref, undefined, clock, signal),
   });
   selection.tierAdmitted = true;
   if (selection.tier.kind === "routed" || selection.tier.kind === "static") selection.model = selection.tier.model;

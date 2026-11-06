@@ -58,6 +58,36 @@ it("threads the factory clock into scheduling and the idle completion outbox", a
   expect(b.pi.sendMessage.mock.calls).toEqual([[expect.objectContaining({ content: "child completed" }), { deliverAs: "steer", triggerTurn: true }]]);
 });
 
+it("cancels a pending scheduled admission through the registered session switch", async () => {
+  const clock = new FakeClock();
+  const b = await boot(createSubagentsExtension({ clock }));
+  const model = { provider: "fixture", id: "model", name: "Model", api: "openai-completions" };
+  b.parent.model = model;
+  b.parent.modelRegistry = { find: () => model, getAvailable: () => [model], getAll: () => [model] };
+  const handlers = new Map<string, (data: unknown) => void>();
+  b.pi.events.on.mockImplementation((channel: string, handler: (data: unknown) => void) => {
+    handlers.set(channel, handler);
+    return () => handlers.delete(channel);
+  });
+  await b.tools.get("Agent").execute("scheduled", {
+    prompt: "later", description: "later", subagent_type: "general-purpose", schedule: "1s",
+  }, undefined, undefined, b.parent);
+  const store = new ScheduleStore(b.storePath);
+  const job = store.list()[0];
+  store.update(job.id, { quotaParked: true });
+  await b.lifecycle.get("session_before_switch")?.({ type: "session_shutdown", reason: "quit" }, b.parent);
+  await b.lifecycle.get("session_start")?.({ type: "session_start", reason: "startup" }, b.parent);
+  clock.advance(1000);
+  expect([...handlers.keys()].filter(key => key.startsWith("router:rpc:admit:reply:"))).toHaveLength(1);
+  const before = clock.pending;
+  await b.lifecycle.get("session_before_switch")?.({ type: "session_shutdown", reason: "quit" }, b.parent);
+  expect([...handlers.keys()].filter(key => key.startsWith("router:rpc:admit:reply:"))).toHaveLength(0);
+  expect(clock.pending).toBe(before - 2);
+  await Promise.resolve();
+  expect(b.pi.events.emit.mock.calls.filter(([channel]: [string]) => channel === "subagents:scheduled")
+    .some(([, event]: [string, { type: string }]) => event.type === "fired")).toBe(false);
+});
+
 it("keeps the default export on real time without a clock option", async () => {
   const b = await boot(subagentsExtension);
   const before = Date.now();
