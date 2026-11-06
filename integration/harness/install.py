@@ -1283,6 +1283,8 @@ class Journal:
             UnsupportedError: the target changed since planning into a kind a restore would
                 refuse; it is not recorded, so the journal stays restorable and the switch
                 rolls back the steps before it.
+            OSError: a file or link original could not be hashed (byte bound, I/O error, or a
+                swap to a special file); it is not recorded, so the switch rolls back likewise.
         """
         if self.backup_fd is not None and target.parent.exists(follow_symlinks=False):
             self.anchors.directory(target.parent)

@@ -5032,20 +5032,70 @@ def test_pending_step_with_digest_restores_a_present_backup(
 def test_switch_records_the_digest_of_file_and_link_originals_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`record` hashes small file and symlink originals; trees keep the four-field fingerprint."""
+    """`record` hashes file and symlink originals; trees keep the four-field fingerprint."""
     harness = Harness(tmp_path, monkeypatch)
-    seed_existing(harness.home)
     layout = harness.layout
-    state_text = layout.state.read_bytes() if layout.state.exists() else None
+    recovery_entry(layout.state, "file", "STATE BYTES")
+    recovery_entry(layout.link, "symlink", "somewhere/else")
+    recovery_entry(layout.agent_dir / "npm", "directory", "tree")
     with AnchoredStore() as anchors:
         journal = Journal(layout, layout.backups / "digest", anchors=anchors)
         with journal.open_backups(create=True):
             journal.record(layout.state, "installed.json")
+            journal.record(layout.link, "bin-pi")
             journal.record(layout.agent_dir / "npm", "npm")
     steps = {Path(step["target"]).name: step for step in journal.steps}
-    if state_text is not None:
-        assert steps["installed.json"]["original_sha256"] == hashlib.sha256(state_text).hexdigest()
+    assert steps["installed.json"]["original_sha256"] == hashlib.sha256(b"STATE BYTES").hexdigest()
+    assert steps["pi"]["original_sha256"] == hashlib.sha256(b"somewhere/else").hexdigest()
     assert "original_sha256" not in steps["npm"]
+
+
+def test_saving_a_backup_drops_the_pending_digest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Once the rename lands the step is saved: no digest is persisted and the journal revalidates."""
+    harness = Harness(tmp_path, monkeypatch)
+    layout = harness.layout
+    recovery_entry(layout.state, "file", "STATE BYTES")
+    with AnchoredStore() as anchors:
+        journal = Journal(layout, layout.backups / "saved", anchors=anchors)
+        with journal.open_backups(create=True):
+            backup = journal.record(layout.state, "installed.json")
+            assert backup is not None
+            assert "original_sha256" in json.loads(layout.journal.read_text())["steps"][0]
+            journal.save(layout.state, backup)
+    (step,) = json.loads(layout.journal.read_text())["steps"]
+    assert step["pending"] is False
+    assert "original_sha256" not in step
+    install.load_journal(layout)
+
+
+def test_unhashable_original_is_not_recorded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A hashing failure while recording aborts before the step is journaled."""
+    harness = Harness(tmp_path, monkeypatch)
+    layout = harness.layout
+    recovery_entry(layout.state, "file", "STATE BYTES")
+
+    def refuse(self: install.RestoreHasher, path: Path | str, **kwargs: Any) -> install.RestoreIdentity:
+        """Fail like an over-budget or vanished file.
+
+        Parameters:
+            self (install.RestoreHasher): hasher.
+            path (Path | str): entry being hashed.
+            **kwargs (Any): ignored hashing options.
+
+        Returns:
+            install.RestoreIdentity: never returned.
+
+        Raises:
+            OSError: always.
+        """
+        raise OSError("hashing byte limit")
+
+    monkeypatch.setattr(install.RestoreHasher, "identity", refuse)
+    with AnchoredStore() as anchors:
+        journal = Journal(layout, layout.backups / "refused", anchors=anchors)
+        with journal.open_backups(create=True), pytest.raises(OSError, match="hashing byte limit"):
+            journal.record(layout.state, "installed.json")
+    assert journal.steps == []
 
 
 @pytest.mark.parametrize("digest", ["", "f" * 63, "G" * 64, 7, None])
@@ -5079,7 +5129,7 @@ def test_original_digest_on_a_saved_step_is_refused(tmp_path: Path) -> None:
         install.validate_journal(layout, {"backups": str(backups), "steps": [step]})
 
 
-@pytest.mark.parametrize("source", ["restoring", "backup"])
+@pytest.mark.parametrize("source", ["restoring", "backup", "restored"])
 def test_legacy_multi_kind_original_takes_its_kind_from_restoring_or_backup(
     tmp_path: Path, source: str
 ) -> None:
@@ -5091,6 +5141,8 @@ def test_legacy_multi_kind_original_takes_its_kind_from_restoring_or_backup(
     step: dict[str, Any] = {"target": str(target), "backup": str(backups / "npm"), "original": [1, 2, 3]}
     if source == "restoring":
         step |= {"pending": False, "restoring": identity_record(kind="symlink")}
+    elif source == "restored":
+        step |= {"pending": False, "restored": True, "restoring": identity_record(kind="directory")}
     else:
         step["pending"] = True
         (backups / "npm").mkdir()
