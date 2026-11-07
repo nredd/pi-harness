@@ -113,6 +113,7 @@ def test_rpc_wait_with_an_expired_deadline_fails_without_reading(box: Sandbox) -
         with pytest.raises(pytest.fail.Exception, match="RPC deadline expired"):
             client.wait(lambda _: True, timeout=0)
         assert client.events == []
+        assert finish_on_eof(client) == 0
 
 
 class FakeRpcChild:
