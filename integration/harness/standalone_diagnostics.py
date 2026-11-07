@@ -517,7 +517,8 @@ def collect_build_failure(evidence: Path, first: Path, second: Path, output: Pat
     """Scan and publish both builds' executables, logs and module graphs after a failed build step (#72).
 
     The first build's wrapper evidence must already be moved to `<evidence>/first/`; the second build's
-    evidence stays at the `<evidence>` root. Missing files (e.g. a build that died early) are skipped.
+    evidence stays at the `<evidence>` root. Missing files (e.g. a build that died early) are skipped;
+    with none at all nothing is published.
 
     Parameters:
         evidence (Path): build-only evidence directory produced by `prepare_build`.
@@ -539,6 +540,9 @@ def collect_build_failure(evidence: Path, first: Path, second: Path, output: Pat
             for name, path in entries.items()
             if path.exists() or path.is_symlink()
         }
+        if not files:
+            LOGGER.error("Build failure capture found no build output (failed before compiling)")
+            return False
         publish(files, output)
     except (OSError, ValueError) as error:
         LOGGER.error(f"Build failure capture refused ({type(error).__name__})")

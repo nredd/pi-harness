@@ -1079,6 +1079,15 @@ def test_collect_build_failure_refuses_a_symlinked_executable(
     assert not (tmp_path / "out").exists()
 
 
+def test_collect_build_failure_publishes_nothing_before_any_compile(tmp_path: Path) -> None:
+    """A failure before either compile (e.g. `npm ci`) leaves no empty upload directory."""
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    output = tmp_path / "out"
+    assert not diag.collect_build_failure(evidence, tmp_path / "a", tmp_path / "b", output)
+    assert not output.exists()
+
+
 def test_collect_build_failure_skips_missing_files(tmp_path: Path) -> None:
     """A build that died early leaves only what exists, not fabricated files."""
     evidence = tmp_path / "evidence"
