@@ -22,7 +22,7 @@ vi.mock("../src/worktree.js", () => ({
   pruneWorktrees: vi.fn(),
 }));
 
-import { runAgent } from "../src/agent-runner.js";
+import { resumeAgent, runAgent } from "../src/agent-runner.js";
 
 const mockPi = {} as any;
 const mockCtx = { cwd: "/tmp" } as any;
@@ -200,6 +200,74 @@ describe("AgentManager — record GC", () => {
 
       expect(manager.getRecord(first)).toBeUndefined();
       expect(reaped).not.toHaveBeenCalled();
+    });
+
+    it("still reports a foreground resume stopped mid-run after a queued resume was stopped", async () => {
+      const reaped = vi.fn();
+      const done = () => ({ responseText: "done", session: { dispose: vi.fn() } as any, aborted: false, steered: false } as any);
+      let release!: () => void;
+      vi.mocked(runAgent)
+        .mockResolvedValueOnce(done())
+        .mockImplementationOnce(() => new Promise(resolve => { release = () => resolve(done()); }));
+      vi.mocked(resumeAgent).mockImplementationOnce(() => new Promise(resolve => {
+        release = () => resolve({ responseText: "", aborted: true, steered: false } as any);
+      }));
+      manager = new AgentManager(undefined, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, reaped);
+      const first = manager.spawn(mockPi, mockCtx, "X", "first", { description: "first", isBackground: true });
+      await manager.getRecord(first)!.promise;
+      const holder = manager.spawn(mockPi, mockCtx, "X", "holder", { description: "holder", isBackground: true });
+      await manager.resume(first, "again", undefined, { isBackground: true });
+      expect(manager.abort(first, "parent")).toBe(true);
+      release();
+      await manager.getRecord(holder)!.promise;
+      markConsumed(manager.getRecord(holder)!);
+
+      // The slot is free again: this resume runs at once and is stopped mid-run.
+      const resuming = manager.resume(first, "once more");
+      expect(manager.getRecord(first)!.status).toBe("running");
+      expect(manager.abort(first, "parent")).toBe(true);
+      release();
+      await resuming;
+      manager.getRecord(first)!.resultConsumed = false;
+
+      await vi.advanceTimersByTimeAsync(SIXTY + TICK);
+
+      expect(manager.getRecord(first)).toBeUndefined();
+      expect(reaped).toHaveBeenCalledWith(expect.objectContaining({ id: first, status: "stopped" }));
+    });
+
+    it("still reports a background resume stopped mid-run after a queued resume was stopped", async () => {
+      const reaped = vi.fn();
+      const done = () => ({ responseText: "done", session: { dispose: vi.fn() } as any, aborted: false, steered: false } as any);
+      let release!: () => void;
+      vi.mocked(runAgent)
+        .mockResolvedValueOnce(done())
+        .mockImplementationOnce(() => new Promise(resolve => { release = () => resolve(done()); }));
+      vi.mocked(resumeAgent).mockImplementationOnce(() => new Promise(resolve => {
+        release = () => resolve({ responseText: "", aborted: true, steered: false } as any);
+      }));
+      manager = new AgentManager(undefined, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, reaped);
+      const first = manager.spawn(mockPi, mockCtx, "X", "first", { description: "first", isBackground: true });
+      await manager.getRecord(first)!.promise;
+      const holder = manager.spawn(mockPi, mockCtx, "X", "holder", { description: "holder", isBackground: true });
+      await manager.resume(first, "again", undefined, { isBackground: true });
+      expect(manager.abort(first, "parent")).toBe(true);
+      release();
+      await manager.getRecord(holder)!.promise;
+      markConsumed(manager.getRecord(holder)!);
+
+      // The slot is free again: this resume runs at once and is stopped mid-run.
+      await manager.resume(first, "once more", undefined, { isBackground: true });
+      expect(manager.getRecord(first)!.status).toBe("running");
+      expect(manager.abort(first, "parent")).toBe(true);
+      release();
+      await manager.getRecord(first)!.promise;
+      manager.getRecord(first)!.resultConsumed = false;
+
+      await vi.advanceTimersByTimeAsync(SIXTY + TICK);
+
+      expect(manager.getRecord(first)).toBeUndefined();
+      expect(reaped).toHaveBeenCalledWith(expect.objectContaining({ id: first, status: "stopped" }));
     });
 
     it("still reports an unread agent that was stopped mid-run", async () => {

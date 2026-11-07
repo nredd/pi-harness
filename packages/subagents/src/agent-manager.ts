@@ -1688,6 +1688,8 @@ export class AgentManager {
     // its limit; the caller's signal (or `/agents` stop) releases the wait.
     // No pool: the foreground pool does not cover resumes (see the README).
     const lease = this.admit(record, undefined);
+    record.stoppedQueued = undefined;
+    record.noticeDelivered = undefined;
     record.status = lease === undefined ? "queued" : "running";
     record.budgetLease = lease;
     record.startedAt = this.clock.now();
@@ -1718,7 +1720,6 @@ export class AgentManager {
         await new Promise<void>(resolve => {
           this.enqueueStart(id, record, undefined, async () => {
             granted = true;
-            record.stoppedQueued = undefined;
             record.status = "running";
             record.startedAt = this.clock.now();
           }, resolve);
@@ -1830,7 +1831,6 @@ export class AgentManager {
       return;
     }
 
-    record.stoppedQueued = undefined;
     record.status = "running";
     record.startedAt = this.clock.now();
     if (occupiesPoolSlot(record)) this.runningBackground++;
