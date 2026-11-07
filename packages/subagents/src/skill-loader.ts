@@ -176,10 +176,9 @@ function findInRoot(root: string, name: string, trusted: boolean): string | unde
 
   const queue = [root];
   const seen = new Set<string>();
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (current === undefined) continue;
-    if (!trusted && isPathThroughSymlink(dirname(root), current)) continue;
+  // `root` passed the symlink check above and every queued directory passed it before it was
+  // pushed, so `current` needs no second check. Iteration visits entries pushed meanwhile, in order.
+  for (const current of queue) {
     if (trusted) {
       const canonical = canonicalPath(current);
       // A directory raced away since it was queued has nothing left to read.
@@ -188,7 +187,7 @@ function findInRoot(root: string, name: string, trusted: boolean): string | unde
     }
     let entries: Dirent<string>[];
     try {
-      entries = readdirSync(current, { withFileTypes: true }).sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+      entries = readdirSync(current, { withFileTypes: true }).sort((left, right) => Number(left.name > right.name) - Number(left.name < right.name));
     } catch {
       continue;
     }
@@ -250,9 +249,8 @@ export function isAmbientUserAgentsSkill(resource: ResolvedResource, homeDir?: s
   return !isPathWithin(injectedRoot, resource.path) && isPathWithin(join(runtimeHome, ".agents", "skills"), resource.path);
 }
 
-/** Reject project symlinks before accepting their resources or resolving collisions. */
+/** Reject project symlinks before accepting their resources or resolving collisions. Callers pass project-tier resources only. */
 function isSymlinkedProjectSkill(resource: ResolvedResource, cwd: string): boolean {
-  if (resource.metadata.scope !== "project" || resource.metadata.origin !== "top-level") return false;
   return projectSkillRoots(cwd).some(root => isPathThroughSymlink(root, resource.path));
 }
 
@@ -282,7 +280,7 @@ function isPathThroughSymlink(root: string, path: string): boolean {
   const relativePath = relative(absoluteRoot, resolve(path));
   let current = absoluteRoot;
   if (isSymlink(current)) return true;
-  for (const segment of relativePath === "" ? [] : relativePath.split(sep)) {
+  for (const segment of relativePath.split(sep)) {
     current = join(current, segment);
     if (isSymlink(current)) return true;
   }

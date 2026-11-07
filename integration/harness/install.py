@@ -885,7 +885,8 @@ def plan_install(
         Plan: additions and overwrites, empty when already installed.
 
     Raises:
-        InstallError: an existing settings file is unreadable.
+        InstallError: an existing settings file is unreadable, or an original a switch would
+            replace is too large or unreadable to hash (checked before staging).
     """
     stack, plan = verified.stack, Plan()
     prefix = layout.core(stack.core.tag)
@@ -940,6 +941,7 @@ def plan_install(
         # Before consent: a kind the journal cannot restore must never be moved into a backup.
         for target in replaced_targets(layout, plan, prefix if plan.install_core else None):
             require_restorable_kind(layout, target)
+            require_hashable_original(target)
             if target.exists(follow_symlinks=False) and not any(
                 f"'{target}'" in message for message in plan.overwrites
             ):
@@ -1016,6 +1018,44 @@ def replaced_targets(layout: Layout, plan: Plan, core: Path | None = None) -> li
     if plan.link is not None:
         targets.append(layout.link)
     return [*([core] if core is not None else []), *targets, layout.state]
+
+
+def hash_original(target: Path) -> str:
+    """Hash an original a switch will back up, naming it when it cannot be verified.
+
+    Parameters:
+        target (Path): existing original (file, link or tree).
+
+    Returns:
+        str: its restore content digest.
+
+    Raises:
+        OSError: too large or unreadable to hash; nothing was changed by this check.
+    """
+    try:
+        return RestoreHasher().identity(target).sha256
+    except OSError as error:
+        reason = str(error).removesuffix("; restore by hand")
+        raise OSError(
+            f"Original '{target}' is too large or unreadable to verify ({reason}); "
+            "shrink or fix it, or move it aside, then rerun"
+        ) from error
+
+
+def require_hashable_original(target: Path) -> None:
+    """Refuse at planning time an existing original a switch could not verify and back up.
+
+    Parameters:
+        target (Path): path a switch replaces; absent paths pass.
+
+    Raises:
+        InstallError: `target` is too large or unreadable to hash; nothing was changed.
+    """
+    if target.exists(follow_symlinks=False):
+        try:
+            hash_original(target)
+        except OSError as error:
+            raise InstallError(f"{error}; nothing was changed") from error
 
 
 def require_restorable_kind(layout: Layout, target: Path, outcome: str = "nothing changed") -> None:
@@ -1283,8 +1323,9 @@ class Journal:
             UnsupportedError: the target changed since planning into a kind a restore would
                 refuse; it is not recorded, so the journal stays restorable and the switch
                 rolls back the steps before it.
-            OSError: a file or link original could not be hashed (byte bound, I/O error, or a
-                swap to a special file); it is not recorded, so the switch rolls back likewise.
+            OSError: an original (file, link or tree) could not be hashed (byte or entry bound, I/O
+                error, or a swap to a special file); it is not recorded, so the switch rolls back
+                likewise. The message names `target` and does not advise restoring by hand.
         """
         if self.backup_fd is not None and target.parent.exists(follow_symlinks=False):
             self.anchors.directory(target.parent)
@@ -1296,8 +1337,7 @@ class Journal:
         if backup is not None:
             info = target.lstat()
             step |= {"pending": True, "original": list(entry_identity(info))}
-            if stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
-                step["original_sha256"] = RestoreHasher().identity(target).sha256
+            step["original_sha256"] = hash_original(target)
         self.steps.append(step)
         self.persist()
         return backup
@@ -1555,7 +1595,8 @@ class Step:
 
         Device, inode, ctime and type can all repeat when a same-kind entry is recreated within one
         coarse ctime tick, so a recorded content digest must match too. Journals without one (older
-        builds, and directory trees, which are not hashed at record time) rely on the four fields.
+        builds) rely on the four fields. For a tree the digest covers sorted names, kinds and
+        content hashes, the same one restore verifies.
 
         Parameters:
             live (RestoreIdentity | None): content identity of the live target, or absence.

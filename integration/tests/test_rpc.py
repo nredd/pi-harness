@@ -106,6 +106,16 @@ def test_rpc_wait_deadline_reports_early_exit(box: Sandbox) -> None:
     assert "stub rpc early exit" in (box.root / "quota-rpc.stderr").read_text()
 
 
+def test_rpc_wait_with_an_expired_deadline_fails_without_reading(box: Sandbox) -> None:
+    """A zero timeout never polls the queue, so an unread event is not matched."""
+    with rpc.rpc(box, [], "faux/main", {}) as client:
+        client.queue.put({"type": "late"})
+        with pytest.raises(pytest.fail.Exception, match="RPC deadline expired"):
+            client.wait(lambda _: True, timeout=0)
+        assert client.events == []
+        assert finish_on_eof(client) == 0
+
+
 class FakeRpcChild:
     """Recording `Popen` stand-in that ignores `terminate()` until `kill()`."""
 
@@ -190,6 +200,18 @@ def test_rpc_process_prompt_round_trip(box: Sandbox) -> None:
     logged = [json.loads(line) for line in session.log_path.read_text().splitlines()]
     assert logged == session.events
     assert "".join(session.stderr) == "stub rpc ready\n"
+
+
+def test_rpc_process_receive_with_an_expired_deadline_reads_nothing(box: Sandbox) -> None:
+    """A zero timeout fails at once, before any queued record is consumed."""
+    with rpc.RpcProcess(box, SCRIPT) as session:
+        session.send({"type": "prompt", "message": "hi"})
+        session.receive(lambda event: event.get("type") == "agent_end")
+        seen = len(session.events)
+        session.lines.put(json.dumps({"type": "late"}))
+        with pytest.raises(AssertionError, match="RPC deadline waiting for event"):
+            session.receive(lambda _: True, timeout_s=0)
+        assert len(session.events) == seen
 
 
 @pytest.mark.parametrize(("command", "reader"), [("/flood", 0), ("/flood-stderr", 1)])

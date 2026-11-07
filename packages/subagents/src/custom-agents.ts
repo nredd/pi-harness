@@ -6,6 +6,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { BUILTIN_TOOL_NAMES } from "./agent-types.js";
+import { errorMessage } from "./error-message.js";
 import { resolveAgentDir } from "./home-paths.js";
 import {
   isPackageResourceExcluded,
@@ -290,7 +291,7 @@ function readAgentFile(path: string, strict: boolean): { frontmatter: Record<str
   try {
     return parseAgentFrontmatter<Record<string, unknown>>(readFileSync(path, "utf-8"));
   } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
+    const reason = errorMessage(err);
     if (strict) throw new Error(`${path}: ${reason}`);
     warnIfNew(`Skipping agent file ${path}: ${reason}`);
     return undefined;

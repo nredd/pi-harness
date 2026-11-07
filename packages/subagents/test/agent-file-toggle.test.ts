@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildNewAgentFile,
   disableInContent,
@@ -21,6 +21,8 @@ import {
   isDisabledContent,
   isEmptyStub,
   locateAgentFile,
+  serializeAgentFile,
+  workspaceAgentsDir,
 } from "../src/agent-file-toggle.js";
 import { parseAgentFrontmatter } from "../src/custom-agents.js";
 
@@ -446,5 +448,55 @@ describe("buildNewAgentFile", () => {
   it("keeps the system prompt as the body", () => {
     const content = buildNewAgentFile({ ...base, systemPrompt: "Line 1.\n\nLine 2." });
     expect(parseFrontmatter<Record<string, unknown>>(content).body).toBe("Line 1.\n\nLine 2.");
+  });
+});
+
+describe("unterminated or missing frontmatter", () => {
+  it("leaves a block that never closes untouched when enabling", () => {
+    const open = "---\nenabled: false\ndescription: x\n";
+    expect(enableInContent(open)).toEqual({ content: open, changed: false });
+    expect(disableInContent(open).outcome).toBe("no-frontmatter");
+  });
+
+  it("leaves content with no frontmatter untouched when enabling", () => {
+    expect(enableInContent("plain body\n")).toEqual({ content: "plain body\n", changed: false });
+    expect(enableInContent("")).toEqual({ content: "", changed: false });
+  });
+});
+
+describe("default working directory", () => {
+  it("resolves workspace and agent lookups against process.cwd()", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-toggle-cwd-"));
+    const spy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+    try {
+      expect(workspaceAgentsDir()).toBe(join(cwd, ".agents", "agents"));
+      mkdirSync(join(cwd, ".agents", "agents"), { recursive: true });
+      writeFileSync(join(cwd, ".agents", "agents", "cwd-only-agent.md"), ENABLED);
+      expect(findAgentFile("cwd-only-agent")).toEqual({
+        path: join(cwd, ".agents", "agents", "cwd-only-agent.md"),
+        location: "workspace",
+      });
+    } finally {
+      spy.mockRestore();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("serializeAgentFile", () => {
+  const base = {
+    name: "x", description: "d", extensions: false, skills: false, systemPrompt: "p", promptMode: "replace",
+  } as const;
+
+  it("writes `*` plus selectors when built-ins are unrestricted but ext selectors exist", () => {
+    const out = serializeAgentFile({ ...base, builtinToolNames: undefined, extSelectors: ["ext:mcp/github"] });
+    expect(out).toContain("tools: *, ext:mcp/github\n");
+  });
+
+  it("writes `all` for unrestricted built-ins with no selectors, and the color when configured", () => {
+    const out = serializeAgentFile({ ...base, builtinToolNames: undefined, color: "purple" });
+    expect(out).toContain("tools: all\n");
+    expect(out).toContain('color: "purple"\n');
+    expect(serializeAgentFile({ ...base, builtinToolNames: undefined })).not.toContain("color:");
   });
 });

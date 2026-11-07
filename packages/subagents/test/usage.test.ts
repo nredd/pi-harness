@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addUsage, getLifetimeCost, getLifetimeTotal, getSessionContextPercent, getSessionTokens, PendingUsagePool } from "../src/usage.js";
+import { addUsage, getLifetimeCost, getLifetimeTotal, getSessionContextPercent, getSessionTokens, PendingUsagePool, toReportedUsage } from "../src/usage.js";
 
 // Regression for issue #38 — token semantics + context indicator
 describe("usage", () => {
@@ -198,6 +198,15 @@ describe("usage", () => {
       pool.add({ input: 0, output: 0, cacheWrite: 0, cost: 0 });
 
       expect(pool.drain()).toBeUndefined();
+    });
+  });
+});
+
+describe("toReportedUsage", () => {
+  it("defaults an absent cacheRead to zero", () => {
+    expect(toReportedUsage({ input: 3, output: 4, cacheWrite: 1 })).toMatchObject({
+      cacheRead: 0,
+      totalTokens: 8,
     });
   });
 });

@@ -1,6 +1,7 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
-import { renderAgentNameLabel, resolveAgentColor } from "../src/agent-color.js";
+import { renderAgentName, renderAgentNameLabel, resolveAgentColor } from "../src/agent-color.js";
+import { registerAgents } from "../src/agent-types.js";
 
 const theme = {
   fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
@@ -65,5 +66,30 @@ describe("renderAgentNameLabel", () => {
       .toBe("<toolTitle>*Agent*</toolTitle>");
     expect(renderAgentNameLabel("Agent", "invalid", theme, { fallbackColor: "muted" }))
       .toBe("<muted>Agent</muted>");
+  });
+});
+
+describe("renderAgentNameLabel luminance", () => {
+  it("treats near-black backgrounds as dark and picks white text", () => {
+    // #0A0A0A is channel 10/255, under the 0.04045 linear-segment cutoff of the sRGB transfer function.
+    const badge = renderAgentNameLabel("Dark", "#0A0A0A", theme);
+    expect(badge).toContain("\u001b[48;2;10;10;10m");
+    expect(badge).toContain("\u001b[38;2;255;255;255m");
+  });
+});
+
+describe("renderAgentName", () => {
+  it("renders a registered agent's badge with default style, and a plain label for no type", () => {
+    registerAgents(new Map([["badge-test", {
+      name: "badge-test", displayName: "Badge Test", color: "purple", description: "d",
+      extensions: false, skills: false, systemPrompt: "p", promptMode: "replace",
+    }]]));
+    try {
+      expect(renderAgentName("badge-test", theme)).toContain(" Badge Test ");
+      expect(renderAgentName("badge-test", theme)).toContain("\u001b[48;2;130;125;189m");
+      expect(renderAgentName(undefined, theme)).toBe("Agent");
+    } finally {
+      registerAgents(new Map());
+    }
   });
 });

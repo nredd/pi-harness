@@ -58,4 +58,14 @@ describe("detectEnv", () => {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("reports an unknown branch when `git branch --show-current` exits non-zero", async () => {
+    const exec = async (_command: string, args: string[]) =>
+      args[0] === "rev-parse"
+        ? { stdout: "true\n", stderr: "", code: 0, killed: false }
+        : { stdout: "", stderr: "fatal", code: 128, killed: false };
+    const env = await detectEnv({ exec } as unknown as ExtensionAPI, process.cwd());
+    expect(env.isGitRepo).toBe(true);
+    expect(env.branch).toBe("unknown");
+  });
 });

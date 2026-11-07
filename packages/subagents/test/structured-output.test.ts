@@ -101,6 +101,12 @@ describe("the StructuredOutput tool", () => {
     expect(JSON.parse(capture.json as string)).toEqual({ file: "a.ts" });
   });
 
+  it("passes an already-structured payload through untouched", () => {
+    const { tool } = build();
+    const args = { file: "a.ts" };
+    expect(tool.prepareArguments?.(args)).toBe(args);
+  });
+
   it("leaves an unparseable string alone for validation to reject", async () => {
     const { tool } = build();
     expect(tool.prepareArguments?.("not json at all")).toBe("not json at all");

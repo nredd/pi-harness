@@ -131,10 +131,10 @@ def rpc(box: Sandbox, args: list[str], model: str, env: dict[str, str]) -> Itera
                 process.kill()
                 process.wait(timeout=5)
             client.reader.join(timeout=5)
-            if process.stdin is not None:
-                process.stdin.close()
-            if process.stdout is not None:
-                process.stdout.close()
+            assert process.stdin is not None
+            assert process.stdout is not None
+            process.stdin.close()
+            process.stdout.close()
 
 
 class RpcProcess:

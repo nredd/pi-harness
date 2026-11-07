@@ -3,6 +3,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_AGENTS } from "../src/default-agents.js";
 import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "../src/memory.js";
 import { buildAgentPrompt } from "../src/prompts.js";
 import { preloadSkills } from "../src/skill-loader.js";
@@ -587,6 +588,28 @@ describe("agent-runner failed-final-turn detection (#144)", () => {
     expect(result.responseText).toBe("truncated answ");
   });
 
+  it("names a provider error that carries no message", async () => {
+    const session = sessionEnding({ role: "assistant", content: [], stopReason: "error" });
+    createAgentSession.mockResolvedValue({ session });
+
+    const result = await runAgent(ctx, "Explore", "go", { pi });
+
+    expect(result.failure).toBe("provider error with no output");
+  });
+
+  it("judges the last assistant turn, not a tool result that follows it", async () => {
+    const session = sessionEnding(
+      { role: "assistant", content: [{ type: "text", text: "all done" }], stopReason: "stop" },
+      { role: "toolResult", content: [{ type: "text", text: "late result" }] },
+    );
+    createAgentSession.mockResolvedValue({ session });
+
+    const result = await runAgent(ctx, "Explore", "go", { pi });
+
+    expect(result.failure).toBeUndefined();
+    expect(result.responseText).toBe("all done");
+  });
+
   it("flags a run whose final turn hit the token limit with no text (#144 residual)", async () => {
     // stopReason "length" with empty content is a silent max-token death — it
     // reproduces the #144 "completed with No output." symptom, so it must fail.
@@ -748,6 +771,21 @@ describe("agent-runner usage callback wiring", () => {
     expect(seen).toEqual([{ input: 50, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0 }]);
   });
 
+  it("runAgent reports a usage object that omits input as zero input", async () => {
+    const { session, listeners } = createSession("OK");
+    createAgentSession.mockResolvedValue({ session });
+
+    const seen: any[] = [];
+    session.prompt = vi.fn(async () => {
+      emitMessageEnd(listeners, { output: 7 });
+      session.messages.push({ role: "assistant", content: [{ type: "text", text: "OK" }] });
+    });
+
+    await runAgent(ctx, "Explore", "go", { pi, onAssistantUsage: (u) => seen.push(u) });
+
+    expect(seen).toEqual([{ input: 0, output: 7, cacheWrite: 0, cacheRead: 0, cost: 0 }]);
+  });
+
   it("runAgent skips the callback when message_end has no usage field", async () => {
     const { session, listeners } = createSession("OK");
     createAgentSession.mockResolvedValue({ session });
@@ -876,6 +914,23 @@ describe("getAgentConversation", () => {
     expect(out.length).toBe("[Tool Result (bash)]: ".length + 200 + 3);
   });
 
+  it("skips a user message with no text and assistant blocks that are neither text nor tool calls", () => {
+    const out = getAgentConversation(
+      fakeSession([
+        { role: "user", content: "   " },
+        { role: "assistant", content: [{ type: "thinking", thinking: "hmm" }, { type: "text", text: "" }] },
+      ]),
+    );
+    expect(out).toBe("");
+  });
+
+  it("keeps a short toolResult whole, without an ellipsis", () => {
+    const out = getAgentConversation(
+      fakeSession([{ role: "toolResult", toolName: "ls", content: [{ type: "text", text: "a.ts" }] }]),
+    );
+    expect(out).toBe("[Tool Result (ls)]: a.ts");
+  });
+
   it("emits [Tool Calls] but no [Assistant] when the assistant only made tool calls", () => {
     const out = getAgentConversation(
       fakeSession([
@@ -905,6 +960,7 @@ describe("getAgentConversation", () => {
 import {
   getAgentConfig,
   getConfig,
+  getReadOnlyMemoryToolNames,
   getToolNamesForType,
 } from "../src/agent-types.js";
 import { createNestedSubagentTools, hasNestableTypes, type NestedAgentManager } from "../src/nested-tools.js";
@@ -2079,6 +2135,11 @@ describe("extensionCanonicalNames (#143 — package short name alias)", () => {
     expect(extensionCanonicalNames(join(dir, "foo.ts"))).toEqual(["foo"]);
   });
 
+  it("ignores non-string manifest entries while matching the declared one", () => {
+    const dir = pkgDir("@scope/mixed-ext", [7, null, "./src/index.ts"]);
+    expect(extensionCanonicalNames(join(dir, "src", "index.ts"))).toEqual(["src", "mixed-ext"]);
+  });
+
   it("adds no alias when the nearest manifest does not declare this entry", () => {
     // The package.json is a real pi package but lists a *different* entry — so a
     // co-located file (e.g. our own test fixtures under this repo) is not falsely
@@ -2596,6 +2657,11 @@ describe("parseExtSelectors", () => {
       new Set(["bar/baz"]),
     );
   });
+  it("skips an empty selector entry", () => {
+    const { extNames, narrowing } = parseExtSelectors(["", "ext:foo"]);
+    expect(extNames).toEqual(new Set(["foo"]));
+    expect(narrowing.size).toBe(0);
+  });
   it("skips empty name and empty tool halves", () => {
     const { extNames, narrowing } = parseExtSelectors(["ext:", "ext:foo/"]);
     expect(extNames).toEqual(new Set(["foo"]));
@@ -3036,7 +3102,7 @@ describe("agent-runner turn limits", () => {
      * never heeds the wrap-up steer. The first prompt ends on the teaser (as an
      * abort mid-turn leaves it); a second, tool-less prompt can only answer.
      */
-    async function runRunaway(opts: { maxTurns: number; turns: number; signal?: AbortSignal }) {
+    async function runRunaway(opts: { maxTurns: number; turns: number; signal?: AbortSignal; trailingToolResult?: boolean }) {
       vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig());
       const { session, listeners } = createSession("unused");
       const toolsDuringPrompt: string[][] = [];
@@ -3051,6 +3117,8 @@ describe("agent-runner turn limits", () => {
             });
             for (const l of [...listeners]) l({ type: "turn_end" });
           }
+          // A tool result after the teaser carries text of its own, which is not an answer.
+          if (opts.trailingToolResult) session.messages.push({ role: "toolResult", content: [{ type: "text", text: "file contents" }] });
           return;
         }
         // The report turn counts turns too; it must not trip the cap again.
@@ -3074,6 +3142,13 @@ describe("agent-runner turn limits", () => {
       // Delivered, so a wrap-up rather than a failure.
       expect(result.aborted).toBe(false);
       expect(result.steered).toBe(true);
+    });
+
+    it("looks past a trailing tool result to judge whether the run ended with a report", async () => {
+      setGraceTurns(2);
+      const { session, result } = await runRunaway({ maxTurns: 5, turns: 7, trailingToolResult: true });
+      expect(session.prompt).toHaveBeenCalledTimes(2);
+      expect(result.responseText).toBe(REPORT);
     });
 
     it("restores the tool set after the report turn", async () => {
@@ -3387,6 +3462,13 @@ describe("agent-runner injected home forwarding", () => {
     expect(sessionManagerCreate).toHaveBeenCalledWith(ctx.cwd, join(homeDir, "sessions"), expect.anything());
   });
 
+  it("uses an absolute frontmatter session_dir as written", async () => {
+    const absolute = resolve(homeDir, "abs-sessions");
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ persistSession: true, sessionDir: absolute }));
+    await runAgent(ctx, "Explore", "go", { pi, homeDir });
+    expect(sessionManagerCreate).toHaveBeenCalledWith(ctx.cwd, absolute, expect.anything());
+  });
+
   it("keeps SDK default relative session settings relative", async () => {
     vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ persistSession: true }));
     settingsManagerGetSessionDir.mockReturnValue("relative/sessions");
@@ -3413,3 +3495,38 @@ describe("agent-runner injected home forwarding", () => {
 
 // Model choice is covered through selectModel with Pi's real registry in
 // model-selection.test.ts and through each dispatch path in model-selection-paths.test.ts.
+
+describe("agent-runner prompt, memory and fallback edges", () => {
+  it("adds the read tool a read-only memory agent lacks to its allowlist", async () => {
+    vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ memory: "user", extensions: false }));
+    vi.mocked(getToolNamesForType).mockReturnValueOnce(["bash"]);
+    vi.mocked(getReadOnlyMemoryToolNames).mockReturnValueOnce(["read"]);
+    const { session } = createSession("OK");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "go", { pi });
+
+    expect(lastToolsPassed()).toEqual(["bash", "read"]);
+  });
+
+  it("prompts with the bare task when the parent conversation is empty", async () => {
+    const { session } = createSession("OK");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "just the task", { pi, inheritContext: true });
+
+    expect(session.prompt).toHaveBeenCalledExactlyOnceWith("just the task");
+  });
+
+  it("refuses an unknown type when even the canonical general-purpose config is missing", async () => {
+    const canonical = DEFAULT_AGENTS.get("general-purpose");
+    vi.mocked(getAgentConfig).mockReturnValueOnce(undefined);
+    DEFAULT_AGENTS.delete("general-purpose");
+    createAgentSession.mockResolvedValue({ session: createSession("OK").session });
+    try {
+      await expect(runAgent(ctx, "ghost-type", "go", { pi })).rejects.toThrow('No fallback config available for unknown type "ghost-type"');
+    } finally {
+      if (canonical) DEFAULT_AGENTS.set("general-purpose", canonical);
+    }
+  });
+});
