@@ -1032,7 +1032,6 @@ def test_prepare_build_wrapper_gives_two_builds_identical_argv(tmp_path: Path) -
     for _ in range(2):
         subprocess.check_call([str(evidence / "bin/bun"), "build", "--compile", "entry.js"])
         recorded.append((evidence / "compile-command.json").read_bytes())
-        (evidence / "compile-command.json").unlink()
     assert recorded[0] == recorded[1]
     assert f"--metafile={evidence / 'module-graph.json'}" in json.loads(recorded[0])
 
