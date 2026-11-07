@@ -15,9 +15,9 @@ The separate approved D7 toolchain upgrade selects Bun 1.4.4; evidence and remai
 | `integration/inprocess` | Full Vitest + guard, spawn-time home | Full Vitest + guard, spawn-time home |
 | `plan-mode` | Full Vitest + guard | Full Vitest + guard |
 | `dev-tools` | Full Vitest + guard | Full Vitest + guard |
-| `session-kit` | Existing full Vitest | Existing native Bun subset plus spawn-time-home Vitest home-forwarding canaries |
+| `session-kit` | Full Vitest + guard | Full Vitest + guard |
 | `todo` | Full Vitest + guard | Full Vitest + guard |
-| `subagents` | Full Vitest + guard | Native-scenario subset + guarded real-loader gate; full suite pending [#320](https://github.com/nredd/pi-harness/issues/320) |
+| `subagents` | Full Vitest + guard | Full Vitest + guard |
 | `computer-use` | Full Vitest + guard, one file at a time, including the platform/opt-in-gated native and live suites (#347); `check-linux-live.mjs` only starts the D-Bus session its Vitest scenario runs in | Not run |
 | `integration/probes`, `scripts/import_audit.test.ts`, `scripts/check-biome-paths.test.mjs`, `scripts/run-vitest.test.ts`, `scripts/router_contract.test.mjs` | Vitest + guard, V8 coverage (#347) | Not run (import audit remains Node-only) |
 
@@ -101,22 +101,18 @@ The todo/subagents guard deferral is resolved by #171. Both Vitest configs insta
 setup on both engines; fixtures inject disposable homes instead of mutating HOME. Todo's
 `test:bun` uses the full-suite launcher with `.vitest.config.ts` (390 tests).
 
-Subagents retains its native-scenario subset plus the real-loader Vitest gate through the
-spawn-time-home launcher. `session-kit` likewise retains its native subset while its
-injected-home canary runs through `scripts/run-vitest.ts bun`. Since #320 `plan-mode` and
-`dev-tools` run their full suites on Bun with the shared guard instead of their native subsets
-and canaries (`tool-policy.test.ts`, `ssh/hosts.test.ts`), every case of which is in the full run. Counts are in the receipt
+Since #320 every package with a `test:bun` runs its full Vitest suite on Bun with the shared guard,
+and no native `bun test` subset remains. `session-kit` and `subagents` were the last two: their
+native scenarios and canaries (`resource-loader-home.test.ts`, `home-injection.test.ts`) are all in the
+full run, and `plan-mode` and `dev-tools` moved earlier. Counts are in the receipt
 [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/bun-enforced.md).
-`session-kit` also runs its home-only factory canary through `scripts/run-vitest.ts node`, and
-leaves it out of its ordinary Node Vitest run and native Bun scenario list. On both engines the
-launcher installs disposable `HOME`/`USERPROFILE` values before the canary imports the SDK, so
-the mocked `node:fs` SSH probe works and Bun never starts with the real home.
-Switching subagents to the full Bun suite is a later slice of
-[#320](https://github.com/nredd/pi-harness/issues/320), gated on macOS minutes. These canaries
-pass `--coverage.enabled=false`, so the launcher appends no Bun coverage arguments to them.
+`session-kit`'s ordinary Node run still keeps `home-injection.test.ts` out of its first Vitest pass
+and runs it through `scripts/run-vitest.ts node`, so the mocked `node:fs` SSH probe sees disposable
+`HOME`/`USERPROFILE` values installed before the SDK import. The launcher sets
+`PI_EXPECT_BUN_RUNTIME=1` for every Bun child, so `subagents`' real-loader test proves it ran on the pinned Bun.
 The guard is active for its full Node suite and any Bun Vitest invocation, including
 the real-loader exact-equality ambient-access canary. No tests are skipped to accommodate the
-guard; native `bun test` scenarios do not consume Vitest setup files.
+guard.
 
 ## Coverage handoff
 
@@ -128,7 +124,7 @@ the same entry point with `--config .vitest.config.ts`. Since #320 the launcher 
 coverage arguments itself, so each `test:bun` carries only its package arguments:
 
 ```sh
-node ../../scripts/run-vitest.ts bun                              # router, preset, plan-mode, dev-tools, inprocess
+node ../../scripts/run-vitest.ts bun                              # router, preset, plan-mode, dev-tools, session-kit, subagents, inprocess
 node ../../scripts/run-vitest.ts bun --maxWorkers=1               # resource-sampler
 node ../../scripts/run-vitest.ts bun --config .vitest.config.ts   # todo
 ```

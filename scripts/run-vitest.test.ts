@@ -109,6 +109,14 @@ test("bun appends the Istanbul coverage arguments after the package arguments", 
 	assert.deepEqual(call.args, ["--bun", VITEST, "run", "--maxWorkers=1", ...BUN_COVERAGE]);
 });
 
+test("only the Bun engine marks its child with the pinned-runtime expectation", () => {
+	main(["bun"], {});
+	assert.equal(onlyCall().env.PI_EXPECT_BUN_RUNTIME, "1");
+	spawn.calls.length = 0;
+	main(["node"], {});
+	assert.equal(onlyCall().env.PI_EXPECT_BUN_RUNTIME, undefined);
+});
+
 test("bun keeps a canary's exact coverage opt-out instead of appending coverage", () => {
 	main(["bun", "--coverage.enabled=false"], {});
 	assert.deepEqual(onlyCall().args, ["--bun", VITEST, "run", "--coverage.enabled=false"]);

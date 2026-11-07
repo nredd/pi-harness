@@ -3,6 +3,7 @@
   "target": { "lines": 0, "functions": 0 },
   "enforce_target": true,
   "reclassifications": [
+    { "package": "session-kit", "signal": "owned", "path": "packages/session-kit/src/stats/library.ts", "reason": "Relative to origin/main: the `export *` barrel is rewritten as static named re-exports and classified a non-executable facade. Istanbul emits zero statements/functions for it, so Vitest-on-Bun cannot report it (#320); aggregate.ts, load.ts and snapshot.ts remain owned and measured." },
     { "package": "dev-tools", "signal": "owned", "path": "packages/dev-tools/src/core/index.ts", "reason": "Relative to integration base 71b0aea: static named ESM re-export facade has zero Istanbul statements/functions in TypeScript and emitted ESM. Strict shape validation rejects executable additions; all executable target modules remain measured." },
     { "package": "plan-mode", "signal": "owned", "path": "packages/plan-mode/src/index.ts", "reason": "Relative to integration base 71b0aea: pure static ESM re-export of the default binding, with zero statements/functions in actual source/emitted-ESM Istanbul maps. Strict facade validation rejects executable additions; src/plan-mode.ts remains owned and measured." },
     { "package": "plan-mode", "signal": "owned", "path": "packages/plan-mode/src/interactive-ui.ts", "reason": "Relative to integration base 71b0aea: pure static ESM named re-export facade, with zero statements/functions in source/emitted-ESM Istanbul maps. Strict shape validation rejects executable additions; every UI target remains owned and measured." },
@@ -137,6 +138,7 @@
       "owned": ["src/**/*.ts"],
       "exclusions": [
         { "path": "src/monitor/types.ts", "kind": "type-only", "reason": "Only TypeScript declarations; emits no executable JavaScript." },
+        { "path": "src/stats/library.ts", "kind": "non-executable-facade", "reason": "Only static named ESM re-exports of the stats parser, aggregation and snapshot APIs. Istanbul emits zero statements/functions for it, so Vitest-on-Bun cannot report it; every target module remains owned and instrumented." },
         { "path": "dist/pi-stats-export.mjs", "kind": "generated", "reason": "Generated esbuild CLI bundle of the owned src/stats/cli.ts implementation; production source remains measured rather than counting the generated duplicate." }
       ],
       "status": "measured",
@@ -149,24 +151,8 @@
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-          "files": [
-            "src/agent-dir.ts", "src/child.ts", "src/clock.ts", "src/config.ts", "src/diff/component.ts", "src/diff/git.ts",
-            "src/diff/index.ts", "src/diff/parse.ts", "src/diff/view.ts", "src/goal/index.ts",
-            "src/goal/state.ts", "src/goal/subagents.ts", "src/index.ts", "src/loop/index.ts",
-            "src/loop/state.ts", "src/mon/component.ts", "src/mon/index.ts", "src/mon/model.ts",
-            "src/mon/poll.ts", "src/mon/source.ts", "src/monitor/coalescer.ts", "src/monitor/index.ts",
-            "src/monitor/manager.ts", "src/monitor/matcher.ts", "src/monitor/messages.ts",
-            "src/monitor/output.ts", "src/monitor/pidfiles.ts", "src/monitor/process.ts",
-            "src/monitor/ring.ts", "src/monitor/splitter.ts", "src/monitor/validate.ts",
-            "src/monitor/widget.ts", "src/output.ts", "src/rules/index.ts", "src/rules/logic.ts",
-            "src/shared.ts", "src/stats/aggregate.ts", "src/stats/chart.ts", "src/stats/component.ts",
-            "src/stats/days.ts", "src/stats/format.ts", "src/stats/freshness.ts", "src/stats/heatmap.ts",
-            "src/stats/index.ts", "src/stats/load.ts", "src/stats/nth.ts", "src/stats/palette.ts", "src/stats/snapshot.ts",
-            "src/stats/ticks.ts", "src/titles/aliases.ts", "src/titles/index.ts", "src/titles/logic.ts"
-          ],
-          "max_uncovered": { "darwin": { "lines": 947, "functions": 96 }, "linux": { "lines": 947, "functions": 94 } },
-          "enforcement": "report-only",
-          "reason": "Compatibility subset, not a full source-complete Bun port. Flip this package to enforced when its full suite runs under Bun and the Bun inventory covers every owned source file: https://github.com/nredd/pi-harness/issues/160.",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 9 }, "linux": { "lines": 0, "functions": 0, "branches": 9 } },
+          "enforcement": "enforced",
           "reporters": ["text", "lcov"]
         }
       }
@@ -185,30 +171,8 @@
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-          "files": [
-            "src/abortable.ts", "src/agent-color.ts", "src/agent-file-toggle.ts", "src/agent-manager.ts",
-            "src/agent-runner.ts", "src/agent-source-badge.ts", "src/agent-types.ts", "src/child-context.ts",
-            "src/clock.ts", "src/completion-outbox.ts", "src/context.ts", "src/cross-extension-rpc.ts",
-            "src/custom-agents.ts", "src/default-agents.ts", "src/detached-results.ts", "src/enabled-models.ts",
-            "src/enterprise-local.ts", "src/env.ts", "src/error-message.ts", "src/group-join.ts", "src/home-paths.ts", "src/index.ts",
-            "src/invocation-config.ts", "src/memory.ts", "src/mention-clone.ts", "src/mention.ts",
-            "src/model-call.ts", "src/model-resolver.ts", "src/model-selection.ts", "src/model-scope.ts", "src/model-tiers.ts", "src/nested-tools.ts",
-            "src/notification-result.ts", "src/output-file.ts", "src/package-resources.ts", "src/plan-mode-children.ts", "src/process-budget.ts", "src/prompts.ts",
-            "src/quota-admission.ts", "src/resource-loader.ts", "src/schedule-store.ts", "src/schedule.ts", "src/settings.ts",
-            "src/skill-loader.ts", "src/stale-ctx.ts", "src/startup-error.ts", "src/status-note.ts", "src/structured-output.ts",
-            "src/ui/agent-mention.ts", "src/ui/agent-row.ts", "src/ui/agent-widget.ts",
-            "src/ui/conversation-viewer.ts", "src/ui/fallback-flag.ts", "src/ui/fleet-list.ts", "src/ui/fleet-state.ts", "src/ui/notification-view.ts",
-            "src/ui/schedule-menu.ts", "src/ui/select-item.ts", "src/ui/viewer-keys.ts",
-            "src/ui/workflow-card.ts", "src/ui/workflow-dialog.ts", "src/ui/workflow-menu.ts", "src/usage.ts",
-            "src/workflow/collisions.ts", "src/workflow/entry.ts", "src/workflow/host.ts",
-            "src/workflow/journal.ts", "src/workflow/json-schema.ts", "src/workflow/meta.ts",
-            "src/workflow/progress.ts", "src/workflow/runtime.ts", "src/workflow/saved.ts",
-            "src/workflow/task.ts", "src/workflow/tool-description.ts", "src/workflow/worker-source.ts",
-            "src/worktree.ts", "src/xml.ts"
-          ],
-          "max_uncovered": { "darwin": { "lines": 6534, "functions": 516 }, "linux": { "lines": 6534, "functions": 516 } },
-          "enforcement": "report-only",
-          "reason": "Compatibility subset, not a full source-complete Bun port. Flip this package to enforced when its full suite runs under Bun and the Bun inventory covers every owned source file: https://github.com/nredd/pi-harness/issues/160.",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
+          "enforcement": "enforced",
           "reporters": ["text", "lcov"]
         }
       }

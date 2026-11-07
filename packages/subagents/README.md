@@ -115,14 +115,15 @@ regression runs the real `npm test` against a hostile fixture home with an unava
 `PI_E2E_LIVE=1 npm run test:e2e` needs the operator's configured Pi login; it is not a
 hermetic verification gate. Without that opt-in, `test:e2e` runs the scripted faux suite.
 
-`npm run check` runs Biome, TypeScript, the full Vitest suite and `test:bun`. The four session scenario
+`npm run check` runs Biome, TypeScript, the full Vitest suite and `test:bun`, the same full suite on Bun 1.4.4 through
+`scripts/run-vitest.ts bun` (no native `bun test` subset). The four session scenario
 files (`test/{session-scenarios,fleet-session,viewer-session,worktree-isolation-e2e}.test.ts`) run under
-both Vitest and Bun 1.4.4 on core `v1.3.0-nredd.8` release tarballs. They use exported `createHarness`
+both engines on core `v1.3.0-nredd.8` release tarballs. They use exported `createHarness`
 and `createInteractiveHarness`/`VirtualTerminal`, real child sessions and git, one injected extension
 clock, promise-held tools/streams and raw SGR mouse input. Homes, settings and provider credentials
 are fixtures; no installed pi, tmux or real-clock sleeps are needed. Existing old-host strict-mode
 coverage explicitly removes the optional SDK export; the shared faux runtime uses the host's real
-`withBeforeProviderRequest` facade. The full older suite remains Vitest-only. Maintainer guidance on public index callback
+`withBeforeProviderRequest` facade. Maintainer guidance on public index callback
 coverage and retained safety guards is [here](../../docs/subagents-index-continuation.md).
 
 ### Other hosts

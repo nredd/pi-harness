@@ -18,9 +18,8 @@ from typing import Any
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
+# A native `bun test` subset reports JSC coverage nobody can compare to Node's; #320 retired the last two.
 NATIVE_BUN_TEST = re.compile(r"(?:\w+=\S+ )*bun test ")
-# Packages still on a native `bun test` subset. #320 retires one per slice; none may come back.
-NATIVE_BUN_PACKAGES = {"session-kit", "subagents"}
 
 
 LAUNCHER = "node ../../scripts/run-vitest.ts bun"
@@ -155,32 +154,24 @@ def test_benchmark_signal_matches_its_check_benchmark_producer() -> None:
 
 
 def test_declared_bun_commands_delegate_coverage_to_the_launcher() -> None:
-    """Keep every Vitest-on-Bun producer on the launcher, and native subsets on both reporters.
+    """Keep every Vitest-on-Bun producer on the launcher, and every native `bun test` subset retired.
 
     Parameters:
         None.
     Returns:
-        None: Vitest-on-Bun manifests pass only package arguments; native subsets keep both reporters.
+        None: Every `test:bun` manifest passes only package arguments to the launcher.
     Raises:
-        AssertionError: A manifest bypasses the launcher, restates coverage flags, drops a reporter
-            or a retired native subset returns.
+        AssertionError: A manifest bypasses the launcher, restates coverage flags or a retired
+            native subset returns.
     """
     manifests = [*ROOT.glob("packages/*/package.json"), ROOT / "integration/inprocess/package.json"]
-    native = set()
     for manifest in manifests:
         command = json.loads(manifest.read_text())["scripts"].get("test:bun")
         if not command:
             continue
-        # Native Bun commands may carry an env prefix such as `JITI_FS_CACHE=false` (#352).
-        if NATIVE_BUN_TEST.match(command):
-            native.add(manifest.parent.name)
-            assert "--coverage-reporter=text" in command, manifest
-            assert "--coverage-reporter=lcov" in command, manifest
-            assert "--coverage-dir=coverage/bun" in command, manifest
-        else:
-            expected = LAUNCHER + LAUNCHER_PACKAGE_ARGS.get(manifest.parent.name, "")
-            assert command == expected, manifest
-    assert native == NATIVE_BUN_PACKAGES
+        assert not NATIVE_BUN_TEST.match(command), manifest
+        expected = LAUNCHER + LAUNCHER_PACKAGE_ARGS.get(manifest.parent.name, "")
+        assert command == expected, manifest
 
 
 def test_generated_coverage_is_ignored_by_whole_workspace_linters() -> None:

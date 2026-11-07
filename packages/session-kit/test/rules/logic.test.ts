@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import {
 	formatRule,
 	formatRules,
@@ -57,6 +58,20 @@ describe("matchesRule", () => {
 		expect(matchesRule(rule("*.ts"), "src/a.ts")).toBe(false);
 		expect(matchesRule(rule("nope", "{src,lib}/*.ts"), "lib/a.ts")).toBe(true);
 		expect(matchesRule(rule("["), "src/a.ts")).toBe(false);
+	});
+	it("treats a glob the matcher throws on as no match and still tries the next one", () => {
+		// Node rejects an oversized pattern and Bun accepts it, so the failure is injected, not provoked.
+		const real = path.posix.matchesGlob.bind(path.posix);
+		const spy = vi.spyOn(path.posix, "matchesGlob").mockImplementation((candidate, glob) => {
+			if (glob === "poison") throw new Error("pattern rejected");
+			return real(candidate, glob);
+		});
+		try {
+			expect(matchesRule(rule("poison"), "src/a.ts")).toBe(false);
+			expect(matchesRule(rule("poison", "src/**"), "src/a.ts")).toBe(true);
+		} finally {
+			spy.mockRestore();
+		}
 	});
 });
 

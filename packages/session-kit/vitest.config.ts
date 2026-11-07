@@ -17,6 +17,8 @@ export default defineConfig({
 			exclude: exclusions.map(({ path }) => path),
 		},
 		pool: "forks",
+		// The launcher isolates HOME before Bun starts; this fails a test that moves it or `os.homedir()`.
+		setupFiles: ["../../integration/inprocess/verification/home-setup.ts"],
 		maxWorkers: 2,
 		testTimeout: 20_000,
 	},

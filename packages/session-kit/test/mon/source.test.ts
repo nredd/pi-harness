@@ -1,5 +1,4 @@
 import { ChildProcess, spawnSync } from "node:child_process";
-import { subscribe, unsubscribe } from "node:diagnostics_channel";
 import { lstat, readFile } from "node:fs/promises";
 import { platform } from "node:os";
 import { dirname, join } from "node:path";
@@ -39,29 +38,32 @@ function tick(): Promise<void> {
 }
 
 /**
- * Narrow a `child_process` channel message without trusting its untyped payload.
- * @param message Channel payload.
- * @returns Whether it carries a child.
- */
-function isChildMessage(message: unknown): message is { process: ChildProcess } {
-	return message instanceof Object && "process" in message && message.process instanceof ChildProcess;
-}
-
-/**
- * Observe the next child this worker spawns through Node's documented `child_process` channel.
- * The channel publishes from the `ChildProcess` constructor, so the promise settles in the microtask
- * after a synchronous `spawn()` returned: the PID is set and the event loop cannot have reaped it yet.
- * @returns The first child, and the disposer ending the subscription whether or not one spawned.
+ * Observe the next child this worker spawns by wrapping `ChildProcess.prototype.spawn`, which Node's
+ * and Bun's `node:child_process` both route every `spawn`/`execFile` through. Node's `child_process`
+ * diagnostics channel is not published by Bun, so it cannot be the seam. The wrapper resolves after the
+ * real spawn returned, in the same synchronous turn: the PID is set and the event loop cannot have
+ * reaped the child yet.
+ * @returns The first child, and the disposer restoring the prototype whether or not one spawned.
  */
 function watchNextChild(): { spawned: Promise<ChildProcess>; stop: () => void } {
-	let onChild: (message: unknown) => void = () => {};
+	// `spawn` is an internal method both engines implement, absent from the public typings.
+	const prototype = ChildProcess.prototype as unknown as { spawn: (this: ChildProcess, options: unknown) => unknown };
+	const original = prototype.spawn;
+	let resolveChild: (child: ChildProcess) => void = () => {};
 	const spawned = new Promise<ChildProcess>((resolve) => {
-		onChild = (message) => {
-			if (isChildMessage(message)) resolve(message.process);
-		};
+		resolveChild = resolve;
 	});
-	subscribe("child_process", onChild);
-	return { spawned, stop: () => unsubscribe("child_process", onChild) };
+	prototype.spawn = function (this: ChildProcess, options: unknown) {
+		const result = original.call(this, options);
+		resolveChild(this);
+		return result;
+	};
+	return {
+		spawned,
+		stop: () => {
+			prototype.spawn = original;
+		},
+	};
 }
 
 /** Upper bound on `ps` polls after SIGKILL, so a helper that never exits fails instead of hanging. */

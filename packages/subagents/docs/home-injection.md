@@ -162,7 +162,7 @@ Tests:
   extension tilde, frontmatter `session_dir`, resource/settings and default-session
   forwarding. Each forwarding argument can be removed independently to make its
   regression fail.
-- `resource-loader-home.test.ts` is in `test:bun` through `bun --bun`-launched
+- `resource-loader-home.test.ts` runs in the full `test:bun` suite through `bun --bun`-launched
   Vitest. Its spawn-time ambient-home child proves Node and Bun both keep an ambient
   `~/.agents/skills` decoy out of injected-home preload blocks; that gate also
   asserts Bun matches the root pin and cannot turn the cached-home regression into

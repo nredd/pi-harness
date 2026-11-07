@@ -136,21 +136,14 @@ test("guarded suites keep the shared setup and launcher in their gates", async (
 		"packages/todo",
 		"packages/plan-mode",
 		"packages/dev-tools",
+		"packages/session-kit",
 		"packages/subagents",
 	]) {
 		const manifest = JSON.parse(readFileSync(join(root, directory, "package.json"), "utf8"));
-		if (directory === "packages/subagents") {
-			// Native subset plus real-loader canary until the full-suite slice of #320.
-			expect(manifest.scripts["test:bun"]).toContain(
-				"node ../../scripts/run-vitest.ts bun test/resource-loader-home.test.ts",
-			);
-			expect(manifest.scripts["test:bun"]).toContain("bun test test/session-scenarios.test.ts");
-		} else {
-			// The launcher owns the coverage arguments; launcher.test.ts pins them.
-			expect(manifest.scripts["test:bun"]).toMatch(
-				/^node \.\.\/\.\.\/scripts\/run-vitest\.ts bun(?: --maxWorkers=1| --config \.vitest\.config\.ts)?$/,
-			);
-		}
+		// The launcher owns the coverage arguments; launcher.test.ts pins them.
+		expect(manifest.scripts["test:bun"]).toMatch(
+			/^node \.\.\/\.\.\/scripts\/run-vitest\.ts bun(?: --maxWorkers=1| --config \.vitest\.config\.ts)?$/,
+		);
 		expect(manifest.scripts.check).toContain("npm run test:bun");
 		const config = await import(
 			join(root, directory, directory === "packages/todo" ? ".vitest.config.ts" : "vitest.config.ts")

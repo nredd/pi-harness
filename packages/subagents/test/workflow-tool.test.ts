@@ -1029,6 +1029,26 @@ describe("SubagentWorkflow tool — script vs scriptPath vs name", () => {
     expect(String(sent[0].details.resultPreview)).toContain("script blew up");
   });
 
+  it("clips a long result to a 500-character preview in the collapsed row and keeps a short one whole", async () => {
+    // The clip is the script's own return value, so it cannot depend on how long an engine's stack is.
+    const long = `${"a".repeat(499)}bc`;
+    const clipped = await tools.get("SubagentWorkflow").execute(
+      "tc-long",
+      { script: `${inlineScript}return ${JSON.stringify(long)};\n` },
+      undefined, undefined, workflowCtx(),
+    );
+    const [longMessage] = await awaitNotification(startedTaskId(clipped));
+    expect(longMessage.details.resultPreview).toBe(`${"a".repeat(499)}b…`);
+
+    const whole = await tools.get("SubagentWorkflow").execute(
+      "tc-short",
+      { script: `${inlineScript}return ${JSON.stringify(long.slice(0, 500))};\n` },
+      undefined, undefined, workflowCtx(),
+    );
+    const [shortMessage] = await awaitNotification(startedTaskId(whole));
+    expect(shortMessage.details.resultPreview).toBe(long.slice(0, 500));
+  });
+
   it("reports a run that could not start at all", async () => {
     // A control character is rejected before the worker is created, so this
     // never reaches the run's own error path.
