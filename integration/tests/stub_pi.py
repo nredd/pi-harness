@@ -129,6 +129,8 @@ def assistant_turn(step: dict[str, Any], index: int) -> None:
 def run_json(argv: list[str]) -> int:
     """Answer `--mode json -p`: noise, the scripted turns, a stderr line, then exit.
 
+    `STUB_PI_NOISE` adds a valid JSON line that is not an event object.
+
     Parameters:
         argv (list[str]): stub arguments.
 
@@ -138,6 +140,8 @@ def run_json(argv: list[str]) -> int:
     prompts = argv[argv.index("-p") + 1 :]
     print("stub pi banner, not JSON")
     print()
+    if os.environ.get("STUB_PI_NOISE"):
+        print(json.dumps(["not", "an", "event"]))
     emit({"type": "session", "argv": argv})
     for prompt in prompts:
         emit({"type": "message_end", "message": {"role": "user", "content": prompt}})
