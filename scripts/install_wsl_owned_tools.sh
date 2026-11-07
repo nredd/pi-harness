@@ -11,7 +11,7 @@ ref=$(node --input-type=module -e '
 ')
 tool_dir=${1:?Tool directory required}
 mkdir -p "$tool_dir/install-action"
-curl --fail --location --retry 3 --connect-timeout 15 --max-time 30 --output "$tool_dir/install-action.tar.gz" \
+curl --fail --location --retry 3 --connect-timeout 15 --max-time 45 --output "$tool_dir/install-action.tar.gz" \
   "https://codeload.github.com/taiki-e/install-action/tar.gz/$ref"
 tar -xzf "$tool_dir/install-action.tar.gz" --strip-components=1 --directory "$tool_dir/install-action"
 paths="$tool_dir/install-action-paths"

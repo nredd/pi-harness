@@ -59,9 +59,9 @@ runs:
         WSL_OWNED: ${{ inputs.owned }}
       run: |
         . (Join-Path $env:GITHUB_WORKSPACE 'scripts/wsl2_bounded.ps1')
-        # Hosted passes took under 1s per command here and 23s to 67s for the guest bootstrap; every bound is a
-        # few times that (#626). Each trip prints the stuck command and a process snapshot.
-        $listing = Invoke-Bounded 'list WSL distributions' 60 -Capture wsl --list --verbose
+        # Hosted passes took under 1s per host command (12s covers the first four) and 22s to 67s for the guest
+        # bootstrap; every bound is a few times that (#626). Each trip prints the stuck command and a process snapshot.
+        $listing = Invoke-BoundedCapture 'list WSL distributions' 30 wsl --list --verbose
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         $listing = ($listing -split "`r?`n") -join "`n"
         $listing
@@ -69,13 +69,14 @@ runs:
           throw 'Ubuntu-24.04 is not listed as WSL version 2'
         }
         # Bootstrap apt as root via setup-wsl, but run every gate as an ordinary user.
-        Invoke-Bounded 'create the pi-ci user' 60 wsl -d Ubuntu-24.04 --user root --exec /usr/sbin/useradd --create-home --shell /bin/bash pi-ci
+        Invoke-Bounded 'create the pi-ci user' 30 wsl -d Ubuntu-24.04 --user root --exec /usr/sbin/useradd --create-home --shell /bin/bash pi-ci
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         $env:WSL_HOST_WORKSPACE = $env:GITHUB_WORKSPACE
         $env:WSL_HOST_TEMP = $env:RUNNER_TEMP
         $env:WSLENV = 'WSL_HOST_WORKSPACE/p:WSL_HOST_TEMP/p:WSL_OWNED'
-        $setup = (Invoke-Bounded 'translate the setup script path' 60 -Capture wsl -d Ubuntu-24.04 --exec wslpath -u "$env:GITHUB_WORKSPACE/scripts/wsl2_setup.sh").Trim()
+        $setup = Invoke-BoundedCapture 'translate the setup script path' 30 wsl -d Ubuntu-24.04 --exec wslpath -u "$env:GITHUB_WORKSPACE/scripts/wsl2_setup.sh"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        # The script bounds its own commands (60s each, 120s for the owned tools); this covers the whole run.
+        $setup = $setup.Trim()
+        # The script bounds its own commands (60s each, 120s for the owned tools, 180s per download); this covers the whole run.
         Invoke-Bounded 'guest bootstrap (scripts/wsl2_setup.sh)' 300 wsl -d Ubuntu-24.04 --user pi-ci --exec bash -euo pipefail "$setup"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

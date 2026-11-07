@@ -44,40 +44,52 @@ function Write-StallReport {
         Format-List | Out-String -Width 300 | Write-Host
     Write-Host '--- wsl --list --verbose'
     $listing = Join-Path ([System.IO.Path]::GetTempPath()) 'wsl2-stall-list.txt'
+    Remove-Item -Force -ErrorAction SilentlyContinue $listing
     $null = Invoke-Limited -FilePath 'wsl' -Arguments @('--list', '--verbose') -Seconds 20 -OutFile $listing
     if (Test-Path $listing) { ((Get-Content -Raw $listing) -replace ([char]0), '') | Write-Host }
     Write-Host '--- guest processes, longest running first'
     $guest = Join-Path ([System.IO.Path]::GetTempPath()) 'wsl2-stall-guest.txt'
+    Remove-Item -Force -ErrorAction SilentlyContinue $guest
     $result = Invoke-Limited -FilePath 'wsl' -Arguments @('-d', 'Ubuntu-24.04', '--user', 'root', '--exec', 'ps', '-eo', 'pid,ppid,etime,stat,args', '--sort=-etime') -Seconds 20 -OutFile $guest
     if ($result.TimedOut) { Write-Host 'guest did not answer within 20s' }
     elseif (Test-Path $guest) { Get-Content $guest -TotalCount 40 | Write-Host }
 }
 
-function Invoke-Bounded {
-    <#
-    .SYNOPSIS
-        Run a command under a deadline. Sets $LASTEXITCODE like a native call; a trip fails with 124.
-    .PARAMETER Label
-        Names the command in the failure message.
-    .PARAMETER Seconds
-        Deadline.
-    .PARAMETER Capture
-        Return the command's standard output instead of streaming it, with NUL bytes removed.
-    #>
-    param(
-        [Parameter(Mandatory = $true)][string]$Label,
-        [Parameter(Mandatory = $true)][int]$Seconds,
-        [switch]$Capture,
-        [Parameter(Mandatory = $true, ValueFromRemainingArguments = $true)][string[]]$Command
-    )
+function Invoke-BoundedCore {
+    # Plain function, no cmdlet binding: an advanced function would bind a leading `-d` of the wrapped command
+    # as an abbreviation of the common `-Debug` parameter instead of passing it through.
+    param([string]$Label, [int]$Seconds, [bool]$Capture, [string[]]$Command)
     $outFile = if ($Capture) { [System.IO.Path]::GetTempFileName() } else { $null }
-    $result = Invoke-Limited -FilePath $Command[0] -Arguments $Command[1..($Command.Count - 1)] -Seconds $Seconds -OutFile $outFile
-    $captured = if ($Capture -and (Test-Path $outFile)) { (Get-Content -Raw $outFile) -replace ([char]0), '' } else { $null }
+    try {
+        $result = Invoke-Limited -FilePath $Command[0] -Arguments @($Command | Select-Object -Skip 1) -Seconds $Seconds -OutFile $outFile
+        $captured = if ($Capture) { (Get-Content -Raw $outFile) -replace ([char]0), '' } else { '' }
+    }
+    finally {
+        if ($outFile) { Remove-Item -Force -ErrorAction SilentlyContinue $outFile }
+    }
     if ($result.TimedOut) {
         Write-Host "::error title=WSL setup timed out::$Label exceeded ${Seconds}s: $($Command -join ' ')"
         if ($captured) { Write-Host "--- output before the timeout`n$captured" }
         Write-StallReport
     }
     $global:LASTEXITCODE = $result.ExitCode
-    if ($Capture) { return $captured }
+    return $captured
+}
+
+function Invoke-Bounded {
+    <#
+    .SYNOPSIS
+        Run a command under a deadline: Invoke-Bounded <label> <seconds> <program> [arguments...].
+        Sets $LASTEXITCODE like a native call; a trip fails with 124 after printing the stuck command.
+    #>
+    $null = Invoke-BoundedCore -Label $args[0] -Seconds ([int]$args[1]) -Capture $false -Command @($args | Select-Object -Skip 2)
+}
+
+function Invoke-BoundedCapture {
+    <#
+    .SYNOPSIS
+        Same as Invoke-Bounded, but returns the command's standard output with NUL bytes removed
+        (`wsl.exe` writes UTF-16). Returns an empty string after a trip.
+    #>
+    return Invoke-BoundedCore -Label $args[0] -Seconds ([int]$args[1]) -Capture $true -Command @($args | Select-Object -Skip 2)
 }

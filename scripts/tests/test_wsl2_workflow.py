@@ -485,16 +485,21 @@ def test_every_host_wsl_call_in_setup_is_bounded() -> None:
     ]
     assert len(commands) == 4
     for line in commands:
-        assert "Invoke-Bounded '" in line, f"unbounded wsl call: {line}"
+        assert re.search(r"Invoke-Bounded(Capture)? '", line), f"unbounded wsl call: {line}"
+    # A tripped capture returns nothing: check the status before trimming it.
+    assert run.index("$setup = Invoke-BoundedCapture") < run.index("$setup = $setup.Trim()")
+    assert run.index("if ($LASTEXITCODE -ne 0)", run.index("$setup = Invoke-BoundedCapture")) < run.index(
+        "$setup = $setup.Trim()"
+    )
     deadlines = {
         match.group("label"): int(match.group("seconds"))
-        for match in re.finditer(r"Invoke-Bounded '(?P<label>[^']+)' (?P<seconds>\d+)", run)
+        for match in re.finditer(r"Invoke-Bounded(?:Capture)? '(?P<label>[^']+)' (?P<seconds>\d+)", run)
     }
     # Measured on hosted passes: under 1s per host command, 23s to 67s for the bootstrap script.
     assert deadlines == {
-        "list WSL distributions": 60,
-        "create the pi-ci user": 60,
-        "translate the setup script path": 60,
+        "list WSL distributions": 30,
+        "create the pi-ci user": 30,
+        "translate the setup script path": 30,
         "guest bootstrap (scripts/wsl2_setup.sh)": 300,
     }
 
@@ -526,6 +531,10 @@ def test_setup_wsl_action_is_bounded_by_a_watchdog_that_always_reports() -> None
 def test_bounded_helper_kills_the_tree_and_reports_the_stuck_command() -> None:
     """Pin the helper's trip behaviour: exit 124, tree kill, annotation, host and guest snapshots."""
     helper = (ROOT / "scripts/wsl2_bounded.ps1").read_text()
+    # A leading `-d` must reach the wrapped command: advanced functions bind it as `-Debug`.
+    assert "CmdletBinding" not in helper
+    assert "[Parameter(" in helper.split("function Invoke-BoundedCore")[0]
+    assert "[Parameter(" not in helper.split("function Invoke-BoundedCore")[1]
     assert "$process.Kill($true)" in helper
     assert "ExitCode = 124" in helper
     assert "::error title=WSL setup timed out::$Label exceeded ${Seconds}s: $($Command -join ' ')" in helper
@@ -590,12 +599,12 @@ def test_guest_setup_names_the_stuck_command_and_guest_processes_on_a_timeout(tm
         "wsl2-setup: TIMEOUT: download https://nodejs.org/dist/v22.0.0/node-v22.0.0-linux-x64.tar.xz"
         in result.stderr
     )
-    assert "exceeded 120s" in result.stderr
-    assert "curl --fail --location --retry 3 --connect-timeout 15 --max-time 30 --output" in result.stderr
+    assert "exceeded 180s" in result.stderr
+    assert "curl --fail --location --retry 3 --connect-timeout 15 --max-time 45 --output" in result.stderr
     assert "synthetic-stuck-apt" in result.stderr
     calls = log.read_text().splitlines()
     assert calls[0].startswith("--kill-after=10 60 cp -a ")
-    assert calls[1].startswith("--kill-after=10 120 curl ")
+    assert calls[1].startswith("--kill-after=10 180 curl ")
 
 
 def test_guest_setup_names_a_failed_command_without_calling_it_a_timeout(tmp_path: Path) -> None:
@@ -620,4 +629,4 @@ def test_guest_setup_leaves_no_external_command_unbounded() -> None:
     for label in ("copy checkout", "extract node", "install npm", "install bun", "install uv", "install gh"):
         assert f'bounded "{label}" ' in setup
     assert 'bounded "install owned tools" 120 ' in setup
-    assert "--connect-timeout 15 --max-time 30" in (ROOT / "scripts/install_wsl_owned_tools.sh").read_text()
+    assert "--connect-timeout 15 --max-time 45" in (ROOT / "scripts/install_wsl_owned_tools.sh").read_text()

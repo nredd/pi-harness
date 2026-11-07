@@ -35,7 +35,7 @@ cd "$worktree"
 unset GH_TOKEN
 fetch() {
   # `--max-time` bounds each attempt, `--retry` repeats it; the outer bound covers every attempt.
-  bounded "download $1" 120 curl --fail --location --retry 3 --connect-timeout 15 --max-time 30 --output "$2" "$1"
+  bounded "download $1" 180 curl --fail --location --retry 3 --connect-timeout 15 --max-time 45 --output "$2" "$1"
 }
 node_version=$(tr -d '\r\n' < .node-version)
 node_archive="node-v${node_version}-linux-x64.tar.xz"
