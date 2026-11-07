@@ -44,13 +44,13 @@ for both runtimes: `NODE_OPTIONS` (`--import`, `--expose-gc`) for Node and `BUN_
   no timer preload to adapt. The issue comment attributes the old `/loop` and footer-poll failures
   to that preload. Re-run on the compiled core (2026-11-06, Gitlink `4af3d547`, Bun 1.4.4
   darwin-arm64 standalone, personal stack with `pi-session-kit` 0.9.0, real time, no scaling,
-  throwaway probe not committed): `/loop 30s` fired its first tick 39 s after launch and the
+  throwaway probe not committed): `/loop 30s` was observed with one run 39 s after submit (the probe polled `/loop list` every ~9 s, so that bounds the 30 s tick, not its precision) and the
   footer's usage poll repeated 60.002 s after the first. The old Python scenarios themselves were
   ported to in-process tests and no longer exist (`787f72f1`)
 
 The render probe keeps its `Bun.gc(true)` fallback behind the adapter's `--expose-gc`.
 
-## Candidate auth runtime adapter (#14)
+## Auth runtime adapter (#14)
 
 The harness sets both `NODE_OPTIONS=--import <redirect>` and
 `BUN_OPTIONS=--preload <redirect>` through that adapter. Compiled Bun 1.4.4 honors the latter

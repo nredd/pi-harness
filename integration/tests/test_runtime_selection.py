@@ -67,5 +67,6 @@ def test_real_auth_scenarios_collect_without_skips(runtime: str, tmp_path: Path)
     )
     states = dict(line.split()[1:] for line in output.splitlines() if line.startswith("ITEM "))
     assert "test_request_uses_auth_json_token_with_claude_code_headers[missing-preload]" in states
+    # Four shaping kinds, missing-preload, one refresh and two refresh-failure cases.
     assert len(states) == 8
     assert set(states.values()) == {"RUN"}
