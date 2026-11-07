@@ -106,9 +106,8 @@ export function isValidCollapseKeySpec(spec: string): boolean {
 	// bare `]` keypress (and the raw terminal listener would consume them globally).
 	if (!spec) return false;
 	if (spec.startsWith("+") || spec.endsWith("+") || spec.includes("++")) return false;
-	const parts = spec.split("+");
-	const base = parts[parts.length - 1] ?? "";
-	const modifiers = parts.slice(0, -1);
+	const modifiers = spec.split("+").slice(0, -1);
+	const base = spec.slice(spec.lastIndexOf("+") + 1);
 	if (modifiers.length !== new Set(modifiers).size) return false;
 	if (!modifiers.every((m) => MODIFIERS.has(m))) return false;
 	return base.length === 1 ? /[a-z0-9_\-!@#$%^&*()|~`'":;,./<>?[\]{}=\\]/.test(base) : SPECIAL_KEYS.has(base);

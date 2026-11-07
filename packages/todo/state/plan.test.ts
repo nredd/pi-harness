@@ -393,3 +393,32 @@ describe("applyPlanApproval", () => {
 		expect(selectPlanProgress(empty())).toBeUndefined();
 	});
 });
+
+describe("planTitle — fallbacks", () => {
+	it.each([
+		["", "plan"],
+		["\n  \n", "plan"],
+		["first words\nmore", "first words"],
+		["# ***", "plan"],
+		["## Only sub\ntext", "Only sub"],
+		["## Sub\n# Top level\n", "Top level"],
+	])("%j -> %j", (markdown, title) => {
+		expect(planTitle(markdown)).toBe(title);
+	});
+});
+
+describe("applyPlanApproval — blockers of dropped plan items", () => {
+	it("keeps blockers that are not plan items", () => {
+		const state: TaskState = {
+			tasks: [
+				{ id: 1, subject: "old", status: "pending", source: "plan" },
+				{ id: 2, subject: "plain", status: "pending" },
+				{ id: 3, subject: "waits", status: "pending", blockedBy: [1, 2] },
+			],
+			nextId: 4,
+			plan: { id: "old", title: "Old" },
+		};
+		const { state: next } = applyPlanApproval(state, "new", "# T\n\n## Work\n- a\n");
+		expect(next.tasks.find((t) => t.subject === "waits")?.blockedBy).toEqual([2]);
+	});
+});

@@ -8,7 +8,9 @@ import registerTodo from "./.test-support/home-fixtures.ts";
 import {
 	formatHeldReminder,
 	formatInProgressNotice,
+	formatPlanReminder,
 	HELD_REMINDER_MARKER,
+	isPlanApprovedPayload,
 	PLAN_REMINDER_MARKER,
 	remindedSinceLastPrompt,
 } from "./plan-hooks.ts";
@@ -1045,5 +1047,71 @@ describe("settling with nothing armed to wake the parent", () => {
 		expect(out).toContain("- #1 a");
 		expect(out).not.toContain("\u001b");
 		expect(out).toContain("- #2 c (@bob)");
+	});
+});
+
+describe("plan payload and mode guards", () => {
+	it.each([null, undefined, "plan", 7])("isPlanApprovedPayload rejects non-object %j", (value) => {
+		expect(isPlanApprovedPayload(value)).toBe(false);
+	});
+
+	it("ignores malformed branch entries when deciding whether Plan mode is active", async () => {
+		const { handler, announce } = setup();
+		const ctx = createMockCtx({ sessionId: "s1" });
+		await handler("session_start")({}, ctx);
+		await announce(approval("p1"));
+		const transition = (details: unknown) => ({
+			type: "message",
+			message: { role: "custom", customType: "plan-mode-transition", details },
+		});
+		const branch: unknown[] = [
+			// Walked last-to-first: each of these must be skipped, never read as "planning".
+			transition({ version: 2, mode: "plan" }),
+			transition({ version: 1, mode: "unknown" }),
+			{ type: "custom", customType: "plan-mode-state", data: { enabled: "yes" } },
+			{ type: "custom", customType: "plan-mode-state" },
+			"not an entry",
+			null,
+		].reverse();
+		vi.mocked(ctx.sessionManager.getBranch).mockImplementation(() => branch as never);
+		const result = await handler("agent_before_settle")(
+			{ outcome: "completed", entries: [], continue: false, context: { contextMessages: [] } },
+			ctx,
+		);
+		expect(result).toMatchObject({ continue: true });
+	});
+
+	it("does not expand a plan reminder once no plan item is open", async () => {
+		const { handler, announce, call } = setup();
+		const ctx = createMockCtx({ sessionId: "s1" });
+		await handler("session_start")({}, ctx);
+		await announce(approval("p1", "s1", "# T\n\n## Work\n- one\n"));
+		for (const task of getState("s1").tasks)
+			await call(ctx, { action: "update", id: task.id, status: "completed", evidence: "ok" });
+		expect(getState("s1").tasks.every((task) => task.status === "completed")).toBe(true);
+		const marker = { role: "custom", customType: PLAN_REMINDER_MESSAGE_TYPE, content: PLAN_REMINDER_MARKER };
+		expect(await handler("context")({ messages: [{ role: "user", content: "go" }, marker] }, ctx)).toBeUndefined();
+	});
+});
+
+describe("formatPlanReminder — sparse state", () => {
+	it("falls back to a generic title and zero counts without a plan", () => {
+		const text = formatPlanReminder({ tasks: [], nextId: 1 });
+		expect(text).toContain('the approved plan "plan" still has 0/0 items open');
+		expect(text).not.toContain("Deferred plan items");
+	});
+
+	it("omits the group tag for ungrouped items and an empty reason for reasonless deferrals", () => {
+		const text = formatPlanReminder({
+			tasks: [
+				{ id: 1, subject: "open one", status: "pending", source: "plan" },
+				{ id: 2, subject: "later one", status: "deferred", source: "plan", planGroup: "G" },
+			],
+			nextId: 3,
+			plan: { id: "p", title: "T" },
+		});
+		expect(text).toContain("- #1 open one\n");
+		expect(text).toContain("Deferred plan items (tell the user):\n- #2 [G] later one -- ");
+		expect(text.endsWith("later one -- ")).toBe(true);
 	});
 });

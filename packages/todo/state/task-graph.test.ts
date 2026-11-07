@@ -40,3 +40,10 @@ describe("deriveBlocks", () => {
 		expect(blocks.get(3)).toBeUndefined();
 	});
 });
+
+describe("detectCycle — dangling blockers", () => {
+	it("ignores a blocker id that is not in the list", () => {
+		const tasks = [task({ id: 1, subject: "a", blockedBy: [99] })];
+		expect(detectCycle(tasks, 1, [])).toBe(false);
+	});
+});

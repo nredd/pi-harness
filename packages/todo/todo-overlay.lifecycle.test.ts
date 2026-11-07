@@ -168,6 +168,12 @@ describe("TodoOverlay — lifecycle", () => {
 		expect(ui2.setWidget as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
 	});
 
+	it("dispose() before any ui context is bound is a harmless reset", () => {
+		const overlay = new TodoOverlay();
+		expect(() => overlay.dispose()).not.toThrow();
+		expect(overlay.isRegistered()).toBe(false);
+	});
+
 	it("dispose() unregisters the widget and clears ctx; later update() without setUICtx is a no-op", async () => {
 		const { captured } = registerTool();
 		await seed(captured, [{ action: "create", subject: "a" }]);

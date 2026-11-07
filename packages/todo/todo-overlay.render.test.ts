@@ -226,6 +226,63 @@ describe("TodoOverlay — scrollable window", () => {
 		expect(widget.render(200).join("\n")).toContain("t22");
 	});
 
+	it("lets the wheel fall through when collapsed, with zero delta, or with no delta", async () => {
+		const { widget, overlay } = await setup(creates(30));
+		widget.render(200);
+		expect(wheel(widget, 0)).toBeUndefined();
+		const noDelta = (widget as unknown as { handleMouse: Mouse }).handleMouse({
+			type: "wheel",
+			button: "none",
+			y: 3,
+		});
+		expect(noDelta).toBeUndefined();
+		overlay.toggleCollapse();
+		expect(wheel(widget, 5)).toBeUndefined();
+		overlay.toggleCollapse();
+		expect(widget.render(200).join("\n")).not.toContain("↑");
+	});
+
+	it("renders nothing once every todo is cleared", async () => {
+		const { widget, tool } = await setup(creates(2));
+		expect(widget.render(200)).not.toEqual([]);
+		await tool.execute?.(
+			"tc",
+			{ action: "clear" } as never,
+			undefined as never,
+			undefined as never,
+			createMockCtx() as never,
+		);
+		expect(widget.render(200)).toEqual([]);
+	});
+
+	it("leaves the window alone when the in_progress task is already visible or stops being active", async () => {
+		const { widget, tool } = await setup(creates(30));
+		const run = (params: Record<string, unknown>) =>
+			tool.execute?.("tc", params as never, undefined as never, undefined as never, createMockCtx() as never);
+		await run({ action: "update", id: 6, status: "in_progress" });
+		const visible = widget.render(200);
+		expect(visible.join("\n")).not.toContain("↑");
+		expect(visible[1]).toContain("t1");
+		await run({ action: "update", id: 6, status: "completed", evidence: "ok" });
+		expect(widget.render(200)[1]).toContain("t1");
+	});
+
+	it("keeps a scrolled window when the new in_progress task is already inside it", async () => {
+		const { widget, tool } = await setup(creates(30));
+		widget.render(200);
+		wheel(widget, 5);
+		await tool.execute?.(
+			"tc",
+			{ action: "update", id: 8, status: "in_progress" } as never,
+			undefined as never,
+			undefined as never,
+			createMockCtx() as never,
+		);
+		const lines = widget.render(200);
+		expect(lines[1]).toContain("↑ 5 above");
+		expect(lines.join("\n")).toContain("t8");
+	});
+
 	it("counts every todo in the heading, completed or not", async () => {
 		const actions = creates(30);
 		for (let i = 1; i <= 4; i++) actions.push({ action: "update", id: i, status: "completed", evidence: "ok" });

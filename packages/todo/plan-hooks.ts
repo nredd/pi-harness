@@ -382,7 +382,8 @@ export function registerPlanHooks(
 			persistenceVersion: 1,
 			tasks: result.state.tasks,
 			nextId: result.state.nextId,
-			...(result.state.plan ? { plan: result.state.plan } : {}),
+			// A changed approval always carries the plan it installed.
+			plan: result.state.plan!,
 		};
 		pi.appendEntry(STATE_ENTRY_TYPE, snapshot);
 		await onStateChange(payload.sessionId);

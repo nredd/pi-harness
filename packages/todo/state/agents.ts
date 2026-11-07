@@ -277,9 +277,9 @@ function sequenceField(value: unknown): number | undefined {
  * decides when both carry it, so a sibling spawned while the owner ran but dequeued only
  * by its settle is no retry; otherwise this tracker's order of first events decides.
  */
-function spawnedAfterSettle(candidate: AgentEntry, owner: AgentEntry): boolean {
+function spawnedAfterSettle(candidate: AgentEntry, owner: AgentEntry, ownerSettledAt: number): boolean {
 	if (candidate.spawnSeq !== undefined && owner.settleSeq !== undefined) return candidate.spawnSeq > owner.settleSeq;
-	return candidate.firstSeenAt > (owner.settledAt ?? Number.POSITIVE_INFINITY);
+	return candidate.firstSeenAt > ownerSettledAt;
 }
 
 /**
@@ -312,8 +312,9 @@ function agentEntryFor(sessionId: string, owner: string | undefined): AgentEntry
 	if (!exact) return byBase[0];
 	// A queued exact match may never run; a retry spawned after it that already settled says more.
 	if (exact.state === "queued") return latestSettled(byBase.filter((entry) => spawnedAfter(entry, exact))) ?? exact;
-	if (exact.settledAt === undefined) return exact;
-	const retries = byBase.filter((entry) => spawnedAfterSettle(entry, exact));
+	const exactSettledAt = exact.settledAt;
+	if (exactSettledAt === undefined) return exact;
+	const retries = byBase.filter((entry) => spawnedAfterSettle(entry, exact, exactSettledAt));
 	retries.sort((a, b) => b.startedAt - a.startedAt);
 	return retries[0] ?? exact;
 }
