@@ -144,7 +144,21 @@ mocks. Vite's module runner pins `import.meta.main` false, so the dispatches of 
 `dispatch(isMain)` whose arms are called directly. A test of ordinary, member and look-alike `require`
 calls covers the non-import call, and the syntax-error location no longer branches on the diagnostic's
 optional `fileName`, since diagnostics are requested per file. The import-audit signal enforces zero uncovered lines, functions, and branches on darwin
-and linux. `import-audit` and `probes` are in the goal and enforced at 0/0. Since #377 `probes` measures every
+and linux. Since #380 it also owns all 15 Vitest producer configurations (`packages/*/vitest*.config.ts`,
+`packages/todo/.vitest.config.ts`, `integration/{inprocess,probes,providers}/vitest.config.ts` and
+`scripts/vitest.config.ts`), and the pending `coverage-configurations` package is deleted (reclassified
+file by file). Vitest loads a config outside its own instrumentation, so `scripts/coverage-configs.test.ts`
+imports each one as a module and asserts the resolved `test.coverage`: provider, the `text` + `lcov`
+reporters, `reportsDirectory`, `reportOnFailure`, and `include`/`exclude` equal to the config's own policy
+entry. A second pass serves a synthetic policy giving every package a distinct inventory, so a config
+reading another package's key fails, and a third serves a policy without the package, which must make the
+load throw. These replace the source-parsing `test_primary_configs_report_owned_source_on_failure` in
+`scripts/tests/test_coverage_producers.py`, so each is asserted once. A new Vitest config must be added to
+the suite's producer table (its first test fails otherwise), and reaches the report through the policy
+glob. The signal's Vitest root is now the repository (`scripts/vitest.config.ts` sets `root` and
+`scripts/`-prefixed paths), so the policy entry has root `.` and the report is
+`scripts/coverage/primary/lcov.info`: LCOV paths are relative to the Vitest root and must reach
+configurations outside `scripts/`. The CI artifact path is unchanged. `import-audit` and `probes` are in the goal and enforced at 0/0. Since #377 `probes` measures every
 executable probe in process under `check-probes`: `transcript-types.ts`, `render.ts` (its
 `/harness-probe` command against a recording TUI), the `pi -e` extensions `latency.ts`,
 `session-kit-child-scope.ts` and `stack-resources.ts` registered against recording `ExtensionAPI`
@@ -329,8 +343,7 @@ mocked argument/path/error tests still run. Existing native/platform checks rema
 full Vitest suite on Bun through `scripts/run-vitest.ts bun`, not a native `bun test` subset.
 Failed-run reports are diagnostic artifacts only and never establish budgets.
 
-Producer configurations are named **measurement-pending**
-inventories, not silently omitted. Python `scripts/*.py` (`python-scripts`) and
+Every Vitest producer configuration is measured since #380 (see the `import-audit` paragraph above). Python `scripts/*.py` (`python-scripts`) and
 `integration/harness/*.py` (`python-harness`) are measured by the one Python gate recipe `PY_GATE` in
 the `Makefile`: ruff, ty, then `pytest -n auto --dist loadfile --cov=<project root>` writing LCOV to
 `scripts/coverage/python/lcov.info` and `integration/coverage/python/lcov.info`. The path is
@@ -367,8 +380,12 @@ added or changed is 0/0:
 
 | Signal | darwin lines/functions | linux lines/functions |
 | --- | --- | --- |
-| `python-scripts/primary` | 284/11 | 285/11 |
+| `python-scripts/primary` | 0/0 | 0/0 |
 | `python-harness/primary` | 628/69 | 628/69 |
+
+`python-scripts/primary` also caps branches at 1 on each OS (#419): the one remaining partial arc is the
+`rerun` return in `scripts/runner_rescue.py`. Both OSes measured 0/0/1 in hosted CI run `42322348786` on commit
+`0d728f60` (`coverage accounting` on `owned (ubuntu-24.04)` and `owned (macos-14)`).
 
 `python-scripts` was measured on the final tree of PR #323 from its own hosted artifacts, `--measure` on each:
 darwin from `coverage-macos-14`, linux from `coverage-ubuntu-24.04`, both run `41718792020` on commit `6912a7b5`.
@@ -376,7 +393,8 @@ After rebasing onto `2862cd80` (#332), main's `harness/tmux.py`/`harness/rpc.py`
 lowered `python-harness` by 8 lines and 1 function. Re-measured on commit `3be0ba22`: linux from
 `coverage-ubuntu-24.04` of run `41749183215`, darwin from a local macOS 27.2 arm64 `make check-integration`
 (Python 3.14.9), which also reproduced `python-scripts` 284/11 and earlier matched the hosted darwin counts.
-Both OSes gave 628/69. `python-scripts` is one line higher on linux than on darwin, so its floors differ per OS.
+Both OSes gave 628/69. At that point `python-scripts` was one line higher on linux than on darwin (285 vs 284);
+both are now 0 lines (#419).
 An earlier run (`41702044725`, before the first rebase) is not a source: it predates `harness/install_paths.py`
 and `harness/release_gate.py`.
 Hosted wall time of the pytest halves with `-n auto --dist loadfile`, `macos-14`: `scripts` 116s and
@@ -386,8 +404,8 @@ A repository-wide regression scan and the CLI audit tracked plus untracked nonig
 Python and executable JavaScript (`.mjs`, `.cjs`, `.js`) source using the same Git-listed traversal. Each executable file must be included in a measured/pending inventory or have an explicit
 reasoned exclusion. Conventional test files are out of scope; arbitrary new implementation files
 are not. There is no implicit `*.config.*` exemption: executable tool configurations need an
-explicit owned/pending declaration or reasoned verification classification. Existing producer
-configurations remain pending/report-only in the policy. All inventories are expanded and
+explicit owned/pending declaration or reasoned verification classification. The producer
+configurations are owned by `import-audit` (#380). All inventories are expanded and
 validated; only eligible pending inventories block the final target flip. Python is outside this
 eight-package zero target; its two measured signals are the enforced `ratchet` floors above.
 
@@ -562,6 +580,17 @@ to 0 on darwin and linux, primary and Bun ([branch caps](#branch-caps)).
 deletion of defaults and fallbacks no caller could reach (`planTitle`'s heading fallback, the bullet
 content-indent default, `withTrailingSpacer`'s empty guard, the `settledAt` default in agent retry
 matching, `isValidCollapseKeySpec`'s `?? ""`). Measured on darwin; hosted CI confirms linux and WSL2.
+
+`plan-mode` branch caps are 0 on primary and Bun since #407: tests for every reachable branch in the
+menus, settings, export, question and launch code, and deletion of the guards and defaults no caller
+could reach (the `codePointAt(0) ?? 0` fallbacks, `safeModelReference`'s `"unknown"` and
+`"configured model"` arms, `itemId ? ... : undefined` lookups on Kit's always-present item id, the
+`settings.ts` `document ?? {}` defaults, the `plan_mode_question` single-question and answer-set
+re-checks). The handler-level pre-checks and the `value ?? ""` export default stay: they guard the
+Kit contract, so `package-menu-contract.test.ts` drives them by adapter fault injection. The
+post-await `isCurrent` guard in the active-implementation Settings handler duplicates Kit's own
+check, and `planFromCompletionDetails`' `normalized.ok` ternary yields `undefined` either way; their
+tests cover the branch but cannot fail without it. Measured on darwin; hosted CI confirms linux and WSL2.
 
 `inprocess` is `enforced` at 0/0 lines/functions on darwin and linux for both `primary` and `bun`
 since #376, with nothing excluded. Its inventory is every fixture module the suites run:

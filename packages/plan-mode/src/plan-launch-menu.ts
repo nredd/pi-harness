@@ -97,7 +97,7 @@ export async function showPlanLaunchMenu(ctx: ExtensionContext, options: PlanLau
       },
       "toggle-tool": async ({ itemId, selected, signal }) => {
         if (signal.aborted || !options.isCurrent()) return { kind: "rejected" };
-        const tool = itemId ? toolsByItemId.get(itemId) : undefined;
+        const tool = toolsByItemId.get(itemId);
         if (!tool || tool.disabled) return { kind: "rejected" };
         if (selected) selectedNames.add(tool.name);
         else selectedNames.delete(tool.name);

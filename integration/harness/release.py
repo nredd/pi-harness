@@ -682,8 +682,7 @@ def redact_diagnostic(text: str) -> str:
     # literal/encoded). Each literal pass is linear, cannot grow
     # text, and cannot create any password across a replacement boundary.
     for password in sorted(passwords, key=lambda value: (-len(value), value)):
-        if password:
-            text = text.replace(password, mask)
+        text = text.replace(password, mask)
     return text
 
 

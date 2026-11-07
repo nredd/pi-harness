@@ -807,6 +807,20 @@ def test_build_metadata_records_versions_and_unavailable_queries(
     assert metadata.build_command[-3:] == ["linux-x64", "--out", str(binary.parent.parent)]
 
 
+def test_capture_inputs_ignores_a_lock_that_does_not_name_the_memory_package(
+    tmp_path: Path, inputs: tuple[Path, Path, Path]
+) -> None:
+    """An installed lock without a `pi-memory` entry contributes no identity file."""
+    binary, core, evidence = inputs
+    box = build_sandbox(tmp_path / "sandbox")
+    lock = box.agent_dir / "npm/package-lock.json"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(json.dumps({"packages": {"node_modules/unrelated": {"token": "DO NOT COPY"}}}))
+    files = diag.capture_inputs(box, binary, core, evidence)
+    assert "packages/pi-memory/npm-lock.json" not in files
+    assert not any(b"DO NOT COPY" in contents for contents in files.values())
+
+
 def test_replay_memory_skips_a_stack_without_the_memory_package(tmp_path: Path) -> None:
     """An installed memory entrypoint that no `npm:pi-memory@` declaration loads is never rewritten."""
     box = build_sandbox(tmp_path / "sandbox")

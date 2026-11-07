@@ -210,12 +210,25 @@ def test_root_script_helpers_are_measured_by_import_audit_at_zero() -> None:
     """
     cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
     audit = cfg.packages["import-audit"]
-    assert inventory(ROOT, audit) == {
-        "check-biome-paths.mjs",
-        "import_audit.ts",
-        "router_contract.mjs",
-        "run-vitest.ts",
+    configs = {
+        path.relative_to(ROOT).as_posix()
+        for pattern in [
+            "packages/*/vitest*.config.ts",
+            "packages/todo/.vitest.config.ts",
+            "integration/*/vitest.config.ts",
+            "scripts/vitest.config.ts",
+        ]
+        for path in ROOT.glob(pattern)
     }
+    assert inventory(ROOT, audit) == {
+        "scripts/check-biome-paths.mjs",
+        "scripts/import_audit.ts",
+        "scripts/router_contract.mjs",
+        "scripts/run-vitest.ts",
+        *configs,
+    }
+    assert len(configs) == 15, configs
+    assert "coverage-configurations" not in cfg.packages
     assert audit.goal == "100-percent"
     primary = audit.signals["primary"]
     assert primary.enforcement == "enforced"

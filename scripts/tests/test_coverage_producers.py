@@ -23,69 +23,6 @@ NATIVE_BUN_TEST = re.compile(r"(?:\w+=\S+ )*bun test ")
 NATIVE_BUN_PACKAGES = {"session-kit", "subagents"}
 
 
-def test_primary_configs_report_owned_source_on_failure() -> None:
-    """Bind each primary signal to one Vitest config that reports text and LCOV even on failure.
-
-    Parameters:
-        None.
-    Returns:
-        None: Every measured primary signal has exactly one producing configuration with both
-            reporters and `reportOnFailure`.
-    Raises:
-        AssertionError: A producer is missing, duplicated or drops a reporter or failure reporting.
-    """
-    policy = json.loads((ROOT / "coverage/policy.json").read_text())
-    for name, package in policy["packages"].items():
-        primary = package["signals"].get("primary")
-        if not primary or name.startswith("python-"):
-            continue
-        directory = ROOT / package["root"]
-        report_directory = Path(primary["report"]).parent.as_posix()
-        configs = [
-            candidate
-            for candidate in directory.glob("*vitest*.config.ts")
-            if f'reportsDirectory: "{report_directory}"' in candidate.read_text()
-        ]
-        assert len(configs) == 1, configs
-        text = configs[0].read_text()
-        assert "reportOnFailure: true" in text
-        assert '"lcov"' in text
-        assert '"text"' in text
-        assert reads_policy(text, name), configs[0]
-
-
-def reads_policy(text: str, name: str) -> bool:
-    """Report whether a Vitest config takes its coverage scope from its own policy entry.
-
-    Parameters:
-        text (str): Vitest config source.
-        name (str): Package key in `coverage/policy.json`.
-    Returns:
-        bool: True when the config looks up `name` and passes `owned` and `exclusions` through.
-    Raises:
-        None.
-    """
-    key = f'.packages["{name}"]' in text or re.search(rf"\.packages\.{re.escape(name)}\b", text)
-    return bool(key) and "include: owned," in text and "exclude: exclusions.map(" in text
-
-
-def test_reads_policy_rejects_literal_and_foreign_inventories() -> None:
-    """Prove the policy-read check fails a literal include list or another package's entry.
-
-    Parameters:
-        None.
-    Returns:
-        None: Only the config reading its own key with both fields passes.
-    Raises:
-        AssertionError: The check accepts a config that does not read its own policy entry.
-    """
-    config = (ROOT / "packages/preset/vitest.config.ts").read_text()
-    assert reads_policy(config, "preset")
-    assert not reads_policy(config.replace("include: owned,", 'include: ["lib/*.ts"],'), "preset")
-    assert not reads_policy(config.replace("exclude: exclusions.map(", "exclude: [].map("), "preset")
-    assert not reads_policy(config, "todo")
-
-
 LAUNCHER = "node ../../scripts/run-vitest.ts bun"
 # Package-specific Vitest options only; the launcher owns every coverage flag.
 LAUNCHER_PACKAGE_ARGS = {

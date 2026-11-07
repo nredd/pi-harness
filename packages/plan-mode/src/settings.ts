@@ -119,10 +119,10 @@ export type PlanModeSettingsLoadResult =
   | { kind: "loaded"; settings: PlanModeSettings; notice?: string };
 
 type SettingsDocument = Record<string, unknown>;
-type SettingsSnapshot = {
-  result: PlanModeSettingsLoadResult;
-  document?: SettingsDocument;
-};
+/** Only a loaded snapshot carries the parsed document, so its presence says the file loaded. */
+type SettingsSnapshot =
+  | { result: Exclude<PlanModeSettingsLoadResult, { kind: "loaded" }>; document?: undefined }
+  | { result: Extract<PlanModeSettingsLoadResult, { kind: "loaded" }>; document: SettingsDocument };
 
 const mutationQueues = new Map<string, Promise<void>>();
 
@@ -225,7 +225,8 @@ function normalizePlanExportPath(value: unknown) {
     normalized.length > MAX_PLAN_EXPORT_PATH_LENGTH ||
     !/[^@\s]/u.test(normalized) ||
     [...normalized].some((character) => {
-      const codePoint = character.codePointAt(0) ?? 0;
+      // Every range below is in the BMP, so the first UTF-16 unit decides.
+      const codePoint = character.charCodeAt(0);
       return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
     })
   ) {
@@ -266,7 +267,8 @@ function normalizeTrustedDirectories(value: unknown): string[] | undefined {
       !directory ||
       directory.length > MAX_PLAN_EXPORT_PATH_LENGTH ||
       !(directory === "~" || directory.startsWith("~/") || isAbsolute(directory)) ||
-      [...directory].some((character) => (character.codePointAt(0) ?? 0) <= 0x1f || character === "\u007f")
+      // Both ranges are in the BMP, so the first UTF-16 unit decides.
+      [...directory].some((character) => character.charCodeAt(0) <= 0x1f || character === "\u007f")
     ) {
       return undefined;
     }
@@ -394,7 +396,7 @@ async function readSettingsDocumentForUpdate(
   legacySettingsPath: string | undefined,
 ): Promise<SettingsDocument> {
   const canonical = await readSettingsSnapshot(settingsPath);
-  if (canonical.result.kind === "loaded") return canonical.document ?? {};
+  if (canonical.document) return canonical.document;
   if (canonical.result.kind === "invalid") {
     throw invalidSettingsError(settingsPath, canonical.result.reason);
   }
@@ -402,7 +404,7 @@ async function readSettingsDocumentForUpdate(
 
   const legacy = await readSettingsSnapshot(legacySettingsPath);
   const raced = await readSettingsSnapshot(settingsPath);
-  if (raced.result.kind === "loaded") return raced.document ?? {};
+  if (raced.document) return raced.document;
   if (raced.result.kind === "invalid") {
     throw invalidSettingsError(settingsPath, raced.result.reason);
   }
@@ -434,7 +436,8 @@ async function readSettingsSnapshot(settingsPath: string): Promise<SettingsSnaps
 }
 
 async function readSettingsContents(settingsPath: string): Promise<string> {
-  const flags = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0);
+  // Bitwise OR reads a flag this platform lacks (Windows has no O_NONBLOCK/O_NOFOLLOW) as 0.
+  const flags = constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW;
   const handle = await open(settingsPath, flags);
   try {
     const stats = await handle.stat();
@@ -498,7 +501,7 @@ function isSettingsDocument(value: unknown): value is SettingsDocument {
 
 async function pathExists(path: string) {
   try {
-    const handle = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+    const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
     await handle.close();
     return true;
   } catch (error: unknown) {

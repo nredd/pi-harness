@@ -56,7 +56,7 @@ check-providers:  ## Synthetic providers and auth preloads Biome + strict tsc, t
 	cd integration/providers && node ../../scripts/run-vitest.ts node --coverage
 
 check-import-audit:  ## Import-audit helper Biome + strict tsc, then Vitest against the real TypeScript parser
-	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json scripts/check-biome-paths.mjs scripts/check-biome-paths.test.mjs scripts/import_audit.ts scripts/import_audit.test.ts scripts/router_contract.mjs scripts/router_contract.test.mjs scripts/run-vitest.ts scripts/run-vitest.test.ts scripts/vitest.config.ts
+	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json scripts/check-biome-paths.mjs scripts/check-biome-paths.test.mjs scripts/coverage-configs.test.ts scripts/import_audit.ts scripts/import_audit.test.ts scripts/router_contract.mjs scripts/router_contract.test.mjs scripts/run-vitest.ts scripts/run-vitest.test.ts scripts/vitest.config.ts
 	node --check scripts/router_contract.mjs
 	node_modules/.bin/tsc -p scripts/tsconfig.import-audit.json
 	cd scripts && node run-vitest.ts node --coverage

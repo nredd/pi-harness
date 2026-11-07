@@ -7,9 +7,11 @@ import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { initTheme, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AgentManager } from "../src/agent-manager.js";
 import { getAgentConfig } from "../src/agent-types.js";
 import { createSubagentsExtension } from "../src/index.js";
 import type { AgentRecord } from "../src/types.js";
+import { isWorktreeIsolationEnabled, setWorktreeIsolationEnabled } from "../src/worktree.js";
 import { type BootedPi, ctx, type Hermetic, hermeticDir, makePi, startSession } from "./helpers/boot-extension.js";
 import { FakeClock } from "./helpers/fake-clock.js";
 import { answer, barrier, calls } from "./helpers/scenario-session.js";
@@ -157,6 +159,48 @@ describe("menu conversation viewer", () => {
       if (action === "stop") expect(registry.getRecord(id)?.status).toBe("stopped");
       else expect(output.content[0].text).toContain("Original answer.");
     } finally { release.resolve(); await pending; await registry.waitForAll(); }
+  });
+
+  describe("running agent picker edges", () => {
+    async function startHeldChild() {
+      const entered = barrier();
+      const release = barrier();
+      provider.setResponses([async () => { entered.resolve(); await release.promise; return answer("Held answer."); }]);
+      const registry = Reflect.get(globalThis, Symbol.for("pi-subagents:manager")) as {
+        waitForAll(): Promise<void>; getRecord(id: string): AgentRecord | undefined;
+      };
+      const started = await boot.tools.get("Agent").execute("held", {
+        subagent_type: "general-purpose", description: "Held private child", prompt: "Begin", run_in_background: true,
+      }, undefined, undefined, context);
+      await entered.promise;
+      const finish = async () => { release.resolve(); await registry.waitForAll(); };
+      return { id: started.details.agentId as string, registry, finish };
+    }
+
+    it("says there is no session to open for a running agent that has none", async () => {
+      const { id, registry, finish } = await startHeldChild();
+      try {
+        registry.getRecord(id)!.session = undefined;
+        selections = ["Running agents", "first", undefined, undefined];
+        await command();
+        expect(notify).toHaveBeenCalledWith("Agent is expired — no session available.", "info");
+      } finally { await finish(); }
+    });
+  });
+
+  it.each([true, false])("offers the isolation field to the generator only when worktrees are on (%s)", async enabled => {
+    const previous = isWorktreeIsolationEnabled();
+    setWorktreeIsolationEnabled(enabled);
+    const prompts: string[] = [];
+    const spawnAndWait = vi.spyOn(AgentManager.prototype, "spawnAndWait").mockImplementation(async (_pi, _ctx, _type, prompt) => {
+      prompts.push(prompt);
+      return { id: "generator", record: { status: "completed" } as AgentRecord };
+    });
+    try {
+      await command();
+    } finally { setWorktreeIsolationEnabled(previous); spawnAndWait.mockRestore(); }
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0].includes('isolation: <"worktree"')).toBe(enabled);
   });
 
   it.each([false, true])("cycles and persists markdown with real write failure=%s", async fail => {

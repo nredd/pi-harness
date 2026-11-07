@@ -29,6 +29,8 @@ export interface OutboxMessage {
   details: NotificationDetails;
   /** Agents whose whole result the content carries: sending it reads their result. */
   delivered?: string[];
+  /** Agents whose whole result the content carries, failures included: the parent has seen it, though it stays unread in FleetView. */
+  noticed?: string[];
 }
 
 /**
@@ -132,9 +134,11 @@ function combine(messages: OutboxMessage[]): OutboxMessage {
   if (messages.length === 1) return messages[0];
   const [first, ...rest] = messages.flatMap(({ details: { others, ...own } }) => [own, ...(others ?? [])]);
   const delivered = messages.flatMap(m => m.delivered ?? []);
+  const noticed = messages.flatMap(m => m.noticed ?? []);
   return {
     content: `${messages.length} background tasks finished.\n\n${messages.map(m => m.content).join("\n\n")}`,
     details: { ...first, others: rest },
     ...(delivered.length > 0 ? { delivered } : {}),
+    ...(noticed.length > 0 ? { noticed } : {}),
   };
 }
