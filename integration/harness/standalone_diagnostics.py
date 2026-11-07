@@ -588,7 +588,7 @@ def main() -> int:
         )
     if opts.action == "collect-build-failure":
         published = collect_build_failure(
-            opts.evidence.resolve(), opts.first.resolve(), opts.second.resolve(), opts.output.resolve()
+            opts.evidence.absolute(), opts.first.absolute(), opts.second.absolute(), opts.output.absolute()
         )
         if published and opts.github_output is not None:
             with opts.github_output.open("a") as stream:

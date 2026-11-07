@@ -682,7 +682,7 @@ jobs:
               if [ -e "$evidence/$name" ]; then mv "$evidence/$name" "$evidence/first/$name"; fi
             done
             if [ -f "$RUNNER_TEMP/pi-standalone/${{ matrix.platform }}/pi" ]; then
-              cp "$RUNNER_TEMP/pi-standalone/${{ matrix.platform }}/pi" "$RUNNER_TEMP/pi-first-build"
+              mv "$RUNNER_TEMP/pi-standalone/${{ matrix.platform }}/pi" "$RUNNER_TEMP/pi-first-build"
             fi
           }
           build_standalone || { keep_first_build; exit 1; }

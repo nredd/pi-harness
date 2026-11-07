@@ -1063,6 +1063,22 @@ def test_collect_build_failure_publishes_both_builds(tmp_path: Path) -> None:
     assert "first/pi" in (output / "SHA256SUMS").read_text()
 
 
+def test_collect_build_failure_refuses_a_symlinked_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CLI does not resolve a symlinked executable into a trusted regular file."""
+    evidence, first, second = _failed_build(tmp_path)
+    target = tmp_path / "elsewhere"
+    target.write_bytes(b"outside")
+    second.unlink()
+    second.symlink_to(target)
+    argv = ["diagnostic", "collect-build-failure", "--evidence", str(evidence), "--first", str(first)]
+    argv += ["--second", str(second), "--output", str(tmp_path / "out")]
+    monkeypatch.setattr(diag.sys, "argv", argv)
+    assert diag.main() == 0
+    assert not (tmp_path / "out").exists()
+
+
 def test_collect_build_failure_skips_missing_files(tmp_path: Path) -> None:
     """A build that died early leaves only what exists, not fabricated files."""
     evidence = tmp_path / "evidence"
