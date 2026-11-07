@@ -2283,9 +2283,10 @@ def rollback(layout: Layout, *, anchors: AnchoredStore | None = None) -> list[st
                         content = restore_backup(journal, step, index)
                         restored.append(str(step.target))
                     else:
+                        # An aside (the only way to reach here after a restore) requires a backup.
+                        assert step.backup is not None
                         finish_aside(journal, step, index)
-                        if step.backup is not None:
-                            content = live_content(step.target)
+                        content = live_content(step.target)
                     identity = step.live_identity() if step.backup is not None else None
                     journal.steps[index] = replace(
                         step, pending=False, original=identity, restored=True, restoring=content, aside=None
