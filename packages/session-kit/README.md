@@ -84,6 +84,9 @@ Plan mode freezes its tool selection at `/plan`, so it reaches `monitor_read` on
 - A run that settles with monitors running shows an info notice naming each one and what wakes the parent (the
   `match` with terminal controls stripped), e.g.
   `Run ended with 2 monitors running, armed: m1 "ci" on /PASS|FAIL/ or exit, m2 "log" on exit`.
+- Each monitor emits `session-kit:monitor:started` and, once, `session-kit:monitor:stopped` (exit, timeout, stop or
+  session shutdown) on `pi.events` with `{ sessionId, id, name }`. The todo package reads them to tell whether a
+  wake is armed at a settle; no package imports the other.
 - Output batches every two seconds into the bounded ring buffer (with dropped-line reporting). Passive batches neither start turns nor create transcript/model-context entries; call `monitor_read` to fetch them. A regex match, natural exit, timeout or `wake: true` emits one compact visible wake with a cursor after the output the model last saw through a wake or read, not a replay of buffered output. A bounded batch preserves its first and latest dropped matching lines as wake evidence even if later output evicts them from the ring.
 - Children run in process groups: SIGTERM, then SIGKILL. Exit cleanup and pidfiles cover orderly quit
   and later recovery after SIGKILL. Sweeps reauthenticate the leader after enumerating members;

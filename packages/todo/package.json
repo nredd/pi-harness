@@ -44,6 +44,8 @@
     "README.md",
     "state/invariants.ts",
     "state/agents.ts",
+    "state/lineage.ts",
+    "state/monitors.ts",
     "state/i18n-bridge.ts",
     "state/plan.ts",
     "state/replay.ts",

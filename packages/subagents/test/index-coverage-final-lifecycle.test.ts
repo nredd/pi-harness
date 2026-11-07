@@ -24,7 +24,7 @@ import { FakeClock } from "./helpers/fake-clock.js";
 import { answer, barrier, calls } from "./helpers/scenario-session.js";
 
 interface Registry { waitForAll(): Promise<void>; getRecord(id: string): AgentRecord | undefined }
-interface Bound { boot: BootedPi; context: ExtensionCommandContext; registry: Registry; stopped: boolean }
+interface Bound { bus: EventEmitter; boot: BootedPi; context: ExtensionCommandContext; registry: Registry; stopped: boolean }
 let env: Hermetic;
 let provider: FauxProviderRegistration;
 let registry: ModelRegistry;
@@ -58,7 +58,7 @@ afterEach(async () => {
   } finally { provider.unregister(); Reflect.deleteProperty(globalThis, managerKey); resetBudgetForTests(); env.restore(); }
 });
 
-async function bind(ui: Record<string, unknown> = {}, flags: Record<string, boolean | string> = {}, competingWorkflow = false): Promise<Bound> {
+async function bind(ui: Record<string, unknown> = {}, flags: Record<string, boolean | string> = {}, competingWorkflow = false, sessionStart?: { reason: string; previousSessionFile?: string }): Promise<Bound> {
   const boot = makePi(flags); const bus = new EventEmitter();
   boot.pi.getAllTools = vi.fn(() => [...boot.tools.values()]);
   if (competingWorkflow) boot.pi.registerTool({ name: "Workflow", description: "Fixture competing orchestrator" });
@@ -73,18 +73,19 @@ async function bind(ui: Record<string, unknown> = {}, flags: Record<string, bool
     sessionManager: { getSessionId: () => "index-final-parent", getBranch: () => [], getSessionFile: () => sessionFile },
     ui: { ...ctx().ui, onTerminalInput: vi.fn(() => () => {}), getEditorText: () => "", ...ui },
   });
-  const bound = { boot, context, registry: Reflect.get(globalThis, managerKey) as Registry, stopped: false };
+  const bound = { bus, boot, context, registry: Reflect.get(globalThis, managerKey) as Registry, stopped: false };
   bindings.push(bound);
-  await startSession(boot.lifecycle, true, context);
+  if (sessionStart) await boot.lifecycle.get("session_start")?.({ type: "session_start", ...sessionStart }, context);
+  else await startSession(boot.lifecycle, true, context);
   return bound;
 }
-async function shutdown(bound: Bound, reason: "reload" | "quit") {
+async function shutdown(bound: Bound, reason: "reload" | "quit" | "fork") {
   await bound.boot.lifecycle.get("session_shutdown")?.({ type: "session_shutdown", reason }, bound.context);
   bound.stopped = true;
 }
-async function spawn(bound: Bound, prompt: string) {
+async function spawn(bound: Bound, prompt: string, name?: string) {
   const result = await bound.boot.tools.get("Agent").execute(`call-${prompt}`, {
-    subagent_type: "general-purpose", prompt, description: prompt, run_in_background: true,
+    subagent_type: "general-purpose", prompt, description: prompt, run_in_background: true, ...(name ? { name } : {}),
   }, undefined, undefined, bound.context);
   return result.details.agentId as string;
 }
@@ -552,6 +553,136 @@ describe("index retained defensive guards", () => {
     expect(bound.registry.getRecord(id)?.result).toBe("survivor result");
     // A rejected wait deliberately did not dispose; explicitly close the fixture's manager.
     await shutdown(bound, "quit");
+  });
+});
+
+describe("index detached survivor lifecycle events", () => {
+  const emitted = (bound: Bound, channel: string) =>
+    (bound.boot.pi.events.emit as ReturnType<typeof vi.fn>).mock.calls.filter(([c]) => c === channel).map(([, data]) => data);
+
+  it("re-announces a live survivor as a waking started event on the reloaded session", async () => {
+    const hold = heldResponse("survivor result"); provider.setResponses([hold.response]);
+    const first = await bind(); const id = await spawn(first, "live survivor"); await hold.entered;
+    await shutdown(first, "reload");
+    const next = await bind();
+    const [event, ...rest] = emitted(next, "subagents:started");
+    expect(rest).toEqual([]);
+    expect(event).toMatchObject({ id, type: "general-purpose", wakesParent: true });
+    expect(event).not.toHaveProperty("spawnSeq");
+    expect(event).not.toHaveProperty("runSeq");
+    // A listener that bound after session_start asks again, once per request however often the session restarts.
+    next.boot.pi.events.emit("subagents:announce_survivors", {});
+    expect(emitted(next, "subagents:started")).toHaveLength(2);
+    await startSession(next.boot.lifecycle, true, next.context);
+    expect(next.bus.listenerCount("subagents:announce_survivors")).toBe(1);
+    // A shut-down instance leaves no listener on the shared bus.
+    await shutdown(next, "reload");
+    expect(next.bus.listenerCount("subagents:announce_survivors")).toBe(0);
+    hold.release();
+  });
+
+  it.each(["fork", "new", "resume", "reload"] as const)(
+    "announces a survivor registered under another file as other-session after %s, never as this session's own",
+    async (reason) => {
+      const parentFile = sessionFile;
+      const hold = heldResponse("parent result"); provider.setResponses([hold.response]);
+      const first = await bind(); const id = await spawn(first, "other survivor"); await hold.entered;
+      await shutdown(first, reason === "fork" ? "fork" : "reload");
+      // pi's switch: a different session file; teardown registered the survivor under the old one.
+      sessionFile = join(env.dir, `${reason}.jsonl`); writeFileSync(sessionFile, "");
+      const next = await bind({}, {}, false, { reason, previousSessionFile: parentFile });
+      expect(emitted(next, "subagents:started")).toEqual([]);
+      const [event, ...rest] = emitted(next, "subagents:other_session_survivor");
+      expect(rest).toEqual([]);
+      expect(event).toMatchObject({ id, type: "general-purpose", sessionFile: parentFile });
+      expect(event).not.toHaveProperty("wakesParent");
+      expect(event).not.toHaveProperty("spawnSeq");
+      next.boot.pi.events.emit("subagents:announce_survivors", {});
+      expect(emitted(next, "subagents:other_session_survivor")).toHaveLength(2);
+      expect(emitted(next, "subagents:started")).toEqual([]);
+      // Results stay with the original file's spool.
+      hold.release(); await first.registry.waitForAll(); await flush();
+      expect(emitted(next, "subagents:completed")).toEqual([]);
+      // A settled survivor is no longer announced.
+      next.boot.pi.events.emit("subagents:announce_survivors", {});
+      expect(emitted(next, "subagents:other_session_survivor")).toHaveLength(2);
+    },
+  );
+
+  it("announces own and other-session survivors together, each under its own channel, with no parent chain", async () => {
+    const parentFile = sessionFile;
+    const holdA = heldResponse("a result"); const holdB = heldResponse("b result");
+    provider.setResponses([holdA.response, holdB.response]);
+    const first = await bind(); const a = await spawn(first, "survivor a"); await holdA.entered;
+    await shutdown(first, "fork");
+    const forkFile = join(env.dir, "fork-b.jsonl"); writeFileSync(forkFile, "");
+    sessionFile = forkFile;
+    const second = await bind({}, {}, false, { reason: "fork", previousSessionFile: parentFile });
+    const b = await spawn(second, "survivor b"); await holdB.entered;
+    await shutdown(second, "reload");
+    // Reload in B: B's own survivor is armed, A's (a fork-of-a-fork ancestor) is another session's.
+    const third = await bind({}, {}, false, { reason: "reload", previousSessionFile: forkFile });
+    expect(emitted(third, "subagents:started")).toMatchObject([{ id: b, wakesParent: true }]);
+    expect(emitted(third, "subagents:other_session_survivor")).toMatchObject([{ id: a, sessionFile: parentFile }]);
+    holdA.release(); holdB.release();
+  });
+
+  it.each(["reload", "new"] as const)(
+    "gives a spawn after %s a handle no live survivor holds, so lifecycle events cannot mix them up",
+    async (reason) => {
+      const parentFile = sessionFile;
+      const holdA = heldResponse("a result"); const holdB = heldResponse("b result");
+      provider.setResponses([holdA.response, holdB.response]);
+      const first = await bind(); const a = await spawn(first, "survivor a"); await holdA.entered;
+      const survivorHandle = first.registry.getRecord(a)?.handle;
+      expect(survivorHandle).toBe("general-purpose");
+      await shutdown(first, "reload");
+      if (reason === "new") { sessionFile = join(env.dir, "new.jsonl"); writeFileSync(sessionFile, ""); }
+      const next = await bind({}, {}, false, { reason, previousSessionFile: parentFile });
+      const b = await spawn(next, "newer"); await holdB.entered;
+      const newHandle = next.registry.getRecord(b)?.handle;
+      expect(newHandle).toBeDefined();
+      expect(newHandle).not.toBe(survivorHandle);
+      holdA.release(); holdB.release();
+    },
+  );
+
+  it("gives a spawn after reload an alias no live survivor holds either", async () => {
+    const holdA = heldResponse("a result"); const holdB = heldResponse("b result");
+    provider.setResponses([holdA.response, holdB.response]);
+    const first = await bind(); const a = await spawn(first, "named survivor", "audit"); await holdA.entered;
+    expect(first.registry.getRecord(a)?.alias).toBe("audit");
+    await shutdown(first, "reload");
+    const next = await bind();
+    const b = await spawn(next, "named newer", "audit"); await holdB.entered;
+    expect(next.registry.getRecord(b)?.alias).toBeDefined();
+    expect(next.registry.getRecord(b)?.alias).not.toBe("audit");
+    holdA.release(); holdB.release();
+  });
+
+  it("emits the settle event, without orphan sequence numbers, when a survivor's result is delivered", async () => {
+    const hold = heldResponse("late result"); provider.setResponses([hold.response]);
+    const first = await bind(); const id = await spawn(first, "late survivor"); await hold.entered;
+    await shutdown(first, "reload");
+    hold.release(); await first.registry.waitForAll(); await flush();
+    const next = await bind();
+    const [done, ...rest] = emitted(next, "subagents:completed");
+    expect(rest).toEqual([]);
+    expect(done).toMatchObject({ id, status: "completed", wakesParent: true, result: "late result" });
+    expect(done).not.toHaveProperty("settleSeq");
+    expect(emitted(next, "subagents:started")).toEqual([]);
+    expect(emitted(next, "subagents:failed")).toEqual([]);
+  });
+
+  it("emits subagents:failed for a survivor that errored while detached", async () => {
+    const hold = heldResponse("unused"); provider.setResponses([hold.response]);
+    const first = await bind(); const id = await spawn(first, "doomed survivor"); await hold.entered;
+    await shutdown(first, "reload");
+    listRunningDetached(sessionFile).find(entry => entry.record.id === id)?.abort("parent");
+    hold.release(); await first.registry.waitForAll(); await flush();
+    const next = await bind();
+    expect(emitted(next, "subagents:failed")).toMatchObject([{ id, wakesParent: true }]);
+    expect(emitted(next, "subagents:completed")).toEqual([]);
   });
 });
 

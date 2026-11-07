@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 // pi-subagents' own slugger, imported from source so the two cannot drift unnoticed.
 import { handleBase } from "../../subagents/src/mention.ts";
 import {
@@ -12,16 +12,48 @@ import {
 	agentLookup,
 	agentStateFor,
 	applyAgentEvent,
+	applyOtherSessionSurvivor,
 	forgetAgents,
 	isAbandoned,
+	isRunningElsewhere,
 	MAX_TRACKED_AGENTS,
 	ownerKey,
 	ownerLabel,
+	setForkLineage,
 } from "./agents.ts";
 
 const S = "s1";
 const apply = (channel: string, payload: unknown) => applyAgentEvent(S, channel, payload);
 const stateOf = (owner: string | undefined) => agentStateFor(S, owner);
+
+describe("isRunningElsewhere", () => {
+	const survivor = { id: "a1", handle: "worker", sessionFile: "a.jsonl" };
+	beforeEach(() => forgetAgents(S));
+
+	it("counts a survivor only under a file in the session's fork ancestry", () => {
+		applyOtherSessionSurvivor(S, survivor);
+		expect(isRunningElsewhere(S, "worker")).toBe(false);
+		setForkLineage(S, new Set(["b.jsonl"]));
+		expect(isRunningElsewhere(S, "worker")).toBe(false);
+		setForkLineage(S, new Set(["b.jsonl", "a.jsonl"]));
+		expect(isRunningElsewhere(S, "worker")).toBe(true);
+		expect(isRunningElsewhere(S, "other")).toBe(false);
+		expect(isRunningElsewhere(S, undefined)).toBe(false);
+	});
+
+	it("ignores a survivor announced without a session file", () => {
+		setForkLineage(S, new Set(["a.jsonl"]));
+		applyOtherSessionSurvivor(S, { id: "a1", handle: "worker" });
+		expect(isRunningElsewhere(S, "worker")).toBe(false);
+	});
+
+	it("forgets the ancestry with the session", () => {
+		setForkLineage(S, new Set(["a.jsonl"]));
+		forgetAgents(S);
+		applyOtherSessionSurvivor(S, survivor);
+		expect(isRunningElsewhere(S, "worker")).toBe(false);
+	});
+});
 
 describe("applyAgentEvent", () => {
 	it("maps the lifecycle to running, done, failed and stopped", () => {
@@ -54,6 +86,40 @@ describe("applyAgentEvent", () => {
 		// A reopened agent's predecessor is known too, so its created is no new queue entry.
 		expect(apply(SUBAGENT_CREATED_EVENT, { id: "a2", previousId: "a1" })).toBe(false);
 		expect(stateOf("explore")).toBe("done");
+	});
+
+	it("leaves a running agent's place in the order alone when its identical started repeats", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "live", handle: "general-purpose", wakesParent: true });
+		apply(SUBAGENT_STARTED_EVENT, { id: "newer", handle: "general-purpose" });
+		apply(SUBAGENT_FAILED_EVENT, { id: "newer", status: "error" });
+		expect(stateOf("general-purpose")).toBe("failed");
+		// A survivor re-announced at every settle must not become the newest match for its handle.
+		expect(apply(SUBAGENT_STARTED_EVENT, { id: "live", handle: "general-purpose", wakesParent: true })).toBe(false);
+		expect(stateOf("general-purpose")).toBe("failed");
+	});
+
+	it("still applies a repeated started that adds a key or flips the wake", () => {
+		apply(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "worker" });
+		expect(apply(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "worker", name: "other" })).toBe(true);
+		expect(apply(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "worker", name: "other", wakesParent: true })).toBe(
+			true,
+		);
+		expect(agentLookup(S).wakesParent?.("worker")).toBe(true);
+		// A new run (`runSeq`) is no repeat: the handoff below must match the latest one.
+		apply(SUBAGENT_STARTED_EVENT, { id: "h1", handle: "handoff", runSeq: 1 });
+		apply(SUBAGENT_STARTED_EVENT, { id: "h1", handle: "handoff", runSeq: 2 });
+		expect(apply(SUBAGENT_CREATED_EVENT, { id: "h1", backgroundHandoff: true, runSeq: 2 })).toBe(true);
+		expect(agentLookup(S).wakesParent?.("handoff")).toBe(true);
+		// An id folding in a predecessor is no repeat either.
+		expect(apply(SUBAGENT_STARTED_EVENT, { id: "a2", handle: "worker2" })).toBe(true);
+		expect(apply(SUBAGENT_STARTED_EVENT, { id: "a2", handle: "worker2", previousId: "a1" })).toBe(true);
+		expect(stateOf("worker")).toBe("running");
+		// A new run of a settled agent is no repeat.
+		apply(SUBAGENT_COMPLETED_EVENT, { id: "a1" });
+		expect(apply(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "worker", name: "other", wakesParent: true })).toBe(
+			true,
+		);
+		expect(stateOf("worker")).toBe("running");
 	});
 
 	it("accepts only a queued resume bound to the most recent settle", () => {

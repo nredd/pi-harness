@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Emit `session-kit:monitor:started` and `session-kit:monitor:stopped` on `pi.events` (`{ sessionId, id, name }`; once per monitor, `stopped` also at session shutdown) so other extensions can tell a wake is armed ([#586](https://github.com/nredd/pi-harness/issues/586), part of [#522](https://github.com/nredd/pi-harness/issues/522))
+
 - Stop counting a background agent stopped before it starts as awaiting a completion notice ([#525](https://github.com/nredd/pi-harness/issues/525)); started background agents still wait for their notices
 
 - Report a run that settles with monitors running, naming what each is armed to wake the parent on: `every batch`, its `/match/` (terminal controls stripped), or exit ([#292](https://github.com/nredd/pi-harness/issues/292))

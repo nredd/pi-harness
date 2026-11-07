@@ -1,7 +1,13 @@
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig } from "../../src/config.ts";
-import { MESSAGE_TYPE, register, TOOL_NAMES } from "../../src/monitor/index.ts";
+import {
+	MESSAGE_TYPE,
+	MONITOR_STARTED_EVENT,
+	MONITOR_STOPPED_EVENT,
+	register,
+	TOOL_NAMES,
+} from "../../src/monitor/index.ts";
 import { psInfo, rootDir, writePidfile } from "../../src/monitor/pidfiles.ts";
 import { ControlledProcesses, FakeClock } from "../scenarios/support.ts";
 import { alive, cleanupProcs, deadPid, spawnSleeper, tempDir, waitFor } from "./helpers.ts";
@@ -18,9 +24,11 @@ function fakePi(sessionName?: string) {
 	const commands = new Map<string, Any>();
 	const shortcuts = new Map<string, Any>();
 	const sendMessage = vi.fn();
+	const emitted: Array<[string, Any]> = [];
 	let active = ["read", ...TOOL_NAMES];
 	const entries: Any[] = [];
 	const pi = {
+		events: { emit: (channel: string, data: unknown) => emitted.push([channel, data]) },
 		appendEntry: (customType: string, data: unknown) => entries.push({ type: "custom", customType, data }),
 		on: (e: string, h: Any) => handlers.set(e, [...(handlers.get(e) ?? []), h]),
 		registerTool: (t: Any) => {
@@ -40,7 +48,7 @@ function fakePi(sessionName?: string) {
 		for (const h of handlers.get(e) ?? []) await h(event, ctx);
 	};
 	shutdowns.push(() => emit("session_shutdown", fakeCtx()));
-	return { pi: pi as Any, tools, commands, shortcuts, sendMessage, emit, entries, active: () => active };
+	return { pi: pi as Any, tools, commands, shortcuts, sendMessage, emit, emitted, entries, active: () => active };
 }
 
 function fakeCtx(mode = "tui", sessionId = "sess-A", entries: Any[] = []) {
@@ -226,6 +234,29 @@ describe("monitor extension", () => {
 		ctx.ui.notify.mockClear();
 		await f.emit("agent_settled", ctx);
 		expect(ctx.ui.notify).not.toHaveBeenCalled();
+	});
+
+	it("announces each monitor once on pi.events as it starts and stops", async () => {
+		const f = fakePi();
+		register(f.pi, defaultConfig());
+		const ctx = fakeCtx("tui", "sess-E");
+		await f.emit("session_start", ctx);
+		expect(f.emitted).toEqual([]);
+		const start = (name: string) =>
+			f.tools.get("monitor_start").execute("1", { argv: ["node", "-e", STAY], name }, undefined, undefined, ctx);
+		await start("ci");
+		await start("log");
+		expect(f.emitted).toEqual([
+			[MONITOR_STARTED_EVENT, { sessionId: "sess-E", id: "m1", name: "ci" }],
+			[MONITOR_STARTED_EVENT, { sessionId: "sess-E", id: "m2", name: "log" }],
+		]);
+		f.emitted.length = 0;
+		await f.tools.get("monitor_stop").execute("2", { id: "m1" }, undefined, undefined, ctx);
+		expect(f.emitted).toEqual([[MONITOR_STOPPED_EVENT, { sessionId: "sess-E", id: "m1", name: "ci" }]]);
+		// Shutdown kills the rest silently, so it must announce them itself, once.
+		f.emitted.length = 0;
+		await f.emit("session_shutdown", ctx, { type: "session_shutdown", reason: "quit" });
+		expect(f.emitted).toEqual([[MONITOR_STOPPED_EVENT, { sessionId: "sess-E", id: "m2", name: "log" }]]);
 	});
 
 	it("reports nothing at settle in a child session", async () => {

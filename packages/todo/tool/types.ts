@@ -62,6 +62,19 @@ export const SUBAGENT_CREATED_EVENT = "subagents:created";
 export const SUBAGENT_STARTED_EVENT = "subagents:started";
 export const SUBAGENT_COMPLETED_EVENT = "subagents:completed";
 export const SUBAGENT_FAILED_EVENT = "subagents:failed";
+/**
+ * Asks pi-subagents to re-announce every running background agent that survived a session switch or
+ * `/reload`: `subagents:started` for those waking this session, `subagents:other_session_survivor`
+ * for the rest. Sent once this session is bound and at every settle, as a fresh snapshot.
+ */
+export const SUBAGENT_ANNOUNCE_SURVIVORS_EVENT = "subagents:announce_survivors";
+/**
+ * A background agent still running for a different session than this one (any switch: `/fork`,
+ * `/resume`, `/new`, `/reload`): its result spools to that session, so it wakes that one and never
+ * this one. Same payload as `started`, plus `sessionFile`.
+ */
+export const SUBAGENT_OTHER_SESSION_SURVIVOR_EVENT = "subagents:other_session_survivor";
+
 export const SUBAGENT_LIFECYCLE_EVENTS = [
 	SUBAGENT_CREATED_EVENT,
 	SUBAGENT_STARTED_EVENT,
@@ -70,11 +83,25 @@ export const SUBAGENT_LIFECYCLE_EVENTS = [
 ];
 
 /**
+ * `session-kit` monitor lifecycle, payload `{ sessionId, id, name }`; read only to see whether a wake is armed.
+ * Mirrors `MONITOR_STARTED_EVENT` / `MONITOR_STOPPED_EVENT` in session-kit; `monitors.test.ts` pins the two.
+ */
+export const MONITOR_STARTED_EVENT = "session-kit:monitor:started";
+export const MONITOR_STOPPED_EVENT = "session-kit:monitor:stopped";
+export const MONITOR_LIFECYCLE_EVENTS = [MONITOR_STARTED_EVENT, MONITOR_STOPPED_EVENT];
+
+/**
  * Hidden custom message appended at `agent_before_settle` when the run would
  * end with plan items open. Persisted only as a short marker; the `context`
  * hook swaps in the open-item list for the one request that follows it.
  */
 export const PLAN_REMINDER_MESSAGE_TYPE = "rpiv-todo-plan-reminder";
+
+/**
+ * Same shape for parent-held todos with nothing armed to wake the parent: persisted marker only,
+ * expanded by the `context` hook into the live list for the one request that follows it.
+ */
+export const HELD_REMINDER_MESSAGE_TYPE = "rpiv-todo-held-reminder";
 
 // ---------------------------------------------------------------------------
 // Public domain types

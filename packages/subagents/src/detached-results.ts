@@ -26,6 +26,8 @@ export interface DetachedResult {
   details: unknown;
   /** History entry for a result that finished detached; absent if already appended. */
   record?: Record<string, unknown>;
+  /** The `subagents:completed`/`subagents:failed` event the live path would have emitted, replayed on delivery. */
+  lifecycle?: { channel: "subagents:completed" | "subagents:failed"; data: Record<string, unknown> };
   /** A full-result notice's parts, so delivery clips it against its batch's budget; `content` is the fallback. */
   notice?: NoticeParts & { footer: string };
 }
@@ -129,6 +131,11 @@ export function unregisterRunningDetached(sessionFile: string, id: string): void
   const byId = running().get(sessionFile);
   byId?.delete(id);
   if (byId?.size === 0) running().delete(sessionFile);
+}
+
+/** Every orphan still running in the process with the session file it is registered (and wakes) under. */
+export function listAllRunningDetached(): Array<{ sessionFile: string; agent: RunningDetached }> {
+  return [...running()].flatMap(([sessionFile, byId]) => [...byId.values()].map((agent) => ({ sessionFile, agent })));
 }
 
 /** Orphans still running for `sessionFile`, in registration order. */

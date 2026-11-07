@@ -23,8 +23,16 @@ import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding
 import type { KeyId } from "@earendil-works/pi-tui";
 import { COLLAPSE_KEY_OFF, getCollapseOnResume, resolveCollapseKey } from "./config.ts";
 import { registerPlanHooks } from "./plan-hooks.ts";
-import { applyAgentEvent, forgetAgents } from "./state/agents.ts";
+import {
+	applyAgentEvent,
+	applyOtherSessionSurvivor,
+	clearElsewhere,
+	forgetAgents,
+	setForkLineage,
+} from "./state/agents.ts";
 import { I18N_NAMESPACE } from "./state/i18n-bridge.ts";
+import { forkAncestry } from "./state/lineage.ts";
+import { applyMonitorEvent, forgetMonitors } from "./state/monitors.ts";
 import { replayFromBranch } from "./state/replay.ts";
 import {
 	clearActiveRenderSession,
@@ -37,7 +45,12 @@ import {
 } from "./state/store.ts";
 import { registerTodosCommand, registerTodoTool, TOOL_NAME } from "./todo.ts";
 import type { TodoOverlay } from "./todo-overlay.ts";
-import { SUBAGENT_LIFECYCLE_EVENTS } from "./tool/types.ts";
+import {
+	MONITOR_LIFECYCLE_EVENTS,
+	SUBAGENT_ANNOUNCE_SURVIVORS_EVENT,
+	SUBAGENT_LIFECYCLE_EVENTS,
+	SUBAGENT_OTHER_SESSION_SURVIVOR_EVENT,
+} from "./tool/types.ts";
 
 type I18nLoader = {
 	registerLocalesFromDir: (namespace: string, packageUrl: string, options?: { label?: string }) => void;
@@ -186,9 +199,26 @@ export default function (
 			await refreshTodoOverlay().catch((e) => console.warn(`[rpiv-todo] ${formatError(e)}`));
 		});
 	}
-	const planHooks = registerPlanHooks(pi, async (sessionId) => {
-		if (sessionId === getActiveRenderSession()) await updateTodoOverlay();
+	// Agents running for another session wake that one: shown as such, never armed here.
+	pi.events.on(SUBAGENT_OTHER_SESSION_SURVIVOR_EVENT, (data) => {
+		if (agentSession !== undefined) applyOtherSessionSurvivor(agentSession, data);
 	});
+	// What other sessions' survivors are doing is only known by asking: rebuild it from a fresh snapshot.
+	// Used at every bind and settle, since a survivor can finish while its session is inactive.
+	const requeryOtherSurvivors = (sessionId: string): void => {
+		if (sessionId !== agentSession) return;
+		clearElsewhere(sessionId);
+		pi.events.emit(SUBAGENT_ANNOUNCE_SURVIVORS_EVENT, {});
+	};
+	// session-kit monitor lifecycle -> whether a wake is armed at a settle. Carries its own session id.
+	for (const channel of MONITOR_LIFECYCLE_EVENTS) pi.events.on(channel, (data) => applyMonitorEvent(channel, data));
+	const planHooks = registerPlanHooks(
+		pi,
+		async (sessionId) => {
+			if (sessionId === getActiveRenderSession()) await updateTodoOverlay();
+		},
+		requeryOtherSurvivors,
+	);
 
 	// Collapse/expand hotkey for the todo overlay. The key is resolved once at
 	// factory scope from config (register-once contract: a config change needs
@@ -239,6 +269,7 @@ export default function (
 			managerSessions.set(ctx.sessionManager, id);
 			// Every session replays into its OWN data slot (Phase 1 isolation).
 			replaceState(id, replayFromBranch(ctx));
+			setForkLineage(id, forkAncestry(ctx.sessionManager));
 		} catch (e) {
 			// Parity with compact/tree/shutdown: session_start is the fresh-ctx event
 			// so the stale risk is low, but a stale/throwing ctx has nothing to bind —
@@ -248,11 +279,17 @@ export default function (
 		}
 		// On top of the replayed state: an approval announced before this
 		// session started here lands now.
-		await planHooks.sessionStarted(id);
+		// Only a process restart provably kills every child; /new, /resume, /fork and /reload
+		// detach live agents that pi-subagents re-announces below.
+		await planHooks.sessionStarted(id, event.reason === "startup");
 		// The session this activation's subagents report to: a headless run's
 		// only session, or the UI foreground (a child session never rebinds it).
-		if (!ctx.hasUI) agentSession ??= id;
-		if (!ctx.hasUI) return;
+		if (!ctx.hasUI) {
+			agentSession ??= id;
+			// Not `agentSession`: a child session must not ask on the parent's behalf.
+			if (agentSession === id) requeryOtherSurvivors(id);
+			return;
+		}
 		// First UI-bearing session_start claims the foreground (the interactive
 		// launcher, by spawn-ordering) without eagerly loading the overlay.
 		if (getActiveRenderSession() === "") setActiveRenderSession(id);
@@ -260,6 +297,7 @@ export default function (
 		// (distinct sid) is skipped — does not rebind to a relay/stale ui.
 		if (id !== getActiveRenderSession()) return;
 		agentSession = id;
+		requeryOtherSurvivors(id);
 		const generation = ++lifecycleGeneration;
 		uiCtx = ctx.ui;
 		collapseOnBind = event.reason === "resume" && getCollapseOnResume(options.homeDir);
@@ -296,6 +334,7 @@ export default function (
 		// The shutting-down session's own data slot is always evicted.
 		evictSession(s);
 		forgetAgents(s);
+		forgetMonitors(s);
 		if (agentSession === s) agentSession = undefined;
 		planHooks.sessionEnded(s);
 		// Overlay teardown is sid-gated: a child shutdown (distinct sid) must not

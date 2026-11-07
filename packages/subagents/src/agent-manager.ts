@@ -1924,9 +1924,15 @@ export class AgentManager {
     return this.agents.get(id);
   }
 
+  /**
+   * Handles held outside this manager, e.g. by live survivors of an orphaned one, which a fresh
+   * spawn must not reuse: a listener keys lifecycle events by handle, so a twin would mix the two up.
+   */
+  reservedHandles: () => Iterable<string> = () => [];
+
   /** Handles already in use, so a fresh spawn can pick an unclaimed one. */
   private takenHandles(): Set<string> {
-    const taken = new Set<string>();
+    const taken = new Set<string>(this.reservedHandles());
     for (const record of this.agents.values()) {
       if (record.handle) taken.add(record.handle);
       if (record.alias) taken.add(record.alias);

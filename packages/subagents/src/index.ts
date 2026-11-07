@@ -32,6 +32,7 @@ import { loadCustomAgents } from "./custom-agents.js";
 import {
   type DetachedResult,
   drainDetached,
+  listAllRunningDetached,
   listRunningDetached,
   registerRunningDetached,
   spoolDetached,
@@ -741,6 +742,23 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     };
   }
 
+  /**
+   * A survivor's lifecycle payload for a session that never heard its spawn: the
+   * orphaned manager's own `spawnSeq`/`runSeq`/`settleSeq` count a different sequence
+   * than this one, so they are dropped rather than compared. Only background runs
+   * survive a switch (`AgentManager.detach`), so `wakesParent` is already true.
+   */
+  function survivorEventData(data: Record<string, unknown>): Record<string, unknown> {
+    const { spawnSeq: _spawn, runSeq: _run, settleSeq: _settle, ...rest } = data;
+    return rest;
+  }
+
+  /** The terminal lifecycle channel for a settled record; shared by the live and the detached path. */
+  function lifecycleChannel(record: AgentRecord): "subagents:failed" | "subagents:completed" {
+    return record.status === "error" || record.status === "stopped" || record.status === "aborted"
+      ? "subagents:failed" : "subagents:completed";
+  }
+
   function spoolDetachedResult(sessionFile: string, record: AgentRecord) {
     if (record.resultConsumed) return;
     const footer = record.outputFile ? `\nFull transcript available at: ${record.outputFile}` : "";
@@ -751,6 +769,10 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
         content: notice.render().text + footer,
         details: notice.details,
         record: historyRecord(record),
+        lifecycle: {
+          channel: lifecycleChannel(record),
+          data: survivorEventData(buildEventData(record)),
+        },
         ...(notice.parts ? { notice: { ...notice.parts, footer } } : {}),
       });
     } catch { /* spool unwritable: the transcript file still has the result */ }
@@ -761,8 +783,35 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     for (const result of drainDetached(sessionFile)) deliverDetachedResult(result);
   }
 
+  /**
+   * Announce every agent still running in an orphaned manager, which this session never
+   * heard spawn, so lifecycle listeners (e.g. pi-todo) see their owners alive instead of lost.
+   * Runs at every `session_start` and on `subagents:announce_survivors`, for a listener that
+   * bound after it. Survivors registered under the current session file are announced as
+   * `subagents:started` (armed: their results spool here and wake this session). All others,
+   * whatever switch left them (`/fork`, `/resume`, `/new`, `/reload`), are announced as
+   * `subagents:other_session_survivor` with the `sessionFile` they wake instead, and arm nothing here.
+   */
+  function announceSurvivors() {
+    const current = currentCtx?.sessionManager?.getSessionFile?.();
+    for (const { sessionFile, agent } of listAllRunningDetached()) {
+      const { record } = agent;
+      const own = sessionFile === current;
+      const { wakesParent: _wakes, ...fields } = eventFields(record);
+      pi.events.emit(own ? "subagents:started" : "subagents:other_session_survivor", survivorEventData({
+        id: record.id,
+        type: record.type,
+        description: record.description,
+        ...fields,
+        ...(own ? { wakesParent: true } : { sessionFile }),
+      }));
+    }
+  }
+
   function deliverDetachedResult(result: DetachedResult) {
     try {
+      // Before the notice: a listener must see the owner settle, not stay "running".
+      if (result.lifecycle) pi.events.emit(result.lifecycle.channel, result.lifecycle.data);
       if (result.record) {
         pi.appendEntry("subagents:record", result.record);
         fleet.ingestFailure(result.record);
@@ -783,6 +832,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   }
 
   let unwatchDetached: (() => void) | undefined;
+  let unwatchAnnounce: (() => void) | undefined;
 
   // At load, before pi-plan-mode's session_start ask: Plan admits `Agent` only with this gate (#437).
   answerPlanGateQueries(pi.events);
@@ -805,14 +855,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 
     if (!record.resultConsumed) fleet.ingestFailure(record);
     // Emit lifecycle event based on terminal status
-    const isError = record.status === "error" || record.status === "stopped" || record.status === "aborted";
     record.settleSeq = manager.nextSequence();
-    const eventData = buildEventData(record);
-    if (isError) {
-      pi.events.emit("subagents:failed", eventData);
-    } else {
-      pi.events.emit("subagents:completed", eventData);
-    }
+    pi.events.emit(lifecycleChannel(record), buildEventData(record));
 
     // Persist final record for cross-extension history reconstruction
     pi.appendEntry("subagents:record", historyRecord(record));
@@ -921,6 +965,11 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     record.settleSeq = manager.nextSequence();
     pi.events.emit("subagents:failed", buildEventData(record));
   });
+
+  // A live survivor of an orphaned manager keeps its handle: reusing it would make a lifecycle listener
+  // that keys by handle read this manager's newer agent and the survivor as one.
+  manager.reservedHandles = () =>
+    listAllRunningDetached().flatMap(({ agent }) => [agent.record.handle, agent.record.alias].filter((h): h is string => !!h));
 
   // Expose manager via Symbol.for() global registry for cross-package access.
   // Standard Node.js pattern for cross-package singletons (used by OpenTelemetry, etc.).
@@ -1117,6 +1166,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       unwatchDetached = watchDetached(sessionFile, () => deliverDetached(sessionFile));
       deliverDetached(sessionFile);
     }
+    announceSurvivors();
+    unwatchAnnounce ??= pi.events.on("subagents:announce_survivors", announceSurvivors);
     // Orphans from the previous instance are already registered; show them now.
     fleet.update();
     // Guard mirrors the `!scheduler.isActive()` pattern below: session_start
@@ -1379,6 +1430,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     const sessionFile = currentCtx?.sessionManager?.getSessionFile?.();
     unwatchDetached?.();
     unwatchDetached = undefined;
+    unwatchAnnounce?.();
+    unwatchAnnounce = undefined;
     rpcHandle?.unsubSpawn();
     rpcHandle?.unsubStop();
     rpcHandle?.unsubPing();

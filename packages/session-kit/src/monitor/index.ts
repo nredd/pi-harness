@@ -28,6 +28,13 @@ import { MonitorWidget } from "./widget.ts";
 
 export const MESSAGE_TYPE = "session-kit:monitor";
 export const TOOL_NAMES = ["monitor_start", "monitor_read", "monitor_stop"] as const;
+/**
+ * Lifecycle on `pi.events`, payload `{ sessionId, id, name }`: `started` once per running monitor,
+ * `stopped` once when it exits, times out, is stopped or its session shuts down. Lets other
+ * extensions (e.g. todo) tell whether anything is armed to wake the parent.
+ */
+export const MONITOR_STARTED_EVENT = "session-kit:monitor:started";
+export const MONITOR_STOPPED_EVENT = "session-kit:monitor:stopped";
 
 const NOT_AVAILABLE = "monitors are not available in this session";
 
@@ -57,6 +64,22 @@ export function register(
 	const describe = (info: MonitorInfo): string => describeAt(info, runtime.clock?.now() ?? Date.now());
 	let manager: MonitorManager | undefined;
 	let widget: MonitorWidget | undefined;
+	// Monitors announced as started and not yet as stopped, by id, for the session `announcedFor`.
+	const announced = new Map<string, string>();
+	let announcedFor = "";
+	const announce = (running: readonly MonitorInfo[]): void => {
+		const live = new Set(running.map((info) => info.id));
+		for (const [id, name] of announced) {
+			if (live.has(id)) continue;
+			announced.delete(id);
+			pi.events.emit(MONITOR_STOPPED_EVENT, { sessionId: announcedFor, id, name });
+		}
+		for (const { id, name } of running) {
+			if (announced.has(id)) continue;
+			announced.set(id, name);
+			pi.events.emit(MONITOR_STARTED_EVENT, { sessionId: announcedFor, id, name });
+		}
+	};
 
 	// Registered once per runtime, like Todos: a key change needs /reload. `off` skips the binding.
 	const { collapseKey, maxWidgetLines } = config.monitor ?? defaultConfig().monitor; // hosts passing a pre-0.7 config shape get defaults
@@ -76,6 +99,7 @@ export function register(
 		widget = undefined;
 		oldWidget?.dispose();
 		await old?.dispose();
+		announce([]);
 	};
 
 	pi.on("session_start", async (_event, ctx: ExtensionContext) => {
@@ -100,8 +124,12 @@ export function register(
 					{ triggerTurn: true, deliverAs: "followUp" },
 				);
 			},
-			onChange: () => w.refresh(),
+			onChange: () => {
+				w.refresh();
+				announce(m.running());
+			},
 		});
+		announcedFor = sessionId;
 		const w = new MonitorWidget(() => m.list(), { maxLines: maxWidgetLines, collapseKey });
 		w.attach(ctx);
 		widget = w;

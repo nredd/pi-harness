@@ -153,7 +153,7 @@ the full list grouped by status.
   items open, the model gets one reminder listing them before it can wrap up.
   Outside Plan mode, a run that settles with `in_progress` todos also reports them
   (`agent_settled` in `plan-hooks.ts`), grouped by why each is still open: `owner agent failed
-  or stopped` (all named), `held by the parent`, `agent running without a completion notice`, `blocked` and `agent running`, three per group
+  or stopped` (all named), `owner agent not found after resume`, `agent running for another session`, `held by the parent`, `agent running without a completion notice`, `blocked` and `agent running`, three per group
   then a count. `agent running` includes an owner agent still `queued`. `blocked` means a live
   `blockedBy` dependency: one `in_progress` whose owner agent has not failed or stopped, or one
   `pending` whose owner agent is running or queued with a verified completion notice. A todo is `held by the
@@ -165,11 +165,36 @@ the full list grouped by status.
   scheduler, `@handle`) are first heard at `subagents:started` and read `held` until then (or at `subagents:failed`, as `stopped`, if stopped while still queued). Its armed clause, `armed:
   no todo-owned wake (monitor and agent notices list session wakes)`, says only that todos arm
   nothing themselves; the `subagents` and `session-kit` monitor notices say what does wake the
-  parent. Only a lifecycle event explicitly confirming an agent completion notice makes that owner a verified wake; foreground, silent RPC and older unknown agents warn on every settle. Abandoned or parent-held work also makes it a warning, repeated on every settle, so a stop with
-  owned work pending is never silent. When every todo waits on a running agent or a live dependency
+  parent. Only a lifecycle event explicitly confirming an agent completion notice makes that owner a verified wake; foreground, silent RPC and older unknown agents warn on every settle. Abandoned, lost or silent work, and parent-held work while nothing is armed (below), is a warning repeated on every settle, so a stop with
+  owned work pending and nothing to wake the parent is never silent. When every todo waits on a running agent or a live dependency
   it is info, shown once: a settle that changes no todo's group, owner, owner agent state, wake eligibility or blocker identity, status, owner or owner agent state
   repeats nothing until the next prompt from a person. Todo status never changes on its own, e.g.
   `Run ended with 2 in_progress todos, armed: no todo-owned wake (monitor and agent notices list session wakes); owner agent failed or stopped: #3 Audit auth (@auth-audit failed); held by the parent: #6 Deploy`.
+  After a process restart (`session_start` reason `startup`), an `in_progress` todo whose `owner` was already set when the session started and
+  that no `subagents` event has named since is `owner agent not found after resume` (warning, every
+  settle, all named): children die with the process, so it is not parent-held. `/new`, `/resume`,
+  `/fork` and `/reload` are not that boundary: pi-subagents detaches still-running background agents.
+  On every `session_start`, and on `subagents:announce_survivors` (which this extension sends once the session is bound and again
+  at every settle), pi-subagents announces ALL running detached survivors in the process. Those registered under this session's
+  file (after `/reload`, or a `/resume` back into the session that spawned them) arrive as `subagents:started` and are `running` and
+  armed, with `subagents:completed` / `:failed` replayed when their results are delivered. Every other one arrives as `subagents:other_session_survivor` with the `sessionFile` it wakes: its result
+  spools there, not here. Only one registered under a file this session was forked from (its header's `parentSession`, then that
+  file's own, so a `/fork`, a fork of a fork, or a `/reload` in either) makes a todo it owns read
+  `agent running for another session, which it wakes instead of this one` (info, once); it is never armed here and never triggers the
+  held-work reminder. Only ancestors count, compared by the exact paths pi wrote (no normalization; an unreadable or moved ancestor ends the chain): a
+  survivor of any other session (`/new`, `/resume` of another session, a sibling fork, or a descendant of this session) is not
+  matched, because handles are per manager and a same-named dead owner must not hide behind it. That todo is `held` (or lost)
+  and reminds as usual, the safe direction. A repeated `started` for an agent already
+  running with the same identity changes nothing, so re-announcing a survivor never outranks a newer same-named agent. The set is rebuilt from each announcement, so a `/reload` loses nothing and a survivor that finished
+  (even while this session was inactive) drops out at the next settle. An owner nobody names is `held`, never lost. A free-text owner (a person or team) is indistinguishable from a dead
+  agent handle, so it lands there too until it is reassigned. Parent-held work warns only when nothing
+  is armed: a running monitor (`session-kit:monitor:started` / `:stopped` on `pi.events`, payload
+  `{ sessionId, id, name }`) or a background agent with a verified completion notice makes it an info
+  report, shown once like the other waiting groups. Abandoned, lost and silent work always warn.
+  When todos are held or lost and nothing is armed, nothing can wake the parent, so `agent_before_settle`
+  appends one hidden `rpiv-todo-held-reminder` and requests one more request, once per prompt from a
+  person (a plan reminder is independent). The `context` hook swaps the live list for the marker on that
+  request only, like the plan reminder; it fires only if the todos are still held and unarmed then.
   Reminders pause while Plan mode is active; old approved todos remain until a
   replacement is approved. Exiting planning without approval resumes the old
   obligations. Details in the

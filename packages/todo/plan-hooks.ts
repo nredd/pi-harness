@@ -21,15 +21,19 @@ import {
 	type AgentRunState,
 	type AgentStateLookup,
 	agentLookup,
+	hasArmedAgent,
 	isAbandoned,
 	NO_AGENT_STATE,
+	ownerKey,
 	ownerLabel,
 } from "./state/agents.ts";
+import { hasRunningMonitor } from "./state/monitors.ts";
 import { applyPlanApproval, selectOpenPlanItems, selectPlanProgress } from "./state/plan.ts";
 import type { TaskState } from "./state/state.ts";
 import { commitState, getState, sid } from "./state/store.ts";
 import { sanitizeTerminalText } from "./tool/sanitize.ts";
 import {
+	HELD_REMINDER_MESSAGE_TYPE,
 	PLAN_APPROVED_EVENT,
 	PLAN_APPROVED_VERSION,
 	PLAN_REMINDER_MESSAGE_TYPE,
@@ -41,6 +45,10 @@ import {
 
 /** Persisted marker text; the `context` hook expands it on the request right after it. */
 export const PLAN_REMINDER_MARKER = "[rpiv-todo] Plan items were still open when this run tried to finish.";
+
+/** Persisted marker text for the held-work reminder. */
+export const HELD_REMINDER_MARKER =
+	"[rpiv-todo] Todos were held with nothing armed to wake you when this run tried to finish.";
 
 interface SettleMessage {
 	role?: string;
@@ -93,17 +101,20 @@ function isPlanning(ctx: PlanContext, messages: readonly unknown[]): boolean {
 	return planningMode(ctx.sessionManager.getBranch()) ?? planningMode(messages) ?? false;
 }
 
-function isReminder(message: SettleMessage | undefined): boolean {
-	return message?.role === "custom" && message.customType === PLAN_REMINDER_MESSAGE_TYPE;
+function isReminder(message: SettleMessage | undefined, type: string = PLAN_REMINDER_MESSAGE_TYPE): boolean {
+	return message?.role === "custom" && message.customType === type;
 }
 
 /**
  * True when a reminder already followed the latest user prompt: the run was
  * reminded once, so let it settle. Stateless, so it survives `/reload`.
  */
-export function remindedSinceLastPrompt(messages: readonly SettleMessage[]): boolean {
+export function remindedSinceLastPrompt(
+	messages: readonly SettleMessage[],
+	type: string = PLAN_REMINDER_MESSAGE_TYPE,
+): boolean {
 	for (let i = messages.length - 1; i >= 0; i--) {
-		if (isReminder(messages[i])) return true;
+		if (isReminder(messages[i], type)) return true;
 		if (messages[i].role === "user") return false;
 	}
 	return false;
@@ -133,7 +144,7 @@ export function formatPlanReminder(state: TaskState): string {
 }
 
 /** Why an `in_progress` todo is still open at a settle, most actionable first. */
-export type InProgressKind = "abandoned" | "held" | "silent" | "blocked" | "running";
+export type InProgressKind = "abandoned" | "lost" | "elsewhere" | "held" | "silent" | "blocked" | "running";
 
 /** A settle report: the line, its severity and a key that changes whenever the classification does. */
 export interface InProgressNotice {
@@ -164,6 +175,20 @@ const GROUPS: ReadonlyArray<{
 		severity: "warning",
 		showDepStatus: false,
 	},
+	{
+		kind: "lost",
+		label: "owner agent not found after resume",
+		capped: false,
+		severity: "warning",
+		showDepStatus: false,
+	},
+	{
+		kind: "elsewhere",
+		label: "agent running for another session, which it wakes instead of this one",
+		capped: true,
+		severity: "info",
+		showDepStatus: false,
+	},
 	{ kind: "held", label: "held by the parent", capped: true, severity: "warning", showDepStatus: true },
 	{
 		kind: "silent",
@@ -175,6 +200,17 @@ const GROUPS: ReadonlyArray<{
 	{ kind: "blocked", label: "blocked", capped: true, severity: "info", showDepStatus: false },
 	{ kind: "running", label: "agent running", capped: true, severity: "info", showDepStatus: false },
 ];
+
+/** The owner key each `in_progress` todo had when its session resumed, by todo id. */
+type Owners = ReadonlyMap<number, string | undefined>;
+
+/** What a settle knows besides the todo list and agent states. */
+export interface SettleFacts {
+	/** Owners present at resume, see `classify`. */
+	resumed?: Owners;
+	/** Whether a running agent's completion notice or a running monitor will wake the parent. */
+	armed?: boolean;
+}
 
 /** One classified `in_progress` todo. `deps` are the open blockers its group is about. */
 interface Row {
@@ -205,9 +241,17 @@ function isLive(dep: Task, lookup: AgentStateLookup): boolean {
  * or queued one either has a verified wake or warns as silent; else a live `blockedBy` dependency makes it wait; anything else, including a todo
  * whose agent is done or whose open blockers are all dead, waits on the parent.
  */
-function classify(task: Task, byId: ReadonlyMap<number, Task>, lookup: AgentStateLookup): Row {
+function classify(task: Task, byId: ReadonlyMap<number, Task>, lookup: AgentStateLookup, resumed: Owners): Row {
 	const agent = lookup(task.owner);
 	if (isAbandoned(task, agent)) return { task, kind: "abandoned", agent, deps: [] };
+	// Children die with the process, so an owner already set when the session resumed that no
+	// agent event has named since is gone, not the parent's to hold.
+	const owner = ownerKey(task.owner);
+	if (agent === undefined && owner !== undefined && resumed.get(task.id) === owner)
+		return { task, kind: "lost", agent, deps: [] };
+	// Running for another session, which it wakes: not ours to take over or wait on.
+	if (agent === undefined && lookup.elsewhere?.(task.owner) === true)
+		return { task, kind: "elsewhere", agent, deps: [] };
 	if (isWorking(agent))
 		return { task, kind: lookup.wakesParent?.(task.owner) === true ? "running" : "silent", agent, deps: [] };
 	const open = (task.blockedBy ?? []).flatMap((id) => {
@@ -230,9 +274,10 @@ function entryText({ task, agent, deps }: Row, showDepStatus: boolean): string {
 	return `#${task.id} ${sanitizeTerminalText(task.subject)}${detail}`;
 }
 
-/** The dedupe key: every todo's group, owner, agent state and the blockers that group names. */
-function reportKey(rows: readonly Row[], lookup: AgentStateLookup): string {
-	return JSON.stringify(
+/** The dedupe key: whether a wake is armed, plus every todo's group, owner, agent state and blockers. */
+function reportKey(rows: readonly Row[], lookup: AgentStateLookup, armed: boolean): string {
+	return JSON.stringify([
+		armed,
 		rows.map(({ task, kind, agent, deps }) => [
 			task.id,
 			kind,
@@ -240,7 +285,35 @@ function reportKey(rows: readonly Row[], lookup: AgentStateLookup): string {
 			agent ?? null,
 			deps.map((d) => [d.id, d.status, d.owner ?? null, lookup(d.owner) ?? null]),
 		]),
-	);
+	]);
+}
+
+function classifyAll(state: TaskState, lookup: AgentStateLookup, resumed: Owners = new Map()): Row[] {
+	const byId = new Map(state.tasks.map((t) => [t.id, t]));
+	return state.tasks.filter((t) => t.status === "in_progress").map((task) => classify(task, byId, lookup, resumed));
+}
+
+/**
+ * The `in_progress` todos only the parent can move: parent-held, or owned by an agent that no longer
+ * exists. Empty when anything is armed to wake the parent, since it will be woken without a nudge.
+ */
+export function unarmedHeld(state: TaskState, lookup: AgentStateLookup, facts: SettleFacts): Task[] {
+	if (facts.armed) return [];
+	return classifyAll(state, lookup, facts.resumed)
+		.filter((r) => r.kind === "held" || r.kind === "lost")
+		.map((r) => r.task);
+}
+
+/** The transient reminder for `unarmedHeld` todos; the `context` hook swaps it in for the marker. */
+export function formatHeldReminder(tasks: readonly Task[]): string {
+	return [
+		"Nothing is armed to wake you: no running background agent with a completion notice and no running monitor. These todos are still in_progress and only you can move them:",
+		...tasks.map((t) => {
+			const owner = ownerLabel(t.owner);
+			return `- #${t.id} ${sanitizeTerminalText(t.subject)}${owner ? ` (${owner})` : ""}`;
+		}),
+		"Keep working on them now. If one is actually done, complete it with evidence; if it cannot proceed, defer it with a reason. If you are waiting on something external, start a monitor or background agent that wakes you, or tell the user exactly what is pending. Do not end the turn by announcing an action you have not taken.",
+	].join("\n");
 }
 
 /**
@@ -254,11 +327,11 @@ function reportKey(rows: readonly Row[], lookup: AgentStateLookup): string {
 export function formatInProgressNotice(
 	state: TaskState,
 	lookup: AgentStateLookup = NO_AGENT_STATE,
+	facts: SettleFacts = {},
 ): InProgressNotice | undefined {
-	const active = state.tasks.filter((t) => t.status === "in_progress");
-	if (!active.length) return undefined;
-	const byId = new Map(state.tasks.map((t) => [t.id, t]));
-	const rows = active.map((task) => classify(task, byId, lookup));
+	const rows = classifyAll(state, lookup, facts.resumed);
+	if (!rows.length) return undefined;
+	const armed = facts.armed === true;
 	const present = GROUPS.filter(({ kind }) => rows.some((r) => r.kind === kind));
 	const parts = present.map(({ kind, label, capped, showDepStatus }) => {
 		const items = rows.filter((r) => r.kind === kind).map((r) => entryText(r, showDepStatus));
@@ -266,10 +339,11 @@ export function formatInProgressNotice(
 		const more = items.length > shown.length ? `, +${items.length - shown.length} more` : "";
 		return `${label}: ${shown.join(", ")}${more}`;
 	});
-	const n = active.length;
+	const n = rows.length;
 	const text = `Run ended with ${n} in_progress todo${n === 1 ? "" : "s"}, armed: no todo-owned wake (monitor and agent notices list session wakes); ${parts.join("; ")}`;
-	const level = present.some((g) => g.severity === "warning") ? "warning" : "info";
-	return { text, level, key: reportKey(rows, lookup) };
+	// Parent-held work only warns when nothing is armed; with a wake armed it is shown once like the rest.
+	const level = present.some((g) => g.severity === "warning" && !(armed && g.kind === "held")) ? "warning" : "info";
+	return { text, level, key: reportKey(rows, lookup, armed) };
 }
 
 /**
@@ -280,8 +354,11 @@ export function formatInProgressNotice(
  *   changed that session's list.
  */
 export interface PlanSessionHooks {
-	/** Call from `session_start` after replay: binds the session and applies a pending approval. */
-	sessionStarted(sessionId: string): Promise<void>;
+	/**
+	 * Call from `session_start` after replay: binds the session and applies a pending approval.
+	 * `resumed` is true only for a process `startup`: `/new`, `/resume`, `/fork` and `/reload` detach live agents instead, so no owner is provably lost.
+	 */
+	sessionStarted(sessionId: string, resumed: boolean): Promise<void>;
 	/** Call from `session_shutdown`. */
 	sessionEnded(sessionId: string): void;
 }
@@ -289,6 +366,8 @@ export interface PlanSessionHooks {
 export function registerPlanHooks(
 	pi: ExtensionAPI,
 	onStateChange: (sessionId: string) => Promise<void>,
+	/** Called at every settle: re-ask where other sessions' survivors stand before classifying. */
+	refreshSurvivors: (sessionId: string) => void,
 ): PlanSessionHooks {
 	// Sessions this extension instance is bound to. An approval for another
 	// session (a child, a stale emitter) waits until that session starts here.
@@ -315,19 +394,47 @@ export function registerPlanHooks(
 		else pending.set(data.sessionId, data);
 	});
 
-	const onSettle: SettleHandler = (event, ctx) => {
-		if (event.outcome !== "completed" || isPlanning(ctx, event.context.contextMessages)) return undefined;
-		if (remindedSinceLastPrompt(event.context.contextMessages)) return undefined;
-		const open = selectOpenPlanItems(getState(sid(ctx)));
-		if (!open.length) return undefined;
+	// Owners `in_progress` todos already had when a session resumed. Children die with the process,
+	// so any of these that no agent event names afterwards is lost rather than parent-held.
+	const resumedOwners = new Map<string, Map<number, string | undefined>>();
+	const settleFacts = (id: string): SettleFacts => ({
+		resumed: resumedOwners.get(id),
+		armed: hasArmedAgent(id) || hasRunningMonitor(id),
+	});
+
+	const reminderDraft = (
+		event: AgentBeforeSettleEvent,
+		customType: string,
+		content: string,
+		details: Record<string, readonly number[]>,
+	): AgentBeforeSettleEventResult => {
 		const draft: SessionBoundaryDraft = {
 			type: "custom_message",
-			customType: PLAN_REMINDER_MESSAGE_TYPE,
-			content: PLAN_REMINDER_MARKER,
+			customType,
+			content,
 			display: false,
-			details: { open: open.map((t) => t.id) },
+			details,
 		};
 		return { entries: [...event.entries, draft], continue: true };
+	};
+
+	const onSettle: SettleHandler = (event, ctx) => {
+		const messages = event.context.contextMessages;
+		if (event.outcome !== "completed" || isPlanning(ctx, messages)) return undefined;
+		const id = sid(ctx);
+		refreshSurvivors(id);
+		if (!remindedSinceLastPrompt(messages)) {
+			const open = selectOpenPlanItems(getState(id));
+			if (open.length)
+				return reminderDraft(event, PLAN_REMINDER_MESSAGE_TYPE, PLAN_REMINDER_MARKER, {
+					open: open.map((t) => t.id),
+				});
+		}
+		// Held work with nothing armed can never wake the parent: remind once per prompt, not every settle.
+		if (remindedSinceLastPrompt(messages, HELD_REMINDER_MESSAGE_TYPE)) return undefined;
+		const held = unarmedHeld(getState(id), agentLookup(id), settleFacts(id));
+		if (!held.length) return undefined;
+		return reminderDraft(event, HELD_REMINDER_MESSAGE_TYPE, HELD_REMINDER_MARKER, { held: held.map((t) => t.id) });
 	};
 	pi.on("agent_before_settle", onSettle);
 
@@ -345,7 +452,8 @@ export function registerPlanHooks(
 	pi.on("agent_settled", (_event, ctx) => {
 		if (isPlanning(ctx, [])) return;
 		const id = sid(ctx);
-		const notice = formatInProgressNotice(getState(id), agentLookup(id));
+		refreshSurvivors(id);
+		const notice = formatInProgressNotice(getState(id), agentLookup(id), settleFacts(id));
 		if (notice?.level === "info") {
 			if (reported.get(id) === notice.key) return;
 			reported.set(id, notice.key);
@@ -356,20 +464,36 @@ export function registerPlanHooks(
 	pi.on("context", async (event, ctx) => {
 		if (isPlanning(ctx, event.messages)) return undefined;
 		const last = event.messages[event.messages.length - 1] as SettleMessage | undefined;
-		if (!isReminder(last)) return undefined;
-		const state = getState(sid(ctx));
-		if (!selectOpenPlanItems(state).length) return undefined;
+		const id = sid(ctx);
+		const state = getState(id);
+		if (isReminder(last, HELD_REMINDER_MESSAGE_TYPE)) refreshSurvivors(id);
+		let content: string;
+		if (isReminder(last)) {
+			if (!selectOpenPlanItems(state).length) return undefined;
+			content = formatPlanReminder(state);
+		} else if (isReminder(last, HELD_REMINDER_MESSAGE_TYPE)) {
+			const held = unarmedHeld(state, agentLookup(id), settleFacts(id));
+			if (!held.length) return undefined;
+			content = formatHeldReminder(held);
+		} else return undefined;
 		const messages = [...event.messages];
-		messages[messages.length - 1] = {
-			...(last as object),
-			content: formatPlanReminder(state),
-		} as (typeof messages)[number];
+		messages[messages.length - 1] = { ...(last as object), content } as (typeof messages)[number];
 		return { messages };
 	});
 
 	return {
-		async sessionStarted(sessionId) {
+		async sessionStarted(sessionId, resumed) {
 			live.add(sessionId);
+			if (resumed)
+				resumedOwners.set(
+					sessionId,
+					new Map(
+						getState(sessionId)
+							.tasks.filter((t) => t.status === "in_progress")
+							.map((t) => [t.id, ownerKey(t.owner)]),
+					),
+				);
+			else resumedOwners.delete(sessionId);
 			const payload = pending.get(sessionId);
 			pending.delete(sessionId);
 			if (payload) await seed(payload);
@@ -377,6 +501,7 @@ export function registerPlanHooks(
 		sessionEnded(sessionId) {
 			live.delete(sessionId);
 			reported.delete(sessionId);
+			resumedOwners.delete(sessionId);
 		},
 	};
 }
