@@ -5018,6 +5018,31 @@ def test_same_kind_original_with_matching_digest_rolls_back_cleanly(
     assert target.exists(follow_symlinks=False)
 
 
+def test_legacy_directory_original_without_a_digest_keeps_the_four_field_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A journal written before the digest existed still rolls back by identity alone."""
+    harness = Harness(tmp_path, monkeypatch)
+    target = harness.layout.agent_dir / "npm"
+    pending_reuse_journal(harness, target, "directory", recorded=b"ORIGINAL", live=b"RECREATED")
+
+    def drop_digest(document: dict[str, Any]) -> None:
+        """Remove the digest, as a journal from an older build lacks it.
+
+        Parameters:
+            document (dict[str, Any]): decoded journal, edited in place.
+
+        Returns:
+            None: the step now carries only the four-field fingerprint.
+        """
+        del document["steps"][0]["original_sha256"]
+
+    edit_journal(harness, drop_digest)
+    assert rollback(harness.layout) == []
+    assert not harness.layout.journal.exists()
+    assert (target / "child").read_text() == "RECREATED"
+
+
 def test_pending_step_with_digest_restores_a_present_backup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
