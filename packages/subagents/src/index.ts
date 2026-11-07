@@ -547,6 +547,11 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
         display: true,
         details: message.details,
       }, { deliverAs: "steer", triggerTurn: true });
+      for (const id of message.noticed ?? []) {
+        const record = manager.getRecord(id);
+        // A resume started since: that run's notice says nothing about this one.
+        if (record && record.status !== "running" && record.status !== "queued") record.noticeDelivered = true;
+      }
       // The whole result reached the parent, as get_subagent_result would hand it over.
       for (const id of message.delivered ?? []) {
         const record = manager.getRecord(id);
@@ -574,8 +579,9 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     const frame = formatTaskNotification(record, showCost);
     const details = buildNotificationDetails(record, previewChars, agentActivity.get(record.id));
     if (notificationResultChars === 0) {
+      // A preview never counts as the whole result, even a short one: reap notices stay on.
       const text = renderNotice(frame, record.result ? previewResult(record.result, previewChars) : "No output.");
-      return { id: record.id, details, chars: undefined, parts: undefined, render: (_share?: number) => ({ text, delivered: false }) };
+      return { id: record.id, details, chars: undefined, parts: undefined, render: (_share?: number) => ({ text, delivered: false, complete: false }) };
     }
     const parts: NoticeParts = {
       ...frame, body: noticeBody(record), cap: notificationResultChars, outputFile: record.outputFile,
@@ -607,8 +613,12 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
         ids: [record.id],
         resultChars: resultCharsOf([notice]),
         build: (_ids, caps) => {
-          const { text, delivered } = notice.render(caps[notice.id]);
-          return { content: text + footer, details: notice.details, ...(delivered ? { delivered: [notice.id] } : {}) };
+          const { text, delivered, complete } = notice.render(caps[notice.id]);
+          return {
+            content: text + footer, details: notice.details,
+            ...(delivered ? { delivered: [notice.id] } : {}),
+            ...(complete ? { noticed: [notice.id] } : {}),
+          };
         },
       });
     } catch { /* ignore stale completion side-effect errors */ }
@@ -636,6 +646,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
             const rendered = unread.map(m => ({ id: m.id, ...m.render(caps[m.id]) }));
             const notifications = rendered.map(m => m.text).join('\n\n');
             const delivered = rendered.filter(m => m.delivered).map(m => m.id);
+            const noticed = rendered.filter(m => m.complete).map(m => m.id);
             const label = partial
               ? `${unread.length} agent(s) finished (partial — others still running)`
               : `${unread.length} agent(s) finished`;
@@ -647,6 +658,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
               content: `Background agent group completed: ${label}\n\n${notifications}${trailer}`,
               details,
               ...(delivered.length > 0 ? { delivered } : {}),
+              ...(noticed.length > 0 ? { noticed } : {}),
             };
           },
         });
@@ -974,6 +986,14 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     if (!isTopLevelAgent(record) || detachedSessionFile !== undefined) return;
     record.settleSeq = manager.nextSequence();
     pi.events.emit("subagents:failed", buildEventData(record));
+  }, (note) => {
+    // The retention sweep dropped a result nobody read: say so now, where the parent sees it on
+    // its next turn, instead of leaving `Agent not found` to be discovered by a later lookup (#330).
+    pi.sendMessage({
+      customType: "subagent-reaped",
+      content: `${describeEvicted(note)}. Its result was never read and its record is gone; reopen it with steer_subagent or Agent resume if its session is still saved.`,
+      display: true,
+    }, { deliverAs: "nextTurn" });
   });
 
   // A live survivor of an orphaned manager keeps its handle: reusing it would make a lifecycle listener
@@ -1473,7 +1493,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       const pending = outbox.takePending();
       if (pending) {
         // Not sent here: the session that reads the spool is the one that sees it.
-        const { delivered: _unsent, ...spooled } = pending;
+        const { delivered: _unsent, noticed: _unseen, ...spooled } = pending;
         const heldIds = [pending.details.id, ...(pending.details.others?.map(other => other.id) ?? [])];
         const evicted = manager.evictionNotes(heldIds);
         const tombstones = manager.evictionTombstones(heldIds);

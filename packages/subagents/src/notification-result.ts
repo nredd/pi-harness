@@ -61,10 +61,14 @@ export function renderNotice(frame: NoticeFrame, result: string): string {
   return `${frame.head}\n${RESULT_FRAMING}\n<result>${escapeXml(result)}</result>\n${frame.tail}`;
 }
 
-/** The notice clipped to `share` (at most its cap), and whether it reads the result. */
-export function clipNotice(parts: NoticeParts, share?: number): { text: string; delivered: boolean } {
+/**
+ * The notice clipped to `share` (at most its cap). `delivered`: it reads the
+ * result. `complete`: it carries the whole body, which for a failure is all the
+ * parent could learn by asking.
+ */
+export function clipNotice(parts: NoticeParts, share?: number): { text: string; delivered: boolean; complete: boolean } {
   const clipped = clipResult(parts.body, Math.min(share ?? parts.cap, parts.cap), parts.outputFile);
-  return { text: renderNotice(parts, clipped.text), delivered: clipped.complete && !parts.failed };
+  return { text: renderNotice(parts, clipped.text), delivered: clipped.complete && !parts.failed, complete: clipped.complete };
 }
 
 /** A result as a notice carries it, and whether that is all of it. */
