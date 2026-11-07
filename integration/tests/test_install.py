@@ -13,6 +13,7 @@ from __future__ import annotations
 import ast
 import builtins
 import errno
+import functools
 import hashlib
 import inspect
 import io
@@ -4949,7 +4950,7 @@ def pending_reuse_journal(harness: Harness, target: Path, kind: str, *, recorded
     Parameters:
         harness (Harness): isolated installer.
         target (Path): journaled target.
-        kind (str): `file` or `symlink`, the live (and recorded) kind.
+        kind (str): `file`, `symlink` or `directory`, the live (and recorded) kind.
         recorded (bytes): contents the journal's original digest was taken from.
         live (bytes): contents of the live entry now.
 
@@ -4958,6 +4959,13 @@ def pending_reuse_journal(harness: Harness, target: Path, kind: str, *, recorded
     """
     layout = harness.layout
     recovery_entry(target, kind, live.decode())
+    if kind == "directory":
+        scratch = harness.home / "recorded-tree"
+        recovery_entry(scratch, kind, recorded.decode())
+        digest = install.RestoreHasher().identity(scratch).sha256
+        install.remove(scratch)
+    else:
+        digest = hashlib.sha256(recorded).hexdigest()
     backups = layout.backups / "reuse"
     backups.mkdir(parents=True)
     name, _ = install.journaled_path(layout, target)
@@ -4966,7 +4974,7 @@ def pending_reuse_journal(harness: Harness, target: Path, kind: str, *, recorded
         "backup": str(backups / name),
         "pending": True,
         "original": list(install.entry_identity(target.lstat())),
-        "original_sha256": hashlib.sha256(recorded).hexdigest(),
+        "original_sha256": digest,
     }
     install.write_atomic(
         layout.journal, json.dumps({"backups": str(backups), "steps": [step]}), mode=install.JOURNAL_MODE
@@ -4974,13 +4982,17 @@ def pending_reuse_journal(harness: Harness, target: Path, kind: str, *, recorded
     return backups / name
 
 
-@pytest.mark.parametrize("kind", ["file", "symlink"])
+@pytest.mark.parametrize("kind", ["file", "symlink", "directory"])
 def test_same_kind_inode_reuse_with_other_content_is_not_the_original(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
     """Issue 486: an identical four-field fingerprint with a different digest keeps the journal."""
     harness = Harness(tmp_path, monkeypatch)
-    target = harness.layout.state if kind == "file" else harness.layout.link
+    target = {
+        "file": harness.layout.state,
+        "symlink": harness.layout.link,
+        "directory": harness.layout.agent_dir / "npm",
+    }[kind]
     pending_reuse_journal(harness, target, kind, recorded=b"ORIGINAL", live=b"RECREATED")
     before = tree(harness.home)
     with pytest.raises(RollbackError, match=r"Expected backup.*missing"):
@@ -4989,13 +5001,17 @@ def test_same_kind_inode_reuse_with_other_content_is_not_the_original(
     assert harness.layout.journal.exists()
 
 
-@pytest.mark.parametrize("kind", ["file", "symlink"])
+@pytest.mark.parametrize("kind", ["file", "symlink", "directory"])
 def test_same_kind_original_with_matching_digest_rolls_back_cleanly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
     """The never-moved original still matches fingerprint AND digest, so the journal is dropped."""
     harness = Harness(tmp_path, monkeypatch)
-    target = harness.layout.state if kind == "file" else harness.layout.link
+    target = {
+        "file": harness.layout.state,
+        "symlink": harness.layout.link,
+        "directory": harness.layout.agent_dir / "npm",
+    }[kind]
     pending_reuse_journal(harness, target, kind, recorded=b"ORIGINAL", live=b"ORIGINAL")
     assert rollback(harness.layout) == []
     assert not harness.layout.journal.exists()
@@ -5056,10 +5072,10 @@ def test_pending_step_with_digest_restores_a_present_backup(
     assert not harness.layout.journal.exists()
 
 
-def test_switch_records_the_digest_of_file_and_link_originals_only(
+def test_switch_records_the_digest_of_every_original_kind(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`record` hashes file and symlink originals; trees keep the four-field fingerprint."""
+    """`record` hashes file, symlink and tree originals."""
     harness = Harness(tmp_path, monkeypatch)
     layout = harness.layout
     recovery_entry(layout.state, "file", "STATE BYTES")
@@ -5074,7 +5090,9 @@ def test_switch_records_the_digest_of_file_and_link_originals_only(
     steps = {Path(step["target"]).name: step for step in journal.steps}
     assert steps["installed.json"]["original_sha256"] == hashlib.sha256(b"STATE BYTES").hexdigest()
     assert steps["pi"]["original_sha256"] == hashlib.sha256(b"somewhere/else").hexdigest()
-    assert "original_sha256" not in steps["npm"]
+    scratch = harness.home / "expected-tree"
+    recovery_entry(scratch, "directory", "tree")
+    assert steps["npm"]["original_sha256"] == install.RestoreHasher().identity(scratch).sha256
 
 
 def test_saving_a_backup_drops_the_pending_digest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -5095,11 +5113,15 @@ def test_saving_a_backup_drops_the_pending_digest(tmp_path: Path, monkeypatch: p
     install.load_journal(layout)
 
 
-def test_unhashable_original_is_not_recorded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("kind", ["file", "directory"])
+def test_unhashable_original_is_not_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
     """A hashing failure while recording aborts before the step is journaled."""
     harness = Harness(tmp_path, monkeypatch)
     layout = harness.layout
-    recovery_entry(layout.state, "file", "STATE BYTES")
+    target = layout.state if kind == "file" else layout.agent_dir / "npm"
+    recovery_entry(target, kind, "STATE BYTES")
 
     def refuse(self: install.RestoreHasher, path: Path | str, **kwargs: Any) -> install.RestoreIdentity:
         """Fail like an over-budget or vanished file.
@@ -5121,8 +5143,27 @@ def test_unhashable_original_is_not_recorded(tmp_path: Path, monkeypatch: pytest
     with AnchoredStore() as anchors:
         journal = Journal(layout, layout.backups / "refused", anchors=anchors)
         with journal.open_backups(create=True), pytest.raises(OSError, match="hashing byte limit"):
-            journal.record(layout.state, "installed.json")
+            journal.record(target, "entry")
     assert journal.steps == []
+
+
+def test_tree_over_the_entry_bound_is_refused_at_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tree too large to digest is refused before journaling, never recorded without identity."""
+    harness = Harness(tmp_path, monkeypatch)
+    layout = harness.layout
+    target = layout.agent_dir / "npm"
+    recovery_entry(target, "directory", "tree")
+    monkeypatch.setattr(
+        install, "RestoreHasher", functools.partial(install.RestoreHasher, remaining_entries=1)
+    )
+    with AnchoredStore() as anchors:
+        journal = Journal(layout, layout.backups / "large", anchors=anchors)
+        with journal.open_backups(create=True), pytest.raises(OSError, match="entry limit"):
+            journal.record(target, "npm")
+    assert journal.steps == []
+    assert (target / "child").read_text() == "tree"
 
 
 @pytest.mark.parametrize("digest", ["", "f" * 63, "G" * 64, 7, None])

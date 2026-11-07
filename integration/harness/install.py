@@ -1283,8 +1283,9 @@ class Journal:
             UnsupportedError: the target changed since planning into a kind a restore would
                 refuse; it is not recorded, so the journal stays restorable and the switch
                 rolls back the steps before it.
-            OSError: a file or link original could not be hashed (byte bound, I/O error, or a
-                swap to a special file); it is not recorded, so the switch rolls back likewise.
+            OSError: an original (file, link or tree) could not be hashed (byte or entry bound, I/O
+                error, or a swap to a special file); it is not recorded, so the switch rolls back
+                likewise.
         """
         if self.backup_fd is not None and target.parent.exists(follow_symlinks=False):
             self.anchors.directory(target.parent)
@@ -1296,8 +1297,7 @@ class Journal:
         if backup is not None:
             info = target.lstat()
             step |= {"pending": True, "original": list(entry_identity(info))}
-            if stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
-                step["original_sha256"] = RestoreHasher().identity(target).sha256
+            step["original_sha256"] = RestoreHasher().identity(target).sha256
         self.steps.append(step)
         self.persist()
         return backup
@@ -1555,7 +1555,8 @@ class Step:
 
         Device, inode, ctime and type can all repeat when a same-kind entry is recreated within one
         coarse ctime tick, so a recorded content digest must match too. Journals without one (older
-        builds, and directory trees, which are not hashed at record time) rely on the four fields.
+        builds) rely on the four fields. For a tree the digest covers sorted names, kinds and
+        content hashes, the same one restore verifies.
 
         Parameters:
             live (RestoreIdentity | None): content identity of the live target, or absence.
