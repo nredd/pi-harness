@@ -431,6 +431,31 @@ def test_ensure_stock_pi_resolves_a_symlinked_prefix(tmp_path: Path) -> None:
     assert pi_bin == real / "stock" / "node_modules" / ".bin" / "pi"
 
 
+def test_ensure_stock_pi_reuses_an_existing_install(
+    tmp_path: Path, sandbox: pc.Sandbox, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A prefix that already holds a manifest and `pi` is verified, never rewritten or reinstalled.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        sandbox (pc.Sandbox): Scrubbed environment.
+        monkeypatch (pytest.MonkeyPatch): Records `run` and `verify_stock_pi` calls.
+    """
+    prefix = tmp_path / "stock"
+    pi_bin = prefix / "node_modules" / ".bin" / "pi"
+    pi_bin.parent.mkdir(parents=True)
+    pi_bin.write_text("#!/bin/sh\n")
+    (prefix / "package.json").write_text("sentinel")
+    ran: list[object] = []
+    verified: list[tuple[Path, Path]] = []
+    monkeypatch.setattr(pc, "run", lambda *args, **_kwargs: ran.append(args))
+    monkeypatch.setattr(pc, "verify_stock_pi", lambda root, pi, _sandbox: verified.append((root, pi)))
+    assert pc.ensure_stock_pi(prefix, sandbox) == pi_bin
+    assert ran == []
+    assert verified == [(prefix.resolve(), pi_bin.resolve())]
+    assert (prefix / "package.json").read_text() == "sentinel"
+
+
 def test_run_rejects_relative_executable(tmp_path: Path) -> None:
     """Commands resolve through absolute paths only.
 
@@ -807,6 +832,20 @@ def discovery_context(root: Path, sandbox: pc.Sandbox) -> pc.Context:
     return pc.Context(Path("pi"), sandbox, root / "a" / "b" / "installed", artifact, root, ())
 
 
+def test_derive_closure_visits_a_shared_dependency_once() -> None:
+    """A diamond (`a` and `b` both need `c`) lists `c` once and does not revisit it."""
+    installed = {
+        "node_modules/a": pc.InstalledPackage("1.0.0", {"c": "1", "b": "1"}, frozenset()),
+        "node_modules/b": pc.InstalledPackage("1.0.0", {"c": "1"}, frozenset()),
+        "node_modules/c": pc.InstalledPackage("1.0.0", {"a": "1"}, frozenset()),
+    }
+    assert pc.derive_closure("node_modules/a", installed) == {
+        "node_modules/a",
+        "node_modules/b",
+        "node_modules/c",
+    }
+
+
 @pytest.mark.parametrize("exited", [True, False])
 def test_stop_hostile_child_kills_only_a_live_child(*, exited: bool) -> None:
     """Reap an already-exited marker without signalling it, and kill a live one.
@@ -1044,6 +1083,15 @@ def test_discovery_targets_the_known_child_and_names_a_partial_scan(
     else:
         with pytest.raises(pc.ContractError, match=message):
             pc.discover_child_with_installed_sampler(ctx, child, "0" * 32)
+
+
+def test_stop_hostile_child_tolerates_a_child_without_a_pipe() -> None:
+    """A child spawned without a stdout pipe is still reaped and nothing is closed."""
+    with subprocess.Popen([sys.executable, "-c", "pass"]) as child:
+        child.wait(timeout=10)
+        pc.stop_hostile_child(child)
+        assert child.returncode == 0
+        assert child.stdout is None
 
 
 def test_secret_windows_cover_every_twelve_char_fragment() -> None:
@@ -1637,6 +1685,29 @@ def test_models_json_registers_provider() -> None:
     assert provider["api"] == "openai-completions"
     assert provider["apiKey"] == fp.PROVIDER_API_KEY
     assert [m["id"] for m in provider["models"]] == ["m", "n"]
+
+
+def test_main_keeps_the_work_dir_and_skips_an_absent_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--keep` leaves the scratch directory, and without `--report` the evidence only goes to stdout.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        monkeypatch (pytest.MonkeyPatch): Replaces the gates with doubles.
+        capsys (pytest.CaptureFixture[str]): Captured stdout.
+    """
+    monkeypatch.setattr(pc, "run_audit_gate", lambda _work, _contract: {"name": "@nredd/pi-preset"})
+    report = pc.validate_report(good_report())
+    monkeypatch.setattr(pc, "run_gate", lambda *_args: report)
+    audit_work = tmp_path / "audit"
+    gate_work = tmp_path / "gate"
+    assert pc.main(["--audit-preset", "--keep", "--work-dir", str(audit_work)]) == 0
+    assert json.loads(capsys.readouterr().out) == {"name": "@nredd/pi-preset"}
+    assert audit_work.is_dir()
+    assert pc.main(["--keep", "--work-dir", str(gate_work)]) == 0
+    assert capsys.readouterr().out == pc.serialize_report(report)
+    assert gate_work.is_dir()
 
 
 def test_main_refuses_nonempty_work_dir(tmp_path: Path) -> None:
