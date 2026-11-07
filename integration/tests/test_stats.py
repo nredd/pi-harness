@@ -82,6 +82,24 @@ def test_portable_command_copies_only_artifact_and_strips_environment(
     assert not (home / ".pi").exists()
 
 
+def test_portable_command_runs_an_artifact_already_in_place(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bundle already at the standalone path is run as-is, not copied over itself."""
+    home = tmp_path / "clean-home"
+    standalone = home / stats.PORTABLE_ARTIFACT
+    standalone.parent.mkdir(parents=True)
+    standalone.write_text("// already in place\n")
+    monkeypatch.setattr(stats.shutil, "which", Mock(return_value="/absolute/node"))
+    copy = Mock(side_effect=AssertionError("must not copy onto itself"))
+    monkeypatch.setattr(stats.shutil, "copy2", copy)
+    run = Mock(return_value="ok\n")
+    monkeypatch.setattr(stats.subprocess, "check_output", run)
+    assert stats.portable_command(standalone, home, ["status"]) == "ok\n"
+    copy.assert_not_called()
+    assert run.call_args.args[0] == ["/absolute/node", str(standalone), "status"]
+
+
 def test_export_validates_public_cli_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The only JSON protocol mirrored by the helper is the approved stdout result."""
     machine_id = "00000000-0000-4000-8000-000000000001"
