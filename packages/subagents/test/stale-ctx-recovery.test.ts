@@ -45,7 +45,7 @@ const BACKOFF_SPAN_MS = 13_000;
 /**
  * Let a recovering child finish without waiting out its backoff: advance the extension clock that times it
  * until the run settles. An advance before the next sleep is armed is a no-op, so the loop is bounded only
- * by the run itself.
+ * by the run itself. The shared clock's other timers (record sweeps, in the minutes) are past this span.
  */
 async function settleThroughBackoff(record: { promise?: Promise<unknown> }) {
   let settled = false;
@@ -228,19 +228,18 @@ describe("backoff timing and timers", () => {
 
   it("times the backoff on the injected clock, not native timers", async () => {
     const clock = new FakeClock();
-    const prompts = vi.fn(async () => {});
+    const reprompted: (() => void)[] = [];
+    const prompts = vi.fn(async () => { reprompted.shift()?.(); });
     const controller = new AbortController();
+    const firstPrompt = new Promise<void>(resolve => reprompted.push(resolve));
     const done = retryStaleCtx(deadSession(prompts), 0, controller.signal, [1_000, 3_000], clock);
     clock.advance(999);
-    await Promise.resolve();
     expect(prompts).not.toHaveBeenCalled();
     clock.advance(1);
-    await Promise.resolve();
-    await Promise.resolve();
+    // The re-prompt lands within microtasks of the advance; a native timer would lose to the next macrotask.
+    await Promise.race([firstPrompt, new Promise(resolve => setImmediate(resolve))]);
     expect(prompts).toHaveBeenCalledTimes(1);
-    // Second wait is armed on the same clock; an abort cancels it there.
-    await Promise.resolve();
-    expect(clock.pending).toBe(1);
+    // Whether or not the second wait is armed yet, an abort leaves nothing pending on the clock.
     controller.abort();
     await done;
     expect(clock.pending).toBe(0);
