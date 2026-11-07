@@ -774,6 +774,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
         content: notice.render().text + footer,
         details: notice.details,
         record: historyRecord(record),
+        evicted: manager.evictionNotes([record.id]),
+        tombstones: manager.evictionTombstones([record.id]),
         lifecycle: {
           channel: lifecycleChannel(record),
           data: survivorEventData(buildEventData(record)),
@@ -815,6 +817,9 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 
   function deliverDetachedResult(result: DetachedResult) {
     try {
+      // First: the notice names this id, and a read of it must not say "not found".
+      for (const note of result.evicted ?? []) manager.rememberEvicted(note);
+      for (const entry of result.tombstones ?? []) manager.rememberTombstone(entry);
       // Before the notice: a listener must see the owner settle, not stay "running".
       if (result.lifecycle) pi.events.emit(result.lifecycle.channel, result.lifecycle.data);
       if (result.record) {
@@ -1469,7 +1474,10 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       if (pending) {
         // Not sent here: the session that reads the spool is the one that sees it.
         const { delivered: _unsent, ...spooled } = pending;
-        try { spoolDetached(sessionFile, { id: nanoid(8), ...spooled }); }
+        const heldIds = [pending.details.id, ...(pending.details.others?.map(other => other.id) ?? [])];
+        const evicted = manager.evictionNotes(heldIds);
+        const tombstones = manager.evictionTombstones(heldIds);
+        try { spoolDetached(sessionFile, { id: nanoid(8), ...spooled, evicted, tombstones }); }
         catch { console.error("[pi-subagents] Could not spool held completion notices; results remain in their transcripts."); }
       }
     }
@@ -2599,7 +2607,10 @@ Terse command-style prompts produce shallow, generic work.
           if (!entry) {
             // Evicted with no session file left to reopen: `rememberAgents` off, or the tombstone was dropped.
             const note = manager.getEvictedNote(latest);
-            const why = note ? `Cannot resume agent "${latest}": no saved session is left to reopen.\n${describeEvicted(note)}` : agentNotFound(latest);
+            const gone = note?.nameTaken
+              ? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.`
+              : "no saved session is left to reopen.";
+            const why = note ? `Cannot resume agent "${latest}": ${gone}\n${describeEvicted(note)}` : agentNotFound(latest);
             return textResult(`${continued}${why}`);
           }
           // The reopen is a fresh detached spawn: nothing can block on it here.
