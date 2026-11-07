@@ -11,7 +11,7 @@ import { AgentManager } from "../src/agent-manager.js";
 import { getAgentConfig } from "../src/agent-types.js";
 import { createSubagentsExtension } from "../src/index.js";
 import type { AgentRecord } from "../src/types.js";
-import { setWorktreeIsolationEnabled } from "../src/worktree.js";
+import { isWorktreeIsolationEnabled, setWorktreeIsolationEnabled } from "../src/worktree.js";
 import { type BootedPi, ctx, type Hermetic, hermeticDir, makePi, startSession } from "./helpers/boot-extension.js";
 import { FakeClock } from "./helpers/fake-clock.js";
 import { answer, barrier, calls } from "./helpers/scenario-session.js";
@@ -189,15 +189,16 @@ describe("menu conversation viewer", () => {
   });
 
   it.each([true, false])("offers the isolation field to the generator only when worktrees are on (%s)", async enabled => {
+    const previous = isWorktreeIsolationEnabled();
     setWorktreeIsolationEnabled(enabled);
     const prompts: string[] = [];
-    vi.spyOn(AgentManager.prototype, "spawnAndWait").mockImplementation(async (_pi, _ctx, _type, prompt) => {
+    const spawnAndWait = vi.spyOn(AgentManager.prototype, "spawnAndWait").mockImplementation(async (_pi, _ctx, _type, prompt) => {
       prompts.push(prompt);
       return { id: "generator", record: { status: "completed" } as AgentRecord };
     });
     try {
       await command();
-    } finally { setWorktreeIsolationEnabled(true); vi.restoreAllMocks(); }
+    } finally { setWorktreeIsolationEnabled(previous); spawnAndWait.mockRestore(); }
     expect(prompts).toHaveLength(1);
     expect(prompts[0].includes('isolation: <"worktree"')).toBe(enabled);
   });

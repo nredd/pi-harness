@@ -20,6 +20,7 @@ function booted() {
   Reflect.deleteProperty(globalThis, managerKey);
   const b = makePi();
   subagentsExtension(b.pi);
+  lifecycle = b.lifecycle;
   return b;
 }
 
@@ -30,7 +31,10 @@ async function spawnBackground(b: ReturnType<typeof makePi>, description: string
 }
 
 let env: Hermetic | undefined;
-afterEach(() => {
+let lifecycle: Map<string, (event: unknown, ctx: unknown) => unknown> | undefined;
+afterEach(async () => {
+  await lifecycle?.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, ctx());
+  lifecycle = undefined;
   env?.restore();
   env = undefined;
   vi.restoreAllMocks();
@@ -64,7 +68,5 @@ describe("failure notice for a record that lost its error text and completion ti
     expect(message.content).toContain("Error: unknown");
     expect(message.content).toContain("<duration_ms>1000</duration_ms>");
     expect(message.details.durationMs).toBe(1_000);
-
-    await b.lifecycle.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" }, ctx());
   });
 });

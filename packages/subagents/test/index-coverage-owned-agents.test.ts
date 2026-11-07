@@ -84,10 +84,15 @@ afterEach(() => {
   env.restore();
 });
 
+/** `hermeticDir` creates the project's `.pi` directory. */
+function writeProjectSettings(dir: string, settings: Record<string, unknown>) {
+  writeFileSync(join(dir, ".pi", "settings.json"), JSON.stringify(settings));
+}
+
 describe("model scope without a caller-supplied config root", () => {
   it("reads enabledModels from the process cwd", async () => {
     const b = bootWithBus();
-    mkdirProjectSettings(env.dir, { enabledModels: ["anthropic/claude-haiku-4-5"] });
+    writeProjectSettings(env.dir, { enabledModels: ["anthropic/claude-haiku-4-5"] });
     const models = [
       { id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic" },
       { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", provider: "anthropic" },
@@ -97,10 +102,6 @@ describe("model scope without a caller-supplied config root", () => {
     await quit(b);
   });
 });
-
-function mkdirProjectSettings(dir: string, settings: Record<string, unknown>) {
-  writeFileSync(join(dir, ".pi", "settings.json"), JSON.stringify(settings));
-}
 
 describe("owned agents on top-level lifecycle channels", () => {
   it("does not announce a steer of an owned agent, but does for a top-level one", async () => {

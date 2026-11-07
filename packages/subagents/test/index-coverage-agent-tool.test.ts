@@ -9,7 +9,7 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
-import { ADMIT_CHANNEL } from "../src/quota-admission.js";
+import { ADMIT_CHANNEL, QUOTA_RESTART_GRACE_MS } from "../src/quota-admission.js";
 import { ctx, flush, type Hermetic, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
 
 const managerKey = Symbol.for("pi-subagents:manager");
@@ -196,5 +196,28 @@ describe("scheduling a cron job that can never fire", () => {
     }, undefined, undefined, parent));
 
     expect(text).toContain("Next run: (unknown).");
+  });
+});
+
+describe("a quota-blocked background dispatch that parks", () => {
+  it("tells the model the one-shot's own start time", async () => {
+    const resetAt = Date.now() + 3_600_000;
+    const bus = new EventEmitter();
+    bus.on(ADMIT_CHANNEL, (raw: { requestId: string }) => {
+      queueMicrotask(() => bus.emit(`${ADMIT_CHANNEL}:reply:${raw.requestId}`, { success: true, data: { ok: false, resetAt } }));
+    });
+    const { tools } = boot({ schedulingEnabled: true }, bus);
+    const model = { provider: "fixture", id: "parent", name: "Parent", api: "openai-completions" };
+    const parent = ctx({
+      model, modelRegistry: { find: () => model, getAll: () => [model], getAvailable: () => [model] },
+      sessionManager: { getSessionId: () => "parked", getBranch: () => [] },
+    });
+    await lifecycle!.get("session_start")?.({ type: "session_start", reason: "startup" }, parent);
+
+    const text = textOf(await tools.get("Agent").execute("tc", {
+      prompt: "go", description: "parked", subagent_type: "general-purpose", run_in_background: true,
+    }, undefined, undefined, parent));
+
+    expect(text).toContain(`to start at ${new Date(resetAt + QUOTA_RESTART_GRACE_MS).toISOString()}. Manage via`);
   });
 });
