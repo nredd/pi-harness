@@ -157,9 +157,9 @@ export async function admitModelSelection(selection: ModelSelection, registry: M
   selection.tierAdmitted = true;
   if (selection.tier.kind === "routed" || selection.tier.kind === "static") selection.model = selection.tier.model;
   if (selection.tier.kind === "exhausted") return selection.tier.block;
-  if (selection.tier.kind === "unavailable" || selection.tier.kind === "unmapped") {
-    const mode = selection.tier.kind === "unmapped" ? getModelResolution().onUnmapped : getModelResolution().onUnavailable;
-    if (mode === "error") throw new Error(`Model tier @${selection.tier.tier} is ${selection.tier.kind}.`);
+  // The binding is handed to `resolveTier`, so it is never `unmapped` here.
+  if (selection.tier.kind === "unavailable") {
+    if (getModelResolution().onUnavailable === "error") throw new Error(`Model tier @${selection.tier.tier} is unavailable.`);
     selection.model = selection.tierParent;
     selection.outcome = "fallback";
     selection.fallback = modelFallbackTo(selection.requested ?? `@${selection.tier.tier}`, selection.tierParent);

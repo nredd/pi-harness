@@ -209,3 +209,18 @@ def test_rpc_eof_timeout_carries_child_stderr(tmp_path: Path, monkeypatch: pytes
         process.__exit__(None, None, None)
     assert process.process.returncode is not None
     assert process.stderr_path.read_bytes() == RAW_STDERR
+
+
+def test_rpc_eof_timeout_keeps_the_original_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A session that ignores EOF is killed, but the in-flight exception is not replaced."""
+    box = build_sandbox(tmp_path / "box")
+    child = tmp_path / "child.py"
+    child.write_text("import sys,time\nsys.stdin.readline()\ntime.sleep(60)\n")
+    monkeypatch.setattr(rpc, "pi_command", lambda: [sys.executable, str(child)])
+    monkeypatch.setattr(rpc, "EOF_EXIT_TIMEOUT_S", 0.5)
+    process = rpc.RpcProcess(box, {})
+    process.send({"type": "get_state"})
+    original = AssertionError("original failure")
+    process.__exit__(AssertionError, original, None)
+    assert process.process.returncode is not None
+    assert process.process.returncode != 0

@@ -95,6 +95,31 @@ describe("detached result spool", () => {
     drainDetached(`${file}.elsewhere`);
   });
 
+  it("keeps a newer watcher when a replaced one unsubscribes late", () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const stopFirst = watchDetached(file, first);
+    const stopSecond = watchDetached(file, second);
+    stopFirst();
+    spoolDetached(file, { id: "n", content: "", details: {}, record: {} });
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledTimes(1);
+    stopSecond();
+    drainDetached(file);
+  });
+
+  it("names the spool directory for uid 0 where the platform has no getuid", async () => {
+    const { detachedDir } = await import("../src/detached-results.js");
+    const original = Object.getOwnPropertyDescriptor(process, "getuid");
+    Object.defineProperty(process, "getuid", { value: undefined, configurable: true });
+    try {
+      expect(detachedDir(file)).toContain("pi-subagents-0");
+    } finally {
+      if (original) Object.defineProperty(process, "getuid", original);
+      else delete (process as { getuid?: unknown }).getuid;
+    }
+  });
+
   it("drops a corrupt entry instead of failing the drain", async () => {
     const { detachedDir } = await import("../src/detached-results.js");
     writeFileSync(join(detachedDir(file), "0-bad.json"), "{nope");

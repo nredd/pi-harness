@@ -196,6 +196,14 @@ describe("cloning the conversation", () => {
     expect(loaders[0].options.systemPromptOverride(undefined)).toBe("the live system prompt");
   });
 
+  it("keeps the loader's own prompt when the live system prompt is empty", async () => {
+    cloneSession(callsAgent());
+
+    await runMentionClone(opts({ ctx: mainCtx({ getSystemPrompt: vi.fn(() => "") }) }));
+
+    expect(loaders[0].options.systemPromptOverride("from SYSTEM.md")).toBe("from SYSTEM.md");
+  });
+
   it("carries the live system prompt rather than the one it rebuilt", async () => {
     // createAgentSession derives a prompt from cwd and agentDir. Close, but not
     // what the user's model is working under — extensions add to it per turn.
