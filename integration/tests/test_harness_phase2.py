@@ -126,7 +126,9 @@ def test_session_cost_skips_non_message_and_non_object_lines(tmp_path: Path) -> 
     history.write_text(
         "\n".join(
             [
-                json.dumps({"type": "session", "message": {"usage": {"cost": {"total": 7.0}}}}),
+                json.dumps(
+                    {"type": "session", "message": {"role": "assistant", "usage": {"cost": {"total": 7.0}}}}
+                ),
                 json.dumps([1, 2]),
                 json.dumps(
                     {"type": "message", "message": {"role": "assistant", "usage": {"cost": {"total": 0.5}}}}
