@@ -87,6 +87,15 @@ def test_start_writes_config_and_launches_in_sandbox(pane: TmuxPane, box: Sandbo
     assert (box.root / "pane.stderr").is_file()
 
 
+def test_launch_without_a_wait_pattern_returns_before_the_first_frame(
+    monkeypatch: pytest.MonkeyPatch, box: Sandbox
+) -> None:
+    """`wait_pattern=None` hands back a live pane without waiting; the frame still arrives later."""
+    with stub_tui(monkeypatch, box, name="nowait", wait_pattern=None) as live:
+        assert live.is_alive()
+        live.wait_for(r"\bmain\b")
+
+
 def test_styled_capture_keeps_escape_sequences(pane: TmuxPane) -> None:
     """`styled=True` is `capture-pane -e`: the footer keeps its SGR bold, the plain view does not."""
     styled = pane.capture(styled=True)

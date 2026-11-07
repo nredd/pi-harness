@@ -65,3 +65,10 @@ do not prove the cause of a guest-wide WSL2 stall.
 
 The package gate is `npm run check --workspace @nredd/pi-subagents` from the
 repository root. Focused tests are not a substitute for that gate or root CI.
+
+The stale-ctx recovery e2e tests in `test/stale-ctx-recovery.test.ts` (#105) time
+the retry backoff on the same `FakeClock`. `FakeClock.timeoutDelays` logs every
+one-shot delay requested; `settleThroughBackoff` advances exactly the next default
+delay (1s, 3s, 9s) once it appears there, never past other timers, and the tests
+assert the advance count equals the re-prompt count. A backoff timed on native
+timers never reaches the clock, so the count is 0 and both tests fail.
