@@ -1,5 +1,5 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { unlink } from "node:fs/promises";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { link, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,16 +8,19 @@ import {
 	atomicJson,
 	exportStats,
 	importStats,
+	type MachineSnapshot,
 	type Manifest,
+	machineIdentity,
 	readGlobal,
 	type Shard,
 	validateShard,
+	validateSnapshot,
 } from "../../src/stats/snapshot.ts";
 import { assistantLine, sessionFile } from "./fixtures.ts";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:fs/promises")>();
-	return { ...actual, unlink: vi.fn(actual.unlink) };
+	return { ...actual, unlink: vi.fn(actual.unlink), link: vi.fn(actual.link) };
 });
 
 const NOW = Date.parse("2026-10-18T12:00:00Z");
@@ -38,6 +41,7 @@ afterEach(() => {
 	vi.useRealTimers();
 	vi.restoreAllMocks();
 	vi.mocked(unlink).mockReset();
+	vi.mocked(link).mockReset();
 	rmSync(dir, { recursive: true, force: true });
 });
 
@@ -145,5 +149,77 @@ describe("snapshot bounded publication and session schemas", () => {
 		await expect(atomicJson(destination, { replacement: true })).rejects.toMatchObject({ code: "EISDIR" });
 		expect(vi.mocked(unlink)).toHaveBeenCalledOnce();
 		expect(readFileSync(join(destination, "last-good.json"), "utf8")).toBe('{"retained":true}');
+	});
+});
+
+describe("snapshot transaction and publication failures", () => {
+	/** Export one machine and import it, returning where its published files live. */
+	async function published() {
+		seed([7]);
+		const exported = await exportStats(producer, repo);
+		const manifest = JSON.parse(readFileSync(join(exported.snapshotDir, "manifest.json"), "utf8")) as Manifest;
+		const reference = manifest.shards[0];
+		if (!reference) throw new Error("Expected one shard");
+		const shardPath = join(exported.snapshotDir, reference.file);
+		return { exported, manifest, reference, shardPath, shard: JSON.parse(readFileSync(shardPath, "utf8")) as Shard };
+	}
+	const incomplete = (id: string) => ({ imported: 0, problems: [`Incomplete snapshot ${id}`] });
+
+	it("rejects a manifest published under another machine's directory", async () => {
+		const { exported } = await published();
+		const other = "22222222-2222-4222-8222-222222222222";
+		cpSync(exported.snapshotDir, join(repo, "machines", other), { recursive: true });
+		rmSync(exported.snapshotDir, { recursive: true });
+		expect(await importStats(viewer, repo)).toMatchObject(incomplete(other));
+	});
+
+	it("rejects a shard whose bytes changed but whose size did not", async () => {
+		const { exported, shardPath } = await published();
+		const text = readFileSync(shardPath, "utf8");
+		expect(text).toContain('"input":7');
+		writeFileSync(shardPath, text.replace('"input":7', '"input":8'));
+		expect(await importStats(viewer, repo)).toMatchObject(incomplete(exported.machineId));
+	});
+
+	it("rejects a digest-matching shard that is not in canonical JSON form", async () => {
+		const { exported, manifest, shard } = await published();
+		const text = JSON.stringify(shard, null, 1);
+		const sha256 = opaqueId(text);
+		const file = `${shard.month}-${sha256}.json`;
+		writeFileSync(join(exported.snapshotDir, file), text);
+		writeFileSync(
+			join(exported.snapshotDir, "manifest.json"),
+			JSON.stringify({ ...manifest, shards: [{ month: shard.month, file, sha256, bytes: Buffer.byteLength(text) }] }),
+		);
+		expect(await importStats(viewer, repo)).toMatchObject(incomplete(exported.machineId));
+	});
+
+	it("rejects a cached shard whose digest no longer matches the manifest", async () => {
+		const { exported } = await published();
+		await importStats(viewer, repo);
+		const cache = join(viewer, "pi-session-kit", "stats-global.json");
+		const doc = JSON.parse(readFileSync(cache, "utf8"));
+		const session = doc.machines[exported.machineId].shards[0].sessions[0];
+		session.endMs += 1;
+		writeFileSync(cache, JSON.stringify(doc));
+		expect((await readGlobal(viewer)).problems).toEqual(["Unreadable global cache"]);
+	});
+
+	it("rejects duplicate sessions or events across shards and events without session metadata", async () => {
+		const { manifest, shard } = await published();
+		const snapshot = (shards: Shard[]): MachineSnapshot => ({ manifest, shards });
+		expect(() => validateSnapshot(snapshot([shard]))).not.toThrow();
+		const sessionOnly = { ...shard, events: [] };
+		expect(() => validateSnapshot(snapshot([sessionOnly, sessionOnly]))).toThrow("Duplicate session metadata");
+		const eventOnly = { ...shard, sessions: [] };
+		expect(() => validateSnapshot(snapshot([shard, eventOnly]))).toThrow("Duplicate event identity");
+		expect(() => validateSnapshot(snapshot([eventOnly]))).toThrow("Missing session metadata");
+	});
+
+	it("surfaces a hard-link failure other than a concurrent publish, and removes its temporary file", async () => {
+		const agent = join(dir, "agent");
+		vi.mocked(link).mockRejectedValueOnce(Object.assign(new Error("no hard links"), { code: "EPERM" }));
+		await expect(machineIdentity(agent)).rejects.toMatchObject({ code: "EPERM" });
+		expect(readdirSync(join(agent, "pi-session-kit"))).toEqual([]);
 	});
 });

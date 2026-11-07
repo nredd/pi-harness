@@ -25,18 +25,13 @@ export async function main(): Promise<void> {
 		options.set(flag, value);
 	}
 	const dir = resolve(options.get("--agent-dir") ?? agentDir());
-	if (command === "export" && options.has("--output") && !options.has("--input")) {
+	const output = options.get("--output");
+	const input = options.get("--input");
+	if (command === "export" && output !== undefined && input === undefined) {
 		const root = options.get("--sessions-dir");
-		console.log(
-			JSON.stringify(await exportStats(dir, resolve(options.get("--output") ?? ""), root ? resolve(root) : undefined)),
-		);
-	} else if (
-		command === "import" &&
-		options.has("--input") &&
-		!options.has("--output") &&
-		!options.has("--sessions-dir")
-	) {
-		const result = await importStats(dir, resolve(options.get("--input") ?? ""));
+		console.log(JSON.stringify(await exportStats(dir, resolve(output), root ? resolve(root) : undefined)));
+	} else if (command === "import" && input !== undefined && output === undefined && !options.has("--sessions-dir")) {
+		const result = await importStats(dir, resolve(input));
 		console.log(JSON.stringify(result));
 		if (result.problems.length) {
 			console.error(result.problems.join("\n"));

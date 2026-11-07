@@ -78,12 +78,12 @@ export function bucketize(
 	for (let b = 0; b < count; b++) {
 		const end = addDays(to, -(count - 1 - b) * size);
 		const start = addDays(end, -(size - 1));
-		const values = new Array<number>(seriesCount).fill(0);
+		let values = new Array<number>(seriesCount).fill(0);
 		for (let i = 0; i < size; i++) {
 			const day = addDays(start, i);
 			if (day < from) continue;
 			const v = perDay(day);
-			for (let s = 0; s < seriesCount; s++) values[s] = (values[s] ?? 0) + (v[s] ?? 0);
+			values = values.map((total, s) => total + (v[s] ?? 0));
 		}
 		buckets.push({ start: start < from ? from : start, values });
 	}
@@ -113,16 +113,18 @@ export function niceStep(x: number): number {
  */
 export function stretch(values: readonly number[], columns: number): number[] {
 	const n = values.length;
-	if (n === 0) return new Array<number>(columns).fill(0);
-	if (n === 1) return new Array<number>(columns).fill(values[0] ?? 0);
+	// Flat at the only value (or 0 when empty): the reducer keeps the last element.
+	if (n <= 1) return new Array<number>(columns).fill(values.reduce((_, value) => value, 0));
 	const out = new Array<number>(columns).fill(0);
 	const at = (k: number) => Math.round((k * (columns - 1)) / (n - 1));
-	for (let k = 0; k < n - 1; k++) {
-		const from = at(k);
-		const to = at(k + 1);
-		const a = values[k] ?? 0;
-		const b = values[k + 1] ?? 0;
-		for (let c = from; c <= to; c++) out[c] = to === from ? b : a + ((b - a) * (c - from)) / (to - from);
+	let a = 0;
+	for (const [k, b] of values.entries()) {
+		if (k > 0) {
+			const from = at(k - 1);
+			const to = at(k);
+			for (let c = from; c <= to; c++) out[c] = to === from ? b : a + ((b - a) * (c - from)) / (to - from);
+		}
+		a = b;
 	}
 	return out;
 }
@@ -164,29 +166,29 @@ export function plot<C extends string | number>(series: readonly Series<C>[], op
 
 	// Cells hold box-drawing ports, not glyphs: where series overlap their ports are OR-ed, so a
 	// crossing becomes `┴`/`┬`/`┼` and every line stays connected. The first series keeps the colour.
-	const grid: { ports: number; color?: C }[][] = Array.from({ length: height + 1 }, () =>
-		Array.from({ length: width }, () => ({ ports: 0 })),
-	);
+	const grid = new Map<number, { ports: number; color?: C }>();
 	const put = (y: number, x: number, ports: number, color: C) => {
-		const cell = grid[height - y]?.[x];
-		if (!cell) return;
+		const key = (height - y) * width + x;
+		const cell = grid.get(key) ?? { ports: 0 };
 		cell.ports |= ports;
 		cell.color ??= color;
+		grid.set(key, cell);
 	};
-	for (let s = 0; s < sampled.length; s++) {
-		const values = sampled[s] ?? [];
+	for (const [s, values] of sampled.entries()) {
 		const color = series[s]?.color as C;
-		for (let x = 0; x < width; x++) {
-			const y0 = row(values[x] ?? 0);
-			const y1 = row(values[x + 1] ?? 0);
-			if (y0 === y1) {
-				put(y0, x, L | R, color);
-				continue;
+		// `values` holds `width + 1` points: column `x` joins point `x` to point `x + 1`.
+		let y0 = 0;
+		for (const [i, value] of values.entries()) {
+			const y1 = row(value);
+			const x = i - 1;
+			if (x >= 0 && y0 === y1) put(y0, x, L | R, color);
+			else if (x >= 0) {
+				// enter from the left at y0, leave to the right at y1, vertical in between
+				put(y0, x, L | (y1 > y0 ? U : D), color);
+				put(y1, x, R | (y1 > y0 ? D : U), color);
+				for (let y = Math.min(y0, y1) + 1; y < Math.max(y0, y1); y++) put(y, x, U | D, color);
 			}
-			// enter from the left at y0, leave to the right at y1, vertical in between
-			put(y0, x, L | (y1 > y0 ? U : D), color);
-			put(y1, x, R | (y1 > y0 ? D : U), color);
-			for (let y = Math.min(y0, y1) + 1; y < Math.max(y0, y1); y++) put(y, x, U | D, color);
+			y0 = y1;
 		}
 	}
 
@@ -195,7 +197,7 @@ export function plot<C extends string | number>(series: readonly Series<C>[], op
 	for (let r = 0; r <= height; r++) {
 		const y = height - r;
 		const tick = Number.isInteger(y / perTick) ? y / perTick : -1;
-		const label = tick >= 0 ? (labels[tick] ?? "") : "";
+		const label = tick >= 0 ? labels[tick] : undefined;
 		const axis = tick >= 0 ? "┤" : "│";
 		let body = "";
 		let run = "";
@@ -204,15 +206,16 @@ export function plot<C extends string | number>(series: readonly Series<C>[], op
 			if (run) body += runColor !== undefined ? options.paint(runColor, run) : run;
 			run = "";
 		};
-		for (const cell of grid[r] ?? []) {
-			if (cell.color !== runColor) {
+		for (let x = 0; x < width; x++) {
+			const cell = grid.get(r * width + x);
+			if (cell?.color !== runColor) {
 				flush();
-				runColor = cell.color;
+				runColor = cell?.color;
 			}
-			run += GLYPH[cell.ports] ?? " ";
+			run += GLYPH[cell?.ports ?? 0] ?? " ";
 		}
 		flush();
-		lines.push(`${options.paint("axis", `${label.padStart(labelWidth)} ${axis}`)}${body}`);
+		lines.push(`${options.paint("axis", `${(label ?? "").padStart(labelWidth)} ${axis}`)}${body}`);
 	}
 	return { lines, gutter: labelWidth + 2, max };
 }

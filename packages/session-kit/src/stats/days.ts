@@ -1,5 +1,7 @@
 /** Local-calendar day keys (`YYYY-MM-DD`) and day arithmetic for `/stats`. DST-safe: built from `Date(y, m, d)`. */
 
+import { nth } from "./nth.ts";
+
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
 
 function pad(n: number): string {
@@ -14,8 +16,8 @@ export function dayKey(ms: number | Date): string {
 
 /** Local midnight of a day key. */
 export function keyDate(key: string): Date {
-	const [y, m, d] = key.split("-").map(Number);
-	return new Date(y ?? 1970, (m ?? 1) - 1, d ?? 1);
+	const [y, m, d] = key.split("-").map(Number) as [number, number, number];
+	return new Date(y, m - 1, d);
 }
 
 export function addDays(key: string, n: number): string {
@@ -39,11 +41,11 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 
 /** `Mon` for `Date#getDay()` 1. */
 export function weekdayName(day: number): string {
-	return WEEKDAYS[day] ?? "";
+	return nth(WEEKDAYS, day);
 }
 
 export function monthName(month: number): string {
-	return MONTHS[month] ?? "";
+	return nth(MONTHS, month);
 }
 
 /** `Oct 3` */

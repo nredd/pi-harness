@@ -17,6 +17,33 @@ it("distinguishes old, absent, invalid and future producer clocks without invent
 	);
 });
 
+it("ages a producer clock in minutes, hours and days", () => {
+	expect(timestampLabel(now - 5 * 60000, now)).toContain("(5m ago)");
+	expect(timestampLabel(now - 59 * 60000, now)).toContain("(59m ago)");
+	expect(timestampLabel(now - 3 * 3600000 - 1000, now)).toContain("(3h ago)");
+	expect(timestampLabel(now - 36 * 3600000, now)).toContain("(1d ago)");
+});
+
+it("lists remote machines of equal standing in machine id order, the local one first", () => {
+	const source = (machineId: string, local = false) => ({
+		machineId,
+		label: `label-${machineId}`,
+		local,
+		incomplete: false,
+	});
+	const lines = freshnessLines(
+		{
+			machines: 3,
+			remoteMachines: 2,
+			incomplete: false,
+			problems: [],
+			sources: [source("b-remote"), source("a-remote"), source("z-local", true)],
+		},
+		now,
+	).filter((line) => line.startsWith("label-"));
+	expect(lines).toEqual(["label-z-local [z-local] (local)", "label-a-remote [a-remote]", "label-b-remote [b-remote]"]);
+});
+
 it("keeps v1 producer times across new imports, corrupt/missing snapshots and last-good retention", async () => {
 	const root = mkdtempSync(join(tmpdir(), "stats-freshness-"));
 	const producer = join(root, "producer");

@@ -34,6 +34,15 @@ describe("modelCandidates", () => {
 		]);
 		expect(modelCandidates("work/t", aliases).map((m) => `${m.provider}/${m.id}`)).toEqual(["work/t"]);
 	});
+	it("drops a malformed configured model and de-duplicates aliases of the pinned default", () => {
+		expect(modelCandidates("nope")).toEqual([]);
+		const aliases = { "claude-haiku-5-5": ["anthropic/claude-haiku-5-5", "corp/h55"] };
+		expect(modelCandidates(undefined, aliases).map((m) => `${m.provider}/${m.id}`)).toEqual([
+			"anthropic/claude-haiku-5-5",
+			"corp/h55",
+			"openai-codex/gpt-6-luna",
+		]);
+	});
 	it("keeps slashes inside the id and rejects malformed refs", () => {
 		expect(parseModelRef("openrouter/a/b")).toEqual({ provider: "openrouter", id: "a/b" });
 		expect(parseModelRef("nope")).toBeUndefined();
@@ -49,6 +58,10 @@ describe("parseModelAliases", () => {
 	};
 	it("returns normalised aliases and drops invalid entries", () => {
 		expect(parseModelAliases(manifest(good), 0o600)).toEqual({ "claude-haiku-5-5": ["corp/h55"] });
+	});
+	it("drops aliases whose candidates are not a list", () => {
+		const raw = { modelAliases: { single: "corp/x", ok: ["corp/y"] } };
+		expect(parseModelAliases(manifest(raw), 0o600)).toEqual({ ok: ["corp/y"] });
 	});
 	it("is empty when aliases are absent", () => {
 		expect(parseModelAliases(manifest({}), 0o600)).toEqual({});
@@ -88,6 +101,9 @@ describe("sanitizeTitle", () => {
 		expect(sanitizeTitle("Refactor")).toBe("Refactor");
 		expect(sanitizeTitle("Fix login")).toBe("Fix login");
 	});
+	it("cuts a single over-long word at the character cap", () => {
+		expect(sanitizeTitle("x".repeat(80))).toBe("x".repeat(60));
+	});
 	it("returns undefined for empty output", () => {
 		expect(sanitizeTitle("  \n ")).toBeUndefined();
 		expect(sanitizeTitle('""')).toBeUndefined();
@@ -106,6 +122,20 @@ describe("firstExchange / buildTitlePrompt", () => {
 	});
 	it("is undefined without a user message", () => {
 		expect(firstExchange([{ type: "custom" }])).toBeUndefined();
+	});
+	it("ignores an assistant reply that precedes the first user message", () => {
+		const early = { type: "message", message: { role: "assistant", content: "early" } };
+		expect(firstExchange([early, entries[1], entries[2]])).toEqual({ user: "hello", assistant: "hi there" });
+		expect(firstExchange([early])).toBeUndefined();
+	});
+	it("flattens only text blocks and tolerates other content shapes", () => {
+		const message = (content: unknown) => [{ type: "message", message: { role: "user", content } }];
+		expect(firstExchange(message(undefined))).toBeUndefined();
+		expect(
+			firstExchange(
+				message([null, { type: "image" }, { type: "text" }, { type: "text", text: "a" }, { type: "text", text: "b" }]),
+			),
+		).toEqual({ user: "ab", assistant: "" });
 	});
 	it("caps the prompt inputs", () => {
 		const prompt = buildTitlePrompt({ user: "u".repeat(5000), assistant: "a".repeat(5000) });

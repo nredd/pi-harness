@@ -37,6 +37,8 @@ describe("relativeToCwd", () => {
 		expect(relativeToCwd("/w/src/a.ts", "/w")).toBe("src/a.ts");
 		expect(relativeToCwd("@src/a.ts", "/w")).toBe("src/a.ts");
 		expect(relativeToCwd("~/p/a.ts", "/h/p/..", "/h")).toBe("p/a.ts");
+		expect(relativeToCwd("~", "/h", "/h")).toBeUndefined();
+		expect(relativeToCwd("~", "/", "/h")).toBe("h");
 	});
 	it("rejects paths outside cwd and cwd itself", () => {
 		expect(relativeToCwd("../x.ts", "/w")).toBeUndefined();
