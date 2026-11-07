@@ -122,15 +122,32 @@ def test_preload_and_gc_load_on_every_runtime(engine: str, compiled_entrypoint: 
     assert report(engine, compiled_entrypoint, tmp_path, hooked) == {"preload": "loaded", "gc": "function"}
 
 
-def test_compiled_bun_ignores_node_options(compiled_entrypoint: Path, tmp_path: Path) -> None:
-    """Pin the root cause of #14: only `BUN_OPTIONS` reaches a compiled standalone.
+@pytest.mark.parametrize("flag", ["--import {preload}", "--require {cjs}", "--expose-gc"])
+def test_compiled_bun_ignores_node_options(compiled_entrypoint: Path, tmp_path: Path, flag: str) -> None:
+    """Pin the root cause of #14: no `NODE_OPTIONS` flag reaches a compiled standalone.
+
+    Parameters:
+        compiled_entrypoint (Path): compiled standalone.
+        tmp_path (Path): private working directory.
+        flag (str): one Node option, isolated from the others.
+    """
+    preload, cjs = tmp_path / "preload.mjs", tmp_path / "preload.cjs"
+    preload.write_text(PRELOAD)
+    cjs.write_text(PRELOAD)
+    env = {"HOME": str(tmp_path), "NODE_OPTIONS": flag.format(preload=preload, cjs=cjs)}
+    assert report("compiled-bun", compiled_entrypoint, tmp_path, env) == {"preload": None, "gc": "undefined"}
+
+
+def test_bun_drops_a_quoted_preload_silently(compiled_entrypoint: Path, tmp_path: Path) -> None:
+    """Pin why paths with whitespace are refused: Bun runs unhooked instead of failing.
 
     Parameters:
         compiled_entrypoint (Path): compiled standalone.
         tmp_path (Path): private working directory.
     """
-    preload = tmp_path / "preload.mjs"
+    spaced = tmp_path / "with space"
+    spaced.mkdir()
+    preload = spaced / "preload.mjs"
     preload.write_text(PRELOAD)
-    hooks = runtime_hooks([preload], expose_gc=True)
-    env = {"HOME": str(tmp_path), "NODE_OPTIONS": hooks["NODE_OPTIONS"]}
+    env = {"HOME": str(tmp_path), "BUN_OPTIONS": f'--preload "{preload}"'}
     assert report("compiled-bun", compiled_entrypoint, tmp_path, env) == {"preload": None, "gc": "undefined"}

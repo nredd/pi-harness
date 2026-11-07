@@ -42,15 +42,16 @@ for both runtimes: `NODE_OPTIONS` (`--import`, `--expose-gc`) for Node and `BUN_
 - `BUN_OPTIONS` does not parse quotes: a `--preload "<path with space>"` is silently dropped, so
   the adapter refuses preload paths holding whitespace or quotes
 - Fast timers: no scenario scales timers any more (`fast_timers.mjs` was deleted, #378), so there is
-  no timer preload to adapt. The old `/loop` and footer-poll failures were that missing preload
+  no timer preload to adapt. The issue comment attributes the old `/loop` and footer-poll failures
+  to that preload; NOT re-run here on the compiled Pi core
 
 The render probe keeps its `Bun.gc(true)` fallback behind the adapter's `--expose-gc`.
 
 ## Candidate auth runtime adapter (#14)
 
 The harness sets both `NODE_OPTIONS=--import <redirect>` and
-`BUN_OPTIONS=--preload <redirect>` through that adapter. Compiled Bun 1.4.4 honors the latter before its entrypoint;
-Node continues using the former. Both load the same harness-only fetch/egress hook. No SDK,
+`BUN_OPTIONS=--preload <redirect>` through that adapter. Compiled Bun 1.4.4 honors the latter
+before its entrypoint; Node continues using the former. Both load the same harness-only fetch/egress hook. No SDK,
 production extension, live configuration, timer behavior or runtime pin changes.
 
 `auth_guard.mjs` still runs readiness during extension factory loading, before session-start
