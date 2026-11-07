@@ -17,8 +17,8 @@ export function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise
   return new Promise<T>((resolve, reject) => {
     let settled = false;
     const cleanup = () => signal.removeEventListener("abort", onAbort);
+    // The listener is removed on every settle path, so abort can only fire while pending.
     const onAbort = () => {
-      if (settled) return;
       settled = true;
       cleanup();
       reject(signal.reason);

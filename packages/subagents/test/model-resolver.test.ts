@@ -22,6 +22,15 @@ function makeRegistry(models = MODELS, available?: typeof MODELS): ModelRegistry
   };
 }
 
+describe("modelFallbackNote", () => {
+  it("attributes a fallback taken via the agent to the agent's own model", () => {
+    expect(modelFallbackNote({ input: "x", via: "agent", used: "p/m" })).toBe(
+      'Note: configured model "x" did not resolve; running on the agent\'s own model p/m.',
+    );
+    expect(modelFallbackNote({ input: "x", used: "p/m" })).toContain("parent model p/m");
+  });
+});
+
 describe("resolveModel", () => {
   afterEach(() => {
     setModelScopeProvider(undefined);
@@ -251,6 +260,17 @@ describe("resolveModel", () => {
       const result = resolveModel("anthropic/claude-sonnet-4-6", makeRegistry(MODELS, available));
       expect(typeof result).toBe("string");
       expect(result).toContain("Model not found");
+    });
+
+    it("reports not found when a listed model cannot be looked up by the registry", () => {
+      // getAvailable and find disagree (a model dropped between the two calls): neither the exact,
+      // the fuzzy nor the provider-fallback path may return a model the registry cannot produce.
+      const registry: ModelRegistry = { find: () => undefined, getAll: () => MODELS, getAvailable: () => MODELS };
+      for (const input of ["anthropic/claude-opus-4-6", "opus"]) {
+        const result = resolveModel(input, registry);
+        expect(typeof result, input).toBe("string");
+        expect(result, input).toContain(`Model not found: "${input}"`);
+      }
     });
 
     it("fuzzy matches against available models only", () => {

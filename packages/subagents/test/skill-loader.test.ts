@@ -421,6 +421,50 @@ describe("preloadSkills", () => {
     }
   });
 
+  it("does not search through a symlinked project skill root in the compatibility lookup", async () => {
+    const box = createSandbox(true);
+    roots.push(box.root);
+    const external = join(box.root, "external");
+    // Bare file: Pi's loader skips it for lacking frontmatter, so only the compatibility walk could find it.
+    mkdirSync(join(external, "review"), { recursive: true });
+    writeFileSync(join(external, "review", "SKILL.md"), "SYMLINKED PROJECT");
+    writeFileSync(join(external, "flat.md"), "SYMLINKED FLAT");
+    mkdirSync(join(box.cwd, ".pi"), { recursive: true });
+    symlinkSync(external, join(box.cwd, ".pi", "skills"), "dir");
+
+    const skills = await preloadSkills(["review", "flat"], box.cwd, box);
+
+    for (const skill of skills) {
+      expect(skill.content).toContain("not found");
+      expect(skill.content).not.toContain("SYMLINKED");
+    }
+  });
+
+  it("skips hidden and node_modules directories and survives a symlink cycle in the legacy walk", async () => {
+    const box = createSandbox(false);
+    roots.push(box.root);
+    const legacy = join(box.homeDir, ".pi", "skills");
+    const bare = (dir: string, content: string): void => {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "SKILL.md"), content);
+    };
+    bare(join(legacy, ".hidden", "ghost"), "HIDDEN");
+    bare(join(legacy, "node_modules", "vendored"), "VENDORED");
+    bare(join(legacy, "zzz", "reachable"), "REACHABLE");
+    // Two directory symlinks back to the root. Without the visited set each level doubles the
+    // queue until the OS refuses to follow more links, so the search would never finish.
+    symlinkSync(legacy, join(legacy, "loop-a"), "dir");
+    symlinkSync(legacy, join(legacy, "loop-b"), "dir");
+
+    const found = await preloadSkills(["ghost", "vendored", "reachable"], box.cwd, box);
+
+    expect(found.map(skill => skill.content)).toEqual([
+      "(Skill \"ghost\" not found in Pi's configured skill resources)",
+      "(Skill \"vendored\" not found in Pi's configured skill resources)",
+      "REACHABLE",
+    ]);
+  });
+
   it("resolves a bare relative project package source and ignores unresolvable ones", async () => {
     const box = createSandbox(true);
     roots.push(box.root);

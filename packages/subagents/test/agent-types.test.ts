@@ -268,6 +268,16 @@ describe("agent type registry", () => {
       expect(config.skills).toEqual(["planning"]);
     });
 
+    it("getToolNamesForType ignores a disabled agent's tool list and returns every built-in", () => {
+      registerAgents(new Map([["retired", makeAgentConfig({ name: "retired", enabled: false, builtinToolNames: ["read"] })]]));
+      expect(getToolNamesForType("retired")).toEqual(BUILTIN_TOOL_NAMES);
+    });
+
+    it("getConfig falls back to the general-purpose entry's name when it has no display name", () => {
+      registerAgents(new Map([["general-purpose", makeAgentConfig({ name: "general-purpose", displayName: undefined })]]));
+      expect(getConfig("no-such-type").displayName).toBe("general-purpose");
+    });
+
     it("getToolNamesForType works for user agents", () => {
       const agents = new Map([["auditor", makeAgentConfig({
         name: "auditor",
@@ -501,6 +511,7 @@ describe("resolveSpawnType — fail-closed dispatch (#183)", () => {
     expect(resolveEnabledTypeIn(registry, "typoo")).toBeUndefined();
     expect(resolveEnabledTypeIn(registry, "retired")).toBeUndefined();
     expect(resolveEnabledTypeIn(registry, " SCOUT ")).toBe("scout");
+    expect(resolveEnabledTypeIn(registry, 42)).toBeUndefined();
     // ...while the policy layer still honors it.
     expect(resolveSpawnTypeIn(registry, "typoo")).toEqual({
       ok: true, type: "router", fellBackFrom: "typoo",

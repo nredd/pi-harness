@@ -97,6 +97,15 @@ def test_run_headless_parses_the_event_stream(box: Sandbox) -> None:
     assert script.with_suffix(".noise.txt").read_text() == "stub pi banner, not JSON"
 
 
+def test_run_headless_drops_json_lines_that_are_not_events(box: Sandbox) -> None:
+    """Valid JSON that is not an object is neither an event nor noise."""
+    result = run_headless(box, SCRIPT, ["first"], env={"STUB_PI_NOISE": "1"})
+    assert result.stdout_noise == ["stub pi banner, not JSON"]
+    assert all(isinstance(event, dict) for event in result.events)
+    assert ["not", "an", "event"] not in result.events
+    assert result.of_type("session")
+
+
 def test_run_headless_flags_and_exit_status(box: Sandbox, tmp_path: Path) -> None:
     """Session/faux toggles, extra args and env reach the child; a failing exit is returned."""
     elsewhere = tmp_path / "elsewhere"
