@@ -173,6 +173,16 @@ describe("CompletionOutbox", () => {
       expect(sent.delivered).toEqual(["a", "b"]);
     });
 
+    it("merges the agents each message noticed whole, failures included", () => {
+      const noticing = (id: string): OutboxItem => ({ ids: [id], build: () => ({ ...message(id), noticed: [id] }) });
+      outbox.add(noticing("a"));
+      outbox.add(noticing("b"));
+      outbox.add(item("c"));
+      vi.advanceTimersByTime(NOTIFICATION_HOLD_MS);
+      expect(send.mock.calls[0][0].noticed).toEqual(["a", "b"]);
+      expect(send.mock.calls[0][0]).not.toHaveProperty("delivered");
+    });
+
     it("allots nothing by default, and a coalesced message without whole results has no delivered list", () => {
       const build = vi.fn((_ids: readonly string[], _caps: Readonly<Record<string, number>>) => message("a"));
       outbox.add({ ids: ["a"], resultChars: { a: 100 }, build });

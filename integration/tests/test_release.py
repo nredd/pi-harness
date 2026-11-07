@@ -453,14 +453,16 @@ def test_prune_matches_formula_platform_spellings(tmp_path: Path) -> None:
     assert not (tmp_path / "@earendil-works/pi-tui/native/tui/prebuilds/linux-x64").exists()
 
 
+@pytest.mark.parametrize("registry_copy", [True, False])
 def test_fetch_installs_formula_layout_and_replaces_nested_tui(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, registry_copy: bool
 ) -> None:
     """Use fake downloads/npm writes to exercise the entire recipe without a Pi launch.
 
     Parameters:
         monkeypatch (pytest.MonkeyPatch): substitute network downloads, npm discovery and execution.
         tmp_path (Path): private release prefix and recorded checksum directory.
+        registry_copy (bool): whether npm leaves a registry `pi-tui` copy that must be replaced.
     """
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w:gz") as archive:
@@ -508,8 +510,9 @@ def test_fetch_installs_formula_layout_and_replaces_nested_tui(
         assert kwargs["env"]["npm_config_globalconfig"] == str(prefix / "npmrc-global")
         assert (prefix / "npmrc-user").read_text() == ""
         assert (prefix / "npmrc-global").read_text() == ""
-        destination.mkdir(parents=True)
-        (destination / "stale").write_text("registry copy must go away")
+        if registry_copy:
+            destination.mkdir(parents=True)
+            (destination / "stale").write_text("registry copy must go away")
         return "installed"
 
     tag = "v1.3.0-nredd.8"
