@@ -10,6 +10,7 @@
  */
 
 import { dayKey, monthName, shortDate, weekdayName } from "./days.ts";
+import { nth } from "./nth.ts";
 
 /** What one bucket spans. `size` is days per bucket for the daily scale. */
 export type Timescale = { kind: "hour" } | { kind: "day"; size: number };
@@ -79,7 +80,7 @@ function hourLevels(starts: readonly number[]): Mark[][] {
 		const marks: Mark[] = [];
 		const anchor = starts.findIndex((ms) => new Date(ms).getHours() % stride === 0);
 		for (let bucket = anchor; anchor >= 0 && bucket < starts.length; bucket += stride) {
-			const ms = starts[bucket] ?? 0;
+			const ms = nth(starts, bucket);
 			marks.push({ bucket, labels: [hourWide(ms), hourNarrow(ms)] });
 		}
 		return marks;
@@ -114,7 +115,7 @@ function dayLevels(starts: readonly number[], size: number): Mark[][] {
 			const newest = starts.map((ms) => new Date(ms).getDay()).lastIndexOf(1);
 			buckets = newest < 0 ? [] : fromNewest(newest + 1, stride);
 		}
-		levels.push(buckets.map((bucket) => ({ bucket, labels: [shortDate(dayKey(starts[bucket] ?? 0))] })));
+		levels.push(buckets.map((bucket) => ({ bucket, labels: [shortDate(dayKey(nth(starts, bucket)))] })));
 	}
 	// A bucket carries the month whose first day it contains; the first label of a year carries it.
 	// A bucket ends where the next starts (the first is often partial, DST days are 23 or 25 hours);
@@ -144,11 +145,11 @@ function dayLevels(starts: readonly number[], size: number): Mark[][] {
 
 /** Label start columns when `marks` use label variant `variant`, or `undefined` if any collide or overflow. */
 function place(marks: readonly Mark[], variant: number, count: number, width: number): Tick[] | undefined {
-	const gap = GAP[Math.min(variant, GAP.length - 1)] ?? 2;
+	const gap = nth(GAP, Math.min(variant, GAP.length - 1));
 	const ticks: Tick[] = [];
 	let end = -gap;
 	for (const m of marks) {
-		const label = m.labels[Math.min(variant, m.labels.length - 1)] ?? "";
+		const label = nth(m.labels, Math.min(variant, m.labels.length - 1));
 		const column = bucketColumn(m.bucket, count, width);
 		if (label.length > width) return undefined;
 		const start = Math.max(0, Math.min(width - label.length, column - Math.floor(label.length / 2)));
@@ -169,7 +170,7 @@ export function chooseTicks(starts: readonly number[], scale: Timescale, width: 
 	const levels = scale.kind === "hour" ? hourLevels(starts) : dayLevels(starts, scale.size);
 	const endLabel = (b: number): Mark => ({
 		bucket: b,
-		labels: [scale.kind === "hour" ? hourWide(starts[b] ?? 0) : shortDate(dayKey(starts[b] ?? 0))],
+		labels: [scale.kind === "hour" ? hourWide(nth(starts, b)) : shortDate(dayKey(nth(starts, b)))],
 	});
 	const ends = [[endLabel(0), endLabel(n - 1)], [endLabel(n - 1)]];
 	for (const [i, marks] of [...levels, ...ends].entries()) {
@@ -188,7 +189,7 @@ export function chooseTicks(starts: readonly number[], scale: Timescale, width: 
 function row(width: number, pieces: readonly { start: number; text: string }[]): string {
 	const cells = new Array<string>(width).fill(" ");
 	for (const p of pieces)
-		for (let i = 0; i < p.text.length && p.start + i < width; i++) cells[p.start + i] = p.text[i] ?? " ";
+		for (let i = 0; i < p.text.length && p.start + i < width; i++) cells[p.start + i] = p.text.charAt(i);
 	return cells.join("").trimEnd();
 }
 
@@ -202,14 +203,14 @@ function dateRow(starts: readonly number[], width: number): string {
 	const free = (start: number, len: number) =>
 		pieces.every((p) => start >= p.start + p.text.length + 2 || start + len + 2 <= p.start);
 	const add = (bucket: number) => {
-		const text = shortDate(dayKey(starts[bucket] ?? 0));
+		const text = shortDate(dayKey(nth(starts, bucket)));
 		const column = bucketColumn(bucket, n, width);
 		const start = Math.max(0, Math.min(width - text.length, column));
 		if (text.length <= width && free(start, text.length)) pieces.push({ start, text });
 	};
 	// Every bucket on a new local day: midnight, or 00:30 in half-hour zones, wherever DST puts it.
 	starts.forEach((ms, bucket) => {
-		if (bucket > 0 && dayKey(ms) !== dayKey(starts[bucket - 1] ?? ms)) add(bucket);
+		if (bucket > 0 && dayKey(ms) !== dayKey(nth(starts, bucket - 1))) add(bucket);
 	});
 	add(0);
 	return row(width, pieces);

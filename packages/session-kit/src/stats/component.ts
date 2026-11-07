@@ -43,6 +43,7 @@ import { dayKey, keyDate, shortDate } from "./days.ts";
 import { duration, formatTokens, money, percent } from "./format.ts";
 import { DAY_LABEL_WIDTH, heatmap, MAX_WEEKS, MONTH_OVERFLOW, weeksFor, YEAR_WEEKS } from "./heatmap.ts";
 import type { Call, Session } from "./load.ts";
+import { nth } from "./nth.ts";
 import { seriesPalette } from "./palette.ts";
 import { timeAxis } from "./ticks.ts";
 
@@ -125,7 +126,7 @@ export class StatsView implements Component {
 	}
 
 	private get filter(): Filter {
-		return this.filters[this.filterIndex] ?? { kind: "all" };
+		return nth(this.filters, this.filterIndex);
 	}
 
 	// --- input -------------------------------------------------------------------------------
@@ -136,11 +137,10 @@ export class StatsView implements Component {
 			return;
 		}
 		if (matchesKey(data, Key.tab) || matchesKey(data, Key.shift("tab"))) {
-			const step = matchesKey(data, Key.shift("tab")) ? -1 : 1;
-			this.tab = TABS[(TABS.indexOf(this.tab) + step + TABS.length) % TABS.length] ?? "Overview";
+			this.tab = cycle(TABS, this.tab, matchesKey(data, Key.shift("tab")) ? -1 : 1);
 			this.scroll = 0;
 		} else if (data === "r") {
-			this.range = RANGES[(RANGES.indexOf(this.range) + 1) % RANGES.length] ?? "all";
+			this.range = cycle(RANGES, this.range, 1);
 			this.scroll = 0;
 		} else if (data === "m") this.stepFilter(1);
 		else if (data === "M" || matchesKey(data, Key.shift("m"))) this.stepFilter(-1);
@@ -234,8 +234,7 @@ export class StatsView implements Component {
 			palette = seriesPalette(this.o.theme.colors.accent, count);
 			this.palettes.set(count, palette);
 		}
-		const fg = palette[index];
-		return fg ? this.o.theme.style(sanitize(text), { fg }) : this.paint("muted", text);
+		return this.o.theme.style(sanitize(text), { fg: nth(palette, index) });
 	}
 
 	private tabsLine(): string {
@@ -268,7 +267,7 @@ export class StatsView implements Component {
 			}
 			line += (line ? sep : "") + part;
 		}
-		if (line) lines.push(line);
+		lines.push(line);
 		return lines.map((l) => truncateToWidth(l, inner, "…"));
 	}
 
@@ -289,15 +288,16 @@ export class StatsView implements Component {
 	private statCells(ov: Overview): { label: string; value: string }[] {
 		const t = this.o.theme;
 		const v = (s: string) => this.paint("accent", s);
+		// Only called for a non-empty range, so the overview has a favorite model and a most active day.
 		const days = (n: number) => `${t.bold(v(String(n)))} ${n === 1 ? "day" : "days"}`;
 		return [
-			{ label: "Favorite model", value: t.bold(v(ov.favorite ?? "-")) },
+			{ label: "Favorite model", value: t.bold(v(ov.favorite as string)) },
 			{ label: "Total tokens", value: `${v(formatTokens(ov.totalTokens))} ${this.paint("muted", TOKENS_NOTE)}` },
 			{ label: "Sessions", value: v(String(ov.sessions)) },
 			{ label: "Longest session", value: v(duration(ov.longestSessionMs)) },
 			{ label: "Active days", value: `${v(String(ov.activeDays))}${this.paint("muted", `/${ov.rangeDays}`)}` },
 			{ label: "Longest streak", value: days(ov.longestStreak) },
-			{ label: "Most active day", value: v(ov.mostActiveDay ? shortDate(ov.mostActiveDay) : "-") },
+			{ label: "Most active day", value: v(shortDate(ov.mostActiveDay as string)) },
 			{ label: "Current streak", value: days(ov.currentStreak) },
 			{
 				label: "Cache tokens",
@@ -329,9 +329,9 @@ export class StatsView implements Component {
 				cells
 					.slice(r, r + cols)
 					.map((cell, c) => {
-						const size = sizes[c];
-						const text = `${this.paint("muted", cell.label.padEnd(size?.label ?? 0))}  ${cell.value}`;
-						return c < cols - 1 ? padTo(text, (size?.cell ?? 0) + GAP) : text;
+						const size = nth(sizes, c);
+						const text = `${this.paint("muted", cell.label.padEnd(size.label))}  ${cell.value}`;
+						return c < cols - 1 ? padTo(text, size.cell + GAP) : text;
 					})
 					.join(""),
 			);
@@ -361,8 +361,8 @@ export class StatsView implements Component {
 			const area = Math.min(inner - GAP - beside, DAY_LABEL_WIDTH + MAX_WEEKS + MONTH_OVERFLOW);
 			if (cells.length > 0 && weeksFor(area) >= YEAR_WEEKS) {
 				const left = heat(area);
-				for (let i = 0; i < Math.max(left.length, column.length); i++)
-					out.push(`${padTo(left[i] ?? "", area + GAP)}${column[i] ?? ""}`.trimEnd());
+				// The heatmap (9 rows) is always shorter than the 10-cell column, so the column sets the height.
+				for (const [i, cell] of column.entries()) out.push(`${padTo(left[i] ?? "", area + GAP)}${cell}`.trimEnd());
 			} else {
 				out.push(...heat(inner));
 				if (cells.length > 0) out.push("", ...this.statGrid(cells, inner, 2));
@@ -397,11 +397,10 @@ export class StatsView implements Component {
 		const title = (name: string) => t.bold(name) + this.paint("muted", `  ${TOKENS_NOTE} · by ${by}`);
 		const legend = this.legend(
 			top.map((k) => k.key),
-			colors,
 			inner,
 		);
 		const head = (name: string): string[] => {
-			const row = legend.length === 1 ? spread(title(name), legend[0] ?? "", inner) : undefined;
+			const row = legend.length === 1 ? spread(title(name), legend.join(""), inner) : undefined;
 			if (row) return [row];
 			// A pane too narrow for the title splits the name from its unit note.
 			const lines =
@@ -425,7 +424,7 @@ export class StatsView implements Component {
 				{ width: plotWidth, height, paint },
 			);
 			const axis = timeAxis(
-				series.map((s) => s.ms ?? 0),
+				series.map((s) => s.ms),
 				{ kind: "hour" },
 				plotWidth,
 				p.gutter,
@@ -435,7 +434,7 @@ export class StatsView implements Component {
 			// Repeated wall-clock hours get an explicit offset-bearing label, even between axis edges.
 			const labels = new Map<string, string>();
 			for (const point of series) {
-				const local = point.day.split(" UTC")[0] ?? point.day;
+				const local = point.day.replace(/ UTC.*$/, "");
 				const prior = labels.get(local);
 				if (prior)
 					out.push(this.paint("muted", `Repeated hour: ${prior}`), this.paint("muted", `               ${point.day}`));
@@ -451,19 +450,20 @@ export class StatsView implements Component {
 			);
 			return { lines: out, colors };
 		}
-		const from = rangeStart(this.range, this.today) ?? dayKey(ranged[0]?.ms ?? Date.now());
+		const from = rangeStart(this.range, this.today) ?? dayKey(nth(ranged, 0).ms);
 		const series = dailySeries(ranged, from, this.today, by === "provider" ? (c) => c.provider : modelName);
 		const byDay = new Map(series.map((p) => [p.day, top.map((k) => p.byKey.get(k.key) ?? 0)]));
-		const bucketed = bucketize(from, this.today, (d) => byDay.get(d) ?? [], top.length, plotWidth + 1);
+		// `series` holds every day from `from` to today, so `byDay` has every day `bucketize` asks for.
+		const bucketed = bucketize(from, this.today, (d) => byDay.get(d) as number[], top.length, plotWidth + 1);
 		const out = head(`Tokens per ${bucketed.unit}`);
 		if (series.length < 2) {
 			out.push(this.paint("muted", "Not enough data for a chart yet"));
 			return { lines: out, colors };
 		}
 		const p = plot(
-			top.map((k, i) => ({
-				values: bucketed.buckets.map((b) => b.values[i] ?? 0),
-				color: colors.get(k.key) ?? i,
+			top.map((_k, i) => ({
+				values: bucketed.buckets.map((b) => nth(b.values, i)),
+				color: i,
 			})),
 			{ width: plotWidth, height, paint },
 		);
@@ -474,15 +474,11 @@ export class StatsView implements Component {
 			p.gutter,
 		);
 		out.push(...p.lines, ...axis.lines.map((l) => this.paint("muted", l)));
-		let peak = series[0];
-		for (const point of series) if (point.total > (peak?.total ?? 0)) peak = point;
+		const peak = series.reduce((best, point) => (point.total > best.total ? point : best));
 		const avg = series.reduce((n, point) => n + point.total, 0) / series.length;
 		out.push(
 			...this.wrapParts(
-				[
-					`total: peak ${formatTokens(peak?.total ?? 0)} on ${shortDate(peak?.day ?? this.today)}`,
-					`avg ${formatTokens(avg)}/day`,
-				],
+				[`total: peak ${formatTokens(peak.total)} on ${shortDate(peak.day)}`, `avg ${formatTokens(avg)}/day`],
 				inner,
 			),
 		);
@@ -490,13 +486,13 @@ export class StatsView implements Component {
 	}
 
 	/** `● a · ● b · ● c`, wrapped onto more lines rather than cutting a series name off. */
-	private legend(keys: readonly string[], colors: ReadonlyMap<string, number>, width: number): string[] {
+	private legend(keys: readonly string[], width: number): string[] {
 		const sepText = " · ";
 		const lines: string[] = [];
 		let line = "";
 		let used = 0;
-		for (const key of keys) {
-			const cell = `${this.paintSeries(colors.get(key) ?? 0, colors.size, "●")} ${sanitize(key)}`;
+		for (const [index, key] of keys.entries()) {
+			const cell = `${this.paintSeries(index, keys.length, "●")} ${sanitize(key)}`;
 			const cellWidth = 2 + visibleWidth(sanitize(key));
 			if (used > 0 && used + sepText.length + cellWidth > width) {
 				lines.push(line);
@@ -506,7 +502,7 @@ export class StatsView implements Component {
 			line += used > 0 ? `${this.paint("dim", sepText)}${cell}` : cell;
 			used += (used > 0 ? sepText.length : 0) + cellWidth;
 		}
-		if (line) lines.push(line);
+		lines.push(line);
 		return lines;
 	}
 
@@ -573,17 +569,15 @@ export class StatsView implements Component {
 			...totals.map((m) => visibleWidth(sanitize(m.model)) + 4),
 			...providers.map((p) => visibleWidth(sanitize(p.provider)) + 2),
 		);
-		const widths = heads.map((h, c) =>
-			Math.max(
-				h.length,
-				...totals.map((m) => (numbers(m, tokensOf(m))[c] ?? "").length),
-				...providers.map((p) => (numbers(p.sub, p.sum)[c] ?? "").length),
-			),
-		);
+		const widths = [
+			heads,
+			...totals.map((m) => numbers(m, tokensOf(m))),
+			...providers.map((p) => numbers(p.sub, p.sum)),
+		].reduce<number[]>((acc, cells) => cells.map((cell, c) => Math.max(cell.length, acc[c] ?? 0)), []);
 		const tableWidth = 2 + nameWidth + widths.reduce((n, x) => n + x + 2, 0);
 		if (tableWidth <= inner) {
 			const line = (name: string, cells: readonly string[], paint: (s: string) => string) =>
-				`  ${padTo(name, nameWidth)}${cells.map((cell, c) => paint(cell.padStart((widths[c] ?? 0) + 2))).join("")}`;
+				`  ${padTo(name, nameWidth)}${cells.map((cell, c) => paint(cell.padStart(nth(widths, c) + 2))).join("")}`;
 			rows.push({ lines: [line("", heads, (s) => this.paint("muted", s))], models: [] });
 			for (const { provider, models, sub, sum } of providers) {
 				rows.push({
@@ -629,6 +623,11 @@ export class StatsView implements Component {
 	}
 }
 
+/** The item `delta` steps from `current` in `items`, wrapping at both ends. */
+function cycle<T>(items: readonly T[], current: T, delta: number): T {
+	return nth(items, (items.indexOf(current) + delta + items.length) % items.length);
+}
+
 /** `text` padded with spaces to `width` columns (ANSI-aware); never cuts. */
 function padTo(text: string, width: number): string {
 	return text + " ".repeat(Math.max(0, width - visibleWidth(text)));
@@ -656,10 +655,10 @@ export function summary(calls: readonly Call[]): string {
 		money(m.cost),
 		percent(tokensOf(m), grand),
 	]);
-	const widths = head.map((h, c) => Math.max(h.length, ...body.map((r) => (r[c] ?? "").length)));
+	const widths = head.map((h, c) => Math.max(h.length, ...body.map((r) => nth(r, c).length)));
 	const fmt = (r: string[]) =>
 		r
-			.map((cell, c) => (c < 2 ? cell.padEnd(widths[c] ?? 0) : cell.padStart(widths[c] ?? 0)))
+			.map((cell, c) => (c < 2 ? cell.padEnd(nth(widths, c)) : cell.padStart(nth(widths, c))))
 			.join("  ")
 			.trimEnd();
 	return [`/stats: ${formatTokens(grand)} tokens ${TOKENS_NOTE}, all time`, fmt(head), ...body.map(fmt)].join("\n");

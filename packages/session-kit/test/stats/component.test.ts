@@ -420,6 +420,36 @@ describe("StatsView", () => {
 		expect(requestRender).not.toHaveBeenCalled();
 	});
 
+	it("says freshness is unknown on Machines when no source metadata was supplied", () => {
+		const { view } = make();
+		view.handleInput("\t");
+		view.handleInput("\t");
+		expect(view.state.tab).toBe("Machines");
+		expect(strip(view.render(100).join("\n"))).toContain("Per-machine freshness unknown (no source metadata).");
+	});
+
+	it("hourly ranges chart models under a filter and report an empty window without the heatmap", () => {
+		const now = Date.parse("2026-10-13T12:30:00Z");
+		const recent = [
+			call(TODAY, "anthropic", "opus", 100, 0, { ms: now - 30 * 60000 }),
+			call(TODAY, "openai-codex", "sol", 50, 0, { ms: now - 90 * 60000 }),
+		];
+		const { view } = make(60, recent, now);
+		for (let i = 0; i < 3; i++) view.handleInput("r");
+		expect(view.state.range).toBe("5h");
+		view.handleInput("m");
+		const text = strip(view.render(120).join("\n"));
+		expect(text).toContain("· by model");
+		expect(text).toContain("● anthropic/opus");
+		expect(text).not.toContain("sol");
+
+		const stale = make(60, [call("2026-01-01", "anthropic", "opus", 10, 10)], now).view;
+		for (let i = 0; i < 3; i++) stale.handleInput("r");
+		const empty = strip(stale.render(120).join("\n"));
+		expect(empty).toContain("No usage in this range.");
+		expect(empty).not.toContain("Less");
+	});
+
 	it("handles an empty range and a single day of data", () => {
 		const old = [call("2026-01-01", "anthropic", "opus", 10, 10)];
 		const { view } = make(44, old);

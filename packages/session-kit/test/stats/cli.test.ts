@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { main, run } from "../../src/stats/cli.ts";
 import { assistantLine, at, sessionFile } from "./fixtures.ts";
@@ -56,6 +57,60 @@ describe("stats CLI", () => {
 		process.argv = ["node", "pi-stats-export", "import", "--agent-dir", viewer, "--input", output];
 		await main();
 		expect(JSON.parse(log.mock.calls[1]?.[0] as string)).toMatchObject({ imported: 1, problems: [] });
+	});
+
+	it("exports sessions from an explicit --sessions-dir instead of the agent directory", async () => {
+		seed(source);
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const empty = join(dir, "empty-agent");
+		const argvTail = ["--agent-dir", empty, "--output", output];
+		process.argv = ["node", "pi-stats-export", "export", ...argvTail, "--sessions-dir", join(source, "sessions")];
+		await main();
+		const exported = JSON.parse(log.mock.calls[0]?.[0] as string);
+
+		process.argv = ["node", "pi-stats-export", "import", "--agent-dir", viewer, "--input", output];
+		await main();
+		expect(JSON.parse(log.mock.calls[1]?.[0] as string)).toMatchObject({ imported: 1, problems: [] });
+		expect(exported.snapshotDir).toBe(join(output, "machines", exported.machineId));
+		// manifest plus the one shard holding the seeded call: the sessions came from --sessions-dir
+		expect(readdirSync(exported.snapshotDir)).toHaveLength(2);
+	});
+
+	it("rejects an export without --output and an import without --input", async () => {
+		process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source];
+		await expect(main()).rejects.toThrow("usage: export");
+		process.argv = ["node", "pi-stats-export", "import", "--agent-dir", source];
+		await expect(main()).rejects.toThrow("usage: export");
+	});
+
+	it("reports a non-Error failure generically", async () => {
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		vi.resetModules();
+		vi.doMock("../../src/stats/snapshot.ts", () => ({
+			exportStats: async () => {
+				throw "plain string failure";
+			},
+			importStats: async () => ({}),
+		}));
+		try {
+			const cli = await import("../../src/stats/cli.ts");
+			process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output];
+			await cli.run();
+		} finally {
+			vi.doUnmock("../../src/stats/snapshot.ts");
+			vi.resetModules();
+		}
+		expect(error).toHaveBeenCalledExactlyOnceWith("Stats operation failed");
+		expect(process.exitCode).toBe(1);
+	});
+
+	it("runs itself when it is the process entrypoint", async () => {
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		process.argv = ["node", fileURLToPath(new URL("../../src/stats/cli.ts", import.meta.url)), "unknown"];
+		vi.resetModules();
+		await import("../../src/stats/cli.ts");
+		await vi.waitFor(() => expect(error).toHaveBeenCalledWith(expect.stringContaining("usage: export")));
+		expect(process.exitCode).toBe(1);
 	});
 
 	it("reports partial imports and malformed argv with nonzero exit codes", async () => {

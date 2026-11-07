@@ -3,7 +3,18 @@ import { randomUUID } from "node:crypto";
 import { link, lstat, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { agentDir } from "../agent-dir.ts";
-import { cachePath, dedupCalls, type Loaded, loadUsage, mergeSessionMetadata, opaqueId, sessionsDir } from "./load.ts";
+import {
+	type Call,
+	cachePath,
+	dedupCalls,
+	type Loaded,
+	loadUsage,
+	mergeSessionMetadata,
+	opaqueId,
+	type Session,
+	sessionsDir,
+} from "./load.ts";
+import { nth } from "./nth.ts";
 
 export const SNAPSHOT_VERSION = 1;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -157,6 +168,9 @@ export function eventId(event: Omit<SnapshotEvent, "id">): string {
 	);
 }
 
+/** Session metadata including children when the loader provided it. */
+const sessionsOf = (loaded: Loaded): Session[] => loaded.sessionMetadata ?? loaded.sessions;
+
 /** Allowlist projection. No source objects, paths, names or message payloads are serialized. */
 export function makeSnapshot(loaded: Loaded, identity: Identity, exportedAt = Date.now()): MachineSnapshot {
 	const shards = new Map<string, Shard>();
@@ -184,7 +198,7 @@ export function makeSnapshot(loaded: Loaded, identity: Identity, exportedAt = Da
 		};
 		shard(monthOf(c.ms)).events.push({ id: eventId(e), ...e });
 	}
-	for (const s of loaded.sessionMetadata ?? loaded.sessions)
+	for (const s of sessionsOf(loaded))
 		shard(monthOf(s.startMs)).sessions.push({
 			id: sessionId(s.path),
 			startMs: s.startMs,
@@ -364,8 +378,8 @@ export async function readGlobal(dir: string): Promise<GlobalCache> {
 			if (m.machineId !== id || !Array.isArray(machine.shards) || machine.shards.length !== m.shards.length)
 				throw new Error("Invalid cached machine");
 			for (const [i, s] of machine.shards.entries()) {
-				const ref = m.shards[i];
-				if (!ref) throw new Error("Missing shard");
+				// The length check above pairs every cached shard with its manifest reference.
+				const ref = nth(m.shards, i);
 				validateShard(s, m, ref.month);
 				if (opaqueId(JSON.stringify(s)) !== ref.sha256) throw new Error("Cached shard digest mismatch");
 			}
@@ -413,8 +427,8 @@ export async function importStats(
 					shards.push(s);
 				}
 				validateSnapshot({ manifest, shards });
-				if (machines[id] && manifest.exportedAt < (machines[id]?.manifest.exportedAt ?? 0))
-					throw new Error("Older machine snapshot");
+				const prior = machines[id];
+				if (prior && manifest.exportedAt < prior.manifest.exportedAt) throw new Error("Older machine snapshot");
 				machines[id] = { manifest, shards };
 				imported++;
 			} catch {
@@ -443,7 +457,7 @@ export async function loadCombined(
 	const global = await readGlobal(dir);
 	const remotes = Object.values(global.machines).filter((m) => m.manifest.machineId !== identity.machineId);
 	const candidates = [...local.calls];
-	const sessionCandidates = [...(local.sessionMetadata ?? local.sessions)];
+	const sessionCandidates = [...sessionsOf(local)];
 	for (const machine of remotes)
 		for (const s of machine.shards) {
 			for (const e of s.events)
@@ -468,14 +482,11 @@ export async function loadCombined(
 				});
 		}
 	const sessions = mergeSessionMetadata(sessionCandidates);
+	// Every candidate's session is in `sessions`: local calls come with their session, remote events are
+	// validated against their shard's sessions.
+	const startOf = (c: Call) => (sessions.get(c.session) as Session).startMs;
 	// Across machines, the oldest session owns copies too, not whichever UUID was read first.
-	const calls = dedupCalls(
-		candidates.sort(
-			(a, b) =>
-				(sessions.get(a.session)?.startMs ?? a.ms) - (sessions.get(b.session)?.startMs ?? b.ms) ||
-				a.session.localeCompare(b.session),
-		),
-	);
+	const calls = dedupCalls(candidates.sort((a, b) => startOf(a) - startOf(b) || a.session.localeCompare(b.session)));
 	const owners = new Set(calls.map((c) => c.session));
 	return {
 		...local,

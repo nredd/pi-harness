@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseColor } from "@earendil-works/pi-tui";
@@ -161,6 +161,20 @@ describe("/stats command", () => {
 			),
 			"info",
 		);
+	});
+
+	it("reports local session errors in print mode so partial totals are not read as complete", async () => {
+		seed();
+		const locked = join(dir, "sessions", "locked");
+		mkdirSync(locked);
+		chmodSync(locked, 0o000);
+		try {
+			const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+			await setup("print").run("");
+			expect(String(out.mock.calls[0]?.[0])).toContain("/stats: 1 local session/cache errors");
+		} finally {
+			chmodSync(locked, 0o755);
+		}
 	});
 
 	it("rpc mode notifies, and an empty history says so", async () => {

@@ -161,6 +161,17 @@ it("copies/forks across machines count once, while fresh local calls and childre
 	expect((await loadCombined(viewer)).calls).toHaveLength(4);
 });
 
+it("loads remote events that carry no entry identity", async () => {
+	const legacy = JSON.parse(usage("unused"));
+	delete legacy.id;
+	seed(a, [JSON.stringify(legacy)]);
+	await exportStats(a, repo);
+	await importStats(b, repo);
+	const result = await loadCombined(b);
+	expect(result.calls).toHaveLength(1);
+	expect(result.calls[0]).toMatchObject({ input: 10, entryId: undefined });
+});
+
 it("credits the oldest original across machines, not a fresh local fork that was scanned first", async () => {
 	seed(a);
 	const fork = join(b, "sessions", "fork.jsonl");
