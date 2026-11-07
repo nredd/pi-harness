@@ -2365,6 +2365,8 @@ def test_setup_refuses_non_linux_filesystem(tmp_path: Path, filesystem: str) -> 
     (commands / "cp").write_text("#!/bin/sh\nexit 0\n")
     (commands / "findmnt").write_text(f"#!/bin/sh\nprintf '%s' '{filesystem}'\n")
     (commands / "curl").write_text("#!/bin/sh\necho unexpected-download >&2\nexit 99\n")
+    # `timeout` is absent on some hosts; the bounds are not under test here.
+    (commands / "timeout").write_text('#!/bin/sh\nshift 2\nexec "$@"\n')
     for command in commands.iterdir():
         command.chmod(0o755)
     home = tmp_path / "home"
