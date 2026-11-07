@@ -1636,6 +1636,7 @@ export class AgentManager {
 
       record.isBackground = true;
       record.resultConsumed = false;
+      record.noticeDelivered = undefined;
       record.consumedAt = undefined;
       record.result = undefined;
       record.error = undefined;
@@ -2152,7 +2153,11 @@ export class AgentManager {
       this.removeRecord(id, record);
       // Evicting a result nobody read is a loss the parent must hear about. Owned
       // children never leave a note, and only their owner could have read them.
-      const note = record.resultConsumed ? undefined : this.evictedNotes.get(id);
+      // Nothing was lost when the parent saw the completion notice (a failure's
+      // stays unread in FleetView), or when the agent was stopped in the queue
+      // and never got a session: it never produced anything to reopen.
+      const neverRan = record.status === "stopped" && !record.session;
+      const note = record.resultConsumed || record.noticeDelivered || neverRan ? undefined : this.evictedNotes.get(id);
       if (note) this.onReaped?.(note);
     }
   }

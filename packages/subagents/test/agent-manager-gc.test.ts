@@ -153,6 +153,27 @@ describe("AgentManager — record GC", () => {
       expect(reaped).not.toHaveBeenCalled();
     });
 
+    it("stays quiet for a queued agent stopped before it ever ran", async () => {
+      const reaped = vi.fn();
+      let release!: () => void;
+      vi.mocked(runAgent).mockImplementationOnce(() => new Promise(resolve => {
+        release = () => resolve({ responseText: "done", session: { dispose: vi.fn() } as any, aborted: false, steered: false } as any);
+      }));
+      manager = new AgentManager(undefined, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, reaped);
+      const first = manager.spawn(mockPi, mockCtx, "X", "first", { description: "first", isBackground: true });
+      const queued = manager.spawn(mockPi, mockCtx, "X", "second", { description: "second", isBackground: true });
+      expect(manager.getRecord(queued)!.status).toBe("queued");
+      expect(manager.abort(queued, "parent")).toBe(true);
+      release();
+      await manager.getRecord(first)!.promise;
+      markConsumed(manager.getRecord(first)!);
+
+      await vi.advanceTimersByTimeAsync(SIXTY + TICK);
+
+      expect(manager.getRecord(queued)).toBeUndefined();
+      expect(reaped).not.toHaveBeenCalled();
+    });
+
     it("does not report records that a session boundary clears", async () => {
       const reaped = vi.fn();
       manager = new AgentManager(undefined, 10, undefined, undefined, undefined, undefined, undefined, undefined, undefined, reaped);
