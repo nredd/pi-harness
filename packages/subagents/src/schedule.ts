@@ -69,6 +69,10 @@ export class SubagentScheduler {
   private readonly clock: Clock;
   private jobs = new Map<string, Cron>();
   private intervals = new Map<string, TimerHandle>();
+  private scheduled = new Map<string, object>();
+  private admissions = new Map<string, Set<AbortController>>();
+  /** Newest pending admission per job that wrote "running", with the status it replaced. */
+  private pendingRuns = new Map<string, { token: AbortController; prior: ScheduledSubagent["lastStatus"] }>();
   private store: ScheduleStore | undefined;
   private pi: ExtensionAPI | undefined;
   private ctx: ExtensionContext | undefined;
@@ -80,6 +84,7 @@ export class SubagentScheduler {
 
   /** Start the scheduler: bind to a session's store and arm enabled jobs. */
   start(pi: ExtensionAPI, ctx: ExtensionContext, manager: AgentManager, store: ScheduleStore): void {
+    this.stop();
     this.pi = pi;
     this.ctx = ctx;
     this.manager = manager;
@@ -96,6 +101,10 @@ export class SubagentScheduler {
     this.jobs.clear();
     for (const t of this.intervals.values()) t.cancel();
     this.intervals.clear();
+    for (const admissions of this.admissions.values()) for (const admission of admissions) admission.abort();
+    this.admissions.clear();
+    this.pendingRuns.clear();
+    this.scheduled.clear();
     this.store = undefined;
     this.pi = undefined;
     this.ctx = undefined;
@@ -192,6 +201,7 @@ export class SubagentScheduler {
 
   private scheduleJob(job: ScheduledSubagent): void {
     const store = this.requireStore();
+    this.scheduled.set(job.id, {});
     try {
       if (job.scheduleType === "interval" && job.intervalMs) {
         const t = this.clock.setInterval(() => this.executeJob(job.id), job.intervalMs);
@@ -213,6 +223,7 @@ export class SubagentScheduler {
           this.intervals.set(job.id, t);
         } else {
           // Past timestamp — disable, mark error, never fire
+          this.scheduled.delete(job.id);
           store.update(job.id, { enabled: false, lastStatus: "error" });
           this.emit({ type: "error", jobId: job.id, error: `Scheduled time ${job.schedule} is in the past` });
         }
@@ -221,11 +232,16 @@ export class SubagentScheduler {
         this.jobs.set(job.id, cron);
       }
     } catch (err) {
+      // Nothing armed, so no token: a stale entry would admit a fire for a job with no timer.
+      this.scheduled.delete(job.id);
       this.emit({ type: "error", jobId: job.id, error: err instanceof Error ? err.message : String(err) });
     }
   }
 
   private unscheduleJob(id: string): void {
+    this.scheduled.delete(id);
+    for (const admission of this.admissions.get(id) ?? []) admission.abort();
+    this.admissions.delete(id);
     const cron = this.jobs.get(id);
     if (cron) {
       cron.stop();
@@ -248,10 +264,15 @@ export class SubagentScheduler {
     const pi = this.pi;
     const ctx = this.ctx;
     const manager = this.manager;
-    if (!store || !pi || !ctx || !manager) return;
+    const scheduled = this.scheduled.get(id);
+    if (!store || !pi || !ctx || !manager || !scheduled) return;
     const job = store.get(id);
     if (!job?.enabled) return;
 
+    // A fire that overlaps a pending admission inherits its prior status.
+    const previous = this.pendingRuns.get(id);
+    const prior = previous ? previous.prior : job.lastStatus;
+    this.pendingRuns.delete(id);
     store.update(id, { lastStatus: "running" });
 
     // Resolve the original request at fire time, using the same type and model
@@ -275,11 +296,26 @@ export class SubagentScheduler {
     // waited for may have refilled while another is still exhausted.
     const admissionModel = selection.model;
     if ((job.quotaParked || selection.tierBinding) && admissionModel) {
+      const controller = new AbortController();
+      const admissions = this.admissions.get(id) ?? new Set<AbortController>();
+      admissions.add(controller);
+      this.admissions.set(id, admissions);
+      this.pendingRuns.set(id, { token: controller, prior });
+      // Cancelled before spawn: undo this admission's "running", never a newer one's.
+      controller.signal.addEventListener("abort", () => {
+        if (this.pendingRuns.get(id)?.token !== controller) return;
+        this.pendingRuns.delete(id);
+        if (store.get(id)?.lastStatus === "running") store.update(id, { lastStatus: prior });
+      }, { once: true });
       const admission = selection.tierBinding
-        ? admitModelSelection(selection, ctx.modelRegistry, pi.events)
-        : checkAdmission(pi.events, modelRef(admissionModel));
+        ? admitModelSelection(selection, ctx.modelRegistry, pi.events, this.clock, controller.signal)
+        : checkAdmission(pi.events, modelRef(admissionModel), undefined, this.clock, controller.signal);
+      const settle = (): void => {
+        if (this.pendingRuns.get(id)?.token === controller) this.pendingRuns.delete(id);
+      };
       void admission.then(block => {
-        if (this.store !== store || this.ctx !== ctx) return;
+        if (this.store !== store || this.ctx !== ctx || this.scheduled.get(id) !== scheduled) return;
+        settle();
         if (!block) {
           this.spawnJob({ store, pi, ctx, manager }, id, selection);
         } else if (mayPark(block) && block.resetAt > this.clock.now()) {
@@ -292,9 +328,13 @@ export class SubagentScheduler {
           this.emit({ type: "error", jobId: id, error: `${describeBlock(block)} The agent was not started.` });
         }
       }).catch(error => {
-        if (this.store !== store) return;
+        if (this.store !== store || this.scheduled.get(id) !== scheduled) return;
+        settle();
         store.update(id, { lastStatus: "error" });
         this.emit({ type: "error", jobId: id, error: error instanceof Error ? error.message : String(error) });
+      }).finally(() => {
+        admissions.delete(controller);
+        if (admissions.size === 0 && this.admissions.get(id) === admissions) this.admissions.delete(id);
       });
       return;
     }
