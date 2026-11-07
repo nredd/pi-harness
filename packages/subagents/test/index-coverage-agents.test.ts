@@ -1,11 +1,12 @@
 /** Drive /agents' registered command and real SettingsList callbacks against private files. */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getAgentConfig, getAllTypes } from "../src/agent-types.js";
 import { createSubagentsExtension } from "../src/index.js";
+import { invalidatePackageCache } from "../src/package-resources.js";
 import { type BootedPi, ctx, type Hermetic, hermeticDir, makePi, startSession } from "./helpers/boot-extension.js";
 import { FakeClock } from "./helpers/fake-clock.js";
 
@@ -219,7 +220,56 @@ describe("agent file operations from /agents", () => {
   });
 });
 
+describe("menu edges", () => {
+  it("ignores a choice the menu did not offer", async () => {
+    selections.push("Not an option");
+    await command();
+    expect(notify).not.toHaveBeenCalled();
+    expect(context.ui.select).toHaveBeenCalledTimes(1);
+  });
+  it("shows no source legend when every agent is a plain built-in", async () => {
+    rmSync(path());
+    writeFileSync(join(process.env.PI_CODING_AGENT_DIR!, "settings.json"), JSON.stringify({}));
+    invalidatePackageCache();
+    const titles: string[] = [];
+    const custom = context.ui.custom;
+    context.ui.custom = vi.fn(async (factory: Factory, ...rest: unknown[]) => {
+      const component = factory({}, {}, {}, () => {});
+      titles.push(component.render(120).join("\n"));
+      return custom(factory, ...rest);
+    });
+    await detail("Plan", "Back");
+    // Title, then the spacer: no empty legend line between them.
+    expect(titles[0].split("\n")[1]).toBe("");
+    expect(titles[0]).toContain("Agent types");
+    expect(titles[0]).not.toMatch(/= project|= global|= package|= disabled/);
+  });
+  it.each(["Delete", "Edit"])("does nothing on %s when the definition vanished while the type list was open", async action => {
+    beforePick = () => rmSync(path());
+    await detail("auditor", action);
+    expect(context.ui.confirm).not.toHaveBeenCalled();
+    expect(context.ui.editor).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+  });
+  it("does nothing on Enable when the definition vanished before the enable ran", async () => {
+    await detail("auditor", "Disable");
+    notify.mockClear();
+    beforeAction = () => rmSync(path());
+    await detail("auditor", "Enable");
+    expect(notify).not.toHaveBeenCalled();
+  });
+});
+
 describe("manual creation through /agents", () => {
+  it("leaves the model to inherit when a custom model is left blank", async () => {
+    selections.push("Create new agent", "Project", "Manual configuration", "none", "custom...", "off");
+    inputs.push("blankmodel", "No model named", "");
+    edits.push("Body.");
+    await command();
+    expect(getAgentConfig("blankmodel")?.model).toBeUndefined();
+    expect(readFileSync(path("blankmodel"), "utf8")).not.toContain("model:");
+    expect(notify).toHaveBeenLastCalledWith(`Created ${path("blankmodel")}`, "info");
+  });
   it.each([
     ["all", "inherit (parent model)", "inherit", undefined, undefined],
     ["none", "haiku", "high", [], "anthropic/claude-haiku-4-5"],
