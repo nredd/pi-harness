@@ -2232,8 +2232,8 @@ export class AgentManager {
       // Evicting a result nobody read is a loss the parent must hear about. Owned
       // children never leave a note, and only their owner could have read them.
       // Nothing was lost when the parent saw the completion notice (a failure's
-      // stays unread in FleetView), or when no run produced a result: stopped
-      // in the queue, refused, or failed before the runner started, so nothing was lost.
+      // stays unread in FleetView), or when no run produced a result (stopped in
+      // the queue, refused, or failed before the runner started).
       const note = record.resultConsumed || record.noticeDelivered || !ran ? undefined : this.evictedNotes.get(id);
       if (note) this.onReaped?.(note);
     }

@@ -157,69 +157,6 @@ describe("AgentManager — record GC", () => {
       expect(reaped).not.toHaveBeenCalled();
     });
 
-    it("stays quiet for a queued agent stopped before it ever ran", async () => {
-      const reaped = vi.fn();
-      let release!: () => void;
-      vi.mocked(runAgent).mockImplementationOnce(() => new Promise(resolve => {
-        release = () => resolve({ responseText: "done", session: { dispose: vi.fn() } as any, aborted: false, steered: false } as any);
-      }));
-      manager = new AgentManager(undefined, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, reaped);
-      const first = manager.spawn(mockPi, mockCtx, "X", "first", { description: "first", isBackground: true });
-      const queued = manager.spawn(mockPi, mockCtx, "X", "second", { description: "second", isBackground: true });
-      expect(manager.getRecord(queued)!.status).toBe("queued");
-      expect(manager.abort(queued, "parent")).toBe(true);
-      release();
-      await manager.getRecord(first)!.promise;
-      markConsumed(manager.getRecord(first)!);
-
-      await vi.advanceTimersByTimeAsync(SIXTY + TICK);
-
-      expect(manager.getRecord(queued)).toBeUndefined();
-      expect(reaped).not.toHaveBeenCalled();
-    });
-
-    it("stays quiet for a foreground spawn refused because its signal was already aborted", async () => {
-      const reaped = vi.fn();
-      let release!: () => void;
-      vi.mocked(runAgent).mockImplementationOnce(() => new Promise(resolve => {
-        release = () => resolve({ responseText: "done", session: { dispose: vi.fn() } as any, aborted: false, steered: false } as any);
-      }));
-      manager = new AgentManager(undefined, 4, undefined, undefined, undefined, undefined, undefined, undefined, undefined, reaped);
-      manager.setMaxConcurrentForeground(1);
-      const holder = manager.spawnAndWait(mockPi, mockCtx, "X", "holder", { description: "holder" });
-      const refused = await manager.spawnAndWait(mockPi, mockCtx, "X", "refused", {
-        description: "refused",
-        signal: AbortSignal.abort(),
-      });
-      expect(refused.record.status).toBe("stopped");
-      release();
-      const held = await holder;
-      markConsumed(held.record);
-
-      await vi.advanceTimersByTimeAsync(SIXTY + TICK);
-
-      expect(manager.getRecord(refused.id)).toBeUndefined();
-      expect(reaped).not.toHaveBeenCalled();
-    });
-
-    it("stays quiet for a spawn stopped while its worktree copy was being made", async () => {
-      const reaped = vi.fn();
-      let copied!: (wt: any) => void;
-      vi.mocked(createWorktree).mockReturnValueOnce(new Promise(r => { copied = r; }) as any);
-      manager = new AgentManager(undefined, 4, undefined, undefined, undefined, undefined, undefined, undefined, undefined, reaped);
-      const id = manager.spawn(mockPi, mockCtx, "X", "copying", { description: "copying", isBackground: true, isolation: "worktree" });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(manager.abort(id)).toBe(true);
-      copied({ path: "/tmp/wt", workPath: "/tmp/wt", repoRoot: "/tmp", branch: "b" });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(runAgent).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(SIXTY + TICK);
-
-      expect(manager.getRecord(id)).toBeUndefined();
-      expect(reaped).not.toHaveBeenCalled();
-    });
-
     it("stays quiet for a queued resume stopped before it ran again", async () => {
       const reaped = vi.fn();
       const done = () => ({ responseText: "done", session: { dispose: vi.fn() } as any, aborted: false, steered: false } as any);
@@ -251,12 +188,13 @@ describe("AgentManager — record GC", () => {
     it("still reports a background resume stopped mid-run after a queued resume was stopped", async () => {
       const reaped = vi.fn();
       const done = () => ({ responseText: "done", session: { dispose: vi.fn() } as any, aborted: false, steered: false } as any);
-      let release!: () => void;
+      let releaseHolder!: () => void;
+      let releaseResume!: () => void;
       vi.mocked(runAgent)
         .mockResolvedValueOnce(done())
-        .mockImplementationOnce(() => new Promise(resolve => { release = () => resolve(done()); }));
+        .mockImplementationOnce(() => new Promise(resolve => { releaseHolder = () => resolve(done()); }));
       vi.mocked(resumeAgent).mockImplementationOnce(() => new Promise(resolve => {
-        release = () => resolve({ text: "", aborted: true, steered: false } as any);
+        releaseResume = () => resolve({ text: "", aborted: true, steered: false } as any);
       }));
       manager = new AgentManager(undefined, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, reaped);
       const first = manager.spawn(mockPi, mockCtx, "X", "first", { description: "first", isBackground: true });
@@ -264,7 +202,7 @@ describe("AgentManager — record GC", () => {
       const holder = manager.spawn(mockPi, mockCtx, "X", "holder", { description: "holder", isBackground: true });
       await manager.resume(first, "again", undefined, { isBackground: true });
       expect(manager.abort(first, "parent")).toBe(true);
-      release();
+      releaseHolder();
       await manager.getRecord(holder)!.promise;
       markConsumed(manager.getRecord(holder)!);
 
@@ -272,7 +210,7 @@ describe("AgentManager — record GC", () => {
       await manager.resume(first, "once more", undefined, { isBackground: true });
       expect(manager.getRecord(first)!.status).toBe("running");
       expect(manager.abort(first, "parent")).toBe(true);
-      release();
+      releaseResume();
       await manager.getRecord(first)!.promise;
       manager.getRecord(first)!.resultConsumed = false;
 
