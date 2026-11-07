@@ -964,7 +964,7 @@ function renderPlanModeWidget(lines, theme, width) {
 function sanitizePlanModeWidgetLine(value) {
   let text = "";
   for (const character of stripTerminalSequences(value).replace(BIDI_CONTROLS, "")) {
-    const codePoint = character.codePointAt(0) ?? 0;
+    const codePoint = character.charCodeAt(0);
     const isControl = codePoint <= 31 || codePoint >= 127 && codePoint <= 159;
     text += isControl ? " " : character;
   }
@@ -1654,7 +1654,7 @@ function normalizePlanExportPath(value) {
   if (typeof value !== "string") return void 0;
   const normalized = value.trim();
   if (!normalized || normalized.length > MAX_PLAN_EXPORT_PATH_LENGTH || !/[^@\s]/u.test(normalized) || [...normalized].some((character) => {
-    const codePoint = character.codePointAt(0) ?? 0;
+    const codePoint = character.charCodeAt(0);
     return codePoint <= 31 || codePoint >= 127 && codePoint <= 159;
   })) {
     return void 0;
@@ -1681,7 +1681,7 @@ function normalizeTrustedDirectories(value) {
   for (const item of value) {
     if (typeof item !== "string") return void 0;
     const directory = item.trim();
-    if (!directory || directory.length > MAX_PLAN_EXPORT_PATH_LENGTH || !(directory === "~" || directory.startsWith("~/") || isAbsolute2(directory)) || [...directory].some((character) => (character.codePointAt(0) ?? 0) <= 31 || character === "\x7F")) {
+    if (!directory || directory.length > MAX_PLAN_EXPORT_PATH_LENGTH || !(directory === "~" || directory.startsWith("~/") || isAbsolute2(directory)) || [...directory].some((character) => character.charCodeAt(0) <= 31 || character === "\x7F")) {
       return void 0;
     }
     if (!directories.includes(directory)) directories.push(directory);
@@ -1786,14 +1786,14 @@ function enqueueMutation(settingsPath, mutation) {
 }
 async function readSettingsDocumentForUpdate(settingsPath, legacySettingsPath) {
   const canonical = await readSettingsSnapshot(settingsPath);
-  if (canonical.result.kind === "loaded") return canonical.document ?? {};
+  if (canonical.document) return canonical.document;
   if (canonical.result.kind === "invalid") {
     throw invalidSettingsError(settingsPath, canonical.result.reason);
   }
   if (!legacySettingsPath) return {};
   const legacy = await readSettingsSnapshot(legacySettingsPath);
   const raced = await readSettingsSnapshot(settingsPath);
-  if (raced.result.kind === "loaded") return raced.document ?? {};
+  if (raced.document) return raced.document;
   if (raced.result.kind === "invalid") {
     throw invalidSettingsError(settingsPath, raced.result.reason);
   }
@@ -1823,7 +1823,7 @@ async function readSettingsSnapshot(settingsPath) {
   return { document: parsed, result: { kind: "loaded", settings } };
 }
 async function readSettingsContents(settingsPath) {
-  const flags = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0);
+  const flags = constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW;
   const handle = await open(settingsPath, flags);
   try {
     const stats = await handle.stat();
@@ -1880,7 +1880,7 @@ function isSettingsDocument(value) {
 }
 async function pathExists(path) {
   try {
-    const handle = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+    const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
     await handle.close();
     return true;
   } catch (error) {
@@ -2063,8 +2063,8 @@ function resolvePlanExportPath(requestedPath, cwd, defaultPath = DEFAULT_PLAN_EX
 function safeNotification(value) {
   let sanitized = "";
   for (const character of stripVTControlCharacters(value)) {
-    const codePoint = character.codePointAt(0);
-    sanitized += codePoint !== void 0 && codePoint > 31 && !(codePoint >= 127 && codePoint <= 159) ? character : " ";
+    const codePoint = character.charCodeAt(0);
+    sanitized += codePoint > 31 && !(codePoint >= 127 && codePoint <= 159) ? character : " ";
   }
   return sanitized;
 }
@@ -2198,15 +2198,17 @@ function normalizePlanModeQuestionParams(input) {
     if (questions.length !== 1) {
       return { ok: false, error: `${REPROPOSAL_CONFIRMATION_MODE} requires exactly one question` };
     }
-    const question = questions[0];
-    if (!question) throw new Error("Validated question unexpectedly missing");
-    questions[0] = {
-      ...question,
-      question: REPROPOSAL_CONFIRMATION_QUESTION,
-      options: [...REPROPOSAL_CONFIRMATION_OPTIONS]
+    return {
+      ok: true,
+      questions: questions.map((question) => ({
+        ...question,
+        question: REPROPOSAL_CONFIRMATION_QUESTION,
+        options: [...REPROPOSAL_CONFIRMATION_OPTIONS]
+      })),
+      mode
     };
   }
-  return { ok: true, questions, ...mode ? { mode } : {} };
+  return { ok: true, questions };
 }
 async function answerPlanModeQuestions(questions, ctx, lifecycle, mode) {
   const answers = await askPlanModeQuestions(questions, ctx, () => lifecycle.isCurrent() && lifecycle.isEnabled());
@@ -2265,21 +2267,22 @@ function mapQuestionnaireResult(questions, result) {
       throw new Error("Questionnaire returned an answer for an unknown question");
     }
     if (answers.has(index)) throw new Error("Questionnaire returned duplicate answers");
+    let text = answer.answer;
     if (answer.wasCustom) {
       if (answer.optionIndex !== void 0) {
         throw new Error("Questionnaire returned a custom answer with an option index");
       }
       if (!answer.answer.trim()) return void 0;
-    } else if (answer.optionIndex === void 0 || !questions[index]?.options[answer.optionIndex - 1]) {
-      throw new Error("Questionnaire returned an invalid selected option");
+    } else {
+      const option = answer.optionIndex === void 0 ? void 0 : questions[index]?.options[answer.optionIndex - 1];
+      if (!option) throw new Error("Questionnaire returned an invalid selected option");
+      text = option.label;
     }
-    answers.set(index, answer);
+    answers.set(index, { answer, text });
   }
   return questions.map((question, index) => {
-    const answer = answers.get(index);
-    if (!answer) throw new Error("Questionnaire returned an incomplete answer set");
-    const answerText = answer.wasCustom ? answer.answer : question.options[(answer.optionIndex ?? 0) - 1]?.label ?? answer.answer;
-    return answerFor(question, answerText, {
+    const { answer, text } = answers.get(index);
+    return answerFor(question, text, {
       wasCustom: answer.wasCustom,
       optionIndex: answer.optionIndex,
       note: answer.note
@@ -2569,4 +2572,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-5SVBAFRF.ts.map
+//# sourceMappingURL=chunk-D2AECO7U.ts.map

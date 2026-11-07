@@ -111,9 +111,8 @@ export function resolvePlanExportPath(
 function safeNotification(value: string) {
   let sanitized = "";
   for (const character of stripVTControlCharacters(value)) {
-    const codePoint = character.codePointAt(0);
-    sanitized +=
-      codePoint !== undefined && codePoint > 0x1f && !(codePoint >= 0x7f && codePoint <= 0x9f) ? character : " ";
+    const codePoint = character.charCodeAt(0);
+    sanitized += codePoint > 0x1f && !(codePoint >= 0x7f && codePoint <= 0x9f) ? character : " ";
   }
   return sanitized;
 }

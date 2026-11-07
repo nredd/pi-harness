@@ -57,7 +57,7 @@ export function renderPlanModeWidget(lines: readonly string[], theme: Theme, wid
 export function sanitizePlanModeWidgetLine(value: string): string {
   let text = "";
   for (const character of stripTerminalSequences(value).replace(BIDI_CONTROLS, "")) {
-    const codePoint = character.codePointAt(0) ?? 0;
+    const codePoint = character.charCodeAt(0);
     const isControl = codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
     text += isControl ? " " : character;
   }

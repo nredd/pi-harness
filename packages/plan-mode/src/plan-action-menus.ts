@@ -421,11 +421,12 @@ function createFreshImplementationFlow(
         selectedModel &&
         !findAvailableImplementationModel(snapshotAvailableImplementationModels(ctx), selectedModel.model)
       ) {
+        const unavailableModel = selectedModel.model;
         selectedModel = undefined;
         selectedModelUsesDefault = false;
         unavailableDefaultActive = true;
         ctx.ui.notify(
-          `Configured default ${safeModelReference(configuredModel)} is unavailable; using ${planModelLabel}.`,
+          `Configured default ${safeModelReference(unavailableModel)} is unavailable; using ${planModelLabel}.`,
           "warning",
         );
       }
@@ -467,8 +468,7 @@ function snapshotAvailableModels(
     .sort((left, right) => Number(right.isPlanModel) - Number(left.isPlanModel));
 }
 
-function safeModelReference(model: ImplementationModelOverride | undefined) {
-  if (!model) return "configured model";
+function safeModelReference(model: ImplementationModelOverride) {
   return `${safeModelMetadata(model.modelId, "unknown model")} [${safeModelMetadata(model.provider, "unknown provider")}]`;
 }
 

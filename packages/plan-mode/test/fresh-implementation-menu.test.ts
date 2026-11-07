@@ -572,3 +572,34 @@ test("closing and reopening fresh settings resets its draft to the plan runtime"
     thinkingLevel: "medium",
   });
 });
+
+test("fresh model choices use placeholders for blank provider and model IDs", async () => {
+  let modelOptions: string[] = [];
+  let settingsVisits = 0;
+  const seenTitles: string[] = [];
+  const context = createMockContext({
+    mode: "rpc",
+    hasUI: true,
+    model: { provider: "planning-provider", id: "planning-model" },
+    modelRegistry: { getAvailable: () => [{ provider: "\u0001", id: "  ", name: "\u0001" }] },
+    select: async (title: string, options: string[]) => {
+      seenTitles.push(title);
+      if (title.startsWith("Fresh implementation settings")) {
+        settingsVisits += 1;
+        return settingsVisits === 1 ? options.find((option) => option.startsWith("Model")) : undefined;
+      }
+      if (title.startsWith("Implementation model")) {
+        modelOptions = options;
+        return undefined;
+      }
+      return settingsVisits === 0 ? "Start fresh and implement" : undefined;
+    },
+  });
+
+  await showReadyPlanMenu(context.ctx, menuOptions());
+
+  assert.ok(
+    modelOptions.some((option) => option.includes("unknown model [unknown provider]")),
+    `${modelOptions.join(" | ")} // ${seenTitles.join(" | ")}`,
+  );
+});

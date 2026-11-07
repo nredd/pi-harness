@@ -531,3 +531,85 @@ test("Plan-mode settings read legacy files without modifying them", async () => 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("Plan-mode settings reject non-object documents", () => {
+  for (const value of [null, undefined, [], "settings", 3]) {
+    assert.equal(normalizePlanModeSettings(value), undefined);
+  }
+});
+
+test("Plan-mode settings keep printable non-ASCII export paths and reject C1 controls", () => {
+  assert.equal(
+    normalizePlanModeSettings({ defaultPlanExportPath: "plans/r\u00e9sum\u00e9.md" })?.defaultPlanExportPath,
+    "plans/r\u00e9sum\u00e9.md",
+  );
+  assert.equal(normalizePlanModeSettings({ defaultPlanExportPath: "bad\u0085path" }), undefined);
+  assert.equal(normalizePlanModeSettings({ defaultPlanExportPath: "bad\u007fpath" }), undefined);
+});
+
+test("Plan-mode settings accept bare function keys but never modified ones", () => {
+  assert.equal(normalizePlanModeSettings({ toggleShortcut: "F5" })?.toggleShortcut, "f5");
+  assert.equal(normalizePlanModeSettings({ toggleShortcut: "ctrl+f5" }), undefined);
+});
+
+test("Plan-mode settings refuse a malformed implementation model patch without writing", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-model-"));
+  const settingsPath = join(directory, "pi-plan-mode.json");
+  try {
+    await assert.rejects(
+      updatePlanModeSettings({ defaultImplementationModel: { provider: "", modelId: "" } }, { settingsPath }),
+      /invalid implementation model/u,
+    );
+    await assert.rejects(access(settingsPath));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Plan-mode settings create the canonical file when neither it nor the legacy file exists", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-fresh-"));
+  const settingsPath = join(directory, "pi-plan-mode.json");
+  try {
+    await updatePlanModeSettings(
+      { thinkingLevel: "high" },
+      { settingsPath, legacySettingsPath: join(directory, "plan-mode.json") },
+    );
+    assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), { thinkingLevel: "high" });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Plan-mode settings default to the agent directory for both canonical and legacy files", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-agent-"));
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = directory;
+  try {
+    const legacy = '{"defaultPlanExportPath":"legacy/PLAN.md"}\n';
+    await writeFile(join(directory, "plan-mode.json"), legacy);
+    const saved = await updatePlanModeSettings({ thinkingLevel: "high" });
+    assert.deepEqual(saved, { thinkingLevel: "high", defaultPlanExportPath: "legacy/PLAN.md" });
+    assert.deepEqual(JSON.parse(await readFile(join(directory, "pi-plan-mode.json"), "utf8")), {
+      thinkingLevel: "high",
+      defaultPlanExportPath: "legacy/PLAN.md",
+    });
+    assert.equal(await readFile(join(directory, "plan-mode.json"), "utf8"), legacy);
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Plan-mode settings report a directory in place of the file as invalid", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-dir-"));
+  try {
+    const result = await readPlanModeSettings(directory);
+    assert.equal(result.kind, "invalid");
+    if (process.platform !== "win32") {
+      assert.equal(result.kind === "invalid" ? result.reason : "", "settings path is not a regular file");
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

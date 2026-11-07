@@ -165,3 +165,10 @@ test("latestPlanApproval takes the newest well-formed entry", () => {
     good,
   );
 });
+
+test("the latest approval skips entries whose data is not an object", () => {
+  const approval = createPlanApproval(PLAN);
+  const entry = (data: unknown) => ({ type: "custom", customType: PLAN_APPROVAL_ENTRY_TYPE, data });
+  assert.deepEqual(latestPlanApproval([entry(approval), entry(null), entry(undefined), entry("approved")]), approval);
+  assert.equal(latestPlanApproval([entry(null), entry(0)]), undefined);
+});

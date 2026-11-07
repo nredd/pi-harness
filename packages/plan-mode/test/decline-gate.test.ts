@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
-import { DECLINE_CONTRACT_MESSAGE_TYPE } from "../src/decline-contract.js";
+import { createDeclineContractMessage, DECLINE_CONTRACT_MESSAGE_TYPE } from "../src/decline-contract.js";
 import planMode from "../src/plan-mode.js";
 import { restorePlanModeState } from "../src/state.js";
 import { createCustomSelectorHarness, createMockContext, createMockPi } from "./support.js";
@@ -337,4 +337,9 @@ test("the gate error names the tool and rejects plain-text answers", async () =>
     f.complete(),
     /reproposal_confirmation[\s\S]*Re-propose now[\s\S]*\/plan finalize[\s\S]*plain-text replies do not unblock/,
   );
+});
+
+test("a decline contract message is timestamped at zero unless the caller supplies one", () => {
+  assert.equal(createDeclineContractMessage(2).timestamp, 0);
+  assert.equal(createDeclineContractMessage(2, 1234).timestamp, 1234);
 });

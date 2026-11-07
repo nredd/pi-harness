@@ -28,6 +28,9 @@ test("completion details require the canonical version and source", () => {
   const completed = planModeCompleted(PLAN);
   assert.equal(planFromCompletionDetails(completed.details), PLAN);
   assert.equal(planFromCompletionDetails({ ...completed.details, version: 2 }), undefined);
+  for (const plan of [" \n ", 42, undefined]) {
+    assert.equal(planFromCompletionDetails({ ...completed.details, plan }), undefined, String(plan));
+  }
   assert.equal(planFromCompletionDetails({ ...completed.details, source: "other" }), undefined);
   assert.equal(planFromCompletionDetails(null), undefined);
 });

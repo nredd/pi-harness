@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { FINALIZE_PLAN_PROMPT } from "../src/finalization-request.js";
+import { createHeadlessTurns } from "../src/headless-turn.js";
 import planMode from "../src/plan-mode.js";
 import { createMockContext, createMockPi } from "./support.js";
 
@@ -95,4 +96,53 @@ test("TUI and RPC: /plan finalize returns without waiting for the turn", async (
     assert.equal(await settlesWithin(plan("finalize"), 30), true, `mode ${mode}`);
     assert.equal(idle.waits, 0);
   }
+});
+
+function headlessContext(waitForIdle: () => Promise<void>) {
+  return { mode: "json" as const, waitForIdle };
+}
+
+test("headless: a turn whose run already started waits for idle without waiting for a start", async () => {
+  const turns = createHeadlessTurns(60_000);
+  let idleWaits = 0;
+  const turn = turns.arm(
+    headlessContext(async () => {
+      idleWaits += 1;
+    }),
+  );
+  assert.ok(turn);
+  turns.messageSent();
+  turns.runStarted();
+
+  await turn.settle();
+
+  assert.equal(idleWaits, 1);
+});
+
+test("headless: a settling turn leaves a newer armed turn in place", async () => {
+  const turns = createHeadlessTurns(60_000);
+  let releaseFirst: () => void = () => undefined;
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const first = turns.arm(headlessContext(() => firstGate));
+  assert.ok(first);
+  turns.messageSent();
+  turns.runStarted();
+  const firstSettled = first.settle();
+
+  let secondIdleWaits = 0;
+  const second = turns.arm(
+    headlessContext(async () => {
+      secondIdleWaits += 1;
+    }),
+  );
+  assert.ok(second);
+  releaseFirst();
+  await firstSettled;
+
+  turns.messageSent();
+  turns.runStarted();
+  await second.settle();
+  assert.equal(secondIdleWaits, 1, "the newer turn still saw its message and run");
 });

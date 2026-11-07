@@ -1061,3 +1061,117 @@ test("destination consumes a thrown model application without retrying", async (
   assert.match(context.notifications.at(-1)?.message ?? "", /could not be applied/u);
   assert.equal(JSON.stringify(context.notifications).includes("\u001b"), false);
 });
+
+test("a model-only runtime override persists no thinking level", async () => {
+  let destinationState: unknown;
+  const source = createMockContext({
+    mode: "rpc",
+    hasUI: true,
+    model: { provider: "planning-provider", id: "planning-model" },
+    modelRegistry: {
+      find: () => TARGET,
+      getApiKeyAndHeaders: async () => ({ ok: true as const }),
+    },
+    sessionManager: { getSessionFile: () => "/sessions/planning.jsonl" },
+    newSession: async (options: {
+      setup?: (manager: {
+        appendCustomMessageEntry(): string;
+        appendCustomEntry(customType: string, data: unknown): string;
+      }) => Promise<void>;
+    }) => {
+      await options.setup?.({
+        appendCustomMessageEntry: () => "contract",
+        appendCustomEntry(_customType, data) {
+          destinationState = data;
+          return "state";
+        },
+      });
+      return { cancelled: false };
+    },
+  });
+
+  const result = await startFreshImplementationSession(source.ctx, {
+    plan: PLAN,
+    source: "plan_mode_complete",
+    retention: "keep",
+    stateEntryType: STATE_ENTRY_TYPE,
+    runtime: { model: { provider: TARGET.provider, modelId: TARGET.id } },
+    isCurrent: () => true,
+  });
+
+  assert.equal(result.kind, "started");
+  assert.deepEqual((destinationState as { pendingImplementationRuntime?: unknown }).pendingImplementationRuntime, {
+    version: 1,
+    model: { provider: TARGET.provider, modelId: TARGET.id },
+  });
+});
+
+test("fresh preflight stops quietly when the request lapses during or after authentication", async () => {
+  for (const lapse of ["during auth", "after preflight"] as const) {
+    let current = true;
+    let isCurrentCalls = 0;
+    let newSessionCalls = 0;
+    const context = createMockContext({
+      mode: "rpc",
+      hasUI: true,
+      model: { provider: "planning-provider", id: "planning-model" },
+      modelRegistry: {
+        getApiKeyAndHeaders: async () => {
+          if (lapse === "during auth") current = false;
+          return { ok: true as const };
+        },
+      },
+      newSession: async () => {
+        newSessionCalls += 1;
+        return { cancelled: false };
+      },
+    });
+    const result = await startFreshImplementationSession(context.ctx, {
+      plan: PLAN,
+      source: "plan_mode_complete",
+      retention: "keep",
+      stateEntryType: STATE_ENTRY_TYPE,
+      isCurrent: () => {
+        isCurrentCalls += 1;
+        // Calls: after waitForIdle, inside preflight after auth, then after preflight returns.
+        return lapse === "during auth" ? isCurrentCalls === 1 || current : isCurrentCalls <= 2;
+      },
+    });
+    assert.equal(result.kind, lapse === "during auth" ? "rejected" : "stale", lapse);
+    assert.equal(newSessionCalls, 0, lapse);
+    assert.deepEqual(context.notifications, [], lapse);
+  }
+});
+
+test("fresh preflight failures show one sanitized, bounded line of detail", async () => {
+  const cases = [
+    {
+      error: "bad\u0001key\u0085and\u202eflipped\u2067text",
+      expected: /: bad key and flipped text\. Choose another model/u,
+    },
+    { error: "\u0001\u0085\u202e\u2069", expected: /: unknown error\. Choose another model/u },
+  ];
+  for (const { error, expected } of cases) {
+    const context = createMockContext({
+      mode: "rpc",
+      hasUI: true,
+      model: { provider: "planning-provider", id: "planning-model" },
+      modelRegistry: {
+        find: () => TARGET,
+        getApiKeyAndHeaders: async () => ({ ok: false as const, error }),
+      },
+    });
+    const result = await startFreshImplementationSession(context.ctx, {
+      plan: PLAN,
+      source: "plan_mode_complete",
+      retention: "keep",
+      stateEntryType: STATE_ENTRY_TYPE,
+      runtime: { model: { provider: TARGET.provider, modelId: TARGET.id } },
+      isCurrent: () => true,
+    });
+    assert.equal(result.kind, "rejected");
+    const message = context.notifications.at(-1)?.message ?? "";
+    assert.match(message, expected);
+    assert.match(message, /target-provider\/target-model/u);
+  }
+});

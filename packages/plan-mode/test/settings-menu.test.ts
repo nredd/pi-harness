@@ -713,3 +713,77 @@ test("Plan settings adapt to RPC cancellation and disposal aborts an in-flight s
     assert.deepEqual(notifications, []);
   });
 });
+
+test("Settings show a sanitized load notice for valid and invalid files", async () => {
+  await withSettingsMenu(async ({ settingsPath, tui, ctx, saved }) => {
+    for (const [loaded, expected] of [
+      [
+        { kind: "loaded", settings: { thinkingLevel: "inherit" }, notice: "Migrated\u0085legacy file" },
+        [/Migrated legacy file/u],
+      ],
+      [
+        { kind: "invalid", reason: "bad\u0085json", notice: "Kept\u0085original" },
+        [/Read only/u, /bad json/u, /Kept original/u],
+      ],
+    ] as const) {
+      const running = showPlanModeSettings(ctx, menuOptions(settingsPath, saved, { readSettings: async () => loaded }));
+      await tui.waitForOpen();
+      const frame = tui.render().join("\n");
+      for (const pattern of expected) assert.match(frame, pattern);
+      tui.press("ctrl+c");
+      await running;
+    }
+  });
+});
+
+test("Retained default tool names render sanitized, never blank, and bounded", async () => {
+  await withSettingsMenu(
+    async ({ settingsPath, tui, ctx, saved }) => {
+      const running = showPlanModeSettings(
+        ctx,
+        menuOptions(settingsPath, saved, {
+          readSettings: async () => ({
+            kind: "loaded",
+            settings: { thinkingLevel: "inherit", defaultPlanTools: ["\u0001", `long-${"x".repeat(200)}`] },
+          }),
+        }),
+      );
+      await tui.waitForOpen();
+      tui.press("tui.select.down");
+      tui.press("tui.select.confirm");
+      await tui.waitForPending();
+      await tui.waitForOpen();
+      for (let index = 0; index < 5; index += 1) tui.press("tui.select.down");
+      const frame = tui.render().join("\n");
+      assert.match(frame, /\(unnamed tool\)/u);
+      assert.match(frame, /long-x+…/u);
+      assert.doesNotMatch(frame, /x{121}/u);
+      tui.press("ctrl+c");
+      await running;
+    },
+    { width: 200 },
+  );
+});
+
+test("Fresh model choices drop blank model names and keep every model selectable", async () => {
+  const models = [
+    { provider: "provider-one", id: "model-one", name: "General model" },
+    { provider: "provider-two", id: "model-two" },
+    { provider: "provider-three", id: "model-three", name: "\u0001  " },
+  ];
+  const offered: string[][] = [];
+  const context = createMockContext({
+    mode: "rpc",
+    hasUI: true,
+    modelRegistry: { getAvailable: () => models },
+    select: async (title: string, options: string[]) => {
+      offered.push(options);
+      return title.startsWith("Plan Mode Settings") && offered.length === 1 ? "Fresh model (same as plan)" : undefined;
+    },
+  });
+  await showPlanModeSettings(context.ctx, menuOptions("/tmp/pi-plan-mode-models.json", [], { tools: [] }));
+  const choices = offered[1]?.join("\n") ?? "";
+  assert.match(choices, /model-one \[provider-one\]/u);
+  assert.match(choices, /model-two \[provider-two\]/u);
+  assert.match(choices, /model-three \[provider-three\]/u);
+});
