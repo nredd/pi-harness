@@ -85,6 +85,7 @@ Every failure reaches the caller as `{ success: false, error }`, where `error` i
 | `<reason> The configured fallbackSubagent "<x>" is itself unknown or disabled. Available: <list>.` | `resolveSpawnTypeIn` |
 | `SpawnOptions.cwd must be an absolute path: "<value>"` | `assertValidSpawnCwd`, `src/agent-manager.ts` |
 | `SpawnOptions.cwd does not exist: "<cwd>"` | `assertValidSpawnCwd` |
+| `SpawnOptions.cwd is not readable (EACCES\|EPERM): "<cwd>". ...` (or `The session cwd is not readable ...` when no `cwd` is given) | `assertReadableCwd` |
 | `SpawnOptions.cwd is not a directory: "<cwd>"` | `assertValidSpawnCwd` |
 | `Cannot run with isolation: "worktree": <cause>. <hint>` | `AgentManager.startAgent`, surfaced through `awaitStartup`. `<cause>` names the directory tried and why: not inside a git repository, no commits yet, a git timeout, or `git worktree add`'s stderr |
 | git plumbing failures | `src/worktree.ts` |

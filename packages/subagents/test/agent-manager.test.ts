@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1506,6 +1506,77 @@ describe("AgentManager — SpawnOptions.cwd passthrough (#96)", () => {
     })).toThrow(/does not exist/);
     expect(manager.listAgents()).toEqual([]);
     expect(runAgent).not.toHaveBeenCalled();
+  });
+
+  // #436: stat() succeeds on a directory the process cannot open (chmod 000, or a
+  // macOS privacy denial), so every child read then failed with a bare EPERM/EACCES.
+  describe("unreadable cwd fails fast", () => {
+    const skip = process.getuid?.() === 0 || process.platform === "win32";
+    const locked = (): { root: string; dir: string } => {
+      const root = mkdtempSync(join(tmpdir(), "subagents-unreadable-"));
+      const dir = join(root, "locked");
+      mkdirSync(dir);
+      chmodSync(dir, 0o000);
+      return { root, dir };
+    };
+    const unlock = ({ root, dir }: { root: string; dir: string }) => {
+      chmodSync(dir, 0o700);
+      rmSync(root, { recursive: true, force: true });
+    };
+
+    it.skipIf(skip)("rejects an explicit cwd the process cannot read, with an actionable message", () => {
+      vi.mocked(runAgent).mockClear();
+      manager = new AgentManager();
+      const l = locked();
+      try {
+        expect(() => manager.spawn(mockPi, mockCtx, "general-purpose", "test", {
+          description: "test",
+          cwd: l.dir,
+        })).toThrow(new RegExp(`SpawnOptions\\.cwd is not readable \\(EACCES\\).*${l.dir}.*Full Disk Access`, "s"));
+        expect(manager.listAgents()).toEqual([]);
+        expect(runAgent).not.toHaveBeenCalled();
+      } finally { unlock(l); }
+    });
+
+    it.skipIf(skip)("rejects an unreadable parent cwd when no cwd is given", () => {
+      vi.mocked(runAgent).mockClear();
+      manager = new AgentManager();
+      const l = locked();
+      try {
+        expect(() => manager.spawn(mockPi, { cwd: l.dir } as any, "general-purpose", "test", {
+          description: "test",
+        })).toThrow(/session cwd is not readable \(EACCES\)/);
+        expect(manager.listAgents()).toEqual([]);
+        expect(runAgent).not.toHaveBeenCalled();
+      } finally { unlock(l); }
+    });
+
+    it.skipIf(skip)("parks the error on a queued spawn whose cwd became unreadable before drain", async () => {
+      vi.mocked(runAgent).mockReset();
+      let release!: () => void;
+      vi.mocked(runAgent).mockImplementationOnce(() => new Promise(r => { release = () => r({ responseText: "done", session: mockSession(), aborted: false, steered: false } as any); }));
+      manager = new AgentManager(undefined, 1);
+      const l = locked();
+      chmodSync(l.dir, 0o700);
+      try {
+        manager.spawn(mockPi, mockCtx, "general-purpose", "blocker", { description: "blocker", isBackground: true });
+        const id = manager.spawn(mockPi, mockCtx, "general-purpose", "test", { description: "test", cwd: l.dir, isBackground: true });
+        expect(manager.getRecord(id)!.status).toBe("queued");
+        chmodSync(l.dir, 0o000);
+        release();
+        await vi.waitFor(() => expect(manager.getRecord(id)!.status).toBe("error"));
+        expect(manager.getRecord(id)!.error).toMatch(/not readable \(EACCES\)/);
+        expect(runAgent).toHaveBeenCalledTimes(1);
+      } finally { unlock(l); }
+    });
+
+    it("ignores a parent cwd that does not exist (stat-less test doubles)", async () => {
+      resolvedRun();
+      manager = new AgentManager();
+      const id = manager.spawn(mockPi, { cwd: "/nonexistent-pi-subagents-parent" } as any, "general-purpose", "test", { description: "test" });
+      await manager.getRecord(id)!.promise;
+      expect(runAgent).toHaveBeenCalled();
+    });
   });
 
   it("cwd pointing at a regular file throws a curated 'not a directory' error", () => {

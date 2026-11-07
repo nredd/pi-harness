@@ -21,7 +21,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { statSync } from "node:fs";
+import { opendirSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -232,6 +232,32 @@ function assertValidSpawnCwd(cwd: unknown): asserts cwd is string | undefined | 
   if (!isDirectory) {
     throw new Error(`SpawnOptions.cwd is not a directory: "${cwd}"`);
   }
+}
+
+/**
+ * Fail fast when a working directory exists but cannot be opened (#436).
+ * `stat` succeeds on such a directory (POSIX `chmod 000`, or a macOS privacy
+ * denial of an external volume), so without this the child starts and every
+ * read fails with a bare EPERM/EACCES. Only those two codes are rejected: a
+ * missing directory stays the caller's concern (`assertValidSpawnCwd`).
+ */
+function assertReadableCwd(cwd: string, label: string): void {
+  try {
+    opendirSync(cwd).closeSync();
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "EACCES" && code !== "EPERM") return;
+    throw new Error(
+      `${label} is not readable (${code}): "${cwd}". Check its permissions; on macOS also check Privacy & Security -> Files & Folders / Full Disk Access for the terminal app (external volumes need it).`,
+    );
+  }
+}
+
+/** Validate the cwd a child will run in: caller-supplied `SpawnOptions.cwd`, else the session cwd. */
+function assertSpawnCwd(cwd: unknown, sessionCwd: string): void {
+  assertValidSpawnCwd(cwd);
+  if (cwd == null) assertReadableCwd(sessionCwd, "The session cwd");
+  else assertReadableCwd(cwd, "SpawnOptions.cwd");
 }
 
 /** The session's own pending agents, split by whether their completion wakes the parent. */
@@ -771,7 +797,7 @@ export class AgentManager {
     // Validate before the queue branch — a queued spawn should fail at the
     // call, not minutes later at drain. Throw (not warn): programmatic callers
     // can fix and retry; the RPC layer converts throws into error envelopes.
-    assertValidSpawnCwd(options.cwd);
+    assertSpawnCwd(options.cwd, ctx.cwd);
     const selection = options.modelSelection ?? selectModel({
       homeDir: options.homeDir ?? this.homeDir,
       agentType: type,
@@ -1082,7 +1108,7 @@ export class AgentManager {
     // Re-validate a caller-supplied cwd: queued spawns can start minutes after
     // spawn()'s check, and the directory may be gone by then (TOCTOU). Same
     // curated errors; drainQueue parks a throw on the record as an error.
-    assertValidSpawnCwd(options.cwd);
+    assertSpawnCwd(options.cwd, ctx.cwd);
     // Single resolution point for the caller-supplied cwd — the worktree base
     // repo and both cleanup calls below MUST agree on this value forever.
     const customCwd = options.cwd ?? undefined; // null (RPC "unset") → undefined
