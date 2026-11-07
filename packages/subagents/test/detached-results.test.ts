@@ -174,13 +174,34 @@ describe("AgentManager.rememberTombstone", () => {
     expect(manager.listTombstones().map(t => t.id)).toEqual(["a"]);
   });
 
-  it("leaves a name a live agent here holds with that agent", () => {
+  it("leaves a name held by a live agent, another tombstone or a reserved handle with its holder", () => {
     const manager = new AgentManager(() => {});
     const agents = Reflect.get(manager, "agents") as Map<string, object>;
     agents.set("live", { id: "live", handle: "gp", alias: "named" });
     manager.rememberTombstone(entry("a", "gp"));
     manager.rememberTombstone(entry("b", "other", "named"));
     expect(manager.listTombstones()).toEqual([]);
+
+    agents.clear();
+    manager.rememberTombstone(entry("c", "kept", "kept-alias"));
+    manager.rememberTombstone(entry("d", "fresh", "kept-alias"));
+    manager.rememberTombstone(entry("c", "kept", "kept-alias"));
+    expect(manager.listTombstones().map(t => t.id)).toEqual(["c"]);
+
+    manager.reservedHandles = () => ["busy"];
+    manager.rememberTombstone(entry("e", "busy"));
+    manager.rememberTombstone(entry("f", "x", "busy"));
+    expect(manager.listTombstones().map(t => t.id)).toEqual(["c"]);
+  });
+
+  it("marks the note of an entry it could not keep, and bounds what it does keep", () => {
+    const manager = new AgentManager(() => {});
+    manager.rememberEvicted({ id: "n", type: "general-purpose", description: "d", status: "completed", evictedAfterMin: 0 });
+    manager.rememberTombstone(entry("k", "gp"));
+    manager.rememberTombstone(entry("n", "gp"));
+    expect(manager.getEvictedNote("n")?.nameTaken).toBe("gp");
+    for (let i = 0; i < 101; i++) manager.rememberTombstone({ ...entry(`t${i}`, `h${i}`), completedAt: i + 1 });
+    expect(manager.listTombstones()).toHaveLength(100);
   });
 
   it("hands over only settled, reopenable records", () => {
@@ -190,7 +211,9 @@ describe("AgentManager.rememberTombstone", () => {
     agents.set("a", { id: "a", handle: "gp", sessionFile: "/s/a.jsonl", ...done });
     agents.set("b", { id: "b", handle: "gp-2", ...done });
     agents.set("c", { id: "c", handle: "gp-3", sessionFile: "/s/c.jsonl", status: "running" });
-    expect(manager.evictionTombstones(["a", "b", "c"]).map(t => t.id)).toEqual(["a"]);
+    agents.set("d", { id: "d", handle: "gp-4", sessionFile: "/s/d.jsonl", parentAgentId: "a", ...done });
+    expect(manager.evictionTombstones(["a", "b", "c", "d"]).map(t => t.id)).toEqual(["a"]);
+    expect(manager.evictionNotes(["a", "d"]).map(n => n.id)).toEqual(["a"]);
   });
 });
 
@@ -410,6 +433,28 @@ describe("session switch with a running background agent", () => {
     const got = await back.tools.get("steer_subagent").execute("s", { agent_id: agent.id, message: "more" }, undefined, undefined, ctx(sessionFile));
     expect(got.content[0].text).toContain(`Cannot resume agent "${agent.id}": no saved session is left to reopen.`);
     expect(got.content[0].text).not.toContain("Agent not found");
+    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+  });
+
+  it("says why when a delivered survivor's name already belongs to another conversation (#330)", async () => {
+    const saved = join(tmpDir, "named-session.jsonl");
+    writeFileSync(saved, "");
+    const result = (id: string) => ({
+      id,
+      content: `<task-notification>${id}</task-notification>`,
+      details: { id },
+      evicted: [{ id, type: "general-purpose", description: "d", status: "completed", evictedAfterMin: 0 }],
+      tombstones: [{ id, handle: "gp", type: "general-purpose", description: "d", sessionFile: saved, completedAt: 1 }],
+    });
+    spoolDetached(sessionFile, result("first-1"));
+    spoolDetached(sessionFile, result("second-1"));
+    const back = makePi();
+    subagentsExtension(back.pi);
+    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    await new Promise(resolve => setTimeout(resolve, 250));
+    const got = await back.tools.get("steer_subagent").execute("s", { agent_id: "second-1", message: "more" }, undefined, undefined, ctx(sessionFile));
+    expect(got.content[0].text).toContain('Cannot resume agent "second-1": its name "gp" now belongs to another agent');
+    expect(got.content[0].text).not.toContain("no saved session is left");
     await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
   });
 

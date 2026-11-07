@@ -193,6 +193,8 @@ export interface EvictedNote {
   /** The run's model fallback, so even an evicted agent's id still discloses it. */
   modelFallback?: ModelFallback;
   modelTier?: TierDisclosure;
+  /** Set when a saved session exists but its name now belongs to another agent, so it was not kept reopenable. */
+  nameTaken?: string;
 }
 
 /** The text a tool returns for an id whose record was evicted. */
@@ -2060,7 +2062,7 @@ export class AgentManager {
    */
   private tombstone(record: SettledRecord): void {
     const entry = this.tombstoneOf(record);
-    if (entry) this.rememberTombstone(entry);
+    if (entry) this.storeTombstone(entry);
   }
 
   /** What `@handle` needs to reopen `record`'s conversation; undefined without a handle and a session file. */
@@ -2083,20 +2085,35 @@ export class AgentManager {
   evictionTombstones(ids: readonly string[]): AgentTombstone[] {
     return [...this.agents.values()]
       .filter(isSettled)
-      .filter(record => ids.includes(record.id))
+      .filter(record => isTopLevelAgent(record) && ids.includes(record.id))
       .flatMap(record => this.tombstoneOf(record) ?? []);
   }
 
   /**
    * Keep `entry` reopenable by handle, alias and id. Also how an agent that settled in an
-   * orphaned manager (`/new`, `/reload`) stays reopenable here (#330). A name a live agent
-   * here already holds stays that agent's: the entry is not kept, as `takenHandles` would
-   * otherwise let two conversations answer to one `@name`.
+   * orphaned manager (`/new`, `/reload`) stays reopenable here (#330). A name already held
+   * by another live agent, an evicted conversation or a handle reserved for another manager's
+   * survivor stays with its holder (as `takenHandles` has it): two conversations must not
+   * answer to one `@name`. The entry is then not kept and its note says why.
    */
   rememberTombstone(entry: AgentTombstone): void {
-    for (const record of this.agents.values()) {
-      if (record.id !== entry.id && (record.handle === entry.handle || (entry.alias && record.alias === entry.alias))) return;
+    const names = [entry.handle, ...(entry.alias ? [entry.alias] : [])];
+    const reserved = new Set<string>(this.reservedHandles());
+    const held = (own: { id: string; handle?: string; alias?: string }) =>
+      own.id !== entry.id && names.some(name => name === own.handle || name === own.alias);
+    if (
+      names.some(name => reserved.has(name)) ||
+      [...this.agents.values()].some(held) ||
+      [...this.tombstones.values()].some(held)
+    ) {
+      const note = this.evictedNotes.get(entry.id);
+      if (note) note.nameTaken = entry.handle;
+      return;
     }
+    this.storeTombstone(entry);
+  }
+
+  private storeTombstone(entry: AgentTombstone): void {
     this.tombstones.set(entry.handle, entry);
     // Bound the memory a long session can accumulate. Oldest first, since the
     // agent someone still wants to reach is the one they used most recently.
@@ -2116,7 +2133,7 @@ export class AgentManager {
 
   /** Notes for whichever of `ids` are settled here, to hand to a session that will never see these records. */
   evictionNotes(ids: readonly string[]): EvictedNote[] {
-    return [...this.agents.values()].filter(isSettled).filter(record => ids.includes(record.id)).map(record => this.evictionNote(record));
+    return [...this.agents.values()].filter(isSettled).filter(record => isTopLevelAgent(record) && ids.includes(record.id)).map(record => this.evictionNote(record));
   }
 
   /** What a settled record leaves behind once it is gone from this manager. */

@@ -2601,7 +2601,10 @@ Terse command-style prompts produce shallow, generic work.
           if (!entry) {
             // Evicted with no session file left to reopen: `rememberAgents` off, or the tombstone was dropped.
             const note = manager.getEvictedNote(latest);
-            const why = note ? `Cannot resume agent "${latest}": no saved session is left to reopen.\n${describeEvicted(note)}` : agentNotFound(latest);
+            const gone = note?.nameTaken
+              ? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.`
+              : "no saved session is left to reopen.";
+            const why = note ? `Cannot resume agent "${latest}": ${gone}\n${describeEvicted(note)}` : agentNotFound(latest);
             return textResult(`${continued}${why}`);
           }
           // The reopen is a fresh detached spawn: nothing can block on it here.
