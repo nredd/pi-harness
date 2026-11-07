@@ -42,16 +42,19 @@ function routedModel(getModel: () => unknown): ExtensionFactory {
 /** Longer than the whole default 1s + 3s + 9s backoff, so one advance clears whichever sleep is armed. */
 const BACKOFF_SPAN_MS = 13_000;
 
+/** Timers the fixture's clock holds before any backoff is armed (record sweeps and the like). */
+let idleTimers = 0;
+
 /**
- * Let a recovering child finish without waiting out its backoff: advance the extension clock that times it
- * until the run settles. An advance before the next sleep is armed is a no-op, so the loop is bounded only
- * by the run itself. The shared clock's other timers (record sweeps, in the minutes) are past this span.
+ * Let a recovering child finish without waiting out its backoff: advance the extension clock only while a
+ * backoff sleep is armed on it (a timer beyond the idle ones), so fake time moves at most once per sleep and
+ * never past the other timers. Bounded by the run's own settling.
  */
 async function settleThroughBackoff(record: { promise?: Promise<unknown> }) {
   let settled = false;
   const finished = Promise.resolve(record.promise).finally(() => { settled = true; });
   while (!settled) {
-    fixture.clock.advance(BACKOFF_SPAN_MS);
+    if (fixture.clock.pending > idleTimers) fixture.clock.advance(BACKOFF_SPAN_MS);
     await new Promise(resolve => setImmediate(resolve));
   }
   await finished;
@@ -77,6 +80,7 @@ async function startHeldChild(responses: ReturnType<typeof answer>[], virtual = 
   await hold.entered;
   const id = h.session.messages.filter(m => m.role === "toolResult" && m.toolName === "Agent").flatMap(m => m.content).find(p => p.type === "text")?.text.match(/Agent ID: (\S+)/)?.[1];
   if (!id) throw new Error("Missing spawn id");
+  idleTimers = fixture.clock.pending;
   return { h, hold, physical, record: fixture.record(id), executions: () => executions };
 }
 
