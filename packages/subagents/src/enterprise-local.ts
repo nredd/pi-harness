@@ -8,6 +8,7 @@
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { errorMessage } from "./error-message.js";
 import { resolveAgentDir } from "./home-paths.js";
 
 const MANIFEST_VERSION = 1;
@@ -59,7 +60,7 @@ export function readEnterpriseLocalManifest(homeDir?: string): EnterpriseLocalMa
     }
     return manifest as unknown as EnterpriseLocalManifest;
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
+    const reason = errorMessage(error);
     console.warn(`[pi-subagents] Ignoring invalid ${path}: ${reason}`);
     return undefined;
   }

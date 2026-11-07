@@ -16,6 +16,7 @@ import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { errorMessage } from "./error-message.js";
 
 export interface WorktreeInfo {
   /** Absolute path to the worktree directory (the copied repo's root). */
@@ -99,7 +100,7 @@ async function step(run: Promise<string>, cause: (detail: string) => string): Pr
   try {
     return await run;
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
+    const detail = errorMessage(err);
     throw new WorktreeError(err instanceof GitTimeoutError ? detail : cause(detail));
   }
 }

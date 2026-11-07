@@ -124,3 +124,13 @@ def test_reap_stale_servers_spares_fresh_dirs(tmp_path: Path) -> None:
     assert not old.exists()
     assert fresh.exists()
     assert other.exists()
+
+
+def test_reap_stale_servers_reports_nothing_when_every_dir_is_fresh(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    (tmp_path / "pih-fresh").mkdir()
+    with caplog.at_level("WARNING"):
+        assert reap_stale_servers(tmp_path, max_age_s=3600) == []
+    assert (tmp_path / "pih-fresh").is_dir()
+    assert "Reaped" not in caplog.text

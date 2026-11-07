@@ -18,7 +18,7 @@ vi.mock("../src/agent-runner.js", async () => {
 });
 
 import subagentsExtension from "../src/index.js";
-import { ADMIT_CHANNEL, checkAdmission, PARKED_RESUME_DELAY_MS, QUOTA_RESTART_GRACE_MS } from "../src/quota-admission.js";
+import { ADMIT_CHANNEL, admissionOutcome, checkAdmission, PARKED_RESUME_DELAY_MS, QUOTA_RESTART_GRACE_MS } from "../src/quota-admission.js";
 import { SubagentScheduler } from "../src/schedule.js";
 import { resolveStorePath, ScheduleStore } from "../src/schedule-store.js";
 import { ctx, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
@@ -87,6 +87,13 @@ describe("checkAdmission", () => {
   it("drops a non-numeric reset rather than trusting it", async () => {
     const { events } = routerBus(() => ({ ok: false, resetAt: "soon" as never }));
     expect(await checkAdmission(events, "anthropic/x")).toEqual({ model: "anthropic/x", resetAt: undefined });
+  });
+});
+
+describe("admissionOutcome", () => {
+  it("uses the real clock and timeout when only events and a model are given", async () => {
+    const { events } = routerBus(() => ({ ok: true }));
+    expect(await admissionOutcome(events, "anthropic/x")).toEqual({ quotaSignal: true, resolvedModel: undefined });
   });
 });
 

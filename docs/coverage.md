@@ -370,7 +370,9 @@ added or changed is 0/0:
 | `python-scripts/primary` | 0/0 | 0/0 |
 | `python-harness/primary` | 628/69 | 628/69 |
 
-`python-scripts/primary` is also 0 branches on each OS (#419, #420). The Linux value is the darwin measurement until hosted CI confirms it.
+`python-scripts/primary` is also 0 branches on each OS (#419, #420): #420 removed the last partial arc, the
+`rerun` return in `scripts/runner_rescue.py`. Both OSes measured 0/0/0 in hosted CI run `42326265405` on commit
+`0e435a9a` (`coverage accounting` on `owned (ubuntu-24.04)` and `owned (macos-14)`).
 
 `python-scripts` was measured on the final tree of PR #323 from its own hosted artifacts, `--measure` on each:
 darwin from `coverage-macos-14`, linux from `coverage-ubuntu-24.04`, both run `41718792020` on commit `6912a7b5`.
@@ -378,7 +380,8 @@ After rebasing onto `2862cd80` (#332), main's `harness/tmux.py`/`harness/rpc.py`
 lowered `python-harness` by 8 lines and 1 function. Re-measured on commit `3be0ba22`: linux from
 `coverage-ubuntu-24.04` of run `41749183215`, darwin from a local macOS 27.2 arm64 `make check-integration`
 (Python 3.14.9), which also reproduced `python-scripts` 284/11 and earlier matched the hosted darwin counts.
-Both OSes gave 628/69. `python-scripts` is one line higher on linux than on darwin, so its floors differ per OS.
+Both OSes gave 628/69. At that point `python-scripts` was one line higher on linux than on darwin (285 vs 284);
+both are now 0 lines (#419).
 An earlier run (`41702044725`, before the first rebase) is not a source: it predates `harness/install_paths.py`
 and `harness/release_gate.py`.
 Hosted wall time of the pytest halves with `-n auto --dist loadfile`, `macos-14`: `scripts` 116s and

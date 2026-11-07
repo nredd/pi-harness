@@ -54,6 +54,19 @@ describe("cross-extension RPC", () => {
       expect(reply).toHaveBeenCalledWith({ success: true, data: { version: PROTOCOL_VERSION } });
     });
 
+    it("replies with the stringified value when a handler throws a non-Error", async () => {
+      (manager.getRecord as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw "plain failure";
+      });
+      registerRpcHandlers(deps);
+      const reply = vi.fn();
+      events.on("subagents:rpc:stop:reply:req-st-str", reply);
+      events.emit("subagents:rpc:stop", { requestId: "req-st-str", agentId: "agent-42" });
+
+      await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+      expect(reply).toHaveBeenCalledWith({ success: false, error: "plain failure" });
+    });
+
     it("scopes replies — other requestIds do not receive it", async () => {
       registerRpcHandlers(deps);
       const wrongReply = vi.fn();

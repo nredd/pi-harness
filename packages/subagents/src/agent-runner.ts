@@ -24,6 +24,7 @@ import {
 import { Type } from "typebox";
 import { BUILTIN_TOOL_NAMES, getAgentConfig, getConfig, getMemoryToolNames, getReadOnlyMemoryToolNames, getToolNamesForType } from "./agent-types.js";
 import { bindChildResourceLoader, runInChildSessionContext } from "./child-context.js";
+import { type Clock, realClock } from "./clock.js";
 import { buildParentContext, extractText } from "./context.js";
 import { DEFAULT_AGENTS } from "./default-agents.js";
 import { detectEnv } from "./env.js";
@@ -305,11 +306,10 @@ export function installExtensionToolScope(
     /** Receives the scope check the child's nested-call gate extension applies. */
     nestedCallGate: NestedCallGate;
     /** Why workflow tools are refused. */
-    workflowError?: string;
+    workflowError: string;
   },
 ): void {
-  const { loader, toolNames, disallowedSet, extNames, narrowing, readmitToolNames, nestedCallGate } = ctx;
-  const workflowError = ctx.workflowError ?? NESTED_WORKFLOW_ERROR;
+  const { loader, toolNames, disallowedSet, extNames, narrowing, readmitToolNames, nestedCallGate, workflowError } = ctx;
 
   // The names allowed right now. Mirrors the `ext:` opt-in flip: when any `ext:`
   // selector is present, extension tools become an explicit allowlist — a loaded
@@ -506,6 +506,8 @@ export interface AssistantMessageInfo {
 export interface RunOptions {
   /** Backoff before each stale-ctx re-prompt (#145); defaults to 1s, 3s, 9s. `[]` disables recovery. */
   staleRetryDelaysMs?: readonly number[];
+  /** Clock that times the stale-ctx backoff; the manager passes its own. Defaults to native timers. */
+  clock?: Clock;
   /** ExtensionAPI instance — used for pi.exec() instead of execSync. */
   pi: ExtensionAPI;
   /** Manager-assigned id; suffixes session name to disambiguate parallel spawns (e.g. `Explore#a1b2c3d4`). */
@@ -692,10 +694,10 @@ function collectResponseText(session: AgentSession) {
  * Get the last non-empty assistant text produced during THIS invocation.
  * `startIndex` is the message count captured before the prompt, so the walk-back
  * never crosses into a previous turn: on a resume whose new turn failed empty,
- * this returns "" instead of the prior turn's answer (#144). Defaults to 0 (a
- * fresh spawn, where the whole history belongs to this run).
+ * this returns "" instead of the prior turn's answer (#144). A fresh spawn passes
+ * 0, since the whole history belongs to that run.
  */
-function getLastAssistantText(session: AgentSession, startIndex = 0): string {
+function getLastAssistantText(session: AgentSession, startIndex: number): string {
   for (let i = session.messages.length - 1; i >= startIndex; i--) {
     const msg = session.messages[i];
     if (msg.role !== "assistant") continue;
@@ -731,7 +733,7 @@ export function forwardModelCall(event: AgentSessionEvent, emit: (event: ModelCa
  * no tool call pending, and a stop that was not an abort, a tool-use handoff or
  * a token-limit cut. Anything else is a teaser or a cut-off report.
  */
-function endedWithReport(session: AgentSession, startIndex = 0): boolean {
+function endedWithReport(session: AgentSession, startIndex: number): boolean {
   for (let i = session.messages.length - 1; i >= startIndex; i--) {
     const msg = session.messages[i];
     if (msg.role !== "assistant") continue;
@@ -796,7 +798,7 @@ async function forceFinalReport(session: AgentSession, startIndex: number, signa
  * Bounded by `startIndex` (like the text fallback) so a resume that produced no
  * assistant message of its own never inherits a PRIOR turn's stop reason.
  */
-function finalTurnError(session: AgentSession, startIndex = 0): string | undefined {
+function finalTurnError(session: AgentSession, startIndex: number): string | undefined {
   for (let i = session.messages.length - 1; i >= startIndex; i--) {
     const msg = session.messages[i];
     if (msg.role !== "assistant") continue;
@@ -820,15 +822,15 @@ const STALE_CTX_RETRY_PROMPT = "Your previous step was interrupted by a session 
 /**
  * Resolve after `ms`, or as soon as `signal` aborts. Never rejects.
  */
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+function sleep(ms: number, signal: AbortSignal | undefined, clock: Clock): Promise<void> {
   return new Promise((resolve) => {
     if (signal?.aborted) return resolve();
     const done = () => {
-      clearTimeout(timer);
+      timer.cancel();
       signal?.removeEventListener("abort", done);
       resolve();
     };
-    const timer = setTimeout(done, ms);
+    const timer = clock.setTimeout(done, ms);
     signal?.addEventListener("abort", done, { once: true });
   });
 }
@@ -858,10 +860,11 @@ export async function retryStaleCtx(
   startIndex: number,
   signal: AbortSignal | undefined,
   delays: readonly number[] = STALE_CTX_RETRY_DELAYS_MS,
+  clock: Clock = realClock,
 ): Promise<void> {
   for (const delay of delays) {
     if (!isStaleCtxError(finalTurnError(session, startIndex))) return;
-    await sleep(delay, signal);
+    await sleep(delay, signal, clock);
     if (signal?.aborted) return;
     await session.prompt(STALE_CTX_RETRY_PROMPT);
   }
@@ -1556,7 +1559,7 @@ export async function runAgent(
     // pi's `session.abort()` is a no-op until a run is active — so a child whose
     // parent is already gone is not prompted at all.
     if (options.signal?.aborted !== true) await session.prompt(effectivePrompt);
-    await retryStaleCtx(session, startLen, options.signal, options.staleRetryDelaysMs);
+    await retryStaleCtx(session, startLen, options.signal, options.staleRetryDelaysMs, options.clock);
 
     // A cap fired. The wrap-up steer is only a request: a model deep in a tool
     // loop keeps calling tools through the grace turns and is then aborted
@@ -1618,7 +1621,7 @@ export async function runAgent(
 export async function resumeAgent(
   session: AgentSession,
   prompt: string,
-  options: Pick<RunOptions, "staleRetryDelaysMs" | "maxTurns" | "onTurnEnd" | "onTextDelta" | "onModelCall" | "onToolActivity" | "onAssistantUsage" | "onCompaction" | "signal"> & {
+  options: Pick<RunOptions, "staleRetryDelaysMs" | "clock" | "maxTurns" | "onTurnEnd" | "onTextDelta" | "onModelCall" | "onToolActivity" | "onAssistantUsage" | "onCompaction" | "signal"> & {
     /** The agent's type, for its own `max_turns`. */
     type: SubagentType;
   },
@@ -1634,7 +1637,7 @@ export async function resumeAgent(
   try {
     // Already aborted: not prompted, as in `runAgent`.
     if (options.signal?.aborted !== true) await session.prompt(prompt);
-    await retryStaleCtx(session, startLen, options.signal, options.staleRetryDelaysMs);
+    await retryStaleCtx(session, startLen, options.signal, options.staleRetryDelaysMs, options.clock);
     if (run.steered && mayFollowUp(session, startLen, options.signal) && !endedWithReport(session, startLen)) {
       run.finalizing = true;
       if (await forceFinalReport(session, startLen, options.signal)) run.aborted = false;

@@ -55,6 +55,29 @@ describe("settings persistence", () => {
     expect(loadSettings(projectDir)).toEqual({});
   });
 
+  it("reads, writes and applies against process.cwd() when no cwd is given", () => {
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(projectDir);
+    try {
+      expect(saveSettings({ maxConcurrent: 5 })).toBe(true);
+      expect(JSON.parse(readFileSync(projectFile(), "utf-8"))).toEqual({ maxConcurrent: 5 });
+      expect(loadSettings()).toEqual({ maxConcurrent: 5 });
+      const setMaxConcurrent = vi.fn();
+      const emit = vi.fn();
+      applyAndEmitLoaded({ setMaxConcurrent, setBudgetPolicy: vi.fn(), setMaxSubagentDepth: vi.fn(), setModelAliases: vi.fn(), setAgentModels: vi.fn() } as unknown as SettingsAppliers, emit);
+      expect(setMaxConcurrent).toHaveBeenCalledWith(5);
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
+
+  it("warns about and drops an invalid modelResolution mode, keeping the valid one", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    writeGlobal({ modelResolution: { onUnmapped: "bogus", onUnavailable: "inherit" } });
+    expect(loadSettings(projectDir).modelResolution).toEqual({ onUnavailable: "inherit" });
+    expect(warn).toHaveBeenCalledWith("[pi-subagents] Ignoring invalid modelResolution.onUnmapped.");
+    warn.mockRestore();
+  });
+
   it("returns {} when both files are malformed JSON", () => {
     writeFileSync(globalFile(), "not json {{");
     mkdirSync(join(projectDir, ".pi"), { recursive: true });
@@ -429,6 +452,13 @@ describe("settings persistence", () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       writeManifest({ version: 2, subagents: { modelAliases: { fast: ["corp/haiku"] } } });
       expect(loadSettings(projectDir).modelAliases).toBeUndefined();
+      warn.mockRestore();
+    });
+
+    it("drops an alias whose candidates are not a list", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      writeManifest({ version: 1, subagents: { modelAliases: { scalar: "corp/a", good: ["corp/b"] } } });
+      expect(loadSettings(projectDir).modelAliases).toEqual({ good: ["corp/b"] });
       warn.mockRestore();
     });
 

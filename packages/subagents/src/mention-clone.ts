@@ -62,6 +62,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { bindChildResourceLoader, runInChildSessionContext } from "./child-context.js";
+import { errorMessage } from "./error-message.js";
 import { resolveAgentDir } from "./home-paths.js";
 import { agentMentionReminder } from "./mention.js";
 import { createHomeResourceLoader } from "./resource-loader.js";
@@ -188,7 +189,7 @@ export async function runMentionClone(opts: MentionCloneOptions): Promise<Mentio
     // renderer produces, where the reminder trails the message it is about.
     await session.prompt(`${message}\n\n${agentMentionReminder(type)}`);
   } catch (err) {
-    return { spawned, error: err instanceof Error ? err.message : String(err) };
+    return { spawned, error: errorMessage(err) };
   } finally {
     session?.dispose?.();
   }

@@ -64,11 +64,11 @@ function mockPi(): ExtensionAPI {
  * A pi whose exec answers one git subcommand with a canned failure result and
  * runs everything else for real. `match` sees the argv git is called with.
  */
-function failingPi(match: (args: string[]) => boolean, failure: { code: number; killed: boolean }): ExtensionAPI {
+function failingPi(match: (args: string[]) => boolean, failure: { code: number; killed: boolean }, stderr = "boom"): ExtensionAPI {
   const real = mockPi();
   return {
     exec: vi.fn(async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
-      if (match(args)) return { stdout: "", stderr: "boom", ...failure };
+      if (match(args)) return { stdout: "", stderr, ...failure };
       return real.exec(command, args, options);
     }),
   } as unknown as ExtensionAPI;
@@ -161,6 +161,14 @@ describe("worktree", () => {
         repoDir,
         "add-fails",
       )).rejects.toThrow(`\`git worktree add\` failed in ${realpathSync(repoDir)}: boom`);
+    });
+
+    it("names the failed git command when a non-zero exit has no stderr", async () => {
+      await expect(createWorktree(
+        failingPi(args => args[0] === "worktree" && args[1] === "add", { code: 128, killed: false }, "  \n"),
+        repoDir,
+        "add-fails-quiet",
+      )).rejects.toThrow(/git worktree add --detach .* HEAD failed \(exit 128\)/);
     });
 
     it("throws a timeout, not a repo-state cause, when a git call is killed", async () => {

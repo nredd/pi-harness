@@ -267,6 +267,19 @@ No tools.`);
     expect(result.get("notool")!.builtinToolNames).toEqual([]);
   });
 
+  it("treats an inherit list with no usable names as inheriting nothing", () => {
+    writeAgent("blanklist", `---
+extensions: ","
+skills: " , "
+---
+
+Blank lists.`);
+
+    const agent = loadCustomAgents(tmpDir).get("blanklist")!;
+    expect(agent.extensions).toBe(false);
+    expect(agent.skills).toBe(false);
+  });
+
   it("handles extensions: false → no extensions", () => {
     writeAgent("noext", `---
 extensions: false
