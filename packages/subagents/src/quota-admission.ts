@@ -56,8 +56,9 @@ export async function checkAdmission(
   model: string,
   timeoutMs = ADMIT_TIMEOUT_MS,
   clock: Clock = realClock,
+  signal?: AbortSignal,
 ): Promise<QuotaBlock | undefined> {
-  return (await admissionOutcome(events, model, timeoutMs, clock)).block;
+  return (await admissionOutcome(events, model, timeoutMs, clock, signal)).block;
 }
 
 /** Retain the physical admission label and whether the router supplied a signal. */
@@ -66,15 +67,23 @@ export function admissionOutcome(
   model: string,
   timeoutMs = ADMIT_TIMEOUT_MS,
   clock: Clock = realClock,
+  signal?: AbortSignal,
 ): Promise<TierAdmission> {
+  if (signal?.aborted) return Promise.reject(new DOMException("Admission cancelled", "AbortError"));
   const requestId = nanoid();
-  return new Promise(resolve => {
-    let done = false;
-    const finish = (outcome: TierAdmission) => {
-      if (done) return;
-      done = true;
+  return new Promise((resolve, reject) => {
+    // Every step is idempotent and a promise settles once, so no `done` latch is needed.
+    const cleanup = () => {
       timer.cancel();
       unsubscribe();
+      signal?.removeEventListener("abort", abort);
+    };
+    const abort = () => {
+      cleanup();
+      reject(new DOMException("Admission cancelled", "AbortError"));
+    };
+    const finish = (outcome: TierAdmission) => {
+      cleanup();
       resolve(outcome);
     };
     const unsubscribe = events.on(`${ADMIT_CHANNEL}:reply:${requestId}`, raw => {
@@ -90,6 +99,7 @@ export function admissionOutcome(
       } });
     });
     const timer = clock.setTimeout(() => finish({ quotaSignal: false }), timeoutMs);
+    signal?.addEventListener("abort", abort, { once: true });
     events.emit(ADMIT_CHANNEL, { requestId, model });
   });
 }

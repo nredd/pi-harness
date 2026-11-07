@@ -55,5 +55,13 @@ node ../../scripts/run-vitest.ts node test/config-model-fallback-provenance.test
 node ../../scripts/run-vitest.ts bun test/config-model-fallback-provenance.test.ts test/evicted-agent-wiring.test.ts --coverage.enabled=false --maxWorkers=1
 ```
 
+`test/branch-coverage-schedule.test.ts` holds admission replies while it disables a
+job or stops and restarts the scheduler. A stale reply must neither dispatch nor
+re-arm the job, and cancellation removes both the reply listener and the injected
+admission timeout. Repeated starts must cancel the old owned timer. The registered
+session-switch fixture exercises the same cleanup through the extension, while
+already dispatched agents may still finish and record their outcome. These tests
+do not prove the cause of a guest-wide WSL2 stall.
+
 The package gate is `npm run check --workspace @nredd/pi-subagents` from the
 repository root. Focused tests are not a substitute for that gate or root CI.

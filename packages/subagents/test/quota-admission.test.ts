@@ -22,6 +22,7 @@ import { ADMIT_CHANNEL, checkAdmission, PARKED_RESUME_DELAY_MS, QUOTA_RESTART_GR
 import { SubagentScheduler } from "../src/schedule.js";
 import { resolveStorePath, ScheduleStore } from "../src/schedule-store.js";
 import { ctx, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
+import { FakeClock } from "./helpers/fake-clock.js";
 
 type Verdict = { ok: boolean; resetAt?: number; wait?: boolean } | "error" | "silent" | "garbage";
 
@@ -52,6 +53,17 @@ function routerBus(verdict: (model: string) => Verdict) {
 const MODEL = { provider: "anthropic", id: "claude-sonnet-5-5", name: "Sonnet" };
 
 describe("checkAdmission", () => {
+  it("refuses an already cancelled admission without registering or emitting", async () => {
+    const clock = new FakeClock();
+    const controller = new AbortController();
+    controller.abort();
+    const events = { on: vi.fn(), emit: vi.fn() };
+    await expect(checkAdmission(events, "fixture/model", undefined, clock, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(events.on).not.toHaveBeenCalled();
+    expect(events.emit).not.toHaveBeenCalled();
+    expect(clock.pending).toBe(0);
+  });
+
   it("returns the block and its reset when the router refuses", async () => {
     const { events, asked } = routerBus(() => ({ ok: false, resetAt: 1234 }));
     expect(await checkAdmission(events, "anthropic/x")).toEqual({ model: "anthropic/x", resetAt: 1234 });

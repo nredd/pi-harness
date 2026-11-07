@@ -58,21 +58,21 @@ function makePi() {
     if (requestId === undefined) throw new Error("no admission request pending");
     handlers.get(`${ADMIT_CHANNEL}:reply:${requestId}`)?.(data);
   };
-  return { pi, events, admits, reply };
+  return { pi, events, admits, reply, handlers };
 }
 
 function setup(opts: { clock?: FakeClock; spawn?: () => string; path?: string } = {}) {
   const clock = opts.clock ?? new FakeClock();
   const spawn = vi.fn(opts.spawn ?? (() => "spawned"));
   const manager = { spawn, awaitStartup: async () => {}, getRecord: () => ({ status: "completed", promise: Promise.resolve("done") }) } as unknown as AgentManager;
-  const { pi, events, admits, reply } = makePi();
+  const { pi, events, admits, reply, handlers } = makePi();
   const ctx = { cwd: dir, modelRegistry: registry, ui: { notify: vi.fn() } } as unknown as ExtensionContext;
   const path = opts.path ?? join(dir, "jobs.json");
   const store = new ScheduleStore(path);
   const scheduler = new SubagentScheduler({ homeDir: dir, clock });
   schedulers.push(scheduler);
   scheduler.start(pi, ctx, manager, store);
-  return { clock, events, admits, reply, spawn, pi, ctx, manager, store, path, scheduler };
+  return { clock, events, admits, reply, handlers, spawn, pi, ctx, manager, store, path, scheduler };
 }
 
 const input = { name: "job", description: "job", schedule: "1s", subagent_type: "general-purpose", prompt: "work" };
@@ -132,12 +132,29 @@ describe("scheduler branches", () => {
   it("does not fire an orphaned timer after stop when start ran twice", () => {
     const f = setup();
     f.scheduler.addJob(input);
-    // A second start re-arms every job without cancelling the first timers.
     f.scheduler.start(f.pi, f.ctx, f.manager, f.store);
     f.scheduler.stop();
-    expect(f.clock.pending).toBe(1);
+    expect(f.clock.pending).toBe(0);
     expect(() => f.clock.advance(1000)).not.toThrow();
     expect(f.spawn).not.toHaveBeenCalled();
+  });
+
+  it("keeps no admission token for a job that never armed", () => {
+    class FullClock extends FakeClock {
+      override setInterval(): never { throw "timer table full"; }
+    }
+    const tokens = (s: SubagentScheduler) => (s as unknown as { scheduled: Map<string, object> }).scheduled;
+    const full = setup({ clock: new FullClock(), path: join(dir, "full.json") });
+    full.scheduler.addJob(input);
+    expect(tokens(full.scheduler).size).toBe(0);
+    const f = setup({ path: join(dir, "armed.json") });
+    f.scheduler.addJob({ ...input, schedule: "5m" });
+    expect(tokens(f.scheduler).size).toBe(1);
+    f.store.add({ ...f.scheduler.buildJob({ ...input, name: "past-job" }), id: "past", scheduleType: "once", schedule: new Date(f.clock.now() - 1000).toISOString() });
+    f.scheduler.stop();
+    f.scheduler.start(f.pi, f.ctx, f.manager, f.store);
+    expect(tokens(f.scheduler).size).toBe(1);
+    expect(f.store.get("past")?.lastStatus).toBe("error");
   });
 
   it("reports a non-Error timer failure as its string", () => {
@@ -181,7 +198,7 @@ describe("scheduler branches", () => {
     await flush();
     expect(f.spawn).not.toHaveBeenCalled();
     expect(next.events).toEqual([]);
-    expect(f.scheduler.list().find(j => j.id === job.id)?.lastStatus).toBe("running");
+    expect(f.scheduler.list().find(j => j.id === job.id)?.lastStatus).toBeUndefined();
   });
 
   it("ignores an admission failure that lands after the session switched", async () => {
@@ -207,7 +224,7 @@ describe("scheduler branches", () => {
     await flush();
     expect(next.events).toEqual([]);
     expect(f.events.filter(e => e.type === "error")).toEqual([]);
-    expect(f.scheduler.list().find(j => j.id === job.id)?.lastStatus).toBe("running");
+    expect(f.scheduler.list().find(j => j.id === job.id)?.lastStatus).toBeUndefined();
   });
 
   it("reports a non-Error admission failure as its string", async () => {
@@ -244,6 +261,152 @@ describe("scheduler branches", () => {
     expect(f.events.map(e => e.type)).toEqual(["added", "updated", "removed"]);
     expect(f.clock.pending).toBe(0);
     expect(f.spawn).not.toHaveBeenCalled();
+  });
+
+  it("does not dispatch or repark a job disabled during pending admission", async () => {
+    for (const reply of [{ ok: true }, { ok: false, resetAt: Date.parse("2030-01-01T00:00:00Z") }]) {
+      const f = setup({ path: join(dir, `jobs-${reply.ok}.json`) });
+      const job = f.scheduler.addJob({ ...input, model: "fixture/model", quotaParked: true });
+      f.clock.advance(1000);
+      f.scheduler.updateJob(job.id, { enabled: false });
+      f.reply({ success: true, data: reply });
+      await flush();
+      expect(f.spawn).not.toHaveBeenCalled();
+      expect(f.store.get(job.id)?.enabled).toBe(false);
+      expect(f.clock.pending).toBe(0);
+    }
+  });
+
+  it.each(["fixture/model", "@cheap"])("cancels pending admission resources on disable: %s", async model => {
+    setModelTiers({ cheap: ["fixture/model"] }, undefined);
+    const f = setup();
+    const job = f.scheduler.addJob({ ...input, model, quotaParked: true });
+    f.clock.advance(1000);
+    expect(f.handlers.size).toBe(1);
+    expect(f.clock.pending).toBe(2);
+    f.scheduler.updateJob(job.id, { enabled: false });
+    expect(f.handlers.size).toBe(0);
+    expect(f.clock.pending).toBe(0);
+    await flush();
+    expect(f.spawn).not.toHaveBeenCalled();
+  });
+
+  it("ignores an old reply after disable and re-enable but admits the new fire", async () => {
+    const f = setup();
+    const job = f.scheduler.addJob({ ...input, model: "fixture/model", quotaParked: true });
+    f.clock.advance(1000);
+    f.scheduler.updateJob(job.id, { enabled: false });
+    f.scheduler.updateJob(job.id, { enabled: true });
+    f.reply({ success: true, data: { ok: true } });
+    await flush();
+    expect(f.spawn).not.toHaveBeenCalled();
+    expect(f.events.filter(e => e.type === "error")).toEqual([]);
+    expect(f.store.get(job.id)?.lastStatus).toBeUndefined();
+    f.clock.advance(1000);
+    f.reply({ success: true, data: { ok: true } });
+    await flush();
+    expect(f.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels overlapping admissions while an already spawned run finishes after stop", async () => {
+    const f = setup();
+    let finish!: (value: string) => void;
+    const promise = new Promise<string>(resolve => { finish = resolve; });
+    vi.spyOn(f.manager, "getRecord").mockReturnValue({ status: "completed", promise } as never);
+    const running = f.scheduler.addJob(input);
+    f.scheduler.addJob({ ...input, name: "pending-a", model: "fixture/model", quotaParked: true });
+    f.scheduler.addJob({ ...input, name: "pending-b", model: "fixture/model", quotaParked: true });
+    f.clock.advance(1000);
+    expect(f.spawn).toHaveBeenCalledTimes(1);
+    expect(f.handlers.size).toBe(2);
+    expect(f.clock.pending).toBe(5);
+    f.scheduler.stop();
+    expect(f.handlers.size).toBe(0);
+    expect(f.clock.pending).toBe(0);
+    finish("done");
+    await flush();
+    expect(f.store.get(running.id)?.lastStatus).toBe("success");
+    expect(f.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not revive an old admission after stop and restart with the same session", async () => {
+    const f = setup();
+    const job = f.scheduler.addJob({ ...input, model: "fixture/model", quotaParked: true });
+    f.clock.advance(1000);
+    f.scheduler.stop();
+    expect(f.clock.pending).toBe(0);
+    f.scheduler.start(f.pi, f.ctx, f.manager, f.store);
+    f.reply({ success: true, data: { ok: true } });
+    await flush();
+    expect(f.spawn).not.toHaveBeenCalled();
+    expect(f.store.get(job.id)?.enabled).toBe(true);
+    expect(f.clock.pending).toBe(1);
+    expect(f.store.get(job.id)?.lastStatus).toBeUndefined();
+    expect(f.events.filter(e => e.type === "error")).toEqual([]);
+  });
+
+  it("cancels overlapping admissions without clobbering a newer fire's running status", async () => {
+    setModelTiers({ cheap: ["fixture/model"] }, undefined);
+    const f = setup();
+    const job = f.scheduler.addJob({ ...input, model: "@cheap" });
+    f.store.update(job.id, { lastStatus: "success" });
+    f.clock.advance(1000);
+    f.clock.advance(1000);
+    expect(f.admits).toHaveLength(2);
+    expect(f.store.get(job.id)?.lastStatus).toBe("running");
+    f.scheduler.updateJob(job.id, { enabled: false });
+    expect(f.store.get(job.id)?.lastStatus).toBe("success");
+    await flush();
+    expect(f.store.get(job.id)?.lastStatus).toBe("success");
+    expect(f.spawn).not.toHaveBeenCalled();
+  });
+
+  it("keeps a status another writer set before a pending admission is cancelled", async () => {
+    const f = setup();
+    const job = f.scheduler.addJob({ ...input, model: "fixture/model", quotaParked: true });
+    f.clock.advance(1000);
+    f.store.update(job.id, { lastStatus: "error" });
+    f.scheduler.updateJob(job.id, { enabled: false });
+    await flush();
+    expect(f.store.get(job.id)?.lastStatus).toBe("error");
+  });
+
+  it("leaves a newer pending admission owning running when an older one settles", async () => {
+    setModelTiers({ cheap: ["fixture/model"] }, undefined);
+    const f = setup();
+    const job = f.scheduler.addJob({ ...input, model: "@cheap" });
+    f.clock.advance(1000);
+    f.clock.advance(1000);
+    f.reply({ success: true, data: { ok: true } });
+    await flush();
+    expect(f.spawn).toHaveBeenCalledTimes(1);
+    f.scheduler.updateJob(job.id, { enabled: false });
+    expect(f.store.get(job.id)?.lastStatus).toBe("success");
+  });
+
+  it("does not spawn a resolved admission disabled before its microtask runs", async () => {
+    const f = setup();
+    const job = f.scheduler.addJob({ ...input, model: "fixture/model", quotaParked: true });
+    f.clock.advance(1000);
+    f.reply({ success: true, data: { ok: true } });
+    f.scheduler.updateJob(job.id, { enabled: false });
+    await flush();
+    expect(f.spawn).not.toHaveBeenCalled();
+    expect(f.store.get(job.id)?.lastStatus).toBeUndefined();
+    expect(f.events.filter(e => e.type === "error")).toEqual([]);
+  });
+
+  it("does not spawn a resolved admission stopped and restarted before its microtask runs", async () => {
+    const f = setup();
+    const job = f.scheduler.addJob({ ...input, model: "fixture/model", quotaParked: true });
+    f.clock.advance(1000);
+    f.reply({ success: true, data: { ok: true } });
+    f.scheduler.stop();
+    f.scheduler.start(f.pi, f.ctx, f.manager, f.store);
+    await flush();
+    expect(f.spawn).not.toHaveBeenCalled();
+    expect(f.store.get(job.id)?.lastStatus).toBeUndefined();
+    expect(f.events.filter(e => e.type === "error")).toEqual([]);
   });
 
   it("fails a fire whose agent type was disabled while admission was pending", async () => {
