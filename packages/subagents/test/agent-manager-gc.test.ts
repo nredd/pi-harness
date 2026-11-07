@@ -20,9 +20,11 @@ vi.mock("../src/worktree.js", () => ({
   createWorktree: vi.fn(),
   cleanupWorktree: vi.fn(() => ({ hasChanges: false })),
   pruneWorktrees: vi.fn(),
+  isWorktreeIsolationEnabled: vi.fn(() => true),
 }));
 
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
+import { createWorktree } from "../src/worktree.js";
 
 const mockPi = {} as any;
 const mockCtx = { cwd: "/tmp" } as any;
@@ -195,6 +197,24 @@ describe("AgentManager — record GC", () => {
       await vi.advanceTimersByTimeAsync(SIXTY + TICK);
 
       expect(manager.getRecord(refused.id)).toBeUndefined();
+      expect(reaped).not.toHaveBeenCalled();
+    });
+
+    it("stays quiet for a spawn stopped while its worktree copy was being made", async () => {
+      const reaped = vi.fn();
+      let copied!: (wt: any) => void;
+      vi.mocked(createWorktree).mockReturnValueOnce(new Promise(r => { copied = r; }) as any);
+      manager = new AgentManager(undefined, 4, undefined, undefined, undefined, undefined, undefined, undefined, undefined, reaped);
+      const id = manager.spawn(mockPi, mockCtx, "X", "copying", { description: "copying", isBackground: true, isolation: "worktree" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(manager.abort(id)).toBe(true);
+      copied({ path: "/tmp/wt", workPath: "/tmp/wt", repoRoot: "/tmp", branch: "b" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runAgent).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(SIXTY + TICK);
+
+      expect(manager.getRecord(id)).toBeUndefined();
       expect(reaped).not.toHaveBeenCalled();
     });
 

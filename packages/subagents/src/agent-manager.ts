@@ -1191,6 +1191,9 @@ export class AgentManager {
         if (record.worktreeResult?.error) {
           if (!record.isBackground) markConsumed(record, this.clock.now());
           try { this.onComplete?.(record); } catch { /* do not strand the lease */ }
+        } else {
+          // Stopped mid-copy: the run never started and no notice goes out, so the sweep must stay quiet.
+          record.stoppedQueued = true;
         }
         // After the cleanup, not before: the copy is still being removed until here.
         this.releaseLease(record);
