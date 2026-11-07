@@ -2099,15 +2099,17 @@ export class AgentManager {
   rememberTombstone(entry: AgentTombstone): void {
     const names = [entry.handle, ...(entry.alias ? [entry.alias] : [])];
     const reserved = new Set<string>(this.reservedHandles());
-    const held = (own: { id: string; handle?: string; alias?: string }) =>
-      own.id !== entry.id && names.some(name => name === own.handle || name === own.alias);
-    if (
-      names.some(name => reserved.has(name)) ||
-      [...this.agents.values()].some(held) ||
-      [...this.tombstones.values()].some(held)
-    ) {
+    const owns = (own: { id: string; handle?: string; alias?: string }, name: string) =>
+      own.id !== entry.id && (name === own.handle || name === own.alias);
+    const taken = names.find(
+      name =>
+        reserved.has(name) ||
+        [...this.agents.values()].some(own => owns(own, name)) ||
+        [...this.tombstones.values()].some(own => owns(own, name)),
+    );
+    if (taken !== undefined) {
       const note = this.evictedNotes.get(entry.id);
-      if (note) note.nameTaken = entry.handle;
+      if (note) note.nameTaken = taken;
       return;
     }
     this.storeTombstone(entry);

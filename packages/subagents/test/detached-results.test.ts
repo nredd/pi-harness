@@ -204,6 +204,19 @@ describe("AgentManager.rememberTombstone", () => {
     expect(manager.listTombstones()).toHaveLength(100);
   });
 
+  it("names the held name in the note, alias or handle", () => {
+    const manager = new AgentManager(() => {});
+    const agents = Reflect.get(manager, "agents") as Map<string, object>;
+    agents.set("live", { id: "live", handle: "gp", alias: "named" });
+    const note = (id: string) => ({ id, type: "general-purpose", description: "d", status: "completed" as const, evictedAfterMin: 0 });
+    manager.rememberEvicted(note("b"));
+    manager.rememberTombstone(entry("b", "other", "named"));
+    expect(manager.getEvictedNote("b")?.nameTaken).toBe("named");
+    manager.rememberEvicted(note("c"));
+    manager.rememberTombstone(entry("c", "gp", "free"));
+    expect(manager.getEvictedNote("c")?.nameTaken).toBe("gp");
+  });
+
   it("hands over only settled, reopenable records", () => {
     const manager = new AgentManager(() => {});
     const agents = Reflect.get(manager, "agents") as Map<string, object>;
