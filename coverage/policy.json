@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "target": { "lines": 0, "functions": 0 },
+  "target": { "lines": 0, "functions": 0, "branches": 0 },
   "enforce_target": true,
   "reclassifications": [
     { "package": "dev-tools", "signal": "owned", "path": "packages/dev-tools/src/core/index.ts", "reason": "Relative to integration base 71b0aea: static named ESM re-export facade has zero Istanbul statements/functions in TypeScript and emitted ESM. Strict shape validation rejects executable additions; all executable target modules remain measured." },

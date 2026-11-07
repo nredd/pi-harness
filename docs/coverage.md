@@ -45,8 +45,8 @@ branches are capped per signal ([branch caps](#branch-caps)), and Bun signals fo
 base-relative facade ledger regression for the `b51e177` main merge are recorded
 [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/tier-main-merge.md).
 
-The target is **100% of owned executable source lines AND functions**, measured by each
-package's primary runner. Uncovered branches are gated by per-signal caps on their way to 0 (below). This is source coverage, not
+The target is **100% of owned executable source lines, functions AND branches**, measured by each
+package's primary runner (`target` in `coverage/policy.json` is 0/0/0). This is source coverage, not
 proof that every behavior is asserted. Every subsequently closed gap needs a test that fails
 without the change. Phase 0 adds accounting; the final integration also tests worker-error settlement and remaining
 cross-platform collector paths without removing guards.
@@ -57,15 +57,16 @@ cross-platform collector paths without removing guards.
 `lines`/`functions`: an enforced signal fails on excess (`Budget exceeded: <measured> uncovered, budget
 <cap>` names all three counters), a report-only signal logs the reference and the signed delta, and the
 JSON `signals` map carries the branch delta. The base ratchet treats it like lines: a cap can only go
-down, and dropping a `branches` key the base had is a weakening. While `target.branches` is unset, a
-100-percent primary signal is held to its own branch cap under the global target; #425 sets it to 0.
+down, and dropping a `branches` key the base had is a weakening. `target.branches` is 0, so every
+100-percent primary signal is held to 0 uncovered branches regardless of its own cap. Every enforced primary and
+Bun signal's cap is 0 as well; `session-kit`'s native Bun subset stays report-only and uncapped (see below).
 
 It fails closed both ways. A signal whose report has branch records (`BRDA`) needs a cap on that OS
 (`Missing branch cap`), and a capped signal whose report has executable lines but no branch records
 fails (`Branch producer missing`), so a producer that silently stops emitting `BRDA` can't read as 0.
 Carve-outs: the native `bun test` subset signal (session-kit `/bun`) writes no branch records
-and declares no cap until #320 moves it to Vitest-on-Bun Istanbul, which then adds one (dev-tools, plan-mode and
-subagents moved in #433, #362 and #320 and are capped); `computer-use-vitest` is owner-excluded (`goal: excluded`), the only
+and declares no cap until #320 moves it to Vitest-on-Bun Istanbul (blocked on Bun `worker.terminate()` latency);
+`computer-use-vitest` is owner-excluded (`goal: excluded`), the only
 goal that may carry branch records without a cap.
 
 Branch units differ by producer: Istanbul and Bun count AST arms (including an implicit `else` and each
@@ -77,18 +78,15 @@ Python measures branches: `PY_GATE` in the `Makefile` passes `--cov-branch`, so 
 producers emit `BRDA` rows like the benchmark's `branch = true` producer already did (`-` for a branch whose line never ran, named targets such as `jump to line 9`).
 `test_real_coveragepy_branch_report_parses` runs real coverage.py to pin that shape.
 
-Starting caps are the counts measured on this policy's introducing PR, per OS, from the hosted
-artifacts of its final HEAD (WSL folded into `linux` as the max). A cap is never a max over runs: a branch
+Caps are per OS, from hosted artifacts (WSL folded into `linux` as the max). A cap is never a max over runs: a branch
 whose coverage changed between runs on an unchanged tree gets a deterministic test first. #429 found three,
 each reached only by the real host: `formatMetric`'s non-`available` arm and `rankProcesses`'s pid
 tiebreak in `packages/dev-tools/src/resource/index.ts`, and `stop_hostile_child()`'s already-exited arm in
 `scripts/package_contracts.py` (whether the marker's exit status was collected before cleanup). Fixture
-tests now pin all three. Caps are references on the way down, not waivers: #404-#424 each
-lower their own signal's cap toward 0 and never raise one, then #425 locks every cap and `target.branches`
-at 0.
+tests now pin all three. Caps are references, not waivers: they never rise, and `target.branches` is 0.
 
 `coverage/policy.json` is the reviewed inventory and the only threshold policy. Its target is
-zero uncovered lines/functions. Schema version 2 keys each signal's transitional `max_uncovered`
+zero uncovered lines, functions and branches. Schema version 2 keys each signal's transitional `max_uncovered`
 integer budgets (or report-only reference numbers) by runner OS: `darwin` (`macos-14`) and
 `linux` (`ubuntu-24.04`), never rounded
 percentages or platform averages. The `owned (wsl2)` cell's shards run the same producers inside Ubuntu
