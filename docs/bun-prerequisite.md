@@ -42,11 +42,15 @@ for both runtimes: `NODE_OPTIONS` (`--import`, `--expose-gc`) for Node and `BUN_
   the adapter refuses preload paths holding whitespace or quotes
 - Fast timers: no scenario scales timers any more (`fast_timers.mjs` was deleted, #378), so there is
   no timer preload to adapt. The issue comment attributes the old `/loop` and footer-poll failures
-  to that preload. Re-run on the compiled core (2026-11-06, Gitlink `4af3d547`, Bun 1.4.4
-  darwin-arm64 standalone, personal stack with `pi-session-kit` 0.9.0, real time, no scaling,
-  throwaway probe not committed): `/loop 30s` was observed with one run 39 s after submit (the probe polled `/loop list` every ~9 s, so that bounds the 30 s tick, not its precision) and the
-  footer's usage poll repeated 60.002 s after the first. The old Python scenarios themselves were
-  ported to in-process tests and no longer exist (`787f72f1`)
+  to that preload. `integration/scenarios/test_realtime_timers.py` now holds the committed proof:
+  it starts the TUI in tmux, runs `/loop 30s` (the minimum interval) against the faux provider and
+  waits for the tick's reply, then stops the loop. It sits in the stack D/E glob, so it runs on Node
+  and on `--runtime bun-standalone`. Local evidence (2026-11-06, Gitlink `4af3d547`, Bun 1.4.4
+  darwin-arm64 standalone, personal stack): the tick arrived 30.1 s after registration on the
+  standalone and 30.0 s on Node. Its RED: a `BUN_OPTIONS` preload that turns 30 s `setInterval`
+  into a no-op times out the 40 s wait. The footer's 60 s usage poll has no real-time scenario;
+  it stays in-process (`footer-quota.test.ts`) and is tracked with the rest in #628. The old Python
+  scenarios themselves were ported to in-process tests and no longer exist (`787f72f1`)
 
 The render probe keeps its `Bun.gc(true)` fallback behind the adapter's `--expose-gc`.
 
