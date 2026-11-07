@@ -54,6 +54,11 @@ FIXED_PATHS = frozenset(
         "core/typebox-package.json",
         "core/package-lock.json",
         "harness-package-lock.json",
+        *(
+            f"{build}/{name}"
+            for build in ("first", "second")
+            for name in ("pi", "build.log", "compile-command.json", "module-graph.json")
+        ),
     }
 )
 CACHE_PATH = re.compile(r"jiti/(?:primary|replay)/pi-memory-index(?:\+map)?(?:\.i)?\.[a-f0-9]{8}\.[cm]js\Z")
@@ -470,16 +475,101 @@ def prepare_build(directory: Path, bun: Path) -> None:
     launcher.chmod(0o700)
 
 
-def main() -> int:
-    """Prepare build observation or run one startup diagnostic in a new throwaway HOME.
+def file_sha256(path: Path) -> str:
+    """Hash one regular file in chunks so a 100 MB executable is never read whole.
+
+    Parameters:
+        path (Path): file to hash.
 
     Returns:
-        int: original startup verdict; preparation failures are fatal.
+        str: lowercase hex SHA-256.
+    """
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_reproducible(first: Path, second: Path, digest_out: Path | None) -> int:
+    """Fail when two builds of the same inputs differ, so a nondeterministic compile cannot ship (#72).
+
+    Parameters:
+        first (Path): executable from the first full build.
+        second (Path): executable from an identical second build.
+        digest_out (Path | None): where to record the matching digest for later carry-forward.
+
+    Returns:
+        int: 0 when byte-identical, else 1 with both digests logged.
+    """
+    left, right = file_sha256(first), file_sha256(second)
+    if left != right:
+        LOGGER.error(f"Standalone build is NOT reproducible: first {left}, second {right}")
+        return 1
+    LOGGER.info(f"Standalone build reproducible: sha256 {left}")
+    if digest_out is not None:
+        digest_out.parent.mkdir(parents=True, exist_ok=True)
+        digest_out.write_text(f"{left}  pi\n")
+    return 0
+
+
+def collect_build_failure(evidence: Path, first: Path, second: Path, output: Path) -> bool:
+    """Scan and publish both builds' executables, logs and module graphs after a failed build step (#72).
+
+    The first build's wrapper evidence must already be moved to `<evidence>/first/`; the second build's
+    evidence stays at the `<evidence>` root. Missing files (e.g. a build that died early) are skipped;
+    with none at all nothing is published.
+
+    Parameters:
+        evidence (Path): build-only evidence directory produced by `prepare_build`.
+        first (Path): the first build's executable, moved aside before the second build.
+        second (Path): the second build's executable at the shared output path.
+        output (Path): new upload directory.
+
+    Returns:
+        bool: whether a scanned directory was published; scan or I/O refusals are logged, never raised,
+            so the original build failure stays the verdict.
+    """
+    entries = {"first/pi": first, "second/pi": second}
+    for name in ("build.log", "compile-command.json", "module-graph.json"):
+        entries[f"first/{name}"] = evidence / "first" / name
+        entries[f"second/{name}"] = evidence / name
+    try:
+        files = {
+            name: read_regular(path, path.parent)
+            for name, path in entries.items()
+            if path.exists() or path.is_symlink()
+        }
+        if not files:
+            LOGGER.error("Build failure capture found no build output (failed before compiling)")
+            return False
+        publish(files, output)
+    except (OSError, ValueError) as error:
+        LOGGER.error(f"Build failure capture refused ({type(error).__name__})")
+        return False
+    return True
+
+
+def main() -> int:
+    """Prepare build observation, verify build reproducibility, or run one startup diagnostic.
+
+    Returns:
+        int: original startup verdict or reproducibility verdict; preparation failures are fatal.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="action", required=True)
     prepare = subparsers.add_parser("prepare-build")
     prepare.add_argument("--directory", type=Path, required=True)
+    reproduce = subparsers.add_parser("verify-reproducible")
+    reproduce.add_argument("--first", type=Path, required=True)
+    reproduce.add_argument("--second", type=Path, required=True)
+    reproduce.add_argument("--digest-out", type=Path, help="Record the matching executable digest")
+    collect = subparsers.add_parser("collect-build-failure")
+    collect.add_argument("--evidence", type=Path, required=True)
+    collect.add_argument("--first", type=Path, required=True)
+    collect.add_argument("--second", type=Path, required=True)
+    collect.add_argument("--output", type=Path, required=True)
+    collect.add_argument("--github-output", type=Path, help="Write artifact_ready after scanned publication")
     startup = subparsers.add_parser("startup")
     startup.add_argument("--binary", type=Path, required=True)
     startup.add_argument("--core", type=Path, required=True)
@@ -495,6 +585,18 @@ def main() -> int:
         if bun is None:
             parser.error("Pinned Bun must be on PATH")
         prepare_build(opts.directory.resolve(), Path(bun).resolve())
+        return 0
+    if opts.action == "verify-reproducible":
+        return verify_reproducible(
+            opts.first.resolve(strict=True), opts.second.resolve(strict=True), opts.digest_out
+        )
+    if opts.action == "collect-build-failure":
+        published = collect_build_failure(
+            opts.evidence.absolute(), opts.first.absolute(), opts.second.absolute(), opts.output.absolute()
+        )
+        if published and opts.github_output is not None:
+            with opts.github_output.open("a") as stream:
+                stream.write("artifact_ready=true\n")
         return 0
     binary = opts.binary.resolve(strict=True)
     if opts.output.exists() or opts.output.is_symlink():

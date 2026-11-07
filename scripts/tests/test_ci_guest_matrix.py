@@ -1813,7 +1813,23 @@ def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> Non
         "${{ !cancelled() && steps.startup.outcome == 'failure' "
         "&& steps.startup.outputs.artifact_ready == 'true' }}"
     )
-    assert all("always()" in step["if"] for step in uploads if step is not startup)
+    build_failure = next(
+        step for step in uploads if step["with"]["name"].startswith("standalone-build-failure-")
+    )
+    assert build_failure["if"] == (
+        "${{ !cancelled() && steps.build.outcome == 'failure' "
+        "&& steps.build_failure.outputs.artifact_ready == 'true' }}"
+    )
+    assert (
+        build_failure["with"]["name"] == "standalone-build-failure-${{ matrix.platform }}-${{ matrix.stack }}"
+    )
+    assert build_failure["with"]["path"] == "${{ runner.temp }}/standalone-build-failure/"
+    assert build_failure["with"]["if-no-files-found"] == "warn"
+    assert build_failure["with"]["retention-days"] == 7
+    assert any(step.get("id") == "build_failure" for step in stack["steps"])
+    assert all(
+        "always()" in step["if"] for step in uploads if step is not startup and step is not build_failure
+    )
     assert startup["with"]["name"] == "standalone-startup-linux-x64"
     standalone = next(step for step in uploads if step["with"]["name"].startswith("standalone-${{"))
     assert standalone["with"]["name"] == "standalone-${{ matrix.platform }}-${{ matrix.stack }}"
