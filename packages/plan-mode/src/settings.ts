@@ -225,6 +225,7 @@ function normalizePlanExportPath(value: unknown) {
     normalized.length > MAX_PLAN_EXPORT_PATH_LENGTH ||
     !/[^@\s]/u.test(normalized) ||
     [...normalized].some((character) => {
+      // Every range below is in the BMP, so the first UTF-16 unit decides.
       const codePoint = character.charCodeAt(0);
       return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
     })
@@ -266,6 +267,7 @@ function normalizeTrustedDirectories(value: unknown): string[] | undefined {
       !directory ||
       directory.length > MAX_PLAN_EXPORT_PATH_LENGTH ||
       !(directory === "~" || directory.startsWith("~/") || isAbsolute(directory)) ||
+      // Both ranges are in the BMP, so the first UTF-16 unit decides.
       [...directory].some((character) => character.charCodeAt(0) <= 0x1f || character === "\u007f")
     ) {
       return undefined;

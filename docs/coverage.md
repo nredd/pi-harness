@@ -570,8 +570,9 @@ could reach (the `codePointAt(0) ?? 0` fallbacks, `safeModelReference`'s `"unkno
 `settings.ts` `document ?? {}` defaults, the `plan_mode_question` single-question and answer-set
 re-checks). The handler-level pre-checks and the `value ?? ""` export default stay: they guard the
 Kit contract, so `package-menu-contract.test.ts` drives them by adapter fault injection. The
-post-await `isCurrent` guards in the Settings handlers duplicate Kit's own check; their tests cover
-the branch but cannot fail without it. Measured on darwin; hosted CI confirms linux and WSL2.
+post-await `isCurrent` guard in the active-implementation Settings handler duplicates Kit's own
+check, and `planFromCompletionDetails`' `normalized.ok` ternary yields `undefined` either way; their
+tests cover the branch but cannot fail without it. Measured on darwin; hosted CI confirms linux and WSL2.
 
 `inprocess` is `enforced` at 0/0 lines/functions on darwin and linux for both `primary` and `bun`
 since #376, with nothing excluded. Its inventory is every fixture module the suites run:

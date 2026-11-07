@@ -354,6 +354,7 @@ function safeErrorDetail(error: unknown) {
   const normalized =
     [...stripVTControlCharacters(detail)]
       .map((character) => {
+        // Every range below is in the BMP, so the first UTF-16 unit decides.
         const codePoint = character.charCodeAt(0);
         return codePoint <= 0x1f ||
           (codePoint >= 0x7f && codePoint <= 0x9f) ||

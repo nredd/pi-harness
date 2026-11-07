@@ -111,6 +111,7 @@ export function resolvePlanExportPath(
 function safeNotification(value: string) {
   let sanitized = "";
   for (const character of stripVTControlCharacters(value)) {
+    // Every range below is in the BMP, so the first UTF-16 unit decides.
     const codePoint = character.charCodeAt(0);
     sanitized += codePoint > 0x1f && !(codePoint >= 0x7f && codePoint <= 0x9f) ? character : " ";
   }

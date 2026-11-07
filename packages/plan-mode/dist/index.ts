@@ -64,7 +64,7 @@ import {
   snapshotPlanModeSelectedNames,
   updatePlanModeSettings,
   updatePlanModeUi
-} from "./chunks/chunk-D2AECO7U.ts";
+} from "./chunks/chunk-2F7W2JBN.ts";
 
 // src/plan-mode.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
@@ -1157,7 +1157,7 @@ function planMode(pi, dependencies = {}) {
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
     if (!interactiveUiPromise) {
-      interactiveUiPromise = import("./chunks/interactive-ui-6ZQR5KNJ.ts").catch((error) => {
+      interactiveUiPromise = import("./chunks/interactive-ui-FXEM7EL7.ts").catch((error) => {
         interactiveUiPromise = void 0;
         throw error;
       });

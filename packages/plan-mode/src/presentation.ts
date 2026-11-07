@@ -57,6 +57,7 @@ export function renderPlanModeWidget(lines: readonly string[], theme: Theme, wid
 export function sanitizePlanModeWidgetLine(value: string): string {
   let text = "";
   for (const character of stripTerminalSequences(value).replace(BIDI_CONTROLS, "")) {
+    // Every range below is in the BMP, so the first UTF-16 unit decides.
     const codePoint = character.charCodeAt(0);
     const isControl = codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
     text += isControl ? " " : character;
