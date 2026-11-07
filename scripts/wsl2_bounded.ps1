@@ -42,7 +42,7 @@ function Write-StallReport {
     Write-Host '--- host processes, oldest first'
     Get-CimInstance Win32_Process |
         Where-Object { $_.ProcessId -ne $PID } |
-        Sort-Object CreationDate |
+        Sort-Object CreationDate -Descending |
         Select-Object -First 40 ProcessId, ParentProcessId, Name, CreationDate, @{ n = 'Command'; e = { "$($_.CommandLine)".Substring(0, [Math]::Min(200, "$($_.CommandLine)".Length)) } } |
         Format-List | Out-String -Width 300 | Write-Host
     Write-Host '--- wsl --list --verbose'
@@ -53,7 +53,7 @@ function Write-StallReport {
     Write-Host '--- guest processes, longest running first'
     $guest = Join-Path ([System.IO.Path]::GetTempPath()) 'wsl2-stall-guest.txt'
     Remove-Item -Force -ErrorAction SilentlyContinue $guest
-    $result = Invoke-Limited -FilePath 'wsl' -Arguments @('-d', 'Ubuntu-24.04', '--user', 'root', '--exec', 'ps', '-eo', 'pid,ppid,etime,stat,args', '--sort=-etime') -Seconds 20 -OutFile $guest
+    $result = Invoke-Limited -FilePath 'wsl' -Arguments @('-d', 'Ubuntu-24.04', '--user', 'root', '--exec', 'ps', '-eo', 'pid,ppid,etime,stat,args', '--sort=etime') -Seconds 20 -OutFile $guest
     if ($result.TimedOut) { Write-Host 'guest did not answer within 20s' }
     elseif (Test-Path $guest) { Get-Content $guest -TotalCount 40 | Write-Host }
 }

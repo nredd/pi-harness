@@ -607,6 +607,26 @@ def test_guest_setup_names_the_stuck_command_and_guest_processes_on_a_timeout(tm
     assert calls[1].startswith("--kill-after=10 180 curl ")
 
 
+def test_trip_snapshots_list_the_newest_processes_first(tmp_path: Path) -> None:
+    """Keep the stuck process inside the 40-row cut: boot-time processes alone outnumber it."""
+    # 59 long-lived services plus the stuck child; `ps` honours only the requested sort.
+    ps = (
+        "#!/bin/sh\n"
+        "echo 'PID PPID ELAPSED STAT COMMAND'\n"
+        'case "$*" in *--sort=etime*) echo "42 1 00:05 S synthetic-stuck-child" ;; esac\n'
+        'i=0; while [ $i -lt 59 ]; do echo "$((100 + i)) 1 9-00:00:00 S service-$i"; i=$((i + 1)); done\n'
+        'case "$*" in *--sort=-etime*) echo "42 1 00:05 S synthetic-stuck-child" ;; esac\n'
+    )
+    env, _ = guest_setup_env(tmp_path, {"ps": ps})
+    result = run_guest_setup(env)
+    assert result.returncode == 124
+    assert "synthetic-stuck-child" in result.stderr
+    helper = (ROOT / "scripts/wsl2_bounded.ps1").read_text()
+    assert "Sort-Object CreationDate -Descending |" in helper
+    assert "'--sort=etime'" in helper
+    assert "--sort=-etime" not in helper
+
+
 def test_guest_setup_names_a_failed_command_without_calling_it_a_timeout(tmp_path: Path) -> None:
     """A plain failure keeps its status and names the command, with no process dump."""
     env, _ = guest_setup_env(tmp_path, {"cp": "#!/bin/sh\nexit 7\n"})
