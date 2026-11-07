@@ -3,7 +3,13 @@ import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { describe, expect, it } from "vitest";
 import type { AgentRunState } from "../state/agents.ts";
 import type { Task } from "../tool/types.ts";
-import { formatCommandTaskLine, formatOverlayTaskLine, overlayStatusGlyph, STATUS_GLYPH } from "./format.ts";
+import {
+	formatCommandTaskLine,
+	formatOverlayTaskLine,
+	overlayStatusGlyph,
+	renderTodoCall,
+	STATUS_GLYPH,
+} from "./format.ts";
 
 const recordingTheme = makeTheme({
 	fg: (color, text) => `<${color}>${text}</${color}>`,
@@ -136,5 +142,23 @@ describe("owner segment", () => {
 		expect(formatCommandTaskLine(task({ owner: "Sergii" }), "○", lookup(undefined))).toBe(
 			"  ○ #1 quiet task @Sergii",
 		);
+	});
+});
+
+describe("renderTodoCall — partially streamed arguments", () => {
+	const empty = { tasks: [], nextId: 1 };
+	const plain = (args: Record<string, unknown>) =>
+		renderTodoCall(args as never, recordingTheme, empty)
+			.render(80)
+			.join("")
+			.replace(/<\/?[a-zA-Z]+>/g, "")
+			.trim();
+
+	it("shows just the tool title before the action has streamed in", () => {
+		expect(plain({})).toBe("todo");
+	});
+
+	it("falls back to the raw action text when it has no glyph", () => {
+		expect(plain({ action: "frobnicate" })).toBe("todo frobnicate");
 	});
 });

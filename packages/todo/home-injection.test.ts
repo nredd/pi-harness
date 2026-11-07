@@ -64,3 +64,17 @@ it("keeps missing-config defaults inside the injected home too", () => {
 	expect(loadConfig(TEST_HOME)).toEqual({});
 	expect(vi.mocked(fs.existsSync)).toHaveBeenCalledWith(join(TEST_HOME, "absent", "rpiv-todo", "config.json"));
 });
+
+it("resolves the home itself when no homeDir is injected", () => {
+	vi.mocked(fs.existsSync).mockClear();
+	// An absolute XDG config that exists keeps both entry points off the real home.
+	process.env.XDG_CONFIG_HOME = join(TEST_HOME, "xdg-default");
+	const dir = join(process.env.XDG_CONFIG_HOME, "rpiv-todo");
+	fs.mkdirSync(dir, { recursive: true });
+	fs.writeFileSync(join(dir, "config.json"), JSON.stringify({ collapseKey: "alt+p" }));
+	const { pi, captured } = createMockPi();
+	registerTodoTool(pi);
+	registerTodo(pi);
+	expect(captured.tools.has("todo")).toBe(true);
+	expect(captured.shortcuts.has("alt+p")).toBe(true);
+});

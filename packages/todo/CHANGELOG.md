@@ -10,6 +10,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - First CI-attested release; no code change.
+- Cover every branch of the extension on the primary and Bun signals, deleting fallbacks that no caller could reach; no behavior change ([#414](https://github.com/nredd/pi-harness/issues/414)).
 
 ### Added
 

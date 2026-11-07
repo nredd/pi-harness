@@ -157,8 +157,9 @@ function notifyPlanDeferral(
 		if (task.source !== "plan" || task.status !== "deferred") continue;
 		const previous = before.tasks.find((candidate) => candidate.id === task.id);
 		if (previous?.source === "plan" && previous.status === "deferred" && previous.reason === task.reason) continue;
+		// The reducer refuses to defer without a reason, and a task that was already deferred is skipped above.
 		ctx.ui.notify(
-			`Plan item deferred: #${task.id} ${sanitizeTerminalText(task.subject)} -- ${sanitizeTerminalText(task.reason ?? "")}`,
+			`Plan item deferred: #${task.id} ${sanitizeTerminalText(task.subject)} -- ${sanitizeTerminalText(task.reason!)}`,
 			"warning",
 		);
 	}

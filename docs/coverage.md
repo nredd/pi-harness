@@ -558,6 +558,11 @@ after cancellation. Whether hosted Darwin counts stay stable is not yet measured
 sampler's starting branch caps came from hosted counts rather than a single local run; #417 drove them
 to 0 on darwin and linux, primary and Bun ([branch caps](#branch-caps)).
 
+`todo` branch caps are 0 on primary and Bun since #414: tests for every reachable branch, and
+deletion of defaults and fallbacks no caller could reach (`planTitle`'s heading fallback, the bullet
+content-indent default, `withTrailingSpacer`'s empty guard, the `settledAt` default in agent retry
+matching, `isValidCollapseKeySpec`'s `?? ""`). Measured on darwin; hosted CI confirms linux and WSL2.
+
 `inprocess` is `enforced` at 0/0 lines/functions on darwin and linux for both `primary` and `bun`
 since #376, with nothing excluded. Its inventory is every fixture module the suites run:
 `support.ts`, `goal-support.ts`, `native-timers.ts`, `agents-support.ts`, `todo-support.ts` and
