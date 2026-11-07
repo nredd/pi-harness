@@ -219,6 +219,14 @@ def test_fixed_artifact_inventory_is_explicit() -> None:
         "core/typebox-package.json",
         "core/package-lock.json",
         "harness-package-lock.json",
+        "first/pi",
+        "first/build.log",
+        "first/compile-command.json",
+        "first/module-graph.json",
+        "second/pi",
+        "second/build.log",
+        "second/compile-command.json",
+        "second/module-graph.json",
     }
     assert expected_paths == diag.FIXED_PATHS
 
@@ -507,7 +515,7 @@ def test_workflow_captures_only_failed_linux_startup() -> None:
     build = next(step for step in steps if step.get("id") == "build")
     assert "standalone_diagnostics" in build["run"]
     assert "prepare-build" in build["run"]
-    assert 'tee "$RUNNER_TEMP/pi-build-evidence/build.log"' in build["run"]
+    assert 'tee "$evidence/build.log"' in build["run"]
     assert any(step.get("name") == "Standalone D and E (personal)" for step in steps)
 
 
@@ -975,7 +983,13 @@ def test_workflow_rebuilds_and_compares_standalone_before_use() -> None:
     workflow = yaml.safe_load((Path(__file__).parents[2] / ".github/workflows/ci.yml").read_text())
     steps = workflow["jobs"]["stack"]["steps"]
     run = next(step for step in steps if step.get("id") == "build")["run"]
-    assert run.count("./scripts/build-binaries.sh --skip-install --offline-model-data") == 2
+    # One wrapped function invoked twice: both builds share argv and tee their logs under pipefail.
+    assert run.count("./scripts/build-binaries.sh --skip-install --offline-model-data") == 1
+    assert run.count("\nbuild_standalone\n") == 2
+    assert 'PATH="$evidence/bin:$PATH"' in run
+    assert "set -o pipefail" in run
+    assert 'cmp "$evidence/first/compile-command.json" "$evidence/compile-command.json"' in run
+    assert run.index("cmp ") < run.index("verify-reproducible")
     assert "--skip-build" not in run
     assert "verify-reproducible" in run
     assert "standalone-pi.sha256" in run
@@ -987,3 +1001,117 @@ def test_workflow_rebuilds_and_compares_standalone_before_use() -> None:
     )
     assert upload["with"]["path"] == "integration/artifacts/"
     assert "always()" in upload["if"]
+
+
+def test_workflow_uploads_scanned_build_failure_evidence() -> None:
+    """Failed builds publish both executables, logs and metafiles only after the collector's scan."""
+    steps = yaml.safe_load((Path(__file__).parents[2] / ".github/workflows/ci.yml").read_text())["jobs"][
+        "stack"
+    ]["steps"]
+    collect = next(step for step in steps if step.get("id") == "build_failure")
+    assert "steps.build.outcome == 'failure'" in collect["if"]
+    assert "collect-build-failure" in collect["run"]
+    upload = next(
+        step for step in steps if step.get("with", {}).get("name", "").startswith("standalone-build-failure")
+    )
+    assert "steps.build.outcome == 'failure'" in upload["if"]
+    assert "steps.build_failure.outputs.artifact_ready == 'true'" in upload["if"]
+    assert upload["with"]["retention-days"] == 7
+
+
+def test_prepare_build_wrapper_gives_two_builds_identical_argv(tmp_path: Path) -> None:
+    """Two compile invocations through one wrapper record byte-identical argv (#72)."""
+    bun = tmp_path / "bun-real"
+    bun.write_text("#!/bin/sh\nexit 0\n")
+    bun.chmod(0o755)
+    evidence = tmp_path / "evidence"
+    diag.prepare_build(evidence, bun)
+    recorded = []
+    for _ in range(2):
+        subprocess.check_call([str(evidence / "bin/bun"), "build", "--compile", "entry.js"])
+        recorded.append((evidence / "compile-command.json").read_bytes())
+        (evidence / "compile-command.json").unlink()
+    assert recorded[0] == recorded[1]
+    assert f"--metafile={evidence / 'module-graph.json'}" in json.loads(recorded[0])
+
+
+def _failed_build(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """Create evidence for two builds, the first moved under `first/` as the workflow does."""
+    evidence = tmp_path / "evidence"
+    (evidence / "first").mkdir(parents=True)
+    for root, tag in ((evidence / "first", "one"), (evidence, "two")):
+        (root / "build.log").write_text(f"log {tag}")
+        (root / "compile-command.json").write_text("[]")
+        (root / "module-graph.json").write_text(f"graph {tag}")
+    first, second = tmp_path / "pi-first-build", tmp_path / "pi-second"
+    first.write_bytes(b"first exe")
+    second.write_bytes(b"second exe")
+    return evidence, first, second
+
+
+def test_collect_build_failure_publishes_both_builds(tmp_path: Path) -> None:
+    """Both executables, logs and module graphs are retained and checksummed."""
+    evidence, first, second = _failed_build(tmp_path)
+    output = tmp_path / "out"
+    assert diag.collect_build_failure(evidence, first, second, output)
+    assert (output / "first/pi").read_bytes() == b"first exe"
+    assert (output / "second/pi").read_bytes() == b"second exe"
+    assert (output / "first/build.log").read_text() == "log one"
+    assert (output / "second/module-graph.json").read_text() == "graph two"
+    assert "first/pi" in (output / "SHA256SUMS").read_text()
+
+
+def test_collect_build_failure_skips_missing_files(tmp_path: Path) -> None:
+    """A build that died early leaves only what exists, not fabricated files."""
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    (evidence / "build.log").write_text("died")
+    output = tmp_path / "out"
+    assert diag.collect_build_failure(evidence, tmp_path / "none-a", tmp_path / "none-b", output)
+    assert sorted(p.name for p in output.rglob("*") if p.is_file()) == ["SHA256SUMS", "build.log"]
+
+
+def test_collect_build_failure_refuses_credential_without_publishing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A credential-shaped log blocks the whole upload and is not echoed."""
+    evidence, first, second = _failed_build(tmp_path)
+    secret = "ghp_" + "a" * 36
+    (evidence / "build.log").write_text(f"token {secret}")
+    output = tmp_path / "out"
+    assert not diag.collect_build_failure(evidence, first, second, output)
+    assert not output.exists()
+    assert secret not in caplog.text
+    assert "Build failure capture refused" in caplog.text
+
+
+def test_cli_collect_build_failure_announces_only_published_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CLI always exits 0 and writes `artifact_ready` only after publication."""
+    evidence, first, second = _failed_build(tmp_path)
+    github_output = tmp_path / "github-output"
+    argv = [
+        "diagnostic",
+        "collect-build-failure",
+        "--evidence",
+        str(evidence),
+        "--first",
+        str(first),
+        "--second",
+        str(second),
+        "--output",
+        str(tmp_path / "out"),
+        "--github-output",
+        str(github_output),
+    ]
+    monkeypatch.setattr(diag.sys, "argv", argv)
+    assert diag.main() == 0
+    assert github_output.read_text() == "artifact_ready=true\n"
+    assert diag.main() == 0  # stale output directory is refused, not announced again
+    assert github_output.read_text() == "artifact_ready=true\n"
+    argv[argv.index("--output") + 1] = str(tmp_path / "out2")
+    monkeypatch.setattr(diag.sys, "argv", argv[:-2])
+    assert diag.main() == 0
+    assert (tmp_path / "out2/SHA256SUMS").is_file()
+    assert github_output.read_text() == "artifact_ready=true\n"

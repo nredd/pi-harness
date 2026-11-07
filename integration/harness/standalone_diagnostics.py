@@ -54,6 +54,11 @@ FIXED_PATHS = frozenset(
         "core/typebox-package.json",
         "core/package-lock.json",
         "harness-package-lock.json",
+        *(
+            f"{build}/{name}"
+            for build in ("first", "second")
+            for name in ("pi", "build.log", "compile-command.json", "module-graph.json")
+        ),
     }
 )
 CACHE_PATH = re.compile(r"jiti/(?:primary|replay)/pi-memory-index(?:\+map)?(?:\.i)?\.[a-f0-9]{8}\.[cm]js\Z")
@@ -508,6 +513,39 @@ def verify_reproducible(first: Path, second: Path, digest_out: Path | None) -> i
     return 0
 
 
+def collect_build_failure(evidence: Path, first: Path, second: Path, output: Path) -> bool:
+    """Scan and publish both builds' executables, logs and module graphs after a failed build step (#72).
+
+    The first build's wrapper evidence must already be moved to `<evidence>/first/`; the second build's
+    evidence stays at the `<evidence>` root. Missing files (e.g. a build that died early) are skipped.
+
+    Parameters:
+        evidence (Path): build-only evidence directory produced by `prepare_build`.
+        first (Path): copy of the first build's executable.
+        second (Path): executable left by the second build.
+        output (Path): new upload directory.
+
+    Returns:
+        bool: whether a scanned directory was published; scan or I/O refusals are logged, never raised,
+            so the original build failure stays the verdict.
+    """
+    entries = {"first/pi": first, "second/pi": second}
+    for name in ("build.log", "compile-command.json", "module-graph.json"):
+        entries[f"first/{name}"] = evidence / "first" / name
+        entries[f"second/{name}"] = evidence / name
+    try:
+        files = {
+            name: read_regular(path, path.parent)
+            for name, path in entries.items()
+            if path.exists() or path.is_symlink()
+        }
+        publish(files, output)
+    except (OSError, ValueError) as error:
+        LOGGER.error(f"Build failure capture refused ({type(error).__name__})")
+        return False
+    return True
+
+
 def main() -> int:
     """Prepare build observation, verify build reproducibility, or run one startup diagnostic.
 
@@ -522,6 +560,12 @@ def main() -> int:
     reproduce.add_argument("--first", type=Path, required=True)
     reproduce.add_argument("--second", type=Path, required=True)
     reproduce.add_argument("--digest-out", type=Path, help="Record the matching executable digest")
+    collect = subparsers.add_parser("collect-build-failure")
+    collect.add_argument("--evidence", type=Path, required=True)
+    collect.add_argument("--first", type=Path, required=True)
+    collect.add_argument("--second", type=Path, required=True)
+    collect.add_argument("--output", type=Path, required=True)
+    collect.add_argument("--github-output", type=Path, help="Write artifact_ready after scanned publication")
     startup = subparsers.add_parser("startup")
     startup.add_argument("--binary", type=Path, required=True)
     startup.add_argument("--core", type=Path, required=True)
@@ -542,6 +586,14 @@ def main() -> int:
         return verify_reproducible(
             opts.first.resolve(strict=True), opts.second.resolve(strict=True), opts.digest_out
         )
+    if opts.action == "collect-build-failure":
+        published = collect_build_failure(
+            opts.evidence.resolve(), opts.first.resolve(), opts.second.resolve(), opts.output.resolve()
+        )
+        if published and opts.github_output is not None:
+            with opts.github_output.open("a") as stream:
+                stream.write("artifact_ready=true\n")
+        return 0
     binary = opts.binary.resolve(strict=True)
     if opts.output.exists() or opts.output.is_symlink():
         raise FileExistsError("Refusing stale diagnostic output before installation")
