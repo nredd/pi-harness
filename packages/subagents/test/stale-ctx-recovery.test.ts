@@ -10,6 +10,7 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-ag
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resumeAgent, retryStaleCtx, staleCtxOutcome } from "../src/agent-runner.js";
 import * as worktrees from "../src/worktree.js";
+import { FakeClock } from "./helpers/fake-clock.js";
 import { answer, barrier, calls, ScenarioSession, spawn } from "./helpers/scenario-session.js";
 
 let fixture: ScenarioSession;
@@ -38,6 +39,41 @@ function routedModel(getModel: () => unknown): ExtensionFactory {
   };
 }
 
+/** The default backoff schedule: the extension clock must be asked for exactly these sleeps, in order. */
+const BACKOFF_DELAYS_MS = [1_000, 3_000, 9_000];
+
+/**
+ * Let a recovering child finish without waiting out its backoff: whenever the fixture clock has been asked for
+ * the next scheduled backoff delay (1s, 3s, 9s), advance it by exactly that delay, so fake time never moves
+ * past other timers or when no sleep is armed. Returns how many sleeps were advanced; a run that timed its
+ * backoff on native timers never asks the clock, so the caller's count assertion fails. `since` is how many
+ * one-shot timers the clock had scheduled before the recovery under test began.
+ */
+async function settleThroughBackoff(record: { promise?: Promise<unknown> }, since: number) {
+  let settled = false;
+  let advances = 0;
+  let cursor = since;
+  const finished = Promise.resolve(record.promise).then(() => { settled = true; }, () => { settled = true; });
+  while (!settled) {
+    const next = BACKOFF_DELAYS_MS[advances];
+    const armed = next === undefined ? -1 : fixture.clock.timeoutDelays.indexOf(next, cursor);
+    if (next !== undefined && armed >= 0) {
+      cursor = armed + 1;
+      advances++;
+      fixture.clock.advance(next);
+    }
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  await finished;
+  await record.promise;
+  return advances;
+}
+
+/** Re-prompts after the task prompt: each one followed exactly one backoff sleep. */
+function retries(record: { session?: { messages: { role: string }[] } }) {
+  return (record.session?.messages.filter(m => m.role === "user").length ?? 0) - 1;
+}
+
 /** Spawn a background child that runs one held tool, so its next model step happens after we act. */
 async function startHeldChild(responses: ReturnType<typeof answer>[], virtual = true, earlierProse = false) {
   fixture = new ScenarioSession();
@@ -58,11 +94,11 @@ async function startHeldChild(responses: ReturnType<typeof answer>[], virtual = 
   await hold.entered;
   const id = h.session.messages.filter(m => m.role === "toolResult" && m.toolName === "Agent").flatMap(m => m.content).find(p => p.type === "text")?.text.match(/Agent ID: (\S+)/)?.[1];
   if (!id) throw new Error("Missing spawn id");
-  return { h, hold, physical, record: fixture.record(id), executions: () => executions };
+  return { h, timersBefore: fixture.clock.timeoutDelays.length, hold, physical, record: fixture.record(id), executions: () => executions };
 }
 
 it("retries the step once a real reload has re-registered the parent's routes", { timeout: 30_000 }, async () => {
-  const { h, hold, record, executions } = await startHeldChild([answer("CHILD DONE")]);
+  const { h, hold, record, executions, timersBefore } = await startHeldChild([answer("CHILD DONE")]);
   // Hold core's reload between `oldRunner.invalidate()` and the rebuild, the
   // window in which the parent's routes are dead and the new ones not yet bound.
   const gate = barrier();
@@ -76,7 +112,9 @@ it("retries the step once a real reload has re-registered the parent's routes", 
   await reloading;
   // Core's reload resets global transports; restore the faux provider before the retry fires.
   fixture.restoreProviders(h);
-  await record.promise;
+  const advances = await settleThroughBackoff(record, timersBefore);
+  expect(advances).toBe(1);
+  expect(retries(record)).toBe(advances);
   expect(record.error).toBeUndefined();
   expect(record.status).toBe("completed");
   expect(record.result).toBe("CHILD DONE");
@@ -88,10 +126,12 @@ it("retries the step once a real reload has re-registered the parent's routes", 
 });
 
 it("reports later tool activity after earlier prose when a real child fails", { timeout: 30_000 }, async () => {
-  const { hold, record } = await startHeldChild([], true, true);
+  const { hold, record, timersBefore } = await startHeldChild([], true, true);
   routeBroken.on = true;
   hold.release();
-  await record.promise;
+  const advances = await settleThroughBackoff(record, timersBefore);
+  expect(advances).toBe(BACKOFF_DELAYS_MS.length);
+  expect(retries(record)).toBe(advances);
   expect(record.status).toBe("error");
   expect(record.error).toContain("This extension ctx is stale");
   expect(record.result).toContain("Earlier progress:");
@@ -205,6 +245,26 @@ describe("backoff timing and timers", () => {
     expect(prompts).toHaveBeenCalledTimes(3);
     await done;
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("times the backoff on the injected clock, not native timers", async () => {
+    const clock = new FakeClock();
+    const reprompted: (() => void)[] = [];
+    const prompts = vi.fn(async () => { reprompted.shift()?.(); });
+    const controller = new AbortController();
+    const firstPrompt = new Promise<void>(resolve => reprompted.push(resolve));
+    const done = retryStaleCtx(deadSession(prompts), 0, controller.signal, [1_000, 3_000], clock);
+    clock.advance(999);
+    expect(prompts).not.toHaveBeenCalled();
+    clock.advance(1);
+    // The re-prompt lands within microtasks of the advance; a native timer would lose to the next macrotask.
+    await Promise.race([firstPrompt, new Promise(resolve => setImmediate(resolve))]);
+    expect(prompts).toHaveBeenCalledTimes(1);
+    // Whether or not the second wait is armed yet, an abort leaves nothing pending on the clock.
+    controller.abort();
+    await done;
+    expect(clock.pending).toBe(0);
+    expect(prompts).toHaveBeenCalledTimes(1);
   });
 
   it("leaves no shutdown deadline when a real child's teardown overlaps the final re-prompt", async () => {
@@ -336,6 +396,20 @@ describe("resumeAgent", () => {
     expect(prompt).toHaveBeenCalledTimes(2);
     expect(result.text).toBe("RESUMED OK");
     expect(result.failure).toBeUndefined();
+  });
+
+  it("times a resumed run's backoff on the clock it is given", async () => {
+    const { session, prompt } = resumed(true);
+    const clock = new FakeClock();
+    const run = resumeAgent(session, "go on", { type: "general-purpose", clock });
+    // The first prompt returns within microtasks; the retry only follows the 1s sleep on that clock.
+    await new Promise(resolve => setImmediate(resolve));
+    expect(prompt).toHaveBeenCalledTimes(1);
+    clock.advance(1_000);
+    // Microtasks finish the retry; a native timer would lose to the next macrotask and leave one prompt.
+    await new Promise(resolve => setImmediate(resolve));
+    expect(prompt).toHaveBeenCalledTimes(2);
+    expect((await run).text).toBe("RESUMED OK");
   });
 
   it("reports an interruption when a resumed run never recovers", async () => {
