@@ -144,7 +144,21 @@ mocks. Vite's module runner pins `import.meta.main` false, so the dispatches of 
 `dispatch(isMain)` whose arms are called directly. A test of ordinary, member and look-alike `require`
 calls covers the non-import call, and the syntax-error location no longer branches on the diagnostic's
 optional `fileName`, since diagnostics are requested per file. The import-audit signal enforces zero uncovered lines, functions, and branches on darwin
-and linux. `import-audit` and `probes` are in the goal and enforced at 0/0. Since #377 `probes` measures every
+and linux. Since #380 it also owns all 15 Vitest producer configurations (`packages/*/vitest*.config.ts`,
+`packages/todo/.vitest.config.ts`, `integration/{inprocess,probes,providers}/vitest.config.ts` and
+`scripts/vitest.config.ts`), and the pending `coverage-configurations` package is deleted (reclassified
+file by file). Vitest loads a config outside its own instrumentation, so `scripts/coverage-configs.test.ts`
+imports each one as a module and asserts the resolved `test.coverage`: provider, the `text` + `lcov`
+reporters, `reportsDirectory`, `reportOnFailure`, and `include`/`exclude` equal to the config's own policy
+entry. A second pass serves a synthetic policy giving every package a distinct inventory, so a config
+reading another package's key fails, and a third serves a policy without the package, which must make the
+load throw. These replace the source-parsing `test_primary_configs_report_owned_source_on_failure` in
+`scripts/tests/test_coverage_producers.py`, so each is asserted once. A new Vitest config must be added to
+the suite's producer table (its first test fails otherwise), and reaches the report through the policy
+glob. The signal's Vitest root is now the repository (`scripts/vitest.config.ts` sets `root` and
+`scripts/`-prefixed paths), so the policy entry has root `.` and the report is
+`scripts/coverage/primary/lcov.info`: LCOV paths are relative to the Vitest root and must reach
+configurations outside `scripts/`. The CI artifact path is unchanged. `import-audit` and `probes` are in the goal and enforced at 0/0. Since #377 `probes` measures every
 executable probe in process under `check-probes`: `transcript-types.ts`, `render.ts` (its
 `/harness-probe` command against a recording TUI), the `pi -e` extensions `latency.ts`,
 `session-kit-child-scope.ts` and `stack-resources.ts` registered against recording `ExtensionAPI`
@@ -329,8 +343,7 @@ mocked argument/path/error tests still run. Existing native/platform checks rema
 full Vitest suite on Bun through `scripts/run-vitest.ts bun`, not a native `bun test` subset.
 Failed-run reports are diagnostic artifacts only and never establish budgets.
 
-Producer configurations are named **measurement-pending**
-inventories, not silently omitted. Python `scripts/*.py` (`python-scripts`) and
+Every Vitest producer configuration is measured since #380 (see the `import-audit` paragraph above). Python `scripts/*.py` (`python-scripts`) and
 `integration/harness/*.py` (`python-harness`) are measured by the one Python gate recipe `PY_GATE` in
 the `Makefile`: ruff, ty, then `pytest -n auto --dist loadfile --cov=<project root>` writing LCOV to
 `scripts/coverage/python/lcov.info` and `integration/coverage/python/lcov.info`. The path is
@@ -391,8 +404,8 @@ A repository-wide regression scan and the CLI audit tracked plus untracked nonig
 Python and executable JavaScript (`.mjs`, `.cjs`, `.js`) source using the same Git-listed traversal. Each executable file must be included in a measured/pending inventory or have an explicit
 reasoned exclusion. Conventional test files are out of scope; arbitrary new implementation files
 are not. There is no implicit `*.config.*` exemption: executable tool configurations need an
-explicit owned/pending declaration or reasoned verification classification. Existing producer
-configurations remain pending/report-only in the policy. All inventories are expanded and
+explicit owned/pending declaration or reasoned verification classification. The producer
+configurations are owned by `import-audit` (#380). All inventories are expanded and
 validated; only eligible pending inventories block the final target flip. Python is outside this
 eight-package zero target; its two measured signals are the enforced `ratchet` floors above.
 

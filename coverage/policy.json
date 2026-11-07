@@ -12,6 +12,21 @@
     { "package": "probe-boundaries", "signal": "owned", "path": "integration/probes/render.ts", "reason": "Relative to f2d607eb: `render.test.ts` already imported it; it now also runs the `/harness-probe` command against a recording TUI under `check-probes`. Moved to the measured, enforced probes signal; probe-boundaries is deleted." },
     { "package": "probe-boundaries", "signal": "owned", "path": "integration/probes/session-kit-child-scope.ts", "reason": "Relative to f2d607eb: `session-kit-child-scope.test.ts` fires its hook and runs its tool against a recording ExtensionAPI under `check-probes`. Moved to the measured, enforced probes signal; probe-boundaries is deleted." },
     { "package": "probe-boundaries", "signal": "owned", "path": "integration/probes/stack-resources.ts", "reason": "Relative to f2d607eb: `stack-resources.test.ts` runs its hook against the real package manager on a disposable preset under `check-probes`. Moved to the measured, enforced probes signal; probe-boundaries is deleted." },
+    { "package": "coverage-configurations", "signal": "owned", "path": "packages/computer-use/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
+    { "package": "coverage-configurations", "signal": "owned", "path": "packages/dev-tools/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
+    { "package": "coverage-configurations", "signal": "owned", "path": "packages/plan-mode/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
+    { "package": "coverage-configurations", "signal": "owned", "path": "packages/plan-mode/vitest.runtime-build.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
+    { "package": "coverage-configurations", "signal": "owned", "path": "packages/preset/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
+    { "package": "coverage-configurations", "signal": "owned", "path": "packages/resource-sampler/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
+    { "package": "coverage-configurations", "signal": "owned", "path": "packages/session-kit/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
+    { "package": "coverage-configurations", "signal": "owned", "path": "packages/subagents/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
+    { "package": "coverage-configurations", "signal": "owned", "path": "packages/subagents/vitest.workflow-examples.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
+    { "package": "coverage-configurations", "signal": "owned", "path": "packages/subscription-router/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
+    { "package": "coverage-configurations", "signal": "owned", "path": "packages/todo/.vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
+    { "package": "coverage-configurations", "signal": "owned", "path": "integration/inprocess/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
+    { "package": "coverage-configurations", "signal": "owned", "path": "integration/probes/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
+    { "package": "coverage-configurations", "signal": "owned", "path": "integration/providers/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
+    { "package": "coverage-configurations", "signal": "owned", "path": "scripts/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
     { "package": "plan-mode", "signal": "bun", "path": "packages/plan-mode/src/interactive-ui.ts", "reason": "Relative to integration base 71b0aea: remove the same validated zero-statement facade from the native Bun subset membership, not executable target logic. Native wrapper/linkage counters are not executable source counters; UI implementations remain inventoried and the subset stays report-only." }
   ],
   "enforcement_changes": [],
@@ -366,25 +381,26 @@
         }
       }
     },
-    "coverage-configurations": {
-      "root": ".",
-      "owned": ["packages/*/vitest*.config.ts", "packages/todo/.vitest.config.ts", "integration/inprocess/vitest.config.ts", "integration/probes/vitest.config.ts", "integration/providers/vitest.config.ts", "scripts/vitest.config.ts"],
-      "exclusions": [],
-      "status": "pending",
-      "goal": "report-only",
-      "goal_reason": "Verification producer configuration is test infrastructure, outside the production-package goal.",
-      "note": "All executable producer configurations remain inventoried and contract checked; no coverage claim.",
-      "signals": {}
-    },
     "import-audit": {
-      "root": "scripts",
-      "owned": ["check-biome-paths.mjs", "import_audit.ts", "router_contract.mjs", "run-vitest.ts"],
+      "root": ".",
+      "owned": [
+        "scripts/check-biome-paths.mjs",
+        "scripts/import_audit.ts",
+        "scripts/router_contract.mjs",
+        "scripts/run-vitest.ts",
+        "scripts/vitest.config.ts",
+        "packages/*/vitest*.config.ts",
+        "packages/todo/.vitest.config.ts",
+        "integration/inprocess/vitest.config.ts",
+        "integration/probes/vitest.config.ts",
+        "integration/providers/vitest.config.ts"
+      ],
       "exclusions": [],
       "status": "measured",
-      "note": "Root Node verification scripts measured in process by `check-import-audit`: the import audit against the real tsgo parser, the Vitest launcher, the Biome path preflight and the packed-router contract fixture. Joins the 100-percent goal at 0/0. Python tooling retains its existing gates.",
+      "note": "Root Node verification scripts measured in process by `check-import-audit`: the import audit against the real tsgo parser, the Vitest launcher, the Biome path preflight and the packed-router contract fixture, plus every Vitest producer configuration (#380), imported and asserted by `scripts/coverage-configs.test.ts`. The Vitest root is the repository root so the report's paths cover configurations outside `scripts/`. Joins the 100-percent goal at 0/0. Python tooling retains its existing gates.",
       "signals": {
         "primary": {
-          "report": "coverage/primary/lcov.info",
+          "report": "scripts/coverage/primary/lcov.info",
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
           "reporters": ["text", "lcov"]
         }
