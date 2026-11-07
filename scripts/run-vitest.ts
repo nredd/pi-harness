@@ -15,6 +15,8 @@ const BUN_COVERAGE_ARGS = [
 	"--coverage.reporter=lcov",
 	"--coverage.reportsDirectory=coverage/bun",
 ];
+// Set for every Bun child so a suite can assert it really runs on the pinned Bun, not a Node fallback.
+const BUN_RUNTIME_ENV = { PI_EXPECT_BUN_RUNTIME: "1" } as const;
 const COVERAGE_DISABLED_ARG = "--coverage.enabled=false";
 
 /**
@@ -54,9 +56,9 @@ export function toolchainHomeEnv(env: NodeJS.ProcessEnv): Record<string, string>
  * Run Vitest once under `engine` with a disposable home, then remove it and report the timing.
  *
  * The child gets the home before any import: Bun caches `os.homedir()`, and Pi can read global model
- * policy. A canary that disables coverage must not overwrite another signal's report, so only the
- * exact `--coverage.enabled=false` argument opts out of the Bun signal's appended coverage arguments;
- * every current canary passes it verbatim (subagents, session-kit).
+ * policy. A run that disables coverage must not overwrite another signal's report, so only the
+ * exact `--coverage.enabled=false` argument opts out of the Bun signal's appended coverage arguments.
+ * Bun children also get `PI_EXPECT_BUN_RUNTIME=1`, which a suite may check to prove its engine.
  *
  * @param argv The engine, `node` or `bun`, then the arguments Vitest's `run` receives.
  * @param env The environment the child inherits under the isolated home; also where
@@ -85,7 +87,13 @@ export function main(argv: readonly string[], env: NodeJS.ProcessEnv): number {
 			],
 			{
 				stdio: "inherit",
-				env: { ...env, ...toolchainHomeEnv(env), ...isolatedHomeEnv(home), ...TEST_JITI_ENV },
+				env: {
+					...env,
+					...(engine === "bun" ? BUN_RUNTIME_ENV : {}),
+					...toolchainHomeEnv(env),
+					...isolatedHomeEnv(home),
+					...TEST_JITI_ENV,
+				},
 			},
 		);
 		if (result.error) throw result.error;

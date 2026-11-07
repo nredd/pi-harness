@@ -22,7 +22,7 @@ command, or generated guest step while preserving its original exit status and s
 
 | Job | Normal PR | `main` push | Docs-only PR or push | Proves |
 | --- | --- | --- | --- | --- |
-| `owned (ubuntu-24.04, macos-14, wsl2)` | A fan-in over parallel `owned shard (<os>, <shard>)` jobs (see the shards section below). Each shard runs `make install-owned`, then one step per gate it owns: `make check-ts WORKSPACES=...` (its workspaces only), `make check-scripts`, `make check-integration` (the Python halves of the last two run through `PY_GATE`: ruff, ty, then pytest across cores, see below); `make install-benchmark` and `make check-benchmark` in the macOS `python` shard only, unless the plan lists it in `skipped_gates` (a PR without `benchmark_inputs`; the step then reports NOT RUN). The WSL guest shards run `make check-ts`, `make check-probes`, `make check-providers`, `make check-import-audit`, and on a PR only with WSL inputs. The fan-in requires every shard, then runs `make check-coverage` over their merged reports. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Same | Native cells report the bypass; WSL runs on `main`, reports NOT RUN on a PR | Biome, tsc and each package's Vitest suite and declared `test:bun` suite (router, preset, resource-sampler, todo, plan-mode, dev-tools and inprocess run FULL Vitest suites on both engines with the shared homedir guard; subagents retains native scenarios plus a guarded real-loader gate until a later #320 slice, with its full Node suite guarded; the other packages retain native Bun subsets; a notice names every package without `test:bun`, as NOT RUN), `scripts/` and `integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux/WSL reports it NOT RUN. See the computer-use note below. |
+| `owned (ubuntu-24.04, macos-14, wsl2)` | A fan-in over parallel `owned shard (<os>, <shard>)` jobs (see the shards section below). Each shard runs `make install-owned`, then one step per gate it owns: `make check-ts WORKSPACES=...` (its workspaces only), `make check-scripts`, `make check-integration` (the Python halves of the last two run through `PY_GATE`: ruff, ty, then pytest across cores, see below); `make install-benchmark` and `make check-benchmark` in the macOS `python` shard only, unless the plan lists it in `skipped_gates` (a PR without `benchmark_inputs`; the step then reports NOT RUN). The WSL guest shards run `make check-ts`, `make check-probes`, `make check-providers`, `make check-import-audit`, and on a PR only with WSL inputs. The fan-in requires every shard, then runs `make check-coverage` over their merged reports. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Same | Native cells report the bypass; WSL runs on `main`, reports NOT RUN on a PR | Biome, tsc and each package's Vitest suite and declared `test:bun` suite (router, preset, resource-sampler, todo, plan-mode, dev-tools, subagents and inprocess run FULL Vitest suites on both engines with the shared homedir guard; session-kit alone retains a native Bun subset; a notice names every package without `test:bun`, as NOT RUN), `scripts/` and `integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux/WSL reports it NOT RUN. See the computer-use note below. |
 | `contracts (ubuntu-24.04, macos-14, wsl2)` | `make install-owned`, `make check-package-contracts` (includes the packed preset audit + install), `make check-plan-mode-package-contract`, `make check-subagents-package-contract`, `make check-todo-package-contract`, `make check-computer-use-package-contract`. WSL runs these on a PR only with WSL inputs | Same | Native cells report the bypass; WSL runs on `main`, reports NOT RUN on a PR | Packed tarballs alone on exact stock Pi 1.3.0 (dev-tools with its exact `@nredd/pi-resource-sampler` from the registry, integrity checked against `npm view`, real parent-child discovery by that installed sampler's full scan, and a bounded `resource_snapshot`), the packed preset audited and installed alone, and the packed `@nredd/pi-subagents` with `croner`/`nanoid` from the registry plus one faux `Agent` call (the same gate the release `verify` runs, so a PR proves it before a tag does). The packed `@nredd/pi-todo` with `@juicesharp/rpiv-config`/`rpiv-i18n` from the registry plus one faux `todo` create. The packed `@nredd/pi-computer-use` through the platform-aware tool set (13 tools on macOS, 11 on Linux) plus Mach-O arch/mode checks of both prebuilt helpers; its `postinstall` and every desktop tool are NOT RUN. JSON reports uploaded as artifacts |
 | `stack (ubuntu-24.04, macos-14, wsl2; personal, local)` | `stack (ubuntu-24.04, personal)`, `stack (ubuntu-24.04, local)` and `stack (macos-14, local)` run Node release-bundle D/E and build the core Gitlink with Bun for standalone D/E of their own stack. A PR with no stack inputs skips the personal steps. The other three cells report NOT RUN | `stack (ubuntu-24.04, personal)` only; the other two running cells log the selective smoke and the three bypass cells report NOT RUN | Every cell reports a bypass or NOT RUN | Node release bundle plus source-built linux-x64/darwin-arm64 standalone, independent stack installations, startup/transport/lifetime/output/tool surfaces and tmux resize; the auth transport cases run on standalone through the `BUN_OPTIONS --preload` adapter, no skips. Separate Node/Bun JUnit and failure artifacts, stack identities and binary/archive SHA-256 retained. Computer-use helper explicitly excluded |
 
@@ -123,7 +123,7 @@ with #375's fake-host FFI tests; no package has a per-OS allowance. Session-kit 
 OSes after the deterministic formatter test removes the incidental comparator hit (#163).
 The earlier 110/32 transitional floor is historical only. Another `always()` step retains LCOV and the per-package/per-file JSON summary
 on either outcome. Bun signals for `dev-tools`, `plan-mode`, `preset`, `subscription-router` and
-`todo` are enforced at 0/0 on both OSes (#320), `resource-sampler` since #375 and `inprocess` since #376. The rest explicitly use `enforcement: "report-only"` with
+`todo` are enforced at 0/0 on both OSes (#320), `resource-sampler` since #375 and `inprocess` since #376, and `subagents` at 0/0/0 since #320 (measured on darwin; linux awaits hosted CI, see [here](coverage.md)). The rest (session-kit) explicitly uses `enforcement: "report-only"` with
 mandatory reasons linked to #160. Report-only signals retain fail-closed LCOV parsing, expected-file checks,
 per-OS references, inventory ratcheting, and text+LCOV reporter checks. Counts and signed deltas
 from references are logged and included under JSON `signals`; budget excess alone cannot fail
@@ -483,15 +483,15 @@ passed on the owner's laptop (`pi` on `PATH`, the chezmoi source tree). They are
 
 Verification engines: Vitest stays the owned TypeScript runner, with Node primary (the shipped
 runtime) and Bun the standalone target. Full Vitest runs on both engines for
-`subscription-router`, `preset`, `resource-sampler`, `todo`, `plan-mode`, `dev-tools` and
+`subscription-router`, `preset`, `resource-sampler`, `todo`, `plan-mode`, `dev-tools`, `subagents` and
 `integration/inprocess`.
 `test:bun` launches `bun --bun vitest run` through `scripts/run-vitest.ts` in a disposable
 spawn-time home (the keys come from its exported `isolatedHomeEnv`, which nested runners such as
 session-kit's worker-death test reuse); `make check-ts` and the native `owned` cells' TypeScript shards run it.
 The launcher also sets `JITI_FS_CACHE=false`, and pins `CARGO_HOME`/`RUSTUP_HOME` to the account's
 (`toolchainHomeEnv`, explicit values win): rustup's proxies otherwise look under the disposable home,
-so dev-tools' real cargo suite silently skipped on Bun on the hosted runners. The `test:bun` scripts that start with native
-`bun test` (session-kit, subagents) set it for that half through an inline
+so dev-tools' real cargo suite silently skipped on Bun on the hosted runners. The `test:bun` script that starts with native
+`bun test` (session-kit) sets it for that half through an inline
 prefix, not the launcher, as do the direct `vitest` scripts; see `docs/verification-engines.md`. Each
 invocation prints engine/OS/package duration and exit status and appends it to the CI step summary.
 The launcher's `bun` engine also appends the Bun signal's Istanbul coverage arguments.
@@ -503,9 +503,9 @@ Phase 2 #171 resolves the todo/subagents guard deferral from
 [spec PR #170](https://github.com/nredd/pi-harness/pull/170), tracking
 [#160](https://github.com/nredd/pi-harness/issues/160). Both Vitest configs now install the
 shared guard and fixtures inject their homes instead of mutating `HOME`. Todo runs its full
-390-test suite on Bun. Subagents keeps its native-scenario subset plus the guarded real-loader
-gate; full Bun activation is a later slice of [#320](https://github.com/nredd/pi-harness/issues/320).
-Its full Node suite is guarded.
+390-test suite on Bun. Since [#320](https://github.com/nredd/pi-harness/issues/320) subagents runs its full suite on Bun too;
+session-kit keeps its native subset, see [#320](https://github.com/nredd/pi-harness/issues/320).
+Both full Node suites are guarded.
 No guard-related skip list or informational-only guard is used. See the current matrix,
 boundary negative controls and package-addition procedure [here](verification-engines.md).
 Python stays on pytest/uv/ruff/ty; dotfiles stays on dependency-free `node --test` as the

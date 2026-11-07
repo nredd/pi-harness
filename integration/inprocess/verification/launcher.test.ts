@@ -186,7 +186,6 @@ test("scripts that bypass the launcher disable jiti's fs cache themselves", () =
 		"packages/session-kit test",
 		"packages/session-kit test:bun",
 		"packages/subagents bench",
-		"packages/subagents test:bun",
 		"packages/subagents test:e2e",
 		"packages/subagents test:watch",
 		"packages/subagents test:workflow-examples",

@@ -20,7 +20,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 NATIVE_BUN_TEST = re.compile(r"(?:\w+=\S+ )*bun test ")
 # Packages still on a native `bun test` subset. #320 retires one per slice; none may come back.
-NATIVE_BUN_PACKAGES = {"session-kit", "subagents"}
+# session-kit stays: Bun's worker.terminate() of a spinning regex outlasts its matcher test's bound (#320).
+NATIVE_BUN_PACKAGES = {"session-kit"}
 
 
 LAUNCHER = "node ../../scripts/run-vitest.ts bun"

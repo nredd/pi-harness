@@ -5,6 +5,19 @@ import { DefaultPackageManager, type ResolvedResource, SettingsManager } from "@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isAmbientUserAgentsSkill, preloadSkills } from "../src/skill-loader.js";
 
+// A directory whose listing fails: Bun's `realpathSync` already rejects a mode-000 directory, so a
+// real chmod never reaches the failed listing there and the failure is injected on both engines.
+const unreadable = vi.hoisted(() => ({ dir: undefined as string | undefined }));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  const readdirSync = ((path: Parameters<typeof actual.readdirSync>[0], options?: never) => {
+    if (String(path) === unreadable.dir) throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    return actual.readdirSync(path, options);
+  }) as typeof actual.readdirSync;
+  return { ...actual, readdirSync };
+});
+
 const presetRoot = join(import.meta.dirname, "../../preset");
 
 interface Sandbox {
@@ -418,6 +431,24 @@ describe("preloadSkills", () => {
       expect(found.map(skill => skill.content)).toEqual(["NESTED", "LINKED", "RETRIED", "(Skill \"absent\" not found in Pi's configured skill resources)"]);
     } finally {
       chmodSync(join(legacy, "locked"), 0o700);
+    }
+  });
+
+  it("keeps walking the legacy tree past a directory whose listing fails", async () => {
+    const box = createSandbox(false);
+    roots.push(box.root);
+    const legacy = join(box.homeDir, ".pi", "skills");
+    // Sorted first, so only a walk that carries on after the failure reaches the sibling's skill.
+    mkdirSync(join(legacy, "a-unreadable", "deeper"), { recursive: true });
+    mkdirSync(join(legacy, "b", "retry"), { recursive: true });
+    writeFileSync(join(legacy, "b", "retry", "SKILL.md"), "REACHED");
+    unreadable.dir = join(legacy, "a-unreadable");
+
+    try {
+      const [skill] = await preloadSkills(["retry"], box.cwd, { ...box, homeDir: box.homeDir });
+      expect(skill?.content).toBe("REACHED");
+    } finally {
+      unreadable.dir = undefined;
     }
   });
 

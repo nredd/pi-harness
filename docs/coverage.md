@@ -63,9 +63,9 @@ down, and dropping a `branches` key the base had is a weakening. While `target.b
 It fails closed both ways. A signal whose report has branch records (`BRDA`) needs a cap on that OS
 (`Missing branch cap`), and a capped signal whose report has executable lines but no branch records
 fails (`Branch producer missing`), so a producer that silently stops emitting `BRDA` can't read as 0.
-Carve-outs: the native `bun test` subset signals (session-kit, subagents `/bun`) write no branch records
-and declare no cap until #320 moves them to Vitest-on-Bun Istanbul, which then adds one (dev-tools and
-plan-mode moved in #433 and #362 and are capped); `computer-use-vitest` is owner-excluded (`goal: excluded`), the only
+Carve-outs: the native `bun test` subset signal (session-kit `/bun`) writes no branch records
+and declares no cap until #320 moves it to Vitest-on-Bun Istanbul, which then adds one (dev-tools, plan-mode and
+subagents moved in #433, #362 and #320 and are capped); `computer-use-vitest` is owner-excluded (`goal: excluded`), the only
 goal that may carry branch records without a cap.
 
 Branch units differ by producer: Istanbul and Bun count AST arms (including an implicit `else` and each
@@ -192,20 +192,21 @@ inventory, 0/0 in their own PRs' hosted macos-14 and ubuntu-24.04 artifacts (rec
 [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/bun-enforced.md)). `resource-sampler` is `enforced` at 0/0 on
 darwin and linux since [#375](https://github.com/nredd/pi-harness/issues/375), which closed its
 darwin 8/4 and linux 47/8 Bun misses with the same fake-host FFI tests as primary. `inprocess` joins them since
-[#376](https://github.com/nredd/pi-harness/issues/376), see below. The other two
-explicitly declare `enforcement: "report-only"`, with a
+[#376](https://github.com/nredd/pi-harness/issues/376), see below. `subagents` runs its full suite on Bun 1.4.4 and is `enforced`
+at 0/0/0 on darwin and linux since #320, measured on darwin only so far (macOS: Node 4361 passed / 8 skipped,
+Bun 4362 passed / 7 skipped, both Istanbul 7731 lines, 1606 functions, 7193 branches fully covered); hosted CI must confirm linux. The other one (session-kit)
+explicitly declares `enforcement: "report-only"`, with a
 mandatory nonblank `reason` and a link to [#160](https://github.com/nredd/pi-harness/issues/160).
-Their stored `max_uncovered` values are advisory references, not enforced budgets. An omitted `enforcement` defaults to
+Its stored `max_uncovered` values are advisory references, not enforced budgets. An omitted `enforcement` defaults to
 `enforced` for backwards-compatible primary/base-policy reading; current Bun declarations never
 rely on that default. Native `bun test` subset measurements are NOT the owned-source denominator:
 Bun 1.3.14 native coverage omits never-imported files. Full Vitest-on-Bun producers now use
-Istanbul for router, preset, sampler, todo, plan-mode, dev-tools and inprocess through `scripts/run-vitest.ts bun`.
+Istanbul for router, preset, sampler, todo, plan-mode, dev-tools, subagents and inprocess through `scripts/run-vitest.ts bun`.
 They inherit the full primary instrumentation inventory (no `files` subset). The launcher's
 `bun` engine appends the provider, the `text` and `lcov` reporters (Vitest's dotted options) and
 `coverage/bun`, so each `test:bun` passes only package arguments. The sampler retains one
-worker.
-Subagents retains its native subset plus main's guarded real-loader gate; coverage is
-disabled for that extra canary so it cannot overwrite Node's primary report. The policy explicitly lists the files currently measured by each signal;
+worker. The launcher also sets `PI_EXPECT_BUN_RUNTIME=1`, which subagents' real-loader test reads to prove it ran on
+the pinned Bun. session-kit alone keeps a native subset, and its policy explicitly lists the files currently measured by each signal;
 missing expected files fail. Files outside that Bun subset remain mandatory in primary
 coverage. Imported sibling production source and dedicated test/helper directories are outside
 that package's signal. Unknown production report paths fail. Never merge JSC, V8 and Istanbul
@@ -215,7 +216,7 @@ the producer wiring and reviewed signal inventory, not the accounting algorithm 
 The policy decision's roughly **1-7%** small-subset characterization must not be mistaken for a
 measured source-coverage percentage or a universal suite ratio. Historically, hosted run `40455349710`
 measured 8 Bun tests versus 539 primary tests for plan-mode (1.5%), 22 versus 3078 for subagents (0.7%)
-and 2 versus 387 for todo (0.5%), before #320 moved plan-mode and todo onto their full suites under
+and 2 versus 387 for todo (0.5%), before #320 moved plan-mode, subagents and todo onto their full suites under
 Bun. There are exceptions: preset runs its whole suite under Bun (173
 tests on both engines, `npm run check -w @nredd/pi-preset` at `dcc7903b`), and the in-process host
 runs the same 64 cases (one intentionally skipped on Linux). Other package ratios also differ.

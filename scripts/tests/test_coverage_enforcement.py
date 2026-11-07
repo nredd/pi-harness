@@ -409,6 +409,7 @@ ENFORCED_BUN_PACKAGES = {
     "plan-mode",
     "preset",
     "resource-sampler",
+    "subagents",
     "subscription-router",
     "todo",
 }
