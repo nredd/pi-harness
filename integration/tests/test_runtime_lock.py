@@ -534,6 +534,45 @@ def test_core_tarballs_require_the_separately_authenticated_release_digest(
     assert archives["node_modules/core"].read_bytes() == contents
 
 
+def test_acquire_downloads_one_archive_per_integrity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lock entries sharing an integrity reuse one verified archive instead of refetching."""
+    contents = package_bytes("shared")
+    urls = [
+        "https://registry.npmjs.org/shared/-/shared-a.tgz",
+        "https://registry.npmjs.org/shared/-/shared-b.tgz",
+    ]
+    entries = {
+        f"node_modules/{name}": {"version": "1.0.0", "resolved": url, "integrity": integrity(contents)}
+        for name, url in zip(("a", "b"), urls, strict=True)
+    }
+    graph = NpmGraph(
+        manifest={"name": "shared", "version": "1.0.0", "dependencies": {"a": "1.0.0", "b": "1.0.0"}},
+        lock={
+            "lockfileVersion": 3,
+            "packages": {"": {"dependencies": {"a": "1.0.0", "b": "1.0.0"}}, **entries},
+        },
+    )
+    fetched: list[str] = []
+
+    def fetch(url: str) -> bytes:
+        """Record each download.
+
+        Parameters:
+            url (str): requested tarball URL.
+
+        Returns:
+            bytes: the shared tarball.
+        """
+        fetched.append(url)
+        return contents
+
+    monkeypatch.setattr(runtime_lock, "fetch_bytes", fetch)
+    archives = acquire(graph, tmp_path / "archives")
+    assert fetched == urls[:1]
+    assert archives["node_modules/a"] == archives["node_modules/b"]
+    assert archives["node_modules/a"].read_bytes() == contents
+
+
 @pytest.mark.parametrize(
     ("members", "message"),
     [

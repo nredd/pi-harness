@@ -8,8 +8,13 @@ export class FakeClock implements Clock {
 
   now(): number { return this.time; }
   get pending(): number { return this.timers.size; }
+  /** Delay of every one-shot timer ever scheduled, in order, so a test can tell which sleep was armed. */
+  readonly timeoutDelays: number[] = [];
 
-  setTimeout(callback: () => void, ms: number) { return this.schedule(callback, ms); }
+  setTimeout(callback: () => void, ms: number) {
+    this.timeoutDelays.push(ms);
+    return this.schedule(callback, ms);
+  }
   setInterval(callback: () => void, ms: number) { return this.schedule(callback, ms, ms); }
 
   advance(ms: number): void {

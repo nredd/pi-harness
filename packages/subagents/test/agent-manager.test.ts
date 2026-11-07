@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentManager } from "../src/agent-manager.js";
 import { registerAgents } from "../src/agent-types.js";
 import type { AgentRecord } from "../src/types.js";
+import { FakeClock } from "./helpers/fake-clock.js";
 
 vi.mock("../src/agent-runner.js", () => ({
   runAgent: vi.fn(),
@@ -833,6 +834,22 @@ describe("AgentManager — lifetime usage + compaction count are eagerly initial
       expect(opts.type).toBe("general-purpose");
       expect(opts.maxTurns).toBe(3);
       expect(opts.onTurnEnd).toBe(onTurnEnd);
+    });
+
+    it("times the runner's stale-ctx backoff on its own clock for spawn and both resume paths", async () => {
+      const clock = new FakeClock();
+      manager = new AgentManager(undefined, undefined, undefined, undefined, undefined, undefined, clock);
+      vi.mocked(runAgent).mockResolvedValue({ responseText: "first", session: mockSession() as any, aborted: false, steered: false });
+      vi.mocked(resumeAgent).mockResolvedValue({ text: "second", aborted: false, steered: false });
+      const id = manager.spawn(mockPi, mockCtx, "general-purpose", "test", { description: "test", isBackground: true });
+      await manager.getRecord(id)!.promise;
+      expect(vi.mocked(runAgent).mock.calls.at(-1)![3]!.clock).toBe(clock);
+
+      await manager.resume(id, "foreground");
+      expect(vi.mocked(resumeAgent).mock.calls.at(-1)![2]!.clock).toBe(clock);
+
+      await (await manager.resume(id, "background", undefined, { isBackground: true }))!.promise;
+      expect(vi.mocked(resumeAgent).mock.calls.at(-1)![2]!.clock).toBe(clock);
     });
 
     it("falls back to the limit the agent was spawned with when the caller passes none", async () => {
