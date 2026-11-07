@@ -189,13 +189,15 @@ wrappers. 194 lines / 51 functions, 0 uncovered on darwin. The `test-helper` exc
 timers) and is deleted.
 
 Every declared `test:bun` command also emits an independent `bun` LCOV signal. Nine Bun signals
-are measured. `dev-tools`, `plan-mode`, `preset`, `subagents`, `subscription-router` and `todo` are `enforced` at
+are measured. `dev-tools`, `plan-mode`, `preset`, `subscription-router` and `todo` are `enforced` at
 0/0 on darwin and linux since [#320](https://github.com/nredd/pi-harness/issues/320): full suite, full primary
 inventory, 0/0 in their own PRs' hosted macos-14 and ubuntu-24.04 artifacts (receipts
 [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/bun-enforced.md)). `resource-sampler` is `enforced` at 0/0 on
 darwin and linux since [#375](https://github.com/nredd/pi-harness/issues/375), which closed its
 darwin 8/4 and linux 47/8 Bun misses with the same fake-host FFI tests as primary. `inprocess` joins them since
-[#376](https://github.com/nredd/pi-harness/issues/376), see below. The other one (session-kit)
+[#376](https://github.com/nredd/pi-harness/issues/376), see below. `subagents` runs its full suite on Bun 1.4.4 and is `enforced`
+at 0/0/0 on darwin and linux since #320, measured on darwin only so far (macOS: Node 4361 passed / 8 skipped,
+Bun 4362 passed / 7 skipped, both Istanbul 7731 lines, 1606 functions, 7193 branches fully covered); hosted CI must confirm linux. The other one (session-kit)
 explicitly declares `enforcement: "report-only"`, with a
 mandatory nonblank `reason` and a link to [#160](https://github.com/nredd/pi-harness/issues/160).
 Its stored `max_uncovered` values are advisory references, not enforced budgets. An omitted `enforcement` defaults to
