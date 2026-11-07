@@ -1105,7 +1105,7 @@ export class AgentManager {
     record: AgentRecord,
     { pi, ctx, type, prompt, options }: SpawnArgs,
   ) {
-    // Re-validate a caller-supplied cwd: queued spawns can start minutes after
+    // Re-validate the cwd (caller-supplied, else the session's): queued spawns can start minutes after
     // spawn()'s check, and the directory may be gone by then (TOCTOU). Same
     // curated errors; drainQueue parks a throw on the record as an error.
     assertSpawnCwd(options.cwd, ctx.cwd);
