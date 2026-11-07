@@ -5191,6 +5191,45 @@ def test_tree_over_the_entry_bound_is_refused_at_record(
     assert (target / "child").read_text() == "tree"
 
 
+def test_oversized_original_error_names_the_path_without_restore_advice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The record-time refusal names the target and does not tell the user to restore by hand."""
+    harness = Harness(tmp_path, monkeypatch)
+    layout = harness.layout
+    target = layout.agent_dir / "npm"
+    recovery_entry(target, "directory", "tree")
+    monkeypatch.setattr(
+        install, "RestoreHasher", functools.partial(install.RestoreHasher, remaining_entries=1)
+    )
+    with AnchoredStore() as anchors:
+        journal = Journal(layout, layout.backups / "large", anchors=anchors)
+        with journal.open_backups(create=True), pytest.raises(OSError, match="too large") as caught:
+            journal.record(target, "npm")
+    message = str(caught.value)
+    assert f"Original '{target}' is too large or unreadable to verify" in message
+    assert "entry limit" in message
+    assert "restore by hand" not in message
+    assert "shrink or fix it, or move it aside, then rerun" in message
+
+
+def test_plan_refuses_an_oversized_original_before_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Planning (and so `--plan`) fails naming the original before anything is staged."""
+    harness = Harness(tmp_path, monkeypatch)
+    target = harness.layout.agent_dir / "npm"
+    recovery_entry(target, "directory", "tree")
+    monkeypatch.setattr(
+        install, "RestoreHasher", functools.partial(install.RestoreHasher, remaining_entries=1)
+    )
+    with pytest.raises(
+        InstallError,
+        match=rf"Original '{re.escape(str(target))}' is too large or unreadable.*; nothing was changed",
+    ):
+        plan_install(harness.layout, harness.verified)
+
+
 @pytest.mark.parametrize("digest", ["", "f" * 63, "G" * 64, 7, None])
 def test_malformed_original_digest_is_refused(tmp_path: Path, digest: object) -> None:
     """A pending digest must be 64 lowercase hex characters."""
