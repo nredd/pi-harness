@@ -15,7 +15,6 @@ interface AgentGroup {
   agentIds: Set<string>;
   completedRecords: Map<string, AgentRecord>;
   timeoutHandle?: ReturnType<typeof setTimeout>;
-  delivered: boolean;
   /** Shorter timeout for stragglers after a partial delivery. */
   isStraggler: boolean;
 }
@@ -40,7 +39,6 @@ export class GroupJoinManager {
       groupId,
       agentIds: new Set(agentIds),
       completedRecords: new Map(),
-      delivered: false,
       isStraggler: false,
     };
     this.groups.set(groupId, group);
@@ -111,7 +109,6 @@ export class GroupJoinManager {
       clearTimeout(group.timeoutHandle);
       group.timeoutHandle = undefined;
     }
-    group.delivered = true;
     this.deliverCb([...group.completedRecords.values()], partial);
     this.cleanupGroup(group);
   }

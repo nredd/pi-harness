@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
@@ -33,11 +33,22 @@ describe("normalizeResourceSettings on Windows", () => {
 });
 
 describe("createHomeResourceLoader", () => {
-  it("builds its own settings manager from cwd and agentDir when none is given", () => {
+  it("builds its own settings manager from cwd and agentDir when none is given", async () => {
     const agentDir = join(root, "agent");
-    const loader = createHomeResourceLoader({ cwd: root, agentDir }, join(root, "home"));
-    expect(loader).toBeDefined();
-    expect(loader.getExtensions()).toBeDefined();
+    const home = join(root, "home");
+    mkdirSync(join(home, "my-skills", "injected-skill"), { recursive: true });
+    writeFileSync(
+      join(home, "my-skills", "injected-skill", "SKILL.md"),
+      "---\nname: injected-skill\ndescription: found through the injected home\n---\nBody\n",
+    );
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ skills: ["~/my-skills"] }));
+    const loader = createHomeResourceLoader({ cwd: root, agentDir, noExtensions: true }, home);
+
+    await loader.reload();
+
+    // The loader read agentDir's settings, and expanded `~` against the injected home, not the real one.
+    expect(loader.getSkills().skills.map(skill => skill.name)).toContain("injected-skill");
   });
 
   it("wraps a supplied settings manager so its readers see the injected home", () => {

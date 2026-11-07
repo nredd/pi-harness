@@ -176,10 +176,9 @@ function findInRoot(root: string, name: string, trusted: boolean): string | unde
 
   const queue = [root];
   const seen = new Set<string>();
-  while (queue.length > 0) {
-    // Non-empty by the loop guard. `root` passed the symlink check above and every queued
-    // directory passed it before it was pushed, so `current` needs no second check.
-    const current = queue.shift() as string;
+  // `root` passed the symlink check above and every queued directory passed it before it was
+  // pushed, so `current` needs no second check. Iteration visits entries pushed meanwhile, in order.
+  for (const current of queue) {
     if (trusted) {
       const canonical = canonicalPath(current);
       // A directory raced away since it was queued has nothing left to read.

@@ -3,7 +3,7 @@
 // missing drive on Windows).
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, parse } from "node:path";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const host = vi.hoisted(() => ({ manager: "real" as "real" | "missing" | "no-listing", failRealpath: false }));
@@ -66,7 +66,7 @@ describe("resolveDeclaredPaths when no ancestor can be canonicalized", () => {
     const { excluded } = resolveDeclaredPaths(dir, ["!./agents/wip.md"], "agents");
 
     // Every ancestor fails, so the walk bottoms out at the filesystem root and re-joins the
-    // remaining segments verbatim.
-    expect([...excluded]).toEqual([join(parse(dir).root, ...dir.slice(parse(dir).root.length).split(/[\\/]/), "agents", "wip.md")]);
+    // remaining segments verbatim: the path comes back as written.
+    expect([...excluded]).toEqual([join(dir, "agents", "wip.md")]);
   });
 });

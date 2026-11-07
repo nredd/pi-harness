@@ -165,7 +165,7 @@ describe("GroupJoinManager", () => {
     expect(mgr.isGrouped("b")).toBe(false);
   });
 
-  it("passes a completion whose group id was re-registered and already delivered", () => {
+  it("passes a completion whose agent still maps to a group that was replaced and disposed", () => {
     const deliver = vi.fn();
     const mgr = new GroupJoinManager(deliver);
     mgr.registerGroup("g", ["a", "b"]);

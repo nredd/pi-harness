@@ -239,7 +239,7 @@ function rankFuzzy(
 
 /** Numeric runs stay ordered and contiguous: `5-5` cannot reuse the `5` in `4-5`. */
 function versionRuns(value: string): string[] {
-  return [...value.replace(/-\d{8}$/, "").matchAll(/(?:^|[\s-])(\d+(?:[\s-]+\d+)*)(?=$|[\s-])/g)].map(match => (match[1] as string).replace(/\s+/g, "-"));
+  return [...value.replace(/-\d{8}$/, "").matchAll(/(?:^|[\s-])(\d+(?:[\s-]+\d+)*)(?=$|[\s-])/g)].map(match => match[1]!.replace(/\s+/g, "-"));
 }
 
 /** Resolve an exact or fuzzy provider/model request without consulting aliases. */
