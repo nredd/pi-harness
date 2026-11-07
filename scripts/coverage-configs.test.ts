@@ -20,6 +20,7 @@ interface Coverage {
 interface Entry {
 	owned: string[];
 	exclusions: { path: string }[];
+	signals: { primary?: { report: string } };
 }
 
 type Loader = () => Promise<{ default: unknown }>;
@@ -193,6 +194,7 @@ for (const producer of PRODUCERS) {
 		assert.equal(coverage.provider, producer.provider);
 		assert.deepEqual(coverage.reporter, ["text", "lcov"]);
 		assert.equal(coverage.reportsDirectory, producer.reportsDirectory);
+		assert.equal(`${coverage.reportsDirectory}/lcov.info`, policy.signals.primary?.report);
 		assert.equal(coverage.reportOnFailure, true);
 		assert.deepEqual(coverage.include, policy.owned);
 		assert.deepEqual(

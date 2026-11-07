@@ -343,7 +343,7 @@ mocked argument/path/error tests still run. Existing native/platform checks rema
 full Vitest suite on Bun through `scripts/run-vitest.ts bun`, not a native `bun test` subset.
 Failed-run reports are diagnostic artifacts only and never establish budgets.
 
-Every Vitest producer configuration is measured since #380 (see below). Python `scripts/*.py` (`python-scripts`) and
+Every Vitest producer configuration is measured since #380 (see the `import-audit` paragraph above). Python `scripts/*.py` (`python-scripts`) and
 `integration/harness/*.py` (`python-harness`) are measured by the one Python gate recipe `PY_GATE` in
 the `Makefile`: ruff, ty, then `pytest -n auto --dist loadfile --cov=<project root>` writing LCOV to
 `scripts/coverage/python/lcov.info` and `integration/coverage/python/lcov.info`. The path is
