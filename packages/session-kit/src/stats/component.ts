@@ -288,6 +288,7 @@ export class StatsView implements Component {
 	private statCells(ov: Overview): { label: string; value: string }[] {
 		const t = this.o.theme;
 		const v = (s: string) => this.paint("accent", s);
+		// Only called for a non-empty range, so the overview has a favorite model and a most active day.
 		const days = (n: number) => `${t.bold(v(String(n)))} ${n === 1 ? "day" : "days"}`;
 		return [
 			{ label: "Favorite model", value: t.bold(v(ov.favorite as string)) },
@@ -449,11 +450,10 @@ export class StatsView implements Component {
 			);
 			return { lines: out, colors };
 		}
-		const from =
-			rangeStart(this.range, this.today) ??
-			dayKey(ranged.reduce((first, c) => Math.min(first, c.ms), Number.POSITIVE_INFINITY));
+		const from = rangeStart(this.range, this.today) ?? dayKey(nth(ranged, 0).ms);
 		const series = dailySeries(ranged, from, this.today, by === "provider" ? (c) => c.provider : modelName);
 		const byDay = new Map(series.map((p) => [p.day, top.map((k) => p.byKey.get(k.key) ?? 0)]));
+		// `series` holds every day from `from` to today, so `byDay` has every day `bucketize` asks for.
 		const bucketed = bucketize(from, this.today, (d) => byDay.get(d) as number[], top.length, plotWidth + 1);
 		const out = head(`Tokens per ${bucketed.unit}`);
 		if (series.length < 2) {
