@@ -174,6 +174,30 @@ describe("AgentManager — record GC", () => {
       expect(reaped).not.toHaveBeenCalled();
     });
 
+    it("stays quiet for a foreground spawn refused because its signal was already aborted", async () => {
+      const reaped = vi.fn();
+      let release!: () => void;
+      vi.mocked(runAgent).mockImplementationOnce(() => new Promise(resolve => {
+        release = () => resolve({ responseText: "done", session: { dispose: vi.fn() } as any, aborted: false, steered: false } as any);
+      }));
+      manager = new AgentManager(undefined, 4, undefined, undefined, undefined, undefined, undefined, undefined, undefined, reaped);
+      manager.setMaxConcurrentForeground(1);
+      const holder = manager.spawnAndWait(mockPi, mockCtx, "X", "holder", { description: "holder" });
+      const refused = await manager.spawnAndWait(mockPi, mockCtx, "X", "refused", {
+        description: "refused",
+        signal: AbortSignal.abort(),
+      });
+      expect(refused.record.status).toBe("stopped");
+      release();
+      const held = await holder;
+      markConsumed(held.record);
+
+      await vi.advanceTimersByTimeAsync(SIXTY + TICK);
+
+      expect(manager.getRecord(refused.id)).toBeUndefined();
+      expect(reaped).not.toHaveBeenCalled();
+    });
+
     it("stays quiet for a queued resume stopped before it ran again", async () => {
       const reaped = vi.fn();
       const done = () => ({ responseText: "done", session: { dispose: vi.fn() } as any, aborted: false, steered: false } as any);

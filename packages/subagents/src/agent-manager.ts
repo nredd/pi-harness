@@ -916,6 +916,7 @@ export class AgentManager {
     if (signal === undefined) return true;
     if (signal.aborted) {
       record.status = "stopped";
+      record.stoppedQueued = true;
       record.completedAt = this.clock.now();
       return false;
     }
@@ -1732,6 +1733,7 @@ export class AgentManager {
           record.status = "stopped";
           record.completedAt = this.clock.now();
         }
+        record.stoppedQueued = true;
         this.detachParentAbort(record);
         return record;
       }
