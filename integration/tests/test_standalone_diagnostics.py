@@ -980,3 +980,10 @@ def test_workflow_rebuilds_and_compares_standalone_before_use() -> None:
     assert "verify-reproducible" in run
     assert "standalone-pi.sha256" in run
     assert run.index("verify-reproducible") < run.index('echo "PI_BIN=')
+    upload = next(
+        step
+        for step in steps
+        if step.get("with", {}).get("name") == "standalone-${{ matrix.platform }}-${{ matrix.stack }}"
+    )
+    assert upload["with"]["path"] == "integration/artifacts/"
+    assert "always()" in upload["if"]

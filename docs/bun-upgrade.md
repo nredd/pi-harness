@@ -129,11 +129,18 @@ All four builds exited 0. Two executable hashes per compiler match exactly:
 Per compiler, both archives contain the same 484 paths and identical bytes for every regular
 file. All 484 entries have differing mtimes (tar checksums change too). Therefore executable
 repetition is deterministic in this local sample, but archive byte determinism is NOT fixed;
-#72/#84 remain open. Bun 1.4.4 re-sample (#72): three full-pipeline `build-binaries.sh` runs of core `4af3d547` at one fixed `--out`, darwin-arm64, produced one executable SHA-256 (`231760749e56ce5b17648f41b7a1570b443aa0026668d13a7badf0d3343a7854`) with zero `Type3` identifiers; CI runs 40 `stack (ubuntu-24.04, personal)` jobs green, 23 with a standalone build. This neither proves the 1.3.14 Type3 cause nor that 1.4.4 fixes it; CI now builds twice per cell and fails on any byte difference. Across compiler versions, paths still match and `pi/pi` is the only
+#72/#84 remain open. Across compiler versions, paths still match and `pi/pi` is the only
 regular file whose bytes differ; adjacent resources remain identical.
 Both are Mach-O arm64. Executable size increases from 77,134,562 to 102,699,746 bytes
 (about 33%); candidate signing is linker-generated ad hoc, without a TeamIdentifier, not
 notarization. This is not an authenticated/reproducible release claim.
+
+Bun 1.4.4 re-sample (#72): three full-pipeline `build-binaries.sh` runs of core `4af3d547` at one
+fixed `--out`, darwin-arm64, produced one executable SHA-256
+(`231760749e56ce5b17648f41b7a1570b443aa0026668d13a7badf0d3343a7854`) with zero `Type3`
+identifiers. Separately, in a sample of 40 recent CI runs all 40 `stack (ubuntu-24.04, personal)`
+jobs passed, 23 of them with a single standalone build. This proves neither the 1.3.14 Type3 cause
+nor that 1.4.4 fixes it. CI now builds twice per cell and fails on any byte difference.
 
 ## Historical workload and gate results
 
