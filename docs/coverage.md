@@ -14,10 +14,8 @@ producer configurations). `goal: "excluded"` records the owner's computer-use
 coverage-maintenance exclusion. Both require a nonblank
 `goal_reason`; neither removes any source from the inventory audit. Measured signals outside the
 goal must be report-only and still require complete, valid reports and per-OS references.
-There is no mode with a nonzero floor: `goal: ratchet` (#314) was deleted by #386 and the schema rejects it,
-so every package is either at the zero target or has no enforced signal. The base-policy read maps a base
-package still declaring `ratchet` to `100-percent`, so the one PR that graduates a package ratchets its old
-floor down to 0 and nothing can raise it back.
+There is no mode with a nonzero line/function floor: `goal: ratchet` (#314) was deleted (#386) and the schema
+rejects it. The base-policy read maps a base package still declaring it to `100-percent`.
 
 The initial integration checkpoint is recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/main-integration.md).
 Facade validation and the actual hosted producer failure diagnosis are recorded
@@ -370,10 +368,11 @@ that executes the gate requires the report. Accounting fails closed on a `--skip
 declares, so a typo cannot skip nothing silently, and a test keeps every `PATH_GATED_GATES` key declared. The ratchet rejects changing a signal's `gate`, as it rejects adding a
 skipped host. Before #387 the gate was 90% with 85 statements and 58 partial branches missed (run `41755991256`).
 
-Both Python packages are `100-percent` with an enforced `primary` signal at 0 lines, 0 functions and 0 branches
-on each OS (#386, after #381 through #385). `integration/harness/__init__.py` is a docstring-only module that
-coverage.py reports as fully covered on import, and `integration/conftest.py` is a conventional pytest
-test file (outside `owned` and the inventory audit), so `python-harness` declares no exclusions.
+Both Python packages are `100-percent` with an enforced `primary` signal at 0 uncovered lines and functions on
+each OS (#386). `python-harness` also caps branches at 0. `python-scripts` still caps branches at 1: the one
+partial arc is the `rerun` return in `scripts/runner_rescue.py` (#419), removed by #613. `integration/harness/__init__.py` is a
+docstring-only module that coverage.py reports as fully covered on import, and `integration/conftest.py` is a
+conventional pytest test file (outside `owned` and the inventory audit), so `python-harness` declares no exclusions.
 
 Hosted wall time of the pytest halves with `-n auto --dist loadfile`, `macos-14`: `scripts` 116s and
 `integration` 143s, against 199s and 281s serial.
@@ -384,7 +383,7 @@ reasoned exclusion. Conventional test files (including pytest `conftest.py`) are
 are not. There is no implicit `*.config.*` exemption: executable tool configurations need an
 explicit owned/pending declaration or reasoned verification classification. The producer
 configurations are owned by `import-audit` (#380). All inventories are expanded and
-validated; only eligible pending inventories block the final target flip. Python is held to the same target: `python-scripts` and `python-harness` are enforced at 0/0/0 above.
+validated; only eligible pending inventories block the final target flip. Python is held to the same 0 line/function target (see above).
 
 ## Add a source file
 
