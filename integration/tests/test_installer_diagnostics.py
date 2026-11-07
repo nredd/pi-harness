@@ -74,6 +74,8 @@ RAW_CHAIN_ALLOWLIST = {
         "read_json": (1, "Local settings JSON parsing"),
         "read_regular": (1, "Local regular-file admission"),
         "require_restorable_kind": (1, "Local restore-layout admission"),
+        "hash_original": (1, "Local original-tree hashing bounds and reads"),
+        "require_hashable_original": (1, "Local planning-time original hash admission"),
         "consent": (1, "Prompt EOF conversion"),
         "read_journal": (2, "Local journal open and JSON parsing"),
         "load_journal": (1, "Local journal validation"),
