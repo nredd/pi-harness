@@ -468,3 +468,20 @@ test("workflow mutex replacement and shutdown clear only the bound session", () 
   mock.eventBus.emit(WORKFLOW_MUTEX_CHANNEL, secondAttempt);
   assert.equal(secondAttempt.busy, false);
 });
+
+test("workflow mutex refuses an unbound session without announcing, and a held group without re-announcing", () => {
+  const mock = createMockPi();
+  const mutex = new WorkflowMutex(mock.pi);
+  const announced: unknown[] = [];
+  mock.eventBus.on(WORKFLOW_MUTEX_CHANNEL, (payload) => announced.push(payload));
+
+  assert.equal(mutex.acquire(), undefined);
+  assert.deepEqual(announced, []);
+
+  mutex.bindSession({});
+  const owner = mutex.acquire();
+  assert.ok(owner);
+  assert.equal(announced.length, 1);
+  assert.equal(mutex.acquire(), undefined);
+  assert.equal(announced.length, 1);
+});

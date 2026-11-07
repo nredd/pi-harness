@@ -84,3 +84,33 @@ test("ready plan chooser offers Edit plan and binds Ctrl+G to it", async () => {
     assert.equal(await chooseReadyPlanAction(context.ctx), "edit");
   }
 });
+
+test("ready plan chooser confirms the selected action with Space", async () => {
+  const context = createMockContext({
+    mode: "tui",
+    hasUI: true,
+    custom: async (factory: unknown) => {
+      const harness = createCustomSelectorHarness(factory);
+      harness.handleInput("tui.select.down");
+      harness.handleInput(" ");
+      return harness.resultPromise;
+    },
+  });
+
+  assert.equal(await chooseReadyPlanAction(context.ctx), "implement-here");
+});
+
+test("ready plan chooser ignores keys that are not bound to an action", async () => {
+  const context = createMockContext({
+    mode: "tui",
+    hasUI: true,
+    custom: async (factory: unknown) => {
+      const harness = createCustomSelectorHarness(factory);
+      harness.handleInput("x");
+      harness.handleInput("tui.select.confirm");
+      return harness.resultPromise;
+    },
+  });
+
+  assert.equal(await chooseReadyPlanAction(context.ctx), "show");
+});

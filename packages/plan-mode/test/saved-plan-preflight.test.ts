@@ -74,3 +74,16 @@ test("saved plan implementation ignores stale authentication results and reports
   assert.equal(await preflightSavedPlanImplementation(staleFailure.ctx, () => false), false);
   assert.deepEqual(staleFailure.notifications, []);
 });
+
+test("saved plan implementation reports the detail of a non-Error authentication failure", async () => {
+  const failure = createMockContext({
+    model: MODEL,
+    modelRegistry: {
+      getApiKeyAndHeaders: async () => {
+        throw "authentication service offline";
+      },
+    },
+  });
+  assert.equal(await preflightSavedPlanImplementation(failure.ctx, () => true), false);
+  assert.equal(failure.notifications.at(-1)?.message, "Unable to implement saved plan: authentication service offline");
+});

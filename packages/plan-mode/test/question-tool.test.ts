@@ -93,6 +93,39 @@ test("plan_mode_question collapses a cancelled question to `cancelled (reason)`"
   assert.doesNotMatch(expanded, /\{/);
 });
 
+test("plan_mode_question renders cancellations without a reason and options without descriptions", () => {
+  const plain: PlanModeQuestion[] = [
+    {
+      id: "scope",
+      header: "Scope",
+      question: "How broad?",
+      options: [{ label: "Small" }, { label: "Broad" }],
+    },
+  ];
+  const details = { version: 1, cancelled: true, questions: plain };
+  const result = { content: [{ type: "text", text: "no answer" }], details };
+  assert.equal(planModeQuestionCollapsedText(result), "cancelled");
+  const expanded = planModeQuestionExpandedText(result);
+  assert.match(expanded, /\u25cb Small$/mu);
+  assert.match(expanded, /\u25cb Broad$/mu);
+  assert.match(expanded, /^cancelled$/mu);
+});
+
+test("plan_mode_question collapses an uncancelled result without answers to its text content", () => {
+  const result = {
+    content: [{ type: "text", text: "waiting\non the user" }],
+    details: { version: 1, cancelled: false, questions },
+  };
+  assert.equal(planModeQuestionCollapsedText(result), "waiting on the user");
+});
+
+test("plan_mode_question renderCall skips arguments that are not question objects", () => {
+  assert.equal(
+    planModeQuestionCallSummary({ questions: ["Scope", null, { header: "Tests" }, { header: 3 }] }),
+    "plan question \u00b7 Tests",
+  );
+});
+
 test("plan_mode_question renderCall lists the headers", () => {
   assert.equal(planModeQuestionCallSummary({ questions }), "plan question \u00b7 Scope, Tests");
   assert.equal(planModeQuestionCallSummary({}), "plan question");

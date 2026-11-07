@@ -22,6 +22,7 @@ test("question adapter rejects incomplete, unknown, and inconsistent Kit answers
     { answers: [{ ...selected, questionId: "99" }], error: /unknown question/ },
     { answers: [{ ...selected, wasCustom: true }], error: /custom answer with an option index/ },
     { answers: [{ ...selected, optionIndex: 9 }], error: /invalid selected option/ },
+    { answers: [{ ...selected, optionIndex: undefined }], error: /invalid selected option/ },
   ];
   try {
     for (const scenario of cases) {
@@ -29,6 +30,31 @@ test("question adapter rejects incomplete, unknown, and inconsistent Kit answers
       await assert.rejects(askPlanModeQuestions([question], context.ctx), scenario.error);
       vi.restoreAllMocks();
     }
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
+
+test("question adapter rejects two answers for the same question", async () => {
+  const context = createMockContext({ hasUI: true });
+  const selected = { questionId: "0", answer: "Small", wasCustom: false, optionIndex: 1 };
+  try {
+    vi.spyOn(kit, "runQuestionnaire").mockResolvedValue({ kind: "submitted", answers: [selected, selected] });
+    await assert.rejects(
+      askPlanModeQuestions([question, { ...question, id: "depth" }], context.ctx),
+      /duplicate answers/,
+    );
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
+
+test("question adapter never opens the questionnaire for an already stale request", async () => {
+  const context = createMockContext({ hasUI: true });
+  const runner = vi.spyOn(kit, "runQuestionnaire");
+  try {
+    assert.equal(await askPlanModeQuestions([question], context.ctx, () => false), undefined);
+    assert.equal(runner.mock.calls.length, 0);
   } finally {
     vi.restoreAllMocks();
   }

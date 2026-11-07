@@ -27,7 +27,7 @@ import {
   retentionLabel,
   snapshotAvailableImplementationModels,
   updatePlanModeSettings
-} from "./chunk-5SVBAFRF.ts";
+} from "./chunk-2F7W2JBN.ts";
 
 // src/active-implementation-menu.ts
 import { defineMenu, runMenu } from "@narumitw/pi-tui-kit";
@@ -514,11 +514,12 @@ function createFreshImplementationFlow(ctx, freshPlanModel, planThinkingLevel, i
     },
     start(signal) {
       if (selectedModelUsesDefault && selectedModel && !findAvailableImplementationModel(snapshotAvailableImplementationModels(ctx), selectedModel.model)) {
+        const unavailableModel = selectedModel.model;
         selectedModel = void 0;
         selectedModelUsesDefault = false;
         unavailableDefaultActive = true;
         ctx.ui.notify(
-          `Configured default ${safeModelReference(configuredModel)} is unavailable; using ${planModelLabel}.`,
+          `Configured default ${safeModelReference(unavailableModel)} is unavailable; using ${planModelLabel}.`,
           "warning"
         );
       }
@@ -554,7 +555,6 @@ function snapshotAvailableModels(ctx, planModel) {
   }).sort((left, right) => Number(right.isPlanModel) - Number(left.isPlanModel));
 }
 function safeModelReference(model) {
-  if (!model) return "configured model";
   return `${safeModelMetadata(model.modelId, "unknown model")} [${safeModelMetadata(model.provider, "unknown provider")}]`;
 }
 function safeModelMetadata(value, fallback) {
@@ -637,7 +637,7 @@ async function showPlanLaunchMenu(ctx, options) {
       },
       "toggle-tool": async ({ itemId, selected, signal }) => {
         if (signal.aborted || !options.isCurrent()) return { kind: "rejected" };
-        const tool = itemId ? toolsByItemId.get(itemId) : void 0;
+        const tool = toolsByItemId.get(itemId);
         if (!tool || tool.disabled) return { kind: "rejected" };
         if (selected) selectedNames.add(tool.name);
         else selectedNames.delete(tool.name);
@@ -977,7 +977,7 @@ async function showPlanModeSettings(ctx, options) {
         screen: "implementation-model"
       }),
       "set-implementation-model": async ({ ctx: actionCtx, itemId, signal }) => {
-        const model = itemId ? modelsByItemId.get(itemId) : void 0;
+        const model = modelsByItemId.get(itemId);
         if (itemId !== "same-as-plan" && !model) return { kind: "rejected" };
         const defaultImplementationModel = model ? { provider: model.provider, modelId: model.id } : null;
         const result = await savePatch(
@@ -1040,7 +1040,7 @@ async function showPlanModeSettings(ctx, options) {
         return result.kind === "stay" ? { kind: "to", screen: "settings" } : result;
       },
       "toggle-tool": async ({ ctx: actionCtx, state, itemId, selected, signal }) => {
-        const tool = itemId ? toolsByItemId.get(itemId) : void 0;
+        const tool = toolsByItemId.get(itemId);
         if (!tool || planModeToolAvailability(tool, activeToolNames) !== "available" || !canSelectToolInPlanMode(tool)) {
           return { kind: "rejected" };
         }
@@ -1105,7 +1105,7 @@ function invalidScreen(settingsPath, state) {
     title: "Plan Mode Settings \xB7 Read only",
     lines: [
       `Invalid settings file. Fix ${safeTerminalText(settingsPath)} before saving.`,
-      safeTerminalText(state.reason ?? "The settings file is invalid."),
+      safeTerminalText(state.reason),
       ...state.notice ? [safeTerminalText(state.notice)] : []
     ],
     hint: "back"
@@ -1198,7 +1198,7 @@ function terminalToolName(value) {
 }
 function safeTerminalText(value) {
   return [...value].map((character) => {
-    const codePoint = character.codePointAt(0) ?? 0;
+    const codePoint = character.charCodeAt(0);
     return codePoint <= 31 || codePoint >= 127 && codePoint <= 159 ? " " : character;
   }).join("").trim();
 }
@@ -1213,4 +1213,4 @@ export {
   showReadyPlanMenu,
   showSavedPlanMenu
 };
-//# sourceMappingURL=interactive-ui-3KLRCEBP.ts.map
+//# sourceMappingURL=interactive-ui-FXEM7EL7.ts.map

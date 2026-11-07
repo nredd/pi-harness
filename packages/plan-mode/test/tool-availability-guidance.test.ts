@@ -9,7 +9,7 @@ import { test } from "vitest";
 import { showPlanLaunchMenu } from "../src/plan-launch-menu.js";
 import planMode from "../src/plan-mode.js";
 import { showPlanModeSettings } from "../src/settings-menu.js";
-import { planModeToolSelection } from "../src/tool-selection.js";
+import { planModeToolSelection, toolNameFromLegacyKey } from "../src/tool-selection.js";
 import { packagePath } from "./package-path.js";
 import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
 
@@ -252,3 +252,23 @@ for (const route of ["settings", "tools"]) {
     }
   });
 }
+
+test("user opt-in tools name their source, with the path only when one is known", () => {
+  const withPath = extensionTool("custom") as ToolInfo;
+  const withoutPath = { name: "custom", sourceInfo: { source: "extension", scope: "user" } } as ToolInfo;
+  const active = new Set(["custom"]);
+
+  const located = planModeToolSelection(withPath, active, false).description;
+  assert.ok(located?.startsWith(`user opt-in: user/extension ${withPath.sourceInfo.path} · `), located);
+  const unlocated = planModeToolSelection(withoutPath, active, false).description;
+  assert.ok(unlocated?.startsWith("user opt-in: user/extension · "), unlocated);
+});
+
+test("legacy tool keys resolve by exact name, then by the name before the source separator", () => {
+  const tools = [builtinTool("read"), extensionTool("custom")] as ToolInfo[];
+  assert.equal(toolNameFromLegacyKey("read", tools), "read");
+  assert.equal(toolNameFromLegacyKey("custom\u001fextension", tools), "custom");
+  assert.equal(toolNameFromLegacyKey("missing\u001fextension", tools), undefined);
+  const separated = [{ name: "odd\u001fname", sourceInfo: { source: "extension", scope: "user" } }] as ToolInfo[];
+  assert.equal(toolNameFromLegacyKey("odd\u001fname", separated), "odd\u001fname");
+});

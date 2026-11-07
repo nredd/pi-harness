@@ -198,3 +198,22 @@ test("plan mode registers the proposed-plan message renderer", () => {
   planMode(mock.pi);
   assert.equal(mock.messageRenderers.get(PLAN_MESSAGE_TYPE), renderPlanMessage);
 });
+
+test("a failed plan message reports the detail of any thrown value", () => {
+  for (const [thrown, expected] of [
+    [new Error("renderer broke"), "renderer broke"],
+    ["plain text failure", "plain text failure"],
+  ] as const) {
+    const mock = createMockPi();
+    mock.rawPi.sendMessage = () => {
+      throw thrown;
+    };
+    const context = createMockContext({ hasUI: true });
+
+    showPlanModePlan(mock.pi, context.ctx, "Plan", "# Plan");
+
+    assert.deepEqual(context.notifications, [
+      { message: `Unable to show completed plan: ${expected}`, level: "error" },
+    ]);
+  }
+});

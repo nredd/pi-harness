@@ -82,3 +82,37 @@ test("watch bursts cancel older reloads and watcher errors cancel pending work",
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+/** Directory watchers also report sibling files and, on some platforms, no file name at all. */
+test("watch events for other files or without a file name never reload settings", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "plan-watch-siblings-"));
+  const settingsPath = join(directory, "settings.json");
+  watchFixture.watcher = Object.assign(new EventEmitter(), { close: () => undefined });
+  const readSpy = vi.spyOn(settings, "readPlanModeSettings");
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    await writeFile(settingsPath, JSON.stringify({ thinkingLevel: "low" }));
+    const mock = createMockPi({ activeTools: ["read"], thinkingLevel: "off" });
+    planMode(mock.pi, { settingsPath });
+    const context = createMockContext();
+    await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+    assert.ok(watchFixture.callback, "session startup must install the watcher before events are delivered");
+    const startupReads = readSpy.mock.calls.length;
+
+    await writeFile(settingsPath, JSON.stringify({ thinkingLevel: "high" }));
+    watchFixture.callback("change", "settings.json.tmp");
+    watchFixture.callback("rename", null as unknown as string);
+    await vi.advanceTimersByTimeAsync(expectedDebounceWindowMs + 25);
+    assert.equal(readSpy.mock.calls.length, startupReads, "unrelated events must not start a settings read");
+
+    watchFixture.callback("change", "settings.json");
+    await vi.advanceTimersByTimeAsync(expectedDebounceWindowMs);
+    assert.equal(readSpy.mock.calls.length, startupReads + 1, "an event for the settings file still reloads");
+  } finally {
+    vi.useRealTimers();
+    readSpy.mockRestore();
+    watchFixture.callback = undefined;
+    watchFixture.watcher = undefined;
+    await rm(directory, { recursive: true, force: true });
+  }
+});

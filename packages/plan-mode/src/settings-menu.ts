@@ -33,12 +33,9 @@ import { planModeToolAvailability } from "./tool-availability.js";
 import { canSelectToolInPlanMode } from "./tool-policy.js";
 import { defaultPlanModeToolNames, planModeToolSelection } from "./tool-selection.js";
 
-interface SettingsMenuState {
-  kind: "valid" | "invalid";
-  settings: PlanModeSettings;
-  notice?: string;
-  reason?: string;
-}
+type SettingsMenuState =
+  | { kind: "valid"; settings: PlanModeSettings; notice?: string }
+  | { kind: "invalid"; settings: PlanModeSettings; notice?: string; reason: string };
 
 export interface PlanModeSettingsMenuOptions {
   tools: readonly ToolInfo[];
@@ -305,7 +302,7 @@ export async function showPlanModeSettings(
         screen: "implementation-model",
       }),
       "set-implementation-model": async ({ ctx: actionCtx, itemId, signal }) => {
-        const model = itemId ? modelsByItemId.get(itemId) : undefined;
+        const model = modelsByItemId.get(itemId);
         if (itemId !== "same-as-plan" && !model) return { kind: "rejected" };
         const defaultImplementationModel = model ? { provider: model.provider, modelId: model.id } : null;
         const result = await savePatch(
@@ -374,7 +371,7 @@ export async function showPlanModeSettings(
         return result.kind === "stay" ? { kind: "to", screen: "settings" } : result;
       },
       "toggle-tool": async ({ ctx: actionCtx, state, itemId, selected, signal }) => {
-        const tool = itemId ? toolsByItemId.get(itemId) : undefined;
+        const tool = toolsByItemId.get(itemId);
         if (
           !tool ||
           planModeToolAvailability(tool, activeToolNames) !== "available" ||
@@ -446,13 +443,13 @@ function settingsLines(settingsPath: string, notice: string | undefined) {
   ];
 }
 
-function invalidScreen(settingsPath: string, state: SettingsMenuState) {
+function invalidScreen(settingsPath: string, state: Extract<SettingsMenuState, { kind: "invalid" }>) {
   return {
     kind: "detail" as const,
     title: "Plan Mode Settings · Read only",
     lines: [
       `Invalid settings file. Fix ${safeTerminalText(settingsPath)} before saving.`,
-      safeTerminalText(state.reason ?? "The settings file is invalid."),
+      safeTerminalText(state.reason),
       ...(state.notice ? [safeTerminalText(state.notice)] : []),
     ],
     hint: "back" as const,
@@ -572,7 +569,8 @@ function terminalToolName(value: string) {
 function safeTerminalText(value: string) {
   return [...value]
     .map((character) => {
-      const codePoint = character.codePointAt(0) ?? 0;
+      // Every range below is in the BMP, so the first UTF-16 unit decides.
+      const codePoint = character.charCodeAt(0);
       return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f) ? " " : character;
     })
     .join("")

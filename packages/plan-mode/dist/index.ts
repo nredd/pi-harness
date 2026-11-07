@@ -64,7 +64,7 @@ import {
   snapshotPlanModeSelectedNames,
   updatePlanModeSettings,
   updatePlanModeUi
-} from "./chunks/chunk-5SVBAFRF.ts";
+} from "./chunks/chunk-2F7W2JBN.ts";
 
 // src/plan-mode.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
@@ -769,7 +769,7 @@ async function preflightModel(ctx, request) {
       notifyCurrent(
         ctx,
         request,
-        `Unable to implement the plan: implementation model ${safeModelReference(requestedModel)} is no longer available. Choose another model and retry.`,
+        `Unable to implement the plan: implementation model ${safeModelReference(requestedModel.provider, requestedModel.modelId)} is no longer available. Choose another model and retry.`,
         "warning"
       );
       return false;
@@ -791,7 +791,7 @@ async function preflightModel(ctx, request) {
     notifyCurrent(
       ctx,
       request,
-      requestedModel ? `Unable to implement the plan with ${safeModelReference(model)}: ${safeErrorDetail(auth.error)}. Choose another model or configure authentication, then retry.` : `Unable to implement the plan: ${safeErrorDetail(auth.error)}`,
+      requestedModel ? `Unable to implement the plan with ${safeModelReference(model.provider, model.id)}: ${safeErrorDetail(auth.error)}. Choose another model or configure authentication, then retry.` : `Unable to implement the plan: ${safeErrorDetail(auth.error)}`,
       "warning"
     );
     return false;
@@ -809,8 +809,8 @@ function pendingRuntimeIntent(selection) {
     ...selection.thinkingLevel ? { thinkingLevel: selection.thinkingLevel } : {}
   };
 }
-function safeModelReference(model) {
-  return safeErrorDetail(`${model.provider}/${model.modelId ?? model.id ?? "unknown"}`);
+function safeModelReference(provider, modelId) {
+  return safeErrorDetail(`${provider}/${modelId}`);
 }
 function destinationRuntimeConsumptionStatus(ctx, stateEntryType) {
   try {
@@ -847,7 +847,7 @@ function isCommandContext(ctx) {
 function safeErrorDetail(error) {
   const detail = error instanceof Error ? error.message : String(error);
   const normalized = [...stripVTControlCharacters(detail)].map((character) => {
-    const codePoint = character.codePointAt(0) ?? 0;
+    const codePoint = character.charCodeAt(0);
     return codePoint <= 31 || codePoint >= 127 && codePoint <= 159 || codePoint >= 8234 && codePoint <= 8238 || codePoint >= 8294 && codePoint <= 8297 ? " " : character;
   }).join("").replace(/\s+/gu, " ").trim() || "unknown error";
   const characters = [...normalized];
@@ -1157,7 +1157,7 @@ function planMode(pi, dependencies = {}) {
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
     if (!interactiveUiPromise) {
-      interactiveUiPromise = import("./chunks/interactive-ui-3KLRCEBP.ts").catch((error) => {
+      interactiveUiPromise = import("./chunks/interactive-ui-FXEM7EL7.ts").catch((error) => {
         interactiveUiPromise = void 0;
         throw error;
       });

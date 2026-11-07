@@ -173,15 +173,17 @@ export function normalizePlanModeQuestionParams(input: unknown): NormalizePlanMo
     if (questions.length !== 1) {
       return { ok: false, error: `${REPROPOSAL_CONFIRMATION_MODE} requires exactly one question` };
     }
-    const question = questions[0];
-    if (!question) throw new Error("Validated question unexpectedly missing");
-    questions[0] = {
-      ...question,
-      question: REPROPOSAL_CONFIRMATION_QUESTION,
-      options: [...REPROPOSAL_CONFIRMATION_OPTIONS],
+    return {
+      ok: true,
+      questions: questions.map((question) => ({
+        ...question,
+        question: REPROPOSAL_CONFIRMATION_QUESTION,
+        options: [...REPROPOSAL_CONFIRMATION_OPTIONS],
+      })),
+      mode,
     };
   }
-  return { ok: true, questions, ...(mode ? { mode } : {}) };
+  return { ok: true, questions };
 }
 
 export async function answerPlanModeQuestions(
@@ -249,31 +251,31 @@ function mapQuestionnaireResult(
     throw new Error("Questionnaire returned an incomplete answer set");
   }
 
-  const answers = new Map<number, QuestionnaireAnswer<string>>();
+  const answers = new Map<number, { answer: QuestionnaireAnswer<string>; text: string }>();
   for (const answer of result.answers) {
     const index = Number(answer.questionId);
     if (!Number.isSafeInteger(index) || String(index) !== answer.questionId || !questions[index]) {
       throw new Error("Questionnaire returned an answer for an unknown question");
     }
     if (answers.has(index)) throw new Error("Questionnaire returned duplicate answers");
+    let text = answer.answer;
     if (answer.wasCustom) {
       if (answer.optionIndex !== undefined) {
         throw new Error("Questionnaire returned a custom answer with an option index");
       }
       if (!answer.answer.trim()) return undefined;
-    } else if (answer.optionIndex === undefined || !questions[index]?.options[answer.optionIndex - 1]) {
-      throw new Error("Questionnaire returned an invalid selected option");
+    } else {
+      const option = answer.optionIndex === undefined ? undefined : questions[index]?.options[answer.optionIndex - 1];
+      if (!option) throw new Error("Questionnaire returned an invalid selected option");
+      text = option.label;
     }
-    answers.set(index, answer);
+    answers.set(index, { answer, text });
   }
 
   return questions.map((question, index) => {
-    const answer = answers.get(index);
-    if (!answer) throw new Error("Questionnaire returned an incomplete answer set");
-    const answerText = answer.wasCustom
-      ? answer.answer
-      : (question.options[(answer.optionIndex ?? 0) - 1]?.label ?? answer.answer);
-    return answerFor(question, answerText, {
+    // One answer per question: the counts match and each in-range index was accepted exactly once.
+    const { answer, text } = answers.get(index) as { answer: QuestionnaireAnswer<string>; text: string };
+    return answerFor(question, text, {
       wasCustom: answer.wasCustom,
       optionIndex: answer.optionIndex,
       note: answer.note,

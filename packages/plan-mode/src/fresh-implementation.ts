@@ -247,7 +247,7 @@ async function preflightModel(ctx: ExtensionCommandContext, request: FreshImplem
       notifyCurrent(
         ctx,
         request,
-        `Unable to implement the plan: implementation model ${safeModelReference(requestedModel)} is no longer available. Choose another model and retry.`,
+        `Unable to implement the plan: implementation model ${safeModelReference(requestedModel.provider, requestedModel.modelId)} is no longer available. Choose another model and retry.`,
         "warning",
       );
       return false;
@@ -270,7 +270,7 @@ async function preflightModel(ctx: ExtensionCommandContext, request: FreshImplem
       ctx,
       request,
       requestedModel
-        ? `Unable to implement the plan with ${safeModelReference(model)}: ${safeErrorDetail(auth.error)}. Choose another model or configure authentication, then retry.`
+        ? `Unable to implement the plan with ${safeModelReference(model.provider, model.id)}: ${safeErrorDetail(auth.error)}. Choose another model or configure authentication, then retry.`
         : `Unable to implement the plan: ${safeErrorDetail(auth.error)}`,
       "warning",
     );
@@ -299,8 +299,8 @@ function pendingRuntimeIntent(
   };
 }
 
-function safeModelReference(model: { provider: string; id?: string; modelId?: string }) {
-  return safeErrorDetail(`${model.provider}/${model.modelId ?? model.id ?? "unknown"}`);
+function safeModelReference(provider: string, modelId: string) {
+  return safeErrorDetail(`${provider}/${modelId}`);
 }
 
 function destinationRuntimeConsumptionStatus(
@@ -354,7 +354,8 @@ function safeErrorDetail(error: unknown) {
   const normalized =
     [...stripVTControlCharacters(detail)]
       .map((character) => {
-        const codePoint = character.codePointAt(0) ?? 0;
+        // Every range below is in the BMP, so the first UTF-16 unit decides.
+        const codePoint = character.charCodeAt(0);
         return codePoint <= 0x1f ||
           (codePoint >= 0x7f && codePoint <= 0x9f) ||
           (codePoint >= 0x202a && codePoint <= 0x202e) ||
