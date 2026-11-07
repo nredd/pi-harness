@@ -184,7 +184,9 @@ scripted step shape against a recording registry with a fake clock, `extension_i
 fake registry, and `preloads.test.ts` imports the auth preloads in its own forked worker against a
 loopback mock: the redirect, refused egress, recorded `claude`/`security` spawns, readiness failures
 and every `auth_runtime_fixture.mjs` negative flag. A stand-in `globalThis.Bun` covers the Bun spawn
-wrappers. 194 lines / 51 functions, 0 uncovered on darwin. The `test-helper` exclusion and the five
+wrappers; a second install without `HARNESS_BLOCKED_LOG`, with and without Bun, covers the unlogged
+block paths, and the dead `?? ""` after `split()` in `forbiddenName` is deleted (#425). 194 lines / 51 functions,
+163 branches, 0 uncovered on darwin. The `test-helper` exclusion and the five
 `verification_helpers` rows are gone; `fast_timers.mjs` was dead (no scenario passed `fixture_env`
 timers) and is deleted.
 
