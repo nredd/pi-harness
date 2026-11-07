@@ -139,7 +139,8 @@ Bun 1.4.4 re-sample (#72): three full-pipeline `build-binaries.sh` runs of core 
 fixed `--out`, darwin-arm64, produced one executable SHA-256
 (`231760749e56ce5b17648f41b7a1570b443aa0026668d13a7badf0d3343a7854`) with zero `Type3`
 identifiers. Separately, in a sample of 40 recent CI runs all 40 `stack (ubuntu-24.04, personal)`
-jobs passed, 23 of them with a single standalone build. This proves neither the 1.3.14 Type3 cause
+jobs passed, 23 of them with a successful standalone build (17 skipped by the CI plan). These
+are local observations without run IDs recorded here. They prove neither the 1.3.14 Type3 cause
 nor that 1.4.4 fixes it. CI now builds twice per cell and fails on any byte difference.
 
 ## Historical workload and gate results

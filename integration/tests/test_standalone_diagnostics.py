@@ -1151,7 +1151,9 @@ def test_cli_collect_build_failure_announces_only_published_artifacts(
     assert diag.main() == 0  # stale output directory is refused, not announced again
     assert github_output.read_text() == "artifact_ready=true\n"
     argv[argv.index("--output") + 1] = str(tmp_path / "out2")
-    monkeypatch.setattr(diag.sys, "argv", argv[:-2])
+    fresh_output = tmp_path / "github-output-2"
+    argv[argv.index("--github-output") + 1] = str(fresh_output)
+    monkeypatch.setattr(diag.sys, "argv", argv)
     assert diag.main() == 0
     assert (tmp_path / "out2/SHA256SUMS").is_file()
-    assert github_output.read_text() == "artifact_ready=true\n"
+    assert fresh_output.read_text() == "artifact_ready=true\n"
