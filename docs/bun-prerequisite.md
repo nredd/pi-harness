@@ -42,15 +42,17 @@ for both runtimes: `NODE_OPTIONS` (`--import`, `--expose-gc`) for Node and `BUN_
   the adapter refuses preload paths holding whitespace or quotes
 - Fast timers: no scenario scales timers any more (`fast_timers.mjs` was deleted, #378), so there is
   no timer preload to adapt. The issue comment attributes the old `/loop` and footer-poll failures
-  to that preload. `integration/scenarios/test_realtime_timers.py` now holds the committed proof:
-  it starts the TUI in tmux, runs `/loop 30s` (the minimum interval) against the faux provider and
-  waits for the tick's reply, then stops the loop. It sits in the stack D/E glob, so it runs on Node
-  and on `--runtime bun-standalone`. Local evidence (2026-11-06, Gitlink `4af3d547`, Bun 1.4.4
-  darwin-arm64 standalone, personal stack): the tick arrived 30.1 s after registration on the
-  standalone and 30.0 s on Node. Its RED: a `BUN_OPTIONS` preload that turns 30 s `setInterval`
-  into a no-op times out the 40 s wait. The footer's 60 s usage poll has no real-time scenario;
-  it stays in-process (`footer-quota.test.ts`) and is tracked with the rest in #628. The old Python
-  scenarios themselves were ported to in-process tests and no longer exist (`787f72f1`)
+  to that preload. `integration/scenarios/test_realtime_timers.py` is the committed proof, in the
+  stack D/E glob so it runs on Node and on `--runtime bun-standalone`: (1) `/loop 30s` (the minimum
+  interval) in tmux against the faux provider, waiting for the tick's reply (40 s bound), then
+  `/loop stop all`; (2) the footer's usage poll, read from the usage fixture's request log, repeats
+  60 s after the first (75 s bound). Local evidence (2026-11-06, Gitlink `4af3d547`, Bun 1.4.4
+  darwin-arm64 standalone, personal stack): loop tick 30.1 s standalone / 30.0 s Node; poll gap
+  60.0 s on both. RED: a throwaway `BUN_OPTIONS` preload (not committed) that makes a 30 s, or 60 s,
+  `setInterval` a no-op times out the loop (40 s) or poll (`Only 1 of 2 usage requests in 75s`)
+  wait. This shows the symptom is gone, not which component caused it. The old Python scenarios
+  were ported to in-process tests and no longer exist (`787f72f1`); the render-probe gc and
+  `ms_input_p95_n4` items stay in #628
 
 The render probe keeps its `Bun.gc(true)` fallback behind the adapter's `--expose-gc`.
 
@@ -169,9 +171,10 @@ Dependency audit:
   failures are all the documented Anthropic auth refusals: Bun ignores the
   `NODE_OPTIONS` preload, so the harness refuses before any request); tui+bench 105 passed, 18 failed
 - 13 TUI failures are deterministic under Bun and pass on Node in the same session, all `pi-session-kit`
-  timer behavior (quota footer never polls, `/loop` never ticks): nredd/pi-harness#14
+  timer behavior (quota footer never polls, `/loop` never ticks): nredd/pi-harness#14, since
+  covered by `scenarios/test_realtime_timers.py` (see the runtime hook adapter section)
 - `bench/test_render_2k_message_transcript`: the probe needs `--expose-gc`, which Bun lacks (same issue; the probe now uses `Bun.gc(true)`, see above)
-- `bench/test_multi_session_responsiveness` `ms_input_p95_n4` 11.4-12.5ms vs the 9.9ms limit under Bun;
+- `bench/test_multi_session_responsiveness` `ms_input_p95_n4` 11.4-12.5ms vs the 9.9ms limit under Bun (open, #628);
   three `typed_vs_bash` cases failed in the suite and passed alone (order-dependent, not re-run further)
 - Checklist items 5.x remain open; the Node/Homebrew tree is the only shipped runtime. Trust cases A-F and the
   fatal-startup matrix stay identical across runtimes (`verify-8754b00/`)
