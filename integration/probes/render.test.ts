@@ -17,7 +17,7 @@ test("a Node `--expose-gc` hook is used as is, and Bun is not consulted", () => 
 	assert.deepEqual(calls, ["node"]);
 });
 
-test("Bun, which has no `--expose-gc`, collects synchronously through `Bun.gc(true)`", () => {
+test("Bun without an exposed `gc` falls back to collecting synchronously through `Bun.gc(true)`", () => {
 	const args: boolean[] = [];
 	const collect = collector({ Bun: { gc: (sync: boolean) => args.push(sync) } });
 	assert.ok(collect);
