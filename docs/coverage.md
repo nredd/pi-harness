@@ -368,9 +368,8 @@ that executes the gate requires the report. Accounting fails closed on a `--skip
 declares, so a typo cannot skip nothing silently, and a test keeps every `PATH_GATED_GATES` key declared. The ratchet rejects changing a signal's `gate`, as it rejects adding a
 skipped host. Before #387 the gate was 90% with 85 statements and 58 partial branches missed (run `41755991256`).
 
-Both Python packages are `100-percent` with an enforced `primary` signal at 0 uncovered lines and functions on
-each OS (#386). `python-harness` also caps branches at 0. `python-scripts` still caps branches at 1: the one
-partial arc is the `rerun` return in `scripts/runner_rescue.py` (#419), removed by #613. `integration/harness/__init__.py` is a
+Both Python packages are `100-percent` with an enforced `primary` signal at 0 uncovered lines, functions and
+branches on each OS (#386; #420 removed the last `python-scripts` partial arc). `integration/harness/__init__.py` is a
 docstring-only module that coverage.py reports as fully covered on import, and `integration/conftest.py` is a
 conventional pytest test file (outside `owned` and the inventory audit), so `python-harness` declares no exclusions.
 

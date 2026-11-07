@@ -184,16 +184,19 @@ def rerun(repo: str, run_id: int) -> None:
     Raises:
         subprocess.CalledProcessError: Every attempt failed.
     """
-    for attempt in range(1, RERUN_TRIES + 1):
+    url = f"repos/{repo}/actions/runs/{run_id}/rerun"
+    for attempt in range(1, RERUN_TRIES):
         try:
-            gh_api(f"repos/{repo}/actions/runs/{run_id}/rerun", method="POST")
+            gh_api(url, method="POST")
         except subprocess.CalledProcessError:
-            if attempt == RERUN_TRIES:
-                LOGGER.error(f"Run '{run_id}' is left cancelled: rerun failed {RERUN_TRIES} times")
-                raise
             time.sleep(RERUN_BACKOFF_S * attempt)
         else:
             return
+    try:
+        gh_api(url, method="POST")
+    except subprocess.CalledProcessError:
+        LOGGER.error(f"Run '{run_id}' is left cancelled: rerun failed {RERUN_TRIES} times")
+        raise
 
 
 def main(argv: list[str] | None = None) -> int:
