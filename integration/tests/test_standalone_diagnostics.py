@@ -985,7 +985,9 @@ def test_workflow_rebuilds_and_compares_standalone_before_use() -> None:
     run = next(step for step in steps if step.get("id") == "build")["run"]
     # One wrapped function invoked twice: both builds share argv and tee their logs under pipefail.
     assert run.count("./scripts/build-binaries.sh --skip-install --offline-model-data") == 1
-    assert run.count("\nbuild_standalone\n") == 2
+    assert run.count("\nbuild_standalone\n") == 1
+    assert "build_standalone || { keep_first_build; exit 1; }" in run
+    assert run.index("build_standalone || ") < run.index("\nbuild_standalone\n")
     assert 'PATH="$evidence/bin:$PATH"' in run
     assert "set -o pipefail" in run
     assert 'cmp "$evidence/first/compile-command.json" "$evidence/compile-command.json"' in run

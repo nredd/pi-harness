@@ -675,11 +675,19 @@ jobs:
               ./scripts/build-binaries.sh --skip-install --offline-model-data \
               --platform "${{ matrix.platform }}" --out "$RUNNER_TEMP/pi-standalone" 2>&1 | tee "$evidence/build.log"
           }
-          build_standalone
+          # Park the first build's evidence and executable under first/ so failures are labelled correctly.
+          keep_first_build() {
+            mkdir -p "$evidence/first"
+            for name in build.log compile-command.json module-graph.json; do
+              if [ -e "$evidence/$name" ]; then mv "$evidence/$name" "$evidence/first/$name"; fi
+            done
+            if [ -f "$RUNNER_TEMP/pi-standalone/${{ matrix.platform }}/pi" ]; then
+              cp "$RUNNER_TEMP/pi-standalone/${{ matrix.platform }}/pi" "$RUNNER_TEMP/pi-first-build"
+            fi
+          }
+          build_standalone || { keep_first_build; exit 1; }
           # Rebuild the same inputs at the same output path: Bun must emit identical bytes (#72).
-          cp "$RUNNER_TEMP/pi-standalone/${{ matrix.platform }}/pi" "$RUNNER_TEMP/pi-first-build"
-          mkdir "$evidence/first"
-          mv "$evidence/build.log" "$evidence/compile-command.json" "$evidence/module-graph.json" "$evidence/first/"
+          keep_first_build
           build_standalone
           # Evidence at the root now describes the second build, i.e. the executable exported as PI_BIN.
           cmp "$evidence/first/compile-command.json" "$evidence/compile-command.json"
