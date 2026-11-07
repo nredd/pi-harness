@@ -47,9 +47,8 @@ PERSONAL_STEPS = {
     "Replay source-selected installer runtime locks without lifecycle scripts",
     "Strict standalone startup with failure-only diagnostics",
     "Standalone D and E (personal)",
-    "Candidate compiled-core auth adapter (personal)",
 }
-LOCAL_STEPS = {"Standalone D and E (local)", "Candidate compiled-core auth adapter (local)"}
+LOCAL_STEPS = {"Standalone D and E (local)"}
 BUILD_AND_NODE = {"Assembled D and E boundaries (explicit stack, no machine config)", "Build standalone"}
 # Each `owned (<os>)` check is its own fan-in job over its own shard job (#350).
 OWNED_FAN_IN = {"ubuntu-24.04": "owned-ubuntu", "macos-14": "owned-macos", "wsl2": "owned-wsl2"}
@@ -1785,19 +1784,10 @@ def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> Non
     stack = cfg["stack"]
     assert stack["strategy"]["matrix"]["stack"] == ["personal", "local"]
     runs = [step for step in stack["steps"] if "pytest scenarios/" in step.get("run", "")]
-    assert len(runs) == 5
-    candidates = [step for step in runs if "--bun-auth-adapter" in step["run"]]
-    assert len(candidates) == 2
-    for step, name in zip(candidates, ("personal", "local"), strict=True):
-        assert "pytest scenarios/test_auth_transport.py" in step["run"]
-        assert (
-            f"--stack stacks/{name}.json --runtime bun-standalone --bun-auth-adapter -m stack" in step["run"]
-        )
-        assert f"--junitxml=artifacts/standalone-auth-{name}.xml" in step["run"]
-        assert "steps.build.outcome == 'success'" in step["if"]
-        assert "matrix.os" not in step["if"]
-    scenarios = [step for step in runs if step not in candidates]
-    assert len(scenarios) == 3
+    assert len(runs) == 3
+    # The candidate `--bun-auth-adapter` lane is gone (#14): auth cases run inside standalone D/E.
+    assert not any("--bun-auth-adapter" in step["run"] for step in stack["steps"] if "run" in step)
+    scenarios = runs
     for step in scenarios:
         assert "pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py" in step["run"]
         assert "-m stack -n 2 --dist loadfile" in step["run"]

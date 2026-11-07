@@ -12,9 +12,9 @@ The `stack` job's `Report coverage exclusions` summary writes only `GITHUB_STEP_
 The workflow contract executes that step's actual body with the test runner's `/bin/bash` in
 an isolated directory, checks production output-failure propagation, and checks scoped exclusions
 separately from shell selection. `stack` has no WSL guest any more, so this is an ordinary step.
-Default standalone D/E still skips seven auth cases (#14); candidate compiled-core auth adapter
-results require their own outcome and JUnit evidence, not the summary notice. Friendly-prose
-changes must preserve those disclosures and the remaining explicit `NOT RUN` scopes.
+Standalone D/E skips no auth case (#14); the step outcome and JUnit, not the summary notice, are
+the evidence. Friendly-prose changes must preserve those disclosures and the remaining explicit
+`NOT RUN` scopes.
 All guest dispatch remains through the adapter, which labels a failing `pwsh`, `wslpath`, guest
 command, or generated guest step while preserving its original exit status and stderr.
 
@@ -24,7 +24,7 @@ command, or generated guest step while preserving its original exit status and s
 | --- | --- | --- | --- | --- |
 | `owned (ubuntu-24.04, macos-14, wsl2)` | A fan-in over parallel `owned shard (<os>, <shard>)` jobs (see the shards section below). Each shard runs `make install-owned`, then one step per gate it owns: `make check-ts WORKSPACES=...` (its workspaces only), `make check-scripts`, `make check-integration` (the Python halves of the last two run through `PY_GATE`: ruff, ty, then pytest across cores, see below); `make install-benchmark` and `make check-benchmark` in the macOS `python` shard only, unless the plan lists it in `skipped_gates` (a PR without `benchmark_inputs`; the step then reports NOT RUN). The WSL guest shards run `make check-ts`, `make check-probes`, `make check-providers`, `make check-import-audit`, and on a PR only with WSL inputs. The fan-in requires every shard, then runs `make check-coverage` over their merged reports. `cargo-nextest` is installed so dev-tools' real cargo suite runs instead of skipping | Same | Native cells report the bypass; WSL runs on `main`, reports NOT RUN on a PR | Biome, tsc and each package's Vitest suite and declared `test:bun` suite (router, preset, resource-sampler, todo, plan-mode, dev-tools and inprocess run FULL Vitest suites on both engines with the shared homedir guard; subagents retains native scenarios plus a guarded real-loader gate until a later #320 slice, with its full Node suite guarded; the other packages retain native Bun subsets; a notice names every package without `test:bun`, as NOT RUN), `scripts/` and `integration/` unit gates. `check-benchmark`'s `native_runtime` test needs Seatbelt, so Linux/WSL reports it NOT RUN. See the computer-use note below. |
 | `contracts (ubuntu-24.04, macos-14, wsl2)` | `make install-owned`, `make check-package-contracts` (includes the packed preset audit + install), `make check-plan-mode-package-contract`, `make check-subagents-package-contract`, `make check-todo-package-contract`, `make check-computer-use-package-contract`. WSL runs these on a PR only with WSL inputs | Same | Native cells report the bypass; WSL runs on `main`, reports NOT RUN on a PR | Packed tarballs alone on exact stock Pi 1.3.0 (dev-tools with its exact `@nredd/pi-resource-sampler` from the registry, integrity checked against `npm view`, real parent-child discovery by that installed sampler's full scan, and a bounded `resource_snapshot`), the packed preset audited and installed alone, and the packed `@nredd/pi-subagents` with `croner`/`nanoid` from the registry plus one faux `Agent` call (the same gate the release `verify` runs, so a PR proves it before a tag does). The packed `@nredd/pi-todo` with `@juicesharp/rpiv-config`/`rpiv-i18n` from the registry plus one faux `todo` create. The packed `@nredd/pi-computer-use` through the platform-aware tool set (13 tools on macOS, 11 on Linux) plus Mach-O arch/mode checks of both prebuilt helpers; its `postinstall` and every desktop tool are NOT RUN. JSON reports uploaded as artifacts |
-| `stack (ubuntu-24.04, macos-14, wsl2; personal, local)` | `stack (ubuntu-24.04, personal)`, `stack (ubuntu-24.04, local)` and `stack (macos-14, local)` run Node release-bundle D/E and build the core Gitlink with Bun for standalone D/E of their own stack. A PR with no stack inputs skips the personal steps. The other three cells report NOT RUN | `stack (ubuntu-24.04, personal)` only; the other two running cells log the selective smoke and the three bypass cells report NOT RUN | Every cell reports a bypass or NOT RUN | Node release bundle plus source-built linux-x64/darwin-arm64 standalone, independent stack installations, startup/transport/lifetime/output/tool surfaces and tmux resize; seven Node-preload auth cases per standalone stack explicitly skip, missing-preload refusal runs. Separate Node/Bun JUnit and failure artifacts, stack identities and binary/archive SHA-256 retained. Computer-use helper explicitly excluded |
+| `stack (ubuntu-24.04, macos-14, wsl2; personal, local)` | `stack (ubuntu-24.04, personal)`, `stack (ubuntu-24.04, local)` and `stack (macos-14, local)` run Node release-bundle D/E and build the core Gitlink with Bun for standalone D/E of their own stack. A PR with no stack inputs skips the personal steps. The other three cells report NOT RUN | `stack (ubuntu-24.04, personal)` only; the other two running cells log the selective smoke and the three bypass cells report NOT RUN | Every cell reports a bypass or NOT RUN | Node release bundle plus source-built linux-x64/darwin-arm64 standalone, independent stack installations, startup/transport/lifetime/output/tool surfaces and tmux resize; the auth transport cases run on standalone through the `BUN_OPTIONS --preload` adapter, no skips. Separate Node/Bun JUnit and failure artifacts, stack identities and binary/archive SHA-256 retained. Computer-use helper explicitly excluded |
 
 `check-scripts` and `check-integration` share one Makefile recipe, `PY_GATE`: ruff format and check, ty, then `pytest -n auto --dist loadfile` (pytest-xdist is already locked) with `--cov=<project root>` writing LCOV to `<project>/coverage/python/lcov.info`. `--dist loadfile` keeps every test file on one worker, as the scenario runs already do (`integration/Makefile`). The reports are uploaded in the `coverage-<os>` artifact and `check-coverage` accounts for them as `python-scripts` and `python-harness`. The fan-in's accounting step sets `COVERAGE_HOST` to the plan's `guest` for the cell (`RUNNERS` in `scripts/ci_paths.py`) so the WSL cell, which has no pytest, reports those two signals NOT RUN instead of failing on a missing report (`skip_hosts` in `coverage/policy.json`, pinned to each cell's planned gates by a test). Serial and parallel runs were compared test by test: identical pass sets, no order-dependent test. `check-benchmark` is its own recipe: pytest-cov at `fail_under = 100` with branch coverage, writing `benchmarks/comparison/coverage/python/lcov.info`, accounted as `python-benchmarks` (#387). The macOS `python` shard uploads that report after the benchmark steps, and the fan-in's `COVERAGE_SKIPPED_GATES` (the plan's `skipped_gates`) reports it NOT RUN on a PR that skipped the gate.
 
@@ -81,7 +81,7 @@ The macOS `Benchmark unit gate` (issue #315) is path-gated at step level, not by
 
 Evidence given up to cut queue time (issue #297):
 
-- No WSL stack acceptance at all, on any event. Node D/E, standalone D/E and the auth adapter no longer run in WSL
+- No WSL stack acceptance at all, on any event. Node D/E, standalone D/E (auth transport included) no longer run in WSL
 - No macOS `personal` or published-stack run. macOS proves only `local`, on Node and standalone
 - WSL `owned` and `contracts` on PRs only with `wsl_inputs`. A `packages/` change that breaks only in WSL fails on the `main` push, after merge
 - The WSL guest no longer runs `pytest scripts`, `pytest tests`, or the ruff and ty steps of `check-scripts` / `check-integration`. Ubuntu runs them. `check-probes`, `check-providers` and `check-import-audit` stay because `coverage-wsl2` needs their LCOV
@@ -642,17 +642,12 @@ Bun scope:
 
 - Native execution on `xcode-27`, macOS 27 (darwin-arm64) and `ubuntu-24.04` (baseline linux-x64).
   Each running cell builds once for its own stack
-- `--runtime bun-standalone` skips only the seven marked auth dispatch/refresh cases from
-  `integration/scenarios/test_auth_transport.py`: Bun ignores the `NODE_OPTIONS --import` redirect
-  and egress/readiness preload in `harness/anthropic_mock.py`. The missing-preload refusal case runs
-  on both runtimes. Skip reasons appear in pytest and JUnit before fake auth fixtures can dispatch.
-  Separate candidate auth steps pass `--bun-auth-adapter` for each stack on the same compiled core:
-  `BUN_OPTIONS --preload` loads the shared redirect before entrypoint startup, while Node retains
-  its original hook. These steps retain the actual shaping/refresh/refusal assertions and write
-  `standalone-auth-personal.xml` / `standalone-auth-local.xml`. This is an explicit receipt lane,
-  not a blanket unskip or a claim that those hosted executions passed. Default skips remain until
-  receipts demonstrate compiled-core acceptance. The small native fixture in infrastructure units
-  proves hook admission and failures only, not assembled-stack behavior
+- `--runtime bun-standalone` skips nothing in `integration/scenarios/test_auth_transport.py`: Bun
+  ignores the `NODE_OPTIONS --import` redirect, so `harness/runtime_hooks.py` also sets
+  `BUN_OPTIONS=--preload` and the compiled core loads the shared redirect and egress/readiness hook
+  before its entrypoint. The unchanged shaping, refresh and refusal assertions run in the ordinary
+  standalone D/E step for each stack (#14). The small native fixture in infrastructure units proves
+  hook admission and failures only
 - No other selected D/E case uses preloads, scaled timers or `--expose-gc`. Clock-driven behavior
   moved to native suites, and the unused `providers/fast_timers.mjs` preload is deleted (#378);
   `harness/probe.py`'s `--expose-gc` is used only by excluded `scenarios/bench/test_render.py`.

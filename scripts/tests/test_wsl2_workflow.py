@@ -323,8 +323,8 @@ def test_wsl2_coverage_summary_propagates_production_output_failure(tmp_path: Pa
 @pytest.mark.parametrize(
     ("scope", "disclosure"),
     [
-        ("Bun standalone", r"default D/E.*seven auth skips.*#14"),
-        ("candidate compiled-core auth adapter", r"outcome and JUnit.*not this notice"),
+        ("Bun standalone", r"no skips.*#14"),
+        ("Bun standalone", r"step outcome and JUnit.*not this notice"),
         *[
             (scope, "NOT RUN")
             for scope in (

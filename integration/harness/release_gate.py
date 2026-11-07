@@ -146,11 +146,7 @@ def expected_jobs() -> dict[str, set[str]]:
             expected[f"owned shard ({system}, {shard})"] = {OWNED_GATE_STEPS[gate] for gate in gates}
         expected[f"contracts ({system})"] = set(CONTRACT_STEPS)
     for system, stack, platform in STACK_CELLS:
-        steps = {
-            STACK_STEP,
-            f"Standalone D and E ({stack})",
-            f"Candidate compiled-core auth adapter ({stack})",
-        }
+        steps = {STACK_STEP, f"Standalone D and E ({stack})"}
         if platform == "linux-x64" and stack == "personal":
             steps.add(STARTUP_STEP)
         expected[f"stack ({system}, {stack})"] = steps
