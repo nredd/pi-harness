@@ -27,7 +27,8 @@ GIT = Path("/usr/bin/git")
 # rejects them (`extra="forbid"`); only the base read drops them, so a ratchet against an older
 # commit keeps working. `target_allowances` went with #375, when the last allowance reached 0/0.
 # Delete `RETIRED_PACKAGE_KEYS` and `base_policy` once no ratchet base carries `target_allowances`,
-# then parse the base with `Policy.model_validate_json` again.
+# then parse the base with `Policy.model_validate_json` again. The same read maps a base package's
+# deleted `goal: ratchet` (#386; delete the mapping once no base carries it) to `100-percent`, so its floor still ratchets down to the zero target.
 RETIRED_PACKAGE_KEYS = ("target_allowances",)
 # Intentionally narrow ESM grammar: no comments, imports, expressions, attributes or declarations.
 # These static local named re-exports only link bindings; their targets remain executable inventory.
@@ -176,12 +177,9 @@ class Package(StrictModel):
     )
     status: Literal["measured", "pending"] = Field(description="Whether clean-run coverage is accounted for.")
     note: str = Field(description="Measurement limitations and concrete pending follow-up.")
-    goal: Literal["100-percent", "ratchet", "report-only", "excluded"] = Field(
+    goal: Literal["100-percent", "report-only", "excluded"] = Field(
         default="100-percent",
-        description=(
-            "Owner-approved scope of the global line/function goal. `ratchet` is outside the zero target "
-            "but enforced: each enforced signal's per-OS `max_uncovered` is a floor that can only go down."
-        ),
+        description="Owner-approved scope of the global line/function goal.",
     )
     goal_reason: str = Field(default="", description="Required reason for domains outside the global goal.")
     signals: dict[str, Signal] = Field(description="Independent primary and compatibility coverage signals.")
@@ -209,15 +207,10 @@ class Package(StrictModel):
             and self.signals["primary"].enforcement != "enforced"
         ):
             raise ValueError("Primary signals must remain enforced")
-        if self.goal not in {"100-percent", "ratchet"} and any(
+        if self.goal != "100-percent" and any(
             signal.enforcement != "report-only" for signal in self.signals.values()
         ):
             raise ValueError("Signals outside the global goal must remain report-only")
-        if self.goal == "ratchet" and (
-            self.status != "measured"
-            or not any(signal.enforcement == "enforced" for signal in self.signals.values())
-        ):
-            raise ValueError("A ratchet package must be measured with at least one enforced signal")
         return self
 
 
@@ -295,7 +288,7 @@ class Policy(StrictModel):
 
     @model_validator(mode="after")
     def zero_target(self) -> Policy:
-        """Keep the final target explicit during transitional ratcheting.
+        """Keep the final target explicit while packages graduate.
 
         Parameters:
             None.
@@ -533,7 +526,7 @@ def parse_lcov(text: str, *, bare_sources: bool = False) -> dict[str, FileCovera
 
 
 def is_test_path(path: Path) -> bool:
-    """Identify conventional tests and dedicated fixture directories.
+    """Identify conventional tests, pytest `conftest.py` fixture modules and fixture directories.
 
     Parameters:
         path (Path): Repository- or package-relative source path.
@@ -545,7 +538,7 @@ def is_test_path(path: Path) -> bool:
     return (
         any(part in {"test", "tests", ".test-support", "fixtures"} for part in path.parts)
         or path.name.endswith(".test.ts")
-        or (path.suffix == ".py" and path.name.startswith("test_"))
+        or (path.suffix == ".py" and (path.name.startswith("test_") or path.name == "conftest.py"))
     )
 
 
@@ -648,6 +641,9 @@ def base_policy(text: str) -> Policy:
         if isinstance(package, dict):
             for key in RETIRED_PACKAGE_KEYS:
                 package.pop(key, None)
+            if package.get("goal") == "ratchet":
+                package["goal"] = "100-percent"
+                package.pop("goal_reason", None)
     return Policy.model_validate_json(json.dumps(data))
 
 
@@ -883,8 +879,7 @@ def check_ratchet(current: Policy, base: Policy) -> None:
                 continue
             raise ValueError(f"Removed package: '{name}'")
         package = current.packages[name]
-        graduates = previous.goal == "ratchet" and package.goal == "100-percent"
-        if previous.goal in {"100-percent", "ratchet"} and package.goal != previous.goal and not graduates:
+        if previous.goal == "100-percent" and package.goal != previous.goal:
             raise ValueError(f"Cannot remove package from global goal: '{name}'")
         for signal_name, old in previous.signals.items():
             if signal_name not in package.signals:

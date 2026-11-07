@@ -316,8 +316,6 @@
       "owned": ["*.py"],
       "exclusions": [],
       "status": "measured",
-      "goal": "ratchet",
-      "goal_reason": "Owner decision on #314: Python is outside the eight-package zero target but its measured uncovered counts are an enforced downward ratchet per OS.",
       "note": "pytest-cov LCOV from `make check-scripts` (pytest -n auto --dist loadfile). Not produced on the WSL cell, which runs no pytest.",
       "signals": {
         "primary": {
@@ -332,13 +330,8 @@
     "python-harness": {
       "root": "integration",
       "owned": ["harness/*.py"],
-      "exclusions": [
-        { "path": "harness/__init__.py", "kind": "type-only", "reason": "Declaration-only package marker containing only a module docstring; no executable implementation." },
-        { "path": "conftest.py", "kind": "test-helper", "reason": "Pytest fixture configuration for integration scenarios, not production implementation." }
-      ],
+      "exclusions": [],
       "status": "measured",
-      "goal": "ratchet",
-      "goal_reason": "Owner decision on #314: Python is outside the eight-package zero target but its measured uncovered counts are an enforced downward ratchet per OS.",
       "note": "pytest-cov LCOV from `make check-integration` (pytest -n auto --dist loadfile). Not produced on the WSL cell, which runs no pytest.",
       "signals": {
         "primary": {

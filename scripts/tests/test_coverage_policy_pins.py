@@ -146,11 +146,10 @@ def test_reviewed_missing_source_is_explicitly_accounted(file: str) -> None:
     ]
     assert owners, file
     if file.endswith(".py"):
-        # Python has a pytest-cov LCOV producer: measured and held at its per-OS floor (`ratchet`).
+        # Python has a pytest-cov LCOV producer: measured and enforced at 0/0 like every owned package.
         assert all(
             package.status == "measured"
-            and package.goal == "ratchet"
-            and package.goal_reason.strip()
+            and package.goal == "100-percent"
             and package.signals["primary"].enforcement == "enforced"
             for package in owners
         )
@@ -334,6 +333,23 @@ def test_reviewed_javascript_harnesses_are_explicitly_classified(path: str) -> N
     cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
     helpers = {helper.path: helper.reason for helper in cfg.verification_helpers}
     assert helpers.get(path, "").strip(), path
+
+
+def test_pytest_conftest_is_a_conventional_test_file_without_an_exclusion() -> None:
+    """Keep `integration/conftest.py` in test scope (#386) instead of a `test-helper` exclusion.
+
+    Parameters:
+        None.
+    Returns:
+        None: Any `conftest.py` is test scope and `python-harness` declares no exclusions.
+    Raises:
+        AssertionError: Pytest fixture modules become implementation inventory or regain an exclusion.
+    """
+    cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
+    assert not cfg.packages["python-harness"].exclusions
+    assert not cfg.packages["python-scripts"].exclusions
+    assert is_test_path(Path("integration/conftest.py"))
+    assert not is_test_path(Path("integration/harness/conftest_like.py"))
 
 
 def test_ported_computer_suites_are_conventional_tests() -> None:

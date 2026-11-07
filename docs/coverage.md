@@ -14,13 +14,10 @@ producer configurations). `goal: "excluded"` records the owner's computer-use
 coverage-maintenance exclusion. Both require a nonblank
 `goal_reason`; neither removes any source from the inventory audit. Measured signals outside the
 goal must be report-only and still require complete, valid reports and per-OS references.
-`goal: "ratchet"` (owner decision on #314, reusable by #321) is the one mode outside the zero target
-that is enforced: a measured package whose enforced signals hold their per-OS `max_uncovered` as a
-floor. The target is not applied, and floors only go down (the existing enforced-to-enforced ratchet).
-A package cannot leave `ratchet` except to graduate to `100-percent`, an enforced signal cannot go report-only without a reasoned
-`enforcement_changes` entry, and a `ratchet` package must be measured with at least one enforced
-signal. The rule keeping `excluded`/`report-only` signals report-only is unchanged. A floor is a new
-enforced signal, not an allowance or waiver: it is the measured count on a named commit and OS.
+There is no mode with a nonzero floor: `goal: ratchet` (#314) was deleted by #386 and the schema rejects it,
+so every package is either at the zero target or has no enforced signal. The base-policy read maps a base
+package still declaring `ratchet` to `100-percent`, so the one PR that graduates a package ratchets its old
+floor down to 0 and nothing can raise it back.
 
 The initial integration checkpoint is recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/main-integration.md).
 Facade validation and the actual hosted producer failure diagnosis are recorded
@@ -371,43 +368,23 @@ declares `gate: "check-benchmark"`. `scripts/ci_paths.py` lists a skipped gate i
 passes it as `COVERAGE_SKIPPED_GATES` (`--skipped-gates`), and the signal reports NOT RUN on that run only; a run
 that executes the gate requires the report. Accounting fails closed on a `--skipped-gates` token no policy signal
 declares, so a typo cannot skip nothing silently, and a test keeps every `PATH_GATED_GATES` key declared. The ratchet rejects changing a signal's `gate`, as it rejects adding a
-skipped host. Before #387 the gate was 90% with 85 statements and 58 partial branches missed (run `41755991256`). The declaration-only `integration/harness/__init__.py` has an explicit
-reasoned exclusion.
+skipped host. Before #387 the gate was 90% with 85 statements and 58 partial branches missed (run `41755991256`).
 
-Both Python packages are `goal: "ratchet"` with an enforced `primary` signal (#314). First floors
-are the measured uncovered counts, never allowances; they only go down. Every Python line the PR
-added or changed is 0/0:
+Both Python packages are `100-percent` with an enforced `primary` signal at 0 lines, 0 functions and 0 branches
+on each OS (#386, after #381 through #385). `integration/harness/__init__.py` is a docstring-only module that
+coverage.py reports as fully covered on import, and `integration/conftest.py` is a conventional pytest
+test file (outside `owned` and the inventory audit), so `python-harness` declares no exclusions.
 
-| Signal | darwin lines/functions | linux lines/functions |
-| --- | --- | --- |
-| `python-scripts/primary` | 0/0 | 0/0 |
-| `python-harness/primary` | 628/69 | 628/69 |
-
-`python-scripts/primary` also caps branches at 1 on each OS (#419): the one remaining partial arc is the
-`rerun` return in `scripts/runner_rescue.py`. Both OSes measured 0/0/1 in hosted CI run `42322348786` on commit
-`0d728f60` (`coverage accounting` on `owned (ubuntu-24.04)` and `owned (macos-14)`).
-
-`python-scripts` was measured on the final tree of PR #323 from its own hosted artifacts, `--measure` on each:
-darwin from `coverage-macos-14`, linux from `coverage-ubuntu-24.04`, both run `41718792020` on commit `6912a7b5`.
-After rebasing onto `2862cd80` (#332), main's `harness/tmux.py`/`harness/rpc.py` changes and their tests
-lowered `python-harness` by 8 lines and 1 function. Re-measured on commit `3be0ba22`: linux from
-`coverage-ubuntu-24.04` of run `41749183215`, darwin from a local macOS 27.2 arm64 `make check-integration`
-(Python 3.14.9), which also reproduced `python-scripts` 284/11 and earlier matched the hosted darwin counts.
-Both OSes gave 628/69. At that point `python-scripts` was one line higher on linux than on darwin (285 vs 284);
-both are now 0 lines (#419).
-An earlier run (`41702044725`, before the first rebase) is not a source: it predates `harness/install_paths.py`
-and `harness/release_gate.py`.
 Hosted wall time of the pytest halves with `-n auto --dist loadfile`, `macos-14`: `scripts` 116s and
 `integration` 143s, against 199s and 281s serial.
 
 A repository-wide regression scan and the CLI audit tracked plus untracked nonignored TypeScript,
 Python and executable JavaScript (`.mjs`, `.cjs`, `.js`) source using the same Git-listed traversal. Each executable file must be included in a measured/pending inventory or have an explicit
-reasoned exclusion. Conventional test files are out of scope; arbitrary new implementation files
+reasoned exclusion. Conventional test files (including pytest `conftest.py`) are out of scope; arbitrary new implementation files
 are not. There is no implicit `*.config.*` exemption: executable tool configurations need an
 explicit owned/pending declaration or reasoned verification classification. The producer
 configurations are owned by `import-audit` (#380). All inventories are expanded and
-validated; only eligible pending inventories block the final target flip. Python is outside this
-eight-package zero target; its two measured signals are the enforced `ratchet` floors above.
+validated; only eligible pending inventories block the final target flip. Python is held to the same target: `python-scripts` and `python-harness` are enforced at 0/0/0 above.
 
 ## Add a source file
 
