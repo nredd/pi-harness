@@ -241,7 +241,7 @@ export interface OwnedPending {
 }
 
 /** A record whose run is over. Every settle and stop stamps `completedAt`; only a (re)start clears it. */
-export type SettledRecord = AgentRecord & { completedAt: number };
+type SettledRecord = AgentRecord & { completedAt: number };
 
 /** Whether `record` is past its run (neither running nor queued), and so carries `completedAt`. */
 function isSettled(record: AgentRecord): record is SettledRecord {
@@ -2087,8 +2087,13 @@ export class AgentManager {
     this.rememberEvicted(this.evictionNote(record));
   }
 
+  /** Notes for whichever of `ids` are settled here, to hand to a session that will never see these records. */
+  evictionNotes(ids: readonly string[]): EvictedNote[] {
+    return [...this.agents.values()].filter(isSettled).filter(record => ids.includes(record.id)).map(record => this.evictionNote(record));
+  }
+
   /** What a settled record leaves behind once it is gone from this manager. */
-  evictionNote(record: SettledRecord): EvictedNote {
+  private evictionNote(record: SettledRecord): EvictedNote {
     return {
       id: record.id,
       type: record.type,

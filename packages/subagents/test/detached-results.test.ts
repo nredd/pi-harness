@@ -400,6 +400,33 @@ describe("session switch with a running background agent", () => {
     await back.lifecycle.get("session_shutdown")({ reason: "quit" });
   });
 
+  it("keeps every agent in a held notice answerable after the switch (#330)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const first = makePi();
+    subagentsExtension(first.pi);
+    const parent = ctx(sessionFile);
+    parent.signal = new AbortController().signal;
+    await first.lifecycle.get("session_start")({ type: "session_start" }, parent);
+    const one = await spawnRunning(first.tools, parent);
+    const two = await spawnRunning(first.tools, parent);
+    one.finish();
+    two.finish();
+    await flush();
+    expect(first.pi.sendMessage).not.toHaveBeenCalled();
+
+    await first.lifecycle.get("session_before_switch")?.();
+    await first.lifecycle.get("session_shutdown")({ reason: "reload" });
+    const back = makePi();
+    subagentsExtension(back.pi);
+    await back.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    for (const { id } of [one, two]) {
+      const got = await back.tools.get("get_subagent_result").execute("g", { agent_id: id }, undefined, undefined, ctx(sessionFile));
+      expect(got.content[0].text).not.toContain("Agent not found");
+      expect(got.content[0].text).toContain(id);
+    }
+    await back.lifecycle.get("session_shutdown")({ reason: "quit" });
+  });
+
   it.each(["consumed", "delivered"])("does not replay a result already %s before a switch", async (handled) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const first = makePi();

@@ -29,8 +29,8 @@ export interface DetachedResult {
   record?: Record<string, unknown>;
   /** The `subagents:completed`/`subagents:failed` event the live path would have emitted, replayed on delivery. */
   lifecycle?: { channel: "subagents:completed" | "subagents:failed"; data: Record<string, unknown> };
-  /** What the reopened session keeps so this id still answers after the orphaned record is gone. */
-  evicted?: EvictedNote;
+  /** What the reopened session keeps so these agents' ids still answer after their records are gone. */
+  evicted?: EvictedNote[];
   /** A full-result notice's parts, so delivery clips it against its batch's budget; `content` is the fallback. */
   notice?: NoticeParts & { footer: string };
 }

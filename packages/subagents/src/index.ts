@@ -20,7 +20,7 @@ import { Type } from "typebox";
 import { abortable } from "./abortable.js";
 import { hasAgentBadge, renderAgentName } from "./agent-color.js";
 import { buildNewAgentFile, disableInContent, enableInContent, isEmptyStub, locateAgentFile as locateAgentFileAtHome, personalAgentsDir as personalAgentsDirAtHome, projectAgentsDir, serializeAgentFile } from "./agent-file-toggle.js";
-import { AgentManager, describeEvicted, isTopLevelAgent, markConsumed, type OwnedPending, type SettledRecord } from "./agent-manager.js";
+import { AgentManager, describeEvicted, isTopLevelAgent, markConsumed, type OwnedPending } from "./agent-manager.js";
 import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, getRememberAgents, normalizeMaxTurns, resolveEffectiveMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, setRememberAgents, steerAgent } from "./agent-runner.js";
 import { rowDescription, sourceIndicator, sourceLegend } from "./agent-source-badge.js";
 import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, getConfig, getFallbackSubagent, isDefaultsDisabled, NO_FALLBACK, registerAgents, resolveSpawnType, resolveType, setDefaultsDisabled, setFallbackSubagent } from "./agent-types.js";
@@ -769,7 +769,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
         content: notice.render().text + footer,
         details: notice.details,
         record: historyRecord(record),
-        evicted: manager.evictionNote(record as SettledRecord),
+        evicted: manager.evictionNotes([record.id]),
         lifecycle: {
           channel: lifecycleChannel(record),
           data: survivorEventData(buildEventData(record)),
@@ -812,7 +812,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   function deliverDetachedResult(result: DetachedResult) {
     try {
       // First: the notice names this id, and a read of it must not say "not found".
-      if (result.evicted) manager.rememberEvicted(result.evicted);
+      for (const note of result.evicted ?? []) manager.rememberEvicted(note);
       // Before the notice: a listener must see the owner settle, not stay "running".
       if (result.lifecycle) pi.events.emit(result.lifecycle.channel, result.lifecycle.data);
       if (result.record) {
@@ -1467,7 +1467,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       if (pending) {
         // Not sent here: the session that reads the spool is the one that sees it.
         const { delivered: _unsent, ...spooled } = pending;
-        try { spoolDetached(sessionFile, { id: nanoid(8), ...spooled }); }
+        const evicted = manager.evictionNotes([pending.details.id, ...(pending.details.others?.map(other => other.id) ?? [])]);
+        try { spoolDetached(sessionFile, { id: nanoid(8), ...spooled, evicted }); }
         catch { console.error("[pi-subagents] Could not spool held completion notices; results remain in their transcripts."); }
       }
     }
