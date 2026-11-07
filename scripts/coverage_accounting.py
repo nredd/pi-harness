@@ -27,9 +27,7 @@ GIT = Path("/usr/bin/git")
 # rejects them (`extra="forbid"`); only the base read drops them, so a ratchet against an older
 # commit keeps working. `target_allowances` went with #375, when the last allowance reached 0/0.
 # Delete `RETIRED_PACKAGE_KEYS` and `base_policy` once no ratchet base carries `target_allowances`,
-# then parse the base with `Policy.model_validate_json` again. The same read maps a base package's
-# deleted `goal: ratchet` (#386) to `100-percent`, so its old floor still ratchets down to the zero
-# target. Delete that mapping once no base carries it (#625).
+# then parse the base with `Policy.model_validate_json` again.
 RETIRED_PACKAGE_KEYS = ("target_allowances",)
 # Intentionally narrow ESM grammar: no comments, imports, expressions, attributes or declarations.
 # These static local named re-exports only link bindings; their targets remain executable inventory.
@@ -642,9 +640,6 @@ def base_policy(text: str) -> Policy:
         if isinstance(package, dict):
             for key in RETIRED_PACKAGE_KEYS:
                 package.pop(key, None)
-            if package.get("goal") == "ratchet":
-                package["goal"] = "100-percent"
-                package.pop("goal_reason", None)
     return Policy.model_validate_json(json.dumps(data))
 
 

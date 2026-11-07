@@ -133,30 +133,21 @@ def test_ratchet_goal_is_rejected() -> None:
         Policy.model_validate(data)
 
 
-def test_base_policy_reads_a_ratchet_base_as_the_zero_target() -> None:
-    """Let the first PR after the mode's removal ratchet against a base that still declares it.
+def test_base_policy_rejects_a_ratchet_base() -> None:
+    """Keep the deleted `ratchet` goal unreadable, in a base policy as in the current one.
 
     Parameters:
         None.
     Returns:
-        None: A `ratchet` base package reads as `100-percent`, so graduating to 0/0 passes.
+        None: A base package still declaring `ratchet` fails validation instead of being remapped.
     Raises:
-        AssertionError: The old base cannot be read, or its floor can be raised.
+        AssertionError: The base read silently accepts or rewrites the deleted goal.
     """
-    current = policy().model_dump()
-    current["enforce_target"] = True
-    old = json.loads(json.dumps(current))
-    old_package = old["packages"]["example"]
-    old_package["goal"] = "ratchet"
-    old_package["goal_reason"] = "Owner-approved downward ratchet at measured floors."
-    old_package["signals"]["primary"]["max_uncovered"] = {
-        host: {"lines": 5, "functions": 5} for host in ("darwin", "linux")
-    }
-    base = base_policy(json.dumps(old))
-    assert base.packages["example"].goal == "100-percent"
-    check_ratchet(Policy.model_validate(current), base)
-    with pytest.raises(ValueError, match="Ratchet violation"):
-        check_ratchet(base, Policy.model_validate(current))
+    old = policy().model_dump()
+    old["packages"]["example"]["goal"] = "ratchet"
+    old["packages"]["example"]["goal_reason"] = "Owner-approved downward ratchet at measured floors."
+    with pytest.raises(ValueError, match="goal"):
+        base_policy(json.dumps(old))
 
 
 @pytest.mark.parametrize("new_goal", ["excluded", "report-only"])

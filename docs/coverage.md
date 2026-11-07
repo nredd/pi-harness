@@ -15,7 +15,7 @@ coverage-maintenance exclusion. Both require a nonblank
 `goal_reason`; neither removes any source from the inventory audit. Measured signals outside the
 goal must be report-only and still require complete, valid reports and per-OS references.
 There is no mode with a nonzero line/function floor: `goal: ratchet` (#314) was deleted (#386) and the schema
-rejects it. The base-policy read maps a base package still declaring it to `100-percent`.
+rejects it, in the current policy and in a base read alike.
 
 The initial integration checkpoint is recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/main-integration.md).
 Facade validation and the actual hosted producer failure diagnosis are recorded
