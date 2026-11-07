@@ -139,7 +139,7 @@ describe("workflow meta scanner", () => {
   it("quotes a host-side syntax error by its message alone", () => {
     expect(() => extractMeta('export const meta = { name: "x" description: "y" };')).toThrow(
       // JavaScriptCore appends where V8 stops: `. Expected '}' to end an object literal.`
-      /could not be evaluated: Unexpected identifier 'description'(?:\. [^\n]*)?\n/,
+      /could not be evaluated: Unexpected identifier 'description'(?:\. Expected '\}' to end an object literal\.)?\n/,
     );
   });
 });
