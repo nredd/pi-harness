@@ -556,10 +556,12 @@ when stream delivery raced cancellation. The controlled cancellation/data-event 
 after cancellation. Whether hosted Darwin counts stay stable is not yet measured (issue
 [here](https://github.com/nredd/pi-harness/issues/164)). That race-dependent branch is why the
 sampler's starting branch caps came from hosted counts rather than a single local run; #417 drove them
-to 0 on darwin and linux, primary and Bun ([branch caps](#branch-caps)). #414 did the same for
-`todo`: tests for the reachable branches, and deletion of defaults and fallbacks no caller could reach
-(`planTitle`'s heading fallback, the bullet content-indent default, `withTrailingSpacer`'s empty guard,
-the unreachable `settledAt` default in agent retry matching). Measured on darwin; hosted CI confirms linux and WSL2.
+to 0 on darwin and linux, primary and Bun ([branch caps](#branch-caps)).
+
+`todo` branch caps are 0 on primary and Bun since #414: tests for every reachable branch, and
+deletion of defaults and fallbacks no caller could reach (`planTitle`'s heading fallback, the bullet
+content-indent default, `withTrailingSpacer`'s empty guard, the `settledAt` default in agent retry
+matching, `isValidCollapseKeySpec`'s `?? ""`). Measured on darwin; hosted CI confirms linux and WSL2.
 
 `inprocess` is `enforced` at 0/0 lines/functions on darwin and linux for both `primary` and `bun`
 since #376, with nothing excluded. Its inventory is every fixture module the suites run:

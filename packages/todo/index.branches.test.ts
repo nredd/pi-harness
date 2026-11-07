@@ -101,6 +101,7 @@ describe("plan approval in the foreground session", () => {
 		for (const h of bus.get(PLAN_APPROVED_EVENT) ?? [])
 			await h({ version: 1, planId: "p1", plan: PLAN, sessionId: "s1" });
 		expect(importer).toHaveBeenCalledTimes(1);
+		expect(instances).toHaveLength(1);
 		expect(instances[0].update).toHaveBeenCalled();
 	});
 
