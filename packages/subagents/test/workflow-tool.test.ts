@@ -1038,7 +1038,7 @@ describe("SubagentWorkflow tool — script vs scriptPath vs name", () => {
       undefined, undefined, workflowCtx(),
     );
     const [longMessage] = await awaitNotification(startedTaskId(clipped));
-    expect(longMessage.details.resultPreview).toBe(`${"a".repeat(499)}b…`);
+    expect(longMessage.details.resultPreview).toBe(`${"a".repeat(499)}b\u2026`);
 
     const whole = await tools.get("SubagentWorkflow").execute(
       "tc-short",
