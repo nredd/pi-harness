@@ -136,6 +136,24 @@ def test_prepare_release_refuses_a_graph_asset_that_did_not_download(
     assert [call[:3] for call in calls[2:]] == [("gh", "release", "download")] * 2
 
 
+def test_prepare_release_resumes_with_a_matching_downloaded_graph(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A listed graph asset that downloads byte-identical to the candidate lets publication resume."""
+    calls = replay(
+        monkeypatch,
+        [
+            ("matching-refs", REFS, {}),
+            (f"releases/tags/{TAG}", release("stack-snapshot.json", "dependency-graph.json"), {}),
+            ("--pattern stack-snapshot.json", "", {"stack-snapshot.json": "{}"}),
+            ("--pattern dependency-graph.json", "", {"dependency-graph.json": '{"graph":1}'}),
+        ],
+    )
+    rebuilt, graph = candidate(tmp_path)
+    assert publish_gate.prepare_release("o/r", SHA, rebuilt, tmp_path / "existing", graph) == "resume"
+    assert [call[:3] for call in calls[2:]] == [("gh", "release", "download")] * 2
+
+
 def test_confirm_tag_refuses_an_absent_tag(monkeypatch: pytest.MonkeyPatch) -> None:
     """After publication an empty `matching-refs` answer means the tag is missing."""
     replay(monkeypatch, [("matching-refs", "[[]]", {})])
