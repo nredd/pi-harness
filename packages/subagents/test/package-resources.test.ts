@@ -3,12 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  isPackageResourceExcluded,
   listPiPackages,
   packageAgentDirs,
   packageAgentFiles,
   packageAllowed,
   packageNameForPath,
   packageWorkflowDirs,
+  packageWorkflowFiles,
   readSubagentManifest,
   resetPackageState,
   resolveDeclaredPaths,
@@ -280,6 +282,38 @@ describe("discovery through pi's configured packages", () => {
     writeFileSync(join(root, "package.json"), "{ not json");
     installGlobally(root);
     expect(listPiPackages(projectDir)).toEqual([]);
+  });
+
+  it("treats a package.json that is valid JSON but not an object as having no manifest", () => {
+    for (const [i, body] of ["null", '"text"', "0"].entries()) {
+      const root = join(tmpDir, `scalar-${i}`);
+      mkdirSync(root, { recursive: true });
+      writeFileSync(join(root, "package.json"), body);
+      installGlobally(root);
+      resetPackageState();
+      expect(listPiPackages(projectDir), body).toEqual([]);
+    }
+  });
+
+  it("keeps the first declared workflow file when two share a name", () => {
+    const root = makePackage("dupes", { pi: { subagents: { workflows: ["./a/same.js", "./b/same.js"] } } });
+    for (const dir of ["a", "b"]) {
+      mkdirSync(join(root, dir), { recursive: true });
+      writeFileSync(join(root, dir, "same.js"), `export const meta = { name: 'same', description: '${dir}' }\n`);
+    }
+    installGlobally(root);
+
+    const files = packageWorkflowFiles(projectDir);
+    expect([...files.keys()]).toEqual(["same"]);
+    expect(files.get("same")).toBe(join(root, "a", "same.js"));
+  });
+
+  it("reports a declared exclusion without discovery options", () => {
+    const root = makePackage("excl", { pi: { subagents: { agents: ["./agents", "!./agents/wip.md"] } } });
+    installGlobally(root);
+
+    expect(isPackageResourceExcluded(join(root, "agents", "wip.md"), projectDir, "agents")).toBe(true);
+    expect(isPackageResourceExcluded(join(root, "agents", "excl-agent.md"), projectDir, "agents")).toBe(false);
   });
 
   it("reads the workflows declaration into its own root list", () => {

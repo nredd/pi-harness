@@ -6,7 +6,7 @@ import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setAgentModels, setModelAliases, setModelScopeProvider } from "../src/model-resolver.js";
 import { setScopeModelsEnabled } from "../src/model-scope.js";
-import { selectModel } from "../src/model-selection.js";
+import { admitModelSelection, describeSelection, type ModelSelection, selectModel } from "../src/model-selection.js";
 import { setModelTiers } from "../src/model-tiers.js";
 
 let dir: string;
@@ -115,5 +115,47 @@ describe("selectModel", () => {
       fallback: { input: "does-not-exist", used: "selection-test/parent" },
     });
     expect(select(undefined, "does-not-exist")).toContain('Model not found: "does-not-exist"');
+  });
+});
+
+describe("admitModelSelection", () => {
+  const events = { on: (_channel: string, _handler: (data: unknown) => void) => () => {}, emit: () => {} };
+  const bound = (members: string[]): ModelSelection => ({
+    source: "param", model: undefined, outcome: "resolved", tierBinding: { kind: "static", tier: "cheap", members },
+  });
+
+  it("makes no admission for a selection without a prepared binding", async () => {
+    const selection: ModelSelection = { source: "param", model: registry.find("selection-test", "parent"), outcome: "resolved" };
+    expect(await admitModelSelection(selection, registry, events)).toBeUndefined();
+    expect(selection.tierAdmitted).toBeUndefined();
+  });
+
+  it("returns the recorded block when an already-admitted selection was exhausted", async () => {
+    const block = { model: "@cheap", wait: false };
+    const selection: ModelSelection = { ...bound([ref("explicit")]), tierAdmitted: true, tier: { kind: "exhausted", tier: "cheap", block, skipped: [] } };
+    expect(await admitModelSelection(selection, registry, events)).toBe(block);
+  });
+
+  it("names the tier in the fallback when the selection carries no requested text", async () => {
+    const parent = registry.find("selection-test", "parent");
+    const selection = { ...bound(["ghost/absent"]), tierParent: parent };
+    expect(await admitModelSelection(selection, registry, events)).toBeUndefined();
+    expect(selection).toMatchObject({ outcome: "fallback", model: parent, fallback: { input: "@cheap", used: ref("parent") } });
+    expect(selection.tierBinding).toBeUndefined();
+  });
+
+  it("refuses to inherit when the policy says an unavailable tier is an error", async () => {
+    setModelTiers({}, { onUnavailable: "error" });
+    await expect(admitModelSelection(bound(["ghost/absent"]), registry, events)).rejects.toThrow("Model tier @cheap is unavailable.");
+  });
+});
+
+describe("describeSelection", () => {
+  it("labels an admitted model the registry does not know from its provider and id alone", () => {
+    const selection: ModelSelection = {
+      source: "param", model: registry.find("router", "default"), outcome: "resolved",
+      tier: { kind: "routed", tier: "cheap", model: registry.find("router", "default")!, profile: "router/default", admitted: "ghost/absent" },
+    };
+    expect(describeSelection(selection, registry)).toMatchObject({ modelId: "ghost/absent" });
   });
 });

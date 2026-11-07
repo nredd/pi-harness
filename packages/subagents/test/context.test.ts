@@ -126,4 +126,12 @@ describe("buildParentContext", () => {
     expect(out).toContain("[User]: question");
     expect(out).not.toContain("[Assistant]:");
   });
+
+  it("ignores branch entries that are neither messages nor compactions", () => {
+    const out = buildParentContext(
+      makeCtx([{ type: "thinking_level_change", thinkingLevel: "high" }, userMsg("hello")]),
+    );
+    expect(out).toContain("[User]: hello");
+    expect(out).not.toContain("high");
+  });
 });

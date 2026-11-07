@@ -305,11 +305,10 @@ export function installExtensionToolScope(
     /** Receives the scope check the child's nested-call gate extension applies. */
     nestedCallGate: NestedCallGate;
     /** Why workflow tools are refused. */
-    workflowError?: string;
+    workflowError: string;
   },
 ): void {
-  const { loader, toolNames, disallowedSet, extNames, narrowing, readmitToolNames, nestedCallGate } = ctx;
-  const workflowError = ctx.workflowError ?? NESTED_WORKFLOW_ERROR;
+  const { loader, toolNames, disallowedSet, extNames, narrowing, readmitToolNames, nestedCallGate, workflowError } = ctx;
 
   // The names allowed right now. Mirrors the `ext:` opt-in flip: when any `ext:`
   // selector is present, extension tools become an explicit allowlist — a loaded
@@ -692,10 +691,10 @@ function collectResponseText(session: AgentSession) {
  * Get the last non-empty assistant text produced during THIS invocation.
  * `startIndex` is the message count captured before the prompt, so the walk-back
  * never crosses into a previous turn: on a resume whose new turn failed empty,
- * this returns "" instead of the prior turn's answer (#144). Defaults to 0 (a
- * fresh spawn, where the whole history belongs to this run).
+ * this returns "" instead of the prior turn's answer (#144). A fresh spawn passes
+ * 0, since the whole history belongs to that run.
  */
-function getLastAssistantText(session: AgentSession, startIndex = 0): string {
+function getLastAssistantText(session: AgentSession, startIndex: number): string {
   for (let i = session.messages.length - 1; i >= startIndex; i--) {
     const msg = session.messages[i];
     if (msg.role !== "assistant") continue;
@@ -731,7 +730,7 @@ export function forwardModelCall(event: AgentSessionEvent, emit: (event: ModelCa
  * no tool call pending, and a stop that was not an abort, a tool-use handoff or
  * a token-limit cut. Anything else is a teaser or a cut-off report.
  */
-function endedWithReport(session: AgentSession, startIndex = 0): boolean {
+function endedWithReport(session: AgentSession, startIndex: number): boolean {
   for (let i = session.messages.length - 1; i >= startIndex; i--) {
     const msg = session.messages[i];
     if (msg.role !== "assistant") continue;
@@ -796,7 +795,7 @@ async function forceFinalReport(session: AgentSession, startIndex: number, signa
  * Bounded by `startIndex` (like the text fallback) so a resume that produced no
  * assistant message of its own never inherits a PRIOR turn's stop reason.
  */
-function finalTurnError(session: AgentSession, startIndex = 0): string | undefined {
+function finalTurnError(session: AgentSession, startIndex: number): string | undefined {
   for (let i = session.messages.length - 1; i >= startIndex; i--) {
     const msg = session.messages[i];
     if (msg.role !== "assistant") continue;

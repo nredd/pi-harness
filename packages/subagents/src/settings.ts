@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { NO_FALLBACK } from "./agent-types.js";
 import { readEnterpriseLocalManifest } from "./enterprise-local.js";
+import { errorMessage } from "./error-message.js";
 import { resolveAgentDir } from "./home-paths.js";
 import { type ModelResolution, parseTierBinding, setModelTiers } from "./model-tiers.js";
 import { NOTIFICATION_RESULT_CHARS_CEILING } from "./notification-result.js";
@@ -689,7 +690,7 @@ function readSettingsFile(path: string): SubagentsSettings {
   try {
     return sanitize(JSON.parse(readFileSync(path, "utf-8")));
   } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
+    const reason = errorMessage(err);
     console.warn(`[pi-subagents] Ignoring malformed settings at ${path}: ${reason}`);
     return {};
   }

@@ -10,7 +10,7 @@ import { DEFAULT_AGENTS } from "../src/default-agents.js";
 import { setAgentModels, setModelAliases, setModelScopeProvider } from "../src/model-resolver.js";
 import { setScopeModelsEnabled } from "../src/model-scope.js";
 import { admitModelSelection, describeSelection, modelSelectionNote, selectModel } from "../src/model-selection.js";
-import { parseTierBinding, resolveTier, setModelTiers, tierDisclosure } from "../src/model-tiers.js";
+import { isTierDisclosure, parseTierBinding, resolveTier, setModelTiers, tierDisclosure, tierNote } from "../src/model-tiers.js";
 import { appendModelTierEntry } from "../src/output-file.js";
 import { loadSettings } from "../src/settings.js";
 import { AgentResultView } from "../src/ui/agent-row.js";
@@ -218,6 +218,71 @@ describe("exact model tiers", () => {
     const outcome = await resolveTier("cheap", { registry, admit: async () => ({ quotaSignal: true, resolvedModel: ref("b") }) });
     expect(outcome).toMatchObject({ kind: "routed", profile: "router/cheap", admitted: ref("b"), model: { api: "pi-virtual", id: "cheap" } });
     expect(describeSelection({ model: outcome.kind === "routed" ? outcome.model : undefined, tier: outcome, source: "param", outcome: "resolved" }, registry)).toEqual({ modelName: "b", modelId: ref("b") });
+  });
+});
+
+describe("tier resolution edge cases", () => {
+  it("reports a routed profile that is not a virtual model, or not registered, as unavailable", async () => {
+    registry.registerProvider("router", {
+      api: "openai-completions", baseUrl: "http://localhost:1", apiKey: "fixture-not-a-secret",
+      models: [{ id: "plain", name: "plain", reasoning: false, input: ["text"], contextWindow: 1000, maxTokens: 100, cost: costs }],
+    });
+    const admit = vi.fn(open);
+    for (const profile of ["router/plain", "router/missing"]) {
+      setModelTiers({ cheap: [profile] }, {});
+      expect(await resolveTier("cheap", { registry, admit }), profile).toEqual({ kind: "unavailable", tier: "cheap", tried: [profile] });
+    }
+    expect(admit).not.toHaveBeenCalled();
+  });
+
+  it("leaves the reset unknown when no refusing member reports one", async () => {
+    setModelTiers({ cheap: [ref("a"), ref("b")] }, {});
+    const admit = async (model: string) => ({ quotaSignal: true, block: { model } });
+    expect(await resolveTier("cheap", { registry, admit })).toMatchObject({
+      kind: "exhausted", block: { model: "@cheap", wait: true, resetAt: undefined },
+    });
+  });
+
+  it("takes the earliest reset among the refusals that report one", async () => {
+    setModelTiers({ cheap: [ref("a"), ref("b")] }, {});
+    const admit = async (model: string) => ({ quotaSignal: true, block: model === ref("a") ? { model } : { model, resetAt: 99 } });
+    expect(await resolveTier("cheap", { registry, admit })).toMatchObject({ kind: "exhausted", block: { resetAt: 99 } });
+  });
+});
+
+describe("isTierDisclosure", () => {
+  const model = { provider: "tier-test", id: "b", name: "b", api: "openai-completions" };
+  const routed = { kind: "routed", tier: "cheap", model, profile: "router/cheap" };
+
+  it.each([[null], [undefined], ["text"], [5]])("rejects the non-object %j", raw => {
+    expect(isTierDisclosure(raw)).toBe(false);
+  });
+
+  it("requires a string tier", () => {
+    expect(isTierDisclosure({ kind: "unmapped", tier: 7 })).toBe(false);
+    expect(isTierDisclosure({ kind: "unmapped" })).toBe(false);
+  });
+
+  it("validates an answered label and routed provenance", () => {
+    expect(isTierDisclosure(routed)).toBe(true);
+    expect(isTierDisclosure({ ...routed, admitted: "tier-test/b", answered: "tier-test/b" })).toBe(true);
+    expect(isTierDisclosure({ ...routed, answered: 5 })).toBe(false);
+    expect(isTierDisclosure({ ...routed, admitted: 5 })).toBe(false);
+    expect(isTierDisclosure({ ...routed, profile: "tier-test/b" })).toBe(false);
+    expect(isTierDisclosure({ ...routed, profile: 5 })).toBe(false);
+  });
+});
+
+describe("tierNote for a routed tier", () => {
+  const model = { provider: "tier-test", id: "b", name: "b", api: "openai-completions" } as never;
+  const base = { kind: "routed", tier: "cheap", model, profile: "router/cheap" } as const;
+
+  it("names the profile, the admitted model and a mid-tier switch", () => {
+    expect(tierNote(base)).toBe("Model: @cheap -> router/cheap via router/cheap");
+    expect(tierNote({ ...base, admitted: "p/a" })).toBe("Model: @cheap -> p/a via router/cheap");
+    expect(tierNote({ ...base, admitted: "p/a", answered: "p/a" })).toBe("Model: @cheap -> p/a via router/cheap");
+    expect(tierNote({ ...base, admitted: "p/a", answered: "p/b" })).toBe("Model: @cheap -> p/b via router/cheap (switched from p/a within tier)");
+    expect(tierNote({ ...base, answered: "p/b" })).toBe("Model: @cheap -> p/b via router/cheap");
   });
 });
 

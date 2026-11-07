@@ -164,4 +164,42 @@ describe("GroupJoinManager", () => {
     expect(mgr.isGrouped("a")).toBe(false);
     expect(mgr.isGrouped("b")).toBe(false);
   });
+
+  it("passes a completion whose group id was re-registered and already delivered", () => {
+    const deliver = vi.fn();
+    const mgr = new GroupJoinManager(deliver);
+    mgr.registerGroup("g", ["a", "b"]);
+    // Re-registering the id replaces the group; `a` and `b` still point at "g".
+    mgr.registerGroup("g", ["c"]);
+    expect(mgr.onAgentComplete(makeRecord("c"))).toBe("delivered");
+    expect(mgr.onAgentComplete(makeRecord("a"))).toBe("pass");
+    expect(deliver).toHaveBeenCalledOnce();
+  });
+
+  it("flushes and disposes a group that has no timeout armed yet", () => {
+    const deliver = vi.fn();
+    const mgr = new GroupJoinManager(deliver);
+    mgr.registerGroup("g", ["a"]);
+    mgr.flushPending();
+    expect(deliver).toHaveBeenCalledExactlyOnceWith([], true);
+    expect(mgr.isGrouped("a")).toBe(false);
+
+    mgr.registerGroup("h", ["b"]);
+    expect(() => mgr.dispose()).not.toThrow();
+    expect(mgr.isGrouped("b")).toBe(false);
+  });
+
+  it("arms one timeout per batch, not one per completion", () => {
+    const deliver = vi.fn();
+    const mgr = new GroupJoinManager(deliver, 1_000);
+    mgr.registerGroup("g", ["a", "b", "c"]);
+    expect(mgr.onAgentComplete(makeRecord("a"))).toBe("held");
+    vi.advanceTimersByTime(600);
+    expect(mgr.onAgentComplete(makeRecord("b"))).toBe("held");
+    vi.advanceTimersByTime(400);
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(deliver.mock.calls[0]?.[0]).toHaveLength(2);
+    expect(deliver.mock.calls[0]?.[1]).toBe(true);
+    mgr.dispose();
+  });
 });

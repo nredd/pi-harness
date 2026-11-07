@@ -61,7 +61,7 @@ export class GroupJoinManager {
     if (!groupId) return 'pass';
 
     const group = this.groups.get(groupId);
-    if (!group || group.delivered) return 'pass';
+    if (!group) return 'pass';
 
     group.completedRecords.set(record.id, record);
 
@@ -83,7 +83,6 @@ export class GroupJoinManager {
   }
 
   private onTimeout(group: AgentGroup): void {
-    if (group.delivered) return;
     group.timeoutHandle = undefined;
 
     // Partial delivery — some agents still running
@@ -114,16 +113,14 @@ export class GroupJoinManager {
     }
     group.delivered = true;
     this.deliverCb([...group.completedRecords.values()], partial);
-    this.cleanupGroup(group.groupId);
+    this.cleanupGroup(group);
   }
 
-  private cleanupGroup(groupId: string): void {
-    const group = this.groups.get(groupId);
-    if (!group) return;
+  private cleanupGroup(group: AgentGroup): void {
     for (const id of group.agentIds) {
       this.agentToGroup.delete(id);
     }
-    this.groups.delete(groupId);
+    this.groups.delete(group.groupId);
   }
 
   /** Check if an agent is in a group. */
