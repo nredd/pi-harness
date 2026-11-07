@@ -770,6 +770,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
         details: notice.details,
         record: historyRecord(record),
         evicted: manager.evictionNotes([record.id]),
+        tombstones: manager.evictionTombstones([record.id]),
         lifecycle: {
           channel: lifecycleChannel(record),
           data: survivorEventData(buildEventData(record)),
@@ -813,6 +814,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     try {
       // First: the notice names this id, and a read of it must not say "not found".
       for (const note of result.evicted ?? []) manager.rememberEvicted(note);
+      for (const entry of result.tombstones ?? []) manager.rememberTombstone(entry);
       // Before the notice: a listener must see the owner settle, not stay "running".
       if (result.lifecycle) pi.events.emit(result.lifecycle.channel, result.lifecycle.data);
       if (result.record) {
@@ -1467,8 +1469,10 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       if (pending) {
         // Not sent here: the session that reads the spool is the one that sees it.
         const { delivered: _unsent, ...spooled } = pending;
-        const evicted = manager.evictionNotes([pending.details.id, ...(pending.details.others?.map(other => other.id) ?? [])]);
-        try { spoolDetached(sessionFile, { id: nanoid(8), ...spooled, evicted }); }
+        const heldIds = [pending.details.id, ...(pending.details.others?.map(other => other.id) ?? [])];
+        const evicted = manager.evictionNotes(heldIds);
+        const tombstones = manager.evictionTombstones(heldIds);
+        try { spoolDetached(sessionFile, { id: nanoid(8), ...spooled, evicted, tombstones }); }
         catch { console.error("[pi-subagents] Could not spool held completion notices; results remain in their transcripts."); }
       }
     }

@@ -2059,8 +2059,14 @@ export class AgentManager {
    * transcript, so the mention would have nothing to continue from.
    */
   private tombstone(record: SettledRecord): void {
-    if (!record.handle || !record.sessionFile) return;
-    this.tombstones.set(record.handle, {
+    const entry = this.tombstoneOf(record);
+    if (entry) this.rememberTombstone(entry);
+  }
+
+  /** What `@handle` needs to reopen `record`'s conversation; undefined without a handle and a session file. */
+  private tombstoneOf(record: SettledRecord): AgentTombstone | undefined {
+    if (!record.handle || !record.sessionFile) return undefined;
+    return {
       handle: record.handle,
       alias: record.alias,
       id: record.id,
@@ -2070,7 +2076,28 @@ export class AgentManager {
       completedAt: record.completedAt,
       ...(record.modelTier ? { modelTier: record.modelTier } : {}),
       ...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
-    });
+    };
+  }
+
+  /** Tombstones for whichever of `ids` are settled here and reopenable, to hand to a session that will never see these records. */
+  evictionTombstones(ids: readonly string[]): AgentTombstone[] {
+    return [...this.agents.values()]
+      .filter(isSettled)
+      .filter(record => ids.includes(record.id))
+      .flatMap(record => this.tombstoneOf(record) ?? []);
+  }
+
+  /**
+   * Keep `entry` reopenable by handle, alias and id. Also how an agent that settled in an
+   * orphaned manager (`/new`, `/reload`) stays reopenable here (#330). A name a live agent
+   * here already holds stays that agent's: the entry is not kept, as `takenHandles` would
+   * otherwise let two conversations answer to one `@name`.
+   */
+  rememberTombstone(entry: AgentTombstone): void {
+    for (const record of this.agents.values()) {
+      if (record.id !== entry.id && (record.handle === entry.handle || (entry.alias && record.alias === entry.alias))) return;
+    }
+    this.tombstones.set(entry.handle, entry);
     // Bound the memory a long session can accumulate. Oldest first, since the
     // agent someone still wants to reach is the one they used most recently.
     while (this.tombstones.size > MAX_TOMBSTONES) {

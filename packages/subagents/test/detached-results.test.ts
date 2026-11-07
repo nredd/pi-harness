@@ -164,6 +164,36 @@ describe("AgentManager.detach", () => {
   });
 });
 
+describe("AgentManager.rememberTombstone", () => {
+  const entry = (id: string, handle: string, alias?: string) =>
+    ({ id, handle, alias, type: "general-purpose", description: "d", sessionFile: `/s/${id}.jsonl`, completedAt: 1 }) as any;
+
+  it("keeps a handed-over entry reopenable by id", () => {
+    const manager = new AgentManager(() => {});
+    manager.rememberTombstone(entry("a", "gp"));
+    expect(manager.listTombstones().map(t => t.id)).toEqual(["a"]);
+  });
+
+  it("leaves a name a live agent here holds with that agent", () => {
+    const manager = new AgentManager(() => {});
+    const agents = Reflect.get(manager, "agents") as Map<string, object>;
+    agents.set("live", { id: "live", handle: "gp", alias: "named" });
+    manager.rememberTombstone(entry("a", "gp"));
+    manager.rememberTombstone(entry("b", "other", "named"));
+    expect(manager.listTombstones()).toEqual([]);
+  });
+
+  it("hands over only settled, reopenable records", () => {
+    const manager = new AgentManager(() => {});
+    const agents = Reflect.get(manager, "agents") as Map<string, object>;
+    const done = { status: "completed", completedAt: 1, type: "general-purpose", description: "d" };
+    agents.set("a", { id: "a", handle: "gp", sessionFile: "/s/a.jsonl", ...done });
+    agents.set("b", { id: "b", handle: "gp-2", ...done });
+    agents.set("c", { id: "c", handle: "gp-3", sessionFile: "/s/c.jsonl", status: "running" });
+    expect(manager.evictionTombstones(["a", "b", "c"]).map(t => t.id)).toEqual(["a"]);
+  });
+});
+
 describe("session switch with a running background agent", () => {
   let tmpDir: string;
   let prevCwd: string;
@@ -193,11 +223,12 @@ describe("session switch with a running background agent", () => {
     vi.restoreAllMocks();
   });
 
-  async function spawnRunning(tools: Map<string, any>, parent = ctx(sessionFile), name?: string) {
+  async function spawnRunning(tools: Map<string, any>, parent = ctx(sessionFile), name?: string, agentSessionFile?: string) {
     let finish!: (v: any) => void;
     let signal: AbortSignal | undefined;
     vi.mocked(runAgent).mockImplementation(((_c: any, _t: any, _p: any, opts: any) => {
       signal = opts?.signal;
+      if (agentSessionFile) opts?.onSessionCreated?.({ sessionManager: { getSessionFile: () => agentSessionFile }, dispose: vi.fn() });
       return new Promise((res) => {
         finish = res;
       });
@@ -337,6 +368,51 @@ describe("session switch with a running background agent", () => {
     await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
   });
 
+  it("steer after a detached finish reopens the survivor's saved session (#330)", async () => {
+    const saved = join(tmpDir, "survivor-session.jsonl");
+    writeFileSync(saved, "");
+    const first = makePi();
+    subagentsExtension(first.pi);
+    await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    const agent = await spawnRunning(first.tools, ctx(sessionFile), "auth-audit", saved);
+    await first.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "reload" }, ctx(sessionFile));
+    agent.finish();
+    await flush();
+
+    const back = makePi();
+    subagentsExtension(back.pi);
+    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    await new Promise(resolve => setTimeout(resolve, 250));
+    vi.mocked(runAgent).mockClear();
+    vi.mocked(runAgent).mockImplementation((() => new Promise(() => {})) as any);
+
+    const got = await back.tools.get("steer_subagent").execute("s", { agent_id: agent.id, message: "more" }, undefined, undefined, ctx(sessionFile));
+    expect(got.content[0].text).not.toContain("Cannot resume");
+    expect(got.content[0].text).toContain("Agent resumed in background");
+    expect(got.content[0].text).toContain(`Session file: ${saved}`);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runAgent).mock.calls[0][3]).toEqual(expect.objectContaining({ resumeSessionFile: saved }));
+    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+  });
+
+  it("a survivor with no saved session says so plainly after a detached finish (#330)", async () => {
+    const first = makePi();
+    subagentsExtension(first.pi);
+    await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    const agent = await spawnRunning(first.tools);
+    await first.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "reload" }, ctx(sessionFile));
+    agent.finish();
+    await flush();
+    const back = makePi();
+    subagentsExtension(back.pi);
+    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    await new Promise(resolve => setTimeout(resolve, 250));
+    const got = await back.tools.get("steer_subagent").execute("s", { agent_id: agent.id, message: "more" }, undefined, undefined, ctx(sessionFile));
+    expect(got.content[0].text).toContain(`Cannot resume agent "${agent.id}": no saved session is left to reopen.`);
+    expect(got.content[0].text).not.toContain("Agent not found");
+    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+  });
+
   it("still delivers a spooled result written without an eviction note", async () => {
     const back = makePi();
     subagentsExtension(back.pi);
@@ -424,6 +500,32 @@ describe("session switch with a running background agent", () => {
       expect(got.content[0].text).not.toContain("Agent not found");
       expect(got.content[0].text).toContain(id);
     }
+    await back.lifecycle.get("session_shutdown")({ reason: "quit" });
+  });
+
+  it("a held notice's agent with a saved session reopens on steer after the switch (#330)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const saved = join(tmpDir, "held-session.jsonl");
+    writeFileSync(saved, "");
+    const first = makePi();
+    subagentsExtension(first.pi);
+    const parent = ctx(sessionFile);
+    parent.signal = new AbortController().signal;
+    await first.lifecycle.get("session_start")({ type: "session_start" }, parent);
+    const one = await spawnRunning(first.tools, parent, undefined, saved);
+    one.finish();
+    await flush();
+    await first.lifecycle.get("session_before_switch")?.();
+    await first.lifecycle.get("session_shutdown")({ reason: "reload" });
+    const back = makePi();
+    subagentsExtension(back.pi);
+    await back.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    vi.mocked(runAgent).mockClear();
+    vi.mocked(runAgent).mockImplementation((() => new Promise(() => {})) as any);
+    const got = await back.tools.get("steer_subagent").execute("s", { agent_id: one.id, message: "more" }, undefined, undefined, ctx(sessionFile));
+    expect(got.content[0].text).not.toContain("Cannot resume");
+    expect(got.content[0].text).toContain(`Session file: ${saved}`);
+    expect(vi.mocked(runAgent).mock.calls[0][3]).toEqual(expect.objectContaining({ resumeSessionFile: saved }));
     await back.lifecycle.get("session_shutdown")({ reason: "quit" });
   });
 
