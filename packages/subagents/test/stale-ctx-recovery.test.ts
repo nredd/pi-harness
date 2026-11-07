@@ -42,31 +42,30 @@ function routedModel(getModel: () => unknown): ExtensionFactory {
 /** The default backoff schedule: the extension clock must be asked for exactly these sleeps, in order. */
 const BACKOFF_DELAYS_MS = [1_000, 3_000, 9_000];
 
-/** How many one-shot timers the fixture clock had scheduled before the recovery under test began. */
-let timersBefore = 0;
-
 /**
  * Let a recovering child finish without waiting out its backoff: whenever the fixture clock has been asked for
  * the next scheduled backoff delay (1s, 3s, 9s), advance it by exactly that delay, so fake time never moves
  * past other timers or when no sleep is armed. Returns how many sleeps were advanced; a run that timed its
- * backoff on native timers never asks the clock, so the caller's count assertion fails.
+ * backoff on native timers never asks the clock, so the caller's count assertion fails. `since` is how many
+ * one-shot timers the clock had scheduled before the recovery under test began.
  */
-async function settleThroughBackoff(record: { promise?: Promise<unknown> }) {
+async function settleThroughBackoff(record: { promise?: Promise<unknown> }, since: number) {
   let settled = false;
   let advances = 0;
-  let cursor = timersBefore;
-  const finished = Promise.resolve(record.promise).finally(() => { settled = true; });
+  let cursor = since;
+  const finished = Promise.resolve(record.promise).then(() => { settled = true; }, () => { settled = true; });
   while (!settled) {
     const next = BACKOFF_DELAYS_MS[advances];
     const armed = next === undefined ? -1 : fixture.clock.timeoutDelays.indexOf(next, cursor);
-    if (armed >= 0) {
+    if (next !== undefined && armed >= 0) {
       cursor = armed + 1;
       advances++;
-      fixture.clock.advance(next ?? 0);
+      fixture.clock.advance(next);
     }
     await new Promise(resolve => setImmediate(resolve));
   }
   await finished;
+  await record.promise;
   return advances;
 }
 
@@ -95,12 +94,11 @@ async function startHeldChild(responses: ReturnType<typeof answer>[], virtual = 
   await hold.entered;
   const id = h.session.messages.filter(m => m.role === "toolResult" && m.toolName === "Agent").flatMap(m => m.content).find(p => p.type === "text")?.text.match(/Agent ID: (\S+)/)?.[1];
   if (!id) throw new Error("Missing spawn id");
-  timersBefore = fixture.clock.timeoutDelays.length;
-  return { h, hold, physical, record: fixture.record(id), executions: () => executions };
+  return { h, timersBefore: fixture.clock.timeoutDelays.length, hold, physical, record: fixture.record(id), executions: () => executions };
 }
 
 it("retries the step once a real reload has re-registered the parent's routes", { timeout: 30_000 }, async () => {
-  const { h, hold, record, executions } = await startHeldChild([answer("CHILD DONE")]);
+  const { h, hold, record, executions, timersBefore } = await startHeldChild([answer("CHILD DONE")]);
   // Hold core's reload between `oldRunner.invalidate()` and the rebuild, the
   // window in which the parent's routes are dead and the new ones not yet bound.
   const gate = barrier();
@@ -114,7 +112,7 @@ it("retries the step once a real reload has re-registered the parent's routes", 
   await reloading;
   // Core's reload resets global transports; restore the faux provider before the retry fires.
   fixture.restoreProviders(h);
-  const advances = await settleThroughBackoff(record);
+  const advances = await settleThroughBackoff(record, timersBefore);
   expect(advances).toBe(1);
   expect(retries(record)).toBe(advances);
   expect(record.error).toBeUndefined();
@@ -128,10 +126,10 @@ it("retries the step once a real reload has re-registered the parent's routes", 
 });
 
 it("reports later tool activity after earlier prose when a real child fails", { timeout: 30_000 }, async () => {
-  const { hold, record } = await startHeldChild([], true, true);
+  const { hold, record, timersBefore } = await startHeldChild([], true, true);
   routeBroken.on = true;
   hold.release();
-  const advances = await settleThroughBackoff(record);
+  const advances = await settleThroughBackoff(record, timersBefore);
   expect(advances).toBe(BACKOFF_DELAYS_MS.length);
   expect(retries(record)).toBe(advances);
   expect(record.status).toBe("error");
