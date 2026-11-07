@@ -19,7 +19,8 @@ deterministic configuration regression, NOT reproduction of every historical
 wall-clock timeout. Neither timeouts nor coverage budgets change.
 
 These defaults apply to Node and Bun **Vitest**. Explicit CLI overrides still win.
-No native `bun test` subset remains (#320), so every Bun run consumes these configs. `npm run check --workspaces` runs
+Native `bun test` subsets do not consume Vitest configs; this change does not
+claim to bound their children or concurrency. `npm run check --workspaces` runs
 workspace checks sequentially, but separate gates and `make -j` can still overlap.
 Two Vitest workers per workspace run is not a host-wide budget. Parent orchestration must bound
 concurrent whole gates separately; do not dispatch eight gates and treat a

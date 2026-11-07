@@ -2,8 +2,6 @@
 
 ## [Unreleased]
 
-- Run the full Vitest suite on Bun 1.4.4 instead of a native `bun test` subset, and enforce its coverage ([#320](https://github.com/nredd/pi-harness/issues/320)); `src/stats/library.ts` re-exports by name so it can be classified a facade
-
 - Cover every `/stats`, title and rule branch ([#408](https://github.com/nredd/pi-harness/issues/408)); remove unreachable fallbacks (`stats/nth.ts` replaces `?? default` after bounded index reads) and drop the primary branch cap to 0
 
 - Emit `session-kit:monitor:started` and `session-kit:monitor:stopped` on `pi.events` (`{ sessionId, id, name }`; once per monitor, `stopped` also at session shutdown) so other extensions can tell a wake is armed ([#586](https://github.com/nredd/pi-harness/issues/586), part of [#522](https://github.com/nredd/pi-harness/issues/522))
