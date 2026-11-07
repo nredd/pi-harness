@@ -29,7 +29,7 @@ GIT = Path("/usr/bin/git")
 # Delete `RETIRED_PACKAGE_KEYS` and `base_policy` once no ratchet base carries `target_allowances`,
 # then parse the base with `Policy.model_validate_json` again. The same read maps a base package's
 # deleted `goal: ratchet` (#386) to `100-percent`, so its old floor still ratchets down to the zero
-# target. Delete that mapping once no base carries it.
+# target. Delete that mapping once no base carries it (#625).
 RETIRED_PACKAGE_KEYS = ("target_allowances",)
 # Intentionally narrow ESM grammar: no comments, imports, expressions, attributes or declarations.
 # These static local named re-exports only link bindings; their targets remain executable inventory.
