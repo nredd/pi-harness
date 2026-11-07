@@ -14,9 +14,9 @@ const LIGHTNESS_RANGE: [number, number] = [0.35, 0.75];
 /** `count` colours, the first at the base hue, the rest `360 / count` degrees apart. */
 export function seriesPalette(base: Color, count: number): Color[] {
 	const { h, s, l } = colorToOkhsl(base);
-	const hue = Number.isFinite(h) ? h : 250;
-	const sat = Math.max(Number.isFinite(s) ? s : 0, MIN_SATURATION);
+	// `colorToOkhsl` is finite for every colour (neutrals come back as hue 0, saturation 0).
+	const sat = Math.max(s, MIN_SATURATION);
 	const light = Math.min(LIGHTNESS_RANGE[1], Math.max(LIGHTNESS_RANGE[0], l));
 	const step = 360 / Math.max(1, count);
-	return Array.from({ length: count }, (_, i) => okhslColor((hue + i * step) % 360, sat, light));
+	return Array.from({ length: count }, (_, i) => okhslColor((h + i * step) % 360, sat, light));
 }

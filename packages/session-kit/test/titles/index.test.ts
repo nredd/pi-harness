@@ -126,6 +126,16 @@ describe("titles agent_end", () => {
 		expect(t.streamSimple).not.toHaveBeenCalled();
 	});
 
+	it("does nothing until the branch has a user message, then names it", async () => {
+		const branch: unknown[] = [ASSISTANT_ENTRY];
+		const t = setup({ branch });
+		await t.end();
+		expect(t.streamSimple).not.toHaveBeenCalled();
+		branch.unshift(USER_ENTRY);
+		await t.end();
+		expect(t.setSessionName).toHaveBeenCalledExactlyOnceWith("Fix Login Bug");
+	});
+
 	it("skips subagent child sessions", async () => {
 		const t = setup({ name: "Explore#1a2b3c4d" });
 		await t.end();

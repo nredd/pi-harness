@@ -179,3 +179,38 @@ describe("formatContent — control characters in model-controlled fields", () =
 		expect(formatContent({ kind: "list", includeDeleted: false }, state)).toBe("[in_progress] #1 evil (clearing)");
 	});
 });
+
+describe("formatContent — plan item details on get", () => {
+	it("lists the plan group, verbatim text and deferral reason", () => {
+		const state = stateWith(
+			t({
+				id: 1,
+				subject: "Migrate",
+				status: "deferred",
+				source: "plan",
+				planGroup: "Rollout",
+				planText: "Move traffic.",
+				reason: "blocked on infra",
+			}),
+		);
+		expect(formatContent({ kind: "get", task: state.tasks[0] }, state)).toBe(
+			["#1 [deferred] Migrate", "  plan item: Rollout", "    Move traffic.", "  deferred: blocked on infra"].join(
+				"\n",
+			),
+		);
+	});
+
+	it("says only 'plan item' for an ungrouped plan item without text", () => {
+		const state = stateWith(t({ id: 1, subject: "Solo", source: "plan" }));
+		expect(formatContent({ kind: "get", task: state.tasks[0] }, state)).toContain("\n  plan item");
+		expect(formatContent({ kind: "get", task: state.tasks[0] }, state)).not.toContain("plan item:");
+	});
+});
+
+describe("formatContent — clear", () => {
+	it("reports kept plan items", () => {
+		expect(formatContent({ kind: "clear", count: 2, kept: 3 }, stateWith())).toBe(
+			"Cleared 2 tasks; kept 3 plan items (complete them with evidence or defer them with a reason)",
+		);
+	});
+});

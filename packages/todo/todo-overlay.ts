@@ -224,7 +224,6 @@ export class TodoOverlay {
 	 * breathing room.
 	 */
 	private withTrailingSpacer(lines: string[]): string[] {
-		if (lines.length === 0) return lines;
 		lines.push("");
 		return lines;
 	}

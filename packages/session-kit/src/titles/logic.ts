@@ -79,7 +79,7 @@ export function modelCandidates(titleModel?: string, aliases: ModelAliases = {})
 	const seen = new Set<string>();
 	const out: ModelRef[] = [];
 	for (const ref of refs) {
-		const parsed = ref === undefined ? undefined : parseModelRef(ref);
+		const parsed = parseModelRef(ref);
 		if (!parsed) continue;
 		const key = `${parsed.provider}/${parsed.id}`;
 		if (seen.has(key)) continue;
@@ -115,7 +115,7 @@ export function firstExchange(entries: readonly unknown[]): FirstExchange | unde
 		const message = (entry as { type?: string; message?: { role?: string; content?: unknown } }).message;
 		if ((entry as { type?: string }).type !== "message" || !message) continue;
 		if (user === undefined && message.role === "user") user = contentText(message.content);
-		else if (user !== undefined && assistant === undefined && message.role === "assistant") {
+		else if (user !== undefined && message.role === "assistant") {
 			assistant = contentText(message.content);
 		}
 		if (user !== undefined && assistant !== undefined) break;

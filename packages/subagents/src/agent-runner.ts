@@ -24,6 +24,7 @@ import {
 import { Type } from "typebox";
 import { BUILTIN_TOOL_NAMES, getAgentConfig, getConfig, getMemoryToolNames, getReadOnlyMemoryToolNames, getToolNamesForType } from "./agent-types.js";
 import { bindChildResourceLoader, runInChildSessionContext } from "./child-context.js";
+import { type Clock, realClock } from "./clock.js";
 import { buildParentContext, extractText } from "./context.js";
 import { DEFAULT_AGENTS } from "./default-agents.js";
 import { detectEnv } from "./env.js";
@@ -505,6 +506,8 @@ export interface AssistantMessageInfo {
 export interface RunOptions {
   /** Backoff before each stale-ctx re-prompt (#145); defaults to 1s, 3s, 9s. `[]` disables recovery. */
   staleRetryDelaysMs?: readonly number[];
+  /** Clock that times the stale-ctx backoff; the manager passes its own. Defaults to native timers. */
+  clock?: Clock;
   /** ExtensionAPI instance — used for pi.exec() instead of execSync. */
   pi: ExtensionAPI;
   /** Manager-assigned id; suffixes session name to disambiguate parallel spawns (e.g. `Explore#a1b2c3d4`). */
@@ -819,15 +822,15 @@ const STALE_CTX_RETRY_PROMPT = "Your previous step was interrupted by a session 
 /**
  * Resolve after `ms`, or as soon as `signal` aborts. Never rejects.
  */
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+function sleep(ms: number, signal: AbortSignal | undefined, clock: Clock): Promise<void> {
   return new Promise((resolve) => {
     if (signal?.aborted) return resolve();
     const done = () => {
-      clearTimeout(timer);
+      timer.cancel();
       signal?.removeEventListener("abort", done);
       resolve();
     };
-    const timer = setTimeout(done, ms);
+    const timer = clock.setTimeout(done, ms);
     signal?.addEventListener("abort", done, { once: true });
   });
 }
@@ -857,10 +860,11 @@ export async function retryStaleCtx(
   startIndex: number,
   signal: AbortSignal | undefined,
   delays: readonly number[] = STALE_CTX_RETRY_DELAYS_MS,
+  clock: Clock = realClock,
 ): Promise<void> {
   for (const delay of delays) {
     if (!isStaleCtxError(finalTurnError(session, startIndex))) return;
-    await sleep(delay, signal);
+    await sleep(delay, signal, clock);
     if (signal?.aborted) return;
     await session.prompt(STALE_CTX_RETRY_PROMPT);
   }
@@ -1555,7 +1559,7 @@ export async function runAgent(
     // pi's `session.abort()` is a no-op until a run is active — so a child whose
     // parent is already gone is not prompted at all.
     if (options.signal?.aborted !== true) await session.prompt(effectivePrompt);
-    await retryStaleCtx(session, startLen, options.signal, options.staleRetryDelaysMs);
+    await retryStaleCtx(session, startLen, options.signal, options.staleRetryDelaysMs, options.clock);
 
     // A cap fired. The wrap-up steer is only a request: a model deep in a tool
     // loop keeps calling tools through the grace turns and is then aborted
@@ -1617,7 +1621,7 @@ export async function runAgent(
 export async function resumeAgent(
   session: AgentSession,
   prompt: string,
-  options: Pick<RunOptions, "staleRetryDelaysMs" | "maxTurns" | "onTurnEnd" | "onTextDelta" | "onModelCall" | "onToolActivity" | "onAssistantUsage" | "onCompaction" | "signal"> & {
+  options: Pick<RunOptions, "staleRetryDelaysMs" | "clock" | "maxTurns" | "onTurnEnd" | "onTextDelta" | "onModelCall" | "onToolActivity" | "onAssistantUsage" | "onCompaction" | "signal"> & {
     /** The agent's type, for its own `max_turns`. */
     type: SubagentType;
   },
@@ -1633,7 +1637,7 @@ export async function resumeAgent(
   try {
     // Already aborted: not prompted, as in `runAgent`.
     if (options.signal?.aborted !== true) await session.prompt(prompt);
-    await retryStaleCtx(session, startLen, options.signal, options.staleRetryDelaysMs);
+    await retryStaleCtx(session, startLen, options.signal, options.staleRetryDelaysMs, options.clock);
     if (run.steered && mayFollowUp(session, startLen, options.signal) && !endedWithReport(session, startLen)) {
       run.finalizing = true;
       if (await forceFinalReport(session, startLen, options.signal)) run.aborted = false;

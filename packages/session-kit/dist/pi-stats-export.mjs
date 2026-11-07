@@ -22,6 +22,13 @@ import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promi
 import { dirname, join as join2, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { setImmediate as tick } from "node:timers/promises";
+
+// src/stats/nth.ts
+function nth(items, index) {
+  return items[index];
+}
+
+// src/stats/load.ts
 var CACHE_VERSION = 2;
 var opaqueId = (value) => createHash("sha256").update(value).digest("hex");
 var EXCLUDED_PROVIDERS = /* @__PURE__ */ new Set(["faux", "faux-provider", "fake-provider", "router"]);
@@ -306,11 +313,11 @@ function flatten(files) {
   let badLines = 0;
   const ordered = Object.entries(files).sort(([pa, a], [pb, b]) => a.startMs - b.startMs || pa.localeCompare(pb));
   for (const [path, file] of ordered) {
-    badLines += file.badLines ?? 0;
+    badLines += file.badLines;
     const session = file.sessionId ?? opaqueId(`legacy-session:${path}`);
     for (const [i, tuple] of file.calls.entries()) {
       const [ms, index, input, output, cacheRead, cacheWrite, cost] = tuple;
-      const raw = file.models[index] ?? "unknown/unknown";
+      const raw = nth(file.models, index);
       const slash = raw.indexOf("/");
       candidates.push({
         session,
@@ -419,6 +426,7 @@ function eventId(event) {
     ])
   );
 }
+var sessionsOf = (loaded) => loaded.sessionMetadata ?? loaded.sessions;
 function makeSnapshot(loaded, identity, exportedAt = Date.now()) {
   const shards = /* @__PURE__ */ new Map();
   const shard = (month) => {
@@ -445,7 +453,7 @@ function makeSnapshot(loaded, identity, exportedAt = Date.now()) {
     };
     shard(monthOf(c.ms)).events.push({ id: eventId(e), ...e });
   }
-  for (const s of loaded.sessionMetadata ?? loaded.sessions)
+  for (const s of sessionsOf(loaded))
     shard(monthOf(s.startMs)).sessions.push({
       id: sessionId(s.path),
       startMs: s.startMs,
@@ -563,8 +571,7 @@ async function readGlobal(dir) {
       if (m.machineId !== id || !Array.isArray(machine.shards) || machine.shards.length !== m.shards.length)
         throw new Error("Invalid cached machine");
       for (const [i, s] of machine.shards.entries()) {
-        const ref = m.shards[i];
-        if (!ref) throw new Error("Missing shard");
+        const ref = nth(m.shards, i);
         validateShard(s, m, ref.month);
         if (opaqueId(JSON.stringify(s)) !== ref.sha256) throw new Error("Cached shard digest mismatch");
       }
@@ -607,8 +614,8 @@ async function importStats(dir, input) {
           shards.push(s);
         }
         validateSnapshot({ manifest, shards });
-        if (machines[id] && manifest.exportedAt < (machines[id]?.manifest.exportedAt ?? 0))
-          throw new Error("Older machine snapshot");
+        const prior = machines[id];
+        if (prior && manifest.exportedAt < prior.manifest.exportedAt) throw new Error("Older machine snapshot");
         machines[id] = { manifest, shards };
         imported++;
       } catch {
@@ -641,13 +648,13 @@ async function main() {
     options.set(flag, value);
   }
   const dir = resolve2(options.get("--agent-dir") ?? agentDir());
-  if (command === "export" && options.has("--output") && !options.has("--input")) {
+  const output = options.get("--output");
+  const input = options.get("--input");
+  if (command === "export" && output !== void 0 && input === void 0) {
     const root = options.get("--sessions-dir");
-    console.log(
-      JSON.stringify(await exportStats(dir, resolve2(options.get("--output") ?? ""), root ? resolve2(root) : void 0))
-    );
-  } else if (command === "import" && options.has("--input") && !options.has("--output") && !options.has("--sessions-dir")) {
-    const result = await importStats(dir, resolve2(options.get("--input") ?? ""));
+    console.log(JSON.stringify(await exportStats(dir, resolve2(output), root ? resolve2(root) : void 0)));
+  } else if (command === "import" && input !== void 0 && output === void 0 && !options.has("--sessions-dir")) {
+    const result = await importStats(dir, resolve2(input));
     console.log(JSON.stringify(result));
     if (result.problems.length) {
       console.error(result.problems.join("\n"));

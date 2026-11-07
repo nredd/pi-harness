@@ -81,6 +81,15 @@ describe("bucketize", () => {
 		expect(b.buckets.reduce((n, x) => n + (x.values[0] ?? 0), 0)).toBe(1000);
 	});
 
+	it("treats a series a day does not report as zero", () => {
+		const b = bucketize("2026-10-01", "2026-10-03", (day) => (day === "2026-10-02" ? [4] : []), 2, 80);
+		expect(b.buckets.map((x) => x.values)).toEqual([
+			[0, 0],
+			[4, 0],
+			[0, 0],
+		]);
+	});
+
 	it("names the bucket in the title unit", () => {
 		expect(bucketize("2026-10-01", "2026-10-07", ones, 1, 80).unit).toBe("day");
 		expect(bucketize("2025-10-14", "2026-10-13", ones, 1, 80).unit).toBe("week");
@@ -97,6 +106,7 @@ describe("plot", () => {
 		expect(niceStep(2.2)).toBe(3);
 		expect(niceStep(14)).toBe(15);
 		expect(niceStep(8.1)).toBe(10);
+		expect(niceStep(Number.POSITIVE_INFINITY)).toBe(Number.POSITIVE_INFINITY);
 	});
 
 	it("stretches buckets over columns, every bucket value landing exactly on a column", () => {

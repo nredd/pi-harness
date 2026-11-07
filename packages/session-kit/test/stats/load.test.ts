@@ -82,6 +82,59 @@ describe("parseSession", () => {
 		expect(file.endMs).toBe(at("2026-10-01", 15));
 	});
 
+	it("ignores a non-message entry or a non-assistant message that merely looks like a call", () => {
+		const iso = new Date(at("2026-10-01")).toISOString();
+		const usage = { input: 5, output: 5 };
+		const custom = JSON.stringify({
+			type: "custom",
+			timestamp: iso,
+			message: { role: "assistant", provider: "p", model: "m", usage },
+		});
+		const user = JSON.stringify({
+			type: "message",
+			timestamp: iso,
+			message: { role: "user", content: "assistant", provider: "p", model: "m", usage },
+		});
+		const file = parseSession([custom, user].join("\n"));
+		expect(file.calls).toEqual([]);
+		expect(file.badLines).toBe(0);
+	});
+
+	it("skips assistant messages without a string provider and model, or without usage or any timestamp", () => {
+		const iso = new Date(at("2026-10-01")).toISOString();
+		const usage = { input: 5, output: 5 };
+		const message = (fields: Record<string, unknown>, timestamp: string | null = iso) =>
+			JSON.stringify({ type: "message", timestamp: timestamp ?? undefined, message: { role: "assistant", ...fields } });
+		const text = [
+			message({ provider: 7, model: "m", usage }),
+			message({ provider: "p", model: 7, usage }),
+			message({ provider: "p", model: "m" }),
+			message({ provider: "p", model: "m", usage }, null),
+		].join("\n");
+		expect(parseSession(text).calls).toEqual([]);
+	});
+
+	it("takes the earliest header time even when a later entry came first", () => {
+		const early = new Date(at("2026-10-01", 9)).toISOString();
+		// Only the first line and lines naming an assistant or session info are parsed in full.
+		const header = JSON.stringify({ type: "session", timestamp: early, cwd: "assistant" });
+		const file = parseSession([opus("2026-10-01", 1, 1), header].join("\n"));
+		expect(file.startMs).toBe(at("2026-10-01", 9));
+	});
+
+	it("treats out-of-range numeric and unparseable timestamps as absent", () => {
+		const message = (timestamp: unknown) =>
+			JSON.stringify({
+				type: "message",
+				timestamp: new Date(at("2026-10-02")).toISOString(),
+				message: { role: "assistant", provider: "p", model: "m", timestamp, usage: { input: 1 } },
+			});
+		for (const bad of [-5, 1.5, 1e16, "not a date", null])
+			expect(parseSession(message(bad)).calls, String(bad)).toEqual([[at("2026-10-02"), 0, 1, 0, 0, 0, 0]]);
+		const file = parseSession(JSON.stringify({ type: "session", timestamp: "not a date" }));
+		expect([file.startMs, file.endMs]).toEqual([0, 0]);
+	});
+
 	it("counts a broken header as a bad line", () => {
 		const file = parseSession(['{"type":"session","timestamp":', opus("2026-10-01", 1, 1)].join("\n"));
 		expect(file.badLines).toBe(1);
@@ -302,6 +355,15 @@ describe("loadUsage", () => {
 		sessionFile(join(`${root}-old`, "c.jsonl"), { startMs: at("2026-10-04"), lines: [opus("2026-10-04", 4, 4)] });
 		await loadUsage({ root: `${root}-old`, cache });
 		expect((await loadUsage({ root, cache })).calls).toHaveLength(1);
+	});
+
+	it("defaults the sessions root and cache to the agent directory", async () => {
+		const agent = join(dir, "agent");
+		vi.stubEnv("PI_CODING_AGENT_DIR", agent);
+		vi.stubEnv("PI_CODING_AGENT_SESSION_DIR", root);
+		sessionFile(join(root, "a.jsonl"), { startMs: at("2026-10-01"), lines: [opus("2026-10-01", 1, 1)] });
+		expect((await loadUsage()).calls).toHaveLength(1);
+		expect(readFileSync(join(agent, "pi-session-kit", "stats-cache.json"), "utf8")).toContain("a.jsonl");
 	});
 
 	it("treats a missing sessions dir as empty, and survives a cache it cannot write", async () => {

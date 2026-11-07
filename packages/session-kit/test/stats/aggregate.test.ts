@@ -64,6 +64,19 @@ describe("aggregate", () => {
 		expect(calls.filter((c) => matches({ kind: "model", name: "openai-codex/sol" }, c))).toHaveLength(1);
 	});
 
+	it("breaks ties by name for the filter cycle, model totals and chart series", () => {
+		const tied = [call("2026-10-01", "zeta", "b", 10), call("2026-10-01", "alpha", "b", 10)];
+		expect(filterCycle(tied)).toEqual([
+			{ kind: "all" },
+			{ kind: "provider", provider: "alpha" },
+			{ kind: "provider", provider: "zeta" },
+			{ kind: "model", name: "alpha/b" },
+			{ kind: "model", name: "zeta/b" },
+		]);
+		expect(modelTotals(tied).map((t) => t.name)).toEqual(["alpha/b", "zeta/b"]);
+		expect(chartSeries({ kind: "all" }, tied, 5).keys.map((k) => k.key)).toEqual(["alpha", "zeta"]);
+	});
+
 	it("charts providers under All and models under a filter", () => {
 		expect(chartSeries({ kind: "all" }, calls, 3)).toEqual({
 			by: "provider",
@@ -114,6 +127,14 @@ describe("aggregate", () => {
 		expect(streaks(["2026-10-31", "2026-11-01"], "2026-11-01").longest).toBe(2);
 		// future days do not make a streak current
 		expect(streaks(["2026-10-01", "2026-10-20"], "2026-10-08")).toEqual({ longest: 1, current: 0 });
+	});
+
+	it("spans one day for an empty all-time Overview", () => {
+		expect(overview([], [], "all", "2026-10-06", [])).toMatchObject({
+			rangeDays: 1,
+			activeDays: 0,
+			favorite: undefined,
+		});
 	});
 
 	it("summarises a range for the Overview", () => {

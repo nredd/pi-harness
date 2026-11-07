@@ -45,8 +45,9 @@ function dedent(lines: readonly string[]): string[] {
 /** First `#` heading, else first non-empty line, else `plan`; Markdown emphasis stripped. */
 export function planTitle(markdown: string): string {
 	const lines = markdown.split("\n").map((line) => line.trim());
-	const heading = lines.find((line) => /^#\s+\S/.test(line)) ?? lines.find((line) => HEADING.test(line));
-	const raw = heading ? (HEADING.exec(heading)?.[2] ?? heading) : (lines.find(Boolean) ?? "");
+	const headings = lines.map((line) => HEADING.exec(line)).filter((match) => match !== null);
+	const heading = headings.find((match) => match[1].length === 1) ?? headings[0];
+	const raw = heading ? heading[2] : (lines.find(Boolean) ?? "");
 	return raw.replace(/[*_`]/g, "").trim() || "plan";
 }
 
@@ -204,14 +205,15 @@ export function parsePlanItems(markdown: string): PlanItem[] {
 		}
 		if (bullet && indent <= 3) {
 			flushItem();
+			// `BULLET` consumes every space after the marker, so the content starts where `bullet[2]` does.
+			const contentOffset = line.trimStart().length - bullet[2].length;
 			const discard = sectionSkipped || listSkipped;
 			current = {
 				group: group(),
 				path: path(),
 				subject: bullet[2].trim(),
 				base: indent,
-				contentIndent:
-					indent + bullet[1].length + (line.trimStart().slice(bullet[1].length).match(/^\s+/)?.[0].length ?? 1),
+				contentIndent: indent + contentOffset,
 				detail: [],
 				body: [bullet[2]],
 				discard,

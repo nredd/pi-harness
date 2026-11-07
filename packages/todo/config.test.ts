@@ -184,3 +184,24 @@ describe("isValidCollapseKeySpec", () => {
 		expect(isValidCollapseKeySpec("ctr+t")).toBe(false);
 	});
 });
+
+describe("XDG_CONFIG_HOME tilde expansion", () => {
+	const previousXdg = process.env.XDG_CONFIG_HOME;
+	afterEach(() => {
+		if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+		else process.env.XDG_CONFIG_HOME = previousXdg;
+		rmSync(join(TEST_HOME, "rpiv-todo"), { recursive: true, force: true });
+		rmSync(join(TEST_HOME, "xdg-sub"), { recursive: true, force: true });
+	});
+
+	it.each([
+		["~", ["rpiv-todo"]],
+		["~/xdg-sub", ["xdg-sub", "rpiv-todo"]],
+	])("expands %s against the injected home", (xdg, segments) => {
+		process.env.XDG_CONFIG_HOME = xdg;
+		const dir = join(TEST_HOME, ...segments);
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "config.json"), JSON.stringify({ maxWidgetLines: 31 }), "utf-8");
+		expect(readConfig(TEST_HOME).maxWidgetLines).toBe(31);
+	});
+});

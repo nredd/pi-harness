@@ -519,3 +519,72 @@ describe("applyTaskMutation — evidence and deferral", () => {
 		});
 	});
 });
+
+describe("applyTaskMutation — structural guards and optional fields", () => {
+	it.each(["update", "get", "delete"] as const)("%s without an id is rejected", (action) => {
+		const state = stateWith(task({ id: 1, subject: "x" }));
+		const result = applyTaskMutation(state, action, action === "update" ? { owner: "w" } : {});
+		expect(result.op).toEqual({ kind: "error", message: `id required for ${action}` });
+		expect(result.state).toBe(state);
+	});
+
+	it.each(["get", "delete"] as const)("%s of an unknown id is rejected", (action) => {
+		const state = stateWith(task({ id: 1, subject: "x" }));
+		const result = applyTaskMutation(state, action, { id: 9 });
+		expect(result.op).toEqual({ kind: "error", message: "#9 not found" });
+		expect(result.state).toBe(state);
+	});
+
+	it("create keeps description and metadata, copying metadata", () => {
+		const metadata = { k: 1 };
+		const result = applyTaskMutation(emptyState(), "create", { subject: "x", description: "why", metadata });
+		expect(result.state.tasks[0]).toMatchObject({ description: "why", metadata: { k: 1 } });
+		expect(result.state.tasks[0].metadata).not.toBe(metadata);
+	});
+
+	it("update rejects addBlockedBy on a missing or deleted task", () => {
+		const state = stateWith(task({ id: 1, subject: "a" }), task({ id: 2, subject: "b", status: "deleted" }));
+		expect(applyTaskMutation(state, "update", { id: 1, addBlockedBy: [9] }).op).toEqual({
+			kind: "error",
+			message: "addBlockedBy: #9 not found",
+		});
+		expect(applyTaskMutation(state, "update", { id: 1, addBlockedBy: [2] }).op).toEqual({
+			kind: "error",
+			message: "addBlockedBy: #2 is deleted",
+		});
+	});
+
+	it("update starts metadata from nothing when the task has none", () => {
+		const state = stateWith(task({ id: 1, subject: "a" }));
+		const result = applyTaskMutation(state, "update", { id: 1, metadata: { a: 1 } });
+		expect(result.state.tasks[0].metadata).toEqual({ a: 1 });
+	});
+
+	it("update refuses to change a plan item's description but accepts the same one", () => {
+		const state = stateWith(task({ id: 1, subject: "a", source: "plan", description: "d" }));
+		const changed = applyTaskMutation(state, "update", { id: 1, description: "other" });
+		expect(changed.op).toMatchObject({ kind: "error" });
+		expect(changed.state).toBe(state);
+		const same = applyTaskMutation(state, "update", { id: 1, description: "d", owner: "w" });
+		expect(same.op).toMatchObject({ kind: "update" });
+		expect(same.state.tasks[0].owner).toBe("w");
+	});
+
+	it("clear keeps plan items untouched when none depends on a dropped task", () => {
+		const state = stateWith(task({ id: 1, subject: "p", source: "plan" }), task({ id: 2, subject: "x" }));
+		const result = applyTaskMutation(state, "clear", {});
+		expect(result.op).toEqual({ kind: "clear", count: 1, kept: 1 });
+		expect(result.state.tasks).toEqual([state.tasks[0]]);
+		expect(result.state.tasks[0]).toBe(state.tasks[0]);
+	});
+
+	it("clear drops only blockers that did not survive", () => {
+		const state = stateWith(
+			task({ id: 1, subject: "p1", source: "plan" }),
+			task({ id: 2, subject: "p2", source: "plan", blockedBy: [1, 3] }),
+			task({ id: 3, subject: "x" }),
+		);
+		const result = applyTaskMutation(state, "clear", {});
+		expect(result.state.tasks[1].blockedBy).toEqual([1]);
+	});
+});

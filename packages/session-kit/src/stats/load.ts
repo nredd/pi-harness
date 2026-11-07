@@ -18,6 +18,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { setImmediate as tick } from "node:timers/promises";
 import { agentDir } from "../agent-dir.ts";
+import { nth } from "./nth.ts";
 export const CACHE_VERSION = 2;
 
 /** Stable opaque identifier: no transcript IDs or paths leave the machine. */
@@ -472,12 +473,12 @@ export function flatten(files: Record<string, FileStats>): Omit<Loaded, "errors"
 	let badLines = 0;
 	const ordered = Object.entries(files).sort(([pa, a], [pb, b]) => a.startMs - b.startMs || pa.localeCompare(pb));
 	for (const [path, file] of ordered) {
-		badLines += file.badLines ?? 0;
+		badLines += file.badLines;
 		const session = file.sessionId ?? opaqueId(`legacy-session:${path}`);
 		for (const [i, tuple] of file.calls.entries()) {
 			const [ms, index, input, output, cacheRead, cacheWrite, cost] = tuple;
 			// Preserve raw attribution for dedup and export; sanitize only in display code.
-			const raw = file.models[index] ?? "unknown/unknown";
+			const raw = nth(file.models, index);
 
 			const slash = raw.indexOf("/");
 			candidates.push({

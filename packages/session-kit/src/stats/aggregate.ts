@@ -41,6 +41,11 @@ export interface DayPoint {
 	total: number;
 }
 
+/** An hourly bucket: always carries its start instant. */
+export interface HourPoint extends DayPoint {
+	ms: number;
+}
+
 export interface Overview {
 	totalTokens: number;
 	cacheRead: number;
@@ -205,25 +210,32 @@ export function hourlySeries(
 	range: "5h" | "24h",
 	now: number,
 	keyOf: (c: Call) => string = modelName,
-): DayPoint[] {
+): HourPoint[] {
 	const start = hourlyStart(range, now);
 	const from = Math.floor(start / HOUR_MS) * HOUR_MS;
 	const to = Math.floor(now / HOUR_MS) * HOUR_MS;
-	const points: DayPoint[] = [];
-	for (let ms = from; ms <= to; ms += HOUR_MS)
-		points.push({
+	const byHour = new Map<number, Call[]>();
+	for (const c of calls) {
+		if (c.ms < start || c.ms > now) continue;
+		const hour = Math.floor(c.ms / HOUR_MS) * HOUR_MS;
+		const bucket = byHour.get(hour);
+		if (bucket) bucket.push(c);
+		else byHour.set(hour, [c]);
+	}
+	const points: HourPoint[] = [];
+	for (let ms = from; ms <= to; ms += HOUR_MS) {
+		const point: HourPoint = {
 			ms,
 			day: `${hourLabel(ms)}${ms < start || ms + HOUR_MS > now ? " (partial)" : ""}`,
 			byKey: new Map(),
 			total: 0,
-		});
-	for (const c of calls) {
-		if (c.ms < start || c.ms > now) continue;
-		const p = points[Math.floor((c.ms - from) / HOUR_MS)];
-		if (!p) continue;
-		const key = keyOf(c);
-		p.byKey.set(key, (p.byKey.get(key) ?? 0) + tokensOf(c));
-		p.total += tokensOf(c);
+		};
+		for (const c of byHour.get(ms) ?? []) {
+			const key = keyOf(c);
+			point.byKey.set(key, (point.byKey.get(key) ?? 0) + tokensOf(c));
+			point.total += tokensOf(c);
+		}
+		points.push(point);
 	}
 	return points;
 }
@@ -267,7 +279,8 @@ export function overview(
 		}
 	}
 	const start = rangeStart(range, today);
-	const firstDay = calls.length > 0 ? dayKey(calls[0]?.ms ?? 0) : today;
+	const first = calls[0];
+	const firstDay = first ? dayKey(first.ms) : today;
 	const rangeDays = start === undefined ? daysBetween(firstDay, today) + 1 : daysBetween(start, today) + 1;
 	// A session is in scope when it owns at least one call that survived the model and range filters.
 	const owners = new Set(calls.map((c) => c.session));

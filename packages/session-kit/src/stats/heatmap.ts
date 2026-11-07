@@ -5,6 +5,7 @@
  */
 
 import { addDays, keyDate, monthName } from "./days.ts";
+import { nth } from "./nth.ts";
 
 /** A year: the heatmap shows at least this many weeks whenever the pane fits them. */
 export const YEAR_WEEKS = 52;
@@ -20,7 +21,7 @@ export type HeatColor = "heat" | "empty" | "label";
 export function quartiles(values: Iterable<number>): [number, number, number] | undefined {
 	const sorted = [...values].filter((v) => v > 0).sort((a, b) => a - b);
 	if (sorted.length === 0) return undefined;
-	const at = (q: number) => sorted[Math.floor(sorted.length * q)] ?? 0;
+	const at = (q: number) => nth(sorted, Math.floor(sorted.length * q));
 	return [at(0.25), at(0.5), at(0.75)];
 }
 
@@ -49,7 +50,7 @@ export function monthRow(start: string, weeks: number): string {
 		const next = starts[i + 1]?.week;
 		// The newest month may run past the grid's right edge; the others need their name plus a space.
 		if (next !== undefined && next - week < name.length + 1) return;
-		for (let c = 0; c < name.length; c++) row[week + c] = name[c] ?? " ";
+		for (let c = 0; c < name.length; c++) row[week + c] = name.charAt(c);
 	});
 	return row.join("").trimEnd();
 }
@@ -95,10 +96,10 @@ export function heatmap(
 
 	const labels = ["   ", "Mon", "   ", "Wed", "   ", "Fri", "   "];
 	const out = [`${" ".repeat(DAY_LABEL_WIDTH)}${paint("label", months)}`];
-	for (let d = 0; d < 7; d++) out.push(`${paint("label", `${labels[d]} `)}${(rows[d] ?? []).join("")}`);
+	for (const [d, cells] of rows.entries()) out.push(`${paint("label", `${labels[d]} `)}${cells.join("")}`);
 	out.push(
-		`${" ".repeat(DAY_LABEL_WIDTH)}${paint("label", "Less ")}${[1, 2, 3, 4]
-			.map((lv) => paint("heat", LEVEL_CHARS[lv] ?? ""))
+		`${" ".repeat(DAY_LABEL_WIDTH)}${paint("label", "Less ")}${LEVEL_CHARS.slice(1)
+			.map((ch) => paint("heat", ch))
 			.join(" ")}${paint("label", " More")}`,
 	);
 	return out;

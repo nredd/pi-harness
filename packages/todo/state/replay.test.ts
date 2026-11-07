@@ -112,6 +112,18 @@ describe("replayFromBranch", () => {
 		expect(state.tasks[0]?.subject).toBe("good");
 	});
 
+	it("replays a task carried over from an earlier plan", () => {
+		const carried = taskFixture(1, "kept", {
+			status: "completed",
+			evidence: "ok",
+			planProvenance: { planId: "old", taskId: 4 },
+		});
+		const ctx = createMockCtx({
+			branch: buildBranch([{ action: "create", params: {}, tasks: [carried], nextId: 2 }]),
+		});
+		expect(replayFromBranch(ctx).tasks).toEqual([carried]);
+	});
+
 	it.each([
 		{ tasks: [null], nextId: 2 },
 		{ tasks: [{}], nextId: 2 },
@@ -125,6 +137,9 @@ describe("replayFromBranch", () => {
 			nextId: 2,
 		},
 		{ tasks: [taskFixture(1, "bad", { planProvenance: { planId: "old", taskId: -1 } })], nextId: 2 },
+		{ tasks: [taskFixture(1, "bad", { planProvenance: { planId: 7, taskId: 1 } as never })], nextId: 2 },
+		{ tasks: [taskFixture(1, "bad", { owner: 7 as never })], nextId: 2 },
+		{ tasks: [taskFixture(1, "bad", { source: "other" as never })], nextId: 2 },
 		{ tasks: [taskFixture(1, "one"), taskFixture(1, "duplicate")], nextId: 2 },
 		{ tasks: [taskFixture(1, "bad")], nextId: 1 },
 		{ tasks: [], nextId: Number.NaN },

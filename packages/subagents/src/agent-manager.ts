@@ -1220,6 +1220,7 @@ export class AgentManager {
 
     const promise = runAgent(ctx, type, prompt, {
       pi,
+      clock: this.clock,
       homeDir: options.homeDir ?? this.homeDir,
       agentId: id,
       model: options.modelSelection?.model,
@@ -1727,6 +1728,7 @@ export class AgentManager {
 
     try {
       this.settleOutcome(record, await resumeAgent(record.session, prompt, {
+        clock: this.clock,
         type: record.type,
         maxTurns: options?.maxTurns ?? record.invocation?.maxTurns,
         onTurnEnd: options?.onTurnEnd,
@@ -1859,6 +1861,7 @@ export class AgentManager {
     };
 
     const promise = resumeAgent(record.session, prompt, {
+      clock: this.clock,
       type: record.type,
       maxTurns: options.maxTurns ?? record.invocation?.maxTurns,
       onTurnEnd: options.onTurnEnd,
