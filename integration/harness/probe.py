@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from harness.interactive import submit
 from harness.paths import PROBE_EXTENSION
+from harness.runtime_hooks import runtime_hooks
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -19,8 +20,6 @@ if TYPE_CHECKING:
 PROBE_TIMEOUT_S = 120.0
 POLL_INTERVAL_S = 0.1
 BYTES_PER_MB = 1024 * 1024
-# `--expose-gc` lets the probe collect before it reads the heap, so the figure is live data.
-PROBE_NODE_OPTIONS = "--expose-gc"
 
 
 @dataclass(frozen=True)
@@ -59,7 +58,9 @@ def probe_args(out: Path) -> tuple[list[str], dict[str, str]]:
     Returns:
         tuple[list[str], dict[str, str]]: extra argv and extra environment.
     """
-    return ["-e", str(PROBE_EXTENSION)], {"HARNESS_PROBE_OUT": str(out), "NODE_OPTIONS": PROBE_NODE_OPTIONS}
+    # `--expose-gc` lets the probe collect before it reads the heap, so the figure is live data; the
+    # adapter sets it for Node and the compiled Bun alike (the probe still falls back to `Bun.gc`).
+    return ["-e", str(PROBE_EXTENSION)], {"HARNESS_PROBE_OUT": str(out)} | runtime_hooks(expose_gc=True)
 
 
 def run_probe(pane: TmuxPane, out: Path, frames: int = 10) -> ProbeResult:

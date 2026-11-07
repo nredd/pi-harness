@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlsplit
 
 from harness.paths import PROVIDERS_DIR
+from harness.runtime_hooks import runtime_hooks
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -321,6 +322,4 @@ def anthropic_env(mock: AnthropicMock, box: Sandbox) -> dict[str, str]:
         MOCK_ENV: mock.url,
         "HARNESS_AUTH_NONCE": secrets.token_hex(16),
         "HARNESS_BLOCKED_LOG": str(shim_log(box)),
-        "NODE_OPTIONS": f"--import {REDIRECT_PRELOAD}",
-        "BUN_OPTIONS": f"--preload {REDIRECT_PRELOAD}",
-    }
+    } | runtime_hooks([REDIRECT_PRELOAD])

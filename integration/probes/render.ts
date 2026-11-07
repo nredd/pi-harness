@@ -6,8 +6,8 @@
  * `renderNow(true)`, the same forced path a resize takes, including the terminal write. Then it
  * times `frames` steady frames: `renderNow()` with no invalidate, the path a keystroke or a
  * spinner tick takes, where every settled component should answer from its cache. After a GC
- * (Node `--expose-gc`, or `Bun.gc(true)` in a compiled Bun standalone, which has no such flag and
- * ignores `NODE_OPTIONS`) it reads `heapUsed`. One JSON line is appended to
+ * (`--expose-gc`, set through `NODE_OPTIONS` or, for a compiled Bun standalone that ignores it,
+ * `BUN_OPTIONS`; else the `Bun.gc(true)` fallback) it reads `heapUsed`. One JSON line is appended to
  * `HARNESS_PROBE_OUT`:
  *   { "frames_ms": [..], "steady_frames_ms": [..], "heap_used": bytes, "gc": bool, "width": n, "height": n }
  */
