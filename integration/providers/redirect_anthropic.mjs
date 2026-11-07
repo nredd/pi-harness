@@ -55,10 +55,9 @@ const blockedLog = process.env.HARNESS_BLOCKED_LOG;
 const childProcess = createRequire(import.meta.url)("node:child_process");
 
 const forbiddenName = (file) => {
-	const first =
-		String(file ?? "")
-			.trim()
-			.split(/\s+/)[0] ?? "";
+	const [first] = String(file ?? "")
+		.trim()
+		.split(/\s+/);
 	return FORBIDDEN.has(basename(first)) ? basename(first) : undefined;
 };
 

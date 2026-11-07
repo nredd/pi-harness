@@ -170,6 +170,17 @@ personal stack, faux provider, `STACK-OK` output, zero exit and empty stderr as
 `standalone-startup-linux-x64` retains the exact executable and `SHA256SUMS` for seven days.
 The normal standalone suites still run and retain their original assertions.
 
+Each cell builds the standalone twice through the same `build_standalone` shell function, so the Bun
+wrapper records the same argv (`cmp` of both `compile-command.json` files). Evidence at the root of the
+build-evidence directory describes the second build, the one exported as `PI_BIN`; the first build's
+evidence and executable are moved to `first/`, also when the first build itself fails.
+
+If the build step fails (including a digest mismatch), `collect-build-failure` scans both executables,
+logs and module graphs through the same `require_safe_diagnostic` policy, and
+`standalone-build-failure-<platform>-<stack>` retains them for seven days, only when the scan published
+(`artifact_ready=true`). `build-binaries.sh` clears its output directory, so a failed second build leaves
+no stale `second/pi`.
+
 `harness.standalone_diagnostics` stages an explicit allowlist and scans *every input*, binary
 included, through the shared `harness.credentials.require_safe_diagnostic` policy before atomically
 publishing the upload directory. This preserves #178's npm (at least 36 alphanumerics), short GitHub,
