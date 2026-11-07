@@ -48,16 +48,22 @@ let idleTimers = 0;
 /**
  * Let a recovering child finish without waiting out its backoff: advance the extension clock only while a
  * backoff sleep is armed on it (a timer beyond the idle ones), so fake time moves at most once per sleep and
- * never past the other timers. Bounded by the run's own settling.
+ * never past the other timers. Bounded by the run's own settling. Asserts the backoff really was armed on the
+ * fixture clock: a run that timed it on native timers would settle with no advance and fail here.
  */
 async function settleThroughBackoff(record: { promise?: Promise<unknown> }) {
   let settled = false;
+  let advances = 0;
   const finished = Promise.resolve(record.promise).finally(() => { settled = true; });
   while (!settled) {
-    if (fixture.clock.pending > idleTimers) fixture.clock.advance(BACKOFF_SPAN_MS);
+    if (fixture.clock.pending > idleTimers) {
+      advances++;
+      fixture.clock.advance(BACKOFF_SPAN_MS);
+    }
     await new Promise(resolve => setImmediate(resolve));
   }
   await finished;
+  expect(advances).toBeGreaterThan(0);
 }
 
 /** Spawn a background child that runs one held tool, so its next model step happens after we act. */
@@ -379,6 +385,20 @@ describe("resumeAgent", () => {
     expect(prompt).toHaveBeenCalledTimes(2);
     expect(result.text).toBe("RESUMED OK");
     expect(result.failure).toBeUndefined();
+  });
+
+  it("times a resumed run's backoff on the clock it is given", async () => {
+    const { session, prompt } = resumed(true);
+    const clock = new FakeClock();
+    const run = resumeAgent(session, "go on", { type: "general-purpose", clock });
+    // The first prompt returns within microtasks; the retry only follows the 1s sleep on that clock.
+    await new Promise(resolve => setImmediate(resolve));
+    expect(prompt).toHaveBeenCalledTimes(1);
+    clock.advance(1_000);
+    // Microtasks finish the retry; a native timer would lose to the next macrotask and leave one prompt.
+    await new Promise(resolve => setImmediate(resolve));
+    expect(prompt).toHaveBeenCalledTimes(2);
+    expect((await run).text).toBe("RESUMED OK");
   });
 
   it("reports an interruption when a resumed run never recovers", async () => {
