@@ -34,6 +34,12 @@ pytestmark = [pytest.mark.stack, pytest.mark.tui]
 INTERVAL_S = 30
 # The footer's `POLL_INTERVAL_MS` in `packages/preset/lib/footer-quota.ts`.
 POLL_INTERVAL_S = 60
+# First request follows `session_start` at once; the second is capped at the interval plus 15 s over
+# the measured 60.0 s gap. Event driven, so the bound only matters for a dead timer.
+FIRST_POLL_TIMEOUT_S = 15
+POLL_TIMEOUT_S = POLL_INTERVAL_S + 15
+# Tolerated lateness of the second request (a loaded host delays timers, never advances them).
+LATE_SLACK_S = 10
 STATUS = "STATUS-LINE-OK"
 TICK_REPLY = "LOOP-TICK-REPLY-7f3a"
 # The tick is the only prompt that ever reaches the provider, so its reply proves the timer fired.
@@ -81,12 +87,12 @@ def test_footer_usage_poll_repeats_on_real_timers(sandbox: Sandbox, tui: Callabl
         env=fixture_env(usage),
         wait_pattern=STATUS,
     )
-    first = wait_for_requests(usage, 1, timeout_s=15)[0]
+    first = wait_for_requests(usage, 1, timeout_s=FIRST_POLL_TIMEOUT_S)[0]
     # Event driven: returns as soon as the second request lands; the bound only caps a dead timer.
-    second = wait_for_requests(usage, 2, timeout_s=POLL_INTERVAL_S + 15)[1]
+    second = wait_for_requests(usage, 2, timeout_s=POLL_TIMEOUT_S)[1]
     gap = (second - first) / 1000
     LOGGER.info("footer usage poll gap %.1fs of a %ss interval", gap, POLL_INTERVAL_S)
-    assert POLL_INTERVAL_S - EARLY_SLACK_S <= gap <= POLL_INTERVAL_S + 10, (
+    assert POLL_INTERVAL_S - EARLY_SLACK_S <= gap <= POLL_INTERVAL_S + LATE_SLACK_S, (
         f"Poll gap {gap:.1f}s, expected ~{POLL_INTERVAL_S}s"
     )
 
