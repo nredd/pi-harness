@@ -13,6 +13,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { EvictedNote } from "./agent-manager.js";
 import type { NoticeParts } from "./notification-result.js";
 import type { AgentRecord } from "./types.js";
 import type { AgentActivity } from "./ui/agent-widget.js";
@@ -28,6 +29,8 @@ export interface DetachedResult {
   record?: Record<string, unknown>;
   /** The `subagents:completed`/`subagents:failed` event the live path would have emitted, replayed on delivery. */
   lifecycle?: { channel: "subagents:completed" | "subagents:failed"; data: Record<string, unknown> };
+  /** What the reopened session keeps so this id still answers after the orphaned record is gone. */
+  evicted?: EvictedNote;
   /** A full-result notice's parts, so delivery clips it against its batch's budget; `content` is the fallback. */
   notice?: NoticeParts & { footer: string };
 }

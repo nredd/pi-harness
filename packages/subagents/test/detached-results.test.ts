@@ -312,6 +312,47 @@ describe("session switch with a running background agent", () => {
     await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
   });
 
+  it("keeps a survivor that settled while detached answerable by id after its result is delivered (#330)", async () => {
+    const first = makePi();
+    subagentsExtension(first.pi);
+    await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    const agent = await spawnRunning(first.tools);
+    await first.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "reload" }, ctx(sessionFile));
+    agent.finish();
+    await flush();
+
+    const back = makePi();
+    subagentsExtension(back.pi);
+    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    await new Promise(resolve => setTimeout(resolve, 250));
+    // The notice names this id; its orphaned record is gone, so the fresh manager has never heard of it.
+    expect(back.pi.sendMessage.mock.calls[0][0].content).toContain(agent.id);
+
+    for (const tool of ["get_subagent_result", "steer_subagent"]) {
+      const got = await back.tools.get(tool).execute("g", { agent_id: agent.id, message: "hi" }, undefined, undefined, ctx(sessionFile));
+      expect(got.content[0].text).not.toContain("Agent not found");
+      expect(got.content[0].text).toContain(agent.id);
+      expect(got.content[0].text).toContain("completed");
+    }
+    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+  });
+
+  it("still delivers a spooled result written without an eviction note", async () => {
+    const back = makePi();
+    subagentsExtension(back.pi);
+    spoolDetached(sessionFile, {
+      id: "legacy-1",
+      content: "<task-notification>legacy</task-notification>",
+      details: { id: "legacy-1" },
+    });
+    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    await new Promise(resolve => setTimeout(resolve, 250));
+    expect(back.pi.sendMessage).toHaveBeenCalledTimes(1);
+    const got = await back.tools.get("get_subagent_result").execute("g", { agent_id: "legacy-1" }, undefined, undefined, ctx(sessionFile));
+    expect(got.content[0].text).toContain("Agent not found");
+    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+  });
+
   it("delivers immediately when the agent finishes while its session is open again", async () => {
     const first = makePi();
     subagentsExtension(first.pi);

@@ -241,7 +241,7 @@ export interface OwnedPending {
 }
 
 /** A record whose run is over. Every settle and stop stamps `completedAt`; only a (re)start clears it. */
-type SettledRecord = AgentRecord & { completedAt: number };
+export type SettledRecord = AgentRecord & { completedAt: number };
 
 /** Whether `record` is past its run (neither running nor queued), and so carries `completedAt`. */
 function isSettled(record: AgentRecord): record is SettledRecord {
@@ -2084,18 +2084,31 @@ export class AgentManager {
     // Only the top-level tools read notes, and an owned child (nested or a
     // workflow's) must stay unreachable from them after eviction as before it.
     if (!isTopLevelAgent(record)) return;
-    const { completedAt } = record;
-    this.evictedNotes.delete(record.id);
-    this.evictedNotes.set(record.id, {
+    this.rememberEvicted(this.evictionNote(record));
+  }
+
+  /** What a settled record leaves behind once it is gone from this manager. */
+  evictionNote(record: SettledRecord): EvictedNote {
+    return {
       id: record.id,
       type: record.type,
       description: record.description,
       status: record.status,
-      evictedAfterMin: Math.max(0, Math.round((this.clock.now() - completedAt) / 60_000)),
+      evictedAfterMin: Math.max(0, Math.round((this.clock.now() - record.completedAt) / 60_000)),
       transcript: record.outputFile ?? record.sessionFile,
       ...(record.modelTier ? { modelTier: record.modelTier } : {}),
       ...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
-    });
+    };
+  }
+
+  /**
+   * Keep `note` addressable by its id, bounded by age. Also how a result handed
+   * over by an orphaned manager (`/new`, `/reload`) stays answerable here: the
+   * record settled in a manager this one never saw (#330).
+   */
+  rememberEvicted(note: EvictedNote): void {
+    this.evictedNotes.delete(note.id);
+    this.evictedNotes.set(note.id, note);
     // Insertion order is age order (the note was just re-inserted above).
     for (const oldest of this.evictedNotes.keys()) {
       if (this.evictedNotes.size <= MAX_EVICTED_NOTES) break;
