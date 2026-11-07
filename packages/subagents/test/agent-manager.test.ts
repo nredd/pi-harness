@@ -1512,11 +1512,11 @@ describe("AgentManager — SpawnOptions.cwd passthrough (#96)", () => {
   // macOS privacy denial), so every child read then failed with a bare EPERM/EACCES.
   describe("unreadable cwd fails fast", () => {
     const skip = process.getuid?.() === 0 || process.platform === "win32";
-    const locked = (): { root: string; dir: string } => {
+    const locked = (mode = 0o000): { root: string; dir: string } => {
       const root = mkdtempSync(join(tmpdir(), "subagents-unreadable-"));
       const dir = join(root, "locked");
       mkdirSync(dir);
-      chmodSync(dir, 0o000);
+      chmodSync(dir, mode);
       return { root, dir };
     };
     const unlock = ({ root, dir }: { root: string; dir: string }) => {
@@ -1534,6 +1534,19 @@ describe("AgentManager — SpawnOptions.cwd passthrough (#96)", () => {
           cwd: l.dir,
         })).toThrow(new RegExp(`SpawnOptions\\.cwd is not readable \\(EACCES\\).*${l.dir}.*Full Disk Access`, "s"));
         expect(manager.listAgents()).toEqual([]);
+        expect(runAgent).not.toHaveBeenCalled();
+      } finally { unlock(l); }
+    });
+
+    it.skipIf(skip)("rejects a read-only cwd with no search bit (0o444)", () => {
+      vi.mocked(runAgent).mockClear();
+      manager = new AgentManager();
+      const l = locked(0o444);
+      try {
+        expect(() => manager.spawn(mockPi, mockCtx, "general-purpose", "test", {
+          description: "test",
+          cwd: l.dir,
+        })).toThrow(new RegExp(`SpawnOptions\\.cwd is not readable \\(EACCES\\).*${l.dir}`, "s"));
         expect(runAgent).not.toHaveBeenCalled();
       } finally { unlock(l); }
     });

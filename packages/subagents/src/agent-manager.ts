@@ -21,7 +21,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { opendirSync, statSync } from "node:fs";
+import { accessSync, constants, opendirSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -244,6 +244,8 @@ function assertValidSpawnCwd(cwd: unknown): asserts cwd is string | undefined | 
 function assertReadableCwd(cwd: string, label: string): void {
   try {
     opendirSync(cwd).closeSync();
+    // opendir needs only the read bit; children also need search (x) to reach anything inside.
+    accessSync(cwd, constants.R_OK | constants.X_OK);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "EACCES" && code !== "EPERM") return;
