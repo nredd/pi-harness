@@ -56,7 +56,7 @@ def test_wsl2_workflow_fails_closed_on_platform_or_mount_mismatch() -> None:
     setup = (ROOT / "scripts/wsl2_setup.sh").read_text()
     assert "wsl-version: '2'" in action
     assert "wsl --list --verbose" in action
-    assert "-replace ([char]0), ''" in action
+    assert "-replace ([char]0), ''" in (ROOT / "scripts/wsl2_bounded.ps1").read_text()
     assert "Ubuntu-24\\.04" in action
     assert "core.autocrlf false" in action
     assert "Expected Windows source below /mnt" in setup
@@ -458,3 +458,166 @@ def test_install_gh_requires_one_directory_argument() -> None:
     completed = subprocess.run(["/bin/bash", str(INSTALL_GH)], capture_output=True, check=False, text=True)
     assert completed.returncode == 2
     assert "usage:" in completed.stderr
+
+
+SETUP = ROOT / "scripts" / "wsl2_setup.sh"
+SETUP_ACTION = ROOT / ".github" / "actions" / "setup-ci-wsl" / "action.yml"
+
+
+def setup_steps() -> list[dict[str, str]]:
+    """Return the WSL setup composite action's steps.
+
+    Returns:
+        list[dict[str, str]]: Parsed steps, in order.
+    """
+    return yaml.safe_load(SETUP_ACTION.read_text(encoding="utf-8"))["runs"]["steps"]
+
+
+def test_every_host_wsl_call_in_setup_is_bounded() -> None:
+    """Route each `wsl` call in the guest-prepare step through `Invoke-Bounded` (#626)."""
+    step = next(item for item in setup_steps() if item.get("name") == "Assert WSL2 and prepare guest")
+    run = step["run"]
+    assert ". (Join-Path $env:GITHUB_WORKSPACE 'scripts/wsl2_bounded.ps1')" in run
+    commands = [
+        line
+        for line in run.splitlines()
+        if not line.lstrip().startswith("#") and re.search(r"\swsl\s", f" {line} ")
+    ]
+    assert len(commands) == 4
+    for line in commands:
+        assert "Invoke-Bounded '" in line, f"unbounded wsl call: {line}"
+    deadlines = {
+        match.group("label"): int(match.group("seconds"))
+        for match in re.finditer(r"Invoke-Bounded '(?P<label>[^']+)' (?P<seconds>\d+)", run)
+    }
+    # Measured on hosted passes: under 1s per host command, 23s to 67s for the bootstrap script.
+    assert deadlines == {
+        "list WSL distributions": 60,
+        "create the pi-ci user": 60,
+        "translate the setup script path": 60,
+        "guest bootstrap (scripts/wsl2_setup.sh)": 300,
+    }
+
+
+def test_setup_wsl_action_is_bounded_by_a_watchdog_that_always_reports() -> None:
+    """Bound the third-party step, which takes no `timeout-minutes`, and fail with the watchdog's report."""
+    steps = setup_steps()
+    names = [step.get("name", step.get("uses", "")) for step in steps]
+    start = names.index("Start WSL setup watchdog")
+    action = next(i for i, step in enumerate(steps) if step.get("uses", "").startswith("Vampire/setup-wsl@"))
+    stop = names.index("Stop WSL setup watchdog and report")
+    assert start < action < stop < names.index("Assert WSL2 and prepare guest")
+    assert re.fullmatch(r"Vampire/setup-wsl@[0-9a-f]{40}", steps[action]["uses"])
+    assert all("timeout-minutes" not in step for step in steps), "composite steps reject timeout-minutes"
+    launch = steps[start]["run"]
+    assert "'-Seconds', '300'" in launch
+    assert "-RedirectStandardOutput" in launch
+    assert "-RedirectStandardError" in launch
+    assert steps[stop]["if"] == "always()"
+    assert "watchdog.tripped" in steps[stop]["run"]
+    assert "throw" in steps[stop]["run"]
+    watchdog = (ROOT / "scripts/wsl2_watchdog.ps1").read_text()
+    assert "watchdog.done" in watchdog
+    assert "Write-StallReport" in watchdog
+    assert "'wsl.exe', 'wslhost.exe'" in watchdog
+    assert "setup-wsl" in watchdog
+
+
+def test_bounded_helper_kills_the_tree_and_reports_the_stuck_command() -> None:
+    """Pin the helper's trip behaviour: exit 124, tree kill, annotation, host and guest snapshots."""
+    helper = (ROOT / "scripts/wsl2_bounded.ps1").read_text()
+    assert "$process.Kill($true)" in helper
+    assert "ExitCode = 124" in helper
+    assert "::error title=WSL setup timed out::$Label exceeded ${Seconds}s: $($Command -join ' ')" in helper
+    assert "Get-CimInstance Win32_Process" in helper
+    assert "'--exec', 'ps'" in helper
+    assert "$global:LASTEXITCODE = $result.ExitCode" in helper
+
+
+def guest_setup_env(tmp_path: Path, stubs: dict[str, str]) -> tuple[dict[str, str], Path]:
+    """Build a guest bootstrap fixture: stub commands, a fake checkout copy and an argv log.
+
+    Parameters:
+        tmp_path (Path): Scratch directory.
+        stubs (dict[str, str]): Extra stub command bodies by name, overriding the defaults.
+
+    Returns:
+        tuple[dict[str, str], Path]: Environment for `wsl2_setup.sh` and the log of every `timeout` call.
+    """
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    log = tmp_path / "timeout.log"
+    defaults = {
+        "findmnt": "#!/bin/sh\nprintf ext4\n",
+        "ps": "#!/bin/sh\necho 'PID PPID ELAPSED STAT COMMAND'\necho '42 1 05:00 S synthetic-stuck-apt'\n",
+        # The copy stub plants the pins the real checkout carries.
+        "cp": '#!/bin/sh\nfor last; do :; done\nprintf "22.0.0\\n" > "$last/.node-version"\n',
+        # Stand-in for coreutils `timeout`, absent on some hosts: record argv, then run or model a trip.
+        "timeout": f'#!/bin/sh\nprintf "%s\\n" "$*" >> {shlex.quote(str(log))}\n'
+        'shift 2\ncase "$1" in curl) exit 124 ;; esac\nexec "$@"\n',
+    }
+    for name, body in (defaults | stubs).items():
+        (commands / name).write_text(body, encoding="utf-8")
+        (commands / name).chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    env = dict(os.environ) | {
+        "HOME": str(home),
+        "WSL_HOST_WORKSPACE": "/mnt/c/synthetic-checkout",
+        "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+    }
+    return env, log
+
+
+def run_guest_setup(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """Run the real guest bootstrap with the given environment.
+
+    Parameters:
+        env (dict[str, str]): Process environment.
+
+    Returns:
+        subprocess.CompletedProcess[str]: Outcome.
+    """
+    return subprocess.run(["/bin/bash", str(SETUP)], env=env, capture_output=True, check=False, text=True)
+
+
+def test_guest_setup_names_the_stuck_command_and_guest_processes_on_a_timeout(tmp_path: Path) -> None:
+    """A tripped bound exits 124 and prints the label, the command, and what the guest was running."""
+    env, log = guest_setup_env(tmp_path, {})
+    result = run_guest_setup(env)
+    assert result.returncode == 124
+    assert (
+        "wsl2-setup: TIMEOUT: download https://nodejs.org/dist/v22.0.0/node-v22.0.0-linux-x64.tar.xz"
+        in result.stderr
+    )
+    assert "exceeded 120s" in result.stderr
+    assert "curl --fail --location --retry 3 --connect-timeout 15 --max-time 30 --output" in result.stderr
+    assert "synthetic-stuck-apt" in result.stderr
+    calls = log.read_text().splitlines()
+    assert calls[0].startswith("--kill-after=10 60 cp -a ")
+    assert calls[1].startswith("--kill-after=10 120 curl ")
+
+
+def test_guest_setup_names_a_failed_command_without_calling_it_a_timeout(tmp_path: Path) -> None:
+    """A plain failure keeps its status and names the command, with no process dump."""
+    env, _ = guest_setup_env(tmp_path, {"cp": "#!/bin/sh\nexit 7\n"})
+    result = run_guest_setup(env)
+    assert result.returncode == 7
+    assert "wsl2-setup: FAILED: copy checkout (status 7): cp -a " in result.stderr
+    assert "TIMEOUT" not in result.stderr
+    assert "synthetic-stuck-apt" not in result.stderr
+
+
+def test_guest_setup_leaves_no_external_command_unbounded() -> None:
+    """Every network, archive and installer command goes through `bounded`/`fetch`; no pipe into a shell."""
+    setup = SETUP.read_text(encoding="utf-8")
+    assert not re.search(r"\|\s*(ba)?sh\b", setup)
+    body = setup.split("source_checkout=$WSL_HOST_WORKSPACE", 1)[1]
+    for line in body.splitlines():
+        stripped = line.strip()
+        if re.match(r"(curl|tar|npm|cp|bun|uv) ", stripped) or re.match(r"(ba)?sh ", stripped):
+            pytest.fail(f"unbounded command: {stripped}")
+    for label in ("copy checkout", "extract node", "install npm", "install bun", "install uv", "install gh"):
+        assert f'bounded "{label}" ' in setup
+    assert 'bounded "install owned tools" 120 ' in setup
+    assert "--connect-timeout 15 --max-time 30" in (ROOT / "scripts/install_wsl_owned_tools.sh").read_text()
