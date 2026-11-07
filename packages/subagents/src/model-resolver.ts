@@ -223,7 +223,7 @@ function scopedCandidates<T extends { entry: ModelEntry }>(
 function compareModelIdentity(a: ModelEntry, b: ModelEntry): number {
   const left = `${a.provider}/${a.id}`;
   const right = `${b.provider}/${b.id}`;
-  return left < right ? -1 : left > right ? 1 : 0;
+  return Number(left > right) - Number(left < right);
 }
 
 function rankFuzzy(
@@ -239,7 +239,7 @@ function rankFuzzy(
 
 /** Numeric runs stay ordered and contiguous: `5-5` cannot reuse the `5` in `4-5`. */
 function versionRuns(value: string): string[] {
-  return [...value.replace(/-\d{8}$/, "").matchAll(/(?:^|[\s-])(\d+(?:[\s-]+\d+)*)(?=$|[\s-])/g)].map(match => (match[1] ?? "").replace(/\s+/g, "-"));
+  return [...value.replace(/-\d{8}$/, "").matchAll(/(?:^|[\s-])(\d+(?:[\s-]+\d+)*)(?=$|[\s-])/g)].map(match => match[1]!.replace(/\s+/g, "-"));
 }
 
 /** Resolve an exact or fuzzy provider/model request without consulting aliases. */

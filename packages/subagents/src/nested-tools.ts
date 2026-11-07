@@ -16,6 +16,7 @@ import {
   resolveTypeIn,
 } from "./agent-types.js";
 import { loadCustomAgents } from "./custom-agents.js";
+import { errorMessage } from "./error-message.js";
 import { isolationParam, resolveAgentInvocationConfig } from "./invocation-config.js";
 import { type ModelSelection, modelIdentityNote, modelSelectionNote, selectModel } from "./model-selection.js";
 import {
@@ -429,7 +430,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         );
         return textResult(formatRecord(record, "inline"), record.status === "error");
       } catch (err) {
-        return textResult(err instanceof Error ? err.message : String(err), true);
+        return textResult(errorMessage(err), true);
       }
     },
   });

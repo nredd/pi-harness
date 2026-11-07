@@ -1000,3 +1000,15 @@ describe("process budget lease release", () => {
     expect(budgetUsage().pending).toBe(0);
   });
 });
+
+describe("tryAcquireBudget depth ceiling", () => {
+  it("refuses a lease deeper than the policy reserves for, even with room free", () => {
+    resetBudgetForTests();
+    setBudgetPolicy({ maxActive: 8, nestedReserve: 1, maxDepth: 2 });
+    expect(tryAcquireBudget(3)).toBeUndefined();
+    const lease = tryAcquireBudget(2);
+    expect(lease).toBeDefined();
+    releaseBudget(lease);
+    resetBudgetForTests();
+  });
+});

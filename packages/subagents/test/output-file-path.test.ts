@@ -17,6 +17,18 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fakeTmp = vi.hoisted(() => ({ dir: "" }));
+const chmodFault = vi.hoisted(() => ({ error: undefined as Error | undefined }));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    chmodSync: (...args: Parameters<typeof actual.chmodSync>) => {
+      if (chmodFault.error) throw chmodFault.error;
+      return actual.chmodSync(...args);
+    },
+  };
+});
 
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
@@ -40,6 +52,7 @@ describe("createOutputFilePath", () => {
   });
 
   afterEach(() => {
+    chmodFault.error = undefined;
     rmSync(fakeTmp.dir, { recursive: true, force: true });
     fakeTmp.dir = "";
   });
@@ -82,5 +95,33 @@ describe("createOutputFilePath", () => {
     createOutputFilePath("/home/user/project", AGENT, SESSION);
 
     expect(statSync(root).mode & 0o777).toBe(0o700);
+  });
+
+  it("falls back to uid 0 in the root name where the platform has no getuid", () => {
+    const original = Object.getOwnPropertyDescriptor(process, "getuid");
+    Object.defineProperty(process, "getuid", { value: undefined, configurable: true });
+    try {
+      const path = createOutputFilePath("/home/user/project", AGENT, SESSION);
+      expect(path).toBe(join(fakeTmp.dir, "pi-subagents-0", "home-user-project", SESSION, "tasks", `${AGENT}.output`));
+    } finally {
+      if (original) Object.defineProperty(process, "getuid", original);
+      else delete (process as { getuid?: unknown }).getuid;
+    }
+  });
+
+  describe("when chmod of the root fails", () => {
+    const realPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    afterEach(() => Object.defineProperty(process, "platform", realPlatform));
+
+    it.skipIf(process.platform === "win32")("rethrows on Unix, where the 0700 mode is the transcript's only protection", () => {
+      chmodFault.error = new Error("EPERM: chmod");
+      expect(() => createOutputFilePath("/home/user/project", AGENT, SESSION)).toThrow("EPERM: chmod");
+    });
+
+    it("tolerates it on Windows, where chmod is a no-op or unsupported", () => {
+      Object.defineProperty(process, "platform", { ...realPlatform, value: "win32" });
+      chmodFault.error = new Error("EPERM: chmod");
+      expect(createOutputFilePath("/home/user/project", AGENT, SESSION)).toContain(`${AGENT}.output`);
+    });
   });
 });

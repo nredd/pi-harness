@@ -17,6 +17,21 @@ function run(events: [ModelCallEvent, number][]): ModelCallState | undefined {
   return state;
 }
 
+describe("applyModelCallEvent", () => {
+  it("starts a thinking call from a delta that arrives with no prior state", () => {
+    expect(applyModelCallEvent(undefined, { type: "delta", kind: "writing", chars: 7 }, T0)).toEqual({
+      startedAt: T0,
+      lastEventAt: T0,
+      kind: "writing",
+      writtenChars: 7,
+    });
+    expect(applyModelCallEvent(undefined, { type: "delta", kind: "thinking", chars: 7 }, T0)).toMatchObject({
+      kind: "thinking",
+      writtenChars: 0,
+    });
+  });
+});
+
 describe("formatClock", () => {
   it.each([
     [0, "0s"],

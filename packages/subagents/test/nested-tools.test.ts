@@ -325,6 +325,18 @@ describe("child-safe nested Agent tools", () => {
     expect(record.pendingSteers).toEqual(["focus on tests"]);
   });
 
+  it("appends to the steers already queued for a child without a session", async () => {
+    const [, , steer] = tools();
+    const record: Record<string, unknown> = {
+      id: "child-1", status: "running", parentAgentId: "parent-1", pendingSteers: ["first"],
+    };
+    records.set("child-1", record);
+
+    await execute(steer, { agent_id: "child-1", message: "second" });
+
+    expect(record.pendingSteers).toEqual(["first", "second"]);
+  });
+
   // #442 made the top-level steer_subagent resume a finished agent; the nested
   // tool keeps its own contract, where a finished child resumes through Agent.
   it("still refuses to steer its own finished child", async () => {
@@ -497,6 +509,17 @@ describe("child-safe nested Agent tools", () => {
     expect(result.content[0].text).toBe("queued done");
   });
 
+  it("returns the child's current state when a queued child starts with no promise to await", async () => {
+    const [, getResult] = tools();
+    const record = { id: "queued-child", status: "queued", parentAgentId: "parent-1" };
+    records.set(record.id, record);
+    setTimeout(() => { record.status = "running"; }, 10);
+
+    const result = await execute(getResult, { agent_id: record.id, wait: true });
+
+    expect(result.content[0].text).toBe("Agent queued-child is running.");
+  });
+
   it("aborts a nested result wait without aborting the owned child", async () => {
     const [, getResult] = tools();
     let settleChild: (() => void) | undefined;
@@ -612,6 +635,69 @@ describe("child-safe nested Agent tools", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("provider exploded");
     expect(result.content[0].text).toContain("got this far");
+  });
+
+  it("reports a failed child that carries no error text as an unknown error", async () => {
+    spawnAndWait.mockImplementation(async () => ({
+      id: "child-1",
+      record: { id: "child-1", status: "error", parentAgentId: "parent-1" },
+    }));
+    const [agent] = tools();
+    const result = await execute(agent, { subagent_type: "scout", description: "failing", prompt: "Do work" });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe("Agent failed: unknown error");
+  });
+
+  it("falls back from a blank result to the error text, then to `No output.`", async () => {
+    const [, getResult] = tools();
+    records.set("with-error", { id: "with-error", status: "completed", result: "  ", error: " late failure ", parentAgentId: "parent-1" });
+    records.set("empty", { id: "empty", status: "completed", result: "", parentAgentId: "parent-1" });
+
+    expect((await execute(getResult, { agent_id: "with-error" })).content[0].text).toBe("late failure");
+    expect((await execute(getResult, { agent_id: "empty" })).content[0].text).toBe("No output.");
+  });
+
+  it("returns the resumed child's outcome when the manager resumes it", async () => {
+    const [agent] = tools(["scout"]);
+    await execute(agent, { subagent_type: "scout", description: "find files", prompt: "Find them" });
+    (manager.resume as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "child-1", type: "scout", status: "completed", result: "resumed answer", parentAgentId: "parent-1",
+    });
+
+    const result = await execute(agent, { resume: "child-1", subagent_type: "scout", description: "continue", prompt: "Continue" });
+
+    expect(result.isError).toBe(false);
+    expect(result.content[0].text).toBe("resumed answer");
+  });
+
+  it("tolerates an ancestor record that is gone when folding in spend", async () => {
+    // The parent record was removed (e.g. cleaned up) while its child is still reporting turns.
+    spawnAndWait.mockImplementation(async (_pi, _ctx, _type, _prompt, options) => {
+      options.onAssistantUsage?.({ input: 1, output: 1, cacheWrite: 0 });
+      return { id: "child-1", record: { id: "child-1", status: "completed", result: "ok", parentAgentId: "parent-1" } };
+    });
+    const [agent] = tools();
+
+    const result = await execute(agent, { subagent_type: "scout", description: "orphan", prompt: "Do work" });
+
+    expect(result.isError).toBe(false);
+    expect(result.content[0].text).toBe("ok");
+  });
+
+  it("skips transcript wiring for a child the manager has no record of, and for a session seen before its id", async () => {
+    records.set("parent-1", { id: "parent-1", status: "running", rootSessionId: "root-session" });
+    spawnAndWait.mockImplementation(async (_pi, _ctx, _type, _prompt, options) => {
+      options.onSessionCreated?.({ subscribe: vi.fn() });
+      options.onPrepare?.("ghost");
+      return { id: "child-1", record: { id: "child-1", status: "completed", result: "ok", parentAgentId: "parent-1" } };
+    });
+    const [agent] = tools();
+
+    const result = await execute(agent, { subagent_type: "scout", description: "ghost", prompt: "Do work" });
+
+    expect(result.isError).toBe(false);
+    expect(records.has("ghost")).toBe(false);
   });
 
   it("attributes a nested child's token spend to the owning parent", async () => {

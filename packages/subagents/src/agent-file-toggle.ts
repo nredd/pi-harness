@@ -128,7 +128,6 @@ function splitFrontmatter(content: string):
   | { lines: string[]; openIdx: number; closeIdx: number; eol: string }
   | undefined {
   const lines = content.split(/(?<=\n)/);
-  if (lines.length === 0) return undefined;
   // The BOM stays where it is — it belongs to the file, not the block — so the
   // fence test looks past it and every index below is unaffected.
   const bom = content.startsWith("\uFEFF");
