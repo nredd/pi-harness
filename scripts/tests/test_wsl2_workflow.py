@@ -486,7 +486,7 @@ def test_every_host_wsl_call_in_setup_is_bounded() -> None:
     assert len(commands) == 4
     for line in commands:
         assert re.search(r"Invoke-Bounded(Capture)? '", line), f"unbounded wsl call: {line}"
-    # A tripped capture returns nothing: check the status before trimming it.
+    # A tripped capture may be empty or partial: check the status before trimming it.
     assert run.index("$setup = Invoke-BoundedCapture") < run.index("$setup = $setup.Trim()")
     assert run.index("if ($LASTEXITCODE -ne 0)", run.index("$setup = Invoke-BoundedCapture")) < run.index(
         "$setup = $setup.Trim()"
@@ -495,7 +495,7 @@ def test_every_host_wsl_call_in_setup_is_bounded() -> None:
         match.group("label"): int(match.group("seconds"))
         for match in re.finditer(r"Invoke-Bounded(?:Capture)? '(?P<label>[^']+)' (?P<seconds>\d+)", run)
     }
-    # Measured on hosted passes: under 1s per host command, 23s to 67s for the bootstrap script.
+    # Measured on hosted passes: under 1s per host command, 22s to 67s for the bootstrap script.
     assert deadlines == {
         "list WSL distributions": 30,
         "create the pi-ci user": 30,
@@ -628,5 +628,5 @@ def test_guest_setup_leaves_no_external_command_unbounded() -> None:
             pytest.fail(f"unbounded command: {stripped}")
     for label in ("copy checkout", "extract node", "install npm", "install bun", "install uv", "install gh"):
         assert f'bounded "{label}" ' in setup
-    assert 'bounded "install owned tools" 60 ' in setup
+    assert 'bounded "install owned tools" 90 ' in setup
     assert "--connect-timeout 15 --max-time 45" in (ROOT / "scripts/install_wsl_owned_tools.sh").read_text()

@@ -92,7 +92,7 @@ function Invoke-BoundedCapture {
     <#
     .SYNOPSIS
         Same as Invoke-Bounded, but returns the command's standard output with NUL bytes removed
-        (`wsl.exe` writes UTF-16). Returns an empty string after a trip.
+        (`wsl.exe` writes UTF-16). May hold partial output after a trip: check $LASTEXITCODE first.
     #>
     return Invoke-BoundedCore -Label $args[0] -Seconds ([int]$args[1]) -Capture $true -Command @($args | Select-Object -Skip 2)
 }

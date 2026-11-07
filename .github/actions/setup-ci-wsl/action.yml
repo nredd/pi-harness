@@ -48,7 +48,7 @@ runs:
         if ($watchdogPid) { Wait-Process -Id $watchdogPid -Timeout 90 -ErrorAction SilentlyContinue }
         foreach ($name in 'watchdog.log', 'watchdog.err') {
           $path = Join-Path $diagnostics $name
-          if ((Test-Path $path) -and (Get-Item $path).Length -gt 0) { Get-Content $path | Write-Host }
+          if ((Test-Path $path) -and (Get-Item $path).Length -gt 0) { Get-Content -ErrorAction SilentlyContinue $path | Write-Host }
         }
         if (Test-Path (Join-Path $diagnostics 'watchdog.tripped')) {
           throw 'WSL setup was killed by its watchdog; see the report above'
