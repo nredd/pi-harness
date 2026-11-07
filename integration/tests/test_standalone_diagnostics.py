@@ -896,3 +896,87 @@ def test_module_entrypoint_requires_an_action(
         runpy.run_module("harness.standalone_diagnostics", run_name="__main__")
     assert caught.value.code == 2
     assert "the following arguments are required: action" in capsys.readouterr().err
+
+
+def test_file_sha256_matches_hashlib_across_chunk_boundary(tmp_path: Path) -> None:
+    """Hash a file larger than one read chunk identically to `hashlib`."""
+    data = b"x" * (1024 * 1024 + 7)
+    path = tmp_path / "pi"
+    path.write_bytes(data)
+    assert diag.file_sha256(path) == hashlib.sha256(data).hexdigest()
+
+
+def test_verify_reproducible_records_matching_digest(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Identical builds pass and leave the carried digest, creating its parent directory."""
+    first, second = tmp_path / "a", tmp_path / "b"
+    first.write_bytes(b"same bytes")
+    second.write_bytes(b"same bytes")
+    out = tmp_path / "artifacts/standalone-pi.sha256"
+    with caplog.at_level("INFO"):
+        assert diag.verify_reproducible(first, second, out) == 0
+    expected = hashlib.sha256(b"same bytes").hexdigest()
+    assert out.read_text() == f"{expected}  pi\n"
+    assert f"Standalone build reproducible: sha256 {expected}" in caplog.messages
+
+
+def test_verify_reproducible_without_digest_file(tmp_path: Path) -> None:
+    """The digest file is optional."""
+    first, second = tmp_path / "a", tmp_path / "b"
+    first.write_bytes(b"same")
+    second.write_bytes(b"same")
+    assert diag.verify_reproducible(first, second, None) == 0
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["a", "b"]
+
+
+def test_verify_reproducible_fails_on_a_single_byte_difference(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Nondeterministic output fails, logs both digests and writes no digest."""
+    first, second = tmp_path / "a", tmp_path / "b"
+    first.write_bytes(b"Type3 ok")
+    second.write_bytes(b"Type4 ok")
+    out = tmp_path / "digest"
+    assert diag.verify_reproducible(first, second, out) == 1
+    assert not out.exists()
+    message = (
+        f"Standalone build is NOT reproducible: first {hashlib.sha256(b'Type3 ok').hexdigest()}, "
+        f"second {hashlib.sha256(b'Type4 ok').hexdigest()}"
+    )
+    assert message in caplog.messages
+
+
+@pytest.mark.parametrize(("second", "status"), [(b"same", 0), (b"different", 1)])
+def test_cli_verify_reproducible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, second: bytes, status: int
+) -> None:
+    """The CLI action returns the comparison verdict as the process status."""
+    first_path, second_path = tmp_path / "a", tmp_path / "b"
+    first_path.write_bytes(b"same")
+    second_path.write_bytes(second)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "standalone_diagnostics",
+            "verify-reproducible",
+            "--first",
+            str(first_path),
+            "--second",
+            str(second_path),
+        ],
+    )
+    assert diag.main() == status
+
+
+def test_workflow_rebuilds_and_compares_standalone_before_use() -> None:
+    """Require a second identical build, verified before `PI_BIN` is exported or any stack runs."""
+    workflow = yaml.safe_load((Path(__file__).parents[2] / ".github/workflows/ci.yml").read_text())
+    steps = workflow["jobs"]["stack"]["steps"]
+    run = next(step for step in steps if step.get("id") == "build")["run"]
+    assert run.count("./scripts/build-binaries.sh --skip-install --offline-model-data") == 2
+    assert "--skip-build" not in run
+    assert "verify-reproducible" in run
+    assert "standalone-pi.sha256" in run
+    assert run.index("verify-reproducible") < run.index('echo "PI_BIN=')

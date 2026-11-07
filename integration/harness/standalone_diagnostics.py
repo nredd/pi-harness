@@ -470,16 +470,58 @@ def prepare_build(directory: Path, bun: Path) -> None:
     launcher.chmod(0o700)
 
 
-def main() -> int:
-    """Prepare build observation or run one startup diagnostic in a new throwaway HOME.
+def file_sha256(path: Path) -> str:
+    """Hash one regular file in chunks so a 100 MB executable is never read whole.
+
+    Parameters:
+        path (Path): file to hash.
 
     Returns:
-        int: original startup verdict; preparation failures are fatal.
+        str: lowercase hex SHA-256.
+    """
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_reproducible(first: Path, second: Path, digest_out: Path | None) -> int:
+    """Fail when two builds of the same inputs differ, so a nondeterministic compile cannot ship (#72).
+
+    Parameters:
+        first (Path): executable from the first full build.
+        second (Path): executable from an identical second build.
+        digest_out (Path | None): where to record the matching digest for later carry-forward.
+
+    Returns:
+        int: 0 when byte-identical, else 1 with both digests logged.
+    """
+    left, right = file_sha256(first), file_sha256(second)
+    if left != right:
+        LOGGER.error(f"Standalone build is NOT reproducible: first {left}, second {right}")
+        return 1
+    LOGGER.info(f"Standalone build reproducible: sha256 {left}")
+    if digest_out is not None:
+        digest_out.parent.mkdir(parents=True, exist_ok=True)
+        digest_out.write_text(f"{left}  pi\n")
+    return 0
+
+
+def main() -> int:
+    """Prepare build observation, verify build reproducibility, or run one startup diagnostic.
+
+    Returns:
+        int: original startup verdict or reproducibility verdict; preparation failures are fatal.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="action", required=True)
     prepare = subparsers.add_parser("prepare-build")
     prepare.add_argument("--directory", type=Path, required=True)
+    reproduce = subparsers.add_parser("verify-reproducible")
+    reproduce.add_argument("--first", type=Path, required=True)
+    reproduce.add_argument("--second", type=Path, required=True)
+    reproduce.add_argument("--digest-out", type=Path, help="Record the matching executable digest")
     startup = subparsers.add_parser("startup")
     startup.add_argument("--binary", type=Path, required=True)
     startup.add_argument("--core", type=Path, required=True)
@@ -496,6 +538,10 @@ def main() -> int:
             parser.error("Pinned Bun must be on PATH")
         prepare_build(opts.directory.resolve(), Path(bun).resolve())
         return 0
+    if opts.action == "verify-reproducible":
+        return verify_reproducible(
+            opts.first.resolve(strict=True), opts.second.resolve(strict=True), opts.digest_out
+        )
     binary = opts.binary.resolve(strict=True)
     if opts.output.exists() or opts.output.is_symlink():
         raise FileExistsError("Refusing stale diagnostic output before installation")

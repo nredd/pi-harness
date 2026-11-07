@@ -671,6 +671,15 @@ jobs:
             ./scripts/build-binaries.sh --skip-install --offline-model-data \
             --platform "${{ matrix.platform }}" --out "$RUNNER_TEMP/pi-standalone" \
             2>&1 | tee "$RUNNER_TEMP/pi-build-evidence/build.log"
+          # Rebuild the same inputs at the same output path: Bun must emit identical bytes (#72).
+          cp "$RUNNER_TEMP/pi-standalone/${{ matrix.platform }}/pi" "$RUNNER_TEMP/pi-first-build"
+          ./scripts/build-binaries.sh --skip-install --offline-model-data \
+            --platform "${{ matrix.platform }}" --out "$RUNNER_TEMP/pi-standalone" \
+            >"$RUNNER_TEMP/pi-build-evidence/second-build.log" 2>&1
+          PYTHONPATH=../../integration ../../integration/.venv/bin/python -m harness.standalone_diagnostics \
+            verify-reproducible --first "$RUNNER_TEMP/pi-first-build" \
+            --second "$RUNNER_TEMP/pi-standalone/${{ matrix.platform }}/pi" \
+            --digest-out ../../integration/artifacts/standalone-pi.sha256
           echo "PI_BIN=$RUNNER_TEMP/pi-standalone/${{ matrix.platform }}/pi" >>"$GITHUB_ENV"
       - name: Report standalone binary and source identity
         if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.build.outcome == 'success' }}
