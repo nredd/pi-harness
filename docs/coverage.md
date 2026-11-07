@@ -367,8 +367,11 @@ added or changed is 0/0:
 
 | Signal | darwin lines/functions | linux lines/functions |
 | --- | --- | --- |
-| `python-scripts/primary` | 284/11 | 285/11 |
+| `python-scripts/primary` | 0/0 | 0/0 |
 | `python-harness/primary` | 628/69 | 628/69 |
+
+`python-scripts/primary` also caps branches at 1 on each OS (#419): the one remaining partial arc is the
+`rerun` return in `scripts/runner_rescue.py`. The Linux value is the darwin measurement until hosted CI confirms it.
 
 `python-scripts` was measured on the final tree of PR #323 from its own hosted artifacts, `--measure` on each:
 darwin from `coverage-macos-14`, linux from `coverage-ubuntu-24.04`, both run `41718792020` on commit `6912a7b5`.
