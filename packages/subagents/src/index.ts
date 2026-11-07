@@ -574,6 +574,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     const frame = formatTaskNotification(record, showCost);
     const details = buildNotificationDetails(record, previewChars, agentActivity.get(record.id));
     if (notificationResultChars === 0) {
+      // A preview never counts as the whole result, even a short one: reap notices stay on.
       const text = renderNotice(frame, record.result ? previewResult(record.result, previewChars) : "No output.");
       return { id: record.id, details, chars: undefined, parts: undefined, render: (_share?: number) => ({ text, delivered: false, complete: false }) };
     }

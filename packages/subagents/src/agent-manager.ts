@@ -2150,13 +2150,14 @@ export class AgentManager {
         ? now - (record.consumedAt ?? completedAt) >= this.consumedTtlMs
         : now - completedAt >= this.unreadTtlMs;
       if (!expired) continue;
+      // Read before `removeRecord` drops the session.
+      const neverRan = record.status === "stopped" && !record.session;
       this.removeRecord(id, record);
       // Evicting a result nobody read is a loss the parent must hear about. Owned
       // children never leave a note, and only their owner could have read them.
       // Nothing was lost when the parent saw the completion notice (a failure's
       // stays unread in FleetView), or when the agent was stopped in the queue
       // and never got a session: it never produced anything to reopen.
-      const neverRan = record.status === "stopped" && !record.session;
       const note = record.resultConsumed || record.noticeDelivered || neverRan ? undefined : this.evictedNotes.get(id);
       if (note) this.onReaped?.(note);
     }

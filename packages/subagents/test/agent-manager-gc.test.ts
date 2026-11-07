@@ -174,6 +174,20 @@ describe("AgentManager — record GC", () => {
       expect(reaped).not.toHaveBeenCalled();
     });
 
+    it("still reports an unread agent that was stopped mid-run", async () => {
+      const reaped = vi.fn();
+      manager = new AgentManager(undefined, 10, undefined, undefined, undefined, undefined, undefined, undefined, undefined, reaped);
+      const { id, record } = await settled("stopped");
+      record.resultConsumed = false;
+      record.status = "stopped";
+      record.completedAt = Date.now() - (SIXTY + 30_000);
+
+      await vi.advanceTimersByTimeAsync(TICK);
+
+      expect(manager.getRecord(id)).toBeUndefined();
+      expect(reaped).toHaveBeenCalledWith(expect.objectContaining({ id, status: "stopped" }));
+    });
+
     it("does not report records that a session boundary clears", async () => {
       const reaped = vi.fn();
       manager = new AgentManager(undefined, 10, undefined, undefined, undefined, undefined, undefined, undefined, undefined, reaped);
