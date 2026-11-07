@@ -621,10 +621,13 @@ def test_trip_snapshots_list_the_newest_processes_first(tmp_path: Path) -> None:
     result = run_guest_setup(env)
     assert result.returncode == 124
     assert "synthetic-stuck-child" in result.stderr
+    assert "guest processes, newest first:" in result.stderr
     helper = (ROOT / "scripts/wsl2_bounded.ps1").read_text()
     assert "Sort-Object CreationDate -Descending |" in helper
     assert "'--sort=etime'" in helper
     assert "--sort=-etime" not in helper
+    assert "--- host processes, newest first" in helper
+    assert "--- guest processes, newest first" in helper
 
 
 def test_guest_setup_names_a_failed_command_without_calling_it_a_timeout(tmp_path: Path) -> None:

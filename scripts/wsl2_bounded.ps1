@@ -39,7 +39,7 @@ function Write-StallReport {
     .SYNOPSIS
         Print what the host and the guest were running, for a command that did not finish.
     #>
-    Write-Host '--- host processes, oldest first'
+    Write-Host '--- host processes, newest first'
     Get-CimInstance Win32_Process |
         Where-Object { $_.ProcessId -ne $PID } |
         Sort-Object CreationDate -Descending |
@@ -50,7 +50,7 @@ function Write-StallReport {
     Remove-Item -Force -ErrorAction SilentlyContinue $listing
     $null = Invoke-Limited -FilePath 'wsl' -Arguments @('--list', '--verbose') -Seconds 20 -OutFile $listing
     if (Test-Path $listing) { ((Get-Content -Raw $listing) -replace ([char]0), '') | Write-Host }
-    Write-Host '--- guest processes, longest running first'
+    Write-Host '--- guest processes, newest first'
     $guest = Join-Path ([System.IO.Path]::GetTempPath()) 'wsl2-stall-guest.txt'
     Remove-Item -Force -ErrorAction SilentlyContinue $guest
     $result = Invoke-Limited -FilePath 'wsl' -Arguments @('-d', 'Ubuntu-24.04', '--user', 'root', '--exec', 'ps', '-eo', 'pid,ppid,etime,stat,args', '--sort=etime') -Seconds 20 -OutFile $guest

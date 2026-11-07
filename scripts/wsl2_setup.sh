@@ -15,7 +15,7 @@ bounded() {
   timeout --kill-after=10 "$seconds" "$@" || status=$?
   if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
     printf 'wsl2-setup: TIMEOUT: %s exceeded %ss: %s\n' "$label" "$seconds" "$*" >&2
-    printf 'wsl2-setup: guest processes, longest running first:\n' >&2
+    printf 'wsl2-setup: guest processes, newest first:\n' >&2
     { ps -eo pid,ppid,etime,stat,args --sort=etime | head -n 40 >&2; } || true
   elif [ "$status" -ne 0 ]; then
     printf 'wsl2-setup: FAILED: %s (status %s): %s\n' "$label" "$status" "$*" >&2
