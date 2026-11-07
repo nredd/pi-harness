@@ -123,7 +123,7 @@ with #375's fake-host FFI tests; no package has a per-OS allowance. Session-kit 
 OSes after the deterministic formatter test removes the incidental comparator hit (#163).
 The earlier 110/32 transitional floor is historical only. Another `always()` step retains LCOV and the per-package/per-file JSON summary
 on either outcome. Bun signals for `dev-tools`, `plan-mode`, `preset`, `subscription-router` and
-`todo` are enforced at 0/0 on both OSes (#320), `resource-sampler` since #375 and `inprocess` since #376, and `subagents` at 0/0/0 since #320. The rest (session-kit) explicitly uses `enforcement: "report-only"` with
+`todo` are enforced at 0/0 on both OSes (#320), `resource-sampler` since #375 and `inprocess` since #376, and `subagents` at 0/0/0 since #320 (measured on darwin; linux awaits hosted CI, see [here](coverage.md)). The rest (session-kit) explicitly uses `enforcement: "report-only"` with
 mandatory reasons linked to #160. Report-only signals retain fail-closed LCOV parsing, expected-file checks,
 per-OS references, inventory ratcheting, and text+LCOV reporter checks. Counts and signed deltas
 from references are logged and included under JSON `signals`; budget excess alone cannot fail
