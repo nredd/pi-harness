@@ -10,6 +10,7 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-ag
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resumeAgent, retryStaleCtx, staleCtxOutcome } from "../src/agent-runner.js";
 import * as worktrees from "../src/worktree.js";
+import { FakeClock } from "./helpers/fake-clock.js";
 import { answer, barrier, calls, ScenarioSession, spawn } from "./helpers/scenario-session.js";
 
 let fixture: ScenarioSession;
@@ -36,6 +37,24 @@ function routedModel(getModel: () => unknown): ExtensionFactory {
       },
     });
   };
+}
+
+/** Longer than the whole default 1s + 3s + 9s backoff, so one advance clears whichever sleep is armed. */
+const BACKOFF_SPAN_MS = 13_000;
+
+/**
+ * Let a recovering child finish without waiting out its backoff: advance the extension clock that times it
+ * until the run settles. An advance before the next sleep is armed is a no-op, so the loop is bounded only
+ * by the run itself.
+ */
+async function settleThroughBackoff(record: { promise?: Promise<unknown> }) {
+  let settled = false;
+  const finished = Promise.resolve(record.promise).finally(() => { settled = true; });
+  while (!settled) {
+    fixture.clock.advance(BACKOFF_SPAN_MS);
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  await finished;
 }
 
 /** Spawn a background child that runs one held tool, so its next model step happens after we act. */
@@ -76,7 +95,7 @@ it("retries the step once a real reload has re-registered the parent's routes", 
   await reloading;
   // Core's reload resets global transports; restore the faux provider before the retry fires.
   fixture.restoreProviders(h);
-  await record.promise;
+  await settleThroughBackoff(record);
   expect(record.error).toBeUndefined();
   expect(record.status).toBe("completed");
   expect(record.result).toBe("CHILD DONE");
@@ -91,7 +110,7 @@ it("reports later tool activity after earlier prose when a real child fails", { 
   const { hold, record } = await startHeldChild([], true, true);
   routeBroken.on = true;
   hold.release();
-  await record.promise;
+  await settleThroughBackoff(record);
   expect(record.status).toBe("error");
   expect(record.error).toContain("This extension ctx is stale");
   expect(record.result).toContain("Earlier progress:");
@@ -205,6 +224,27 @@ describe("backoff timing and timers", () => {
     expect(prompts).toHaveBeenCalledTimes(3);
     await done;
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("times the backoff on the injected clock, not native timers", async () => {
+    const clock = new FakeClock();
+    const prompts = vi.fn(async () => {});
+    const controller = new AbortController();
+    const done = retryStaleCtx(deadSession(prompts), 0, controller.signal, [1_000, 3_000], clock);
+    clock.advance(999);
+    await Promise.resolve();
+    expect(prompts).not.toHaveBeenCalled();
+    clock.advance(1);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(prompts).toHaveBeenCalledTimes(1);
+    // Second wait is armed on the same clock; an abort cancels it there.
+    await Promise.resolve();
+    expect(clock.pending).toBe(1);
+    controller.abort();
+    await done;
+    expect(clock.pending).toBe(0);
+    expect(prompts).toHaveBeenCalledTimes(1);
   });
 
   it("leaves no shutdown deadline when a real child's teardown overlaps the final re-prompt", async () => {
