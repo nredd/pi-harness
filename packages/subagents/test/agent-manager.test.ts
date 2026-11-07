@@ -1121,6 +1121,32 @@ describe("AgentManager — isolation: worktree fails loud, no silent fallback", 
     expect(cleanupWorktree).toHaveBeenCalledWith(mockPi, "/tmp", wt, "stopped");
     expect(manager.getRecord(id)!.status).toBe("stopped");
   });
+
+  it.each([true, false])("reports a stopped-during-copy agent whose copy would not clean up, background=%s", async isBackground => {
+    // Nothing else tells the caller about the leftover copy, so the record is announced; only a
+    // foreground record is marked read, since nobody is waiting on a notification for it.
+    const { createWorktree, cleanupWorktree } = await import("../src/worktree.js");
+    let releaseCopy!: () => void;
+    const wt = { path: "/wt/stuck", branch: "pi-agent-y", baseSha: "abc", repoRoot: "/repo", workPath: "/wt/stuck" };
+    vi.mocked(createWorktree).mockImplementationOnce(
+      () => new Promise(resolve => { releaseCopy = () => resolve(wt); }),
+    );
+    vi.mocked(cleanupWorktree).mockResolvedValueOnce({ hasChanges: false, error: "could not remove copy" } as never);
+    vi.mocked(runAgent).mockClear();
+    resolvedRun();
+
+    const onComplete = vi.fn();
+    manager = new AgentManager(onComplete);
+    const id = manager.spawn(mockPi, mockCtx, "X", "stopped", { description: "stopped", isBackground, isolation: "worktree" });
+    expect(manager.abort(id)).toBe(true);
+
+    releaseCopy();
+    await manager.awaitStartup(id);
+
+    expect(runAgent).not.toHaveBeenCalled();
+    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ id, status: "stopped" }));
+    expect(Boolean(manager.getRecord(id)!.resultConsumed)).toBe(!isBackground);
+  });
 });
 
 // The worktree is committed to a branch and deleted inside the settle path, so

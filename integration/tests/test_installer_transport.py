@@ -454,6 +454,22 @@ def test_installer_refuses_unsupported_proxy_without_downgrade(scheme: str) -> N
     assert not request.has_header("Proxy-Authorization")
 
 
+def test_installer_proxy_without_userinfo_sends_no_credentials() -> None:
+    """A bare HTTP proxy authority routes the CONNECT request but never invents `Proxy-Authorization`.
+
+    Returns:
+        None: the request is retargeted and carries no proxy credential header.
+
+    Raises:
+        AssertionError: credentials appear, or the request is not retargeted to the proxy.
+    """
+    handler = release.ValidatedProxyHandler({})
+    request = Request("https://origin.invalid/resource")
+    handler.proxy_open(request, "http://proxy.invalid:8080", "https")
+    assert request.host == "proxy.invalid:8080"
+    assert not request.has_header("Proxy-authorization")
+
+
 def test_fetch_context_without_defaults_ignores_ambient_ca(
     local_transport: LocalTransport, monkeypatch: pytest.MonkeyPatch
 ) -> None:

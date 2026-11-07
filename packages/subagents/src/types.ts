@@ -247,6 +247,19 @@ export interface AgentRecord {
   joinMode?: JoinMode;
   /** Set when result was already consumed via get_subagent_result — suppresses completion notification. */
   resultConsumed?: boolean;
+  /**
+   * Set when the completion notice was sent to the parent, whole or clipped, failures
+   * included. Unlike `resultConsumed` it does not mean FleetView acknowledged it; the
+   * reap notice only asks "did the parent ever see this?".
+   */
+  noticeDelivered?: boolean;
+  /**
+   * The latest run actually began executing (the runner was started on a live signal).
+   * Positive evidence the reap notice requires: a record that was stopped in the queue,
+   * refused, or failed before the runner started never ran, so evicting it loses nothing.
+   * Reset on every resume.
+   */
+  ranThisRun?: boolean;
   /** When `resultConsumed` was set; the GC keeps a consumed record for a short window from here. */
   consumedAt?: number;
   /** Steering messages queued before the session was ready. */

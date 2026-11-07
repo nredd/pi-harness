@@ -176,6 +176,11 @@ function createActivityTracker(maxTurns: number | undefined, onStreamUpdate: (()
  */
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
+/** Run time of an agent: frozen at `completedAt` once settled, else measured to `now`. */
+function recordElapsedMs(record: { startedAt: number; completedAt?: number }, now: number): number {
+  return (record.completedAt ?? now) - record.startedAt;
+}
+
 /** Human-readable status label for agent completion. */
 function getStatusLabel(status: string, error?: string): string {
   switch (status) {
@@ -193,7 +198,7 @@ function getStatusLabel(status: string, error?: string): string {
  */
 function formatTaskNotification(record: AgentRecord, showCost: boolean): NoticeFrame {
   const status = getStatusLabel(record.status, record.error);
-  const durationMs = record.completedAt ? record.completedAt - record.startedAt : 0;
+  const durationMs = recordElapsedMs(record, Date.now());
   const totalTokens = getLifetimeTotal(record.lifetimeUsage);
   const contextPercent = getSessionContextPercent(record.session);
   const ctxXml = contextPercent !== null ? `<context_percent>${Math.round(contextPercent)}</context_percent>` : "";
@@ -245,7 +250,7 @@ function buildDetails(
     cost: getLifetimeCost(record.lifetimeUsage),
     turnCount: activity?.turnCount,
     maxTurns: activity?.maxTurns,
-    durationMs: (record.completedAt ?? Date.now()) - record.startedAt,
+    durationMs: recordElapsedMs(record, Date.now()),
     status: record.status as AgentDetails["status"],
     agentId: record.id,
     error: record.error,
@@ -295,7 +300,7 @@ function buildNotificationDetails(record: AgentRecord, resultMaxLen: number, act
     // data, and a notification rendered before a mid-session toggle should not
     // be stuck with the old answer.
     totalCost: getLifetimeCost(record.lifetimeUsage),
-    durationMs: record.completedAt ? record.completedAt - record.startedAt : 0,
+    durationMs: recordElapsedMs(record, Date.now()),
     outputFile: record.outputFile,
     error: record.error,
     resumeHint: resumeHint(record) || undefined,
@@ -542,6 +547,11 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
         display: true,
         details: message.details,
       }, { deliverAs: "steer", triggerTurn: true });
+      for (const id of message.noticed ?? []) {
+        const record = manager.getRecord(id);
+        // A resume started since: that run's notice says nothing about this one.
+        if (record && record.status !== "running" && record.status !== "queued") record.noticeDelivered = true;
+      }
       // The whole result reached the parent, as get_subagent_result would hand it over.
       for (const id of message.delivered ?? []) {
         const record = manager.getRecord(id);
@@ -569,8 +579,9 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     const frame = formatTaskNotification(record, showCost);
     const details = buildNotificationDetails(record, previewChars, agentActivity.get(record.id));
     if (notificationResultChars === 0) {
+      // A preview never counts as the whole result, even a short one: reap notices stay on.
       const text = renderNotice(frame, record.result ? previewResult(record.result, previewChars) : "No output.");
-      return { id: record.id, details, chars: undefined, parts: undefined, render: (_share?: number) => ({ text, delivered: false }) };
+      return { id: record.id, details, chars: undefined, parts: undefined, render: (_share?: number) => ({ text, delivered: false, complete: false }) };
     }
     const parts: NoticeParts = {
       ...frame, body: noticeBody(record), cap: notificationResultChars, outputFile: record.outputFile,
@@ -602,8 +613,12 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
         ids: [record.id],
         resultChars: resultCharsOf([notice]),
         build: (_ids, caps) => {
-          const { text, delivered } = notice.render(caps[notice.id]);
-          return { content: text + footer, details: notice.details, ...(delivered ? { delivered: [notice.id] } : {}) };
+          const { text, delivered, complete } = notice.render(caps[notice.id]);
+          return {
+            content: text + footer, details: notice.details,
+            ...(delivered ? { delivered: [notice.id] } : {}),
+            ...(complete ? { noticed: [notice.id] } : {}),
+          };
         },
       });
     } catch { /* ignore stale completion side-effect errors */ }
@@ -631,6 +646,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
             const rendered = unread.map(m => ({ id: m.id, ...m.render(caps[m.id]) }));
             const notifications = rendered.map(m => m.text).join('\n\n');
             const delivered = rendered.filter(m => m.delivered).map(m => m.id);
+            const noticed = rendered.filter(m => m.complete).map(m => m.id);
             const label = partial
               ? `${unread.length} agent(s) finished (partial — others still running)`
               : `${unread.length} agent(s) finished`;
@@ -642,6 +658,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
               content: `Background agent group completed: ${label}\n\n${notifications}${trailer}`,
               details,
               ...(delivered.length > 0 ? { delivered } : {}),
+              ...(noticed.length > 0 ? { noticed } : {}),
             };
           },
         });
@@ -653,7 +670,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 
   /** Helper: build event data for lifecycle events from an AgentRecord. */
   function buildEventData(record: AgentRecord) {
-    const durationMs = record.completedAt ? record.completedAt - record.startedAt : Date.now() - record.startedAt;
+    const durationMs = recordElapsedMs(record, Date.now());
     // All three fields are lifetime-accumulated (Σ over every assistant message_end),
     // so they survive compaction together — input + output ≤ total always.
     // tokens is omitted when nothing was ever produced (e.g. agent errored before
@@ -969,6 +986,14 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     if (!isTopLevelAgent(record) || detachedSessionFile !== undefined) return;
     record.settleSeq = manager.nextSequence();
     pi.events.emit("subagents:failed", buildEventData(record));
+  }, (note) => {
+    // The retention sweep dropped a result nobody read: say so now, where the parent sees it on
+    // its next turn, instead of leaving `Agent not found` to be discovered by a later lookup (#330).
+    pi.sendMessage({
+      customType: "subagent-reaped",
+      content: `${describeEvicted(note)}. Its result was never read and its record is gone; reopen it with steer_subagent or Agent resume if its session is still saved.`,
+      display: true,
+    }, { deliverAs: "nextTurn" });
   });
 
   // A live survivor of an orphaned manager keeps its handle: reusing it would make a lifecycle listener
@@ -1238,7 +1263,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 
   /** Agent types `@` can start, in the shape the roster wants. */
   const mentionTypes = (): TypeInfo[] =>
-    getAvailableTypes().map(name => ({ name, description: getAgentConfig(name)?.description ?? name }));
+    getAvailableTypes().map(name => ({ name, description: getAgentConfig(name)!.description }));
 
   /**
    * `@handle message` typed at the prompt addresses that agent instead of the
@@ -1468,7 +1493,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       const pending = outbox.takePending();
       if (pending) {
         // Not sent here: the session that reads the spool is the one that sees it.
-        const { delivered: _unsent, ...spooled } = pending;
+        const { delivered: _unsent, noticed: _unseen, ...spooled } = pending;
         const heldIds = [pending.details.id, ...(pending.details.others?.map(other => other.id) ?? [])];
         const evicted = manager.evictionNotes(heldIds);
         const tombstones = manager.evictionTombstones(heldIds);
@@ -2009,10 +2034,11 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     const available = getAvailableTypes();
 
     return available.map((name) => {
-      const cfg = getAgentConfig(name);
-      const modelSuffix = cfg?.model ? ` (${getModelLabelFromConfig(cfg.model)})` : "";
+      // Every available type is registered, so its config exists.
+      const cfg = getAgentConfig(name)!;
+      const modelSuffix = cfg.model ? ` (${getModelLabelFromConfig(cfg.model)})` : "";
       const toolsSuffix = ` (Tools: ${formatToolsSuffix(cfg)})`;
-      return `- ${name}: ${cfg?.description ?? name}${modelSuffix}${toolsSuffix}`;
+      return `- ${name}: ${cfg.description}${modelSuffix}${toolsSuffix}`;
     }).join("\n");
   };
 
@@ -2025,8 +2051,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   /** Compact type list: one line per agent, first sentence only. */
   const buildCompactTypeListText = () =>
     getAvailableTypes().map((name) => {
-      const cfg = getAgentConfig(name);
-      return `- ${name}: ${firstSentence(cfg?.description ?? name)} (Tools: ${formatToolsSuffix(cfg)})`;
+      const cfg = getAgentConfig(name)!;
+      return `- ${name}: ${firstSentence(cfg.description)} (Tools: ${formatToolsSuffix(cfg)})`;
     }).join("\n");
 
   /** Derive a short model label from a model string. */
@@ -2772,7 +2798,7 @@ Terse command-style prompts produce shallow, generic work.
         });
         return textResult(
           `${fallbackNoteFor(undefined)}${describeBlock(quotaBlock)} Queued "${job.name}" (id: ${job.id}) to start at ` +
-          `${scheduler.getNextRun(job.id) ?? job.schedule}. Manage via /agents → Scheduled jobs.`,
+          `${job.schedule}. Manage via /agents → Scheduled jobs.`,
         );
       }
 
@@ -2918,14 +2944,9 @@ Terse command-style prompts produce shallow, generic work.
             widget.ensureTimer();
             fleet.ensureTimer();
             fleet.update();
+            // Stream conversation to output file (foreground agent logging)
+            if (a.outputFile) a.outputCleanup = streamToOutputFile(session, a.outputFile, a.id, ctx.cwd);
             break;
-          }
-        }
-        // Stream conversation to output file (foreground agent logging)
-        if (fgId) {
-          const rec = manager.getRecord(fgId);
-          if (rec?.outputFile) {
-            rec.outputCleanup = streamToOutputFile(session, rec.outputFile, fgId, ctx.cwd);
           }
         }
       };
@@ -2970,7 +2991,8 @@ Terse command-style prompts produce shallow, generic work.
           ...fgCallbacks,
         }, (fgAgentId) => {
           // onSpawned fires after the run promise exists, before onSessionCreated.
-          const fgRec = manager.getRecord(fgAgentId);
+          // Running, so the manager still holds it: only settled records are removed.
+          const fgRec = manager.getRecord(fgAgentId)!;
           // Fires once the run promise exists, i.e. the agent is running. From
           // here until this call returns, the run can be handed off.
           handoffId = fgAgentId;
@@ -2978,10 +3000,8 @@ Terse command-style prompts produce shallow, generic work.
             // What a background spawn sets up front: the notification names
             // this tool call, and it reports alone — its spawn batch is long
             // closed.
-            if (fgRec) {
-              fgRec.toolCallId = toolCallId;
-              fgRec.joinMode = "async";
-            }
+            fgRec.toolCallId = toolCallId;
+            fgRec.joinMode = "async";
             backgrounded = true;
             wakeBackgrounded();
           });
@@ -3015,7 +3035,7 @@ Terse command-style prompts produce shallow, generic work.
         return textResult(`${fallbackNoteFor(record)}Agent failed: ${record.error}${partialOutputSuffix(record)}`, details);
       }
 
-      const durationMs = (record.completedAt ?? Date.now()) - record.startedAt;
+      const durationMs = recordElapsedMs(record, Date.now());
       const statsParts = [`${record.toolUses} tool uses`];
       if (tokenText) statsParts.push(tokenText);
       if (showCost) {
@@ -3106,7 +3126,8 @@ Terse command-style prompts produce shallow, generic work.
     // run's progress log here would put O(log) work in the render loop.
     return [...workflowTasks.values()].map(task => ({
       id: task.id,
-      name: task.meta?.name ?? task.workflowName ?? task.id,
+      // Every task here is created from a parsed `meta`, which also names the run.
+      name: task.meta!.name,
       status: task.status,
       doneCount: task.doneCount,
       totalCount: task.agentCount,
@@ -3168,7 +3189,7 @@ Terse command-style prompts produce shallow, generic work.
       content: formatWorkflowNotification(task),
       details: {
         id: task.id,
-        description: `Workflow ${task.workflowName ?? task.id}`,
+        description: `Workflow ${task.meta!.name}`,
         status: task.status === "completed" ? "completed" : task.status === "killed" ? "stopped" : "error",
         toolUses: task.totalToolCalls,
         // A workflow has agents, not turns; rendering "↻0" would be noise.
@@ -3352,7 +3373,7 @@ Terse command-style prompts produce shallow, generic work.
             `Task ID: ${runId}\n` +
             (task.scriptPath ? `Script: ${task.scriptPath}\n` : "") +
             (task.resumedFrom !== undefined
-              ? `Resuming ${task.resumedFrom}: ${task.replay?.length ?? 0} recorded call(s) available to replay.\n`
+              ? `Resuming ${task.resumedFrom}: ${task.replay!.length} recorded call(s) available to replay.\n`
               : params.resumeFromRunId !== undefined
                 ? `Nothing to replay from ${params.resumeFromRunId} — every agent runs live.\n`
                 : "") +
@@ -3708,14 +3729,14 @@ Terse command-style prompts produce shallow, generic work.
   /** Stop one top-level agent through the manager that owns it, this one or an orphan's. */
   function stopAgent(record: AgentRecord, by?: AgentRecord["stoppedBy"]): boolean {
     if (manager.getRecord(record.id) === record) return manager.abort(record.id, by);
-    return runningSurvivors().find(d => d.record === record)?.abort(by) ?? false;
+    return !!runningSurvivors().find(d => d.record === record)?.abort(by);
   }
 
   /** What a stop that matched nothing lists instead: everything still running or queued. */
   function describeStoppable(): string {
     const lines = [
       ...stoppableAgents().map(r => `- ${r.id} @${r.alias ?? r.handle} (${r.status}): ${r.description}`),
-      ...[...workflowTasks.values()].filter(isLiveWorkflow).map(t => `- ${t.id} workflow "${t.meta?.name ?? t.id}" (${t.status})`),
+      ...[...workflowTasks.values()].filter(isLiveWorkflow).map(t => `- ${t.id} workflow "${t.meta!.name}" (${t.status})`),
     ];
     return lines.length > 0 ? `Running or queued:\n${lines.join("\n")}` : "Nothing is running or queued.";
   }
@@ -3758,11 +3779,11 @@ Terse command-style prompts produce shallow, generic work.
         // Marked first: the run's notice is written when it settles, after this returns.
         task.stoppedBy = "parent";
         task.abortController.abort();
-        return textResult(`Workflow "${task.meta?.name ?? task.id}" (${task.id}) stopped, with its agents. A completion notice follows.`);
+        return textResult(`Workflow "${task.meta!.name}" (${task.id}) stopped, with its agents. A completion notice follows.`);
       }
       if (task && (task.status === "running" || task.status === "paused")) {
         // Told to stop, still unwinding: not "not running", and nothing more to do.
-        return textResult(`Workflow "${task.meta?.name ?? task.id}" (${task.id}) is already stopping. A completion notice follows.`);
+        return textResult(`Workflow "${task.meta!.name}" (${task.id}) is already stopping. A completion notice follows.`);
       }
       const latest = manager.latestId(params.agent_id);
       const found = resolveAgentRef(latest);
@@ -3794,13 +3815,12 @@ Terse command-style prompts produce shallow, generic work.
   // so they are reachable from tests — this command handler is only registered
   // through `registerCommand`, which every test mocks.
 
-  function getModelLabel(type: string, registry?: ModelRegistry): string {
+  function getModelLabel(type: string, registry: ModelRegistry, cwd: string): string {
     const cfg = getAgentConfig(type);
     const input = modelRequest(type, cfg?.model).requested;
     if (!input) return "inherit";
     const label = getModelLabelFromConfig(input);
-    if (!registry) return label;
-    const selection = selectModel({ homeDir: options.homeDir, agentType: type, definitionModel: cfg?.model, parentModel: undefined, registry, cwd: currentCtx?.cwd ?? process.cwd() });
+    const selection = selectModel({ homeDir: options.homeDir, agentType: type, definitionModel: cfg?.model, parentModel: undefined, registry, cwd });
     if (typeof selection === "string" || selection.outcome === "fallback" || !selection.model) {
       return `${label} (unavailable, fallback: inherit)`;
     }
@@ -3918,7 +3938,7 @@ Terse command-style prompts produce shallow, generic work.
     // it: the `▪` badge says a package won, not which one.
     const items: SettingItem[] = allNames.map((name, i) => {
       const cfg = configs[i];
-      const model = getModelLabel(name, ctx.modelRegistry);
+      const model = getModelLabel(name, ctx.modelRegistry, ctx.cwd);
       return {
         id: name,
         label: `${sourceIndicator(cfg)}${name}`,
@@ -3996,9 +4016,9 @@ Terse command-style prompts produce shallow, generic work.
       (tui, theme, keybindings, done) => {
         overlayOptions = getConversationOverlayOptions(tui);
         return new ConversationViewer(tui, session, record, activity, theme, done, () => {
-          if (manager.abort(record.id)) {
-            ctx.ui.notify(`Stopped "${record.description}".`, "info");
-          }
+          // The viewer offers stop only while the agent is running or queued, which `abort` always honours.
+          manager.abort(record.id);
+          ctx.ui.notify(`Stopped "${record.description}".`, "info");
         }, keybindings, (message: string) => manager.steer(record.id, message), showCost, getViewerMarkdown, (mode) => chooseViewerMarkdown(mode, ctx), getFullscreenScrollbar(),
         backgroundActionFor(record, message => ctx.ui.notify(message, "info")), clock);
       },
@@ -4027,10 +4047,9 @@ Terse command-style prompts produce shallow, generic work.
         ? ["Eject (export as .md)", "Back"]
         : ["Eject (export as .md)", "Disable", "Back"];
     } else if (disabled && file) {
-      // Disabled agent with a file — offer Enable
-      menuOptions = isDefault
-        ? ["Enable", "Edit", "Reset to default", "Delete", "Back"]
-        : ["Enable", "Edit", "Delete", "Back"];
+      // Disabled agent with a file — offer Enable. Never a built-in: a built-in is only ever
+      // disabled by the very file that replaces it, which makes the entry a user definition.
+      menuOptions = ["Enable", "Edit", "Delete", "Back"];
     } else if (isDefault && !file) {
       // Default agent with no .md override
       menuOptions = ["Eject (export as .md)", "Disable", "Back"];
@@ -4336,7 +4355,8 @@ Write the file using the write tool. Only write the file, nothing else.`;
     else if (modelChoice === "sonnet") model = "anthropic/claude-sonnet-4-6";
     else if (modelChoice === "opus") model = "anthropic/claude-opus-4-6";
     else if (modelChoice === "custom...") {
-      model = (await ctx.ui.input("Model (provider/modelId)")) || undefined;
+      // A blank answer writes no `model:` line, exactly as no answer does.
+      model = await ctx.ui.input("Model (provider/modelId)");
     }
 
     // 5. Thinking

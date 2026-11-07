@@ -62,12 +62,12 @@ describe("renderNotice / clipNotice", () => {
 
   it("counts the cap on the raw result, before escaping", () => {
     const parts = { ...frame, body: "<<<<", cap: 4, failed: false };
-    expect(clipNotice(parts)).toEqual({ text: renderNotice(frame, "<<<<"), delivered: true });
+    expect(clipNotice(parts)).toEqual({ text: renderNotice(frame, "<<<<"), delivered: true, complete: true });
   });
 
   it("never exceeds the cap whatever share it is given, and leaves a failure unread", () => {
     const parts = { ...frame, body: "abcdef", cap: 4, failed: true };
-    expect(clipNotice(parts, 100)).toEqual({ text: renderNotice(frame, clipResult("abcdef", 4).text), delivered: false });
-    expect(clipNotice({ ...parts, body: "abc" })).toEqual({ text: renderNotice(frame, "abc"), delivered: false });
+    expect(clipNotice(parts, 100)).toEqual({ text: renderNotice(frame, clipResult("abcdef", 4).text), delivered: false, complete: false });
+    expect(clipNotice({ ...parts, body: "abc" })).toEqual({ text: renderNotice(frame, "abc"), delivered: false, complete: true });
   });
 });
