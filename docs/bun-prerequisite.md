@@ -51,8 +51,9 @@ The render probe keeps its `Bun.gc(true)` fallback behind the adapter's `--expos
 
 The harness sets both `NODE_OPTIONS=--import <redirect>` and
 `BUN_OPTIONS=--preload <redirect>` through that adapter. Compiled Bun 1.4.4 honors the latter
-before its entrypoint; Node continues using the former. Both load the same harness-only fetch/egress hook. No SDK,
-production extension, live configuration, timer behavior or runtime pin changes.
+before its entrypoint; Node continues using the former. Both load the same harness-only
+fetch/egress hook. No SDK, production extension, live configuration, timer behavior or runtime pin
+changes.
 
 `auth_guard.mjs` still runs readiness during extension factory loading, before session-start
 warmup or auth dispatch: a per-launch identity nonce, refused non-loopback fetch, then a real
