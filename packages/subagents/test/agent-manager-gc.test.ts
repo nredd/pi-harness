@@ -24,6 +24,7 @@ vi.mock("../src/worktree.js", () => ({
 }));
 
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
+import { resetBudgetForTests, setBudgetPolicy } from "../src/process-budget.js";
 import { createWorktree } from "../src/worktree.js";
 
 const mockPi = {} as any;
@@ -41,6 +42,7 @@ describe("AgentManager — record GC", () => {
   });
 
   afterEach(() => {
+    resetBudgetForTests();
     manager?.dispose();
     vi.useRealTimers();
   });
@@ -246,40 +248,6 @@ describe("AgentManager — record GC", () => {
       expect(reaped).not.toHaveBeenCalled();
     });
 
-    it("still reports a foreground resume stopped mid-run after a queued resume was stopped", async () => {
-      const reaped = vi.fn();
-      const done = () => ({ responseText: "done", session: { dispose: vi.fn() } as any, aborted: false, steered: false } as any);
-      let release!: () => void;
-      vi.mocked(runAgent)
-        .mockResolvedValueOnce(done())
-        .mockImplementationOnce(() => new Promise(resolve => { release = () => resolve(done()); }));
-      vi.mocked(resumeAgent).mockImplementationOnce(() => new Promise(resolve => {
-        release = () => resolve({ responseText: "", aborted: true, steered: false } as any);
-      }));
-      manager = new AgentManager(undefined, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, reaped);
-      const first = manager.spawn(mockPi, mockCtx, "X", "first", { description: "first", isBackground: true });
-      await manager.getRecord(first)!.promise;
-      const holder = manager.spawn(mockPi, mockCtx, "X", "holder", { description: "holder", isBackground: true });
-      await manager.resume(first, "again", undefined, { isBackground: true });
-      expect(manager.abort(first, "parent")).toBe(true);
-      release();
-      await manager.getRecord(holder)!.promise;
-      markConsumed(manager.getRecord(holder)!);
-
-      // The slot is free again: this resume runs at once and is stopped mid-run.
-      const resuming = manager.resume(first, "once more");
-      expect(manager.getRecord(first)!.status).toBe("running");
-      expect(manager.abort(first, "parent")).toBe(true);
-      release();
-      await resuming;
-      manager.getRecord(first)!.resultConsumed = false;
-
-      await vi.advanceTimersByTimeAsync(SIXTY + TICK);
-
-      expect(manager.getRecord(first)).toBeUndefined();
-      expect(reaped).toHaveBeenCalledWith(expect.objectContaining({ id: first, status: "stopped" }));
-    });
-
     it("still reports a background resume stopped mid-run after a queued resume was stopped", async () => {
       const reaped = vi.fn();
       const done = () => ({ responseText: "done", session: { dispose: vi.fn() } as any, aborted: false, steered: false } as any);
@@ -288,7 +256,7 @@ describe("AgentManager — record GC", () => {
         .mockResolvedValueOnce(done())
         .mockImplementationOnce(() => new Promise(resolve => { release = () => resolve(done()); }));
       vi.mocked(resumeAgent).mockImplementationOnce(() => new Promise(resolve => {
-        release = () => resolve({ responseText: "", aborted: true, steered: false } as any);
+        release = () => resolve({ text: "", aborted: true, steered: false } as any);
       }));
       manager = new AgentManager(undefined, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, reaped);
       const first = manager.spawn(mockPi, mockCtx, "X", "first", { description: "first", isBackground: true });
@@ -326,6 +294,298 @@ describe("AgentManager — record GC", () => {
 
       expect(manager.getRecord(id)).toBeUndefined();
       expect(reaped).toHaveBeenCalledWith(expect.objectContaining({ id, status: "stopped" }));
+    });
+
+    describe("every terminal path: reap only where a run produced an unseen result", () => {
+      const SIXTY_MIN = 60 * 60_000;
+      const done = () => ({ responseText: "done", session: { dispose: vi.fn() } as any, aborted: false, steered: false } as any);
+      const aborted = () => ({ responseText: "", session: { dispose: vi.fn() } as any, aborted: true, steered: false } as any);
+      // resumeAgent's outcome shape: `text`, not `responseText`.
+      const resumed = (isAborted = false) => ({ text: isAborted ? "" : "again", aborted: isAborted, steered: false } as any);
+      const spawnOpts = (extra: object = {}) => ({ description: "d", isBackground: true, ...extra });
+
+      let reaped: ReturnType<typeof vi.fn>;
+      let failStart = false;
+
+      beforeEach(() => {
+        vi.mocked(runAgent).mockReset();
+        vi.mocked(resumeAgent).mockReset();
+        vi.mocked(createWorktree).mockReset();
+        reaped = vi.fn();
+        failStart = false;
+        manager = new AgentManager(
+          undefined, 1,
+          () => { if (failStart) throw new Error("onStart boom"); },
+          undefined, undefined, undefined, undefined, undefined, undefined, reaped,
+        );
+      });
+
+      /** A pending run that holds the only slot; `finish` settles it and marks it read. */
+      async function hold() {
+        let release!: () => void;
+        vi.mocked(runAgent).mockImplementationOnce(() => new Promise(resolve => { release = () => resolve(done()); }));
+        const id = manager.spawn(mockPi, mockCtx, "X", "holder", spawnOpts());
+        return {
+          id,
+          finish: async () => {
+            release();
+            await manager.getRecord(id)!.promise;
+            markConsumed(manager.getRecord(id)!);
+          },
+        };
+      }
+
+      /** A settled agent whose first result is left UNREAD, so only the new run's flag can silence it. */
+      async function finished() {
+        vi.mocked(runAgent).mockResolvedValueOnce(done());
+        const id = manager.spawn(mockPi, mockCtx, "X", "first", spawnOpts());
+        await manager.getRecord(id)!.promise;
+        return id;
+      }
+
+      const cases: Array<{ name: string; reap: boolean; run: () => Promise<string> }> = [
+        {
+          name: "spawn: immediate background run completes unseen",
+          reap: true,
+          run: async () => {
+            vi.mocked(runAgent).mockResolvedValueOnce(done());
+            const id = manager.spawn(mockPi, mockCtx, "X", "p", spawnOpts());
+            await manager.getRecord(id)!.promise;
+            return id;
+          },
+        },
+        {
+          name: "spawn: immediate foreground run returns inline",
+          reap: false,
+          run: async () => {
+            vi.mocked(runAgent).mockResolvedValueOnce(done());
+            return (await manager.spawnAndWait(mockPi, mockCtx, "X", "p", { description: "d" })).id;
+          },
+        },
+        {
+          name: "spawn: queued background run starts later and completes unseen",
+          reap: true,
+          run: async () => {
+            const holder = await hold();
+            vi.mocked(runAgent).mockResolvedValueOnce(done());
+            const id = manager.spawn(mockPi, mockCtx, "X", "p", spawnOpts());
+            await holder.finish();
+            await vi.advanceTimersByTimeAsync(0);
+            await manager.getRecord(id)!.promise;
+            return id;
+          },
+        },
+        {
+          name: "spawn: queued background stopped before it started",
+          reap: false,
+          run: async () => {
+            const holder = await hold();
+            const id = manager.spawn(mockPi, mockCtx, "X", "p", spawnOpts());
+            expect(manager.abort(id, "parent")).toBe(true);
+            await holder.finish();
+            return id;
+          },
+        },
+        {
+          name: "spawn: background spawn with an already-aborted signal",
+          reap: false,
+          run: async () => {
+            vi.mocked(runAgent).mockResolvedValue(done());
+            const id = manager.spawn(mockPi, mockCtx, "X", "p", spawnOpts({ signal: AbortSignal.abort() }));
+            await vi.advanceTimersByTimeAsync(0);
+            return id;
+          },
+        },
+        {
+          name: "spawn: stopped while the worktree copy was made",
+          reap: false,
+          run: async () => {
+            let copied!: (wt: any) => void;
+            vi.mocked(createWorktree).mockReturnValueOnce(new Promise(r => { copied = r; }) as any);
+            const id = manager.spawn(mockPi, mockCtx, "X", "p", spawnOpts({ isolation: "worktree" }));
+            await vi.advanceTimersByTimeAsync(0);
+            manager.abort(id);
+            copied({ path: "/tmp/wt", workPath: "/tmp/wt", repoRoot: "/tmp", branch: "b" });
+            await vi.advanceTimersByTimeAsync(0);
+            return id;
+          },
+        },
+        {
+          name: "spawn: queued startup failure (worktree creation rejects)",
+          reap: false,
+          run: async () => {
+            const holder = await hold();
+            vi.mocked(createWorktree).mockRejectedValueOnce(new Error("no repo"));
+            const id = manager.spawn(mockPi, mockCtx, "X", "p", spawnOpts({ isolation: "worktree" }));
+            await holder.finish();
+            await vi.advanceTimersByTimeAsync(0);
+            expect(manager.getRecord(id)!.status).toBe("error");
+            return id;
+          },
+        },
+        {
+          name: "spawn: queued start whose onStart throws",
+          reap: false,
+          run: async () => {
+            const holder = await hold();
+            const id = manager.spawn(mockPi, mockCtx, "X", "p", spawnOpts());
+            failStart = true;
+            await holder.finish();
+            await vi.advanceTimersByTimeAsync(0);
+            expect(manager.getRecord(id)!.status).toBe("error");
+            return id;
+          },
+        },
+        {
+          name: "spawn: background run stopped mid-run",
+          reap: true,
+          run: async () => {
+            let release!: () => void;
+            vi.mocked(runAgent).mockImplementationOnce(() => new Promise(resolve => { release = () => resolve(aborted()); }));
+            const id = manager.spawn(mockPi, mockCtx, "X", "p", spawnOpts());
+            expect(manager.abort(id, "parent")).toBe(true);
+            release();
+            await manager.getRecord(id)!.promise;
+            return id;
+          },
+        },
+        {
+          name: "resume: immediate foreground resume returns inline",
+          reap: false,
+          run: async () => {
+            const id = await finished();
+            vi.mocked(resumeAgent).mockResolvedValueOnce(resumed());
+            await manager.resume(id, "again");
+            return id;
+          },
+        },
+        {
+          name: "resume: foreground resume stopped mid-run returns inline",
+          reap: false,
+          run: async () => {
+            const id = await finished();
+            let release!: () => void;
+            vi.mocked(resumeAgent).mockImplementationOnce(() => new Promise(resolve => { release = () => resolve(resumed(true)); }));
+            const resuming = manager.resume(id, "again");
+            expect(manager.abort(id, "parent")).toBe(true);
+            release();
+            await resuming;
+            return id;
+          },
+        },
+        {
+          name: "resume: foreground resume queued, then granted and run inline",
+          reap: false,
+          run: async () => {
+            const id = await finished();
+            setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
+            const holder = await hold();
+            vi.mocked(resumeAgent).mockResolvedValueOnce(resumed());
+            const resuming = manager.resume(id, "again");
+            expect(manager.getRecord(id)!.status).toBe("queued");
+            await holder.finish();
+            await resuming;
+            return id;
+          },
+        },
+        {
+          name: "resume: foreground resume stopped while queued",
+          reap: false,
+          run: async () => {
+            const id = await finished();
+            setBudgetPolicy({ maxActive: 1, nestedReserve: 0, maxDepth: 1 });
+            const holder = await hold();
+            const resuming = manager.resume(id, "again");
+            expect(manager.abort(id, "parent")).toBe(true);
+            await resuming;
+            await holder.finish();
+            return id;
+          },
+        },
+        {
+          name: "resume: foreground resume with an already-aborted signal and a free lease",
+          reap: false,
+          run: async () => {
+            const id = await finished();
+            vi.mocked(resumeAgent).mockResolvedValueOnce(resumed(true));
+            await manager.resume(id, "again", AbortSignal.abort());
+            return id;
+          },
+        },
+        {
+          name: "resume: immediate background resume completes unseen",
+          reap: true,
+          run: async () => {
+            const id = await finished();
+            vi.mocked(resumeAgent).mockResolvedValueOnce(resumed());
+            await manager.resume(id, "again", undefined, { isBackground: true });
+            await manager.getRecord(id)!.promise;
+            return id;
+          },
+        },
+        {
+          name: "resume: queued background resume starts later and completes unseen",
+          reap: true,
+          run: async () => {
+            const id = await finished();
+            const holder = await hold();
+            vi.mocked(resumeAgent).mockResolvedValueOnce(resumed());
+            await manager.resume(id, "again", undefined, { isBackground: true });
+            expect(manager.getRecord(id)!.status).toBe("queued");
+            await holder.finish();
+            await vi.advanceTimersByTimeAsync(0);
+            await manager.getRecord(id)!.promise;
+            return id;
+          },
+        },
+        {
+          name: "resume: queued background resume stopped before it ran",
+          reap: false,
+          run: async () => {
+            const id = await finished();
+            const holder = await hold();
+            await manager.resume(id, "again", undefined, { isBackground: true });
+            expect(manager.abort(id, "parent")).toBe(true);
+            await holder.finish();
+            return id;
+          },
+        },
+        {
+          name: "resume: immediate background resume whose onStart throws",
+          reap: false,
+          run: async () => {
+            const id = await finished();
+            failStart = true;
+            await expect(manager.resume(id, "again", undefined, { isBackground: true })).rejects.toThrow("onStart boom");
+            expect(manager.getRecord(id)!.status).toBe("error");
+            return id;
+          },
+        },
+        {
+          name: "resume: background resume stopped mid-run",
+          reap: true,
+          run: async () => {
+            const id = await finished();
+            let release!: () => void;
+            vi.mocked(resumeAgent).mockImplementationOnce(() => new Promise(resolve => { release = () => resolve(resumed(true)); }));
+            await manager.resume(id, "again", undefined, { isBackground: true });
+            expect(manager.abort(id, "parent")).toBe(true);
+            release();
+            await manager.getRecord(id)!.promise;
+            return id;
+          },
+        },
+      ];
+
+      it.each(cases)("$name", async ({ reap, run }) => {
+        const id = await run();
+
+        await vi.advanceTimersByTimeAsync(SIXTY_MIN + 2 * TICK);
+
+        expect(manager.getRecord(id)).toBeUndefined();
+        if (reap) expect(reaped).toHaveBeenCalledWith(expect.objectContaining({ id }));
+        else expect(reaped).not.toHaveBeenCalled();
+      });
     });
 
     it("does not report records that a session boundary clears", async () => {

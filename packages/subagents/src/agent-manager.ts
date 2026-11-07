@@ -916,7 +916,6 @@ export class AgentManager {
     if (signal === undefined) return true;
     if (signal.aborted) {
       record.status = "stopped";
-      record.stoppedQueued = true;
       record.completedAt = this.clock.now();
       return false;
     }
@@ -1191,9 +1190,6 @@ export class AgentManager {
         if (record.worktreeResult?.error) {
           if (!record.isBackground) markConsumed(record, this.clock.now());
           try { this.onComplete?.(record); } catch { /* do not strand the lease */ }
-        } else {
-          // Stopped mid-copy: the run never started and no notice goes out, so the sweep must stay quiet.
-          record.stoppedQueued = true;
         }
         // After the cleanup, not before: the copy is still being removed until here.
         this.releaseLease(record);
@@ -1229,6 +1225,7 @@ export class AgentManager {
     else this.armParentAbort(record, options.signal);
     const detach = () => this.detachParentAbort(record);
 
+    record.ranThisRun = record.status === "running";
     const promise = runAgent(ctx, type, prompt, {
       pi,
       clock: this.clock,
@@ -1644,7 +1641,7 @@ export class AgentManager {
       record.isBackground = true;
       record.resultConsumed = false;
       record.noticeDelivered = undefined;
-      record.stoppedQueued = undefined;
+      record.ranThisRun = false;
       record.consumedAt = undefined;
       record.result = undefined;
       record.error = undefined;
@@ -1692,7 +1689,7 @@ export class AgentManager {
     // its limit; the caller's signal (or `/agents` stop) releases the wait.
     // No pool: the foreground pool does not cover resumes (see the README).
     const lease = this.admit(record, undefined);
-    record.stoppedQueued = undefined;
+    record.ranThisRun = false;
     record.noticeDelivered = undefined;
     record.status = lease === undefined ? "queued" : "running";
     record.budgetLease = lease;
@@ -1736,13 +1733,15 @@ export class AgentManager {
           record.status = "stopped";
           record.completedAt = this.clock.now();
         }
-        record.stoppedQueued = true;
+        markConsumed(record, this.clock.now());
         this.detachParentAbort(record);
         return record;
       }
     }
 
     try {
+      // Positive evidence for the reap notice: only a live signal means the prompt runs.
+      record.ranThisRun = record.status === "running";
       this.settleOutcome(record, await resumeAgent(record.session, prompt, {
         clock: this.clock,
         type: record.type,
@@ -1771,6 +1770,8 @@ export class AgentManager {
       this.failResume(record, err);
     }
     this.detachParentAbort(record);
+    // The caller gets the settled record inline, whatever the outcome.
+    markConsumed(record, this.clock.now());
 
     // Same contract as the spawn settle paths: children spawned during the
     // resumed turn must not outlive it — nothing else can see or reach them.
@@ -1876,6 +1877,7 @@ export class AgentManager {
       this.drainQueue();
     };
 
+    record.ranThisRun = true;
     const promise = resumeAgent(record.session, prompt, {
       clock: this.clock,
       type: record.type,
@@ -2049,7 +2051,6 @@ export class AgentManager {
   /** Mark a dequeued record stopped and tell `onQueuedStop`; the queue entry is already gone. */
   private stopQueued(record: AgentRecord): void {
     record.status = "stopped";
-    record.stoppedQueued = true;
     record.completedAt = this.clock.now();
     this.onQueuedStop?.(record);
   }
@@ -2226,14 +2227,14 @@ export class AgentManager {
         ? now - (record.consumedAt ?? completedAt) >= this.consumedTtlMs
         : now - completedAt >= this.unreadTtlMs;
       if (!expired) continue;
-      const neverRan = record.stoppedQueued === true;
+      const ran = record.ranThisRun === true && (record.result !== undefined || record.error !== undefined);
       this.removeRecord(id, record);
       // Evicting a result nobody read is a loss the parent must hear about. Owned
       // children never leave a note, and only their owner could have read them.
       // Nothing was lost when the parent saw the completion notice (a failure's
-      // stays unread in FleetView), or when the agent was stopped in the queue,
-      // a spawn or a resume: that run never started, so it lost nothing.
-      const note = record.resultConsumed || record.noticeDelivered || neverRan ? undefined : this.evictedNotes.get(id);
+      // stays unread in FleetView), or when no run produced a result: stopped
+      // in the queue, refused, or failed before the runner started, so nothing was lost.
+      const note = record.resultConsumed || record.noticeDelivered || !ran ? undefined : this.evictedNotes.get(id);
       if (note) this.onReaped?.(note);
     }
   }
