@@ -301,3 +301,26 @@ test("the compiled-host fixture passes under the preload and fails closed on eac
 		log.mockRestore();
 	}
 });
+
+test("a second install without HARNESS_BLOCKED_LOG still blocks, with and without Bun, and records nothing", async () => {
+	// The accessor and wrappers re-install (they stack); only the write-once marker refuses a redefinition.
+	const logged = readFileSync(blockedLog, "utf8");
+	vi.stubEnv("HARNESS_BLOCKED_LOG", "");
+	vi.stubEnv("HARNESS_ANTHROPIC_MOCK", mock);
+	vi.stubEnv("HARNESS_AUTH_NONCE", NONCE);
+	try {
+		setBun(true);
+		await assert.rejects(importFresh("./redirect_anthropic.mjs"), /Cannot redefine property/);
+		assert.throws(() => fakeBun.spawn(["security"]), /harness blocked `security` via Bun\.spawn/);
+		setBun(false);
+		await assert.rejects(importFresh("./redirect_anthropic.mjs"), /Cannot redefine property/);
+		assert.throws(
+			() => execFileSync("claude", ["--version"]),
+			/harness blocked `claude` via child_process\.execFileSync/,
+		);
+	} finally {
+		setBun(false);
+		vi.unstubAllEnvs();
+	}
+	assert.equal(readFileSync(blockedLog, "utf8"), logged);
+});
