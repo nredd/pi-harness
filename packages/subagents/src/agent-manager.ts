@@ -1640,6 +1640,7 @@ export class AgentManager {
       record.isBackground = true;
       record.resultConsumed = false;
       record.noticeDelivered = undefined;
+      record.stoppedQueued = undefined;
       record.consumedAt = undefined;
       record.result = undefined;
       record.error = undefined;
@@ -1717,6 +1718,7 @@ export class AgentManager {
         await new Promise<void>(resolve => {
           this.enqueueStart(id, record, undefined, async () => {
             granted = true;
+            record.stoppedQueued = undefined;
             record.status = "running";
             record.startedAt = this.clock.now();
           }, resolve);
@@ -1828,6 +1830,7 @@ export class AgentManager {
       return;
     }
 
+    record.stoppedQueued = undefined;
     record.status = "running";
     record.startedAt = this.clock.now();
     if (occupiesPoolSlot(record)) this.runningBackground++;
@@ -2041,6 +2044,7 @@ export class AgentManager {
   /** Mark a dequeued record stopped and tell `onQueuedStop`; the queue entry is already gone. */
   private stopQueued(record: AgentRecord): void {
     record.status = "stopped";
+    record.stoppedQueued = true;
     record.completedAt = this.clock.now();
     this.onQueuedStop?.(record);
   }
@@ -2217,14 +2221,13 @@ export class AgentManager {
         ? now - (record.consumedAt ?? completedAt) >= this.consumedTtlMs
         : now - completedAt >= this.unreadTtlMs;
       if (!expired) continue;
-      // Read before `removeRecord` drops the session.
-      const neverRan = record.status === "stopped" && !record.session;
+      const neverRan = record.stoppedQueued === true;
       this.removeRecord(id, record);
       // Evicting a result nobody read is a loss the parent must hear about. Owned
       // children never leave a note, and only their owner could have read them.
       // Nothing was lost when the parent saw the completion notice (a failure's
-      // stays unread in FleetView), or when the agent was stopped in the queue
-      // and never got a session: it never produced anything to reopen.
+      // stays unread in FleetView), or when the agent was stopped in the queue,
+      // a spawn or a resume: that run never started, so it lost nothing.
       const note = record.resultConsumed || record.noticeDelivered || neverRan ? undefined : this.evictedNotes.get(id);
       if (note) this.onReaped?.(note);
     }

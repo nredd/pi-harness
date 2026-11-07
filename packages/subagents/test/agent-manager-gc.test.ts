@@ -174,6 +174,34 @@ describe("AgentManager — record GC", () => {
       expect(reaped).not.toHaveBeenCalled();
     });
 
+    it("stays quiet for a queued resume stopped before it ran again", async () => {
+      const reaped = vi.fn();
+      const done = () => ({ responseText: "done", session: { dispose: vi.fn() } as any, aborted: false, steered: false } as any);
+      let release!: () => void;
+      vi.mocked(runAgent)
+        .mockResolvedValueOnce(done())
+        .mockImplementationOnce(() => new Promise(resolve => { release = () => resolve(done()); }));
+      manager = new AgentManager(undefined, 1, undefined, undefined, undefined, undefined, undefined, undefined, undefined, reaped);
+      const first = manager.spawn(mockPi, mockCtx, "X", "first", { description: "first", isBackground: true });
+      await manager.getRecord(first)!.promise;
+      markConsumed(manager.getRecord(first)!);
+      // Holds the only slot, so the resume queues.
+      const holder = manager.spawn(mockPi, mockCtx, "X", "holder", { description: "holder", isBackground: true });
+      await manager.resume(first, "again", undefined, { isBackground: true });
+      expect(manager.getRecord(first)!.status).toBe("queued");
+      // The previous run's session is still on the record; it must not count as a run.
+      expect(manager.getRecord(first)!.session).toBeDefined();
+      expect(manager.abort(first, "parent")).toBe(true);
+      release();
+      await manager.getRecord(holder)!.promise;
+      markConsumed(manager.getRecord(holder)!);
+
+      await vi.advanceTimersByTimeAsync(SIXTY + TICK);
+
+      expect(manager.getRecord(first)).toBeUndefined();
+      expect(reaped).not.toHaveBeenCalled();
+    });
+
     it("still reports an unread agent that was stopped mid-run", async () => {
       const reaped = vi.fn();
       manager = new AgentManager(undefined, 10, undefined, undefined, undefined, undefined, undefined, undefined, undefined, reaped);

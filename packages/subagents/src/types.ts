@@ -253,6 +253,8 @@ export interface AgentRecord {
    * reap notice only asks "did the parent ever see this?".
    */
   noticeDelivered?: boolean;
+  /** Stopped while still queued, so its latest run never started; cleared when a resume is admitted. */
+  stoppedQueued?: boolean;
   /** When `resultConsumed` was set; the GC keeps a consumed record for a short window from here. */
   consumedAt?: number;
   /** Steering messages queued before the session was ready. */
