@@ -144,6 +144,14 @@ def test_mock_url_refuses_before_start_and_after_stop() -> None:
         _ = mock.url
 
 
+def test_mock_exit_without_start_is_a_no_op() -> None:
+    """Leaving a never-started mock stops nothing and keeps the URL refused."""
+    mock = AnthropicMock()
+    mock.__exit__(None, None, None)
+    with pytest.raises(RuntimeError, match="not started"):
+        _ = mock.url
+
+
 def test_token_replies_are_scripted_in_order_then_refused() -> None:
     """Queued token replies are consumed FIFO, an unscripted refresh is a 500, every request is recorded."""
     with AnthropicMock() as mock:

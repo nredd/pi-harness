@@ -118,6 +118,25 @@ def test_ledger_charges_the_larger_source_and_enforces_the_cap(tmp_path: Path) -
         ledger.require_headroom()
 
 
+def test_session_cost_skips_non_message_and_non_object_lines(tmp_path: Path) -> None:
+    """Only `message` entries are priced; other entry types and non-object JSON add nothing."""
+    box = make_box(tmp_path)
+    history = box.agent_dir / "sessions" / "history.jsonl"
+    history.parent.mkdir()
+    history.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "session", "message": {"usage": {"cost": {"total": 7.0}}}}),
+                json.dumps([1, 2]),
+                json.dumps(
+                    {"type": "message", "message": {"role": "assistant", "usage": {"cost": {"total": 0.5}}}}
+                ),
+            ]
+        )
+    )
+    assert live.session_cost(box.agent_dir) == pytest.approx(0.5)
+
+
 def test_link_real_credentials_symlinks_never_copies(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     real_agent = tmp_path / "real" / ".pi" / "agent"
     real_agent.mkdir(parents=True)
