@@ -3,6 +3,7 @@
 # A hung `wsl.exe` call used to burn the whole 45 minute job timeout and lose the job log with it. These helpers
 # give each command a deadline sized from hosted passes, and print the stuck command and a process snapshot when
 # it trips, so the step fails in minutes with a cause.
+# Arguments are joined unquoted by Start-Process, so none may contain a space (hosted paths do not).
 $ErrorActionPreference = 'Stop'
 
 function Invoke-Limited {
@@ -28,6 +29,8 @@ function Invoke-Limited {
         return [pscustomobject]@{ TimedOut = $false; ExitCode = $process.ExitCode }
     }
     $process.Kill($true)
+    # Let the redirect file close before the caller reads it.
+    $null = $process.WaitForExit(5000)
     return [pscustomobject]@{ TimedOut = $true; ExitCode = 124 }
 }
 

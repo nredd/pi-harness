@@ -60,7 +60,7 @@ case "$(uv --version)" in "uv $uv_version"*) ;; *) exit 1 ;; esac
 bounded "install gh" "$command_seconds" bash scripts/install_gh_linux.sh "$tool_dir/gh"
 # Owned Linux gates use real cargo/nextest, not native Windows tools or skipped suites.
 if [ "${WSL_OWNED:-false}" = true ]; then
-  bounded "install owned tools" 120 bash scripts/install_wsl_owned_tools.sh "$tool_dir"
+  bounded "install owned tools" 60 bash scripts/install_wsl_owned_tools.sh "$tool_dir"
   PATH=$(< "$tool_dir/owned-tool-path")
   export PATH
 fi
