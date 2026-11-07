@@ -330,7 +330,7 @@
           "report": "coverage/python/lcov.info",
           "producer": "coverage.py",
           "skip_hosts": ["wsl2"],
-          "max_uncovered": { "darwin": { "lines": 628, "functions": 69, "branches": 15 }, "linux": { "lines": 628, "functions": 69, "branches": 15 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 13 }, "linux": { "lines": 0, "functions": 0, "branches": 13 } },
           "reporters": ["text", "lcov"]
         }
       }
