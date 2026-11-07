@@ -382,9 +382,9 @@ added or changed is 0/0:
 | `python-scripts/primary` | 0/0 | 0/0 |
 | `python-harness/primary` | 628/69 | 628/69 |
 
-`python-scripts/primary` also caps branches at 1 on each OS (#419): the one remaining partial arc is the
-`rerun` return in `scripts/runner_rescue.py`. Both OSes measured 0/0/1 in hosted CI run `42322348786` on commit
-`0d728f60` (`coverage accounting` on `owned (ubuntu-24.04)` and `owned (macos-14)`).
+`python-scripts/primary` is also 0 branches on each OS (#419, #420): #420 removed the last partial arc, the
+`rerun` return in `scripts/runner_rescue.py`. Both OSes measured 0/0/0 in hosted CI run `42326265405` on commit
+`0e435a9a` (`coverage accounting` on `owned (ubuntu-24.04)` and `owned (macos-14)`).
 
 `python-scripts` was measured on the final tree of PR #323 from its own hosted artifacts, `--measure` on each:
 darwin from `coverage-macos-14`, linux from `coverage-ubuntu-24.04`, both run `41718792020` on commit `6912a7b5`.
