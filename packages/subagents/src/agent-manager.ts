@@ -90,6 +90,8 @@ export type OnAgentStart = (record: AgentRecord) => void;
  * that heard it spawn needs to learn it ended.
  */
 export type OnAgentQueuedStop = (record: AgentRecord) => void;
+/** Fired when the retention sweep evicts a top-level agent whose result was never read (#330). */
+export type OnAgentReaped = (note: EvictedNote) => void;
 /**
  * Fired by `steer()` once a message is delivered or queued. Every steer path
  * goes through it except the steer tools (`steer_subagent` in index.ts, and its
@@ -594,6 +596,7 @@ export class AgentManager {
   private onComplete?: OnAgentComplete;
   private onStart?: OnAgentStart;
   private onQueuedStop?: OnAgentQueuedStop;
+  private onReaped?: OnAgentReaped;
   private onCompact?: OnAgentCompact;
   private onUsage?: OnAgentUsage;
   private onSteered?: OnAgentSteered;
@@ -660,10 +663,12 @@ export class AgentManager {
     private readonly clock: Clock = realClock,
     private readonly homeDir?: string,
     onQueuedStop?: OnAgentQueuedStop,
+    onReaped?: OnAgentReaped,
   ) {
     this.onComplete = onComplete;
     this.onStart = onStart;
     this.onQueuedStop = guardObserver("queued stop", onQueuedStop);
+    this.onReaped = guardObserver("reaped", onReaped);
     this.onCompact = guardObserver("compaction", onCompact);
     this.onUsage = guardObserver("usage", onUsage);
     this.onSteered = onSteered;
@@ -2143,7 +2148,12 @@ export class AgentManager {
       const expired = record.resultConsumed
         ? now - (record.consumedAt ?? completedAt) >= this.consumedTtlMs
         : now - completedAt >= this.unreadTtlMs;
-      if (expired) this.removeRecord(id, record);
+      if (!expired) continue;
+      this.removeRecord(id, record);
+      // Evicting a result nobody read is a loss the parent must hear about. Owned
+      // children never leave a note, and only their owner could have read them.
+      const note = record.resultConsumed ? undefined : this.evictedNotes.get(id);
+      if (note) this.onReaped?.(note);
     }
   }
 

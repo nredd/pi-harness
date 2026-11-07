@@ -109,6 +109,62 @@ describe("AgentManager — record GC", () => {
     expect(emit.mock.invocationCallOrder[0]).toBeLessThan(dispose.mock.invocationCallOrder[0]);
   });
 
+  describe("reap notice (#330)", () => {
+    const SIXTY = 60 * 60_000;
+
+    it("reports an unread result evicted by the sweep, with where it went", async () => {
+      const reaped = vi.fn();
+      manager = new AgentManager(undefined, 10, undefined, undefined, undefined, undefined, undefined, undefined, undefined, reaped);
+      const { id, record } = await settled("lost");
+      record.resultConsumed = false;
+      record.outputFile = "/tmp/pi-subagents-1/x/tasks/lost.output";
+      record.completedAt = Date.now() - (SIXTY + 30_000);
+
+      await vi.advanceTimersByTimeAsync(TICK);
+
+      expect(manager.getRecord(id)).toBeUndefined();
+      expect(reaped).toHaveBeenCalledTimes(1);
+      expect(reaped).toHaveBeenCalledWith(expect.objectContaining({ id, status: "completed", transcript: "/tmp/pi-subagents-1/x/tasks/lost.output" }));
+    });
+
+    it("stays quiet for a result that was read", async () => {
+      const reaped = vi.fn();
+      manager = new AgentManager(undefined, 10, undefined, undefined, undefined, undefined, undefined, undefined, undefined, reaped);
+      const { id, record } = await settled("read");
+      record.completedAt = Date.now() - (TEN_MINUTES + 30_000);
+
+      await vi.advanceTimersByTimeAsync(TICK);
+
+      expect(manager.getRecord(id)).toBeUndefined();
+      expect(reaped).not.toHaveBeenCalled();
+    });
+
+    it("stays quiet for an unread nested child, which only its owner reads", async () => {
+      const reaped = vi.fn();
+      manager = new AgentManager(undefined, 10, undefined, undefined, undefined, undefined, undefined, undefined, undefined, reaped);
+      const { id, record } = await settled("child");
+      record.resultConsumed = false;
+      record.parentAgentId = "owner";
+      record.completedAt = Date.now() - (SIXTY + 30_000);
+
+      await vi.advanceTimersByTimeAsync(TICK);
+
+      expect(manager.getRecord(id)).toBeUndefined();
+      expect(reaped).not.toHaveBeenCalled();
+    });
+
+    it("does not report records that a session boundary clears", async () => {
+      const reaped = vi.fn();
+      manager = new AgentManager(undefined, 10, undefined, undefined, undefined, undefined, undefined, undefined, undefined, reaped);
+      const { record } = await settled("boundary");
+      record.resultConsumed = false;
+
+      manager.clearCompleted();
+
+      expect(reaped).not.toHaveBeenCalled();
+    });
+  });
+
   it("never evicts a running agent, however old its timestamp looks", async () => {
     // A live agent's session being disposed mid-run is the worst failure this
     // guard prevents, and `completedAt` on a running record is meaningless.

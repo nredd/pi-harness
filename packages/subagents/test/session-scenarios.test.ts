@@ -330,3 +330,37 @@ it("absent admission RPC admits physical child", async () => {
   expect(transcript).not.toContain("Queued");
   expect(child.state.callCount).toBe(1);
 });
+
+it("tells the parent when an unread agent is reaped, not only on a later lookup (#330)", async () => {
+  const before = process.env.PI_SUBAGENTS_UNREAD_TTL_MIN;
+  process.env.PI_SUBAGENTS_UNREAD_TTL_MIN = "1";
+  try {
+    // `0` keeps the notice to a preview, so the result stays unread.
+    fixture = new ScenarioSession({ notificationResultChars: 0 });
+    fixture.physical("kid", "child", [answer("CHILD RESULT 330")]);
+    const h = await fixture.start();
+    h.setResponses([calls(spawn("forgotten")), answer("SPAWNED"), answer("NOTICE SEEN")]);
+    const completed = fixture.completion();
+    await h.session.prompt("go");
+    const id = agentId(h);
+    await completed;
+    const noticeTurn = nextEvent(h, e => e.type === "agent_end");
+    fixture.clock.advance(200); // the notice hold
+    await noticeTurn;
+    while (h.session.isStreaming) await new Promise(resolve => setTimeout(resolve, 1)); // agent_end fires before the turn closes
+    expect(notices(h)).toHaveLength(1);
+    expect(fixture.record(id).resultConsumed).toBeFalsy();
+    fixture.clock.advance(60_000);
+    expect(() => fixture.record(id)).toThrow(`No record ${id}`);
+
+    h.setResponses([answer("NOTED")]);
+    await h.session.prompt("next");
+    const reaped = h.session.messages.filter(m => m.role === "custom" && m.customType === "subagent-reaped").map(text);
+    expect(reaped).toHaveLength(1);
+    expect(reaped[0]).toContain(id);
+    expect(reaped[0]).toContain("never read");
+    expect(reaped[0]).toContain("transcript: ");
+  } finally {
+    if (before === undefined) delete process.env.PI_SUBAGENTS_UNREAD_TTL_MIN; else process.env.PI_SUBAGENTS_UNREAD_TTL_MIN = before;
+  }
+});

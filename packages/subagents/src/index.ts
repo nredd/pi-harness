@@ -964,6 +964,14 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     if (!isTopLevelAgent(record) || detachedSessionFile !== undefined) return;
     record.settleSeq = manager.nextSequence();
     pi.events.emit("subagents:failed", buildEventData(record));
+  }, (note) => {
+    // The retention sweep dropped a result nobody read: say so now, where the parent sees it on
+    // its next turn, instead of leaving `Agent not found` to be discovered by a later lookup (#330).
+    pi.sendMessage({
+      customType: "subagent-reaped",
+      content: `${describeEvicted(note)}. Its result was never read and its record is gone; reopen it with steer_subagent or Agent resume if its session is still saved.`,
+      display: true,
+    }, { deliverAs: "nextTurn" });
   });
 
   // A live survivor of an orphaned manager keeps its handle: reusing it would make a lifecycle listener
