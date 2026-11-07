@@ -162,8 +162,8 @@ PI_BIN=<selected-build>/darwin-arm64/pi uv run --locked pytest \
 | 1.4.4 | 32 passed, 7 skipped, 102.500s | 32 passed, 7 skipped, 118.381s |
 
 This includes all 16 unchanged startup-mode cases, RPC EOF/monitor lifetime, TUI exit/status
-and footer resize. All seven skips per stack are the existing auth/preload cases (#14);
-missing-preload refusal still runs. Zero retries and zero local native crashes. Timings are
+and footer resize. All seven skips per stack were the auth/preload cases (#14, historical: the
+`BUN_OPTIONS` adapter removed them); missing-preload refusal ran. Zero retries and zero local native crashes. Timings are
 observations, not a performance gate or controlled speed comparison.
 
 Execution receipts are in ignored `integration/artifacts/compare-*` and `/tmp/bun-upgrade-*`.

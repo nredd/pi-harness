@@ -1,6 +1,6 @@
 # Bun standalone evidence
 
-Current CI scope (2026-10-29):
+CI scope (2026-10-29, auth skips removed 2026-11-07, #14):
 
 - Previously `.github/workflows/ci.yml` ran only the release-tarball Node bundle for D/E, across
   two OSes and two stacks. `owned`'s Bun package/in-process tests were not standalone coverage.
@@ -10,18 +10,17 @@ Current CI scope (2026-10-29):
   They restore npm release model data, run the official `forks/pi/scripts/build-binaries.sh`
   with `--offline-model-data`, and execute the native archive on macOS ARM64 and Linux x64.
   Each running `stack` cell builds for its own explicit stack. No binaries are committed or published
-- Only seven auth dispatch/refresh cases are skipped per stack, with an explicit reason in the
-  test markers/collection policy and JUnit: `NODE_OPTIONS --import` interception is unavailable.
+- No auth case is skipped (#14): `NODE_OPTIONS --import` is ignored by the standalone, so
+  `integration/harness/anthropic_mock.py::anthropic_env` also sets `BUN_OPTIONS --preload`.
+  `providers/redirect_anthropic.mjs` and `providers/auth_guard.mjs` implement the hook;
   `test_request_uses_auth_json_token_with_claude_code_headers[missing-preload]` still exercises
-  fail-closed startup on standalone. `integration/harness/anthropic_mock.py::anthropic_env`,
-  `providers/redirect_anthropic.mjs` and `providers/auth_guard.mjs` implement this dependency.
-  The candidate adapter receipt lane below does not remove those default skips
+  fail-closed startup on standalone
 - No selected D/E scenario scales timers (`fast_timers.mjs` is deleted, #378) or uses `--expose-gc`.
   Injected-clock behavior is native; GC instrumentation is confined to excluded render benches
   (`integration/harness/probe.py`, `scenarios/bench/test_render.py`), whose probe now falls back to
-  `Bun.gc(true)` when `--expose-gc` is unavailable. Not yet run on a compiled standalone. The actual adapter issue is
+  `Bun.gc(true)` when `--expose-gc` is unavailable. Not run on a compiled standalone (tracked in #628). The actual adapter issue is
   [here](https://github.com/nredd/pi-harness/issues/14), not the nonexistent repository issue #58
-- NOT RUN: Linux ARM64 (no `ubuntu-24.04-arm` job), other architectures/Windows, auth interception,
+- NOT RUN: Linux ARM64 (no `ubuntu-24.04-arm` job), other architectures/Windows,
   packed contracts under standalone, benchmarks, live credentials and desktop/TCC helpers.
   REA was retired in `nredd/dotfiles#58`; it is not an outstanding Bun or release requirement.
   This is a source-build D/E gate, not full Bun acceptance or a published-artifact gate
@@ -43,11 +42,21 @@ for both runtimes: `NODE_OPTIONS` (`--import`, `--expose-gc`) for Node and `BUN_
   the adapter refuses preload paths holding whitespace or quotes
 - Fast timers: no scenario scales timers any more (`fast_timers.mjs` was deleted, #378), so there is
   no timer preload to adapt. The issue comment attributes the old `/loop` and footer-poll failures
-  to that preload; NOT re-run here on the compiled Pi core
+  to that preload. `integration/scenarios/test_realtime_timers.py` is the committed proof, in the
+  stack D/E glob so it runs on Node and on `--runtime bun-standalone`: (1) `/loop 30s` (the minimum
+  interval) in tmux against the faux provider, waiting for the tick's reply (40 s bound), then
+  `/loop stop all`; (2) the footer's usage poll, read from the usage fixture's request log, repeats
+  60 s after the first (75 s bound). Local evidence (2026-11-06, Gitlink `4af3d547`, Bun 1.4.4
+  darwin-arm64 standalone, personal stack): loop tick 30.1 s standalone / 30.0 s Node; poll gap
+  60.0 s on both. RED: a throwaway `BUN_OPTIONS` preload (not committed) that makes a 30 s, or 60 s,
+  `setInterval` a no-op times out the loop (40 s) or poll (`Only 1 of 2 usage requests in 75s`)
+  wait. This shows the symptom is gone, not which component caused it. The old Python scenarios
+  were ported to in-process tests and no longer exist (`787f72f1`); the render-probe gc and
+  `ms_input_p95_n4` items stay in #628
 
 The render probe keeps its `Bun.gc(true)` fallback behind the adapter's `--expose-gc`.
 
-## Candidate auth runtime adapter (#14)
+## Auth runtime adapter (#14)
 
 The harness sets both `NODE_OPTIONS=--import <redirect>` and
 `BUN_OPTIONS=--preload <redirect>` through that adapter. Compiled Bun 1.4.4 honors the latter
@@ -71,14 +80,12 @@ also exercises replaced fetch, identity/echo/egress failures, unsafe mock origin
 Node/Bun subprocess APIs and a real HTTP redirect that must not reach its destination. It is
 NOT the compiled Pi core and proves no auth shaping, router dispatch or refresh acceptance.
 
-CI keeps the default seven skips and adds explicit `--bun-auth-adapter` candidate auth steps on
-the actual compiled core for each stack, reusing the existing standalone build. Those steps run
-the unchanged shaping, direct/router/API-key/custom, refresh persistence/refusal and missing-hook
-assertions. Their individual outcomes and `standalone-auth-{personal,local}.xml` are the required
-receipt. They are NOT RUN locally; no hosted receipt is claimed by this document. Keep #14 open
-and do not remove default skips until the actual compiled-core CI receipts pass on both stacks
-and both native OSes. Linux ARM64, timer/GC adapter requirements and published-artifact acceptance
-remain outside this change.
+The unchanged shaping, direct/router/API-key/custom, refresh persistence/refusal and missing-hook
+assertions run on the actual compiled core inside the ordinary standalone D/E step of each stack;
+the `--bun-auth-adapter` opt-in and its candidate steps are gone. Hosted receipts before removal
+(`redd/issue-14-runtime-adapter` PR run 42335928288, `standalone-auth-*.xml`): linux-x64 personal,
+linux-x64 local and darwin-arm64 local each 8 tests, 0 skipped, 0 failures. macOS `personal` is not a
+CI cell. Linux ARM64, packed contracts and published-artifact acceptance remain outside this gate.
 
 Historical local evidence below predates the rebuilt integration gate. Do not treat the old
 `pi-harness-e2e` failures or smoke results as execution evidence for the new Gitlink/CI jobs.
@@ -164,9 +171,10 @@ Dependency audit:
   failures are all the documented Anthropic auth refusals: Bun ignores the
   `NODE_OPTIONS` preload, so the harness refuses before any request); tui+bench 105 passed, 18 failed
 - 13 TUI failures are deterministic under Bun and pass on Node in the same session, all `pi-session-kit`
-  timer behavior (quota footer never polls, `/loop` never ticks): nredd/pi-harness#14
+  timer behavior (quota footer never polls, `/loop` never ticks): nredd/pi-harness#14, since
+  covered by `scenarios/test_realtime_timers.py` (see the runtime hook adapter section)
 - `bench/test_render_2k_message_transcript`: the probe needs `--expose-gc`, which Bun lacks (same issue; the probe now uses `Bun.gc(true)`, see above)
-- `bench/test_multi_session_responsiveness` `ms_input_p95_n4` 11.4-12.5ms vs the 9.9ms limit under Bun;
+- `bench/test_multi_session_responsiveness` `ms_input_p95_n4` 11.4-12.5ms vs the 9.9ms limit under Bun (open, #628);
   three `typed_vs_bash` cases failed in the suite and passed alone (order-dependent, not re-run further)
 - Checklist items 5.x remain open; the Node/Homebrew tree is the only shipped runtime. Trust cases A-F and the
   fatal-startup matrix stay identical across runtimes (`verify-8754b00/`)

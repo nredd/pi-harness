@@ -11,7 +11,7 @@ benchmarks, and exact-stack release tooling. The Pi core retains its upstream hi
   both attested snapshot and complete runtime graph assets; old snapshot-only promotions are unsupported.
   Source-selected npm locks replay offline with scripts disabled: [details](docs/runtime-locks.md).
 - CI builds the Bun standalone from the Gitlinked core and runs the stack D/E scenarios on it on darwin-arm64 (`local`
-  only) and linux-x64; seven auth-interception cases are explicit skips. linux-arm64 is NOT RUN. Details [here](docs/bun-prerequisite.md).
+  only) and linux-x64; auth interception runs through the `BUN_OPTIONS` preload adapter, no skips. linux-arm64 is NOT RUN. Details [here](docs/bun-prerequisite.md).
 - CI also runs the owned gates and packed contracts on a hosted `windows-2025` runner inside verified Ubuntu WSL2, after
   copying the checkout from the mounted Windows drive to WSL's Linux filesystem: on `main`, and on PRs that change CI or
   WSL inputs. No stack runs in WSL. Coverage and exclusions: [CI](docs/ci.md).

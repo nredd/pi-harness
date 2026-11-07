@@ -744,13 +744,6 @@ jobs:
           uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
             --stack stacks/personal.json --runtime bun-standalone -m stack -n 2 --dist loadfile \
             --log-cli-level=INFO --junitxml=artifacts/standalone-personal.xml
-      - name: Candidate compiled-core auth adapter (personal)
-        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.build.outcome == 'success' && matrix.stack == 'personal' }}
-        working-directory: integration
-        run: |
-          uv run --locked pytest scenarios/test_auth_transport.py \
-            --stack stacks/personal.json --runtime bun-standalone --bun-auth-adapter -m stack \
-            --log-cli-level=INFO --junitxml=artifacts/standalone-auth-personal.xml
       - name: Standalone D and E (local)
         if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.build.outcome == 'success' && matrix.stack == 'local' }}
         working-directory: integration
@@ -758,18 +751,11 @@ jobs:
           uv run --locked pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py \
             --stack stacks/local.json --runtime bun-standalone -m stack -n 2 --dist loadfile \
             --log-cli-level=INFO --junitxml=artifacts/standalone-local.xml
-      - name: Candidate compiled-core auth adapter (local)
-        if: ${{ !cancelled() && steps.plan.outputs.run == 'true' && steps.build.outcome == 'success' && matrix.stack == 'local' }}
-        working-directory: integration
-        run: |
-          uv run --locked pytest scenarios/test_auth_transport.py \
-            --stack stacks/local.json --runtime bun-standalone --bun-auth-adapter -m stack \
-            --log-cli-level=INFO --junitxml=artifacts/standalone-auth-local.xml
       - name: Report coverage exclusions
         if: ${{ always() && steps.plan.outputs.scenarios == 'true' }}
         shell: bash -e {0}
         run: |
-          echo "Bun standalone: default D/E retains seven auth skips (#14). Separate candidate compiled-core auth adapter steps execute the unchanged assertions; consult their outcome and JUnit, not this notice, for evidence." >>"$GITHUB_STEP_SUMMARY"
+          echo "Bun standalone: default D/E runs the auth transport cases through the BUN_OPTIONS preload adapter, no skips (#14); consult the step outcome and JUnit, not this notice, for evidence." >>"$GITHUB_STEP_SUMMARY"
           echo "linux-arm64, packed contracts under standalone, bench, live credentials and desktop helpers: NOT RUN." >>"$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ always() && steps.plan.outputs.scenarios == 'true' }}

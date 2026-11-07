@@ -56,7 +56,7 @@ NOT RUN, with what each would need:
 - Quiet-runner benchmarks (`F`): a quiet self-hosted runner
 
 The Bun standalone runs these scenarios too (`ci.yml` standalone pass globs `scenarios/test_*.py`);
-only the seven Node-preload auth cases are skipped there. Exclusion and clean offline failures must
+no auth case is skipped there (`BUN_OPTIONS` preload adapter, #14). Exclusion and clean offline failures must
 never be reported as successful GUI/network coverage.
 
 ## Historical migration inventory
