@@ -193,6 +193,8 @@ export interface EvictedNote {
   /** The run's model fallback, so even an evicted agent's id still discloses it. */
   modelFallback?: ModelFallback;
   modelTier?: TierDisclosure;
+  /** Set when a saved session exists but its name now belongs to another agent, so it was not kept reopenable. */
+  nameTaken?: string;
 }
 
 /** The text a tool returns for an id whose record was evicted. */
@@ -2062,8 +2064,14 @@ export class AgentManager {
    * transcript, so the mention would have nothing to continue from.
    */
   private tombstone(record: SettledRecord): void {
-    if (!record.handle || !record.sessionFile) return;
-    this.tombstones.set(record.handle, {
+    const entry = this.tombstoneOf(record);
+    if (entry) this.storeTombstone(entry);
+  }
+
+  /** What `@handle` needs to reopen `record`'s conversation; undefined without a handle and a session file. */
+  private tombstoneOf(record: SettledRecord): AgentTombstone | undefined {
+    if (!record.handle || !record.sessionFile) return undefined;
+    return {
       handle: record.handle,
       alias: record.alias,
       id: record.id,
@@ -2073,7 +2081,45 @@ export class AgentManager {
       completedAt: record.completedAt,
       ...(record.modelTier ? { modelTier: record.modelTier } : {}),
       ...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
-    });
+    };
+  }
+
+  /** Tombstones for whichever of `ids` are settled here and reopenable, to hand to a session that will never see these records. */
+  evictionTombstones(ids: readonly string[]): AgentTombstone[] {
+    return [...this.agents.values()]
+      .filter(isSettled)
+      .filter(record => isTopLevelAgent(record) && ids.includes(record.id))
+      .flatMap(record => this.tombstoneOf(record) ?? []);
+  }
+
+  /**
+   * Keep `entry` reopenable by handle, alias and id. Also how an agent that settled in an
+   * orphaned manager (`/new`, `/reload`) stays reopenable here (#330). A name already held
+   * by another live agent, an evicted conversation or a handle reserved for another manager's
+   * survivor stays with its holder (as `takenHandles` has it): two conversations must not
+   * answer to one `@name`. The entry is then not kept and its note says why.
+   */
+  rememberTombstone(entry: AgentTombstone): void {
+    const names = [entry.handle, ...(entry.alias ? [entry.alias] : [])];
+    const reserved = new Set<string>(this.reservedHandles());
+    const owns = (own: { id: string; handle?: string; alias?: string }, name: string) =>
+      own.id !== entry.id && (name === own.handle || name === own.alias);
+    const taken = names.find(
+      name =>
+        reserved.has(name) ||
+        [...this.agents.values()].some(own => owns(own, name)) ||
+        [...this.tombstones.values()].some(own => owns(own, name)),
+    );
+    if (taken !== undefined) {
+      const note = this.evictedNotes.get(entry.id);
+      if (note) note.nameTaken = taken;
+      return;
+    }
+    this.storeTombstone(entry);
+  }
+
+  private storeTombstone(entry: AgentTombstone): void {
+    this.tombstones.set(entry.handle, entry);
     // Bound the memory a long session can accumulate. Oldest first, since the
     // agent someone still wants to reach is the one they used most recently.
     while (this.tombstones.size > MAX_TOMBSTONES) {
@@ -2087,18 +2133,36 @@ export class AgentManager {
     // Only the top-level tools read notes, and an owned child (nested or a
     // workflow's) must stay unreachable from them after eviction as before it.
     if (!isTopLevelAgent(record)) return;
-    const { completedAt } = record;
-    this.evictedNotes.delete(record.id);
-    this.evictedNotes.set(record.id, {
+    this.rememberEvicted(this.evictionNote(record));
+  }
+
+  /** Notes for whichever of `ids` are settled here, to hand to a session that will never see these records. */
+  evictionNotes(ids: readonly string[]): EvictedNote[] {
+    return [...this.agents.values()].filter(isSettled).filter(record => isTopLevelAgent(record) && ids.includes(record.id)).map(record => this.evictionNote(record));
+  }
+
+  /** What a settled record leaves behind once it is gone from this manager. */
+  private evictionNote(record: SettledRecord): EvictedNote {
+    return {
       id: record.id,
       type: record.type,
       description: record.description,
       status: record.status,
-      evictedAfterMin: Math.max(0, Math.round((this.clock.now() - completedAt) / 60_000)),
+      evictedAfterMin: Math.max(0, Math.round((this.clock.now() - record.completedAt) / 60_000)),
       transcript: record.outputFile ?? record.sessionFile,
       ...(record.modelTier ? { modelTier: record.modelTier } : {}),
       ...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
-    });
+    };
+  }
+
+  /**
+   * Keep `note` addressable by its id, bounded by age. Also how a result handed
+   * over by an orphaned manager (`/new`, `/reload`) stays answerable here: the
+   * record settled in a manager this one never saw (#330).
+   */
+  rememberEvicted(note: EvictedNote): void {
+    this.evictedNotes.delete(note.id);
+    this.evictedNotes.set(note.id, note);
     // Insertion order is age order (the note was just re-inserted above).
     for (const oldest of this.evictedNotes.keys()) {
       if (this.evictedNotes.size <= MAX_EVICTED_NOTES) break;

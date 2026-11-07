@@ -164,6 +164,72 @@ describe("AgentManager.detach", () => {
   });
 });
 
+describe("AgentManager.rememberTombstone", () => {
+  const entry = (id: string, handle: string, alias?: string) =>
+    ({ id, handle, alias, type: "general-purpose", description: "d", sessionFile: `/s/${id}.jsonl`, completedAt: 1 }) as any;
+
+  it("keeps a handed-over entry reopenable by id", () => {
+    const manager = new AgentManager(() => {});
+    manager.rememberTombstone(entry("a", "gp"));
+    expect(manager.listTombstones().map(t => t.id)).toEqual(["a"]);
+  });
+
+  it("leaves a name held by a live agent, another tombstone or a reserved handle with its holder", () => {
+    const manager = new AgentManager(() => {});
+    const agents = Reflect.get(manager, "agents") as Map<string, object>;
+    agents.set("live", { id: "live", handle: "gp", alias: "named" });
+    manager.rememberTombstone(entry("a", "gp"));
+    manager.rememberTombstone(entry("b", "other", "named"));
+    expect(manager.listTombstones()).toEqual([]);
+
+    agents.clear();
+    manager.rememberTombstone(entry("c", "kept", "kept-alias"));
+    manager.rememberTombstone(entry("d", "fresh", "kept-alias"));
+    manager.rememberTombstone(entry("c", "kept", "kept-alias"));
+    expect(manager.listTombstones().map(t => t.id)).toEqual(["c"]);
+
+    manager.reservedHandles = () => ["busy"];
+    manager.rememberTombstone(entry("e", "busy"));
+    manager.rememberTombstone(entry("f", "x", "busy"));
+    expect(manager.listTombstones().map(t => t.id)).toEqual(["c"]);
+  });
+
+  it("marks the note of an entry it could not keep, and bounds what it does keep", () => {
+    const manager = new AgentManager(() => {});
+    manager.rememberEvicted({ id: "n", type: "general-purpose", description: "d", status: "completed", evictedAfterMin: 0 });
+    manager.rememberTombstone(entry("k", "gp"));
+    manager.rememberTombstone(entry("n", "gp"));
+    expect(manager.getEvictedNote("n")?.nameTaken).toBe("gp");
+    for (let i = 0; i < 101; i++) manager.rememberTombstone({ ...entry(`t${i}`, `h${i}`), completedAt: i + 1 });
+    expect(manager.listTombstones()).toHaveLength(100);
+  });
+
+  it("names the held name in the note, alias or handle", () => {
+    const manager = new AgentManager(() => {});
+    const agents = Reflect.get(manager, "agents") as Map<string, object>;
+    agents.set("live", { id: "live", handle: "gp", alias: "named" });
+    const note = (id: string) => ({ id, type: "general-purpose", description: "d", status: "completed" as const, evictedAfterMin: 0 });
+    manager.rememberEvicted(note("b"));
+    manager.rememberTombstone(entry("b", "other", "named"));
+    expect(manager.getEvictedNote("b")?.nameTaken).toBe("named");
+    manager.rememberEvicted(note("c"));
+    manager.rememberTombstone(entry("c", "gp", "free"));
+    expect(manager.getEvictedNote("c")?.nameTaken).toBe("gp");
+  });
+
+  it("hands over only settled, reopenable records", () => {
+    const manager = new AgentManager(() => {});
+    const agents = Reflect.get(manager, "agents") as Map<string, object>;
+    const done = { status: "completed", completedAt: 1, type: "general-purpose", description: "d" };
+    agents.set("a", { id: "a", handle: "gp", sessionFile: "/s/a.jsonl", ...done });
+    agents.set("b", { id: "b", handle: "gp-2", ...done });
+    agents.set("c", { id: "c", handle: "gp-3", sessionFile: "/s/c.jsonl", status: "running" });
+    agents.set("d", { id: "d", handle: "gp-4", sessionFile: "/s/d.jsonl", parentAgentId: "a", ...done });
+    expect(manager.evictionTombstones(["a", "b", "c", "d"]).map(t => t.id)).toEqual(["a"]);
+    expect(manager.evictionNotes(["a", "d"]).map(n => n.id)).toEqual(["a"]);
+  });
+});
+
 describe("session switch with a running background agent", () => {
   let tmpDir: string;
   let prevCwd: string;
@@ -193,11 +259,12 @@ describe("session switch with a running background agent", () => {
     vi.restoreAllMocks();
   });
 
-  async function spawnRunning(tools: Map<string, any>, parent = ctx(sessionFile), name?: string) {
+  async function spawnRunning(tools: Map<string, any>, parent = ctx(sessionFile), name?: string, agentSessionFile?: string) {
     let finish!: (v: any) => void;
     let signal: AbortSignal | undefined;
     vi.mocked(runAgent).mockImplementation(((_c: any, _t: any, _p: any, opts: any) => {
       signal = opts?.signal;
+      if (agentSessionFile) opts?.onSessionCreated?.({ sessionManager: { getSessionFile: () => agentSessionFile }, dispose: vi.fn() });
       return new Promise((res) => {
         finish = res;
       });
@@ -312,6 +379,114 @@ describe("session switch with a running background agent", () => {
     await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
   });
 
+  it("keeps a survivor that settled while detached answerable by id after its result is delivered (#330)", async () => {
+    const first = makePi();
+    subagentsExtension(first.pi);
+    await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    const agent = await spawnRunning(first.tools);
+    await first.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "reload" }, ctx(sessionFile));
+    agent.finish();
+    await flush();
+
+    const back = makePi();
+    subagentsExtension(back.pi);
+    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    await new Promise(resolve => setTimeout(resolve, 250));
+    // The notice names this id; its orphaned record is gone, so the fresh manager has never heard of it.
+    expect(back.pi.sendMessage.mock.calls[0][0].content).toContain(agent.id);
+
+    for (const tool of ["get_subagent_result", "steer_subagent"]) {
+      const got = await back.tools.get(tool).execute("g", { agent_id: agent.id, message: "hi" }, undefined, undefined, ctx(sessionFile));
+      expect(got.content[0].text).not.toContain("Agent not found");
+      expect(got.content[0].text).toContain(agent.id);
+      expect(got.content[0].text).toContain("completed");
+    }
+    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+  });
+
+  it("steer after a detached finish reopens the survivor's saved session (#330)", async () => {
+    const saved = join(tmpDir, "survivor-session.jsonl");
+    writeFileSync(saved, "");
+    const first = makePi();
+    subagentsExtension(first.pi);
+    await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    const agent = await spawnRunning(first.tools, ctx(sessionFile), "auth-audit", saved);
+    await first.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "reload" }, ctx(sessionFile));
+    agent.finish();
+    await flush();
+
+    const back = makePi();
+    subagentsExtension(back.pi);
+    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    await new Promise(resolve => setTimeout(resolve, 250));
+    vi.mocked(runAgent).mockClear();
+    vi.mocked(runAgent).mockImplementation((() => new Promise(() => {})) as any);
+
+    const got = await back.tools.get("steer_subagent").execute("s", { agent_id: agent.id, message: "more" }, undefined, undefined, ctx(sessionFile));
+    expect(got.content[0].text).not.toContain("Cannot resume");
+    expect(got.content[0].text).toContain("Agent resumed in background");
+    expect(got.content[0].text).toContain(`Session file: ${saved}`);
+    expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runAgent).mock.calls[0][3]).toEqual(expect.objectContaining({ resumeSessionFile: saved }));
+    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+  });
+
+  it("a survivor with no saved session says so plainly after a detached finish (#330)", async () => {
+    const first = makePi();
+    subagentsExtension(first.pi);
+    await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    const agent = await spawnRunning(first.tools);
+    await first.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "reload" }, ctx(sessionFile));
+    agent.finish();
+    await flush();
+    const back = makePi();
+    subagentsExtension(back.pi);
+    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    await new Promise(resolve => setTimeout(resolve, 250));
+    const got = await back.tools.get("steer_subagent").execute("s", { agent_id: agent.id, message: "more" }, undefined, undefined, ctx(sessionFile));
+    expect(got.content[0].text).toContain(`Cannot resume agent "${agent.id}": no saved session is left to reopen.`);
+    expect(got.content[0].text).not.toContain("Agent not found");
+    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+  });
+
+  it("says why when a delivered survivor's name already belongs to another conversation (#330)", async () => {
+    const saved = join(tmpDir, "named-session.jsonl");
+    writeFileSync(saved, "");
+    const result = (id: string) => ({
+      id,
+      content: `<task-notification>${id}</task-notification>`,
+      details: { id },
+      evicted: [{ id, type: "general-purpose", description: "d", status: "completed", evictedAfterMin: 0 }],
+      tombstones: [{ id, handle: "gp", type: "general-purpose", description: "d", sessionFile: saved, completedAt: 1 }],
+    });
+    spoolDetached(sessionFile, result("first-1"));
+    spoolDetached(sessionFile, result("second-1"));
+    const back = makePi();
+    subagentsExtension(back.pi);
+    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    await new Promise(resolve => setTimeout(resolve, 250));
+    const got = await back.tools.get("steer_subagent").execute("s", { agent_id: "second-1", message: "more" }, undefined, undefined, ctx(sessionFile));
+    expect(got.content[0].text).toContain('Cannot resume agent "second-1": its name "gp" now belongs to another agent');
+    expect(got.content[0].text).not.toContain("no saved session is left");
+    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+  });
+
+  it("still delivers a spooled result written without an eviction note", async () => {
+    const back = makePi();
+    subagentsExtension(back.pi);
+    spoolDetached(sessionFile, {
+      id: "legacy-1",
+      content: "<task-notification>legacy</task-notification>",
+      details: { id: "legacy-1" },
+    });
+    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    await new Promise(resolve => setTimeout(resolve, 250));
+    expect(back.pi.sendMessage).toHaveBeenCalledTimes(1);
+    const got = await back.tools.get("get_subagent_result").execute("g", { agent_id: "legacy-1" }, undefined, undefined, ctx(sessionFile));
+    expect(got.content[0].text).toContain("Agent not found");
+    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+  });
+
   it("delivers immediately when the agent finishes while its session is open again", async () => {
     const first = makePi();
     subagentsExtension(first.pi);
@@ -356,6 +531,59 @@ describe("session switch with a running background agent", () => {
     expect(back.pi.appendEntry).not.toHaveBeenCalledWith("subagents:record", expect.anything());
     await vi.advanceTimersByTimeAsync(1000);
     expect(back.pi.sendMessage).toHaveBeenCalledTimes(1);
+    await back.lifecycle.get("session_shutdown")({ reason: "quit" });
+  });
+
+  it("keeps every agent in a held notice answerable after the switch (#330)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const first = makePi();
+    subagentsExtension(first.pi);
+    const parent = ctx(sessionFile);
+    parent.signal = new AbortController().signal;
+    await first.lifecycle.get("session_start")({ type: "session_start" }, parent);
+    const one = await spawnRunning(first.tools, parent);
+    const two = await spawnRunning(first.tools, parent);
+    one.finish();
+    two.finish();
+    await flush();
+    expect(first.pi.sendMessage).not.toHaveBeenCalled();
+
+    await first.lifecycle.get("session_before_switch")?.();
+    await first.lifecycle.get("session_shutdown")({ reason: "reload" });
+    const back = makePi();
+    subagentsExtension(back.pi);
+    await back.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    for (const { id } of [one, two]) {
+      const got = await back.tools.get("get_subagent_result").execute("g", { agent_id: id }, undefined, undefined, ctx(sessionFile));
+      expect(got.content[0].text).not.toContain("Agent not found");
+      expect(got.content[0].text).toContain(id);
+    }
+    await back.lifecycle.get("session_shutdown")({ reason: "quit" });
+  });
+
+  it("a held notice's agent with a saved session reopens on steer after the switch (#330)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const saved = join(tmpDir, "held-session.jsonl");
+    writeFileSync(saved, "");
+    const first = makePi();
+    subagentsExtension(first.pi);
+    const parent = ctx(sessionFile);
+    parent.signal = new AbortController().signal;
+    await first.lifecycle.get("session_start")({ type: "session_start" }, parent);
+    const one = await spawnRunning(first.tools, parent, undefined, saved);
+    one.finish();
+    await flush();
+    await first.lifecycle.get("session_before_switch")?.();
+    await first.lifecycle.get("session_shutdown")({ reason: "reload" });
+    const back = makePi();
+    subagentsExtension(back.pi);
+    await back.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
+    vi.mocked(runAgent).mockClear();
+    vi.mocked(runAgent).mockImplementation((() => new Promise(() => {})) as any);
+    const got = await back.tools.get("steer_subagent").execute("s", { agent_id: one.id, message: "more" }, undefined, undefined, ctx(sessionFile));
+    expect(got.content[0].text).not.toContain("Cannot resume");
+    expect(got.content[0].text).toContain(`Session file: ${saved}`);
+    expect(vi.mocked(runAgent).mock.calls[0][3]).toEqual(expect.objectContaining({ resumeSessionFile: saved }));
     await back.lifecycle.get("session_shutdown")({ reason: "quit" });
   });
 

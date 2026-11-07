@@ -13,8 +13,9 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { EvictedNote } from "./agent-manager.js";
 import type { NoticeParts } from "./notification-result.js";
-import type { AgentRecord } from "./types.js";
+import type { AgentRecord, AgentTombstone } from "./types.js";
 import type { AgentActivity } from "./ui/agent-widget.js";
 
 /** One finished agent, in the shape `session_start` needs to re-announce it. */
@@ -28,6 +29,10 @@ export interface DetachedResult {
   record?: Record<string, unknown>;
   /** The `subagents:completed`/`subagents:failed` event the live path would have emitted, replayed on delivery. */
   lifecycle?: { channel: "subagents:completed" | "subagents:failed"; data: Record<string, unknown> };
+  /** What the reopened session keeps so these agents' ids still answer after their records are gone. */
+  evicted?: EvictedNote[];
+  /** Reopenable sessions among them, so a steer or resume of these ids continues the saved conversation. */
+  tombstones?: AgentTombstone[];
   /** A full-result notice's parts, so delivery clips it against its batch's budget; `content` is the fallback. */
   notice?: NoticeParts & { footer: string };
 }
