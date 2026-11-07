@@ -1,6 +1,6 @@
 # Bun standalone evidence
 
-Current CI scope (2026-10-29):
+CI scope (2026-10-29, auth skips removed 2026-11-07, #14):
 
 - Previously `.github/workflows/ci.yml` ran only the release-tarball Node bundle for D/E, across
   two OSes and two stacks. `owned`'s Bun package/in-process tests were not standalone coverage.

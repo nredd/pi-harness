@@ -1787,14 +1787,13 @@ def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> Non
     assert len(runs) == 3
     # The candidate `--bun-auth-adapter` lane is gone (#14): auth cases run inside standalone D/E.
     assert not any("--bun-auth-adapter" in step["run"] for step in stack["steps"] if "run" in step)
-    scenarios = runs
-    for step in scenarios:
+    for step in runs:
         assert "pytest scenarios/test_*.py scenarios/tui/test_footer_resize.py" in step["run"]
         assert "-m stack -n 2 --dist loadfile" in step["run"]
         assert "matrix.os" not in step["if"]  # No WSL-only elision.
-    assert '--stack "stacks/${{ matrix.stack }}.json"' in scenarios[0]["run"]
-    assert "stacks/personal.json --runtime bun-standalone" in scenarios[1]["run"]
-    assert "stacks/local.json --runtime bun-standalone" in scenarios[2]["run"]
+    assert '--stack "stacks/${{ matrix.stack }}.json"' in runs[0]["run"]
+    assert "stacks/personal.json --runtime bun-standalone" in runs[1]["run"]
+    assert "stacks/local.json --runtime bun-standalone" in runs[2]["run"]
     uploads = [step for step in stack["steps"] if "upload-artifact@" in step.get("uses", "")]
     startup = next(
         step for step in uploads if step.get("name") == "Upload scanned standalone startup failure evidence"
