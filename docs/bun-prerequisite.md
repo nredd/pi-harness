@@ -28,10 +28,28 @@ Current CI scope (2026-10-29):
 - CI results, run IDs and measured runner cost belong in the draft PR; job definitions alone are
   not evidence that these new runs pass. See [here](ci.md) for the zero-added-job capacity budget
 
+## Runtime hook adapter (#14)
+
+`integration/harness/runtime_hooks.py::runtime_hooks` is the one place that spells a harness hook
+for both runtimes: `NODE_OPTIONS` (`--import`, `--expose-gc`) for Node and `BUN_OPTIONS`
+(`--preload`, `--expose-gc`) for a compiled Bun standalone. `anthropic_env` (auth redirect) and
+`probe_args` (`--expose-gc`) both use it. Bun 1.4.4 evidence (2026-11-06, compiled `bun build
+--compile`, `tests/test_runtime_hooks.py`):
+
+- `NODE_OPTIONS` with `--import`, `--require` or `--expose-gc` is ignored by the standalone
+- `BUN_OPTIONS=--preload <module>` and `BUN_OPTIONS=--expose-gc` are honored by the standalone and
+  by `bun <file>`; Node ignores `BUN_OPTIONS`, so setting both is safe
+- `BUN_OPTIONS` does not parse quotes: a `--preload "<path with space>"` is silently dropped, so
+  the adapter refuses preload paths holding whitespace or quotes
+- Fast timers: no scenario scales timers any more (`fast_timers.mjs` was deleted, #378), so there is
+  no timer preload to adapt. The old `/loop` and footer-poll failures were that missing preload
+
+The render probe keeps its `Bun.gc(true)` fallback behind the adapter's `--expose-gc`.
+
 ## Candidate auth runtime adapter (#14)
 
 The harness sets both `NODE_OPTIONS=--import <redirect>` and
-`BUN_OPTIONS=--preload <redirect>`. Compiled Bun 1.4.4 honors the latter before its entrypoint;
+`BUN_OPTIONS=--preload <redirect>` through that adapter. Compiled Bun 1.4.4 honors the latter before its entrypoint;
 Node continues using the former. Both load the same harness-only fetch/egress hook. No SDK,
 production extension, live configuration, timer behavior or runtime pin changes.
 

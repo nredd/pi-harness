@@ -20,11 +20,11 @@ if TYPE_CHECKING:
 
 
 def test_probe_args_load_the_extension_with_gc(tmp_path: Path) -> None:
-    """The probe extension, its output path and `--expose-gc` are the whole contract."""
+    """The probe extension, its output path and `--expose-gc` for Node and compiled Bun are the contract."""
     out = tmp_path / "probe.jsonl"
     assert probe_args(out) == (
         ["-e", str(PROBE_EXTENSION)],
-        {"HARNESS_PROBE_OUT": str(out), "NODE_OPTIONS": "--expose-gc"},
+        {"HARNESS_PROBE_OUT": str(out), "NODE_OPTIONS": "--expose-gc", "BUN_OPTIONS": "--expose-gc"},
     )
 
 
