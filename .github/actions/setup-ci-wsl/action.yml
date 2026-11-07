@@ -77,6 +77,6 @@ runs:
         $setup = Invoke-BoundedCapture 'translate the setup script path' 30 wsl -d Ubuntu-24.04 --exec wslpath -u "$env:GITHUB_WORKSPACE/scripts/wsl2_setup.sh"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         $setup = $setup.Trim()
-        # The script bounds its own commands (60s each, 180s per download); this covers the whole run.
+        # The script bounds its own commands (60s each, 90s for the owned tools, 180s per download); this covers the whole run.
         Invoke-Bounded 'guest bootstrap (scripts/wsl2_setup.sh)' 300 wsl -d Ubuntu-24.04 --user pi-ci --exec bash -euo pipefail "$setup"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
