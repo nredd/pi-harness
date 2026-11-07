@@ -18,7 +18,7 @@ Current CI scope (2026-10-29):
 - No selected D/E scenario scales timers (`fast_timers.mjs` is deleted, #378) or uses `--expose-gc`.
   Injected-clock behavior is native; GC instrumentation is confined to excluded render benches
   (`integration/harness/probe.py`, `scenarios/bench/test_render.py`), whose probe now falls back to
-  `Bun.gc(true)` when `--expose-gc` is unavailable. Not run on a compiled standalone. The actual adapter issue is
+  `Bun.gc(true)` when `--expose-gc` is unavailable. Not run on a compiled standalone (tracked in #628). The actual adapter issue is
   [here](https://github.com/nredd/pi-harness/issues/14), not the nonexistent repository issue #58
 - NOT RUN: Linux ARM64 (no `ubuntu-24.04-arm` job), other architectures/Windows,
   packed contracts under standalone, benchmarks, live credentials and desktop/TCC helpers.

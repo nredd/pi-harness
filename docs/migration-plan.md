@@ -8,7 +8,7 @@
 - Never built: sections 6-8's dotfiles release-manifest consumption/runtime-tree distribution,
   section 8's staging/activation/rollback transaction, section 7's GitHub App promotion, and
   section 5's three-platform standalone Bun acceptance. CI runs the stack D/E scenarios on a Bun standalone
-  built from the Gitlinked core on darwin-arm64 and linux-x64, minus seven auth-interception skips; linux-arm64
+  built from the Gitlinked core on darwin-arm64 and linux-x64, with no auth-interception skips (`BUN_OPTIONS` preload adapter, #14); linux-arm64
   is NOT RUN.
 - Current ownership supersedes section 1's five-submodule layout: only `forks/pi` is a Gitlink;
   subagents, plan-mode, todo and computer-use are imported npm workspaces. Computer-use's upstream

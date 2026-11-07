@@ -47,7 +47,7 @@ Verification layers now implemented:
 - `.github/workflows/forks.yml` runs the remaining core Gitlink suite only. Imported package releases use their workspace `npm run check` commands in `owned` before publishing.
 - `contracts` owns packed artifact identity, installation/discovery/trust and stock-host compatibility. See `docs/package-contracts.md`; do not confuse it with assembled-stack coverage.
 - `stack` D/E jobs use a formula-shaped released Node binary plus explicit `integration/stacks/personal.json` / `integration/stacks/local.json` in throwaway agent dirs, on both OSes. No chezmoi, Brewfile or live install input. D owns process boundaries; E owns the real tmux resize seam.
-- Bun standalone D/E runs in CI: the `stack (..., personal)` jobs build it from the Gitlinked core and run both stacks on it on darwin-arm64 and linux-x64 (#56); seven auth-interception cases are explicit skips (adapter #14). linux-arm64 is NOT RUN.
+- Bun standalone D/E runs in CI: the `stack (..., personal)` jobs build it from the Gitlinked core and run both stacks on it on darwin-arm64 and linux-x64 (#56); auth interception runs through the `BUN_OPTIONS` preload adapter with no skips (#14). linux-arm64 is NOT RUN.
 - Bench F is visibly NOT RUN until a quiet runner exists. G remains explicit live-provider opt-in, never CI.
 - `pi-profile doctor` belongs to dotfiles, checks machine-specific render/pins/install consistency, and runs warn-only after apply. It is not a package gate.
 - `docs/verification-rebuild.md` is the destination ledger. No unported non-boundary Python scenarios remain; old progress paragraphs retain their historical port-base context.
