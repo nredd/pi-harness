@@ -521,8 +521,8 @@ def collect_build_failure(evidence: Path, first: Path, second: Path, output: Pat
 
     Parameters:
         evidence (Path): build-only evidence directory produced by `prepare_build`.
-        first (Path): copy of the first build's executable.
-        second (Path): executable left by the second build.
+        first (Path): the first build's executable, moved aside before the second build.
+        second (Path): the second build's executable at the shared output path.
         output (Path): new upload directory.
 
     Returns:
