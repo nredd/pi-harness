@@ -95,13 +95,17 @@ Publication does not prove full combined-stack CI or desktop/live-provider accep
 Failed earlier tag attempts are not publication receipts; the table identifies the
 successful source and run.
 
-The generated core receipt is [here](../releases/2026-10-29-core-undici-8.12.3.json).
-It was generated retrospectively from clean harness commit
+The generated core receipt for `v1.3.0-nredd.10` is [here](../releases/2026-11-08-core-nredd.10.json).
+It was generated from the clean harness commit `be6a179ecdb1e59ba8e2369d44467093bcce36b9`
+with `make release-manifest`, after the four tarballs from the release passed
+`SHA256SUMS` and `harness.release --verify-root-overrides`. It is an artifact/source record,
+NOT pre-release approval or a claim that all gates passed. The earlier `v1.3.0-nredd.8` receipt
+is [here](../releases/2026-10-29-core-undici-8.12.3.json). It was generated retrospectively from clean harness commit
 `17236539759ccc8858e605ed3f07531cacf2d9e0`, not before publication. All four original
 core tarballs were downloaded again and passed `SHA256SUMS` plus `gh attestation verify`
 against `fork-release.yml` and `refs/tags/v1.3.0-nredd.8`. Its schema-v1 `owned_packages`
 field still inventories the generator's original four packages; the table above records
-all nine publications. It is an artifact/source record, NOT pre-release approval or a
+all nine publications. It is likewise NOT pre-release approval or a
 claim that all gates passed.
 
 Release PRs #222-#226 merged under an owner-authorized CI waiver. The final `main` run
