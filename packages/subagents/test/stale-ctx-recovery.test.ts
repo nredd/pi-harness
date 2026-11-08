@@ -1,8 +1,10 @@
 /**
- * #145: a child shares its parent's model runtime, and a virtual model routes
+ * #145: a child shares its parent's model runtime, and a virtual model used to route
  * through a closure over the PARENT's extension runner. Invalidating that runner
- * (what core does on reload and session replacement) used to kill a running
- * background child with a stale-ctx error and "No output".
+ * (what core does on reload and session replacement) killed a running background
+ * child with a stale-ctx error and "No output". Refs #581: core now routes with the
+ * requesting session's context, so a parent reload no longer interrupts a child.
+ * Retry still bounds any other stale-ctx route failure, injected via `routeBroken`.
  */
 import { join } from "node:path";
 import { type AgentSession, type ExtensionFactory, SessionManager } from "@earendil-works/pi-coding-agent";
@@ -23,7 +25,7 @@ afterEach(async () => {
 /** Flip to make routing die with the stale-ctx error without touching the real runner. */
 const routeBroken = { on: false };
 
-/** A real virtual model whose route reads the host ctx, which any extension may do; `subscription-router` no longer does (#294). */
+/** A real virtual model whose route reads the requesting session's ctx; injected stale failures still exercise recovery. */
 function routedModel(getModel: () => unknown): ExtensionFactory {
   return pi => {
     pi.registerVirtualModel({
@@ -31,7 +33,7 @@ function routedModel(getModel: () => unknown): ExtensionFactory {
       id: "default",
       name: "vroute default",
       route: async (_request, ctx) => {
-        void ctx.cwd;
+        void ctx.session?.sessionManager;
         if (routeBroken.on) throw new Error("This extension ctx is stale after session replacement or reload. Do not use a captured pi.");
         return { model: getModel() as never };
       },
@@ -97,21 +99,40 @@ async function startHeldChild(responses: ReturnType<typeof answer>[], virtual = 
   return { h, timersBefore: fixture.clock.timeoutDelays.length, hold, physical, record: fixture.record(id), executions: () => executions };
 }
 
-it("retries the step once a real reload has re-registered the parent's routes", { timeout: 30_000 }, async () => {
-  const { h, hold, record, executions, timersBefore } = await startHeldChild([answer("CHILD DONE")]);
-  // Hold core's reload between `oldRunner.invalidate()` and the rebuild, the
-  // window in which the parent's routes are dead and the new ones not yet bound.
+it("#581: routes during the parent's invalidated reload gap without retrying", { timeout: 30_000 }, async () => {
+  const { h, hold, record, executions } = await startHeldChild([answer("CHILD DONE")]);
+  // Stop core's reload after `oldRunner.invalidate()` but before the new runner binds.
+  const entered = barrier();
   const gate = barrier();
   const settings = h.session.settingsManager;
   const reloadSettings = settings.reload.bind(settings);
-  settings.reload = async () => { await gate.promise; return reloadSettings(); };
+  settings.reload = async () => { entered.resolve(); await gate.promise; return reloadSettings(); };
   const reloading = h.session.reload();
+  try {
+    await entered.promise;
+    hold.release();
+    await record.promise;
+  } finally {
+    gate.resolve();
+    await reloading;
+    // Core's reload resets global transports; restore the faux provider.
+    fixture.restoreProviders(h);
+  }
+  expect(record.error).toBeUndefined();
+  expect(record.status).toBe("completed");
+  expect(record.result).toBe("CHILD DONE");
+  // No stale error, no recovery prompt, no replay of the side-effecting tool batch.
+  expect(executions()).toBe(1);
+  expect(record.session?.messages.filter(m => m.role === "toolResult")).toHaveLength(1);
+  expect(record.session?.messages.filter(m => m.role === "user")).toHaveLength(1);
+});
+
+it("retries a stale-ctx route failure once routing recovers, without replaying the tool batch", { timeout: 30_000 }, async () => {
+  const { hold, record, executions, timersBefore } = await startHeldChild([answer("CHILD DONE")]);
+  routeBroken.on = true;
   hold.release();
-  await vi.waitFor(() => expect(record.session?.messages.at(-1)).toMatchObject({ stopReason: "error" }), { timeout: 10_000 });
-  gate.resolve();
-  await reloading;
-  // Core's reload resets global transports; restore the faux provider before the retry fires.
-  fixture.restoreProviders(h);
+  await untilBackoff(record);
+  routeBroken.on = false;
   const advances = await settleThroughBackoff(record, timersBefore);
   expect(advances).toBe(1);
   expect(retries(record)).toBe(advances);

@@ -72,24 +72,24 @@ class HTTPBody(io.BytesIO):
 # sha256 its release `SHA256SUMS` publishes and the npm SRI sha512 of the same downloaded bytes.
 # Re-derive both from one download: `gh release download <tag> --repo nredd/pi -p <asset>`, then
 # `shasum -a 256 <asset>` and `printf 'sha512-%s' "$(openssl dgst -sha512 -binary <asset> | base64)"`.
-ROOT_OVERRIDE_TAG = "v1.3.0-nredd.8"
+ROOT_OVERRIDE_TAG = "v1.3.0-nredd.10"
 ROOT_OVERRIDE_DIGESTS = MappingProxyType(
     {
         "earendil-works-pi-coding-agent-1.3.0.tgz": (
-            "7730b607a6df491ed14862dbd5a8a4c6ac2712cf5a674bf43730a5b4877329bf",
-            "sha512-xNToGOloR+beYD9nAVIsM8Wpc1Ph+cE70dwgMBYbNPncNbFm5oMhvg9+/9xA55DvCPkiXNJLeJMt1IWFdJzljw==",
+            "ac42b4317b85182065606cc8a526ec157f4c950a7b74f3410eed110a22bf8903",
+            "sha512-s4VpM/nfJNptaTJ19XzUrDg+eq4uJuBjTZnJykFuuSfb4NgZQRzQE9oYliKwNHrjuD0EjSslp6NzNsvETn4+hw==",
         ),
         "earendil-works-pi-tui-1.3.0.tgz": (
             "4f1e74a43649fd2024ad7f5ba1f6ed5efa651df024caad1a60f0d4875be58201",
             "sha512-m/hckLlwUbueyM7wwxmCWZc6qA5GBtUIo8Ji19RyJtWm/XopE5W+LrL8pZjlyXXtSdQY2rLNm60gst2KWdylHA==",
         ),
         "earendil-works-pi-agent-core-1.3.0.tgz": (
-            "e1c080999209a72e0919bb7fabefcdece49e8252433c8c3ae83ad18c6c52a51c",
-            "sha512-IHx5B9scwHB8jCbaLIwfSgiY5XJy2rje7Hy5G/1MvDPelNdfOThd2BACGDMd1yp8RQKRIOhENMOmEvGrSDVdmQ==",
+            "1e714468b1cd0a05ff7aed322c7173bedc6edbf016ed061478c62b545bce3022",
+            "sha512-B2KL7vSdA8hjNTSRPZOaSdgtvpfK3lRGOMGdJe8D6EYSYd5Y0RMVWmZJXuIE83ITfDaMjxtc1PU28lhCZKReEw==",
         ),
         "earendil-works-pi-ai-1.3.0.tgz": (
-            "eaf94ad9a0fe6ecc3f77642e5ef3b5e6e907862d3f1667dd75fcbb32a293d65c",
-            "sha512-KF5wE5YjhV9wGPgl09Yxra1gcz/vTz3/UrrkaYXnlTry5T7omMhPOYllC2H3/GZTv9h7ftrztTf/g38BE5ZsaQ==",
+            "c83fa27ce06da978f532f409832c7fc111707c7ffbf19086795ddfaa88f97410",
+            "sha512-I1acQ6HXxPAHy2VqVO2qh5C7sTmuvIOiwlfqLens5vUT3gimLT0rU1cG8MUiEH8bstUFcI8/xYv82A5Um0xgiQ==",
         ),
     }
 )
