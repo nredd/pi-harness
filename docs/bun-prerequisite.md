@@ -4,9 +4,9 @@ CI scope (2026-10-29, auth skips removed 2026-11-07, #14):
 
 - Previously `.github/workflows/ci.yml` ran only the release-tarball Node bundle for D/E, across
   two OSes and two stacks. `owned`'s Bun package/in-process tests were not standalone coverage.
-  The release API for `v1.3.0-nredd.8` confirms the coding-agent and pi-tui npm tarballs and no standalone archive
-- Each existing `stack (..., personal)` job builds Gitlink `4af3d547ef0f78ed077ce7a373cdeebfc9e5cd6e`
-  (`v1.3.0-nredd.8`) using root `.bun-version` (1.4.4; upgrade evidence [here](bun-upgrade.md)); the core has no `.bun-version` file.
+  The release API for `v1.3.0-nredd.9` confirms the coding-agent and pi-tui npm tarballs and no standalone archive
+- Each existing `stack (..., personal)` job builds Gitlink `2944d9347d1e326067b903ef0811d51619a60f9b`
+  (`v1.3.0-nredd.9`) using root `.bun-version` (1.4.4; upgrade evidence [here](bun-upgrade.md)); the core has no `.bun-version` file.
   They restore npm release model data, run the official `forks/pi/scripts/build-binaries.sh`
   with `--offline-model-data`, and execute the native archive on macOS ARM64 and Linux x64.
   Each running `stack` cell builds for its own explicit stack. No binaries are committed or published
