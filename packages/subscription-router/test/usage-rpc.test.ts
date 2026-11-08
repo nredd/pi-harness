@@ -1,5 +1,10 @@
 import { EventEmitter } from "node:events";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	type ExtensionAPI,
+	type ExtensionCommandContext,
+	type ExtensionContext,
+	SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type ConfigResult, loadConfig, type Profile } from "../src/config.js";
 import { ExhaustionTracker } from "../src/exhaustion.js";
@@ -258,6 +263,72 @@ describe("router usage RPC", () => {
 		expect(h.pi.appendEntry).toHaveBeenCalledTimes(1);
 		await h.status(ctx);
 		expect(notify.mock.calls[0]?.[0]).toContain("router/default user -> openai-codex/terra");
+	});
+
+	/** Refs #581: what a core with request-owned routing passes to `route`. */
+	function requesterContext(ctx: ExtensionCommandContext, sessionManager = SessionManager.inMemory()) {
+		const appendEntry = vi.fn();
+		const session = Object.assign(Object.create(ctx), { sessionManager }) as ExtensionCommandContext;
+		return { session, appendEntry, routeContext: { modelRegistry: ctx.modelRegistry, session, appendEntry } };
+	}
+
+	it("logs a requested route to the requester, deduplicated, with its own status history", async () => {
+		const { h, ctx, notify, tick } = await routed();
+		const registration = vi.mocked(h.pi.registerVirtualModel).mock.calls[0]?.[0];
+		const requester = requesterContext(ctx);
+		const route = () =>
+			registration?.route({ reason: "user", thinkingLevel: "off" } as never, requester.routeContext as never);
+		tick(MINUTE);
+		await expect(route()).resolves.toMatchObject({ model: { provider: "openai-codex", id: "terra" } });
+		await route();
+		expect(requester.appendEntry).toHaveBeenCalledTimes(1);
+		expect(requester.appendEntry).toHaveBeenCalledWith(
+			"router:decision",
+			expect.objectContaining({ chosen: "openai-codex/terra" }),
+		);
+		// The registrant's own pi never logs for a requester, even one that is disposed.
+		expect(h.pi.appendEntry).not.toHaveBeenCalled();
+		await h.status(requester.session);
+		expect(notify.mock.calls[0]?.[0]).toContain("router/default user -> openai-codex/terra");
+		// Another session's status does not show this requester's decisions.
+		await h.status(ctx);
+		expect(notify.mock.calls[1]?.[0]).not.toContain("last decisions");
+		// Starting the requester's session again forgets what it persisted.
+		h.handlers.get("session_start")?.({}, requester.session as unknown as ExtensionContext);
+		await route();
+		expect(requester.appendEntry).toHaveBeenCalledTimes(2);
+	});
+
+	it("keeps only the last five decisions per requester and survives a throwing appendEntry", async () => {
+		const { h, ctx, notify, tick } = await routed();
+		const registration = vi.mocked(h.pi.registerVirtualModel).mock.calls[0]?.[0];
+		const requester = requesterContext(ctx);
+		requester.appendEntry.mockImplementation(() => {
+			throw new Error("session write failed");
+		});
+		for (let i = 0; i < 7; i++) {
+			tick(MINUTE);
+			await registration?.route({ reason: "user", thinkingLevel: "off" } as never, requester.routeContext as never);
+		}
+		await h.status(requester.session);
+		const history: string = notify.mock.calls[0]?.[0].split("last decisions (newest last):")[1];
+		expect(history.split("\n").filter((line) => line.includes("router/default user ->"))).toHaveLength(5);
+		expect(requester.appendEntry).toHaveBeenCalledTimes(1);
+	});
+
+	it("falls back to the registrant when the host passes a session without appendEntry", async () => {
+		const { h, ctx, tick } = await routed();
+		const registration = vi.mocked(h.pi.registerVirtualModel).mock.calls[0]?.[0];
+		const { session } = requesterContext(ctx);
+		tick(MINUTE);
+		await registration?.route(
+			{ reason: "user", thinkingLevel: "off" } as never,
+			{
+				modelRegistry: ctx.modelRegistry,
+				session,
+			} as never,
+		);
+		expect(h.pi.appendEntry).toHaveBeenCalledTimes(1);
 	});
 
 	it("forecasts status from cached-only shared selection and shows scores/fallbacks", async () => {

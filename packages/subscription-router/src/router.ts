@@ -247,7 +247,12 @@ export class Router {
 	 * - `continuation`, balanced `direct`: keep eligible `previous`, otherwise select
 	 * - `retry`: confirmed quota reselects an eligible entry; anything else retries the failed model
 	 */
-	async route(profile: Profile, request: ModelRouteRequest, env: RouteEnv): Promise<ModelRoute> {
+	async route(
+		profile: Profile,
+		request: ModelRouteRequest,
+		env: RouteEnv,
+		onDecision = this.onDecision,
+	): Promise<ModelRoute> {
 		request.signal?.throwIfAborted();
 		const { reason, previous, failed } = request;
 		if (reason === "retry" && failed) {
@@ -276,7 +281,7 @@ export class Router {
 			reason === "user" && profile.strategy === "balanced" ? previous?.model : undefined,
 		);
 		if (!picked.ok) throw new ChainExhaustedError(profile.id, picked.blocked, picked.resetAt);
-		this.onDecision?.({
+		onDecision?.({
 			at: this.now(),
 			profile: profile.id,
 			strategy: profile.strategy ?? "ordered",
