@@ -118,7 +118,7 @@ hermetic verification gate. Without that opt-in, `test:e2e` runs the scripted fa
 `npm run check` runs Biome, TypeScript, the full Vitest suite and `test:bun`, the same full suite on Bun 1.4.4 through
 `scripts/run-vitest.ts bun` (no native `bun test` subset). The four session scenario
 files (`test/{session-scenarios,fleet-session,viewer-session,worktree-isolation-e2e}.test.ts`) run under
-both engines on core `v1.3.0-nredd.9` release tarballs. They use exported `createHarness`
+both engines on core `v1.3.0-nredd.10` release tarballs. They use exported `createHarness`
 and `createInteractiveHarness`/`VirtualTerminal`, real child sessions and git, one injected extension
 clock, promise-held tools/streams and raw SGR mouse input. Homes, settings and provider credentials
 are fixtures; no installed pi, tmux or real-clock sleeps are needed. Existing old-host strict-mode
