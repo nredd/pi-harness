@@ -318,6 +318,8 @@ describe("router usage RPC", () => {
 
 	it("never fails a route when the requester session went stale", async () => {
 		const { h, ctx, tick } = await routed();
+		// The registrant's session_start registry stays valid after the requester's runner goes stale.
+		h.handlers.get("session_start")?.({}, ctx as unknown as ExtensionContext);
 		const registration = vi.mocked(h.pi.registerVirtualModel).mock.calls[0]?.[0];
 		const session = {
 			get sessionManager(): never {
@@ -329,7 +331,10 @@ describe("router usage RPC", () => {
 			registration?.route(
 				{ reason: "user", thinkingLevel: "off" } as never,
 				{
-					modelRegistry: ctx.modelRegistry,
+					// A stale requester runner guards every getter, the registry included.
+					get modelRegistry(): never {
+						throw new Error("stale");
+					},
 					session,
 					appendEntry: vi.fn(),
 				} as never,

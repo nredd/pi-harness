@@ -222,7 +222,10 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 						return router.route(profile, request, routeEnv(registry ?? ctx, usage));
 					}
 					const requester = { session, appendEntry };
-					return router.route(profile, request, routeEnv(ctx, usage), (decision) => recordFor(requester, decision));
+					// Only logging belongs to the requester; its route ctx getters can be stale, the registrant's registry is not.
+					return router.route(profile, request, routeEnv(registry ?? ctx, usage), (decision) =>
+						recordFor(requester, decision),
+					);
 				},
 			});
 		}
