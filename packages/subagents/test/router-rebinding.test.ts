@@ -62,9 +62,14 @@ async function startChild({ h }: Fleet, description: string) {
 
 /** Let the manager's real sweep dispose finished children, and wait until it has. */
 async function sweep(...records: ReturnType<ScenarioSession["record"]>[]) {
+  return sweepAllowing(["completed"], ...records);
+}
+
+/** Like `sweep`, for children that may legitimately end `stopped` (cancelled before `session_start`). */
+async function sweepAllowing(statuses: string[], ...records: ReturnType<ScenarioSession["record"]>[]) {
   await Promise.all(records.map(record => record.promise));
   const disposals = records.map(record => {
-    expect(["completed", "stopped"]).toContain(record.status);
+    expect(statuses).toContain(record.status);
     const session = record.session;
     if (!session) throw new Error("Finished child has no session");
     const disposed = barrier();
@@ -103,14 +108,11 @@ it("control: with the last-registered child alive a sibling routes on unmodified
   expect(a.result).toBe("A DONE");
 });
 
-it("a sibling and parent route after an unstarted disk-loaded child is disposed", { timeout: 30_000 }, async () => {
+it("#581: a sibling and parent route after an unstarted disk-loaded child is disposed", { timeout: 30_000 }, async () => {
   const fleet = await startFleet([calls({ name: "hold", args: {} }), answer("PARENT ROUTED"), answer("A DONE")]);
   const a = await startChild(fleet, "child a");
   await fleet.hold.entered;
-  const loader = new DefaultResourceLoader({ cwd: fixture.cwd, agentDir: fixture.agentDir, additionalExtensionPaths: [ROUTER_SOURCE] });
-  await loader.reload();
-  const unstarted = await createHarness({ cwd: fixture.cwd, resourceLoader: loader, modelRuntime: fleet.h.session.modelRuntime, useModelRuntimeStream: true });
-  unstarted.cleanup();
+  await registerAndDisposeUnstarted(fleet);
   const parent = await routeParent(fleet);
   fleet.hold.release();
   await a.promise;
@@ -119,6 +121,14 @@ it("a sibling and parent route after an unstarted disk-loaded child is disposed"
   expect(a.error).toBeUndefined();
   expect(a.result).toBe("A DONE");
 });
+
+/** Register the router in a new, never-started session on the shared runtime (the newest registrant), then dispose it. */
+async function registerAndDisposeUnstarted(fleet: Fleet) {
+  const loader = new DefaultResourceLoader({ cwd: fixture.cwd, agentDir: fixture.agentDir, additionalExtensionPaths: [ROUTER_SOURCE] });
+  await loader.reload();
+  const unstarted = await createHarness({ cwd: fixture.cwd, resourceLoader: loader, modelRuntime: fleet.h.session.modelRuntime, useModelRuntimeStream: true });
+  unstarted.cleanup();
+}
 
 /** #581: cancel the real manager run after SDK construction but before session_start. */
 async function cancelBeforeStart(fleet: Fleet) {
@@ -131,10 +141,10 @@ async function cancelBeforeStart(fleet: Fleet) {
     return bind.apply(this, args);
   });
   const owner: { manager?: AgentManager; id?: string } = {};
-  const spawn = AgentManager.prototype.spawn;
+  const realSpawn = AgentManager.prototype.spawn;
   const spawning = vi.spyOn(AgentManager.prototype, "spawn").mockImplementationOnce(function (this: AgentManager, ...args) {
     owner.manager = this;
-    owner.id = spawn.apply(this, args);
+    owner.id = realSpawn.apply(this, args);
     return owner.id;
   });
   const starting = startChild(fleet, "cancel before session_start");
@@ -162,17 +172,14 @@ async function cancelBeforeStart(fleet: Fleet) {
 it("#581: manager cancellation before session_start, disposal, and all-child cleanup preserve parent routing", async () => {
   const fleet = await startFleet([answer("PARENT ROUTED")]);
   const { record } = await cancelBeforeStart(fleet);
-  await sweep(record);
+  await sweepAllowing(["stopped"], record);
   expectRouted(await routeParent(fleet));
 });
 
 it("#581: a manager-owned cancelled child resumes and routes after the newest registrant is disposed", async () => {
   const fleet = await startFleet([answer("RESUMED"), answer("PARENT ROUTED")]);
   const { manager, record } = await cancelBeforeStart(fleet);
-  const loader = new DefaultResourceLoader({ cwd: fixture.cwd, agentDir: fixture.agentDir, additionalExtensionPaths: [ROUTER_SOURCE] });
-  await loader.reload();
-  const unstarted = await createHarness({ cwd: fixture.cwd, resourceLoader: loader, modelRuntime: fleet.h.session.modelRuntime, useModelRuntimeStream: true });
-  unstarted.cleanup();
+  await registerAndDisposeUnstarted(fleet);
   const resumed = await manager.resume(record.id, "resume work");
   expect(resumed?.status).toBe("completed");
   expect(resumed?.error).toBeUndefined();
