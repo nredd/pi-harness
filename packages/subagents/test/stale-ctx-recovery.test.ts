@@ -127,6 +127,25 @@ it("#581: routes during the parent's invalidated reload gap without retrying", {
   expect(record.session?.messages.filter(m => m.role === "user")).toHaveLength(1);
 });
 
+it("retries a stale-ctx route failure once routing recovers, without replaying the tool batch", { timeout: 30_000 }, async () => {
+  const { hold, record, executions, timersBefore } = await startHeldChild([answer("CHILD DONE")]);
+  routeBroken.on = true;
+  hold.release();
+  await untilBackoff(record);
+  routeBroken.on = false;
+  const advances = await settleThroughBackoff(record, timersBefore);
+  expect(advances).toBe(1);
+  expect(retries(record)).toBe(advances);
+  expect(record.error).toBeUndefined();
+  expect(record.status).toBe("completed");
+  expect(record.result).toBe("CHILD DONE");
+  // Recovery re-prompts the model; it must never replay the tool batch.
+  expect(executions()).toBe(1);
+  expect(record.session?.messages.filter(m => m.role === "toolResult")).toHaveLength(1);
+  // One original task prompt plus one continue prompt: the task is not re-sent.
+  expect(record.session?.messages.filter(m => m.role === "user")).toHaveLength(2);
+});
+
 it("reports later tool activity after earlier prose when a real child fails", { timeout: 30_000 }, async () => {
   const { hold, record, timersBefore } = await startHeldChild([], true, true);
   routeBroken.on = true;
