@@ -32,6 +32,7 @@ import { formatScore } from "./selection.js";
 import { COLLECTED_PROVIDERS, type RegistryContext, UsageService } from "./usage.js";
 
 const SHARED_KEY: unique symbol = Symbol.for("pi-subscription-router.shared");
+const DECISIONS_KEY: unique symbol = Symbol.for("pi-subscription-router.decisions");
 const RPC_ADMIT = "router:rpc:admit";
 const RPC_USAGE = "router:rpc:usage";
 const PROMPT_SECTION = "subscription_usage";
@@ -58,6 +59,35 @@ export interface SubscriptionRouterOptions {
 interface Shared {
 	usage: RouterUsage;
 	tracker: ExhaustionTracker;
+}
+
+/** Decisions of one requesting session, for `/router status` and persistence de-duplication. */
+interface SessionDecisions {
+	recent: RouteDecision[];
+	persisted: Map<string, string>;
+}
+
+/** What a core with request-owned routing passes to `route` instead of the registrant's context. */
+interface RequesterContext {
+	session?: Pick<ExtensionContext, "sessionManager">;
+	appendEntry?: (customType: string, data: unknown) => void;
+}
+
+/**
+ * Weak session-owned diagnostics shared across disk-loaded copies of this extension, never a
+ * model registry. Copies in sibling sessions then agree on what each requester has persisted.
+ */
+function sessionDecisions(manager: object | undefined): SessionDecisions {
+	// A host context without a session manager has no durable owner to key diagnostics on.
+	if (!manager) return { recent: [], persisted: new Map() };
+	const host = globalThis as typeof globalThis & { [DECISIONS_KEY]?: WeakMap<object, SessionDecisions> };
+	host[DECISIONS_KEY] ??= new WeakMap();
+	let state = host[DECISIONS_KEY].get(manager);
+	if (!state) {
+		state = { recent: [], persisted: new Map() };
+		host[DECISIONS_KEY].set(manager, state);
+	}
+	return state;
 }
 
 function shared(): Shared {
@@ -131,20 +161,37 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 		const { usage, tracker } = options
 			? { usage: options.usage, tracker: options.tracker ?? new ExhaustionTracker(now) }
 			: shared();
-		const recent: RouteDecision[] = [];
-		const persisted = new Map<string, string>();
-		const record = (decision: RouteDecision): void => {
-			recent.push(decision);
-			if (recent.length > RECENT_DECISIONS) recent.shift();
-			// Session entries are never pruned. Persisting only a profile's first decision per session
-			// and each change of chosen model slows growth; it is not a bound (flapping appends).
-			if (persisted.get(decision.profile) === decision.chosen) return;
-			persisted.set(decision.profile, decision.chosen);
-			// Logging must never fail a route.
+		const registrantState: SessionDecisions = { recent: [], persisted: new Map() };
+		/**
+		 * Remember a decision for `/router status` and append it to the session log unless the profile
+		 * already persisted that pick. Session entries are never pruned, so this slows growth but is
+		 * not a bound (flapping appends).
+		 */
+		const log = (
+			stateOf: () => SessionDecisions,
+			append: (type: string, data: RouteDecision) => void,
+			decision: RouteDecision,
+		): void => {
+			// Logging must never fail a route, including a stale requester whose state lookup throws.
 			try {
-				pi.appendEntry(DECISION_ENTRY, decision);
+				const state = stateOf();
+				state.recent.push(decision);
+				if (state.recent.length > RECENT_DECISIONS) state.recent.shift();
+				if (state.persisted.get(decision.profile) === decision.chosen) return;
+				state.persisted.set(decision.profile, decision.chosen);
+				append(DECISION_ENTRY, decision);
 			} catch {}
 		};
+		/** Older cores and raw runtime calls: the registrant logs, as before. */
+		const record = (decision: RouteDecision): void =>
+			log(
+				() => registrantState,
+				(type, data) => pi.appendEntry(type, data),
+				decision,
+			);
+		/** Cores with request-owned routing log to the requester, never to a possibly disposed registrant. */
+		const recordFor = (requester: Required<RequesterContext>, decision: RouteDecision): void =>
+			log(() => sessionDecisions(requester.session.sessionManager), requester.appendEntry, decision);
 		const router = new Router(usage, tracker, now, record);
 		const recovery = new SettleRecovery(router);
 		const config = options?.config ?? (await loadConfig(getAgentDir()));
@@ -167,15 +214,27 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 				id: profile.id,
 				name: profile.name,
 				thinkingLevels: THINKING_LEVELS,
-				// `ctx` only serves the gap before session_start, when this session cannot have been disposed.
-				route: (request, ctx) => router.route(profile, request, routeEnv(registry ?? ctx, usage)),
+				route: (request, ctx) => {
+					const { session, appendEntry } = ctx as RequesterContext;
+					// `in`, not a read: a stale session's `sessionManager` getter throws. A partial host without one has no owner to key on.
+					if (!session || !appendEntry || !("sessionManager" in session)) {
+						// Registrant context: `ctx` only serves the gap before session_start, when this session cannot have been disposed.
+						return router.route(profile, request, routeEnv(registry ?? ctx, usage));
+					}
+					const requester = { session, appendEntry };
+					// Only logging belongs to the requester; its route ctx getters can be stale, the registrant's registry is not.
+					return router.route(profile, request, routeEnv(registry ?? ctx, usage), (decision) =>
+						recordFor(requester, decision),
+					);
+				},
 			});
 		}
 
 		pi.on("session_start", (_event, ctx) => {
 			registry = { modelRegistry: ctx.modelRegistry };
 			// A new or resumed session has no durable decision yet; its first pick must persist.
-			persisted.clear();
+			registrantState.persisted.clear();
+			sessionDecisions(ctx.sessionManager).persisted.clear();
 			if (!config.ok) ctx.ui.notify(`subscription-router: ignoring config. ${config.error}`, "error");
 			warm(ctx, usage, sessionProviders(ctx, profiles));
 		});
@@ -268,8 +327,10 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 					}
 					for (const block of picked.blocked) lines.push(`  ${refKey(block.entry)}: ${block.reason}`);
 				}
-				if (recent.length > 0) {
-					lines.push("last decisions (newest last):", ...recent.map(formatDecision));
+				const own = sessionDecisions(ctx.sessionManager).recent;
+				const decisions = own.length > 0 ? own : registrantState.recent;
+				if (decisions.length > 0) {
+					lines.push("last decisions (newest last):", ...decisions.map(formatDecision));
 				}
 				ctx.ui.notify(lines.join("\n"), "info");
 			},
