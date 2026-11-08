@@ -286,7 +286,7 @@ describe("router usage RPC", () => {
 			"router:decision",
 			expect.objectContaining({ chosen: "openai-codex/terra" }),
 		);
-		// The registrant's own pi never logs for a requester, even one that is disposed.
+		// The registrant's own pi never logs for a requester.
 		expect(h.pi.appendEntry).not.toHaveBeenCalled();
 		await h.status(requester.session);
 		expect(notify.mock.calls[0]?.[0]).toContain("router/default user -> openai-codex/terra");
@@ -329,6 +329,17 @@ describe("router usage RPC", () => {
 			} as never,
 		);
 		expect(h.pi.appendEntry).toHaveBeenCalledTimes(1);
+		// An `appendEntry` without a session is no requester either: nothing writes through it.
+		const stray = vi.fn();
+		tick(MINUTE);
+		await registration?.route(
+			{ reason: "user", thinkingLevel: "off" } as never,
+			{
+				modelRegistry: ctx.modelRegistry,
+				appendEntry: stray,
+			} as never,
+		);
+		expect(stray).not.toHaveBeenCalled();
 	});
 
 	it("forecasts status from cached-only shared selection and shows scores/fallbacks", async () => {

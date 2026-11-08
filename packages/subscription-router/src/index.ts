@@ -161,35 +161,32 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 		const { usage, tracker } = options
 			? { usage: options.usage, tracker: options.tracker ?? new ExhaustionTracker(now) }
 			: shared();
-		const recent: RouteDecision[] = [];
-		const persisted = new Map<string, string>();
-		const record = (decision: RouteDecision): void => {
-			recent.push(decision);
-			if (recent.length > RECENT_DECISIONS) recent.shift();
-			// Session entries are never pruned. Persisting only a profile's first decision per session
-			// and each change of chosen model slows growth; it is not a bound (flapping appends).
-			if (persisted.get(decision.profile) === decision.chosen) return;
-			persisted.set(decision.profile, decision.chosen);
-			// Logging must never fail a route.
-			try {
-				pi.appendEntry(DECISION_ENTRY, decision);
-			} catch {}
-		};
+		const registrantState: SessionDecisions = { recent: [], persisted: new Map() };
 		/**
-		 * Cores with request-owned routing hand `route` the requesting session. Log there, never to the
-		 * possibly disposed registrant. Older cores and raw runtime calls fall back to `record` above.
+		 * Remember a decision for `/router status` and append it to the session log unless the profile
+		 * already persisted that pick. Session entries are never pruned, so this slows growth but is
+		 * not a bound (flapping appends).
 		 */
-		const recordFor = (requester: Required<RequesterContext>, decision: RouteDecision): void => {
-			const state = sessionDecisions(requester.session.sessionManager);
+		const log = (
+			state: SessionDecisions,
+			append: (type: string, data: RouteDecision) => void,
+			decision: RouteDecision,
+		): void => {
 			state.recent.push(decision);
 			if (state.recent.length > RECENT_DECISIONS) state.recent.shift();
 			if (state.persisted.get(decision.profile) === decision.chosen) return;
 			state.persisted.set(decision.profile, decision.chosen);
 			// Logging must never fail a route.
 			try {
-				requester.appendEntry(DECISION_ENTRY, decision);
+				append(DECISION_ENTRY, decision);
 			} catch {}
 		};
+		/** Older cores and raw runtime calls: the registrant logs, as before. */
+		const record = (decision: RouteDecision): void =>
+			log(registrantState, (type, data) => pi.appendEntry(type, data), decision);
+		/** Cores with request-owned routing log to the requester, never to a possibly disposed registrant. */
+		const recordFor = (requester: Required<RequesterContext>, decision: RouteDecision): void =>
+			log(sessionDecisions(requester.session.sessionManager), requester.appendEntry, decision);
 		const router = new Router(usage, tracker, now, record);
 		const recovery = new SettleRecovery(router);
 		const config = options?.config ?? (await loadConfig(getAgentDir()));
@@ -227,7 +224,7 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 		pi.on("session_start", (_event, ctx) => {
 			registry = { modelRegistry: ctx.modelRegistry };
 			// A new or resumed session has no durable decision yet; its first pick must persist.
-			persisted.clear();
+			registrantState.persisted.clear();
 			sessionDecisions(ctx.sessionManager).persisted.clear();
 			if (!config.ok) ctx.ui.notify(`subscription-router: ignoring config. ${config.error}`, "error");
 			warm(ctx, usage, sessionProviders(ctx, profiles));
@@ -321,9 +318,10 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 					}
 					for (const block of picked.blocked) lines.push(`  ${refKey(block.entry)}: ${block.reason}`);
 				}
-				const decisions = [...recent, ...sessionDecisions(ctx.sessionManager).recent];
+				const own = sessionDecisions(ctx.sessionManager).recent;
+				const decisions = own.length > 0 ? own : registrantState.recent;
 				if (decisions.length > 0) {
-					lines.push("last decisions (newest last):", ...decisions.slice(-RECENT_DECISIONS).map(formatDecision));
+					lines.push("last decisions (newest last):", ...decisions.map(formatDecision));
 				}
 				ctx.ui.notify(lines.join("\n"), "info");
 			},
