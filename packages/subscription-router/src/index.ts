@@ -168,25 +168,30 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 		 * not a bound (flapping appends).
 		 */
 		const log = (
-			state: SessionDecisions,
+			stateOf: () => SessionDecisions,
 			append: (type: string, data: RouteDecision) => void,
 			decision: RouteDecision,
 		): void => {
-			state.recent.push(decision);
-			if (state.recent.length > RECENT_DECISIONS) state.recent.shift();
-			if (state.persisted.get(decision.profile) === decision.chosen) return;
-			state.persisted.set(decision.profile, decision.chosen);
-			// Logging must never fail a route.
+			// Logging must never fail a route, including a stale requester whose state lookup throws.
 			try {
+				const state = stateOf();
+				state.recent.push(decision);
+				if (state.recent.length > RECENT_DECISIONS) state.recent.shift();
+				if (state.persisted.get(decision.profile) === decision.chosen) return;
+				state.persisted.set(decision.profile, decision.chosen);
 				append(DECISION_ENTRY, decision);
 			} catch {}
 		};
 		/** Older cores and raw runtime calls: the registrant logs, as before. */
 		const record = (decision: RouteDecision): void =>
-			log(registrantState, (type, data) => pi.appendEntry(type, data), decision);
+			log(
+				() => registrantState,
+				(type, data) => pi.appendEntry(type, data),
+				decision,
+			);
 		/** Cores with request-owned routing log to the requester, never to a possibly disposed registrant. */
 		const recordFor = (requester: Required<RequesterContext>, decision: RouteDecision): void =>
-			log(sessionDecisions(requester.session.sessionManager), requester.appendEntry, decision);
+			log(() => sessionDecisions(requester.session.sessionManager), requester.appendEntry, decision);
 		const router = new Router(usage, tracker, now, record);
 		const recovery = new SettleRecovery(router);
 		const config = options?.config ?? (await loadConfig(getAgentDir()));
@@ -211,7 +216,8 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 				thinkingLevels: THINKING_LEVELS,
 				route: (request, ctx) => {
 					const { session, appendEntry } = ctx as RequesterContext;
-					if (!session || !appendEntry) {
+					// `in`, not a read: a stale session's `sessionManager` getter throws. A partial host without one has no owner to key on.
+					if (!session || !appendEntry || !("sessionManager" in session)) {
 						// Registrant context: `ctx` only serves the gap before session_start, when this session cannot have been disposed.
 						return router.route(profile, request, routeEnv(registry ?? ctx, usage));
 					}

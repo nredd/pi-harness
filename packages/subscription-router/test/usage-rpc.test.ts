@@ -316,6 +316,39 @@ describe("router usage RPC", () => {
 		expect(requester.appendEntry).toHaveBeenCalledTimes(1);
 	});
 
+	it("never fails a route when the requester session went stale", async () => {
+		const { h, ctx, tick } = await routed();
+		const registration = vi.mocked(h.pi.registerVirtualModel).mock.calls[0]?.[0];
+		const session = {
+			get sessionManager(): never {
+				throw new Error("stale");
+			},
+		};
+		tick(MINUTE);
+		await expect(
+			registration?.route(
+				{ reason: "user", thinkingLevel: "off" } as never,
+				{
+					modelRegistry: ctx.modelRegistry,
+					session,
+					appendEntry: vi.fn(),
+				} as never,
+			),
+		).resolves.toMatchObject({ model: { provider: "openai-codex", id: "terra" } });
+	});
+
+	it("deduplicates through the registrant when the session has no sessionManager", async () => {
+		const { h, ctx, tick } = await routed();
+		const registration = vi.mocked(h.pi.registerVirtualModel).mock.calls[0]?.[0];
+		const appendEntry = vi.fn();
+		const routeContext = { modelRegistry: ctx.modelRegistry, session: {}, appendEntry };
+		tick(MINUTE);
+		await registration?.route({ reason: "user", thinkingLevel: "off" } as never, routeContext as never);
+		await registration?.route({ reason: "user", thinkingLevel: "off" } as never, routeContext as never);
+		expect(h.pi.appendEntry).toHaveBeenCalledTimes(1);
+		expect(appendEntry).not.toHaveBeenCalled();
+	});
+
 	it("falls back to the registrant when the host passes a session without appendEntry", async () => {
 		const { h, ctx, tick } = await routed();
 		const registration = vi.mocked(h.pi.registerVirtualModel).mock.calls[0]?.[0];
