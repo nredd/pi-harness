@@ -46,7 +46,7 @@ const HOST_RELEASE_TARBALL =
 test("metadata: public, versioned, correctly attributed", () => {
 	const pkg = manifest();
 	assert.equal(pkg.name, "@nredd/pi-preset");
-	assert.equal(pkg.version, "0.3.0");
+	assert.equal(pkg.version, "0.4.0");
 	assert.ok(!("private" in pkg));
 	assert.deepEqual(pkg.publishConfig, { access: "public" });
 	assert.deepEqual(pkg.repository, {

@@ -126,7 +126,7 @@ Each new version publishes current `main`, so it carries every unreleased change
 
 Planned versions, chosen by SemVer from that range (minor for added features or behavior, patch for fixes only; fork-suffixed versions keep their `-nredd.N` scheme):
 
-- `@nredd/pi-resource-sampler` `0.2.0` -> `0.2.1`: one behavior fix (mid-listing PID exit) plus coverage-driven cleanups
+- `@nredd/pi-resource-sampler` `0.2.0` -> `0.2.1`: one behavior fix (mid-listing PID exit) plus coverage and test-infra changes
 - `@nredd/pi-subscription-router` `0.5.0` -> `0.6.0`: frontier tier, per-session decision log, weekly-scoped limit handling
 - `@nredd/pi-subagents` `0.22.0-nredd.8` -> `0.22.0-nredd.9`: about 65 commits, roughly half tests and coverage (`stop_subagent`, resume through `steer_subagent`, survivor events, `principal-investigator` and more)
 - `@nredd/pi-plan-mode` `0.59.3-nredd.3` -> `0.59.3-nredd.4`: router-tier `planModel`, plan editing, Plan-time steer refusals
