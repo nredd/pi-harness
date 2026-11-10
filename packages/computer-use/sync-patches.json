@@ -238,15 +238,17 @@
 		},
 		{
 			"id": "act-preflight",
-			"purpose": "Validate every desktop action before the write lock advances the epoch, so a rejected request neither stales the stateId nor delivers a valid prefix",
+			"purpose": "Validate every desktop action, including the macOS strict-headless typeText/keypress rule, before the write lock advances the epoch, so a request that fails preflight neither stales the stateId nor delivers a valid prefix (runtime failures mid-batch can still leave an executed prefix)",
 			"files": [
+				"src/actions.ts",
 				"src/bridge.ts",
 				"test/invariants.test.mjs",
 				"test/unpaired-act.test.mjs"
 			],
 			"check": "test/unpaired-act.test.mjs",
 			"dropControls": [
-				"action preflight before write epoch (upstream #112)"
+				"action preflight before write epoch (upstream #112)",
+				"strict headless keyboard preflight (upstream #112 deviation)"
 			],
 			"upstream": {
 				"status": "candidate",
@@ -273,7 +275,7 @@
 		},
 		{
 			"id": "scroll-bar-fallback",
-			"purpose": "Scroll SwiftUI/AppKit scroll areas by writing the nearest settable AXScrollBar value between AX scroll actions and the wheel fallback",
+			"purpose": "Scroll SwiftUI/AppKit scroll areas by writing a settable AXScrollBar value between AX scroll actions and the wheel fallback, only for the target's own scroll area (or one an AX hit test resolves to, deviating from upstream's nearest-ancestor walk) and delivering every requested axis (deviating from upstream's first-axis-wins)",
 			"files": [
 				"native/macos/bridge.swift",
 				"src/platform/types.ts",
@@ -281,7 +283,9 @@
 			],
 			"check": "test/macos-native-pure.test.mjs",
 			"dropControls": [
-				"scroll bar range guard (upstream #114)"
+				"scroll bar range guard (upstream #114)",
+				"scroll bar write scope (upstream #114 deviation)",
+				"scroll bar per-axis delivery (upstream #114 deviation)"
 			],
 			"upstream": {
 				"status": "candidate",
@@ -360,6 +364,7 @@
 		"scripts/fixtures/alert-app.swift",
 		"scripts/fixtures/event-probe.swift",
 		"scripts/setup-helper.mjs",
+		"src/actions.ts",
 		"src/bridge.ts",
 		"src/config.ts",
 		"src/desktop.ts",

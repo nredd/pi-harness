@@ -311,6 +311,34 @@ test("unpaired act roots and physical transaction lease", async () => {
 	assert.match(text(retried), /Executed 1 checked UI action/, "rejected request must not stale the stateId");
 	assert.equal(delivered.length, 1);
 
+	// Strict headless on macOS rejects typeText/keypress natively mid-batch; the preflight mirrors that rule so
+	// a batch with an earlier valid step delivers nothing and keeps the stateId usable.
+	const { loadComputerUseConfig } = await import("../src/config.ts");
+	const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+	const priorHeadless = process.env.PI_COMPUTER_USE_HEADLESS;
+	const strict = await call(executeObserve, { root: "@r1", mode: "semantic" });
+	const strictState = text(strict).match(/stateId ([0-9a-f-]{36})/)[1];
+	const strictButton = text(strict).match(/(@e\d+) button/)[1];
+	delivered.length = 0;
+	try {
+		process.env.PI_COMPUTER_USE_HEADLESS = "1";
+		loadComputerUseConfig(process.cwd());
+		Object.defineProperty(process, "platform", { value: "darwin" });
+		await assert.rejects(
+			call(executeAct, { stateId: strictState, actions: [{ action: "press", ref: strictButton }, { action: "keypress", ref: strictButton, keys: ["return"] }] }),
+			/strict headless/,
+		);
+		assert.equal(delivered.length, 0, "strict headless rejection must not deliver the earlier step");
+		Object.defineProperty(process, "platform", { value: "linux" });
+		const allowed = await call(executeAct, { stateId: strictState, actions: [{ action: "press", ref: strictButton }] });
+		assert.match(text(allowed), /Executed 1 checked UI action/, "rejected request must not stale the stateId");
+	} finally {
+		Object.defineProperty(process, "platform", platformDescriptor);
+		if (priorHeadless === undefined) delete process.env.PI_COMPUTER_USE_HEADLESS;
+		else process.env.PI_COMPUTER_USE_HEADLESS = priorHeadless;
+		loadComputerUseConfig(process.cwd());
+	}
+
 	// Desktop lock scope: only foreground (physical) delivery waits for desktop_input; background acts don't.
 	/**
 	 * Restore the single root for lock checks.

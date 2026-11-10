@@ -101,6 +101,18 @@ check(scrollBarTargetValue(current: 1, delta: 100, viewportLength: 579, contentL
 check(scrollBarTargetValue(current: 0, delta: 100, viewportLength: 579, contentLength: 579, thumbLength: nil, trackLength: nil) == nil, "content that fits has nothing to scroll")
 check(scrollBarTargetValue(current: 0, delta: 0, viewportLength: 579, contentLength: 1374, thumbLength: nil, trackLength: nil) == nil, "zero delta does nothing")
 
+// Scroll bar write scope and per-axis delivery
+check(scrollBarWriteAllowed(depthFromStart: 0, hitTestResolvesToArea: false), "the scroll area itself may be written")
+check(scrollBarWriteAllowed(depthFromStart: 1, hitTestResolvesToArea: false), "a direct child of the scroll area may be written")
+check(!scrollBarWriteAllowed(depthFromStart: 3, hitTestResolvesToArea: false), "a deeper ref in an inner scroller must fall through to the wheel")
+check(scrollBarWriteAllowed(depthFromStart: 3, hitTestResolvesToArea: true), "a hit test resolving to the same area allows the write")
+let bothMoved = remainingScroll(requestedX: 5, requestedY: 7, movedX: true, movedY: true)
+check(bothMoved.x == 0 && bothMoved.y == 0, "both axes moved leaves nothing to deliver")
+let onlyYMoved = remainingScroll(requestedX: 5, requestedY: 7, movedX: false, movedY: true)
+check(onlyYMoved.x == 5 && onlyYMoved.y == 0, "an unmoved horizontal axis stays requested")
+let onlyXMoved = remainingScroll(requestedX: 5, requestedY: 0, movedX: true, movedY: false)
+check(onlyXMoved.x == 0 && onlyXMoved.y == 0, "an axis never requested stays zero")
+
 if failures > 0 { exit(1) }
 print("macos native pure checks passed")
 `;

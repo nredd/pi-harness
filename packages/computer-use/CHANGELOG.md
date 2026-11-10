@@ -6,9 +6,9 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
-- `act_ui` validates every action before the write epoch advances, so a rejected request (e.g. `keypress` without `ref`) no longer stales the `stateId`, and a batch with an invalid later step delivers nothing (upstream injaneity/pi-computer-use#112, nredd/pi-harness#637).
+- `act_ui` validates every action before the write epoch advances, so a rejected request (e.g. `keypress` without `ref`, or `typeText`/`keypress` under strict headless on macOS) no longer stales the `stateId`, and a batch that fails this validation at a later step delivers nothing (upstream injaneity/pi-computer-use#112, nredd/pi-harness#637).
 - macOS `typeText` types punctuation and letters correctly on non-US keyboard layouts and input methods: a physical US key code is used only when the active layout produces that exact character (upstream #113).
-- macOS `act_ui` `scroll` moves SwiftUI/AppKit scroll areas by writing their `AXScrollBar` value instead of reporting success with no movement (upstream #114).
+- macOS `act_ui` `scroll` moves SwiftUI/AppKit scroll areas by writing their `AXScrollBar` value instead of reporting success with no movement. The bar is written only for the target's own scroll area (or one an AX hit test resolves to), so inner wheel-scrollable regions still use the wheel, and with both `scrollX` and `scrollY` an unmoved axis is carried on rather than reported as handled (upstream #114).
 - Linux `launch_browser` starts the managed browser headless when no `DISPLAY` or `WAYLAND_DISPLAY` is set, instead of timing out waiting for CDP; `PI_COMPUTER_USE_MANAGED_BROWSER_HEADLESS=0|1` overrides, and `--no-sandbox` is added only for root (upstream #104).
 
 ### Changed

@@ -248,6 +248,20 @@ func scrollBarTargetValue(current: Double, delta: Int, viewportLength: Double, c
 	let target = min(1, max(0, clamped + Double(delta) / range))
 	return abs(target - clamped) < 0.0001 ? nil : target
 }
+
+/// Whether the scroll area found `depthFromStart` parents above the target may be moved by writing its scroll
+/// bar. Only the area itself, its direct child (content view) or an area an AX hit test at the scroll point
+/// resolves to qualifies: a farther outer area would otherwise scroll in place of an inner wheel-scrollable
+/// region that exposes no AX scroll action.
+func scrollBarWriteAllowed(depthFromStart: Int, hitTestResolvesToArea: Bool) -> Bool {
+	depthFromStart <= 1 || hitTestResolvesToArea
+}
+
+/// The scroll deltas still undelivered after a scroll bar write: an axis keeps its requested delta unless its
+/// bar moved, so a one-axis move never reports the other axis as handled.
+func remainingScroll(requestedX: Int, requestedY: Int, movedX: Bool, movedY: Bool) -> (x: Int, y: Int) {
+	(movedX ? 0 : requestedX, movedY ? 0 : requestedY)
+}
 // END PURE
 
 // BEGIN KEYBOARD LAYOUT (compiled standalone by test/macos-native-pure.test.mjs; Carbon only)
@@ -2109,6 +2123,8 @@ final class Bridge {
 			if policy == "ax_only" { throw BridgeFailure(message: message, code: "foreground_required") }
 		}
 		var performed: [String: Any] = ["delivery": delivery]
+		// Wheel deltas left after a partial scroll bar write; nil delivers the requested scroll unchanged.
+		var wheelDeltaOverride: (x: Int, y: Int)?
 		var element: AXUIElement?
 		var rawPoint: CGPoint?
 		var preflightCapsUnknown = false
@@ -2223,7 +2239,7 @@ final class Bridge {
 				try postMouseMove(to: point, pid: pid, delivery: delivery)
 			case "scroll":
 				animateCursor(at: point)
-				try postScrollWheel(at: point, deltaX: (params["scrollX"] as? NSNumber)?.intValue ?? 0, deltaY: (params["scrollY"] as? NSNumber)?.intValue ?? 0, pid: pid, delivery: delivery)
+				try postScrollWheel(at: point, deltaX: wheelDeltaOverride?.x ?? (params["scrollX"] as? NSNumber)?.intValue ?? 0, deltaY: wheelDeltaOverride?.y ?? (params["scrollY"] as? NSNumber)?.intValue ?? 0, pid: pid, delivery: delivery)
 			case "drag":
 				guard let rawPath = params["path"] as? [[String: Any]], rawPath.count >= 2 else {
 					throw BridgeFailure(message: "drag requires path", code: "invalid_args")
@@ -2376,15 +2392,27 @@ final class Bridge {
 			// SwiftUI and many AppKit scroll areas expose no scroll actions and can
 			// ignore wheel events posted to a background app, but accept a write to
 			// their scroll bar's value.
-			if let scrolled = setScrollBarValueOrAncestor(startingAt: element, targetPid: pid, scrollX: (params["scrollX"] as? NSNumber)?.intValue ?? 0, scrollY: (params["scrollY"] as? NSNumber)?.intValue ?? 0) {
+			let requestedX = (params["scrollX"] as? NSNumber)?.intValue ?? 0
+			let requestedY = (params["scrollY"] as? NSNumber)?.intValue ?? 0
+			if let write = setScrollBarValueOrAncestor(startingAt: element, targetPid: pid, scrollX: requestedX, scrollY: requestedY, point: cursorPoint) {
 				performed["grounding"] = "description"
 				performed["delivery"] = "ax"
 				performed["axScroll"] = "scroll_bar_value"
 				if let cursorPoint { animateCursor(at: cursorPoint) }
-				return finish(["outcome": "worked", "performed": performed, "evidence": ["scrollBarValue": scrolled]])
+				if write.remainingX == 0 && write.remainingY == 0 {
+					return finish(["outcome": "worked", "performed": performed, "evidence": ["scrollBarValue": write.value]])
+				}
+				// Only some requested axes moved: deliver the rest with the wheel, never report them as handled.
+				performed["axScroll"] = "scroll_bar_value_partial"
+				if policy == "ax_only" {
+					return finish(["outcome": "unknown", "performed": performed, "evidence": ["scrollBarValue": write.value, "unmovedScrollX": write.remainingX, "unmovedScrollY": write.remainingY]])
+				}
+				wheelDeltaOverride = (write.remainingX, write.remainingY)
+				try executeCoordinates(coordinatePoint())
+			} else {
+				performed["axScroll"] = result["reason"] ?? "no_scroll_action"
+				try executeCoordinates(coordinatePoint())
 			}
-			performed["axScroll"] = result["reason"] ?? "no_scroll_action"
-			try executeCoordinates(coordinatePoint())
 		} else {
 			try executeCoordinates(coordinatePoint())
 		}
@@ -2685,24 +2713,47 @@ final class Bridge {
 		return ["scrolled": false, "reason": "no_scroll_action"]
 	}
 
-	/// Moves the nearest scroll area, at or above `element`, whose scroll bar can
-	/// still move in the requested direction, by writing the bar's value. Returns
-	/// the new value read back from the bar, or nil when no bar moved.
-	private func setScrollBarValueOrAncestor(startingAt element: AXUIElement, targetPid: Int32, scrollX: Int, scrollY: Int) -> Double? {
+	/// Moves scroll areas at or above `element` by writing their scroll bar values, one requested axis at a time.
+	/// Only an area that `scrollBarWriteAllowed` accepts is written, so a ref inside an inner wheel-scrollable
+	/// region falls through to the wheel instead of scrolling the outer area. Returns the last value read back
+	/// plus the deltas no bar delivered, or nil when no bar moved.
+	private func setScrollBarValueOrAncestor(startingAt element: AXUIElement, targetPid: Int32, scrollX: Int, scrollY: Int, point: CGPoint?) -> (value: Double, remainingX: Int, remainingY: Int)? {
+		var remaining = (x: scrollX, y: scrollY)
+		var value: Double?
+		var hitArea: AXUIElement??
+		func hitTestResolves(to area: AXUIElement) -> Bool {
+			if hitArea == nil {
+				var found: AXUIElement?
+				if let point, var hit = hitTestElement(at: point) {
+					var hops = 0
+					while hops < 10 {
+						if stringAttribute(hit, attribute: kAXRoleAttribute as CFString) == (kAXScrollAreaRole as String) { found = hit; break }
+						guard let parent = parentElement(hit) else { break }
+						hit = parent
+						hops += 1
+					}
+				}
+				hitArea = .some(found)
+			}
+			if case .some(.some(let found)) = hitArea { return sameElement(found, area) }
+			return false
+		}
 		var current: AXUIElement? = element
 		var depth = 0
-		while let candidate = current, depth < 10 {
-			if let pid = pidForElement(candidate), pid != targetPid { return nil }
+		while let candidate = current, depth < 10, remaining.x != 0 || remaining.y != 0 {
+			if let pid = pidForElement(candidate), pid != targetPid { break }
 			if stringAttribute(candidate, attribute: kAXRoleAttribute as CFString) == (kAXScrollAreaRole as String) {
-				var moved: Double?
-				if scrollY != 0 { moved = setScrollBarValue(area: candidate, barAttribute: "AXVerticalScrollBar", delta: scrollY, vertical: true) }
-				if scrollX != 0, let value = setScrollBarValue(area: candidate, barAttribute: "AXHorizontalScrollBar", delta: scrollX, vertical: false) { moved = moved ?? value }
-				if let moved { return moved }
+				guard scrollBarWriteAllowed(depthFromStart: depth, hitTestResolvesToArea: depth <= 1 ? false : hitTestResolves(to: candidate)) else { break }
+				let movedY = remaining.y != 0 ? setScrollBarValue(area: candidate, barAttribute: "AXVerticalScrollBar", delta: remaining.y, vertical: true) : nil
+				let movedX = remaining.x != 0 ? setScrollBarValue(area: candidate, barAttribute: "AXHorizontalScrollBar", delta: remaining.x, vertical: false) : nil
+				remaining = remainingScroll(requestedX: remaining.x, requestedY: remaining.y, movedX: movedX != nil, movedY: movedY != nil)
+				if let moved = movedY ?? movedX { value = moved }
 			}
 			current = parentElement(candidate)
 			depth += 1
 		}
-		return nil
+		guard let value else { return nil }
+		return (value, remaining.x, remaining.y)
 	}
 
 	/// Moves one scroll bar of `area` by `delta` points: reads the bar value, viewport and content length (falling

@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { debuglog } from "node:util";
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { canRetryInForeground, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, type ActionState, type PreparedAction } from "./actions.ts";
+import { canRetryInForeground, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, strictHeadlessRejection, type ActionState, type PreparedAction } from "./actions.ts";
 import { cdpClickForContext, cdpDragForContext, cdpEvaluateForContext, cdpKeypressForContext, cdpMouseForContext, cdpNavigateContext, cdpScrollForContext, cdpSnapshotForContext, cdpTabForWindow, cdpTypeFocusedForContext, cdpTypeForContext, disconnectCdp, listCdpPageContexts, type CdpConsoleEntry, type CdpPageSnapshot } from "./cdp.ts";
 import { type ComputerUseConfig, getComputerUseConfig, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig } from "./config.ts";
 import { normalizeFindParams } from "./find-params.ts";
@@ -1804,6 +1804,8 @@ async function dispatchUiAction(action: UiAction, target: ResolvedTarget, look: 
 function preflightUiTransaction(actions: UiAction[], look: LookResponse, headless: boolean): void {
 	const actionState: ActionState = { currentFocus: false };
 	for (const action of actions) {
+		const rejection = strictHeadlessRejection(action, headless, process.platform);
+		if (rejection) throw new Error(rejection);
 		const prepared = prepareUiAction(action, actionState, look, headless);
 		if (!headless && (prepared.establishesFocus || (prepared.action === "click" && "x" in prepared.target))) {
 			actionState.currentFocus = true;
