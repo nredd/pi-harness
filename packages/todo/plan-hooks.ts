@@ -27,7 +27,7 @@ import {
 	ownerKey,
 	ownerLabel,
 } from "./state/agents.ts";
-import { hasRunningMonitor, monitorsByTodo } from "./state/monitors.ts";
+import { monitorsByTodo } from "./state/monitors.ts";
 import { applyPlanApproval, selectOpenPlanItems, selectPlanProgress } from "./state/plan.ts";
 import type { TaskState } from "./state/state.ts";
 import { commitState, getState, sid } from "./state/store.ts";
@@ -223,7 +223,7 @@ type Owners = ReadonlyMap<number, string | undefined>;
 export interface SettleFacts {
 	/** Owners present at resume, see `classify`. */
 	resumed?: Owners;
-	/** Whether a running agent's completion notice or a running monitor will wake the parent. */
+	/** Whether a running agent's completion notice will wake the parent session-wide; monitors arm only their linked todos. */
 	armed?: boolean;
 	/** Running monitors started for a todo, by todo id, see `monitorsByTodo`. */
 	monitors?: ReadonlyMap<number, string>;
@@ -332,7 +332,7 @@ function classifyAll(
 
 /**
  * The `in_progress` todos only the parent can move: parent-held, or owned by an agent that no longer
- * exists. Empty when anything is armed to wake the parent, since it will be woken without a nudge.
+ * exists. Empty when a background agent's completion notice is armed (monitors arm only the todos they are linked to, which are not held), since it will be woken without a nudge.
  */
 export function unarmedHeld(state: TaskState, lookup: AgentStateLookup, facts: SettleFacts): Task[] {
 	if (facts.armed) return [];
@@ -344,12 +344,12 @@ export function unarmedHeld(state: TaskState, lookup: AgentStateLookup, facts: S
 /** The transient reminder for `unarmedHeld` todos; the `context` hook swaps it in for the marker. */
 export function formatHeldReminder(tasks: readonly Task[]): string {
 	return [
-		"Nothing is armed to wake you: no running background agent with a completion notice and no running monitor. These todos are still in_progress and only you can move them:",
+		"Nothing is armed to wake you: no running background agent with a completion notice and no running monitor linked to them with `todo`. These todos are still in_progress and only you can move them:",
 		...tasks.map((t) => {
 			const owner = ownerLabel(t.owner);
 			return `- #${t.id} ${sanitizeTerminalText(t.subject)}${owner ? ` (${owner})` : ""}`;
 		}),
-		"Keep working on them now. If one is actually done, complete it with evidence; if it cannot proceed, defer it with a reason. If you are waiting on something external, start a monitor or background agent that wakes you, or tell the user exactly what is pending. Do not end the turn by announcing an action you have not taken.",
+		"Keep working on them now. If one is actually done, complete it with evidence; if it cannot proceed, defer it with a reason. If you are waiting on something external, start a monitor or background agent that wakes you, or tell the user exactly what is pending. If a running monitor is a todo's continuation, monitor_stop it and monitor_start it again with todo: <id>. Do not end the turn by announcing an action you have not taken.",
 	].join("\n");
 }
 
@@ -358,7 +358,7 @@ export function formatHeldReminder(tasks: readonly Task[]): string {
  * Same shape as the `subagents` and `session-kit` monitor settle notices,
  * `Run ended with N <work>, armed: <what wakes the parent>`. Todos arm nothing themselves, so the
  * armed clause says so and defers to those notices for session-wide wakes rather than reading as
- * "nothing is armed". Each todo is then named under one group: failed or stopped owners uncapped,
+ * "nothing is armed"; when a row is `monitored` it names the monitored todos instead. Each todo is then named under one group: failed or stopped owners uncapped,
  * the rest three per group. Its level is the most severe group's.
  */
 export function formatInProgressNotice(
@@ -377,7 +377,11 @@ export function formatInProgressNotice(
 		return `${label}: ${shown.join(", ")}${more}`;
 	});
 	const n = rows.length;
-	const text = `Run ended with ${n} in_progress todo${n === 1 ? "" : "s"}, armed: no todo-owned wake (monitor and agent notices list session wakes); ${parts.join("; ")}`;
+	const monitored = rows.filter((r) => r.kind === "monitored").map((r) => `#${r.task.id}`);
+	const armedClause = monitored.length
+		? `monitor for ${monitored.join(", ")}`
+		: "no todo-owned wake (agent notices list session wakes; unlinked monitors arm no todo)";
+	const text = `Run ended with ${n} in_progress todo${n === 1 ? "" : "s"}, armed: ${armedClause}; ${parts.join("; ")}`;
 	// Parent-held work only warns when nothing is armed; with a wake armed it is shown once like the rest.
 	const level = present.some((g) => g.severity === "warning" && !(armed && g.kind === "held")) ? "warning" : "info";
 	return { text, level, key: reportKey(rows, lookup, armed) };
@@ -437,7 +441,7 @@ export function registerPlanHooks(
 	const resumedOwners = new Map<string, Map<number, string | undefined>>();
 	const settleFacts = (id: string): SettleFacts => ({
 		resumed: resumedOwners.get(id),
-		armed: hasArmedAgent(id) || hasRunningMonitor(id),
+		armed: hasArmedAgent(id),
 		monitors: monitorsByTodo(id),
 	});
 

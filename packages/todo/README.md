@@ -163,13 +163,14 @@ the full list grouped by status.
   alongside any blocker details, e.g. `(@release-team; by #3 deferred)`. An `Agent`-tool background spawn or resume is heard at `subagents:created`, so
   it counts as running while still queued; spawns that skip `created` (cross-extension RPC, the
   scheduler, `@handle`) are first heard at `subagents:started` and read `held` until then (or at `subagents:failed`, as `stopped`, if stopped while still queued). Its armed clause, `armed:
-  no todo-owned wake (monitor and agent notices list session wakes)`, says only that todos arm
-  nothing themselves; the `subagents` and `session-kit` monitor notices say what does wake the
-  parent. Only a lifecycle event explicitly confirming an agent completion notice makes that owner a verified wake; foreground, silent RPC and older unknown agents warn on every settle. Abandoned, lost or silent work, and parent-held work while nothing is armed (below), is a warning repeated on every settle, so a stop with
+  no todo-owned wake (agent notices list session wakes; unlinked monitors arm no todo)`, says only that todos arm
+  nothing themselves (with a monitored todo it reads `armed: monitor for #<id>`); the `subagents` and `session-kit` monitor notices say what does wake the
+  parent. Background agents still arm session-wide, since they wake the parent on completion; monitors can sit for up to 7 days, so they arm only the
+  todos they are linked to. Only a lifecycle event explicitly confirming an agent completion notice makes that owner a verified wake; foreground, silent RPC and older unknown agents warn on every settle. Abandoned, lost or silent work, and parent-held work while nothing is armed (below), is a warning repeated on every settle, so a stop with
   owned work pending and nothing to wake the parent is never silent. When every todo waits on a running agent or a live dependency
   it is info, shown once: a settle that changes no todo's group, owner, owner agent state, wake eligibility or blocker identity, status, owner or owner agent state
   repeats nothing until the next prompt from a person. Todo status never changes on its own, e.g.
-  `Run ended with 2 in_progress todos, armed: no todo-owned wake (monitor and agent notices list session wakes); owner agent failed or stopped: #3 Audit auth (@auth-audit failed); held by the parent: #6 Deploy`.
+  `Run ended with 2 in_progress todos, armed: no todo-owned wake (agent notices list session wakes; unlinked monitors arm no todo); owner agent failed or stopped: #3 Audit auth (@auth-audit failed); held by the parent: #6 Deploy`.
   After a process restart (`session_start` reason `startup`), an `in_progress` todo whose `owner` was already set when the session started and
   that no `subagents` event has named since is `owner agent not found after resume` (warning, every
   settle, all named): children die with the process, so it is not parent-held. `/new`, `/resume`,
@@ -188,12 +189,13 @@ the full list grouped by status.
   running with the same identity changes nothing, so re-announcing a survivor never outranks a newer same-named agent. The set is rebuilt from each announcement, so a `/reload` loses nothing and a survivor that finished
   (even while this session was inactive) drops out at the next settle. An owner nobody names is `held`, never lost. A free-text owner (a person or team) is indistinguishable from a dead
   agent handle, so it lands there too until it is reassigned. Parent-held work warns only when nothing
-  is armed: a running monitor (`session-kit:monitor:started` / `:stopped` on `pi.events`, payload
-  `{ sessionId, id, name, wake, match?, todo? }`) or a background agent with a verified completion notice makes it an info
-  report, shown once like the other waiting groups. A monitor started with `todo: <id>` arms only that todo, which reads
+  is armed: a running monitor started for it (`session-kit:monitor:started` / `:stopped` on `pi.events`, payload
+  `{ sessionId, id, name, wake, match?, todos? }`) or a background agent with a verified completion notice makes it an info
+  report, shown once like the other waiting groups. A monitor started with `todo: <id>` (or a list of ids, for one monitor serving several todos) arms only those todos, which reads
   `waiting on a monitor, which wakes the parent: #<id> <subject> (monitor <name>)` (info); once the monitor stops or
   expires with the todo still `in_progress` it is `held` again and warns. Other held todos still warn. A monitor
-  with no `todo` stays session-wide and arms every held todo. Abandoned, lost and silent work always warn.
+  with no `todo` arms no todo (it may be unrelated to the held work; before, it silenced every held todo and the held-work
+  reminder), so link it with `todo: <id>`. `todo clear` (also inside an `ops` batch) and tree navigation drop links to todos that no longer exist or changed, since ids can be reused. Abandoned, lost and silent work always warn.
   When todos are held or lost and nothing is armed, nothing can wake the parent, so `agent_before_settle`
   appends one hidden `rpiv-todo-held-reminder` and requests one more request, once per prompt from a
   person (a plan reminder is independent). The `context` hook swaps the live list for the marker on that

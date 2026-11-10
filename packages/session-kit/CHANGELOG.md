@@ -2,9 +2,7 @@
 
 ## [Unreleased]
 
-- Add an optional `todo` id to `monitor_start`, and carry `wake`, `match` and `todo` on `session-kit:monitor:started` / `:stopped` (`{ sessionId, id, name, wake, match?, todo? }`), so todo can show the linked work as waiting on the monitor instead of held ([#522](https://github.com/nredd/pi-harness/issues/522))
-
-- Add an optional `todo` id to `monitor_start`, and carry `wake`, `match` and `todo` on `session-kit:monitor:started` / `:stopped` (`{ sessionId, id, name, wake, match?, todo? }`), so todo can show the linked work as waiting on the monitor instead of held ([#522](https://github.com/nredd/pi-harness/issues/522))
+- Add an optional `todo` (an id, or a list of up to 20) to `monitor_start`, and carry `wake`, `match` and `todos` on `session-kit:monitor:started` / `:stopped` (`{ sessionId, id, name, wake, match?, todos? }`), so todo can show the linked work as waiting on the monitor instead of held; a monitor without `todo` no longer counts as a todo's continuation ([#522](https://github.com/nredd/pi-harness/issues/522))
 
 - Skip all-NUL crash-padding lines in session JSONL instead of counting them as bad lines, so `exportStats` no longer fails closed on them ([#585](https://github.com/nredd/pi-harness/issues/585)); NULs mixed with data still count. Bump the stats cache to version 3: older entries with bad lines are marked stale (`size: -1`) and re-parsed whenever their root is next listed; records for deleted or out-of-root files are kept. A migrated record for a since-deleted file keeps its old `badLines` (it cannot be re-derived), so export still fails closed for it
 

@@ -36,6 +36,6 @@ export interface MonitorInfo {
 	wake: boolean;
 	match?: string;
 	timeoutMs: number;
-	/** Todo id the monitor was linked to at start, if any. */
-	todo?: number;
+	/** Todo ids the monitor was linked to at start, if any. */
+	todos?: number[];
 }

@@ -32,13 +32,14 @@ import {
 } from "./state/agents.ts";
 import { I18N_NAMESPACE } from "./state/i18n-bridge.ts";
 import { forkAncestry } from "./state/lineage.ts";
-import { applyMonitorEvent, forgetMonitors } from "./state/monitors.ts";
+import { applyMonitorEvent, forgetMonitors, keepLinks } from "./state/monitors.ts";
 import { replayFromBranch } from "./state/replay.ts";
 import {
 	clearActiveRenderSession,
 	evictSession,
 	getActiveRenderSession,
 	getRenderState,
+	getState,
 	replaceState,
 	setActiveRenderSession,
 	sid,
@@ -253,7 +254,14 @@ export default function (
 		let isForeground = false;
 		try {
 			const id = sid(ctx);
-			replaceState(id, replayFromBranch(ctx));
+			const before = getState(id);
+			const after = replayFromBranch(ctx);
+			replaceState(id, after);
+			// A link survives only while its todo is the same one: same id and subject.
+			keepLinks(id, (todo) => {
+				const was = before.tasks.find((t) => t.id === todo);
+				return was !== undefined && after.tasks.find((t) => t.id === todo)?.subject === was.subject;
+			});
 			isForeground = id === getActiveRenderSession();
 		} catch (e) {
 			if (!isStaleCtxError(e)) throw e;

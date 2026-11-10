@@ -267,11 +267,11 @@ describe("monitor extension", () => {
 		const run = (params: object) =>
 			f.tools.get("monitor_start").execute("1", { argv: ["node", "-e", STAY], ...params }, undefined, undefined, ctx);
 		expect((await run({ name: "ci", match: "PASS|FAIL", todo: 3 })).isError).toBe(false);
-		expect((await run({ name: "poll", wake: true })).isError).toBe(false);
-		const ci = { sessionId: "sess-L", id: "m1", name: "ci", wake: false, match: "PASS|FAIL", todo: 3 };
+		expect((await run({ name: "poll", wake: true, todo: [4, 5, 4] })).isError).toBe(false);
+		const ci = { sessionId: "sess-L", id: "m1", name: "ci", wake: false, match: "PASS|FAIL", todos: [3] };
 		expect(f.emitted).toEqual([
 			[MONITOR_STARTED_EVENT, ci],
-			[MONITOR_STARTED_EVENT, { sessionId: "sess-L", id: "m2", name: "poll", wake: true }],
+			[MONITOR_STARTED_EVENT, { sessionId: "sess-L", id: "m2", name: "poll", wake: true, todos: [4, 5] }],
 		]);
 		f.emitted.length = 0;
 		await f.tools.get("monitor_stop").execute("2", { id: "m1" }, undefined, undefined, ctx);

@@ -23,16 +23,16 @@ import { formatDuration, formatPendingMonitors } from "./messages.ts";
 import { boundTail } from "./output.ts";
 import { ensureRoot, rootDir, sessionDirName, sweepOrphans } from "./pidfiles.ts";
 import type { MonitorInfo } from "./types.ts";
-import { MAX_MONITORS, MAX_TIMEOUT_S } from "./validate.ts";
+import { MAX_MONITORS, MAX_TIMEOUT_S, MAX_TODO_LINKS } from "./validate.ts";
 import { MonitorWidget } from "./widget.ts";
 
 export const MESSAGE_TYPE = "session-kit:monitor";
 export const TOOL_NAMES = ["monitor_start", "monitor_read", "monitor_stop"] as const;
 /**
- * Lifecycle on `pi.events`, payload `{ sessionId, id, name, wake, match?, todo? }`: `started` once
+ * Lifecycle on `pi.events`, payload `{ sessionId, id, name, wake, match?, todos? }`: `started` once
  * per running monitor, `stopped` once when it exits, times out, is stopped or its session shuts
- * down. `match` is the wake regex source, `wake` is true when every batch wakes, and `todo` is the
- * todo id the monitor was started for. Lets other extensions (e.g. todo) tell what is armed to wake
+ * down. `match` is the wake regex source, `wake` is true when every batch wakes, and `todos` are the
+ * todo ids the monitor was started for. Lets other extensions (e.g. todo) tell what is armed to wake
  * the parent, and for which work.
  */
 export const MONITOR_STARTED_EVENT = "session-kit:monitor:started";
@@ -45,12 +45,12 @@ export interface LifecyclePayload {
 	name: string;
 	wake: boolean;
 	match?: string;
-	todo?: number;
+	todos?: number[];
 }
 
 function lifecyclePayload(sessionId: string, info: MonitorInfo): LifecyclePayload {
-	const { id, name, wake, match, todo } = info;
-	return { sessionId, id, name, wake, ...(match ? { match } : {}), ...(todo === undefined ? {} : { todo }) };
+	const { id, name, wake, match, todos } = info;
+	return { sessionId, id, name, wake, ...(match ? { match } : {}), ...(todos ? { todos } : {}) };
 }
 
 const NOT_AVAILABLE = "monitors are not available in this session";
@@ -178,19 +178,27 @@ export function register(
 			'argv is spawned directly with no shell; use ["sh","-c","..."] explicitly for pipes. ' +
 			"Output lines are retained in the monitor buffer and read with monitor_read. You are woken only when a line " +
 			"matches `match` (JS regex), when the process exits or times out, or on every batch when `wake` is true; " +
-			"passive output is not added to the session. Do not use this for commands that finish quickly.",
-		promptSnippet: "Start a background process and be woken on matching output or exit",
+			"passive output is not added to the session. Do not use this for commands that finish quickly. " +
+			"If this monitor is the continuation for in_progress todo(s), pass `todo`.",
+		promptSnippet:
+			"Start a background process and be woken on matching output or exit; pass `todo` if it is an in_progress todo's continuation",
 		parameters: Type.Object({
 			argv: Type.Array(Type.String(), { minItems: 1, description: "Command and arguments, no shell" }),
 			name: Type.String({ description: "Unique short name, [A-Za-z0-9._-]" }),
 			match: Type.Optional(Type.String({ description: "JS regex; a matching line wakes you" })),
 			wake: Type.Optional(Type.Boolean({ description: "Wake on every output batch" })),
 			todo: Type.Optional(
-				Type.Integer({
-					minimum: 1,
-					description:
-						"Id of the in_progress todo this monitor wakes you for; todo shows it as waiting while this runs",
-				}),
+				Type.Union(
+					[
+						Type.Integer({ minimum: 1 }),
+						Type.Array(Type.Integer({ minimum: 1 }), { minItems: 1, maxItems: MAX_TODO_LINKS }),
+					],
+					{
+						description:
+							"Id (or ids) of the in_progress todo(s) this monitor wakes you for. REQUIRED for the monitor to count as a todo's " +
+							"continuation: without it the todo is still reported as held by the parent, even while this runs",
+					},
+				),
 			),
 			timeout_s: Type.Optional(
 				Type.Number({ minimum: 1, maximum: MAX_TIMEOUT_S, description: "Kill after this many seconds (default 3600)" }),

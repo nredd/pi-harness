@@ -19,7 +19,7 @@ describe("todo settle with a linked session-kit monitor", () => {
 	let home: Awaited<ReturnType<typeof isolateStackHome>>;
 	let h: Harness | undefined;
 	let processes: ControlledProcesses;
-	let notices: string[];
+	let notices: Array<[string, string | undefined]>;
 
 	beforeEach(async () => {
 		home = await isolateStackHome();
@@ -39,7 +39,7 @@ describe("todo settle with a linked session-kit monitor", () => {
 				}),
 			],
 			mode: "rpc",
-			ui: createTestUiContext({ notify: (message) => notices.push(message) }),
+			ui: createTestUiContext({ notify: (message, level) => notices.push([message, level]) }),
 			settings: { compaction: { enabled: false } },
 		});
 	});
@@ -49,7 +49,7 @@ describe("todo settle with a linked session-kit monitor", () => {
 		await home.cleanup();
 	});
 
-	const todoNotices = () => notices.filter((n) => n.includes("in_progress todo"));
+	const todoNotices = () => notices.filter(([message]) => message.includes("in_progress todo"));
 
 	it("shows the todo as waiting, then held again when the monitor exits", async () => {
 		if (!h) throw new Error("no harness");
@@ -60,7 +60,8 @@ describe("todo settle with a linked session-kit monitor", () => {
 		]);
 		for (const outcome of [created, started, watching]) expect(outcome?.isError, outcome?.text).toBe(false);
 		expect(todoNotices()).toHaveLength(1);
-		expect(todoNotices()[0]).toContain(WAITING);
+		expect(todoNotices()[0][0]).toContain(WAITING);
+		expect(todoNotices()[0][1]).toBe("info");
 
 		// The monitor exits: its wake turn settles with the todo still in_progress and nothing armed.
 		h.setResponses([fauxAssistantMessage("woke")]);
@@ -69,6 +70,7 @@ describe("todo settle with a linked session-kit monitor", () => {
 		await settled;
 		await h.session.waitForIdle();
 		expect(todoNotices()).toHaveLength(2);
-		expect(todoNotices()[1]).toContain(HELD);
+		expect(todoNotices()[1][0]).toContain(HELD);
+		expect(todoNotices()[1][1]).toBe("warning");
 	});
 });
