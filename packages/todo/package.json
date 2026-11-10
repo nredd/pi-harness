@@ -1,6 +1,6 @@
 {
   "name": "@nredd/pi-todo",
-  "version": "2.13.11",
+  "version": "2.14.0",
   "description": "Pi todo extension with a persistent overlay and plan-aware task tracking.",
   "keywords": [
     "pi-package",

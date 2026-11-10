@@ -726,7 +726,16 @@ describe("cleanupWorktree — submodules", () => {
   });
 });
 
-describe("cleanupWorktree — nested repositories git refuses to remove", () => {
+/**
+ * Every case spawns dozens of real `git` children (init, clone, submodule add/update/
+ * deinit, fetch), so the cost is process spawn, not work a shared fixture could skip:
+ * each case mutates its own repos. 0.25-1.2 s alone on an M4, but 5.8-8.6 s on the
+ * self-hosted macOS runners against vitest's 5 s default. 20 s is about twice the worst
+ * self-hosted figure (docs/test-worker-budgets.md, #651).
+ */
+const NESTED_REPO_TEST_TIMEOUT_MS = 20_000;
+
+describe("cleanupWorktree — nested repositories git refuses to remove", { timeout: NESTED_REPO_TEST_TIMEOUT_MS }, () => {
   let repoDir: string;
   let subDir: string;
   let pi: ExtensionAPI;
