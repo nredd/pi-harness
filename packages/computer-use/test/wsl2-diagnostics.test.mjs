@@ -9,11 +9,12 @@ const WSL_TEXT = /Windows host windows are not reachable from the WSL2 guest.*nr
 
 test("WSL detection reads the environment and kernel string", async () => {
 	const { isWsl, wslNoWindowsHint } = await import("../src/platform/linux/wsl.ts");
-	const probe = (env, version = "") => ({ env: () => env, procVersion: () => version });
+	const probe = (env, version = "", interop = false) => ({ env: () => env, procVersion: () => version, hasInteropEntry: () => interop });
 	assert.equal(isWsl(probe({ WSL_DISTRO_NAME: "Ubuntu" })), true);
 	assert.equal(isWsl(probe({ WSL_INTEROP: "/run/WSL/1_interop" })), true);
 	assert.equal(isWsl(probe({}, "Linux version 5.15.0-microsoft-standard-WSL2 (gcc)")), true);
 	assert.equal(isWsl(probe({}, "Linux version 6.5.0-generic (buildd@lcy02)")), false);
+	assert.equal(isWsl(probe({}, "", true)), true);
 	assert.equal(isWsl(probe({}, "")), false);
 	assert.match(wslNoWindowsHint(probe({ WSL_DISTRO_NAME: "Ubuntu" })) ?? "", WSL_TEXT);
 	assert.equal(wslNoWindowsHint(probe({})), undefined);
@@ -44,12 +45,12 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		linuxHelper.installChecked = true;
 		const linux = platformBackendForRuntime("linux");
 
-		Object.assign(wslProbe, { env: () => ({ WSL_DISTRO_NAME: "Ubuntu" }), procVersion: () => "" });
+		Object.assign(wslProbe, { env: () => ({ WSL_DISTRO_NAME: "Ubuntu" }), procVersion: () => "", hasInteropEntry: () => false });
 		await assert.rejects(() => linux.getFrontmost(), WSL_TEXT);
 		assert.match(linux.emptyRootsHint?.() ?? "", WSL_TEXT);
 
 		// Native Linux keeps the original wording and no hint.
-		Object.assign(wslProbe, { env: () => ({}), procVersion: () => "Linux version 6.5.0-generic" });
+		Object.assign(wslProbe, { env: () => ({}), procVersion: () => "Linux version 6.5.0-generic", hasInteropEntry: () => false });
 		await assert.rejects(
 			() => linux.getFrontmost(),
 			(error) => error.message === "No frontmost window was available.",
@@ -58,8 +59,8 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 
 		// The shared find_roots path appends the backend hint to its empty-result text.
 		const ctx = { cwd: process.cwd(), hasUI: false, ui: { notify() {} }, sessionManager: { getBranch: () => [] } };
-		const find = async () => {
-			const result = await executeFind("t", {}, undefined, undefined, ctx);
+		const find = async (params = {}) => {
+			const result = await executeFind("t", params, undefined, undefined, ctx);
 			return result.content.map((block) => block.text).join("\n");
 		};
 		Object.assign(currentPlatformBackend, {
@@ -69,7 +70,9 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 			emptyRootsHint: () => "HINT-FROM-BACKEND",
 		});
 		assert.match(await find(), /No roots are currently visible to pi-computer-use\..*HINT-FROM-BACKEND/s);
+		assert.match(await find({ app: "Teams" }), /No roots matched the supplied filters\..*HINT-FROM-BACKEND/s);
 		currentPlatformBackend.emptyRootsHint = () => undefined;
+		assert.equal(await find({ app: "Teams" }), "No roots matched the supplied filters.");
 		assert.equal(await find(), "No roots are currently visible to pi-computer-use.");
 		await linux.shutdown?.();
 	} finally {

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 /** Tracking issue for reaching Windows host windows from a WSL2 guest. */
 export const WSL2_BRIDGE_ISSUE = "nredd/pi-harness#668";
@@ -7,6 +7,8 @@ export const WSL2_BRIDGE_ISSUE = "nredd/pi-harness#668";
 export interface WslProbe {
 	/** Environment of the Pi process. */
 	env(): NodeJS.ProcessEnv;
+	/** Whether the WSL interop binfmt entry `/proc/sys/fs/binfmt_misc/WSLInterop` exists. */
+	hasInteropEntry(): boolean;
 	/** Contents of `/proc/version`, or an empty string when unreadable. */
 	procVersion(): string;
 }
@@ -14,6 +16,7 @@ export interface WslProbe {
 /** Real probe by default; tests assign fields to inject an environment or kernel string. */
 export const wslProbe: WslProbe = {
 	env: () => process.env,
+	hasInteropEntry: () => existsSync("/proc/sys/fs/binfmt_misc/WSLInterop"),
 	procVersion(): string {
 		try {
 			return readFileSync("/proc/version", "utf8");
@@ -24,14 +27,14 @@ export const wslProbe: WslProbe = {
 };
 
 /**
- * Detect a WSL guest from `WSL_DISTRO_NAME`/`WSL_INTEROP` or a Microsoft kernel string.
+ * Detect a WSL guest from `WSL_DISTRO_NAME`/`WSL_INTEROP`, the `WSLInterop` binfmt entry or a Microsoft kernel string.
  * @param probe Environment and kernel version source.
  * @returns True when running inside WSL.
  */
 export function isWsl(probe: WslProbe = wslProbe): boolean {
 	const env = probe.env();
 	if (env.WSL_DISTRO_NAME || env.WSL_INTEROP) return true;
-	return /microsoft|wsl/i.test(probe.procVersion());
+	return probe.hasInteropEntry() || /microsoft|wsl/i.test(probe.procVersion());
 }
 
 /**

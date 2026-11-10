@@ -31,7 +31,7 @@ The upstream [AT-SPI development guide](https://gnome.pages.gitlab.gnome.org/at-
 
 Under WSL2, Pi runs in the Linux guest and the Linux backend only sees the guest's AT-SPI bus. Windows host windows (a WebView2 or Electron client, for example) never appear there. Linux apps inside the guest, e.g. through WSLg, work as usual.
 
-WSL is detected from `WSL_DISTRO_NAME`, `WSL_INTEROP` or a `microsoft`/`wsl` string in `/proc/version`. When the guest has no windows to report, `find_roots` appends the explanation to its empty result and `observe_ui`, `act_ui` and `search_ui` fail with `No frontmost window was available. Running under WSL2: Windows host windows are not reachable from the WSL2 guest ...` instead of the bare message. Reaching host windows needs a Windows-host bridge, tracked in [nredd/pi-harness#668](https://github.com/nredd/pi-harness/issues/668); it is not implemented. Native Linux behavior and messages are unchanged.
+WSL is detected from `WSL_DISTRO_NAME`, `WSL_INTEROP`, the `/proc/sys/fs/binfmt_misc/WSLInterop` entry or a `microsoft`/`wsl` string in `/proc/version`. When the guest has no windows to report, `find_roots` appends the explanation to its empty or filter-miss result and `observe_ui`, `act_ui` and `search_ui` fail with `No frontmost window was available. Running under WSL2: Windows host windows are not reachable from the WSL2 guest ...` instead of the bare message. Reaching host windows needs a Windows-host bridge, tracked in [nredd/pi-harness#668](https://github.com/nredd/pi-harness/issues/668); it is not implemented. Native Linux behavior and messages are unchanged.
 
 ## Cancellation checks
 
