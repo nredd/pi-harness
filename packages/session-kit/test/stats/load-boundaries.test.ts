@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -182,6 +182,29 @@ describe("stats file races", () => {
 		expect(saved.version).toBe(CACHE_VERSION);
 		expect(saved.files[padded].badLines).toBe(0);
 		expect(saved.files[deleted]).toEqual(gone);
+	});
+
+	it("re-parses a migrated bad-line record on the next load when its first re-parse failed", async () => {
+		mkdirSync(root);
+		const padded = join(root, "padded.jsonl");
+		writeFileSync(padded, `${usageLine()}\n${"\0".repeat(64)}\n`);
+		const s = statSync(padded);
+		writeFileSync(
+			cache,
+			JSON.stringify({
+				version: 2,
+				files: { [padded]: { ...cachedRecord(), size: s.size, mtimeMs: s.mtimeMs, badLines: 1 } },
+			}),
+		);
+		chmodSync(padded, 0o000);
+		try {
+			expect((await loadUsage({ root, cache })).errors).toBe(1);
+		} finally {
+			chmodSync(padded, 0o644);
+		}
+		const loaded = await loadUsage({ root, cache });
+		expect(loaded.errors).toBe(0);
+		expect(loaded.badLines).toBe(0);
 	});
 
 	it("drops invalid cached identity and attribution records instead of reporting their usage", async () => {

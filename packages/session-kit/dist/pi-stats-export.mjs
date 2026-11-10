@@ -266,6 +266,10 @@ async function loadUsage(options = {}) {
   const paths = listed.paths;
   let errors = listed.errors;
   const stale = [];
+  const invalidate = (path) => {
+    const record2 = files[path];
+    if (reparse.has(path) && record2) files[path] = { ...record2, size: -1 };
+  };
   for (const path of paths) {
     try {
       const s = await stat(path);
@@ -274,6 +278,7 @@ async function loadUsage(options = {}) {
         stale.push({ path, size: s.size, mtimeMs: s.mtimeMs });
     } catch {
       errors++;
+      invalidate(path);
     }
   }
   let done = 0;
@@ -284,6 +289,7 @@ async function loadUsage(options = {}) {
       dirty = true;
     } catch {
       errors++;
+      invalidate(path);
     }
     options.onProgress?.(++done, stale.length);
   }

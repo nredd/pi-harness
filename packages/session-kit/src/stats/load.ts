@@ -342,8 +342,10 @@ export function isFileStats(value: unknown): value is FileStats {
 }
 
 /**
- * Cached records keyed by path. Unreadable JSON, a wrong version, or a non-object `files` yields an
- * empty cache; a malformed record is dropped on its own (its file is re-parsed if still on disk).
+ * Cached records keyed by path. Unreadable JSON, an unknown version, or a non-object `files` yields
+ * an empty cache; a malformed record is dropped on its own (its file is re-parsed if still on disk).
+ * Version 1/2 records are all kept (deleted files' history must survive); those with bad lines are
+ * returned in `reparse`, since older versions counted all-NUL padding as bad.
  */
 async function readCache(
 	path: string,
@@ -412,8 +414,8 @@ export interface LoadOptions {
 }
 
 /**
- * Load every session under `root`, re-parsing only files whose size or mtime changed. Cache entries
- * for deleted files are kept, so pruning old sessions does not erase history; entries outside `root`
+ * Load every session under `root`, re-parsing only files whose size or mtime changed (plus listed
+ * files whose pre-version-3 record has bad lines). Cache entries for deleted files are kept, so pruning old sessions does not erase history; entries outside `root`
  * stay cached but are not reported.
  */
 export async function loadUsage(options: LoadOptions = {}): Promise<Loaded> {
@@ -424,6 +426,11 @@ export async function loadUsage(options: LoadOptions = {}): Promise<Loaded> {
 	const paths = listed.paths;
 	let errors = listed.errors;
 	const stale: { path: string; size: number; mtimeMs: number }[] = [];
+	// A failed re-parse must not leave a migrated bad-line record matching its file forever.
+	const invalidate = (path: string): void => {
+		const record = files[path];
+		if (reparse.has(path) && record) files[path] = { ...record, size: -1 };
+	};
 	for (const path of paths) {
 		try {
 			const s = await stat(path);
@@ -432,6 +439,7 @@ export async function loadUsage(options: LoadOptions = {}): Promise<Loaded> {
 				stale.push({ path, size: s.size, mtimeMs: s.mtimeMs });
 		} catch {
 			errors++;
+			invalidate(path);
 		}
 	}
 	let done = 0;
@@ -442,6 +450,7 @@ export async function loadUsage(options: LoadOptions = {}): Promise<Loaded> {
 			dirty = true;
 		} catch {
 			errors++;
+			invalidate(path);
 		}
 		options.onProgress?.(++done, stale.length);
 	}
