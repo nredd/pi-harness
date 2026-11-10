@@ -690,6 +690,20 @@ describe("settling with nothing armed to wake the parent", () => {
 			expect(notices(ctx)[0][0]).toContain("#1 t1 (monitor ci), #2 t2 (monitor ci)");
 		});
 
+		it("keeps the link of a plan todo that survives clear, drops the cleared one", async () => {
+			const snapshot = tasks({ id: 1 }, { id: 2 });
+			snapshot.tasks[0] = { ...snapshot.tasks[0], source: "plan" } as never;
+			const { handler, ctx, bus, call } = await start(snapshot);
+			link(bus, MONITOR_STARTED_EVENT, [1, 2]);
+			await call(ctx, { action: "clear" });
+			await call(ctx, { action: "create", subject: "reused id" });
+			await call(ctx, { action: "update", id: 3, status: "in_progress" });
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			expect(notices(ctx)[0][0]).toContain(
+				"held by the parent: #3 reused id; waiting on a monitor, which wakes the parent: #1 t1",
+			);
+		});
+
 		it("drops a link when its todo is cleared inside an ops batch, so a reused id is not armed", async () => {
 			const { handler, ctx, bus, call } = await start(tasks({ id: 1 }));
 			link(bus, MONITOR_STARTED_EVENT, 1);
