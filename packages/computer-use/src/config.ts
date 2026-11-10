@@ -49,12 +49,16 @@ export interface ComputerUseConfigSource {
 	exists: boolean;
 	values?: Partial<ComputerUseConfig>;
 	error?: string;
+	/** `blocked_apps` from a project file: ids that are only ever ADDED to the effective list. */
+	blockedAppsAdd?: string[];
 }
 
 export interface LoadedComputerUseConfig {
 	config: ComputerUseConfig;
 	sources: ComputerUseConfigSource[];
 	env: Partial<ComputerUseConfig>;
+	/** Rejected `blocked_apps` input (the defaults stay in force for it); shown by `/computer-use`. */
+	blockedAppsErrors: string[];
 }
 
 const DEFAULT_CONFIG: ComputerUseConfig = {
@@ -68,7 +72,7 @@ const DEFAULT_CONFIG: ComputerUseConfig = {
 };
 
 let activeConfig: ComputerUseConfig = { ...DEFAULT_CONFIG };
-let activeLoadedConfig: LoadedComputerUseConfig = { config: activeConfig, sources: [], env: {} };
+let activeLoadedConfig: LoadedComputerUseConfig = { config: activeConfig, sources: [], env: {}, blockedAppsErrors: [] };
 
 function parseBoolean(value: unknown): boolean | undefined {
 	if (typeof value === "boolean") return value;
@@ -80,11 +84,22 @@ function parseBoolean(value: unknown): boolean | undefined {
 	return undefined;
 }
 
-/** A list of bundle ids from JSON (array) or the env var (comma-separated); anything else is ignored. */
-function parseBundleIds(value: unknown): string[] | undefined {
-	const items = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : undefined;
-	if (!items) return undefined;
-	return [...new Set(items.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean))];
+type BundleIds = { ids: string[] } | { error: string };
+
+/** A JSON array of non-blank bundle id strings. Any other shape or entry is rejected whole, never filtered. */
+function parseBundleIdArray(value: unknown): BundleIds {
+	if (!Array.isArray(value)) return { error: "blocked_apps must be an array of bundle id strings" };
+	const bad = value.filter((item) => typeof item !== "string" || !item.trim());
+	if (bad.length) return { error: `blocked_apps has ${bad.length} invalid entr${bad.length === 1 ? "y" : "ies"} (each must be a non-blank string)` };
+	return { ids: [...new Set((value as string[]).map((item) => item.trim()))] };
+}
+
+/** `PI_COMPUTER_USE_BLOCKED_APPS`: blank is unset (undefined), `none` is the explicit opt-out, else a comma list. */
+function parseBundleIdEnv(value: string | undefined): string[] | undefined {
+	const ids = [...new Set((value ?? "").split(",").map((item) => item.trim()).filter(Boolean))];
+	if (ids.length === 0) return undefined;
+	if (ids.length === 1 && ids[0].toLowerCase() === "none") return [];
+	return ids;
 }
 
 function normalizePartial(raw: unknown): Partial<ComputerUseConfig> {
@@ -103,16 +118,30 @@ function normalizePartial(raw: unknown): Partial<ComputerUseConfig> {
 	if (activityGlow !== undefined) out.activity_glow = activityGlow;
 	const managedBrowser = (source as any).managed_browser;
 	if (managedBrowser === "helium" || managedBrowser === "chrome") out.managed_browser = managedBrowser;
-	const blockedApps = parseBundleIds((source as any).blocked_apps);
-	if (blockedApps) out.blocked_apps = blockedApps;
 	return out;
 }
 
-function readConfigFile(filePath: string): ComputerUseConfigSource {
+/** The raw `blocked_apps` value of a parsed config file, or undefined when absent. */
+function rawBlockedApps(raw: unknown): unknown {
+	if (!raw || typeof raw !== "object") return undefined;
+	const source = (raw as any).computer_use && typeof (raw as any).computer_use === "object" ? (raw as any).computer_use : raw;
+	return (source as any).blocked_apps;
+}
+
+function readConfigFile(filePath: string, scope: "user" | "project"): ComputerUseConfigSource & { blockedAppsError?: string } {
 	if (!existsSync(filePath)) return { path: filePath, exists: false };
 	try {
 		const parsed = JSON.parse(readFileSync(filePath, "utf-8"));
-		return { path: filePath, exists: true, values: normalizePartial(parsed) };
+		const out: ComputerUseConfigSource & { blockedAppsError?: string } = { path: filePath, exists: true, values: normalizePartial(parsed) };
+		const rawList = rawBlockedApps(parsed);
+		if (rawList !== undefined) {
+			const result = parseBundleIdArray(rawList);
+			if ("error" in result) out.blockedAppsError = `${filePath}: ${result.error}; keeping the current list`;
+			// Only the user-global file may replace (or empty) the list; a project file, which a repo or an agent can write, only adds.
+			else if (scope === "user") out.values = { ...out.values, blocked_apps: result.ids };
+			else out.blockedAppsAdd = result.ids;
+		}
+		return out;
 	} catch (error) {
 		return { path: filePath, exists: true, error: error instanceof Error ? error.message : String(error) };
 	}
@@ -132,24 +161,27 @@ function readEnv(): Partial<ComputerUseConfig> {
 	if (activityGlow !== undefined) out.activity_glow = activityGlow;
 	const managedBrowser = process.env.PI_COMPUTER_USE_MANAGED_BROWSER;
 	if (managedBrowser === "helium" || managedBrowser === "chrome") out.managed_browser = managedBrowser;
-	const blockedApps = parseBundleIds(process.env.PI_COMPUTER_USE_BLOCKED_APPS);
+	const blockedApps = parseBundleIdEnv(process.env.PI_COMPUTER_USE_BLOCKED_APPS);
 	if (blockedApps) out.blocked_apps = blockedApps;
 	return out;
 }
 
 export function loadComputerUseConfig(cwd: string): LoadedComputerUseConfig {
-	const sources = [
-		readConfigFile(path.join(getAgentDir(), "extensions", "pi-computer-use.json")),
-		readConfigFile(path.join(cwd, ".pi", "computer-use.json")),
+	const read = [
+		readConfigFile(path.join(getAgentDir(), "extensions", "pi-computer-use.json"), "user"),
+		readConfigFile(path.join(cwd, ".pi", "computer-use.json"), "project"),
 	];
+	const blockedAppsErrors = read.flatMap((source) => (source.blockedAppsError ? [source.blockedAppsError] : []));
+	const sources: ComputerUseConfigSource[] = read.map(({ blockedAppsError: _ignored, ...source }) => source);
 	const env = readEnv();
-	const config = { ...DEFAULT_CONFIG };
+	const config = { ...DEFAULT_CONFIG, blocked_apps: [...DEFAULT_BLOCKED_APPS] };
 	for (const source of sources) {
 		if (source.values) Object.assign(config, source.values);
 	}
 	Object.assign(config, env);
+	config.blocked_apps = [...new Set([...config.blocked_apps, ...sources.flatMap((source) => source.blockedAppsAdd ?? [])])];
 	activeConfig = config;
-	activeLoadedConfig = { config, sources, env };
+	activeLoadedConfig = { config, sources, env, blockedAppsErrors };
 	return activeLoadedConfig;
 }
 
@@ -200,7 +232,7 @@ Project config:
 .pi/computer-use.json
 ```
 
-Project config overrides global config. Environment variables override both.
+Project config overrides global config, except `blocked_apps`, which a project file can only add to. Environment variables override both.
 
 Example:
 
@@ -251,7 +283,7 @@ Default: `{{config-default:activity_glow}}`
 
 When `true`, macOS displays a click-through pulsing border on every screen while a Pi agent is using one of the extension's tools. The border stays visible until the agent run ends. Each Pi session owns its indicator state, so one session cannot hide another session's active indicator. The helper removes a session's state if its connection closes unexpectedly.
 
-The activity glow appears in user screen recordings. Single-window `observe_ui` captures exclude screen-edge overlays, but whole-display `desktop_screenshot` captures exclude no windows and can include an already-active glow. Desktop tools do not activate the glow themselves; another tool or session may already have activated it. The glow is excluded from accessibility discovery. Other platforms ignore this setting, and `headless: true` always suppresses it ([macOS reference](./platforms/macos/implementation.mdx#activity-glow)).
+The activity glow appears in user screen recordings. Single-window `observe_ui` captures exclude screen-edge overlays, but whole-display `desktop_screenshot` captures exclude only blocked apps and can include an already-active glow. Desktop tools do not activate the glow themselves; another tool or session may already have activated it. The glow is excluded from accessibility discovery. Other platforms ignore this setting, and `headless: true` always suppresses it ([macOS reference](./platforms/macos/implementation.mdx#activity-glow)).
 
 ### `blocked_apps`
 
@@ -267,7 +299,17 @@ A blocked target fails with the coded error `app_blocked`:
 - `desktop_input` refuses `activateApp` of a blocked app, refuses `typeText` and `keypress` while a blocked app is frontmost, and refuses `moveMouse`, `click`, `scroll` and `drag` whose pointer (or drag endpoint) lands on a blocked app's window. The helper checks immediately before it delivers the input, but a key sequence that itself switches apps (e.g. `cmd+tab`) or a focus change in the middle of delivery is not re-checked, so this is a guard against mistakes, not a sandbox. Clipboard actions are not input delivery and are not blocked.
 - `find_roots` still lists blocked roots, marked `blocked`, so the model learns why they cannot be used.
 
-The list replaces the default, it does not extend it, so an explicit opt-out is `"blocked_apps": []`; copy the defaults and append to extend them. Bundle ids compare case-insensitively. A root without a bundle id (e.g. an unbundled process) cannot be matched. The environment variable `PI_COMPUTER_USE_BLOCKED_APPS` takes a comma-separated list and overrides the files; set it to the empty string to opt out.
+Only the user-global file and the environment can replace the list. A project `.pi/computer-use.json` is writable by the repository and by the agent itself, so its `blocked_apps` is only unioned into the effective list: it can add ids, never remove one, and `[]` there changes nothing. The user-global list replaces the default, it does not extend it, so the explicit opt-out is a literal `"blocked_apps": []` in `~/.pi/agent/extensions/pi-computer-use.json`; copy the defaults and append to extend them.
+
+A `blocked_apps` value that is not an array of non-blank strings (e.g. `[{"id": "..."}]`, `[123]`, `[" "]`) is a configuration error, not an opt-out: the previous list stays in force and `/computer-use` prints the error. Bundle ids compare case-insensitively. A root without a bundle id (e.g. an unbundled process) cannot be matched. The environment variable `PI_COMPUTER_USE_BLOCKED_APPS` takes a comma-separated list and overrides the user file; a blank value (empty, whitespace, only commas) is treated as unset, and the explicit opt-out is `none`.
+
+Known limits. This is a guard against mistakes, not a sandbox:
+
+- Terminals embedded in an IDE (e.g. VS Code, JetBrains) belong to the IDE's bundle id, so they are not blocked unless you add the IDE.
+- Password managers that run inside a browser (extensions, web vaults) belong to the browser's bundle id and are not blocked. Add the browser, or set `browser_use` to `false`.
+- The clipboard is not guarded: `desktop_input` `readClipboard` and `writeClipboard` work regardless of the list, and secrets copied from a blocked app stay readable.
+- Outlines cached by an earlier `observe_ui` (`search_ui`, `expand_ui`, `inspect_ui` read the stored state) are not re-checked against a list that grew afterwards; `act_ui` and `read_text` are.
+- Pointer input is checked against the window list and an accessibility hit test immediately before delivery; a window that appears or moves in the middle of delivery is not re-checked.
 
 ### Locked sessions
 
@@ -289,7 +331,7 @@ PI_COMPUTER_USE_CURSOR_OVERLAY=1
 PI_COMPUTER_USE_ACTIVITY_GLOW=0
 PI_COMPUTER_USE_ACTIVITY_GLOW=1
 PI_COMPUTER_USE_BLOCKED_APPS=com.apple.Terminal,com.example.Vault
-PI_COMPUTER_USE_BLOCKED_APPS=
+PI_COMPUTER_USE_BLOCKED_APPS=none
 PI_COMPUTER_USE_DELIVERY_POLICY=default
 PI_COMPUTER_USE_DELIVERY_POLICY=foreground
 PI_COMPUTER_USE_CDP_PORT=9222

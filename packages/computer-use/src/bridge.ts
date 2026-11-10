@@ -653,7 +653,7 @@ function assertAppNotBlocked(target: { appName: string; bundleId?: string }): vo
 	if (!isBlockedBundleId(target.bundleId)) return;
 	throw new ComputerUseError(
 		"app_blocked",
-		`app_blocked: '${target.appName}' (${target.bundleId}) is blocked by pi-computer-use policy, so it cannot be observed or controlled. Adjust blocked_apps in ~/.pi/agent/extensions/pi-computer-use.json or .pi/computer-use.json (system authentication agents are always blocked).`,
+		`app_blocked: '${target.appName}' (${target.bundleId}) is blocked by pi-computer-use policy, so it cannot be observed or controlled. Adjust blocked_apps in ~/.pi/agent/extensions/pi-computer-use.json (system authentication agents are always blocked).`,
 	);
 }
 

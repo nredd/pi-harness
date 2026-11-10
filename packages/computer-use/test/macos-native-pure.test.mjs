@@ -75,9 +75,21 @@ let windowList: [[String: Any]] = [
 	["kCGWindowOwnerPID": 10, "kCGWindowAlpha": 1.0, "kCGWindowBounds": ["X": 100, "Y": 100, "Width": 200, "Height": 200]],
 	["kCGWindowOwnerPID": 30, "kCGWindowAlpha": 1.0, "kCGWindowBounds": ["X": 0, "Y": 0, "Width": 1000, "Height": 800]],
 ]
-check(topmostWindowOwnerPid(windowList, at: CGPoint(x: 150, y: 150), excludingPid: 99) == 50, "front-most window wins")
-check(topmostWindowOwnerPid(windowList, at: CGPoint(x: 150, y: 150), excludingPid: 50) == 10, "own overlay and transparent windows are skipped")
-check(topmostWindowOwnerPid(windowList, at: CGPoint(x: 1500, y: 150), excludingPid: 99) == nil, "no window at the point")
+let blockedPids: Set<Int32> = [10]
+let isBlockedPid: (Int32) -> Bool = { blockedPids.contains($0) }
+check(blockedWindowOwnerPid(windowList, at: CGPoint(x: 150, y: 150), excludingPid: 99, isBlockedPid: isBlockedPid) == nil, "a layer-0 window of an unblocked app above a blocked one ends the scan")
+check(blockedWindowOwnerPid(windowList, at: CGPoint(x: 150, y: 150), excludingPid: 50, isBlockedPid: isBlockedPid) == 10, "own overlay and transparent windows are skipped")
+check(blockedWindowOwnerPid(windowList, at: CGPoint(x: 1500, y: 150), excludingPid: 99, isBlockedPid: isBlockedPid) == nil, "no window at the point")
+let overlayList: [[String: Any]] = [
+	["kCGWindowOwnerPID": 70, "kCGWindowLayer": 25, "kCGWindowAlpha": 1.0, "kCGWindowBounds": ["X": 0, "Y": 0, "Width": 1000, "Height": 800]],
+	["kCGWindowOwnerPID": 10, "kCGWindowLayer": 0, "kCGWindowAlpha": 1.0, "kCGWindowBounds": ["X": 100, "Y": 100, "Width": 200, "Height": 200]],
+	["kCGWindowOwnerPID": 30, "kCGWindowLayer": 0, "kCGWindowAlpha": 1.0, "kCGWindowBounds": ["X": 0, "Y": 0, "Width": 1000, "Height": 800]],
+]
+check(blockedWindowOwnerPid(overlayList, at: CGPoint(x: 150, y: 150), excludingPid: 99, isBlockedPid: isBlockedPid) == 10, "a full-screen overlay at a higher layer does not hide a blocked window")
+check(blockedWindowOwnerPid(overlayList, at: CGPoint(x: 500, y: 500), excludingPid: 99, isBlockedPid: isBlockedPid) == nil, "outside the blocked window nothing is refused")
+let displayApps: [(id: String?, name: String)] = [("com.apple.Terminal", "Terminal"), ("com.example.Safe", "Safe"), (nil, "Unbundled"), ("COM.EXAMPLE.VAULT", "Vault")]
+check(itemsWithBlockedBundleId(displayApps, blocked: ["com.apple.terminal", "com.example.Vault"], bundleId: { $0.id }).map { $0.name } == ["Terminal", "Vault"], "display capture excludes exactly the blocked apps, case-insensitively")
+check(itemsWithBlockedBundleId(displayApps, blocked: [], bundleId: { $0.id }).isEmpty, "empty blocklist excludes nothing")
 
 // Drag interpolation
 let pts = interpolatedDragPoints(from: CGPoint(x: 0, y: 0), to: CGPoint(x: 100, y: 0), maxStep: 12)

@@ -392,7 +392,12 @@
 				"find_roots blocked marker (#646)",
 				"desktop_input blocklist wire (#646)",
 				"helper locked-session refusal (#646)",
-				"helper blocked-app input refusal (#646)"
+				"helper blocked-app input refusal (#646)",
+				"display capture blocklist wire (#646)",
+				"display capture app exclusion (#646)",
+				"accessibility hit test for pointer input (#646)",
+				"project blocked_apps is additive only (#646)",
+				"blank blocklist env is unset (#646)"
 			],
 			"upstream": {
 				"status": "harness-only",
@@ -405,7 +410,7 @@
 			"purpose": "Pure Swift lock-state parsing (CGSSessionCopyCurrentDictionary flags) and the commands refused while locked",
 			"files": ["native/macos/bridge.swift", "test/macos-native-pure.test.mjs"],
 			"check": "test/macos-native-pure.test.mjs",
-			"dropControls": ["screen-locked flag parsing (#646)"],
+			"dropControls": ["screen-locked flag parsing (#646)", "overlay-proof blocked window scan (#646)"],
 			"upstream": {
 				"status": "harness-only",
 				"reference": "UPSTREAM.md",

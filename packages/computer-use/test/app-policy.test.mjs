@@ -12,34 +12,108 @@ afterEach(() => {
 	delete process.env[ENV];
 });
 
-test("blocked_apps config: defaults, JSON, env and the always-blocked system agents", async () => {
+test("blocked_apps config: defaults, user JSON, env and the always-blocked system agents", async ({ onTestFinished }) => {
 	const { DEFAULT_BLOCKED_APPS, ALWAYS_BLOCKED_BUNDLE_IDS, loadComputerUseConfig, isBlockedBundleId, effectiveBlockedBundleIds } = await import("../src/config.ts");
 	assert.deepEqual([...ALWAYS_BLOCKED_BUNDLE_IDS], SYSTEM_AGENTS);
+	const agentDir = mkdtempSync(path.join(os.tmpdir(), "cu-agent-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	onTestFinished(() => {
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+	});
+	mkdirSync(path.join(agentDir, "extensions"));
+	const userFile = path.join(agentDir, "extensions", "pi-computer-use.json");
 	const cwd = mkdtempSync(path.join(os.tmpdir(), "cu-policy-"));
-	const load = () => loadComputerUseConfig(cwd).config.blocked_apps;
+	const load = () => loadComputerUseConfig(cwd);
+	const list = () => load().config.blocked_apps;
 
-	assert.deepEqual(load(), [...DEFAULT_BLOCKED_APPS], "default list applies with no config");
+	assert.deepEqual(list(), [...DEFAULT_BLOCKED_APPS], "default list applies with no config");
 	for (const id of ["com.apple.keychainaccess", "com.1password.1password", "com.apple.Terminal", "com.googlecode.iterm2"]) assert.ok(isBlockedBundleId(id), id);
 	assert.ok(isBlockedBundleId("COM.APPLE.TERMINAL"), "match is case-insensitive");
 	assert.ok(!isBlockedBundleId("com.apple.TextEdit") && !isBlockedBundleId(undefined));
 
-	mkdirSync(path.join(cwd, ".pi"));
-	writeFileSync(path.join(cwd, ".pi", "computer-use.json"), JSON.stringify({ blocked_apps: ["com.example.Vault", " com.example.Vault ", 7] }));
-	assert.deepEqual(load(), ["com.example.Vault"], "JSON list replaces the default, trimmed, deduplicated, non-strings dropped");
+	writeFileSync(userFile, JSON.stringify({ blocked_apps: ["com.example.Vault", " com.example.Vault "] }));
+	assert.deepEqual(list(), ["com.example.Vault"], "user JSON list replaces the default, trimmed and deduplicated");
 	assert.ok(isBlockedBundleId("com.example.vault") && !isBlockedBundleId("com.apple.Terminal"));
 
 	process.env[ENV] = "com.example.A, com.example.B";
-	assert.deepEqual(load(), ["com.example.A", "com.example.B"], "env overrides the file");
+	assert.deepEqual(list(), ["com.example.A", "com.example.B"], "env overrides the user file");
 
-	// Explicit opt-out: an empty list unblocks the defaults but never the system agents.
-	process.env[ENV] = "";
-	assert.deepEqual(load(), []);
+	// Blank env is unset, never an opt-out; only `none` opts out.
+	for (const blank of ["", "   ", ",", " , ,"]) {
+		process.env[ENV] = blank;
+		writeFileSync(userFile, "{}");
+		assert.deepEqual(list(), [...DEFAULT_BLOCKED_APPS], `blank env ${JSON.stringify(blank)} keeps the defaults`);
+	}
+	process.env[ENV] = " None ";
+	assert.deepEqual(list(), []);
 	assert.ok(!isBlockedBundleId("com.apple.Terminal"));
 	assert.deepEqual(effectiveBlockedBundleIds(), SYSTEM_AGENTS);
-	writeFileSync(path.join(cwd, ".pi", "computer-use.json"), JSON.stringify({ blocked_apps: [] }));
 	delete process.env[ENV];
-	assert.deepEqual(load(), []);
+
+	// Only a literal [] in the USER file opts out.
+	writeFileSync(userFile, JSON.stringify({ blocked_apps: [] }));
+	assert.deepEqual(list(), []);
+	assert.deepEqual(load().blockedAppsErrors, []);
 	for (const id of SYSTEM_AGENTS) assert.ok(isBlockedBundleId(id), id);
+	writeFileSync(userFile, "{}");
+	loadComputerUseConfig(cwd);
+});
+
+test("blocked_apps: invalid entries are a config error that keeps the defaults", async ({ onTestFinished }) => {
+	const { DEFAULT_BLOCKED_APPS, loadComputerUseConfig } = await import("../src/config.ts");
+	const agentDir = mkdtempSync(path.join(os.tmpdir(), "cu-agent-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	onTestFinished(() => {
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+	});
+	mkdirSync(path.join(agentDir, "extensions"));
+	const userFile = path.join(agentDir, "extensions", "pi-computer-use.json");
+	const cwd = mkdtempSync(path.join(os.tmpdir(), "cu-policy-"));
+	for (const bad of [[{ id: "com.example.Vault" }], [123], [" "], [""], ["com.example.Vault", 7], "com.example.Vault", { a: 1 }]) {
+		writeFileSync(userFile, JSON.stringify({ blocked_apps: bad }));
+		const loaded = loadComputerUseConfig(cwd);
+		assert.deepEqual(loaded.config.blocked_apps, [...DEFAULT_BLOCKED_APPS], `${JSON.stringify(bad)} keeps defaults`);
+		assert.equal(loaded.blockedAppsErrors.length, 1, JSON.stringify(bad));
+		assert.match(loaded.blockedAppsErrors[0], /blocked_apps/);
+	}
+	writeFileSync(userFile, "{}");
+	loadComputerUseConfig(cwd);
+});
+
+test("project config can only add to blocked_apps, never remove", async ({ onTestFinished }) => {
+	const { DEFAULT_BLOCKED_APPS, loadComputerUseConfig, isBlockedBundleId } = await import("../src/config.ts");
+	const agentDir = mkdtempSync(path.join(os.tmpdir(), "cu-agent-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	onTestFinished(() => {
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+	});
+	const cwd = mkdtempSync(path.join(os.tmpdir(), "cu-policy-"));
+	mkdirSync(path.join(cwd, ".pi"));
+	const projectFile = path.join(cwd, ".pi", "computer-use.json");
+	const list = () => loadComputerUseConfig(cwd).config.blocked_apps;
+
+	writeFileSync(projectFile, JSON.stringify({ blocked_apps: [] }));
+	assert.deepEqual(list(), [...DEFAULT_BLOCKED_APPS], "project [] cannot opt out");
+	writeFileSync(projectFile, JSON.stringify({ blocked_apps: ["com.example.Vault", "com.apple.Terminal"] }));
+	assert.deepEqual(list(), [...DEFAULT_BLOCKED_APPS, "com.example.Vault"], "project ids are unioned");
+	assert.ok(isBlockedBundleId("com.example.vault"));
+	writeFileSync(projectFile, JSON.stringify({ blocked_apps: [123] }));
+	const loaded = loadComputerUseConfig(cwd);
+	assert.deepEqual(loaded.config.blocked_apps, [...DEFAULT_BLOCKED_APPS]);
+	assert.equal(loaded.blockedAppsErrors.length, 1, "invalid project entries are surfaced");
+
+	// Over a user opt-out, a project can only add its own ids.
+	mkdirSync(path.join(agentDir, "extensions"));
+	writeFileSync(path.join(agentDir, "extensions", "pi-computer-use.json"), JSON.stringify({ blocked_apps: [] }));
+	writeFileSync(projectFile, JSON.stringify({ blocked_apps: ["com.example.Vault"] }));
+	assert.deepEqual(list(), ["com.example.Vault"]);
+	writeFileSync(path.join(agentDir, "extensions", "pi-computer-use.json"), "{}");
 	loadComputerUseConfig(cwd);
 });
 
@@ -49,6 +123,8 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	assert.deepEqual([...body.matchAll(/"([^"]+)"/g)].map((m) => m[1]), SYSTEM_AGENTS);
 	assert.match(swift, /lockedSessionRefusal\(cmd: cmd, session: CGSessionCopyCurrentDictionary\(\)/, "helper must refuse UI commands while locked");
 	assert.match(swift, /guard let app, isBlockedBundleId\(app\.bundleIdentifier, blocked: blocked\) else \{ return \}/, "helper must refuse blocked apps for keys and pointer input");
+	assert.match(swift, /SCContentFilter\(display: display, excludingApplications: excluded, exceptingWindows: \[\]\)/, "display capture must exclude blocked apps");
+	assert.match(swift, /AXUIElementCopyElementAtPosition\(AXUIElementCreateSystemWide\(\)/, "pointer input must also hit-test through accessibility");
 	assert.match(swift, /return \("screen_locked", "screen_locked:/);
 	assert.match(swift, /code: "app_blocked"/);
 });
@@ -142,8 +218,8 @@ test("act_ui, observe_ui and find_roots enforce blocked_apps at the platform bac
 	assert.equal(readCalls.length, 0, "blocked read_text must not reach the helper");
 	assert.ok((await call(executeFind, { app: "Safe" })).details.windows.every((w) => w.blocked), "find_roots reflects the new list");
 
-	// Opt-out: an empty blocked_apps allows Terminal again, system agents stay blocked.
-	process.env[ENV] = "";
+	// Opt-out: `none` allows Terminal again, system agents stay blocked.
+	process.env[ENV] = "none";
 	await call(executeObserve, { root: refOf("Terminal"), mode: "semantic" });
 	await assert.rejects(() => call(executeObserve, { root: refOf("SecurityAgent") }), blocked("app_blocked"));
 });
@@ -169,4 +245,15 @@ test.skipIf(process.platform !== "darwin")("desktop_input sends the effective bl
 	}
 	assert.equal(sent.length, 3);
 	for (const { args } of sent) assert.deepEqual(args.blockedBundleIds, [...SYSTEM_AGENTS, "com.example.Vault"]);
+
+	// desktop_screenshot sends it too, so the helper can exclude the blocked apps from the capture.
+	sent.length = 0;
+	const { executeDesktopScreenshot } = await import("../src/desktop.ts");
+	macosHelper.command = async (name, args) => {
+		sent.push({ name, args });
+		return { displays: [{ index: 0, isMain: true, frame: { x: 0, y: 0, w: 100, h: 100 } }], display: 0, frame: { x: 0, y: 0, w: 100, h: 100 }, image: { jpegBase64: "", width: 100, height: 100 } };
+	};
+	await executeDesktopScreenshot("d", {}, undefined, undefined, undefined);
+	assert.equal(sent[0].name, "captureDisplay");
+	assert.deepEqual(sent[0].args.blockedBundleIds, [...SYSTEM_AGENTS, "com.example.Vault"]);
 });

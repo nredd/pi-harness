@@ -334,10 +334,18 @@ func lockedSessionRefusal(cmd: String, session: [String: Any]?) -> (code: String
 	return ("screen_locked", "screen_locked: the macOS session is locked, so '\(cmd)' is refused until it is unlocked")
 }
 
-/// Owner pid of the front-most visible window containing `point`, from `CGWindowListCopyWindowInfo` entries
-/// (ordered front to back). Windows of `excludingPid` (our own click-through overlays) and fully transparent or
-/// empty windows are skipped.
-func topmostWindowOwnerPid(_ windows: [[String: Any]], at point: CGPoint, excludingPid: Int32) -> Int32? {
+/// Items whose bundle id is on the blocklist (case-insensitive), e.g. the `SCRunningApplication`s a display
+/// capture must exclude so a blocked app's pixels never reach the model.
+func itemsWithBlockedBundleId<T>(_ items: [T], blocked: [String], bundleId: (T) -> String?) -> [T] {
+	items.filter { isBlockedBundleId(bundleId($0), blocked: blocked) }
+}
+
+/// A blocked owner pid among the windows at `point`, from `CGWindowListCopyWindowInfo` entries (ordered front
+/// to back), or nil. Windows of `excludingPid` (our own click-through overlays) and fully transparent or empty
+/// windows are skipped. The scan refuses a blocked window anywhere above the first non-blocked normal-layer
+/// (layer 0) window containing the point, so a click-through overlay from another app (any layer above 0) cannot
+/// hide a blocked window beneath it; a normal-layer window of an unblocked app ends the scan.
+func blockedWindowOwnerPid(_ windows: [[String: Any]], at point: CGPoint, excludingPid: Int32, isBlockedPid: (Int32) -> Bool) -> Int32? {
 	for window in windows {
 		guard let pid = (window["kCGWindowOwnerPID"] as? NSNumber)?.int32Value, pid != excludingPid else { continue }
 		if let alpha = (window["kCGWindowAlpha"] as? NSNumber)?.doubleValue, alpha <= 0.01 { continue }
@@ -345,7 +353,9 @@ func topmostWindowOwnerPid(_ windows: [[String: Any]], at point: CGPoint, exclud
 			let x = (bounds["X"] as? NSNumber)?.doubleValue, let y = (bounds["Y"] as? NSNumber)?.doubleValue,
 			let w = (bounds["Width"] as? NSNumber)?.doubleValue, let h = (bounds["Height"] as? NSNumber)?.doubleValue,
 			w > 0, h > 0 else { continue }
-		if point.x >= x, point.x < x + w, point.y >= y, point.y < y + h { return pid }
+		guard point.x >= x, point.x < x + w, point.y >= y, point.y < y + h else { continue }
+		if isBlockedPid(pid) { return pid }
+		if ((window["kCGWindowLayer"] as? NSNumber)?.intValue ?? 0) == 0 { return nil }
 	}
 	return nil
 }
@@ -3246,6 +3256,7 @@ final class Bridge {
 	private func captureDisplay(_ request: [String: Any]) throws -> [String: Any] {
 		let index = max(0, optionalIntArg(request, "display") ?? 0)
 		let maxDimension = optionalIntArg(request, "maxDimension").map { max(1, $0) }
+		let blocked = blockedBundleIdList(request)
 		let semaphore = DispatchSemaphore(value: 0)
 		let result = Box<(CGImage, [[String: Any]], Int)?>(nil)
 		let failure = Box<Error?>(nil)
@@ -3267,7 +3278,10 @@ final class Bridge {
 				config.width = max(1, Int((display.frame.width * scale).rounded()))
 				config.height = max(1, Int((display.frame.height * scale).rounded()))
 				config.showsCursor = true
-				let image = try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(display: display, excludingWindows: []), configuration: config)
+				// Blocked apps' windows are excluded from the capture itself, so their pixels never leave the helper.
+				let excluded = itemsWithBlockedBundleId(shareable.applications, blocked: blocked) { $0.bundleIdentifier }
+				let filter = SCContentFilter(display: display, excludingApplications: excluded, exceptingWindows: [])
+				let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
 				let infos = displays.enumerated().map { offset, item -> [String: Any] in
 					["index": offset, "isMain": item.displayID == mainId, "frame": ["x": item.frame.minX, "y": item.frame.minY, "w": item.frame.width, "h": item.frame.height]]
 				}
@@ -3316,8 +3330,17 @@ final class Bridge {
 		}
 		func refuseBlockedWindow(at point: CGPoint) throws {
 			let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
-			guard let pid = topmostWindowOwnerPid(windows, at: point, excludingPid: getpid()) else { return }
-			try refuseBlocked(NSRunningApplication(processIdentifier: pid))
+			let isBlockedPid: (Int32) -> Bool = { isBlockedBundleId(NSRunningApplication(processIdentifier: $0)?.bundleIdentifier, blocked: blocked) }
+			if let pid = blockedWindowOwnerPid(windows, at: point, excludingPid: getpid(), isBlockedPid: isBlockedPid) {
+				try refuseBlocked(NSRunningApplication(processIdentifier: pid))
+			}
+			// The window list cannot see through a click-through overlay that sits at layer 0; ask the accessibility hit test too.
+			var element: AXUIElement?
+			var hitPid: pid_t = 0
+			if AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &element) == .success,
+				let element, AXUIElementGetPid(element, &hitPid) == .success, hitPid != getpid(), isBlockedPid(hitPid) {
+				try refuseBlocked(NSRunningApplication(processIdentifier: hitPid))
+			}
 		}
 		switch action {
 		case "type", "key":

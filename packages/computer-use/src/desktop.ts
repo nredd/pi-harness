@@ -148,7 +148,8 @@ export async function executeDesktopScreenshot(
 	assertDesktopControlAllowed();
 	const result = await withDesktopLock(() => macosHelper.command<{ displays: DisplayInfo[]; display: number; frame: DisplayInfo["frame"]; image: { jpegBase64: string; width: number; height: number } }>(
 		"captureDisplay",
-		{ display: params.display ?? 0, maxDimension: params.maxDimension ?? 1600 },
+		// The helper excludes blocked apps' windows from the capture.
+		{ display: params.display ?? 0, maxDimension: params.maxDimension ?? 1600, blockedBundleIds: effectiveBlockedBundleIds() },
 		{ signal, timeoutMs: 15_000 },
 	), signal);
 	const f = result.frame;
