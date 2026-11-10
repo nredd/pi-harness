@@ -82,6 +82,41 @@ g.dropElements(owner: "look_b")
 check(g.element(for: base) == nil, "transferred refs drop with the successor look")
 check(AXRefStore().storeWindow(el) != w1, "another store (helper process) never reissues the same ref")
 
+// Keyboard layout gate for physical key strokes (upstream #113)
+check(usLayoutKeyStroke(for: ":").map { $0.key == ";" && $0.shift } == true, "colon is shifted semicolon on the US layout")
+check(usLayoutKeyStroke(for: "Q").map { $0.key == "q" && $0.shift } == true, "uppercase letter is shifted")
+check(usLayoutKeyStroke(for: "æ") == nil && usLayoutKeyStroke(for: "ab") == nil, "no US key for non-ASCII or multi-character text")
+check(physicalKeyStrokeTypes(":", isKeyboardLayout: true, layoutProduces: ":"), "matching layout output allows the physical key")
+check(!physicalKeyStrokeTypes(":", isKeyboardLayout: true, layoutProduces: "Æ"), "layout that types another character falls back")
+check(!physicalKeyStrokeTypes("'", isKeyboardLayout: true, layoutProduces: nil), "dead key falls back")
+check(!physicalKeyStrokeTypes("a", isKeyboardLayout: false, layoutProduces: "a"), "input method falls back even when the layout matches")
+
+// Scroll bar fallback (upstream #114)
+func near(_ value: Double?, _ expected: Double) -> Bool { value.map { abs($0 - expected) < 0.001 } ?? false }
+check(near(scrollBarTargetValue(current: 0, delta: 600, viewportLength: 579, contentLength: 1374, thumbLength: nil, trackLength: nil), 600.0 / 795.0), "content size maps points to the scroll bar range")
+check(near(scrollBarTargetValue(current: 0.5, delta: 2_000, viewportLength: 579, contentLength: 1374, thumbLength: nil, trackLength: nil), 1), "large delta clamps to the end")
+check(near(scrollBarTargetValue(current: 0.5, delta: -2_000, viewportLength: 579, contentLength: 1374, thumbLength: nil, trackLength: nil), 0), "negative delta clamps to the start")
+check(near(scrollBarTargetValue(current: 0, delta: 100, viewportLength: 500, contentLength: nil, thumbLength: 250, trackLength: 500), 0.2), "thumb ratio estimates the content length")
+check(scrollBarTargetValue(current: 1, delta: 100, viewportLength: 579, contentLength: 1374, thumbLength: nil, trackLength: nil) == nil, "bar at the end can't scroll further")
+check(scrollBarTargetValue(current: 0, delta: 100, viewportLength: 579, contentLength: 579, thumbLength: nil, trackLength: nil) == nil, "content that fits has nothing to scroll")
+check(scrollBarTargetValue(current: 0, delta: 0, viewportLength: 579, contentLength: 1374, thumbLength: nil, trackLength: nil) == nil, "zero delta does nothing")
+
+// Scroll bar write scope and per-axis delivery
+check(scrollBarWriteAllowed(depthFromStart: 0, hitTestResolvesToArea: false), "the scroll area itself may be written")
+check(scrollBarWriteAllowed(depthFromStart: 1, hitTestResolvesToArea: false), "a direct child of the scroll area may be written")
+check(!scrollBarWriteAllowed(depthFromStart: 3, hitTestResolvesToArea: false), "a deeper ref in an inner scroller must fall through to the wheel")
+check(scrollBarWriteAllowed(depthFromStart: 3, hitTestResolvesToArea: true), "a hit test resolving to the same area allows the write")
+let bothMoved = remainingScroll(requestedX: 5, requestedY: 7, x: .moved, y: .moved)
+check(bothMoved.x == 0 && bothMoved.y == 0, "both axes moved leaves nothing to deliver")
+let onlyYMoved = remainingScroll(requestedX: 5, requestedY: 7, x: .notWritten, y: .moved)
+check(onlyYMoved.x == 5 && onlyYMoved.y == 0, "an unwritten horizontal axis stays requested")
+let onlyXMoved = remainingScroll(requestedX: 5, requestedY: 0, x: .moved, y: .notWritten)
+check(onlyXMoved.x == 0 && onlyXMoved.y == 0, "an axis never requested stays zero")
+let lateWrite = remainingScroll(requestedX: 5, requestedY: 7, x: .unconfirmed, y: .unconfirmed)
+check(lateWrite.x == 0 && lateWrite.y == 0, "an accepted but unconfirmed write is delivered, not carried to the wheel")
+check(scrollWritesConfirmed(x: .moved, y: .notWritten), "confirmed and unwritten axes leave the write confirmed")
+check(!scrollWritesConfirmed(x: .moved, y: .unconfirmed), "an unconfirmed axis makes the outcome unknown")
+
 if failures > 0 { exit(1) }
 print("macos native pure checks passed")
 `;
@@ -94,6 +129,76 @@ print("macos native pure checks passed")
 			output = execFileSync(path.join(dir, "t"), { encoding: "utf8" });
 		} catch (error) {
 			// Vitest prints the message, not the child's stdout: carry the Swift FAIL lines into it.
+			throw new Error(`${error.message}\n${error.stdout ?? ""}`, { cause: error });
+		}
+		process.stdout.write(output);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+// Compiles the standalone KEYBOARD LAYOUT region (Carbon TIS) against real installed layouts.
+test.skipIf(process.platform !== "darwin")("macOS keyboard layout translation", { timeout: SWIFT_COMPILE_AND_RUN_BUDGET_MS }, async () => {
+	const source = readFileSync(new URL("../native/macos/bridge.swift", import.meta.url), "utf8");
+	const match = source.match(/\/\/ BEGIN KEYBOARD LAYOUT[^\n]*\n([\s\S]*?)\/\/ END KEYBOARD LAYOUT/);
+	if (!match) throw new Error("KEYBOARD LAYOUT region not found in bridge.swift");
+
+	const main = `
+import Foundation
+import Carbon.HIToolbox
+var failures = 0
+var checked = 0
+func check(_ ok: Bool, _ name: String) { if !ok { failures += 1; print("FAIL: \\(name)") } }
+
+func installedSource(_ id: String) -> TISInputSource? {
+	let filter = [kTISPropertyInputSourceID as String: id] as CFDictionary
+	guard let list = TISCreateInputSourceList(filter, true)?.takeRetainedValue() as? [TISInputSource] else { return nil }
+	return list.first
+}
+func layoutData(_ id: String) -> Data? {
+	guard let source = installedSource(id), let data = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return nil }
+	return Unmanaged<CFData>.fromOpaque(data).takeUnretainedValue() as Data
+}
+// US virtual key codes, as used by Bridge.keyCode.
+let semicolon: UInt16 = 41, slash: UInt16 = 44, minus: UInt16 = 27, keyA: UInt16 = 0, digit1: UInt16 = 18
+
+if let us = layoutData("com.apple.keylayout.US") {
+	checked += 1
+	check(keyboardLayoutCharacter(layoutData: us, keyCode: semicolon, shift: true) == ":", "US shift+semicolon types a colon")
+	check(keyboardLayoutCharacter(layoutData: us, keyCode: slash, shift: false) == "/", "US slash types a slash")
+	check(keyboardLayoutCharacter(layoutData: us, keyCode: keyA, shift: true) == "A", "US shift+a types A")
+}
+if let danish = layoutData("com.apple.keylayout.Danish") {
+	checked += 1
+	check(keyboardLayoutCharacter(layoutData: danish, keyCode: semicolon, shift: true) != ":", "Danish shift+semicolon is not a colon")
+	check(keyboardLayoutCharacter(layoutData: danish, keyCode: slash, shift: false) != "/", "Danish slash key is not a slash")
+	check(keyboardLayoutCharacter(layoutData: danish, keyCode: minus, shift: false) != "-", "Danish minus key is not a minus")
+	check(keyboardLayoutCharacter(layoutData: danish, keyCode: keyA, shift: false) == "a", "Danish letters still type directly")
+}
+if let french = layoutData("com.apple.keylayout.French") {
+	checked += 1
+	check(keyboardLayoutCharacter(layoutData: french, keyCode: keyA, shift: false) != "a", "AZERTY a key types q")
+	check(keyboardLayoutCharacter(layoutData: french, keyCode: digit1, shift: false) != "1", "AZERTY digits need Shift")
+}
+if let pinyin = installedSource("com.apple.inputmethod.SCIM.ITABC"), let type = TISGetInputSourceProperty(pinyin, kTISPropertyInputSourceType) {
+	checked += 1
+	check((Unmanaged<CFString>.fromOpaque(type).takeUnretainedValue() as String) != (kTISTypeKeyboardLayout as String), "Pinyin is an input method, not a keyboard layout")
+}
+let active = currentKeyboardInputSource()
+check(active.layoutData != nil, "active keyboard layout data is readable")
+
+if failures > 0 { exit(1) }
+if checked == 0 { print("FAIL: no reference keyboard layouts installed"); exit(1) }
+print("macos keyboard layout checks passed (\\(checked) reference sources)")
+`;
+	const dir = mkdtempSync(path.join(tmpdir(), "pcu-layout-"));
+	try {
+		writeFileSync(path.join(dir, "main.swift"), match[1] + main);
+		execFileSync("swiftc", ["-O", "-o", path.join(dir, "t"), path.join(dir, "main.swift")], { stdio: "inherit" });
+		let output;
+		try {
+			output = execFileSync(path.join(dir, "t"), { encoding: "utf8" });
+		} catch (error) {
 			throw new Error(`${error.message}\n${error.stdout ?? ""}`, { cause: error });
 		}
 		process.stdout.write(output);

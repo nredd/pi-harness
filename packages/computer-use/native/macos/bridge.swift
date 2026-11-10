@@ -5,6 +5,7 @@ import Darwin
 import Vision
 import ImageIO
 import ScreenCaptureKit
+import Carbon.HIToolbox
 
 struct BridgeFailure: Error {
 	let message: String
@@ -199,7 +200,129 @@ func interpolatedDragPoints(from start: CGPoint, to end: CGPoint, maxStep: CGFlo
 		return CGPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t)
 	}
 }
+
+/// The US-layout key, plus Shift, that types a character, or nil when the US
+/// layout has no direct key for it. The key is a `keyCode` name; whether that
+/// key really types the character depends on the active layout.
+func usLayoutKeyStroke(for character: String) -> (key: String, shift: Bool)? {
+	guard character.count == 1 else { return nil }
+	if character >= "a" && character <= "z" { return (character, false) }
+	if character >= "A" && character <= "Z" { return (character.lowercased(), true) }
+	if character >= "0" && character <= "9" { return (character, false) }
+	switch character {
+	case " ": return ("space", false)
+	case ".", ",", "/", "-", "=", ";", "'", "[", "]", "\\", "`": return (character, false)
+	case "_": return ("-", true)
+	case "+": return ("=", true)
+	case ":": return (";", true)
+	case "\"": return ("'", true)
+	case "?": return ("/", true)
+	case "<": return (",", true)
+	case ">": return (".", true)
+	default: return nil
+	}
+}
+
+/// A physical key stroke is only safe when the active input source is a plain
+/// keyboard layout, not an input method that composes keys, and that layout
+/// produces exactly the intended character for the key.
+func physicalKeyStrokeTypes(_ character: String, isKeyboardLayout: Bool, layoutProduces produced: String?) -> Bool {
+	isKeyboardLayout && produced == character
+}
+
+/// The scroll bar value, 0 at the start and 1 at the end, that moves a scroll
+/// area's content by `delta` points. The scrollable range comes from the content
+/// length when the area reports it, otherwise from the scroll bar's thumb to
+/// track ratio, which equals the viewport to content ratio. Returns nil when the
+/// range is unknown or empty, or when the bar is already at the end in the
+/// requested direction.
+func scrollBarTargetValue(current: Double, delta: Int, viewportLength: Double, contentLength: Double?, thumbLength: Double?, trackLength: Double?) -> Double? {
+	guard delta != 0, viewportLength > 0, current.isFinite else { return nil }
+	var content = contentLength ?? 0
+	if content <= viewportLength, let thumbLength, let trackLength, thumbLength > 0, trackLength > thumbLength {
+		content = viewportLength * trackLength / thumbLength
+	}
+	let range = content - viewportLength
+	guard range > 1 else { return nil }
+	let clamped = min(1, max(0, current))
+	let target = min(1, max(0, clamped + Double(delta) / range))
+	return abs(target - clamped) < 0.0001 ? nil : target
+}
+
+/// Whether the scroll area found `depthFromStart` parents above the target may be moved by writing its scroll
+/// bar. Only the area itself, its direct child (content view) or an area an AX hit test at the scroll point
+/// resolves to qualifies: a farther outer area would otherwise scroll in place of an inner wheel-scrollable
+/// region that exposes no AX scroll action.
+func scrollBarWriteAllowed(depthFromStart: Int, hitTestResolvesToArea: Bool) -> Bool {
+	depthFromStart <= 1 || hitTestResolvesToArea
+}
+
+/// What a scroll bar write did for one axis: `notWritten` (no settable bar, at its end, or the set call failed),
+/// `unconfirmed` (the set call succeeded but the immediate read-back still showed the old value, as async apps
+/// such as SwiftUI do) or `moved` (the read-back confirmed the move).
+enum ScrollAxisWrite {
+	case notWritten
+	case unconfirmed
+	case moved
+}
+
+/// The scroll deltas still undelivered after a scroll bar write: an axis keeps its requested delta only when its
+/// set call did not succeed. An `unconfirmed` write counts as delivered, because the late bar write lands and a
+/// wheel on top of it would scroll twice. A one-axis write never reports the other axis as handled.
+func remainingScroll(requestedX: Int, requestedY: Int, x: ScrollAxisWrite, y: ScrollAxisWrite) -> (x: Int, y: Int) {
+	(x == .notWritten ? requestedX : 0, y == .notWritten ? requestedY : 0)
+}
+
+/// Whether every written axis was confirmed by its read-back; an `unconfirmed` write can only be `unknown`.
+func scrollWritesConfirmed(x: ScrollAxisWrite, y: ScrollAxisWrite) -> Bool {
+	x != .unconfirmed && y != .unconfirmed
+}
 // END PURE
+
+// BEGIN KEYBOARD LAYOUT (compiled standalone by test/macos-native-pure.test.mjs; Carbon only)
+/// The text a `UCKeyboardLayout` produces for one key press, or nil for a dead
+/// key or a key with no output.
+func keyboardLayoutCharacter(layoutData: Data, keyCode: UInt16, shift: Bool) -> String? {
+	layoutData.withUnsafeBytes { raw -> String? in
+		guard let layout = raw.baseAddress?.assumingMemoryBound(to: UCKeyboardLayout.self) else { return nil }
+		var deadKeyState: UInt32 = 0
+		var length = 0
+		var characters = [UniChar](repeating: 0, count: 4)
+		let modifiers: UInt32 = shift ? UInt32(shiftKey >> 8) & 0xFF : 0
+		let status = UCKeyTranslate(layout, keyCode, UInt16(kUCKeyActionDown), modifiers, UInt32(LMGetKbdType()), 0, &deadKeyState, characters.count, &length, &characters)
+		guard status == noErr, deadKeyState == 0, length > 0 else { return nil }
+		return String(utf16CodeUnits: characters, count: length)
+	}
+}
+
+struct KeyboardInputSource {
+	/// False when the active source is an input method, such as Pinyin, that
+	/// intercepts key strokes before they reach the text field.
+	let isKeyboardLayout: Bool
+	let layoutData: Data?
+}
+
+/// Reads the active keyboard input source. Text Input Sources must be queried on
+/// the main thread, which runs the AppKit event loop in serve mode.
+func currentKeyboardInputSource() -> KeyboardInputSource {
+	let read = { () -> KeyboardInputSource in
+		guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else {
+			return KeyboardInputSource(isKeyboardLayout: false, layoutData: nil)
+		}
+		var isKeyboardLayout = false
+		if let type = TISGetInputSourceProperty(source, kTISPropertyInputSourceType) {
+			isKeyboardLayout = (Unmanaged<CFString>.fromOpaque(type).takeUnretainedValue() as String) == (kTISTypeKeyboardLayout as String)
+		}
+		var layoutData: Data?
+		if let layoutSource = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+			let data = TISGetInputSourceProperty(layoutSource, kTISPropertyUnicodeKeyLayoutData) {
+			layoutData = Unmanaged<CFData>.fromOpaque(data).takeUnretainedValue() as Data
+		}
+		return KeyboardInputSource(isKeyboardLayout: isKeyboardLayout, layoutData: layoutData)
+	}
+	return Thread.isMainThread ? read() : DispatchQueue.main.sync(execute: read)
+}
+// END KEYBOARD LAYOUT
 
 private struct LookRecord {
 	let lookId: String
@@ -2015,6 +2138,9 @@ final class Bridge {
 			if policy == "ax_only" { throw BridgeFailure(message: message, code: "foreground_required") }
 		}
 		var performed: [String: Any] = ["delivery": delivery]
+		// Wheel deltas left after a partial scroll bar write; nil delivers the requested scroll unchanged.
+		var wheelDeltaOverride: (x: Int, y: Int)?
+		var scrollWriteUnconfirmed = false
 		var element: AXUIElement?
 		var rawPoint: CGPoint?
 		var preflightCapsUnknown = false
@@ -2129,7 +2255,7 @@ final class Bridge {
 				try postMouseMove(to: point, pid: pid, delivery: delivery)
 			case "scroll":
 				animateCursor(at: point)
-				try postScrollWheel(at: point, deltaX: (params["scrollX"] as? NSNumber)?.intValue ?? 0, deltaY: (params["scrollY"] as? NSNumber)?.intValue ?? 0, pid: pid, delivery: delivery)
+				try postScrollWheel(at: point, deltaX: wheelDeltaOverride?.x ?? (params["scrollX"] as? NSNumber)?.intValue ?? 0, deltaY: wheelDeltaOverride?.y ?? (params["scrollY"] as? NSNumber)?.intValue ?? 0, pid: pid, delivery: delivery)
 			case "drag":
 				guard let rawPath = params["path"] as? [[String: Any]], rawPath.count >= 2 else {
 					throw BridgeFailure(message: "drag requires path", code: "invalid_args")
@@ -2279,7 +2405,46 @@ final class Bridge {
 				let after = scrollPositionSignature(element)
 				return finish(["outcome": before != after ? "worked" : "unknown", "performed": performed])
 			}
-			try executeCoordinates(coordinatePoint())
+			// SwiftUI and many AppKit scroll areas expose no scroll actions and can
+			// ignore wheel events posted to a background app, but accept a write to
+			// their scroll bar's value.
+			let requestedX = (params["scrollX"] as? NSNumber)?.intValue ?? 0
+			let requestedY = (params["scrollY"] as? NSNumber)?.intValue ?? 0
+			if let write = setScrollBarValueOrAncestor(startingAt: element, targetPid: pid, scrollX: requestedX, scrollY: requestedY, point: cursorPoint) {
+				performed["grounding"] = "description"
+				performed["delivery"] = "ax"
+				performed["axScroll"] = "scroll_bar_value"
+				if let cursorPoint { animateCursor(at: cursorPoint) }
+				var barEvidence: [String: Any] = [:]
+				if let value = write.value { barEvidence["scrollBarValue"] = value }
+				if write.remainingX == 0 && write.remainingY == 0 {
+					// An unconfirmed write was accepted but not yet visible: it is delivered, so never add a wheel on top.
+					if !write.confirmed { performed["axScroll"] = "scroll_bar_value_unconfirmed" }
+					return finish(["outcome": write.confirmed ? "worked" : "unknown", "performed": performed, "evidence": barEvidence])
+				}
+				// Only some requested axes were written: deliver the rest with the wheel, never report them as handled.
+				performed["axScroll"] = "scroll_bar_value_partial"
+				if policy == "ax_only" {
+					barEvidence["unmovedScrollX"] = write.remainingX
+					barEvidence["unmovedScrollY"] = write.remainingY
+					return finish(["outcome": "unknown", "performed": performed, "evidence": barEvidence])
+				}
+				wheelDeltaOverride = (write.remainingX, write.remainingY)
+				scrollWriteUnconfirmed = !write.confirmed
+				performed["delivery"] = delivery
+				do {
+					try executeCoordinates(coordinatePoint())
+				} catch let failure as BridgeFailure {
+					// The bar axis already scrolled: rethrowing would read as nothing delivered and a retry would scroll it twice.
+					performed["grounding"] = "description"
+					performed["delivery"] = "ax"
+					barEvidence["error"] = ["code": failure.code, "message": failure.message]
+					return finish(["outcome": "unknown", "performed": performed, "evidence": barEvidence])
+				}
+			} else {
+				performed["axScroll"] = result["reason"] ?? "no_scroll_action"
+				try executeCoordinates(coordinatePoint())
+			}
 		} else {
 			try executeCoordinates(coordinatePoint())
 		}
@@ -2297,6 +2462,8 @@ final class Bridge {
 		} else if windowChanged {
 			outcome = "worked"
 		}
+		// The wheel heuristic cannot verify the bar axis whose write the read-back did not confirm.
+		if scrollWriteUnconfirmed { outcome = "unknown" }
 		if windowChanged { evidence["windowChanged"] = true }
 		var response: [String: Any] = ["outcome": outcome, "performed": performed]
 		if !evidence.isEmpty { response["evidence"] = evidence }
@@ -2528,10 +2695,12 @@ final class Bridge {
 		return ["found": false, "timedOut": true, "nodeCount": lastCount]
 	}
 
-	private func hitTestElement(at point: CGPoint) -> AXUIElement? {
-		let systemWide = AXUIElementCreateSystemWide()
+	/// The element at `point`. With `pid` the query goes to that app, so a covered window still hits its own
+	/// elements; without it the system-wide element answers with whatever is frontmost there.
+	private func hitTestElement(at point: CGPoint, pid: Int32? = nil) -> AXUIElement? {
+		let root = pid.map { AXUIElementCreateApplication($0) } ?? AXUIElementCreateSystemWide()
 		var hitElement: AXUIElement?
-		let status = AXUIElementCopyElementAtPosition(systemWide, Float(point.x), Float(point.y), &hitElement)
+		let status = AXUIElementCopyElementAtPosition(root, Float(point.x), Float(point.y), &hitElement)
 		guard status == .success, let hitElement else { return nil }
 		return hitElement
 	}
@@ -2578,6 +2747,84 @@ final class Bridge {
 		}
 
 		return ["scrolled": false, "reason": "no_scroll_action"]
+	}
+
+	/// Moves scroll areas at or above `element` by writing their scroll bar values, one requested axis at a time.
+	/// Only an area that `scrollBarWriteAllowed` accepts is written, so a ref inside an inner wheel-scrollable
+	/// region falls through to the wheel instead of scrolling the outer area. Returns the last value read back
+	/// (nil when no write was confirmed), whether every written axis was confirmed, and the deltas no bar
+	/// delivered. Nil when no bar was written.
+	private func setScrollBarValueOrAncestor(startingAt element: AXUIElement, targetPid: Int32, scrollX: Int, scrollY: Int, point: CGPoint?) -> (value: Double?, remainingX: Int, remainingY: Int, confirmed: Bool)? {
+		var remaining = (x: scrollX, y: scrollY)
+		var value: Double?
+		var anyWritten = false
+		var confirmed = true
+		var hitArea: AXUIElement??
+		func hitTestResolves(to area: AXUIElement) -> Bool {
+			if hitArea == nil {
+				var found: AXUIElement?
+				if let point, var hit = hitTestElement(at: point, pid: pidForElement(element) ?? targetPid) {
+					var hops = 0
+					while hops < 10 {
+						if stringAttribute(hit, attribute: kAXRoleAttribute as CFString) == (kAXScrollAreaRole as String) { found = hit; break }
+						guard let parent = parentElement(hit) else { break }
+						hit = parent
+						hops += 1
+					}
+				}
+				hitArea = .some(found)
+			}
+			if case .some(.some(let found)) = hitArea { return sameElement(found, area) }
+			return false
+		}
+		var current: AXUIElement? = element
+		var depth = 0
+		while let candidate = current, depth < 10, remaining.x != 0 || remaining.y != 0 {
+			if let pid = pidForElement(candidate), pid != targetPid { break }
+			if stringAttribute(candidate, attribute: kAXRoleAttribute as CFString) == (kAXScrollAreaRole as String) {
+				guard scrollBarWriteAllowed(depthFromStart: depth, hitTestResolvesToArea: depth <= 1 ? false : hitTestResolves(to: candidate)) else { break }
+				let writeY = remaining.y != 0 ? setScrollBarValue(area: candidate, barAttribute: "AXVerticalScrollBar", delta: remaining.y, vertical: true) : (write: ScrollAxisWrite.notWritten, value: nil)
+				let writeX = remaining.x != 0 ? setScrollBarValue(area: candidate, barAttribute: "AXHorizontalScrollBar", delta: remaining.x, vertical: false) : (write: ScrollAxisWrite.notWritten, value: nil)
+				remaining = remainingScroll(requestedX: remaining.x, requestedY: remaining.y, x: writeX.write, y: writeY.write)
+				if writeX.write != .notWritten || writeY.write != .notWritten { anyWritten = true }
+				if !scrollWritesConfirmed(x: writeX.write, y: writeY.write) { confirmed = false }
+				if let moved = writeY.value ?? writeX.value { value = moved }
+			}
+			current = parentElement(candidate)
+			depth += 1
+		}
+		guard anyWritten else { return nil }
+		return (value, remaining.x, remaining.y, confirmed)
+	}
+
+	/// Moves one scroll bar of `area` by `delta` points: reads the bar value, viewport and content length (falling
+	/// back to the thumb/track ratio when the area reports no content), writes the new value and classifies the
+	/// write: `moved` with the value when the read-back shows the bar moved, `unconfirmed` when the set call
+	/// succeeded but the read-back is unchanged or unreadable (async apps apply it late), `notWritten` when the bar
+	/// is missing, unsettable, at its end or the set call failed.
+	private func setScrollBarValue(area: AXUIElement, barAttribute: String, delta: Int, vertical: Bool) -> (write: ScrollAxisWrite, value: Double?) {
+		let none: (write: ScrollAxisWrite, value: Double?) = (.notWritten, nil)
+		guard let barObject = copyAttribute(area, attribute: barAttribute as CFString),
+			CFGetTypeID(barObject as CFTypeRef) == AXUIElementGetTypeID()
+		else { return none }
+		let bar = unsafeBitCast(barObject, to: AXUIElement.self)
+		var settable = DarwinBoolean(false)
+		guard AXUIElementIsAttributeSettable(bar, kAXValueAttribute as CFString, &settable) == .success, settable.boolValue,
+			let current = (copyAttribute(bar, attribute: kAXValueAttribute as CFString) as? NSNumber)?.doubleValue,
+			let viewport = sizeAttribute(area, attribute: kAXSizeAttribute as CFString)
+		else { return none }
+		let length = { (size: CGSize) in Double(vertical ? size.height : size.width) }
+		let content = sizeAttribute(area, attribute: "AXContentSize" as CFString).map(length)
+		let thumb = axElementArray(bar, attribute: kAXChildrenAttribute as CFString)
+			.first { stringAttribute($0, attribute: kAXRoleAttribute as CFString) == (kAXValueIndicatorRole as String) }
+			.flatMap { sizeAttribute($0, attribute: kAXSizeAttribute as CFString) }
+			.map(length)
+		let track = sizeAttribute(bar, attribute: kAXSizeAttribute as CFString).map(length)
+		guard let target = scrollBarTargetValue(current: current, delta: delta, viewportLength: length(viewport), contentLength: content, thumbLength: thumb, trackLength: track),
+			AXUIElementSetAttributeValue(bar, kAXValueAttribute as CFString, NSNumber(value: target)) == .success
+		else { return none }
+		guard let after = (copyAttribute(bar, attribute: kAXValueAttribute as CFString) as? NSNumber)?.doubleValue, abs(after - current) > 0.0001 else { return (.unconfirmed, nil) }
+		return (.moved, after)
 	}
 
 	private func performActionOrAncestor(startingAt element: AXUIElement, action: CFString, targetPid: Int32) -> [String: Any] {
@@ -3910,9 +4157,10 @@ final class Bridge {
 	private func postUnicodeText(_ text: String, pid: Int32, delivery: String = "hid") throws {
 		if delivery == "hid" { physicalInputLock.lock() }
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
+		let inputSource = currentKeyboardInputSource()
 		for scalar in text.unicodeScalars {
 			let char = String(scalar)
-			if let stroke = physicalKeyStroke(for: char) {
+			if let stroke = physicalKeyStroke(for: char, inputSource: inputSource) {
 				try postKey(stroke.key, flags: stroke.flags, pid: pid, delivery: delivery)
 				continue
 			}
@@ -3946,24 +4194,13 @@ final class Bridge {
 	/// AppKit field editors can observe synthetic Unicode events without applying
 	/// them to the backing value, while normal key codes follow the same input
 	/// path as a user keystroke. Unicode synthesis remains the fallback for text
-	/// that has no direct key representation.
-	private func physicalKeyStroke(for character: String) -> (key: String, flags: CGEventFlags)? {
-		guard character.count == 1 else { return nil }
-		if character >= "a" && character <= "z" { return (character, []) }
-		if character >= "A" && character <= "Z" { return (character.lowercased(), [.maskShift]) }
-		if character >= "0" && character <= "9" { return (character, []) }
-		switch character {
-		case " ": return ("space", [])
-		case ".", ",", "/", "-", "=", ";", "'", "[", "]", "\\", "`": return (character, [])
-		case "_": return ("-", [.maskShift])
-		case "+": return ("=", [.maskShift])
-		case ":": return (";", [.maskShift])
-		case "\"": return ("'", [.maskShift])
-		case "?": return ("/", [.maskShift])
-		case "<": return (",", [.maskShift])
-		case ">": return (".", [.maskShift])
-		default: return nil
-		}
+	/// that has no direct key representation, and for any character the active
+	/// layout or input method would not type from that US key.
+	private func physicalKeyStroke(for character: String, inputSource: KeyboardInputSource) -> (key: String, flags: CGEventFlags)? {
+		guard let stroke = usLayoutKeyStroke(for: character), let code = keyCode(stroke.key) else { return nil }
+		let produced = inputSource.layoutData.flatMap { keyboardLayoutCharacter(layoutData: $0, keyCode: code, shift: stroke.shift) }
+		guard physicalKeyStrokeTypes(character, isKeyboardLayout: inputSource.isKeyboardLayout, layoutProduces: produced) else { return nil }
+		return (stroke.key, stroke.shift ? [.maskShift] : [])
 	}
 
 	private func setUnicodeString(event: CGEvent, text: String) {

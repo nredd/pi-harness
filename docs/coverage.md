@@ -333,7 +333,7 @@ their platform or opt-in, and `linux-native` counts only the `src/platform/linux
 native sources stay in inventory. The owner explicitly excludes this package from coverage maintenance, so it does not block
 the global flip. Imported documentation-site TS/TSX/configuration is likewise inventory-only under
 that exclusion; the documentation generators and optional `scripts/rust-coverage.mjs` tooling are
-measured only by the report-only signal above, never gated. The opt-in Rust report is never collected by normal checks; its
+measured only by the report-only signal above, never gated. The plan for lifting the exclusion (TS and Swift, seams, phases) is [here](computer-use-coverage.md). The opt-in Rust report is never collected by normal checks; its
 mocked argument/path/error tests still run. Existing native/platform checks remain unchanged.
 `dev-tools` emits primary Istanbul after #155/#195. Since #320 its Bun report comes from the same
 full Vitest suite on Bun through `scripts/run-vitest.ts bun`, not a native `bun test` subset.

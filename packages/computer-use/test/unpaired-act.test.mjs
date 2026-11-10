@@ -282,6 +282,63 @@ test("unpaired act roots and physical transaction lease", async () => {
 	);
 	assert.doesNotMatch(text(acted), /Unknown App/);
 
+	// Validation precedes the write epoch (upstream #112): a rejected batch delivers nothing and leaves
+	// the observed state usable for the corrected retry.
+	const delivered = [];
+	/**
+	 * Record batches that reach the native layer.
+	 * @param {object} request Batch request.
+	 * @returns {Promise<object>} Batch success.
+	 * @throws {never} The mock always succeeds.
+	 */
+	currentPlatformBackend.actBatch = async (request) => {
+		delivered.push(request);
+		return { outcome: "worked", performed: { delivery: "pid", transaction: true, actionCount: 1 }, steps: [{ outcome: "worked" }] };
+	};
+	currentPlatformBackend.act = async (request) => {
+		delivered.push(request);
+		return { outcome: "worked", performed: { delivery: "pid" } };
+	};
+	const fresh = await call(executeObserve, { root: "@r1", mode: "semantic" });
+	const freshState = text(fresh).match(/stateId ([0-9a-f-]{36})/)[1];
+	const freshButton = text(fresh).match(/(@e\d+) button/)[1];
+	await assert.rejects(
+		call(executeAct, { stateId: freshState, actions: [{ action: "press", ref: freshButton }, { action: "keypress", keys: ["return"] }] }),
+		/keypress|ref|coordinates|focus/i,
+	);
+	assert.equal(delivered.length, 0, "invalid batch must not deliver its valid prefix");
+	const retried = await call(executeAct, { stateId: freshState, actions: [{ action: "press", ref: freshButton }] });
+	assert.match(text(retried), /Executed 1 checked UI action/, "rejected request must not stale the stateId");
+	assert.equal(delivered.length, 1);
+
+	// Strict headless on macOS rejects typeText/keypress natively mid-batch; the preflight mirrors that rule so
+	// a batch with an earlier valid step delivers nothing and keeps the stateId usable.
+	const { loadComputerUseConfig } = await import("../src/config.ts");
+	const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+	const priorHeadless = process.env.PI_COMPUTER_USE_HEADLESS;
+	const strict = await call(executeObserve, { root: "@r1", mode: "semantic" });
+	const strictState = text(strict).match(/stateId ([0-9a-f-]{36})/)[1];
+	const strictButton = text(strict).match(/(@e\d+) button/)[1];
+	delivered.length = 0;
+	try {
+		process.env.PI_COMPUTER_USE_HEADLESS = "1";
+		loadComputerUseConfig(process.cwd());
+		Object.defineProperty(process, "platform", { value: "darwin" });
+		await assert.rejects(
+			call(executeAct, { stateId: strictState, actions: [{ action: "press", ref: strictButton }, { action: "keypress", ref: strictButton, keys: ["return"] }] }),
+			/strict headless/,
+		);
+		assert.equal(delivered.length, 0, "strict headless rejection must not deliver the earlier step");
+		Object.defineProperty(process, "platform", { value: "linux" });
+		const allowed = await call(executeAct, { stateId: strictState, actions: [{ action: "press", ref: strictButton }] });
+		assert.match(text(allowed), /Executed 1 checked UI action/, "rejected request must not stale the stateId");
+	} finally {
+		Object.defineProperty(process, "platform", platformDescriptor);
+		if (priorHeadless === undefined) delete process.env.PI_COMPUTER_USE_HEADLESS;
+		else process.env.PI_COMPUTER_USE_HEADLESS = priorHeadless;
+		loadComputerUseConfig(process.cwd());
+	}
+
 	// Desktop lock scope: only foreground (physical) delivery waits for desktop_input; background acts don't.
 	/**
 	 * Restore the single root for lock checks.
