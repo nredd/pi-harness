@@ -2,9 +2,11 @@
 # Root-owned apt prerequisites for the WSL guest (#626). `Vampire/setup-wsl` used to run these through
 # `additional-packages` with no bound: run 42756515991 spent 43 of its 44 minutes there, the stock Ubuntu mirrors
 # answering at about 50 kB/s with minute-long stalls (`Fetched 89.8 MB in 28min 0s (53.5 kB/s)`).
-# Here apt gets short network timeouts and retries, no Translation downloads, and each mirror one bounded attempt:
-# Azure's mirror first (hosted runners are Azure VMs; its speed is unmeasured until CI reports it), the stock one if
-# that fails.
+# PR 654's first run showed the index fetch is fast (32 MB in 5s) but the .deb downloads crawl (up to 290 kB/s, stalls
+# of tens of seconds) even from Azure's mirror. So: short network timeouts and retries, no Translation downloads,
+# a bounded `--download-only` pass per mirror (Azure first, the stock one if that fails; apt resumes `partial/`), the
+# downloaded .debs kept in `WSL_APT_CACHE` (a host directory the workflow caches) and restored from it next time,
+# and an offline install.
 set -euo pipefail
 if [ "$(id -u)" -ne 0 ]; then
   echo 'wsl2-apt: must run as root' >&2
@@ -12,7 +14,10 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 sources=${WSL_APT_SOURCES:-/etc/apt/sources.list.d/ubuntu.sources}
 conf=${WSL_APT_CONF:-/etc/apt/apt.conf.d/99-pi-ci}
-update_seconds=${WSL_APT_UPDATE_SECONDS:-90}
+archives=${WSL_APT_ARCHIVES:-/var/cache/apt/archives}
+cache=${WSL_APT_CACHE:-}
+update_seconds=${WSL_APT_UPDATE_SECONDS:-100}
+download_seconds=${WSL_APT_DOWNLOAD_SECONDS:-360}
 install_seconds=${WSL_APT_INSTALL_SECONDS:-180}
 packages=(build-essential curl fd-find git jq libatomic1 libssl-dev pkg-config python3 ripgrep tmux unzip xz-utils)
 bounded() {
@@ -28,6 +33,8 @@ bounded() {
   fi
   return "$status"
 }
+# `timeout` runs a program, not a shell function, so the install command is an array.
+install=(env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends)
 printf '%s\n' \
   'Acquire::Retries "3";' \
   'Acquire::http::Timeout "20";' \
@@ -38,20 +45,35 @@ if [ ! -r "$sources" ]; then
   printf 'wsl2-apt: apt sources file not found: %s\n' "$sources" >&2
   exit 1
 fi
+mkdir -p "$archives/partial"
+if [ -n "$cache" ] && compgen -G "$cache/*.deb" > /dev/null; then
+  cp -n "$cache"/*.deb "$archives/"
+  printf 'wsl2-apt: restored %s cached packages\n' "$(find "$cache" -name '*.deb' | wc -l | tr -d ' ')"
+fi
 original=$(< "$sources")
+fetched=false
 for mirror in http://azure.archive.ubuntu.com/ubuntu http://archive.ubuntu.com/ubuntu; do
   # Point both the archive and security URIs at one mirror; the second pass restores the stock ones.
   printf '%s\n' "$original" | sed -E "s#http://(archive|security)\\.ubuntu\\.com/ubuntu/?#${mirror}/#" > "$sources"
+  if ! grep -q "$mirror" "$sources"; then
+    printf 'wsl2-apt: %s is not in %s after rewriting it\n' "$mirror" "$sources" >&2
+  fi
   printf 'wsl2-apt: using %s\n' "$mirror"
   if bounded "apt-get update ($mirror)" "$update_seconds" apt-get update &&
-    bounded "apt-get install ($mirror)" "$install_seconds" env DEBIAN_FRONTEND=noninteractive \
-      apt-get install --yes --no-install-recommends "${packages[@]}"; then
-    exit 0
+    bounded "apt-get download ($mirror)" "$download_seconds" "${install[@]}" --download-only "${packages[@]}"; then
+    fetched=true
+    break
   fi
   printf 'wsl2-apt: %s failed, trying the next mirror\n' "$mirror" >&2
-  # A killed install can leave dpkg half-configured, which would fail the next attempt for the wrong reason.
-  dpkg --configure --pending || true
 done
 printf '%s\n' "$original" > "$sources"
-echo 'wsl2-apt: every mirror failed' >&2
-exit 1
+if [ "$fetched" != true ]; then
+  echo 'wsl2-apt: every mirror failed' >&2
+  exit 1
+fi
+if [ -n "$cache" ]; then
+  mkdir -p "$cache"
+  find "$archives" -maxdepth 1 -name '*.deb' -exec cp -n {} "$cache"/ \;
+fi
+# Everything is on disk now: the install needs no network, so a failure here is not a mirror problem.
+bounded "apt-get install" "$install_seconds" "${install[@]}" "${packages[@]}"

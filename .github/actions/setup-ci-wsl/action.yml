@@ -70,10 +70,26 @@ runs:
             throw "WSL setup took ${elapsed}s, over its $($started[1])s deadline, and the watchdog did not trip (last alive: $alive)"
           }
         }
+    # Hosted guest downloads of .debs crawl (50-300 kB/s) while the host's network is fast, so the .debs that
+    # `scripts/wsl2_apt.sh` downloads are cached by the host's Actions cache, keyed by script and ISO week (#626).
+    - name: Locate the WSL apt cache
+      id: apt-cache
+      shell: pwsh
+      run: |
+        $dir = Join-Path $env:RUNNER_TEMP 'wsl-apt-cache'
+        New-Item -ItemType Directory -Force $dir | Out-Null
+        "dir=$dir" >> $env:GITHUB_OUTPUT
+        "week=$((Get-Date).ToUniversalTime().ToString('yyyy')+'-W'+[System.Globalization.ISOWeek]::GetWeekOfYear((Get-Date).ToUniversalTime()))" >> $env:GITHUB_OUTPUT
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.apt-cache.outputs.dir }}
+        key: wsl-apt-${{ hashFiles('scripts/wsl2_apt.sh') }}-${{ steps.apt-cache.outputs.week }}
+        restore-keys: wsl-apt-${{ hashFiles('scripts/wsl2_apt.sh') }}-
     - name: Assert WSL2 and prepare guest
       shell: pwsh
       env:
         WSL_OWNED: ${{ inputs.owned }}
+        WSL_APT_CACHE: ${{ steps.apt-cache.outputs.dir }}
       run: |
         . (Join-Path $env:GITHUB_WORKSPACE 'scripts/wsl2_bounded.ps1')
         # Hosted passes took under 1s per host command (12s covered the first four host steps) and 22s to 67s for the guest
@@ -89,8 +105,9 @@ runs:
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         $scripts = $scripts.Trim()
         # apt runs here, not inside setup-wsl, so it is bounded and mirror-aware (#626).
-        # Two attempts of 90s update plus 180s install, plus kill grace, fit inside 630s.
-        Invoke-Bounded 'apt prerequisites (scripts/wsl2_apt.sh)' 630 wsl -d Ubuntu-24.04 --user root --exec bash -euo pipefail "$scripts/wsl2_apt.sh"
+        # Two attempts of 100s update plus 360s download, an offline 180s install and kill grace fit inside 1200s.
+        $env:WSLENV = 'WSL_APT_CACHE/p'
+        Invoke-Bounded 'apt prerequisites (scripts/wsl2_apt.sh)' 1200 wsl -d Ubuntu-24.04 --user root --exec bash -euo pipefail "$scripts/wsl2_apt.sh"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         # Run every gate as an ordinary user.
         Invoke-Bounded 'create the pi-ci user' 30 wsl -d Ubuntu-24.04 --user root --exec /usr/sbin/useradd --create-home --shell /bin/bash pi-ci

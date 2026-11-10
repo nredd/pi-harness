@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import textwrap
 from pathlib import Path
+from typing import cast
 
 import pytest
 import yaml
@@ -492,7 +493,7 @@ def test_every_host_wsl_call_in_setup_is_bounded() -> None:
     assert run.index("if ($LASTEXITCODE -ne 0)", run.index("$scripts = Invoke-BoundedCapture")) < run.index(
         "$scripts = $scripts.Trim()"
     )
-    # Order only: the 630s bound itself is pinned in `deadlines` below.
+    # Order only: the 1200s bound itself is pinned in `deadlines` below.
     assert run.index("wsl2_apt.sh") < run.index("useradd") < run.index("wsl2_setup.sh")
     deadlines = {
         match.group("label"): int(match.group("seconds"))
@@ -503,7 +504,7 @@ def test_every_host_wsl_call_in_setup_is_bounded() -> None:
         "list WSL distributions": 30,
         "create the pi-ci user": 30,
         "translate the scripts directory": 30,
-        "apt prerequisites (scripts/wsl2_apt.sh)": 630,
+        "apt prerequisites (scripts/wsl2_apt.sh)": 1200,
         "guest bootstrap (scripts/wsl2_setup.sh)": 300,
     }
 
@@ -675,15 +676,22 @@ UBUNTU_SOURCES = (
 )
 
 
+PACKAGES = (
+    "build-essential curl fd-find git jq libatomic1 libssl-dev pkg-config python3 ripgrep tmux unzip xz-utils"
+)
+APT_FLAGS = "install --yes --no-install-recommends"
+
+
 def run_apt(
-    tmp_path: Path, fail_mirror: str | None, hang: bool = False
+    tmp_path: Path, fail_mirror: str | None = None, hang: bool = False, cached: bool = False
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     """Run the real apt script with stub `id`, `timeout`, `apt-get` and `ps`.
 
     Parameters:
-        tmp_path (Path): Scratch directory.
+        tmp_path (Path): Scratch directory; `cache/` and `archives/` live under it.
         fail_mirror (str | None): Mirror host whose `apt-get update` fails; `None` fails none.
         hang (bool): Model `timeout` tripping (exit 124) on every `apt-get update`.
+        cached (bool): Seed the host cache with one .deb.
 
     Returns:
         tuple[subprocess.CompletedProcess[str], Path, Path]: Outcome, the sources file and the stub call log.
@@ -693,20 +701,23 @@ def run_apt(
     log = tmp_path / "calls.log"
     sources = tmp_path / "ubuntu.sources"
     sources.write_text(UBUNTU_SOURCES, encoding="utf-8")
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    if cached:
+        (cache / "seeded.deb").write_text("deb", encoding="utf-8")
     quoted = shlex.quote(str(sources))
     quoted_log = shlex.quote(str(log))
+    fail = f'case "$1" in update) grep -q {fail_mirror} {quoted} && exit 100 ;; esac\n' if fail_mirror else ""
     stubs = {
         "id": "#!/bin/sh\necho 0\n",
         "ps": "#!/bin/sh\necho '42 1 05:00 S synthetic-stuck-apt'\n",
         "timeout": '#!/bin/sh\nshift 2\ncase "$*" in *"apt-get update"*) '
         + ("exit 124 " if hang else "")
         + ';; esac\nexec "$@"\n',
+        # Log argv plus the sources' first URI at call time; a download-only run leaves one .deb behind.
         "apt-get": f'#!/bin/sh\nprintf "%s|%s\\n" "$*" "$(grep -m1 URIs {quoted})" >> {quoted_log}\n'
-        + (
-            f'case "$1" in update) grep -q {fail_mirror} {quoted} && exit 100 ;; esac\nexit 0\n'
-            if fail_mirror
-            else ""
-        ),
+        + fail
+        + 'case "$*" in *--download-only*) touch "$WSL_APT_ARCHIVES/fetched.deb" ;; esac\nexit 0\n',
     }
     for name, body in stubs.items():
         (commands / name).write_text(body, encoding="utf-8")
@@ -715,43 +726,84 @@ def run_apt(
         "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
         "WSL_APT_SOURCES": str(sources),
         "WSL_APT_CONF": str(tmp_path / "99-pi-ci"),
+        "WSL_APT_ARCHIVES": str(tmp_path / "archives"),
+        "WSL_APT_CACHE": str(cache),
     }
     result = subprocess.run(["/bin/bash", str(APT)], env=env, capture_output=True, check=False, text=True)
     return result, sources, log
 
 
-def test_apt_prerequisites_use_the_azure_mirror_with_bounded_retrying_apt(tmp_path: Path) -> None:
-    """Point archive and security at one mirror, set short apt timeouts, and install the full package list."""
-    result, sources, log = run_apt(tmp_path, None)
+def test_apt_prerequisites_download_from_azure_then_install_offline(tmp_path: Path) -> None:
+    """Rewrite archive and security to one mirror for the fetch, restore the sources, and install offline."""
+    result, sources, log = run_apt(tmp_path)
     assert result.returncode == 0, result.stderr
-    text = sources.read_text()
-    assert "azure.archive.ubuntu.com" in text
-    assert "security.ubuntu.com" not in text
-    assert "archive.ubuntu.com/ubuntu//" not in text
     conf = (tmp_path / "99-pi-ci").read_text()
     for line in ('Acquire::Retries "3";', 'Acquire::http::Timeout "20";', 'Acquire::Languages "none";'):
         assert line in conf
-    calls = log.read_text().splitlines()
-    assert calls[0].startswith("update|")
-    assert "install --yes --no-install-recommends build-essential" in calls[1]
-    assert "xz-utils" in calls[1]
+    azure = "URIs: http://azure.archive.ubuntu.com/ubuntu/"
+    assert log.read_text().splitlines()[:2] == [
+        f"update|{azure}",
+        f"{APT_FLAGS} --download-only {PACKAGES}|{azure}",
+    ]
+    # The install runs offline against the restored stock sources.
+    assert (
+        log.read_text().splitlines()[2].startswith(f"{APT_FLAGS} {PACKAGES}|URIs: http://archive.ubuntu.com")
+    )
+    assert sources.read_text() == UBUNTU_SOURCES
+    # Both stock hosts collapse to the one mirror, without a doubled slash.
+    assert "(archive|security)" in APT.read_text(encoding="utf-8")
+    assert "ubuntu/?#${mirror}/#" in APT.read_text(encoding="utf-8")
+
+
+def test_apt_debs_are_cached_by_the_host_and_keyed_by_script_and_week() -> None:
+    """The guest's .deb downloads are slow, so the host's Actions cache carries them between runs (#626)."""
+    steps = setup_steps()
+    locate = next(step for step in steps if step.get("id") == "apt-cache")
+    cache = next(step for step in steps if step.get("uses", "").startswith("actions/cache@"))
+    cache_with = cast("dict[str, str]", cache["with"])
+    assert cache_with["path"] == "${{ steps.apt-cache.outputs.dir }}"
+    assert "hashFiles('scripts/wsl2_apt.sh')" in cache_with["key"]
+    assert "steps.apt-cache.outputs.week" in cache_with["key"]
+    assert cache_with["restore-keys"].startswith("wsl-apt-${{ hashFiles('scripts/wsl2_apt.sh') }}-")
+    assert "GetWeekOfYear" in locate["run"]
+    names = [step.get("name", step.get("uses", "")) for step in steps]
+    assert (
+        names.index("Locate the WSL apt cache")
+        < steps.index(cache)
+        < names.index("Assert WSL2 and prepare guest")
+    )
+    prepare = next(step for step in steps if step.get("name") == "Assert WSL2 and prepare guest")
+    prepare_env = cast("dict[str, str]", prepare["env"])
+    assert prepare_env["WSL_APT_CACHE"] == "${{ steps.apt-cache.outputs.dir }}"
+    assert "$env:WSLENV = 'WSL_APT_CACHE/p'" in prepare["run"]
+
+
+def test_apt_prerequisites_restore_and_refill_the_host_cache(tmp_path: Path) -> None:
+    """Seed `/archives` from the cache before apt runs, and copy newly downloaded .debs back."""
+    result, _, _ = run_apt(tmp_path, cached=True)
+    assert result.returncode == 0, result.stderr
+    assert "restored 1 cached packages" in result.stdout
+    assert (tmp_path / "archives" / "seeded.deb").exists()
+    assert (tmp_path / "cache" / "fetched.deb").exists()
 
 
 def test_apt_prerequisites_fall_back_to_the_stock_mirror_once(tmp_path: Path) -> None:
     """A failing first mirror names itself, then the stock one is tried and succeeds."""
-    result, sources, log = run_apt(tmp_path, "azure.archive")
+    result, _, log = run_apt(tmp_path, "azure.archive")
     assert result.returncode == 0, result.stderr
     assert "wsl2-apt: FAILED: apt-get update (http://azure.archive.ubuntu.com/ubuntu)" in result.stderr
     assert "trying the next mirror" in result.stderr
-    assert "URIs: http://archive.ubuntu.com/ubuntu/" in sources.read_text()
-    assert len(log.read_text().splitlines()) == 3
+    # azure update (failed), stock update, stock download, offline install
+    assert len(log.read_text().splitlines()) == 4
+    assert "--download-only" in log.read_text().splitlines()[2]
 
 
 def test_apt_prerequisites_name_a_hang_and_restore_the_sources(tmp_path: Path) -> None:
     """A trip on both mirrors exits non-zero with the stuck command and guest processes, sources restored."""
-    result, sources, _ = run_apt(tmp_path, None, hang=True)
+    result, sources, log = run_apt(tmp_path, hang=True)
     assert result.returncode == 1
     assert result.stderr.count("wsl2-apt: TIMEOUT: apt-get update") == 2
     assert "synthetic-stuck-apt" in result.stderr
     assert "every mirror failed" in result.stderr
     assert sources.read_text() == UBUNTU_SOURCES
+    assert not log.exists()
