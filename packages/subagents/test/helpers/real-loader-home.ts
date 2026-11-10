@@ -77,6 +77,10 @@ async function main(): Promise<void> {
     }
     return undefined;
   }
+  /** Sorted, de-duplicated decoy-home-relative paths observed so far. */
+  function ambientAccessList(): string[] {
+    return [...new Set(probes.map(ambientRelative).filter((path): path is string => path !== undefined))].sort();
+  }
   /** Trace calls and constructors, including `realpath*.native`, on a filesystem API surface. */
   function traceFilesystemApi(api: object): void {
     function traceFunction(original: TracedFunction): TracedFunction {
@@ -116,12 +120,13 @@ async function main(): Promise<void> {
   if (mode === "preload") {
     write(join(agentDir, "skills", "review", "SKILL.md"), "---\nname: review\ndescription: injected\n---\nINJECTED-SKILL\n");
     write(join(ambientSkillsDir, "ambient-only", "SKILL.md"), "---\nname: ambient-only\ndescription: ambient\n---\nAMBIENT-SKILL\n");
+    probes.length = 0; // Fixture writes above are not loader reads.
     const [skill] = await preloadSkills(["ambient-only"], cwd, {
       agentDir,
       settingsManager: SettingsManager.create(cwd, agentDir, { projectTrusted: false }),
       homeDir: home,
     });
-    fs.writeFileSync(join(root, "result.json"), JSON.stringify({ runtime: process.versions.bun ?? "node", content: skill?.content }));
+    fs.writeFileSync(join(root, "result.json"), JSON.stringify({ runtime: process.versions.bun ?? "node", content: skill?.content, ambientAccesses: ambientAccessList() }));
     return;
   }
 
@@ -140,9 +145,10 @@ async function main(): Promise<void> {
       fs.mkdirSync(join(cwd, ".pi", "skills"), { recursive: true });
       fs.symlinkSync(join(packageRoot, "skills", "packaged"), join(cwd, ".pi", "skills", "packaged"));
     }
-    write(join(agentDir, "settings.json"), JSON.stringify({ packages: [packageRoot], ...(mode === "child-disabled" ? { skills: ["-skills/review"] } : {}) }));
+    write(join(agentDir, "settings.json"), JSON.stringify({ packages: ["~/private-package"], ...(mode === "child-disabled" ? { skills: ["-skills/review"] } : {}) }));
     write(join(agentDir, "agents", "scout.md"), "---\nname: scout\ndescription: scout\ntools: read\nskills: packaged, review, injected-agents, ambient-only\nextensions: false\n---\nScout.\n");
     let childPrompt = "";
+    let startupPackageAccesses: string[] = [];
     const respond = (context: Context): FauxReply => {
       const transcript = JSON.stringify([context.systemPrompt, context.messages]);
       if (transcript.includes('active_agent name=\\"scout\\"')) {
@@ -150,6 +156,11 @@ async function main(): Promise<void> {
         return "child done";
       }
       if (context.messages.some((message) => message.role === "toolResult")) return "parent done";
+      // The parent session's own loader legitimately reads the ambient HOME (`isolateGlobals: false`).
+      // Everything after this first reply is the subagent child's resource discovery under test.
+      // Package discovery at startup is ours (`configuredPackages`); report its ambient package reads separately, since the reset below drops them.
+      startupPackageAccesses = ambientAccessList().filter(path => path.startsWith("private-package"));
+      probes.length = 0;
       return agentCall({ subagent_type: "scout", description: "check", prompt: "check", run_in_background: false });
     };
     const run = await runPrintMode({
@@ -157,7 +168,7 @@ async function main(): Promise<void> {
       respond, subagentsFactory: createSubagentsExtension({ homeDir: home }),
     });
     await run.dispose();
-    fs.writeFileSync(join(root, "result.json"), JSON.stringify({ runtime: process.versions.bun ?? "node", childPrompt }));
+    fs.writeFileSync(join(root, "result.json"), JSON.stringify({ runtime: process.versions.bun ?? "node", childPrompt, ambientAccesses: ambientAccessList(), startupPackageAccesses }));
     return;
   }
 
@@ -191,7 +202,7 @@ async function main(): Promise<void> {
   }
   const forbidden = [join(ambient, "package"), join(ambient, "extension.ts")];
   const forbiddenProbes = probes.filter(path => forbidden.some(root => path === root || path.startsWith(root + sep)));
-  const ambientAccesses = [...new Set(probes.map(ambientRelative).filter((path): path is string => path !== undefined))].sort();
+  const ambientAccesses = ambientAccessList();
   const loaded = fs.existsSync(marker) ? fs.readFileSync(marker, "utf8").trim().split("\n") : [];
   fs.writeFileSync(join(root, "result.json"), JSON.stringify({ runtime: process.versions.bun ?? "node", mode, scope, forbiddenProbes, ambientAccesses, loaded, sawInjectedPackage: probes.includes(join(home, "package", "package.json")), sawInjectedExtension: probes.includes(join(home, "extension.ts")) }));
 }
