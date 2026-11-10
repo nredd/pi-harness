@@ -46,6 +46,12 @@ candidate `head_sha`, the current attempt's complete matrix and core jobs, the s
 execution steps (not just successful job labels), and all retained, nonempty coverage, packed
 contract, Node stack and standalone stack artifacts bound to that run and SHA.
 
+The required job set is the verifier's own `OWNED_SHARDS`, not the candidate's. Each caller runs
+the verifier that matches its candidate: `publish.yml` runs from the tag's commit, and
+`promote-stack.yml` verifies a candidate from current `main`. A candidate that predates a shard
+change (e.g. the #660 macOS split) therefore verifies under its own commit's gate, not current
+`main`'s; do not promote such a candidate from a later `main` without re-freezing it.
+
 The required steps follow the CI plan (`scripts/ci_paths.py`, [ci.md](ci.md)): each `owned shard (<os>, <shard>)` job must have executed its planned `Owned gate <target>` steps, and the macOS `python` shard its `Benchmark unit gate` (`OWNED_SHARDS`: native cells `check-ts` (on macOS split across the `subagents`, `computer-use` and `ts` shards, #660), `check-scripts`, `check-integration`; WSL `check-ts`, `check-probes`, `check-providers`, `check-import-audit`), each `owned (<os>)` fan-in its `Require every planned shard to succeed` and coverage accounting steps, and the stack cells are exactly those the plan can run, never the `STACK_NOT_RUN` names. A dispatch is planned with `ci_paths.py --full`, so every such cell runs. Tests pin `harness.release_gate` to `OWNED_SHARDS`, `OWNED_GATES`, `STACK_NOT_RUN` and the step names in `ci.yml`.
 
 Artifacts are per run, with no attempt field, so each required artifact is bound to the job that
