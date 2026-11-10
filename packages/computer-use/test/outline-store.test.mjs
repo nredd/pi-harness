@@ -1,7 +1,7 @@
 // Outlines live in the agent-cache store, not the session file (#648).
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { beforeEach, test } from "vitest";
+import { beforeEach, test, vi } from "vitest";
 
 const uiNode = (ref, title, fields = {}) => ({ ref, wireRef: `w${ref}`, role: "AXGroup", subrole: "", identifier: `id-${ref}`, title, description: "An element description", value: "", actions: ["AXPress"], canPress: true, canFocus: false, canSetValue: false, canScroll: false, canIncrement: false, canDecrement: false, isTextInput: false, rect: { x: 1, y: 2, w: 30, h: 40 }, focused: false, offscreen: false, pictureOnly: false, truncated: false, text: [], children: [], ...fields });
 
@@ -116,4 +116,25 @@ test("restore with an evicted store entry skips the state instead of throwing", 
 	assert.equal(testing.savedState("S-gone"), undefined, "the state is unavailable, so tools report the stale-state error");
 	const { executeSearchUi } = await import("../src/bridge.ts");
 	await assert.rejects(() => executeSearchUi("call", { stateId: "S-gone", text: "x" }, undefined, undefined, {}), /State 'S-gone' is unavailable or was evicted/);
+});
+
+test("a failed write removes its temporary file", async () => {
+	const { saveStoredOutline, loadStoredOutline, outlineStoreDir, serializeOutline } = await modules();
+	const outline = serializeOutline(outlineOf(0, 0));
+	const now = vi.spyOn(Date, "now").mockReturnValue(1);
+	try {
+		saveStoredOutline("w", outline);
+		const dir = outlineStoreDir();
+		const [first] = fs.readdirSync(dir);
+		// The next save reuses the timestamp with the next sequence number; block its final name with a non-empty directory so the rename fails.
+		const blocked = first.replace(/-(\d{6})-/, (_, seq) => `-${String(Number(seq) + 1).padStart(6, "0")}-`);
+		fs.mkdirSync(`${dir}/${blocked}`);
+		fs.writeFileSync(`${dir}/${blocked}/keep`, "x");
+		assert.doesNotThrow(() => saveStoredOutline("w", outline));
+		assert.deepEqual(fs.readdirSync(dir).filter((name) => name.endsWith(".tmp")), []);
+		fs.rmSync(`${dir}/${blocked}`, { recursive: true });
+		assert.ok(loadStoredOutline("w"), "the earlier entry survives the failed write");
+	} finally {
+		now.mockRestore();
+	}
 });

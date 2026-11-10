@@ -53,11 +53,11 @@ function removeQuietly(file: string): void {
  */
 export function saveStoredOutline(stateId: string, outline: SerializedOutline, limit = OUTLINE_STORE_LIMIT): void {
 	const dir = outlineStoreDir();
+	const key = stateKey(stateId);
+	const name = `${String(Date.now()).padStart(16, "0")}-${String(sequence++ % 1_000_000).padStart(6, "0")}-${key}.json`;
+	const tmp = path.join(dir, `.${name}.tmp`);
 	try {
 		mkdirSync(dir, { recursive: true, mode: 0o700 });
-		const key = stateKey(stateId);
-		const name = `${String(Date.now()).padStart(16, "0")}-${String(sequence++ % 1_000_000).padStart(6, "0")}-${key}.json`;
-		const tmp = path.join(dir, `.${name}.tmp`);
 		writeFileSync(tmp, JSON.stringify({ stateId, outline }), { mode: 0o600 });
 		renameSync(tmp, path.join(dir, name));
 		// Newest first: drop older copies of the same state, then everything past the cap.
@@ -67,6 +67,7 @@ export function saveStoredOutline(stateId: string, outline: SerializedOutline, l
 			else seen.add(entry.key);
 		}
 	} catch (error) {
+		removeQuietly(tmp);
 		debugLog("outline store: could not save %s: %s", stateId, error instanceof Error ? error.message : String(error));
 	}
 }
