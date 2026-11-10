@@ -288,22 +288,24 @@ function lstatOrUndefined(path: string): BigIntStats | undefined {
 }
 
 /**
- * Regular files whose index executable bit differs from the file on disk, decoded. `add -A`
- * restages from disk and would silently drop such a mode, and an index-only mode cannot be
- * told from a later on-disk change, so cleanup keeps the worktree instead of guessing.
- * Skipped when `core.fileMode=false`: git ignores the bit then, so a mismatch is not a change.
+ * Regular files whose staged executable bit (index vs `HEAD`, a new file counting as a change)
+ * differs from the file on disk, decoded. `add -A` restages from disk and would silently drop
+ * such a mode, and an index-only mode cannot be told from a later on-disk change, so cleanup
+ * keeps the worktree instead of guessing. A plain unstaged `chmod` is not listed: the index
+ * still matches `HEAD`, so `add -A` commits the disk mode. Skipped when `core.fileMode=false`:
+ * git ignores the bit then, so a mismatch is not a change.
  */
 async function indexOnlyModes(pi: ExtensionAPI, repo: string): Promise<string[]> {
   if ((await git(pi, repo, ["config", "--type=bool", "--default", "true", "core.fileMode"], 5000)) === "false") return [];
   const paths: string[] = [];
-  // `<mode> <sha> <stage>` TAB `<path>`
-  for (const line of await gitLines(pi, repo, ["ls-files", "--stage"], 30000)) {
+  // `:<old mode> <new mode> <old sha> <new sha> <status>` TAB `<path>`
+  for (const line of await gitLines(pi, repo, ["diff", "--cached", "--raw", "--no-renames"], 30000)) {
     const tab = line.indexOf("\t");
-    const [mode, , stage] = line.slice(0, tab).split(" ");
-    if (stage !== "0" || (mode !== "100644" && mode !== "100755")) continue;
+    const [oldMode, newMode] = line.slice(1, tab).split(" ");
+    if (oldMode === newMode || (newMode !== "100644" && newMode !== "100755")) continue;
     const path = unquoteGitPath(line.slice(tab + 1));
     const disk = lstatOrUndefined(join(repo, path));
-    if (disk?.isFile() && ((disk.mode & 0o100n) !== 0n) !== (mode === "100755")) paths.push(path);
+    if (disk?.isFile() && ((disk.mode & 0o100n) !== 0n) !== (newMode === "100755")) paths.push(path);
   }
   return paths;
 }

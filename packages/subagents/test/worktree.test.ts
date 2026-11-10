@@ -1339,6 +1339,14 @@ describe("cleanupWorktree -- index bits and ignored path decoding (#596)", () =>
     expect(run(repoDir, "branch", "--list", "pi-agent*")).not.toContain(wt.branch);
   }
 
+  it("commits a plain unstaged chmod +x on a tracked file", async () => {
+    const wt = await worktree("chmod-plain");
+    chmodSync(join(wt.path, "run.sh"), 0o755);
+    const result = await cleanupWorktree(pi, repoDir, wt, "plain chmod");
+    expect(result.error).toBeUndefined();
+    expect(run(repoDir, "ls-tree", result.branch as string, "run.sh")).toMatch(/^100755 /);
+  });
+
   it("keeps a worktree with a mode staged only in the index (update-index --chmod)", async () => {
     const wt = await worktree("chmod");
     run(wt.path, "update-index", "--chmod=+x", "run.sh");
