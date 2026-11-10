@@ -735,7 +735,14 @@ def test_core_assets_are_hashed_and_attested_for_new_tags(tmp_path: Path) -> Non
 
 
 def test_core_assets_also_attest_unrecorded_runtime_assets(tmp_path: Path) -> None:
-    """`pi-ai` and `pi-agent-core` are hashed against the release checksums and attested too."""
+    """`pi-ai` and `pi-agent-core` are hashed against the release checksums and attested too.
+
+    Parameters:
+        tmp_path (Path): private fixture directory.
+
+    Returns:
+        None: attestation and refusals were observed.
+    """
     digest = hashlib.sha256(ASSET_BYTES).hexdigest()
     stack = core_stack(tmp_path, NEW_CORE_TAG, digest)
     urls = release_package_urls(NEW_CORE_TAG)
@@ -1217,6 +1224,7 @@ def test_build_candidate_records_the_full_dispatch_first(
     monkeypatch.setattr(
         promotion_verify, "run_command", lambda *_args: subprocess.CompletedProcess([], 0, personal, "")
     )
+    monkeypatch.setattr(promotion, "release_checksums", lambda _tag: {})
     monkeypatch.setattr(promotion_verify, "verify_core", lambda *_args: None)
     monkeypatch.setattr(promotion_verify, "collect_owned_evidence", lambda *_args: [])
     monkeypatch.setattr(promotion_verify, "build_gates", build_gates)

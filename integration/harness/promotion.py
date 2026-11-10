@@ -634,12 +634,14 @@ def verify_core_assets(
         verify(path, tag)
 
 
-def verify_core(stack: Stack, workdir: Path) -> CoreEvidence:
+def verify_core(stack: Stack, workdir: Path, checksums: Mapping[str, str] | None = None) -> CoreEvidence:
     """Verify the stack's core release identity, asset bytes and provenance.
 
     Parameters:
         stack (Stack): selected personal stack.
         workdir (Path): directory for downloaded core assets.
+        checksums (Mapping[str, str] | None): release `SHA256SUMS` map to verify against; fetched
+            when omitted. Callers that later acquire the same assets pass the map back in.
 
     Returns:
         CoreEvidence: tag and asset digests that agree with the published release.
@@ -649,8 +651,8 @@ def verify_core(stack: Stack, workdir: Path) -> CoreEvidence:
         AttestationError: an asset's bytes or provenance is wrong (non-legacy tags).
         EvidenceError: an asset could not be downloaded.
     """
-    checksums = release_checksums(stack.core.tag)
-    validate_release_identity(stack, stack.core.tag, checksums)
+    checksums = release_checksums(stack.core.tag) if checksums is None else checksums
+    validate_release_identity(stack, stack.core.tag, dict(checksums))
     verify_core_assets(stack, workdir, checksums=checksums)
     return CoreEvidence(tag=stack.core.tag, integrity=dict(stack.core.integrity))
 

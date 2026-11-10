@@ -6,6 +6,7 @@ replay: no `gh`, `git` or network call leaves the process.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import runpy
 import subprocess
@@ -102,6 +103,21 @@ def owned_evidence(stack: Stack, entries: dict[str, Any]) -> list[OwnedPackageEv
     return owned
 
 
+def published_checksums(stack: Stack) -> dict[str, str]:
+    """Fixture release `SHA256SUMS`: recorded digests plus distinct ones for the other runtime assets.
+
+    Parameters:
+        stack (Stack): selected stack.
+
+    Returns:
+        dict[str, str]: release URL -> SHA-256 for every runtime core package.
+    """
+    return {
+        url: stack.core.integrity.get(url.rsplit("/", 1)[-1], hashlib.sha256(url.encode()).hexdigest())
+        for url in runtime_lock.release_package_urls(stack.core.tag).values()
+    }
+
+
 def candidate_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, owned: Callable[[Stack, dict[str, Any]], list[Any]]
 ) -> tuple[promotion_verify.VerifyContext, list[tuple[NpmGraph, Path, dict[str, str]]]]:
@@ -143,11 +159,24 @@ def candidate_context(
     monkeypatch.setattr(promotion_verify, "required_checks", lambda _rules: ["fixture"])
     monkeypatch.setattr(promotion_verify, "verify_required_checks", lambda *_args: ["fixture"])
     monkeypatch.setattr(promotion_verify, "run_command", run)
-    monkeypatch.setattr(
-        promotion_verify,
-        "verify_core",
-        lambda selected, _dir: CoreEvidence(tag=selected.core.tag, integrity=dict(selected.core.integrity)),
-    )
+    published = published_checksums(stack)
+    monkeypatch.setattr(promotion, "release_checksums", lambda _tag: published)
+
+    def verify_core(selected: Stack, _dir: Path, checksums: dict[str, str]) -> CoreEvidence:
+        """Require the one fetched `SHA256SUMS` map, so acquisition cannot re-read a mutable file.
+
+        Parameters:
+            selected (Stack): selected stack.
+            _dir (Path): asset directory.
+            checksums (dict[str, str]): map handed to the verifier.
+
+        Returns:
+            CoreEvidence: the stack's recorded core evidence.
+        """
+        assert checksums is published
+        return CoreEvidence(tag=selected.core.tag, integrity=dict(selected.core.integrity))
+
+    monkeypatch.setattr(promotion_verify, "verify_core", verify_core)
     monkeypatch.setattr(promotion_verify, "collect_owned_evidence", lambda *_args: owned(stack, entries))
     monkeypatch.setattr(promotion_verify, "acquire", acquire)
     (tmp_path / "promo").mkdir()
@@ -170,10 +199,8 @@ def test_build_candidate_writes_the_snapshot_and_graph_after_acquiring_every_run
     ctx, acquired = candidate_context(tmp_path, monkeypatch, owned_evidence)
     promotion_verify.build_candidate(ctx, SHA)
     stack = Stack.model_validate_json(PERSONAL.read_bytes())
-    expected = {
-        promotion.release_asset_url(stack.core.tag, name): digest
-        for name, digest in stack.core.integrity.items()
-    }
+    expected = published_checksums(stack)
+    assert len(expected) == 4
     runtime = RuntimeLocks.model_validate_json((ROOT / runtime_lock.SOURCE_LOCK).read_bytes())
     assert [scratch for _graph, scratch, _sums in acquired] == [
         tmp_path / "runner" / "runtime" / target / kind

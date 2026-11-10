@@ -146,7 +146,8 @@ def build_candidate(ctx: VerifyContext, source_sha: str) -> None:
         ).stdout
     )
     stack = Stack.model_validate_json(stack_path.read_bytes())
-    core = verify_core(stack, ctx.temp / "core")
+    published = promotion.release_checksums(stack.core.tag)
+    core = verify_core(stack, ctx.temp / "core", published)
     owned = collect_owned_evidence(stack, ctx.workspace, ctx.temp / "packages")
     gates: GateEvidence = build_gates(stack, checks, stack_runs, owned, core)
     snapshot = build_snapshot(stack_path, source_sha, gates)
@@ -164,7 +165,7 @@ def build_candidate(ctx: VerifyContext, source_sha: str) -> None:
             acquire(
                 graph,
                 ctx.temp / "runtime" / target / kind,
-                core_checksums(stack),
+                core_checksums(stack, published),
             )
     (ctx.promo / ASSET).write_text(
         DependencyGraph(schema_version=1, source_sha=source_sha, runtime=runtime).model_dump_json()

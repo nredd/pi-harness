@@ -41,7 +41,7 @@ from harness.release import (
 from harness.stack import Stack, canonical_stack_bytes, source_string
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
 LOGGER = logging.getLogger(__name__)
 ASSET = "dependency-graph.json"
@@ -225,7 +225,7 @@ def root_manifest(stack: Stack, kind: str) -> dict[str, Any]:
     }
 
 
-def core_checksums(stack: Stack) -> dict[str, str]:
+def core_checksums(stack: Stack, published: Mapping[str, str] | None = None) -> dict[str, str]:
     """Map every selected core release tarball URL to its expected SHA-256.
 
     The stack records only the formula-consumed assets; the other fork assets the runtime graphs
@@ -234,6 +234,8 @@ def core_checksums(stack: Stack) -> dict[str, str]:
 
     Parameters:
         stack (Stack): authoritative exact stack selection.
+        published (Mapping[str, str] | None): the release checksum map the caller already attested
+            against; fetched when omitted. Reuse it so acquired bytes match what was attested.
 
     Returns:
         dict[str, str]: release asset URL -> SHA-256 for all `RELEASE_PACKAGES` assets.
@@ -242,7 +244,7 @@ def core_checksums(stack: Stack) -> dict[str, str]:
         RuntimeLockError: the release does not publish a checksum for a runtime asset.
         ValueError: the release checksum file is unreadable or malformed.
     """
-    published = release_checksums(stack.core.tag)
+    published = release_checksums(stack.core.tag) if published is None else published
     checksums: dict[str, str] = {}
     for url in release_package_urls(stack.core.tag).values():
         name = url.rsplit("/", 1)[-1]

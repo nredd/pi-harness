@@ -889,7 +889,14 @@ def test_replay_source_audits_both_roots_then_smokes_core(
 def test_core_checksums_prefer_recorded_digests_and_require_every_asset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Recorded stack digests win; an asset the release does not publish is refused."""
+    """Recorded stack digests win; an asset the release does not publish is refused.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): module seams.
+
+    Returns:
+        None: digest precedence and the refusal were observed.
+    """
     stack = selected_stack()
     monkeypatch.setattr(runtime_lock, "release_checksums", published_checksums)
     checksums = runtime_lock.core_checksums(stack)
