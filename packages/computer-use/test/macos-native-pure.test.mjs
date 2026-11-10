@@ -126,6 +126,10 @@ let wheelDown = scrollWheelCounts(deltaX: 0, deltaY: 200)
 check(wheelDown.wheel1 == -200 && wheelDown.wheel2 == 0, "positive scrollY posts a negative wheel1 so the view scrolls down")
 let wheelUp = scrollWheelCounts(deltaX: 0, deltaY: -200)
 check(wheelUp.wheel1 == 200, "negative scrollY posts a positive wheel1 so the view scrolls up")
+let wheelExtreme = scrollWheelCounts(deltaX: Int(Int32.min), deltaY: Int.min)
+check(wheelExtreme.wheel2 == Int32.max && wheelExtreme.wheel1 == Int32.max, "extreme negative deltas clamp instead of trapping")
+let wheelHuge = scrollWheelCounts(deltaX: Int.max, deltaY: Int.max)
+check(wheelHuge.wheel2 == -Int32.max && wheelHuge.wheel1 == -Int32.max, "extreme positive deltas clamp instead of trapping")
 
 if failures > 0 { exit(1) }
 print("macos native pure checks passed")

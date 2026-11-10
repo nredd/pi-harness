@@ -306,8 +306,8 @@ const cases = [
 	{
 		name: "wheel horizontal sign (#650)",
 		file: "native/macos/bridge.swift",
-		before: "(Int32(-deltaY), Int32(-deltaX))",
-		after: "(Int32(-deltaY), Int32(deltaX))",
+		before: "return (wheel(deltaY), wheel(deltaX))",
+		after: "return (wheel(deltaY), -wheel(deltaX))",
 		check: "test/macos-native-pure.test.mjs",
 		failure: /positive scrollX posts a negative wheel2/,
 		darwinOnly: true,

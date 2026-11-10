@@ -275,9 +275,12 @@ func remainingScroll(requestedX: Int, requestedY: Int, x: ScrollAxisWrite, y: Sc
 
 /// The `CGEvent` wheel counts for a scroll request in the AX/scroll-bar convention (`scrollY > 0` is down,
 /// `scrollX > 0` is right). A positive wheel1 scrolls content up and a positive wheel2 scrolls content right
-/// (the view moves left), so both axes are negated.
+/// (the view moves left), so both axes are negated. Deltas clamp to the symmetric `Int32` range first, so
+/// negating and narrowing an extreme request cannot trap the helper.
 func scrollWheelCounts(deltaX: Int, deltaY: Int) -> (wheel1: Int32, wheel2: Int32) {
-	(Int32(-deltaY), Int32(-deltaX))
+	let bound = Int(Int32.max)
+	func wheel(_ delta: Int) -> Int32 { Int32(-min(bound, max(-bound, delta))) }
+	return (wheel(deltaY), wheel(deltaX))
 }
 
 /// Whether every written axis was confirmed by its read-back; an `unconfirmed` write can only be `unknown`.
