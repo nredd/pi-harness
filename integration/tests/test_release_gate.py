@@ -210,6 +210,8 @@ def test_required_job_names_are_pinned() -> None:
         "owned shard (ubuntu-24.04, computer-use)",
         "owned shard (ubuntu-24.04, ts)",
         "owned shard (ubuntu-24.04, python)",
+        "owned shard (macos-14, subagents)",
+        "owned shard (macos-14, computer-use)",
         "owned shard (macos-14, ts)",
         "owned shard (macos-14, python)",
         "owned shard (wsl2, subagents-computer-use)",

@@ -170,3 +170,28 @@ claiming source migration proved a fix. Two isolated passes are not closure proo
 Local whole gates and scenarios were deliberately not run for this audit while
 the parent had a full gate running; focused configuration tests are not a full
 gate receipt.
+
+## macOS `check-ts` shard split (#660)
+
+`owned shard (macos-14, ts)` ran every workspace's `check-ts` in one 30 min job. Hosted
+runs took 15-28 min (`Owned gate check-ts` 877-1607 s) and c0dae1b6 (#649) was cancelled at the
+budget. Per-workspace wall time is the gap between consecutive `> <pkg> check` lines in the job log
+(each includes lint, typecheck, Vitest on Node and Bun, docs and build checks):
+
+| Workspace | Run 42799667706 (`a9b89d81`) | Run 42777395371 (`5e15aac6`) |
+| --- | --- | --- |
+| `packages/subagents` | 603 s | 666 s |
+| `packages/computer-use` | 286 s | 356 s |
+| `packages/dev-tools` | 116 s | 150 s |
+| `packages/plan-mode` | 61 s | 92 s |
+| `packages/session-kit` | 58 s | 76 s |
+| `packages/todo` + `integration/inprocess` | about 126 s | not split out |
+| `packages/subscription-router` | 17 s | 23 s |
+| `packages/preset` | 14 s | 20 s |
+| `packages/resource-sampler` | 10 s | 12 s |
+
+Hosted job totals were 1373 s and 1666 s. `packages/subagents` and
+`packages/computer-use` are 61-65% of the `check-ts` step, so macOS takes the same `subagents`, `computer-use`,
+`ts` split as Ubuntu; the remainder is about 400 s of gate time. Self-hosted `pi-macos` runners are
+slower still, which is the headroom the split buys. Re-measure from `Duration` and `> <pkg> check`
+lines after a split lands and update `CELL_SECONDS` in `scripts/runner_pools.py`.

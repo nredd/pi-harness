@@ -61,13 +61,16 @@ OS_POOLS = {"ubuntu-24.04": "pi-linux", "macos-14": "pi-macos"}
 # empty for `contracts`.
 CellKey = tuple[str, str, str]
 
-# Seconds a cell runs on a hosted runner (the clean `main` run 41914882314, #463). Only a cell listed here
-# and at least `MIN_HEAVY_S` long is ever sent to a pool: a self-hosted job pays ~25 s to clone and boot a
-# VM, so short jobs lose, and an unlisted cell is not known to pass on the pool images.
+# Seconds a cell runs on a hosted runner (the clean `main` run 41914882314, #463; the macOS `check-ts`
+# shards from run 42799667706, #660). Only a cell listed here and at least `MIN_HEAVY_S` long is ever sent
+# to a pool: a self-hosted job pays ~25 s to clone and boot a VM, so short jobs lose, and an unlisted cell
+# is not known to pass on the pool images.
 CELL_SECONDS: dict[CellKey, int] = {
     # Every macOS cell that does real work. Hosted macOS is the longest pole (median queue ~10 min), and
     # `pi-macos` has two slots plus one queued cell, so one PR can fill both slots on its own.
-    ("owned", "macos-14", "ts"): 937,
+    ("owned", "macos-14", "subagents"): 680,
+    ("owned", "macos-14", "computer-use"): 360,
+    ("owned", "macos-14", "ts"): 480,
     ("stack", "macos-14", "local"): 711,
     ("owned", "macos-14", "python"): 462,
     ("contracts", "macos-14", ""): 331,

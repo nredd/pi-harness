@@ -44,6 +44,8 @@ OWNED_SHARDS = {
         "python": ("check-scripts", "check-integration"),
     },
     "macos-14": {
+        "subagents": ("check-ts",),
+        "computer-use": ("check-ts",),
         "ts": ("check-ts",),
         "python": ("check-scripts", "check-integration", "check-benchmark"),
     },

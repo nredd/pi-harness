@@ -30,6 +30,8 @@ HOSTED_RUNNERS = {
     ("ubuntu-24.04", "computer-use"): "ubuntu-24.04",
     ("ubuntu-24.04", "ts"): "ubuntu-24.04",
     ("ubuntu-24.04", "python"): "ubuntu-24.04",
+    ("macos-14", "subagents"): "xcode-27",
+    ("macos-14", "computer-use"): "xcode-27",
     ("macos-14", "ts"): "xcode-27",
     ("macos-14", "python"): "xcode-27",
     ("wsl2", "subagents-computer-use"): "windows-2025",
@@ -362,7 +364,7 @@ def test_main_routes_with_fresh_beats_and_never_with_no_pools(tmp_path: Path) ->
         tmp_path, "a", "--pool-heartbeat", f"pi-linux={beat}:2", "--pool-heartbeat", f"pi-macos={beat}:1"
     )
     assert cell_runners(routed, "owned (ubuntu-24.04)")["ts"] == "pi-linux"
-    assert cell_runners(routed, "owned (macos-14)")["ts"] == "pi-macos"
+    assert cell_runners(routed, "owned (macos-14)")["subagents"] == "pi-macos"
     blocked = plan_with(tmp_path, "b", "--pool-heartbeat", f"pi-linux={beat}:2", "--no-pools")
     assert set(cell_runners(blocked, "owned (ubuntu-24.04)").values()) == {"ubuntu-24.04"}
     stale = plan_with(tmp_path, "c", "--pool-heartbeat", "pi-macos=0", "--pool-heartbeat", "pi-linux=")

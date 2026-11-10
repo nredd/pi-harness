@@ -119,6 +119,8 @@ OWNED_SHARDS: dict[str, tuple[Shard, ...]] = {
         Shard("python", ("check-scripts", "check-integration")),
     ),
     "macos-14": (
+        Shard("subagents", (CHECK_TS,), ("packages/subagents",)),
+        Shard("computer-use", (CHECK_TS,), ("packages/computer-use",)),
         Shard("ts", (CHECK_TS,)),
         Shard("python", ("check-scripts", "check-integration", "check-benchmark")),
     ),
