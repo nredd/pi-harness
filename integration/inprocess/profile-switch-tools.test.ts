@@ -3,8 +3,7 @@
  * reported to the user and the model, and a later call to a removed tool must say it is unavailable.
  * Downstream guard only: core owns the behavior (nredd/pi#19 notice, nredd/pi#27 result wording).
  */
-import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { copyFileSync } from "node:fs";
 import { join } from "node:path";
 import type { TranscriptContext } from "@earendil-works/pi-ai";
 import { type ExtensionFactory, SessionManager } from "@earendil-works/pi-coding-agent";
@@ -52,7 +51,7 @@ async function persistWideSession(root: string): Promise<string> {
 		await wide.session.prompt("first");
 		const file = wide.sessionManager.getSessionFile();
 		if (!file) throw new Error("wide session was not persisted");
-		const copy = join(mkdtempSync(join(tmpdir(), "pi-582-")), "source.jsonl");
+		const copy = join(root, "source.jsonl");
 		copyFileSync(file, copy);
 		return copy;
 	} finally {
@@ -63,48 +62,44 @@ async function persistWideSession(root: string): Promise<string> {
 it("a profile switch that removes tools warns user and model, then explains an unavailable call", async () => {
 	if (!home) throw new Error("home not isolated");
 	const source = await persistWideSession(home.root);
-	try {
-		const narrow = await startStack({
-			cwd: home.root,
-			sessionManager: SessionManager.open(source),
-			factories: [await loadThirdParty("deferred")],
-		});
-		started.push(narrow);
-		narrow.session.agent.state.messages = narrow.sessionManager.buildSessionContext().messages;
-		const requests: TranscriptContext[] = [];
-		narrow.setResponses([
-			(context) => {
-				requests.push(structuredClone(context));
-				return fauxAssistantMessage([fauxToolCall("monitor_start", {})], { stopReason: "toolUse" });
-			},
-			fauxAssistantMessage("done"),
-		]);
-		await narrow.session.prompt("second");
+	const narrow = await startStack({
+		cwd: home.root,
+		sessionManager: SessionManager.open(source),
+		factories: [await loadThirdParty("deferred")],
+	});
+	started.push(narrow);
+	narrow.session.agent.state.messages = narrow.sessionManager.buildSessionContext().messages;
+	const requests: TranscriptContext[] = [];
+	narrow.setResponses([
+		(context) => {
+			requests.push(structuredClone(context));
+			return fauxAssistantMessage([fauxToolCall("monitor_start", {})], { stopReason: "toolUse" });
+		},
+		fauxAssistantMessage("done"),
+	]);
+	await narrow.session.prompt("second");
 
-		// User: a displayed custom notice naming every removed tool.
-		const notices = narrow.session.messages.flatMap((message) =>
-			message.role === "custom" && message.customType === "unregistered-tools-notice" ? [message] : [],
-		);
-		expect(notices).toHaveLength(1);
-		expect(notices[0]?.display).toBe(true);
-		const notice = JSON.stringify(notices[0]?.content);
-		for (const name of WIDE_ONLY) expect(notice).toContain(name);
+	// User: a displayed custom notice naming every removed tool.
+	const notices = narrow.session.messages.flatMap((message) =>
+		message.role === "custom" && message.customType === "unregistered-tools-notice" ? [message] : [],
+	);
+	expect(notices).toHaveLength(1);
+	expect(notices[0]?.display).toBe(true);
+	const notice = JSON.stringify(notices[0]?.content);
+	for (const name of WIDE_ONLY) expect(notice).toContain(name);
 
-		// Model: the very first request already carries the notice and the removals.
-		const first = requests[0];
-		if (!first) throw new Error("expected the first request");
-		expect(JSON.stringify(first)).toContain("no longer available");
-		const removed = first.messages.flatMap((message) =>
-			message.role === "system" ? (message.toolsRemoved ?? []).map((tool) => tool.name) : [],
-		);
-		expect(removed).toEqual(expect.arrayContaining(WIDE_ONLY));
+	// Model: the very first request already carries the notice and the removals.
+	const first = requests[0];
+	if (!first) throw new Error("expected the first request");
+	expect(JSON.stringify(first)).toContain("no longer available");
+	const removed = first.messages.flatMap((message) =>
+		message.role === "system" ? (message.toolsRemoved ?? []).map((tool) => tool.name) : [],
+	);
+	expect(removed).toEqual(expect.arrayContaining(WIDE_ONLY));
 
-		// A later call is an error naming the tool. Core pins the exact wording (nredd/pi#27); the pinned
-		// release may still say "not found", so this guard only requires an error that names the tool.
-		const result = narrow.session.messages.find((message) => message.role === "toolResult");
-		expect(result?.isError).toBe(true);
-		expect(JSON.stringify(result?.content)).toContain("monitor_start");
-	} finally {
-		rmSync(source, { force: true });
-	}
+	// A later call is an error naming the tool. Core pins the exact wording (nredd/pi#27); the pinned
+	// release may still say "not found", so this guard only requires an error that names the tool.
+	const result = narrow.session.messages.find((message) => message.role === "toolResult");
+	expect(result?.isError).toBe(true);
+	expect(JSON.stringify(result?.content)).toContain("monitor_start");
 });
