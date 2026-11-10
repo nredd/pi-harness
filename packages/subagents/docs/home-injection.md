@@ -11,7 +11,7 @@ the owning manager and nested-tool context. Explicit `PI_CODING_AGENT_DIR` and
 session-directory overrides still win; an explicit absolute override is intentionally
 not rebased under the supplied home.
 
-Named skill preloading uses Pi's public `DefaultPackageManager.resolve()` and `loadSkills()` path: configured global/package skills and trusted project skills retain Pi's native precedence. Pi's disabled resource result is authoritative, so a configured exclusion such as `skills: ["-skills/review"]` cannot reappear through the extension's legacy compatibility roots. Discovery supplies Pi's documented `"skip"` missing-source action, so an unavailable configured npm or Git package is reported through the normal not-found diagnostic without installing it or running package lifecycle scripts. The preloader removes automatic project skill symlinks before accepting project candidates, then resolves the same configuration without project trust to restore only user/package candidates that Pi's realpath deduplication hid behind a rejected project alias, preserving Pi's package-identity precedence. A candidate whose path cannot be canonicalized (raced away or unreadable) is never restored, and the rest of the preload continues. Historical user roots remain after native discovery: `<home>/.agents/skills`, `<home>/.pi/skills`, and explicit top-level `<name>.md` files. When `homeDir` is explicit, it removes the SDK's returned ambient runtime-home `~/.agents/skills` resources while retaining the injected `<home>/.agents/skills` root. The host still scans the ambient location -- filters prevent its text from reaching a child prompt, not the filesystem read. User compatibility roots and package resources otherwise follow Pi's normal link handling: a project or global package skill symlinked outside its package is followed and injected, as in Pi. Pi matches the frontmatter `name:` first; the compatibility walk matches the file or directory name only when Pi found nothing by that name.
+Named skill preloading uses Pi's public `DefaultPackageManager.resolve()` and `loadSkills()` path: configured global/package skills and trusted project skills retain Pi's native precedence. Pi's disabled resource result is authoritative, so a configured exclusion such as `skills: ["-skills/review"]` cannot reappear through the extension's legacy compatibility roots. Discovery supplies Pi's documented `"skip"` missing-source action, so an unavailable configured npm or Git package is reported through the normal not-found diagnostic without installing it or running package lifecycle scripts. The preloader removes automatic project skill symlinks before accepting project candidates, then resolves the same configuration without project trust to restore only user/package candidates that Pi's realpath deduplication hid behind a rejected project alias, preserving Pi's package-identity precedence. A candidate whose path cannot be canonicalized (raced away or unreadable) is never restored, and the rest of the preload continues. Historical user roots remain after native discovery: `<home>/.agents/skills`, `<home>/.pi/skills`, and explicit top-level `<name>.md` files. When `homeDir` is explicit, it removes the SDK's returned ambient runtime-home `~/.agents/skills` resources while retaining the injected `<home>/.agents/skills` root. With a core that supports `homeDir` the ambient location is no longer scanned; the filter remains for older SDKs. User compatibility roots and package resources otherwise follow Pi's normal link handling: a project or global package skill symlinked outside its package is followed and injected, as in Pi. Pi matches the frontmatter `name:` first; the compatibility walk matches the file or directory name only when Pi found nothing by that name.
 
 `home-paths.ts` centralizes the agent-directory override and path normalization.
 Pi's `normalizePath` helper is not exported from its public package entry point;
@@ -85,21 +85,18 @@ rest of the test, not Vitest's 5s default: the cold SDK import is measured per
 case in
 [`test-worker-budgets.md`](../../../docs/test-worker-budgets.md#measured-cold-budgets-312).
 
-This is not a filesystem sandbox. Before loader-level `noSkills` takes effect,
-Pi's package-manager `resolve()` automatically scans the real runtime home's
-`~/.agents/skills`. The public loader does not expose an injected-home seam for
-that read, so the scan remains until a Pi core change and release. Named preloads
-filter those returned ambient resources before `loadSkills()` and prompt construction;
-the `#179` characterization remains a *best-effort* JavaScript regression detector,
-not a syscall sandbox. It traces `node:fs`, `fs`, their
-promise aliases, `realpath*.native`, `Bun.file()`, stream constructors, and
-path-bearing pattern/`cwd` arguments under its decoy ambient home. It normalizes,
-deduplicates and sorts those paths, then asserts exact membership. Raw syscalls in
-native addons, child processes spawned by the SDK, and dynamic
-`process.binding("fs")` calls remain outside this probe. Its expected array
-documents the current `~/.agents/skills` traversal; flip it when the host fix lands
-so both a new read and a removed expected read fail. The required host follow-up is
-tracked [here](https://github.com/nredd/pi-harness/issues/179).
+Core `v1.3.0-nredd.10` (nredd/pi#13) gives `DefaultResourceLoader` and `DefaultPackageManager` an
+optional `homeDir`. `createHomeResourceLoader` and `createHomePackageManager` forward it, so Pi's automatic `<home>/.agents/skills` root is the injected one and the runtime
+home's `~/.agents/skills` is never scanned. Omitting `homeDir` keeps the host defaults. Older
+SDKs ignore the option, which is why named preloads still filter the returned ambient resources.
+
+`#179` regression: `resource-loader-home.test.ts` runs the real runner and mention clone in
+Node and Bun against a decoy ambient `~/.agents/skills` tree and asserts zero ambient reads.
+It is a *best-effort* JavaScript detector, not a syscall sandbox: it traces `node:fs`, `fs`,
+their promise aliases, `realpath*.native`, `Bun.file()`, stream constructors, and path-bearing
+pattern/`cwd` arguments under the decoy home. Raw syscalls in native addons, child processes
+spawned by the SDK, and dynamic `process.binding("fs")` calls remain outside this probe.
+Dropping the forwarded `homeDir` turns both cases red.
 
 Frontmatter extension compatibility:
 

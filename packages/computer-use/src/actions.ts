@@ -109,6 +109,22 @@ export function prepareAction(action: UiAction, state: ActionState, env: ActionE
 	}
 }
 
+/**
+ * Whether strict headless mode refuses `action` before delivery. Mirrors the native macOS
+ * `rejectInStrictHeadless` rule (`foreground_required`): `typeText` and `keypress` always need synthesized
+ * keyboard input there. Other platforms don't enforce it. Keep in step with `native/macos/bridge.swift`.
+ *
+ * @param action Requested action.
+ * @param headless Whether strict headless mode is on.
+ * @param platform Host `process.platform` value.
+ * @returns The rejection message, or undefined when the action is allowed.
+ */
+export function strictHeadlessRejection(action: UiAction, headless: boolean, platform: string): string | undefined {
+	if (!headless || platform !== "darwin") return undefined;
+	if (action.action !== "typeText" && action.action !== "keypress") return undefined;
+	return `${action.action} requires synthesized keyboard input, which strict headless mode prohibits (foreground_required)`;
+}
+
 export function canRetryInForeground(action: PreparedAction, outcome: "worked" | "didnt" | "unknown", headless: boolean): boolean {
 	return !headless && outcome === "didnt" && (action.action === "typeText" || action.action === "keypress");
 }

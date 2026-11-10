@@ -4,6 +4,13 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- `act_ui` validates every action before the write epoch advances, so a rejected request (e.g. `keypress` without `ref`, or `typeText`/`keypress` under strict headless on macOS) no longer stales the `stateId`, and a batch that fails this validation at a later step delivers nothing (upstream injaneity/pi-computer-use#112, nredd/pi-harness#637).
+- macOS `typeText` types punctuation and letters correctly on non-US keyboard layouts and input methods: a physical US key code is used only when the active layout produces that exact character (upstream #113).
+- macOS `act_ui` `scroll` moves SwiftUI/AppKit scroll areas by writing their `AXScrollBar` value instead of reporting success with no movement. The bar is written only for the target's own scroll area (or one an AX hit test resolves to), so inner wheel-scrollable regions still use the wheel (the hit test queries the target's own app, so covered windows work), and with both `scrollX` and `scrollY` an unwritten axis is carried on rather than reported as handled. A write the app accepts but has not yet applied is never doubled by the wheel and reports `unknown`; if the wheel leg for the remaining axis then fails, the act reports `unknown` with the bar evidence and the error instead of throwing, so a retry cannot scroll the written axis twice (upstream #114).
+- Linux `launch_browser` starts the managed browser headless when no `DISPLAY` or `WAYLAND_DISPLAY` is set, instead of timing out waiting for CDP; `PI_COMPUTER_USE_MANAGED_BROWSER_HEADLESS=0|1` overrides, and `--no-sandbox` is added only for root (upstream #104).
+
 ### Changed
 
 - A `launch_browser` aborted while waiting its turn no longer starts a browser. Tool-path launches enter the managed-browser lifecycle before session shutdown drains readiness, without holding the readiness queue for the rest of the tool call (nredd/pi-harness#543).

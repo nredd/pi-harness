@@ -1475,7 +1475,8 @@ function planMode(pi, dependencies = {}) {
     try {
       const directory = dirname(pathToWatch);
       const fileName = basename(pathToWatch);
-      const watcher = watch(directory, { persistent: false }, (_event, changedFile) => {
+      const watchDirectory = dependencies.watchSettingsDirectory ?? ((target, listener) => watch(target, { persistent: false }, listener));
+      const watcher = watchDirectory(directory, (_event, changedFile) => {
         if (!changedFile || changedFile.toString() !== fileName) return;
         schedulePlanModeSettingsReload(generation);
       });

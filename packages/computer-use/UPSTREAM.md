@@ -58,6 +58,10 @@ the release is `requested release: injaneity/pi-computer-use#116`
 | Owned install/release docs | harness follow-up | Install `@nredd/pi-computer-use`, use root `publish.yml` and opt into Linux repair builds; upstream: harness-only, not filed | `docs:check` and three `test:sync-reverts` controls reject the upstream-only instructions |
 | Site working directory | harness follow-up | Run imported website commands from `packages/computer-use`, not the harness root; upstream: harness-only, not filed | `docs:check` and `test:sync-reverts` reject the old root-relative instructions |
 | Rust coverage | harness follow-up | Report-only LCOV and per-file text/JSON from the native crates; upstream: proposed after issue-first (draft (c) in the drafts file), currently labeled draft D there, not filed | `test:rust-coverage` arguments/paths/missing tool and `test:sync-reverts` missing-tool control |
+| Act preflight | upstream PR #112 (`be73574`) | Validate every action before the write lock advances the epoch; rejected batches neither stale the `stateId` nor deliver a prefix; open upstream PR, status `candidate`. Deviation: the preflight also mirrors native macOS strict-headless `foreground_required` for `typeText`/`keypress` (`strictHeadlessRejection` in `src/actions.ts`), which upstream leaves to the native layer mid-batch. Only keyboard actions are mirrored: native strict headless also rejects coordinate fallback and web `setText` at runtime, and any runtime failure after delivery starts can still leave an executed prefix | `test:sync-reverts` preflight and strict-headless controls in `test/unpaired-act.test.mjs`, plus the two `strict-headless-drift` controls (`INV-strict-headless` in `test/invariants.test.mjs`) |
+| Keyboard-layout typing | upstream PR #113 (`5bd2894`) | Post physical US key codes only when `UCKeyTranslate` on the active layout yields that character; else Unicode events; open upstream PR | `test:sync-reverts` layout gate control in `test:macos-native` |
+| Scroll-bar fallback | upstream PR #114 (`5e8378f`) | Write a settable `AXScrollBar` value for SwiftUI/AppKit scroll areas before the wheel fallback; open upstream PR. Deviations: the bar is written only when the target is the scroll area or its direct child, or an AX hit test at the scroll point, run against the target's own app so a covered window is not hit through the app on top, resolves to that area (upstream walks up to 10 parents, so an inner wheel-only scroller made the outer area scroll); with `scrollX` and `scrollY` both set, an axis whose bar was not written is carried to ancestors then the wheel (`unknown` under strict headless) instead of reporting `worked`; an axis whose set call succeeded but whose immediate read-back is unchanged (async apps) counts as delivered, is never also sent to the wheel, and reports `unknown`. The pure predicates are revert-proved; the AX hit test, partial-write wheel carry, its `unknown` result with `evidence.error` when the wheel leg throws after a bar axis was delivered (e.g. `occluded_target`, `input_failed`), and strict-headless `unknown` outcome need a live macOS AX session and have no deterministic control | `test:sync-reverts` range guard, write scope and per-axis controls in `test:macos-native` |
+| Headless managed browser | upstream PR #104 (`6bcd831`) | Headless `launch_browser` without `DISPLAY`/`WAYLAND_DISPLAY`, override env var; `--no-sandbox` only as root, unlike upstream; open upstream PR | `test/managed-browser-headless.test.mjs` via `test:sync-reverts` |
 
 See `sync-patches.json` for each row's exact file paths and `upstream` status, including harness-only
 patches. [Rust coverage](docs/rust-coverage.md) records pinned tools, real per-file numbers,
@@ -78,6 +82,14 @@ is carried. The existing range-checked window-id helpers and tests remain; upstr
 has equivalent positive-id/ref targeting but not the out-of-range guard. `cd72165`'s validation
 history remains in `docs/macos-root-targeting.md`, rather than restoring removed upstream doc pages.
 The note is historical evidence, not validation of this sync.
+
+Unmerged upstream PRs carried (2026-11-09, upstream main still `67e9e2f`): #112, #113, #114, #104,
+all MIT, authors `glvent` (#112-#114) and `ceslami` (#104), applied from their heads onto this
+tree (see nredd/pi-harness#637). Skipped: #118 (this package already ships every helper source,
+checked by `test:package-assets`), #108/#110/#120 (Windows, NOT RUN here), dependabot bumps.
+Committed `prebuilt/macos` payloads were not rebuilt for the Swift changes; the release pipeline
+compiles them from tagged source. `test:upstream-sync` already reports drift on files declared by
+earlier main PRs (`scripts/build-native.mjs`, `test/fixtures/fake-*.mjs`); not changed here.
 
 ## Conflict resolutions
 
