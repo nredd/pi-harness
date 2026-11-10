@@ -2140,6 +2140,7 @@ final class Bridge {
 		var performed: [String: Any] = ["delivery": delivery]
 		// Wheel deltas left after a partial scroll bar write; nil delivers the requested scroll unchanged.
 		var wheelDeltaOverride: (x: Int, y: Int)?
+		var scrollWriteUnconfirmed = false
 		var element: AXUIElement?
 		var rawPoint: CGPoint?
 		var preflightCapsUnknown = false
@@ -2429,6 +2430,7 @@ final class Bridge {
 					return finish(["outcome": "unknown", "performed": performed, "evidence": barEvidence])
 				}
 				wheelDeltaOverride = (write.remainingX, write.remainingY)
+				scrollWriteUnconfirmed = !write.confirmed
 				performed["delivery"] = delivery
 				try executeCoordinates(coordinatePoint())
 			} else {
@@ -2452,6 +2454,8 @@ final class Bridge {
 		} else if windowChanged {
 			outcome = "worked"
 		}
+		// The wheel heuristic cannot verify the bar axis whose write the read-back did not confirm.
+		if scrollWriteUnconfirmed { outcome = "unknown" }
 		if windowChanged { evidence["windowChanged"] = true }
 		var response: [String: Any] = ["outcome": outcome, "performed": performed]
 		if !evidence.isEmpty { response["evidence"] = evidence }
@@ -2740,7 +2744,8 @@ final class Bridge {
 	/// Moves scroll areas at or above `element` by writing their scroll bar values, one requested axis at a time.
 	/// Only an area that `scrollBarWriteAllowed` accepts is written, so a ref inside an inner wheel-scrollable
 	/// region falls through to the wheel instead of scrolling the outer area. Returns the last value read back
-	/// (nil when no write was confirmed), whether every written axis was confirmed, plus the deltas no bar delivered, or nil when no bar was written.
+	/// (nil when no write was confirmed), whether every written axis was confirmed, and the deltas no bar
+	/// delivered. Nil when no bar was written.
 	private func setScrollBarValueOrAncestor(startingAt element: AXUIElement, targetPid: Int32, scrollX: Int, scrollY: Int, point: CGPoint?) -> (value: Double?, remainingX: Int, remainingY: Int, confirmed: Bool)? {
 		var remaining = (x: scrollX, y: scrollY)
 		var value: Double?

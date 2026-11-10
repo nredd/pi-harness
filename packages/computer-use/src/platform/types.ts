@@ -101,7 +101,7 @@ export interface HelperActPerformed {
 	/** Free-form diagnostic naming the platform's delta mechanism. */
 	deltaSource?: string;
 	selectionGrounding?: "ax" | "keyboard";
-	/** macOS scroll diagnostic: `scroll_bar_value` when the scroll bar value was written, otherwise why the accessibility path was skipped before the wheel fallback. */
+	/** macOS scroll diagnostic: `scroll_bar_value` when the scroll bar value was written and confirmed, `scroll_bar_value_unconfirmed` when the write was accepted but not yet visible, `scroll_bar_value_partial` when only some requested axes were written (the rest used the wheel), otherwise why the accessibility path was skipped before the wheel fallback. */
 	axScroll?: string;
 	transaction?: boolean;
 	actionCount?: number;
