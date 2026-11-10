@@ -296,7 +296,6 @@
 				"src/bridge.ts",
 				"src/config.ts",
 				"docs/content/docs/how-to-guides/linux.mdx",
-				"docs/content/docs/reference/codebase.mdx",
 				"docs/content/docs/reference/configuration.mdx",
 				"test/managed-browser-headless.test.mjs"
 			],
@@ -386,8 +385,8 @@
 		"test/local-signing.test.mjs",
 		"test/macos-helper-live.test.mjs",
 		"test/macos-helper-path.test.mjs",
-		"test/managed-browser-headless.test.mjs",
 		"test/macos-native-pure.test.mjs",
+		"test/managed-browser-headless.test.mjs",
 		"test/macos-observe-target.test.mjs",
 		"test/platform-linux.test.mjs",
 		"test/platform-windows.test.mjs",

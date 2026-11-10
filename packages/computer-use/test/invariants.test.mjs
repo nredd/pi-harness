@@ -204,13 +204,6 @@ test("INV-12 parallel native transports", () => {
 	assert(windows.includes("thread::spawn") && windows.includes("physical_input_lock"), "Windows helper is not concurrent with protected physical input");
 });
 
-test("INV-21 action validation precedes the write epoch", () => {
-	const transaction = ts.slice(ts.indexOf("async function performDesktopTransaction"), ts.indexOf("async function performBrowserTransaction"));
-	const preflight = transaction.indexOf("preflightUiTransaction(actions");
-	const lock = transaction.indexOf("withWindowWriteLock(");
-	assert(preflight >= 0 && lock > preflight, "desktop actions are not validated before the write lock advances the epoch");
-});
-
 test("INV-14 native batches settle once", () => {
 	const swift = fs.readFileSync(path.join(root, "native/macos/bridge.swift"), "utf8");
 	const windows = fs.readFileSync(path.join(root, "native/windows/bridge-rs/src/main.rs"), "utf8");
@@ -306,6 +299,13 @@ test("INV-20 bounded broad root discovery", () => {
 	assert(swift.includes("SO_NOSIGPIPE"), "helper sockets can terminate the daemon on a late response");
 	assert(swift.includes("Darwin.send(responseSocket"), "helper socket responses do not use failure-tolerant writes");
 	assert(swift.includes("recentCompletedRequestIds"), "helper diagnostics cannot establish abandoned-request completion");
+});
+
+test("INV-21 action validation precedes the write epoch", () => {
+	const transaction = ts.slice(ts.indexOf("async function performDesktopTransaction"), ts.indexOf("async function performBrowserTransaction"));
+	const preflight = transaction.indexOf("preflightUiTransaction(actions");
+	const lock = transaction.indexOf("withWindowWriteLock(");
+	assert(preflight >= 0 && lock > preflight, "desktop actions are not validated before the write lock advances the epoch");
 });
 
 // NOT RUN elsewhere (requires macOS xcrun): Vitest reports the skip, never a pass.

@@ -1798,7 +1798,8 @@ async function dispatchUiAction(action: UiAction, target: ResolvedTarget, look: 
  * Validates every action against the base look before the write lock is taken.
  * The write lock advances the resource epoch before dispatch, so a request that
  * fails pure validation must be rejected here or it would stale a state on which
- * nothing was delivered.
+ * nothing was delivered. Mirrors the `currentFocus` tracking of `dispatchUiTransaction`: keep the
+ * two in step, or validation will disagree with dispatch.
  */
 function preflightUiTransaction(actions: UiAction[], look: LookResponse, headless: boolean): void {
 	const actionState: ActionState = { currentFocus: false };

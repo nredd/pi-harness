@@ -2705,6 +2705,9 @@ final class Bridge {
 		return nil
 	}
 
+	/// Moves one scroll bar of `area` by `delta` points: reads the bar value, viewport and content length (falling
+	/// back to the thumb/track ratio when the area reports no content), writes the new value, and returns it only
+	/// when the read-back shows the bar actually moved. Nil when the bar is missing, unsettable, at its end or ignores the write.
 	private func setScrollBarValue(area: AXUIElement, barAttribute: String, delta: Int, vertical: Bool) -> Double? {
 		guard let barObject = copyAttribute(area, attribute: barAttribute as CFString),
 			CFGetTypeID(barObject as CFTypeRef) == AXUIElementGetTypeID()

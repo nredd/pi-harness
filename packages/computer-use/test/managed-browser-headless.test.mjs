@@ -17,6 +17,11 @@ describe("managed browser headless detection (upstream #104)", () => {
 		vi.restoreAllMocks();
 	});
 
+	/**
+	 * Pretend to run on another platform.
+	 * @param {string} value `process.platform` value.
+	 * @returns {object} The spy, restored by `vi.restoreAllMocks`.
+	 */
 	const platform = (value) => vi.spyOn(process, "platform", "get").mockReturnValue(value);
 
 	test("linux without a display runs headless", () => {
