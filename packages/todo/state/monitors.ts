@@ -1,6 +1,6 @@
 /**
  * Which `session-kit` monitors are running per session, fed by `session-kit:monitor:started` and
- * `:stopped` on `pi.events` (`{ sessionId, id, name, todo? }`). A running monitor wakes the parent
+ * `:stopped` on `pi.events` (`{ sessionId, id, name, todos? }`). A running monitor wakes the parent
  * on its match or exit, so a todo it was started for (`todos`) is waiting at a settle, not held. A
  * monitor without a link arms no todo: it may be unrelated to the held work. Either package works
  * without the other: no session-kit means no events, so nothing is ever reported as armed.
