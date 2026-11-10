@@ -1150,7 +1150,7 @@ def test_no_step_names_a_shard() -> None:
 
 
 def test_wsl_setup_does_not_upgrade_distribution_packages() -> None:
-    """Keep the guest on its image's packages; `additional-packages` still refreshes apt."""
+    """Keep the guest on its image's packages; `scripts/wsl2_apt.sh` still refreshes apt."""
     assert "update: 'false'" in (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
 
 
@@ -2289,12 +2289,9 @@ def test_toolchain_pins_and_token_lifetime_follow_shared_steps() -> None:
         assert "--user pi-ci --exec bash -euo pipefail" in boundary
     setup = (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
     assert "--user root --exec /usr/sbin/useradd --create-home --shell /bin/bash pi-ci" in setup
-    guest_setup = yaml.safe_load(setup)
-    distribution = next(
-        step for step in guest_setup["runs"]["steps"] if "Vampire/setup-wsl@" in step.get("uses", "")
-    )
-    # install-action needs jq; install system prerequisites before dropping root.
-    assert "jq" in distribution["with"]["additional-packages"].split()
+    # install-action needs jq; the root-owned apt script installs system prerequisites before dropping root.
+    assert "--user root --exec bash -euo pipefail" in setup
+    assert " jq " in (ROOT / "scripts/wsl2_apt.sh").read_text()
 
 
 def test_guest_preflight_failure_is_recorded(tmp_path: Path) -> None:

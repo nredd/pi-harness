@@ -307,8 +307,8 @@ def test_reviewer_dependencies_are_provisioned_before_owned_tests() -> None:
         step_named(shard, "Install reviewer read dependencies (Ubuntu)")["if"]
         == "matrix.os == 'ubuntu-24.04'"
     )
-    wsl = (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
-    packages = wsl.split("additional-packages:", 1)[1].splitlines()[0].split()
+    apt = (ROOT / "scripts/wsl2_apt.sh").read_text()
+    packages = apt.split("packages=(", 1)[1].splitlines()[0].rstrip(")").split()
     assert {"ripgrep", "fd-find"}.issubset(packages)
     mac_install = shard.index(step_named(shard, "Install reviewer read dependencies (macOS)"))
     assert mac_install < verify
