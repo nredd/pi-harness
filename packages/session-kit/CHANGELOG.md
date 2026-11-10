@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Skip all-NUL crash-padding lines in session JSONL instead of counting them as bad lines, so `exportStats` no longer fails closed on them ([#585](https://github.com/nredd/pi-harness/issues/585)); NULs mixed with data still count. Bump the stats cache to version 3: older entries with bad lines are re-parsed, clean ones kept
+
 - Cover every `/stats`, title and rule branch ([#408](https://github.com/nredd/pi-harness/issues/408)); remove unreachable fallbacks (`stats/nth.ts` replaces `?? default` after bounded index reads) and drop the primary branch cap to 0
 
 - Emit `session-kit:monitor:started` and `session-kit:monitor:stopped` on `pi.events` (`{ sessionId, id, name }`; once per monitor, `stopped` also at session shutdown) so other extensions can tell a wake is armed ([#586](https://github.com/nredd/pi-harness/issues/586), part of [#522](https://github.com/nredd/pi-harness/issues/522))

@@ -19,7 +19,7 @@ import { createInterface } from "node:readline";
 import { setImmediate as tick } from "node:timers/promises";
 import { agentDir } from "../agent-dir.ts";
 import { nth } from "./nth.ts";
-export const CACHE_VERSION = 2;
+export const CACHE_VERSION = 3;
 
 /** Stable opaque identifier: no transcript IDs or paths leave the machine. */
 export const opaqueId = (value: string): string => createHash("sha256").update(value).digest("hex");
@@ -87,7 +87,7 @@ export interface Loaded {
 	sessionMetadata?: Session[];
 	/** Failed session/directory reads or durable local cache writes. */
 	errors: number;
-	/** Lines that are not a JSON object, across all files. */
+	/** Lines that are not a JSON object, across all files. All-NUL crash padding is skipped, not counted. */
 	badLines: number;
 }
 
@@ -122,6 +122,9 @@ function looksLikeObject(line: string): boolean {
 	return text.startsWith("{") && text.endsWith("}");
 }
 
+/** A line of only NULs: crash padding (file size extended, data never written) that carries no data. */
+const NUL_PADDING = /^\0+$/;
+
 /** Line-at-a-time parser for one session file. */
 export class SessionParser {
 	private readonly out: FileStats;
@@ -147,7 +150,7 @@ export class SessionParser {
 	}
 
 	accept(line: string): void {
-		if (!line) return;
+		if (!line || NUL_PADDING.test(line)) return;
 		// Cheap supersets, whitespace-agnostic: a false positive only costs a JSON.parse.
 		const isHeader = this.lines++ === 0;
 		const isAssistant = line.includes('"assistant"');
@@ -349,11 +352,19 @@ async function readCache(path: string): Promise<{ files: Record<string, FileStat
 	} catch {
 		return { files: {}, migrate: false };
 	}
-	if ((doc?.version !== CACHE_VERSION && doc?.version !== 1) || typeof doc.files !== "object" || doc.files === null)
+	if (
+		(doc?.version !== CACHE_VERSION && doc?.version !== 1 && doc?.version !== 2) ||
+		typeof doc.files !== "object" ||
+		doc.files === null
+	)
 		return { files: {}, migrate: false };
+	// Older versions counted all-NUL crash padding as bad lines: re-parse those files, keep clean ones.
+	const current = doc.version === CACHE_VERSION;
 	return {
-		files: Object.fromEntries(Object.entries(doc.files).filter(([, record]) => isFileStats(record))),
-		migrate: doc.version === 1,
+		files: Object.fromEntries(
+			Object.entries(doc.files).filter(([, record]) => isFileStats(record) && (current || record.badLines === 0)),
+		),
+		migrate: !current,
 	};
 }
 
