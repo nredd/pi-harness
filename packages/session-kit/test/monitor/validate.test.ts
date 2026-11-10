@@ -24,10 +24,16 @@ describe("validateStart", () => {
 		[{ ...base, timeout_s: 0 }, /timeout_s/],
 		[{ ...base, timeout_s: MAX_TIMEOUT_S + 1 }, /timeout_s/],
 		[{ ...base, timeout_s: Number.NaN }, /timeout_s/],
+		[{ ...base, todo: 0 }, /todo/],
+		[{ ...base, todo: 1.5 }, /todo/],
 	])("rejects %j", (input, error) => {
 		const r = validateStart(input, none, 0);
 		expect(r.ok).toBe(false);
 		expect(r.ok === false && r.error).toMatch(error);
+	});
+
+	it("passes a valid todo link through", () => {
+		expect(validateStart({ ...base, todo: 7 }, none, 0)).toMatchObject({ ok: true, value: { todo: 7 } });
 	});
 
 	it("rejects a duplicate live name and the concurrency cap", () => {

@@ -9,6 +9,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A todo with a running `session-kit` monitor started for it (`monitor_start` with `todo: <id>`) is reported at a settle as `waiting on a monitor, which wakes the parent` (info, shown once) instead of `held by the parent`, and falls back to the warning when the monitor stops or expires with the todo still `in_progress`. A linked monitor arms only its todo; one without a link still arms the whole session as before ([#522](https://github.com/nredd/pi-harness/issues/522))
 - First CI-attested release; no code change.
 - Cover every branch of the extension on the primary and Bun signals, deleting fallbacks that no caller could reach; no behavior change ([#414](https://github.com/nredd/pi-harness/issues/414)).
 

@@ -51,6 +51,7 @@ interface Monitor {
 	matcher: BoundedMatcher | undefined;
 	matchSource: string | undefined;
 	timeoutMs: number;
+	todo: number | undefined;
 	startedAt: number;
 	endedAt?: number;
 	status: MonitorStatus;
@@ -134,7 +135,7 @@ export class MonitorManager {
 	}
 
 	private async spawn(valid: ValidStart, matchSource: string | undefined, cwd: string): Promise<MonitorInfo> {
-		const { argv, name, regex, wake, timeoutMs } = valid;
+		const { argv, name, regex, wake, timeoutMs, todo } = valid;
 		const id = `m${++this.counter}`;
 		const ring = new RingBuffer();
 		let monitor: Monitor | undefined;
@@ -203,6 +204,7 @@ export class MonitorManager {
 			matcher,
 			matchSource: matchSource || undefined,
 			timeoutMs,
+			todo,
 			startedAt: proc.startedAt,
 			status: "running",
 			exit: { exitCode: null, signal: null },
@@ -338,5 +340,6 @@ function toInfo(m: Monitor): MonitorInfo {
 		wake: m.wake,
 		match: m.matchSource,
 		timeoutMs: m.timeoutMs,
+		todo: m.todo,
 	};
 }

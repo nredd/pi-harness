@@ -247,16 +247,47 @@ describe("monitor extension", () => {
 		await start("ci");
 		await start("log");
 		expect(f.emitted).toEqual([
-			[MONITOR_STARTED_EVENT, { sessionId: "sess-E", id: "m1", name: "ci" }],
-			[MONITOR_STARTED_EVENT, { sessionId: "sess-E", id: "m2", name: "log" }],
+			[MONITOR_STARTED_EVENT, { sessionId: "sess-E", id: "m1", name: "ci", wake: false }],
+			[MONITOR_STARTED_EVENT, { sessionId: "sess-E", id: "m2", name: "log", wake: false }],
 		]);
 		f.emitted.length = 0;
 		await f.tools.get("monitor_stop").execute("2", { id: "m1" }, undefined, undefined, ctx);
-		expect(f.emitted).toEqual([[MONITOR_STOPPED_EVENT, { sessionId: "sess-E", id: "m1", name: "ci" }]]);
+		expect(f.emitted).toEqual([[MONITOR_STOPPED_EVENT, { sessionId: "sess-E", id: "m1", name: "ci", wake: false }]]);
 		// Shutdown kills the rest silently, so it must announce them itself, once.
 		f.emitted.length = 0;
 		await f.emit("session_shutdown", ctx, { type: "session_shutdown", reason: "quit" });
-		expect(f.emitted).toEqual([[MONITOR_STOPPED_EVENT, { sessionId: "sess-E", id: "m2", name: "log" }]]);
+		expect(f.emitted).toEqual([[MONITOR_STOPPED_EVENT, { sessionId: "sess-E", id: "m2", name: "log", wake: false }]]);
+	});
+
+	it("carries the wake condition and linked todo on both lifecycle events", async () => {
+		const f = fakePi();
+		register(f.pi, defaultConfig());
+		const ctx = fakeCtx("tui", "sess-L");
+		await f.emit("session_start", ctx);
+		const run = (params: object) =>
+			f.tools.get("monitor_start").execute("1", { argv: ["node", "-e", STAY], ...params }, undefined, undefined, ctx);
+		expect((await run({ name: "ci", match: "PASS|FAIL", todo: 3 })).isError).toBe(false);
+		expect((await run({ name: "poll", wake: true })).isError).toBe(false);
+		const ci = { sessionId: "sess-L", id: "m1", name: "ci", wake: false, match: "PASS|FAIL", todo: 3 };
+		expect(f.emitted).toEqual([
+			[MONITOR_STARTED_EVENT, ci],
+			[MONITOR_STARTED_EVENT, { sessionId: "sess-L", id: "m2", name: "poll", wake: true }],
+		]);
+		f.emitted.length = 0;
+		await f.tools.get("monitor_stop").execute("2", { id: "m1" }, undefined, undefined, ctx);
+		expect(f.emitted).toEqual([[MONITOR_STOPPED_EVENT, ci]]);
+	});
+
+	it("rejects a todo link that is not a positive integer id", async () => {
+		const f = fakePi();
+		register(f.pi, defaultConfig());
+		const ctx = fakeCtx("tui", "sess-V");
+		await f.emit("session_start", ctx);
+		const run = await f.tools
+			.get("monitor_start")
+			.execute("1", { argv: ["node", "-e", STAY], name: "bad", todo: 0 }, undefined, undefined, ctx);
+		expect(run.isError).toBe(true);
+		expect(f.emitted).toEqual([]);
 	});
 
 	it("reports nothing at settle in a child session", async () => {

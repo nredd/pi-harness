@@ -13,6 +13,8 @@ export interface StartParams {
 	match?: string;
 	wake?: boolean;
 	timeout_s?: number;
+	/** Todo id this monitor wakes the parent for; carried on the lifecycle events only. */
+	todo?: number;
 }
 
 export interface ValidStart {
@@ -21,6 +23,7 @@ export interface ValidStart {
 	regex: RegExp | undefined;
 	wake: boolean;
 	timeoutMs: number;
+	todo: number | undefined;
 }
 
 export type Validation = { ok: true; value: ValidStart } | { ok: false; error: string };
@@ -51,7 +54,12 @@ export function validateStart(input: StartParams, liveNames: ReadonlySet<string>
 	if (!Number.isFinite(timeoutS) || timeoutS < 1 || timeoutS > MAX_TIMEOUT_S) {
 		return fail(`timeout_s must be between 1 and ${MAX_TIMEOUT_S}`);
 	}
-	return { ok: true, value: { argv, name, regex, wake: input.wake === true, timeoutMs: Math.round(timeoutS * 1000) } };
+	if (input.todo !== undefined && (!Number.isSafeInteger(input.todo) || input.todo < 1))
+		return fail("todo must be a positive integer todo id");
+	return {
+		ok: true,
+		value: { argv, name, regex, wake: input.wake === true, timeoutMs: Math.round(timeoutS * 1000), todo: input.todo },
+	};
 }
 
 function fail(error: string): Validation {

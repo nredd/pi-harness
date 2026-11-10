@@ -76,7 +76,7 @@ Plan mode freezes its tool selection at `/plan`, so it reaches `monitor_read` on
 
 ## Monitor
 
-- `monitor_start({argv, name, match?, wake?, timeout_s?})`: run an argv command with stdin closed,
+- `monitor_start({argv, name, match?, wake?, todo?, timeout_s?})`: run an argv command with stdin closed,
   no implicit shell. Five active monitors maximum, one-hour default timeout, 7 day (`604800` s) maximum. Explicitly passing a
   shell remains arbitrary command execution; this is not a sandbox.
 - `monitor_read({id, since?})`: numbered output since a cursor. Ring buffers retain 2000 lines.
@@ -85,8 +85,10 @@ Plan mode freezes its tool selection at `/plan`, so it reaches `monitor_read` on
   `match` with terminal controls stripped), e.g.
   `Run ended with 2 monitors running, armed: m1 "ci" on /PASS|FAIL/ or exit, m2 "log" on exit`.
 - Each monitor emits `session-kit:monitor:started` and, once, `session-kit:monitor:stopped` (exit, timeout, stop or
-  session shutdown) on `pi.events` with `{ sessionId, id, name }`. The todo package reads them to tell whether a
-  wake is armed at a settle; no package imports the other.
+  session shutdown) on `pi.events` with `{ sessionId, id, name, wake, match?, todo? }`: `wake` is true when every batch
+  wakes, `match` is the wake regex source, and `todo` is the optional todo id passed to `monitor_start` (a positive
+  integer; session-kit does not check it exists). The todo package reads them to tell what is armed at a settle and
+  for which todo; no package imports the other.
 - Output batches every two seconds into the bounded ring buffer (with dropped-line reporting). Passive batches neither start turns nor create transcript/model-context entries; call `monitor_read` to fetch them. A regex match, natural exit, timeout or `wake: true` emits one compact visible wake with a cursor after the output the model last saw through a wake or read, not a replay of buffered output. A bounded batch preserves its first and latest dropped matching lines as wake evidence even if later output evicts them from the ring.
 - Children run in process groups: SIGTERM, then SIGKILL. Exit cleanup and pidfiles cover orderly quit
   and later recovery after SIGKILL. Sweeps reauthenticate the leader after enumerating members;

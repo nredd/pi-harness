@@ -189,8 +189,11 @@ the full list grouped by status.
   (even while this session was inactive) drops out at the next settle. An owner nobody names is `held`, never lost. A free-text owner (a person or team) is indistinguishable from a dead
   agent handle, so it lands there too until it is reassigned. Parent-held work warns only when nothing
   is armed: a running monitor (`session-kit:monitor:started` / `:stopped` on `pi.events`, payload
-  `{ sessionId, id, name }`) or a background agent with a verified completion notice makes it an info
-  report, shown once like the other waiting groups. Abandoned, lost and silent work always warn.
+  `{ sessionId, id, name, wake, match?, todo? }`) or a background agent with a verified completion notice makes it an info
+  report, shown once like the other waiting groups. A monitor started with `todo: <id>` arms only that todo, which reads
+  `waiting on a monitor, which wakes the parent: #<id> <subject> (monitor <name>)` (info); once the monitor stops or
+  expires with the todo still `in_progress` it is `held` again and warns. Other held todos still warn. A monitor
+  with no `todo` stays session-wide and arms every held todo. Abandoned, lost and silent work always warn.
   When todos are held or lost and nothing is armed, nothing can wake the parent, so `agent_before_settle`
   appends one hidden `rpiv-todo-held-reminder` and requests one more request, once per prompt from a
   person (a plan reminder is independent). The `context` hook swaps the live list for the marker on that

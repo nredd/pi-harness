@@ -631,6 +631,71 @@ describe("settling with nothing armed to wake the parent", () => {
 		expect(await settle(settleEvent([user, assistant]), ctx)).toBeUndefined();
 	});
 
+	describe("monitors linked to a todo", () => {
+		const link = (bus: Map<string, Handler[]>, channel: string, todo?: number, id = "m1", name = "ci") => {
+			for (const h of bus.get(channel) ?? []) void h({ sessionId: "s1", id, name, wake: false, todo });
+		};
+		const WAITING =
+			"Run ended with 1 in_progress todo, armed: no todo-owned wake (monitor and agent notices list session wakes); waiting on a monitor, which wakes the parent: #1 t1 (monitor ci)";
+
+		it("shows a todo with a live linked monitor as waiting once, then held again after it stops", async () => {
+			const { handler, ctx, bus } = await start(tasks({ id: 1 }));
+			link(bus, MONITOR_STARTED_EVENT, 1);
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			expect(notices(ctx)).toEqual([[WAITING, "info"]]);
+			expect(await handler("agent_before_settle")(settleEvent([user, assistant]), ctx)).toBeUndefined();
+			link(bus, MONITOR_STOPPED_EVENT, 1);
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			expect(notices(ctx)[1]).toEqual([expect.stringContaining("held by the parent: #1 t1"), "warning"]);
+			expect(await handler("agent_before_settle")(settleEvent([user, assistant]), ctx)).toBeDefined();
+		});
+
+		it("leaves a todo the monitor is not linked to held, and a linked one does not arm the session", async () => {
+			const { handler, ctx, bus } = await start(tasks({ id: 1 }, { id: 2 }));
+			link(bus, MONITOR_STARTED_EVENT, 2);
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			expect(notices(ctx)).toEqual([
+				[
+					expect.stringContaining(
+						"held by the parent: #1 t1; waiting on a monitor, which wakes the parent: #2 t2 (monitor ci)",
+					),
+					"warning",
+				],
+			]);
+			const result = (await handler("agent_before_settle")(settleEvent([user, assistant]), ctx)) as {
+				entries: Array<{ details: { held: number[] } }>;
+			};
+			expect(result.entries[0].details.held).toEqual([1]);
+		});
+
+		it("keeps an unlinked monitor session-wide and ignores a malformed link", async () => {
+			const { handler, ctx, bus } = await start(tasks({ id: 1 }));
+			link(bus, MONITOR_STARTED_EVENT, 0.5);
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			expect(notices(ctx)[0][1]).toBe("info");
+			expect(notices(ctx)[0][0]).toContain("held by the parent: #1 t1");
+			expect(await handler("agent_before_settle")(settleEvent([user, assistant]), ctx)).toBeUndefined();
+		});
+
+		it("names a monitor by id when its event carries no name and keeps the first of two on one todo", async () => {
+			const { handler, ctx, bus } = await start(tasks({ id: 1 }));
+			for (const h of bus.get(MONITOR_STARTED_EVENT) ?? []) void h({ sessionId: "s1", id: "m9", todo: 1 });
+			link(bus, MONITOR_STARTED_EVENT, 1, "m10", "later");
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			expect(notices(ctx)[0][0]).toContain("(monitor m9)");
+		});
+
+		it("forgets linked monitors when the session shuts down", async () => {
+			const { handler, ctx, bus } = await start(tasks({ id: 1 }));
+			link(bus, MONITOR_STARTED_EVENT, 1);
+			await handler("session_shutdown")({ reason: "quit" }, ctx);
+			await handler("session_start")({ reason: "startup" }, ctx);
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			expect(notices(ctx)[0][1]).toBe("warning");
+		});
+	});
+
 	it("does not count a running agent without a completion notice as armed", async () => {
 		const { handler, ctx } = await start(tasks({ id: 1 }));
 		applyAgentEvent("s1", SUBAGENT_STARTED_EVENT, { id: "a1", handle: "worker" });
