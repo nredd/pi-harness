@@ -14,6 +14,7 @@ import {
 	MUTATIONS,
 	READS,
 	report,
+	unavailable,
 	WEB,
 } from "./agents-support.ts";
 import { isolateResearchPackages, isolateStackHome, loadThirdParty } from "./support.ts";
@@ -89,7 +90,7 @@ it.each(["architect", "critic", "principal-investigator", "researcher"])(
 		const original = "MUST NOT CHANGE\n";
 		writeFileSync(path, original);
 		const answer = await ask(h, type, [call("write", { path, content: "CORRUPTED\n" }), report]);
-		expect(answer).toContain("Tool write not found");
+		expect(answer).toMatch(unavailable("write"));
 		expect(readFileSync(path, "utf8")).toBe(original);
 	},
 );
@@ -99,5 +100,5 @@ it("debugger excludes commit despite always-active defaults", async () => {
 		call("git_commit", { subject: "Sneak", paths: ["x"], push: false }),
 		report,
 	]);
-	expect(answer).toContain("Tool git_commit not found");
+	expect(answer).toMatch(unavailable("git_commit"));
 });

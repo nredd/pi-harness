@@ -4,7 +4,17 @@ import { dirname, join } from "node:path";
 import type { Harness } from "@earendil-works/pi-coding-agent/testing";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { makeGitFixture } from "../../packages/dev-tools/test/scenarios/support.ts";
-import { agentStack, ask, call, closeAgentStack, GIT_READS, listTools, READS, report } from "./agents-support.ts";
+import {
+	agentStack,
+	ask,
+	call,
+	closeAgentStack,
+	GIT_READS,
+	listTools,
+	READS,
+	report,
+	unavailable,
+} from "./agents-support.ts";
 import { isolateStackHome } from "./support.ts";
 
 let home: Awaited<ReturnType<typeof isolateStackHome>>;
@@ -53,7 +63,7 @@ it("reviewer executes each permitted read", async () => {
 		const answer = await ask(h, "code-reviewer", [call(entry.name, entry.args), report]);
 		expect(answer.startsWith("REPORT\n"), answer).toBe(true);
 		expect(answer, entry.name).toContain(entry.expected);
-		expect(answer.toLowerCase()).not.toContain("not found");
+		expect(answer).not.toMatch(unavailable());
 	}
 });
 
@@ -72,7 +82,7 @@ it("reviewer rejects every explicit mutation", async () => {
 	];
 	for (const { name, args } of calls) {
 		const answer = await ask(h, "code-reviewer", [call(name, args), report]);
-		expect(answer).toContain(`Tool ${name} not found`);
+		expect(answer).toMatch(unavailable(name));
 		expect(readFileSync(path, "utf8"), name).toBe(original);
 	}
 });

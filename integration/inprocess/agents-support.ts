@@ -39,6 +39,14 @@ export function jsonFile(path: string, data: unknown): void {
 }
 
 /** One model call, with no test-side dispatch of tools. */
+/**
+ * Matches core's unavailable-tool result for `name`. Accepts the older "not found" wording and the
+ * "is not available" wording (nredd/pi#27) so tests do not pin core's exact text.
+ */
+export function unavailable(name = "\\S+"): RegExp {
+	return new RegExp(`Tool ${name} (not found|is not available)`);
+}
+
 export function call(name: string, args: Parameters<typeof fauxToolCall>[1]): Step {
 	return fauxAssistantMessage([fauxToolCall(name, args)], { stopReason: "toolUse" });
 }

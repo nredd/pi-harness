@@ -7,6 +7,7 @@ References:
 from __future__ import annotations
 
 import json
+import re
 import socket
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -132,7 +133,7 @@ def test_installed_extension_behavior(sandbox: Sandbox) -> None:
     assert outcomes[6].is_error
     assert "Invalid date format" in outcomes[6].text
     assert outcomes[7].is_error, result.transcript()
-    assert "Tool fetch_content not found" not in outcomes[7].text
+    assert not re.search(r"Tool fetch_content (not found|is not available)", outcomes[7].text)
     assert outcomes[7].text.startswith("Error:"), outcomes[7].text
     failed = result.of_type("tool_execution_end")[-1]["result"]["details"]
     assert failed["urls"] == [url], failed
