@@ -1346,6 +1346,8 @@ This is useful for creating agents that inherit extension tools but should not h
 
 ## Architecture
 
+`pi.extensions` loads `dist/index.ts`, a generated esbuild bundle of `src/` (`npm run build`; `npm run check:runtime` fails when it is stale). Edit `src/`, never `dist/`.
+
 ```
 docs/                 # Long-form guides (shipped to npm; README links out to them)
   workflows.md        # SubagentWorkflow: writing, editing, saving and re-running scripts

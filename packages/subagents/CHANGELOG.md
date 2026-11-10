@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Pi loads a pre-bundled `dist/index.ts` ([#577](https://github.com/nredd/pi-harness/issues/577)).** Jiti transformed ~80 `src/` modules on every launch, ~290 ms of a ~730 ms startup. `pi.extensions` now targets the esbuild bundle (`npm run build`, checked by `npm run check:runtime`), cutting the median launch-to-input-ready by ~39% in the measurements in `docs/startup-latency.md`. `src/` still ships for `createSubagentsExtension` imports.
+
 ### Added
 - **Detached survivors emit lifecycle events ([#586](https://github.com/nredd/pi-harness/issues/586)).** Background agents still running under the current session file (after `/reload`, or `/resume` back into their session) are re-announced with `subagents:started` on `session_start` or `subagents:announce_survivors`, and their `subagents:completed` / `:failed` is emitted when the spooled result is delivered, so pi-todo keeps the owner armed instead of lost. A live survivor's handle and alias stay reserved against new spawns after the switch. Every survivor registered under any other session file (after `/fork`, `/resume` or `/new`) is announced at every `session_start` as `subagents:other_session_survivor`, with the `sessionFile` it wakes instead of this session.
 - **The `Agent` guidance names the configured tiers ([#501](https://github.com/nredd/pi-harness/issues/501)).** With `modelTiers` set, the usage note and the `model` parameter say e.g. `Configured tiers: @cheap, @frontier. Prefer a tier over a model id.` instead of teaching fuzzy names like `"haiku"`, which leaked ids into calls and bypassed `agentModels` and the router. Keys only, never members; no tiers keeps the old text. The README documents the new `@frontier` tier and an enterprise static binding.
