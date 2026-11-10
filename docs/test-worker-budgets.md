@@ -124,7 +124,8 @@ the hosted job is the failing receipt.
 
 `plan-mode/test/settings-watch-native.test.ts` is the only test that depends on
 real `fs.watch` delivery. Every other settings-watch test injects
-`watchSettingsDirectory` and publishes the change itself, so none races FSEvents.
+`watchSettingsDirectory` or mocks `node:fs` `watch` (`settings-watch-lifecycle.test.ts`)
+and publishes the change itself, so none races FSEvents.
 The native test cannot be event-driven (Node exposes no "watch ready" signal; the
 stream starts "since now" and drops earlier writes), so it republishes until one
 reload lands and carries an explicit budget.
