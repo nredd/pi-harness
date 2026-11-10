@@ -12,7 +12,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, readdirSync, realpathSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, readdirSync, realpathSync, type Stats } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -259,18 +259,18 @@ async function clearHiddenIndexBits(pi: ExtensionAPI, repo: string): Promise<voi
     const tag = entry.charAt(0);
     const path = entry.slice(2);
     if (tag !== tag.toUpperCase()) assumed.push(path);
-    if (tag.toLowerCase() === "s" && isFile(join(repo, path))) skipped.push(path);
+    if (tag.toLowerCase() === "s" && lstatOrUndefined(join(repo, path))) skipped.push(path);
   }
   await updateIndex(pi, repo, "--no-assume-unchanged", assumed);
   await updateIndex(pi, repo, "--no-skip-worktree", skipped);
 }
 
-/** Whether `path` is a regular file; false for anything missing or unreadable (e.g. ENOTDIR). */
-function isFile(path: string): boolean {
+/** `lstat` of `path`, or undefined when it is missing or unreachable (ENOENT, ENOTDIR). */
+function lstatOrUndefined(path: string): Stats | undefined {
   try {
-    return lstatSync(path).isFile();
+    return lstatSync(path);
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -299,7 +299,7 @@ async function stagedModeChanges(pi: ExtensionAPI, repo: string): Promise<ModeCh
 async function restoreStagedModes(pi: ExtensionAPI, repo: string, changes: ModeChange[]): Promise<void> {
   for (const mode of ["100644", "100755"] as const) {
     // A file the agent deleted after the chmod is already staged as a deletion: nothing to restore.
-    const paths = changes.filter(change => change.mode === mode && isFile(join(repo, change.path))).map(change => change.path);
+    const paths = changes.filter(change => change.mode === mode && lstatOrUndefined(join(repo, change.path))?.isFile()).map(change => change.path);
     await updateIndex(pi, repo, mode === "100755" ? "--chmod=+x" : "--chmod=-x", paths);
     for (const path of paths) {
       const { mode: onDisk } = lstatSync(join(repo, path));
@@ -330,7 +330,9 @@ const GITLINK_MODE = "160000";
 async function gitlinks(pi: ExtensionAPI, repo: string, rev?: string): Promise<Map<string, string>> {
   const out = await git(pi, repo, rev ? ["ls-tree", "-r", "-z", rev] : ["ls-files", "-s", "-z"], 30000);
   const links = new Map<string, string>();
-  for (const entry of out.split("\0")) {
+  const entries = out.split("\0");
+  assertDecoded(entries, "A gitlink");
+  for (const entry of entries) {
     const tab = entry.indexOf("\t");
     if (tab < 0) continue;
     // ls-files: `<mode> <sha> <stage>`; ls-tree: `<mode> <type> <sha>`.

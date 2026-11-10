@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -1313,6 +1313,16 @@ describe("cleanupWorktree — index bits and ignored path decoding (#596)", () =
     const result = await cleanupWorktree(lossy, repoDir, wt, "index fffd");
     expect(result.error).toMatch(/mis-decoded/);
     expect(readFileSync(join(wt.path, "caf\u00e9.txt"), "utf8")).toBe("agent edit");
+  });
+
+  it("preserves a skip-worktree file replaced by a symlink", async () => {
+    const wt = await worktree("skip-symlink");
+    run(wt.path, "update-index", "--skip-worktree", "tracked.txt");
+    rmSync(join(wt.path, "tracked.txt"));
+    symlinkSync("README.md", join(wt.path, "tracked.txt"));
+    const result = await cleanupWorktree(pi, repoDir, wt, "skip symlink");
+    expect(result.error).toBeUndefined();
+    expect(run(repoDir, "ls-tree", result.branch as string, "tracked.txt")).toMatch(/^120000 /);
   });
 
   it("removes a worktree whose skip-worktree file is simply absent", async () => {
