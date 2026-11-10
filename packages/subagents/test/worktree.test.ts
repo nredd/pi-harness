@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -11,6 +11,7 @@ import {
   pruneWorktrees,
   setWorktreeIsolationEnabled,
   WorktreeError,
+  type WorktreeInfo,
 } from "../src/worktree.js";
 
 /** `git worktree remove`, wherever `-c` options put it in argv. */
@@ -102,9 +103,6 @@ function failingPi(match: (args: string[]) => boolean, failure: { code: number; 
 /**
  * Helper: create a temporary git repo with an initial commit.
  */
-/** Let the clock pass a filesystem timestamp tick, so a later change gets a ctime the index entry lacks. */
-const tick = () => new Promise<void>(resolve => setTimeout(resolve, 25));
-
 function initGitRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "pi-wt-test-"));
   execFileSync("git", ["init"], { cwd: dir, stdio: "pipe" });
@@ -1329,99 +1327,79 @@ describe("cleanupWorktree — index bits and ignored path decoding (#596)", () =
     expect(run(repoDir, "show", `${result.branch}:tracked.txt`)).toBe("agent edit");
   });
 
-  it("preserves a staged mode change from update-index --chmod", async () => {
+  /** Cleanup must keep the tree and name `path`; nothing may be committed, branched or removed. */
+  async function expectKept(wt: WorktreeInfo, path: string): Promise<void> {
+    const result = await cleanupWorktree(pi, repoDir, wt, "mode");
+    expect(result.hasChanges).toBe(true);
+    expect(result.error).toContain("mode staged only in the index; worktree kept");
+    expect(result.error).toContain(path);
+    expect(result.path).toBe(wt.path);
+    expect(existsSync(wt.path)).toBe(true);
+    expect(run(wt.path, "rev-parse", "HEAD")).toBe(wt.baseSha);
+    expect(run(repoDir, "branch", "--list", "pi-agent*")).not.toContain(wt.branch);
+  }
+
+  it("keeps a worktree with a mode staged only in the index (update-index --chmod)", async () => {
     const wt = await worktree("chmod");
     run(wt.path, "update-index", "--chmod=+x", "run.sh");
-    const result = await cleanupWorktree(pi, repoDir, wt, "chmod");
-    expect(result.error).toBeUndefined();
-    expect(result.hasChanges).toBe(true);
-    expect(run(repoDir, "ls-tree", result.branch as string, "run.sh")).toMatch(/^100755 /);
+    await expectKept(wt, "run.sh");
+    expect(run(wt.path, "ls-files", "--stage", "run.sh")).toMatch(/^100755 /);
   });
 
-  it("preserves an index-only chmod on a newly staged file", async () => {
+  it("keeps the worktree when the index-only chmod is followed by a ctime bump", async () => {
+    const wt = await worktree("chmod-touch");
+    run(wt.path, "update-index", "--chmod=+x", "run.sh");
+    const now = new Date(Date.now() + 5000);
+    utimesSync(join(wt.path, "run.sh"), now, now);
+    await expectKept(wt, "run.sh");
+    expect(run(wt.path, "ls-files", "--stage", "run.sh")).toMatch(/^100755 /);
+  });
+
+  it("keeps a worktree with an index-only chmod on a newly staged file", async () => {
     const wt = await worktree("chmod-new");
     writeFileSync(join(wt.path, "new.sh"), "#!/bin/sh\n");
     run(wt.path, "add", "new.sh");
     run(wt.path, "update-index", "--chmod=+x", "new.sh");
-    const result = await cleanupWorktree(pi, repoDir, wt, "chmod new");
-    expect(result.error).toBeUndefined();
-    expect(run(repoDir, "ls-tree", result.branch as string, "new.sh")).toMatch(/^100755 /);
+    await expectKept(wt, "new.sh");
   });
 
-  it("keeps a later chmod on a newly added file", async () => {
+  it("keeps a worktree when a file added at 644 was chmod +x on disk", async () => {
     const wt = await worktree("chmod-after-add");
     writeFileSync(join(wt.path, "new.sh"), "#!/bin/sh\n");
     run(wt.path, "add", "new.sh");
-    await tick();
     chmodSync(join(wt.path, "new.sh"), 0o755);
-    const result = await cleanupWorktree(pi, repoDir, wt, "chmod after add");
-    expect(result.error).toBeUndefined();
-    expect(run(repoDir, "ls-tree", result.branch as string, "new.sh")).toMatch(/^100755 /);
+    await expectKept(wt, "new.sh");
+    expect(readFileSync(join(wt.path, "new.sh"), "utf8")).toBe("#!/bin/sh\n");
+    expect(run(wt.path, "ls-files", "--stage", "new.sh")).toMatch(/^100644 /);
   });
 
-  it("keeps a chmod made after an edit of a newly added file", async () => {
-    const wt = await worktree("edit-then-chmod");
-    writeFileSync(join(wt.path, "new.sh"), "#!/bin/sh\n");
-    run(wt.path, "add", "new.sh");
-    await tick();
-    writeFileSync(join(wt.path, "new.sh"), "#!/bin/sh\necho edited\n");
-    chmodSync(join(wt.path, "new.sh"), 0o755);
-    const result = await cleanupWorktree(pi, repoDir, wt, "edit then chmod");
-    expect(result.error).toBeUndefined();
-    expect(run(repoDir, "ls-tree", result.branch as string, "new.sh")).toMatch(/^100755 /);
-    expect(run(repoDir, "show", `${result.branch}:new.sh`)).toContain("edited");
+  it("keeps a worktree whose staged +x the agent reverted on disk", async () => {
+    const wt = await worktree("chmod-after-stage");
+    chmodSync(join(wt.path, "run.sh"), 0o755);
+    run(wt.path, "add", "run.sh");
+    chmodSync(join(wt.path, "run.sh"), 0o644);
+    await expectKept(wt, "run.sh");
   });
 
-  it("keeps a leading-space filename and its index-only chmod", async () => {
+  it("keeps a leading-space filename with an index-only chmod", async () => {
     const wt = await worktree("space-name");
     writeFileSync(join(wt.path, " lead.sh"), "#!/bin/sh\n");
     run(wt.path, "add", "--", " lead.sh");
     run(wt.path, "update-index", "--chmod=+x", "--", " lead.sh");
-    const result = await cleanupWorktree(pi, repoDir, wt, "space name");
-    expect(result.error).toBeUndefined();
-    expect(run(repoDir, "ls-tree", result.branch as string, "--", " lead.sh")).toMatch(/^100755 /);
+    await expectKept(wt, " lead.sh");
   });
 
-  it("keeps a trailing-space filename and its index-only chmod", async () => {
-    const wt = await worktree("trail-space");
-    writeFileSync(join(wt.path, "zz.sh "), "#!/bin/sh\n");
-    run(wt.path, "add", "--", "zz.sh ");
-    run(wt.path, "update-index", "--chmod=+x", "--", "zz.sh ");
-    const result = await cleanupWorktree(pi, repoDir, wt, "trail space");
-    expect(result.error).toBeUndefined();
-    expect(run(repoDir, "ls-tree", result.branch as string, "--", "zz.sh ")).toMatch(/^100755 /);
-  });
-
-  it("lets an edit made after an index-only chmod decide the mode", async () => {
-    const wt = await worktree("chmod-then-edit");
-    run(wt.path, "update-index", "--chmod=+x", "run.sh");
-    await tick();
-    writeFileSync(join(wt.path, "run.sh"), "#!/bin/sh\necho edited\n");
-    const result = await cleanupWorktree(pi, repoDir, wt, "chmod then edit");
-    expect(result.error).toBeUndefined();
-    expect(run(repoDir, "show", `${result.branch}:run.sh`)).toContain("edited");
-    expect(run(repoDir, "ls-tree", result.branch as string, "run.sh")).toMatch(/^100644 /);
-  });
-
-  it("removes a worktree whose staged +x the agent reverted on disk", async () => {
-    const wt = await worktree("chmod-after-stage");
-    chmodSync(join(wt.path, "run.sh"), 0o755);
-    run(wt.path, "add", "run.sh");
-    await tick();
-    chmodSync(join(wt.path, "run.sh"), 0o644);
-    expect(await cleanupWorktree(pi, repoDir, wt, "chmod after stage")).toEqual({ hasChanges: false });
-    expect(existsSync(wt.path)).toBe(false);
-  });
-
-  it("preserves a staged mode removal (--chmod=-x)", async () => {
+  it("keeps a worktree with a staged mode removal (--chmod=-x)", async () => {
     const wt = await worktree("chmod-minus");
     chmodSync(join(wt.path, "run.sh"), 0o755);
     run(wt.path, "add", "run.sh");
     run(wt.path, "commit", "-m", "exec");
+    const base = run(wt.path, "rev-parse", "HEAD");
     run(wt.path, "update-index", "--chmod=-x", "run.sh");
     const result = await cleanupWorktree(pi, repoDir, wt, "chmod minus");
-    expect(result.error).toBeUndefined();
-    expect(run(repoDir, "ls-tree", result.branch as string, "run.sh")).toMatch(/^100644 /);
+    expect(result.error).toContain("run.sh");
+    expect(existsSync(wt.path)).toBe(true);
+    expect(run(wt.path, "rev-parse", "HEAD")).toBe(base);
   });
 
   it("preserves a deletion of a file whose mode change was staged", async () => {
@@ -1453,15 +1431,14 @@ describe("cleanupWorktree — index bits and ignored path decoding (#596)", () =
     expect(existsSync(wt.path)).toBe(false);
   });
 
-  it("restores an index-only chmod on a non-ASCII filename under chunked decoding", async () => {
+  it("names a non-ASCII filename with an index-only chmod under chunked decoding", async () => {
     const wt = await worktree("chmod-accent");
     writeFileSync(join(wt.path, "n\u00e9w.sh"), "#!/bin/sh\n");
     run(wt.path, "add", "n\u00e9w.sh");
     run(wt.path, "update-index", "--chmod=+x", "n\u00e9w.sh");
     const result = await cleanupWorktree(chunkedPi(), repoDir, wt, "chmod accent");
-    expect(result.error).toBeUndefined();
-    expect(run(repoDir, "ls-tree", "--name-only", "-z", result.branch as string)).toContain("n\u00e9w.sh");
-    expect(run(repoDir, "ls-tree", result.branch as string, "--", "n\u00e9w.sh")).toMatch(/^100755 /);
+    expect(result.error).toContain("n\u00e9w.sh");
+    expect(existsSync(wt.path)).toBe(true);
   });
 
   it("preserves a skip-worktree file replaced by a symlink", async () => {

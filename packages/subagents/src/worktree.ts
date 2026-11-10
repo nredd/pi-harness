@@ -12,7 +12,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { type BigIntStats, chmodSync, existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { type BigIntStats, existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -177,21 +177,21 @@ export async function cleanupWorktree(
     let committed = false;
     if (status) {
       // Changes exist — stage, commit, and create a branch
-      const stagedModes = await stagedModeChanges(pi, worktree.path);
+      const modes = await indexOnlyModes(pi, worktree.path);
+      if (modes.length > 0) {
+        throw new Error(`mode staged only in the index; worktree kept: ${modes.join(", ")}`);
+      }
       await git(pi, worktree.path, ["add", "-A"], 10000);
-      await restoreStagedModes(pi, worktree.path, stagedModes);
-      if (await git(pi, worktree.path, ["diff", "--cached", "--name-only"], 10000)) {
-        // Truncate description for commit message (no shell sanitization needed — pi.exec uses argv)
-        const safeDesc = agentDescription.slice(0, 200);
-        const commitMsg = `pi-agent: ${safeDesc}`;
-        await git(pi, worktree.path, ["commit", "--no-verify", "-m", commitMsg], 10000);
-        committed = true;
-      } else if (await dirtyState(pi, worktree.path)) {
-        // Nothing staged yet still dirty: `add -A` skips a moved gitlink hidden by
-        // `submodule.<name>.ignore = all`; an empty commit would fail opaquely, so say why and keep the worktree.
+      // `add -A` skips a moved gitlink hidden by `submodule.<name>.ignore = all`; an empty
+      // commit would fail opaquely, so say why and keep the worktree.
+      if (!(await git(pi, worktree.path, ["diff", "--cached", "--name-only"], 10000))) {
         throw new Error(`uncommitted changes could not be staged (a submodule \`ignore\` setting can hide a moved gitlink); worktree kept:\n${status}`);
       }
-      // Nothing staged and clean: the only changes were staged modes the agent reverted on disk.
+      // Truncate description for commit message (no shell sanitization needed — pi.exec uses argv)
+      const safeDesc = agentDescription.slice(0, 200);
+      const commitMsg = `pi-agent: ${safeDesc}`;
+      await git(pi, worktree.path, ["commit", "--no-verify", "-m", commitMsg], 10000);
+      committed = true;
     }
     if (!committed) {
       const currentSha = await git(pi, worktree.path, ["rev-parse", "HEAD"], 5000);
@@ -290,75 +290,25 @@ function lstatOrUndefined(path: string): BigIntStats | undefined {
   }
 }
 
-/** An executable-bit change staged with `update-index --chmod`: path -> index mode now. */
-type ModeChange = { path: string; mode: "100644" | "100755" };
-
-/** An index entry's ctime as `ls-files --debug` prints it. */
-type IndexCtime = { sec: bigint; nsec: bigint };
-
-/** Index entry ctimes, keyed by path. */
-async function indexCtimes(pi: ExtensionAPI, repo: string): Promise<Map<string, IndexCtime>> {
-  const times = new Map<string, IndexCtime>();
-  let path: string | undefined;
-  for (const line of await gitLines(pi, repo, ["ls-files", "--debug"], 30000)) {
-    // Stat lines are indented `  <field>: ...`; anything else is the next path.
-    if (!/^ {2}[a-z]+: /.test(line)) {
-      path = unquoteGitPath(line);
-      continue;
-    }
-    const ctime = /^ {2}ctime: (\d+):(\d+)$/.exec(line);
-    if (ctime && path !== undefined) times.set(path, { sec: BigInt(ctime[1] as string), nsec: BigInt(ctime[2] as string) });
-  }
-  return times;
-}
-
-/** Whether `disk` still carries the ctime the index recorded: nothing touched the file since. Seconds only when git stored no nsec. */
-function ctimeUnchanged(disk: BigIntStats, staged: IndexCtime): boolean {
-  return staged.nsec === 0n ? disk.ctimeNs / 1_000_000_000n === staged.sec : disk.ctimeNs === staged.sec * 1_000_000_000n + staged.nsec;
-}
-
 /**
- * Mode changes held only by the index. `add -A` would restage them from the file on disk,
- * so they are recorded here to be restored. A staged mode is index-only only while nothing
- * has touched the file since it was staged (its ctime is still the index entry's) and the
- * file on disk differs from it. Once the file changed (a `chmod` or an edit), the disk is the
- * agent's later state and wins, as `add -A` alone would have it. Same-tick changes on a
- * filesystem with coarse timestamps cannot be told apart.
+ * Regular files whose index executable bit differs from the file on disk, decoded. `add -A`
+ * restages from disk and would silently drop such a mode, and an index-only mode cannot be
+ * told from a later on-disk change, so cleanup keeps the worktree instead of guessing.
+ * Skipped when `core.fileMode=false`: git ignores the bit then, so a mismatch is not a change.
  */
-async function stagedModeChanges(pi: ExtensionAPI, repo: string): Promise<ModeChange[]> {
-  // `:<old mode> <new mode> <old sha> <new sha> <status>` TAB `<path>`
-  const candidates: ModeChange[] = [];
-  for (const line of await gitLines(pi, repo, ["diff", "--cached", "--raw", "--no-renames"], 30000)) {
+async function indexOnlyModes(pi: ExtensionAPI, repo: string): Promise<string[]> {
+  if ((await git(pi, repo, ["config", "--type=bool", "--default", "true", "core.fileMode"], 5000)) === "false") return [];
+  const paths: string[] = [];
+  // `<mode> <sha> <stage>` TAB `<path>`
+  for (const line of await gitLines(pi, repo, ["ls-files", "--stage"], 30000)) {
     const tab = line.indexOf("\t");
-    const [oldMode, newMode] = line.slice(1, tab).split(" ");
-    if (oldMode !== newMode && (newMode === "100644" || newMode === "100755") && (oldMode === "000000" || oldMode === "100644" || oldMode === "100755")) {
-      candidates.push({ path: unquoteGitPath(line.slice(tab + 1)), mode: newMode });
-    }
-  }
-  if (candidates.length === 0) return [];
-  const times = await indexCtimes(pi, repo);
-  return candidates.filter(({ path, mode }) => {
+    const [mode, , stage] = line.slice(0, tab).split(" ");
+    if (stage !== "0" || (mode !== "100644" && mode !== "100755")) continue;
+    const path = unquoteGitPath(line.slice(tab + 1));
     const disk = lstatOrUndefined(join(repo, path));
-    const staged = times.get(path);
-    if (!disk?.isFile() || !staged) return false;
-    return ((disk.mode & 0o100n) !== 0n) !== (mode === "100755") && ctimeUnchanged(disk, staged);
-  });
-}
-
-/**
- * `add -A` restages from the file on disk, which drops a mode change that exists only
- * in the index. Restore it, and match the file on disk so git's removal check sees a clean tree.
- */
-async function restoreStagedModes(pi: ExtensionAPI, repo: string, changes: ModeChange[]): Promise<void> {
-  for (const mode of ["100644", "100755"] as const) {
-    // A file the agent deleted after the chmod is already staged as a deletion: nothing to restore.
-    const paths = changes.filter(change => change.mode === mode && lstatOrUndefined(join(repo, change.path))?.isFile()).map(change => change.path);
-    await updateIndex(pi, repo, mode === "100755" ? "--chmod=+x" : "--chmod=-x", paths);
-    for (const path of paths) {
-      const onDisk = Number(lstatSync(join(repo, path)).mode);
-      chmodSync(join(repo, path), mode === "100755" ? onDisk | 0o111 : onDisk & ~0o111);
-    }
+    if (disk?.isFile() && ((disk.mode & 0o100n) !== 0n) !== (mode === "100755")) paths.push(path);
   }
+  return paths;
 }
 
 /**
