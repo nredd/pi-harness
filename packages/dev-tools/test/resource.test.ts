@@ -1105,7 +1105,7 @@ describe("process metadata loss diagnostics", () => {
 	const probes = (overrides: Partial<HostProbes> = {}): HostProbes => ({
 		platform: "linux",
 		pid: 42,
-		readdir: async () => ["1", "42"],
+		countDir: async () => 2,
 		readlink: async () => "/usr/bin/node",
 		stat: async () => ({}),
 		readFile: async () => "x".repeat(10),
@@ -1133,7 +1133,7 @@ describe("process metadata loss diagnostics", () => {
 				readlink: async () => {
 					throw enoent;
 				},
-				readdir: async () => {
+				countDir: async () => {
 					throw "plain";
 				},
 			}),
@@ -1142,7 +1142,7 @@ describe("process metadata loss diagnostics", () => {
 		expect(message).toContain("reason `process-collection-unavailable`: the whole process listing failed");
 		expect(message).toContain("reason `mystery`: unknown to this harness");
 		expect(message).toContain("FAIL readlink /proc/42/exe: ENOENT readlink no such file");
-		expect(message).toContain("FAIL readdir /proc: plain");
+		expect(message).toContain("FAIL opendir /proc: plain");
 		expect(message).toContain("ok   read /proc/42/stat: 10 bytes");
 		expect(message).toContain('"processes":[]');
 	});
@@ -1156,8 +1156,10 @@ describe("process metadata loss diagnostics", () => {
 
 	it("probes the real host without throwing", async () => {
 		const results = await probeHost();
-		if (process.platform === "linux") expect(results.every((result) => result.ok)).toBe(true);
-		else expect(results).toEqual([]);
+		if (process.platform === "linux") {
+			expect(results.length, JSON.stringify(results)).toBe(6);
+			expect(results.find((result) => result.step.startsWith("opendir"))?.ok, JSON.stringify(results)).toBe(true);
+		} else expect(results).toEqual([]);
 	});
 
 	it("prints every raw process, not a prefix", async () => {

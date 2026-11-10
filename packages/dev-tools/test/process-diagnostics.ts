@@ -5,7 +5,7 @@
  * failure (e.g. an ephemeral WSL runner) is self-explaining.
  */
 
-import { readdir, readFile, readlink, stat } from "node:fs/promises";
+import { opendir, readFile, readlink, stat } from "node:fs/promises";
 import type { ResourceSnapshot } from "@nredd/pi-resource-sampler";
 
 /** What each sampler coverage reason means in terms of the host read that produced it. */
@@ -36,7 +36,8 @@ export interface ProbeResult {
 export interface HostProbes {
 	readonly platform: NodeJS.Platform;
 	readonly pid: number;
-	readonly readdir: (path: string) => Promise<string[]>;
+	/** Entry count via `opendir` iteration, the sampler's listing mechanism (its implicit lstat can reject mid-listing). */
+	readonly countDir: (path: string) => Promise<number>;
 	readonly readlink: (path: string) => Promise<string>;
 	readonly stat: (path: string) => Promise<unknown>;
 	readonly readFile: (path: string) => Promise<string>;
@@ -45,7 +46,11 @@ export interface HostProbes {
 export const realProbes: HostProbes = {
 	platform: process.platform,
 	pid: process.pid,
-	readdir: (path) => readdir(path),
+	countDir: async (path) => {
+		let count = 0;
+		for await (const _entry of await opendir(path)) count++;
+		return count;
+	},
 	readlink: (path) => readlink(path),
 	stat: (path) => stat(path),
 	readFile: (path) => readFile(path, "utf8"),
@@ -73,7 +78,7 @@ export async function probeHost(probes: HostProbes = realProbes): Promise<ProbeR
 	if (probes.platform !== "linux") return [];
 	const self = `/proc/${probes.pid}`;
 	return Promise.all([
-		probe("readdir /proc", async () => `${(await probes.readdir("/proc")).length} entries`),
+		probe("opendir /proc", async () => `${await probes.countDir("/proc")} entries`),
 		probe(`readlink ${self}/exe`, async () => `-> ${await probes.readlink(`${self}/exe`)}`),
 		probe(`stat ${self}`, async () => {
 			await probes.stat(self);
