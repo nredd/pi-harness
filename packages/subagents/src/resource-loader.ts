@@ -53,12 +53,13 @@ function normalizeHomeResourceSettings(settingsManager: SettingsManager, homeDir
 /** Build Pi's package manager with injected-home settings normalization. */
 export function createHomePackageManager(options: PackageManagerOptions, homeDir?: string): DefaultPackageManager {
   if (homeDir === undefined) return new DefaultPackageManager(options);
-  return new DefaultPackageManager({ ...options, settingsManager: normalizeHomeResourceSettings(options.settingsManager, homeDir) });
+  // `homeDir` also redirects Pi's automatic `<home>/.agents/skills` root (nredd/pi#13).
+  return new DefaultPackageManager({ ...options, homeDir, settingsManager: normalizeHomeResourceSettings(options.settingsManager, homeDir) });
 }
 
 /** Use the real loader/manager while preventing ambient-home expansion of explicit settings. */
 export function createHomeResourceLoader(options: ResourceLoaderOptions, homeDir?: string): DefaultResourceLoader {
   if (homeDir === undefined) return new DefaultResourceLoader(options);
   const settingsManager = options.settingsManager ?? SettingsManager.create(options.cwd, options.agentDir);
-  return new DefaultResourceLoader({ ...options, settingsManager: normalizeHomeResourceSettings(settingsManager, homeDir) });
+  return new DefaultResourceLoader({ ...options, homeDir, settingsManager: normalizeHomeResourceSettings(settingsManager, homeDir) });
 }
