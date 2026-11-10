@@ -38,6 +38,14 @@ export function jsonFile(path: string, data: unknown): void {
 	writeFileSync(path, JSON.stringify(data));
 }
 
+/**
+ * Matches core's unavailable-tool result for `name`. Accepts the older "not found" wording and the
+ * "is not available" wording (nredd/pi#27) so tests do not pin core's exact text.
+ */
+export function unavailable(name = "\\S+"): RegExp {
+	return new RegExp(`Tool ${name} (not found|is not available)`);
+}
+
 /** One model call, with no test-side dispatch of tools. */
 export function call(name: string, args: Parameters<typeof fauxToolCall>[1]): Step {
 	return fauxAssistantMessage([fauxToolCall(name, args)], { stopReason: "toolUse" });
