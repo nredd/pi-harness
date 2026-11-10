@@ -77,6 +77,7 @@ it("keeps ambient user skill content out of an injected-home preload", () => {
     // The decoy is the only skill with this name: any ambient leak would read as its text.
     expect(result.content).toContain("not found");
     expect(result.content).not.toContain("AMBIENT-SKILL");
+    expect(result.ambientAccesses).toEqual([]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -99,6 +100,8 @@ it("builds a real child prompt from the injected private package, not an ambient
     expect(result.childPrompt).toContain("INJECTED-AGENTS-SKILL");
     expect(result.childPrompt).toContain("not found");
     expect(result.childPrompt).not.toContain("AMBIENT-SKILL");
+    expect(result.ambientAccesses).toEqual([]);
+    expect(result.startupPackageAccesses).toEqual([]);
   } finally {
     rmSync(root, { recursive: true, force: true });
     fixture.restore();
@@ -122,6 +125,8 @@ it("keeps a native-disabled skill out of a real injected-home child prompt", () 
     expect(result.childPrompt).toContain("INJECTED-AGENTS-SKILL");
     expect(result.childPrompt).toContain("not found");
     expect(result.childPrompt).not.toContain("DISABLED-GLOBAL-SKILL");
+    expect(result.ambientAccesses).toEqual([]);
+    expect(result.startupPackageAccesses).toEqual([]);
   } finally {
     rmSync(root, { recursive: true, force: true });
     fixture.restore();
@@ -143,6 +148,8 @@ it.each(["disabled", "allowed"])("honors a project package %s filter in a privat
     expect(result.runtime).toBe(process.versions.bun ?? "node");
     expect(result.childPrompt).toContain("INJECTED-AGENTS-SKILL");
     expect(result.childPrompt).not.toContain("AMBIENT-SKILL");
+    expect(result.ambientAccesses).toEqual([]);
+    expect(result.startupPackageAccesses).toEqual([]);
     if (filter === "allowed") {
       expect(result.childPrompt).toContain("PACKAGED-PRIVATE-SKILL");
       expect(result.childPrompt).not.toContain('Skill \\"packaged\\" not found');
