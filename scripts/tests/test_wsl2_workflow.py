@@ -696,7 +696,7 @@ def run_apt(
         fail_mirror (str | None): Mirror host whose `apt-get update` fails; `None` fails none.
         hang (bool): Model `timeout` tripping (exit 124) on every `apt-get update`.
         cached (bool): Seed the host cache with one .deb.
-        stale (bool): Seed the host cache with a .deb that `autoclean` removes from the archives.
+        stale (bool): Seed the host cache with a .deb of a superseded version.
 
     Returns:
         tuple[subprocess.CompletedProcess[str], Path, Path]: Outcome, the sources file and the stub call log.
@@ -709,16 +709,20 @@ def run_apt(
     cache = tmp_path / "cache"
     cache.mkdir()
     if stale:
-        (cache / "stale.deb").write_text("deb", encoding="utf-8")
+        (cache / "stale_0.9_amd64.deb").write_text("deb", encoding="utf-8")
     if cached:
-        (cache / "seeded.deb").write_text("deb", encoding="utf-8")
+        (cache / "seeded_1.0_amd64.deb").write_text("deb", encoding="utf-8")
     quoted = shlex.quote(str(sources))
     quoted_log = shlex.quote(str(log))
     quoted_lists = shlex.quote(str(tmp_path / "lists.uri"))
     fail = f'case "$1" in update) grep -q {fail_mirror} {quoted} && exit 100 ;; esac\n' if fail_mirror else ""
+    dpkg_deb_body = 'case "$3" in Package) echo "${n%%_*}" ;; *) v=${n#*_}; echo "${v%%_*}" ;; esac\n'
     no_candidate = '{ echo "E: Unable to locate package" >&2; exit 100; }'
     stubs = {
         "id": "#!/bin/sh\necho 0\n",
+        # .deb names are `package_version_arch.deb`; every package is "installed" at version 1.0.
+        "dpkg-deb": '#!/bin/sh\nn=$(basename "$2" .deb)\n' + dpkg_deb_body,
+        "dpkg-query": "#!/bin/sh\nprintf 1.0\n",
         "ps": "#!/bin/sh\necho '42 1 05:00 S synthetic-stuck-apt'\n",
         "timeout": '#!/bin/sh\nshift 2\ncase "$*" in *"apt-get update"*) '
         + ("exit 124 " if hang else "")
@@ -730,9 +734,8 @@ def run_apt(
         + fail
         + f"uris=$(grep -m1 URIs {quoted})\n"
         + f'case "$1" in update) echo "$uris" > {quoted_lists}; exit 0 ;; esac\n'
-        + 'case "$*" in *--download-only*) touch "$WSL_APT_ARCHIVES/fetched.deb"; exit 0 ;; esac\n'
+        + 'case "$*" in *--download-only*) touch "$WSL_APT_ARCHIVES/fetched_1.0_amd64.deb"; exit 0 ;; esac\n'
         + f'case "$1" in install) [ "$uris" = "$(cat {quoted_lists})" ] || {no_candidate} ;; esac\n'
-        + 'case "$1" in autoclean) rm -f "$WSL_APT_ARCHIVES/stale.deb" ;; esac\n'
         + "exit 0\n",
     }
     for name, body in stubs.items():
@@ -798,18 +801,16 @@ def test_apt_prerequisites_restore_and_refill_the_host_cache(tmp_path: Path) -> 
     result, _, _ = run_apt(tmp_path, cached=True)
     assert result.returncode == 0, result.stderr
     assert "restored 1 cached packages" in result.stdout
-    assert (tmp_path / "archives" / "seeded.deb").exists()
-    assert (tmp_path / "cache" / "fetched.deb").exists()
+    assert (tmp_path / "archives" / "seeded_1.0_amd64.deb").exists()
+    assert (tmp_path / "cache" / "fetched_1.0_amd64.deb").exists()
 
 
 def test_apt_cache_is_pruned_to_the_archives_after_install(tmp_path: Path) -> None:
     """A stale .deb in the host cache (last week's restore-key hit) is not carried into the new key."""
-    result, _, log = run_apt(tmp_path, stale=True)
+    result, _, _ = run_apt(tmp_path, stale=True)
     assert result.returncode == 0, result.stderr
-    assert not (tmp_path / "cache" / "stale.deb").exists()
-    assert (tmp_path / "cache" / "fetched.deb").exists()
-    # `autoclean` runs after the install, on the same mirror.
-    assert log.read_text().splitlines()[-1].startswith("autoclean|")
+    assert not (tmp_path / "cache" / "stale_0.9_amd64.deb").exists()
+    assert (tmp_path / "cache" / "fetched_1.0_amd64.deb").exists()
 
 
 def test_apt_prerequisites_fall_back_to_the_stock_mirror_once(tmp_path: Path) -> None:
@@ -818,9 +819,9 @@ def test_apt_prerequisites_fall_back_to_the_stock_mirror_once(tmp_path: Path) ->
     assert result.returncode == 0, result.stderr
     assert "wsl2-apt: FAILED: apt-get update (http://azure.archive.ubuntu.com/ubuntu)" in result.stderr
     assert "trying the next mirror" in result.stderr
-    # azure update (failed), stock update, stock download, offline install on the stock mirror, autoclean
+    # azure update (failed), stock update, stock download, offline install on the stock mirror
     lines = log.read_text().splitlines()
-    assert len(lines) == 5
+    assert len(lines) == 4
     assert "--download-only" in lines[2]
     stock = "URIs: http://archive.ubuntu.com/ubuntu/"
     assert lines[3] == f"{APT_FLAGS} {PACKAGES}|{stock}"

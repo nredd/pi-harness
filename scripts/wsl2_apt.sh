@@ -74,10 +74,24 @@ fi
 # Everything is on disk now: the install needs no network, so a failure here is not a mirror problem.
 bounded "apt-get install" "$install_seconds" "${install[@]}" "${packages[@]}"
 if [ -n "$cache" ]; then
-  # Drop .debs for superseded versions (restore-keys brings back last week's), then make the cache match
-  # `archives`, so a warm cache stays bounded to what the current package set needs.
-  apt-get autoclean > /dev/null || true
-  mkdir -p "$cache"
-  find "$cache" -maxdepth 1 -name '*.deb' -delete
-  find "$archives" -maxdepth 1 -name '*.deb' -exec cp {} "$cache"/ \;
+  # Keep exactly the .debs whose version is installed (restore-keys brings back last week's superseded ones;
+  # `apt-get autoclean` would keep any version the mirror still lists), so a warm cache stays bounded to the
+  # current package set. Build the new set aside so an empty `archives` cannot wipe a good cache.
+  kept=$(mktemp -d)
+  for deb in "$archives"/*.deb; do
+    [ -e "$deb" ] || continue
+    name=$(dpkg-deb -f "$deb" Package)
+    version=$(dpkg-deb -f "$deb" Version)
+    if [ "$(dpkg-query -W -f='${Version}' "$name" 2> /dev/null || true)" = "$version" ]; then
+      cp "$deb" "$kept"/
+    fi
+  done
+  if compgen -G "$kept/*.deb" > /dev/null; then
+    mkdir -p "$cache"
+    find "$cache" -maxdepth 1 -name '*.deb' -delete
+    cp "$kept"/*.deb "$cache"/
+  else
+    echo 'wsl2-apt: no installed .debs found in the archives, leaving the host cache as it was' >&2
+  fi
+  rm -rf "$kept"
 fi
