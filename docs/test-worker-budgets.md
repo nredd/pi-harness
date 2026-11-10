@@ -125,18 +125,22 @@ the hosted job is the failing receipt.
 `packages/subagents/test/worktree.test.ts`, describe "cleanupWorktree -- nested
 repositories git refuses to remove", hit the 5 s default on the self-hosted macOS
 runners `pi-macos-ci-7e30c3` and `pi-macos-ci2-ad5a35` (run 42756218410, jobs
-129631524032 and 129643652803): 8315 ms, 5765-8571 ms and 6372 ms for the three
-slowest cases.
+129631524032 and 129643652803): 8315 ms ("fetched by sha"), 5765-8571 ms
+("lacks the object", across the two jobs) and 6372 ms ("pinned to a sha-fetched
+commit").
 
 Alone on an Apple M4 the 21 cases take 0.25-1.2 s each (worst: "does not count
 another submodule's sha...", 1.1-1.2 s). The time is dozens of synchronous `git`
 child spawns per case (init, clone, `submodule add`/`update`/`deinit`, fetch,
-worktree remove), about 7x slower on those runners. No avoidable work: each case
-mutates its own repos, so a shared `beforeAll` fixture would couple them, and the
-`protocol.file.allow` config is needed for the local submodule URLs.
+worktree remove), about 7x slower on those self-hosted runners. Little is
+avoidable: each case mutates its own repos, so a shared `beforeAll` fixture would
+couple them, and `protocol.file.allow` is needed for the local submodule URLs.
+Only the unused `subDir` in one case (about 5 spawns) could go, which is not worth
+touching the shared hooks.
 
-The describe takes `{ timeout: 20_000 }`: twice the worst hosted figure (8571
-ms), the same margin rule as the cold loads above. No global `testTimeout`, retry
+The describe takes `NESTED_REPO_TEST_TIMEOUT_MS` (20 s): about twice the worst
+self-hosted figure (8571 ms, 2x is 17.1 s) rounded up, the margin rule of the cold
+loads above. No global `testTimeout`, retry
 or skip.
 
 ## Remaining external acceptance criterion
