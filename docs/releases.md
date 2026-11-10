@@ -69,28 +69,36 @@ owner's policy decision. Publication is not live-provider acceptance or activati
 
 ## Combined stack selection
 
-The 2026-11-08 selection in `integration/stacks/personal.json` uses core
-`v1.3.0-nredd.10` at `4d857379f37f83397871a66c522abbe8469a003d` and the published
-packages below. The sampler is an exact `0.2.0` registry dependency of dev-tools and
-session-kit, not another Pi extension. The footer-only preset filters and unchanged
-third-party sources remain in the stack manifest.
+The 2026-11-10 selection in `integration/stacks/personal.json` uses core
+`v1.3.0-nredd.10` at `4d857379f37f83397871a66c522abbe8469a003d` and the packages below,
+republished with fresh provenance after the history purge (#638). Plan-mode and subagents move
+together. The sampler stays an exact `0.2.0` registry dependency of dev-tools and session-kit
+(`0.2.1` is published but not selected), not another Pi extension. The footer-only preset
+filters and unchanged third-party sources remain in the stack manifest;
+`integration/stacks/runtime-locks.json` is regenerated for this selection.
 
 | Package | Version | Publication source | Successful `publish.yml` run |
 | --- | --- | --- | --- |
-| `@nredd/pi-resource-sampler` | `0.2.0` | `63208e72bb61c3ba2ca0c7df2c0a9f00f773fb2d` | [here](https://github.com/nredd/pi-harness/actions/runs/40933174011) |
-| `@nredd/pi-subscription-router` | `0.5.0` | `63208e72bb61c3ba2ca0c7df2c0a9f00f773fb2d` | [here](https://github.com/nredd/pi-harness/actions/runs/40933183332) |
-| `@nredd/pi-subagents` | `0.22.0-nredd.8` | `63208e72bb61c3ba2ca0c7df2c0a9f00f773fb2d` | [here](https://github.com/nredd/pi-harness/actions/runs/40933213063) |
-| `@nredd/pi-plan-mode` | `0.59.3-nredd.3` | `63208e72bb61c3ba2ca0c7df2c0a9f00f773fb2d` | [here](https://github.com/nredd/pi-harness/actions/runs/40933224906) |
-| `@nredd/pi-todo` | `2.13.11` | `63208e72bb61c3ba2ca0c7df2c0a9f00f773fb2d` | [here](https://github.com/nredd/pi-harness/actions/runs/40933238149) |
-| `@nredd/pi-preset` | `0.3.0` | `1e9ba623be8554561b7d37052028b584e71f0c22` | [here](https://github.com/nredd/pi-harness/actions/runs/40934758956) |
-| `@nredd/pi-computer-use` | `0.6.0` | `1e9ba623be8554561b7d37052028b584e71f0c22` | [here](https://github.com/nredd/pi-harness/actions/runs/40934774694) |
-| `@nredd/pi-session-kit` | `0.9.0` | `d85b4adca767df81fc28a59ee3860cf03ec1da6e` | [here](https://github.com/nredd/pi-harness/actions/runs/40937192908) |
-| `@nredd/pi-dev-tools` | `0.7.0` | `d85b4adca767df81fc28a59ee3860cf03ec1da6e` | [here](https://github.com/nredd/pi-harness/actions/runs/40937207217) |
+| `@nredd/pi-resource-sampler` | `0.2.1` | `a9b89d81c82826807609362b1af2b896f8910d48` | [here](https://github.com/nredd/pi-harness/actions/runs/42849841461) |
+| `@nredd/pi-subscription-router` | `0.6.0` | `a9b89d81c82826807609362b1af2b896f8910d48` | [here](https://github.com/nredd/pi-harness/actions/runs/42852221607) |
+| `@nredd/pi-subagents` | `0.22.0-nredd.9` | `a9b89d81c82826807609362b1af2b896f8910d48` | [here](https://github.com/nredd/pi-harness/actions/runs/42852199411) |
+| `@nredd/pi-plan-mode` | `0.59.3-nredd.4` | `a9b89d81c82826807609362b1af2b896f8910d48` | [here](https://github.com/nredd/pi-harness/actions/runs/42852138078) |
+| `@nredd/pi-todo` | `2.14.0` | `a9b89d81c82826807609362b1af2b896f8910d48` | [here](https://github.com/nredd/pi-harness/actions/runs/42852242624) |
+| `@nredd/pi-preset` | `0.4.0` | `a9b89d81c82826807609362b1af2b896f8910d48` | [here](https://github.com/nredd/pi-harness/actions/runs/42852161319) |
+| `@nredd/pi-computer-use` | `0.6.2` | `352ab6b31973816e56cf81a514d5f8d8b3c1eff1` | [here](https://github.com/nredd/pi-harness/actions/runs/42876274632) |
+| `@nredd/pi-session-kit` | `0.10.0` | `a9b89d81c82826807609362b1af2b896f8910d48` | [here](https://github.com/nredd/pi-harness/actions/runs/42852182553) |
+| `@nredd/pi-dev-tools` | `0.8.0` | `a9b89d81c82826807609362b1af2b896f8910d48` | [here](https://github.com/nredd/pi-harness/actions/runs/42852114165) |
 
-Those publication runs verified the packed bytes and their npm provenance. During recovery,
-all nine release `identity.json` files were downloaded again: their source commits match the
-table and each recorded SHA-512 integrity equals the exact version's current npm
-`dist.integrity`. That comparison is not a new independent cryptographic verification.
+Eight packages publish from frozen candidate `a9b89d81` (full CI run [here](https://github.com/nredd/pi-harness/actions/runs/42799667706)),
+computer-use from frozen candidate `352ab6b3` (full CI run [here](https://github.com/nredd/pi-harness/actions/runs/42868662479)). The
+`@nredd/pi-computer-use@0.6.1` tag at `a9b89d81` never published (#663); `0.6.2` replaces it.
+`subagents` and `resource-sampler` each needed a failed-jobs rerun after npm's attestation
+endpoint lagged the upload; the rerun skipped republication on matching integrity.
+
+Those publication runs verified the packed bytes and their npm provenance. For this pin, all
+nine release `identity.json` files were downloaded again: their source commits match the table
+and each recorded SHA-512 integrity equals the exact version's current npm `dist.integrity`.
+That comparison is not a new independent cryptographic verification.
 Publication does not prove full combined-stack CI or desktop/live-provider acceptance.
 Failed earlier tag attempts are not publication receipts; the table identifies the
 successful source and run.
@@ -139,7 +147,7 @@ Planned versions, chosen by SemVer from that range (minor for added features or 
 
 Plan-mode newer than `0.59.3-nredd.3` and subagents newer than `0.22.0-nredd.8` must update together (`packages/subagents/README.md`), so the pin PR moves both `personal.json` pins in one change. "No source changes" applies only to this PR's own diff (versions and lockfile), not to what publishing `main` ships. Dev-tools and session-kit keep their exact `@nredd/pi-resource-sampler@0.2.0` dependency: the lockfile cannot select an unpublished `0.2.1`, and nothing verifies a dependency's provenance. The bump PR deliberately leaves `integration/stacks/personal.json` and `integration/stacks/runtime-locks.json` on the published selection, per [release verification](release-verification.md).
 
-Not yet published: this section records the plan, and nothing here is a claim of publication. The publication table and receipt are added with the pin PR, after each `publish.yml` run succeeds.
+Published: see the selection table under Combined stack selection.
 
 ## Owned npm packages
 
