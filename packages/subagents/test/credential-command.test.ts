@@ -28,15 +28,15 @@ function helper(fails: number) {
   writeFileSync(join(dir, "fails"), String(fails));
   writeFileSync(script, [
     "#!/bin/sh",
-    `n=$(($(cat ${dir}/count) + 1)); echo $n > ${dir}/count`,
-    `f=$(cat ${dir}/fails)`,
+    `n=$(($(cat "${dir}/count") + 1)); echo $n > "${dir}/count"`,
+    `f=$(cat "${dir}/fails")`,
     `if [ "$f" -lt 0 ] || [ "$n" -le "$f" ]; then echo "auth failed token=${LEAK}" >&2; exit 1; fi`,
     `printf %s ${KEY}`,
     "",
   ].join("\n"));
   chmodSync(script, 0o755);
   return {
-    command: `!${script}`,
+    command: `!"${script}"`,
     runs: () => Number(readFileSync(join(dir, "count"), "utf8")),
     /** From here on the helper works. */
     heal: () => writeFileSync(join(dir, "fails"), "0"),
@@ -107,7 +107,8 @@ it("a dead helper fails the child with a bounded, redacted error and leaves it r
   // The notice hold: advance until the parent's notice turn has settled, whenever the timer is armed.
   let noticed = false;
   void noticeTurn.then(() => { noticed = true; });
-  while (!noticed) {
+  for (let ticks = 0; !noticed; ticks++) {
+    if (ticks > 100) throw new Error("The parent never settled its notice turn");
     fixture.clock.advance(200);
     await new Promise(resolve => setImmediate(resolve));
   }
@@ -116,11 +117,10 @@ it("a dead helper fails the child with a bounded, redacted error and leaves it r
   // time between them, which is why these tests take about a second), and the model never saw a request.
   expect(key.runs()).toBe(3);
   expect(keys).toEqual([]);
-  const failure = record.error ?? record.result ?? "";
-  expect(failure).toContain("exited with code 1");
-  expect(failure).not.toContain(LEAK);
-  expect(failure).not.toContain(KEY);
-  // Diagnostics survive redaction: the exit code is named, and no key-shaped text reaches the stored transcript either.
+  // Diagnostics survive redaction: the exit code is named, and no key-shaped text reaches the error or the stored transcript.
+  expect(record.error ?? "").toContain("exited with code 1");
+  expect(record.error).not.toContain(LEAK);
+  expect(record.error).not.toContain(KEY);
   expect(JSON.stringify(record.session?.messages)).not.toContain(LEAK);
   // The parent is told the transcript is intact, and nothing it sees carries the secret.
   const delivered = notices(h).join("\n");
