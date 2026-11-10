@@ -34,6 +34,14 @@ source locks with the selection change; do not regenerate during promotion or re
 The initial committed lock was generated with npm 11.20.0. These are runtime locks, not the
 root development workspace `package-lock.json`.
 
+The agent graph overrides `pi-coding-agent` and `pi-tui` to the selected fork release
+assets and `pi-ai` to the core tag's upstream version. This prevents automatic peer
+resolution from following newer upstream releases. Pi's Node extension loader aliases
+ordinary Jiti imports to the running core (`forks/pi/packages/coding-agent/src/core/extensions/loader.ts`),
+but native imports or subprocesses need not use that loader. The agent graph therefore
+keeps the fork peer rather than assuming every import is aliased. The two fork assets
+still require the separately authenticated core SHA-256 during acquisition.
+
 ## Producer and consumer
 
 Promotion reads the exact source commit's lock file via Git, requires its roots/digest to

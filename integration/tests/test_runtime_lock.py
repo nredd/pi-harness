@@ -156,6 +156,14 @@ def test_source_runtime_locks_match_the_selected_stack() -> None:
     assert set(runtime.platforms) == {"darwin-arm64", "linux-x64"}
     for graphs in runtime.platforms.values():
         assert all(graph.manifest == root_manifest(stack, kind) for kind, graph in graphs.items())
+        packages = graphs["agent"].lock["packages"]
+        urls = runtime_lock.release_package_urls(stack.core.tag)
+        for name in ("pi-coding-agent", "pi-tui"):
+            assert packages[f"node_modules/@earendil-works/{name}"]["resolved"] == urls[name]
+        assert (
+            packages["node_modules/@earendil-works/pi-ai"]["version"]
+            == (stack.core.tag.removeprefix("v").split("-", 1)[0])
+        )
 
 
 @pytest.mark.parametrize("target", [TOP, LEAF])
