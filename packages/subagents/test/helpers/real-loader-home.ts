@@ -158,7 +158,7 @@ async function main(): Promise<void> {
       if (context.messages.some((message) => message.role === "toolResult")) return "parent done";
       // The parent session's own loader legitimately reads the ambient HOME (`isolateGlobals: false`).
       // Everything after this first reply is the subagent child's resource discovery under test.
-      // Package discovery at startup is ours (`configuredPackages`), so keep its ambient package reads.
+      // Package discovery at startup is ours (`configuredPackages`); report its ambient package reads separately, since the reset below drops them.
       startupPackageAccesses = ambientAccessList().filter(path => path.startsWith("private-package"));
       probes.length = 0;
       return agentCall({ subagent_type: "scout", description: "check", prompt: "check", run_in_background: false });
