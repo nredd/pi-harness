@@ -14,6 +14,7 @@ describe("unquoteGitPath", () => {
     ["other control escapes", '"\\a\\b\\f\\r\\v"', "\x07\b\f\r\v"],
     ["octal control", '"\\001"', "\x01"],
     ["spaces", '"my dir/"', "my dir/"],
+    ["leading BOM", '"\\357\\273\\277a"', "\uFEFFa"],
     ["literal quote mid name", 'a"b', 'a"b'],
   ])("decodes %s", (_name, text, expected) => {
     expect(unquoteGitPath(text)).toBe(expected);

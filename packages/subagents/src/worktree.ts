@@ -12,7 +12,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { type BigIntStats, chmodSync, existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { type BigIntStats, chmodSync, existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -78,12 +78,17 @@ export interface WorktreeCleanupResult {
  * clean exit".
  */
 async function git(pi: ExtensionAPI, cwd: string, args: string[], timeout: number): Promise<string> {
+  return (await gitRaw(pi, cwd, args, timeout)).trim();
+}
+
+/** `git`, with stdout untrimmed: a path may start or end with whitespace. */
+async function gitRaw(pi: ExtensionAPI, cwd: string, args: string[], timeout: number): Promise<string> {
   const result = await pi.exec("git", args, { cwd, timeout });
   if (result.killed) throw new GitTimeoutError(`\`git ${args.join(" ")}\` timed out after ${timeout}ms in ${cwd}`);
   if (result.code !== 0) {
     throw new Error(result.stderr.trim() || `git ${args.join(" ")} failed (exit ${result.code})`);
   }
-  return result.stdout.trim();
+  return result.stdout;
 }
 
 /** A git call killed by its timeout — reported as-is, never as a repo-state cause. */
@@ -238,7 +243,7 @@ export async function cleanupWorktree(
  * corrupt a path (see `unquoteGitPath`). Each line's paths are decoded by the caller.
  */
 async function gitLines(pi: ExtensionAPI, repo: string, args: string[], timeout: number): Promise<string[]> {
-  return (await git(pi, repo, [...QUOTE_PATH_ARGS, ...args], timeout)).split("\n").filter(Boolean);
+  return (await gitRaw(pi, repo, [...QUOTE_PATH_ARGS, ...args], timeout)).split("\n").filter(Boolean);
 }
 
 const INDEX_BATCH = 200;
@@ -286,29 +291,37 @@ function lstatOrUndefined(path: string): BigIntStats | undefined {
 /** An executable-bit change staged with `update-index --chmod`: path -> index mode now. */
 type ModeChange = { path: string; mode: "100644" | "100755" };
 
-/** Index entry timestamps in ns, from `ls-files --debug`, keyed by path. */
-async function indexTimes(pi: ExtensionAPI, repo: string): Promise<Map<string, { ctime: bigint; mtime: bigint }>> {
-  const times = new Map<string, { ctime: bigint; mtime: bigint }>();
-  let current: { ctime: bigint; mtime: bigint } | undefined;
+/** An index entry's ctime as `ls-files --debug` prints it. */
+type IndexCtime = { sec: bigint; nsec: bigint };
+
+/** Index entry ctimes, keyed by path. */
+async function indexCtimes(pi: ExtensionAPI, repo: string): Promise<Map<string, IndexCtime>> {
+  const times = new Map<string, IndexCtime>();
+  let path: string | undefined;
   for (const line of await gitLines(pi, repo, ["ls-files", "--debug"], 30000)) {
     // Stat lines are indented `  <field>: ...`; anything else is the next path.
     if (!/^ {2}[a-z]+: /.test(line)) {
-      current = { ctime: -1n, mtime: -1n };
-      times.set(unquoteGitPath(line), current);
+      path = unquoteGitPath(line);
       continue;
     }
-    const stamp = /^ {2}(ctime|mtime): (\d+):(\d+)$/.exec(line);
-    if (stamp && current) current[stamp[1] as "ctime" | "mtime"] = BigInt(stamp[2] as string) * 1_000_000_000n + BigInt(stamp[3] as string);
+    const ctime = /^ {2}ctime: (\d+):(\d+)$/.exec(line);
+    if (ctime && path !== undefined) times.set(path, { sec: BigInt(ctime[1] as string), nsec: BigInt(ctime[2] as string) });
   }
   return times;
 }
 
+/** Whether `disk` still carries the ctime the index recorded: nothing touched the file since. Seconds only when git stored no nsec. */
+function ctimeUnchanged(disk: BigIntStats, staged: IndexCtime): boolean {
+  return staged.nsec === 0n ? disk.ctimeNs / 1_000_000_000n === staged.sec : disk.ctimeNs === staged.sec * 1_000_000_000n + staged.nsec;
+}
+
 /**
  * Mode changes held only by the index. `add -A` would restage them from the file on disk,
- * so they are recorded here to be restored. A staged mode is not index-only when the file
- * on disk already has it, or when its mode was changed on disk after it was staged (a
- * `chmod` changes the file's ctime but not its mtime, so ctime moved past the index entry
- * with mtime unchanged): the agent's later `chmod` wins, as `add -A` alone would have it.
+ * so they are recorded here to be restored. A staged mode is index-only only while nothing
+ * has touched the file since it was staged (its ctime is still the index entry's) and the
+ * file on disk differs from it. Once the file changed (a `chmod` or an edit), the disk is the
+ * agent's later state and wins, as `add -A` alone would have it. Same-tick changes on a
+ * filesystem with coarse timestamps cannot be told apart.
  */
 async function stagedModeChanges(pi: ExtensionAPI, repo: string): Promise<ModeChange[]> {
   // `:<old mode> <new mode> <old sha> <new sha> <status>` TAB `<path>`
@@ -321,13 +334,12 @@ async function stagedModeChanges(pi: ExtensionAPI, repo: string): Promise<ModeCh
     }
   }
   if (candidates.length === 0) return [];
-  const times = await indexTimes(pi, repo);
+  const times = await indexCtimes(pi, repo);
   return candidates.filter(({ path, mode }) => {
     const disk = lstatOrUndefined(join(repo, path));
     const staged = times.get(path);
     if (!disk?.isFile() || !staged) return false;
-    if (((disk.mode & 0o100n) !== 0n) === (mode === "100755")) return false;
-    return !(disk.ctimeNs !== staged.ctime && disk.mtimeNs === staged.mtime);
+    return ((disk.mode & 0o100n) !== 0n) !== (mode === "100755") && ctimeUnchanged(disk, staged);
   });
 }
 
@@ -400,7 +412,7 @@ async function unpublished(pi: ExtensionAPI, gitArgs: string[], cwd: string, pub
  */
 function gitDirOf(dir: string): string {
   const dotGit = join(dir, ".git");
-  if (lstatSync(dotGit).isDirectory()) return dotGit;
+  if (statSync(dotGit).isDirectory()) return dotGit;
   const target = /^gitdir: (.+)$/m.exec(readFileSync(dotGit, "utf8"))?.[1];
   if (!target) throw new Error(`${dotGit} is neither a directory nor a gitdir file`);
   return resolve(dir, target.trim());

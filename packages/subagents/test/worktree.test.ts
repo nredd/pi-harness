@@ -77,8 +77,9 @@ function chunkedPi(chunkSize = 1): ExtensionAPI {
       try {
         const stdout = execFileSync(command, args, { cwd: options?.cwd, stdio: ["pipe", "pipe", "pipe"], timeout: options?.timeout });
         return { stdout: decode(stdout), stderr: "", code: 0, killed: false };
-      } catch (err: any) {
-        return { stdout: decode(err.stdout ?? ""), stderr: String(err.stderr ?? ""), code: err.status ?? 1, killed: false };
+      } catch (err) {
+        const failure = err as { stdout?: Buffer; stderr?: Buffer; status?: number };
+        return { stdout: decode(failure.stdout ?? ""), stderr: String(failure.stderr ?? ""), code: failure.status ?? 1, killed: false };
       }
     },
   } as unknown as ExtensionAPI;
@@ -1334,6 +1335,28 @@ describe("cleanupWorktree — index bits and ignored path decoding (#596)", () =
     const result = await cleanupWorktree(pi, repoDir, wt, "chmod after add");
     expect(result.error).toBeUndefined();
     expect(run(repoDir, "ls-tree", result.branch as string, "new.sh")).toMatch(/^100755 /);
+  });
+
+  it("keeps a chmod made after an edit of a newly added file", async () => {
+    const wt = await worktree("edit-then-chmod");
+    writeFileSync(join(wt.path, "new.sh"), "#!/bin/sh\n");
+    run(wt.path, "add", "new.sh");
+    writeFileSync(join(wt.path, "new.sh"), "#!/bin/sh\necho edited\n");
+    chmodSync(join(wt.path, "new.sh"), 0o755);
+    const result = await cleanupWorktree(pi, repoDir, wt, "edit then chmod");
+    expect(result.error).toBeUndefined();
+    expect(run(repoDir, "ls-tree", result.branch as string, "new.sh")).toMatch(/^100755 /);
+    expect(run(repoDir, "show", `${result.branch}:new.sh`)).toContain("edited");
+  });
+
+  it("keeps a leading-space filename and its index-only chmod", async () => {
+    const wt = await worktree("space-name");
+    writeFileSync(join(wt.path, " lead.sh"), "#!/bin/sh\n");
+    run(wt.path, "add", "--", " lead.sh");
+    run(wt.path, "update-index", "--chmod=+x", "--", " lead.sh");
+    const result = await cleanupWorktree(pi, repoDir, wt, "space name");
+    expect(result.error).toBeUndefined();
+    expect(run(repoDir, "ls-tree", result.branch as string, "--", " lead.sh")).toMatch(/^100755 /);
   });
 
   it("removes a worktree whose staged +x the agent reverted on disk", async () => {

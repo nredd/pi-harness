@@ -20,7 +20,7 @@ const SIMPLE_ESCAPES: Record<string, number> = {
   "\\": 0x5c,
 };
 
-const UTF8 = new TextDecoder("utf-8", { fatal: true });
+const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 /** Args that make `git` quote every non-ASCII path byte; put them before the subcommand. */
 export const QUOTE_PATH_ARGS = ["-c", "core.quotePath=true"];
