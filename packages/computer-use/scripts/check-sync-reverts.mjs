@@ -344,6 +344,14 @@ const cases = [
 		check: "test/managed-browser-headless.test.mjs",
 		failure: /Expected values to be strictly deep-equal/,
 	},
+	{
+		name: "WSL2 empty-roots hint (#672)",
+		file: "src/platform/linux/backend.ts",
+		before: "emptyRootsHint: () => wslNoWindowsHint(),",
+		after: "emptyRootsHint: () => undefined,",
+		check: "test/wsl2-diagnostics.test.mjs",
+		failure: /HINT-FROM-BACKEND|not reachable from the WSL2 guest/,
+	},
 ];
 
 try {

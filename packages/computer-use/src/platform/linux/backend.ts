@@ -21,6 +21,7 @@ import type {
 	PlatformWaitForResponse,
 } from "../types.ts";
 import { LINUX_HELPER_PROTOCOL_VERSION, linuxHelper, resetLinuxHelper } from "./helper.ts";
+import { wslNoWindowsHint } from "./wsl.ts";
 
 function normalizedProcessName(appName: string): string {
 	return appName.toLowerCase().split("/").pop()!.replace(/\.desktop$/i, "");
@@ -135,10 +136,12 @@ export const linuxBackend: ComputerUsePlatformBackend = {
 		const title = query.title?.trim().toLowerCase();
 		return title ? roots.filter((root) => root.title.trim().toLowerCase().includes(title)) : roots;
 	},
+	emptyRootsHint: () => wslNoWindowsHint(),
 	async getFrontmost(signal?: AbortSignal): Promise<PlatformFrontmostResult> {
 		const roots = parseRoots(await linuxHelper.command("listRoots", {}, { signal }));
 		const focused = roots.find((root) => root.isFocused) ?? roots[0];
-		if (!focused?.pid) throw new Error("No frontmost window was available.");
+		// The WSL hint is only for an empty guest: roots without a pid are a Linux-side problem.
+		if (!focused?.pid) throw new Error(["No frontmost window was available.", roots.length === 0 ? wslNoWindowsHint() : undefined].filter(Boolean).join(" "));
 		return {
 			appName: focused.appName ?? "Unknown",
 			bundleId: focused.bundleId,

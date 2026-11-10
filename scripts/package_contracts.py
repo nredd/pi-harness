@@ -631,6 +631,7 @@ COMPUTER_USE_CONTRACT = PackageContract(
         "src/platform/index.ts",
         "src/platform/linux/backend.ts",
         "src/platform/linux/helper.ts",
+        "src/platform/linux/wsl.ts",
         "src/platform/macos/backend.ts",
         "src/platform/macos/browser.ts",
         "src/platform/macos/helper-path.d.mts",

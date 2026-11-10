@@ -217,6 +217,8 @@ export interface ComputerUsePlatformBackend {
 	ensureReady(ctx: ExtensionContext, state: PlatformReadyState, signal?: AbortSignal): Promise<PlatformReadyState>;
 	listApps(signal?: AbortSignal): Promise<PlatformApp[]>;
 	listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRoot[]>;
+	/** Explain why no roots are visible on this host (e.g. a WSL2 guest), appended to empty `find_roots` text. */
+	emptyRootsHint?(): string | undefined;
 	getFrontmost(signal?: AbortSignal): Promise<PlatformFrontmostResult>;
 	focusWindow(target: PlatformTarget, signal?: AbortSignal): Promise<PlatformFocusWindowResult>;
 	observe(request: PlatformObserveRequest, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<LookResponse>;
