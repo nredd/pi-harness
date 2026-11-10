@@ -191,7 +191,7 @@ budget. Per-workspace wall time is the gap between consecutive `> <pkg> check` l
 | `packages/resource-sampler` | 10 s | 12 s |
 
 Hosted job totals were 1373 s and 1666 s. `packages/subagents` and
-`packages/computer-use` are 61-65% of the `check-ts` step, so macOS takes the same `subagents`, `computer-use`,
+`packages/computer-use` are about 69-73% of the summed per-workspace time (the 877-1607 s step range spans other runs), so macOS takes the same `subagents`, `computer-use`,
 `ts` split as Ubuntu; the remainder is about 400 s of gate time. Self-hosted `pi-macos` runners are
 slower still, which is the headroom the split buys. Re-measure from `Duration` and `> <pkg> check`
 lines after a split lands and update `CELL_SECONDS` in `scripts/runner_pools.py`.
