@@ -2408,6 +2408,7 @@ final class Bridge {
 					return finish(["outcome": "unknown", "performed": performed, "evidence": ["scrollBarValue": write.value, "unmovedScrollX": write.remainingX, "unmovedScrollY": write.remainingY]])
 				}
 				wheelDeltaOverride = (write.remainingX, write.remainingY)
+				performed["delivery"] = delivery
 				try executeCoordinates(coordinatePoint())
 			} else {
 				performed["axScroll"] = result["reason"] ?? "no_scroll_action"
