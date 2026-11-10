@@ -191,8 +191,10 @@ each `provider/model`), `j/k` or arrows scroll, `q` or Escape closes.
   `<agentDir>/pi-session-kit/stats-cache.json`, re-parsing only files whose size or mtime changed;
   deleted sessions keep counting; machine views also retain history from previously configured
   session roots. Version 1 caches migrate without dropping deleted-file records; available files
-  are reparsed for preserved IDs. A corrupt record is dropped and rebuilt. Lines that are not JSON
-  objects show as `! N unreadable lines`.
+  are reparsed for preserved IDs. Version 1 and 2 records with unreadable lines are reparsed when
+  their file is next listed; a deleted file keeps its old count. A corrupt record is dropped and
+  rebuilt. All-NUL lines (crash padding) are skipped; other lines that are not JSON objects show
+  as `! N unreadable lines`.
 - Print mode prints a per-model table and coverage; JSON emits a display message. Works in Plan mode.
 - After `make install` at the monorepo root, `npm run build:stats-export --workspace @nredd/pi-session-kit`
   reproduces `dist/pi-stats-export.mjs` inside this package. Copy this standalone Node 22+ artifact

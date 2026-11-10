@@ -29,7 +29,7 @@ function nth(items, index) {
 }
 
 // src/stats/load.ts
-var CACHE_VERSION = 2;
+var CACHE_VERSION = 3;
 var opaqueId = (value) => createHash("sha256").update(value).digest("hex");
 var EXCLUDED_PROVIDERS = /* @__PURE__ */ new Set(["faux", "faux-provider", "fake-provider", "router"]);
 var CHILD_NAME = /#[0-9a-f]{8}$/;
@@ -55,6 +55,7 @@ function looksLikeObject(line) {
   const text = line.trim();
   return text.startsWith("{") && text.endsWith("}");
 }
+var NUL_PADDING = /^\0+$/;
 var SessionParser = class {
   out;
   modelIndex = /* @__PURE__ */ new Map();
@@ -77,7 +78,7 @@ var SessionParser = class {
     };
   }
   accept(line) {
-    if (!line) return;
+    if (!line || NUL_PADDING.test(line)) return;
     const isHeader = this.lines++ === 0;
     const isAssistant = line.includes('"assistant"');
     const isInfo = line.includes('"session_info"') || line.includes('"session-kit:child"');
@@ -224,12 +225,15 @@ async function readCache(path) {
   } catch {
     return { files: {}, migrate: false };
   }
-  if (doc?.version !== CACHE_VERSION && doc?.version !== 1 || typeof doc.files !== "object" || doc.files === null)
+  if (doc?.version !== CACHE_VERSION && doc?.version !== 1 && doc?.version !== 2 || typeof doc.files !== "object" || doc.files === null)
     return { files: {}, migrate: false };
-  return {
-    files: Object.fromEntries(Object.entries(doc.files).filter(([, record2]) => isFileStats(record2))),
-    migrate: doc.version === 1
-  };
+  const current = doc.version === CACHE_VERSION;
+  const files = {};
+  for (const [file, record2] of Object.entries(doc.files)) {
+    if (!isFileStats(record2)) continue;
+    files[file] = !current && record2.badLines > 0 ? { ...record2, size: -1 } : record2;
+  }
+  return { files, migrate: !current };
 }
 async function writeCache(path, files) {
   await mkdir(dirname(path), { recursive: true });

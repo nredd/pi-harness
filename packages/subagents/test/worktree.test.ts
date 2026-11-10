@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -11,6 +11,7 @@ import {
   pruneWorktrees,
   setWorktreeIsolationEnabled,
   WorktreeError,
+  type WorktreeInfo,
 } from "../src/worktree.js";
 
 /** `git worktree remove`, wherever `-c` options put it in argv. */
@@ -55,6 +56,31 @@ function mockPi(): ExtensionAPI {
         return { stdout, stderr: "", code: 0, killed: false };
       } catch (err: any) {
         return { stdout: err.stdout ?? "", stderr: err.stderr ?? "", code: err.status ?? 1, killed: false };
+      }
+    },
+  } as unknown as ExtensionAPI;
+}
+
+/**
+ * A pi whose exec decodes stdout like the host's: every `chunkSize`-byte chunk on its own,
+ * so a multibyte character split across chunks becomes U+FFFD (a real `pi.exec` does this
+ * at 64KB; a tiny chunk makes every non-ASCII byte hit the boundary).
+ */
+function chunkedPi(chunkSize = 1): ExtensionAPI {
+  return {
+    exec: async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
+      const decode = (data: Buffer | string) => {
+        const bytes = Buffer.from(data);
+        let text = "";
+        for (let i = 0; i < bytes.length; i += chunkSize) text += bytes.subarray(i, i + chunkSize).toString();
+        return text;
+      };
+      try {
+        const stdout = execFileSync(command, args, { cwd: options?.cwd, stdio: ["pipe", "pipe", "pipe"], timeout: options?.timeout });
+        return { stdout: decode(stdout), stderr: "", code: 0, killed: false };
+      } catch (err) {
+        const failure = err as { stdout?: Buffer; stderr?: Buffer; status?: number };
+        return { stdout: decode(failure.stdout ?? ""), stderr: String(failure.stderr ?? ""), code: failure.status ?? 1, killed: false };
       }
     },
   } as unknown as ExtensionAPI;
@@ -773,6 +799,41 @@ describe("cleanupWorktree — nested repositories git refuses to remove", () => 
     return { wt, sub, sha: run(sub, "rev-parse", "HEAD") };
   }
 
+  it("finds a leftover submodule git dir when the main repository path is non-ASCII", async () => {
+    const accentRepo = join(tmpdir(), `pi-wt-\u00e9-${process.pid}-${Date.now()}`);
+    renameSync(repoDir, accentRepo);
+    repoDir = accentRepo;
+    run(repoDir, "submodule", "add", subDir, "sub");
+    run(repoDir, "commit", "-m", "add submodule");
+    const wt = await createWorktree(pi, repoDir, "modules-accent");
+    cleanups.push(wt.path);
+    run(wt.path, "submodule", "update", "--init", "--recursive");
+    writeFileSync(join(wt.path, "sub", "precious.txt"), "unpublished");
+    run(join(wt.path, "sub"), "add", "precious.txt");
+    run(join(wt.path, "sub"), "commit", "-m", "local only");
+    run(wt.path, "submodule", "deinit", "-f", "sub");
+    const result = await cleanupWorktree(chunkedPi(), repoDir, wt, "modules accent");
+    expect(result.path).toBe(wt.path);
+    expect(result.error).toMatch(/submodule work would be lost/);
+  });
+
+  it("detects unpublished commits in a submodule at a non-ASCII path when stdout is decoded chunk by chunk", async () => {
+    run(repoDir, "submodule", "add", subDir, "d\u00e9p");
+    run(repoDir, "commit", "-m", "add submodule");
+    const wt = await createWorktree(pi, repoDir, "gitlink-accent");
+    cleanups.push(wt.path);
+    run(wt.path, "submodule", "update", "--init", "--recursive");
+    const sub = join(wt.path, "d\u00e9p");
+    writeFileSync(join(sub, "precious.txt"), "unpublished");
+    run(sub, "add", "precious.txt");
+    run(sub, "commit", "-m", "local only");
+    const sha = run(sub, "rev-parse", "HEAD");
+    const result = await cleanupWorktree(chunkedPi(), repoDir, wt, "gitlink accent");
+    expect(result.path).toBe(wt.path);
+    expect(result.error).toMatch(/submodule work would be lost[\s\S]*d\u00e9p/);
+    expect(run(sub, "rev-parse", "HEAD")).toBe(sha);
+  });
+
   it("keeps the worktree when the agent deleted .gitmodules over a submodule with unpushed commits", async () => {
     const { wt, sub, sha } = await worktreeWithSubmodule("no-gitmodules");
     rmSync(join(wt.path, ".gitmodules"));
@@ -1062,10 +1123,8 @@ describe("cleanupWorktree — nested repositories git refuses to remove", () => 
     }) as typeof pi.exec;
     expect(await cleanupWorktree(pi, repoDir, wt, "ignored alias")).toEqual({ hasChanges: false });
     expect(existsSync(wt.path)).toBe(false);
-    // Only the identity lookup that finds it already `seen` (once per disposability pass: before
-    // the commit check and again before the forced removal); never status, probe or `HEAD`.
-    expect(inAlias.length).toBeGreaterThan(0);
-    expect(inAlias.every(args => args.join(" ") === "rev-parse --absolute-git-dir")).toBe(true);
+    // The identity lookup reads `.git` itself and finds it already `seen`: never status, probe or `HEAD`.
+    expect(inAlias).toEqual([]);
   });
 
   it("does not let submodule ignore=all hide a bumped gitlink", async () => {
@@ -1203,5 +1262,326 @@ describe("worktree isolation switch", () => {
       await pruneWorktrees(pi, repoDir);
       rmSync(repoDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("cleanupWorktree -- index bits and ignored path decoding (#596)", () => {
+  let repoDir: string;
+  let subDir: string;
+  let pi: ExtensionAPI;
+  const cleanups: string[] = [];
+
+  const run = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-c", "protocol.file.allow=always", "-c", "user.email=t@t.com", "-c", "user.name=T", ...args], {
+      cwd,
+      stdio: "pipe",
+    })
+      .toString()
+      .trim();
+
+  beforeEach(() => {
+    pi = mockPi();
+    subDir = initGitRepo();
+    repoDir = initGitRepo();
+    writeFileSync(join(repoDir, "tracked.txt"), "original");
+    writeFileSync(join(repoDir, "run.sh"), "#!/bin/sh\n");
+    run(repoDir, "add", "tracked.txt", "run.sh");
+    run(repoDir, "commit", "-m", "tracked");
+  });
+
+  afterEach(() => {
+    for (const path of cleanups.splice(0)) {
+      if (existsSync(path)) execFileSync("git", ["worktree", "remove", "--force", path], { cwd: repoDir });
+    }
+    rmSync(repoDir, { recursive: true, force: true });
+    rmSync(subDir, { recursive: true, force: true });
+  });
+
+  async function worktree(id: string) {
+    const wt = await createWorktree(pi, repoDir, id);
+    cleanups.push(wt.path);
+    return wt;
+  }
+
+  it.each([
+    ["assume-unchanged", "--assume-unchanged"],
+    ["skip-worktree", "--skip-worktree"],
+  ])("preserves an edit hidden by %s", async (id, flag) => {
+    const wt = await worktree(id);
+    run(wt.path, "update-index", flag, "tracked.txt");
+    writeFileSync(join(wt.path, "tracked.txt"), "agent edit");
+    expect(run(wt.path, "status", "--porcelain")).toBe("");
+    const result = await cleanupWorktree(pi, repoDir, wt, id);
+    expect(result.error).toBeUndefined();
+    expect(result.hasChanges).toBe(true);
+    expect(run(repoDir, "show", `${result.branch}:tracked.txt`)).toBe("agent edit");
+    expect(existsSync(wt.path)).toBe(false);
+  });
+
+  it("preserves an edit hidden by both assume-unchanged and skip-worktree", async () => {
+    const wt = await worktree("both-bits");
+    run(wt.path, "update-index", "--assume-unchanged", "--skip-worktree", "tracked.txt");
+    writeFileSync(join(wt.path, "tracked.txt"), "agent edit");
+    const result = await cleanupWorktree(pi, repoDir, wt, "both bits");
+    expect(result.error).toBeUndefined();
+    expect(run(repoDir, "show", `${result.branch}:tracked.txt`)).toBe("agent edit");
+  });
+
+  /** Cleanup must keep the tree and name `path`; nothing may be committed, branched or removed. */
+  async function expectKept(wt: WorktreeInfo, path: string): Promise<void> {
+    const result = await cleanupWorktree(pi, repoDir, wt, "mode");
+    expect(result.hasChanges).toBe(true);
+    expect(result.error).toContain("mode staged only in the index; worktree kept");
+    expect(result.error).toContain(path);
+    expect(result.path).toBe(wt.path);
+    expect(existsSync(wt.path)).toBe(true);
+    expect(run(wt.path, "rev-parse", "HEAD")).toBe(wt.baseSha);
+    expect(run(repoDir, "branch", "--list", "pi-agent*")).not.toContain(wt.branch);
+  }
+
+  it("commits a plain unstaged chmod +x on a tracked file", async () => {
+    const wt = await worktree("chmod-plain");
+    chmodSync(join(wt.path, "run.sh"), 0o755);
+    const result = await cleanupWorktree(pi, repoDir, wt, "plain chmod");
+    expect(result.error).toBeUndefined();
+    expect(run(repoDir, "ls-tree", result.branch as string, "run.sh")).toMatch(/^100755 /);
+  });
+
+  it("keeps a worktree with a mode staged only in the index (update-index --chmod)", async () => {
+    const wt = await worktree("chmod");
+    run(wt.path, "update-index", "--chmod=+x", "run.sh");
+    await expectKept(wt, "run.sh");
+    expect(run(wt.path, "ls-files", "--stage", "run.sh")).toMatch(/^100755 /);
+  });
+
+  it("keeps the worktree when the index-only chmod is followed by a touch", async () => {
+    const wt = await worktree("chmod-touch");
+    run(wt.path, "update-index", "--chmod=+x", "run.sh");
+    const now = new Date(Date.now() + 5000);
+    utimesSync(join(wt.path, "run.sh"), now, now);
+    await expectKept(wt, "run.sh");
+    expect(run(wt.path, "ls-files", "--stage", "run.sh")).toMatch(/^100755 /);
+  });
+
+  it("keeps a worktree with an index-only chmod on a newly staged file", async () => {
+    const wt = await worktree("chmod-new");
+    writeFileSync(join(wt.path, "new.sh"), "#!/bin/sh\n");
+    run(wt.path, "add", "new.sh");
+    run(wt.path, "update-index", "--chmod=+x", "new.sh");
+    await expectKept(wt, "new.sh");
+  });
+
+  it("keeps a worktree when a file added at 644 was chmod +x on disk", async () => {
+    const wt = await worktree("chmod-after-add");
+    writeFileSync(join(wt.path, "new.sh"), "#!/bin/sh\n");
+    run(wt.path, "add", "new.sh");
+    chmodSync(join(wt.path, "new.sh"), 0o755);
+    await expectKept(wt, "new.sh");
+    expect(readFileSync(join(wt.path, "new.sh"), "utf8")).toBe("#!/bin/sh\n");
+    expect(run(wt.path, "ls-files", "--stage", "new.sh")).toMatch(/^100644 /);
+  });
+
+  it("keeps a worktree whose staged +x the agent reverted on disk", async () => {
+    const wt = await worktree("chmod-after-stage");
+    chmodSync(join(wt.path, "run.sh"), 0o755);
+    run(wt.path, "add", "run.sh");
+    chmodSync(join(wt.path, "run.sh"), 0o644);
+    await expectKept(wt, "run.sh");
+  });
+
+  it("keeps a leading-space filename with an index-only chmod", async () => {
+    const wt = await worktree("space-name");
+    writeFileSync(join(wt.path, " lead.sh"), "#!/bin/sh\n");
+    run(wt.path, "add", "--", " lead.sh");
+    run(wt.path, "update-index", "--chmod=+x", "--", " lead.sh");
+    await expectKept(wt, " lead.sh");
+  });
+
+  it("keeps a worktree with a staged mode removal (--chmod=-x)", async () => {
+    const wt = await worktree("chmod-minus");
+    chmodSync(join(wt.path, "run.sh"), 0o755);
+    run(wt.path, "add", "run.sh");
+    run(wt.path, "commit", "-m", "exec");
+    const base = run(wt.path, "rev-parse", "HEAD");
+    run(wt.path, "update-index", "--chmod=-x", "run.sh");
+    const result = await cleanupWorktree(pi, repoDir, wt, "chmod minus");
+    expect(result.error).toContain("run.sh");
+    expect(existsSync(wt.path)).toBe(true);
+    expect(run(wt.path, "rev-parse", "HEAD")).toBe(base);
+  });
+
+  it("preserves a deletion of a file whose mode change was staged", async () => {
+    const wt = await worktree("chmod-delete");
+    run(wt.path, "update-index", "--chmod=+x", "run.sh");
+    rmSync(join(wt.path, "run.sh"));
+    const result = await cleanupWorktree(pi, repoDir, wt, "chmod delete");
+    expect(result.error).toBeUndefined();
+    expect(run(repoDir, "ls-tree", "--name-only", result.branch as string)).not.toMatch(/run\.sh/);
+  });
+
+  it("commits a staged content change plus an unstaged chmod: the staged mode is unchanged", async () => {
+    const wt = await worktree("staged-content");
+    writeFileSync(join(wt.path, "run.sh"), "#!/bin/sh\necho edit\n");
+    run(wt.path, "add", "run.sh");
+    chmodSync(join(wt.path, "run.sh"), 0o755);
+    const result = await cleanupWorktree(pi, repoDir, wt, "staged content");
+    expect(result.error).toBeUndefined();
+    expect(run(repoDir, "show", `${result.branch}:run.sh`)).toContain("echo edit");
+    expect(run(repoDir, "ls-tree", result.branch as string, "run.sh")).toMatch(/^100755 /);
+  });
+
+  it("does not look for index-only modes when core.fileMode=false", async () => {
+    const wt = await worktree("filemode-off");
+    run(wt.path, "config", "core.fileMode", "false");
+    run(wt.path, "update-index", "--chmod=+x", "run.sh");
+    const result = await cleanupWorktree(pi, repoDir, wt, "filemode off");
+    expect(result.error).toBeUndefined();
+    expect(result.hasChanges).toBe(true);
+    expect(existsSync(wt.path)).toBe(false);
+  });
+
+  it("treats a skip-worktree path under a replaced directory as absent (ENOTDIR)", async () => {
+    mkdirSync(join(repoDir, "d"));
+    writeFileSync(join(repoDir, "d", "f.txt"), "nested");
+    run(repoDir, "add", "d/f.txt");
+    run(repoDir, "commit", "-m", "nested");
+    const wt = await worktree("enotdir");
+    run(wt.path, "update-index", "--skip-worktree", "d/f.txt");
+    rmSync(join(wt.path, "d"), { recursive: true });
+    writeFileSync(join(wt.path, "d"), "now a file");
+    const result = await cleanupWorktree(pi, repoDir, wt, "enotdir");
+    expect(result.error).toBeUndefined();
+    expect(run(repoDir, "show", `${result.branch}:d`)).toBe("now a file");
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("keeps the worktree when a skip-worktree path cannot be inspected (EACCES)", async () => {
+    mkdirSync(join(repoDir, "d"));
+    writeFileSync(join(repoDir, "d", "f.txt"), "nested");
+    run(repoDir, "add", "d/f.txt");
+    run(repoDir, "commit", "-m", "nested");
+    const wt = await worktree("eacces");
+    run(wt.path, "update-index", "--skip-worktree", "d/f.txt");
+    chmodSync(join(wt.path, "d"), 0o000);
+    try {
+      const result = await cleanupWorktree(pi, repoDir, wt, "eacces");
+      expect(result.hasChanges).toBe(true);
+      expect(result.error).toContain("EACCES");
+      expect(result.path).toBe(wt.path);
+      expect(existsSync(wt.path)).toBe(true);
+    } finally {
+      chmodSync(join(wt.path, "d"), 0o755);
+    }
+  });
+
+  it("keeps the worktree when a gitlink's .git is neither a directory nor a gitdir file", async () => {
+    const wt = await worktree("bad-dotgit");
+    run(wt.path, "update-index", "--add", "--cacheinfo", `160000,${wt.baseSha},dep`);
+    mkdirSync(join(wt.path, "dep"));
+    writeFileSync(join(wt.path, "dep", ".git"), "not a gitdir pointer\n");
+    const result = await cleanupWorktree(pi, repoDir, wt, "bad dotgit");
+    expect(result.error).toContain("neither a directory nor a gitdir file");
+    expect(result.path).toBe(wt.path);
+    expect(existsSync(wt.path)).toBe(true);
+  });
+
+  it.each([
+    ["accent", "caf\u00e9.txt"],
+    ["newline", "a\nb.txt"],
+    ["leading dash", "-dash.txt"],
+    ["quote and backslash", 'say "hi" \\ x.txt'],
+    ["real U+FFFD", "a\uFFFDb.txt"],
+    ["emoji", "\u{1F600} z.txt"],
+  ])("classifies a %s filename correctly when stdout is decoded chunk by chunk", async (id, name) => {
+    writeFileSync(join(repoDir, name), "original");
+    run(repoDir, "add", "--", name);
+    run(repoDir, "commit", "-m", "name");
+    const wt = await worktree(`name-${id.replace(/\W/g, "")}`);
+    run(wt.path, "update-index", "--skip-worktree", "--", name);
+    writeFileSync(join(wt.path, name), "agent edit");
+    const result = await cleanupWorktree(chunkedPi(), repoDir, wt, id);
+    expect(result.error).toBeUndefined();
+    expect(run(repoDir, "show", `${result.branch}:${name}`)).toBe("agent edit");
+    expect(existsSync(wt.path)).toBe(false);
+  });
+
+  it("names a non-ASCII filename with an index-only chmod under chunked decoding", async () => {
+    const wt = await worktree("chmod-accent");
+    writeFileSync(join(wt.path, "n\u00e9w.sh"), "#!/bin/sh\n");
+    run(wt.path, "add", "n\u00e9w.sh");
+    run(wt.path, "update-index", "--chmod=+x", "n\u00e9w.sh");
+    const result = await cleanupWorktree(chunkedPi(), repoDir, wt, "chmod accent");
+    expect(result.error).toContain("n\u00e9w.sh");
+    expect(existsSync(wt.path)).toBe(true);
+  });
+
+  it("preserves a skip-worktree file replaced by a symlink", async () => {
+    const wt = await worktree("skip-symlink");
+    run(wt.path, "update-index", "--skip-worktree", "tracked.txt");
+    rmSync(join(wt.path, "tracked.txt"));
+    symlinkSync("README.md", join(wt.path, "tracked.txt"));
+    const result = await cleanupWorktree(pi, repoDir, wt, "skip symlink");
+    expect(result.error).toBeUndefined();
+    expect(run(repoDir, "ls-tree", result.branch as string, "tracked.txt")).toMatch(/^120000 /);
+  });
+
+  it("removes a worktree whose skip-worktree file is simply absent", async () => {
+    const wt = await worktree("sparse");
+    run(wt.path, "update-index", "--skip-worktree", "tracked.txt");
+    rmSync(join(wt.path, "tracked.txt"));
+    expect(await cleanupWorktree(pi, repoDir, wt, "sparse")).toEqual({ hasChanges: false });
+    expect(existsSync(wt.path)).toBe(false);
+  });
+
+  it("removes a worktree whose index bits hide no edit", async () => {
+    const wt = await worktree("bits-clean");
+    run(wt.path, "update-index", "--assume-unchanged", "tracked.txt");
+    expect(await cleanupWorktree(pi, repoDir, wt, "bits clean")).toEqual({ hasChanges: false });
+    expect(existsSync(wt.path)).toBe(false);
+  });
+
+  it("keeps a nested clone whose edit is hidden by assume-unchanged", async () => {
+    const wt = await worktree("nested-bits");
+    run(wt.path, "clone", subDir, "dep");
+    const dep = join(wt.path, "dep");
+    run(dep, "update-index", "--assume-unchanged", "README.md");
+    writeFileSync(join(dep, "README.md"), "agent edit");
+    const result = await cleanupWorktree(pi, repoDir, wt, "nested bits");
+    expect(result.error).toMatch(/submodule work would be lost[\s\S]*README\.md/);
+    expect(readFileSync(join(dep, "README.md"), "utf8")).toBe("agent edit");
+  });
+
+  /** An ignored nested clone with an unpublished commit, under an awkwardly named ignored directory. */
+  async function worktreeWithIgnoredClone(id: string, ignoredDir: string) {
+    writeFileSync(join(repoDir, ".gitignore"), "vendor/\n");
+    run(repoDir, "add", ".gitignore");
+    run(repoDir, "commit", "-m", "ignore vendor");
+    const wt = await worktree(id);
+    const parent = join(wt.path, "vendor", ignoredDir);
+    mkdirSync(parent, { recursive: true });
+    run(parent, "clone", subDir, "dep");
+    const dep = join(parent, "dep");
+    writeFileSync(join(dep, "precious.txt"), "unpublished");
+    run(dep, "add", "precious.txt");
+    run(dep, "commit", "-m", "local only");
+    return { wt, dep };
+  }
+
+  it.each([
+    ["spaces", "my dir"],
+    ["unicode", "d\u00e9p\u00f4t \u2603"],
+    ["quotes", 'say "hi" \\ it\'s'],
+  ])("keeps an ignored nested clone under a path with %s", async (id, name) => {
+    const { wt, dep } = await worktreeWithIgnoredClone(`ignored-${id}`, name);
+    const result = await cleanupWorktree(pi, repoDir, wt, id);
+    expect(result.error).toMatch(/submodule work would be lost/);
+    expect(existsSync(join(dep, "precious.txt"))).toBe(true);
+  });
+
+  it("finds an ignored nested clone under a non-ASCII path when stdout is decoded chunk by chunk", async () => {
+    const { wt, dep } = await worktreeWithIgnoredClone("ignored-chunked", "d\u00e9p\u00f4t");
+    const result = await cleanupWorktree(chunkedPi(), repoDir, wt, "ignored chunked");
+    expect(result.error).toMatch(/submodule work would be lost/);
+    expect(result.path).toBe(wt.path);
+    expect(existsSync(join(dep, "precious.txt"))).toBe(true);
   });
 });
