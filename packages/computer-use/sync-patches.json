@@ -235,6 +235,80 @@
 				"reference": "~/code/review-notes/upstream-issues-drafts.md",
 				"detail": "Owner draft (c) wording, currently labeled draft D in the drafts file; not filed"
 			}
+		},
+		{
+			"id": "act-preflight",
+			"purpose": "Validate every desktop action before the write lock advances the epoch, so a rejected request neither stales the stateId nor delivers a valid prefix",
+			"files": [
+				"src/bridge.ts",
+				"test/invariants.test.mjs",
+				"test/unpaired-act.test.mjs"
+			],
+			"check": "test/unpaired-act.test.mjs",
+			"dropControls": [
+				"action preflight before write epoch (upstream #112)"
+			],
+			"upstream": {
+				"status": "candidate",
+				"reference": "UPSTREAM.md",
+				"detail": "Open upstream PR injaneity/pi-computer-use#112 (unmerged, MIT, author credited); carried from its head, not filed by us"
+			}
+		},
+		{
+			"id": "keyboard-layout-typing",
+			"purpose": "Type via physical US key codes only when the active layout, checked with UCKeyTranslate, yields that exact character; otherwise use Unicode events",
+			"files": [
+				"native/macos/bridge.swift",
+				"test/macos-native-pure.test.mjs"
+			],
+			"check": "test/macos-native-pure.test.mjs",
+			"dropControls": [
+				"keyboard layout gate for physical keys (upstream #113)"
+			],
+			"upstream": {
+				"status": "candidate",
+				"reference": "UPSTREAM.md",
+				"detail": "Open upstream PR injaneity/pi-computer-use#113 (unmerged, MIT, author credited); carried from its head, not filed by us"
+			}
+		},
+		{
+			"id": "scroll-bar-fallback",
+			"purpose": "Scroll SwiftUI/AppKit scroll areas by writing the nearest settable AXScrollBar value between AX scroll actions and the wheel fallback",
+			"files": [
+				"native/macos/bridge.swift",
+				"src/platform/types.ts",
+				"test/macos-native-pure.test.mjs"
+			],
+			"check": "test/macos-native-pure.test.mjs",
+			"dropControls": [
+				"scroll bar range guard (upstream #114)"
+			],
+			"upstream": {
+				"status": "candidate",
+				"reference": "UPSTREAM.md",
+				"detail": "Open upstream PR injaneity/pi-computer-use#114 (unmerged, MIT, author credited); carried from its head, not filed by us"
+			}
+		},
+		{
+			"id": "managed-browser-headless",
+			"purpose": "Launch the managed Linux browser headless when no DISPLAY or WAYLAND_DISPLAY exists, with an override variable; --no-sandbox only for root (deviates from upstream, which always adds it)",
+			"files": [
+				"src/bridge.ts",
+				"src/config.ts",
+				"docs/content/docs/how-to-guides/linux.mdx",
+				"docs/content/docs/reference/codebase.mdx",
+				"docs/content/docs/reference/configuration.mdx",
+				"test/managed-browser-headless.test.mjs"
+			],
+			"check": "test/managed-browser-headless.test.mjs",
+			"dropControls": [
+				"headless managed browser flags (upstream #104)"
+			],
+			"upstream": {
+				"status": "candidate",
+				"reference": "UPSTREAM.md",
+				"detail": "Open upstream PR injaneity/pi-computer-use#104 (unmerged, MIT, author credited); carried from its head, not filed by us"
+			}
 		}
 	],
 	"files": [
@@ -294,6 +368,7 @@
 		"src/platform/linux/helper.ts",
 		"src/platform/macos/backend.ts",
 		"src/platform/macos/helper.ts",
+		"src/platform/types.ts",
 		"sync-patches.json",
 		"test/act-outcomes.test.mjs",
 		"test/async.test.mjs",
@@ -311,6 +386,7 @@
 		"test/local-signing.test.mjs",
 		"test/macos-helper-live.test.mjs",
 		"test/macos-helper-path.test.mjs",
+		"test/managed-browser-headless.test.mjs",
 		"test/macos-native-pure.test.mjs",
 		"test/macos-observe-target.test.mjs",
 		"test/platform-linux.test.mjs",

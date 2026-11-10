@@ -5,6 +5,7 @@ import Darwin
 import Vision
 import ImageIO
 import ScreenCaptureKit
+import Carbon.HIToolbox
 
 struct BridgeFailure: Error {
 	let message: String
@@ -199,7 +200,100 @@ func interpolatedDragPoints(from start: CGPoint, to end: CGPoint, maxStep: CGFlo
 		return CGPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t)
 	}
 }
+
+/// The US-layout key, plus Shift, that types a character, or nil when the US
+/// layout has no direct key for it. The key is a `keyCode` name; whether that
+/// key really types the character depends on the active layout.
+func usLayoutKeyStroke(for character: String) -> (key: String, shift: Bool)? {
+	guard character.count == 1 else { return nil }
+	if character >= "a" && character <= "z" { return (character, false) }
+	if character >= "A" && character <= "Z" { return (character.lowercased(), true) }
+	if character >= "0" && character <= "9" { return (character, false) }
+	switch character {
+	case " ": return ("space", false)
+	case ".", ",", "/", "-", "=", ";", "'", "[", "]", "\\", "`": return (character, false)
+	case "_": return ("-", true)
+	case "+": return ("=", true)
+	case ":": return (";", true)
+	case "\"": return ("'", true)
+	case "?": return ("/", true)
+	case "<": return (",", true)
+	case ">": return (".", true)
+	default: return nil
+	}
+}
+
+/// A physical key stroke is only safe when the active input source is a plain
+/// keyboard layout, not an input method that composes keys, and that layout
+/// produces exactly the intended character for the key.
+func physicalKeyStrokeTypes(_ character: String, isKeyboardLayout: Bool, layoutProduces produced: String?) -> Bool {
+	isKeyboardLayout && produced == character
+}
+
+/// The scroll bar value, 0 at the start and 1 at the end, that moves a scroll
+/// area's content by `delta` points. The scrollable range comes from the content
+/// length when the area reports it, otherwise from the scroll bar's thumb to
+/// track ratio, which equals the viewport to content ratio. Returns nil when the
+/// range is unknown or empty, or when the bar is already at the end in the
+/// requested direction.
+func scrollBarTargetValue(current: Double, delta: Int, viewportLength: Double, contentLength: Double?, thumbLength: Double?, trackLength: Double?) -> Double? {
+	guard delta != 0, viewportLength > 0, current.isFinite else { return nil }
+	var content = contentLength ?? 0
+	if content <= viewportLength, let thumbLength, let trackLength, thumbLength > 0, trackLength > thumbLength {
+		content = viewportLength * trackLength / thumbLength
+	}
+	let range = content - viewportLength
+	guard range > 1 else { return nil }
+	let clamped = min(1, max(0, current))
+	let target = min(1, max(0, clamped + Double(delta) / range))
+	return abs(target - clamped) < 0.0001 ? nil : target
+}
 // END PURE
+
+// BEGIN KEYBOARD LAYOUT (compiled standalone by test/macos-native-pure.test.mjs; Carbon only)
+/// The text a `UCKeyboardLayout` produces for one key press, or nil for a dead
+/// key or a key with no output.
+func keyboardLayoutCharacter(layoutData: Data, keyCode: UInt16, shift: Bool) -> String? {
+	layoutData.withUnsafeBytes { raw -> String? in
+		guard let layout = raw.baseAddress?.assumingMemoryBound(to: UCKeyboardLayout.self) else { return nil }
+		var deadKeyState: UInt32 = 0
+		var length = 0
+		var characters = [UniChar](repeating: 0, count: 4)
+		let modifiers: UInt32 = shift ? UInt32(shiftKey >> 8) & 0xFF : 0
+		let status = UCKeyTranslate(layout, keyCode, UInt16(kUCKeyActionDown), modifiers, UInt32(LMGetKbdType()), 0, &deadKeyState, characters.count, &length, &characters)
+		guard status == noErr, deadKeyState == 0, length > 0 else { return nil }
+		return String(utf16CodeUnits: characters, count: length)
+	}
+}
+
+struct KeyboardInputSource {
+	/// False when the active source is an input method, such as Pinyin, that
+	/// intercepts key strokes before they reach the text field.
+	let isKeyboardLayout: Bool
+	let layoutData: Data?
+}
+
+/// Reads the active keyboard input source. Text Input Sources must be queried on
+/// the main thread, which runs the AppKit event loop in serve mode.
+func currentKeyboardInputSource() -> KeyboardInputSource {
+	let read = { () -> KeyboardInputSource in
+		guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else {
+			return KeyboardInputSource(isKeyboardLayout: false, layoutData: nil)
+		}
+		var isKeyboardLayout = false
+		if let type = TISGetInputSourceProperty(source, kTISPropertyInputSourceType) {
+			isKeyboardLayout = (Unmanaged<CFString>.fromOpaque(type).takeUnretainedValue() as String) == (kTISTypeKeyboardLayout as String)
+		}
+		var layoutData: Data?
+		if let layoutSource = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+			let data = TISGetInputSourceProperty(layoutSource, kTISPropertyUnicodeKeyLayoutData) {
+			layoutData = Unmanaged<CFData>.fromOpaque(data).takeUnretainedValue() as Data
+		}
+		return KeyboardInputSource(isKeyboardLayout: isKeyboardLayout, layoutData: layoutData)
+	}
+	return Thread.isMainThread ? read() : DispatchQueue.main.sync(execute: read)
+}
+// END KEYBOARD LAYOUT
 
 private struct LookRecord {
 	let lookId: String
@@ -2279,6 +2373,17 @@ final class Bridge {
 				let after = scrollPositionSignature(element)
 				return finish(["outcome": before != after ? "worked" : "unknown", "performed": performed])
 			}
+			// SwiftUI and many AppKit scroll areas expose no scroll actions and can
+			// ignore wheel events posted to a background app, but accept a write to
+			// their scroll bar's value.
+			if let scrolled = setScrollBarValueOrAncestor(startingAt: element, targetPid: pid, scrollX: (params["scrollX"] as? NSNumber)?.intValue ?? 0, scrollY: (params["scrollY"] as? NSNumber)?.intValue ?? 0) {
+				performed["grounding"] = "description"
+				performed["delivery"] = "ax"
+				performed["axScroll"] = "scroll_bar_value"
+				if let cursorPoint { animateCursor(at: cursorPoint) }
+				return finish(["outcome": "worked", "performed": performed, "evidence": ["scrollBarValue": scrolled]])
+			}
+			performed["axScroll"] = result["reason"] ?? "no_scroll_action"
 			try executeCoordinates(coordinatePoint())
 		} else {
 			try executeCoordinates(coordinatePoint())
@@ -2578,6 +2683,50 @@ final class Bridge {
 		}
 
 		return ["scrolled": false, "reason": "no_scroll_action"]
+	}
+
+	/// Moves the nearest scroll area, at or above `element`, whose scroll bar can
+	/// still move in the requested direction, by writing the bar's value. Returns
+	/// the new value read back from the bar, or nil when no bar moved.
+	private func setScrollBarValueOrAncestor(startingAt element: AXUIElement, targetPid: Int32, scrollX: Int, scrollY: Int) -> Double? {
+		var current: AXUIElement? = element
+		var depth = 0
+		while let candidate = current, depth < 10 {
+			if let pid = pidForElement(candidate), pid != targetPid { return nil }
+			if stringAttribute(candidate, attribute: kAXRoleAttribute as CFString) == (kAXScrollAreaRole as String) {
+				var moved: Double?
+				if scrollY != 0 { moved = setScrollBarValue(area: candidate, barAttribute: "AXVerticalScrollBar", delta: scrollY, vertical: true) }
+				if scrollX != 0, let value = setScrollBarValue(area: candidate, barAttribute: "AXHorizontalScrollBar", delta: scrollX, vertical: false) { moved = moved ?? value }
+				if let moved { return moved }
+			}
+			current = parentElement(candidate)
+			depth += 1
+		}
+		return nil
+	}
+
+	private func setScrollBarValue(area: AXUIElement, barAttribute: String, delta: Int, vertical: Bool) -> Double? {
+		guard let barObject = copyAttribute(area, attribute: barAttribute as CFString),
+			CFGetTypeID(barObject as CFTypeRef) == AXUIElementGetTypeID()
+		else { return nil }
+		let bar = unsafeBitCast(barObject, to: AXUIElement.self)
+		var settable = DarwinBoolean(false)
+		guard AXUIElementIsAttributeSettable(bar, kAXValueAttribute as CFString, &settable) == .success, settable.boolValue,
+			let current = (copyAttribute(bar, attribute: kAXValueAttribute as CFString) as? NSNumber)?.doubleValue,
+			let viewport = sizeAttribute(area, attribute: kAXSizeAttribute as CFString)
+		else { return nil }
+		let length = { (size: CGSize) in Double(vertical ? size.height : size.width) }
+		let content = sizeAttribute(area, attribute: "AXContentSize" as CFString).map(length)
+		let thumb = axElementArray(bar, attribute: kAXChildrenAttribute as CFString)
+			.first { stringAttribute($0, attribute: kAXRoleAttribute as CFString) == (kAXValueIndicatorRole as String) }
+			.flatMap { sizeAttribute($0, attribute: kAXSizeAttribute as CFString) }
+			.map(length)
+		let track = sizeAttribute(bar, attribute: kAXSizeAttribute as CFString).map(length)
+		guard let target = scrollBarTargetValue(current: current, delta: delta, viewportLength: length(viewport), contentLength: content, thumbLength: thumb, trackLength: track),
+			AXUIElementSetAttributeValue(bar, kAXValueAttribute as CFString, NSNumber(value: target)) == .success
+		else { return nil }
+		guard let after = (copyAttribute(bar, attribute: kAXValueAttribute as CFString) as? NSNumber)?.doubleValue, abs(after - current) > 0.0001 else { return nil }
+		return after
 	}
 
 	private func performActionOrAncestor(startingAt element: AXUIElement, action: CFString, targetPid: Int32) -> [String: Any] {
@@ -3910,9 +4059,10 @@ final class Bridge {
 	private func postUnicodeText(_ text: String, pid: Int32, delivery: String = "hid") throws {
 		if delivery == "hid" { physicalInputLock.lock() }
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
+		let inputSource = currentKeyboardInputSource()
 		for scalar in text.unicodeScalars {
 			let char = String(scalar)
-			if let stroke = physicalKeyStroke(for: char) {
+			if let stroke = physicalKeyStroke(for: char, inputSource: inputSource) {
 				try postKey(stroke.key, flags: stroke.flags, pid: pid, delivery: delivery)
 				continue
 			}
@@ -3946,24 +4096,13 @@ final class Bridge {
 	/// AppKit field editors can observe synthetic Unicode events without applying
 	/// them to the backing value, while normal key codes follow the same input
 	/// path as a user keystroke. Unicode synthesis remains the fallback for text
-	/// that has no direct key representation.
-	private func physicalKeyStroke(for character: String) -> (key: String, flags: CGEventFlags)? {
-		guard character.count == 1 else { return nil }
-		if character >= "a" && character <= "z" { return (character, []) }
-		if character >= "A" && character <= "Z" { return (character.lowercased(), [.maskShift]) }
-		if character >= "0" && character <= "9" { return (character, []) }
-		switch character {
-		case " ": return ("space", [])
-		case ".", ",", "/", "-", "=", ";", "'", "[", "]", "\\", "`": return (character, [])
-		case "_": return ("-", [.maskShift])
-		case "+": return ("=", [.maskShift])
-		case ":": return (";", [.maskShift])
-		case "\"": return ("'", [.maskShift])
-		case "?": return ("/", [.maskShift])
-		case "<": return (",", [.maskShift])
-		case ">": return (".", [.maskShift])
-		default: return nil
-		}
+	/// that has no direct key representation, and for any character the active
+	/// layout or input method would not type from that US key.
+	private func physicalKeyStroke(for character: String, inputSource: KeyboardInputSource) -> (key: String, flags: CGEventFlags)? {
+		guard let stroke = usLayoutKeyStroke(for: character), let code = keyCode(stroke.key) else { return nil }
+		let produced = inputSource.layoutData.flatMap { keyboardLayoutCharacter(layoutData: $0, keyCode: code, shift: stroke.shift) }
+		guard physicalKeyStrokeTypes(character, isKeyboardLayout: inputSource.isKeyboardLayout, layoutProduces: produced) else { return nil }
+		return (stroke.key, stroke.shift ? [.maskShift] : [])
 	}
 
 	private func setUnicodeString(event: CGEvent, text: String) {

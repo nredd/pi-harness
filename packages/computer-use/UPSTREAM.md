@@ -58,6 +58,10 @@ the release is `requested release: injaneity/pi-computer-use#116`
 | Owned install/release docs | harness follow-up | Install `@nredd/pi-computer-use`, use root `publish.yml` and opt into Linux repair builds; upstream: harness-only, not filed | `docs:check` and three `test:sync-reverts` controls reject the upstream-only instructions |
 | Site working directory | harness follow-up | Run imported website commands from `packages/computer-use`, not the harness root; upstream: harness-only, not filed | `docs:check` and `test:sync-reverts` reject the old root-relative instructions |
 | Rust coverage | harness follow-up | Report-only LCOV and per-file text/JSON from the native crates; upstream: proposed after issue-first (draft (c) in the drafts file), currently labeled draft D there, not filed | `test:rust-coverage` arguments/paths/missing tool and `test:sync-reverts` missing-tool control |
+| Act preflight | upstream PR #112 (`be73574`) | Validate every action before the write lock advances the epoch; rejected batches neither stale the `stateId` nor deliver a prefix; open upstream PR, status `candidate` | `test:sync-reverts` preflight control in `test/unpaired-act.test.mjs` |
+| Keyboard-layout typing | upstream PR #113 (`5bd2894`) | Post physical US key codes only when `UCKeyTranslate` on the active layout yields that character; else Unicode events; open upstream PR | `test:sync-reverts` layout gate control in `test:macos-native` |
+| Scroll-bar fallback | upstream PR #114 (`5e8378f`) | Write the nearest settable `AXScrollBar` value for SwiftUI/AppKit scroll areas before the wheel fallback; open upstream PR | `test:sync-reverts` range guard control in `test:macos-native` |
+| Headless managed browser | upstream PR #104 (`6bcd831`) | Headless `launch_browser` without `DISPLAY`/`WAYLAND_DISPLAY`, override env var; `--no-sandbox` only as root, unlike upstream; open upstream PR | `test:managed-browser-headless` via `test:sync-reverts` |
 
 See `sync-patches.json` for each row's exact file paths and `upstream` status, including harness-only
 patches. [Rust coverage](docs/rust-coverage.md) records pinned tools, real per-file numbers,
@@ -78,6 +82,14 @@ is carried. The existing range-checked window-id helpers and tests remain; upstr
 has equivalent positive-id/ref targeting but not the out-of-range guard. `cd72165`'s validation
 history remains in `docs/macos-root-targeting.md`, rather than restoring removed upstream doc pages.
 The note is historical evidence, not validation of this sync.
+
+Unmerged upstream PRs carried (2026-11-09, upstream main still `67e9e2f`): #112, #113, #114, #104,
+all MIT, authors `glvent` (#112-#114) and `ceslami` (#104), applied from their heads onto this
+tree (see nredd/pi-harness#637). Skipped: #118 (this package already ships every helper source,
+checked by `test:package-assets`), #108/#110/#120 (Windows, NOT RUN here), dependabot bumps.
+Committed `prebuilt/macos` payloads were not rebuilt for the Swift changes; the release pipeline
+compiles them from tagged source. `test:upstream-sync` already reports drift on files declared by
+earlier main PRs (`scripts/build-native.mjs`, `test/fixtures/fake-*.mjs`); not changed here.
 
 ## Conflict resolutions
 

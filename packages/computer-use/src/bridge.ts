@@ -319,7 +319,7 @@ const runtimeState: RuntimeState = {
 
 const savedStates = new SavedStates();
 /** Test seam: lets scripts run bridge internals inside an operation state. */
-export const testing = { runInOperation: <T>(fn: () => T, state: OperationState = {}): T => savedStates.operations.run(state, fn), buildToolResult, browserObservationResult, waitForViewText, performSearchUi, performLaunchBrowser, removeProfileDirsOnExit };
+export const testing = { runInOperation: <T>(fn: () => T, state: OperationState = {}): T => savedStates.operations.run(state, fn), buildToolResult, browserObservationResult, waitForViewText, performSearchUi, performLaunchBrowser, removeProfileDirsOnExit, managedBrowserNeedsHeadless, managedBrowserArgs };
 let resourceScheduler = new ResourceScheduler();
 
 function operationState(): OperationState {
@@ -1794,6 +1794,22 @@ async function dispatchUiAction(action: UiAction, target: ResolvedTarget, look: 
 	return trace;
 }
 
+/**
+ * Validates every action against the base look before the write lock is taken.
+ * The write lock advances the resource epoch before dispatch, so a request that
+ * fails pure validation must be rejected here or it would stale a state on which
+ * nothing was delivered.
+ */
+function preflightUiTransaction(actions: UiAction[], look: LookResponse, headless: boolean): void {
+	const actionState: ActionState = { currentFocus: false };
+	for (const action of actions) {
+		const prepared = prepareUiAction(action, actionState, look, headless);
+		if (!headless && (prepared.establishesFocus || (prepared.action === "click" && "x" in prepared.target))) {
+			actionState.currentFocus = true;
+		}
+	}
+}
+
 async function dispatchUiTransaction(actions: UiAction[], target: ResolvedTarget, look: LookResponse, headless: boolean, signal?: AbortSignal): Promise<ExecutionTrace> {
 	// Strict-headless batches have one immutable delivery class. When foreground
 	// fallback is permitted, decide independently per action so a completed
@@ -2004,10 +2020,11 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 	const baseView = { stateId: state.currentCapture!.stateId, outline: state.currentOutline! };
 	const condition = params.expect ? validateCondition(params.expect) : undefined;
 	const scopeNode = condition ? conditionScopeNode(look.parsedOutline!, condition) : undefined;
+	const headless = getComputerUseConfig().headless;
+	preflightUiTransaction(actions, look, headless);
 	const target = await ensureTargetWindowId(await resolveCurrentTarget(signal, { preferModal: false }), signal);
 	const noteBefore = state.currentNote;
 	return await withWindowWriteLock(target, () => withDesktopTransaction(async () => {
-		const headless = getComputerUseConfig().headless;
 		const execution = await dispatchUiTransaction(actions, target, look, headless, signal);
 		await normalizeRootDeltaRefs(execution, target);
 		const executedActions = actions.slice(0, execution.actionCount ?? actions.length);
@@ -2380,6 +2397,39 @@ async function releaseManagedBrowser(): Promise<void> {
 }
 
 /**
+ * Whether the managed browser must run headless: no graphical session to attach a window to.
+ * `PI_COMPUTER_USE_MANAGED_BROWSER_HEADLESS` forces the answer either way (`1`/`true`, `0`/`false`).
+ * macOS and Windows always have a desktop session.
+ * @returns True when `--headless=new` should be passed.
+ */
+function managedBrowserNeedsHeadless(): boolean {
+	const override = trimOrUndefined(process.env.PI_COMPUTER_USE_MANAGED_BROWSER_HEADLESS)?.toLowerCase();
+	if (override === "1" || override === "true") return true;
+	if (override === "0" || override === "false") return false;
+	if (process.platform === "darwin" || process.platform === "win32") return false;
+	return !trimOrUndefined(process.env.DISPLAY) && !trimOrUndefined(process.env.WAYLAND_DISPLAY);
+}
+
+/**
+ * Pure argv builder for the managed browser, testable without spawning one. Headless adds
+ * `--no-sandbox` only for root, whose Chromium refuses to start sandboxed.
+ * @param opts Debugging port, private profile dir and first page.
+ * @returns Browser arguments.
+ */
+function managedBrowserArgs({ remoteDebuggingPort, userDataDir, url }: { remoteDebuggingPort: number; userDataDir: string; url: string }): string[] {
+	const headless = managedBrowserNeedsHeadless();
+	const root = process.getuid?.() === 0;
+	return [
+		`--remote-debugging-port=${remoteDebuggingPort}`,
+		`--user-data-dir=${userDataDir}`,
+		"--no-first-run",
+		"--no-default-browser-check",
+		...(headless ? ["--headless=new", "--disable-gpu", ...(root ? ["--no-sandbox"] : [])] : []),
+		url,
+	];
+}
+
+/**
  * Stop the previous managed browser, then start a new one with a private profile dir and record it.
  * Call only inside `withManagedBrowserLifecycle`.
  * @param browser Configured managed browser, which names the executable and the profile dir.
@@ -2398,7 +2448,7 @@ async function startManagedBrowser(browser: ComputerUseConfig["managed_browser"]
 	const profileDir = await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`));
 	let managedBrowser: ChildProcess;
 	try {
-		const args = [`--remote-debugging-port=${port}`, `--user-data-dir=${profileDir}`, "--no-first-run", "--no-default-browser-check", url];
+		const args = managedBrowserArgs({ remoteDebuggingPort: port, userDataDir: profileDir, url });
 		managedBrowser = spawn(executable, args, { stdio: "ignore", detached: false });
 	} catch (error) {
 		await removeProfileDir(profileDir);

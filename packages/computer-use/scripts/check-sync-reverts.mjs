@@ -241,6 +241,40 @@ const cases = [
 		check: "scripts/check-package-assets.mjs",
 		failure: /missing package\/native\/macos\/agent_cursor_motion.swift/,
 	},
+	{
+		name: "action preflight before write epoch (upstream #112)",
+		file: "src/bridge.ts",
+		before: "\tpreflightUiTransaction(actions, look, headless);",
+		after: "\t/* preflight dropped */",
+		check: "test/unpaired-act.test.mjs",
+		failure: /invalid batch must not deliver its valid prefix/,
+	},
+	{
+		name: "keyboard layout gate for physical keys (upstream #113)",
+		file: "native/macos/bridge.swift",
+		before: "isKeyboardLayout && produced == character",
+		after: "produced == character",
+		check: "test/macos-native-pure.test.mjs",
+		failure: /input method falls back even when the layout matches/,
+		darwinOnly: true,
+	},
+	{
+		name: "scroll bar range guard (upstream #114)",
+		file: "native/macos/bridge.swift",
+		before: "guard range > 1 else { return nil }",
+		after: "/* range unchecked */",
+		check: "test/macos-native-pure.test.mjs",
+		failure: /content that fits has nothing to scroll/,
+		darwinOnly: true,
+	},
+	{
+		name: "headless managed browser flags (upstream #104)",
+		file: "src/bridge.ts",
+		before: '"--headless=new", "--disable-gpu"',
+		after: '"--disable-gpu"',
+		check: "test/managed-browser-headless.test.mjs",
+		failure: /Expected values to be strictly deep-equal/,
+	},
 ];
 
 try {
