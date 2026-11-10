@@ -1561,7 +1561,7 @@ def test_old_node_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     make_tarball(workdir / "core" / "earendil-works-pi-coding-agent-1.3.0.tgz", core_manifest())
     monkeypatch.setattr(install, "validate_release_identity", lambda stack, tag, checksums: None)
     monkeypatch.setattr(install, "release_checksums", lambda tag: {})
-    monkeypatch.setattr(install, "verify_core_assets", lambda stack, path, attest: None)
+    monkeypatch.setattr(install, "verify_core_assets", lambda stack, path, attest, checksums: None)
     monkeypatch.setattr(install, "node_version", lambda node: (20, 11, 0))
     with pytest.raises(UnsupportedError, match=r"Node\.js 20\.11\.0 is older than the 22\.19\.0"):
         install.verify_release(snapshot, "node", workdir)
@@ -1805,7 +1805,7 @@ def test_verify_release_binds_staged_core_to_the_snapshot(
     }
     extra = {release_asset_url(tag, "earendil-works-pi-ai-1.3.0.tgz"): "e" * 64}
     monkeypatch.setattr(install, "release_checksums", lambda release_tag: recorded | extra)
-    monkeypatch.setattr(install, "verify_core_assets", lambda stack, path, attest: None)
+    monkeypatch.setattr(install, "verify_core_assets", lambda stack, path, attest, checksums: None)
     monkeypatch.setattr(install, "node_version", lambda node: (22, 19, 0))
     monkeypatch.setattr(install, "verify_runtime", lambda *args, **kwargs: (None, {}))
     verified = verify_release(snapshot, "node", tmp_path / "work")
@@ -1823,7 +1823,7 @@ def test_verify_release_requires_integrity_for_installed_core_assets(
     core = snapshot.stack.core
     partial = {name: digest for name, digest in core.integrity.items() if "pi-tui" not in name}
     stack = snapshot.stack.model_copy(update={"core": core.model_copy(update={"integrity": partial})})
-    monkeypatch.setattr(install, "verify_core_assets", lambda stack, path, attest: None)
+    monkeypatch.setattr(install, "verify_core_assets", lambda stack, path, attest, checksums: None)
     with pytest.raises(VerificationError, match="pi-tui"):
         install.verify_release(snapshot.model_copy(update={"stack": stack}), "node", tmp_path)
 
@@ -1847,7 +1847,7 @@ def test_verify_release_rejects_wrong_legacy_core_bytes(
         return destination
 
     monkeypatch.setattr(install, "download", serve)
-    monkeypatch.setattr(install, "verify_core_assets", lambda stack, path, attest: None)
+    monkeypatch.setattr(install, "verify_core_assets", lambda stack, path, attest, checksums: None)
     with pytest.raises(VerificationError, match="checksum mismatch"):
         install.verify_release(real_snapshot(), "node", tmp_path)
 

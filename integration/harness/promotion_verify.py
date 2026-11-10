@@ -37,7 +37,7 @@ from harness.promotion import (
     verify_required_checks,
 )
 from harness.release_gate import require_full_verification
-from harness.runtime_lock import ASSET, SOURCE_LOCK, DependencyGraph, RuntimeLocks, acquire
+from harness.runtime_lock import ASSET, SOURCE_LOCK, DependencyGraph, RuntimeLocks, acquire, core_checksums
 from harness.stack import Stack
 
 if TYPE_CHECKING:
@@ -164,10 +164,7 @@ def build_candidate(ctx: VerifyContext, source_sha: str) -> None:
             acquire(
                 graph,
                 ctx.temp / "runtime" / target / kind,
-                {
-                    promotion.release_asset_url(stack.core.tag, name): digest
-                    for name, digest in stack.core.integrity.items()
-                },
+                core_checksums(stack),
             )
     (ctx.promo / ASSET).write_text(
         DependencyGraph(schema_version=1, source_sha=source_sha, runtime=runtime).model_dump_json()
