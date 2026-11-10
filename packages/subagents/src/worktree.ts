@@ -284,7 +284,7 @@ async function stagedModeChanges(pi: ExtensionAPI, repo: string): Promise<ModeCh
   for (let i = 0; i + 1 < fields.length; i += 2) {
     const [oldMode, newMode] = (fields[i] ?? "").slice(1).split(" ");
     const path = fields[i + 1] ?? "";
-    if (oldMode !== newMode && (newMode === "100644" || newMode === "100755") && (oldMode === "100644" || oldMode === "100755")) {
+    if (oldMode !== newMode && (newMode === "100644" || newMode === "100755") && (oldMode === "000000" || oldMode === "100644" || oldMode === "100755")) {
       changes.push({ path, mode: newMode });
     }
   }

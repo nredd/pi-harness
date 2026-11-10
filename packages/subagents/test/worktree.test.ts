@@ -1277,6 +1277,16 @@ describe("cleanupWorktree — index bits and ignored path decoding (#596)", () =
     expect(run(repoDir, "ls-tree", result.branch as string, "run.sh")).toMatch(/^100755 /);
   });
 
+  it("preserves an index-only chmod on a newly staged file", async () => {
+    const wt = await worktree("chmod-new");
+    writeFileSync(join(wt.path, "new.sh"), "#!/bin/sh\n");
+    run(wt.path, "add", "new.sh");
+    run(wt.path, "update-index", "--chmod=+x", "new.sh");
+    const result = await cleanupWorktree(pi, repoDir, wt, "chmod new");
+    expect(result.error).toBeUndefined();
+    expect(run(repoDir, "ls-tree", result.branch as string, "new.sh")).toMatch(/^100755 /);
+  });
+
   it("preserves a staged mode removal (--chmod=-x)", async () => {
     const wt = await worktree("chmod-minus");
     run(wt.path, "update-index", "--chmod=+x", "run.sh");
