@@ -269,8 +269,11 @@ async function clearHiddenIndexBits(pi: ExtensionAPI, repo: string): Promise<voi
 function lstatOrUndefined(path: string): Stats | undefined {
   try {
     return lstatSync(path);
-  } catch {
-    return undefined;
+  } catch (error) {
+    // Anything else (EACCES, ...) is unknown, not absent: let cleanup fail and keep the tree.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return undefined;
+    throw error;
   }
 }
 
