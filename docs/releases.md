@@ -118,6 +118,14 @@ its tag, asset or attestation. Recovery is tracked in #227: reviewed fixes, succ
 exact-main registry-stack evidence, then a new ordinary `promote`. Publication, promotion
 and live activation remain separate facts.
 
+## Provenance republication
+
+All nine packages in the table above fail `stack-check`: a history purge rewrote the commits under their `@nredd/*` tags, so each npm SLSA provenance names a pre-purge source commit (e.g. preset `0.3.0` provenance `1e9ba623`, tag now `8ec5f7d8`), and `promote-stack.yml` run [here](https://github.com/nredd/pi-harness/actions/runs/42491284274) failed `Provenance source commit differs from the tagged release`. Published bytes are unchanged and valid; only the source binding is stale. #638 republishes each package at a new patch version from current `main` through `publish.yml` with fresh provenance. `stack-check` is not weakened and no purge map is added.
+
+Planned versions: `@nredd/pi-resource-sampler` `0.2.1`, `@nredd/pi-subscription-router` `0.5.1`, `@nredd/pi-subagents` `0.22.0-nredd.9`, `@nredd/pi-plan-mode` `0.59.3-nredd.4`, `@nredd/pi-todo` `2.13.12`, `@nredd/pi-preset` `0.3.1`, `@nredd/pi-computer-use` `0.6.1`, `@nredd/pi-session-kit` `0.9.1`, `@nredd/pi-dev-tools` `0.7.1`. No package source changes. Dev-tools and session-kit keep their exact `@nredd/pi-resource-sampler@0.2.0` dependency: the lockfile cannot select an unpublished `0.2.1`, and nothing verifies a dependency's provenance. The bump PR deliberately leaves `integration/stacks/personal.json` and `integration/stacks/runtime-locks.json` on the published selection, per [release verification](release-verification.md).
+
+Not yet published: this section records the plan. The publication table and receipt are added with the pin PR, after each `publish.yml` run succeeds.
+
 ## Owned npm packages
 
 `.github/workflows/publish.yml` is the only automated publish path for `@nredd/pi-computer-use`,
