@@ -1419,6 +1419,69 @@ describe("cleanupWorktree -- index bits and ignored path decoding (#596)", () =>
     expect(run(repoDir, "ls-tree", "--name-only", result.branch as string)).not.toMatch(/run\.sh/);
   });
 
+  it("commits a staged content change, whose mode is unchanged", async () => {
+    const wt = await worktree("staged-content");
+    writeFileSync(join(wt.path, "tracked.txt"), "staged edit");
+    run(wt.path, "add", "tracked.txt");
+    const result = await cleanupWorktree(pi, repoDir, wt, "staged content");
+    expect(result.error).toBeUndefined();
+    expect(run(repoDir, "show", `${result.branch}:tracked.txt`)).toBe("staged edit");
+  });
+
+  it("does not look for index-only modes when core.fileMode=false", async () => {
+    const wt = await worktree("filemode-off");
+    run(wt.path, "config", "core.fileMode", "false");
+    run(wt.path, "update-index", "--chmod=+x", "run.sh");
+    const result = await cleanupWorktree(pi, repoDir, wt, "filemode off");
+    expect(result.error).toBeUndefined();
+    expect(result.hasChanges).toBe(true);
+    expect(existsSync(wt.path)).toBe(false);
+  });
+
+  it("treats a skip-worktree path under a replaced directory as absent (ENOTDIR)", async () => {
+    mkdirSync(join(repoDir, "d"));
+    writeFileSync(join(repoDir, "d", "f.txt"), "nested");
+    run(repoDir, "add", "d/f.txt");
+    run(repoDir, "commit", "-m", "nested");
+    const wt = await worktree("enotdir");
+    run(wt.path, "update-index", "--skip-worktree", "d/f.txt");
+    rmSync(join(wt.path, "d"), { recursive: true });
+    writeFileSync(join(wt.path, "d"), "now a file");
+    const result = await cleanupWorktree(pi, repoDir, wt, "enotdir");
+    expect(result.error).toBeUndefined();
+    expect(run(repoDir, "show", `${result.branch}:d`)).toBe("now a file");
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("keeps the worktree when a skip-worktree path cannot be inspected (EACCES)", async () => {
+    mkdirSync(join(repoDir, "d"));
+    writeFileSync(join(repoDir, "d", "f.txt"), "nested");
+    run(repoDir, "add", "d/f.txt");
+    run(repoDir, "commit", "-m", "nested");
+    const wt = await worktree("eacces");
+    run(wt.path, "update-index", "--skip-worktree", "d/f.txt");
+    chmodSync(join(wt.path, "d"), 0o000);
+    try {
+      const result = await cleanupWorktree(pi, repoDir, wt, "eacces");
+      expect(result.hasChanges).toBe(true);
+      expect(result.error).toContain("EACCES");
+      expect(result.path).toBe(wt.path);
+      expect(existsSync(wt.path)).toBe(true);
+    } finally {
+      chmodSync(join(wt.path, "d"), 0o755);
+    }
+  });
+
+  it("keeps the worktree when a gitlink's .git is neither a directory nor a gitdir file", async () => {
+    const wt = await worktree("bad-dotgit");
+    run(wt.path, "update-index", "--add", "--cacheinfo", `160000,${wt.baseSha},dep`);
+    mkdirSync(join(wt.path, "dep"));
+    writeFileSync(join(wt.path, "dep", ".git"), "not a gitdir pointer\n");
+    const result = await cleanupWorktree(pi, repoDir, wt, "bad dotgit");
+    expect(result.error).toContain("neither a directory nor a gitdir file");
+    expect(result.path).toBe(wt.path);
+    expect(existsSync(wt.path)).toBe(true);
+  });
+
   it.each([
     ["accent", "caf\u00e9.txt"],
     ["newline", "a\nb.txt"],

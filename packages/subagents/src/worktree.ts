@@ -332,8 +332,8 @@ const GITLINK_MODE = "160000";
 async function gitlinks(pi: ExtensionAPI, repo: string, rev?: string): Promise<Map<string, string>> {
   const links = new Map<string, string>();
   for (const entry of await gitLines(pi, repo, rev ? ["ls-tree", "-r", rev] : ["ls-files", "-s"], 30000)) {
+    // `gitLines` drops blanks, so every entry is `<fields>` TAB `<path>`.
     const tab = entry.indexOf("\t");
-    if (tab < 0) continue;
     // ls-files: `<mode> <sha> <stage>`; ls-tree: `<mode> <type> <sha>`.
     const [mode, second, third] = entry.slice(0, tab).split(" ");
     if (mode === GITLINK_MODE) links.set(unquoteGitPath(entry.slice(tab + 1)), rev ? (third as string) : (second as string));
