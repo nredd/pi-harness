@@ -155,7 +155,18 @@ interface QueuedRuntimeAdmissionInput {
 }
 type InteractiveUi = typeof import("./interactive-ui.js");
 
+/** The slice of `fs.FSWatcher` the settings reload needs. */
+export interface SettingsDirectoryWatcher {
+  close(): void;
+  on(event: "error", listener: (error: Error) => void): unknown;
+}
+
+/** Directory change listener with the `fs.watch` callback shape. */
+export type SettingsDirectoryListener = (event: string, fileName: string | Buffer | null) => void;
+
 interface PlanModeDependencies {
+  /** Test seam: defaults to a non-persistent `fs.watch`, whose FSEvents start latency is host dependent. */
+  watchSettingsDirectory?(directory: string, listener: SettingsDirectoryListener): SettingsDirectoryWatcher;
   readSettings?(): ReturnType<typeof readPlanModeSettings>;
   updateSettings?(
     patch: PlanModeSettingsPatch,
@@ -209,7 +220,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   let queuedRuntimeAdmissionInputs: QueuedRuntimeAdmissionInput[] = [];
   let shuttingDownSession: object | undefined;
   let menuController = new AbortController();
-  let settingsWatch: ReturnType<typeof watch> | undefined;
+  let settingsWatch: SettingsDirectoryWatcher | undefined;
   let settingsReloadTimer: ReturnType<typeof setTimeout> | undefined;
   /** Bumped by every Plan start, exit and session change so a queued model switch can tell it is stale. */
   let planModelEpoch = 0;
@@ -538,7 +549,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       const directory = dirname(pathToWatch);
       const fileName = basename(pathToWatch);
       // Node and Bun report only "rename" and "change", and either can mean the file changed.
-      const watcher = watch(directory, { persistent: false }, (_event, changedFile) => {
+      const watchDirectory =
+        dependencies.watchSettingsDirectory ??
+        ((target: string, listener: SettingsDirectoryListener) => watch(target, { persistent: false }, listener));
+      const watcher = watchDirectory(directory, (_event, changedFile) => {
         if (!changedFile || changedFile.toString() !== fileName) return;
         schedulePlanModeSettingsReload(generation);
       });

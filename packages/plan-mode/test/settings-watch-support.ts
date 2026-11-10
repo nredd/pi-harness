@@ -1,22 +1,30 @@
-import assert from "node:assert/strict";
-import { readFile, rename, writeFile } from "node:fs/promises";
-import { vi } from "vitest";
+import { basename } from "node:path";
+import type { SettingsDirectoryListener, SettingsDirectoryWatcher } from "../src/plan-mode.js";
 
-/** Wait for an extension-observable read before testing a newly installed native watcher. */
-export async function waitForSettingsWatch(settingsPath: string, hasReloaded: () => boolean) {
-  const initial = await readFile(settingsPath, "utf8");
-  const temporaryPath = `${settingsPath}.watch-ready`;
-  // Native watcher startup can miss or coalesce immediate writes. Republish the
-  // unchanged settings until the extension observes one, rather than sleeping.
-  await vi.waitFor(
-    async () => {
-      if (!hasReloaded()) {
-        await writeFile(temporaryPath, initial);
-        await rename(temporaryPath, settingsPath);
-      }
-      assert.ok(hasReloaded(), "settings watcher must observe a read before the test mutation");
+/**
+ * Deterministic stand-in for the native directory watcher. Native delivery (FSEvents on macOS)
+ * has host-dependent start latency, so unit tests publish the change themselves via `trigger`.
+ */
+export function createFakeSettingsWatch() {
+  const live: { listener: SettingsDirectoryListener; closed: boolean }[] = [];
+  return {
+    /** Inject as `watchSettingsDirectory`. */
+    watchSettingsDirectory(_directory: string, listener: SettingsDirectoryListener): SettingsDirectoryWatcher {
+      const entry = { listener, closed: false };
+      live.push(entry);
+      return {
+        close: () => {
+          entry.closed = true;
+        },
+        on: () => undefined,
+      };
     },
-    // Leave room for the extension's 75 ms debounce between publications.
-    { timeout: 2_000, interval: 150 },
-  );
+    /** Deliver a change for `settingsPath` to every watcher that is still open. */
+    trigger(settingsPath: string, event = "change") {
+      const open = live.filter((entry) => !entry.closed);
+      if (open.length === 0) throw new Error("no open settings watcher to deliver the change to");
+      for (const entry of open) entry.listener(event, basename(settingsPath));
+    },
+    openCount: () => live.filter((entry) => !entry.closed).length,
+  };
 }

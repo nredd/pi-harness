@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test, vi } from "vitest";
 import planMode from "../src/plan-mode.js";
 import * as settingsModule from "../src/settings.js";
-import { waitForSettingsWatch } from "./settings-watch-support.js";
+import { createFakeSettingsWatch } from "./settings-watch-support.js";
 import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
 
 const HELPERS = ["plan_mode_question", "plan_mode_complete"];
@@ -62,24 +62,22 @@ test("watched retired visibility is ignored while remaining settings still reloa
     await writeFile(settingsPath, '{"toolVisibility":"always"}\n');
     const mock = createMockPi({ activeTools: ["read"], thinkingLevel: "low" });
     let reloaded = false;
-    let reads = 0;
+    const watch = createFakeSettingsWatch();
     const readSettings = settingsModule.readPlanModeSettings;
     const readSpy = vi.spyOn(settingsModule, "readPlanModeSettings").mockImplementation(async (path) => {
       const result = await readSettings(path);
-      reads++;
       reloaded = result.kind === "loaded" && result.settings.thinkingLevel === "high";
       return result;
     });
-    planMode(mock.pi, { settingsPath });
+    planMode(mock.pi, { settingsPath, watchSettingsDirectory: watch.watchSettingsDirectory });
     const context = createMockContext();
     try {
       await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
-      const initialReads = reads;
-      await waitForSettingsWatch(settingsPath, () => reads > initialReads);
       await writeFile(
         settingsPath,
         '{"toolVisibility":"after-first-plan","toggleShortcut":"ctrl+shift+p","thinkingLevel":"high"}\n',
       );
+      watch.trigger(settingsPath);
       await waitForCondition(() => reloaded);
       await mock.commands.get("plan")?.handler("start", context.ctx);
 

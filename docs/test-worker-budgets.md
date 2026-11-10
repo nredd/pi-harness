@@ -120,6 +120,15 @@ Under 50 self-terminating local spinners (load 90-174 on a shared Apple M4) five
 runs took 13.7-27.0 s, two of them past 20 s. That is not a deterministic RED;
 the hosted job is the failing receipt.
 
+## Settings watch tests (#636)
+
+No plan-mode unit test depends on real `fs.watch` delivery. Settings-watch tests
+inject `watchSettingsDirectory` or mock `node:fs` `watch`
+(`settings-watch-lifecycle.test.ts`) and publish the change themselves, so none
+races FSEvents. Native stream start measured 0.1-12.1 s on a degraded macOS host
+(diagnosis on #636), far past the 5 s cap. A real-watch smoke test needs a
+measured budget entry, an owner decision under #312, so it is not included.
+
 ## Measured real-git submodule budget (#651)
 
 `packages/subagents/test/worktree.test.ts`, describe "cleanupWorktree -- nested
