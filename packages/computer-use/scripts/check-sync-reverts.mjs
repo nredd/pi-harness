@@ -304,6 +304,15 @@ const cases = [
 		darwinOnly: true,
 	},
 	{
+		name: "wheel horizontal sign (#650)",
+		file: "native/macos/bridge.swift",
+		before: "return (wheel(deltaY), wheel(deltaX))",
+		after: "return (wheel(deltaY), -wheel(deltaX))",
+		check: "test/macos-native-pure.test.mjs",
+		failure: /positive scrollX posts a negative wheel2/,
+		darwinOnly: true,
+	},
+	{
 		name: "strict headless keyboard preflight (upstream #112 deviation)",
 		file: "src/actions.ts",
 		before: 'if (action.action !== "typeText" && action.action !== "keypress") return undefined;',
