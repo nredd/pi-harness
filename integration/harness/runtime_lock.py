@@ -35,12 +35,13 @@ from harness.release import (
     detached_exception,
     fetch_bytes,
     redact_diagnostic,
+    release_checksums,
     release_package_urls,
 )
 from harness.stack import Stack, canonical_stack_bytes, source_string
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
 LOGGER = logging.getLogger(__name__)
 ASSET = "dependency-graph.json"
@@ -200,7 +201,9 @@ def root_manifest(stack: Stack, kind: str) -> dict[str, Any]:
     if kind == "core":
         urls = release_package_urls(stack.core.tag)
         dependencies = {"@earendil-works/pi-coding-agent": urls["pi-coding-agent"]}
-        overrides = {"@earendil-works/pi-tui": urls["pi-tui"]}
+        overrides = {
+            f"@earendil-works/{package}": url for package, url in urls.items() if package != "pi-coding-agent"
+        }
     elif kind == "agent":
         dependencies = {}
         for package in stack.sources:
@@ -210,11 +213,7 @@ def root_manifest(stack: Stack, kind: str) -> dict[str, Any]:
             name, version = source.removeprefix("npm:").rsplit("@", 1)
             dependencies[name] = version
         urls = release_package_urls(stack.core.tag)
-        overrides = {
-            "@earendil-works/pi-coding-agent": urls["pi-coding-agent"],
-            "@earendil-works/pi-tui": urls["pi-tui"],
-            "@earendil-works/pi-ai": stack.core.tag.removeprefix("v").split("-", 1)[0],
-        }
+        overrides = {f"@earendil-works/{package}": url for package, url in urls.items()}
     else:
         raise RuntimeLockError(f"Unknown runtime root '{kind}'")
     return {
@@ -224,6 +223,36 @@ def root_manifest(stack: Stack, kind: str) -> dict[str, Any]:
         "dependencies": dependencies,
         **({"overrides": overrides} if overrides else {}),
     }
+
+
+def core_checksums(stack: Stack, published: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Map every selected core release tarball URL to its expected SHA-256.
+
+    The stack records only the formula-consumed assets; the other fork assets the runtime graphs
+    install come from the release `SHA256SUMS`, whose bytes the installer and promotion attest
+    separately (`promotion.verify_core_assets`). Recorded stack digests always win.
+
+    Parameters:
+        stack (Stack): authoritative exact stack selection.
+        published (Mapping[str, str] | None): the release checksum map the caller already attested
+            against; fetched when omitted. Reuse it so acquired bytes match what was attested.
+
+    Returns:
+        dict[str, str]: release asset URL -> SHA-256 for all `RELEASE_PACKAGES` assets.
+
+    Raises:
+        RuntimeLockError: the release does not publish a checksum for a runtime asset.
+        ValueError: the release checksum file is unreadable or malformed.
+    """
+    published = release_checksums(stack.core.tag) if published is None else published
+    checksums: dict[str, str] = {}
+    for url in release_package_urls(stack.core.tag).values():
+        name = url.rsplit("/", 1)[-1]
+        digest = stack.core.integrity.get(name, published.get(url))
+        if digest is None:
+            raise RuntimeLockError(f"Core release '{stack.core.tag}' publishes no checksum for '{name}'")
+        checksums[url] = digest
+    return checksums
 
 
 def npm_env(root: Path) -> dict[str, str]:
@@ -661,11 +690,7 @@ def replay_source(runtime: RuntimeLocks, stack: Stack, scratch: Path, npm: str) 
         RuntimeLockError: the authenticated source runtime cannot start.
     """
     runtime.bind(stack)
-    checksums = {
-        url: stack.core.integrity[url.rsplit("/", 1)[-1]]
-        for url in release_package_urls(stack.core.tag).values()
-        if url.rsplit("/", 1)[-1] in stack.core.integrity
-    }
+    checksums = core_checksums(stack)
     graphs = selected_graphs(runtime)
     archives = {
         kind: acquire(graph, scratch / kind / "archives", checksums) for kind, graph in graphs.items()

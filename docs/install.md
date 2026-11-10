@@ -20,7 +20,7 @@ Nothing is piped into a shell. `uv` fetches the pinned Git commit, so Git's obje
 
 ## What it installs
 
-- The core release named by the snapshot (`stack.core.tag`, e.g. `v1.3.0-nredd.10`) into `~/.local/share/pi-stack/core/<tag>/`, using a source-selected native npm runtime lock, replayed offline with lifecycle scripts disabled. The prefix contains `node_modules` and a `bin/pi` link, not a global npm install. The core graph overrides pi-tui with the same attested release resource. Homebrew is never used, so a newer formula cannot replace the pinned core.
+- The core release named by the snapshot (`stack.core.tag`, e.g. `v1.3.0-nredd.10`) into `~/.local/share/pi-stack/core/<tag>/`, using a source-selected native npm runtime lock, replayed offline with lifecycle scripts disabled. The prefix contains `node_modules` and a `bin/pi` link, not a global npm install. The core graph overrides pi-tui, pi-agent-core and pi-ai with the same attested release resources. Homebrew is never used, so a newer formula cannot replace the pinned core.
 - A `pi` link in `~/.local/bin` (`--bin-dir` changes it). Add that directory to `PATH` if it is not already.
 - Every exact npm package source into `~/.pi/agent/npm`, using one authenticated complete native npm lock. Declaration order and resource filters remain the snapshot's order. Staging never executes `pi install` or any lifecycle script.
 - In `~/.pi/agent/settings.json`: `packages` set to the snapshot's exact declarations (resource filters kept as written, so the preset loads only its footer extension), plus the snapshot's `settings` keys (`quietStartup`, `fullscreen`). Every other key you have is kept.

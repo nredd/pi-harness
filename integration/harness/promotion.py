@@ -11,7 +11,7 @@ import hashlib
 import re
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Self
@@ -24,6 +24,7 @@ from harness.release import (
     fetch_bytes,
     release_asset_url,
     release_checksums,
+    release_package_urls,
     verify_provenance,
 )
 from harness.stack import Stack, canonical_stack_bytes, validate_release_identity
@@ -582,7 +583,11 @@ def _attest_asset(path: Path, tag: str) -> None:
 
 
 def verify_core_assets(
-    stack: Stack, workdir: Path, fetch: AssetFetch | None = None, attest: AssetAttest | None = None
+    stack: Stack,
+    workdir: Path,
+    fetch: AssetFetch | None = None,
+    attest: AssetAttest | None = None,
+    checksums: Mapping[str, str] | None = None,
 ) -> None:
     """Hash the real core release assets and verify their provenance (non-legacy tags only).
 
@@ -591,11 +596,17 @@ def verify_core_assets(
     `gh attestation verify` (signer `fork-release.yml`, source ref the tag). Legacy tags predate
     that workflow and rely on `LEGACY_CHECKSUMS`.
 
+    The runtime graphs also install the release's other `RELEASE_PACKAGES` tarballs (`pi-ai`,
+    `pi-agent-core`). When `checksums` (release URL -> SHA-256) is given, each of those is
+    downloaded, matched to its published digest and attested the same way.
+
     Parameters:
         stack (Stack): selected personal stack.
         workdir (Path): directory for the downloaded assets; created when absent.
         fetch (AssetFetch | None): downloader taking a URL and destination; defaults to HTTPS.
         attest (AssetAttest | None): verifier taking an asset and its tag; defaults to `gh`.
+        checksums (Mapping[str, str] | None): release URL -> SHA-256 covering the unrecorded runtime
+            assets; omitted means only the stack-recorded assets are verified.
 
     Raises:
         AttestationError: an asset's bytes differ from the recorded digest or lack provenance.
@@ -606,7 +617,15 @@ def verify_core_assets(
         return
     download, verify = fetch or _fetch_asset, attest or _attest_asset
     workdir.mkdir(parents=True, exist_ok=True)
-    for name, digest in sorted(stack.core.integrity.items()):
+    expected = dict(stack.core.integrity)
+    if checksums is not None:
+        for url in release_package_urls(tag).values():
+            name = url.rsplit("/", 1)[-1]
+            if name not in expected:
+                if url not in checksums:
+                    raise AttestationError(f"Core release '{tag}' publishes no checksum for '{name}'")
+                expected[name] = checksums[url]
+    for name, digest in sorted(expected.items()):
         path = workdir / name
         download(release_asset_url(tag, name), path)
         actual = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -615,12 +634,14 @@ def verify_core_assets(
         verify(path, tag)
 
 
-def verify_core(stack: Stack, workdir: Path) -> CoreEvidence:
+def verify_core(stack: Stack, workdir: Path, checksums: Mapping[str, str] | None = None) -> CoreEvidence:
     """Verify the stack's core release identity, asset bytes and provenance.
 
     Parameters:
         stack (Stack): selected personal stack.
         workdir (Path): directory for downloaded core assets.
+        checksums (Mapping[str, str] | None): release `SHA256SUMS` map to verify against; fetched
+            when omitted. Callers that later acquire the same assets pass the map back in.
 
     Returns:
         CoreEvidence: tag and asset digests that agree with the published release.
@@ -630,8 +651,9 @@ def verify_core(stack: Stack, workdir: Path) -> CoreEvidence:
         AttestationError: an asset's bytes or provenance is wrong (non-legacy tags).
         EvidenceError: an asset could not be downloaded.
     """
-    validate_release_identity(stack, stack.core.tag, release_checksums(stack.core.tag))
-    verify_core_assets(stack, workdir)
+    checksums = release_checksums(stack.core.tag) if checksums is None else checksums
+    validate_release_identity(stack, stack.core.tag, dict(checksums))
+    verify_core_assets(stack, workdir, checksums=checksums)
     return CoreEvidence(tag=stack.core.tag, integrity=dict(stack.core.integrity))
 
 
