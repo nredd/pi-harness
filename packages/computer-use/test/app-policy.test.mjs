@@ -47,9 +47,9 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	const swift = readFileSync(new URL("../native/macos/bridge.swift", import.meta.url), "utf8");
 	const body = swift.match(/let alwaysBlockedBundleIds: \[String\] = \[([\s\S]*?)\]/)?.[1] ?? "";
 	assert.deepEqual([...body.matchAll(/"([^"]+)"/g)].map((m) => m[1]), SYSTEM_AGENTS);
-	assert.match(swift, /commandRequiresUnlockedSession\(cmd\), sessionIsLocked\(CGSessionCopyCurrentDictionary\(\)/, "helper must refuse UI commands while locked");
+	assert.match(swift, /lockedSessionRefusal\(cmd: cmd, session: CGSessionCopyCurrentDictionary\(\)/, "helper must refuse UI commands while locked");
 	assert.match(swift, /guard let app, isBlockedBundleId\(app\.bundleIdentifier, blocked: blocked\) else \{ return \}/, "helper must refuse blocked apps for keys and pointer input");
-	assert.match(swift, /code: "screen_locked"/);
+	assert.match(swift, /return \("screen_locked", "screen_locked:/);
 	assert.match(swift, /code: "app_blocked"/);
 });
 

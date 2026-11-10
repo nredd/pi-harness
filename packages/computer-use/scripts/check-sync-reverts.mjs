@@ -388,8 +388,8 @@ const cases = [
 	{
 		name: "helper locked-session refusal (#646)",
 		file: "native/macos/bridge.swift",
-		before: "if commandRequiresUnlockedSession(cmd), sessionIsLocked(",
-		after: "if false, sessionIsLocked(",
+		before: "if let refusal = lockedSessionRefusal(cmd: cmd,",
+		after: "if let refusal = lockedSessionRefusalDropped(cmd: cmd,",
 		check: "test/app-policy.test.mjs",
 		failure: /helper must refuse UI commands while locked/,
 	},

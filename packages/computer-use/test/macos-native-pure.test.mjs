@@ -64,6 +64,11 @@ check(!sessionIsLocked(["CGSSessionScreenIsLocked": false, "kCGSSessionOnConsole
 check(!sessionIsLocked([:]) && !sessionIsLocked(nil), "no lock flag and no session are not locked")
 check(["look", "act", "actBatch", "desktopInput", "captureDisplay", "axReadText", "focusWindow"].allSatisfy(commandRequiresUnlockedSession), "UI commands need an unlocked session")
 check(!["listApps", "listRoots", "getFrontmost", "diagnostics", "checkPermissions", "shutdown"].contains(where: commandRequiresUnlockedSession), "discovery and lifecycle commands work while locked")
+let lockedRefusal = lockedSessionRefusal(cmd: "act", session: ["CGSSessionScreenIsLocked": true])
+check(lockedRefusal?.code == "screen_locked" && lockedRefusal?.message.hasPrefix("screen_locked:") == true && lockedRefusal?.message.contains("'act'") == true, "locked act is refused with screen_locked")
+check(lockedSessionRefusal(cmd: "desktopInput", session: ["kCGSSessionOnConsoleKey": false])?.code == "screen_locked", "off-console desktopInput is refused with screen_locked")
+check(lockedSessionRefusal(cmd: "act", session: ["CGSSessionScreenIsLocked": false]) == nil, "unlocked act runs")
+check(lockedSessionRefusal(cmd: "listRoots", session: ["CGSSessionScreenIsLocked": true]) == nil, "discovery runs while locked")
 let windowList: [[String: Any]] = [
 	["kCGWindowOwnerPID": 50, "kCGWindowAlpha": 1.0, "kCGWindowBounds": ["X": 0, "Y": 0, "Width": 1000, "Height": 800]],
 	["kCGWindowOwnerPID": 20, "kCGWindowAlpha": 0.0, "kCGWindowBounds": ["X": 0, "Y": 0, "Width": 400, "Height": 400]],

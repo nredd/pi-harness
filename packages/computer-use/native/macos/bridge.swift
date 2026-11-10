@@ -328,6 +328,12 @@ func appBlockedMessage(_ name: String, _ bundleId: String?) -> String {
 	"app_blocked: '\(name)' (\(bundleId ?? "unknown bundle id")) is blocked by pi-computer-use policy; adjust blocked_apps to allow it (system authentication agents are always blocked)"
 }
 
+/// The refusal `handleRequest` throws for `cmd` given the session dictionary, or nil when the command may run.
+func lockedSessionRefusal(cmd: String, session: [String: Any]?) -> (code: String, message: String)? {
+	guard commandRequiresUnlockedSession(cmd), sessionIsLocked(session) else { return nil }
+	return ("screen_locked", "screen_locked: the macOS session is locked, so '\(cmd)' is refused until it is unlocked")
+}
+
 /// Owner pid of the front-most visible window containing `point`, from `CGWindowListCopyWindowInfo` entries
 /// (ordered front to back). Windows of `excludingPid` (our own click-through overlays) and fully transparent or
 /// empty windows are skipped.
@@ -890,8 +896,8 @@ final class Bridge {
 
 	private func handleRequest(_ request: [String: Any], clientID: UUID?) throws -> Any {
 		let cmd = try stringArg(request, "cmd")
-		if commandRequiresUnlockedSession(cmd), sessionIsLocked(CGSessionCopyCurrentDictionary() as? [String: Any]) {
-			throw BridgeFailure(message: "screen_locked: the macOS session is locked, so '\(cmd)' is refused until it is unlocked", code: "screen_locked")
+		if let refusal = lockedSessionRefusal(cmd: cmd, session: CGSessionCopyCurrentDictionary() as? [String: Any]) {
+			throw BridgeFailure(message: refusal.message, code: refusal.code)
 		}
 
 		switch cmd {
