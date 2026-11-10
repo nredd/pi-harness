@@ -375,7 +375,8 @@ def test_wsl2_workflow_bootstraps_gh_and_verifies_overrides_before_npm_ci() -> N
     assert "GH_TOKEN/u" in wrapper
     assert "Core Gitlink:" in (ROOT / "scripts/wsl2_capture.sh").read_text()
     action = (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
-    assert "python3" in action.split("additional-packages:")[1].splitlines()[0]
+    assert "additional-packages" not in action
+    assert "python3" in (ROOT / "scripts/wsl2_apt.sh").read_text().split("packages=(")[1].splitlines()[0]
     assert "unset GH_TOKEN" in setup
     assert 'bash scripts/install_gh_linux.sh "$tool_dir/gh"' in setup
     makefile = (ROOT / "Makefile").read_text()
@@ -483,14 +484,16 @@ def test_every_host_wsl_call_in_setup_is_bounded() -> None:
         for line in run.splitlines()
         if not line.lstrip().startswith("#") and re.search(r"\swsl\s", f" {line} ")
     ]
-    assert len(commands) == 4
+    assert len(commands) == 5
     for line in commands:
         assert re.search(r"Invoke-Bounded(Capture)? '", line), f"unbounded wsl call: {line}"
     # A tripped capture may be empty or partial: check the status before trimming it.
-    assert run.index("$setup = Invoke-BoundedCapture") < run.index("$setup = $setup.Trim()")
-    assert run.index("if ($LASTEXITCODE -ne 0)", run.index("$setup = Invoke-BoundedCapture")) < run.index(
-        "$setup = $setup.Trim()"
+    assert run.index("$scripts = Invoke-BoundedCapture") < run.index("$scripts = $scripts.Trim()")
+    assert run.index("if ($LASTEXITCODE -ne 0)", run.index("$scripts = Invoke-BoundedCapture")) < run.index(
+        "$scripts = $scripts.Trim()"
     )
+    # The apt bound covers two mirror attempts of the script's own update and install bounds.
+    assert run.index("wsl2_apt.sh") < run.index("useradd") < run.index("wsl2_setup.sh")
     deadlines = {
         match.group("label"): int(match.group("seconds"))
         for match in re.finditer(r"Invoke-Bounded(?:Capture)? '(?P<label>[^']+)' (?P<seconds>\d+)", run)
@@ -499,7 +502,8 @@ def test_every_host_wsl_call_in_setup_is_bounded() -> None:
     assert deadlines == {
         "list WSL distributions": 30,
         "create the pi-ci user": 30,
-        "translate the setup script path": 30,
+        "translate the scripts directory": 30,
+        "apt prerequisites (scripts/wsl2_apt.sh)": 630,
         "guest bootstrap (scripts/wsl2_setup.sh)": 300,
     }
 
@@ -515,14 +519,23 @@ def test_setup_wsl_action_is_bounded_by_a_watchdog_that_always_reports() -> None
     assert re.fullmatch(r"Vampire/setup-wsl@[0-9a-f]{40}", steps[action]["uses"])
     assert all("timeout-minutes" not in step for step in steps), "composite steps reject timeout-minutes"
     launch = steps[start]["run"]
-    assert "'-Seconds', '300'" in launch
-    assert "-RedirectStandardOutput" in launch
-    assert "-RedirectStandardError" in launch
+    assert "$seconds = 300" in launch
+    # Start-Process children vanished with the step in run 42756515991: start outside the runner tree.
+    assert "Win32_Process" in launch
+    assert "Start-Process" not in launch
+    assert "watchdog.started" in launch
+    assert "never armed" in launch
     assert steps[stop]["if"] == "always()"
-    assert "watchdog.tripped" in steps[stop]["run"]
-    assert "throw" in steps[stop]["run"]
+    stop_run = steps[stop]["run"]
+    assert "watchdog.tripped" in stop_run
+    assert "throw" in stop_run
+    # Backstop: a watchdog that died unseen still fails an overlong step instead of passing it.
+    assert "the watchdog did not trip" in stop_run
+    assert "watchdog.started" in stop_run
+    assert "additional-packages" not in steps[action].get("with", {})
     watchdog = (ROOT / "scripts/wsl2_watchdog.ps1").read_text()
     assert "watchdog.done" in watchdog
+    assert "watchdog.alive" in watchdog
     assert "Write-StallReport" in watchdog
     assert "'wsl.exe', 'wslhost.exe'" in watchdog
     assert "setup-wsl" in watchdog
@@ -653,3 +666,92 @@ def test_guest_setup_leaves_no_external_command_unbounded() -> None:
         assert f'bounded "{label}" ' in setup
     assert 'bounded "install owned tools" 90 ' in setup
     assert "--connect-timeout 15 --max-time 45" in (ROOT / "scripts/install_wsl_owned_tools.sh").read_text()
+
+
+APT = ROOT / "scripts" / "wsl2_apt.sh"
+UBUNTU_SOURCES = (
+    "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: noble noble-updates\n\n"
+    "Types: deb\nURIs: http://security.ubuntu.com/ubuntu/\nSuites: noble-security\n"
+)
+
+
+def run_apt(
+    tmp_path: Path, fail_mirror: str | None, hang: bool = False
+) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
+    """Run the real apt script with stub `id`, `timeout`, `apt-get` and `ps`.
+
+    Parameters:
+        tmp_path (Path): Scratch directory.
+        fail_mirror (str | None): Mirror host whose `apt-get update` fails; `None` fails none.
+        hang (bool): Model `timeout` tripping (exit 124) on every `apt-get update`.
+
+    Returns:
+        tuple[subprocess.CompletedProcess[str], Path, Path]: Outcome, the sources file and the stub call log.
+    """
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    log = tmp_path / "calls.log"
+    sources = tmp_path / "ubuntu.sources"
+    sources.write_text(UBUNTU_SOURCES, encoding="utf-8")
+    quoted = shlex.quote(str(sources))
+    quoted_log = shlex.quote(str(log))
+    stubs = {
+        "id": "#!/bin/sh\necho 0\n",
+        "ps": "#!/bin/sh\necho '42 1 05:00 S synthetic-stuck-apt'\n",
+        "timeout": '#!/bin/sh\nshift 2\ncase "$*" in *"apt-get update"*) '
+        + ("exit 124 " if hang else "")
+        + ';; esac\nexec "$@"\n',
+        "apt-get": f'#!/bin/sh\nprintf "%s|%s\\n" "$*" "$(grep -m1 URIs {quoted})" >> {quoted_log}\n'
+        + (
+            f'case "$1" in update) grep -q {fail_mirror} {quoted} && exit 100 ;; esac\nexit 0\n'
+            if fail_mirror
+            else ""
+        ),
+    }
+    for name, body in stubs.items():
+        (commands / name).write_text(body, encoding="utf-8")
+        (commands / name).chmod(0o755)
+    env = dict(os.environ) | {
+        "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+        "WSL_APT_SOURCES": str(sources),
+        "WSL_APT_CONF": str(tmp_path / "99-pi-ci"),
+    }
+    result = subprocess.run(["/bin/bash", str(APT)], env=env, capture_output=True, check=False, text=True)
+    return result, sources, log
+
+
+def test_apt_prerequisites_use_the_azure_mirror_with_bounded_retrying_apt(tmp_path: Path) -> None:
+    """Point archive and security at one mirror, set short apt timeouts, and install the full package list."""
+    result, sources, log = run_apt(tmp_path, None)
+    assert result.returncode == 0, result.stderr
+    text = sources.read_text()
+    assert "azure.archive.ubuntu.com" in text
+    assert "security.ubuntu.com" not in text
+    assert "archive.ubuntu.com/ubuntu//" not in text
+    conf = (tmp_path / "99-pi-ci").read_text()
+    for line in ('Acquire::Retries "3";', 'Acquire::http::Timeout "20";', 'Acquire::Languages "none";'):
+        assert line in conf
+    calls = log.read_text().splitlines()
+    assert calls[0].startswith("update|")
+    assert "install --yes --no-install-recommends build-essential" in calls[1]
+    assert "xz-utils" in calls[1]
+
+
+def test_apt_prerequisites_fall_back_to_the_stock_mirror_once(tmp_path: Path) -> None:
+    """A failing first mirror names itself, then the stock one is tried and succeeds."""
+    result, sources, log = run_apt(tmp_path, "azure.archive")
+    assert result.returncode == 0, result.stderr
+    assert "wsl2-apt: FAILED: apt-get update (http://azure.archive.ubuntu.com/ubuntu)" in result.stderr
+    assert "trying the next mirror" in result.stderr
+    assert "URIs: http://archive.ubuntu.com/ubuntu/" in sources.read_text()
+    assert len(log.read_text().splitlines()) == 3
+
+
+def test_apt_prerequisites_name_a_hang_and_restore_the_sources(tmp_path: Path) -> None:
+    """A trip on both mirrors exits non-zero with the stuck command and guest processes, sources restored."""
+    result, sources, _ = run_apt(tmp_path, None, hang=True)
+    assert result.returncode == 1
+    assert result.stderr.count("wsl2-apt: TIMEOUT: apt-get update") == 2
+    assert "synthetic-stuck-apt" in result.stderr
+    assert "every mirror failed" in result.stderr
+    assert sources.read_text() == UBUNTU_SOURCES

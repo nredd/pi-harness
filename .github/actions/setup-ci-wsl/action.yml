@@ -18,26 +18,35 @@ runs:
         $diagnostics = Join-Path $env:RUNNER_TEMP 'wsl2-diagnostics'
         New-Item -ItemType Directory -Force $diagnostics | Out-Null
         Set-Content -Path (Join-Path $diagnostics 'capture-status.txt') -Value 'WSL guest has not started.'
-    # Composite steps take no `timeout-minutes` and setup-wsl is third-party, so a detached watchdog bounds it (#626).
-    # Hosted passes took 73-80s; the deadline is about 4x that.
+    # Composite steps take no `timeout-minutes` and setup-wsl is third-party, so a watchdog bounds it (#626).
+    # Hosted passes took 73-80s with apt inside setup-wsl; apt now runs in the bounded step below, and what is left
+    # (cache restore plus `wsl --install`) took about 30s, so the deadline is 300s. `Start-Process` children did not
+    # survive the step in run 42756515991 (the watchdog was gone, logs empty), so `Win32_Process.Create` starts it
+    # outside the runner's process tree, and the step waits for its first heartbeat to prove the timer is armed.
     - name: Start WSL setup watchdog
       shell: pwsh
       run: |
         $diagnostics = Join-Path $env:RUNNER_TEMP 'wsl2-diagnostics'
         Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $diagnostics 'watchdog.*')
-        $arguments = @('-NoProfile', '-File', (Join-Path $env:GITHUB_WORKSPACE 'scripts/wsl2_watchdog.ps1'),
-          '-Label', 'setup-wsl', '-Seconds', '300', '-StateDirectory', $diagnostics)
-        # Redirect both streams so the runner does not wait on the detached process's inherited pipes.
-        $watchdog = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $arguments -WindowStyle Hidden -PassThru `
-          -RedirectStandardOutput (Join-Path $diagnostics 'watchdog.log') `
-          -RedirectStandardError (Join-Path $diagnostics 'watchdog.err')
-        Set-Content -Path (Join-Path $diagnostics 'watchdog.pid') -Value $watchdog.Id
+        $seconds = 300
+        $script = Join-Path $env:GITHUB_WORKSPACE 'scripts/wsl2_watchdog.ps1'
+        $log = Join-Path $diagnostics 'watchdog.log'
+        $command = "& '$script' -Label setup-wsl -Seconds $seconds -StateDirectory '$diagnostics' *> '$log'"
+        $commandLine = '"{0}" -NoProfile -Command "{1}"' -f (Get-Process -Id $PID).Path, $command
+        $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $commandLine; CurrentDirectory = $env:GITHUB_WORKSPACE }
+        if ($created.ReturnValue -ne 0) { throw "Win32_Process.Create failed with $($created.ReturnValue): $commandLine" }
+        Set-Content -Path (Join-Path $diagnostics 'watchdog.pid') -Value $created.ProcessId
+        # Line 1 is when the clock started, line 2 the deadline; the stop step enforces them if the watchdog is gone.
+        Set-Content -Path (Join-Path $diagnostics 'watchdog.started') -Value @([DateTimeOffset]::UtcNow.ToUnixTimeSeconds(), $seconds)
+        $alive = Join-Path $diagnostics 'watchdog.alive'
+        for ($i = 0; $i -lt 40 -and -not (Test-Path $alive); $i++) { Start-Sleep -Milliseconds 500 }
+        if (-not (Test-Path $alive)) { throw "The watchdog never armed (pid $($created.ProcessId)); log: $(Get-Content -Raw -ErrorAction SilentlyContinue $log)" }
+        Write-Host "Watchdog armed: pid $($created.ProcessId), ${seconds}s"
     - uses: Vampire/setup-wsl@4c48163d9f981914dd8caa0fc335fe19cca5bff4 # v7.2.0
       with:
         distribution: Ubuntu-24.04
         wsl-version: '2'
         update: 'false'
-        additional-packages: build-essential curl fd-find git jq libatomic1 libssl-dev pkg-config python3 ripgrep tmux unzip xz-utils
     - name: Stop WSL setup watchdog and report
       if: always()
       shell: pwsh
@@ -46,12 +55,20 @@ runs:
         New-Item -ItemType File -Force (Join-Path $diagnostics 'watchdog.done') | Out-Null
         $watchdogPid = Get-Content -ErrorAction SilentlyContinue (Join-Path $diagnostics 'watchdog.pid')
         if ($watchdogPid) { Wait-Process -Id $watchdogPid -Timeout 90 -ErrorAction SilentlyContinue }
-        foreach ($name in 'watchdog.log', 'watchdog.err') {
-          $path = Join-Path $diagnostics $name
-          if ((Test-Path $path) -and (Get-Item $path).Length -gt 0) { Get-Content -ErrorAction SilentlyContinue $path | Write-Host }
-        }
+        $log = Join-Path $diagnostics 'watchdog.log'
+        if ((Test-Path $log) -and (Get-Item $log).Length -gt 0) { Get-Content -ErrorAction SilentlyContinue $log | Write-Host }
         if (Test-Path (Join-Path $diagnostics 'watchdog.tripped')) {
           throw 'WSL setup was killed by its watchdog; see the report above'
+        }
+        # Backstop: a watchdog that died unseen must not let a slow step pass (run 42756515991 took 2646s).
+        $started = Get-Content -ErrorAction SilentlyContinue (Join-Path $diagnostics 'watchdog.started')
+        $alive = Get-Content -ErrorAction SilentlyContinue (Join-Path $diagnostics 'watchdog.alive')
+        if ($started) {
+          $elapsed = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [long]$started[0]
+          Write-Host "setup-wsl step window: ${elapsed}s of $($started[1])s; watchdog last alive: $alive"
+          if ($elapsed -gt [long]$started[1] + 30) {
+            throw "WSL setup took ${elapsed}s, over its $($started[1])s deadline, and the watchdog did not trip (last alive: $alive)"
+          }
         }
     - name: Assert WSL2 and prepare guest
       shell: pwsh
@@ -59,7 +76,7 @@ runs:
         WSL_OWNED: ${{ inputs.owned }}
       run: |
         . (Join-Path $env:GITHUB_WORKSPACE 'scripts/wsl2_bounded.ps1')
-        # Hosted passes took under 1s per host command (12s covers the first four) and 22s to 67s for the guest
+        # Hosted passes took under 1s per host command (12s covered the first four host steps) and 22s to 67s for the guest
         # bootstrap; every bound is a few times that (#626). Each trip prints the stuck command and a process snapshot.
         $listing = Invoke-BoundedCapture 'list WSL distributions' 30 wsl --list --verbose
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -68,15 +85,19 @@ runs:
         if ($listing -notmatch '(?m)^\s*\*?\s*Ubuntu-24\.04\s+\S+\s+2\s*$') {
           throw 'Ubuntu-24.04 is not listed as WSL version 2'
         }
-        # Bootstrap apt as root via setup-wsl, but run every gate as an ordinary user.
+        $scripts = Invoke-BoundedCapture 'translate the scripts directory' 30 wsl -d Ubuntu-24.04 --exec wslpath -u "$env:GITHUB_WORKSPACE/scripts"
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $scripts = $scripts.Trim()
+        # apt runs here, not inside setup-wsl, so it is bounded and mirror-aware (#626).
+        # Two attempts of 90s update plus 180s install, plus kill grace, fit inside 630s.
+        Invoke-Bounded 'apt prerequisites (scripts/wsl2_apt.sh)' 630 wsl -d Ubuntu-24.04 --user root --exec bash -euo pipefail "$scripts/wsl2_apt.sh"
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        # Run every gate as an ordinary user.
         Invoke-Bounded 'create the pi-ci user' 30 wsl -d Ubuntu-24.04 --user root --exec /usr/sbin/useradd --create-home --shell /bin/bash pi-ci
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         $env:WSL_HOST_WORKSPACE = $env:GITHUB_WORKSPACE
         $env:WSL_HOST_TEMP = $env:RUNNER_TEMP
         $env:WSLENV = 'WSL_HOST_WORKSPACE/p:WSL_HOST_TEMP/p:WSL_OWNED'
-        $setup = Invoke-BoundedCapture 'translate the setup script path' 30 wsl -d Ubuntu-24.04 --exec wslpath -u "$env:GITHUB_WORKSPACE/scripts/wsl2_setup.sh"
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        $setup = $setup.Trim()
         # The script bounds its own commands (60s each, 90s for the owned tools, 180s per download); this covers the whole run.
-        Invoke-Bounded 'guest bootstrap (scripts/wsl2_setup.sh)' 300 wsl -d Ubuntu-24.04 --user pi-ci --exec bash -euo pipefail "$setup"
+        Invoke-Bounded 'guest bootstrap (scripts/wsl2_setup.sh)' 300 wsl -d Ubuntu-24.04 --user pi-ci --exec bash -euo pipefail "$scripts/wsl2_setup.sh"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

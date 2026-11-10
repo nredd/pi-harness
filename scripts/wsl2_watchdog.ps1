@@ -2,9 +2,11 @@
 # `Vampire/setup-wsl` step is a third-party action. Started detached before the step, signalled by `-StateDirectory`
 # files, it kills the stuck WSL processes at the deadline so the step fails with a report instead of hanging.
 #
-# The label has no spaces: Start-Process joins its argument list unquoted.
+# The caller must start it outside the runner's process tree (`Win32_Process.Create`): run 42756515991 launched it with
+# `Start-Process` and it was gone when `setup-wsl` ended 2646s later, with empty logs and no trip.
 # Files in the state directory: `watchdog.done` (the step finished; written by the caller), `watchdog.tripped`
-# (written here) and `watchdog.pid`.
+# (written here), `watchdog.alive` (a unix timestamp refreshed every loop, so the caller can prove the timer is armed
+# and see when it last ran) and `watchdog.pid`.
 param(
     [Parameter(Mandatory = $true)][string]$Label,
     [Parameter(Mandatory = $true)][int]$Seconds,
@@ -13,8 +15,10 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'wsl2_bounded.ps1')
 $done = Join-Path $StateDirectory 'watchdog.done'
+$alive = Join-Path $StateDirectory 'watchdog.alive'
 $deadline = (Get-Date).AddSeconds($Seconds)
 while ((Get-Date) -lt $deadline) {
+    Set-Content -Path $alive -Value ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
     if (Test-Path $done) { exit 0 }
     Start-Sleep -Seconds 2
 }
