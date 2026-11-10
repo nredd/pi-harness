@@ -56,6 +56,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ github.sha }}
+          # Trusted absolute `gh`: the computer-use cell runs on macOS, where the runner image ships it in Homebrew.
+          RELEASE_GATE_GH: ${{ runner.os == 'macOS' && '/opt/homebrew/bin/gh' || '/usr/bin/gh' }}
         run: >-
           PYTHONPATH=integration uv run --locked --project integration python -m harness.release_gate
           --repo "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA"

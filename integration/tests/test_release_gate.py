@@ -305,6 +305,15 @@ def test_workflow_execution_names_and_barriers() -> None:
                 or "-m harness.promotion_verify" in step.get("run", "")
             ]
             assert all(barriers[0] < index for index in protected)
+    # `verify` runs computer-use releases on macOS, where `/usr/bin/gh` does not exist.
+    publish = yaml.safe_load((ROOT / ".github/workflows/publish.yml").read_text())
+    verify = publish["jobs"]["verify"]
+    assert "macos-" in verify["runs-on"]
+    barrier = next(step for step in verify["steps"] if "-m harness.release_gate" in step.get("run", ""))
+    assert barrier["env"]["RELEASE_GATE_GH"] == (
+        "${{ runner.os == 'macOS' && '/opt/homebrew/bin/gh' || '/usr/bin/gh' }}"
+    )
+    assert publish["jobs"]["publish"]["runs-on"] == "ubuntu-24.04"
 
 
 def test_stack_cells_are_exactly_the_executing_matrix() -> None:
