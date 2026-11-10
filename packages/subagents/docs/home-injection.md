@@ -86,8 +86,7 @@ case in
 [`test-worker-budgets.md`](../../../docs/test-worker-budgets.md#measured-cold-budgets-312).
 
 Core `v1.3.0-nredd.10` (nredd/pi#13) gives `DefaultResourceLoader` and `DefaultPackageManager` an
-optional `homeDir`. `createHomeResourceLoader`, `createHomePackageManager` and package discovery
-forward it, so Pi's automatic `<home>/.agents/skills` root is the injected one and the runtime
+optional `homeDir`. `createHomeResourceLoader` and `createHomePackageManager` forward it, so Pi's automatic `<home>/.agents/skills` root is the injected one and the runtime
 home's `~/.agents/skills` is never scanned. Omitting `homeDir` keeps the host defaults. Older
 SDKs ignore the option, which is why named preloads still filter the returned ambient resources.
 
