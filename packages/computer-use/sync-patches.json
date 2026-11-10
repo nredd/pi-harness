@@ -371,6 +371,25 @@
 				"reference": "UPSTREAM.md",
 				"detail": "nredd/pi-harness#672; not filed upstream"
 			}
+		},
+		{
+			"id": "outline-store",
+			"purpose": "Keep full outlines out of the Pi session file: persist them in a capped agent-cache store keyed by stateId, restore from it, and still restore legacy inline outlines",
+			"files": [
+				"src/bridge.ts",
+				"src/outline-store.ts",
+				"docs/content/docs/explanation/state-and-scheduling.mdx",
+				"test/outline-store.test.mjs"
+			],
+			"check": "test/outline-store.test.mjs",
+			"dropControls": [
+				"Outline store write (#648)"
+			],
+			"upstream": {
+				"status": "candidate",
+				"reference": "UPSTREAM.md",
+				"detail": "injaneity/pi-computer-use#115 reports the same session bloat; nredd/pi-harness#648"
+			}
 		}
 	],
 	"files": [
@@ -379,6 +398,7 @@
 		"UPSTREAM.md",
 		"docs/content/docs/how-to-guides/linux.mdx",
 		"docs/content/docs/how-to-guides/develop-and-validate.mdx",
+		"docs/content/docs/explanation/state-and-scheduling.mdx",
 		"docs/content/docs/how-to-guides/troubleshooting.mdx",
 		"docs/content/docs/tutorials/getting-started.mdx",
 		"docs/content/docs/reference/agent/tools.mdx",
@@ -427,6 +447,7 @@
 		"src/bridge.ts",
 		"src/config.ts",
 		"src/desktop.ts",
+		"src/outline-store.ts",
 		"src/platform/linux/backend.ts",
 		"src/platform/linux/helper.ts",
 		"src/platform/linux/wsl.ts",
@@ -453,6 +474,7 @@
 		"test/macos-native-pure.test.mjs",
 		"test/macos-observe-target.test.mjs",
 		"test/managed-browser-headless.test.mjs",
+		"test/outline-store.test.mjs",
 		"test/platform-linux.test.mjs",
 		"test/platform-windows.test.mjs",
 		"test/runtime-concurrency.test.mjs",

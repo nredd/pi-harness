@@ -12,6 +12,7 @@ import { cdpClickForContext, cdpDragForContext, cdpEvaluateForContext, cdpKeypre
 import { type ComputerUseConfig, getComputerUseConfig, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig } from "./config.ts";
 import { normalizeFindParams } from "./find-params.ts";
 import { noteAfterAct, noteFromLook, noteRegionKeyForRef, renderNote, type WindowNote } from "./note.ts";
+import { loadStoredOutline, saveStoredOutline } from "./outline-store.ts";
 import { controlLine, foldToBudget, graftScopedOutline, nodeByRef, outlineNodeLabel, outlineNodePath, rankedTextMatch, renderInteractiveControls, restoreOutline, searchOutline, searchOutlineRanked, serializeOutline, serializeOutlineNodeShallow, serializeOutlineSearchMatch, type LookResponse, type Outline, type OutlineChange, type OutlineDiff, type OutlineNode, type OutlineSearchMatch, type SerializedOutline, type SerializedOutlineNode, type SerializedOutlineSearchMatch } from "./outline.ts";
 import { applyOutputEnvelope, boundToolError, clearStoredOutputs, readStoredOutput, UI_TEXT_PAGE_CHARS } from "./output.ts";
 import { AGENT_TOOL_NAMES, type ActParams, type EvaluateBrowserParams, type ExpandUiParams, type ImageMode, type InspectUiParams, type LaunchBrowserParams, type FindParams, type NavigateBrowserParams, type ObserveDetail, type ObserveParams, type ObserveTargetParams, type ReadTextParams, type RootSelector, type SearchUiParams, type UiAction, type WaitForParams } from "./contract.ts";
@@ -98,6 +99,7 @@ interface ComputerUseDetails {
 	viewReason?: "root_replaced" | "change_budget_exceeded" | "identity_confidence_low";
 	renderedOutline?: string;
 	detail?: ObserveDetail;
+	/** Legacy sessions only: new results keep the outline in the outline store, keyed by `capture.stateId`. */
 	outline?: SerializedOutline;
 	note?: WindowNote;
 	activation: ActivationFlags;
@@ -191,7 +193,6 @@ interface BrowserObservationDetails {
 	view: "full" | "diff";
 	changes?: OutlineChange[];
 	root: { ref: string; kind: "browser_page"; title: string; url: string };
-	outline: SerializedOutline;
 	renderedOutline: string;
 	detail?: ObserveDetail;
 }
@@ -202,7 +203,6 @@ interface EvaluateBrowserDetails {
 	stateId: string;
 	view: "full" | "diff";
 	changes?: OutlineChange[];
-	outline: SerializedOutline;
 	renderedOutline: string;
 }
 
@@ -233,7 +233,6 @@ interface WaitForDetails {
 	role?: string;
 	value?: string;
 	scopeRef?: string;
-	outline: SerializedOutline;
 	renderedOutline: string;
 }
 
@@ -319,7 +318,7 @@ const runtimeState: RuntimeState = {
 
 const savedStates = new SavedStates();
 /** Test seam: lets scripts run bridge internals inside an operation state. */
-export const testing = { runInOperation: <T>(fn: () => T, state: OperationState = {}): T => savedStates.operations.run(state, fn), buildToolResult, browserObservationResult, waitForViewText, performSearchUi, performLaunchBrowser, removeProfileDirsOnExit, managedBrowserNeedsHeadless, managedBrowserArgs };
+export const testing = { savedState: (stateId: string) => savedStates.get(stateId), runInOperation: <T>(fn: () => T, state: OperationState = {}): T => savedStates.operations.run(state, fn), buildToolResult, browserObservationResult, waitForViewText, performSearchUi, performLaunchBrowser, removeProfileDirsOnExit, managedBrowserNeedsHeadless, managedBrowserArgs };
 let resourceScheduler = new ResourceScheduler();
 
 function operationState(): OperationState {
@@ -1059,6 +1058,8 @@ async function buildToolResult(
 	const view = useDiff ? undefined : renderStateView(result.outline, result.capture.stateId, detail, transition?.reason);
 	const renderedNote = renderNote(state.currentNote);
 
+	// The session file keeps only `capture.stateId`/`lookId`; restore reads the outline back from here.
+	saveStoredOutline(result.capture.stateId, serializeOutline(result.outline));
 	const details: ComputerUseDetails = {
 		tool,
 		target: {
@@ -1085,7 +1086,6 @@ async function buildToolResult(
 		viewReason: transition?.useFullView ? transition.reason : undefined,
 		renderedOutline: folded.text,
 		detail: view?.detail,
-		outline: serializeOutline(result.outline),
 		note: state.currentNote,
 		activation: result.activation,
 		execution,
@@ -1383,7 +1383,7 @@ function browserObservationResult(browser: CdpPageSnapshot, resourceKey: string,
 	const folded = foldToBudget(currentOutline);
 	const view = useDiff ? undefined : detail === "outline" ? { detail, text: folded.text } : renderStateView(currentOutline, browser.snapshotId, detail);
 	const root = { ref: storeBrowserRootRef(browser.contextId), kind: "browser_page" as const, title: browser.title, url: browser.url };
-	const details: BrowserObservationDetails = { tool, kind: "browser_page", stateId: browser.snapshotId, baseStateId: base?.stateId, view: useDiff ? "diff" : "full", changes: useDiff ? transition?.changes : undefined, root, outline: browser.outline, renderedOutline: folded.text, detail: view?.detail };
+	const details: BrowserObservationDetails = { tool, kind: "browser_page", stateId: browser.snapshotId, baseStateId: base?.stateId, view: useDiff ? "diff" : "full", changes: useDiff ? transition?.changes : undefined, root, renderedOutline: folded.text, detail: view?.detail };
 	const viewText = view
 		? view.text
 		: `Changes (${transition!.changedNodeCount}, ${base!.stateId} → ${browser.snapshotId}):\n${renderChanges(transition!.changes) || "(no element changes)"}\nUse stateId ${browser.snapshotId} for subsequent actions and queries.`;
@@ -1540,7 +1540,7 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 			const transition = changesBetween(restoreOutline(baseSnapshot.outline), successorOutline);
 			const useDiff = !transition.useFullView;
 			const renderedOutline = foldToBudget(successorOutline).text;
-			const details: WaitForDetails = { tool: "wait_for", stateId: lastSnapshot.snapshotId, baseStateId: baseSnapshot.snapshotId, view: useDiff ? "diff" : "full", changes: useDiff ? transition.changes : undefined, found, gone: found && gone || undefined, timedOut, nodeCount: lastSnapshot.targets.length, text, role, value, scopeRef, outline: lastSnapshot.outline, renderedOutline };
+			const details: WaitForDetails = { tool: "wait_for", stateId: lastSnapshot.snapshotId, baseStateId: baseSnapshot.snapshotId, view: useDiff ? "diff" : "full", changes: useDiff ? transition.changes : undefined, found, gone: found && gone || undefined, timedOut, nodeCount: lastSnapshot.targets.length, text, role, value, scopeRef, renderedOutline };
 			const message = found ? (gone ? "Condition disappeared." : "Condition appeared.") : `Timed out after ${timeoutMs}ms waiting for condition.`;
 			return { content: [{ type: "text", text: `${message}\n${waitForViewText(successorOutline, lastSnapshot.snapshotId, transition)}` }], details };
 		};
@@ -1593,7 +1593,6 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 		role,
 		value,
 		scopeRef,
-		outline: serializeOutline(refreshed.outline),
 		renderedOutline: foldToBudget(refreshed.outline).text,
 	};
 	const message = details.found ? (details.gone ? "Condition disappeared." : "Condition appeared.") : `Timed out after ${timeoutMs}ms waiting for condition.`;
@@ -2532,7 +2531,6 @@ async function performEvaluateBrowser(params: EvaluateBrowserParams): Promise<Ag
 			stateId: successor.details.stateId,
 			view: successor.details.view,
 			changes: successor.details.changes,
-			outline: successor.details.outline,
 			renderedOutline: successor.details.renderedOutline,
 		};
 		return { content: [...successor.content, { type: "text", text: `Evaluation value: ${JSON.stringify(result.value)}` }], details };
@@ -2666,7 +2664,9 @@ export function reconstructStateFromBranch(ctx: ExtensionContext): void {
 			scaleFactor: Math.max(1, toFiniteNumber(details.capture.scaleFactor, 1)),
 			timestamp: Number.isFinite(details.capture.timestamp) ? details.capture.timestamp : Date.now(),
 		};
-		if (details.outline?.root && typeof details.outline.lookId === "string") {
+		// Sessions written before the outline store carry the outline inline; newer ones read it back by stateId.
+		const outline = details.outline?.root && typeof details.outline.lookId === "string" ? details.outline : loadStoredOutline(capture.stateId);
+		if (outline) {
 			const epoch = 0;
 			resourceScheduler.restoreEpoch(resourceKey, epoch);
 			savedStates.set({
@@ -2677,9 +2677,9 @@ export function reconstructStateFromBranch(ctx: ExtensionContext): void {
 					kind: "desktop",
 					target,
 					capture,
-					outline: details.outline,
+					outline,
 					look: {
-				lookId: details.outline.lookId,
+				lookId: outline.lookId,
 				capturedAt: details.capture.timestamp / 1000,
 				window: {
 					windowId: Math.trunc(details.target.windowId),
