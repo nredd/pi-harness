@@ -78,10 +78,14 @@ if [ -n "$cache" ]; then
   # `apt-get autoclean` would keep any version the mirror still lists), so a warm cache stays bounded to the
   # current package set. Build the new set aside so an empty `archives` cannot wipe a good cache.
   kept=$(mktemp -d)
+  trap 'rm -rf "$kept"' EXIT
   for deb in "$archives"/*.deb; do
     [ -e "$deb" ] || continue
-    name=$(dpkg-deb -f "$deb" Package)
-    version=$(dpkg-deb -f "$deb" Version)
+    # An unreadable .deb is simply not kept; housekeeping must not fail the setup.
+    name=$(dpkg-deb -f "$deb" Package 2> /dev/null) || continue
+    version=$(dpkg-deb -f "$deb" Version 2> /dev/null) || continue
+    arch=$(dpkg-deb -f "$deb" Architecture 2> /dev/null) || continue
+    [ "$arch" = all ] || name="$name:$arch"
     if [ "$(dpkg-query -W -f='${Version}' "$name" 2> /dev/null || true)" = "$version" ]; then
       cp "$deb" "$kept"/
     fi
@@ -93,5 +97,4 @@ if [ -n "$cache" ]; then
   else
     echo 'wsl2-apt: no installed .debs found in the archives, leaving the host cache as it was' >&2
   fi
-  rm -rf "$kept"
 fi

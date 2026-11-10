@@ -685,9 +685,11 @@ APT_FLAGS = "install --yes --no-install-recommends"
 def run_apt(
     tmp_path: Path,
     fail_mirror: str | None = None,
+    *,
     hang: bool = False,
     cached: bool = False,
     stale: bool = False,
+    fetched_version: str = "1.0",
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     """Run the real apt script with stub `id`, `timeout`, `apt-get` and `ps`.
 
@@ -696,6 +698,7 @@ def run_apt(
         fail_mirror (str | None): Mirror host whose `apt-get update` fails; `None` fails none.
         hang (bool): Model `timeout` tripping (exit 124) on every `apt-get update`.
         cached (bool): Seed the host cache with one .deb.
+        fetched_version (str): Version in the name of the .deb a download leaves behind.
         stale (bool): Seed the host cache with a .deb of a superseded version.
 
     Returns:
@@ -716,7 +719,11 @@ def run_apt(
     quoted_log = shlex.quote(str(log))
     quoted_lists = shlex.quote(str(tmp_path / "lists.uri"))
     fail = f'case "$1" in update) grep -q {fail_mirror} {quoted} && exit 100 ;; esac\n' if fail_mirror else ""
-    dpkg_deb_body = 'case "$3" in Package) echo "${n%%_*}" ;; *) v=${n#*_}; echo "${v%%_*}" ;; esac\n'
+    dpkg_deb_body = (
+        'v=${n#*_}\ncase "$3" in Package) echo "${n%%_*}" ;; Version) echo "${v%%_*}" ;; '
+        '*) echo "${v#*_}" ;; esac\n'
+    )
+    fetched = f"fetched_{fetched_version}_amd64.deb"
     no_candidate = '{ echo "E: Unable to locate package" >&2; exit 100; }'
     stubs = {
         "id": "#!/bin/sh\necho 0\n",
@@ -734,7 +741,7 @@ def run_apt(
         + fail
         + f"uris=$(grep -m1 URIs {quoted})\n"
         + f'case "$1" in update) echo "$uris" > {quoted_lists}; exit 0 ;; esac\n'
-        + 'case "$*" in *--download-only*) touch "$WSL_APT_ARCHIVES/fetched_1.0_amd64.deb"; exit 0 ;; esac\n'
+        + f'case "$*" in *--download-only*) touch "$WSL_APT_ARCHIVES/{fetched}"; exit 0 ;; esac\n'
         + f'case "$1" in install) [ "$uris" = "$(cat {quoted_lists})" ] || {no_candidate} ;; esac\n'
         + "exit 0\n",
     }
@@ -805,12 +812,20 @@ def test_apt_prerequisites_restore_and_refill_the_host_cache(tmp_path: Path) -> 
     assert (tmp_path / "cache" / "fetched_1.0_amd64.deb").exists()
 
 
-def test_apt_cache_is_pruned_to_the_archives_after_install(tmp_path: Path) -> None:
-    """A stale .deb in the host cache (last week's restore-key hit) is not carried into the new key."""
+def test_apt_cache_is_pruned_to_installed_versions(tmp_path: Path) -> None:
+    """A superseded .deb in the host cache (last week's restore-key hit) is not carried into the new key."""
     result, _, _ = run_apt(tmp_path, stale=True)
     assert result.returncode == 0, result.stderr
     assert not (tmp_path / "cache" / "stale_0.9_amd64.deb").exists()
     assert (tmp_path / "cache" / "fetched_1.0_amd64.deb").exists()
+
+
+def test_apt_cache_is_left_alone_when_no_installed_deb_is_found(tmp_path: Path) -> None:
+    """Nothing in the archives matches an installed version: keep the cache rather than wipe it."""
+    result, _, _ = run_apt(tmp_path, stale=True, fetched_version="0.5")
+    assert result.returncode == 0, result.stderr
+    assert "leaving the host cache as it was" in result.stderr
+    assert (tmp_path / "cache" / "stale_0.9_amd64.deb").exists()
 
 
 def test_apt_prerequisites_fall_back_to_the_stock_mirror_once(tmp_path: Path) -> None:
