@@ -29,13 +29,17 @@ test("Linux backend and find_roots explain empty windows under WSL2", async () =
 const readline = require("node:readline");
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const request = JSON.parse(line);
-  const result = request.cmd === "listRoots" ? { roots: [] } : {};
+  const rootsFile = process.env.PI_TEST_WSL_ROOTS_FILE;
+  const roots = rootsFile && require("node:fs").existsSync(rootsFile) ? JSON.parse(require("node:fs").readFileSync(rootsFile, "utf8")) : [];
+  const result = request.cmd === "listRoots" ? { roots } : {};
   process.stdout.write(JSON.stringify({ protocolVersion: 4, id: request.id, ok: true, result }) + "\\n");
 });
 `,
 	);
 	await fs.chmod(fakeHelper, 0o755);
 	process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH = fakeHelper;
+	const rootsFile = path.join(tempDir, "roots.json");
+	process.env.PI_TEST_WSL_ROOTS_FILE = rootsFile;
 	const { platformBackendForRuntime, currentPlatformBackend } = await import("../src/platform/index.ts");
 	const { linuxHelper } = await import("../src/platform/linux/helper.ts");
 	const { wslProbe } = await import("../src/platform/linux/wsl.ts");
@@ -48,6 +52,14 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		Object.assign(wslProbe, { env: () => ({ WSL_DISTRO_NAME: "Ubuntu" }), procVersion: () => "", hasInteropEntry: () => false });
 		await assert.rejects(() => linux.getFrontmost(), WSL_TEXT);
 		assert.match(linux.emptyRootsHint?.() ?? "", WSL_TEXT);
+
+		// WSLg: Linux roots exist but none reports a pid. That is not a host-reachability problem.
+		await fs.writeFile(rootsFile, JSON.stringify([{ title: "gedit" }]));
+		await assert.rejects(
+			() => linux.getFrontmost(),
+			(error) => error.message === "No frontmost window was available.",
+		);
+		await fs.rm(rootsFile);
 
 		// Native Linux keeps the original wording and no hint.
 		Object.assign(wslProbe, { env: () => ({}), procVersion: () => "Linux version 6.5.0-generic", hasInteropEntry: () => false });
@@ -76,6 +88,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		assert.equal(await find(), "No roots are currently visible to pi-computer-use.");
 		await linux.shutdown?.();
 	} finally {
+		delete process.env.PI_TEST_WSL_ROOTS_FILE;
 		Object.assign(wslProbe, realProbe);
 		await fs.rm(tempDir, { recursive: true, force: true });
 	}
