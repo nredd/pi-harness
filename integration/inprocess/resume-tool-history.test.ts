@@ -33,6 +33,7 @@ interface WireBlock {
 	tool?: { name?: string; definition?: { name: string } };
 }
 interface WirePayload {
+	betas?: string[];
 	tools?: { name: string }[];
 	messages: { role: string; content: string | WireBlock[] }[];
 }
@@ -59,6 +60,19 @@ function removedTools(context: TranscriptContext): string[] {
 			? (message.toolsRemoved ?? []).map((tool) => (typeof tool === "string" ? tool : tool.name))
 			: [],
 	);
+}
+
+/**
+ * Converter beta that marks native mid-conversation tool changes (pi-ai `INLINE_TOOLS_BETA`, unexported).
+ * Without native mode the converter emits no `tool_removal` at all and `unresolved` would pass vacuously.
+ */
+const NATIVE_TOOL_CHANGES_BETA = "inline-tools-2026-09-15";
+
+/** Wire payload, required to use native tool changes so `unresolved` cannot pass vacuously. */
+async function nativePayload(request: TranscriptContext): Promise<WirePayload> {
+	const payload = await wirePayload(request);
+	expect(payload.betas ?? []).toContain(NATIVE_TOOL_CHANGES_BETA);
+	return payload;
 }
 
 /** Names Anthropic rejects with `tool_reference_unresolved`: removals of tools the request never declared. */
@@ -137,7 +151,7 @@ it("resume after a promoted deferred tool went inactive declares no orphan tool 
 	await h.session.prompt("read it again");
 	if (!request) throw new Error("expected the resumed request");
 	expect(removedTools(request)).toContain(PROMOTED);
-	expect(unresolved(await wirePayload(request))).toEqual([]);
+	expect(unresolved(await nativePayload(request))).toEqual([]);
 });
 
 it("continuing a run after demoting a promoted deferred tool declares no orphan tool removal", async () => {
@@ -155,5 +169,5 @@ it("continuing a run after demoting a promoted deferred tool declares no orphan 
 	expect(h.session.getActiveToolNames()).not.toContain(PROMOTED);
 	if (!request) throw new Error("expected the continuation request");
 	expect(removedTools(request)).toContain(PROMOTED);
-	expect(unresolved(await wirePayload(request))).toEqual([]);
+	expect(unresolved(await nativePayload(request))).toEqual([]);
 });
