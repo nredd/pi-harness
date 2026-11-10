@@ -1265,7 +1265,7 @@ describe("worktree isolation switch", () => {
   });
 });
 
-describe("cleanupWorktree — index bits and ignored path decoding (#596)", () => {
+describe("cleanupWorktree -- index bits and ignored path decoding (#596)", () => {
   let repoDir: string;
   let subDir: string;
   let pi: ExtensionAPI;
@@ -1346,7 +1346,7 @@ describe("cleanupWorktree — index bits and ignored path decoding (#596)", () =
     expect(run(wt.path, "ls-files", "--stage", "run.sh")).toMatch(/^100755 /);
   });
 
-  it("keeps the worktree when the index-only chmod is followed by a ctime bump", async () => {
+  it("keeps the worktree when the index-only chmod is followed by a touch", async () => {
     const wt = await worktree("chmod-touch");
     run(wt.path, "update-index", "--chmod=+x", "run.sh");
     const now = new Date(Date.now() + 5000);

@@ -174,7 +174,6 @@ export async function cleanupWorktree(
     // Check for uncommitted changes in the worktree
     const status = await dirtyState(pi, worktree.path);
 
-    let committed = false;
     if (status) {
       // Changes exist — stage, commit, and create a branch
       const modes = await indexOnlyModes(pi, worktree.path);
@@ -191,9 +190,7 @@ export async function cleanupWorktree(
       const safeDesc = agentDescription.slice(0, 200);
       const commitMsg = `pi-agent: ${safeDesc}`;
       await git(pi, worktree.path, ["commit", "--no-verify", "-m", commitMsg], 10000);
-      committed = true;
-    }
-    if (!committed) {
+    } else {
       const currentSha = await git(pi, worktree.path, ["rev-parse", "HEAD"], 5000);
 
       if (currentSha === worktree.baseSha) {
