@@ -128,6 +128,15 @@ it("exports only allowlisted metadata in monthly shards and persistent agent-loc
 	expect(second.machineId).toBe(identity.machineId);
 });
 
+it("exports a session with all-NUL crash-padding lines mid-file and at EOF, but still fails closed on mixed garbage", async () => {
+	const path = seed(a, [usage("entry-1"), "\0".repeat(174), usage("entry-2", at("2026-10-02"))]);
+	writeFileSync(path, `${readFileSync(path, "utf8")}${"\0".repeat(2079)}`);
+	const result = await exportStats(a, repo);
+	expect(readdirSync(result.snapshotDir)).toContain("manifest.json");
+	writeFileSync(path, `${readFileSync(path, "utf8")}\n\0\0{"type":"x"}\n`);
+	await expect(exportStats(a, join(dir, "other"))).rejects.toThrow("1 bad lines");
+});
+
 it("copies/forks across machines count once, while fresh local calls and children remain included", async () => {
 	const original = seed(a);
 	const copied = seed(b);

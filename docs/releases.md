@@ -118,6 +118,28 @@ its tag, asset or attestation. Recovery is tracked in #227: reviewed fixes, succ
 exact-main registry-stack evidence, then a new ordinary `promote`. Publication, promotion
 and live activation remain separate facts.
 
+## Provenance republication
+
+All nine packages in the table above have stale provenance (the eight `personal.json` sources fail `stack-check`; `@nredd/pi-resource-sampler` is only a dependency): a history purge rewrote the commits under their `@nredd/*` tags, so each npm SLSA provenance names a pre-purge source commit (e.g. preset `0.3.0` provenance `1e9ba623`, tag now `8ec5f7d8`), and `promote-stack.yml` run [here](https://github.com/nredd/pi-harness/actions/runs/42491284274) failed `Provenance source commit differs from the tagged release`. The published bytes are unchanged and valid for each old version; only the source binding is stale. The purge rewriting the tags is the trigger for #638, which republishes each package from current `main` through `publish.yml` with fresh provenance. `stack-check` is not weakened and no purge map is added.
+
+Each new version publishes current `main`, so it carries every unreleased change since its old tag, not a rebuild of the old bytes. Package `CHANGELOG.md` headings lag the tags (e.g. todo's last heading is `2.13.9` against tag `2.13.11`), so the authoritative range is `git log <old tag>..HEAD -- packages/<name>`; `[Unreleased]` in each package `CHANGELOG.md` (all but dev-tools, preset and resource-sampler, which have none) lists much of it. This PR does not move those sections to version headings, matching earlier releases.
+
+Planned versions, chosen by SemVer from that range (minor for added features or behavior, patch for fixes only; fork-suffixed versions keep their `-nredd.N` scheme):
+
+- `@nredd/pi-resource-sampler` `0.2.0` -> `0.2.1`: one behavior fix (mid-listing PID exit) plus coverage and test-infra changes
+- `@nredd/pi-subscription-router` `0.5.0` -> `0.6.0`: frontier tier, per-session decision log, weekly-scoped limit handling
+- `@nredd/pi-subagents` `0.22.0-nredd.8` -> `0.22.0-nredd.9`: about 65 commits, roughly half tests and coverage (`stop_subagent`, resume through `steer_subagent`, survivor events, `principal-investigator` and more)
+- `@nredd/pi-plan-mode` `0.59.3-nredd.3` -> `0.59.3-nredd.4`: router-tier `planModel`, plan editing, Plan-time steer refusals
+- `@nredd/pi-todo` `2.13.11` -> `2.14.0`: owner display, settle warnings, held-work reminders
+- `@nredd/pi-preset` `0.3.0` -> `0.4.0`: frontier tier and `principal-investigator` agent
+- `@nredd/pi-computer-use` `0.6.0` -> `0.6.1`: managed-browser lifecycle and private profile and Swift cache fixes, Linux helper stdin fix
+- `@nredd/pi-session-kit` `0.9.0` -> `0.10.0`: `homeDir`, `/mon` and monitor-tool changes, settle enforcement
+- `@nredd/pi-dev-tools` `0.7.0` -> `0.8.0`: approved merge-commit support, resource and git/ssh/py changes
+
+Plan-mode newer than `0.59.3-nredd.3` and subagents newer than `0.22.0-nredd.8` must update together (`packages/subagents/README.md`), so the pin PR moves both `personal.json` pins in one change. "No source changes" applies only to this PR's own diff (versions and lockfile), not to what publishing `main` ships. Dev-tools and session-kit keep their exact `@nredd/pi-resource-sampler@0.2.0` dependency: the lockfile cannot select an unpublished `0.2.1`, and nothing verifies a dependency's provenance. The bump PR deliberately leaves `integration/stacks/personal.json` and `integration/stacks/runtime-locks.json` on the published selection, per [release verification](release-verification.md).
+
+Not yet published: this section records the plan, and nothing here is a claim of publication. The publication table and receipt are added with the pin PR, after each `publish.yml` run succeeds.
+
 ## Owned npm packages
 
 `.github/workflows/publish.yml` is the only automated publish path for `@nredd/pi-computer-use`,

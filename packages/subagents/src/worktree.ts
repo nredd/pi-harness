@@ -12,11 +12,12 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, realpathSync } from "node:fs";
+import { type BigIntStats, existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { errorMessage } from "./error-message.js";
+import { QUOTE_PATH_ARGS, unquoteGitPath } from "./git-path.js";
 
 export interface WorktreeInfo {
   /** Absolute path to the worktree directory (the copied repo's root). */
@@ -77,12 +78,17 @@ export interface WorktreeCleanupResult {
  * clean exit".
  */
 async function git(pi: ExtensionAPI, cwd: string, args: string[], timeout: number): Promise<string> {
+  return (await gitRaw(pi, cwd, args, timeout)).trim();
+}
+
+/** `git`, with stdout untrimmed: a path may start or end with whitespace. */
+async function gitRaw(pi: ExtensionAPI, cwd: string, args: string[], timeout: number): Promise<string> {
   const result = await pi.exec("git", args, { cwd, timeout });
   if (result.killed) throw new GitTimeoutError(`\`git ${args.join(" ")}\` timed out after ${timeout}ms in ${cwd}`);
   if (result.code !== 0) {
     throw new Error(result.stderr.trim() || `git ${args.join(" ")} failed (exit ${result.code})`);
   }
-  return result.stdout.trim();
+  return result.stdout;
 }
 
 /** A git call killed by its timeout — reported as-is, never as a repo-state cause. */
@@ -170,6 +176,10 @@ export async function cleanupWorktree(
 
     if (status) {
       // Changes exist — stage, commit, and create a branch
+      const modes = await indexOnlyModes(pi, worktree.path);
+      if (modes.length > 0) {
+        throw new Error(`mode staged only in the index; worktree kept: ${modes.join(", ")}`);
+      }
       await git(pi, worktree.path, ["add", "-A"], 10000);
       // `add -A` skips a moved gitlink hidden by `submodule.<name>.ignore = all`; an empty
       // commit would fail opaquely, so say why and keep the worktree.
@@ -225,12 +235,90 @@ export async function cleanupWorktree(
 }
 
 /**
+ * Lines of a path listing, read without `-z` and with `core.quotePath=true`: every
+ * non-ASCII path byte is escaped, so `pi.exec` decoding stdout chunk by chunk cannot
+ * corrupt a path (see `unquoteGitPath`). Each line's paths are decoded by the caller.
+ */
+async function gitLines(pi: ExtensionAPI, repo: string, args: string[], timeout: number): Promise<string[]> {
+  return (await gitRaw(pi, repo, [...QUOTE_PATH_ARGS, ...args], timeout)).split("\n").filter(Boolean);
+}
+
+const INDEX_BATCH = 200;
+
+/** `git update-index <flag> -- <paths>` in argv-sized batches. */
+async function updateIndex(pi: ExtensionAPI, repo: string, flag: string, paths: string[]): Promise<void> {
+  for (let i = 0; i < paths.length; i += INDEX_BATCH) {
+    await git(pi, repo, ["update-index", flag, "--", ...paths.slice(i, i + INDEX_BATCH)], 30000);
+  }
+}
+
+/**
+ * Clear the assume-unchanged and skip-worktree index bits of `repo`: with either
+ * set, `status` and git's own removal check ignore edits to the file, so an edited
+ * file would be deleted with the worktree. A skip-worktree file absent from disk
+ * (sparse checkout) is left alone: clearing it would report a deletion nobody made.
+ * The tree is disposable, so mutating its index is fine.
+ */
+async function clearHiddenIndexBits(pi: ExtensionAPI, repo: string): Promise<void> {
+  const assumed: string[] = [];
+  const skipped: string[] = [];
+  // `-v` tags: lowercase = assume-unchanged, `S` (or `s` with both) = skip-worktree.
+  for (const entry of await gitLines(pi, repo, ["ls-files", "-v"], 30000)) {
+    const tag = entry.charAt(0);
+    const hidden = tag !== tag.toUpperCase() || tag === "S";
+    if (!hidden) continue;
+    const path = unquoteGitPath(entry.slice(2));
+    if (tag !== tag.toUpperCase()) assumed.push(path);
+    if (tag.toLowerCase() === "s" && lstatOrUndefined(join(repo, path))) skipped.push(path);
+  }
+  await updateIndex(pi, repo, "--no-assume-unchanged", assumed);
+  await updateIndex(pi, repo, "--no-skip-worktree", skipped);
+}
+
+/** `lstat` of `path`, or undefined when it is missing or unreachable (ENOENT, ENOTDIR). */
+function lstatOrUndefined(path: string): BigIntStats | undefined {
+  try {
+    return lstatSync(path, { bigint: true });
+  } catch (error) {
+    // Anything else (EACCES, ...) is unknown, not absent: let cleanup fail and keep the tree.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return undefined;
+    throw error;
+  }
+}
+
+/**
+ * Regular files whose staged executable bit (index vs `HEAD`, a new file counting as a change)
+ * differs from the file on disk, decoded. `add -A` restages from disk and would silently drop
+ * such a mode, and an index-only mode cannot be told from a later on-disk change, so cleanup
+ * keeps the worktree instead of guessing. A plain unstaged `chmod` is not listed: the index
+ * still matches `HEAD`, so `add -A` commits the disk mode. Skipped when `core.fileMode=false`:
+ * git ignores the bit then, so a mismatch is not a change.
+ */
+async function indexOnlyModes(pi: ExtensionAPI, repo: string): Promise<string[]> {
+  if ((await git(pi, repo, ["config", "--type=bool", "--default", "true", "core.fileMode"], 5000)) === "false") return [];
+  const paths: string[] = [];
+  // `:<old mode> <new mode> <old sha> <new sha> <status>` TAB `<path>`
+  for (const line of await gitLines(pi, repo, ["diff", "--cached", "--raw", "--no-renames"], 30000)) {
+    const tab = line.indexOf("\t");
+    const [oldMode, newMode] = line.slice(1, tab).split(" ");
+    if (oldMode === newMode || (newMode !== "100644" && newMode !== "100755")) continue;
+    const path = unquoteGitPath(line.slice(tab + 1));
+    const disk = lstatOrUndefined(join(repo, path));
+    if (disk?.isFile() && ((disk.mode & 0o100n) !== 0n) !== (newMode === "100755")) paths.push(path);
+  }
+  return paths;
+}
+
+/**
  * Uncommitted state of `repo`, untracked files and submodule changes included.
  * `status.showUntrackedFiles=no` in user or repo config would otherwise hide new
  * files from `status`, and `submodule.<name>.ignore` / `diff.ignoreSubmodules`
  * would hide a moved gitlink; a clean-looking tree gets removed with them.
+ * Index bits that hide edits are cleared first, see `clearHiddenIndexBits`.
  */
 async function dirtyState(pi: ExtensionAPI, repo: string): Promise<string> {
+  await clearHiddenIndexBits(pi, repo);
   return await git(pi, repo, ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"], 10000);
 }
 
@@ -242,14 +330,13 @@ const GITLINK_MODE = "160000";
  * remove a worktree on the gitlink, not on the config file.
  */
 async function gitlinks(pi: ExtensionAPI, repo: string, rev?: string): Promise<Map<string, string>> {
-  const out = await git(pi, repo, rev ? ["ls-tree", "-r", "-z", rev] : ["ls-files", "-s", "-z"], 30000);
   const links = new Map<string, string>();
-  for (const entry of out.split("\0")) {
+  for (const entry of await gitLines(pi, repo, rev ? ["ls-tree", "-r", rev] : ["ls-files", "-s"], 30000)) {
+    // `gitLines` drops blanks, so every entry is `<fields>` TAB `<path>`.
     const tab = entry.indexOf("\t");
-    if (tab < 0) continue;
     // ls-files: `<mode> <sha> <stage>`; ls-tree: `<mode> <type> <sha>`.
     const [mode, second, third] = entry.slice(0, tab).split(" ");
-    if (mode === GITLINK_MODE) links.set(entry.slice(tab + 1), rev ? (third as string) : (second as string));
+    if (mode === GITLINK_MODE) links.set(unquoteGitPath(entry.slice(tab + 1)), rev ? (third as string) : (second as string));
   }
   return links;
 }
@@ -270,6 +357,19 @@ async function unpublished(pi: ExtensionAPI, gitArgs: string[], cwd: string, pub
 }
 
 /**
+ * The git dir of the repository whose work tree is `dir`, read from `.git` (a directory, or
+ * a `gitdir: <path>` file for a submodule) rather than from `git rev-parse` output, which
+ * `pi.exec` can mis-decode when the path is non-ASCII.
+ */
+function gitDirOf(dir: string): string {
+  const dotGit = join(dir, ".git");
+  if (statSync(dotGit).isDirectory()) return dotGit;
+  const target = /^gitdir: (.+)$/m.exec(readFileSync(dotGit, "utf8"))?.[1];
+  if (!target) throw new Error(`${dotGit} is neither a directory nor a gitdir file`);
+  return resolve(dir, target.trim());
+}
+
+/**
  * Inspect the nested repository at `dir`, then the ones behind its own gitlinks.
  * `recorded` is the sha a trusted baseline pins it at (when any).
  */
@@ -282,7 +382,7 @@ async function inspectRepo(
   seen: Set<string>,
   problems: string[],
 ): Promise<void> {
-  seen.add(realpathSync(await git(pi, dir, ["rev-parse", "--absolute-git-dir"], 5000)));
+  seen.add(realpathSync(gitDirOf(dir)));
   const dirty = await dirtyState(pi, dir);
   const lost = await unpublished(pi, [], dir, recorded ? [recorded] : []);
   const detail = [dirty, lost].filter(Boolean).join("\n");
@@ -305,7 +405,7 @@ async function inspectIgnoredRepos(
   problems: string[],
 ): Promise<void> {
   for (const dir of await ignoredRepoDirs(pi, repo)) {
-    if (!seen.has(realpathSync(await git(pi, dir, ["rev-parse", "--absolute-git-dir"], 5000)))) {
+    if (!seen.has(realpathSync(gitDirOf(dir)))) {
       await inspectRepo(pi, dir, relative(root, dir), undefined, trusted, seen, problems);
     }
   }
@@ -340,13 +440,11 @@ async function inspectGitlinks(
  * records them, yet plain removal deletes their ignored content.
  */
 async function ignoredRepoDirs(pi: ExtensionAPI, worktreePath: string): Promise<string[]> {
-  const out = await git(pi, worktreePath, ["status", "--porcelain", "-z", "--ignored", "--untracked-files=all", "--ignore-submodules=none"], 30000);
+  const entries = await gitLines(pi, worktreePath, ["status", "--porcelain", "--ignored", "--untracked-files=all", "--ignore-submodules=none"], 30000);
   // With `--untracked-files=all` git lists an ignored nested repository as its own `!! dir/` entry.
-  return out
-    .split("\0")
-    .filter(entry => entry.startsWith("!! ") && entry.endsWith("/"))
-    .map(entry => join(worktreePath, entry.slice(3)))
-    .filter(dir => existsSync(join(dir, ".git")));
+  // Only directory entries (`dir/`, or `"dir/"` when quoted) can be a clone: decode just those.
+  const dirs = entries.filter(entry => entry.startsWith("!! ") && /\/"?$/.test(entry)).map(entry => unquoteGitPath(entry.slice(3)));
+  return dirs.map(dir => join(worktreePath, dir)).filter(dir => existsSync(join(dir, ".git")));
 }
 
 /** Git dirs under a `modules` directory, including those nested in other submodule git dirs. */
@@ -359,8 +457,8 @@ function moduleGitDirs(dir: string): string[] {
 }
 
 /** Absolute `modules` directory of the worktree's private git dir, when present. */
-async function modulesDir(pi: ExtensionAPI, worktreePath: string): Promise<string | undefined> {
-  const dir = resolve(worktreePath, await git(pi, worktreePath, ["rev-parse", "--git-path", "modules"], 5000));
+function modulesDir(worktreePath: string): string | undefined {
+  const dir = join(gitDirOf(worktreePath), "modules");
   return existsSync(dir) ? dir : undefined;
 }
 
@@ -378,7 +476,7 @@ async function assertSubmodulesDisposable(pi: ExtensionAPI, worktreePath: string
   const problems: string[] = [];
   await inspectGitlinks(pi, worktreePath, baseSha, trusted, seen, problems);
   await inspectIgnoredRepos(pi, worktreePath, worktreePath, trusted, seen, problems);
-  const modules = await modulesDir(pi, worktreePath);
+  const modules = modulesDir(worktreePath);
   for (const gitDir of modules ? moduleGitDirs(modules) : []) {
     if (seen.has(realpathSync(gitDir))) continue;
     const lost = await unpublished(pi, ["--git-dir", gitDir], worktreePath, trusted);
@@ -389,7 +487,7 @@ async function assertSubmodulesDisposable(pi: ExtensionAPI, worktreePath: string
 
 /** Whether git would refuse plain removal for submodule state: any gitlink in the index or a `modules` dir. */
 async function hasSubmoduleState(pi: ExtensionAPI, worktreePath: string): Promise<boolean> {
-  return (await gitlinks(pi, worktreePath)).size > 0 || (await modulesDir(pi, worktreePath)) !== undefined;
+  return (await gitlinks(pi, worktreePath)).size > 0 || modulesDir(worktreePath) !== undefined;
 }
 
 /**
