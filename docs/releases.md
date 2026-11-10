@@ -133,6 +133,7 @@ Planned versions, chosen by SemVer from that range (minor for added features or 
 - `@nredd/pi-todo` `2.13.11` -> `2.14.0`: owner display, settle warnings, held-work reminders
 - `@nredd/pi-preset` `0.3.0` -> `0.4.0`: frontier tier and `principal-investigator` agent
 - `@nredd/pi-computer-use` `0.6.0` -> `0.6.1`: managed-browser lifecycle and private profile and Swift cache fixes, Linux helper stdin fix
+  - `0.6.1` (tag at `a9b89d81`) never published: its `publish.yml` `verify` runs on macOS, where the release gate's default `/usr/bin/gh` does not exist (#663). Publish runs each tag's own workflow, so that tag can never pass; `0.6.2` publishes from a commit with the fix (#664) and also carries the macOS wheel horizontal sign fix (#661). The orphaned `0.6.1` tag stays; nothing was published under it
 - `@nredd/pi-session-kit` `0.9.0` -> `0.10.0`: `homeDir`, `/mon` and monitor-tool changes, settle enforcement
 - `@nredd/pi-dev-tools` `0.7.0` -> `0.8.0`: approved merge-commit support, resource and git/ssh/py changes
 
