@@ -253,20 +253,25 @@ async function clearHiddenIndexBits(pi: ExtensionAPI, repo: string): Promise<voi
   const assumed: string[] = [];
   const skipped: string[] = [];
   // `-v` tags: lowercase = assume-unchanged, `S` (or `s` with both) = skip-worktree.
-  for (const entry of (await git(pi, repo, ["ls-files", "-v", "-z"], 30000)).split("\0")) {
+  const entries = (await git(pi, repo, ["ls-files", "-v", "-z"], 30000)).split("\0").filter(Boolean);
+  assertDecoded(entries, "An index");
+  for (const entry of entries) {
     const tag = entry.charAt(0);
     const path = entry.slice(2);
-    if (!path) continue;
-    const lower = tag !== tag.toUpperCase();
-    const skip = tag.toLowerCase() === "s" && lstatSync(join(repo, path), { throwIfNoEntry: false }) !== undefined;
-    if (tag === "S" ? skip : lower) {
-      if (lower) assumed.push(path);
-      if (skip) skipped.push(path);
-    }
+    if (tag !== tag.toUpperCase()) assumed.push(path);
+    if (tag.toLowerCase() === "s" && isFile(join(repo, path))) skipped.push(path);
   }
-  assertDecoded([...assumed, ...skipped], "An index");
   await updateIndex(pi, repo, "--no-assume-unchanged", assumed);
   await updateIndex(pi, repo, "--no-skip-worktree", skipped);
+}
+
+/** Whether `path` is a regular file; false for anything missing or unreadable (e.g. ENOTDIR). */
+function isFile(path: string): boolean {
+  try {
+    return lstatSync(path).isFile();
+  } catch {
+    return false;
+  }
 }
 
 /** An executable-bit change staged with `update-index --chmod`: path -> index mode now. */
@@ -277,8 +282,8 @@ async function stagedModeChanges(pi: ExtensionAPI, repo: string): Promise<ModeCh
   const fields = (await git(pi, repo, ["diff", "--cached", "--raw", "-z", "--no-renames"], 30000)).split("\0");
   const changes: ModeChange[] = [];
   for (let i = 0; i + 1 < fields.length; i += 2) {
-    const [oldMode, newMode] = (fields[i] as string).slice(1).split(" ");
-    const path = fields[i + 1] as string;
+    const [oldMode, newMode] = (fields[i] ?? "").slice(1).split(" ");
+    const path = fields[i + 1] ?? "";
     if (oldMode !== newMode && (newMode === "100644" || newMode === "100755") && (oldMode === "100644" || oldMode === "100755")) {
       changes.push({ path, mode: newMode });
     }
@@ -293,11 +298,12 @@ async function stagedModeChanges(pi: ExtensionAPI, repo: string): Promise<ModeCh
  */
 async function restoreStagedModes(pi: ExtensionAPI, repo: string, changes: ModeChange[]): Promise<void> {
   for (const mode of ["100644", "100755"] as const) {
-    const paths = changes.filter(change => change.mode === mode).map(change => change.path);
+    // A file the agent deleted after the chmod is already staged as a deletion: nothing to restore.
+    const paths = changes.filter(change => change.mode === mode && isFile(join(repo, change.path))).map(change => change.path);
     await updateIndex(pi, repo, mode === "100755" ? "--chmod=+x" : "--chmod=-x", paths);
     for (const path of paths) {
-      const stat = lstatSync(join(repo, path), { throwIfNoEntry: false });
-      if (stat?.isFile()) chmodSync(join(repo, path), mode === "100755" ? stat.mode | 0o111 : stat.mode & ~0o111);
+      const { mode: onDisk } = lstatSync(join(repo, path));
+      chmodSync(join(repo, path), mode === "100755" ? onDisk | 0o111 : onDisk & ~0o111);
     }
   }
 }

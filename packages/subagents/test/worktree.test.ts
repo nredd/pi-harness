@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -1275,6 +1275,44 @@ describe("cleanupWorktree — index bits and ignored path decoding (#596)", () =
     expect(result.error).toBeUndefined();
     expect(result.hasChanges).toBe(true);
     expect(run(repoDir, "ls-tree", result.branch as string, "run.sh")).toMatch(/^100755 /);
+  });
+
+  it("preserves a staged mode removal (--chmod=-x)", async () => {
+    const wt = await worktree("chmod-minus");
+    run(wt.path, "update-index", "--chmod=+x", "run.sh");
+    run(wt.path, "commit", "-m", "exec");
+    run(wt.path, "update-index", "--chmod=-x", "run.sh");
+    chmodSync(join(wt.path, "run.sh"), 0o755);
+    const result = await cleanupWorktree(pi, repoDir, wt, "chmod minus");
+    expect(result.error).toBeUndefined();
+    expect(run(repoDir, "ls-tree", result.branch as string, "run.sh")).toMatch(/^100644 /);
+  });
+
+  it("preserves a deletion of a file whose mode change was staged", async () => {
+    const wt = await worktree("chmod-delete");
+    run(wt.path, "update-index", "--chmod=+x", "run.sh");
+    rmSync(join(wt.path, "run.sh"));
+    const result = await cleanupWorktree(pi, repoDir, wt, "chmod delete");
+    expect(result.error).toBeUndefined();
+    expect(run(repoDir, "ls-tree", "--name-only", result.branch as string)).not.toMatch(/run\.sh/);
+  });
+
+  it("keeps the worktree when an index path was mis-decoded to U+FFFD", async () => {
+    writeFileSync(join(repoDir, "caf\u00e9.txt"), "original");
+    run(repoDir, "add", ".");
+    run(repoDir, "commit", "-m", "cafe");
+    const wt = await worktree("index-fffd");
+    run(wt.path, "update-index", "--skip-worktree", "caf\u00e9.txt");
+    writeFileSync(join(wt.path, "caf\u00e9.txt"), "agent edit");
+    const lossy = {
+      exec: async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
+        const result = await pi.exec(command, args, options);
+        return args.includes("ls-files") ? { ...result, stdout: result.stdout.replace(/\u00e9/g, "\uFFFD") } : result;
+      },
+    } as unknown as ExtensionAPI;
+    const result = await cleanupWorktree(lossy, repoDir, wt, "index fffd");
+    expect(result.error).toMatch(/mis-decoded/);
+    expect(readFileSync(join(wt.path, "caf\u00e9.txt"), "utf8")).toBe("agent edit");
   });
 
   it("removes a worktree whose skip-worktree file is simply absent", async () => {
