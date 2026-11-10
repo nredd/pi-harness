@@ -1419,13 +1419,15 @@ describe("cleanupWorktree -- index bits and ignored path decoding (#596)", () =>
     expect(run(repoDir, "ls-tree", "--name-only", result.branch as string)).not.toMatch(/run\.sh/);
   });
 
-  it("commits a staged content change, whose mode is unchanged", async () => {
+  it("commits a staged content change plus an unstaged chmod: the staged mode is unchanged", async () => {
     const wt = await worktree("staged-content");
-    writeFileSync(join(wt.path, "tracked.txt"), "staged edit");
-    run(wt.path, "add", "tracked.txt");
+    writeFileSync(join(wt.path, "run.sh"), "#!/bin/sh\necho edit\n");
+    run(wt.path, "add", "run.sh");
+    chmodSync(join(wt.path, "run.sh"), 0o755);
     const result = await cleanupWorktree(pi, repoDir, wt, "staged content");
     expect(result.error).toBeUndefined();
-    expect(run(repoDir, "show", `${result.branch}:tracked.txt`)).toBe("staged edit");
+    expect(run(repoDir, "show", `${result.branch}:run.sh`)).toContain("echo edit");
+    expect(run(repoDir, "ls-tree", result.branch as string, "run.sh")).toMatch(/^100755 /);
   });
 
   it("does not look for index-only modes when core.fileMode=false", async () => {
