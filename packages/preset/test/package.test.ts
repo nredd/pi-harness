@@ -170,7 +170,7 @@ test("README states public publication and keeps the pending work explicit", () 
 	for (const needle of [
 		"Published to npm as `@nredd/pi-preset` (public)",
 		"not a supported release",
-		"npm:@nredd/pi-preset@0.3.0",
+		"npm:@nredd/pi-preset@0.4.0",
 		'"packageAgents": false',
 		"test/footer-render.test.ts",
 		"no installer, no profile resolver, no activation path",
