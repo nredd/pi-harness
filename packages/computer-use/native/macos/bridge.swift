@@ -257,10 +257,25 @@ func scrollBarWriteAllowed(depthFromStart: Int, hitTestResolvesToArea: Bool) -> 
 	depthFromStart <= 1 || hitTestResolvesToArea
 }
 
-/// The scroll deltas still undelivered after a scroll bar write: an axis keeps its requested delta unless its
-/// bar moved, so a one-axis move never reports the other axis as handled.
-func remainingScroll(requestedX: Int, requestedY: Int, movedX: Bool, movedY: Bool) -> (x: Int, y: Int) {
-	(movedX ? 0 : requestedX, movedY ? 0 : requestedY)
+/// What a scroll bar write did for one axis: `notWritten` (no settable bar, at its end, or the set call failed),
+/// `unconfirmed` (the set call succeeded but the immediate read-back still showed the old value, as async apps
+/// such as SwiftUI do) or `moved` (the read-back confirmed the move).
+enum ScrollAxisWrite {
+	case notWritten
+	case unconfirmed
+	case moved
+}
+
+/// The scroll deltas still undelivered after a scroll bar write: an axis keeps its requested delta only when its
+/// set call did not succeed. An `unconfirmed` write counts as delivered, because the late bar write lands and a
+/// wheel on top of it would scroll twice. A one-axis write never reports the other axis as handled.
+func remainingScroll(requestedX: Int, requestedY: Int, x: ScrollAxisWrite, y: ScrollAxisWrite) -> (x: Int, y: Int) {
+	(x == .notWritten ? requestedX : 0, y == .notWritten ? requestedY : 0)
+}
+
+/// Whether every written axis was confirmed by its read-back; an `unconfirmed` write can only be `unknown`.
+func scrollWritesConfirmed(x: ScrollAxisWrite, y: ScrollAxisWrite) -> Bool {
+	x != .unconfirmed && y != .unconfirmed
 }
 // END PURE
 
@@ -2399,13 +2414,19 @@ final class Bridge {
 				performed["delivery"] = "ax"
 				performed["axScroll"] = "scroll_bar_value"
 				if let cursorPoint { animateCursor(at: cursorPoint) }
+				var barEvidence: [String: Any] = [:]
+				if let value = write.value { barEvidence["scrollBarValue"] = value }
 				if write.remainingX == 0 && write.remainingY == 0 {
-					return finish(["outcome": "worked", "performed": performed, "evidence": ["scrollBarValue": write.value]])
+					// An unconfirmed write was accepted but not yet visible: it is delivered, so never add a wheel on top.
+					if !write.confirmed { performed["axScroll"] = "scroll_bar_value_unconfirmed" }
+					return finish(["outcome": write.confirmed ? "worked" : "unknown", "performed": performed, "evidence": barEvidence])
 				}
-				// Only some requested axes moved: deliver the rest with the wheel, never report them as handled.
+				// Only some requested axes were written: deliver the rest with the wheel, never report them as handled.
 				performed["axScroll"] = "scroll_bar_value_partial"
 				if policy == "ax_only" {
-					return finish(["outcome": "unknown", "performed": performed, "evidence": ["scrollBarValue": write.value, "unmovedScrollX": write.remainingX, "unmovedScrollY": write.remainingY]])
+					barEvidence["unmovedScrollX"] = write.remainingX
+					barEvidence["unmovedScrollY"] = write.remainingY
+					return finish(["outcome": "unknown", "performed": performed, "evidence": barEvidence])
 				}
 				wheelDeltaOverride = (write.remainingX, write.remainingY)
 				performed["delivery"] = delivery
@@ -2662,10 +2683,12 @@ final class Bridge {
 		return ["found": false, "timedOut": true, "nodeCount": lastCount]
 	}
 
-	private func hitTestElement(at point: CGPoint) -> AXUIElement? {
-		let systemWide = AXUIElementCreateSystemWide()
+	/// The element at `point`. With `pid` the query goes to that app, so a covered window still hits its own
+	/// elements; without it the system-wide element answers with whatever is frontmost there.
+	private func hitTestElement(at point: CGPoint, pid: Int32? = nil) -> AXUIElement? {
+		let root = pid.map { AXUIElementCreateApplication($0) } ?? AXUIElementCreateSystemWide()
 		var hitElement: AXUIElement?
-		let status = AXUIElementCopyElementAtPosition(systemWide, Float(point.x), Float(point.y), &hitElement)
+		let status = AXUIElementCopyElementAtPosition(root, Float(point.x), Float(point.y), &hitElement)
 		guard status == .success, let hitElement else { return nil }
 		return hitElement
 	}
@@ -2717,15 +2740,17 @@ final class Bridge {
 	/// Moves scroll areas at or above `element` by writing their scroll bar values, one requested axis at a time.
 	/// Only an area that `scrollBarWriteAllowed` accepts is written, so a ref inside an inner wheel-scrollable
 	/// region falls through to the wheel instead of scrolling the outer area. Returns the last value read back
-	/// plus the deltas no bar delivered, or nil when no bar moved.
-	private func setScrollBarValueOrAncestor(startingAt element: AXUIElement, targetPid: Int32, scrollX: Int, scrollY: Int, point: CGPoint?) -> (value: Double, remainingX: Int, remainingY: Int)? {
+	/// (nil when no write was confirmed), whether every written axis was confirmed, plus the deltas no bar delivered, or nil when no bar was written.
+	private func setScrollBarValueOrAncestor(startingAt element: AXUIElement, targetPid: Int32, scrollX: Int, scrollY: Int, point: CGPoint?) -> (value: Double?, remainingX: Int, remainingY: Int, confirmed: Bool)? {
 		var remaining = (x: scrollX, y: scrollY)
 		var value: Double?
+		var anyWritten = false
+		var confirmed = true
 		var hitArea: AXUIElement??
 		func hitTestResolves(to area: AXUIElement) -> Bool {
 			if hitArea == nil {
 				var found: AXUIElement?
-				if let point, var hit = hitTestElement(at: point) {
+				if let point, var hit = hitTestElement(at: point, pid: pidForElement(element) ?? targetPid) {
 					var hops = 0
 					while hops < 10 {
 						if stringAttribute(hit, attribute: kAXRoleAttribute as CFString) == (kAXScrollAreaRole as String) { found = hit; break }
@@ -2745,31 +2770,36 @@ final class Bridge {
 			if let pid = pidForElement(candidate), pid != targetPid { break }
 			if stringAttribute(candidate, attribute: kAXRoleAttribute as CFString) == (kAXScrollAreaRole as String) {
 				guard scrollBarWriteAllowed(depthFromStart: depth, hitTestResolvesToArea: depth <= 1 ? false : hitTestResolves(to: candidate)) else { break }
-				let movedY = remaining.y != 0 ? setScrollBarValue(area: candidate, barAttribute: "AXVerticalScrollBar", delta: remaining.y, vertical: true) : nil
-				let movedX = remaining.x != 0 ? setScrollBarValue(area: candidate, barAttribute: "AXHorizontalScrollBar", delta: remaining.x, vertical: false) : nil
-				remaining = remainingScroll(requestedX: remaining.x, requestedY: remaining.y, movedX: movedX != nil, movedY: movedY != nil)
-				if let moved = movedY ?? movedX { value = moved }
+				let writeY = remaining.y != 0 ? setScrollBarValue(area: candidate, barAttribute: "AXVerticalScrollBar", delta: remaining.y, vertical: true) : (write: ScrollAxisWrite.notWritten, value: nil)
+				let writeX = remaining.x != 0 ? setScrollBarValue(area: candidate, barAttribute: "AXHorizontalScrollBar", delta: remaining.x, vertical: false) : (write: ScrollAxisWrite.notWritten, value: nil)
+				remaining = remainingScroll(requestedX: remaining.x, requestedY: remaining.y, x: writeX.write, y: writeY.write)
+				if writeX.write != .notWritten || writeY.write != .notWritten { anyWritten = true }
+				if !scrollWritesConfirmed(x: writeX.write, y: writeY.write) { confirmed = false }
+				if let moved = writeY.value ?? writeX.value { value = moved }
 			}
 			current = parentElement(candidate)
 			depth += 1
 		}
-		guard let value else { return nil }
-		return (value, remaining.x, remaining.y)
+		guard anyWritten else { return nil }
+		return (value, remaining.x, remaining.y, confirmed)
 	}
 
 	/// Moves one scroll bar of `area` by `delta` points: reads the bar value, viewport and content length (falling
-	/// back to the thumb/track ratio when the area reports no content), writes the new value, and returns it only
-	/// when the read-back shows the bar actually moved. Nil when the bar is missing, unsettable, at its end or ignores the write.
-	private func setScrollBarValue(area: AXUIElement, barAttribute: String, delta: Int, vertical: Bool) -> Double? {
+	/// back to the thumb/track ratio when the area reports no content), writes the new value and classifies the
+	/// write: `moved` with the value when the read-back shows the bar moved, `unconfirmed` when the set call
+	/// succeeded but the read-back is unchanged or unreadable (async apps apply it late), `notWritten` when the bar
+	/// is missing, unsettable, at its end or the set call failed.
+	private func setScrollBarValue(area: AXUIElement, barAttribute: String, delta: Int, vertical: Bool) -> (write: ScrollAxisWrite, value: Double?) {
+		let none: (write: ScrollAxisWrite, value: Double?) = (.notWritten, nil)
 		guard let barObject = copyAttribute(area, attribute: barAttribute as CFString),
 			CFGetTypeID(barObject as CFTypeRef) == AXUIElementGetTypeID()
-		else { return nil }
+		else { return none }
 		let bar = unsafeBitCast(barObject, to: AXUIElement.self)
 		var settable = DarwinBoolean(false)
 		guard AXUIElementIsAttributeSettable(bar, kAXValueAttribute as CFString, &settable) == .success, settable.boolValue,
 			let current = (copyAttribute(bar, attribute: kAXValueAttribute as CFString) as? NSNumber)?.doubleValue,
 			let viewport = sizeAttribute(area, attribute: kAXSizeAttribute as CFString)
-		else { return nil }
+		else { return none }
 		let length = { (size: CGSize) in Double(vertical ? size.height : size.width) }
 		let content = sizeAttribute(area, attribute: "AXContentSize" as CFString).map(length)
 		let thumb = axElementArray(bar, attribute: kAXChildrenAttribute as CFString)
@@ -2779,9 +2809,9 @@ final class Bridge {
 		let track = sizeAttribute(bar, attribute: kAXSizeAttribute as CFString).map(length)
 		guard let target = scrollBarTargetValue(current: current, delta: delta, viewportLength: length(viewport), contentLength: content, thumbLength: thumb, trackLength: track),
 			AXUIElementSetAttributeValue(bar, kAXValueAttribute as CFString, NSNumber(value: target)) == .success
-		else { return nil }
-		guard let after = (copyAttribute(bar, attribute: kAXValueAttribute as CFString) as? NSNumber)?.doubleValue, abs(after - current) > 0.0001 else { return nil }
-		return after
+		else { return none }
+		guard let after = (copyAttribute(bar, attribute: kAXValueAttribute as CFString) as? NSNumber)?.doubleValue, abs(after - current) > 0.0001 else { return (.unconfirmed, nil) }
+		return (.moved, after)
 	}
 
 	private func performActionOrAncestor(startingAt element: AXUIElement, action: CFString, targetPid: Int32) -> [String: Any] {

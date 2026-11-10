@@ -257,6 +257,25 @@
 			}
 		},
 		{
+			"id": "strict-headless-drift",
+			"purpose": "Keep the TS strict-headless keyboard rejection in `src/actions.ts` equal to the native `rejectInStrictHeadless` keyboard branches in `native/macos/bridge.swift`, so a change to either side fails an invariant instead of drifting",
+			"files": [
+				"native/macos/bridge.swift",
+				"src/actions.ts",
+				"test/invariants.test.mjs"
+			],
+			"check": "test/invariants.test.mjs",
+			"dropControls": [
+				"strict headless TS rejection drift (upstream #112 deviation)",
+				"strict headless native rejection drift (upstream #112 deviation)"
+			],
+			"upstream": {
+				"status": "candidate",
+				"reference": "UPSTREAM.md",
+				"detail": "Guards the act-preflight deviation carried from open upstream PR injaneity/pi-computer-use#112; not filed by us"
+			}
+		},
+		{
 			"id": "keyboard-layout-typing",
 			"purpose": "Type via physical US key codes only when the active layout, checked with UCKeyTranslate, yields that exact character; otherwise use Unicode events",
 			"files": [
@@ -275,7 +294,7 @@
 		},
 		{
 			"id": "scroll-bar-fallback",
-			"purpose": "Scroll SwiftUI/AppKit scroll areas by writing a settable AXScrollBar value between AX scroll actions and the wheel fallback, only for the target's own scroll area (or one an AX hit test resolves to, deviating from upstream's nearest-ancestor walk) and delivering every requested axis (deviating from upstream's first-axis-wins)",
+			"purpose": "Scroll SwiftUI/AppKit scroll areas by writing a settable AXScrollBar value between AX scroll actions and the wheel fallback, only for the target's own scroll area (or one an AX hit test against the target's own app resolves to, deviating from upstream's nearest-ancestor walk) and delivering every requested axis (deviating from upstream's first-axis-wins), treating an accepted but unconfirmed write as delivered with an `unknown` outcome rather than adding a wheel scroll",
 			"files": [
 				"native/macos/bridge.swift",
 				"src/platform/types.ts",
@@ -285,7 +304,9 @@
 			"dropControls": [
 				"scroll bar range guard (upstream #114)",
 				"scroll bar write scope (upstream #114 deviation)",
-				"scroll bar per-axis delivery (upstream #114 deviation)"
+				"scroll bar per-axis delivery (upstream #114 deviation)",
+				"scroll bar accepted write is not doubled by the wheel (upstream #114 deviation)",
+				"scroll bar unconfirmed write reports unknown (upstream #114 deviation)"
 			],
 			"upstream": {
 				"status": "candidate",
