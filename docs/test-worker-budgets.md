@@ -120,6 +120,21 @@ Under 50 self-terminating local spinners (load 90-174 on a shared Apple M4) five
 runs took 13.7-27.0 s, two of them past 20 s. That is not a deterministic RED;
 the hosted job is the failing receipt.
 
+## Native directory watch budget (#636)
+
+`plan-mode/test/settings-watch-native.test.ts` is the only test that depends on
+real `fs.watch` delivery. Every other settings-watch test injects
+`watchSettingsDirectory` and publishes the change itself, so none races FSEvents.
+The native test cannot be event-driven (Node exposes no "watch ready" signal; the
+stream starts "since now" and drops earlier writes), so it republishes until one
+reload lands and carries an explicit budget.
+
+Measured on a degraded macOS host (`fseventsd` up 12 days, load 7-11): first event
+95 ms to 12062 ms for Node, 165 ms to 10252 ms for a raw `FSEventStreamCreate`
+(diagnosis on #636). Same margin rule as the cold loads: twice the worst figure,
+25 s, with the republish loop bounded at 20 s so its own failure reports first. No
+retry, skip or `testTimeout` change; the name is pinned in `measuredTestBudgetsMs`.
+
 ## Remaining external acceptance criterion
 
 Keep #105 open after the worker-cap PR. The historical report does not retain

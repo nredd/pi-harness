@@ -19,7 +19,7 @@ import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test, vi } from "vitest";
 import planMode from "../src/plan-mode.js";
 import * as settingsModule from "../src/settings.js";
-import { waitForSettingsWatch } from "./settings-watch-support.js";
+import { createFakeSettingsWatch } from "./settings-watch-support.js";
 import { createMockContext, createMockPi } from "./support.js";
 
 const KEY = "ctrl+alt+p";
@@ -54,6 +54,7 @@ async function createShortcutFixture(initial: KeyId | undefined) {
   const ctx = context.ctx as ExtensionContext;
   const mock = createMockPi({ activeTools: ["read", "write"], thinkingLevel: "low" });
   const errors: unknown[] = [];
+  const watch = createFakeSettingsWatch();
   const reads: settingsModule.PlanModeSettingsLoadResult[] = [];
   const readSettings = settingsModule.readPlanModeSettings;
   vi.spyOn(settingsModule, "readPlanModeSettings").mockImplementation(async (path) => {
@@ -71,7 +72,7 @@ async function createShortcutFixture(initial: KeyId | undefined) {
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
-    extensionFactories: [(pi) => planMode(pi, { settingsPath })],
+    extensionFactories: [(pi) => planMode(pi, { settingsPath, watchSettingsDirectory: watch.watchSettingsDirectory })],
   });
   // Pi exports the UI keybinding type, but not its app keybinding constructor.
   // This test-only import uses the installed implementation, including reserved-key conflicts.
@@ -150,12 +151,11 @@ async function createShortcutFixture(initial: KeyId | undefined) {
     active: () => context.statuses.get("plan-mode") === "plan active",
     press: (data: string) => editor.handleInput(data),
     async change(next: KeyId | undefined) {
-      const initialReads = reads.length;
-      await waitForSettingsWatch(settingsPath, () => reads.length > initialReads);
       reads.length = 0;
       const temporaryPath = join(root, "next.json");
       await writeFile(temporaryPath, JSON.stringify({ toggleShortcut: next, thinkingLevel: "high" }));
       await rename(temporaryPath, settingsPath);
+      watch.trigger(settingsPath, "rename");
       await vi.waitFor(() =>
         assert.ok(
           reads.some(
