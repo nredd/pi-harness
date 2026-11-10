@@ -12,11 +12,12 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, readdirSync, realpathSync, type Stats } from "node:fs";
+import { type BigIntStats, chmodSync, existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { errorMessage } from "./error-message.js";
+import { QUOTE_PATH_ARGS, unquoteGitPath } from "./git-path.js";
 
 export interface WorktreeInfo {
   /** Absolute path to the worktree directory (the copied repo's root). */
@@ -168,21 +169,26 @@ export async function cleanupWorktree(
     // Check for uncommitted changes in the worktree
     const status = await dirtyState(pi, worktree.path);
 
+    let committed = false;
     if (status) {
       // Changes exist — stage, commit, and create a branch
       const stagedModes = await stagedModeChanges(pi, worktree.path);
       await git(pi, worktree.path, ["add", "-A"], 10000);
       await restoreStagedModes(pi, worktree.path, stagedModes);
-      // `add -A` skips a moved gitlink hidden by `submodule.<name>.ignore = all`; an empty
-      // commit would fail opaquely, so say why and keep the worktree.
-      if (!(await git(pi, worktree.path, ["diff", "--cached", "--name-only"], 10000))) {
+      if (await git(pi, worktree.path, ["diff", "--cached", "--name-only"], 10000)) {
+        // Truncate description for commit message (no shell sanitization needed — pi.exec uses argv)
+        const safeDesc = agentDescription.slice(0, 200);
+        const commitMsg = `pi-agent: ${safeDesc}`;
+        await git(pi, worktree.path, ["commit", "--no-verify", "-m", commitMsg], 10000);
+        committed = true;
+      } else if (await dirtyState(pi, worktree.path)) {
+        // `add -A` skips a moved gitlink hidden by `submodule.<name>.ignore = all`; an empty
+        // commit would fail opaquely, so say why and keep the worktree.
         throw new Error(`uncommitted changes could not be staged (a submodule \`ignore\` setting can hide a moved gitlink); worktree kept:\n${status}`);
       }
-      // Truncate description for commit message (no shell sanitization needed — pi.exec uses argv)
-      const safeDesc = agentDescription.slice(0, 200);
-      const commitMsg = `pi-agent: ${safeDesc}`;
-      await git(pi, worktree.path, ["commit", "--no-verify", "-m", commitMsg], 10000);
-    } else {
+      // Else the only changes were staged modes the agent reverted on disk: nothing differs from HEAD.
+    }
+    if (!committed) {
       const currentSha = await git(pi, worktree.path, ["rev-parse", "HEAD"], 5000);
 
       if (currentSha === worktree.baseSha) {
@@ -226,11 +232,13 @@ export async function cleanupWorktree(
   }
 }
 
-/** Reject a path list `pi.exec` mis-decoded (U+FFFD): it no longer names the file on disk. */
-function assertDecoded(paths: string[], what: string): void {
-  if (paths.some(path => path.includes("\uFFFD"))) {
-    throw new Error(`${what} path was mis-decoded (U+FFFD) and cannot be inspected; worktree kept`);
-  }
+/**
+ * Lines of a path listing, read without `-z` and with `core.quotePath=true`: every
+ * non-ASCII path byte is escaped, so `pi.exec` decoding stdout chunk by chunk cannot
+ * corrupt a path (see `unquoteGitPath`). Each line's paths are decoded by the caller.
+ */
+async function gitLines(pi: ExtensionAPI, repo: string, args: string[], timeout: number): Promise<string[]> {
+  return (await git(pi, repo, [...QUOTE_PATH_ARGS, ...args], timeout)).split("\n").filter(Boolean);
 }
 
 const INDEX_BATCH = 200;
@@ -253,11 +261,9 @@ async function clearHiddenIndexBits(pi: ExtensionAPI, repo: string): Promise<voi
   const assumed: string[] = [];
   const skipped: string[] = [];
   // `-v` tags: lowercase = assume-unchanged, `S` (or `s` with both) = skip-worktree.
-  const entries = (await git(pi, repo, ["ls-files", "-v", "-z"], 30000)).split("\0").filter(Boolean);
-  assertDecoded(entries, "An index");
-  for (const entry of entries) {
+  for (const entry of await gitLines(pi, repo, ["ls-files", "-v"], 30000)) {
     const tag = entry.charAt(0);
-    const path = entry.slice(2);
+    const path = unquoteGitPath(entry.slice(2));
     if (tag !== tag.toUpperCase()) assumed.push(path);
     if (tag.toLowerCase() === "s" && lstatOrUndefined(join(repo, path))) skipped.push(path);
   }
@@ -266,9 +272,9 @@ async function clearHiddenIndexBits(pi: ExtensionAPI, repo: string): Promise<voi
 }
 
 /** `lstat` of `path`, or undefined when it is missing or unreachable (ENOENT, ENOTDIR). */
-function lstatOrUndefined(path: string): Stats | undefined {
+function lstatOrUndefined(path: string): BigIntStats | undefined {
   try {
-    return lstatSync(path);
+    return lstatSync(path, { bigint: true });
   } catch (error) {
     // Anything else (EACCES, ...) is unknown, not absent: let cleanup fail and keep the tree.
     const code = (error as NodeJS.ErrnoException).code;
@@ -280,19 +286,49 @@ function lstatOrUndefined(path: string): Stats | undefined {
 /** An executable-bit change staged with `update-index --chmod`: path -> index mode now. */
 type ModeChange = { path: string; mode: "100644" | "100755" };
 
+/** Index entry timestamps in ns, from `ls-files --debug`, keyed by path. */
+async function indexTimes(pi: ExtensionAPI, repo: string): Promise<Map<string, { ctime: bigint; mtime: bigint }>> {
+  const times = new Map<string, { ctime: bigint; mtime: bigint }>();
+  let current: { ctime: bigint; mtime: bigint } | undefined;
+  for (const line of await gitLines(pi, repo, ["ls-files", "--debug"], 30000)) {
+    // Stat lines are indented `  <field>: ...`; anything else is the next path.
+    if (!/^ {2}[a-z]+: /.test(line)) {
+      current = { ctime: -1n, mtime: -1n };
+      times.set(unquoteGitPath(line), current);
+      continue;
+    }
+    const stamp = /^ {2}(ctime|mtime): (\d+):(\d+)$/.exec(line);
+    if (stamp && current) current[stamp[1] as "ctime" | "mtime"] = BigInt(stamp[2] as string) * 1_000_000_000n + BigInt(stamp[3] as string);
+  }
+  return times;
+}
+
+/**
+ * Mode changes held only by the index. `add -A` would restage them from the file on disk,
+ * so they are recorded here to be restored. A staged mode is not index-only when the file
+ * on disk already has it, or when its mode was changed on disk after it was staged (a
+ * `chmod` changes the file's ctime but not its mtime, so ctime moved past the index entry
+ * with mtime unchanged): the agent's later `chmod` wins, as `add -A` alone would have it.
+ */
 async function stagedModeChanges(pi: ExtensionAPI, repo: string): Promise<ModeChange[]> {
-  // `:<old mode> <new mode> <old sha> <new sha> <status>` NUL `<path>` NUL
-  const fields = (await git(pi, repo, ["diff", "--cached", "--raw", "-z", "--no-renames"], 30000)).split("\0");
-  const changes: ModeChange[] = [];
-  for (let i = 0; i + 1 < fields.length; i += 2) {
-    const [oldMode, newMode] = (fields[i] ?? "").slice(1).split(" ");
-    const path = fields[i + 1] ?? "";
+  // `:<old mode> <new mode> <old sha> <new sha> <status>` TAB `<path>`
+  const candidates: ModeChange[] = [];
+  for (const line of await gitLines(pi, repo, ["diff", "--cached", "--raw", "--no-renames"], 30000)) {
+    const tab = line.indexOf("\t");
+    const [oldMode, newMode] = line.slice(1, tab).split(" ");
     if (oldMode !== newMode && (newMode === "100644" || newMode === "100755") && (oldMode === "000000" || oldMode === "100644" || oldMode === "100755")) {
-      changes.push({ path, mode: newMode });
+      candidates.push({ path: unquoteGitPath(line.slice(tab + 1)), mode: newMode });
     }
   }
-  assertDecoded(changes.map(change => change.path), "A staged");
-  return changes;
+  if (candidates.length === 0) return [];
+  const times = await indexTimes(pi, repo);
+  return candidates.filter(({ path, mode }) => {
+    const disk = lstatOrUndefined(join(repo, path));
+    const staged = times.get(path);
+    if (!disk?.isFile() || !staged) return false;
+    if (((disk.mode & 0o100n) !== 0n) === (mode === "100755")) return false;
+    return !(disk.ctimeNs !== staged.ctime && disk.mtimeNs === staged.mtime);
+  });
 }
 
 /**
@@ -305,7 +341,7 @@ async function restoreStagedModes(pi: ExtensionAPI, repo: string, changes: ModeC
     const paths = changes.filter(change => change.mode === mode && lstatOrUndefined(join(repo, change.path))?.isFile()).map(change => change.path);
     await updateIndex(pi, repo, mode === "100755" ? "--chmod=+x" : "--chmod=-x", paths);
     for (const path of paths) {
-      const { mode: onDisk } = lstatSync(join(repo, path));
+      const onDisk = Number(lstatSync(join(repo, path)).mode);
       chmodSync(join(repo, path), mode === "100755" ? onDisk | 0o111 : onDisk & ~0o111);
     }
   }
@@ -331,16 +367,13 @@ const GITLINK_MODE = "160000";
  * remove a worktree on the gitlink, not on the config file.
  */
 async function gitlinks(pi: ExtensionAPI, repo: string, rev?: string): Promise<Map<string, string>> {
-  const out = await git(pi, repo, rev ? ["ls-tree", "-r", "-z", rev] : ["ls-files", "-s", "-z"], 30000);
   const links = new Map<string, string>();
-  const entries = out.split("\0");
-  assertDecoded(entries, "A gitlink");
-  for (const entry of entries) {
+  for (const entry of await gitLines(pi, repo, rev ? ["ls-tree", "-r", rev] : ["ls-files", "-s"], 30000)) {
     const tab = entry.indexOf("\t");
     if (tab < 0) continue;
     // ls-files: `<mode> <sha> <stage>`; ls-tree: `<mode> <type> <sha>`.
     const [mode, second, third] = entry.slice(0, tab).split(" ");
-    if (mode === GITLINK_MODE) links.set(entry.slice(tab + 1), rev ? (third as string) : (second as string));
+    if (mode === GITLINK_MODE) links.set(unquoteGitPath(entry.slice(tab + 1)), rev ? (third as string) : (second as string));
   }
   return links;
 }
@@ -361,6 +394,19 @@ async function unpublished(pi: ExtensionAPI, gitArgs: string[], cwd: string, pub
 }
 
 /**
+ * The git dir of the repository whose work tree is `dir`, read from `.git` (a directory, or
+ * a `gitdir: <path>` file for a submodule) rather than from `git rev-parse` output, which
+ * `pi.exec` can mis-decode when the path is non-ASCII.
+ */
+function gitDirOf(dir: string): string {
+  const dotGit = join(dir, ".git");
+  if (lstatSync(dotGit).isDirectory()) return dotGit;
+  const target = /^gitdir: (.+)$/m.exec(readFileSync(dotGit, "utf8"))?.[1];
+  if (!target) throw new Error(`${dotGit} is neither a directory nor a gitdir file`);
+  return resolve(dir, target.trim());
+}
+
+/**
  * Inspect the nested repository at `dir`, then the ones behind its own gitlinks.
  * `recorded` is the sha a trusted baseline pins it at (when any).
  */
@@ -373,7 +419,7 @@ async function inspectRepo(
   seen: Set<string>,
   problems: string[],
 ): Promise<void> {
-  seen.add(realpathSync(await git(pi, dir, ["rev-parse", "--absolute-git-dir"], 5000)));
+  seen.add(realpathSync(gitDirOf(dir)));
   const dirty = await dirtyState(pi, dir);
   const lost = await unpublished(pi, [], dir, recorded ? [recorded] : []);
   const detail = [dirty, lost].filter(Boolean).join("\n");
@@ -396,7 +442,7 @@ async function inspectIgnoredRepos(
   problems: string[],
 ): Promise<void> {
   for (const dir of await ignoredRepoDirs(pi, repo)) {
-    if (!seen.has(realpathSync(await git(pi, dir, ["rev-parse", "--absolute-git-dir"], 5000)))) {
+    if (!seen.has(realpathSync(gitDirOf(dir)))) {
       await inspectRepo(pi, dir, relative(root, dir), undefined, trusted, seen, problems);
     }
   }
@@ -431,12 +477,9 @@ async function inspectGitlinks(
  * records them, yet plain removal deletes their ignored content.
  */
 async function ignoredRepoDirs(pi: ExtensionAPI, worktreePath: string): Promise<string[]> {
-  const out = await git(pi, worktreePath, ["status", "--porcelain", "-z", "--ignored", "--untracked-files=all", "--ignore-submodules=none"], 30000);
+  const entries = await gitLines(pi, worktreePath, ["status", "--porcelain", "--ignored", "--untracked-files=all", "--ignore-submodules=none"], 30000);
   // With `--untracked-files=all` git lists an ignored nested repository as its own `!! dir/` entry.
-  const dirs = out.split("\0").filter(entry => entry.startsWith("!! ") && entry.endsWith("/")).map(entry => entry.slice(3));
-  // `pi.exec` decodes each stdout chunk separately, so a multibyte path split across chunks
-  // becomes U+FFFD and `.git` below would not be found: skip nothing silently, keep the tree.
-  assertDecoded(dirs, "An ignored");
+  const dirs = entries.filter(entry => entry.startsWith("!! ")).map(entry => unquoteGitPath(entry.slice(3))).filter(path => path.endsWith("/"));
   return dirs.map(dir => join(worktreePath, dir)).filter(dir => existsSync(join(dir, ".git")));
 }
 

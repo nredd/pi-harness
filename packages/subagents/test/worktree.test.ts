@@ -61,6 +61,30 @@ function mockPi(): ExtensionAPI {
 }
 
 /**
+ * A pi whose exec decodes stdout like the host's: every `chunkSize`-byte chunk on its own,
+ * so a multibyte character split across chunks becomes U+FFFD (a real `pi.exec` does this
+ * at 64KB; a tiny chunk makes every non-ASCII byte hit the boundary).
+ */
+function chunkedPi(chunkSize = 1): ExtensionAPI {
+  return {
+    exec: async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
+      const decode = (data: Buffer | string) => {
+        const bytes = Buffer.from(data);
+        let text = "";
+        for (let i = 0; i < bytes.length; i += chunkSize) text += bytes.subarray(i, i + chunkSize).toString();
+        return text;
+      };
+      try {
+        const stdout = execFileSync(command, args, { cwd: options?.cwd, stdio: ["pipe", "pipe", "pipe"], timeout: options?.timeout });
+        return { stdout: decode(stdout), stderr: "", code: 0, killed: false };
+      } catch (err: any) {
+        return { stdout: decode(err.stdout ?? ""), stderr: String(err.stderr ?? ""), code: err.status ?? 1, killed: false };
+      }
+    },
+  } as unknown as ExtensionAPI;
+}
+
+/**
  * A pi whose exec answers one git subcommand with a canned failure result and
  * runs everything else for real. `match` sees the argv git is called with.
  */
@@ -773,6 +797,23 @@ describe("cleanupWorktree — nested repositories git refuses to remove", () => 
     return { wt, sub, sha: run(sub, "rev-parse", "HEAD") };
   }
 
+  it("detects unpublished commits in a submodule at a non-ASCII path when stdout is decoded chunk by chunk", async () => {
+    run(repoDir, "submodule", "add", subDir, "d\u00e9p");
+    run(repoDir, "commit", "-m", "add submodule");
+    const wt = await createWorktree(pi, repoDir, "gitlink-accent");
+    cleanups.push(wt.path);
+    run(wt.path, "submodule", "update", "--init", "--recursive");
+    const sub = join(wt.path, "d\u00e9p");
+    writeFileSync(join(sub, "precious.txt"), "unpublished");
+    run(sub, "add", "precious.txt");
+    run(sub, "commit", "-m", "local only");
+    const sha = run(sub, "rev-parse", "HEAD");
+    const result = await cleanupWorktree(chunkedPi(), repoDir, wt, "gitlink accent");
+    expect(result.path).toBe(wt.path);
+    expect(result.error).toMatch(/submodule work would be lost[\s\S]*d\u00e9p/);
+    expect(run(sub, "rev-parse", "HEAD")).toBe(sha);
+  });
+
   it("keeps the worktree when the agent deleted .gitmodules over a submodule with unpushed commits", async () => {
     const { wt, sub, sha } = await worktreeWithSubmodule("no-gitmodules");
     rmSync(join(wt.path, ".gitmodules"));
@@ -1062,10 +1103,8 @@ describe("cleanupWorktree — nested repositories git refuses to remove", () => 
     }) as typeof pi.exec;
     expect(await cleanupWorktree(pi, repoDir, wt, "ignored alias")).toEqual({ hasChanges: false });
     expect(existsSync(wt.path)).toBe(false);
-    // Only the identity lookup that finds it already `seen` (once per disposability pass: before
-    // the commit check and again before the forced removal); never status, probe or `HEAD`.
-    expect(inAlias.length).toBeGreaterThan(0);
-    expect(inAlias.every(args => args.join(" ") === "rev-parse --absolute-git-dir")).toBe(true);
+    // The identity lookup reads `.git` itself and finds it already `seen`: never status, probe or `HEAD`.
+    expect(inAlias).toEqual([]);
   });
 
   it("does not let submodule ignore=all hide a bumped gitlink", async () => {
@@ -1287,12 +1326,31 @@ describe("cleanupWorktree — index bits and ignored path decoding (#596)", () =
     expect(run(repoDir, "ls-tree", result.branch as string, "new.sh")).toMatch(/^100755 /);
   });
 
+  it("keeps a later chmod on a newly added file", async () => {
+    const wt = await worktree("chmod-after-add");
+    writeFileSync(join(wt.path, "new.sh"), "#!/bin/sh\n");
+    run(wt.path, "add", "new.sh");
+    chmodSync(join(wt.path, "new.sh"), 0o755);
+    const result = await cleanupWorktree(pi, repoDir, wt, "chmod after add");
+    expect(result.error).toBeUndefined();
+    expect(run(repoDir, "ls-tree", result.branch as string, "new.sh")).toMatch(/^100755 /);
+  });
+
+  it("removes a worktree whose staged +x the agent reverted on disk", async () => {
+    const wt = await worktree("chmod-after-stage");
+    chmodSync(join(wt.path, "run.sh"), 0o755);
+    run(wt.path, "add", "run.sh");
+    chmodSync(join(wt.path, "run.sh"), 0o644);
+    expect(await cleanupWorktree(pi, repoDir, wt, "chmod after stage")).toEqual({ hasChanges: false });
+    expect(existsSync(wt.path)).toBe(false);
+  });
+
   it("preserves a staged mode removal (--chmod=-x)", async () => {
     const wt = await worktree("chmod-minus");
-    run(wt.path, "update-index", "--chmod=+x", "run.sh");
+    chmodSync(join(wt.path, "run.sh"), 0o755);
+    run(wt.path, "add", "run.sh");
     run(wt.path, "commit", "-m", "exec");
     run(wt.path, "update-index", "--chmod=-x", "run.sh");
-    chmodSync(join(wt.path, "run.sh"), 0o755);
     const result = await cleanupWorktree(pi, repoDir, wt, "chmod minus");
     expect(result.error).toBeUndefined();
     expect(run(repoDir, "ls-tree", result.branch as string, "run.sh")).toMatch(/^100644 /);
@@ -1307,22 +1365,35 @@ describe("cleanupWorktree — index bits and ignored path decoding (#596)", () =
     expect(run(repoDir, "ls-tree", "--name-only", result.branch as string)).not.toMatch(/run\.sh/);
   });
 
-  it("keeps the worktree when an index path was mis-decoded to U+FFFD", async () => {
-    writeFileSync(join(repoDir, "caf\u00e9.txt"), "original");
-    run(repoDir, "add", ".");
-    run(repoDir, "commit", "-m", "cafe");
-    const wt = await worktree("index-fffd");
-    run(wt.path, "update-index", "--skip-worktree", "caf\u00e9.txt");
-    writeFileSync(join(wt.path, "caf\u00e9.txt"), "agent edit");
-    const lossy = {
-      exec: async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
-        const result = await pi.exec(command, args, options);
-        return args.includes("ls-files") ? { ...result, stdout: result.stdout.replace(/\u00e9/g, "\uFFFD") } : result;
-      },
-    } as unknown as ExtensionAPI;
-    const result = await cleanupWorktree(lossy, repoDir, wt, "index fffd");
-    expect(result.error).toMatch(/mis-decoded/);
-    expect(readFileSync(join(wt.path, "caf\u00e9.txt"), "utf8")).toBe("agent edit");
+  it.each([
+    ["accent", "caf\u00e9.txt"],
+    ["newline", "a\nb.txt"],
+    ["leading dash", "-dash.txt"],
+    ["quote and backslash", 'say "hi" \\ x.txt'],
+    ["real U+FFFD", "a\uFFFDb.txt"],
+    ["emoji", "\u{1F600} z.txt"],
+  ])("classifies a %s filename correctly when stdout is decoded chunk by chunk", async (id, name) => {
+    writeFileSync(join(repoDir, name), "original");
+    run(repoDir, "add", "--", name);
+    run(repoDir, "commit", "-m", "name");
+    const wt = await worktree(`name-${id.replace(/\W/g, "")}`);
+    run(wt.path, "update-index", "--skip-worktree", "--", name);
+    writeFileSync(join(wt.path, name), "agent edit");
+    const result = await cleanupWorktree(chunkedPi(), repoDir, wt, id);
+    expect(result.error).toBeUndefined();
+    expect(run(repoDir, "show", `${result.branch}:${name}`)).toBe("agent edit");
+    expect(existsSync(wt.path)).toBe(false);
+  });
+
+  it("restores an index-only chmod on a non-ASCII filename under chunked decoding", async () => {
+    const wt = await worktree("chmod-accent");
+    writeFileSync(join(wt.path, "n\u00e9w.sh"), "#!/bin/sh\n");
+    run(wt.path, "add", "n\u00e9w.sh");
+    run(wt.path, "update-index", "--chmod=+x", "n\u00e9w.sh");
+    const result = await cleanupWorktree(chunkedPi(), repoDir, wt, "chmod accent");
+    expect(result.error).toBeUndefined();
+    expect(run(repoDir, "ls-tree", "--name-only", "-z", result.branch as string)).toContain("n\u00e9w.sh");
+    expect(run(repoDir, "ls-tree", result.branch as string, "--", "n\u00e9w.sh")).toMatch(/^100755 /);
   });
 
   it("preserves a skip-worktree file replaced by a symlink", async () => {
@@ -1388,17 +1459,10 @@ describe("cleanupWorktree — index bits and ignored path decoding (#596)", () =
     expect(existsSync(join(dep, "precious.txt"))).toBe(true);
   });
 
-  it("keeps the worktree when an ignored path was mis-decoded to U+FFFD", async () => {
-    const { wt, dep } = await worktreeWithIgnoredClone("ignored-fffd", "d\u00e9p\u00f4t");
-    // pi.exec decodes each stdout chunk on its own, so a multibyte char split across chunks becomes U+FFFD.
-    const lossy = {
-      exec: async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
-        const result = await pi.exec(command, args, options);
-        return args.includes("--ignored") ? { ...result, stdout: result.stdout.replace(/\u00e9/g, "\uFFFD") } : result;
-      },
-    } as unknown as ExtensionAPI;
-    const result = await cleanupWorktree(lossy, repoDir, wt, "ignored fffd");
-    expect(result.error).toMatch(/mis-decoded/);
+  it("finds an ignored nested clone under a non-ASCII path when stdout is decoded chunk by chunk", async () => {
+    const { wt, dep } = await worktreeWithIgnoredClone("ignored-chunked", "d\u00e9p\u00f4t");
+    const result = await cleanupWorktree(chunkedPi(), repoDir, wt, "ignored chunked");
+    expect(result.error).toMatch(/submodule work would be lost/);
     expect(result.path).toBe(wt.path);
     expect(existsSync(join(dep, "precious.txt"))).toBe(true);
   });
