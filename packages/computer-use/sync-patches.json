@@ -349,6 +349,28 @@
 				"reference": "UPSTREAM.md",
 				"detail": "Open upstream PR injaneity/pi-computer-use#104 (unmerged, MIT, author credited); carried from its head, not filed by us"
 			}
+		},
+		{
+			"id": "wsl2-diagnostics",
+			"purpose": "Say Windows host windows are unreachable from a WSL2 guest when Linux finds no roots or frontmost window, instead of the bare errors",
+			"files": [
+				"src/bridge.ts",
+				"src/platform/types.ts",
+				"src/platform/linux/backend.ts",
+				"src/platform/linux/wsl.ts",
+				"docs/content/docs/how-to-guides/linux.mdx",
+				"docs/content/docs/how-to-guides/troubleshooting.mdx",
+				"test/wsl2-diagnostics.test.mjs"
+			],
+			"check": "test/wsl2-diagnostics.test.mjs",
+			"dropControls": [
+				"WSL2 empty-roots hint (#672)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#672; not filed upstream"
+			}
 		}
 	],
 	"files": [
@@ -407,6 +429,7 @@
 		"src/desktop.ts",
 		"src/platform/linux/backend.ts",
 		"src/platform/linux/helper.ts",
+		"src/platform/linux/wsl.ts",
 		"src/platform/macos/backend.ts",
 		"src/platform/macos/helper.ts",
 		"src/platform/types.ts",
@@ -439,6 +462,7 @@
 		"test/tool-schemas.test.mjs",
 		"test/unpaired-act.test.mjs",
 		"test/windows-build-scripts.test.mjs",
+		"test/wsl2-diagnostics.test.mjs",
 		"vitest.config.ts"
 	]
 }

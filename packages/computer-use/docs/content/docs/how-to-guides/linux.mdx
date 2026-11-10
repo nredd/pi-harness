@@ -27,6 +27,12 @@ In-session setup keeps its existing 60s deadline, and a cold build can exceed it
 
 The upstream [AT-SPI development guide](https://gnome.pages.gitlab.gnome.org/at-spi2-core/devel-docs/index.html) describes the accessibility stack. Containers, system services, `sudo`, and unrelated SSH sessions do not automatically inherit the graphical user's bus.
 
+## WSL2 limits
+
+Under WSL2, Pi runs in the Linux guest and the Linux backend only sees the guest's AT-SPI bus. Windows host windows (a WebView2 or Electron client, for example) never appear there. Linux apps inside the guest, e.g. through WSLg, work as usual.
+
+WSL is detected from `WSL_DISTRO_NAME`, `WSL_INTEROP` or a `microsoft`/`wsl` string in `/proc/version`. When the guest has no windows to report, `find_roots` appends the explanation to its empty result and `observe_ui`, `act_ui` and `search_ui` fail with `No frontmost window was available. Running under WSL2: Windows host windows are not reachable from the WSL2 guest ...` instead of the bare message. Reaching host windows needs a Windows-host bridge, tracked in [nredd/pi-harness#668](https://github.com/nredd/pi-harness/issues/668); it is not implemented. Native Linux behavior and messages are unchanged.
+
 ## Cancellation checks
 
 `npm run test:linux-scripts` runs real POSIX process groups on macOS and Linux. Each fixture process publishes readiness only after installing its TERM handler. A test-only Node preload also observes the wrapper adding all three cancellation listeners and an exit listener before publishing a separate wrapper PID marker. Cancellation and exit-first release wait for leader, descendant and wrapper readiness; production handlers are never replaced or instrumented. The checks record injected group signals and require TERM followed by KILL after the grace period, plus dead descendants and an empty group. A TERM-responsive negative control must fail that same escalation assertion. The reaped-group guard requires TERM without a later exit-hook KILL. An injected `EPERM` probe has no real process to synchronize and must reject without any group signal.

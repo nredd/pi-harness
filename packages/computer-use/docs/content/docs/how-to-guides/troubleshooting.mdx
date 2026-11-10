@@ -30,6 +30,10 @@ See the [Linux source-build guide](./linux.mdx) for prerequisites and the writab
 
 AT-SPI semantic presses/clicks and editable-text replacement are attempted first on Linux. X11 also supports window capture plus non-headless EWMH focus and XTEST pointer/keyboard/scroll/drag fallback. Strict headless, `ax_only`, and `background` policies block XTEST/focus. Native Wayland remains semantic-only. Diagnostics may read portal version and capability properties, but never creates or starts a portal session. Interactive portal capture and input dispatch are disabled, so installing a portal backend alone does not enable them. The [Linux support guide](./linux.mdx) lists the full capability matrix.
 
+## Windows windows are missing under WSL2
+
+`find_roots` returns no roots, or `observe_ui` reports `No frontmost window was available. Running under WSL2: ...`, when the target is a Windows host app. The WSL2 guest cannot reach host windows; only Linux apps in the guest are visible. See [Run on Linux](./linux.mdx) and nredd/pi-harness#668.
+
 ## Repair a missing macOS helper
 
 The normal runtime requires this executable inside the resolved helper app:

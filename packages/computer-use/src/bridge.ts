@@ -1336,7 +1336,7 @@ async function performListWindows(params: FindParams, signal?: AbortSignal): Pro
 		? `Found ${totalMatches} matching root${totalMatches === 1 ? "" : "s"}; returned ${windows.length}${totalMatches > windows.length ? ". Refine the filters for additional roots" : ""}. Use @r refs with observe_ui({ root: "@rN" }).\n${lines.join("\n")}`
 		: query.text || query.app || query.bundleId || query.pid || query.kind
 			? "No roots matched the supplied filters."
-			: "No roots are currently visible to pi-computer-use.";
+			: ["No roots are currently visible to pi-computer-use.", currentPlatformBackend.emptyRootsHint?.()].filter(Boolean).join(" ");
 	return { content: [{ type: "text", text }], details };
 }
 
