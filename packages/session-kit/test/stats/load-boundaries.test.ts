@@ -159,7 +159,7 @@ describe("stats file races", () => {
 		expect(Object.keys(JSON.parse(readFileSync(cache, "utf8")).files)).toEqual([a, b]);
 	});
 
-	it("recomputes a version-2 cached file that counted bad lines, keeping clean ones and deleted-file records", async () => {
+	it("recomputes a version-2 cached file that counted bad lines, keeping clean ones and deleted-file data", async () => {
 		mkdirSync(root);
 		const padded = join(root, "padded.jsonl");
 		const clean = join(root, "clean.jsonl");
@@ -172,7 +172,7 @@ describe("stats file races", () => {
 				return [path, { ...cachedRecord(), size: s.size, mtimeMs: s.mtimeMs, badLines: path === padded ? 1 : 0 }];
 			}),
 		);
-		// A record whose file is gone cannot be re-parsed; it must survive migration unchanged.
+		// A record whose file is gone cannot be re-parsed; its data (and bad count) must survive migration.
 		const gone = { ...cachedRecord(), size: 1, mtimeMs: 1, badLines: 1 };
 		files[deleted] = gone;
 		writeFileSync(cache, JSON.stringify({ version: 2, files }));
@@ -181,7 +181,27 @@ describe("stats file races", () => {
 		const saved = JSON.parse(readFileSync(cache, "utf8"));
 		expect(saved.version).toBe(CACHE_VERSION);
 		expect(saved.files[padded].badLines).toBe(0);
-		expect(saved.files[deleted]).toEqual(gone);
+		expect(saved.files[deleted]).toEqual({ ...gone, size: -1 });
+	});
+
+	it("re-parses a migrated bad-line record outside the loaded root once its root is listed", async () => {
+		const other = join(root, "other");
+		mkdirSync(other, { recursive: true });
+		const padded = join(other, "padded.jsonl");
+		writeFileSync(padded, `${usageLine()}\n${"\0".repeat(64)}\n`);
+		const s = statSync(padded);
+		writeFileSync(
+			cache,
+			JSON.stringify({
+				version: 2,
+				files: { [padded]: { ...cachedRecord(), size: s.size, mtimeMs: s.mtimeMs, badLines: 1 } },
+			}),
+		);
+		const all = await loadUsage({ root: join(root, "empty"), cache, includeAllRoots: true });
+		expect(all.badLines).toBe(1);
+		const loaded = await loadUsage({ root: other, cache });
+		expect(loaded.errors).toBe(0);
+		expect(loaded.badLines).toBe(0);
 	});
 
 	it("re-parses a migrated bad-line record on the next load when its first re-parse failed", async () => {

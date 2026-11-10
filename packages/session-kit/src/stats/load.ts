@@ -36,6 +36,7 @@ const YIELD_EVERY_LINES = 2000;
 export type CallTuple = [number, number, number, number, number, number, number];
 
 export interface FileStats {
+	/** File size in bytes; `-1` marks a migrated record that must be re-parsed when its file is next listed. */
 	size: number;
 	mtimeMs: number;
 	/** Header timestamp. */
@@ -344,35 +345,32 @@ export function isFileStats(value: unknown): value is FileStats {
 /**
  * Cached records keyed by path. Unreadable JSON, an unknown version, or a non-object `files` yields
  * an empty cache; a malformed record is dropped on its own (its file is re-parsed if still on disk).
- * Version 1/2 records are all kept (deleted files' history must survive); those with bad lines are
- * returned in `reparse`, since older versions counted all-NUL padding as bad.
+ * Version 1/2 records are all kept (deleted files' history must survive); those with bad lines get
+ * `size: -1` so the size check re-parses them whenever their root is next listed, since older
+ * versions counted all-NUL padding as bad.
  */
-async function readCache(
-	path: string,
-): Promise<{ files: Record<string, FileStats>; migrate: boolean; reparse: Set<string> }> {
+async function readCache(path: string): Promise<{ files: Record<string, FileStats>; migrate: boolean }> {
 	let doc: Partial<CacheDoc> | null;
 	try {
 		doc = JSON.parse(await readFile(path, "utf8")) as Partial<CacheDoc> | null;
 	} catch {
-		return { files: {}, migrate: false, reparse: new Set() };
+		return { files: {}, migrate: false };
 	}
 	if (
 		(doc?.version !== CACHE_VERSION && doc?.version !== 1 && doc?.version !== 2) ||
 		typeof doc.files !== "object" ||
 		doc.files === null
 	)
-		return { files: {}, migrate: false, reparse: new Set() };
+		return { files: {}, migrate: false };
 	// Older versions counted all-NUL crash padding as bad lines. Keep every record (a deleted file's
-	// history must survive) but flag the ones with bad lines so listed files are re-parsed.
+	// history must survive) but mark the ones with bad lines stale (`size: -1`) so they are re-parsed.
 	const current = doc.version === CACHE_VERSION;
 	const files: Record<string, FileStats> = {};
-	const reparse = new Set<string>();
 	for (const [file, record] of Object.entries(doc.files)) {
 		if (!isFileStats(record)) continue;
-		files[file] = record;
-		if (!current && record.badLines > 0) reparse.add(file);
+		files[file] = !current && record.badLines > 0 ? { ...record, size: -1 } : record;
 	}
-	return { files, migrate: !current, reparse };
+	return { files, migrate: !current };
 }
 
 /** Atomic write: a crash mid-write never leaves a truncated cache behind. */
@@ -414,32 +412,27 @@ export interface LoadOptions {
 }
 
 /**
- * Load every session under `root`, re-parsing only files whose size or mtime changed (plus listed
- * files whose pre-version-3 record has bad lines). Cache entries for deleted files are kept, so pruning old sessions does not erase history; entries outside `root`
- * stay cached but are not reported.
+ * Load every session under `root`, re-parsing only files whose size or mtime changed (migrated
+ * pre-version-3 bad-line records are marked stale, see `readCache`). Cache entries for deleted files
+ * are kept, so pruning old sessions does not erase history; entries outside `root` stay cached but
+ * are not reported.
  */
 export async function loadUsage(options: LoadOptions = {}): Promise<Loaded> {
 	const root = resolve(options.root ?? sessionsDir());
 	const cacheFile = options.cache ?? cachePath();
-	const { files, migrate, reparse } = await readCache(cacheFile);
+	const { files, migrate } = await readCache(cacheFile);
 	const listed = await listJsonl(root);
 	const paths = listed.paths;
 	let errors = listed.errors;
 	const stale: { path: string; size: number; mtimeMs: number }[] = [];
-	// A failed re-parse must not leave a migrated bad-line record matching its file forever.
-	const invalidate = (path: string): void => {
-		const record = files[path];
-		if (reparse.has(path) && record) files[path] = { ...record, size: -1 };
-	};
 	for (const path of paths) {
 		try {
 			const s = await stat(path);
 			const hit = files[path];
-			if (!hit || reparse.has(path) || hit.entryIds === undefined || hit.size !== s.size || hit.mtimeMs !== s.mtimeMs)
+			if (!hit || hit.entryIds === undefined || hit.size !== s.size || hit.mtimeMs !== s.mtimeMs)
 				stale.push({ path, size: s.size, mtimeMs: s.mtimeMs });
 		} catch {
 			errors++;
-			invalidate(path);
 		}
 	}
 	let done = 0;
@@ -450,7 +443,6 @@ export async function loadUsage(options: LoadOptions = {}): Promise<Loaded> {
 			dirty = true;
 		} catch {
 			errors++;
-			invalidate(path);
 		}
 		options.onProgress?.(++done, stale.length);
 	}

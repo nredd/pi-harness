@@ -223,19 +223,17 @@ async function readCache(path) {
   try {
     doc = JSON.parse(await readFile(path, "utf8"));
   } catch {
-    return { files: {}, migrate: false, reparse: /* @__PURE__ */ new Set() };
+    return { files: {}, migrate: false };
   }
   if (doc?.version !== CACHE_VERSION && doc?.version !== 1 && doc?.version !== 2 || typeof doc.files !== "object" || doc.files === null)
-    return { files: {}, migrate: false, reparse: /* @__PURE__ */ new Set() };
+    return { files: {}, migrate: false };
   const current = doc.version === CACHE_VERSION;
   const files = {};
-  const reparse = /* @__PURE__ */ new Set();
   for (const [file, record2] of Object.entries(doc.files)) {
     if (!isFileStats(record2)) continue;
-    files[file] = record2;
-    if (!current && record2.badLines > 0) reparse.add(file);
+    files[file] = !current && record2.badLines > 0 ? { ...record2, size: -1 } : record2;
   }
-  return { files, migrate: !current, reparse };
+  return { files, migrate: !current };
 }
 async function writeCache(path, files) {
   await mkdir(dirname(path), { recursive: true });
@@ -261,24 +259,19 @@ function dedupCalls(candidates) {
 async function loadUsage(options = {}) {
   const root = resolve(options.root ?? sessionsDir());
   const cacheFile = options.cache ?? cachePath();
-  const { files, migrate, reparse } = await readCache(cacheFile);
+  const { files, migrate } = await readCache(cacheFile);
   const listed = await listJsonl(root);
   const paths = listed.paths;
   let errors = listed.errors;
   const stale = [];
-  const invalidate = (path) => {
-    const record2 = files[path];
-    if (reparse.has(path) && record2) files[path] = { ...record2, size: -1 };
-  };
   for (const path of paths) {
     try {
       const s = await stat(path);
       const hit = files[path];
-      if (!hit || reparse.has(path) || hit.entryIds === void 0 || hit.size !== s.size || hit.mtimeMs !== s.mtimeMs)
+      if (!hit || hit.entryIds === void 0 || hit.size !== s.size || hit.mtimeMs !== s.mtimeMs)
         stale.push({ path, size: s.size, mtimeMs: s.mtimeMs });
     } catch {
       errors++;
-      invalidate(path);
     }
   }
   let done = 0;
@@ -289,7 +282,6 @@ async function loadUsage(options = {}) {
       dirty = true;
     } catch {
       errors++;
-      invalidate(path);
     }
     options.onProgress?.(++done, stale.length);
   }
