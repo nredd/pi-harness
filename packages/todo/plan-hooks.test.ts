@@ -610,6 +610,7 @@ describe("settling with nothing armed to wake the parent", () => {
 		expect(reminder).toContain("Nothing is armed to wake you");
 		expect(reminder).toContain("- #1 t1\n");
 		expect(reminder).toContain("- #2 t2 (@release-team)");
+		expect(reminder).toContain("monitor_stop it and monitor_start it again with todo: <id>");
 		// Only the request right after the marker sees the list.
 		expect(await handler("context")({ messages: [user, marker, assistant] }, ctx)).toBeUndefined();
 	});
@@ -704,19 +705,26 @@ describe("settling with nothing armed to wake the parent", () => {
 			expect(notices(ctx)[0][0]).not.toContain("waiting on a monitor");
 		});
 
-		it("drops a link when tree navigation replaces its todo, keeps it when the todo is unchanged", async () => {
-			const { handler, ctx, bus } = await start(tasks({ id: 1 }, { id: 2 }));
-			link(bus, MONITOR_STARTED_EVENT, [1, 2]);
-			const snapshot = tasks({ id: 1 }, { id: 2 });
-			snapshot.tasks[1] = { ...snapshot.tasks[1], subject: "other" };
-			(ctx.sessionManager as unknown as { getBranch: () => unknown }).getBranch = () => [
-				{ type: "custom", customType: STATE_ENTRY_TYPE, data: snapshot },
-			];
+		it("drops every link when tree navigation changes the todos, keeps them when nothing changed", async () => {
+			const { handler, ctx, bus } = await start(tasks({ id: 1 }));
+			link(bus, MONITOR_STARTED_EVENT, 1);
+			const branchWith = (data: unknown) => {
+				(ctx.sessionManager as unknown as { getBranch: () => unknown }).getBranch = () => [
+					{ type: "custom", customType: STATE_ENTRY_TYPE, data },
+				];
+			};
+			// The same state replayed (compaction) keeps the link.
+			branchWith(tasks({ id: 1 }));
+			await handler("session_compact")({}, ctx);
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			expect(notices(ctx)[0][0]).toContain("waiting on a monitor");
+			// Another branch's #1, even with the same subject, is not the todo the monitor was started for.
+			const other = tasks({ id: 1 });
+			other.tasks[0] = { ...other.tasks[0], description: "recreated on another branch" } as never;
+			branchWith(other);
 			await handler("session_tree")({}, ctx);
 			await handler("agent_settled")({ type: "agent_settled" }, ctx);
-			expect(notices(ctx)[0][0]).toContain(
-				"held by the parent: #2 other; waiting on a monitor, which wakes the parent: #1 t1",
-			);
+			expect(notices(ctx)[1]).toEqual([expect.stringContaining("held by the parent: #1 t1"), "warning"]);
 		});
 
 		it("drops a link when its todo is cleared, so a reused id is not armed", async () => {

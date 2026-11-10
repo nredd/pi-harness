@@ -195,7 +195,7 @@ the full list grouped by status.
   `waiting on a monitor, which wakes the parent: #<id> <subject> (monitor <name>)` (info); once the monitor stops or
   expires with the todo still `in_progress` it is `held` again and warns. Other held todos still warn. A monitor
   with no `todo` arms no todo (it may be unrelated to the held work; before, it silenced every held todo and the held-work
-  reminder), so link it with `todo: <id>`. `todo clear` (also inside an `ops` batch) and tree navigation drop links to todos that no longer exist or changed, since ids can be reused. Abandoned, lost and silent work always warn.
+  reminder), so link it with `todo: <id>`. `todo clear` (also inside an `ops` batch) drops links to cleared todos, and a tree navigation that changes the todos drops every link, since ids can be reused. Abandoned, lost and silent work always warn.
   When todos are held or lost and nothing is armed, nothing can wake the parent, so `agent_before_settle`
   appends one hidden `rpiv-todo-held-reminder` and requests one more request, once per prompt from a
   person (a plan reminder is independent). The `context` hook swaps the live list for the marker on that

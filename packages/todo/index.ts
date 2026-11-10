@@ -257,11 +257,10 @@ export default function (
 			const before = getState(id);
 			const after = replayFromBranch(ctx);
 			replaceState(id, after);
-			// A link survives only while its todo is the same one: same id and subject.
-			keepLinks(id, (todo) => {
-				const was = before.tasks.find((t) => t.id === todo);
-				return was !== undefined && after.tasks.find((t) => t.id === todo)?.subject === was.subject;
-			});
+			// Ids can be reused on another branch and cannot be told apart from the same todo, so any
+			// change of state drops every link; a replay that changes nothing (compaction) keeps them.
+			const unchanged = JSON.stringify(before.tasks) === JSON.stringify(after.tasks);
+			keepLinks(id, () => unchanged);
 			isForeground = id === getActiveRenderSession();
 		} catch (e) {
 			if (!isStaleCtxError(e)) throw e;
