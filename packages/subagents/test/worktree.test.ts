@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -102,6 +102,9 @@ function failingPi(match: (args: string[]) => boolean, failure: { code: number; 
 /**
  * Helper: create a temporary git repo with an initial commit.
  */
+/** Let the clock pass a filesystem timestamp tick, so a later change gets a ctime the index entry lacks. */
+const tick = () => new Promise<void>(resolve => setTimeout(resolve, 25));
+
 function initGitRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "pi-wt-test-"));
   execFileSync("git", ["init"], { cwd: dir, stdio: "pipe" });
@@ -798,6 +801,24 @@ describe("cleanupWorktree — nested repositories git refuses to remove", () => 
     return { wt, sub, sha: run(sub, "rev-parse", "HEAD") };
   }
 
+  it("finds a leftover submodule git dir when the main repository path is non-ASCII", async () => {
+    const accentRepo = join(tmpdir(), `pi-wt-\u00e9-${process.pid}-${Date.now()}`);
+    renameSync(repoDir, accentRepo);
+    repoDir = accentRepo;
+    run(repoDir, "submodule", "add", subDir, "sub");
+    run(repoDir, "commit", "-m", "add submodule");
+    const wt = await createWorktree(pi, repoDir, "modules-accent");
+    cleanups.push(wt.path);
+    run(wt.path, "submodule", "update", "--init", "--recursive");
+    writeFileSync(join(wt.path, "sub", "precious.txt"), "unpublished");
+    run(join(wt.path, "sub"), "add", "precious.txt");
+    run(join(wt.path, "sub"), "commit", "-m", "local only");
+    run(wt.path, "submodule", "deinit", "-f", "sub");
+    const result = await cleanupWorktree(chunkedPi(), repoDir, wt, "modules accent");
+    expect(result.path).toBe(wt.path);
+    expect(result.error).toMatch(/submodule work would be lost/);
+  });
+
   it("detects unpublished commits in a submodule at a non-ASCII path when stdout is decoded chunk by chunk", async () => {
     run(repoDir, "submodule", "add", subDir, "d\u00e9p");
     run(repoDir, "commit", "-m", "add submodule");
@@ -1331,6 +1352,7 @@ describe("cleanupWorktree — index bits and ignored path decoding (#596)", () =
     const wt = await worktree("chmod-after-add");
     writeFileSync(join(wt.path, "new.sh"), "#!/bin/sh\n");
     run(wt.path, "add", "new.sh");
+    await tick();
     chmodSync(join(wt.path, "new.sh"), 0o755);
     const result = await cleanupWorktree(pi, repoDir, wt, "chmod after add");
     expect(result.error).toBeUndefined();
@@ -1341,6 +1363,7 @@ describe("cleanupWorktree — index bits and ignored path decoding (#596)", () =
     const wt = await worktree("edit-then-chmod");
     writeFileSync(join(wt.path, "new.sh"), "#!/bin/sh\n");
     run(wt.path, "add", "new.sh");
+    await tick();
     writeFileSync(join(wt.path, "new.sh"), "#!/bin/sh\necho edited\n");
     chmodSync(join(wt.path, "new.sh"), 0o755);
     const result = await cleanupWorktree(pi, repoDir, wt, "edit then chmod");
@@ -1372,6 +1395,7 @@ describe("cleanupWorktree — index bits and ignored path decoding (#596)", () =
   it("lets an edit made after an index-only chmod decide the mode", async () => {
     const wt = await worktree("chmod-then-edit");
     run(wt.path, "update-index", "--chmod=+x", "run.sh");
+    await tick();
     writeFileSync(join(wt.path, "run.sh"), "#!/bin/sh\necho edited\n");
     const result = await cleanupWorktree(pi, repoDir, wt, "chmod then edit");
     expect(result.error).toBeUndefined();
@@ -1383,6 +1407,7 @@ describe("cleanupWorktree — index bits and ignored path decoding (#596)", () =
     const wt = await worktree("chmod-after-stage");
     chmodSync(join(wt.path, "run.sh"), 0o755);
     run(wt.path, "add", "run.sh");
+    await tick();
     chmodSync(join(wt.path, "run.sh"), 0o644);
     expect(await cleanupWorktree(pi, repoDir, wt, "chmod after stage")).toEqual({ hasChanges: false });
     expect(existsSync(wt.path)).toBe(false);

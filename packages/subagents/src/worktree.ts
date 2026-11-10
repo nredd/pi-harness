@@ -187,11 +187,11 @@ export async function cleanupWorktree(
         await git(pi, worktree.path, ["commit", "--no-verify", "-m", commitMsg], 10000);
         committed = true;
       } else if (await dirtyState(pi, worktree.path)) {
-        // `add -A` skips a moved gitlink hidden by `submodule.<name>.ignore = all`; an empty
-        // commit would fail opaquely, so say why and keep the worktree.
+        // Nothing staged yet still dirty: `add -A` skips a moved gitlink hidden by
+        // `submodule.<name>.ignore = all`; an empty commit would fail opaquely, so say why and keep the worktree.
         throw new Error(`uncommitted changes could not be staged (a submodule \`ignore\` setting can hide a moved gitlink); worktree kept:\n${status}`);
       }
-      // Else the only changes were staged modes the agent reverted on disk: nothing differs from HEAD.
+      // Nothing staged and clean: the only changes were staged modes the agent reverted on disk.
     }
     if (!committed) {
       const currentSha = await git(pi, worktree.path, ["rev-parse", "HEAD"], 5000);
@@ -268,6 +268,8 @@ async function clearHiddenIndexBits(pi: ExtensionAPI, repo: string): Promise<voi
   // `-v` tags: lowercase = assume-unchanged, `S` (or `s` with both) = skip-worktree.
   for (const entry of await gitLines(pi, repo, ["ls-files", "-v"], 30000)) {
     const tag = entry.charAt(0);
+    const hidden = tag !== tag.toUpperCase() || tag === "S";
+    if (!hidden) continue;
     const path = unquoteGitPath(entry.slice(2));
     if (tag !== tag.toUpperCase()) assumed.push(path);
     if (tag.toLowerCase() === "s" && lstatOrUndefined(join(repo, path))) skipped.push(path);
@@ -491,7 +493,8 @@ async function inspectGitlinks(
 async function ignoredRepoDirs(pi: ExtensionAPI, worktreePath: string): Promise<string[]> {
   const entries = await gitLines(pi, worktreePath, ["status", "--porcelain", "--ignored", "--untracked-files=all", "--ignore-submodules=none"], 30000);
   // With `--untracked-files=all` git lists an ignored nested repository as its own `!! dir/` entry.
-  const dirs = entries.filter(entry => entry.startsWith("!! ")).map(entry => unquoteGitPath(entry.slice(3))).filter(path => path.endsWith("/"));
+  // Only directory entries (`dir/`, or `"dir/"` when quoted) can be a clone: decode just those.
+  const dirs = entries.filter(entry => entry.startsWith("!! ") && /\/"?$/.test(entry)).map(entry => unquoteGitPath(entry.slice(3)));
   return dirs.map(dir => join(worktreePath, dir)).filter(dir => existsSync(join(dir, ".git")));
 }
 
@@ -505,8 +508,8 @@ function moduleGitDirs(dir: string): string[] {
 }
 
 /** Absolute `modules` directory of the worktree's private git dir, when present. */
-async function modulesDir(pi: ExtensionAPI, worktreePath: string): Promise<string | undefined> {
-  const dir = resolve(worktreePath, await git(pi, worktreePath, ["rev-parse", "--git-path", "modules"], 5000));
+function modulesDir(worktreePath: string): string | undefined {
+  const dir = join(gitDirOf(worktreePath), "modules");
   return existsSync(dir) ? dir : undefined;
 }
 
@@ -524,7 +527,7 @@ async function assertSubmodulesDisposable(pi: ExtensionAPI, worktreePath: string
   const problems: string[] = [];
   await inspectGitlinks(pi, worktreePath, baseSha, trusted, seen, problems);
   await inspectIgnoredRepos(pi, worktreePath, worktreePath, trusted, seen, problems);
-  const modules = await modulesDir(pi, worktreePath);
+  const modules = modulesDir(worktreePath);
   for (const gitDir of modules ? moduleGitDirs(modules) : []) {
     if (seen.has(realpathSync(gitDir))) continue;
     const lost = await unpublished(pi, ["--git-dir", gitDir], worktreePath, trusted);
@@ -535,7 +538,7 @@ async function assertSubmodulesDisposable(pi: ExtensionAPI, worktreePath: string
 
 /** Whether git would refuse plain removal for submodule state: any gitlink in the index or a `modules` dir. */
 async function hasSubmoduleState(pi: ExtensionAPI, worktreePath: string): Promise<boolean> {
-  return (await gitlinks(pi, worktreePath)).size > 0 || (await modulesDir(pi, worktreePath)) !== undefined;
+  return (await gitlinks(pi, worktreePath)).size > 0 || modulesDir(worktreePath) !== undefined;
 }
 
 /**
