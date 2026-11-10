@@ -117,7 +117,7 @@ afterEach(async () => {
 });
 
 it("resume after a promoted deferred tool went inactive declares no orphan tool removal", async () => {
-	// Default `promotionLifetime: "run"`: the engine's agent_settled handler resets promotions after the first run.
+	// Explicit `promotionLifetime: "run"` (the engine default): the engine's agent_settled handler resets promotions after the first run.
 	const h = await start("run");
 	h.setResponses([
 		call("search_tools", { query: "web search capability", limit: 1, kind: "tool" }),
