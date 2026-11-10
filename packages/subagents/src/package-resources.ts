@@ -384,7 +384,7 @@ function configuredPackages(cwd: string, projectTrusted: boolean, homeDir?: stri
     if (typeof DefaultPackageManager !== "function") return [];
     const agentDir = resolveAgentDir(homeDir);
     const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
-    const manager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
+    const manager = new DefaultPackageManager({ cwd, agentDir, settingsManager, homeDir });
     if (typeof manager.listConfiguredPackages !== "function") return [];
     if (homeDir === undefined) return manager.listConfiguredPackages();
     // Pi's enumerator expands local package sources through its own ambient

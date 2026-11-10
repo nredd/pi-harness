@@ -22,28 +22,6 @@ const PROBE_CHILD_TIMEOUT_MS = 10_000;
 const PROBE_OVERHEAD_MARGIN_MS = 1_000;
 const PROBE_TEST_BUDGET_MS = PROBE_CHILD_TIMEOUT_MS + PROBE_OVERHEAD_MARGIN_MS;
 
-// Flip when #179 gives the host package manager an injected-home seam.
-const EXPECTED_AMBIENT_ACCESSES = [
-  // `collectSkillEntries` first checks the automatic host root exists.
-  ".agents/skills",
-  // `addIgnoreRules` probes the fd ignore convention at the automatic root.
-  ".agents/skills/.fdignore",
-  // `addIgnoreRules` probes the Git ignore convention at the automatic root.
-  ".agents/skills/.gitignore",
-  // `addIgnoreRules` probes the generic ignore convention at the automatic root.
-  ".agents/skills/.ignore",
-  // `collectSkillEntries` descends into the discovered skill directory.
-  ".agents/skills/ambient-skill",
-  // `addIgnoreRules` probes the fd ignore convention in the child directory.
-  ".agents/skills/ambient-skill/.fdignore",
-  // `addIgnoreRules` probes the Git ignore convention in the child directory.
-  ".agents/skills/ambient-skill/.gitignore",
-  // `addIgnoreRules` probes the generic ignore convention in the child directory.
-  ".agents/skills/ambient-skill/.ignore",
-  // `collectSkillEntries` records the first `SKILL.md` as the automatic skill.
-  ".agents/skills/ambient-skill/SKILL.md",
-];
-
 beforeAll(async () => {
   if (process.env.PI_EXPECT_BUN_RUNTIME === "1") expect(process.versions.bun).toBe(pinnedBunVersion);
   // Bundle only owned TypeScript, leaving the real Pi SDK/package manager
@@ -178,11 +156,11 @@ it.each(["disabled", "allowed"])("honors a project package %s filter in a privat
   }
 }, PROBE_TEST_BUDGET_MS);
 
-it("#179 characterizes Pi's ambient .agents/skills scan before loader-level noSkills", () => {
+it.each(["runner", "clone"])("#179 never reads the ambient .agents/skills root through the real %s loader", (mode) => {
   const root = mkdtempSync(join(tmpdir(), "real-loader-home-"));
   const ambient = join(root, "ambient");
   mkdirSync(ambient);
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: ambient, USERPROFILE: ambient, XDG_CONFIG_HOME: join(ambient, ".config"), PI_OFFLINE: "1", PI_HOME_FIXTURE_ROOT: root, PI_HOME_FIXTURE_MODE: "runner", PI_HOME_FIXTURE_SCOPE: "global" };
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: ambient, USERPROFILE: ambient, XDG_CONFIG_HOME: join(ambient, ".config"), PI_OFFLINE: "1", PI_HOME_FIXTURE_ROOT: root, PI_HOME_FIXTURE_MODE: mode, PI_HOME_FIXTURE_SCOPE: "global" };
   delete env.PI_CODING_AGENT_DIR;
   delete env.PI_CODING_AGENT_SESSION_DIR;
   try {
@@ -190,7 +168,7 @@ it("#179 characterizes Pi's ambient .agents/skills scan before loader-level noSk
     expect(child.status, child.stdout + child.stderr).toBe(0);
     const result = JSON.parse(readFileSync(join(root, "result.json"), "utf8"));
     expect(result.runtime).toBe(process.versions.bun ?? "node");
-    expect(result.ambientAccesses).toEqual(EXPECTED_AMBIENT_ACCESSES);
+    expect(result.ambientAccesses).toEqual([]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
