@@ -120,6 +120,25 @@ Under 50 self-terminating local spinners (load 90-174 on a shared Apple M4) five
 runs took 13.7-27.0 s, two of them past 20 s. That is not a deterministic RED;
 the hosted job is the failing receipt.
 
+## Measured real-git submodule budget (#651)
+
+`packages/subagents/test/worktree.test.ts`, describe "cleanupWorktree -- nested
+repositories git refuses to remove", hit the 5 s default on the self-hosted macOS
+runners `pi-macos-ci-7e30c3` and `pi-macos-ci2-ad5a35` (run 42756218410, jobs
+129631524032 and 129643652803): 8315 ms, 5765-8571 ms and 6372 ms for the three
+slowest cases.
+
+Alone on an Apple M4 the 21 cases take 0.25-1.2 s each (worst: "does not count
+another submodule's sha...", 1.1-1.2 s). The time is dozens of synchronous `git`
+child spawns per case (init, clone, `submodule add`/`update`/`deinit`, fetch,
+worktree remove), about 7x slower on those runners. No avoidable work: each case
+mutates its own repos, so a shared `beforeAll` fixture would couple them, and the
+`protocol.file.allow` config is needed for the local submodule URLs.
+
+The describe takes `{ timeout: 20_000 }`: twice the worst hosted figure (8571
+ms), the same margin rule as the cold loads above. No global `testTimeout`, retry
+or skip.
+
 ## Remaining external acceptance criterion
 
 Keep #105 open after the worker-cap PR. The historical report does not retain
