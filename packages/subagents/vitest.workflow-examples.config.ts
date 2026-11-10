@@ -8,7 +8,7 @@ const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] }
 export default defineConfig({
   test: {
     env: { PI_WORKFLOW_EXAMPLE_COVERAGE: "1" },
-    setupFiles: ["../../integration/inprocess/verification/home-setup.ts"],
+    setupFiles: ["./test/helpers/tmp-root-setup.ts", "../../integration/inprocess/verification/home-setup.ts"],
     server: { deps: { inline: [/@earendil-works\/pi-/] } },
     coverage: {
       provider: "istanbul",
