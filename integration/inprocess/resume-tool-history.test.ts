@@ -7,7 +7,7 @@ import { join } from "node:path";
 import type { Model, TranscriptContext } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/compat";
 import { fauxAssistantMessage, type Harness } from "@earendil-works/pi-coding-agent/testing";
-import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { call, jsonFile } from "./agents-support.ts";
 import { isolateResearchPackages, isolateStackHome, loadThirdParty, startStack } from "./support.ts";
 
@@ -77,48 +77,56 @@ function unresolved(payload: WirePayload): string[] {
 	return bad;
 }
 
-let home: Awaited<ReturnType<typeof isolateStackHome>>;
-let restore: () => void;
-let h: Harness;
-beforeAll(async () => {
+let home: Awaited<ReturnType<typeof isolateStackHome>> | undefined;
+let restore: (() => void) | undefined;
+let started: Harness | undefined;
+
+/** Build a fresh stack per test so each runs alone; `promotionLifetime` is the engine setting under test. */
+async function start(promotionLifetime: "run" | "session"): Promise<Harness> {
 	home = await isolateStackHome();
 	restore = isolateResearchPackages(home.root);
 	vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
 		throw new Error("Resume tool-history test must stay offline");
 	});
 	jsonFile(join(home.root, "agent/deferred-tools.json"), {
-		promotionLifetime: "session",
+		promotionLifetime,
 		replaceAlwaysActive: true,
 		alwaysActive: ["read", "search_tools", "demote_tools"],
 	});
-	h = await startStack({
+	const h = await startStack({
 		cwd: home.root,
 		factories: [await loadThirdParty("web"), await loadThirdParty("deferred")],
 	});
-});
-afterAll(async () => {
+	started = h;
+	return h;
+}
+afterEach(async () => {
 	try {
-		if (h) {
-			await h.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
-			h.cleanup();
+		if (started) {
+			await started.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+			started.cleanup();
 		}
 	} finally {
+		started = undefined;
 		vi.restoreAllMocks();
 		restore?.();
-		await home.cleanup();
+		restore = undefined;
+		await home?.cleanup();
+		home = undefined;
 	}
 });
 
 it("resume after a promoted deferred tool went inactive declares no orphan tool removal", async () => {
+	// Default `promotionLifetime: "run"`: the engine's agent_settled handler resets promotions after the first run.
+	const h = await start("run");
 	h.setResponses([
 		call("search_tools", { query: "web search capability", limit: 1, kind: "tool" }),
 		fauxAssistantMessage("done"),
 	]);
 	await h.session.prompt("find a web tool");
-	expect(h.session.getActiveToolNames()).toContain(PROMOTED);
 
-	// session_start in a resumed child re-selects its tools and drops the promoted tool again.
-	h.session.setActiveToolsByName(h.session.getActiveToolNames().filter((name) => name !== PROMOTED));
+	// agent_settled -> synchronize({ resetPromotions: true }) deactivates the promoted tool; resume is a plain prompt.
+	expect(h.session.getActiveToolNames()).not.toContain(PROMOTED);
 	let request: TranscriptContext | undefined;
 	h.setResponses([
 		(ctx) => {
@@ -133,6 +141,7 @@ it("resume after a promoted deferred tool went inactive declares no orphan tool 
 });
 
 it("continuing a run after demoting a promoted deferred tool declares no orphan tool removal", async () => {
+	const h = await start("session");
 	let request: TranscriptContext | undefined;
 	h.setResponses([
 		call("search_tools", { query: "web search capability", limit: 1, kind: "tool" }),
