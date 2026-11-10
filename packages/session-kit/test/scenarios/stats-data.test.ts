@@ -16,7 +16,7 @@ it("stats reopening uses versioned cache with unchanged totals", async () => {
 	const first = layout(fixture);
 	const cache = join(fixture.agentDir, "pi-session-kit", "stats-cache.json");
 	expect(existsSync(cache)).toBe(true);
-	expect(JSON.parse(readFileSync(cache, "utf8")).version).toBe(2);
+	expect(JSON.parse(readFileSync(cache, "utf8")).version).toBe(3);
 	await fixture.close();
 	footer(fixture);
 	await fixture.open("/stats");

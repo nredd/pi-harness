@@ -19,7 +19,7 @@ import { createInterface } from "node:readline";
 import { setImmediate as tick } from "node:timers/promises";
 import { agentDir } from "../agent-dir.ts";
 import { nth } from "./nth.ts";
-export const CACHE_VERSION = 2;
+export const CACHE_VERSION = 3;
 
 /** Stable opaque identifier: no transcript IDs or paths leave the machine. */
 export const opaqueId = (value: string): string => createHash("sha256").update(value).digest("hex");
@@ -36,6 +36,7 @@ const YIELD_EVERY_LINES = 2000;
 export type CallTuple = [number, number, number, number, number, number, number];
 
 export interface FileStats {
+	/** File size in bytes; `-1` marks a migrated record that must be re-parsed when its file is next listed. */
 	size: number;
 	mtimeMs: number;
 	/** Header timestamp. */
@@ -87,7 +88,7 @@ export interface Loaded {
 	sessionMetadata?: Session[];
 	/** Failed session/directory reads or durable local cache writes. */
 	errors: number;
-	/** Lines that are not a JSON object, across all files. */
+	/** Lines that are not a JSON object, across all files. All-NUL crash padding is skipped, not counted. */
 	badLines: number;
 }
 
@@ -122,6 +123,9 @@ function looksLikeObject(line: string): boolean {
 	return text.startsWith("{") && text.endsWith("}");
 }
 
+/** A line of only NULs: crash padding (file size extended, data never written) that carries no data. */
+const NUL_PADDING = /^\0+$/;
+
 /** Line-at-a-time parser for one session file. */
 export class SessionParser {
 	private readonly out: FileStats;
@@ -147,7 +151,7 @@ export class SessionParser {
 	}
 
 	accept(line: string): void {
-		if (!line) return;
+		if (!line || NUL_PADDING.test(line)) return;
 		// Cheap supersets, whitespace-agnostic: a false positive only costs a JSON.parse.
 		const isHeader = this.lines++ === 0;
 		const isAssistant = line.includes('"assistant"');
@@ -339,8 +343,11 @@ export function isFileStats(value: unknown): value is FileStats {
 }
 
 /**
- * Cached records keyed by path. Unreadable JSON, a wrong version, or a non-object `files` yields an
- * empty cache; a malformed record is dropped on its own (its file is re-parsed if still on disk).
+ * Cached records keyed by path. Unreadable JSON, an unknown version, or a non-object `files` yields
+ * an empty cache; a malformed record is dropped on its own (its file is re-parsed if still on disk).
+ * Version 1/2 records are all kept (deleted files' history must survive); those with bad lines get
+ * `size: -1` so the size check re-parses them whenever their root is next listed, since older
+ * versions counted all-NUL padding as bad.
  */
 async function readCache(path: string): Promise<{ files: Record<string, FileStats>; migrate: boolean }> {
 	let doc: Partial<CacheDoc> | null;
@@ -349,12 +356,21 @@ async function readCache(path: string): Promise<{ files: Record<string, FileStat
 	} catch {
 		return { files: {}, migrate: false };
 	}
-	if ((doc?.version !== CACHE_VERSION && doc?.version !== 1) || typeof doc.files !== "object" || doc.files === null)
+	if (
+		(doc?.version !== CACHE_VERSION && doc?.version !== 1 && doc?.version !== 2) ||
+		typeof doc.files !== "object" ||
+		doc.files === null
+	)
 		return { files: {}, migrate: false };
-	return {
-		files: Object.fromEntries(Object.entries(doc.files).filter(([, record]) => isFileStats(record))),
-		migrate: doc.version === 1,
-	};
+	// Older versions counted all-NUL crash padding as bad lines. Keep every record (a deleted file's
+	// history must survive) but mark the ones with bad lines stale (`size: -1`) so they are re-parsed.
+	const current = doc.version === CACHE_VERSION;
+	const files: Record<string, FileStats> = {};
+	for (const [file, record] of Object.entries(doc.files)) {
+		if (!isFileStats(record)) continue;
+		files[file] = !current && record.badLines > 0 ? { ...record, size: -1 } : record;
+	}
+	return { files, migrate: !current };
 }
 
 /** Atomic write: a crash mid-write never leaves a truncated cache behind. */
@@ -396,9 +412,10 @@ export interface LoadOptions {
 }
 
 /**
- * Load every session under `root`, re-parsing only files whose size or mtime changed. Cache entries
- * for deleted files are kept, so pruning old sessions does not erase history; entries outside `root`
- * stay cached but are not reported.
+ * Load every session under `root`, re-parsing only files whose size or mtime changed (migrated
+ * pre-version-3 bad-line records are marked stale, see `readCache`). Cache entries for deleted files
+ * are kept, so pruning old sessions does not erase history; entries outside `root` stay cached but
+ * are not reported.
  */
 export async function loadUsage(options: LoadOptions = {}): Promise<Loaded> {
 	const root = resolve(options.root ?? sessionsDir());

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -76,6 +76,28 @@ describe("stats parser rejection boundaries", () => {
 	});
 });
 
+describe("crash padding", () => {
+	const NUL = (n: number): string => "\0".repeat(n);
+	const assistant = usageLine();
+
+	it.each([
+		["mid-file", [NUL(174), assistant]],
+		["at EOF", [assistant, NUL(2079)]],
+		["several in a row", [NUL(1), NUL(8), assistant, NUL(3)]],
+	])("skips an all-NUL line %s without counting it as bad", (_name, lines) => {
+		const parsed = parseSession(lines.join("\n"));
+		expect(parsed.badLines).toBe(0);
+		expect(parsed.calls).toHaveLength(1);
+	});
+
+	it.each([`${NUL(4)}${assistant}`, `${assistant}${NUL(4)}`, `{"type":"x"${NUL(2)}`, `${NUL(2)} ${NUL(2)}`])(
+		"still counts a line mixing NULs with other data as bad: %j",
+		(line) => {
+			expect(parseSession(`${line}\n${assistant}`).badLines).toBe(1);
+		},
+	);
+});
+
 describe("stats file races", () => {
 	let dir: string;
 	let root: string;
@@ -135,6 +157,74 @@ describe("stats file races", () => {
 			[2, 2],
 		]);
 		expect(Object.keys(JSON.parse(readFileSync(cache, "utf8")).files)).toEqual([a, b]);
+	});
+
+	it("recomputes a version-2 cached file that counted bad lines, keeping clean ones and deleted-file data", async () => {
+		mkdirSync(root);
+		const padded = join(root, "padded.jsonl");
+		const clean = join(root, "clean.jsonl");
+		const deleted = join(root, "deleted.jsonl");
+		writeFileSync(padded, `${usageLine()}\n${"\0".repeat(64)}\n`);
+		writeFileSync(clean, `${usageLine()}\n`);
+		const files = Object.fromEntries(
+			[padded, clean].map((path) => {
+				const s = statSync(path);
+				return [path, { ...cachedRecord(), size: s.size, mtimeMs: s.mtimeMs, badLines: path === padded ? 1 : 0 }];
+			}),
+		);
+		// A record whose file is gone cannot be re-parsed; its data (and bad count) must survive migration.
+		const gone = { ...cachedRecord(), size: 1, mtimeMs: 1, badLines: 1 };
+		files[deleted] = gone;
+		writeFileSync(cache, JSON.stringify({ version: 2, files }));
+		const loaded = await loadUsage({ root, cache });
+		expect(loaded.badLines).toBe(1);
+		const saved = JSON.parse(readFileSync(cache, "utf8"));
+		expect(saved.version).toBe(CACHE_VERSION);
+		expect(saved.files[padded].badLines).toBe(0);
+		expect(saved.files[deleted]).toEqual({ ...gone, size: -1 });
+	});
+
+	it("re-parses a migrated bad-line record outside the loaded root once its root is listed", async () => {
+		const other = join(root, "other");
+		mkdirSync(other, { recursive: true });
+		const padded = join(other, "padded.jsonl");
+		writeFileSync(padded, `${usageLine()}\n${"\0".repeat(64)}\n`);
+		const s = statSync(padded);
+		writeFileSync(
+			cache,
+			JSON.stringify({
+				version: 2,
+				files: { [padded]: { ...cachedRecord(), size: s.size, mtimeMs: s.mtimeMs, badLines: 1 } },
+			}),
+		);
+		const all = await loadUsage({ root: join(root, "empty"), cache, includeAllRoots: true });
+		expect(all.badLines).toBe(1);
+		const loaded = await loadUsage({ root: other, cache });
+		expect(loaded.errors).toBe(0);
+		expect(loaded.badLines).toBe(0);
+	});
+
+	it("re-parses a migrated bad-line record on the next load when its first re-parse failed", async () => {
+		mkdirSync(root);
+		const padded = join(root, "padded.jsonl");
+		writeFileSync(padded, `${usageLine()}\n${"\0".repeat(64)}\n`);
+		const s = statSync(padded);
+		writeFileSync(
+			cache,
+			JSON.stringify({
+				version: 2,
+				files: { [padded]: { ...cachedRecord(), size: s.size, mtimeMs: s.mtimeMs, badLines: 1 } },
+			}),
+		);
+		chmodSync(padded, 0o000);
+		try {
+			expect((await loadUsage({ root, cache })).errors).toBe(1);
+		} finally {
+			chmodSync(padded, 0o644);
+		}
+		const loaded = await loadUsage({ root, cache });
+		expect(loaded.errors).toBe(0);
+		expect(loaded.badLines).toBe(0);
 	});
 
 	it("drops invalid cached identity and attribution records instead of reporting their usage", async () => {
