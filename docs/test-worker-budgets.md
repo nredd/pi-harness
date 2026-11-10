@@ -85,9 +85,9 @@ three times: jobs 126342175715 (5064 ms), 126369170298 (5120 ms) and
 re-transforms the extension's ~74 sources. A cheaper loader path stays open.
 
 `plan-mode` caps every test at 5 s in `test/harness/test-timeout-policy.ts`.
-The Jiti case passes it only through `measuredTestBudgetsMs`, by exact name
-(`jitiRuntimeLoadTestName`) and up to its own budget;
-`test/test-timeout-policy.test.ts` pins that no other test inherits it.
+Measured cases pass it only through `measuredTestBudgetsMs`, by exact name
+(`jitiRuntimeLoadTestName`, and `nativeWatchTestName` from #636) and up to their
+own budget; `test/test-timeout-policy.test.ts` pins that no other test inherits it.
 
 RED under 50 self-terminating spinners (load ~90-100, Apple M4, 10 cores):
 `resource-loader-home` timed out 4 of 13 cases at 5019-5296 ms, the
