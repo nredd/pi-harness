@@ -36,11 +36,14 @@
   },
   "files": [
     "src",
+    "dist",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc",
+    "build": "node scripts/build-runtime.mjs",
+    "check:runtime": "node scripts/check-runtime.mjs",
+    "prepack": "npm run build",
     "prepublishOnly": "npm run lint && npm run typecheck && npm run test && npm run build",
     "test": "node ../../scripts/run-vitest.ts node --coverage",
     "test:watch": "JITI_FS_CACHE=false vitest",
@@ -48,7 +51,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check src/ test/",
     "lint:fix": "biome check --fix src/ test/",
-    "check": "npm run lint && npm run typecheck && npm run test && npm run test:workflow-examples && npm run test:bun",
+    "check": "npm run lint && npm run typecheck && npm run check:runtime && npm run test && npm run test:workflow-examples && npm run test:bun",
     "test:bun": "node ../../scripts/run-vitest.ts bun",
     "test:workflow-examples": "JITI_FS_CACHE=false vitest run --config vitest.workflow-examples.config.ts --coverage",
     "test:coverage": "node ../../scripts/run-vitest.ts node --coverage",
@@ -61,6 +64,7 @@
     "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-coding-agent-1.3.0.tgz",
     "@earendil-works/pi-tui": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-tui-1.3.0.tgz",
     "@xterm/headless": "5.5.0",
+    "esbuild": "0.28.2",
     "@sinclair/typebox": "^0.34.49",
     "@types/node": "^25.5.0",
     "@vitest/coverage-istanbul": "5.0.3",
@@ -72,7 +76,7 @@
   },
   "pi": {
     "extensions": [
-      "./src/index.ts"
+      "./dist/index.ts"
     ],
     "video": "https://github.com/tintinweb/pi-subagents/raw/master/media/demo.mp4",
     "image": "https://github.com/tintinweb/pi-subagents/raw/master/media/screenshot.png"
