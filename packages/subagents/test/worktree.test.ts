@@ -1359,6 +1359,26 @@ describe("cleanupWorktree — index bits and ignored path decoding (#596)", () =
     expect(run(repoDir, "ls-tree", result.branch as string, "--", " lead.sh")).toMatch(/^100755 /);
   });
 
+  it("keeps a trailing-space filename and its index-only chmod", async () => {
+    const wt = await worktree("trail-space");
+    writeFileSync(join(wt.path, "zz.sh "), "#!/bin/sh\n");
+    run(wt.path, "add", "--", "zz.sh ");
+    run(wt.path, "update-index", "--chmod=+x", "--", "zz.sh ");
+    const result = await cleanupWorktree(pi, repoDir, wt, "trail space");
+    expect(result.error).toBeUndefined();
+    expect(run(repoDir, "ls-tree", result.branch as string, "--", "zz.sh ")).toMatch(/^100755 /);
+  });
+
+  it("lets an edit made after an index-only chmod decide the mode", async () => {
+    const wt = await worktree("chmod-then-edit");
+    run(wt.path, "update-index", "--chmod=+x", "run.sh");
+    writeFileSync(join(wt.path, "run.sh"), "#!/bin/sh\necho edited\n");
+    const result = await cleanupWorktree(pi, repoDir, wt, "chmod then edit");
+    expect(result.error).toBeUndefined();
+    expect(run(repoDir, "show", `${result.branch}:run.sh`)).toContain("edited");
+    expect(run(repoDir, "ls-tree", result.branch as string, "run.sh")).toMatch(/^100644 /);
+  });
+
   it("removes a worktree whose staged +x the agent reverted on disk", async () => {
     const wt = await worktree("chmod-after-stage");
     chmodSync(join(wt.path, "run.sh"), 0o755);
