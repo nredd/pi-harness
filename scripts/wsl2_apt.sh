@@ -6,7 +6,8 @@
 # of tens of seconds) even from Azure's mirror. So: short network timeouts and retries, no Translation downloads,
 # a bounded `--download-only` pass per mirror (Azure first, the stock one if that fails; apt resumes `partial/`), the
 # downloaded .debs kept in `WSL_APT_CACHE` (a host directory the workflow caches) and restored from it next time,
-# and an offline install.
+# and an offline install against the mirror whose `update` succeeded. The sources are NOT restored: apt's lists only
+# match that mirror, and the guest is ephemeral per job.
 set -euo pipefail
 if [ "$(id -u)" -ne 0 ]; then
   echo 'wsl2-apt: must run as root' >&2
@@ -53,7 +54,7 @@ fi
 original=$(< "$sources")
 fetched=false
 for mirror in http://azure.archive.ubuntu.com/ubuntu http://archive.ubuntu.com/ubuntu; do
-  # Point both the archive and security URIs at one mirror; the second pass restores the stock ones.
+  # Point both the archive and security URIs at one mirror.
   printf '%s\n' "$original" | sed -E "s#http://(archive|security)\\.ubuntu\\.com/ubuntu/?#${mirror}/#" > "$sources"
   if ! grep -q "$mirror" "$sources"; then
     printf 'wsl2-apt: %s is not in %s after rewriting it\n' "$mirror" "$sources" >&2
@@ -66,14 +67,17 @@ for mirror in http://azure.archive.ubuntu.com/ubuntu http://archive.ubuntu.com/u
   fi
   printf 'wsl2-apt: %s failed, trying the next mirror\n' "$mirror" >&2
 done
-printf '%s\n' "$original" > "$sources"
 if [ "$fetched" != true ]; then
   echo 'wsl2-apt: every mirror failed' >&2
   exit 1
 fi
-if [ -n "$cache" ]; then
-  mkdir -p "$cache"
-  find "$archives" -maxdepth 1 -name '*.deb' -exec cp -n {} "$cache"/ \;
-fi
 # Everything is on disk now: the install needs no network, so a failure here is not a mirror problem.
 bounded "apt-get install" "$install_seconds" "${install[@]}" "${packages[@]}"
+if [ -n "$cache" ]; then
+  # Drop .debs for superseded versions (restore-keys brings back last week's), then make the cache match
+  # `archives`, so a warm cache stays bounded to what the current package set needs.
+  apt-get autoclean > /dev/null || true
+  mkdir -p "$cache"
+  find "$cache" -maxdepth 1 -name '*.deb' -delete
+  find "$archives" -maxdepth 1 -name '*.deb' -exec cp {} "$cache"/ \;
+fi
