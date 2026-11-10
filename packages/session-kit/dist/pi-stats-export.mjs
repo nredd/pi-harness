@@ -223,17 +223,19 @@ async function readCache(path) {
   try {
     doc = JSON.parse(await readFile(path, "utf8"));
   } catch {
-    return { files: {}, migrate: false };
+    return { files: {}, migrate: false, reparse: /* @__PURE__ */ new Set() };
   }
   if (doc?.version !== CACHE_VERSION && doc?.version !== 1 && doc?.version !== 2 || typeof doc.files !== "object" || doc.files === null)
-    return { files: {}, migrate: false };
+    return { files: {}, migrate: false, reparse: /* @__PURE__ */ new Set() };
   const current = doc.version === CACHE_VERSION;
-  return {
-    files: Object.fromEntries(
-      Object.entries(doc.files).filter(([, record2]) => isFileStats(record2) && (current || record2.badLines === 0))
-    ),
-    migrate: !current
-  };
+  const files = {};
+  const reparse = /* @__PURE__ */ new Set();
+  for (const [file, record2] of Object.entries(doc.files)) {
+    if (!isFileStats(record2)) continue;
+    files[file] = record2;
+    if (!current && record2.badLines > 0) reparse.add(file);
+  }
+  return { files, migrate: !current, reparse };
 }
 async function writeCache(path, files) {
   await mkdir(dirname(path), { recursive: true });
@@ -259,7 +261,7 @@ function dedupCalls(candidates) {
 async function loadUsage(options = {}) {
   const root = resolve(options.root ?? sessionsDir());
   const cacheFile = options.cache ?? cachePath();
-  const { files, migrate } = await readCache(cacheFile);
+  const { files, migrate, reparse } = await readCache(cacheFile);
   const listed = await listJsonl(root);
   const paths = listed.paths;
   let errors = listed.errors;
@@ -268,7 +270,7 @@ async function loadUsage(options = {}) {
     try {
       const s = await stat(path);
       const hit = files[path];
-      if (!hit || hit.entryIds === void 0 || hit.size !== s.size || hit.mtimeMs !== s.mtimeMs)
+      if (!hit || reparse.has(path) || hit.entryIds === void 0 || hit.size !== s.size || hit.mtimeMs !== s.mtimeMs)
         stale.push({ path, size: s.size, mtimeMs: s.mtimeMs });
     } catch {
       errors++;

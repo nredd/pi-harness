@@ -345,27 +345,32 @@ export function isFileStats(value: unknown): value is FileStats {
  * Cached records keyed by path. Unreadable JSON, a wrong version, or a non-object `files` yields an
  * empty cache; a malformed record is dropped on its own (its file is re-parsed if still on disk).
  */
-async function readCache(path: string): Promise<{ files: Record<string, FileStats>; migrate: boolean }> {
+async function readCache(
+	path: string,
+): Promise<{ files: Record<string, FileStats>; migrate: boolean; reparse: Set<string> }> {
 	let doc: Partial<CacheDoc> | null;
 	try {
 		doc = JSON.parse(await readFile(path, "utf8")) as Partial<CacheDoc> | null;
 	} catch {
-		return { files: {}, migrate: false };
+		return { files: {}, migrate: false, reparse: new Set() };
 	}
 	if (
 		(doc?.version !== CACHE_VERSION && doc?.version !== 1 && doc?.version !== 2) ||
 		typeof doc.files !== "object" ||
 		doc.files === null
 	)
-		return { files: {}, migrate: false };
-	// Older versions counted all-NUL crash padding as bad lines: re-parse those files, keep clean ones.
+		return { files: {}, migrate: false, reparse: new Set() };
+	// Older versions counted all-NUL crash padding as bad lines. Keep every record (a deleted file's
+	// history must survive) but flag the ones with bad lines so listed files are re-parsed.
 	const current = doc.version === CACHE_VERSION;
-	return {
-		files: Object.fromEntries(
-			Object.entries(doc.files).filter(([, record]) => isFileStats(record) && (current || record.badLines === 0)),
-		),
-		migrate: !current,
-	};
+	const files: Record<string, FileStats> = {};
+	const reparse = new Set<string>();
+	for (const [file, record] of Object.entries(doc.files)) {
+		if (!isFileStats(record)) continue;
+		files[file] = record;
+		if (!current && record.badLines > 0) reparse.add(file);
+	}
+	return { files, migrate: !current, reparse };
 }
 
 /** Atomic write: a crash mid-write never leaves a truncated cache behind. */
@@ -414,7 +419,7 @@ export interface LoadOptions {
 export async function loadUsage(options: LoadOptions = {}): Promise<Loaded> {
 	const root = resolve(options.root ?? sessionsDir());
 	const cacheFile = options.cache ?? cachePath();
-	const { files, migrate } = await readCache(cacheFile);
+	const { files, migrate, reparse } = await readCache(cacheFile);
 	const listed = await listJsonl(root);
 	const paths = listed.paths;
 	let errors = listed.errors;
@@ -423,7 +428,7 @@ export async function loadUsage(options: LoadOptions = {}): Promise<Loaded> {
 		try {
 			const s = await stat(path);
 			const hit = files[path];
-			if (!hit || hit.entryIds === undefined || hit.size !== s.size || hit.mtimeMs !== s.mtimeMs)
+			if (!hit || reparse.has(path) || hit.entryIds === undefined || hit.size !== s.size || hit.mtimeMs !== s.mtimeMs)
 				stale.push({ path, size: s.size, mtimeMs: s.mtimeMs });
 		} catch {
 			errors++;
