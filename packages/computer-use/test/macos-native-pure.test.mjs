@@ -117,6 +117,16 @@ check(lateWrite.x == 0 && lateWrite.y == 0, "an accepted but unconfirmed write i
 check(scrollWritesConfirmed(x: .moved, y: .notWritten), "confirmed and unwritten axes leave the write confirmed")
 check(!scrollWritesConfirmed(x: .moved, y: .unconfirmed), "an unconfirmed axis makes the outcome unknown")
 
+// Wheel counts follow the AX/scroll-bar convention on both axes (#650)
+let wheelRight = scrollWheelCounts(deltaX: 200, deltaY: 0)
+check(wheelRight.wheel2 == -200 && wheelRight.wheel1 == 0, "positive scrollX posts a negative wheel2 so the view scrolls right")
+let wheelLeft = scrollWheelCounts(deltaX: -200, deltaY: 0)
+check(wheelLeft.wheel2 == 200, "negative scrollX posts a positive wheel2 so the view scrolls left")
+let wheelDown = scrollWheelCounts(deltaX: 0, deltaY: 200)
+check(wheelDown.wheel1 == -200 && wheelDown.wheel2 == 0, "positive scrollY posts a negative wheel1 so the view scrolls down")
+let wheelUp = scrollWheelCounts(deltaX: 0, deltaY: -200)
+check(wheelUp.wheel1 == 200, "negative scrollY posts a positive wheel1 so the view scrolls up")
+
 if failures > 0 { exit(1) }
 print("macos native pure checks passed")
 `;

@@ -315,6 +315,22 @@
 			}
 		},
 		{
+			"id": "wheel-horizontal-sign",
+			"purpose": "Post the macOS scroll wheel with positive `scrollX` scrolling right, matching the AX scroll-bar convention and `scrollY` (upstream posts `wheel2: Int32(deltaX)`, which scrolls left)",
+			"files": [
+				"native/macos/bridge.swift",
+				"test/macos-native-pure.test.mjs",
+				"scripts/check-sync-reverts.mjs"
+			],
+			"check": "test/macos-native-pure.test.mjs",
+			"dropControls": ["wheel horizontal sign (#650)"],
+			"upstream": {
+				"status": "candidate",
+				"reference": "UPSTREAM.md",
+				"detail": "injaneity/pi-computer-use main has the same wheel2 sign bug; not filed"
+			}
+		},
+		{
 			"id": "managed-browser-headless",
 			"purpose": "Launch the managed Linux browser headless when no DISPLAY or WAYLAND_DISPLAY exists, with an override variable; --no-sandbox only for root (deviates from upstream, which always adds it)",
 			"files": [

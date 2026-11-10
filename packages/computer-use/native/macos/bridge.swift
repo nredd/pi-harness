@@ -273,6 +273,13 @@ func remainingScroll(requestedX: Int, requestedY: Int, x: ScrollAxisWrite, y: Sc
 	(x == .notWritten ? requestedX : 0, y == .notWritten ? requestedY : 0)
 }
 
+/// The `CGEvent` wheel counts for a scroll request in the AX/scroll-bar convention (`scrollY > 0` is down,
+/// `scrollX > 0` is right). A positive wheel1 scrolls content up and a positive wheel2 scrolls content right
+/// (the view moves left), so both axes are negated.
+func scrollWheelCounts(deltaX: Int, deltaY: Int) -> (wheel1: Int32, wheel2: Int32) {
+	(Int32(-deltaY), Int32(-deltaX))
+}
+
 /// Whether every written axis was confirmed by its read-back; an `unconfirmed` write can only be `unknown`.
 func scrollWritesConfirmed(x: ScrollAxisWrite, y: ScrollAxisWrite) -> Bool {
 	x != .unconfirmed && y != .unconfirmed
@@ -4048,12 +4055,13 @@ final class Bridge {
 		if delivery == "hid" { physicalInputLock.lock() }
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
 		try postMouseMove(to: point, pid: pid, delivery: delivery)
+		let counts = scrollWheelCounts(deltaX: deltaX, deltaY: deltaY)
 		guard let event = CGEvent(
 			scrollWheelEvent2Source: nil,
 			units: .pixel,
 			wheelCount: 2,
-			wheel1: Int32(-deltaY),
-			wheel2: Int32(deltaX),
+			wheel1: counts.wheel1,
+			wheel2: counts.wheel2,
 			wheel3: 0
 		) else {
 			throw BridgeFailure(message: "Failed to create scroll event", code: "input_failed")
