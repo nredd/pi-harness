@@ -6,7 +6,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { SerializedOutline } from "./outline.ts";
 
 /** Newest outlines kept on disk, across all Pi sessions sharing the agent directory. */
-export const OUTLINE_STORE_LIMIT = 64;
+export const OUTLINE_STORE_LIMIT = 512;
 
 const debugLog = debuglog("pi-computer-use");
 const ENTRY_NAME = /^(\d{16})-(\d{6})-([0-9a-f]{32})\.json$/;

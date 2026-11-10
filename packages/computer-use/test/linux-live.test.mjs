@@ -434,7 +434,7 @@ describe.skipIf(process.env.PI_CU_LINUX_LIVE_SESSION !== "1")("live Linux E2E (i
 					"target_closed action fabricated a successor capture",
 				);
 				assert.equal(
-					launched.details?.outline,
+					launched.details?.lookId,
 					undefined,
 					"target_closed action fabricated a successor outline",
 				);

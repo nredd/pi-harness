@@ -52,14 +52,14 @@ test("store round-trips, replaces a state, and evicts past the newest limit", as
 	assert.equal(loadStoredOutline("never-saved"), undefined);
 });
 
-test("default cap keeps the newest 64 states", async () => {
+test("default cap keeps the newest 512 states", async () => {
 	const { saveStoredOutline, loadStoredOutline, OUTLINE_STORE_LIMIT, serializeOutline } = await modules();
-	assert.equal(OUTLINE_STORE_LIMIT, 64);
+	assert.equal(OUTLINE_STORE_LIMIT, 512);
 	const outline = serializeOutline(outlineOf(0, 0));
-	for (let i = 0; i < 70; i++) saveStoredOutline(`s${i}`, outline);
+	for (let i = 0; i < 518; i++) saveStoredOutline(`s${i}`, outline);
 	assert.equal(loadStoredOutline("s5"), undefined);
 	assert.ok(loadStoredOutline("s6"));
-	assert.ok(loadStoredOutline("s69"));
+	assert.ok(loadStoredOutline("s517"));
 });
 
 test("unreadable or mismatched entries load as missing", async () => {
@@ -116,6 +116,20 @@ test("restore with an evicted store entry skips the state instead of throwing", 
 	assert.equal(testing.savedState("S-gone"), undefined, "the state is unavailable, so tools report the stale-state error");
 	const { executeSearchUi } = await import("../src/bridge.ts");
 	await assert.rejects(() => executeSearchUi("call", { stateId: "S-gone", text: "x" }, undefined, undefined, {}), /State 'S-gone' is unavailable or was evicted/);
+});
+
+test("an evicted newest state does not fall back to an older inline one", async () => {
+	const { testing, reconstructStateFromBranch, outlineStoreDir, serializeOutline } = await modules();
+	const older = outlineOf(1, 2, "look-older");
+	const legacy = {
+		...JSON.parse(JSON.stringify((await testing.runInOperation(() => testing.buildToolResult("observe_ui", "Observed.", capture(older, "S-older"), {}, undefined, "never"))).details)),
+		outline: JSON.parse(JSON.stringify(serializeOutline(older))),
+	};
+	const newer = (await testing.runInOperation(() => testing.buildToolResult("observe_ui", "Observed.", capture(outlineOf(1, 3, "look-newer"), "S-newer"), {}, undefined, "never"))).details;
+	fs.rmSync(outlineStoreDir(), { recursive: true, force: true });
+	reconstructStateFromBranch(branchOf(legacy, JSON.parse(JSON.stringify(newer))));
+	assert.equal(testing.savedState("S-newer"), undefined);
+	assert.equal(testing.savedState("S-older"), undefined, "the older legacy state must not be restored in place of the evicted newest one");
 });
 
 test("a failed write removes its temporary file", async () => {

@@ -2666,6 +2666,8 @@ export function reconstructStateFromBranch(ctx: ExtensionContext): void {
 		};
 		// Sessions written before the outline store carry the outline inline; newer ones read it back by stateId.
 		const outline = details.outline?.root && typeof details.outline.lookId === "string" ? details.outline : loadStoredOutline(capture.stateId);
+		// The newest result for a resource decides it: if its outline was evicted, do not fall back to an older state.
+		restoredResources.add(resourceKey);
 		if (outline) {
 			const epoch = 0;
 			resourceScheduler.restoreEpoch(resourceKey, epoch);
@@ -2695,7 +2697,6 @@ export function reconstructStateFromBranch(ctx: ExtensionContext): void {
 					note: details.note,
 				},
 			});
-			restoredResources.add(resourceKey);
 		}
 	}
 }
