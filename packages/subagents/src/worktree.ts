@@ -12,7 +12,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, realpathSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, readdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -170,7 +170,9 @@ export async function cleanupWorktree(
 
     if (status) {
       // Changes exist — stage, commit, and create a branch
+      const stagedModes = await stagedModeChanges(pi, worktree.path);
       await git(pi, worktree.path, ["add", "-A"], 10000);
+      await restoreStagedModes(pi, worktree.path, stagedModes);
       // `add -A` skips a moved gitlink hidden by `submodule.<name>.ignore = all`; an empty
       // commit would fail opaquely, so say why and keep the worktree.
       if (!(await git(pi, worktree.path, ["diff", "--cached", "--name-only"], 10000))) {
@@ -224,13 +226,91 @@ export async function cleanupWorktree(
   }
 }
 
+/** Reject a path list `pi.exec` mis-decoded (U+FFFD): it no longer names the file on disk. */
+function assertDecoded(paths: string[], what: string): void {
+  if (paths.some(path => path.includes("\uFFFD"))) {
+    throw new Error(`${what} path was mis-decoded (U+FFFD) and cannot be inspected; worktree kept`);
+  }
+}
+
+const INDEX_BATCH = 200;
+
+/** `git update-index <flag> -- <paths>` in argv-sized batches. */
+async function updateIndex(pi: ExtensionAPI, repo: string, flag: string, paths: string[]): Promise<void> {
+  for (let i = 0; i < paths.length; i += INDEX_BATCH) {
+    await git(pi, repo, ["update-index", flag, "--", ...paths.slice(i, i + INDEX_BATCH)], 30000);
+  }
+}
+
+/**
+ * Clear the assume-unchanged and skip-worktree index bits of `repo`: with either
+ * set, `status` and git's own removal check ignore edits to the file, so an edited
+ * file would be deleted with the worktree. A skip-worktree file absent from disk
+ * (sparse checkout) is left alone: clearing it would report a deletion nobody made.
+ * The tree is disposable, so mutating its index is fine.
+ */
+async function clearHiddenIndexBits(pi: ExtensionAPI, repo: string): Promise<void> {
+  const assumed: string[] = [];
+  const skipped: string[] = [];
+  // `-v` tags: lowercase = assume-unchanged, `S` (or `s` with both) = skip-worktree.
+  for (const entry of (await git(pi, repo, ["ls-files", "-v", "-z"], 30000)).split("\0")) {
+    const tag = entry.charAt(0);
+    const path = entry.slice(2);
+    if (!path) continue;
+    const lower = tag !== tag.toUpperCase();
+    const skip = tag.toLowerCase() === "s" && lstatSync(join(repo, path), { throwIfNoEntry: false }) !== undefined;
+    if (tag === "S" ? skip : lower) {
+      if (lower) assumed.push(path);
+      if (skip) skipped.push(path);
+    }
+  }
+  assertDecoded([...assumed, ...skipped], "An index");
+  await updateIndex(pi, repo, "--no-assume-unchanged", assumed);
+  await updateIndex(pi, repo, "--no-skip-worktree", skipped);
+}
+
+/** An executable-bit change staged with `update-index --chmod`: path -> index mode now. */
+type ModeChange = { path: string; mode: "100644" | "100755" };
+
+async function stagedModeChanges(pi: ExtensionAPI, repo: string): Promise<ModeChange[]> {
+  // `:<old mode> <new mode> <old sha> <new sha> <status>` NUL `<path>` NUL
+  const fields = (await git(pi, repo, ["diff", "--cached", "--raw", "-z", "--no-renames"], 30000)).split("\0");
+  const changes: ModeChange[] = [];
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    const [oldMode, newMode] = (fields[i] as string).slice(1).split(" ");
+    const path = fields[i + 1] as string;
+    if (oldMode !== newMode && (newMode === "100644" || newMode === "100755") && (oldMode === "100644" || oldMode === "100755")) {
+      changes.push({ path, mode: newMode });
+    }
+  }
+  assertDecoded(changes.map(change => change.path), "A staged");
+  return changes;
+}
+
+/**
+ * `add -A` restages from the file on disk, which drops a mode change that exists only
+ * in the index. Restore it, and match the file on disk so git's removal check sees a clean tree.
+ */
+async function restoreStagedModes(pi: ExtensionAPI, repo: string, changes: ModeChange[]): Promise<void> {
+  for (const mode of ["100644", "100755"] as const) {
+    const paths = changes.filter(change => change.mode === mode).map(change => change.path);
+    await updateIndex(pi, repo, mode === "100755" ? "--chmod=+x" : "--chmod=-x", paths);
+    for (const path of paths) {
+      const stat = lstatSync(join(repo, path), { throwIfNoEntry: false });
+      if (stat?.isFile()) chmodSync(join(repo, path), mode === "100755" ? stat.mode | 0o111 : stat.mode & ~0o111);
+    }
+  }
+}
+
 /**
  * Uncommitted state of `repo`, untracked files and submodule changes included.
  * `status.showUntrackedFiles=no` in user or repo config would otherwise hide new
  * files from `status`, and `submodule.<name>.ignore` / `diff.ignoreSubmodules`
  * would hide a moved gitlink; a clean-looking tree gets removed with them.
+ * Index bits that hide edits are cleared first, see `clearHiddenIndexBits`.
  */
 async function dirtyState(pi: ExtensionAPI, repo: string): Promise<string> {
+  await clearHiddenIndexBits(pi, repo);
   return await git(pi, repo, ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"], 10000);
 }
 
@@ -342,11 +422,11 @@ async function inspectGitlinks(
 async function ignoredRepoDirs(pi: ExtensionAPI, worktreePath: string): Promise<string[]> {
   const out = await git(pi, worktreePath, ["status", "--porcelain", "-z", "--ignored", "--untracked-files=all", "--ignore-submodules=none"], 30000);
   // With `--untracked-files=all` git lists an ignored nested repository as its own `!! dir/` entry.
-  return out
-    .split("\0")
-    .filter(entry => entry.startsWith("!! ") && entry.endsWith("/"))
-    .map(entry => join(worktreePath, entry.slice(3)))
-    .filter(dir => existsSync(join(dir, ".git")));
+  const dirs = out.split("\0").filter(entry => entry.startsWith("!! ") && entry.endsWith("/")).map(entry => entry.slice(3));
+  // `pi.exec` decodes each stdout chunk separately, so a multibyte path split across chunks
+  // becomes U+FFFD and `.git` below would not be found: skip nothing silently, keep the tree.
+  assertDecoded(dirs, "An ignored");
+  return dirs.map(dir => join(worktreePath, dir)).filter(dir => existsSync(join(dir, ".git")));
 }
 
 /** Git dirs under a `modules` directory, including those nested in other submodule git dirs. */

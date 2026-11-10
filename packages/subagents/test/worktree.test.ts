@@ -1205,3 +1205,143 @@ describe("worktree isolation switch", () => {
     }
   });
 });
+
+describe("cleanupWorktree — index bits and ignored path decoding (#596)", () => {
+  let repoDir: string;
+  let subDir: string;
+  let pi: ExtensionAPI;
+  const cleanups: string[] = [];
+
+  const run = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-c", "protocol.file.allow=always", "-c", "user.email=t@t.com", "-c", "user.name=T", ...args], {
+      cwd,
+      stdio: "pipe",
+    })
+      .toString()
+      .trim();
+
+  beforeEach(() => {
+    pi = mockPi();
+    subDir = initGitRepo();
+    repoDir = initGitRepo();
+    writeFileSync(join(repoDir, "tracked.txt"), "original");
+    writeFileSync(join(repoDir, "run.sh"), "#!/bin/sh\n");
+    run(repoDir, "add", "tracked.txt", "run.sh");
+    run(repoDir, "commit", "-m", "tracked");
+  });
+
+  afterEach(() => {
+    for (const path of cleanups.splice(0)) {
+      if (existsSync(path)) execFileSync("git", ["worktree", "remove", "--force", path], { cwd: repoDir });
+    }
+    rmSync(repoDir, { recursive: true, force: true });
+    rmSync(subDir, { recursive: true, force: true });
+  });
+
+  async function worktree(id: string) {
+    const wt = await createWorktree(pi, repoDir, id);
+    cleanups.push(wt.path);
+    return wt;
+  }
+
+  it.each([
+    ["assume-unchanged", "--assume-unchanged"],
+    ["skip-worktree", "--skip-worktree"],
+  ])("preserves an edit hidden by %s", async (id, flag) => {
+    const wt = await worktree(id);
+    run(wt.path, "update-index", flag, "tracked.txt");
+    writeFileSync(join(wt.path, "tracked.txt"), "agent edit");
+    expect(run(wt.path, "status", "--porcelain")).toBe("");
+    const result = await cleanupWorktree(pi, repoDir, wt, id);
+    expect(result.error).toBeUndefined();
+    expect(result.hasChanges).toBe(true);
+    expect(run(repoDir, "show", `${result.branch}:tracked.txt`)).toBe("agent edit");
+    expect(existsSync(wt.path)).toBe(false);
+  });
+
+  it("preserves an edit hidden by both assume-unchanged and skip-worktree", async () => {
+    const wt = await worktree("both-bits");
+    run(wt.path, "update-index", "--assume-unchanged", "--skip-worktree", "tracked.txt");
+    writeFileSync(join(wt.path, "tracked.txt"), "agent edit");
+    const result = await cleanupWorktree(pi, repoDir, wt, "both bits");
+    expect(result.error).toBeUndefined();
+    expect(run(repoDir, "show", `${result.branch}:tracked.txt`)).toBe("agent edit");
+  });
+
+  it("preserves a staged mode change from update-index --chmod", async () => {
+    const wt = await worktree("chmod");
+    run(wt.path, "update-index", "--chmod=+x", "run.sh");
+    const result = await cleanupWorktree(pi, repoDir, wt, "chmod");
+    expect(result.error).toBeUndefined();
+    expect(result.hasChanges).toBe(true);
+    expect(run(repoDir, "ls-tree", result.branch as string, "run.sh")).toMatch(/^100755 /);
+  });
+
+  it("removes a worktree whose skip-worktree file is simply absent", async () => {
+    const wt = await worktree("sparse");
+    run(wt.path, "update-index", "--skip-worktree", "tracked.txt");
+    rmSync(join(wt.path, "tracked.txt"));
+    expect(await cleanupWorktree(pi, repoDir, wt, "sparse")).toEqual({ hasChanges: false });
+    expect(existsSync(wt.path)).toBe(false);
+  });
+
+  it("removes a worktree whose index bits hide no edit", async () => {
+    const wt = await worktree("bits-clean");
+    run(wt.path, "update-index", "--assume-unchanged", "tracked.txt");
+    expect(await cleanupWorktree(pi, repoDir, wt, "bits clean")).toEqual({ hasChanges: false });
+    expect(existsSync(wt.path)).toBe(false);
+  });
+
+  it("keeps a nested clone whose edit is hidden by assume-unchanged", async () => {
+    const wt = await worktree("nested-bits");
+    run(wt.path, "clone", subDir, "dep");
+    const dep = join(wt.path, "dep");
+    run(dep, "update-index", "--assume-unchanged", "README.md");
+    writeFileSync(join(dep, "README.md"), "agent edit");
+    const result = await cleanupWorktree(pi, repoDir, wt, "nested bits");
+    expect(result.error).toMatch(/submodule work would be lost[\s\S]*README\.md/);
+    expect(readFileSync(join(dep, "README.md"), "utf8")).toBe("agent edit");
+  });
+
+  /** An ignored nested clone with an unpublished commit, under an awkwardly named ignored directory. */
+  async function worktreeWithIgnoredClone(id: string, ignoredDir: string) {
+    writeFileSync(join(repoDir, ".gitignore"), "vendor/\n");
+    run(repoDir, "add", ".gitignore");
+    run(repoDir, "commit", "-m", "ignore vendor");
+    const wt = await worktree(id);
+    const parent = join(wt.path, "vendor", ignoredDir);
+    mkdirSync(parent, { recursive: true });
+    run(parent, "clone", subDir, "dep");
+    const dep = join(parent, "dep");
+    writeFileSync(join(dep, "precious.txt"), "unpublished");
+    run(dep, "add", "precious.txt");
+    run(dep, "commit", "-m", "local only");
+    return { wt, dep };
+  }
+
+  it.each([
+    ["spaces", "my dir"],
+    ["unicode", "d\u00e9p\u00f4t \u2603"],
+    ["quotes", 'say "hi" \\ it\'s'],
+  ])("keeps an ignored nested clone under a path with %s", async (id, name) => {
+    const { wt, dep } = await worktreeWithIgnoredClone(`ignored-${id}`, name);
+    const result = await cleanupWorktree(pi, repoDir, wt, id);
+    expect(result.error).toMatch(/submodule work would be lost/);
+    expect(existsSync(join(dep, "precious.txt"))).toBe(true);
+  });
+
+  it("keeps the worktree when an ignored path was mis-decoded to U+FFFD", async () => {
+    const { wt, dep } = await worktreeWithIgnoredClone("ignored-fffd", "d\u00e9p\u00f4t");
+    // pi.exec decodes each stdout chunk on its own, so a multibyte char split across chunks becomes U+FFFD.
+    const lossy = {
+      exec: async (command: string, args: string[], options?: { cwd?: string; timeout?: number }) => {
+        const result = await pi.exec(command, args, options);
+        return args.includes("--ignored") ? { ...result, stdout: result.stdout.replace(/\u00e9/g, "\uFFFD") } : result;
+      },
+    } as unknown as ExtensionAPI;
+    const result = await cleanupWorktree(lossy, repoDir, wt, "ignored fffd");
+    expect(result.error).toMatch(/mis-decoded/);
+    expect(result.path).toBe(wt.path);
+    expect(existsSync(join(dep, "precious.txt"))).toBe(true);
+  });
+});
