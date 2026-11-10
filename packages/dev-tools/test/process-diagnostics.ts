@@ -6,6 +6,7 @@
  */
 
 import { opendir, readFile, readlink, stat } from "node:fs/promises";
+import { basename } from "node:path";
 import type { ResourceSnapshot } from "@nredd/pi-resource-sampler";
 
 /** What each sampler coverage reason means in terms of the host read that produced it. */
@@ -79,7 +80,8 @@ export async function probeHost(probes: HostProbes = realProbes): Promise<ProbeR
 	const self = `/proc/${probes.pid}`;
 	return Promise.all([
 		probe("opendir /proc", async () => `${await probes.countDir("/proc")} entries`),
-		probe(`readlink ${self}/exe`, async () => `-> ${await probes.readlink(`${self}/exe`)}`),
+		// Basename only, like the sampler's own executable rule: a full path can name the runner's layout.
+		probe(`readlink ${self}/exe`, async () => `-> ${basename(await probes.readlink(`${self}/exe`))}`),
 		probe(`stat ${self}`, async () => {
 			await probes.stat(self);
 			return "ok";

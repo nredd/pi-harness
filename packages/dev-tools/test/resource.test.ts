@@ -1147,6 +1147,13 @@ describe("process metadata loss diagnostics", () => {
 		expect(message).toContain('"processes":[]');
 	});
 
+	it("prints only the executable basename from the exe readlink", async () => {
+		const results = await probeHost(probes({ readlink: async () => "/opt/hostedtoolcache/node/26.12.0/x64/bin/node" }));
+		const exe = results.find((result) => result.step === "readlink /proc/42/exe");
+		expect(exe).toEqual({ step: "readlink /proc/42/exe", ok: true, detail: "-> node" });
+		expect(JSON.stringify(results)).not.toContain("hostedtoolcache");
+	});
+
 	it("reports a run with no completed scan and skips probes off Linux", async () => {
 		const message = await describeProcessLoss("processes", "x", [], probes({ platform: "darwin" }));
 		expect(message).toContain("no sampler scan completed");
@@ -1157,8 +1164,13 @@ describe("process metadata loss diagnostics", () => {
 	it("probes the real host without throwing", async () => {
 		const results = await probeHost();
 		if (process.platform === "linux") {
+			// Shape only: a transient /proc failure is what this probe reports, so it must not fail here.
 			expect(results.length, JSON.stringify(results)).toBe(6);
-			expect(results.find((result) => result.step.startsWith("opendir"))?.ok, JSON.stringify(results)).toBe(true);
+			for (const result of results) {
+				expect(typeof result.step, JSON.stringify(result)).toBe("string");
+				expect(typeof result.ok, JSON.stringify(result)).toBe("boolean");
+				expect(typeof result.detail, JSON.stringify(result)).toBe("string");
+			}
 		} else expect(results).toEqual([]);
 	});
 
