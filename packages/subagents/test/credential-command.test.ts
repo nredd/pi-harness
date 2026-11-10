@@ -7,7 +7,7 @@ import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getApiProvider, registerApiProvider } from "@earendil-works/pi-ai/compat";
 import { afterEach, expect, it } from "vitest";
-import { answer, barrier, calls, nextEvent, notices, ScenarioSession, spawn } from "./helpers/scenario-session.js";
+import { answer, barrier, calls, nextEvent, notices, ScenarioSession, spawn, text } from "./helpers/scenario-session.js";
 
 /** Key-shaped text the helper writes to stderr; core must redact it from every surfaced error. */
 const LEAK = "sk-ant-api03-LEAKEDLEAKEDLEAKED0123456789";
@@ -64,10 +64,13 @@ async function startChild(fails: number, responses: ReturnType<typeof answer>[])
   const physical = fixture.physical("credphys", "physical", responses);
   const h = await fixture.start();
   const keys: (string | undefined)[] = [];
+  /** User prompts each request carried, to tell a resumed transcript from a fresh one. */
+  const prompts: string[][] = [];
   const delegate = getApiProvider(physical.api);
   if (!delegate) throw new Error(`Missing transport ${physical.api}`);
   const stream: typeof delegate.streamSimple = (model, context, options) => {
     keys.push(options?.apiKey);
+    prompts.push(context.messages.filter(m => m.role === "user").map(m => text(m)));
     return delegate.streamSimple(model, context, options);
   };
   registerApiProvider({ ...delegate, stream, streamSimple: stream }, fixture.root);
@@ -83,7 +86,7 @@ async function startChild(fails: number, responses: ReturnType<typeof answer>[])
     .flatMap(m => m.content)
     .find(p => p.type === "text")?.text.match(/Agent ID: (\S+)/)?.[1];
   if (!id) throw new Error("Missing spawn id");
-  return { h, key, keys, completed, record: fixture.record(id) };
+  return { h, key, keys, prompts, completed, record: fixture.record(id) };
 }
 
 it("a helper that fails twice is retried inside the run and the child completes", { timeout: 30_000 }, async () => {
@@ -97,24 +100,33 @@ it("a helper that fails twice is retried inside the run and the child completes"
 });
 
 it("a dead helper fails the child with a bounded, redacted error and leaves it resumable", { timeout: 30_000 }, async () => {
-  const { h, key, keys, completed, record } = await startChild(-1, [answer("RESUMED DONE")]);
+  const { h, key, keys, prompts, completed, record } = await startChild(-1, [answer("RESUMED DONE")]);
   await record.promise;
   await completed;
   const noticeTurn = nextEvent(h, e => e.type === "agent_settled");
-  fixture.clock.advance(200); // the notice hold
-  await noticeTurn;
+  // The notice hold: advance until the parent's notice turn has settled, whenever the timer is armed.
+  let noticed = false;
+  void noticeTurn.then(() => { noticed = true; });
+  while (!noticed) {
+    fixture.clock.advance(200);
+    await new Promise(resolve => setImmediate(resolve));
+  }
   expect(record.status).toBe("error");
-  // Bounded: core's three attempts, no more, and the model never saw a request.
+  // Bounded: core's `resolveConfigValueOrThrowWithRetry` makes 3 attempts (200 ms and 800 ms of real
+  // time between them, which is why these tests take about a second), and the model never saw a request.
   expect(key.runs()).toBe(3);
   expect(keys).toEqual([]);
   const failure = record.error ?? record.result ?? "";
   expect(failure).toContain("exited with code 1");
   expect(failure).not.toContain(LEAK);
   expect(failure).not.toContain(KEY);
+  // Diagnostics survive redaction: the exit code is named, and no key-shaped text reaches the stored transcript either.
+  expect(JSON.stringify(record.session?.messages)).not.toContain(LEAK);
   // The parent is told the transcript is intact, and nothing it sees carries the secret.
   const delivered = notices(h).join("\n");
   expect(delivered).toContain(`transcript intact; resume agent ${record.id} to continue`);
   expect(delivered).not.toContain(LEAK);
+  expect(delivered).not.toContain(KEY);
   expect(record.session).toBeDefined();
   // Fix the helper and resume the same agent: the retry continues the transcript instead of starting over.
   key.heal();
@@ -128,4 +140,6 @@ it("a dead helper fails the child with a bounded, redacted error and leaves it r
   expect(record.status).toBe("completed");
   expect(record.result).toBe("RESUMED DONE");
   expect(keys).toEqual([KEY]);
+  // Same conversation, not a fresh agent: the resumed request still carried the original task prompt.
+  expect(prompts).toEqual([["work", "continue"]]);
 });
