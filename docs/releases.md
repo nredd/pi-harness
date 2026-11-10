@@ -97,8 +97,9 @@ endpoint lagged the upload; the rerun skipped republication on matching integrit
 
 Regenerating `runtime-locks.json` also took the registry's current third-party resolutions
 (reviewed diff, per [runtime locks](runtime-locks.md)): in both graphs on both targets,
-`@aws-sdk/*` patch releases (`core` 3.980.1 -> 3.980.2 and the credential providers,
-middleware, `nested-clients`, `types`, `xml-builder`), `@smithy/core` 3.39.0 -> 3.40.0 and `ws`
+`@aws-sdk/*` updates (patch releases of `core` 3.980.1 -> 3.980.2, the credential providers,
+middleware, `nested-clients`, `types` and `xml-builder`; minor for the nested `token-providers`
+3.1164.0 -> 3.1165.0), `@smithy/core` 3.39.0 -> 3.40.0 (minor) and `ws`
 8.22.1 -> 8.22.2; in the agent graph only, `jose` 6.2.15 -> 6.2.17, `express-rate-limit` 8.7.3 ->
 8.7.4 and the peer-resolved upstream `@earendil-works/pi-*` copy 1.5.0 -> 1.5.2 (new dependency
 `lovely-mermaid` 0.3.3). The core graph keeps the fork's `v1.3.0-nredd.10` tarballs. The agent
