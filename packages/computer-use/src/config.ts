@@ -10,7 +10,39 @@ export interface ComputerUseConfig {
 	desktop_control: boolean;
 	activity_glow: boolean;
 	managed_browser: "helium" | "chrome";
+	/** Bundle ids `act_ui`, `desktop_input` and `observe_ui` refuse (`app_blocked`), on top of `ALWAYS_BLOCKED_BUNDLE_IDS`. */
+	blocked_apps: string[];
 }
+
+/** Password managers, credential UIs and terminals blocked unless `blocked_apps` replaces the list. */
+export const DEFAULT_BLOCKED_APPS: readonly string[] = [
+	"com.apple.keychainaccess",
+	"com.apple.Passwords",
+	"com.1password.1password",
+	"com.1password.1password7",
+	"com.agilebits.onepassword7",
+	"com.agilebits.onepassword-osx-helper",
+	"com.bitwarden.desktop",
+	"com.lastpass.LastPass",
+	"com.dashlane.dashlanephonefinal",
+	"org.keepassxc.keepassxc",
+	"com.apple.Terminal",
+	"com.googlecode.iterm2",
+	"net.kovidgoyal.kitty",
+	"com.mitchellh.ghostty",
+	"dev.warp.Warp-Stable",
+	"co.zeit.hyper",
+	"org.alacritty",
+	"com.github.wez.wezterm",
+];
+
+/** System authentication agents. Never removable through `blocked_apps`; mirrored by `alwaysBlockedBundleIds` in `bridge.swift`. */
+export const ALWAYS_BLOCKED_BUNDLE_IDS: readonly string[] = [
+	"com.apple.SecurityAgent",
+	"com.apple.loginwindow",
+	"com.apple.coreservices.uiagent",
+	"com.apple.ScreenSaver.Engine",
+];
 
 export interface ComputerUseConfigSource {
 	path: string;
@@ -32,6 +64,7 @@ const DEFAULT_CONFIG: ComputerUseConfig = {
 	desktop_control: true,
 	activity_glow: false,
 	managed_browser: "chrome",
+	blocked_apps: [...DEFAULT_BLOCKED_APPS],
 };
 
 let activeConfig: ComputerUseConfig = { ...DEFAULT_CONFIG };
@@ -45,6 +78,13 @@ function parseBoolean(value: unknown): boolean | undefined {
 	if (["1", "true", "yes", "on", "enabled"].includes(normalized)) return true;
 	if (["0", "false", "no", "off", "disabled"].includes(normalized)) return false;
 	return undefined;
+}
+
+/** A list of bundle ids from JSON (array) or the env var (comma-separated); anything else is ignored. */
+function parseBundleIds(value: unknown): string[] | undefined {
+	const items = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : undefined;
+	if (!items) return undefined;
+	return [...new Set(items.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean))];
 }
 
 function normalizePartial(raw: unknown): Partial<ComputerUseConfig> {
@@ -63,6 +103,8 @@ function normalizePartial(raw: unknown): Partial<ComputerUseConfig> {
 	if (activityGlow !== undefined) out.activity_glow = activityGlow;
 	const managedBrowser = (source as any).managed_browser;
 	if (managedBrowser === "helium" || managedBrowser === "chrome") out.managed_browser = managedBrowser;
+	const blockedApps = parseBundleIds((source as any).blocked_apps);
+	if (blockedApps) out.blocked_apps = blockedApps;
 	return out;
 }
 
@@ -90,6 +132,8 @@ function readEnv(): Partial<ComputerUseConfig> {
 	if (activityGlow !== undefined) out.activity_glow = activityGlow;
 	const managedBrowser = process.env.PI_COMPUTER_USE_MANAGED_BROWSER;
 	if (managedBrowser === "helium" || managedBrowser === "chrome") out.managed_browser = managedBrowser;
+	const blockedApps = parseBundleIds(process.env.PI_COMPUTER_USE_BLOCKED_APPS);
+	if (blockedApps) out.blocked_apps = blockedApps;
 	return out;
 }
 
@@ -121,6 +165,18 @@ export function isHeadlessMode(): boolean {
 	return activeConfig.headless;
 }
 
+/** Every bundle id the policy blocks: the always-blocked system agents plus the configured `blocked_apps`. */
+export function effectiveBlockedBundleIds(): string[] {
+	return [...new Set([...ALWAYS_BLOCKED_BUNDLE_IDS, ...activeConfig.blocked_apps])];
+}
+
+/** True when `bundleId` (case-insensitive) is blocked; an app without a bundle id can never match. */
+export function isBlockedBundleId(bundleId: string | undefined): boolean {
+	if (!bundleId) return false;
+	const wanted = bundleId.toLowerCase();
+	return effectiveBlockedBundleIds().some((blocked) => blocked.toLowerCase() === wanted);
+}
+
 export function isBrowserUseEnabled(): boolean {
 	return activeConfig.browser_use;
 }
@@ -128,7 +184,7 @@ export function isBrowserUseEnabled(): boolean {
 /*
 PI_DOCS_REFERENCE_BEGIN reference/configuration
 
-Configuration controls browser access, strict accessibility execution, the macOS agent cursor, and the macOS activity glow.
+Configuration controls browser access, blocked apps, strict accessibility execution, the macOS agent cursor, and the macOS activity glow.
 
 ## Files
 
@@ -154,7 +210,8 @@ Example:
   "managed_browser": "chrome",
   "headless": false,
   "cursor_overlay": true,
-  "activity_glow": true
+  "activity_glow": true,
+  "blocked_apps": ["com.apple.Terminal", "com.1password.1password"]
 }
 ```
 
@@ -196,6 +253,26 @@ When `true`, macOS displays a click-through pulsing border on every screen while
 
 The activity glow appears in user screen recordings. Single-window `observe_ui` captures exclude screen-edge overlays, but whole-display `desktop_screenshot` captures exclude no windows and can include an already-active glow. Desktop tools do not activate the glow themselves; another tool or session may already have activated it. The glow is excluded from accessibility discovery. Other platforms ignore this setting, and `headless: true` always suppresses it ([macOS reference](./platforms/macos/implementation.mdx#activity-glow)).
 
+### `blocked_apps`
+
+Default: the list below. System authentication agents are blocked in addition, always.
+
+A list of macOS bundle ids that Pi refuses to observe or control. The default list covers password managers (`com.apple.Passwords`, `com.1password.1password`, `com.1password.1password7`, `com.agilebits.onepassword7`, `com.agilebits.onepassword-osx-helper`, `com.bitwarden.desktop`, `com.lastpass.LastPass`, `com.dashlane.dashlanephonefinal`, `org.keepassxc.keepassxc`), Keychain Access (`com.apple.keychainaccess`) and terminals (`com.apple.Terminal`, `com.googlecode.iterm2`, `net.kovidgoyal.kitty`, `com.mitchellh.ghostty`, `dev.warp.Warp-Stable`, `co.zeit.hyper`, `org.alacritty`, `com.github.wez.wezterm`).
+
+The system authentication agents `com.apple.SecurityAgent`, `com.apple.loginwindow`, `com.apple.coreservices.uiagent` and `com.apple.ScreenSaver.Engine` are always blocked and cannot be removed by this option.
+
+A blocked target fails with the coded error `app_blocked`:
+
+- `observe_ui`, `act_ui` and every tool that resolves a root (e.g. `read_text`, `wait_for`) refuse a root owned by a blocked app. `act_ui` re-checks on every call, so adding an app to the list stops a state observed earlier.
+- `desktop_input` refuses `activateApp` of a blocked app, refuses `typeText` and `keypress` while a blocked app is frontmost, and refuses `moveMouse`, `click`, `scroll` and `drag` whose pointer (or drag endpoint) lands on a blocked app's window. The helper decides this atomically with the input, so the check cannot race an app switch. Clipboard actions are not input delivery and are not blocked.
+- `find_roots` still lists blocked roots, marked `blocked`, so the model learns why they cannot be used.
+
+The list replaces the default, it does not extend it, so an explicit opt-out is `"blocked_apps": []`; copy the defaults and append to extend them. Bundle ids compare case-insensitively. A root without a bundle id (e.g. an unbundled process) cannot be matched. The environment variable `PI_COMPUTER_USE_BLOCKED_APPS` takes a comma-separated list and overrides the files; set it to the empty string to opt out.
+
+### Locked sessions
+
+While the macOS session is locked (`CGSSessionScreenIsLocked`, or a session that is no longer on the console after a fast user switch) the helper refuses every command that reads or drives the UI (`look`, `act`, `actBatch`, `hitTest`, `axWaitFor`, `axReadText`, `focusedElement`, `focusWindow`, `setWindowFrame`, `captureDisplay`, `desktopInput`) with the coded error `screen_locked`. Discovery (`find_roots`) keeps working. This is not configurable.
+
 ## Environment variables
 
 ```bash
@@ -211,6 +288,8 @@ PI_COMPUTER_USE_CURSOR_OVERLAY=0
 PI_COMPUTER_USE_CURSOR_OVERLAY=1
 PI_COMPUTER_USE_ACTIVITY_GLOW=0
 PI_COMPUTER_USE_ACTIVITY_GLOW=1
+PI_COMPUTER_USE_BLOCKED_APPS=com.apple.Terminal,com.example.Vault
+PI_COMPUTER_USE_BLOCKED_APPS=
 PI_COMPUTER_USE_DELIVERY_POLICY=default
 PI_COMPUTER_USE_DELIVERY_POLICY=foreground
 PI_COMPUTER_USE_CDP_PORT=9222

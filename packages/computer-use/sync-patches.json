@@ -371,6 +371,45 @@
 				"reference": "UPSTREAM.md",
 				"detail": "nredd/pi-harness#672; not filed upstream"
 			}
+		},
+		{
+			"id": "blocked-apps",
+			"purpose": "Fail closed with app_blocked for password managers, credential UIs, terminals and system auth agents (config blocked_apps; system agents always blocked), and with screen_locked for UI commands while the macOS session is locked",
+			"files": [
+				"src/config.ts",
+				"src/bridge.ts",
+				"src/desktop.ts",
+				"native/macos/bridge.swift",
+				"docs/content/docs/reference/configuration.mdx",
+				"test/app-policy.test.mjs",
+				"test/desktop-tools.test.mjs"
+			],
+			"check": "test/app-policy.test.mjs",
+			"dropControls": [
+				"blocked app target refusal (#646)",
+				"always-blocked system agents (#646)",
+				"find_roots blocked marker (#646)",
+				"desktop_input blocklist wire (#646)",
+				"helper locked-session refusal (#646)",
+				"helper blocked-app input refusal (#646)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#646; same shape as unmerged upstream proposal injaneity/pi-computer-use#115 part 2, reimplemented from its description; not filed upstream"
+			}
+		},
+		{
+			"id": "locked-session-parsing",
+			"purpose": "Pure Swift lock-state parsing (CGSSessionCopyCurrentDictionary flags) and the commands refused while locked",
+			"files": ["native/macos/bridge.swift", "test/macos-native-pure.test.mjs"],
+			"check": "test/macos-native-pure.test.mjs",
+			"dropControls": ["screen-locked flag parsing (#646)"],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#646; not filed upstream"
+			}
 		}
 	],
 	"files": [
@@ -435,6 +474,7 @@
 		"src/platform/types.ts",
 		"sync-patches.json",
 		"test/act-outcomes.test.mjs",
+		"test/app-policy.test.mjs",
 		"test/async.test.mjs",
 		"test/bounded-output.test.mjs",
 		"test/cleanup.test.mjs",

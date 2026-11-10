@@ -28,6 +28,7 @@ All platforms retain `find_roots`, `observe_ui`, `search_ui`, `expand_ui`, `insp
 `read_text`, `wait_for`, `launch_browser`, `navigate_browser`, and `evaluate_browser`.
 macOS additionally registers `desktop_screenshot` and `desktop_input` (including app activation and
 plain-text clipboard access). Desktop tools require `desktop_control: true` and `headless: false`.
+Password managers, Keychain Access, terminals and system authentication agents are blocked by default (`app_blocked`, config `blocked_apps`), and the macOS helper refuses UI commands while the session is locked (`screen_locked`); see the [configuration reference](./docs/content/docs/reference/configuration.mdx).
 They share a scoped physical-input lock with `act_ui`; background semantic work stays independent.
 
 The normal loop is find a root, observe it, then query or act from the returned immutable `stateId`.

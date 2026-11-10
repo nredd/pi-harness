@@ -366,8 +366,8 @@ def test_ported_computer_suites_are_conventional_tests() -> None:
     helpers = {helper.path for helper in cfg.verification_helpers}
     suites = sorted((ROOT / "packages/computer-use/test").glob("*.test.mjs"))
     # The 26 ported suites plus #551's SDK preparation and #637's headless browser regression suites
-    # and #672's WSL2 diagnostics suite.
-    assert len(suites) == 29
+    # #672's WSL2 diagnostics suite and #646's app policy suite.
+    assert len(suites) == 30
     assert (ROOT / "packages/computer-use/test/swift-sdk.test.mjs") in suites
     assert (ROOT / "packages/computer-use/test/managed-browser-headless.test.mjs") in suites
     for suite in suites:

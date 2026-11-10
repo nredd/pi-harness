@@ -287,6 +287,62 @@ func scrollWheelCounts(deltaX: Int, deltaY: Int) -> (wheel1: Int32, wheel2: Int3
 func scrollWritesConfirmed(x: ScrollAxisWrite, y: ScrollAxisWrite) -> Bool {
 	x != .unconfirmed && y != .unconfirmed
 }
+/// System authentication agents the helper refuses regardless of the request's list. Mirrors
+/// `ALWAYS_BLOCKED_BUNDLE_IDS` in `src/config.ts` (pinned by `test/app-policy.test.mjs`).
+let alwaysBlockedBundleIds: [String] = [
+	"com.apple.SecurityAgent",
+	"com.apple.loginwindow",
+	"com.apple.coreservices.uiagent",
+	"com.apple.ScreenSaver.Engine",
+]
+
+/// The request's `blockedBundleIds` (sent by the TypeScript policy) plus the always-blocked agents.
+func blockedBundleIdList(_ request: [String: Any]) -> [String] {
+	alwaysBlockedBundleIds + ((request["blockedBundleIds"] as? [Any]) ?? []).compactMap { $0 as? String }
+}
+
+/// Whether `bundleId` is on the list (case-insensitive). An app without a bundle id never matches.
+func isBlockedBundleId(_ bundleId: String?, blocked: [String]) -> Bool {
+	guard let bundleId, !bundleId.isEmpty else { return false }
+	return blocked.contains { $0.caseInsensitiveCompare(bundleId) == .orderedSame }
+}
+
+/// Whether the console session is locked, from `CGSessionCopyCurrentDictionary()`. `CGSSessionScreenIsLocked`
+/// is set while the lock screen is up; a session that is not on the console (fast user switch) is unusable for
+/// UI work too. No dictionary means no window-server session at all, where UI commands fail by themselves.
+func sessionIsLocked(_ session: [String: Any]?) -> Bool {
+	guard let session else { return false }
+	if (session["CGSSessionScreenIsLocked"] as? NSNumber)?.boolValue == true { return true }
+	if let onConsole = (session["kCGSSessionOnConsoleKey"] as? NSNumber)?.boolValue, !onConsole { return true }
+	return false
+}
+
+/// Commands that read or drive the UI and therefore fail with `screen_locked` while the session is locked.
+/// Discovery (`listApps`/`listRoots`/`getFrontmost`), diagnostics, permissions and shutdown stay available.
+func commandRequiresUnlockedSession(_ cmd: String) -> Bool {
+	["look", "act", "actBatch", "hitTest", "axWaitFor", "axReadText", "focusedElement", "focusWindow", "setWindowFrame", "captureDisplay", "desktopInput"].contains(cmd)
+}
+
+/// Message for an `app_blocked` refusal; the TypeScript layer words its own the same way.
+func appBlockedMessage(_ name: String, _ bundleId: String?) -> String {
+	"app_blocked: '\(name)' (\(bundleId ?? "unknown bundle id")) is blocked by pi-computer-use policy; adjust blocked_apps to allow it (system authentication agents are always blocked)"
+}
+
+/// Owner pid of the front-most visible window containing `point`, from `CGWindowListCopyWindowInfo` entries
+/// (ordered front to back). Windows of `excludingPid` (our own click-through overlays) and fully transparent or
+/// empty windows are skipped.
+func topmostWindowOwnerPid(_ windows: [[String: Any]], at point: CGPoint, excludingPid: Int32) -> Int32? {
+	for window in windows {
+		guard let pid = (window["kCGWindowOwnerPID"] as? NSNumber)?.int32Value, pid != excludingPid else { continue }
+		if let alpha = (window["kCGWindowAlpha"] as? NSNumber)?.doubleValue, alpha <= 0.01 { continue }
+		guard let bounds = window["kCGWindowBounds"] as? [String: Any],
+			let x = (bounds["X"] as? NSNumber)?.doubleValue, let y = (bounds["Y"] as? NSNumber)?.doubleValue,
+			let w = (bounds["Width"] as? NSNumber)?.doubleValue, let h = (bounds["Height"] as? NSNumber)?.doubleValue,
+			w > 0, h > 0 else { continue }
+		if point.x >= x, point.x < x + w, point.y >= y, point.y < y + h { return pid }
+	}
+	return nil
+}
 // END PURE
 
 // BEGIN KEYBOARD LAYOUT (compiled standalone by test/macos-native-pure.test.mjs; Carbon only)
@@ -834,6 +890,9 @@ final class Bridge {
 
 	private func handleRequest(_ request: [String: Any], clientID: UUID?) throws -> Any {
 		let cmd = try stringArg(request, "cmd")
+		if commandRequiresUnlockedSession(cmd), sessionIsLocked(CGSessionCopyCurrentDictionary() as? [String: Any]) {
+			throw BridgeFailure(message: "screen_locked: the macOS session is locked, so '\(cmd)' is refused until it is unlocked", code: "screen_locked")
+		}
 
 		switch cmd {
 		case "diagnostics":
@@ -3244,9 +3303,32 @@ final class Bridge {
 			}
 			return CGPoint(x: x, y: y)
 		}
+		let blocked = blockedBundleIdList(request)
+		func refuseBlocked(_ app: NSRunningApplication?) throws {
+			guard let app, isBlockedBundleId(app.bundleIdentifier, blocked: blocked) else { return }
+			throw BridgeFailure(message: appBlockedMessage(app.localizedName ?? "app", app.bundleIdentifier), code: "app_blocked")
+		}
+		func refuseBlockedWindow(at point: CGPoint) throws {
+			let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+			guard let pid = topmostWindowOwnerPid(windows, at: point, excludingPid: getpid()) else { return }
+			try refuseBlocked(NSRunningApplication(processIdentifier: pid))
+		}
+		switch action {
+		case "type", "key":
+			try refuseBlocked(NSWorkspace.shared.frontmostApplication)
+		case "moveMouse", "click", "scroll":
+			try refuseBlockedWindow(at: try point())
+		case "drag":
+			let ends = (request["path"] as? [[String: Any]]).map { [$0.first, $0.last].compactMap { $0 } } ?? []
+			for end in ends {
+				if let x = (end["x"] as? NSNumber)?.doubleValue, let y = (end["y"] as? NSNumber)?.doubleValue { try refuseBlockedWindow(at: CGPoint(x: x, y: y)) }
+			}
+		default:
+			break
+		}
 		switch action {
 		case "activateApp":
-			return try activateApp(try stringArg(request, "app"))
+			return try activateApp(try stringArg(request, "app"), blocked: blocked)
 		case "readClipboard":
 			guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else {
 				throw BridgeFailure(message: "The clipboard holds no text", code: "clipboard_empty")
@@ -3307,7 +3389,7 @@ final class Bridge {
 	/// the kernel (`_sandbox_extension_issue`) and wedge the daemon's serial Launch Services queue.
 	/// Unbundled executables have no bundle URL and get AX + `activate()` only. Fails with
 	/// `activation_failed` unless the app is frontmost within 5s.
-	private func activateApp(_ query: String) throws -> [String: Any] {
+	private func activateApp(_ query: String, blocked: [String]) throws -> [String: Any] {
 		let wanted = query.trimmingCharacters(in: .whitespaces)
 		guard !wanted.isEmpty, !wanted.contains("/") else { throw BridgeFailure(message: "activateApp requires an app name or bundle id (no paths)", code: "invalid_args") }
 		/// Bundle id beats display name beats executable name; two different apps sharing the winning name is an error.
@@ -3331,6 +3413,10 @@ final class Bridge {
 				.first { FileManager.default.fileExists(atPath: $0.path) }
 		guard running != nil || installed != nil else {
 			throw BridgeFailure(message: "No running or installed app named '\(wanted)'", code: "app_not_found")
+		}
+		let resolvedBundleId = running?.bundleIdentifier ?? installed.flatMap { Bundle(url: $0)?.bundleIdentifier }
+		if isBlockedBundleId(resolvedBundleId, blocked: blocked) {
+			throw BridgeFailure(message: appBlockedMessage(running?.localizedName ?? wanted, resolvedBundleId), code: "app_blocked")
 		}
 		var app = running
 		// Only fall back to an installed bundle when nothing is running: an unbundled process sharing a name with

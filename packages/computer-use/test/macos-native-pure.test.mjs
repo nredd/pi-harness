@@ -49,6 +49,31 @@ check(allowsFirstWindowFallback(windowId: nil, windowRef: nil), "unqualified may
 check(!allowsFirstWindowFallback(windowId: nil, windowRef: "ax:dlg"), "stale ref must not fall back to first window")
 check(!allowsFirstWindowFallback(windowId: 7, windowRef: nil), "id request must not fall back")
 
+// App blocklist and session lock
+check(isBlockedBundleId("com.apple.Terminal", blocked: ["com.apple.terminal"]), "bundle ids match case-insensitively")
+check(!isBlockedBundleId("com.apple.TextEdit", blocked: ["com.apple.Terminal"]), "unlisted app is allowed")
+check(!isBlockedBundleId(nil, blocked: ["com.apple.Terminal"]) && !isBlockedBundleId("", blocked: [""]), "no bundle id never matches")
+check(blockedBundleIdList([:]) == alwaysBlockedBundleIds, "system agents are blocked with no request list")
+check(isBlockedBundleId("com.apple.SecurityAgent", blocked: blockedBundleIdList(["blockedBundleIds": []])), "empty request list keeps system agents blocked")
+check(isBlockedBundleId("com.example.Vault", blocked: blockedBundleIdList(["blockedBundleIds": ["com.example.Vault", 7]])), "request list extends the blocklist")
+check(sessionIsLocked(["CGSSessionScreenIsLocked": true]), "screen-locked flag locks the session")
+check(sessionIsLocked(["CGSSessionScreenIsLocked": NSNumber(value: 1)]), "NSNumber lock flag locks the session")
+check(sessionIsLocked(["kCGSSessionOnConsoleKey": false]), "session off the console is unusable")
+check(!sessionIsLocked(["kCGSSessionOnConsoleKey": true]), "unlocked console session")
+check(!sessionIsLocked(["CGSSessionScreenIsLocked": false, "kCGSSessionOnConsoleKey": true]), "explicitly unlocked session")
+check(!sessionIsLocked([:]) && !sessionIsLocked(nil), "no lock flag and no session are not locked")
+check(["look", "act", "actBatch", "desktopInput", "captureDisplay", "axReadText", "focusWindow"].allSatisfy(commandRequiresUnlockedSession), "UI commands need an unlocked session")
+check(!["listApps", "listRoots", "getFrontmost", "diagnostics", "checkPermissions", "shutdown"].contains(where: commandRequiresUnlockedSession), "discovery and lifecycle commands work while locked")
+let windowList: [[String: Any]] = [
+	["kCGWindowOwnerPID": 50, "kCGWindowAlpha": 1.0, "kCGWindowBounds": ["X": 0, "Y": 0, "Width": 1000, "Height": 800]],
+	["kCGWindowOwnerPID": 20, "kCGWindowAlpha": 0.0, "kCGWindowBounds": ["X": 0, "Y": 0, "Width": 400, "Height": 400]],
+	["kCGWindowOwnerPID": 10, "kCGWindowAlpha": 1.0, "kCGWindowBounds": ["X": 100, "Y": 100, "Width": 200, "Height": 200]],
+	["kCGWindowOwnerPID": 30, "kCGWindowAlpha": 1.0, "kCGWindowBounds": ["X": 0, "Y": 0, "Width": 1000, "Height": 800]],
+]
+check(topmostWindowOwnerPid(windowList, at: CGPoint(x: 150, y: 150), excludingPid: 99) == 50, "front-most window wins")
+check(topmostWindowOwnerPid(windowList, at: CGPoint(x: 150, y: 150), excludingPid: 50) == 10, "own overlay and transparent windows are skipped")
+check(topmostWindowOwnerPid(windowList, at: CGPoint(x: 1500, y: 150), excludingPid: 99) == nil, "no window at the point")
+
 // Drag interpolation
 let pts = interpolatedDragPoints(from: CGPoint(x: 0, y: 0), to: CGPoint(x: 100, y: 0), maxStep: 12)
 check(pts.count == 9 && pts.last == CGPoint(x: 100, y: 0), "100pt drag steps <=12 and ends exactly at target")
