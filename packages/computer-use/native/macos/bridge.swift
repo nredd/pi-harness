@@ -2432,7 +2432,13 @@ final class Bridge {
 				wheelDeltaOverride = (write.remainingX, write.remainingY)
 				scrollWriteUnconfirmed = !write.confirmed
 				performed["delivery"] = delivery
-				try executeCoordinates(coordinatePoint())
+				do {
+					try executeCoordinates(coordinatePoint())
+				} catch let failure as BridgeFailure {
+					// The bar axis already scrolled: rethrowing would read as nothing delivered and a retry would scroll it twice.
+					barEvidence["error"] = ["code": failure.code, "message": failure.message]
+					return finish(["outcome": "unknown", "performed": performed, "evidence": barEvidence])
+				}
 			} else {
 				performed["axScroll"] = result["reason"] ?? "no_scroll_action"
 				try executeCoordinates(coordinatePoint())
