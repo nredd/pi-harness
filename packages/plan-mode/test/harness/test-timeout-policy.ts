@@ -12,19 +12,9 @@ export const jitiRuntimeLoadTestName = "generated runtime is loadable by Pi's Ji
  */
 export const jitiRuntimeLoadBudgetMs = 13_000;
 
-/** The one real `fs.watch` smoke test (#636); its name is pinned by `settings-watch-native.test.ts`. */
-export const nativeWatchTestName = "the native directory watcher reloads settings once its stream is live";
-
-/**
- * FSEvents stream start measured at 0.1-12.1 s on a degraded macOS host (#636). Budget is twice
- * the worst start; `docs/test-worker-budgets.md#native-directory-watch-budget-636`.
- */
-export const nativeWatchBudgetMs = 25_000;
-
 /** Tests allowed past the cap, each by exact name and only up to its own measured budget. */
 export const measuredTestBudgetsMs: ReadonlyMap<string, number> = new Map([
   [jitiRuntimeLoadTestName, jitiRuntimeLoadBudgetMs],
-  [nativeWatchTestName, nativeWatchBudgetMs],
 ]);
 
 export type TimeoutTask = {

@@ -7,8 +7,6 @@ import {
   jitiRuntimeLoadTestName as jitiTest,
   maximumTestTimeoutMs,
   measuredTestBudgetsMs,
-  nativeWatchBudgetMs,
-  nativeWatchTestName,
 } from "./harness/test-timeout-policy.js";
 
 test("every test is capped at the default maximum", () => {
@@ -22,18 +20,7 @@ test("every test is capped at the default maximum", () => {
 });
 
 test("a measured budget admits only its named test, only up to that budget", () => {
-  assert.deepEqual(
-    [...measuredTestBudgetsMs],
-    [
-      [jitiTest, jitiRuntimeLoadBudgetMs],
-      [nativeWatchTestName, nativeWatchBudgetMs],
-    ],
-  );
-  assertTestTimeoutWithinCap(nativeWatchBudgetMs, nativeWatchTestName);
-  assert.throws(
-    () => assertTestTimeoutWithinCap(nativeWatchBudgetMs + 1, nativeWatchTestName),
-    new RegExp(`the maximum is ${nativeWatchBudgetMs} ms`, "u"),
-  );
+  assert.deepEqual([...measuredTestBudgetsMs], [[jitiTest, jitiRuntimeLoadBudgetMs]]);
   assertTestTimeoutWithinCap(jitiRuntimeLoadBudgetMs, jitiTest);
   assert.throws(
     () => assertTestTimeoutWithinCap(jitiRuntimeLoadBudgetMs + 1, jitiTest),

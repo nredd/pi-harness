@@ -85,9 +85,9 @@ three times: jobs 126342175715 (5064 ms), 126369170298 (5120 ms) and
 re-transforms the extension's ~74 sources. A cheaper loader path stays open.
 
 `plan-mode` caps every test at 5 s in `test/harness/test-timeout-policy.ts`.
-Measured cases pass it only through `measuredTestBudgetsMs`, by exact name
-(`jitiRuntimeLoadTestName`, and `nativeWatchTestName` from #636) and up to their
-own budget; `test/test-timeout-policy.test.ts` pins that no other test inherits it.
+The Jiti case passes it only through `measuredTestBudgetsMs`, by exact name
+(`jitiRuntimeLoadTestName`) and up to its own budget;
+`test/test-timeout-policy.test.ts` pins that no other test inherits it.
 
 RED under 50 self-terminating spinners (load ~90-100, Apple M4, 10 cores):
 `resource-loader-home` timed out 4 of 13 cases at 5019-5296 ms, the
@@ -120,21 +120,14 @@ Under 50 self-terminating local spinners (load 90-174 on a shared Apple M4) five
 runs took 13.7-27.0 s, two of them past 20 s. That is not a deterministic RED;
 the hosted job is the failing receipt.
 
-## Native directory watch budget (#636)
+## Settings watch tests (#636)
 
-`plan-mode/test/settings-watch-native.test.ts` is the only test that depends on
-real `fs.watch` delivery. Every other settings-watch test injects
-`watchSettingsDirectory` or mocks `node:fs` `watch` (`settings-watch-lifecycle.test.ts`)
-and publishes the change itself, so none races FSEvents.
-The native test cannot be event-driven (Node exposes no "watch ready" signal; the
-stream starts "since now" and drops earlier writes), so it republishes until one
-reload lands and carries an explicit budget.
-
-Measured on a degraded macOS host (`fseventsd` up 12 days, load 7-11): first event
-95 ms to 12062 ms for Node, 165 ms to 10252 ms for a raw `FSEventStreamCreate`
-(diagnosis on #636). Same margin rule as the cold loads: twice the worst figure,
-25 s, with the republish loop bounded at 20 s so its own failure reports first. No
-retry, skip or `testTimeout` change; the name is pinned in `measuredTestBudgetsMs`.
+No plan-mode unit test depends on real `fs.watch` delivery. Settings-watch tests
+inject `watchSettingsDirectory` or mock `node:fs` `watch`
+(`settings-watch-lifecycle.test.ts`) and publish the change themselves, so none
+races FSEvents. Native stream start measured 0.1-12.1 s on a degraded macOS host
+(diagnosis on #636), far past the 5 s cap. A real-watch smoke test needs a
+measured budget entry, an owner decision under #312, so it is not included.
 
 ## Remaining external acceptance criterion
 
