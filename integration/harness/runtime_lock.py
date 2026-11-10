@@ -209,7 +209,12 @@ def root_manifest(stack: Stack, kind: str) -> dict[str, Any]:
                 raise RuntimeLockError("Authenticated runtime installs support exact npm stack sources only")
             name, version = source.removeprefix("npm:").rsplit("@", 1)
             dependencies[name] = version
-        overrides = {}
+        urls = release_package_urls(stack.core.tag)
+        overrides = {
+            "@earendil-works/pi-coding-agent": urls["pi-coding-agent"],
+            "@earendil-works/pi-tui": urls["pi-tui"],
+            "@earendil-works/pi-ai": stack.core.tag.removeprefix("v").split("-", 1)[0],
+        }
     else:
         raise RuntimeLockError(f"Unknown runtime root '{kind}'")
     return {
