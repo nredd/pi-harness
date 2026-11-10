@@ -1461,6 +1461,8 @@ async function performReadText(params: ReadTextParams, signal?: AbortSignal): Pr
 	}
 
 	validateStateId(params.stateId);
+	// A hydrated state restores its target without resolving it, so re-check the policy before the live read.
+	assertAppNotBlocked(currentTargetOrThrow());
 	if (!ref) throw new Error("read_text requires ref for desktop contexts. Call observe_ui/inspect_ui and use a text-bearing outline ref.");
 	const node = outlineNodeByRef(ref);
 	const state = operationState();

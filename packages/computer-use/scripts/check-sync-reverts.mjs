@@ -353,6 +353,14 @@ const cases = [
 		failure: /Missing expected rejection|app_blocked/,
 	},
 	{
+		name: "read_text blocked app re-check (#646)",
+		file: "src/bridge.ts",
+		before: "\tassertAppNotBlocked(currentTargetOrThrow());",
+		after: "\t/* read_text policy dropped */",
+		check: "test/app-policy.test.mjs",
+		failure: /Missing expected rejection|app_blocked/,
+	},
+	{
 		name: "always-blocked system agents (#646)",
 		file: "src/config.ts",
 		before: "[...ALWAYS_BLOCKED_BUNDLE_IDS, ...activeConfig.blocked_apps]",

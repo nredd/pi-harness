@@ -55,7 +55,7 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 
 test("act_ui, observe_ui and find_roots enforce blocked_apps at the platform backend seam", async ({ onTestFinished }) => {
 	const { currentPlatformBackend } = await import("../src/platform/index.ts");
-	const { executeFind, executeObserve, executeAct } = await import("../src/bridge.ts");
+	const { executeFind, executeObserve, executeAct, executeReadText } = await import("../src/bridge.ts");
 	const { parseLookResponse } = await import("../src/outline.ts");
 	const original = { ...currentPlatformBackend };
 	onTestFinished(() => {
@@ -133,6 +133,13 @@ test("act_ui, observe_ui and find_roots enforce blocked_apps at the platform bac
 	process.env[ENV] = "com.example.Safe";
 	await assert.rejects(() => call(executeAct, press), blocked("app_blocked"));
 	assert.equal(calls.act, 0, "blocked act_ui must not deliver input");
+	const readCalls = [];
+	currentPlatformBackend.readText = async (request) => {
+		readCalls.push(request);
+		return { text: "secret", offset: 0, limit: 10, totalChars: 6, hasMore: false };
+	};
+	await assert.rejects(() => call(executeReadText, { stateId, ref: text(observed).match(/(@e\d+) button/)[1] }), blocked("app_blocked"));
+	assert.equal(readCalls.length, 0, "blocked read_text must not reach the helper");
 	assert.ok((await call(executeFind, { app: "Safe" })).details.windows.every((w) => w.blocked), "find_roots reflects the new list");
 
 	// Opt-out: an empty blocked_apps allows Terminal again, system agents stay blocked.

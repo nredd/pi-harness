@@ -6,7 +6,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Added
 
-- `blocked_apps` config (and `PI_COMPUTER_USE_BLOCKED_APPS`): `observe_ui`, `act_ui` and `desktop_input` fail closed with `app_blocked` for apps on a bundle-id list that defaults to password managers, Keychain Access and terminals. System authentication agents (`com.apple.SecurityAgent`, `com.apple.loginwindow`, `com.apple.coreservices.uiagent`, `com.apple.ScreenSaver.Engine`) are always blocked. `desktop_input` refuses `activateApp` of a blocked app, keys while one is frontmost and pointer input that lands on one, decided by the helper with the input. `find_roots` marks blocked roots `blocked`. Opt out with `"blocked_apps": []`. The helper also refuses UI commands with `screen_locked` while the macOS session is locked (nredd/pi-harness#646).
+- `blocked_apps` config (and `PI_COMPUTER_USE_BLOCKED_APPS`): `observe_ui`, `act_ui` and `desktop_input` fail closed with `app_blocked` for apps on a bundle-id list that defaults to password managers, Keychain Access and terminals. System authentication agents (`com.apple.SecurityAgent`, `com.apple.loginwindow`, `com.apple.coreservices.uiagent`, `com.apple.ScreenSaver.Engine`) are always blocked. `desktop_input` refuses `activateApp` of a blocked app, keys while one is frontmost and pointer input that lands on one, checked by the helper immediately before delivery. `find_roots` marks blocked roots `blocked`. Opt out with `"blocked_apps": []`. The helper also refuses UI commands with `screen_locked` while the macOS session is locked (nredd/pi-harness#646).
 
 ### Fixed
 

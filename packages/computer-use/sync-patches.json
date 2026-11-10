@@ -387,6 +387,7 @@
 			"check": "test/app-policy.test.mjs",
 			"dropControls": [
 				"blocked app target refusal (#646)",
+				"read_text blocked app re-check (#646)",
 				"always-blocked system agents (#646)",
 				"find_roots blocked marker (#646)",
 				"desktop_input blocklist wire (#646)",
