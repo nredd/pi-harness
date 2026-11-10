@@ -1,4 +1,8 @@
-/** Regression nredd/pi-harness#435/#593: resuming after a deferred promotion must not 400 on tool history. */
+/**
+ * Regression nredd/pi-harness#435/#593: resuming after a deferred promotion must not 400 on tool history.
+ * Downstream guard only: core owns the fix (nredd/pi#16, `harness-435-orphan-tool-removal.test.ts`).
+ * pi-subagents resumes with `session.prompt` on the same session, which is what test 1 drives.
+ */
 import { join } from "node:path";
 import type { Model, TranscriptContext } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/compat";
@@ -46,6 +50,15 @@ async function wirePayload(context: TranscriptContext): Promise<WirePayload> {
 	}).result();
 	if (!captured) throw new Error("expected an Anthropic payload");
 	return captured;
+}
+
+/** Tools the request's system messages remove; proves the scenario produced the history under test. */
+function removedTools(context: TranscriptContext): string[] {
+	return context.messages.flatMap((message) =>
+		message.role === "system"
+			? (message.toolsRemoved ?? []).map((tool) => (typeof tool === "string" ? tool : tool.name))
+			: [],
+	);
 }
 
 /** Names Anthropic rejects with `tool_reference_unresolved`: removals of tools the request never declared. */
@@ -115,6 +128,7 @@ it("resume after a promoted deferred tool went inactive declares no orphan tool 
 	]);
 	await h.session.prompt("read it again");
 	if (!request) throw new Error("expected the resumed request");
+	expect(removedTools(request)).toContain(PROMOTED);
 	expect(unresolved(await wirePayload(request))).toEqual([]);
 });
 
@@ -131,5 +145,6 @@ it("continuing a run after demoting a promoted deferred tool declares no orphan 
 	await h.session.prompt("promote, then demote");
 	expect(h.session.getActiveToolNames()).not.toContain(PROMOTED);
 	if (!request) throw new Error("expected the continuation request");
+	expect(removedTools(request)).toContain(PROMOTED);
 	expect(unresolved(await wirePayload(request))).toEqual([]);
 });
