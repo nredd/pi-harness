@@ -60,8 +60,7 @@ describe("todo settle with a linked session-kit monitor", () => {
 		]);
 		for (const outcome of [created, started, watching]) expect(outcome?.isError, outcome?.text).toBe(false);
 		expect(todoNotices()).toHaveLength(1);
-		expect(todoNotices()[0][0]).toContain(WAITING);
-		expect(todoNotices()[0][1]).toBe("info");
+		expect(todoNotices()[0]).toEqual([expect.stringContaining(WAITING), "info"]);
 
 		// The monitor exits: its wake turn settles with the todo still in_progress and nothing armed.
 		h.setResponses([fauxAssistantMessage("woke")]);
@@ -70,7 +69,6 @@ describe("todo settle with a linked session-kit monitor", () => {
 		await settled;
 		await h.session.waitForIdle();
 		expect(todoNotices()).toHaveLength(2);
-		expect(todoNotices()[1][0]).toContain(HELD);
-		expect(todoNotices()[1][1]).toBe("warning");
+		expect(todoNotices()[1]).toEqual([expect.stringContaining(HELD), "warning"]);
 	});
 });
