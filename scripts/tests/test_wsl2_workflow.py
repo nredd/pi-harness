@@ -692,6 +692,7 @@ def run_apt(
     fetched_version: str = "1.0",
     extra_debs: tuple[str, ...] = (),
     tmpdir: Path | None = None,
+    broken_cache_copy: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     """Run the real apt script with stub `id`, `timeout`, `apt-get` and `ps`.
 
@@ -704,6 +705,7 @@ def run_apt(
         extra_debs (tuple[str, ...]): More .deb names to seed in the host cache.
         tmpdir (Path | None): `TMPDIR` for the script's scratch directory.
         stale (bool): Seed the host cache with a .deb of a superseded version.
+        broken_cache_copy (bool): Model a host cache write failing (`cp` into `cache/` exits 1).
 
     Returns:
         tuple[subprocess.CompletedProcess[str], Path, Path]: Outcome, the sources file and the stub call log.
@@ -753,6 +755,11 @@ def run_apt(
         + f'case "$1" in install) [ "$uris" = "$(cat {quoted_lists})" ] || {no_candidate} ;; esac\n'
         + "exit 0\n",
     }
+    if broken_cache_copy:
+        # Only writes into the host cache fail; seeding the archives from it still works.
+        last = 'for a in "$@"; do t=$a; done\n'
+        refuse = f'case "$t" in {shlex.quote(str(cache))}*) exit 1 ;; esac\n'
+        stubs["cp"] = f'#!/bin/sh\n{last}{refuse}exec /bin/cp "$@"\n'
     for name, body in stubs.items():
         (commands / name).write_text(body, encoding="utf-8")
         (commands / name).chmod(0o755)
@@ -848,6 +855,14 @@ def test_apt_cache_is_left_alone_when_no_installed_deb_is_found(tmp_path: Path) 
     assert result.returncode == 0, result.stderr
     assert "leaving the host cache as it was" in result.stderr
     assert (tmp_path / "cache" / "stale_0.9_amd64.deb").exists()
+
+
+def test_apt_cache_refresh_failure_does_not_fail_a_successful_install(tmp_path: Path) -> None:
+    """A host cache write failing after the install only warns: the packages are in place."""
+    result, _, log = run_apt(tmp_path, stale=True, broken_cache_copy=True)
+    assert result.returncode == 0, result.stderr
+    assert "cache refresh failed, continuing" in result.stderr
+    assert f"{APT_FLAGS} {PACKAGES}|" in log.read_text()
 
 
 def test_apt_prerequisites_fall_back_to_the_stock_mirror_once(tmp_path: Path) -> None:

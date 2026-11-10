@@ -73,7 +73,10 @@ if [ "$fetched" != true ]; then
 fi
 # Everything is on disk now: the install needs no network, so a failure here is not a mirror problem.
 bounded "apt-get install" "$install_seconds" "${install[@]}" "${packages[@]}"
-if [ -n "$cache" ]; then
+# Refresh the host cache. Housekeeping must not fail a setup whose install succeeded: a partly
+# emptied cache only costs the next run a download (a failed job saves no cache anyway). Calling it
+# on the left of `||` also suspends `set -e` inside it.
+prune_cache() {
   # Keep exactly the .debs whose version is installed (restore-keys brings back last week's superseded ones;
   # `apt-get autoclean` would keep any version the mirror still lists), so a warm cache stays bounded to the
   # current package set. Build the new set aside so an empty `archives` cannot wipe a good cache.
@@ -97,4 +100,7 @@ if [ -n "$cache" ]; then
   else
     echo 'wsl2-apt: no installed .debs found in the archives, leaving the host cache as it was' >&2
   fi
+}
+if [ -n "$cache" ]; then
+  prune_cache || echo 'wsl2-apt: cache refresh failed, continuing' >&2
 fi
