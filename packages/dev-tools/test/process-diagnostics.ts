@@ -108,9 +108,7 @@ export async function describeProcessLoss(
 			lines.push(`  ${result.ok ? "ok  " : "FAIL"} ${result.step}: ${result.detail}`);
 		}
 	}
-	lines.push(
-		`raw samples: ${JSON.stringify(samples.map(({ processes, ...rest }) => ({ ...rest, processes: processes.slice(0, 5), processCount: processes.length })))}`,
-	);
+	lines.push(`raw samples: ${JSON.stringify(samples)}`);
 	return lines.join("\n");
 }
 

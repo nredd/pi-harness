@@ -534,7 +534,10 @@ describe("resource_snapshot on the real host through the published sampler", () 
 			expect(snapshot.processes.entries.some((entry) => entry.cpu.state === "available")).toBe(nativeDarwinCpu);
 		}
 		const bad = firstBadProcessField(snapshot.processes.entries);
-		expect(bad, `process field ${bad?.field} of pid ${bad?.pid} is ${JSON.stringify(bad?.value)}`).toBeUndefined();
+		if (bad !== undefined) {
+			const reason = `pid ${bad.pid} has invalid ${bad.field} ${JSON.stringify(bad.value)}`;
+			throw new Error(await describeProcessLoss(bad.field, reason, real.state.samples));
+		}
 		for (const entry of snapshot.processes.entries) {
 			expect(Object.keys(entry).sort()).toEqual(["cpu", "executable", "parentPid", "pid", "rssBytes"]);
 			if (entry.cpu.state === "available") expect(entry.cpu.value).toBeGreaterThanOrEqual(0);
@@ -1141,7 +1144,7 @@ describe("process metadata loss diagnostics", () => {
 		expect(message).toContain("FAIL readlink /proc/42/exe: ENOENT readlink no such file");
 		expect(message).toContain("FAIL readdir /proc: plain");
 		expect(message).toContain("ok   read /proc/42/stat: 10 bytes");
-		expect(message).toContain('"processCount":0');
+		expect(message).toContain('"processes":[]');
 	});
 
 	it("reports a run with no completed scan and skips probes off Linux", async () => {
@@ -1155,6 +1158,15 @@ describe("process metadata loss diagnostics", () => {
 		const results = await probeHost();
 		if (process.platform === "linux") expect(results.every((result) => result.ok)).toBe(true);
 		else expect(results).toEqual([]);
+	});
+
+	it("prints every raw process, not a prefix", async () => {
+		const sample = fixture(
+			"linux",
+			Array.from({ length: 8 }, (_, index) => proc(100 + index, 1, measured(0))),
+		)(1);
+		const message = await describeProcessLoss("rssBytes", "x", [sample], probes({ platform: "darwin" }));
+		expect(message).toContain('"pid":107');
 	});
 
 	it("names the first bad process field", () => {
