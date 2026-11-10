@@ -13,18 +13,28 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll } from "vitest";
 
-const realTmp = process.env.PI_TEST_REAL_TMPDIR ?? tmpdir();
-const previousTmpdir = process.env.TMPDIR;
-const previousReal = process.env.PI_TEST_REAL_TMPDIR;
-const sandbox = realpathSync(mkdtempSync(join(realTmp, "pi-subagents-test-tmp-")));
+export const SANDBOX_PREFIX = "pi-subagents-test-tmp-";
 
-process.env.PI_TEST_REAL_TMPDIR = realTmp;
-process.env.TMPDIR = sandbox;
+/** Redirect `TMPDIR` into a fresh sandbox; the returned function removes it and restores env. */
+export function sandboxTmpdir(): { sandbox: string; realTmp: string; restore: () => void } {
+  const realTmp = realpathSync(process.env.PI_TEST_REAL_TMPDIR ?? tmpdir());
+  const previousTmpdir = process.env.TMPDIR;
+  const previousReal = process.env.PI_TEST_REAL_TMPDIR;
+  const sandbox = realpathSync(mkdtempSync(join(realTmp, SANDBOX_PREFIX)));
+  process.env.PI_TEST_REAL_TMPDIR = realTmp;
+  process.env.TMPDIR = sandbox;
+  return {
+    sandbox,
+    realTmp,
+    restore() {
+      if (previousTmpdir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = previousTmpdir;
+      if (previousReal === undefined) delete process.env.PI_TEST_REAL_TMPDIR;
+      else process.env.PI_TEST_REAL_TMPDIR = previousReal;
+      rmSync(sandbox, { recursive: true, force: true });
+    },
+  };
+}
 
-afterAll(() => {
-  if (previousTmpdir === undefined) delete process.env.TMPDIR;
-  else process.env.TMPDIR = previousTmpdir;
-  if (previousReal === undefined) delete process.env.PI_TEST_REAL_TMPDIR;
-  else process.env.PI_TEST_REAL_TMPDIR = previousReal;
-  rmSync(sandbox, { recursive: true, force: true });
-});
+const active = sandboxTmpdir();
+afterAll(active.restore);
