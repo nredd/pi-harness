@@ -492,7 +492,7 @@ def test_every_host_wsl_call_in_setup_is_bounded() -> None:
     assert run.index("if ($LASTEXITCODE -ne 0)", run.index("$scripts = Invoke-BoundedCapture")) < run.index(
         "$scripts = $scripts.Trim()"
     )
-    # The apt bound covers two mirror attempts of the script's own update and install bounds.
+    # Order only: the 630s bound itself is pinned in `deadlines` below.
     assert run.index("wsl2_apt.sh") < run.index("useradd") < run.index("wsl2_setup.sh")
     deadlines = {
         match.group("label"): int(match.group("seconds"))

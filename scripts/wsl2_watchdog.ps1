@@ -18,7 +18,8 @@ $done = Join-Path $StateDirectory 'watchdog.done'
 $alive = Join-Path $StateDirectory 'watchdog.alive'
 $deadline = (Get-Date).AddSeconds($Seconds)
 while ((Get-Date) -lt $deadline) {
-    Set-Content -Path $alive -Value ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
+    # A sharing violation with the stop step's read must not kill the timer.
+    Set-Content -ErrorAction SilentlyContinue -Path $alive -Value ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
     if (Test-Path $done) { exit 0 }
     Start-Sleep -Seconds 2
 }

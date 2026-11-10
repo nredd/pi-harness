@@ -3,7 +3,8 @@
 # `additional-packages` with no bound: run 42756515991 spent 43 of its 44 minutes there, the stock Ubuntu mirrors
 # answering at about 50 kB/s with minute-long stalls (`Fetched 89.8 MB in 28min 0s (53.5 kB/s)`).
 # Here apt gets short network timeouts and retries, no Translation downloads, and each mirror one bounded attempt:
-# Azure's mirror first (hosted runners sit next to it), the stock one if that fails.
+# Azure's mirror first (hosted runners are Azure VMs; its speed is unmeasured until CI reports it), the stock one if
+# that fails.
 set -euo pipefail
 if [ "$(id -u)" -ne 0 ]; then
   echo 'wsl2-apt: must run as root' >&2
@@ -33,6 +34,10 @@ printf '%s\n' \
   'Acquire::https::Timeout "20";' \
   'Acquire::ForceIPv4 "true";' \
   'Acquire::Languages "none";' > "$conf"
+if [ ! -r "$sources" ]; then
+  printf 'wsl2-apt: apt sources file not found: %s\n' "$sources" >&2
+  exit 1
+fi
 original=$(< "$sources")
 for mirror in http://azure.archive.ubuntu.com/ubuntu http://archive.ubuntu.com/ubuntu; do
   # Point both the archive and security URIs at one mirror; the second pass restores the stock ones.
@@ -44,6 +49,8 @@ for mirror in http://azure.archive.ubuntu.com/ubuntu http://archive.ubuntu.com/u
     exit 0
   fi
   printf 'wsl2-apt: %s failed, trying the next mirror\n' "$mirror" >&2
+  # A killed install can leave dpkg half-configured, which would fail the next attempt for the wrong reason.
+  dpkg --configure --pending || true
 done
 printf '%s\n' "$original" > "$sources"
 echo 'wsl2-apt: every mirror failed' >&2

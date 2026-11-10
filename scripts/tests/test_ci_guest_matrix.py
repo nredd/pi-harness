@@ -1150,7 +1150,7 @@ def test_no_step_names_a_shard() -> None:
 
 
 def test_wsl_setup_does_not_upgrade_distribution_packages() -> None:
-    """Keep the guest on its image's packages; `additional-packages` still refreshes apt."""
+    """Keep the guest on its image's packages; `scripts/wsl2_apt.sh` still refreshes apt."""
     assert "update: 'false'" in (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
 
 
