@@ -845,7 +845,8 @@ def test_write_github_output_publishes_one_line_plan_json(repo: Path, tmp_path: 
     output = tmp_path / "out"
     ci_paths.write_github_output(output, result, ci_paths.plan_cells(result, PULL_REQUEST))
     plan = read_plan(output)
-    workspaces = " ".join(ci_paths.npm_workspaces(ci_paths.REPO_ROOT))
+    split = {"packages/subagents", "packages/computer-use"}
+    rest = " ".join(w for w in ci_paths.npm_workspaces(ci_paths.REPO_ROOT) if w not in split)
     assert plan["owned (macos-14)"] == {
         "run": True,
         "scenarios": True,
@@ -855,11 +856,29 @@ def test_write_github_output_publishes_one_line_plan_json(repo: Path, tmp_path: 
         "shards": [
             {
                 "os": "macos-14",
+                "shard": "subagents",
+                "runner": "xcode-27",
+                "guest": "macos",
+                "gates": "check-ts",
+                "workspaces": "packages/subagents",
+                "skipped_gates": "",
+            },
+            {
+                "os": "macos-14",
+                "shard": "computer-use",
+                "runner": "xcode-27",
+                "guest": "macos",
+                "gates": "check-ts",
+                "workspaces": "packages/computer-use",
+                "skipped_gates": "",
+            },
+            {
+                "os": "macos-14",
                 "shard": "ts",
                 "runner": "xcode-27",
                 "guest": "macos",
                 "gates": "check-ts",
-                "workspaces": workspaces,
+                "workspaces": rest,
                 "skipped_gates": "",
             },
             {
@@ -1173,7 +1192,7 @@ def test_main_publishes_every_flag_for_a_benchmark_diff(repo: Path, tmp_path: Pa
 WORKSPACES = ci_paths.npm_workspaces(ci_paths.REPO_ROOT)
 SHARD_NAMES = {
     "ubuntu-24.04": ("subagents", "computer-use", "ts", "python"),
-    "macos-14": ("ts", "python"),
+    "macos-14": ("subagents", "computer-use", "ts", "python"),
     "wsl2": ("subagents-computer-use", "ts"),
 }
 
@@ -1210,7 +1229,7 @@ def test_owned_shards_run_every_workspace_exactly_once_in_npm_order(repo: Path, 
 
 
 def test_owned_shards_follow_the_issue_split_and_runner_budget(repo: Path) -> None:
-    """Pin the shard split: four Ubuntu shards, at most two macOS shards, two WSL shards.
+    """Pin the shard split: four Ubuntu shards, four macOS shards, two WSL shards.
 
     Parameters:
         repo (Path): Disposable repository.
@@ -1226,8 +1245,13 @@ def test_owned_shards_follow_the_issue_split_and_runner_budget(repo: Path) -> No
         if workspace not in {"packages/subagents", "packages/computer-use"}
     ]
     mac = {entry["shard"]: entry for entry in shard_outputs(plan["owned (macos-14)"])}
-    assert len(mac) <= 2
-    assert mac["ts"]["workspaces"].split() == list(WORKSPACES)
+    assert mac["subagents"]["workspaces"] == "packages/subagents"
+    assert mac["computer-use"]["workspaces"] == "packages/computer-use"
+    assert mac["ts"]["workspaces"].split() == [
+        workspace
+        for workspace in WORKSPACES
+        if workspace not in {"packages/subagents", "packages/computer-use"}
+    ]
     assert mac["python"]["gates"] == "check-scripts check-integration check-benchmark"
     wsl = {entry["shard"]: entry for entry in shard_outputs(plan["owned (wsl2)"])}
     assert wsl["subagents-computer-use"]["workspaces"] == "packages/computer-use packages/subagents"
@@ -1420,7 +1444,12 @@ def test_plan_skips_the_benchmark_gate_only_on_a_pull_request_without_its_inputs
     mac = plan["owned (macos-14)"]
     assert mac.gates == MAC_GATES
     assert mac.skipped_gates == expected
-    assert {shard.name: shard.skipped_gates for shard in mac.shards} == {"ts": (), "python": expected}
+    assert {shard.name: shard.skipped_gates for shard in mac.shards} == {
+        "subagents": (),
+        "computer-use": (),
+        "ts": (),
+        "python": expected,
+    }
     # A cell never skips a gate it does not plan: Ubuntu and WSL have no benchmark producer at all.
     for os_name in ("ubuntu-24.04", "wsl2"):
         cell = plan[f"owned ({os_name})"]
