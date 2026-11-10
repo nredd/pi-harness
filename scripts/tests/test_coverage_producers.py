@@ -73,6 +73,51 @@ def launch_bun(tmp_path: Path, *args: str) -> list[str]:
     return json.loads(receipt.read_text())
 
 
+def assert_bounded_apt(script: str) -> None:
+    """Assert every apt-get call fails fast on a stalled mirror or held dpkg lock.
+
+    Parameters:
+        script (str): Shell text of a CI step.
+    Returns:
+        None: Every apt-get call is bounded.
+    Raises:
+        AssertionError: An apt-get call lacks the retry, timeout or lock options.
+    """
+    calls = [line for line in script.splitlines() if "apt-get" in line]
+    assert calls
+    for call in calls:
+        for option in ("Acquire::Retries=3", "Acquire::http::Timeout=30", "DPkg::Lock::Timeout=120"):
+            assert f"-o {option}" in call
+
+
+def test_apt_steps_skip_present_tools_and_are_bounded() -> None:
+    """Assert tmux and fork apt steps skip when installed and carry bounds (#655).
+
+    Parameters:
+        None.
+    Returns:
+        None: Each apt step skips present tools and is bounded.
+    Raises:
+        AssertionError: An apt step can stall for the whole job budget.
+    """
+    ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    for name in ("owned-shards-ubuntu", "stack"):
+        step = step_named(ci["jobs"][name]["steps"], "Install tmux (Linux)")
+        assert step["timeout-minutes"] == 5
+        assert "command -v tmux" in step["run"]
+        assert_bounded_apt(step["run"])
+    forks = yaml.safe_load((ROOT / ".github/workflows/forks.yml").read_text())
+    deps = next(
+        step
+        for job in forks["jobs"].values()
+        for step in job["steps"]
+        if step.get("name", "").startswith("System dependencies")
+    )
+    assert deps["timeout-minutes"] == 5
+    assert "dpkg -s" in deps["run"]
+    assert_bounded_apt(deps["run"])
+
+
 def test_bun_launcher_owns_istanbul_reporters_and_directory(tmp_path: Path) -> None:
     """Bind the Bun signal's provider, both reporters and output directory to the launcher.
 
@@ -302,11 +347,12 @@ def test_reviewer_dependencies_are_provisioned_before_owned_tests() -> None:
     install = shard.index(step_named(shard, "Install reviewer read dependencies (Ubuntu)"))
     verify = shard.index(step_named(shard, "Verify reviewer read dependencies"))
     assert install < verify < shard.index(step_named(shard, "Owned gate "))
-    assert "apt-get install --yes ripgrep fd-find" in owned
-    assert (
-        step_named(shard, "Install reviewer read dependencies (Ubuntu)")["if"]
-        == "matrix.os == 'ubuntu-24.04'"
-    )
+    assert "install --yes ripgrep fd-find" in owned
+    ubuntu = step_named(shard, "Install reviewer read dependencies (Ubuntu)")
+    assert ubuntu["if"] == "matrix.os == 'ubuntu-24.04'"
+    assert ubuntu["timeout-minutes"] == 5
+    assert "command -v rg" in ubuntu["run"]
+    assert_bounded_apt(ubuntu["run"])
     wsl = (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
     packages = wsl.split("additional-packages:", 1)[1].splitlines()[0].split()
     assert {"ripgrep", "fd-find"}.issubset(packages)
