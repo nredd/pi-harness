@@ -16,6 +16,7 @@ import {
 import { describe, expect, it } from "vitest";
 import type { RunOptions, RunResult } from "../src/core/index.ts";
 import { type ResourceSnapshotOptions, registerResourceTools, resourceSnapshot } from "../src/resource/index.ts";
+import { describeProcessLoss, firstBadProcessField, type HostProbes, probeHost } from "./process-diagnostics.ts";
 import { createMockPi } from "./support.ts";
 
 it("attempts the default Linux memory read and keeps optional failures null off Linux", async () => {
@@ -513,7 +514,8 @@ describe("resource_snapshot on the real host through the published sampler", () 
 
 	it("smokes the real host through tool execution and output schema validation", async () => {
 		const mock = createMockPi();
-		registerResourceTools(mock.pi);
+		const real = realSampler();
+		registerResourceTools(mock.pi, { createSampler: real.createSampler });
 		const result = await mock.call("resource_snapshot", { process_limit: 50, interval_ms: INTERVAL_MS }, "/tmp");
 		const snapshot = result.structuredContent as Awaited<ReturnType<typeof resourceSnapshot>>;
 		expect(snapshot.cpu.logicalCpus).toBeGreaterThan(0);
@@ -522,17 +524,22 @@ describe("resource_snapshot on the real host through the published sampler", () 
 		expect(snapshot.interval.measuredMs).toBeGreaterThanOrEqual(INTERVAL_MS - 1);
 		expect(snapshot.cpu.utilization.state).toBe("available");
 		if (process.platform !== "darwin" && process.platform !== "linux") return;
+		// On failure print the producer reason per scan, the raw samples and an errno-keeping re-probe of the host.
 		if (snapshot.processes.status !== "available")
-			throw new Error(`missing process metadata: ${snapshot.processes.reason}`);
+			throw new Error(await describeProcessLoss("processes", snapshot.processes.reason, real.state.samples));
 		expect(snapshot.processes.entries.length).toBeGreaterThan(0);
 		expect(snapshot.processes.entries.length).toBeLessThanOrEqual(50);
 		expect(snapshot.processes.ranking).toBe(process.platform === "linux" || nativeDarwinCpu ? "interval-cpu" : "rss");
 		if (process.platform === "darwin") {
 			expect(snapshot.processes.entries.some((entry) => entry.cpu.state === "available")).toBe(nativeDarwinCpu);
 		}
+		const bad = firstBadProcessField(snapshot.processes.entries);
+		if (bad !== undefined) {
+			const reason = `pid ${bad.pid} has invalid ${bad.field} ${JSON.stringify(bad.value)}`;
+			throw new Error(await describeProcessLoss(bad.field, reason, real.state.samples));
+		}
 		for (const entry of snapshot.processes.entries) {
 			expect(Object.keys(entry).sort()).toEqual(["cpu", "executable", "parentPid", "pid", "rssBytes"]);
-			expect(entry.executable).not.toContain("/");
 			if (entry.cpu.state === "available") expect(entry.cpu.value).toBeGreaterThanOrEqual(0);
 		}
 	});
@@ -1091,5 +1098,113 @@ describe("resource_snapshot mapping", () => {
 			{},
 		);
 		expect(sections).not.toHaveProperty("resource_awareness");
+	});
+});
+
+describe("process metadata loss diagnostics", () => {
+	const probes = (overrides: Partial<HostProbes> = {}): HostProbes => ({
+		platform: "linux",
+		pid: 42,
+		countDir: async () => 2,
+		readlink: async () => "/usr/bin/node",
+		stat: async () => ({}),
+		readFile: async () => "x".repeat(10),
+		...overrides,
+	});
+	const enoent = Object.assign(new Error("no such file"), { code: "ENOENT", syscall: "readlink" });
+	const lost = (): ResourceSnapshot => ({
+		...fixture("linux", [])(1),
+		coverage: {
+			complete: false,
+			enumerated: 0,
+			sampled: 0,
+			skipped: 0,
+			bytesRead: 0,
+			reasons: ["process-collection-unavailable", "mystery"],
+		},
+	});
+
+	it("names the failing field, each reason's meaning, the raw sample and the failing errno", async () => {
+		const message = await describeProcessLoss(
+			"processes",
+			"process metadata unavailable (process-collection-unavailable)",
+			[lost()],
+			probes({
+				readlink: async () => {
+					throw enoent;
+				},
+				countDir: async () => {
+					throw "plain";
+				},
+			}),
+		);
+		expect(message).toContain("field `processes`: process metadata unavailable (process-collection-unavailable)");
+		expect(message).toContain("reason `process-collection-unavailable`: the whole process listing failed");
+		expect(message).toContain("reason `mystery`: unknown to this harness");
+		expect(message).toContain("FAIL readlink /proc/42/exe: ENOENT readlink no such file");
+		expect(message).toContain("FAIL opendir /proc: plain");
+		expect(message).toContain("ok   read /proc/42/stat: 10 bytes");
+		expect(message).toContain('"processes":[]');
+	});
+
+	it("prints only the executable basename from the exe readlink", async () => {
+		const results = await probeHost(probes({ readlink: async () => "/opt/hostedtoolcache/node/26.12.0/x64/bin/node" }));
+		const exe = results.find((result) => result.step === "readlink /proc/42/exe");
+		expect(exe).toEqual({ step: "readlink /proc/42/exe", ok: true, detail: "-> node" });
+		expect(JSON.stringify(results)).not.toContain("hostedtoolcache");
+	});
+
+	it("reports a run with no completed scan and skips probes off Linux", async () => {
+		const message = await describeProcessLoss("processes", "x", [], probes({ platform: "darwin" }));
+		expect(message).toContain("no sampler scan completed");
+		expect(message).not.toContain("independent host probes");
+		expect(await probeHost(probes({ platform: "darwin" }))).toEqual([]);
+	});
+
+	it("probes the real host without throwing", async () => {
+		const results = await probeHost();
+		if (process.platform === "linux") {
+			// Shape only: a transient /proc failure is what this probe reports, so it must not fail here.
+			expect(results.length, JSON.stringify(results)).toBe(6);
+			for (const result of results) {
+				expect(typeof result.step, JSON.stringify(result)).toBe("string");
+				expect(typeof result.ok, JSON.stringify(result)).toBe("boolean");
+				expect(typeof result.detail, JSON.stringify(result)).toBe("string");
+			}
+		} else expect(results).toEqual([]);
+	});
+
+	it("prints every raw process, not a prefix", async () => {
+		const sample = fixture(
+			"linux",
+			Array.from({ length: 8 }, (_, index) => proc(100 + index, 1, measured(0))),
+		)(1);
+		const message = await describeProcessLoss("rssBytes", "x", [sample], probes({ platform: "darwin" }));
+		expect(message).toContain('"pid":107');
+	});
+
+	it("names the first bad process field", () => {
+		const entry = { pid: 7, executable: "node", rssBytes: 1, parentPid: 1 };
+		expect(firstBadProcessField([entry])).toBeUndefined();
+		expect(firstBadProcessField([{ ...entry, executable: "/bin/node" }])).toEqual({
+			field: "executable",
+			pid: 7,
+			value: "/bin/node",
+		});
+		expect(firstBadProcessField([entry, { ...entry, pid: 8, rssBytes: Number.NaN }])?.field).toBe("rssBytes");
+		expect(firstBadProcessField([{ ...entry, parentPid: -1 }])?.field).toBe("parentPid");
+	});
+
+	it("keeps the unavailable reason when a real sampler loses its listing", async () => {
+		const real = realSampler(new Set([0, 1, 2, 3]));
+		const mock = createMockPi();
+		registerResourceTools(mock.pi, { createSampler: real.createSampler });
+		const result = await mock.call("resource_snapshot", { interval_ms: INTERVAL_MS }, "/tmp");
+		const snapshot = result.structuredContent as Awaited<ReturnType<typeof resourceSnapshot>>;
+		expect(snapshot.processes.status).toBe("unavailable");
+		if (snapshot.processes.status === "available") return;
+		const message = await describeProcessLoss("processes", snapshot.processes.reason, real.state.samples, probes());
+		expect(message).toContain("process-collection-unavailable");
+		expect(message).toContain("scan 3:");
 	});
 });
