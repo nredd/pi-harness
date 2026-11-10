@@ -61,7 +61,7 @@ the release is `requested release: injaneity/pi-computer-use#116`
 | Act preflight | upstream PR #112 (`be73574`) | Validate every action before the write lock advances the epoch; rejected batches neither stale the `stateId` nor deliver a prefix; open upstream PR, status `candidate` | `test:sync-reverts` preflight control in `test/unpaired-act.test.mjs` |
 | Keyboard-layout typing | upstream PR #113 (`5bd2894`) | Post physical US key codes only when `UCKeyTranslate` on the active layout yields that character; else Unicode events; open upstream PR | `test:sync-reverts` layout gate control in `test:macos-native` |
 | Scroll-bar fallback | upstream PR #114 (`5e8378f`) | Write the nearest settable `AXScrollBar` value for SwiftUI/AppKit scroll areas before the wheel fallback; open upstream PR | `test:sync-reverts` range guard control in `test:macos-native` |
-| Headless managed browser | upstream PR #104 (`6bcd831`) | Headless `launch_browser` without `DISPLAY`/`WAYLAND_DISPLAY`, override env var; `--no-sandbox` only as root, unlike upstream; open upstream PR | `test:managed-browser-headless` via `test:sync-reverts` |
+| Headless managed browser | upstream PR #104 (`6bcd831`) | Headless `launch_browser` without `DISPLAY`/`WAYLAND_DISPLAY`, override env var; `--no-sandbox` only as root, unlike upstream; open upstream PR | `test/managed-browser-headless.test.mjs` via `test:sync-reverts` |
 
 See `sync-patches.json` for each row's exact file paths and `upstream` status, including harness-only
 patches. [Rust coverage](docs/rust-coverage.md) records pinned tools, real per-file numbers,

@@ -199,7 +199,7 @@ land it before the next upstream sync or carry it as a recorded patch in `sync-p
   (`-profile-generate -profile-coverage-mapping`, all production sources minus `entry.swift`, plus `world_fake.swift`
   and `tests/*.swift`), run with `LLVM_PROFILE_FILE=<dir>/%p.profraw`, merge, `llvm-cov export` JSON, emit
   `coverage/swift/lcov.info` with `DA`, `FN`/`FNDA` and one `BRDA` per region (hit count, `-` for unreachable line).
-  Report excludes `world_fake.swift` and `tests/` via the policy's `verification_helpers`, not via llvm-cov filters.
+  `world_fake.swift` and `tests/` are non-shipped verification code, classified individually under the policy's `verification_helpers` (never llvm-cov filters); no shipped source is excluded.
 - Two producers merged into one profdata: (a) in-process unit tests with `FakeWorld`; (b) black-box protocol
   tests, a TS Vitest suite spawning the instrumented helper (stdin NDJSON mode, then `serve --socket` mode) with
   a fixture world selected by `PI_CU_WORLD_FIXTURE`, which only `world_fake.swift` reads. (b) covers `run`,
