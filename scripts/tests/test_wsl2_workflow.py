@@ -690,6 +690,8 @@ def run_apt(
     cached: bool = False,
     stale: bool = False,
     fetched_version: str = "1.0",
+    extra_debs: tuple[str, ...] = (),
+    tmpdir: Path | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     """Run the real apt script with stub `id`, `timeout`, `apt-get` and `ps`.
 
@@ -699,6 +701,8 @@ def run_apt(
         hang (bool): Model `timeout` tripping (exit 124) on every `apt-get update`.
         cached (bool): Seed the host cache with one .deb.
         fetched_version (str): Version in the name of the .deb a download leaves behind.
+        extra_debs (tuple[str, ...]): More .deb names to seed in the host cache.
+        tmpdir (Path | None): `TMPDIR` for the script's scratch directory.
         stale (bool): Seed the host cache with a .deb of a superseded version.
 
     Returns:
@@ -713,6 +717,8 @@ def run_apt(
     cache.mkdir()
     if stale:
         (cache / "stale_0.9_amd64.deb").write_text("deb", encoding="utf-8")
+    for extra in extra_debs:
+        (cache / extra).write_text("deb", encoding="utf-8")
     if cached:
         (cache / "seeded_1.0_amd64.deb").write_text("deb", encoding="utf-8")
     quoted = shlex.quote(str(sources))
@@ -728,8 +734,10 @@ def run_apt(
     stubs = {
         "id": "#!/bin/sh\necho 0\n",
         # .deb names are `package_version_arch.deb`; every package is "installed" at version 1.0.
-        "dpkg-deb": '#!/bin/sh\nn=$(basename "$2" .deb)\n' + dpkg_deb_body,
-        "dpkg-query": "#!/bin/sh\nprintf 1.0\n",
+        "dpkg-deb": '#!/bin/sh\nn=$(basename "$2" .deb)\ncase $n in broken*) exit 1 ;; esac\n'
+        + dpkg_deb_body,
+        # Installed: amd64 packages (queried `name:amd64`) and the arch-independent `docs` (queried bare).
+        "dpkg-query": '#!/bin/sh\ncase "$3" in *:amd64|docs) printf 1.0 ;; *) exit 1 ;; esac\n',
         "ps": "#!/bin/sh\necho '42 1 05:00 S synthetic-stuck-apt'\n",
         "timeout": '#!/bin/sh\nshift 2\ncase "$*" in *"apt-get update"*) '
         + ("exit 124 " if hang else "")
@@ -755,6 +763,8 @@ def run_apt(
         "WSL_APT_ARCHIVES": str(tmp_path / "archives"),
         "WSL_APT_CACHE": str(cache),
     }
+    if tmpdir is not None:
+        env["TMPDIR"] = str(tmpdir)
     result = subprocess.run(["/bin/bash", str(APT)], env=env, capture_output=True, check=False, text=True)
     return result, sources, log
 
@@ -818,6 +828,18 @@ def test_apt_cache_is_pruned_to_installed_versions(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert not (tmp_path / "cache" / "stale_0.9_amd64.deb").exists()
     assert (tmp_path / "cache" / "fetched_1.0_amd64.deb").exists()
+
+
+def test_apt_cache_prune_keys_arch_skips_unreadable_debs_and_cleans_up(tmp_path: Path) -> None:
+    """Query `all` debs bare and others as `name:arch`, skip a corrupt .deb, and leave no scratch."""
+    scratch = tmp_path / "tmp"
+    scratch.mkdir()
+    extra = ("docs_1.0_all.deb", "foreign_1.0_i386.deb", "broken_1.0_amd64.deb")
+    result, _, _ = run_apt(tmp_path, extra_debs=extra, tmpdir=scratch)
+    assert result.returncode == 0, result.stderr
+    kept = sorted(path.name for path in (tmp_path / "cache").glob("*.deb"))
+    assert kept == ["docs_1.0_all.deb", "fetched_1.0_amd64.deb"]
+    assert list(scratch.iterdir()) == []
 
 
 def test_apt_cache_is_left_alone_when_no_installed_deb_is_found(tmp_path: Path) -> None:
