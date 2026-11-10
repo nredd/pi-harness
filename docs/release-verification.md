@@ -61,7 +61,8 @@ expired or mismatched evidence refuses, and so does a malformed REST page. `pyth
 harness defect raises instead of reading as a refusal. Ordinary push/main smoke and old PR checks are
 not fallbacks. Artifacts use normal Actions retention; expired evidence needs a real rerun, not
 a replacement receipt. The verifier paginates run, job and artifact collections. Ubuntu publication/promotion jobs use
-trusted `/usr/bin/gh`, not PATH lookup. Read-only local diagnostics on another platform must set
+trusted `/usr/bin/gh`, not PATH lookup; the `publish.yml` `verify` job runs computer-use releases on
+macOS and sets `RELEASE_GATE_GH=/opt/homebrew/bin/gh` there. Read-only local diagnostics on another platform must set
 `RELEASE_GATE_GH` to its trusted absolute executable, e.g. `/opt/homebrew/bin/gh` on this Mac;
 relative, missing or nonexecutable paths refuse.
 
