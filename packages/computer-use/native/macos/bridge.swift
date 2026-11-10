@@ -2436,6 +2436,8 @@ final class Bridge {
 					try executeCoordinates(coordinatePoint())
 				} catch let failure as BridgeFailure {
 					// The bar axis already scrolled: rethrowing would read as nothing delivered and a retry would scroll it twice.
+					performed["grounding"] = "description"
+					performed["delivery"] = "ax"
 					barEvidence["error"] = ["code": failure.code, "message": failure.message]
 					return finish(["outcome": "unknown", "performed": performed, "evidence": barEvidence])
 				}
