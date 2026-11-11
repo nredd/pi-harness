@@ -245,7 +245,10 @@ export function createFakeChild({ engine, stdout = "", stderr = "", exitCode, sp
 	child.stderr = new PassThrough();
 	child.signals = [];
 	child.killed = false;
+	child.exitCode = null;
+	child.unref = () => undefined;
 	child.exit = (code = 0) => {
+		child.exitCode = code;
 		child.stdout.end();
 		child.stderr.end();
 		child.emit("close", code, null);
