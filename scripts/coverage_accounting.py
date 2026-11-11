@@ -1201,23 +1201,26 @@ def require_declared_gates(policy: Policy, skipped_gates: frozenset[str]) -> Non
         raise ValueError(f"Skipped gates no policy signal declares: {undeclared}")
 
 
-def check_branch_cap(package: Package, cap: Counts, records: dict[str, FileCoverage]) -> None:
+def check_branch_cap(package: Package, signal: Signal, cap: Counts, records: dict[str, FileCoverage]) -> None:
     """Require a branch cap exactly when the producer emits branch records.
 
     A capped signal whose report has executable lines but no branch records fails closed, so a
     producer that silently stops writing `BRDA` rows can't read as zero uncovered branches.
 
     Parameters:
-        package (Package): Package whose goal may exempt it from branch caps.
+        package (Package): Package whose goal may exempt a report-only signal from branch caps.
+        signal (Signal): The signal under check; an enforced signal always needs a branch cap.
         cap (Counts): The signal's declared per-OS budget or reference.
         records (dict[str, FileCoverage]): The signal's validated, scoped report records.
     Returns:
         None: The declared cap matches the producer's branch output.
     Raises:
-        ValueError: Branch records have no cap outside `goal: excluded`, or a cap has no branch records.
+        ValueError: Branch records have no cap (a report-only `goal: excluded` signal is exempt), or a
+            cap has no branch records.
     """
     branches = sum(counters.branches for counters in records.values())
-    if cap.branches is None and branches and package.goal != "excluded":
+    exempt = package.goal == "excluded" and signal.enforcement == "report-only"
+    if cap.branches is None and branches and not exempt:
         raise ValueError(f"Missing branch cap: the report has {branches} branch records")
     if cap.branches is not None and not branches and any(counters.lines for counters in records.values()):
         raise ValueError(
@@ -1322,7 +1325,7 @@ def account(
                 if measure:
                     continue
                 declared = signal.max_uncovered[runner_os]
-                check_branch_cap(package, declared, records)
+                check_branch_cap(package, signal, declared, records)
                 # Until `target.branches` locks it, a 100-percent primary keeps its own branch cap.
                 budget = (
                     policy.target.model_copy(

@@ -131,7 +131,7 @@ def test_excluded_goal_may_enforce_ratchet_caps() -> None:
 
 
 def test_ratchet_goal_is_rejected() -> None:
-    """Keep the deleted `ratchet` mode from returning: no package may sit on a nonzero floor.
+    """Keep the deleted `ratchet` mode from returning: no package may be on a `ratchet` goal.
 
     Parameters:
         None.

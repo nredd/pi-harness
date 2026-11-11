@@ -142,6 +142,19 @@ const PRODUCERS: Producer[] = [
 	},
 ];
 
+/** Files at 0/0/0 on every OS; adding or dropping a pin in the configuration must change this list too (#645). */
+const ZERO_UNCOVERED_FILES = [
+	"scripts/build-native.mjs",
+	"scripts/docs-generators/generate-source-references.mjs",
+	"scripts/docs-generators/generate-tool-reference.mjs",
+	"scripts/rust-coverage.mjs",
+	"scripts/setup-helper.mjs",
+	"src/outline-store.ts",
+	"src/outline.ts",
+	"src/platform/macos/helper-path.mjs",
+	"src/platform/macos/helper.ts",
+];
+
 const POLICY_URL = new URL("../coverage/policy.json", import.meta.url);
 
 /** Policy entries the faked `readFileSync` serves; null serves the real file. */
@@ -251,7 +264,7 @@ test("computer-use pins every file already at zero uncovered, each owned (#645)"
 	const root = fileURLToPath(new URL("../packages/computer-use/", import.meta.url));
 	const owned = new Set(include.flatMap((pattern) => globSync(pattern, { cwd: root })));
 	const pinned = Object.keys(thresholds);
-	assert.ok(pinned.length >= 9);
+	assert.deepEqual(pinned.sort(), [...ZERO_UNCOVERED_FILES]);
 	for (const path of pinned) {
 		assert.ok(owned.has(path), `${path} is an owned source file`);
 		assert.deepEqual(thresholds[path], { lines: 100, functions: 100, branches: 100 });

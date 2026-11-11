@@ -241,7 +241,7 @@ Recording to a freshly built helper, so these can only be covered on a TCC-grant
    database for the instrumented binary's identifier.
 2. Move the live adapters into a `verification_helpers`-style exclusion. Rejected: shipped runtime code is
    never a verification helper (coverage.md), and policy forbids widening exclusions to pass.
-3. Leave `computer-use-swift` at a nonzero live-adapter cap. Rejected: there is no mode with a nonzero floor.
+3. Leave `computer-use-swift` at a nonzero live-adapter cap. Rejected: the Swift signal is not enforced at a nonzero cap; only `computer-use-vitest` is, as the T0 ratchet.
 
 Until option 1 is available, phases S0-S4 get everything behind the seam to 0 and leave only the adapter
 files uncovered; the Swift signal stays report-only and the goal stays `excluded` for that file set.

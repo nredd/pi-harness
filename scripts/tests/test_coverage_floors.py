@@ -111,8 +111,28 @@ def test_branch_records_without_cap_fail(tmp_path: Path) -> None:
     ]
 
 
+def test_enforced_excluded_signal_needs_a_branch_cap(tmp_path: Path) -> None:
+    """Require a branch cap once an owner-excluded signal is enforced (#645).
+
+    Parameters:
+        tmp_path (Path): Disposable report root.
+    Returns:
+        None: The enforced excluded signal without a cap fails; with a cap it passes.
+    Raises:
+        AssertionError: Enforcement on an excluded goal skips the branch cap.
+    """
+    setup_report(tmp_path, "branches.info")
+    for cap, expected in (
+        (None, ["example/primary: Missing branch cap: the report has 2 branch records"]),
+        (1, []),
+    ):
+        cfg = branch_policy(cap, goal="excluded", goal_reason="Owner decision.")
+        cfg.packages["example"].signals["primary"].enforcement = "enforced"
+        assert account(tmp_path, cfg)[1] == expected
+
+
 def test_excluded_goal_needs_no_branch_cap(tmp_path: Path) -> None:
-    """Accept uncapped branch records only for an owner-excluded package.
+    """Accept uncapped branch records only for a report-only owner-excluded signal.
 
     Parameters:
         tmp_path (Path): Disposable report root.
