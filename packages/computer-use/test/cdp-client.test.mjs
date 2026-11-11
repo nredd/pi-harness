@@ -765,7 +765,7 @@ describe("same-titled tabs", () => {
 		scriptWindows(fake, { solo: { bounds: there, visible: true } });
 		assert.equal(await cdpTabForWindow("Solo", frame), tab, "same target is re-selected and its open connection reused");
 		assert.equal(fake.upgraded.length, 1);
-		assert(fake.listRequests >= 2);
+		assert.equal(fake.listRequests, 2);
 	});
 
 	test("window bounds convert to a frame and malformed bounds are dropped", async () => {

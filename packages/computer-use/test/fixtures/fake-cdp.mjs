@@ -20,7 +20,7 @@ import { createHash } from "node:crypto";
 import http from "node:http";
 
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-const OPCODE = { continuation: 0, text: 1, binary: 2, close: 8, ping: 9, pong: 10 };
+const OPCODE = { continuation: 0, text: 1, close: 8, ping: 9 };
 
 /** Handler return value: send nothing (the client's timeout fires). */
 export const NO_REPLY = Symbol("fake-cdp:no-reply");
