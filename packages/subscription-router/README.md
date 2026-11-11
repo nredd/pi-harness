@@ -45,7 +45,15 @@ The shipped [frontier profile](examples/subscription-router.json) is opt-in the 
 - `thinking` pins that entry's level. Without it the selected level passes through
 - With `enabledModels` / scoped models, add `router/<profile>` there too
 
-Routing:
+Versioned policies are explicit opt-ins: `policy: {"version":1,"kind":"strict-priority"}`
+provides unconditional chain priority at allocation boundaries; `remaining-balanced` balances the
+binding raw remaining percentage, not reset-normalized headroom. A bounded `lexicographic` form,
+continuation stickiness and configurable prompt margin are also available. Do not combine `policy`
+with `strategy`. Semantics, schema and cached `/router explain <profile> [--json]` diagnostics are
+[here](docs/policies.md); opt-in examples are [here](examples/policies.json). Existing examples and
+legacy strategies keep their behavior and serialized decisions.
+
+Routing (legacy strategies):
 
 - Ordered `user`, `direct`: first eligible entry, unchanged
 - Balanced `user`: highest-ranked eligible entry, with incumbent hysteresis below

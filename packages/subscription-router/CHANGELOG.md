@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add opt-in v1 `strict-priority`, `remaining-balanced` and bounded `lexicographic` policies on a pure filter/metric/order evaluator, with closed validation, shipped schema and cached `/router explain`; preserve legacy strategies and decision bytes (#741)
+
 - Log `router:decision` entries and `/router status` history to the requesting session on cores that pass `session` and `appendEntry` to `route`; older cores keep logging through the registrant, which may be disposed (Refs #581)
 - Skip Anthropic `weekly_scoped` limits narrowed by a non-null `scope.surface` or `scope.model.id`, so a single-surface cap no longer blocks every `claude-<family>-*` caller (#511)
 - Name `subscription_usage` in the `subscription_usage` prompt section only when the session can call it or discover it through `search_tools`, and tell a deferred session to discover it first, so the tool can stay deferred (#291)

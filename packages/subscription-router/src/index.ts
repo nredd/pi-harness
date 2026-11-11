@@ -26,6 +26,7 @@ import {
 } from "./config.js";
 import { ExhaustionTracker } from "./exhaustion.js";
 import { refKey } from "./model-ref.js";
+import { compilePolicy } from "./policy.js";
 import { SettleRecovery } from "./recovery.js";
 import { formatDecision, type RouteDecision, type RouteEnv, Router } from "./router.js";
 import { formatScore } from "./selection.js";
@@ -209,6 +210,7 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 			ctx.model?.provider === ROUTER_PROVIDER ? profileById.get(ctx.model.id) : undefined;
 
 		for (const profile of profiles) {
+			compilePolicy(profile);
 			pi.registerVirtualModel({
 				provider: ROUTER_PROVIDER,
 				id: profile.id,
@@ -294,9 +296,31 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 		});
 
 		pi.registerCommand("router", {
-			description: "Subscription router: status (default), refresh, or reset confirmed blocks",
+			description:
+				"Subscription router: status (default), explain <profile> [--json], refresh, or reset confirmed blocks",
 			handler: async (args, ctx) => {
 				const action = args.trim() || "status";
+				if (action.split(/\s+/)[0] === "explain") {
+					const [, id, ...flags] = action.split(/\s+/);
+					if (!id || flags.length > 1 || (flags.length === 1 && flags[0] !== "--json")) {
+						ctx.ui.notify("subscription-router: expected explain <profile> [--json]", "error");
+						return;
+					}
+					const profile = profileById.get(id);
+					if (!profile) {
+						ctx.ui.notify(`subscription-router: unknown profile '${id}'`, "error");
+						return;
+					}
+					const evaluation = router.explain(profile, routeEnv(ctx, usage));
+					const json = JSON.stringify(evaluation, null, 2);
+					ctx.ui.notify(
+						flags.length
+							? json
+							: `Cached fresh-dispatch forecast router/${id} -> ${evaluation.chosen ?? "exhausted"}\n${json}`,
+						"info",
+					);
+					return;
+				}
 				if (action === "reset") {
 					tracker.clear();
 					ctx.ui.notify("subscription-router: cleared confirmed blocks", "info");
@@ -319,7 +343,7 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 				for (const profile of profiles) {
 					const picked = router.pick(profile, env);
 					lines.push(
-						`router/${profile.id} (${profile.strategy ?? "ordered"}) -> ${picked.ok ? refKey(picked.entry) : "exhausted"}`,
+						`router/${profile.id} (${profile.policy?.kind ?? profile.strategy ?? "ordered"}) -> ${picked.ok ? refKey(picked.entry) : "exhausted"}`,
 					);
 					if (picked.ok) {
 						for (const candidate of picked.candidates)

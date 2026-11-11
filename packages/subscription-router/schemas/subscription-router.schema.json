@@ -1,0 +1,87 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Subscription router configuration",
+  "type": "object",
+  "required": ["profiles"],
+  "properties": {
+    "profiles": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+      "additionalProperties": { "$ref": "#/definitions/profile" }
+    }
+  },
+  "definitions": {
+    "remaining": {
+      "type": "object", "additionalProperties": false,
+      "required": ["metric", "window", "direction"],
+      "properties": {
+        "metric": { "const": "remaining" }, "direction": { "const": "desc" },
+        "window": { "oneOf": [
+          { "const": "binding" },
+          { "type": "object", "required": ["name"], "additionalProperties": false, "properties": { "name": { "type": "string", "minLength": 1 } } }
+        ] }
+      }
+    },
+    "chain": {
+      "type": "object", "additionalProperties": false,
+      "required": ["metric", "direction"],
+      "properties": { "metric": { "const": "chain-index" }, "direction": { "const": "asc" } }
+    },
+    "policy": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["version", "kind"],
+          "properties": { "version": { "const": 1 }, "kind": { "const": "strict-priority" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["version", "kind"],
+          "properties": {
+            "version": { "const": 1 }, "kind": { "const": "remaining-balanced" },
+            "switchMargin": { "type": "number", "minimum": 0, "maximum": 1 },
+            "stickiness": { "enum": ["none", "continuation"] }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["version", "kind", "by"],
+          "properties": {
+            "version": { "const": 1 }, "kind": { "const": "lexicographic" },
+            "switchMargin": { "type": "number", "minimum": 0, "maximum": 1 },
+            "stickiness": { "enum": ["none", "continuation"] },
+            "by": { "oneOf": [
+              { "type": "array", "minItems": 1, "maxItems": 1, "items": [{ "$ref": "#/definitions/chain" }] },
+              { "type": "array", "minItems": 1, "maxItems": 2, "items": [{ "$ref": "#/definitions/remaining" }, { "$ref": "#/definitions/chain" }] }
+            ] }
+          },
+          "allOf": [{ "if": { "required": ["switchMargin"] }, "then": { "properties": { "by": { "items": [{ "$ref": "#/definitions/remaining" }, { "$ref": "#/definitions/chain" }] } } } }]
+        }
+      ]
+    },
+    "profile": {
+      "type": "object", "required": ["chain"],
+      "properties": {
+        "name": { "type": "string" },
+        "strategy": { "enum": ["ordered", "balanced"] },
+        "policy": { "$ref": "#/definitions/policy" },
+        "exhaustionPolicy": { "enum": ["wait", "fail"] },
+        "maxWaitMinutes": { "type": "number", "exclusiveMinimum": 0 },
+        "chain": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "required": ["model"],
+            "properties": {
+              "model": { "type": "string", "pattern": "^(?!router/)[^/\\s]+/[^\\s]+$" },
+              "thinking": { "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"] }
+            }
+          }
+        }
+      },
+      "allOf": [
+        { "not": { "required": ["policy", "strategy"] } },
+        { "not": { "required": ["policy", "policyByCaller"] } }
+      ]
+    }
+  }
+}

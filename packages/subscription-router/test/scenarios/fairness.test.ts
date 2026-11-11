@@ -3,6 +3,25 @@ import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
 import { afterEach, expect, it } from "vitest";
 import { CachedUsage, Clock, prompt, type RouterScenario, startRouter } from "./support.js";
 
+it("real Pi remaining balance keeps equal-debit normalized skew within one debit", async () => {
+	const usage = new CachedUsage(new Clock());
+	const counts = [0, 0, 0];
+	scenario = await startRouter(usage, { version: 1, kind: "remaining-balanced" });
+	for (const provider of scenario.providers)
+		provider.setResponses(Array.from({ length: 12 }, () => fauxAssistantMessage("synthetic debit")));
+	for (let turn = 0; turn < 18; turn++) {
+		for (const [index, provider] of scenario.providers.entries())
+			usage.set(provider.getModel().provider, (100 * (counts[index] ?? 0)) / 64);
+		const messages = await prompt(scenario);
+		const index = scenario.providers.findIndex((provider) => provider.getModel().provider === messages[0]?.provider);
+		expect(index).toBeGreaterThanOrEqual(0);
+		counts[index] = (counts[index] ?? 0) + 1;
+		expect(Math.max(...counts) - Math.min(...counts)).toBeLessThanOrEqual(1);
+	}
+	expect(counts).toEqual([6, 6, 6]);
+	expect(usage.reads).toEqual([]);
+});
+
 let scenario: RouterScenario | undefined;
 afterEach(() => scenario?.cleanup());
 

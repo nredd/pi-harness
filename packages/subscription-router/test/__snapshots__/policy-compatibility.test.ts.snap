@@ -1,0 +1,3808 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`preserves legacy routes, diagnostics, errors and admissions byte for byte 1`] = `
+"[
+  {
+    "state": "measured",
+    "reason": "user",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "ordered",
+        "reason": "user",
+        "chosen": "a/sonnet",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "measured",
+              "score": 0.30000000000000004,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "measured",
+              "score": 0.8,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "measured",
+              "score": 0.7,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16
+            },
+            "ageMs": 0
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden user -> a/sonnet (ordered)\\n    a/sonnet: score 0.300, limiting weekly, data 0m old\\n    b/terra: score 0.800, limiting weekly, data 0m old\\n    c/third: score 0.700, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "measured",
+    "reason": "direct",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "ordered",
+        "reason": "direct",
+        "chosen": "a/sonnet",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "measured",
+              "score": 0.30000000000000004,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "measured",
+              "score": 0.8,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "measured",
+              "score": 0.7,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16
+            },
+            "ageMs": 0
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden direct -> a/sonnet (ordered)\\n    a/sonnet: score 0.300, limiting weekly, data 0m old\\n    b/terra: score 0.800, limiting weekly, data 0m old\\n    c/third: score 0.700, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "measured",
+    "reason": "continuation",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "measured",
+    "reason": "retry",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [
+      "b"
+    ],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "fallback",
+    "reason": "user",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "ordered",
+        "reason": "user",
+        "chosen": "a/sonnet",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage unavailable"
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage unavailable"
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage unavailable"
+            },
+            "ageMs": 0
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden user -> a/sonnet (ordered)\\n    a/sonnet: fallback: usage unavailable, data 0m old\\n    b/terra: fallback: usage unavailable, data 0m old\\n    c/third: fallback: usage unavailable, data 0m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "fallback",
+    "reason": "direct",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "ordered",
+        "reason": "direct",
+        "chosen": "a/sonnet",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage unavailable"
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage unavailable"
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage unavailable"
+            },
+            "ageMs": 0
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden direct -> a/sonnet (ordered)\\n    a/sonnet: fallback: usage unavailable, data 0m old\\n    b/terra: fallback: usage unavailable, data 0m old\\n    c/third: fallback: usage unavailable, data 0m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "fallback",
+    "reason": "continuation",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "fallback",
+    "reason": "retry",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [
+      "b"
+    ],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "unlimited",
+    "reason": "user",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "ordered",
+        "reason": "user",
+        "chosen": "a/sonnet",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "unlimited"
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "unlimited"
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "unlimited"
+            },
+            "ageMs": 0
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden user -> a/sonnet (ordered)\\n    a/sonnet: unlimited, data 0m old\\n    b/terra: unlimited, data 0m old\\n    c/third: unlimited, data 0m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "unlimited",
+    "reason": "direct",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "ordered",
+        "reason": "direct",
+        "chosen": "a/sonnet",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "unlimited"
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "unlimited"
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "unlimited"
+            },
+            "ageMs": 0
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden direct -> a/sonnet (ordered)\\n    a/sonnet: unlimited, data 0m old\\n    b/terra: unlimited, data 0m old\\n    c/third: unlimited, data 0m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "unlimited",
+    "reason": "continuation",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "unlimited",
+    "reason": "retry",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [
+      "b"
+    ],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "stale",
+    "reason": "user",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "ordered",
+        "reason": "user",
+        "chosen": "a/sonnet",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "measured",
+              "score": 0.30000000000000004,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16,
+              "stale": 900000
+            },
+            "ageMs": 900000
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "measured",
+              "score": 0.8,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16,
+              "stale": 900000
+            },
+            "ageMs": 900000
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "measured",
+              "score": 0.7,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16,
+              "stale": 900000
+            },
+            "ageMs": 900000
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden user -> a/sonnet (ordered)\\n    a/sonnet: score 0.300, limiting weekly, stale 15m, data 15m old\\n    b/terra: score 0.800, limiting weekly, stale 15m, data 15m old\\n    c/third: score 0.700, limiting weekly, stale 15m, data 15m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "stale",
+    "reason": "direct",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "ordered",
+        "reason": "direct",
+        "chosen": "a/sonnet",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "measured",
+              "score": 0.30000000000000004,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16,
+              "stale": 900000
+            },
+            "ageMs": 900000
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "measured",
+              "score": 0.8,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16,
+              "stale": 900000
+            },
+            "ageMs": 900000
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "measured",
+              "score": 0.7,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16,
+              "stale": 900000
+            },
+            "ageMs": 900000
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden direct -> a/sonnet (ordered)\\n    a/sonnet: score 0.300, limiting weekly, stale 15m, data 15m old\\n    b/terra: score 0.800, limiting weekly, stale 15m, data 15m old\\n    c/third: score 0.700, limiting weekly, stale 15m, data 15m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "stale",
+    "reason": "continuation",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "stale",
+    "reason": "retry",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [
+      "b"
+    ],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "expired",
+    "reason": "user",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "ordered",
+        "reason": "user",
+        "chosen": "a/sonnet",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage stale"
+            },
+            "ageMs": 900001
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage stale"
+            },
+            "ageMs": 900001
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage stale"
+            },
+            "ageMs": 900001
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden user -> a/sonnet (ordered)\\n    a/sonnet: fallback: usage stale, data 15m old\\n    b/terra: fallback: usage stale, data 15m old\\n    c/third: fallback: usage stale, data 15m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "expired",
+    "reason": "direct",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "ordered",
+        "reason": "direct",
+        "chosen": "a/sonnet",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage stale"
+            },
+            "ageMs": 900001
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage stale"
+            },
+            "ageMs": 900001
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage stale"
+            },
+            "ageMs": 900001
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden direct -> a/sonnet (ordered)\\n    a/sonnet: fallback: usage stale, data 15m old\\n    b/terra: fallback: usage stale, data 15m old\\n    c/third: fallback: usage stale, data 15m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "expired",
+    "reason": "continuation",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "expired",
+    "reason": "retry",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [
+      "b"
+    ],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "blocked",
+    "reason": "user",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": "router/golden: every model is unavailable (a/sonnet: weekly exhausted; b/terra: weekly exhausted; c/third: weekly exhausted). Earliest reset 2030-01-01T01:00:00Z.",
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": false,
+      "resetAt": 1893459600000,
+      "wait": true
+    }
+  },
+  {
+    "state": "blocked",
+    "reason": "direct",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": "router/golden: every model is unavailable (a/sonnet: weekly exhausted; b/terra: weekly exhausted; c/third: weekly exhausted). Earliest reset 2030-01-01T01:00:00Z.",
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": false,
+      "resetAt": 1893459600000,
+      "wait": true
+    }
+  },
+  {
+    "state": "blocked",
+    "reason": "continuation",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": "router/golden: every model is unavailable (a/sonnet: weekly exhausted; b/terra: weekly exhausted; c/third: weekly exhausted). Earliest reset 2030-01-01T01:00:00Z.",
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": false,
+      "resetAt": 1893459600000,
+      "wait": true
+    }
+  },
+  {
+    "state": "blocked",
+    "reason": "retry",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ]
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [
+      "b"
+    ],
+    "admission": {
+      "ok": false,
+      "resetAt": 1893459600000,
+      "wait": true
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "measured",
+    "reason": "user",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "ordered",
+        "reason": "user",
+        "chosen": "a/sonnet",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "measured",
+              "score": 0.30000000000000004,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "measured",
+              "score": 0.8,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "measured",
+              "score": 0.7,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16
+            },
+            "ageMs": 0
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden user -> a/sonnet (ordered)\\n    a/sonnet: score 0.300, limiting weekly, data 0m old\\n    b/terra: score 0.800, limiting weekly, data 0m old\\n    c/third: score 0.700, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "measured",
+    "reason": "direct",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "ordered",
+        "reason": "direct",
+        "chosen": "a/sonnet",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "measured",
+              "score": 0.30000000000000004,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "measured",
+              "score": 0.8,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "measured",
+              "score": 0.7,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16
+            },
+            "ageMs": 0
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden direct -> a/sonnet (ordered)\\n    a/sonnet: score 0.300, limiting weekly, data 0m old\\n    b/terra: score 0.800, limiting weekly, data 0m old\\n    c/third: score 0.700, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "measured",
+    "reason": "continuation",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "measured",
+    "reason": "retry",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [
+      "b"
+    ],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "fallback",
+    "reason": "user",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "ordered",
+        "reason": "user",
+        "chosen": "a/sonnet",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage unavailable"
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage unavailable"
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage unavailable"
+            },
+            "ageMs": 0
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden user -> a/sonnet (ordered)\\n    a/sonnet: fallback: usage unavailable, data 0m old\\n    b/terra: fallback: usage unavailable, data 0m old\\n    c/third: fallback: usage unavailable, data 0m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "fallback",
+    "reason": "direct",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "ordered",
+        "reason": "direct",
+        "chosen": "a/sonnet",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage unavailable"
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage unavailable"
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage unavailable"
+            },
+            "ageMs": 0
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden direct -> a/sonnet (ordered)\\n    a/sonnet: fallback: usage unavailable, data 0m old\\n    b/terra: fallback: usage unavailable, data 0m old\\n    c/third: fallback: usage unavailable, data 0m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "fallback",
+    "reason": "continuation",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "fallback",
+    "reason": "retry",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [
+      "b"
+    ],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "unlimited",
+    "reason": "user",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "ordered",
+        "reason": "user",
+        "chosen": "a/sonnet",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "unlimited"
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "unlimited"
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "unlimited"
+            },
+            "ageMs": 0
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden user -> a/sonnet (ordered)\\n    a/sonnet: unlimited, data 0m old\\n    b/terra: unlimited, data 0m old\\n    c/third: unlimited, data 0m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "unlimited",
+    "reason": "direct",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "ordered",
+        "reason": "direct",
+        "chosen": "a/sonnet",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "unlimited"
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "unlimited"
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "unlimited"
+            },
+            "ageMs": 0
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden direct -> a/sonnet (ordered)\\n    a/sonnet: unlimited, data 0m old\\n    b/terra: unlimited, data 0m old\\n    c/third: unlimited, data 0m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "unlimited",
+    "reason": "continuation",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "unlimited",
+    "reason": "retry",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [
+      "b"
+    ],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "stale",
+    "reason": "user",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "ordered",
+        "reason": "user",
+        "chosen": "a/sonnet",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "measured",
+              "score": 0.30000000000000004,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16,
+              "stale": 900000
+            },
+            "ageMs": 900000
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "measured",
+              "score": 0.8,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16,
+              "stale": 900000
+            },
+            "ageMs": 900000
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "measured",
+              "score": 0.7,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16,
+              "stale": 900000
+            },
+            "ageMs": 900000
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden user -> a/sonnet (ordered)\\n    a/sonnet: score 0.300, limiting weekly, stale 15m, data 15m old\\n    b/terra: score 0.800, limiting weekly, stale 15m, data 15m old\\n    c/third: score 0.700, limiting weekly, stale 15m, data 15m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "stale",
+    "reason": "direct",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "ordered",
+        "reason": "direct",
+        "chosen": "a/sonnet",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "measured",
+              "score": 0.30000000000000004,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16,
+              "stale": 900000
+            },
+            "ageMs": 900000
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "measured",
+              "score": 0.8,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16,
+              "stale": 900000
+            },
+            "ageMs": 900000
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "measured",
+              "score": 0.7,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16,
+              "stale": 900000
+            },
+            "ageMs": 900000
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden direct -> a/sonnet (ordered)\\n    a/sonnet: score 0.300, limiting weekly, stale 15m, data 15m old\\n    b/terra: score 0.800, limiting weekly, stale 15m, data 15m old\\n    c/third: score 0.700, limiting weekly, stale 15m, data 15m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "stale",
+    "reason": "continuation",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "stale",
+    "reason": "retry",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [
+      "b"
+    ],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "expired",
+    "reason": "user",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "ordered",
+        "reason": "user",
+        "chosen": "a/sonnet",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage stale"
+            },
+            "ageMs": 900001
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage stale"
+            },
+            "ageMs": 900001
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage stale"
+            },
+            "ageMs": 900001
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden user -> a/sonnet (ordered)\\n    a/sonnet: fallback: usage stale, data 15m old\\n    b/terra: fallback: usage stale, data 15m old\\n    c/third: fallback: usage stale, data 15m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "expired",
+    "reason": "direct",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "ordered",
+        "reason": "direct",
+        "chosen": "a/sonnet",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage stale"
+            },
+            "ageMs": 900001
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage stale"
+            },
+            "ageMs": 900001
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage stale"
+            },
+            "ageMs": 900001
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden direct -> a/sonnet (ordered)\\n    a/sonnet: fallback: usage stale, data 15m old\\n    b/terra: fallback: usage stale, data 15m old\\n    c/third: fallback: usage stale, data 15m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "expired",
+    "reason": "continuation",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "expired",
+    "reason": "retry",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [
+      "b"
+    ],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "blocked",
+    "reason": "user",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": "router/golden: every model is unavailable (a/sonnet: weekly exhausted; b/terra: weekly exhausted; c/third: weekly exhausted). Earliest reset 2030-01-01T01:00:00Z.",
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": false,
+      "resetAt": 1893459600000,
+      "wait": true
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "blocked",
+    "reason": "direct",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": "router/golden: every model is unavailable (a/sonnet: weekly exhausted; b/terra: weekly exhausted; c/third: weekly exhausted). Earliest reset 2030-01-01T01:00:00Z.",
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": false,
+      "resetAt": 1893459600000,
+      "wait": true
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "blocked",
+    "reason": "continuation",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": "router/golden: every model is unavailable (a/sonnet: weekly exhausted; b/terra: weekly exhausted; c/third: weekly exhausted). Earliest reset 2030-01-01T01:00:00Z.",
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": false,
+      "resetAt": 1893459600000,
+      "wait": true
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "blocked",
+    "reason": "retry",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "ordered"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [
+      "b"
+    ],
+    "admission": {
+      "ok": false,
+      "resetAt": 1893459600000,
+      "wait": true
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "measured",
+    "reason": "user",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "balanced",
+        "reason": "user",
+        "chosen": "b/terra",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "measured",
+              "score": 0.30000000000000004,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "measured",
+              "score": 0.8,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "measured",
+              "score": 0.7,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16
+            },
+            "ageMs": 0
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden user -> b/terra (balanced)\\n    a/sonnet: score 0.300, limiting weekly, data 0m old\\n    b/terra: score 0.800, limiting weekly, data 0m old\\n    c/third: score 0.700, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "measured",
+    "reason": "direct",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "measured",
+    "reason": "continuation",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "measured",
+    "reason": "retry",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [
+      "b"
+    ],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "fallback",
+    "reason": "user",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "balanced",
+        "reason": "user",
+        "chosen": "b/terra",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage unavailable"
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage unavailable"
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage unavailable"
+            },
+            "ageMs": 0
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden user -> b/terra (balanced)\\n    a/sonnet: fallback: usage unavailable, data 0m old\\n    b/terra: fallback: usage unavailable, data 0m old\\n    c/third: fallback: usage unavailable, data 0m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "fallback",
+    "reason": "direct",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "fallback",
+    "reason": "continuation",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "fallback",
+    "reason": "retry",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [
+      "b"
+    ],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "unlimited",
+    "reason": "user",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "balanced",
+        "reason": "user",
+        "chosen": "b/terra",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "unlimited"
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "unlimited"
+            },
+            "ageMs": 0
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "unlimited"
+            },
+            "ageMs": 0
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden user -> b/terra (balanced)\\n    a/sonnet: unlimited, data 0m old\\n    b/terra: unlimited, data 0m old\\n    c/third: unlimited, data 0m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "unlimited",
+    "reason": "direct",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "unlimited",
+    "reason": "continuation",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "unlimited",
+    "reason": "retry",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [
+      "b"
+    ],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "stale",
+    "reason": "user",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "balanced",
+        "reason": "user",
+        "chosen": "b/terra",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "measured",
+              "score": 0.30000000000000004,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16,
+              "stale": 900000
+            },
+            "ageMs": 900000
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "measured",
+              "score": 0.8,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16,
+              "stale": 900000
+            },
+            "ageMs": 900000
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "measured",
+              "score": 0.7,
+              "window": "weekly",
+              "roundoff": 8.881784197001252e-16,
+              "stale": 900000
+            },
+            "ageMs": 900000
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden user -> b/terra (balanced)\\n    a/sonnet: score 0.300, limiting weekly, stale 15m, data 15m old\\n    b/terra: score 0.800, limiting weekly, stale 15m, data 15m old\\n    c/third: score 0.700, limiting weekly, stale 15m, data 15m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "stale",
+    "reason": "direct",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "stale",
+    "reason": "continuation",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "stale",
+    "reason": "retry",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [
+      "b"
+    ],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "expired",
+    "reason": "user",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [
+      {
+        "at": 1893456000000,
+        "profile": "golden",
+        "strategy": "balanced",
+        "reason": "user",
+        "chosen": "b/terra",
+        "candidates": [
+          {
+            "model": "a/sonnet",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage stale"
+            },
+            "ageMs": 900001
+          },
+          {
+            "model": "b/terra",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage stale"
+            },
+            "ageMs": 900001
+          },
+          {
+            "model": "c/third",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage stale"
+            },
+            "ageMs": 900001
+          }
+        ],
+        "blocked": []
+      }
+    ],
+    "text": [
+      "2030-01-01T00:00:00Z router/golden user -> b/terra (balanced)\\n    a/sonnet: fallback: usage stale, data 15m old\\n    b/terra: fallback: usage stale, data 15m old\\n    c/third: fallback: usage stale, data 15m old"
+    ],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "expired",
+    "reason": "direct",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "expired",
+    "reason": "continuation",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "expired",
+    "reason": "retry",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [
+      "b"
+    ],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "blocked",
+    "reason": "user",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": "router/golden: every model is unavailable (a/sonnet: weekly exhausted; b/terra: weekly exhausted; c/third: weekly exhausted). Earliest reset 2030-01-01T01:00:00Z.",
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": false,
+      "resetAt": 1893459600000,
+      "wait": true
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "blocked",
+    "reason": "direct",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": "router/golden: every model is unavailable (a/sonnet: weekly exhausted; b/terra: weekly exhausted; c/third: weekly exhausted). Earliest reset 2030-01-01T01:00:00Z.",
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": false,
+      "resetAt": 1893459600000,
+      "wait": true
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "blocked",
+    "reason": "continuation",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": "router/golden: every model is unavailable (a/sonnet: weekly exhausted; b/terra: weekly exhausted; c/third: weekly exhausted). Earliest reset 2030-01-01T01:00:00Z.",
+    "decisions": [],
+    "text": [],
+    "reads": [],
+    "admission": {
+      "ok": false,
+      "resetAt": 1893459600000,
+      "wait": true
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "blocked",
+    "reason": "retry",
+    "profile": {
+      "id": "golden",
+      "name": "Router golden",
+      "chain": [
+        {
+          "provider": "a",
+          "id": "sonnet",
+          "thinking": "high"
+        },
+        {
+          "provider": "b",
+          "id": "terra"
+        },
+        {
+          "provider": "c",
+          "id": "third"
+        }
+      ],
+      "strategy": "balanced"
+    },
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "decisions": [],
+    "text": [],
+    "reads": [
+      "b"
+    ],
+    "admission": {
+      "ok": false,
+      "resetAt": 1893459600000,
+      "wait": true
+    }
+  }
+]"
+`;

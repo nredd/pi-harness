@@ -13,7 +13,16 @@ import type { ModelRoute, ModelRouteRequest } from "@earendil-works/pi-coding-ag
 import { type ChainEntry, type Exhaustion, type Profile, ROUTER_PROVIDER } from "./config.js";
 import type { ExhaustionTracker } from "./exhaustion.js";
 import { type ModelRef, parseRef, refKey, sameModel } from "./model-ref.js";
-import { formatScore, type QuotaScore, scoreQuota, selectCandidate } from "./selection.js";
+import {
+	compilePolicy,
+	evaluatePolicy,
+	metricScore,
+	type PolicyContext,
+	type PolicyEvaluation,
+	type PolicyMember,
+	type SafetyFilter,
+} from "./policy.js";
+import { formatScore, type QuotaScore } from "./selection.js";
 import type { UsageDecision, UsageSnapshot } from "./usage.js";
 
 /**
@@ -86,7 +95,10 @@ export interface Candidate {
 export interface RouteDecision {
 	at: number;
 	profile: string;
-	strategy: "ordered" | "balanced";
+	strategy: "ordered" | "balanced" | "strict-priority" | "remaining-balanced" | "lexicographic";
+	/** Opt-in v1 trace; absent from every legacy decision. */
+	version?: 1;
+	evaluation?: PolicyEvaluation;
 	reason: ModelRouteRequest["reason"];
 	/** `provider/id` of the chosen entry. */
 	chosen: string;
@@ -97,8 +109,15 @@ export interface RouteDecision {
 
 /** Outcome of `Router.pick`, shared by route, recovery, admission and status. */
 export type PickResult =
-	| { ok: true; entry: ChainEntry; model: Model<Api>; candidates: Candidate[]; blocked: Ineligible[] }
-	| { ok: false; blocked: Ineligible[]; resetAt?: number };
+	| {
+			ok: true;
+			entry: ChainEntry;
+			model: Model<Api>;
+			candidates: Candidate[];
+			blocked: Ineligible[];
+			evaluation: PolicyEvaluation;
+	  }
+	| { ok: false; blocked: Ineligible[]; resetAt?: number; evaluation: PolicyEvaluation };
 
 /** Multi-line, human-readable form of a decision for `/router status`. */
 export function formatDecision(decision: RouteDecision): string {
@@ -196,36 +215,97 @@ export class Router {
 	}
 
 	/** Cached-only selection; balanced user prompts may supply an eligible incumbent. */
-	pick(profile: Profile, env: RouteEnv, incumbent?: ModelRef): PickResult {
+	pick(profile: Profile, env: RouteEnv, incumbent?: ModelRef, context: PolicyContext = { reason: "user" }): PickResult {
 		const blocked: Ineligible[] = [];
 		const candidates: Candidate[] = [];
+		const members: PolicyMember[] = [];
 		const now = this.now();
-		for (const entry of profile.chain) {
+		for (const [index, entry] of profile.chain.entries()) {
+			const filters: SafetyFilter[] = [];
+			const member: PolicyMember = { ref: entry, index, filters };
+			if (profile.policy) member.snapshot = this.usage.peek?.(entry.provider);
+			members.push(member);
 			const model = env.resolve(entry);
+			filters.push({
+				name: "registered-authenticated",
+				result: model
+					? { outcome: "pass" }
+					: { outcome: "reject", reason: "not available (unknown model or no credentials)" },
+			});
 			if (!model) {
 				blocked.push({ entry, reason: "not available (unknown model or no credentials)", quota: false });
+				for (const name of ["confirmed-quota", "cached-exhaustion"] as const)
+					filters.push({
+						name,
+						result: { outcome: "unknown", reason: "not evaluated after registry rejection", rule: "reject" },
+					});
 				continue;
 			}
-			const block = this.blockedBy(model);
-			if (!block) {
-				const snapshot = this.usage.peek?.(model.provider);
+			// Preserve historical resolve -> tracker -> usage -> peek ordering and each dependency's clock.
+			const mark = this.tracker.blocking(model);
+			filters.push({
+				name: "confirmed-quota",
+				result: mark
+					? {
+							outcome: "reject",
+							reason: `${mark.window} exhausted, ${mark.resetKnown ? "resets" : "backing off until"} ${isoSeconds(mark.until)}`,
+							recheckAt: mark.until,
+						}
+					: { outcome: "pass" },
+			});
+			const decision = mark ? undefined : this.usage.decisionFor(model);
+			filters.push({
+				name: "cached-exhaustion",
+				result: mark
+					? { outcome: "unknown", reason: "not evaluated after confirmed block", rule: "reject" }
+					: decision?.block
+						? { outcome: "reject", reason: `${decision.window ?? "quota"} exhausted`, recheckAt: decision.resetAt }
+						: { outcome: "pass" },
+			});
+			const rejection = filters.find(({ result }) => result.outcome === "reject")?.result;
+			if (rejection?.outcome === "reject")
+				blocked.push({ entry, reason: rejection.reason, resetAt: rejection.recheckAt, quota: true });
+			else {
+				const snapshot = profile.policy ? member.snapshot : this.usage.peek?.(model.provider);
+				member.snapshot = snapshot;
 				candidates.push({
 					entry,
 					model,
-					score: scoreQuota(model, snapshot, now),
+					score: { kind: "fallback", reason: "not scored" },
 					...(snapshot ? { ageMs: Math.max(0, now - snapshot.retrievedAt) } : {}),
 				});
-			} else blocked.push({ entry, ...block, quota: true });
+			}
 		}
-		const index = selectCandidate(
-			candidates.map((candidate) => candidate.score),
-			profile.strategy,
-			incumbent ? candidates.findIndex((candidate) => sameModel(candidate.entry, incumbent)) : undefined,
-		);
-		const selected = candidates[index];
-		if (selected) return { ok: true, entry: selected.entry, model: selected.model, candidates, blocked };
+		const evaluation = evaluatePolicy(compilePolicy(profile), members, now, {
+			...context,
+			previous: incumbent ? refKey(incumbent) : context.previous,
+		});
+		for (const candidate of candidates) {
+			const row = evaluation.members.find(
+				(item) => item.model === refKey(candidate.entry),
+			) as PolicyEvaluation["members"][number];
+			candidate.score = row.metric ? metricScore(row.metric) : row.legacyScore;
+		}
+		const selected = candidates.find((candidate) => refKey(candidate.entry) === evaluation.chosen);
+		if (selected) return { ok: true, entry: selected.entry, model: selected.model, candidates, blocked, evaluation };
 		const resets = blocked.flatMap((item) => (item.resetAt === undefined ? [] : [item.resetAt]));
-		return { ok: false, blocked, resetAt: resets.length ? Math.min(...resets) : undefined };
+		return { ok: false, blocked, resetAt: resets.length ? Math.min(...resets) : undefined, evaluation };
+	}
+
+	/** Cached-only fresh-dispatch forecast. Never records a decision or mutates affinity. */
+	explain(profile: Profile, env: RouteEnv): PolicyEvaluation {
+		const picked = this.pick(profile, env, undefined, { reason: "direct" });
+		// Blocked members did not need a peek on the compatibility-sensitive selection path.
+		const members = picked.evaluation.members.map((row) => ({
+			ref: profile.chain[row.index] as ChainEntry,
+			index: row.index,
+			filters: row.filters,
+			snapshot: this.usage.peek?.((profile.chain[row.index] as ChainEntry).provider),
+		}));
+		return {
+			...evaluatePolicy(compilePolicy(profile), members, picked.evaluation.at, { reason: "direct" }),
+			forecast: true,
+		};
 	}
 
 	/**
@@ -262,13 +342,23 @@ export class Router {
 					isQuotaError(failed.message) &&
 					(await this.confirm(failed.model, env, request.signal, failed.message.timestamp));
 				request.signal?.throwIfAborted();
-				if (!confirmed) return this.toRoute(entry, failed.model, request.thinkingLevel);
+				if (!confirmed) {
+					if (profile.policy) {
+						const picked = this.pick(profile, env, undefined, { reason, retryUnconfirmed: refKey(entry) });
+						this.recordPolicy(profile.id, profile.policy.kind, reason, picked.evaluation, onDecision);
+					}
+					return this.toRoute(entry, failed.model, request.thinkingLevel);
+				}
 				if (hasPartialOutput(failed.message)) {
 					throw new Error("subscription-router: refusing to replay a partial response; retry explicitly.");
 				}
 			}
 		}
-		if ((reason === "continuation" || (reason === "direct" && profile.strategy === "balanced")) && previous) {
+		if (
+			!profile.policy &&
+			(reason === "continuation" || (reason === "direct" && profile.strategy === "balanced")) &&
+			previous
+		) {
 			const entry = profile.chain.find((item) => sameModel(item, previous.model));
 			if (entry && !this.blockedBy(previous.model)) {
 				const model = env.resolve(entry);
@@ -279,22 +369,56 @@ export class Router {
 			profile,
 			env,
 			reason === "user" && profile.strategy === "balanced" ? previous?.model : undefined,
+			profile.policy ? { reason, previous: previous ? refKey(previous.model) : undefined } : { reason: "user" },
 		);
 		if (!picked.ok) throw new ChainExhaustedError(profile.id, picked.blocked, picked.resetAt);
-		onDecision?.({
-			at: this.now(),
-			profile: profile.id,
-			strategy: profile.strategy ?? "ordered",
-			reason,
-			chosen: refKey(picked.entry),
-			candidates: picked.candidates.map((c) => ({
-				model: refKey(c.entry),
-				quota: c.score,
-				...(c.ageMs === undefined ? {} : { ageMs: c.ageMs }),
-			})),
-			blocked: picked.blocked.map((b) => ({ model: refKey(b.entry), reason: b.reason })),
-		});
+		if (profile.policy) this.recordPolicy(profile.id, profile.policy.kind, reason, picked.evaluation, onDecision);
+		else
+			onDecision?.({
+				at: this.now(),
+				profile: profile.id,
+				strategy: profile.strategy ?? "ordered",
+				reason,
+				chosen: refKey(picked.entry),
+				candidates: picked.candidates.map((c) => ({
+					model: refKey(c.entry),
+					quota: c.score,
+					...(c.ageMs === undefined ? {} : { ageMs: c.ageMs }),
+				})),
+				blocked: picked.blocked.map((b) => ({ model: refKey(b.entry), reason: b.reason })),
+			});
 		return this.toRoute(picked.entry, picked.model, request.thinkingLevel);
+	}
+
+	private recordPolicy(
+		profile: string,
+		kind: NonNullable<Profile["policy"]>["kind"],
+		reason: ModelRouteRequest["reason"],
+		evaluation: PolicyEvaluation,
+		record: ((decision: RouteDecision) => void) | undefined,
+	): void {
+		record?.({
+			at: evaluation.at,
+			profile,
+			strategy: kind,
+			reason,
+			chosen: evaluation.chosen as string,
+			version: 1,
+			evaluation,
+			candidates: evaluation.members
+				.filter((row) => row.eligible)
+				.map((row) => ({
+					model: row.model,
+					quota: row.metric ? metricScore(row.metric) : row.legacyScore,
+					...(row.snapshot.ageMs === null ? {} : { ageMs: row.snapshot.ageMs }),
+				})),
+			blocked: evaluation.members
+				.filter((row) => !row.eligible)
+				.map((row) => ({
+					model: row.model,
+					reason: row.filters.flatMap(({ result }) => (result.outcome === "reject" ? [result.reason] : [])).join("; "),
+				})),
+		});
 	}
 
 	private toRoute(entry: ChainEntry, model: Model<Api>, selected: ModelThinkingLevel): ModelRoute {
