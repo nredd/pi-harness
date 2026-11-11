@@ -57,7 +57,7 @@ test("Linux build/setup scripts and process lifetime", async () => {
 	assert.match(setupSource, /prebuilt", "linux", arch, "linux-bridge"/);
 	assert.match(
 		setupSource,
-		/allowLinuxBuildFallback = args\.has\("--allow-build"\) \|\| process\.env\.PI_COMPUTER_USE_ALLOW_BUILD === "1"/,
+		/allowLinuxBuildFallback = args\.has\("--allow-build"\) \|\| env\.PI_COMPUTER_USE_ALLOW_BUILD === "1"/,
 	);
 	assert.match(
 		helperSource,
