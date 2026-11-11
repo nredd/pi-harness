@@ -642,6 +642,7 @@ COMPUTER_USE_CONTRACT = PackageContract(
         "src/platform/windows/backend.ts",
         "src/platform/windows/helper.ts",
         "src/root-selection.ts",
+        "src/outline-store.ts",
         "src/runtime.ts",
         "src/state.ts",
         "src/view.ts",

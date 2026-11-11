@@ -352,6 +352,14 @@ const cases = [
 		check: "test/wsl2-diagnostics.test.mjs",
 		failure: /HINT-FROM-BACKEND|not reachable from the WSL2 guest/,
 	},
+	{
+		name: "Outline store write (#648)",
+		file: "src/bridge.ts",
+		before: "saveStoredOutline(result.capture.stateId, serializeOutline(result.outline));",
+		after: "/* outline store write dropped */",
+		check: "test/outline-store.test.mjs",
+		failure: /Expected values to be strictly equal|expected undefined/,
+	},
 ];
 
 try {
