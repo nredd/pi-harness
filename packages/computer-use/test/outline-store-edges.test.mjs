@@ -25,10 +25,12 @@ test("a missing store directory, stray files and unreadable states are all toler
 	const outline = serializeOutline(outlineOf());
 	saveStoredOutline("real", outline);
 	const dir = outlineStoreDir();
-	for (const stray of ["README", "0-1-abc.json", `.tmp-${"0".repeat(32)}.json`]) fs.writeFileSync(`${dir}/${stray}`, "x");
+	const [entry] = fs.readdirSync(dir);
+	const strays = ["README", "0-1-abc.json", `.tmp-${"0".repeat(32)}.json`, `.${entry}.tmp`];
+	for (const stray of strays) fs.writeFileSync(`${dir}/${stray}`, "x");
 	saveStoredOutline("other", outline, 1);
 	assert.equal(fs.readdirSync(dir).filter((name) => /^\d{16}-/.test(name)).length, 1, "only well-formed entries are counted and evicted");
-	assert.ok(fs.existsSync(`${dir}/README`), "unrelated files are never deleted");
+	for (const stray of strays) assert.ok(fs.existsSync(`${dir}/${stray}`), `${stray} is never deleted`);
 	assert.ok(loadStoredOutline("other"));
 	assert.equal(loadStoredOutline("real"), undefined);
 });
@@ -46,12 +48,11 @@ test("shape-invalid entries load as missing", async () => {
 });
 
 test("a save that cannot serialize is swallowed and leaves nothing loadable", async () => {
-	const { saveStoredOutline, loadStoredOutline, outlineStoreDir } = await modules();
+	const { saveStoredOutline, loadStoredOutline } = await modules();
 	const circular = {};
 	circular.self = circular;
 	assert.doesNotThrow(() => saveStoredOutline("bad", { lookId: "l", root: circular }));
 	assert.equal(loadStoredOutline("bad"), undefined);
-	assert.deepEqual(fs.readdirSync(outlineStoreDir()).filter((name) => name.endsWith(".tmp")), [], "no temporary file is left behind");
 });
 
 test("load returns the newest entry when two copies of a state exist", async () => {

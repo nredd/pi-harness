@@ -265,10 +265,14 @@ describe("graftScopedOutline", () => {
 		const outline = graftBase();
 		const target = outline.nodes[1];
 		const originalRect = { ...target.rect };
-		const returned = graftScopedOutline(outline, "@e2", scopedLook());
+		const scoped = scopedLook();
+		scoped.root.wireRef = "pane-scoped";
+		const returned = graftScopedOutline(outline, "@e2", scoped);
 		assert.equal(returned, target);
 		assert.equal(target.ref, "@e2");
-		assert.equal(target.wireRef, "pane", "preserveWireRef keeps the live wire ref");
+		assert.equal(target.wireRef, "pane", "the live wire ref survives a scoped root that carries a different one");
+		assert.equal(outline.wireRefToRef.get("pane"), "@e2");
+		assert.equal(outline.wireRefToRef.has("pane-scoped"), false);
 		assert.deepEqual(target.rect, originalRect);
 		assert.deepEqual(
 			{ role: target.role, subrole: target.subrole, identifier: target.identifier, title: target.title, description: target.description, value: target.value, actions: target.actions },

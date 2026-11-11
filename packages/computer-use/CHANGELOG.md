@@ -10,6 +10,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
+- `observe_ui` folded summaries pluralize unnamed-role children correctly: `1 nodes` / `2 nodess` -> `1 node` / `2 nodes` (nredd/pi-harness#702).
 - Linux under WSL2 (detected from `WSL_DISTRO_NAME`, `WSL_INTEROP` or `/proc/version`): `find_roots` with no (or no matching) roots and `observe_ui`/`act_ui`/`search_ui` with no frontmost window now say that Windows host windows are not reachable from the WSL2 guest and name nredd/pi-harness#668, instead of the bare "No roots"/"No frontmost window" text. Native Linux messages are unchanged. No Windows bridge is added (nredd/pi-harness#672).
 - macOS wheel scrolling (`desktop_input` and the `act_ui` wheel fallback) now scrolls right for positive `scrollX`, matching the AX scroll-bar path and `scrollY`; it scrolled left before. The wheel mapping is the pure `scrollWheelCounts`, revert-proved; it clamps deltas to the `Int32` range so an extreme `scrollX`/`scrollY` no longer traps the helper. Linux and Windows were already correct. Upstream injaneity/pi-computer-use has the same bug (nredd/pi-harness#650).
 - `act_ui` validates every action before the write epoch advances, so a rejected request (e.g. `keypress` without `ref`, or `typeText`/`keypress` under strict headless on macOS) no longer stales the `stateId`, and a batch that fails this validation at a later step delivers nothing (upstream injaneity/pi-computer-use#112, nredd/pi-harness#637).
