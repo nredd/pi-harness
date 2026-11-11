@@ -333,6 +333,7 @@ test("search_ui and expand_ui on a browser state never escalate to the desktop",
 
 	const expanded = await fake.call(executeExpandUi, { stateId, ref: "@e4" });
 	assert.match(fake.text(expanded), /^@e4 AXGroup "Truncated"\npath: AXWebArea "Page" /);
+	assert.match(fake.text(expanded), /\[truncated\]/, "the cached subtree still shows the node as truncated");
 	assert.equal(fake.looks.length, 0, "no OCR or scoped look reaches the native helper");
 });
 
