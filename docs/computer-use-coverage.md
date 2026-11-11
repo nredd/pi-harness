@@ -38,7 +38,7 @@ The signal is **enforced** since #645 T0, with caps equal to the measured per-OS
 | OS | Lines | Functions | Branches | Source |
 | --- | --- | --- | --- | --- |
 | darwin | 572 | 203 | 871 | local `npm test` at `6d913af1` |
-| linux (max of Ubuntu and WSL2) | 592 | 211 | 899 | hosted `owned (ubuntu-24.04)` 589/209/899 and `owned (wsl2)` 592/211/899, PR #731 at `d1ebcfc0` (after #723) |
+| linux (max of Ubuntu and WSL2) | 592 | 211 | 900 | hosted `owned (ubuntu-24.04)` 589/209/900 and `owned (wsl2)` 592/211/900, PR #731 merged with main `9de93b4c` (after #723, #732, #733) |
 
 Every later coverage PR lowers these caps to its own hosted numbers (never raises them). Statement
 accounting does not exist yet (#700), so statements carry no cap.
