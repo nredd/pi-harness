@@ -334,7 +334,8 @@ class MacosActivityGlowConnection {
 	}
 
 	async close(): Promise<void> {
-		await this.tail.catch(() => undefined);
+		// `tail` is `operation.catch(...)` in `setActive`, so it never rejects.
+		await this.tail;
 		const socket = this.socket;
 		this.socket = undefined;
 		this.connecting = undefined;

@@ -95,6 +95,16 @@ RED under 50 self-terminating spinners (load ~90-100, Apple M4, 10 cores):
 the same load peaked at 18172 ms, 9560 ms and 4204 ms (Jiti). The budgets do
 not claim to bound arbitrary host starvation.
 
+## computer-use helper client waits (#706)
+
+`computer-use/test/macos-helper-client.test.mjs` drives `MacosHelperClient` against the fake
+helper in `test/support/fake-helper.mjs` over a real unix socket. Some cases wait out the
+client's own fixed timers, not host speed: the 30 x 100 ms `ensureDaemon` probe loop (3.2 s), the
+400 ms `restart` pause plus a second probe loop (5.9 s alone, the longest), a failing `open`
+launch (3.1 s) and the 2 s activity-glow timeout. Those cases carry a 45 s budget (about 7x the
+longest, same twice-the-worst-hosted-figure rule once hosted numbers exist); the rest of the file
+runs well inside the 20 s default. Total alone: ~17 s on Apple M4.
+
 ## Measured macOS Swift budget (#457)
 
 `computer-use/test/macos-native-pure.test.mjs` compiles the PURE region of
