@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // Opt-in report-only native coverage. No thresholds and no normal-check invocation.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const TOOL_VERSION = "0.9.1";
@@ -126,7 +126,7 @@ export function runCoverage(args, spawn = spawnSync) {
 	}
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (process.argv[1] && realpathSync(path.resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url))) {
 	try {
 		runCoverage(process.argv.slice(2));
 	} catch (error) {

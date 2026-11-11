@@ -34,13 +34,15 @@ Istanbul text summary: statements 46.20% (2123/4595), branches 38.87% (1339/3444
 macOS 1975 / 517 lines/functions, no branch cap; `goal: excluded` so branches carry no cap at all).
 `src/platform/types.ts` is excluded as type-only and stays so (no executable output).
 
+The totals above and the other rows are the pre-#705 baseline (T7 refreshes them). The four `scripts/` rows below were re-measured in #705 from `npm run check` in `packages/computer-use` (`coverage/primary/lcov.info`, darwin), so the totals still count their old 298 uncovered lines.
+
 | File | Lines missed/total | Branches missed/total | Functions missed/total | Uncovered lines |
 | --- | --- | --- | --- | --- |
 | `extensions/computer-use.ts` | 19/50 | 27/28 | 7/9 | 175-176,185,232-233,238-241,245-248,252-254,258-260 |
-| `scripts/build-native.mjs` | 152/152 | 96/96 | 22/22 | 9-10,15-19,23-25,28-30,32,37-39,41,45,49-51,55-61,63,69,73,81-83,87-88,91-95,97-98,100,102-103,107-108,111-113,115,117-119,123-133,141,144,... |
-| `scripts/docs-generators/generate-source-references.mjs` | 79/79 | 44/44 | 21/21 | 7-13,15-19,22,26,30-38,42-48,51-52,56-60,62-64,66-67,71,100-102,107-111,113-114,123,127,147-149,151,154-155,157-158,161,163-165,168-169,... |
-| `scripts/docs-generators/generate-tool-reference.mjs` | 57/57 | 55/55 | 13/13 | 8-10,12,15,19-23,25-28,30,34-37,41-46,48,52-58,60-61,64,66,69,81-87,89-90,93,95-96,98-101,103,105-106 |
-| `scripts/rust-coverage.mjs` | 10/62 | 9/56 | 0/6 | 38,52,97,105,107,109,130-131,133-134 |
+| `scripts/build-native.mjs` | 0/154 | 0/120 | 0/23 | none |
+| `scripts/docs-generators/generate-source-references.mjs` | 0/85 | 0/55 | 0/22 | none |
+| `scripts/docs-generators/generate-tool-reference.mjs` | 0/65 | 0/68 | 0/15 | none |
+| `scripts/rust-coverage.mjs` | 0/62 | 0/56 | 0/6 | none |
 | `scripts/setup-helper.mjs` | 308/428 | 197/287 | 71/99 | 40-42,53-54,58,62,68-70,72,76,80-82,84,89-90,94-99,103-108,110-112,114,116,120-126,128,319,323-324,332-333,336-337,342-345,368-370,385-386,... |
 | `src/actions.ts` | 16/55 | 29/94 | 5/17 | 38,42-43,47-52,76-77,103,105-108 |
 | `src/bridge.ts` | 486/1118 | 828/1312 | 90/246 | 341,371-373,399,401,403,463,467-468,470,476,480,486,492-494,501-502,510-511,517-518,520,535-536,538-539,541,547,575,605-607,630,635,648-649,... |
@@ -79,9 +81,12 @@ Why so low, in order of size:
 - `src/bridge.ts` holds 486 lines / 828 branches / 90 functions: the tool executors, `launch_browser`,
   wait/expect handling and the CDP routing. Existing suites drive it through a mocked
   `currentPlatformBackend` but only on the happy path of find/observe/act.
-- Subprocess-only checks do not count. `scripts/build-native.mjs` (0/152), both docs generators
-  (0/136 lines) and most of `scripts/setup-helper.mjs` are exercised by tests that spawn `node` or
-  `tsx`, so Istanbul never sees them. They need an in-process `main(argv, deps)`.
+- Subprocess-only checks do not count. `scripts/build-native.mjs`, both docs generators and
+  `scripts/rust-coverage.mjs` used to be exercised only by tests that spawn `node` or `tsx` (or
+  missed their error arms); they now export `main(argv, deps)` and are at 0 uncovered via
+  `test/build-native.test.mjs`, `test/docs-generators.test.mjs` and
+  `test/rust-coverage-errors.test.mjs` (#705). Most of `scripts/setup-helper.mjs` still needs the
+  same in-process `main(argv, deps)`.
 - Platform helpers talk to real sockets/children. `src/platform/macos/helper.ts` 196, `windows/helper.ts`
   78, `linux/helper.ts` 26 uncovered lines. The Windows and Linux halves are plain TS and only need a fake
   child, not a Windows or Linux host.
