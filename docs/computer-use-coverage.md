@@ -34,6 +34,8 @@ Istanbul text summary: statements 46.20% (2123/4595), branches 38.87% (1339/3444
 macOS 1975 / 517 lines/functions, no branch cap; `goal: excluded` so branches carry no cap at all).
 `src/platform/types.ts` is excluded as type-only and stays so (no executable output).
 
+The totals above and the other rows are the pre-#705 baseline (T7 refreshes them). The four `scripts/` rows below were re-measured in #705 from `npm run check` in `packages/computer-use` (`coverage/primary/lcov.info`, darwin), so the totals still count their old 298 uncovered lines.
+
 | File | Lines missed/total | Branches missed/total | Functions missed/total | Uncovered lines |
 | --- | --- | --- | --- | --- |
 | `extensions/computer-use.ts` | 19/50 | 27/28 | 7/9 | 175-176,185,232-233,238-241,245-248,252-254,258-260 |
