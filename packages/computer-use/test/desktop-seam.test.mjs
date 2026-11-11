@@ -1,5 +1,8 @@
 // `src/desktop.ts` on every OS: `process.platform` is the seam and `macosHelper.command` a recording fake, so no case needs a Mac (nredd/pi-harness#703, Refs #645).
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, test } from "vitest";
 import { loadComputerUseConfig } from "../src/config.ts";
 import { DesktopLease, desktopInputText, executeDesktopInput, executeDesktopScreenshot, withDesktopLock, withDesktopTransaction, withPhysicalInput } from "../src/desktop.ts";
@@ -11,10 +14,15 @@ const setPlatform = (value) => Object.defineProperty(process, "platform", { ...r
 const ENV_KEYS = ["PI_COMPUTER_USE_HEADLESS", "PI_COMPUTER_USE_DESKTOP_CONTROL", "PI_COMPUTER_USE_BLOCKED_APPS"];
 let savedEnv;
 let sent;
+let savedAgentDir;
+let agentDir;
 
 beforeEach(() => {
 	savedEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 	for (const key of ENV_KEYS) delete process.env[key];
+	savedAgentDir = process.env.PI_CODING_AGENT_DIR;
+	agentDir = mkdtempSync(path.join(os.tmpdir(), "cu-desktop-"));
+	process.env.PI_CODING_AGENT_DIR = agentDir;
 	loadComputerUseConfig("/nonexistent-cwd");
 	sent = [];
 	setPlatform("darwin");
@@ -27,6 +35,9 @@ afterEach(() => {
 		if (savedEnv[key] === undefined) delete process.env[key];
 		else process.env[key] = savedEnv[key];
 	}
+	if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
+	rmSync(agentDir, { recursive: true, force: true });
 	loadComputerUseConfig("/nonexistent-cwd");
 });
 

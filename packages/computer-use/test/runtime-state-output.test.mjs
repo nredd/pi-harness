@@ -23,6 +23,15 @@ describe("StateStore", () => {
 		assert.equal(store.size, 0);
 	});
 
+	test("an empty restored stateId does not disable eviction", () => {
+		const store = new StateStore(1);
+		store.set({ stateId: "", resourceKey: "r", epoch: 0, value: "restored" });
+		store.create("r", 0, "a");
+		store.create("r", 0, "b");
+		assert.equal(store.size, 1);
+		assert.equal(store.get(""), undefined);
+	});
+
 	test("the default limit is 128", () => {
 		const store = new StateStore();
 		const first = store.create("r", 0, 0);

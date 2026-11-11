@@ -63,6 +63,9 @@ beforeEach(() => {
 	mkdirSync(path.join(root, "project"), { recursive: true });
 	process.env.PI_CODING_AGENT_DIR = path.join(root, "agent");
 	vi.clearAllMocks();
+	// `clearAllMocks` keeps implementations: re-apply the defaults so a `mockRejectedValue` cannot leak into the next test.
+	for (const name of ["ensureComputerUseSetup", "setComputerUseActivity", "shutdownComputerUseSession"]) bridge[name].mockReset().mockResolvedValue(undefined);
+	bridge.reconstructStateFromBranch.mockReset();
 });
 
 afterEach(() => {
