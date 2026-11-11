@@ -252,6 +252,7 @@ interface OutlineToolDetails {
 }
 
 interface ResolvedTarget extends CurrentTarget {
+	windowRef: string;
 	framePoints: FramePoints;
 	scaleFactor: number;
 	isMinimized: boolean;
@@ -331,10 +332,9 @@ function desktopResourceKey(target: Pick<CurrentTarget, "pid">): string {
 }
 
 function persistOperation(state: OperationState): void {
-	if (!state.currentTarget || !state.currentCapture || !state.currentLook || !state.currentOutline) return;
-	const resourceKey = state.resourceKey ?? desktopResourceKey(state.currentTarget);
-	const epoch = state.epoch ?? resourceScheduler.epoch(resourceKey);
-	savedStates.saveDesktop(state, resourceKey, epoch);
+	// Every desktop capture and hydrated state carries its resource identity alongside the target and look.
+	if (!state.currentTarget || !state.currentCapture || !state.currentLook || !state.currentOutline || !state.resourceKey || state.epoch === undefined) return;
+	savedStates.saveDesktop(state, state.resourceKey, state.epoch);
 }
 
 export async function setComputerUseActivity(active: boolean): Promise<void> {
@@ -367,13 +367,7 @@ function currentRuntimeMode(): ExecutionVariant {
 	return isHeadlessMode() ? "stealth" : "default";
 }
 
-function currentDeliveryPolicy(): DeliveryPolicy {
-	if (isHeadlessMode()) return "background";
-	const value = (process.env.PI_COMPUTER_USE_DELIVERY_POLICY ?? process.env.PI_COMPUTER_USE_EVENT_DELIVERY ?? "default").toLowerCase();
-	return value === "background" || value === "pid" ? "background" : value === "foreground" || value === "hid" ? "foreground" : value === "ax_only" || value === "ax-only" ? "ax_only" : "default";
-}
-
-function nativeInputDelivery(policy = currentDeliveryPolicy()): NativeInputDelivery {
+function nativeInputDelivery(policy: DeliveryPolicy): NativeInputDelivery {
 	return policy === "foreground" ? "hid" : "pid";
 }
 
@@ -395,14 +389,7 @@ function settleMsForExecution(execution: ExecutionTrace): number {
 	// Any deltaSource means the helper already awaited UI quiescence; the
 	// bridge must not double-pay with its own settle sleep.
 	if (execution.performed?.deltaSource) return 0;
-	if (execution.variant === "stealth") {
-		switch (execution.strategy) {
-			case "browser_open_location":
-				return 120;
-			default:
-				return 120;
-		}
-	}
+	if (execution.variant === "stealth") return 120;
 	return ACTION_SETTLE_MS;
 }
 
@@ -439,8 +426,8 @@ async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 async function withWindowWriteLock<T>(target: ResolvedTarget | CurrentTarget, work: () => Promise<T>): Promise<T> {
 	const state = operationState();
 	const key = desktopResourceKey(target);
-	const baseEpoch = state.epoch ?? resourceScheduler.epoch(key);
-	const result = await resourceScheduler.write(key, baseEpoch, async (nextEpoch) => {
+	// Callers run on a hydrated or freshly captured desktop state, which always carries its epoch.
+	const result = await resourceScheduler.write(key, state.epoch!, async (nextEpoch) => {
 		state.resourceKey = key;
 		state.epoch = nextEpoch;
 		return await work();
@@ -455,8 +442,8 @@ function trimOrUndefined(value: string | undefined): string | undefined {
 	return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function normalizeText(value: string | undefined): string {
-	return (value ?? "").trim().toLowerCase();
+function normalizeText(value: string): string {
+	return value.trim().toLowerCase();
 }
 
 function toBoolean(value: unknown): boolean {
@@ -470,22 +457,13 @@ function outlineNodeCenter(node: OutlineNode): { x: number; y: number } {
 	return { x: node.rect.x + node.rect.w / 2, y: node.rect.y + node.rect.h / 2 };
 }
 
-function validateStateId(stateId?: string): CurrentCapture {
-	const state = operationState();
-	if (!state.currentCapture) {
+/** `executeTool` already hydrated this operation from `params.stateId`, so the capture can only be missing when no state was supplied. */
+function currentCaptureOrThrow(): CurrentCapture {
+	const capture = operationState().currentCapture;
+	if (!capture) {
 		throw new Error("No observation state is available. Call observe_ui first.");
 	}
-	const supplied = stateId;
-	if (supplied && state.currentCapture.stateId !== supplied) {
-		throw new Error(
-			`Stale state '${supplied}'. The active operation state is '${state.currentCapture.stateId}'. Observe the root again and retry.`,
-		);
-	}
-	const stateTarget = state.currentStateTarget;
-	if (stateTarget && state.currentTarget && (stateTarget.pid !== state.currentTarget.pid || stateTarget.windowId !== state.currentTarget.windowId)) {
-		throw new Error("The latest state belongs to a different window. Call observe_ui for the target window and retry.");
-	}
-	return state.currentCapture;
+	return capture;
 }
 
 function formatOutlineNodeLabel(node: OutlineNode): string {
@@ -504,8 +482,7 @@ function formatOutlineNodeLabel(node: OutlineNode): string {
 
 function outlineNodeByRef(ref: string): OutlineNode {
 	const state = operationState();
-	const outline = state.currentOutline;
-	const node = outline ? nodeByRef(outline, ref) : undefined;
+	const node = nodeByRef(currentOutlineOrThrow(), ref);
 	if (!node) {
 		const windowHint = state.currentTarget?.windowRef ? `({ root: "${state.currentTarget.windowRef}" })` : "";
 		throw new Error(`Outline ref '${ref}' is stale or not available for the latest state. Call observe_ui${windowHint} again and choose a current @e ref.`);
@@ -523,7 +500,7 @@ function wireRefForNode(node: OutlineNode): string {
 function imageFallbackReason(
 	tool: string,
 	result: CaptureResult,
-	imageMode: ImageMode = "auto",
+	imageMode: ImageMode,
 ): { reason: NonNullable<ComputerUseDetails["imageReason"]>; message: string } | undefined {
 	if (imageMode === "never") return undefined;
 	if (imageMode === "always") return { reason: "fallback_recovery", message: "An image was requested explicitly for visual verification." };
@@ -624,7 +601,7 @@ function formatWindowLine(window: ListWindowsDetails["windows"][number]): string
 	const frame = `${Math.round(window.framePoints.x)},${Math.round(window.framePoints.y)} ${Math.round(window.framePoints.w)}x${Math.round(window.framePoints.h)}`;
 	const id = window.windowId ? `windowId ${window.windowId}` : window.nativeWindowRef ? `nativeRootRef ${window.nativeWindowRef}` : "unstable root id";
 	const pairing = window.pairing ? `, pairing ${window.pairing.confidence}/${Math.round(window.pairing.score)}` : "";
-	return `- ${window.windowRef} ${window.kind} ${window.app} pid ${window.pid} — ${window.windowTitle || "(untitled)"} (z ${window.zOrder}, ${id}, frame ${frame}${pairing}${flags ? `, ${flags}` : ""})`;
+	return `- ${window.windowRef} ${window.kind} ${window.app} pid ${window.pid} — ${window.windowTitle} (z ${window.zOrder}, ${id}, frame ${frame}${pairing}${flags ? `, ${flags}` : ""})`;
 }
 
 async function getFrontmost(signal?: AbortSignal): Promise<FrontmostResult> {
@@ -669,14 +646,12 @@ function windowRecordIdentity(record: Pick<WindowRefRecord, "pid" | "windowId" |
 
 function storeWindowRef(record: Omit<WindowRefRecord, "ref">): WindowRefRecord {
 	const identity = windowRecordIdentity(record);
+	// `windowRefs` and `windowRefByIdentity` are only ever written and cleared together.
 	const existingRef = runtimeState.windowRefByIdentity.get(identity);
 	if (existingRef) {
-		const existing = runtimeState.windowRefs.get(existingRef);
-		if (existing) {
-			const updated = { ...record, ref: existingRef };
-			runtimeState.windowRefs.set(existingRef, updated);
-			return updated;
-		}
+		const updated = { ...record, ref: existingRef };
+		runtimeState.windowRefs.set(existingRef, updated);
+		return updated;
 	}
 
 	const ref = `@r${runtimeState.nextRootRefIndex++}`;
@@ -693,22 +668,6 @@ function storeBrowserRootRef(contextId: string): string {
 	runtimeState.browserRootByContext.set(contextId, ref);
 	runtimeState.browserContextByRoot.set(ref, contextId);
 	return ref;
-}
-
-function storeWindowRefForTarget(target: ResolvedTarget): string {
-	return storeWindowRef({
-		appName: target.appName,
-		bundleId: target.bundleId,
-		pid: target.pid,
-		windowTitle: target.windowTitle,
-		windowId: target.windowId > 0 ? target.windowId : undefined,
-		framePoints: target.framePoints,
-		scaleFactor: target.scaleFactor,
-		isMinimized: target.isMinimized,
-		isOnscreen: target.isOnscreen,
-		isMain: target.isMain,
-		isFocused: target.isFocused,
-	}).ref;
 }
 
 function storeWindowRefForAppWindow(app: HelperApp, window: HelperWindow): WindowRefRecord {
@@ -728,13 +687,9 @@ function storeWindowRefForAppWindow(app: HelperApp, window: HelperWindow): Windo
 	});
 }
 
-function choosePreferredWindow(windows: HelperWindow[], appName: string): HelperWindow {
-	if (!windows.length) {
-		throw new Error(`No controllable root was found in app '${appName}'.`);
-	}
-
-	const scored = [...windows].sort((a, b) => scoreWindow(b) - scoreWindow(a));
-	return scored[0];
+/** Highest-scoring root; callers pass a non-empty list. */
+function choosePreferredWindow(windows: HelperWindow[]): HelperWindow {
+	return [...windows].sort((a, b) => scoreWindow(b) - scoreWindow(a))[0];
 }
 
 function summarizeWindowCandidate(window: HelperWindow): string {
@@ -746,7 +701,7 @@ function summarizeWindowCandidate(window: HelperWindow): string {
 	]
 		.filter(Boolean)
 		.join(",");
-	return `${window.title || "(untitled)"} [score=${scoreWindow(window)}${flags ? `, ${flags}` : ""}]`;
+	return `${window.title} [score=${scoreWindow(window)}${flags ? `, ${flags}` : ""}]`;
 }
 
 function summarizeWindowCandidates(windows: HelperWindow[], limit = 6): string {
@@ -758,7 +713,6 @@ function summarizeWindowCandidates(windows: HelperWindow[], limit = 6): string {
 }
 
 function chooseRankedWindowOrUndefined(windows: HelperWindow[]): HelperWindow | undefined {
-	if (windows.length === 0) return undefined;
 	const ranked = [...windows].sort((a, b) => scoreWindow(b) - scoreWindow(a));
 	if (ranked.length === 1) return ranked[0];
 	const topScore = scoreWindow(ranked[0]);
@@ -796,82 +750,42 @@ export function nativeWindowRequest(target: Pick<CurrentTarget, "pid" | "windowI
 function setCurrentTarget(target: ResolvedTarget): void {
 	assertBrowserUseAllowed(target);
 	assertAppNotBlocked(target);
-	const windowRef = target.windowRef ?? storeWindowRefForTarget(target);
 	operationState().currentTarget = {
 		appName: target.appName,
 		bundleId: target.bundleId,
 		pid: target.pid,
 		windowTitle: target.windowTitle,
 		windowId: target.windowId,
-		windowRef,
+		windowRef: target.windowRef,
 		nativeWindowRef: target.nativeWindowRef,
 	};
 }
 
 function normalizeWindowSelector(selector: RootSelector | undefined): string | undefined {
-	if (typeof selector === "number" && Number.isFinite(selector)) return String(Math.trunc(selector));
-	if (typeof selector === "string") return trimOrUndefined(selector);
-	return undefined;
+	return trimOrUndefined(selector);
 }
 
-async function resolveTargetByWindowSelector(selector: RootSelector, signal?: AbortSignal): Promise<ResolvedTarget> {
-	const normalized = normalizeWindowSelector(selector);
-	if (!normalized) {
-		throw new Error("root target must be a non-empty @r ref or numeric windowId.");
-	}
-
+/** `observe_ui` admits only exact `@r` refs (see `performObserve`), so a selector is either the current root or a ref `find_roots` issued. */
+async function resolveTargetByWindowSelector(selector: string, signal?: AbortSignal): Promise<ResolvedTarget> {
 	const current = operationState().currentTarget;
-	if (current?.windowRef === normalized) {
+	if (current?.windowRef === selector) {
 		return await resolveCurrentTarget(signal);
 	}
 
-	const fromRef = runtimeState.windowRefs.get(normalized);
-	if (fromRef) {
-		const app: HelperApp = { appName: fromRef.appName, bundleId: fromRef.bundleId, pid: fromRef.pid };
-		const windows = await listWindows(fromRef.pid, signal);
-		const match =
-			(fromRef.windowId ? windows.find((window) => window.windowId === fromRef.windowId) : undefined) ??
-			(fromRef.nativeWindowRef ? windows.find((window) => window.windowRef === fromRef.nativeWindowRef) : undefined) ??
-			windows.find((window) => normalizeText(window.title || "(untitled)") === normalizeText(fromRef.windowTitle));
-		if (!match) {
-			throw new Error(`Root ref '${normalized}' is stale. Call find_roots again and choose a current window.`);
-		}
-		const resolved = toResolvedTarget(app, match);
-		setCurrentTarget(resolved);
-		return resolved;
+	const fromRef = runtimeState.windowRefs.get(selector);
+	if (!fromRef) {
+		throw new Error(`Root ref '${selector}' is not available in this session. Call find_roots first.`);
 	}
-
-	const numericWindowId = Number(normalized);
-	if (Number.isInteger(numericWindowId) && numericWindowId > 0) {
-		const apps = await listApps(signal);
-		for (const app of apps) {
-			const windows = await listWindows(app.pid, signal);
-			const match = windows.find((window) => window.windowId === numericWindowId);
-			if (match) {
-				assertBrowserUseAllowed(app);
-				const resolved = toResolvedTarget(app, match);
-				setCurrentTarget(resolved);
-				return resolved;
-			}
-		}
-		throw new Error(`Window id '${numericWindowId}' was not found. Call find_roots again and choose a current window.`);
+	const app: HelperApp = { appName: fromRef.appName, bundleId: fromRef.bundleId, pid: fromRef.pid };
+	const windows = await listWindows(fromRef.pid, signal);
+	const match =
+		(fromRef.windowId ? windows.find((window) => window.windowId === fromRef.windowId) : undefined) ??
+		(fromRef.nativeWindowRef ? windows.find((window) => window.windowRef === fromRef.nativeWindowRef) : undefined) ??
+		windows.find((window) => normalizeText(window.title || "(untitled)") === normalizeText(fromRef.windowTitle));
+	if (!match) {
+		throw new Error(`Root ref '${selector}' is stale. Call find_roots again and choose a current window.`);
 	}
-
-	if (normalized.startsWith("@r")) {
-		throw new Error(`Root ref '${normalized}' is not available in this session. Call find_roots first.`);
-	}
-
-	const config = getComputerUseConfig();
-	const candidates = await collectWindowDetails(await listApps(signal), config, signal);
-	const query = normalizeText(normalized);
-	const exact = candidates.filter((candidate) => normalizeText(candidate.app) === query || normalizeText(candidate.windowTitle) === query);
-	const fuzzy = exact.length > 0 ? exact : candidates.filter((candidate) => `${normalizeText(candidate.app)} ${normalizeText(candidate.windowTitle)}`.includes(query));
-	const match = fuzzy.sort((a, b) => Number(b.isFocused) - Number(a.isFocused) || a.zOrder - b.zOrder)[0];
-	if (!match) throw new Error(`Root query '${normalized}' did not match any current root. Call find_roots to inspect roots.`);
-	const app: HelperApp = { appName: match.app, bundleId: match.bundleId, pid: match.pid };
-	const roots = await listWindows(match.pid, signal);
-	const helperRoot = roots.find((root) => root.rootRef === match.nativeWindowRef || root.windowRef === match.nativeWindowRef || root.windowId === match.windowId) ?? roots[0];
-	const resolved = toResolvedTarget(app, helperRoot);
+	const resolved = toResolvedTarget(app, match);
 	setCurrentTarget(resolved);
 	return resolved;
 }
@@ -949,9 +863,10 @@ async function resolveFrontmostTarget(signal?: AbortSignal): Promise<ResolvedTar
 
 	let selected = windows.find((window) => window.windowId !== undefined && window.windowId === frontmost.windowId);
 	if (!selected && frontmost.windowTitle) {
-		selected = windows.find((window) => normalizeText(window.title) === normalizeText(frontmost.windowTitle));
+		const title = normalizeText(frontmost.windowTitle);
+		selected = windows.find((window) => normalizeText(window.title) === title);
 	}
-	selected ??= choosePreferredWindow(windows, app.appName);
+	selected ??= choosePreferredWindow(windows);
 
 	const resolved = toResolvedTarget(app, selected);
 	setCurrentTarget(resolved);
@@ -998,7 +913,6 @@ function captureForLook(look: LookResponse): CurrentCapture {
 }
 
 async function performLook(target: ResolvedTarget, options: { readText: "auto" | "always" | "never"; baseLookId?: string; scopeRef?: string; maxDimension?: number; includeImage?: boolean }, signal?: AbortSignal): Promise<LookResponse> {
-	if ((!Number.isFinite(target.windowId) || target.windowId <= 0) && !target.nativeWindowRef) throw new Error(`Current platform requires a stable root id to observe '${target.windowTitle}'. Call find_roots and select a root with a stable id.`);
 	return await currentPlatformBackend.observe({
 		target: nativeWindowRequest(target),
 		baseLookId: options.baseLookId,
@@ -1018,7 +932,7 @@ function noteWindowForTarget(target: ResolvedTarget | CurrentTarget, look?: Look
 	};
 }
 
-async function captureCurrentTarget(signal?: AbortSignal, readText: "auto" | "always" | "never" = "auto", maxDimension = AUTO_IMAGE_MAX_DIMENSION, targetOverride?: ResolvedTarget, includeImage = true): Promise<CaptureResult> {
+async function captureCurrentTarget(signal: AbortSignal | undefined, readText: "auto" | "always" | "never", maxDimension = AUTO_IMAGE_MAX_DIMENSION, targetOverride?: ResolvedTarget, includeImage = true): Promise<CaptureResult> {
 	const state = operationState();
 	const baseOutline = state.currentOutline;
 	const baseTarget = state.currentTarget;
@@ -1088,8 +1002,8 @@ async function buildToolResult(
 			pid: result.target.pid,
 			windowTitle: result.target.windowTitle,
 			windowId: result.target.windowId,
-			windowRef: result.target.windowRef ?? state.currentTarget?.windowRef,
-			nativeWindowRef: result.target.nativeWindowRef ?? state.currentTarget?.nativeWindowRef,
+			windowRef: result.target.windowRef,
+			nativeWindowRef: result.target.nativeWindowRef,
 		},
 		capture: {
 			stateId: result.capture.stateId,
@@ -1146,12 +1060,9 @@ async function buildToolResult(
 
 type NativePreparedAction = Exclude<PreparedAction, { action: "wait" }>;
 
-function currentLookOrThrow(): LookResponse {
-	const state = operationState();
-	if (!state.currentLook || !state.currentCapture) {
-		throw new Error("No current look. Call observe_ui first, then act using refs or coordinates from that look.");
-	}
-	return state.currentLook;
+/** Desktop acts only run once `currentCaptureOrThrow` passed, and every desktop capture or hydrated state carries its look. */
+function currentLook(): LookResponse {
+	return operationState().currentLook!;
 }
 
 function ensurePointIsInLookImage(x: number, y: number, look: LookResponse, errorPrefix = "Coordinates"): void {
@@ -1166,7 +1077,7 @@ function ensurePointIsInLookImage(x: number, y: number, look: LookResponse, erro
 	}
 }
 
-function executionTraceFromAct(result: HelperActResult, policy = currentDeliveryPolicy()): ExecutionTrace {
+function executionTraceFromAct(result: HelperActResult, policy: DeliveryPolicy): ExecutionTrace {
 	// Refs stay helper-native here; normalizeRootDeltaRefs() maps them to @rN once per transaction.
 	const rootDelta = result.rootDelta?.map((delta) => ({ ...delta }));
 	return executionTrace("act", result.performed?.delivery === "ax" ? "stealth" : "default", {
@@ -1233,8 +1144,8 @@ async function helperAct(
 	}
 }
 
-function helperActRequest(target: ResolvedTarget, action: NativePreparedAction, policy = currentDeliveryPolicy()): PlatformActRequest {
-	const look = currentLookOrThrow();
+function helperActRequest(target: ResolvedTarget, action: NativePreparedAction, policy: DeliveryPolicy): PlatformActRequest {
+	const look = currentLook();
 	const delivery = nativeInputDelivery(policy);
 	const base = { lookId: look.lookId, pid: target.pid, target: action.target, policy };
 	return (() => {
@@ -1460,7 +1371,7 @@ async function performReadText(params: ReadTextParams, signal?: AbortSignal): Pr
 		return { content: [{ type: "text", text: sliced.text || "(empty text slice)" }], details };
 	}
 
-	validateStateId(params.stateId);
+	currentCaptureOrThrow();
 	// A hydrated state restores its target without resolving it, so re-check the policy before the live read.
 	assertAppNotBlocked(currentTargetOrThrow());
 	if (!ref) throw new Error("read_text requires ref for desktop contexts. Call observe_ui/inspect_ui and use a text-bearing outline ref.");
@@ -1631,7 +1542,9 @@ function sameRootIdentity(a: CurrentTarget, b: CurrentTarget): boolean {
 
 /** Side effects: captures/updates current target, capture state, look, and parsed outline. */
 async function performObserve(params: ObserveParams, signal?: AbortSignal): Promise<AgentToolResult<ComputerUseDetails | BrowserObservationDetails>> {
-	const requestedRoot = typeof params.root === "string" ? params.root : undefined;
+	const requestedRoot = params.root;
+	// Direct callers can bypass the schema; a non-string root must not silently fall back to the frontmost window.
+	if (typeof requestedRoot !== "string" && requestedRoot !== undefined) throw new Error("observe_ui.root must be an exact @r ref issued by find_roots.");
 	if (requestedRoot && !/^@r\d+$/.test(requestedRoot)) throw new Error("observe_ui.root must be an exact @r ref issued by find_roots.");
 	const browserContextId = requestedRoot ? runtimeState.browserContextByRoot.get(requestedRoot) : undefined;
 	if (isBrowserContextId(browserContextId)) {
@@ -1650,7 +1563,7 @@ async function performObserve(params: ObserveParams, signal?: AbortSignal): Prom
 	state.currentImageMode = normalizeImageMode(image);
 	const selection: ObserveTargetParams = { root: normalizeWindowSelector(params.root) };
 	const requestedTarget = selection.root
-		? await resolveTargetByWindowSelector(params.root!, signal)
+		? await resolveTargetByWindowSelector(selection.root, signal)
 		: await resolveTargetForObserve(signal);
 	const imageMode = normalizeImageMode(image);
 	const resourceKey = desktopResourceKey(requestedTarget);
@@ -1672,9 +1585,9 @@ async function performObserve(params: ObserveParams, signal?: AbortSignal): Prom
 	return await buildToolResult("observe_ui", summary, captureResult, executionTrace("look", "stealth"), signal, imageMode, undefined, params.detail);
 }
 
-function currentOutlineOrThrow(stateId?: string): Outline {
-	validateStateId(stateId);
-	// `validateStateId` guarantees a capture, and captures are always stored with their outline.
+/** `currentCaptureOrThrow` guarantees a capture, and captures are always stored with their outline. */
+function currentOutlineOrThrow(): Outline {
+	currentCaptureOrThrow();
 	return operationState().currentOutline!;
 }
 
@@ -1690,7 +1603,7 @@ function shouldEscalateSearchOCR(matches: OutlineSearchMatch[], _text?: string):
 /** Pure outline query unless a window selector is supplied, in which case current target selection may change. */
 async function performSearchUi(params: SearchUiParams, signal?: AbortSignal): Promise<AgentToolResult<OutlineToolDetails>> {
 	const state = operationState();
-	let outline = currentOutlineOrThrow(params.stateId);
+	let outline = currentOutlineOrThrow();
 	const text = trimOrUndefined(params.text);
 	const role = trimOrUndefined(params.role);
 	const capability = trimOrUndefined(params.capability);
@@ -1726,7 +1639,7 @@ async function performSearchUi(params: SearchUiParams, signal?: AbortSignal): Pr
 /** Reads cached outline; truncated refs trigger a scoped look. */
 async function performExpandUi(params: ExpandUiParams, signal?: AbortSignal): Promise<AgentToolResult<OutlineToolDetails>> {
 	const state = operationState();
-	let outline = currentOutlineOrThrow(params.stateId);
+	let outline = currentOutlineOrThrow();
 	const ref = trimOrUndefined(params.ref);
 	if (!ref) throw new Error("expand_ui.ref is required.");
 	const initialTarget = nodeByRef(outline, ref);
@@ -1759,7 +1672,7 @@ async function performExpandUi(params: ExpandUiParams, signal?: AbortSignal): Pr
 /** Pure cached-outline inspection. */
 async function performInspectUi(params: InspectUiParams): Promise<AgentToolResult<OutlineToolDetails>> {
 	const state = operationState();
-	const outline = currentOutlineOrThrow(params.stateId);
+	const outline = currentOutlineOrThrow();
 	const ref = trimOrUndefined(params.ref);
 	if (!ref) throw new Error("inspect_ui.ref is required.");
 	const target = nodeByRef(outline, ref);
@@ -2036,8 +1949,8 @@ export async function terminalDesktopActionResult(
 async function performDesktopTransaction(params: ActParams, actions: UiAction[], signal?: AbortSignal): Promise<AgentToolResult<ComputerUseDetails | TerminalDesktopActionDetails>> {
 	const state = operationState();
 	state.currentImageMode = "auto";
-	validateStateId(params.stateId);
-	const look = currentLookOrThrow();
+	currentCaptureOrThrow();
+	const look = currentLook();
 	const baseView = { stateId: state.currentCapture!.stateId, outline: state.currentOutline! };
 	const condition = params.expect ? validateCondition(params.expect) : undefined;
 	const scopeNode = condition ? conditionScopeNode(look.parsedOutline!, condition) : undefined;

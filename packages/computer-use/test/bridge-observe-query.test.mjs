@@ -52,9 +52,8 @@ test("observe_ui follows root selection across roots and windows", async ({ onTe
 	// Same app, another window id.
 	const second = await fake.observe({ root: refOf("App2", "Second") });
 	assert.match(second.text, /App2 — Second\./);
-	// Numeric window ids select a root whose ref differs from the selector string.
-	const numeric = await fake.observe({ root: 100 });
-	assert.match(numeric.text, /App1 — Main\./);
+	// A numeric window id is not a selector: only exact @r refs resolve (#709).
+	await assert.rejects(() => fake.observe({ root: 100 }), /must be an exact @r ref issued by find_roots/);
 	// Re-observing the current root keeps the same identity.
 	const again = await fake.observe({ root: refOf("App1", "Main") });
 	assert.match(again.text, /App1 — Main\./);

@@ -587,6 +587,14 @@ const cases = [
 		failure: /HINT-FROM-BACKEND|not reachable from the WSL2 guest/,
 	},
 	{
+		name: "observe_ui rejects a non-string root (#709)",
+		file: "src/bridge.ts",
+		before: 'if (typeof requestedRoot !== "string" && requestedRoot !== undefined)',
+		after: "if (false)",
+		check: "test/bridge-setup-look.test.mjs",
+		failure: /Missing expected rejection/,
+	},
+	{
 		name: "Outline store write (#648)",
 		file: "src/bridge.ts",
 		before: "saveStoredOutline(result.capture.stateId, serializeOutline(result.outline));",

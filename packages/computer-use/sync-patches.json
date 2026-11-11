@@ -150,6 +150,18 @@
 			}
 		},
 		{
+			"id": "bridge-dead-arm-removal",
+			"purpose": "Delete bridge.ts arms with no public caller instead of testing them: the numeric/text root selector, the inert delivery-policy env reader (already dead in the #178 resync), validateStateId stale/window arms, and unreachable guards and fallbacks; non-string observe_ui root is rejected, not dropped",
+			"files": ["src/bridge.ts", "src/config.ts", "test/bridge-setup-look.test.mjs", "test/support/fake-desktop.mjs"],
+			"check": "test/bridge-setup-look.test.mjs",
+			"dropControls": ["observe_ui rejects a non-string root (#709)"],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "Coverage-driven dead code removal (nredd/pi-harness#709); not filed"
+			}
+		},
+		{
 			"id": "canonical-root-deltas",
 			"purpose": "Map helper-native root deltas once to canonical public refs",
 			"files": ["src/bridge.ts"],
@@ -512,6 +524,7 @@
 		"src/platform/types.ts",
 		"sync-patches.json",
 		"test/act-outcomes.test.mjs",
+		"test/bridge-setup-look.test.mjs",
 		"test/app-policy.test.mjs",
 		"test/async.test.mjs",
 		"test/bounded-output.test.mjs",
@@ -522,6 +535,7 @@
 		"test/docs-generators.test.mjs",
 		"test/find-params.test.mjs",
 		"test/invariants.test.mjs",
+		"test/support/fake-desktop.mjs",
 		"test/support/swift-sdk.mjs",
 		"test/swift-sdk.test.mjs",
 		"test/linux-build-scripts.test.mjs",

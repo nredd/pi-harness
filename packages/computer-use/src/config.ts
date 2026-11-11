@@ -328,14 +328,12 @@ PI_COMPUTER_USE_CURSOR_OVERLAY=1
 PI_COMPUTER_USE_ACTIVITY_GLOW=0
 PI_COMPUTER_USE_ACTIVITY_GLOW=1
 PI_COMPUTER_USE_BLOCKED_APPS=com.apple.Terminal,com.example.Vault
-PI_COMPUTER_USE_DELIVERY_POLICY=default
-PI_COMPUTER_USE_DELIVERY_POLICY=foreground
 PI_COMPUTER_USE_CDP_PORT=9222
 PI_COMPUTER_USE_MANAGED_BROWSER_HEADLESS=0
 PI_COMPUTER_USE_MANAGED_BROWSER_HEADLESS=1
 ```
 
-`PI_COMPUTER_USE_HEADLESS=1` prohibits foreground fallback. `PI_COMPUTER_USE_DELIVERY_POLICY` is a debugging input; normal policy belongs in configuration rather than individual model calls.
+`PI_COMPUTER_USE_HEADLESS=1` prohibits foreground fallback.
 
 `launch_browser` searches common platform install locations and `PATH`. Use `PI_COMPUTER_USE_CHROME_EXECUTABLE` or `PI_COMPUTER_USE_HELIUM_EXECUTABLE` for an AppImage, portable install, or any non-standard location. An explicit override is authoritative and must name an executable file.
 
