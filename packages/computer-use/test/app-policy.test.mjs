@@ -136,7 +136,8 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	const postAt = pasteBody.indexOf("try postKeyCode(");
 	assert.ok(lookupAt > 0 && recheckAt > lookupAt && postAt > recheckAt, "paste must look up the layout key first and re-check the focused app immediately before cmd+v");
 	assert.ok(!pasteBody.slice(recheckAt, postAt).includes("currentKeyboardInputSource"), "nothing slow may sit between the last blocked-app check and the post");
-assert.match(swift, /pasteboard\.prepareForNewContents\(with: \.currentHostOnly\)/, "the temporary paste item must stay off Universal Clipboard");
+	assert.match(swift, /Keep the pasted text off Universal Clipboard[^\n]*\n\t+pasteboard\.prepareForNewContents\(with: \.currentHostOnly\)/, "the temporary paste item must stay off Universal Clipboard");
+	assert.match(swift, /else \{ return false \}\n\t+\/\/ Always host-only[^\n]*\n\t+pasteboard\.prepareForNewContents\(with: \.currentHostOnly\)/, "the restore must be host-only so a host-only secret is never republished as syncable");
 	assert.match(swift, /return try withRestoredClipboard\(write: \{[\s\S]*?\}, restore: restore, body: body\)/, "the temporary clipboard must restore on every exit, including a refusal in the body");
 	const restoreHelper = swift.match(/func withRestoredClipboard[\s\S]*?\n\}\n/)?.[0] ?? "";
 	assert.match(restoreHelper, /catch \{\n\t\t_ = restore\(\)\n\t\tthrow error/, "a throwing write or body restores the clipboard before rethrowing");
