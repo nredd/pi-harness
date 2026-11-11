@@ -69,7 +69,7 @@ owner's policy decision. Publication is not live-provider acceptance or activati
 
 ## Combined stack selection
 
-The 2026-11-10 selection in `integration/stacks/personal.json` uses core
+The 2026-11-11 selection in `integration/stacks/personal.json` uses core
 `v1.3.0-nredd.10` at `4d857379f37f83397871a66c522abbe8469a003d` and the packages below,
 republished with fresh provenance after the history purge (#638). Plan-mode and subagents move
 together. The sampler stays an exact `0.2.0` registry dependency of dev-tools and session-kit
@@ -81,17 +81,15 @@ filters and unchanged third-party sources remain in the stack manifest;
 | --- | --- | --- | --- |
 | `@nredd/pi-resource-sampler` | `0.2.1` | `a9b89d81c82826807609362b1af2b896f8910d48` | [here](https://github.com/nredd/pi-harness/actions/runs/42849841461) |
 | `@nredd/pi-subscription-router` | `0.6.0` | `a9b89d81c82826807609362b1af2b896f8910d48` | [here](https://github.com/nredd/pi-harness/actions/runs/42852221607) |
-| `@nredd/pi-subagents` | `0.22.0-nredd.9` | `a9b89d81c82826807609362b1af2b896f8910d48` | [here](https://github.com/nredd/pi-harness/actions/runs/42852199411) |
+| `@nredd/pi-subagents` | `0.22.0-nredd.10` | `8a97f8b75acd9c4985a5a5f330f7a0ea27cce2d7` | [here](https://github.com/nredd/pi-harness/actions/runs/43008075967) |
 | `@nredd/pi-plan-mode` | `0.59.3-nredd.4` | `a9b89d81c82826807609362b1af2b896f8910d48` | [here](https://github.com/nredd/pi-harness/actions/runs/42852138078) |
-| `@nredd/pi-todo` | `2.14.0` | `a9b89d81c82826807609362b1af2b896f8910d48` | [here](https://github.com/nredd/pi-harness/actions/runs/42852242624) |
+| `@nredd/pi-todo` | `2.15.0` | `8a97f8b75acd9c4985a5a5f330f7a0ea27cce2d7` | [here](https://github.com/nredd/pi-harness/actions/runs/43003771892) |
 | `@nredd/pi-preset` | `0.4.0` | `a9b89d81c82826807609362b1af2b896f8910d48` | [here](https://github.com/nredd/pi-harness/actions/runs/42852161319) |
-| `@nredd/pi-computer-use` | `0.6.2` | `352ab6b31973816e56cf81a514d5f8d8b3c1eff1` | [here](https://github.com/nredd/pi-harness/actions/runs/42876274632) |
-| `@nredd/pi-session-kit` | `0.10.0` | `a9b89d81c82826807609362b1af2b896f8910d48` | [here](https://github.com/nredd/pi-harness/actions/runs/42852182553) |
+| `@nredd/pi-computer-use` | `0.7.0` | `8a97f8b75acd9c4985a5a5f330f7a0ea27cce2d7` | [here](https://github.com/nredd/pi-harness/actions/runs/43009792454) |
+| `@nredd/pi-session-kit` | `0.11.0` | `8a97f8b75acd9c4985a5a5f330f7a0ea27cce2d7` | [here](https://github.com/nredd/pi-harness/actions/runs/43004860783) |
 | `@nredd/pi-dev-tools` | `0.8.0` | `a9b89d81c82826807609362b1af2b896f8910d48` | [here](https://github.com/nredd/pi-harness/actions/runs/42852114165) |
 
-Eight packages publish from frozen candidate `a9b89d81` (full CI run [here](https://github.com/nredd/pi-harness/actions/runs/42799667706)),
-computer-use from frozen candidate `352ab6b3` (full CI run [here](https://github.com/nredd/pi-harness/actions/runs/42868662479)). The
-`@nredd/pi-computer-use@0.6.1` tag at `a9b89d81` never published (#663); `0.6.2` replaces it.
+Four packages (`subagents`, `todo`, `computer-use`, `session-kit`) publish from frozen candidate `8a97f8b7` (full CI run [here](https://github.com/nredd/pi-harness/actions/runs/42989032375)); `preset`, `subscription-router`, `plan-mode` and `dev-tools` keep their 2026-11-10 publications from `a9b89d81` (`resource-sampler` is only a dependency), and the `computer-use` row's earlier `352ab6b3` candidate is superseded. Each of the four ran `publish.yml` once with no rerun; `verify`, `attest`, `publish` and `release` all succeeded.
 `subagents` and `resource-sampler` each needed a failed-jobs rerun after npm's attestation
 endpoint lagged the upload; the rerun skipped republication on matching integrity.
 
@@ -107,10 +105,9 @@ graph's upstream copy comes from the extensions' `*` peer ranges on
 `@earendil-works/pi-coding-agent` and predates this pin (the base lock had 1.5.0); #671 tracks
 whether it should resolve to the fork core instead.
 
-Those publication runs verified the packed bytes and their npm provenance. For this pin, all
-nine release `identity.json` files were downloaded again: their source commits match the table
-and each recorded SHA-512 integrity equals the exact version's current npm `dist.integrity`.
-That comparison is not a new independent cryptographic verification.
+The wave-3 regeneration also took, in both graphs on both targets, `@hono/node-server` 2.1.6 -> 2.1.7 and `hono` 4.13.17 -> 4.13.18 (patch releases, reviewed diff); the remaining lock changes are the four owned versions and their integrity values. Source-selected offline replay passes.
+
+Those publication runs verified the packed bytes and their npm provenance. For this pin, the four new release `identity.json` files were downloaded again: their `commit` is `8a97f8b7` and each recorded SHA-512 integrity equals the exact version's current npm `dist.integrity`. That comparison is not a new independent cryptographic verification.
 Publication does not prove full combined-stack CI or desktop/live-provider acceptance.
 Failed earlier tag attempts are not publication receipts; the table identifies the
 successful source and run.
@@ -163,7 +160,7 @@ Published: see the selection table under Combined stack selection.
 
 ## Wave-3 release plan
 
-Planned versions, chosen by SemVer from `git log 1872f0cc..HEAD -- packages/<name>` (minor for added features or behavior, `-nredd.N` kept for the fork-suffixed package). Nothing here is a claim of publication; the table and receipt move with the pin PR after each `publish.yml` run succeeds.
+Planned versions, chosen by SemVer from `git log 1872f0cc..HEAD -- packages/<name>` (minor for added features or behavior, `-nredd.N` kept for the fork-suffixed package). Published from `8a97f8b7` (see the selection table under Combined stack selection) and pinned in `integration/stacks/personal.json`.
 
 - `@nredd/pi-computer-use` `0.6.2` -> `0.7.0`: `blocked_apps` fail-closed policy and locked-session refusal, outline store moved out of the session file, WSL2 diagnostics, scroll fixes
 - `@nredd/pi-session-kit` `0.10.0` -> `0.11.0`: `monitor_start` `todo` link and `todos` on monitor events
@@ -171,7 +168,7 @@ Planned versions, chosen by SemVer from `git log 1872f0cc..HEAD -- packages/<nam
 - `@nredd/pi-todo` `2.14.0` -> `2.15.0`: monitor-linked todos reported as waiting on a monitor, unlinked monitors arm nothing
 - `@nredd/pi-dev-tools` stays `0.8.0`: only `test/` changed since its tag and `files` ships `src`, `LICENSE` and `README.md`, so the published bytes are current
 
-Core stays `v1.3.0-nredd.10`. `integration/stacks/personal.json` and `integration/stacks/runtime-locks.json` stay on the published selection until the pin PR, per [release verification](release-verification.md).
+Core stays `v1.3.0-nredd.10`. `integration/stacks/runtime-locks.json` is regenerated for the pin.
 
 ## Owned npm packages
 
