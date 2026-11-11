@@ -1549,17 +1549,14 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 	const { text, role, value, scopeRef, scopeExact, gone, timeoutMs } = condition;
 
 	if (isBrowserContextId(contextId)) {
+		// A browser state hydrates from a saved record, which always carries its resource identity and base snapshot.
 		const state = operationState();
-		if (!state.resourceKey) throw new Error("The browser observation has no live resource identity. Observe again.");
-		const baseSnapshot = state.browserSnapshot;
-		if (!baseSnapshot) throw new Error("Browser wait requires a complete base observation.");
+		const resourceKey = state.resourceKey!;
+		const baseSnapshot = state.browserSnapshot!;
 		conditionScopeNode(restoreOutline(baseSnapshot.outline), condition);
 		const deadline = Date.now() + timeoutMs;
-		let lastSnapshot: CdpPageSnapshot | undefined;
-		let lastEpoch = state.epoch ?? resourceScheduler.epoch(state.resourceKey);
-		const finish = (found: boolean, timedOut?: boolean): AgentToolResult<WaitForDetails> => {
-			if (!lastSnapshot) throw new Error("Browser wait completed without an observation.");
-			savedStates.set({ stateId: lastSnapshot.snapshotId, resourceKey: state.resourceKey!, epoch: lastEpoch, value: { kind: "browser", snapshot: lastSnapshot, outline: lastSnapshot.outline } });
+		const finish = (lastSnapshot: CdpPageSnapshot, lastEpoch: number, found: boolean, timedOut?: boolean): AgentToolResult<WaitForDetails> => {
+			savedStates.set({ stateId: lastSnapshot.snapshotId, resourceKey, epoch: lastEpoch, value: { kind: "browser", snapshot: lastSnapshot, outline: lastSnapshot.outline } });
 			const successorOutline = restoreOutline(lastSnapshot.outline);
 			const transition = changesBetween(restoreOutline(baseSnapshot.outline), successorOutline);
 			const useDiff = !transition.useFullView;
@@ -1568,16 +1565,18 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 			const message = found ? (gone ? "Condition disappeared." : "Condition appeared.") : `Timed out after ${timeoutMs}ms waiting for condition.`;
 			return { content: [{ type: "text", text: `${message}\n${waitForViewText(successorOutline, lastSnapshot.snapshotId, transition)}` }], details };
 		};
+		let snapshot: CdpPageSnapshot | undefined;
+		let epoch: number;
 		do {
-			const scheduled = await resourceScheduler.read(state.resourceKey, async () => await cdpSnapshotForContext(contextId));
-			lastSnapshot = scheduled.value;
-			lastEpoch = scheduled.epoch;
-			if (!lastSnapshot) throw new Error(`Browser root '${contextId}' is no longer available. Call find_roots and observe_ui again.`);
-			const present = outlineConditionPresent(restoreOutline(lastSnapshot.outline), condition);
-			if (present !== gone) return finish(true);
+			const scheduled = await resourceScheduler.read(resourceKey, async () => await cdpSnapshotForContext(contextId));
+			snapshot = scheduled.value;
+			epoch = scheduled.epoch;
+			if (!snapshot) throw new Error(`Browser root '${contextId}' is no longer available. Call find_roots and observe_ui again.`);
+			const present = outlineConditionPresent(restoreOutline(snapshot.outline), condition);
+			if (present !== gone) return finish(snapshot, epoch, true);
 			await sleep(200, signal);
 		} while (Date.now() < deadline);
-		return finish(false, true);
+		return finish(snapshot, epoch, false, true);
 	}
 
 	const state = operationState();
@@ -1596,8 +1595,8 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 		gone,
 		timeoutMs,
 	}, { signal, timeoutMs: timeoutMs + 2_000 });
-	if (!state.resourceKey || state.epoch === undefined) throw new Error("The observation has no live resource identity. Observe again.");
-	const refreshed = (await resourceScheduler.readAt(state.resourceKey, state.epoch, async () => await captureCurrentTarget(signal, "auto"))).value;
+	// A desktop state hydrates from a saved record, which always carries its resource identity.
+	const refreshed = (await resourceScheduler.readAt(state.resourceKey!, state.epoch!, async () => await captureCurrentTarget(signal, "auto"))).value;
 	const transition = changesBetween(baseView.outline, refreshed.outline);
 	const useDiff = !transition.useFullView;
 	const matches = searchOutline(refreshed.outline, text, role, undefined, 1);
@@ -1624,7 +1623,6 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 }
 
 function sameRootIdentity(a: CurrentTarget, b: CurrentTarget): boolean {
-	if (a.pid !== b.pid) return false;
 	if (a.windowId > 0 && b.windowId > 0) return a.windowId === b.windowId;
 	if (a.nativeWindowRef && b.nativeWindowRef) return a.nativeWindowRef === b.nativeWindowRef;
 	return normalizeText(a.windowTitle) === normalizeText(b.windowTitle);
@@ -1669,15 +1667,14 @@ async function performObserve(params: ObserveParams, signal?: AbortSignal): Prom
 			`Observation target drifted from the requested selection. Requested ${requestedTarget.appName} — ${requestedTarget.windowTitle}, captured ${captureResult.target.appName} — ${captureResult.target.windowTitle}. Call observe_ui again or specify a more exact window title.`,
 		);
 	}
-	const summary = `Observed ${mode} ${captureResult.target.windowRef ? `${captureResult.target.windowRef} ` : ""}${captureResult.target.appName} — ${captureResult.target.windowTitle}. Returned the latest outline state.`;
+	const summary = `Observed ${mode} ${captureResult.target.windowRef} ${captureResult.target.appName} — ${captureResult.target.windowTitle}. Returned the latest outline state.`;
 	return await buildToolResult("observe_ui", summary, captureResult, executionTrace("look", "stealth"), signal, imageMode, undefined, params.detail);
 }
 
 function currentOutlineOrThrow(stateId?: string): Outline {
 	validateStateId(stateId);
-	const outline = operationState().currentOutline;
-	if (!outline) throw new Error("No observation outline is available. Call observe_ui first.");
-	return outline;
+	// `validateStateId` guarantees a capture, and captures are always stored with their outline.
+	return operationState().currentOutline!;
 }
 
 function matchIsNonActionableStatic(match: OutlineSearchMatch): boolean {
@@ -1702,15 +1699,13 @@ async function performSearchUi(params: SearchUiParams, signal?: AbortSignal): Pr
 	let matches = ranked.matches;
 	let escalatedOCR = false;
 	const look = state.currentLook;
-	if (shouldEscalateSearchOCR(matches, text) && look && look.readText?.requested !== "never" && !look.readText?.executed && state.lastSearchOcrEscalatedLookId !== look.lookId) {
-		state.lastSearchOcrEscalatedLookId = look.lookId;
+	if (shouldEscalateSearchOCR(matches, text) && look && look.readText?.requested !== "never" && !look.readText?.executed) {
 		const currentTarget = await ensureTargetWindowId(await resolveCurrentTarget(signal), signal);
 		// captureCurrentTarget adopts the new look/outline/capture into
 		// runtimeState, so refs in these matches stay actable. Keep the image
 		// payload: OCR-only matches are clicked by coordinate, and coordinate
 		// acts require the current look to be image-bearing.
-		if (!state.resourceKey || state.epoch === undefined) throw new Error("The observation has no live resource identity. Observe again.");
-		const captureResult = (await resourceScheduler.readAt(state.resourceKey, state.epoch, async () => await captureCurrentTarget(signal, "always", AUTO_IMAGE_MAX_DIMENSION, currentTarget))).value;
+		const captureResult = (await resourceScheduler.readAt(state.resourceKey!, state.epoch!, async () => await captureCurrentTarget(signal, "always", AUTO_IMAGE_MAX_DIMENSION, currentTarget))).value;
 		outline = captureResult.outline;
 		ranked = searchOutlineRanked(outline, text, role, capability, limit);
 		matches = ranked.matches;
@@ -1719,7 +1714,7 @@ async function performSearchUi(params: SearchUiParams, signal?: AbortSignal): Pr
 	const detailMatches = matches.map(serializeOutlineSearchMatch);
 	const details: OutlineToolDetails = { tool: "search_ui", stateId: state.currentCapture?.stateId, lookId: outline.lookId, matches: detailMatches, totalMatches: ranked.totalMatches, returned: matches.length, hasMore: ranked.totalMatches > matches.length, note: state.currentNote };
 	const collides = (match: OutlineSearchMatch) => matches.some((other) => other !== match && other.role === match.role && other.label === match.label);
-	const lines = matches.map((match) => `${controlLine(match.node)} [${match.matchReason}${match.matchReason === "fuzzy" ? ` ${match.score?.toFixed(2)}` : ""}]${collides(match) ? `\n  path: ${match.path}` : ""}`);
+	const lines = matches.map((match) => `${controlLine(match.node)} [${match.matchReason}${match.matchReason === "fuzzy" ? ` ${match.score!.toFixed(2)}` : ""}]${collides(match) ? `\n  path: ${match.path}` : ""}`);
 	const noteHeader = renderNote(state.currentNote);
 	const noteText = noteHeader ? `${noteHeader}\n\n` : "";
 	const escalationText = escalatedOCR ? " OCR text was escalated for this search after the cached outline had no matches." : "";
@@ -1742,8 +1737,7 @@ async function performExpandUi(params: ExpandUiParams, signal?: AbortSignal): Pr
 	if (target.truncated || regionChanged) {
 		const currentTarget = await ensureTargetWindowId(await resolveCurrentTarget(signal), signal);
 		const targetWireRef = wireRefForNode(target);
-		if (!state.resourceKey || state.epoch === undefined) throw new Error("The observation has no live resource identity. Observe again.");
-		const scoped = (await resourceScheduler.readAt(state.resourceKey, state.epoch, async () => await performLook(currentTarget, {
+		const scoped = (await resourceScheduler.readAt(state.resourceKey!, state.epoch!, async () => await performLook(currentTarget, {
 			readText: "auto",
 			baseLookId: outline.lookId,
 			scopeRef: targetWireRef,
