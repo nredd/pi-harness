@@ -480,8 +480,7 @@
 			"files": [
 				"src/platform/linux/helper.ts",
 				"test/stdio-helper-clients.test.mjs",
-				"test/wsl-detection.test.mjs",
-				"test/support/fake-helper.mjs"
+				"test/wsl-detection.test.mjs"
 			],
 			"check": "test/stdio-helper-clients.test.mjs",
 			"dropControls": ["Linux setup escalates to SIGKILL after the grace (#713)"],

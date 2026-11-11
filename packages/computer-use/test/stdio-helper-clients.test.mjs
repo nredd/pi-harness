@@ -314,11 +314,18 @@ describe("Windows helper client", () => {
 		const { client, children } = await windows({ helper: (list) => realisticChild(list, { engine }) });
 		await client.command("look");
 		children[0].kill();
-		const pending = client.command("hang", {}, { timeoutMs: 150 });
+		let settled;
+		const pending = client.command("hang", {}, { timeoutMs: 600_000 }).then(() => "resolved", (error) => error);
+		void pending.then((value) => { settled = value; });
 		await vi.waitFor(() => assert.equal(children.length, 2));
 		await vi.waitFor(() => assert.equal(engine.requests.at(-1).cmd, "hang"));
 		children[0].emit("close", 1, null);
-		await assert.rejects(pending, (error) => error.code === undefined && /timed out after 150ms\./.test(error.message));
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		assert.equal(settled, undefined, "the dead child's close must not fail the successor's command");
+		client.dispose();
+		const error = await pending;
+		assert.equal(error.code, undefined);
+		assert.match(error.message, /closed because the Pi session ended/);
 	});
 
 	test("after the child exits, the next command spawns a fresh helper", async () => {
