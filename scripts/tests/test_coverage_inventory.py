@@ -1019,7 +1019,7 @@ def test_unmeasured_tree_cannot_contain_owned_source(tmp_path: Path) -> None:
         signals={},
     )
     cfg.unmeasured_trees = [tree("tools")]
-    with pytest.raises(ValueError, match="contains owned source"):
+    with pytest.raises(ValueError, match="contains owned source: 'tools'"):
         audit_inventory(tmp_path, cfg, repository_files(tmp_path))
 
 
