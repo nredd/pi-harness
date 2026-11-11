@@ -377,9 +377,16 @@ conventional pytest test file (outside `owned` and the inventory audit), so `pyt
 Hosted wall time of the pytest halves with `-n auto --dist loadfile`, `macos-14`: `scripts` 116s and
 `integration` 143s, against 199s and 281s serial.
 
-A repository-wide regression scan and the CLI audit tracked plus untracked nonignored TypeScript,
-Python and executable JavaScript (`.mjs`, `.cjs`, `.js`) source using the same Git-listed traversal. Each executable file must be included in a measured/pending inventory or have an explicit
-reasoned exclusion. Conventional test files (including pytest `conftest.py`) are out of scope; arbitrary new implementation files
+The audit (`audit_inventory`) fails closed over every nonignored tracked and untracked file, from
+the same Git-listed traversal. Executable suffixes (`SOURCE_SUFFIXES`: TS/TSX/`.mts`/`.cts`, JS/JSX/`.mjs`/`.cjs`,
+Python, Swift, Rust, `.sh`/`.bash`/`.ps1`) and extensionless files with a `#!` shebang must be inventoried.
+A suffix in neither `SOURCE_SUFFIXES` nor the known-inert `NON_SOURCE_SUFFIXES` (docs, data, images, ...)
+also fails, so a new language is classified deliberately (#694). Declaration files (`.d.ts`, `.d.mts`) pass
+only through a `type-only` exclusion. Whole directories stay out only via `unmeasured_trees` in
+`coverage/policy.json`, each with a tracking issue and reason (today: `forks/`, #693). Shell and
+PowerShell under `scripts/` are the `shell-scripts` package, `pending` with no coverage claim (#695);
+`computer-use` owns `native/macos/*.swift`, so new Swift files join its inventory. Each executable file must be included in a measured/pending inventory or have an explicit
+reasoned exclusion. Conventional test files (including pytest `conftest.py` and Swift `*_tests.swift`) are out of scope; arbitrary new implementation files
 are not. There is no implicit `*.config.*` exemption: executable tool configurations need an
 explicit owned/pending declaration or reasoned verification classification. The producer
 configurations are owned by `import-audit` (#380). All inventories are expanded and

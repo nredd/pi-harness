@@ -33,6 +33,7 @@ from coverage_accounting import (
     Policy,
     Reclassification,
     Signal,
+    UnmeasuredTree,
     VerificationHelper,
     account,
     audit_inventory,
@@ -40,6 +41,7 @@ from coverage_accounting import (
     git_read,
     inventory,
     inventory_scopes,
+    is_test_path,
     repository_files,
 )
 
@@ -736,3 +738,135 @@ def test_cli_rejects_unowned_workspaces_and_source(tmp_path: Path, path: str, me
     )
     assert result.returncode == 1
     assert json.loads(summary.read_text())["errors"] == [message]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "packages/example/entry.swift",
+        "packages/example/bridge-rs/src/portal.rs",
+        "scripts/new_gate.sh",
+        "scripts/new_gate.bash",
+        "scripts/new_gate.ps1",
+        "packages/example/panel.tsx",
+        "packages/example/panel.jsx",
+        "packages/example/lib.mts",
+        "packages/example/lib.cts",
+        "packages/example/native/agent_cursor_extra.swift",
+    ],
+)
+def test_unowned_non_typescript_source_fails_the_audit(tmp_path: Path, path: str) -> None:
+    """Fail on every executable language, not only TS, Python and JavaScript (#694).
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+        path (str): New unowned source path in a non-TS language.
+    Returns:
+        None: The exact path is reported.
+    Raises:
+        AssertionError: A language outside the old suffix allowlist passes unowned.
+    """
+    cfg = scope_fixture(tmp_path)
+    write_script(tmp_path, path)
+    assert audit_inventory(tmp_path, cfg, repository_files(tmp_path)) == {path}
+
+
+@pytest.mark.parametrize("path", ["scripts/new.wasm", "packages/example/x.zig", "scripts/Dockerfile.sh2"])
+def test_unknown_suffix_fails_closed(tmp_path: Path, path: str) -> None:
+    """Treat a suffix in neither the source nor the known-inert list as unaccounted.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+        path (str): New file with an unclassified suffix.
+    Returns:
+        None: The file is reported until its kind is classified.
+    Raises:
+        AssertionError: An unknown suffix silently passes.
+    """
+    cfg = scope_fixture(tmp_path)
+    write_script(tmp_path, path)
+    assert audit_inventory(tmp_path, cfg, repository_files(tmp_path)) == {path}
+
+
+def test_extensionless_shebang_script_fails_but_data_passes(tmp_path: Path) -> None:
+    """Catch extensionless scripts by shebang while leaving inert extensionless files alone.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+    Returns:
+        None: Only the shebang file is reported; test-directory fixtures and known data pass.
+    Raises:
+        AssertionError: An extensionless script evades the audit, or data is flagged.
+    """
+    cfg = scope_fixture(tmp_path)
+    for path, text in {
+        "scripts/run-thing": "#!/bin/sh\necho hi\n",
+        "scripts/Makefile": "all:\n",
+        "scripts/notes.md": "# notes\n",
+        "scripts/data.json": "{}\n",
+        "scripts/tests/fake-ssh": "#!/bin/sh\n",
+    }.items():
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+    assert audit_inventory(tmp_path, cfg, repository_files(tmp_path)) == {"scripts/run-thing"}
+
+
+def test_declaration_files_need_a_type_only_exclusion(tmp_path: Path) -> None:
+    """Accept a `.d.mts` declaration only through an owned `type-only` exclusion.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+    Returns:
+        None: Unclassified fails; owned plus excluded passes.
+    Raises:
+        AssertionError: A declaration file passes without a reasoned exclusion.
+    """
+    cfg = scope_fixture(tmp_path)
+    path = "packages/example/src/helper.d.mts"
+    write_script(tmp_path, path)
+    files = repository_files(tmp_path)
+    assert audit_inventory(tmp_path, cfg, files) == {path}
+    package = cfg.packages["example"]
+    package.owned = [*package.owned, "src/**/*.mts"]
+    package.exclusions = [
+        *package.exclusions,
+        Exclusion(path="src/helper.d.mts", kind="type-only", reason="Declarations only; no executable code."),
+    ]
+    assert not audit_inventory(tmp_path, cfg, files)
+
+
+def test_swift_test_files_are_test_scope_but_other_swift_is_not() -> None:
+    """Pin the Swift test naming convention used by `agent_cursor_tests.swift`.
+
+    Parameters:
+        None.
+    Returns:
+        None: `*_tests.swift` is test scope; ordinary Swift is production.
+    Raises:
+        AssertionError: Test or production classification is wrong.
+    """
+    assert is_test_path(Path("native/macos/agent_cursor_tests.swift"))
+    assert not is_test_path(Path("native/macos/agent_cursor.swift"))
+
+
+def test_unmeasured_tree_is_tracked_and_reasoned(tmp_path: Path) -> None:
+    """Allow a whole tree to stay out of inventory only through a tracked, reasoned policy entry.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+    Returns:
+        None: The tree fails without an entry, passes with one, and blank entries are rejected.
+    Raises:
+        AssertionError: `forks/` is skipped implicitly or an unreasoned entry is accepted.
+    """
+    cfg = scope_fixture(tmp_path)
+    path = "forks/pi/packages/x/src/new.ts"
+    write_script(tmp_path, path)
+    files = repository_files(tmp_path)
+    assert audit_inventory(tmp_path, cfg, files) == {path}
+    cfg.unmeasured_trees = [UnmeasuredTree(path="forks", issue=693, reason="Open owner decision.")]
+    assert not audit_inventory(tmp_path, cfg, files)
+    for bad in [{"path": "forks", "issue": 693, "reason": " "}, {"path": ".", "issue": 1, "reason": "x"}]:
+        with pytest.raises(ValidationError):
+            UnmeasuredTree.model_validate(bad)

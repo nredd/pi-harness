@@ -86,6 +86,28 @@ class Exclusion(StrictModel):
         return self
 
 
+class UnmeasuredTree(StrictModel):
+    path: str = Field(min_length=1, description="Repository-relative directory outside the inventory.")
+    issue: int = Field(ge=1, description="Tracking issue number for the open coverage decision.")
+    reason: str = Field(min_length=1, description="Why the tree is not inventoried yet.")
+
+    @model_validator(mode="after")
+    def reasoned_tree(self) -> UnmeasuredTree:
+        """Require a concrete directory and a substantive reason, never a blanket skip.
+
+        Parameters:
+            None.
+        Returns:
+            UnmeasuredTree: Validated tracked-unmeasured directory.
+        Raises:
+            ValueError: The path is absolute, escapes or is the whole repository, or the reason is blank.
+        """
+        path = Path(self.path)
+        if path.is_absolute() or ".." in path.parts or path.parts in {(), (".",)} or not self.reason.strip():
+            raise ValueError("Unmeasured tree needs a relative, non-root path and a nonblank reason")
+        return self
+
+
 class VerificationHelper(StrictModel):
     path: str = Field(min_length=1, description="Exact repository-relative verification-only file path.")
     reason: str = Field(
@@ -274,6 +296,10 @@ class Policy(StrictModel):
     verification_helpers: list[VerificationHelper] = Field(
         default_factory=list,
         description="Per-file reasoned verification harness classifications, never production.",
+    )
+    unmeasured_trees: list[UnmeasuredTree] = Field(
+        default_factory=list,
+        description="Whole directories not inventoried, each tied to an open tracking issue.",
     )
     reclassifications: list[Reclassification] = Field(
         default_factory=list,
@@ -524,6 +550,34 @@ def parse_lcov(text: str, *, bare_sources: bool = False) -> dict[str, FileCovera
     return records
 
 
+SOURCE_SUFFIXES = frozenset(
+    {
+        ".ts",
+        ".tsx",
+        ".mts",
+        ".cts",
+        ".js",
+        ".jsx",
+        ".mjs",
+        ".cjs",
+        ".py",
+        ".swift",
+        ".rs",
+        ".sh",
+        ".bash",
+        ".ps1",
+    }
+)
+# Suffixes that are known to carry no executable source. Anything in neither set fails the audit, so a
+# new language is classified deliberately rather than slipping through.
+NON_SOURCE_SUFFIXES = frozenset(
+    {
+        ".md", ".mdx", ".txt", ".json", ".jsonl", ".yml", ".yaml", ".toml", ".lock", ".conf", ".xml",
+        ".entitlements", ".css", ".info", ".map", ".snap", ".stderr", ".png", ".jpg", ".svg", ".mp4", ".mov",
+    }
+)  # fmt: skip
+
+
 def is_test_path(path: Path) -> bool:
     """Identify conventional tests, pytest `conftest.py` fixture modules and fixture directories.
 
@@ -537,6 +591,7 @@ def is_test_path(path: Path) -> bool:
     return (
         any(part in {"test", "tests", ".test-support", "fixtures"} for part in path.parts)
         or path.name.endswith(".test.ts")
+        or path.name.endswith("_tests.swift")
         or (path.suffix == ".py" and (path.name.startswith("test_") or path.name == "conftest.py"))
     )
 
@@ -755,7 +810,7 @@ def check_inventory_ratchet(root: Path, current: Policy, base: Policy, revision:
 
 
 def audit_inventory(root: Path, policy: Policy, files: set[str]) -> set[str]:
-    """Find owned executable TS, Python and JavaScript absent from reviewed scope.
+    """Find executable source absent from reviewed scope, failing closed on unknown suffixes.
 
     Parameters:
         root (Path): Absolute repository root.
@@ -776,14 +831,13 @@ def audit_inventory(root: Path, policy: Policy, files: set[str]) -> set[str]:
         )
     if helpers & covered:
         raise ValueError(f"Verification helpers overlap production inventory: '{sorted(helpers & covered)}'")
+    trees = [tree.path for tree in policy.unmeasured_trees]
     unknown: set[str] = set()
     for file in files:
         path = Path(file)
-        if (
-            path.suffix not in {".ts", ".py", ".mjs", ".cjs", ".js"}
-            or is_test_path(path)
-            or path.parts[0] == "forks"
-        ):
+        if is_test_path(path) or any(path.is_relative_to(tree) for tree in trees):
+            continue
+        if not is_executable_candidate(root, path):
             continue
         if file in covered or file in helpers:
             continue
@@ -795,6 +849,30 @@ def audit_inventory(root: Path, policy: Policy, files: set[str]) -> set[str]:
         if not excluded:
             unknown.add(file)
     return unknown
+
+
+def is_executable_candidate(root: Path, path: Path) -> bool:
+    """Fail closed: every file is executable source unless its kind is positively known to be inert.
+
+    Parameters:
+        root (Path): Absolute repository root, used to sniff extensionless files.
+        path (Path): Repository-relative path.
+    Returns:
+        bool: Whether the file must be inventoried; unknown suffixes and extensionless shebang scripts are.
+    Raises:
+        None.
+    """
+    if path.suffix in SOURCE_SUFFIXES:
+        return True
+    if path.suffix in NON_SOURCE_SUFFIXES:
+        return False
+    if path.suffix == "":
+        try:
+            with (root / path).open("rb") as handle:
+                return handle.read(2) == b"#!"
+        except OSError:
+            return False
+    return True
 
 
 def check_enforcement_changes(current: Policy, base: Policy) -> None:
