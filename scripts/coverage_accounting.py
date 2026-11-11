@@ -1104,14 +1104,15 @@ def reads_statements(signal: Signal) -> bool:
     return "json-summary" in signal.reporters
 
 
-def parse_statement_summary(text: str, base: Path) -> dict[Path, tuple[int, int]]:
+def parse_statement_summary(text: str, base: Path) -> dict[str, tuple[int, int]]:
     """Parse an Istanbul or V8 `json-summary` report into per-file statement totals.
 
     Parameters:
         text (str): Complete `coverage-summary.json` document.
         base (Path): Directory that relative source keys are resolved against.
     Returns:
-        dict[Path, tuple[int, int]]: Resolved source path -> (statements, covered statements).
+        dict[str, tuple[int, int]]: Normalized POSIX source path -> (statements, covered statements).
+            Absolute keys stay anchored to the producing checkout; see `statement_counts`.
     Raises:
         ValueError: The document is malformed, empty, duplicated or inconsistent.
     """
@@ -1121,7 +1122,7 @@ def parse_statement_summary(text: str, base: Path) -> dict[Path, tuple[int, int]
         raise ValueError(f"Malformed statement summary: {error}") from error
     if not isinstance(document, dict) or not isinstance(document.get("total"), dict):
         raise ValueError("Malformed statement summary: no `total` entry")
-    files: dict[Path, tuple[int, int]] = {}
+    files: dict[str, tuple[int, int]] = {}
     for key, entry in document.items():
         if key == "total":
             continue
@@ -1139,7 +1140,7 @@ def parse_statement_summary(text: str, base: Path) -> dict[Path, tuple[int, int]
             raise ValueError(f"Malformed statement counter: '{key}'")
         if covered > total:
             raise ValueError(f"Inconsistent statement counter: '{key}'")
-        resolved = (Path(key) if Path(key).is_absolute() else base / key).resolve()
+        resolved = Path(os.path.normpath(Path(key) if Path(key).is_absolute() else base / key)).as_posix()
         if resolved in files:
             raise ValueError(f"Duplicate statement summary source: '{key}'")
         files[resolved] = (total, covered)
@@ -1148,9 +1149,37 @@ def parse_statement_summary(text: str, base: Path) -> dict[Path, tuple[int, int]
     return files
 
 
+def statement_counts(
+    summary: dict[str, tuple[int, int]], root: Path, resolved: Path
+) -> tuple[int, int] | None:
+    """Find one source's statement totals, wherever the producing checkout lived.
+
+    Istanbul and V8 key `coverage-summary.json` by absolute path, while the fan-in accounts reports on a
+    different runner than the one that produced them (macOS reports are replayed on Ubuntu). An exact match
+    wins; otherwise the repository-relative path must be the unique suffix of one summary key.
+
+    Parameters:
+        summary (dict[str, tuple[int, int]]): Parsed per-file totals.
+        root (Path): Absolute repository root the LCOV record was resolved against.
+        resolved (Path): The record's resolved source path under `root`.
+    Returns:
+        tuple[int, int] | None: (statements, covered), or None when no key names the source.
+    Raises:
+        ValueError: More than one summary key matches the repository-relative path.
+    """
+    exact = summary.get(resolved.as_posix())
+    if exact is not None:
+        return exact
+    suffix = "/" + resolved.relative_to(root.resolve()).as_posix()
+    matches = [counts for key, counts in summary.items() if key.endswith(suffix)]
+    if len(matches) > 1:
+        raise ValueError(f"Ambiguous statement summary source: '{suffix[1:]}'")
+    return matches[0] if matches else None
+
+
 def read_statement_summary(
     root: Path, package: Package, signal: Signal, reports_root: Path | None
-) -> dict[Path, tuple[int, int]]:
+) -> dict[str, tuple[int, int]]:
     """Read the `coverage-summary.json` written next to the signal's LCOV report.
 
     Parameters:
@@ -1159,7 +1188,7 @@ def read_statement_summary(
         signal (Signal): Signal declaring the `json-summary` reporter.
         reports_root (Path | None): Downloaded artifact root, or null for working-tree reports.
     Returns:
-        dict[Path, tuple[int, int]]: Per-file statement totals keyed by resolved path.
+        dict[str, tuple[int, int]]: Per-file statement totals keyed by normalized path.
     Raises:
         ValueError: The summary is missing, malformed or empty.
     """
@@ -1234,9 +1263,10 @@ def scoped_records(
             raise ValueError(f"Duplicate normalized source: '{relative}'")
         counted = counters
         if statements is not None:
-            if resolved not in statements:
+            found = statement_counts(statements, root, resolved)
+            if found is None:
                 raise ValueError(f"Statements missing for source: '{relative}'")
-            total, covered = statements[resolved]
+            total, covered = found
             counted = replace(counters, statements=total, uncovered_statements=total - covered)
         records[relative] = counted
     missing = expected - records.keys()

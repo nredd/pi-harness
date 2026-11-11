@@ -89,6 +89,52 @@ def test_relative_summary_keys_resolve_against_the_package_root(tmp_path: Path) 
     assert errors_of(tmp_path, statement_policy(0)) == []
 
 
+def test_summary_from_another_checkout_is_matched_by_repository_path(tmp_path: Path) -> None:
+    """Replay a summary whose absolute keys name the producing runner's checkout, as the fan-in does.
+
+    Parameters:
+        tmp_path (Path): Disposable report root.
+    Returns:
+        None: The repository-relative suffix matches; a lookalike package does not.
+    Raises:
+        AssertionError: Cross-runner replay fails or matches the wrong file.
+    """
+    setup_report(tmp_path)
+    write_summary(
+        tmp_path, total=3, covered=2, key="/Users/runner/work/repo/repo/packages/example/src/index.ts"
+    )
+    results, errors = account(tmp_path, statement_policy(1))
+    assert errors == []
+    assert [r["uncovered_statements"] for r in results] == [1]
+    write_summary(
+        tmp_path, total=3, covered=3, key="/Users/runner/work/repo/repo/packages/other-example/src/index.ts"
+    )
+    (error,) = errors_of(tmp_path, statement_policy(0))
+    assert "Statements missing for source: 'src/index.ts'" in error
+
+
+def test_ambiguous_summary_suffixes_fail(tmp_path: Path) -> None:
+    """Refuse to guess between two producing checkouts' entries for one source.
+
+    Parameters:
+        tmp_path (Path): Disposable report root.
+    Returns:
+        None: Two suffix matches are an error.
+    Raises:
+        AssertionError: One entry silently wins.
+    """
+    setup_report(tmp_path)
+    counter = {"statements": {"total": 1, "covered": 1}}
+    document = {
+        "total": counter,
+        "/a/packages/example/src/index.ts": counter,
+        "/b/packages/example/src/index.ts": counter,
+    }
+    (tmp_path / "packages/example/coverage/coverage-summary.json").write_text(json.dumps(document))
+    (error,) = errors_of(tmp_path, statement_policy(0))
+    assert "Ambiguous statement summary source: 'packages/example/src/index.ts'" in error
+
+
 def test_a_producer_that_stops_writing_the_summary_fails(tmp_path: Path) -> None:
     """Fail closed rather than read a missing summary as zero uncovered statements.
 
