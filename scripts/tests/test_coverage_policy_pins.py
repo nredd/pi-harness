@@ -133,7 +133,7 @@ def test_reviewed_missing_source_is_explicitly_accounted(file: str) -> None:
     Parameters:
         file (str): Previously unaccounted executable repository path.
     Returns:
-        None: A package owns the source: measured by a real producer, or pending with a follow-up.
+        None: A package owns the source: measured by a real producer.
     Raises:
         AssertionError: The source is omitted or treated as measured without a producer.
     """

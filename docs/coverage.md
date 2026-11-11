@@ -341,10 +341,10 @@ Failed-run reports are diagnostic artifacts only and never establish budgets.
 
 Every Vitest producer configuration is measured since #380 (see the `import-audit` paragraph above). Python `scripts/*.py` (`python-scripts`) and
 `integration/harness/*.py` (`python-harness`) are measured by the one Python gate recipe `PY_GATE` in
-the `Makefile`: ruff, ty, then `pytest -n auto --dist loadfile --cov=<project root>` writing LCOV to
+the `Makefile`: ruff, ty, then `pytest -n auto --dist loadfile --cov=<project root> --cov-fail-under=100` writing LCOV to
 `scripts/coverage/python/lcov.info` and `integration/coverage/python/lcov.info`. The path is
 deliberately not `coverage/primary`, which is import-audit's report. The `--cov` source is the project
-root (`.` and `harness`), so the policy `owned` globs stay the only copy of the inventory.
+root (`.` and `harness`), so the policy `owned` globs stay the only copy of the inventory. For `scripts` that root includes `scripts/tests/`, so the test files themselves must reach 100%; `--cov-fail-under=100` applies to both `check-scripts` and `check-integration` (`harness`).
 `scripts/pyproject.toml` sets coverage's `patch = ["subprocess"]` so the CLI tests that spawn
 `coverage_accounting.py` count. `pytest-cov` is locked in `integration/pyproject.toml`.
 Measurement can report an OS with no reference floor; enforcement still requires one. Summary totals
