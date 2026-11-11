@@ -32,6 +32,7 @@ vi.mock("../src/platform/windows/helper.ts", () => ({
 
 const { platformBackendForRuntime } = await import("../src/platform/index.ts");
 const { macosBackend, normalizeTarget } = await import("../src/platform/macos/backend.ts");
+const { effectiveBlockedBundleIds, getComputerUseConfig } = await import("../src/config.ts");
 const { wslProbe } = await import("../src/platform/linux/wsl.ts");
 
 const signal = new AbortController().signal;
@@ -158,8 +159,9 @@ describe("macOS backend", () => {
 		let [command, args, passed] = lastCall(fakes.macos);
 		assert.equal(command, "act");
 		assert.deepEqual(args.target, { pid: 1 });
-		assert.equal(typeof args.cursorOverlay, "boolean");
-		assert.ok(Array.isArray(args.blockedBundleIds));
+		assert.equal(args.cursorOverlay, getComputerUseConfig().cursor_overlay);
+		assert.deepEqual(args.blockedBundleIds, effectiveBlockedBundleIds());
+		assert.ok(args.blockedBundleIds.length > 0);
 		assert.equal(passed, options);
 		await macosBackend.act(focus);
 		args = lastCall(fakes.macos)[1];
@@ -368,7 +370,7 @@ describe("Linux backend", () => {
 		Object.assign(wslProbe, { env: () => ({ WSL_DISTRO_NAME: "Ubuntu" }) });
 		await rejectsWith(backend.getFrontmost(), /No frontmost window was available\. Running under WSL2/);
 		fakes.linux.command.mockResolvedValue([{ title: "no pid" }]);
-		await rejectsWith(backend.getFrontmost(), (error) => !/WSL2/.test(error.message));
+		await rejectsWith(backend.getFrontmost(), (error) => error.message === "No frontmost window was available.");
 		assert.match(backend.emptyRootsHint(), /WSL2/);
 	});
 
