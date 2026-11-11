@@ -89,8 +89,11 @@ filters and unchanged third-party sources remain in the stack manifest;
 | `@nredd/pi-session-kit` | `0.11.0` | `8a97f8b75acd9c4985a5a5f330f7a0ea27cce2d7` | [here](https://github.com/nredd/pi-harness/actions/runs/43004860783) |
 | `@nredd/pi-dev-tools` | `0.8.0` | `a9b89d81c82826807609362b1af2b896f8910d48` | [here](https://github.com/nredd/pi-harness/actions/runs/42852114165) |
 
-Four packages (`subagents`, `todo`, `computer-use`, `session-kit`) publish from frozen candidate `8a97f8b7` (full CI run [here](https://github.com/nredd/pi-harness/actions/runs/42989032375)); `preset`, `subscription-router`, `plan-mode` and `dev-tools` keep their 2026-11-10 publications from `a9b89d81` (`resource-sampler` is only a dependency), and the `computer-use` row's earlier `352ab6b3` candidate is superseded. Each of the four ran `publish.yml` once with no rerun; `verify`, `attest`, `publish` and `release` all succeeded.
-`subagents` and `resource-sampler` each needed a failed-jobs rerun after npm's attestation
+Four packages (`subagents`, `todo`, `computer-use`, `session-kit`) publish from frozen candidate `8a97f8b7`
+(full CI run [here](https://github.com/nredd/pi-harness/actions/runs/42989032375)). `preset`, `subscription-router`,
+`plan-mode` and `dev-tools` keep their 2026-11-10 publications from `a9b89d81`; `resource-sampler` is only a dependency.
+Each of the four ran `publish.yml` once with no rerun.
+Of the 2026-11-10 publications, `subagents` (`nredd.9`) and `resource-sampler` each needed a failed-jobs rerun after npm's attestation
 endpoint lagged the upload; the rerun skipped republication on matching integrity.
 
 Regenerating `runtime-locks.json` also took the registry's current third-party resolutions
@@ -105,7 +108,7 @@ graph's upstream copy comes from the extensions' `*` peer ranges on
 `@earendil-works/pi-coding-agent` and predates this pin (the base lock had 1.5.0); #671 tracks
 whether it should resolve to the fork core instead.
 
-The wave-3 regeneration also took, in both graphs on both targets, `@hono/node-server` 2.1.6 -> 2.1.7 and `hono` 4.13.17 -> 4.13.18 (patch releases, reviewed diff); the remaining lock changes are the four owned versions and their integrity values. Source-selected offline replay passes.
+The wave-3 regeneration also took, in the extension graph on both targets, `@hono/node-server` 2.1.6 -> 2.1.7 and `hono` 4.13.17 -> 4.13.18 (patch releases, reviewed diff); the remaining lock changes are the four owned versions and their integrity values. Source-selected offline replay passes.
 
 Those publication runs verified the packed bytes and their npm provenance. For this pin, the four new release `identity.json` files were downloaded again: their `commit` is `8a97f8b7` and each recorded SHA-512 integrity equals the exact version's current npm `dist.integrity`. That comparison is not a new independent cryptographic verification.
 Publication does not prove full combined-stack CI or desktop/live-provider acceptance.
