@@ -299,26 +299,33 @@ if let us = layoutData("com.apple.keylayout.US") {
 	check(keyboardLayoutCharacter(layoutData: us, keyCode: keyA, shift: true) == "A", "US shift+a types A")
 }
 let keyV: UInt16 = 9
+/// These layouts ship with macOS: a missing one fails the suite instead of silently skipping its checks.
+func requiredLayout(_ id: String) -> Data {
+	guard let data = layoutData(id) else { print("FAIL: required keyboard layout \(id) is not installed"); exit(1) }
+	checked += 1
+	return data
+}
 check(pasteKeyCode(layoutData: nil) == nil, "an unreadable layout has no paste key")
 if let us = layoutData("com.apple.keylayout.US") {
 	checked += 1
 	check(pasteKeyCode(layoutData: us) == keyV, "US cmd+v is key code 9")
 	check(layoutCommandKeyCode(producing: "~", layoutData: us) == nil, "a character no key produces has no command key code")
 }
-if let dvorak = layoutData("com.apple.keylayout.Dvorak") {
-	checked += 1
+do {
+	let dvorak = requiredLayout("com.apple.keylayout.Dvorak")
 	let typed = (0..<UInt16(128)).first { keyboardLayoutCharacter(layoutData: dvorak, keyCode: $0, shift: false) == "v" }
 	check(typed != nil && typed != keyV, "plain Dvorak types v on another key than ANSI key code 9")
 	check(pasteKeyCode(layoutData: dvorak) == typed, "plain Dvorak cmd+v follows the layout: the Dvorak v key")
 }
-if let dvorakQwerty = layoutData("com.apple.keylayout.DVORAK-QWERTYCMD") {
-	checked += 1
+do {
+	let dvorakQwerty = requiredLayout("com.apple.keylayout.DVORAK-QWERTYCMD")
 	check(keyboardLayoutCharacter(layoutData: dvorakQwerty, keyCode: 47, modifierState: commandModifierState) == ".", "Dvorak-QWERTY command map keeps QWERTY: key 47 is a period")
 	check(pasteKeyCode(layoutData: dvorakQwerty) == keyV, "Dvorak - QWERTY Command pastes with key code 9, not the Dvorak v key")
 }
 for id in ["com.apple.keylayout.Russian", "com.apple.keylayout.Ukrainian", "com.apple.keylayout.Greek", "com.apple.keylayout.Hebrew", "com.apple.keylayout.Arabic"] {
-	if let layout = layoutData(id) {
-		checked += 1
+	let required = id.hasSuffix("Russian") || id.hasSuffix("Ukrainian")
+	if let layout = required ? requiredLayout(id) : layoutData(id) {
+		if !required { checked += 1 }
 		check(keyboardLayoutCharacter(layoutData: layout, keyCode: keyV, shift: false) != "v", "\(id) types no v on key 9")
 		check(keyboardLayoutCharacter(layoutData: layout, keyCode: keyV, modifierState: commandModifierState) == "v", "\(id) command map yields v on key 9")
 		check(pasteKeyCode(layoutData: layout) == keyV, "\(id) pastes with key code 9, it is not refused")

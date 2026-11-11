@@ -774,10 +774,19 @@ const cases = [
 	{
 		name: "paste stays off Universal Clipboard (#647)",
 		file: "native/macos/bridge.swift",
-		before: "pasteboard.prepareForNewContents(with: .currentHostOnly)",
-		after: "pasteboard.clearContents()",
+		before: "it must not sync to the user's other devices.\n\t\t\tpasteboard.prepareForNewContents(with: .currentHostOnly)",
+		after: "it must not sync to the user's other devices.\n\t\t\tpasteboard.clearContents()",
 		check: "test/app-policy.test.mjs",
 		failure: /Universal Clipboard/,
+		darwinOnly: true,
+	},
+	{
+		name: "paste restore is host-only (#647)",
+		file: "native/macos/bridge.swift",
+		before: "republish it as syncable.\n\t\t\tpasteboard.prepareForNewContents(with: .currentHostOnly)",
+		after: "republish it as syncable.\n\t\t\tpasteboard.clearContents()",
+		check: "test/app-policy.test.mjs",
+		failure: /restore must be host-only/,
 		darwinOnly: true,
 	},
 ];

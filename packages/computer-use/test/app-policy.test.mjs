@@ -133,8 +133,10 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	const pasteBody = swift.match(/let restored = try withTemporaryClipboard\(text\) \{[\s\S]*?\n\t\t\t\}\n/)?.[0] ?? "";
 	const recheckAt = pasteBody.indexOf("try refuseBlockedKeyboardTarget(blocked: blockedBundleIdList(request))");
 	const lookupAt = pasteBody.indexOf("pasteKeyCode(layoutData: currentKeyboardInputSource().layoutData)");
-	assert.ok(recheckAt > 0 && lookupAt > recheckAt && lookupAt < pasteBody.indexOf("try postKeyCode("), "paste must re-check the focused app after the clipboard snapshot, then look up the layout key, right before cmd+v");
-	assert.match(swift, /pasteboard\.prepareForNewContents\(with: \.currentHostOnly\)/, "the temporary paste item must stay off Universal Clipboard");
+	const postAt = pasteBody.indexOf("try postKeyCode(");
+	assert.ok(lookupAt > 0 && recheckAt > lookupAt && postAt > recheckAt, "paste must look up the layout key first and re-check the focused app immediately before cmd+v");
+	assert.ok(!pasteBody.slice(recheckAt, postAt).includes("currentKeyboardInputSource"), "nothing slow may sit between the last blocked-app check and the post");
+assert.match(swift, /pasteboard\.prepareForNewContents\(with: \.currentHostOnly\)/, "the temporary paste item must stay off Universal Clipboard");
 	assert.match(swift, /return try withRestoredClipboard\(write: \{[\s\S]*?\}, restore: restore, body: body\)/, "the temporary clipboard must restore on every exit, including a refusal in the body");
 	const restoreHelper = swift.match(/func withRestoredClipboard[\s\S]*?\n\}\n/)?.[0] ?? "";
 	assert.match(restoreHelper, /catch \{\n\t\t_ = restore\(\)\n\t\tthrow error/, "a throwing write or body restores the clipboard before rethrowing");

@@ -531,7 +531,8 @@
 			"dropControls": [
 				"paste blocked app keyboard refusal (#647)",
 				"paste re-checks blocked app before cmd+v (#647)",
-				"paste stays off Universal Clipboard (#647)"
+				"paste stays off Universal Clipboard (#647)",
+				"paste restore is host-only (#647)"
 			],
 			"upstream": {
 				"status": "harness-only",
