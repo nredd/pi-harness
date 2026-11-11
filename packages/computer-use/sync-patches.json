@@ -186,6 +186,18 @@
 			}
 		},
 		{
+			"id": "cdp-dead-guard-removal",
+			"purpose": "Delete dead cdp.ts guards instead of testing them: the try/catch around WebSocket.close() (a no-argument close never throws), the non-Error wrapping of send failures (JSON.stringify and ws.send only throw Errors) and the unreachable snapshot ref fallback; covered by a scriptable fake CDP",
+			"files": ["src/cdp.ts", "test/cdp-client.test.mjs", "test/fake-cdp.test.mjs"],
+			"check": "test/cdp-client.test.mjs",
+			"dropControls": ["CDP snapshot maps wire refs to model refs (#708)"],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "Coverage-driven dead code removal (nredd/pi-harness#708); not filed"
+			}
+		},
+		{
 			"id": "canonical-root-deltas",
 			"purpose": "Map helper-native root deltas once to canonical public refs",
 			"files": ["src/bridge.ts"],
@@ -644,6 +656,7 @@
 		"scripts/setup-helper.mjs",
 		"src/actions.ts",
 		"src/bridge.ts",
+		"src/cdp.ts",
 		"src/config.ts",
 		"src/desktop.ts",
 		"src/outline-store.ts",
@@ -666,10 +679,12 @@
 		"test/async.test.mjs",
 		"test/bounded-output.test.mjs",
 		"test/build-native.test.mjs",
+		"test/cdp-client.test.mjs",
 		"test/cleanup.test.mjs",
 		"test/commit-messages.test.mjs",
 		"test/desktop-tools.test.mjs",
 		"test/docs-generators.test.mjs",
+		"test/fake-cdp.test.mjs",
 		"test/find-params.test.mjs",
 		"test/invariants.test.mjs",
 		"test/support/fake-desktop.mjs",

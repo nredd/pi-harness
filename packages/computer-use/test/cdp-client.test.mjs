@@ -270,6 +270,21 @@ describe("connection lifecycle", () => {
 		await assert.rejects(tab.evaluate("1"), /CDP connection (closed|error)\./);
 	});
 
+	test("`close` rejects pending commands at once even if the browser never completes the closing handshake", async () => {
+		const fake = await fakeBrowser({ echoClose: false });
+		const tab = await connectedTab();
+		fake.handle("Runtime.evaluate", () => NO_REPLY);
+		const pending = tab.evaluate("1");
+		pending.catch(() => {});
+		await fake.connections[0].waitForRequest("Runtime.evaluate");
+		tab.close();
+		const outcome = await Promise.race([
+			pending.then(() => "resolved", (error) => error.message),
+			new Promise((resolve) => realSetTimeout(resolve, 1_000, "still pending")),
+		]);
+		assert.equal(outcome, "CDP connection closed.");
+	});
+
 	test("`close` rejects pending commands and is idempotent", async () => {
 		const fake = await fakeBrowser();
 		const tab = await connectedTab();

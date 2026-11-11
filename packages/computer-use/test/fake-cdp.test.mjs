@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import http from "node:http";
 import { afterEach, describe, test } from "vitest";
 import { cdpError, startFakeCdp, websocketFrame, parseFrames } from "./fixtures/fake-cdp.mjs";
 
@@ -62,6 +63,27 @@ describe("fake CDP framing", () => {
 		const connection = fake.connections[0];
 		connection.socket.emit("data", Buffer.concat([Buffer.from([0x01, 5]), Buffer.from(request.slice(0, 5)), Buffer.from([0x80, request.length - 5]), Buffer.from(request.slice(5))]));
 		assert.deepEqual((await next()).result, { v: 1 });
+	});
+});
+
+describe("fake CDP control frames", () => {
+	test("a client ping is answered with a pong echoing its payload", async () => {
+		const fake = await startFakeCdp();
+		fakes.push(fake);
+		const socket = await new Promise((resolve, reject) => {
+			const request = http.request({ port: fake.port, host: "127.0.0.1", path: "/devtools/page/fake", headers: { Connection: "Upgrade", Upgrade: "websocket", "Sec-WebSocket-Version": "13", "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==" } });
+			request.on("upgrade", (_response, upgraded) => resolve(upgraded));
+			request.on("error", reject);
+			request.end();
+		});
+		const mask = Buffer.from([1, 2, 3, 4]);
+		const payload = Buffer.from("beat");
+		socket.write(Buffer.concat([Buffer.from([0x89, 0x80 | payload.length]), mask, Buffer.from(payload.map((byte, index) => byte ^ mask[index % 4]))]));
+		const reply = await new Promise((resolve) => socket.once("data", resolve));
+		socket.destroy();
+		const [frame] = parseFrames(reply).frames;
+		assert.equal(frame.opcode, 10);
+		assert.equal(frame.payload.toString(), "beat");
 	});
 });
 

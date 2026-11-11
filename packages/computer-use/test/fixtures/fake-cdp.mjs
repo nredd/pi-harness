@@ -6,7 +6,7 @@
 // Scripting surface, for `cdp.ts` today and the bridge act-transaction / managed-browser suites later:
 // - HTTP discovery: `/json/version`, `/json/list`; `setTargets` swaps the list,
 //   `discoveryBody` breaks it, `rejectUpgrade`/`hangUpgrade` break the handshake.
-// - WebSocket: RFC 6455 framing both ways (7/16/64-bit lengths, masking, fragmentation, ping/pong,
+// - WebSocket: RFC 6455 framing both ways (7/16/64-bit lengths, masking, fragmentation, client ping answered with pong, server ping,
 //   close handshake). Page endpoints live at `/devtools/page/<id>`, the browser endpoint at
 //   `/devtools/browser/<id>` and both speak flat-session CDP (`Target.getTargets`,
 //   `Target.attachToTarget`, `Target.detachFromTarget`, `sessionId` routing).
@@ -20,7 +20,7 @@ import { createHash } from "node:crypto";
 import http from "node:http";
 
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-const OPCODE = { continuation: 0, text: 1, close: 8 };
+const OPCODE = { continuation: 0, text: 1, close: 8, ping: 9, pong: 10 };
 
 /** Handler return value: send nothing (the client's timeout fires). */
 export const NO_REPLY = Symbol("fake-cdp:no-reply");
@@ -248,11 +248,11 @@ class FakeConnection {
 
 /**
  * Start a fake CDP endpoint on loopback.
- * @param {{ port?: number, id?: string, title?: string, url?: string, targets?: FakeTarget[] }} [options] Port (0 picks one), the single default page, or an explicit target list.
+ * @param {{ port?: number, id?: string, title?: string, url?: string, targets?: FakeTarget[], echoClose?: boolean }} [options] Port (0 picks one), the single default page or an explicit target list, and whether client close frames are echoed (`false` leaves the closing handshake hanging, like an unresponsive browser).
  * @returns {Promise<FakeCdp>} The listening endpoint.
  * @throws {Error} If the port cannot be bound.
  */
-export async function startFakeCdp({ port = 0, id = "fake", title = "Fake", url = "about:blank", targets } = {}) {
+export async function startFakeCdp({ port = 0, id = "fake", title = "Fake", url = "about:blank", targets, echoClose = true } = {}) {
 	const sockets = new Set();
 	const upgraded = [];
 	const connections = [];
@@ -357,7 +357,11 @@ export async function startFakeCdp({ port = 0, id = "fake", title = "Fake", url 
 			for (const frame of parsed.frames) {
 				connection.received.push(frame);
 				if (frame.opcode === OPCODE.close) {
-					socket.end(websocketFrame(frame.payload, OPCODE.close));
+					if (echoClose) socket.end(websocketFrame(frame.payload, OPCODE.close));
+					continue;
+				}
+				if (frame.opcode === OPCODE.ping) {
+					connection.sendFrame(OPCODE.pong, frame.payload);
 					continue;
 				}
 				if (frame.opcode === OPCODE.text || frame.opcode === OPCODE.continuation) fragments.push(frame.payload);
