@@ -331,7 +331,7 @@ function foldedSummary(node: OutlineNode): string {
 		.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
 		.slice(0, 4)
 		.map(([role, count]) => `${count} ${plural(count, role)}`);
-	const countText = `${counts.total}: ${roleCounts.join(", ") || "0 children"}`;
+	const countText = `${counts.total}: ${roleCounts.join(", ")}`;
 	const scroll = node.scrollExtent ? ` [scrollable ${node.scrollExtent.seen}/${node.scrollExtent.total}]` : "";
 	return ` ▸ (${countText})${scroll}`;
 }
@@ -617,7 +617,7 @@ function rebuildIndexes(outline: Outline): void {
 	}
 }
 
-function copyNodeFields(target: OutlineNode, source: OutlineNode, preserveWireRef = false): void {
+function copyNodeFields(target: OutlineNode, source: OutlineNode, preserveWireRef: boolean): void {
 	if (!preserveWireRef) target.wireRef = source.wireRef;
 	target.role = source.role;
 	target.subrole = source.subrole;
