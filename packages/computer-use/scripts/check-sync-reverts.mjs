@@ -707,7 +707,7 @@ const cases = [
 		before: 'if delivery == "hid" { try refuseBlockedKeyboardTarget(blocked: blockedBundleIdList(request)) }',
 		after: "/* paste re-check dropped */",
 		check: "test/app-policy.test.mjs",
-		failure: /paste must re-check the focused app/,
+		failure: /immediately before cmd\+v/,
 		darwinOnly: true,
 	},
 	{
