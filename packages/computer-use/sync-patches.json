@@ -162,6 +162,18 @@
 			}
 		},
 		{
+			"id": "platform-dead-arm-removal",
+			"purpose": "Delete platform arms with no caller instead of testing them: the unreachable win32 label in UnsupportedPlatformBackend and the redundant permissionSignal fallbacks in ensureMacosReady (ensurePermissions always forwards its own signal)",
+			"files": ["src/platform/index.ts", "src/platform/macos/permissions.ts", "test/permissions-browser.test.mjs", "test/platform-backends.test.mjs"],
+			"check": "test/permissions-browser.test.mjs",
+			"dropControls": ["openPermissionPane forwards the signal (#707)"],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "Coverage-driven dead code removal (nredd/pi-harness#707); not filed"
+			}
+		},
+		{
 			"id": "canonical-root-deltas",
 			"purpose": "Map helper-native root deltas once to canonical public refs",
 			"files": ["src/bridge.ts"],
@@ -557,10 +569,14 @@
 		"src/platform/linux/wsl.ts",
 		"src/platform/macos/backend.ts",
 		"src/platform/macos/helper.ts",
+		"src/platform/index.ts",
+		"src/platform/macos/permissions.ts",
 		"src/platform/types.ts",
 		"src/platform/windows/helper.ts",
 		"sync-patches.json",
 		"test/act-outcomes.test.mjs",
+		"test/permissions-browser.test.mjs",
+		"test/platform-backends.test.mjs",
 		"test/bridge-setup-look.test.mjs",
 		"test/app-policy.test.mjs",
 		"test/async.test.mjs",

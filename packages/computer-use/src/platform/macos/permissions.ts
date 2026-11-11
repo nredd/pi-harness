@@ -128,12 +128,13 @@ export async function ensureMacosReady(
 					readyMessage: "pi-computer-use is ready.",
 					stillMissing: missingPermissionMessage,
 				},
-				checkPermissions: (permissionSignal) => checkPermissions(permissionSignal ?? signal),
-				registerPermissions: (permissionSignal) => registerPermissions(permissionSignal ?? signal),
+				// `ensurePermissions` forwards the caller's own `signal` to each callback.
+				checkPermissions,
+				registerPermissions,
 				openPermissionPane: async (kind, permissionSignal) => {
-					await macosHelper.command("openPermissionPane", { kind }, { signal: permissionSignal ?? signal });
+					await macosHelper.command("openPermissionPane", { kind }, { signal: permissionSignal });
 				},
-				restartHelper: (permissionSignal) => macosHelper.restart(permissionSignal ?? signal),
+				restartHelper: (permissionSignal) => macosHelper.restart(permissionSignal),
 				permissionHint: attributionHint,
 			},
 			HELPER_APP_PATH,

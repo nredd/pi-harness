@@ -595,6 +595,14 @@ const cases = [
 		failure: /Missing expected rejection/,
 	},
 	{
+		name: "openPermissionPane forwards the signal (#707)",
+		file: "src/platform/macos/permissions.ts",
+		before: '{ kind }, { signal: permissionSignal }',
+		after: '{ kind }, {}',
+		check: "test/permissions-browser.test.mjs",
+		failure: /openPermissionPane forwards the signal/,
+	},
+	{
 		name: "Outline store write (#648)",
 		file: "src/bridge.ts",
 		before: "saveStoredOutline(result.capture.stateId, serializeOutline(result.outline));",

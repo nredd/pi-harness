@@ -25,13 +25,10 @@ const macosPlatformBackend: ComputerUsePlatformBackend = {
 };
 
 class UnsupportedPlatformBackend implements ComputerUsePlatformBackend {
-	readonly name: PlatformName;
-	private readonly platform: NodeJS.Platform;
+	// `win32`, `linux` and `darwin` never reach this class, so the label is always the Linux fallback.
+	readonly name: PlatformName = "linux";
 
-	constructor(platform: NodeJS.Platform) {
-		this.platform = platform;
-		this.name = platform === "win32" ? "windows" : "linux";
-	}
+	constructor(private readonly platform: NodeJS.Platform) {}
 
 	private unsupported(): never {
 		throw new Error(`pi-computer-use does not support platform '${this.platform}' yet.`);
