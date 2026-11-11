@@ -2635,6 +2635,10 @@ def test_the_smoke_workflow_covers_the_wsl2_pool_for_same_repo_runs_only() -> No
     workflow = yaml.safe_load((ROOT / ".github/workflows/runner-smoke.yml").read_text())
     job = workflow["jobs"]["pi-wsl2"]
     assert job["runs-on"] == ["self-hosted", "pi-wsl2"]
-    assert job["if"] == workflow["jobs"]["pi-linux"]["if"]
+    # No pool, no runner with the label: a PR-triggered job would queue forever, so PRs wait for the heartbeat
+    # variable and only a manual dispatch runs the acceptance smoke before it exists.
+    assert "workflow_dispatch" in job["if"]
+    assert "vars.PI_WSL2_HEARTBEAT != ''" in job["if"]
+    assert "head.repo.full_name == github.repository" in job["if"]
     assert any(step.get("run") == "bash scripts/wsl2_smoke.sh" for step in job["steps"])
     assert "scripts/wsl2_smoke.sh" in workflow[True]["pull_request"]["paths"]

@@ -75,7 +75,12 @@ jobs:
     # refuses any run whose head repository is not this one), repo-scoped single-use JIT runners and the
     # per-job VM's firewall. The host-specific targets arrive through the runner's environment
     # (`SMOKE_HOST_IP`, `SMOKE_DEV_IP`, `SMOKE_DEV_PORTS`), never from this repository.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Until the pool's heartbeat variable exists no runner carries the label, so a PR-triggered job would queue
+    # forever (`timeout-minutes` only starts once a runner picks it up): PRs wait for the pool, and the acceptance
+    # smoke before that is a manual `workflow_dispatch`.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (vars.PI_WSL2_HEARTBEAT != '' && github.event.pull_request.head.repo.full_name == github.repository)
     name: smoke (pi-wsl2)
     runs-on: [self-hosted, pi-wsl2]
     timeout-minutes: 10
