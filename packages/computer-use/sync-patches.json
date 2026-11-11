@@ -451,11 +451,23 @@
 			}
 		},
 		{
+			"id": "helper-disconnect-linux",
+			"purpose": "Fail pending Linux helper commands only once the helper's stdout is drained (close, not exit), and frame each helper process's output separately",
+			"files": ["src/platform/linux/helper.ts", "test/linux-helper-client.test.mjs"],
+			"check": "test/linux-helper-client.test.mjs",
+			"dropControls": ["Linux pending requests fail on close, after stdout drains (#725)", "Linux per-child line buffer (#725)"],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#725; not filed upstream"
+			}
+		},
+		{
 			"id": "helper-disconnect-windows",
 			"purpose": "Reject pending Windows helper commands with coded helper_disconnected when the helper process closes, instead of waiting out the command timeout",
 			"files": ["src/platform/windows/helper.ts", "test/windows-helper-client.test.mjs"],
 			"check": "test/windows-helper-client.test.mjs",
-			"dropControls": ["Windows helper exit rejects pending commands (#725)"],
+			"dropControls": ["Windows helper exit rejects pending commands (#725)", "Windows per-child line buffer (#725)"],
 			"upstream": {
 				"status": "harness-only",
 				"reference": "UPSTREAM.md",

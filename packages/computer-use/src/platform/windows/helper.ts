@@ -50,7 +50,6 @@ async function runProcess(command: string, args: string[], timeoutMs: number, si
 export class WindowsHelperClient {
 	private installChecked = false;
 	private child?: ChildProcessWithoutNullStreams;
-	private buffer = "";
 	private pending = new Map<string, Pending<unknown>>();
 
 	dispose(): void {
@@ -60,7 +59,6 @@ export class WindowsHelperClient {
 			pending.reject(error);
 		}
 		this.pending.clear();
-		this.buffer = "";
 
 		const child = this.child;
 		this.child = undefined;
@@ -87,13 +85,14 @@ export class WindowsHelperClient {
 		child.stdout.setEncoding("utf8");
 		child.stderr.setEncoding("utf8");
 		child.stdin.setDefaultEncoding("utf8");
-		child.stdout.on("data", (chunk: string) => this.onStdout(chunk));
+		// Each child frames its own lines, so a dead child's partial output cannot corrupt its successor's replies.
+		let buffer = "";
+		child.stdout.on("data", (chunk: string) => { buffer = this.onStdout(buffer, chunk); });
 		child.on("exit", () => { if (this.child === child) this.child = undefined; });
 		child.on("error", () => { if (this.child === child) this.child = undefined; });
 		// `close` fires after stdout drained, so replies already written are delivered first.
 		child.on("close", () => this.rejectPending(child));
 		this.child = child;
-		this.buffer = "";
 		return child;
 	}
 
@@ -109,13 +108,14 @@ export class WindowsHelperClient {
 		}
 	}
 
-	private onStdout(chunk: string): void {
-		this.buffer += chunk;
+	/** Settle the requests answered by the complete lines in `buffer + chunk`; returns the unfinished tail. */
+	private onStdout(previous: string, chunk: string): string {
+		let buffer = previous + chunk;
 		for (;;) {
-			const newline = this.buffer.indexOf("\n");
-			if (newline < 0) return;
-			const line = this.buffer.slice(0, newline).trim();
-			this.buffer = this.buffer.slice(newline + 1);
+			const newline = buffer.indexOf("\n");
+			if (newline < 0) return buffer;
+			const line = buffer.slice(0, newline).trim();
+			buffer = buffer.slice(newline + 1);
 			if (!line) continue;
 			let parsed: any;
 			try { parsed = JSON.parse(line); } catch { continue; }

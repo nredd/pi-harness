@@ -1,7 +1,7 @@
 // Drives `WindowsHelperClient` against `support/fake-helper.mjs` stdio children: no Windows helper runs.
 import assert from "node:assert/strict";
 import { afterEach, describe, test, vi } from "vitest";
-import { createFakeChild, createFakeSpawn, createHelperEngine, drop, ok, silent } from "./support/fake-helper.mjs";
+import { createFakeChild, createFakeSpawn, createHelperEngine, drop, effect, ok, silent } from "./support/fake-helper.mjs";
 
 afterEach(() => {
 	vi.doUnmock("node:child_process");
@@ -10,13 +10,18 @@ afterEach(() => {
 
 async function clientFor(handlers) {
 	const engine = createHelperEngine({ profile: "envelope", protocolVersion: 4, handlers, platform: "Windows" });
-	const spawn = createFakeSpawn({ "*": () => createFakeChild({ engine }) });
+	const children = [];
+	const spawn = createFakeSpawn({ "*": () => {
+		const child = createFakeChild({ engine });
+		children.push(child);
+		return child;
+	} });
 	vi.resetModules();
 	vi.doMock("node:child_process", async (original) => ({ ...(await original()), spawn }));
 	const { WindowsHelperClient } = await import("../src/platform/windows/helper.ts");
 	const client = new WindowsHelperClient();
 	vi.spyOn(client, "ensureInstalled").mockResolvedValue(undefined);
-	return { client, spawn };
+	return { client, spawn, children, engine };
 }
 
 describe("Windows helper client disconnects (#725)", () => {
@@ -41,5 +46,21 @@ describe("Windows helper client disconnects (#725)", () => {
 		client.child.emit("close", 1, null);
 		await assert.rejects(pending, (error) => error.code === "helper_disconnected");
 		assert.equal(spawn.calls.length, 1);
+	});
+
+	test("a dead child's partial line is not glued onto its successor's first reply", async () => {
+		const { client, children, engine } = await clientFor({});
+		engine.script("first", effect(() => {
+			children.at(-1).stdout.write('{"id":"x"');
+			children.at(-1).emit("exit", 1, null);
+		}, silent()));
+		engine.script("second", ok({ fine: true }));
+		const first = client.command("first", {}, { timeoutMs: 30_000 });
+		await vi.waitFor(() => assert.ok(children.length === 1 && client.child === undefined));
+		assert.deepEqual(await client.command("second"), { fine: true });
+		assert.equal(children.length, 2);
+		children[0].emit("close", 1, null);
+		await assert.rejects(first, (error) => error.code === "helper_disconnected");
+		assert.deepEqual(await client.command("second"), { fine: true });
 	});
 });
