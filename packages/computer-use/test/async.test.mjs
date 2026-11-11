@@ -308,8 +308,27 @@ async function verifyCommandDeadline() {
 	);
 }
 
-/** @returns {Promise<void>} Verifies group escalation after leader closure. @throws {Error} On fixture or survivor assertion failure. */
-async function verifyRedirectedDescendant() {
+/**
+ * Best-effort SIGKILL of a fixture's process group whatever the leader's state.
+ * The descendant shares the group, and a group signal still reaches members after the leader exited.
+ * @param {number} leader Fixture group leader PID.
+ * @returns {void} Never throws: cleanup must not replace the primary assertion.
+ * @throws {never} ESRCH (nothing left to kill) and EPERM are swallowed.
+ */
+function killFixtureTree(leader) {
+	try {
+		process.kill(-leader, "SIGKILL");
+	} catch {
+		/* Already gone. */
+	}
+}
+
+/**
+ * Spawns the redirected-descendant fixture: a TERM-responsive leader plus a TERM-ignoring descendant.
+ * @returns {{child: import('node:child_process').ChildProcess, closed: Promise<unknown>, ready: Promise<number>}} Fixture handles; `ready` resolves to the descendant PID.
+ * @throws {Error} On spawn failure (rejects `closed`).
+ */
+function spawnRedirectedFixture() {
 	const ready = deferred();
 	const descendantSource = `
 process.on("SIGTERM", /** @returns {void} Ignores TERM. @throws {never} No errors. */ () => {});
@@ -344,10 +363,28 @@ setInterval(/** @returns {void} Retains leader liveness. @throws {never} No erro
 		/** @returns {void} Acknowledges the descendant's installed handler. @throws {never} No errors for a valid buffer. */
 		(chunk) => ready.resolve(Number(String(chunk).trim())),
 	);
+	return { child, closed, ready: ready.promise };
+}
+
+/**
+ * Failure-path cleanup for the redirected fixture: unless the success path proved the tree reaped, SIGKILL the group
+ * even when the leader already exited (#689), then wait for the leader to close.
+ * @param {{child: import('node:child_process').ChildProcess, closed: Promise<unknown>, reaped: boolean}} fixture Fixture handles and whether quiescence was already proven.
+ * @returns {Promise<void>} Resolves once the leader has closed.
+ * @throws {Error} If the leader does not close in time.
+ */
+async function cleanupRedirectedFixture({ child, closed, reaped }) {
+	if (!reaped) killFixtureTree(child.pid);
+	await within(closed, "redirected descendant fixture to close");
+}
+
+/** @returns {Promise<void>} Verifies group escalation after leader closure. @throws {Error} On fixture or survivor assertion failure. */
+async function verifyRedirectedDescendant() {
+	const { child, closed, ready } = spawnRedirectedFixture();
 	let reaped = false;
 	try {
 		const descendant = await within(
-			ready.promise,
+			ready,
 			"redirected descendant handler readiness",
 		);
 		assert.ok(Number.isInteger(descendant) && descendant > 0);
@@ -364,14 +401,41 @@ setInterval(/** @returns {void} Retains leader liveness. @throws {never} No erro
 		);
 		reaped = true;
 	} finally {
-		if (!reaped && child.exitCode === null && child.signalCode === null) {
-			try {
-				process.kill(-child.pid, "SIGKILL");
-			} catch {
-				/* Best-effort fallback must not replace the failed regression assertion. */
-			}
-		}
-		await within(closed, "redirected descendant fixture to close");
+		await cleanupRedirectedFixture({ child, closed, reaped });
+	}
+}
+
+/** @returns {Promise<void>} Proves the failure-path cleanup reaps a TERM-ignoring descendant after the leader died. @throws {Error} If the descendant survives. */
+async function verifyLeakedDescendantCleanup() {
+	const { child, closed, ready } = spawnRedirectedFixture();
+	let done = false;
+	let stop = false;
+	try {
+		const descendant = await within(ready, "leak control descendant readiness");
+		process.kill(child.pid, "SIGKILL");
+		await within(closed, "leak control leader to close");
+		// Leader is dead but the descendant lives: a leader-state guard in the cleanup would skip it.
+		assert.doesNotThrow(() => process.kill(descendant, 0));
+		await cleanupRedirectedFixture({ child, closed, reaped: false });
+		await within(
+			(async () => {
+				while (!stop) {
+					try {
+						process.kill(descendant, 0);
+					} catch {
+						return;
+					}
+					await new Promise((resolve) => setTimeout(resolve, 10));
+				}
+			})(),
+			"leaked descendant to die",
+		);
+		done = true;
+	} finally {
+		stop = true;
+		// Only signal when the poll did not prove the group dead; a proven-dead PID may be reused.
+		if (!done) killFixtureTree(child.pid);
+		await within(closed, "leak control fixture to close").catch(() => {});
 	}
 }
 
@@ -661,6 +725,10 @@ test.skipIf(process.platform === "win32")(
 			COMMAND_TERM_WAIT_MS + COMMAND_KILL_WAIT_MS + DEFAULT_CHECK_TIMEOUT_MS,
 	},
 	verifyRedirectedDescendant,
+);
+test.skipIf(process.platform === "win32")(
+	"failure cleanup kills a TERM-ignoring descendant after its leader died",
+	verifyLeakedDescendantCleanup,
 );
 test(
 	"completed fixtures never signal their former PID",
