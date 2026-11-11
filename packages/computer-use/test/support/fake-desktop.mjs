@@ -1,5 +1,5 @@
 // Fake desktop backend for driving the public observe/query tools without a native helper.
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -67,11 +67,12 @@ export const desktopRoot = (fields = {}) => {
 
 /**
  * Install a scripted platform backend and return its controls.
- * `roots` is the live root listing, `tree` the children of the next look's window node, and
- * `lookPayload` may be replaced to script whole looks. Every look and wait request is recorded.
+ * `roots` is the live root listing, `tree` the children of the next look's window node, `frontmostPid`
+ * picks the frontmost root, and `listRootsHook`, `lookPayload` and `waitFor` may be replaced to script
+ * the backend. Every look and wait request is recorded.
  * @param {(fn: () => void | Promise<void>) => void} onTestFinished Vitest cleanup registrar.
- * @param {object} [options] `roots` seeds the listing.
- * @returns {Promise<object>} Fake controls: `roots`, `tree`, `looks`, `waits`, `waitFor`, `call`, `ids`.
+ * @param {object} [options] `roots` seeds the listing (the first root's pid is not auto-selected; set `frontmostPid`).
+ * @returns {Promise<object>} Fake controls: `roots`, `tree`, `looks`, `waits`, `call`, `text`, `observe`, `bridge` and the hooks above.
  * @throws {Error} When the backend module cannot be imported.
  */
 export async function installFakeDesktop(onTestFinished, options = {}) {
@@ -82,8 +83,10 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 	onTestFinished(async () => {
 		await bridge.shutdownComputerUseSession();
 		Object.assign(currentPlatformBackend, original);
+		rmSync(cwd, { recursive: true, force: true });
 	});
 
+	const cwd = mkdtempSync(path.join(os.tmpdir(), "cu-fake-"));
 	const fake = {
 		roots: options.roots ?? [desktopRoot()],
 		frontmostPid: 1,
@@ -94,6 +97,8 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 		looks: [],
 		waits: [],
 		lookSeq: 0,
+		/** Replaceable listing: receives the query, returns roots, or undefined for the default. */
+		listRootsHook: undefined,
 		/** Replaceable look builder: receives the request, returns a wire look. */
 		lookPayload: undefined,
 		/** Replaceable `waitFor` backend result: receives the request. */
@@ -122,7 +127,7 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 	Object.assign(currentPlatformBackend, {
 		ensureReady: async () => ({ permissionStatus: { accessibility: true, screenRecording: true }, lastPermissionCheckAt: Date.now() }),
 		listApps: async () => fake.roots.map((r) => ({ appName: r.appName, bundleId: r.bundleId, pid: r.pid, isFrontmost: r.pid === fake.frontmostPid })),
-		listRoots: async (query) => (query?.pid ? fake.roots.filter((r) => r.pid === query.pid) : fake.roots),
+		listRoots: async (query) => fake.listRootsHook?.(query) ?? (query?.pid ? fake.roots.filter((r) => r.pid === query.pid) : fake.roots),
 		getFrontmost: async () => {
 			const root = fake.roots.find((candidate) => candidate.pid === fake.frontmostPid) ?? fake.roots[0];
 			return { appName: root.appName, bundleId: root.bundleId, pid: root.pid, windowId: root.windowId };
@@ -137,7 +142,7 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 		},
 	});
 
-	const ctx = { cwd: mkdtempSync(path.join(os.tmpdir(), "cu-fake-")), hasUI: false, ui: { notify() {} }, sessionManager: { getBranch: () => [] } };
+	const ctx = { cwd, hasUI: false, ui: { notify() {} }, sessionManager: { getBranch: () => [] } };
 	fake.call = (executor, params, signal) => executor("t", params, signal, undefined, ctx);
 	fake.text = (result) => result.content.filter((c) => c.type === "text").map((c) => c.text).join("\n");
 	/** Observe the frontmost root and return `{ result, stateId, text }`. */

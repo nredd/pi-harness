@@ -90,6 +90,7 @@ test("wait_for reports timeouts and disappearance, replacing the diff when the r
 	assert.equal(gone.details.gone, true);
 
 	// A replaced root is not diffable: the full compact view comes back instead.
+	fake.waitFor = async () => ({ found: true, nodeCount: 2 });
 	fake.lookPayload = (request) => ({
 		lookId: "replaced",
 		capturedAt: 1,
@@ -101,7 +102,7 @@ test("wait_for reports timeouts and disappearance, replacing the diff when the r
 	const replaced = await fake.call(executeWaitFor, { stateId, text: "OK" });
 	assert.equal(replaced.details.view, "full");
 	assert.equal(replaced.details.changes, undefined);
-	assert.match(fake.text(replaced), /\nControls \(1 of 2 nodes, stateId .*root_replaced|\nControls \(1 of 2 nodes/);
+	assert.match(fake.text(replaced), /^Condition appeared\.\nControls \(1 of 2 nodes, stateId \S+, root @e\d+\):\n@e\d+ button "OK"\n/);
 	assert.equal(replaced.details.target.label, "OK");
 });
 
@@ -165,11 +166,12 @@ test("wait_for on a browser page times out and reports disappearance", async ({ 
 	const { executeWaitFor } = fake.bridge;
 	const { cdp, stateId } = await observeBrowser(fake, [wireButton("go", "Go")]);
 	cdp.cdpSnapshotForContext.mockImplementation(async () => await browserSnapshot("same", [wireButton("go", "Go")]));
+	cdp.cdpSnapshotForContext.mockClear();
 
 	const timedOut = await fake.call(executeWaitFor, { stateId, text: "Never", timeoutMs: 100 });
 	assert.match(fake.text(timedOut), /^Timed out after 100ms waiting for condition\.\n\(no element changes\)/);
 	assert.deepEqual([timedOut.details.found, timedOut.details.timedOut, timedOut.details.gone], [false, true, undefined]);
-	assert.ok(cdp.cdpSnapshotForContext.mock.calls.length >= 2, "at least the initial poll ran");
+	assert.equal(cdp.cdpSnapshotForContext.mock.calls.length, 1, "one poll, one 200ms sleep, then the deadline passes");
 
 	cdp.cdpSnapshotForContext.mockImplementation(async () => await browserSnapshot("gone", []));
 	const gone = await fake.call(executeWaitFor, { stateId, text: "Go", until: "absent", timeoutMs: 5_000 });

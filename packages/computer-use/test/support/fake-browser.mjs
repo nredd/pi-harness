@@ -1,6 +1,7 @@
 // Scripted CDP browser pages for tools that observe or poll `browser:` contexts.
 // The importing test file must `vi.mock("../src/cdp.ts", ...)` so `listCdpPageContexts` and
 // `cdpSnapshotForContext` are `vi.fn()` mocks.
+import { vi } from "vitest";
 import { wireNode } from "./fake-desktop.mjs";
 
 /**
@@ -32,6 +33,7 @@ export async function browserSnapshot(id, children, options = {}) {
  */
 export async function observeBrowser(fake, children) {
 	const cdp = await import("../../src/cdp.ts");
+	if (!vi.isMockFunction(cdp.cdpSnapshotForContext) || !vi.isMockFunction(cdp.listCdpPageContexts)) throw new Error("observeBrowser needs the caller to vi.mock(\"../src/cdp.ts\") with vi.fn() page functions.");
 	cdp.listCdpPageContexts.mockResolvedValue([{ contextId: "browser:page1", targetId: "page1", title: "Page", url: "https://example.test/" }]);
 	cdp.cdpSnapshotForContext.mockResolvedValue(await browserSnapshot("base", children));
 	const found = await fake.call(fake.bridge.executeFind, { app: "Browser" });

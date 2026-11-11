@@ -13,7 +13,7 @@ test("observe_ui maps mode and readText onto the native look request", async ({ 
 	const { executeObserve } = fake.bridge;
 
 	const semantic = await fake.observe();
-	assert.deepEqual(fake.looks[0], { target: { pid: 1, windowId: 100, rootRef: "ax:w1", windowRef: "ax:w1" }, baseLookId: undefined, readText: "never", scopeRef: undefined, maxDimension: fake.looks[0].maxDimension, includeImage: false });
+	assert.deepEqual(fake.looks[0], { target: { pid: 1, windowId: 100, rootRef: "ax:w1", windowRef: "ax:w1" }, baseLookId: undefined, readText: "never", scopeRef: undefined, maxDimension: 900, includeImage: false });
 	assert.match(semantic.text, /^Observed semantic @r1 App1 — Main\. Returned the latest outline state\.\n\nnote @r1 "Main" \(pairing low, looked just now\)\n  go +seen\n\nControls \(1 of 2 nodes, stateId /);
 	assert.equal(semantic.result.details.detail, "compact");
 
@@ -23,7 +23,7 @@ test("observe_ui maps mode and readText onto the native look request", async ({ 
 	assert.deepEqual([fake.looks[2].readText, fake.looks[2].includeImage], ["auto", true], "fused is the default mode");
 	await fake.call(executeObserve, { mode: "semantic", readText: "always" });
 	assert.deepEqual([fake.looks[3].readText, fake.looks[3].includeImage], ["always", false], "explicit readText overrides the mode default");
-	assert.ok(fake.looks[1].maxDimension > fake.looks[2].maxDimension, "visual observations request the larger explicit image");
+	assert.deepEqual([fake.looks[1].maxDimension, fake.looks[2].maxDimension], [1_600, 900], "visual observations request the larger explicit image");
 
 	const outline = await fake.call(executeObserve, { mode: "semantic", detail: "outline" });
 	assert.match(fake.text(outline), /\n\nOutline \(2 nodes, stateId /);
@@ -45,7 +45,6 @@ test("observe_ui follows root selection across roots and windows", async ({ onTe
 	const refOf = (app, title) => found.details.windows.find((w) => w.app === app && w.windowTitle === title).windowRef;
 
 	await fake.observe({ root: refOf("App1", "Main") });
-	// A different app's root is a different identity: the second capture must not stabilize refs against the first.
 	fake.tree = [wireButton("other", "Elsewhere")];
 	const other = await fake.observe({ root: refOf("App2", "Main") });
 	assert.match(other.text, /Observed semantic @r\d+ App2 — Main\./);
@@ -74,10 +73,9 @@ test("observe_ui keeps unpaired roots stable and rejects drifted selections", as
 	// A root with no window id and no native ref gets both on re-resolution; its title decides identity.
 	const bare = { ...desktopRoot({ pid: 4, title: "Bare" }), windowId: undefined, rootRef: undefined, windowRef: undefined };
 	fake.roots = [bare];
-	const { currentPlatformBackend } = await import("../src/platform/index.ts");
 	let listings = 0;
 	const resolved = { ...bare, windowId: 400, rootRef: "ax:bare", windowRef: "ax:bare" };
-	currentPlatformBackend.listRoots = async () => (++listings <= 1 ? [bare] : [resolved]);
+	fake.listRootsHook = () => (++listings <= 1 ? [bare] : [resolved]);
 	const found = await fake.call(executeFind, { pid: 4 });
 	listings = 0;
 	fake.frontmostPid = 4;
@@ -88,7 +86,7 @@ test("observe_ui keeps unpaired roots stable and rejects drifted selections", as
 
 	listings = 0;
 	const renamed = { ...resolved, title: "Renamed" };
-	currentPlatformBackend.listRoots = async () => (++listings <= 1 ? [bare] : [renamed]);
+	fake.listRootsHook = () => (++listings <= 1 ? [bare] : [renamed]);
 	await assert.rejects(() => fake.call(executeObserve, { root: bareRef }), /Observation target drifted from the requested selection\. Requested App4 — Bare, captured App4 — Renamed\./);
 });
 
@@ -199,6 +197,7 @@ test("expand_ui renders a bounded subtree and grafts truncated refs", async ({ o
 	const { stateId } = await fake.observe();
 
 	await assert.rejects(() => fake.call(executeExpandUi, { stateId }), /expand_ui\.ref is required/);
+	await assert.rejects(() => fake.call(executeExpandUi, { stateId: "stale", ref: "@e2" }), /State 'stale' is unavailable or was evicted/);
 	await assert.rejects(() => fake.call(executeExpandUi, { stateId, ref: "@e99" }), /Outline ref '@e99' is not available in the current outline/);
 
 	const shallow = await fake.call(executeExpandUi, { stateId, ref: "@e3", depth: 1 });
@@ -299,7 +298,7 @@ test("observe_ui reads browser pages through CDP and reports vanished contexts",
 	assert.equal(observed.details.kind, "browser_page");
 	assert.match(fake.text(observed), /^observe_ui completed for @r\d+ "Page"\. State base\.\nControls \(1 of 2 nodes, stateId base/);
 	const outline = await fake.call(executeObserve, { root, detail: "outline" });
-	assert.equal(outline.details.renderedOutline.includes("Go"), true);
+	assert.match(outline.details.renderedOutline, /AXButton "Go"/);
 	assert.equal(outline.details.detail, "outline");
 
 	cdp.cdpSnapshotForContext.mockResolvedValue(undefined);
@@ -318,4 +317,20 @@ test("search_ui, expand_ui and inspect_ui query a saved browser observation", as
 	assert.match(fake.text(expanded), /^@e2 AXGroup "Form"\npath: AXWebArea "Page" ▸ AXGroup "Form"\n\n/);
 	assert.match(fake.text(await fake.call(executeInspectUi, { stateId, ref: "@e3" })), /actions: AXPress\ncapabilities: none/);
 	assert.equal(fake.looks.length, 0);
+});
+
+test("root identity never crosses apps and prefers window id, then native ref, then title", async () => {
+	const { testing } = await import("../src/bridge.ts");
+	const root = (fields) => ({ appName: "App", pid: 1, windowTitle: "Untitled", windowId: 0, ...fields });
+	const same = testing.sameRootIdentity;
+	assert.equal(same(root({ pid: 1 }), root({ pid: 2 })), false, "two apps with identically titled, unpaired roots are different roots");
+	assert.equal(same(root({ pid: 1, windowId: 5 }), root({ pid: 2, windowId: 5 })), false, "a window id is only unique within its app");
+	assert.equal(same(root({ windowId: 5, nativeWindowRef: "a" }), root({ windowId: 5, nativeWindowRef: "b", windowTitle: "Other" })), true, "equal window ids decide first");
+	assert.equal(same(root({ windowId: 5, nativeWindowRef: "a" }), root({ windowId: 6, nativeWindowRef: "a" })), false, "different window ids decide first");
+	assert.equal(same(root({ nativeWindowRef: "a" }), root({ nativeWindowRef: "a", windowTitle: "Other" })), true, "without window ids the native ref decides");
+	assert.equal(same(root({ nativeWindowRef: "a" }), root({ nativeWindowRef: "b" })), false);
+	assert.equal(same(root({ windowTitle: "Doc " }), root({ windowTitle: "doc" })), true, "otherwise the normalized title decides");
+	assert.equal(same(root({ windowTitle: "Doc" }), root({ windowTitle: "Other" })), false);
+	assert.equal(same(root({ windowId: 5 }), root({ nativeWindowRef: "a" })), true, "a lone native ref falls back to the title");
+	assert.equal(same(root({ windowId: 5 }), root({ nativeWindowRef: "a", windowTitle: "Other" })), false);
 });

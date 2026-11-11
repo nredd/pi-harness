@@ -319,7 +319,7 @@ const runtimeState: RuntimeState = {
 
 const savedStates = new SavedStates();
 /** Test seam: lets scripts run bridge internals inside an operation state. */
-export const testing = { savedState: (stateId: string) => savedStates.get(stateId), runInOperation: <T>(fn: () => T, state: OperationState = {}): T => savedStates.operations.run(state, fn), buildToolResult, browserObservationResult, waitForViewText, performSearchUi, performLaunchBrowser, removeProfileDirsOnExit, managedBrowserNeedsHeadless, managedBrowserArgs };
+export const testing = { savedState: (stateId: string) => savedStates.get(stateId), runInOperation: <T>(fn: () => T, state: OperationState = {}): T => savedStates.operations.run(state, fn), buildToolResult, browserObservationResult, waitForViewText, sameRootIdentity, performSearchUi, performLaunchBrowser, removeProfileDirsOnExit, managedBrowserNeedsHeadless, managedBrowserArgs };
 let resourceScheduler = new ResourceScheduler();
 
 function operationState(): OperationState {
@@ -1623,6 +1623,7 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 }
 
 function sameRootIdentity(a: CurrentTarget, b: CurrentTarget): boolean {
+	if (a.pid !== b.pid) return false;
 	if (a.windowId > 0 && b.windowId > 0) return a.windowId === b.windowId;
 	if (a.nativeWindowRef && b.nativeWindowRef) return a.nativeWindowRef === b.nativeWindowRef;
 	return normalizeText(a.windowTitle) === normalizeText(b.windowTitle);
