@@ -3162,6 +3162,19 @@ def test_scenario_computer_use_parses_mixed_quote_helper_sources(
     assert evidence["helper_sources"] == [f"native/macos/{name}" for name in CU_SWIFT]
 
 
+@pytest.mark.parametrize("script", sorted(pc.HELPER_SOURCE_LIST_DECLARATIONS))
+def test_parse_helper_source_list_reads_the_real_shipped_scripts(script: str) -> None:
+    """The contract parses the REAL `packages/computer-use` scripts, so a rename or reshape fails here.
+
+    Synthetic fixtures alone hid a `macosSourcePaths` rename until the packed-tarball contract ran.
+    """
+    source = (pc.REPO_ROOT / "packages" / "computer-use" / script).read_text()
+    names = pc.parse_helper_source_list(script, source)
+    assert "bridge.swift" in names
+    for name in names:
+        assert (pc.REPO_ROOT / "packages" / "computer-use" / "native" / "macos" / name).is_file()
+
+
 @pytest.mark.parametrize(
     ("setup_script", "build_script", "message"),
     [

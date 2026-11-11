@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -316,6 +316,27 @@ test("running the script as the entry point sets the exit code", async () => {
 		process.exitCode = undefined;
 		await import("../scripts/build-native.mjs");
 		assert.equal(process.exitCode, undefined, "no entry script means nothing runs");
+	} finally {
+		process.argv = argv;
+		process.exitCode = exitCode;
+		spy.mockRestore();
+		vi.resetModules();
+	}
+});
+
+test("a symlinked entry path still runs the script instead of silently exiting 0", async () => {
+	const argv = process.argv;
+	const exitCode = process.exitCode;
+	const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+	try {
+		const link = path.join(sandbox, "linked-build-native.mjs");
+		symlinkSync(scriptPath, link);
+		vi.resetModules();
+		process.exitCode = undefined;
+		process.argv = [argv[0], link, "--platform", "darwin", "--arch", "bogus"];
+		await import("../scripts/build-native.mjs");
+		assert.equal(process.exitCode, 1);
+		assert.match(spy.mock.calls[0][0], /Unsupported architecture 'bogus'/);
 	} finally {
 		process.argv = argv;
 		process.exitCode = exitCode;

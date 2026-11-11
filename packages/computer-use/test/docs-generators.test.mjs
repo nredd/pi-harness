@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -411,6 +411,17 @@ test.each(Object.keys(entryPoints))("%s run as a script checks the real docs and
 		await entryPoints[name]();
 		assert.equal(process.exitCode, 0);
 		assert.equal(log.mock.calls.length, 1);
+
+		// Through a symlink (workspace node_modules, /var vs /private/var) the script must still run.
+		const link = path.join(root, name);
+		symlinkSync(fileURLToPath(new URL(name, generatorDir)), link);
+		log.mockClear();
+		process.exitCode = undefined;
+		vi.resetModules();
+		process.argv = [argv[0], link, "--check"];
+		await entryPoints[name]();
+		assert.equal(process.exitCode, 0);
+		assert.equal(log.mock.calls.length, 1, "a symlinked entry path is not a silent no-op");
 
 		log.mockClear();
 		vi.resetModules();

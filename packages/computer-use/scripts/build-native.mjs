@@ -1,13 +1,20 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const macosSources = ["activity_glow.swift", "agent_cursor.swift", "agent_cursor_motion.swift", "bridge.swift"];
+// `scripts/package_contracts.py` parses this declaration from the packed script: keep it a plain literal list plus `.map`.
+const macosSourcePaths = [
+	"activity_glow.swift",
+	"agent_cursor.swift",
+	"agent_cursor_motion.swift",
+	"bridge.swift",
+].map((file) => path.join("native", "macos", file));
 const linuxTargets = { x64: "x86_64-unknown-linux-gnu", arm64: "aarch64-unknown-linux-gnu" };
 const archTriples = {
 	arm64: "arm64-apple-macosx",
@@ -89,7 +96,7 @@ function swiftArgsForArch(ctx, arch, outputPath, moduleCachePath) {
 		"-O",
 	];
 	for (const framework of frameworks) args.push("-framework", framework);
-	args.push(...macosSources.map((file) => path.join(ctx.rootDir, "native", "macos", file)), "-o", outputPath);
+	args.push(...macosSourcePaths.map((file) => path.join(ctx.rootDir, file)), "-o", outputPath);
 	return args;
 }
 
@@ -310,6 +317,6 @@ export async function runCli(argv, deps = {}) {
 	}
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (process.argv[1] && realpathSync(path.resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url))) {
 	process.exitCode = await runCli(process.argv.slice(2));
 }

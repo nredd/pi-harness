@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -139,6 +139,27 @@ test("running the script as the entry point prints the error and sets the exit c
 		await import("../scripts/rust-coverage.mjs");
 		assert.equal(error.mock.calls.length, 0);
 		assert.equal(process.exitCode, undefined);
+	} finally {
+		process.argv = argv;
+		process.exitCode = exitCode;
+		error.mockRestore();
+		vi.resetModules();
+	}
+});
+
+test("a symlinked entry path still runs the script instead of silently exiting 0", async () => {
+	const argv = process.argv;
+	const exitCode = process.exitCode;
+	const error = vi.spyOn(console, "error").mockImplementation(() => {});
+	try {
+		const link = path.join(output, "linked-rust-coverage.mjs");
+		symlinkSync(scriptPath, link);
+		vi.resetModules();
+		process.exitCode = undefined;
+		process.argv = [argv[0], link, "--crate", "bogus"];
+		await import("../scripts/rust-coverage.mjs");
+		assert.equal(process.exitCode, 1);
+		assert.deepEqual(error.mock.calls, [["--crate must be linux or windows"]]);
 	} finally {
 		process.argv = argv;
 		process.exitCode = exitCode;
