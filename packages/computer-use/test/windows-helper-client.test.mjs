@@ -63,4 +63,15 @@ describe("Windows helper client disconnects (#725)", () => {
 		await assert.rejects(first, (error) => error.code === "helper_disconnected");
 		assert.deepEqual(await client.command("second"), { fine: true });
 	});
+
+	test("a complete reply still in stdout when the helper exits resolves the command", async () => {
+		const { client, children, engine } = await clientFor({});
+		engine.script("last", effect(() => {
+			const child = children.at(-1);
+			child.emit("exit", 0, null);
+			setTimeout(() => child.emit("close", 0, null), 20);
+		}, ok({ done: true })));
+		assert.deepEqual(await client.command("last", {}, { timeoutMs: 30_000 }), { done: true });
+		assert.equal(client.child, undefined, "exit forgets the child so the next command respawns");
+	});
 });
