@@ -27,7 +27,13 @@ if [ "$(id -u)" -ne 0 ]; then ok 'non-root'; else bad 'running as root'; fi
 if [ "$(uname -m)" = aarch64 ]; then ok 'aarch64'; else bad "not aarch64: $(uname -m)"; fi
 if sudo -n true 2>/dev/null; then bad 'sudo works'; else ok 'no sudo'; fi
 # Unprivileged user namespaces are a root-in-namespace route to kernel attack surface: they must be off.
-if unshare -Urn true 2>/dev/null; then bad 'unprivileged user namespaces are enabled'; else ok 'no unprivileged user namespaces'; fi
+if ! command -v unshare >/dev/null 2>&1; then
+  bad 'unshare is missing, so user namespaces cannot be checked'
+elif unshare -Urn true 2>/dev/null; then
+  bad 'unprivileged user namespaces are enabled'
+else
+  ok 'no unprivileged user namespaces'
+fi
 
 # Public internet
 for url in https://api.github.com https://registry.npmjs.org/; do
