@@ -24,10 +24,21 @@ describe("validateStart", () => {
 		[{ ...base, timeout_s: 0 }, /timeout_s/],
 		[{ ...base, timeout_s: MAX_TIMEOUT_S + 1 }, /timeout_s/],
 		[{ ...base, timeout_s: Number.NaN }, /timeout_s/],
+		[{ ...base, todo: 0 }, /todo/],
+		[{ ...base, todo: 1.5 }, /todo/],
+		[{ ...base, todo: [] }, /todo/],
+		[{ ...base, todo: [1, 0] }, /todo/],
+		[{ ...base, todo: Array.from({ length: 21 }, (_, i) => i + 1) }, /todo/],
 	])("rejects %j", (input, error) => {
 		const r = validateStart(input, none, 0);
 		expect(r.ok).toBe(false);
 		expect(r.ok === false && r.error).toMatch(error);
+	});
+
+	it("normalizes a todo link, single or list, to a deduplicated list", () => {
+		expect(validateStart({ ...base, todo: 7 }, none, 0)).toMatchObject({ ok: true, value: { todos: [7] } });
+		expect(validateStart({ ...base, todo: [2, 1, 2] }, none, 0)).toMatchObject({ ok: true, value: { todos: [2, 1] } });
+		expect(validateStart(base, none, 0)).toMatchObject({ ok: true, value: { todos: undefined } });
 	});
 
 	it("rejects a duplicate live name and the concurrency cap", () => {

@@ -114,7 +114,7 @@ describe("owner matches a subagent", () => {
 
 		await h.handler("agent_settled")({ type: "agent_settled" }, ctx);
 		expect((ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls.at(-1)).toEqual([
-			"Run ended with 1 in_progress todo, armed: no todo-owned wake (monitor and agent notices list session wakes); owner agent failed or stopped: #1 Audit auth (@explore failed)",
+			"Run ended with 1 in_progress todo, armed: no todo-owned wake (agent notices list session wakes; unlinked monitors arm no todo); owner agent failed or stopped: #1 Audit auth (@explore failed)",
 			"warning",
 		]);
 	});
@@ -244,7 +244,7 @@ describe("isolation and history", () => {
 });
 
 describe("repeated settles during background work (#448)", () => {
-	const ARMED = "armed: no todo-owned wake (monitor and agent notices list session wakes)";
+	const ARMED = "armed: no todo-owned wake (agent notices list session wakes; unlinked monitors arm no todo)";
 
 	it("renotifies when a pending dependency changes its waking owner or agent state", async () => {
 		const h = setup();

@@ -5,6 +5,7 @@ export const DEFAULT_TIMEOUT_S = 3600;
 export const MAX_TIMEOUT_S = 604_800;
 export const MAX_NAME_LENGTH = 40;
 export const MAX_MATCH_LENGTH = 500;
+export const MAX_TODO_LINKS = 20;
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export interface StartParams {
@@ -13,6 +14,8 @@ export interface StartParams {
 	match?: string;
 	wake?: boolean;
 	timeout_s?: number;
+	/** Todo id, or ids, this monitor wakes the parent for; carried on the lifecycle events only. */
+	todo?: number | number[];
 }
 
 export interface ValidStart {
@@ -21,6 +24,8 @@ export interface ValidStart {
 	regex: RegExp | undefined;
 	wake: boolean;
 	timeoutMs: number;
+	/** Deduplicated todo ids the monitor was linked to, absent when unlinked. */
+	todos: number[] | undefined;
 }
 
 export type Validation = { ok: true; value: ValidStart } | { ok: false; error: string };
@@ -51,7 +56,17 @@ export function validateStart(input: StartParams, liveNames: ReadonlySet<string>
 	if (!Number.isFinite(timeoutS) || timeoutS < 1 || timeoutS > MAX_TIMEOUT_S) {
 		return fail(`timeout_s must be between 1 and ${MAX_TIMEOUT_S}`);
 	}
-	return { ok: true, value: { argv, name, regex, wake: input.wake === true, timeoutMs: Math.round(timeoutS * 1000) } };
+	let todos: number[] | undefined;
+	if (input.todo !== undefined) {
+		const ids = Array.isArray(input.todo) ? input.todo : [input.todo];
+		if (ids.length === 0 || ids.length > MAX_TODO_LINKS || ids.some((t) => !Number.isSafeInteger(t) || t < 1))
+			return fail(`todo must be a positive integer todo id, or up to ${MAX_TODO_LINKS} of them`);
+		todos = [...new Set(ids)];
+	}
+	return {
+		ok: true,
+		value: { argv, name, regex, wake: input.wake === true, timeoutMs: Math.round(timeoutS * 1000), todos },
+	};
 }
 
 function fail(error: string): Validation {

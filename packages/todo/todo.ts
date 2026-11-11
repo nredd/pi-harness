@@ -16,10 +16,11 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadConfig, validateGuidanceFields } from "./config.ts";
 import { agentLookup } from "./state/agents.ts";
 import { formatProgress, t } from "./state/i18n-bridge.ts";
+import { keepLinks } from "./state/monitors.ts";
 import { isTaskDetails } from "./state/replay.ts";
 import { selectTasksByStatus, selectVisibleTasks } from "./state/selectors.ts";
 import type { TaskState } from "./state/state.ts";
-import { applyTaskCall, changesState } from "./state/state-reducer.ts";
+import { applyTaskCall, changesState, type Op } from "./state/state-reducer.ts";
 import {
 	commitState,
 	getRenderState,
@@ -80,6 +81,11 @@ export const DEFAULT_PROMPT_GUIDELINES: string[] = [
 	"Subject must be short and imperative (e.g. 'Research existing tool'); description is for long-form detail. activeForm is a present-continuous label shown while in_progress.",
 ];
 
+/** Whether a call, or any op of a batch, was a `clear`. */
+function clears(op: Op): boolean {
+	return op.kind === "clear" || (op.kind === "batch" && op.results.some((r) => r?.kind === "clear"));
+}
+
 export function registerTodoTool(pi: ExtensionAPI, options: { homeDir?: string } = {}): void {
 	const guidance = validateGuidanceFields(loadConfig(options.homeDir).guidance);
 	pi.registerTool({
@@ -95,6 +101,11 @@ export function registerTodoTool(pi: ExtensionAPI, options: { homeDir?: string }
 			const before = getState(sid(ctx));
 			const result = applyTaskCall(before, params as TaskMutationParams);
 			commitState(sid(ctx), result.state);
+			if (clears(result.op)) {
+				// Plan items survive a clear unchanged; any other id may be reused by a later create.
+				const survivors = new Set(before.tasks.filter((t) => t.source === "plan").map((t) => t.id));
+				keepLinks(sid(ctx), (todo) => survivors.has(todo));
+			}
 			notifyPlanDeferral(ctx, before, result.state);
 			const toolResult = buildToolResult(result.action, params as TaskMutationParams, result.state, result.op);
 			// Persist the snapshot as a custom entry on the calling session's branch, however the
