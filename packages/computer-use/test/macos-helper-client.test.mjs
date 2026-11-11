@@ -177,6 +177,16 @@ describe("daemon commands over the socket", () => {
 		assert.equal((await client.command("diagnostics")).protocolVersion, 7);
 	});
 
+	test("a reply that is followed at once by a disconnect resolves, not helper_disconnected (#725)", async () => {
+		const fake = await fakeOn();
+		fake.script("last", effect(() => setTimeout(() => fake.disconnectAll(), 0), ok({ done: true })));
+		const { MacosHelperClient } = await load({ external: true, fake });
+		const client = new MacosHelperClient();
+		assert.deepEqual(await client.command("last", {}, { timeoutMs: 30_000 }), { done: true });
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		assert.equal(client.daemonAvailable, true, "the close after a settled reply is ignored");
+	});
+
 	test("a disconnect releases the abort listener, so a later abort cannot settle the command again (#725)", async () => {
 		const fake = await fakeOn({ handlers: { crash: drop() } });
 		const { MacosHelperClient } = await load({ external: true, fake });

@@ -574,6 +574,7 @@
 		"test/managed-browser-headless.test.mjs",
 		"test/outline-store.test.mjs",
 		"test/platform-linux.test.mjs",
+		"test/linux-helper-client.test.mjs",
 		"test/macos-helper-client.test.mjs",
 		"test/platform-windows.test.mjs",
 		"test/windows-helper-client.test.mjs",
