@@ -234,7 +234,7 @@ def test_repository_target_holds_primaries_at_zero_branches_despite_stale_cap(tm
     setup_report(tmp_path, "branches.info")
     cfg = branch_policy(1)
     cfg.enforce_target = True
-    cfg.target = shipped.target
+    cfg.target = shipped.target.model_copy(update={"statements": None})
     assert account(tmp_path, cfg)[1] == [
         "example/primary: Budget exceeded: 0 lines, 0 functions, 1 branches uncovered, "
         "budget 0 lines, 0 functions, 0 branches"
@@ -276,7 +276,7 @@ def test_branch_target_must_be_zero() -> None:
     """
     data = policy().model_dump()
     data["target"]["branches"] = 1
-    with pytest.raises(ValidationError, match="zero uncovered lines, functions and branches"):
+    with pytest.raises(ValidationError, match="zero uncovered lines, functions, branches and statements"):
         Policy.model_validate(data)
 
 

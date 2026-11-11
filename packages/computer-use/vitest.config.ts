@@ -10,7 +10,7 @@ const {
 ).packages["computer-use-vitest"];
 
 /**
- * Files already at 0 uncovered lines, functions and branches on every OS (#645 T0). The policy schema has
+ * Files already at 0 uncovered lines, functions, branches and statements on every OS (#645 T0). The policy schema has
  * no per-file pins, so Vitest enforces them: any regression fails `npm test` even inside the aggregate cap.
  */
 const ZERO_UNCOVERED_FILES = [
@@ -19,10 +19,25 @@ const ZERO_UNCOVERED_FILES = [
 	"scripts/docs-generators/generate-tool-reference.mjs",
 	"scripts/rust-coverage.mjs",
 	"scripts/setup-helper.mjs",
+	"src/cdp.ts",
+	"src/contract.ts",
+	"src/find-params.ts",
 	"src/outline-store.ts",
 	"src/outline.ts",
+	"src/permissions.ts",
+	"src/platform/coerce.ts",
+	"src/platform/index.ts",
+	"src/platform/linux/backend.ts",
+	"src/platform/linux/helper.ts",
+	"src/platform/linux/wsl.ts",
+	"src/platform/macos/backend.ts",
+	"src/platform/macos/browser.ts",
 	"src/platform/macos/helper-path.mjs",
 	"src/platform/macos/helper.ts",
+	"src/platform/macos/permissions.ts",
+	"src/platform/windows/backend.ts",
+	"src/platform/windows/helper.ts",
+	"src/root-selection.ts",
 ];
 
 export default defineConfig({
@@ -42,13 +57,13 @@ export default defineConfig({
 		// `istanbul` like the other Pi-loading packages; caps in `coverage/policy.json`.
 		coverage: {
 			provider: "istanbul",
-			reporter: ["text", "lcov"],
+			reporter: ["text", "lcov", "json-summary"],
 			reportsDirectory: "coverage/primary",
 			reportOnFailure: true,
 			include: owned,
 			exclude: exclusions.map(({ path }) => path),
 			thresholds: Object.fromEntries(
-				ZERO_UNCOVERED_FILES.map((path) => [path, { lines: 100, functions: 100, branches: 100 }]),
+				ZERO_UNCOVERED_FILES.map((path) => [path, { lines: 100, functions: 100, branches: 100, statements: 100 }]),
 			),
 		},
 	},

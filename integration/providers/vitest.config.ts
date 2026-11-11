@@ -13,7 +13,7 @@ export default defineConfig({
 		include: ["extension_inventory.test.ts", "faux.test.ts", "preloads.test.ts", "usage_fixture.test.ts"],
 		coverage: {
 			provider: "v8",
-			reporter: ["text", "lcov"],
+			reporter: ["text", "lcov", "json-summary"],
 			reportsDirectory: "coverage/primary",
 			reportOnFailure: true,
 			include: owned,

@@ -103,6 +103,46 @@ def branch_policy(cap: int | None, **package: object) -> Policy:
     return Policy.model_validate(data)
 
 
+def statement_policy(cap: int | None, **signal: object) -> Policy:
+    """Return the miniature policy with `target.statements` locked and a statement cap on the active OS.
+
+    Parameters:
+        cap (int | None): Uncovered-statement cap, or None for no `statements` key.
+        **signal (object): Signal fields to override, e.g. `reporters` or `producer`.
+    Returns:
+        Policy: Validated enforced 100-percent fixture policy reading `coverage-summary.json`.
+    Raises:
+        ValidationError: The overridden fixture policy is invalid.
+    """
+    data = policy().model_dump(exclude_none=True)
+    data["target"]["statements"] = 0
+    primary = data["packages"]["example"]["signals"]["primary"]
+    primary["reporters"] = ["text", "lcov", "json-summary"]
+    primary["max_uncovered"][sys.platform]["statements"] = cap
+    primary |= signal
+    return Policy.model_validate({**data, "enforce_target": False})
+
+
+def write_summary(root: Path, total: int, covered: int, key: str | None = None) -> Path:
+    """Write the `coverage-summary.json` Istanbul and V8 emit next to the fixture LCOV report.
+
+    Parameters:
+        root (Path): Disposable repository root from `setup_report`.
+        total (int): Statements in `src/index.ts`.
+        covered (int): Covered statements in `src/index.ts`.
+        key (str | None): Source key; defaults to the absolute path, as Vitest writes it.
+    Returns:
+        Path: The written summary.
+    Raises:
+        OSError: The summary cannot be written.
+    """
+    counter = {"total": total, "covered": covered, "skipped": 0, "pct": 100}
+    path = root / "packages/example/coverage/coverage-summary.json"
+    source = key or str(root / "packages/example/src/index.ts")
+    path.write_text(json.dumps({"total": {"statements": counter}, source: {"statements": counter}}))
+    return path
+
+
 def commit_base(root: Path, cfg: Policy) -> None:
     """Persist a miniature policy and its source in a real immutable Git commit.
 
