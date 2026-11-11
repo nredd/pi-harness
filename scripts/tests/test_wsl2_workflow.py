@@ -414,8 +414,8 @@ def run_install_gh(tmp_path: Path, system: str, machine: str) -> subprocess.Comp
         ),
         encoding="utf-8",
     )
-    # macOS has no `sha256sum`: a portable stand-in that really verifies `<digest>  <path>` from stdin and records
-    # that it ran, so a wrong pinned digest or a wrong archive both fail the check for the right reason.
+    # macOS has no `sha256sum`: a portable stand-in that verifies the digest and path from stdin and
+    # records that it ran, so a wrong pinned digest or archive fails the check for the right reason.
     (commands / "sha256sum").write_text(
         textwrap.dedent(
             f"""\
