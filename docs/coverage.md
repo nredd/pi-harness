@@ -67,8 +67,8 @@ It fails closed both ways. A signal whose report has branch records (`BRDA`) nee
 fails (`Branch producer missing`), so a producer that silently stops emitting `BRDA` can't read as 0.
 Carve-outs: the native `bun test` subset signal (session-kit `/bun`) writes no branch records
 and declares no cap until #320 moves it to Vitest-on-Bun Istanbul (blocked on Bun `worker.terminate()` latency);
-`computer-use-vitest` is owner-excluded (`goal: excluded`), the only
-goal that may carry branch records without a cap, and `computer-use-vitest` now declares one (#645).
+`computer-use-vitest` is owner-excluded (`goal: excluded`); its signal declares a branch cap since #645, so no
+remaining signal carries branch records uncapped.
 
 Branch units differ by producer: Istanbul and Bun count AST arms (including an implicit `else` and each
 logical operand), coverage.py counts jump arcs, so caps are only comparable within one signal. Both
