@@ -126,7 +126,9 @@ printf 'WSL2 %s, Linux filesystem: %s\nUser: %s (uid %s)\nArch: %s\nNode: %s\nBu
 printf 'Guest setup complete; ordinary CI steps follow.\n' > "$diagnostics/capture-status.txt"
 if [ "$in_guest" = 1 ]; then
   # Later steps are plain Linux bash on this runner: hand them the tool path through the runner's PATH file.
+  # The runner prepends each GITHUB_PATH line, so the last line written ends up first in PATH: write them in reverse
+  # to keep this script's own precedence (a tool it just installed must beat a stale baked copy).
   tr ':' '\n' <<< "$PATH" | while IFS= read -r directory; do
     case "$directory" in "$HOME"/*) printf '%s\n' "$directory" ;; esac
-  done >> "${GITHUB_PATH:?GITHUB_PATH is required in guest mode}"
+  done | tac >> "${GITHUB_PATH:?GITHUB_PATH is required in guest mode}"
 fi

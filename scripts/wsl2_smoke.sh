@@ -8,9 +8,11 @@
 #   SMOKE_HOST_IP     the Windows host's address as the guest could reach it, if not the default gateway
 #   SMOKE_DEV_IP      the dev environment's LAN address, if it has one
 #   SMOKE_DEV_PORTS   space-separated ports its services listen on (default: 22 631 8080 35112)
+#   SMOKE_ROOT        prefix for the host paths probed below, for tests only (default: empty)
 # No token is read, written or echoed.
 set -u
 
+root=${SMOKE_ROOT:-}
 fail=0
 bad() {
   printf '::error::%s\n' "$*"
@@ -47,22 +49,17 @@ for port in $dev_ports; do
   if tcp 127.0.0.1 "$port"; then bad "loopback:$port answers"; else ok "loopback:$port closed"; fi
 done
 
-# Layer 1 rules need CAP_NET_ADMIN to read; the reachability probes above are what proves them as this user.
-if nft list set inet pi_ci deny4 >/dev/null 2>&1; then
-  ok 'nft deny4 present'
-else
-  ok 'nft deny4 not readable as non-root (enforcement is proven by the probes above)'
-fi
-if [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null)" = 1 ]; then ok 'ipv6 off'; else bad 'ipv6 on'; fi
+# Layer 1 rules need CAP_NET_ADMIN to read: the reachability probes above are what prove them as this user.
+if [ "$(cat "$root"/proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null)" = 1 ]; then ok 'ipv6 off'; else bad 'ipv6 on'; fi
 
 # No Windows reach: no automount, no interop, no Windows PATH.
-if [ -e /mnt/c ] || [ -e /mnt/d ]; then bad '/mnt/c or /mnt/d exists'; else ok 'no /mnt/c'; fi
-if [ -e /proc/sys/fs/binfmt_misc/WSLInterop ] || [ -e /proc/sys/fs/binfmt_misc/WSLInterop-late ]; then
+if [ -e "$root/mnt/c" ] || [ -e "$root/mnt/d" ]; then bad '/mnt/c or /mnt/d exists'; else ok 'no /mnt/c'; fi
+if [ -e "$root/proc/sys/fs/binfmt_misc/WSLInterop" ] || [ -e "$root/proc/sys/fs/binfmt_misc/WSLInterop-late" ]; then
   bad 'WSLInterop binfmt present'
 else
   ok 'no WSLInterop'
 fi
-if compgen -G '/run/WSL/*interop*' >/dev/null; then bad '/run/WSL interop sockets present'; else ok 'no interop sockets'; fi
+if compgen -G "$root/run/WSL/*interop*" >/dev/null; then bad '/run/WSL interop sockets present'; else ok 'no interop sockets'; fi
 case ":$PATH:" in *:/mnt/*) bad 'Windows path on PATH' ;; *) ok 'no Windows PATH' ;; esac
 for exe in cmd.exe powershell.exe wsl.exe explorer.exe; do
   if command -v "$exe" >/dev/null 2>&1; then bad "can find $exe"; else ok "no $exe"; fi

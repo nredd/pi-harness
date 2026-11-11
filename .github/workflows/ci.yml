@@ -196,7 +196,8 @@ jobs:
       # computer-use's Linux helper checks (cargo tests, packed-source build, diagnostics) run inside its `check-ts` on
       # Ubuntu and WSL and print NOT RUN on macOS. ARM64 is compile-only (`cargo check`, no linker): never a runtime claim.
       - name: Add the aarch64 Linux compile target
-        if: matrix.guest != 'macos' && contains(matrix.workspaces, 'packages/computer-use')
+        # Skipped on the native ARM64 host: a native `cargo check` of that target is no extra evidence.
+        if: matrix.guest != 'macos' && matrix.host != 'native' && contains(matrix.workspaces, 'packages/computer-use')
         run: |
           rustup target add aarch64-unknown-linux-gnu
           echo "PI_CU_LINUX_ARM64_CHECK=1" >>"$GITHUB_ENV"

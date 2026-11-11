@@ -978,6 +978,13 @@ def test_in_guest_setup_reuses_baked_tools_and_never_touches_the_windows_side(tm
     identity = (tmp_path / "temp" / "wsl2-diagnostics" / "identity.txt").read_text()
     assert "Arch: aarch64" in identity
     assert (workspace / ".ci-temp" / "tool-path").is_file()
+    # The runner prepends each line, so the file must list the PATH's home directories in reverse.
+    home_dirs = [
+        d
+        for d in (workspace / ".ci-temp" / "tool-path").read_text().strip().split(":")
+        if d.startswith(str(tmp_path / "home"))
+    ]
+    assert tool_dirs == home_dirs[::-1]
 
 
 @pytest.mark.parametrize(
@@ -1039,7 +1046,14 @@ def run_smoke(
     for name, body in stubs.items():
         (commands / name).write_text(body, encoding="utf-8")
         (commands / name).chmod(0o755)
-    env = dict(os.environ) | {"PATH": f"{commands}{os.pathsep}{os.environ['PATH']}"} | (extra_env or {})
+    root = tmp_path / "root"
+    (root / "proc/sys/net/ipv6/conf/all").mkdir(parents=True)
+    (root / "proc/sys/net/ipv6/conf/all/disable_ipv6").write_text("1\n")
+    env = (
+        dict(os.environ)
+        | {"PATH": f"{commands}{os.pathsep}{os.environ['PATH']}", "SMOKE_ROOT": str(root)}
+        | (extra_env or {})
+    )
     return subprocess.run(["/bin/bash", str(SMOKE)], env=env, capture_output=True, check=False, text=True)
 
 
@@ -1050,7 +1064,8 @@ def test_smoke_passes_when_every_private_target_is_blocked(tmp_path: Path) -> No
         blocked=True,
         extra_env={"SMOKE_HOST_IP": "172.20.0.2", "SMOKE_DEV_IP": "172.20.0.9", "SMOKE_DEV_PORTS": "22 8080"},
     )
-    assert "::error::" not in result.stdout or result.returncode != 0
+    assert result.returncode == 0, result.stdout
+    assert "::error::" not in result.stdout
     for target in (
         "192.168.1.1:80",
         "100.100.100.100:80",

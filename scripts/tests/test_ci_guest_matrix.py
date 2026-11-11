@@ -1771,7 +1771,10 @@ def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> Non
     }
     owned = cfg["owned-shards-ubuntu"]["steps"]
     arm = next(step for step in owned if step.get("name") == "Add the aarch64 Linux compile target")
-    assert arm["if"] == "matrix.guest != 'macos' && contains(matrix.workspaces, 'packages/computer-use')"
+    assert (
+        arm["if"] == "matrix.guest != 'macos' && matrix.host != 'native' "
+        "&& contains(matrix.workspaces, 'packages/computer-use')"
+    )
     contracts = [step["run"] for step in cfg["contracts"]["steps"] if "run" in step]
     for target in (
         "check-package-contracts",
