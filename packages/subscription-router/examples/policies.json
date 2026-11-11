@@ -11,11 +11,11 @@
       "chain": [{ "model": "anthropic/claude-fable-5-1" }, { "model": "openai-codex/gpt-6-astra" }],
       "exhaustionPolicy": "wait"
     },
-    "named-window-example": {
+    "lexicographic-example": {
       "policy": {
         "version": 1,
         "kind": "lexicographic",
-        "by": [{ "metric": "remaining", "window": { "name": "seven_day_fable" }, "direction": "desc" }, { "metric": "chain-index", "direction": "asc" }],
+        "by": [{ "metric": "remaining", "window": "binding", "direction": "desc" }, { "metric": "chain-index", "direction": "asc" }],
         "switchMargin": 0.2,
         "stickiness": "none"
       },

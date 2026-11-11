@@ -19,7 +19,10 @@ Policies:
 - `lexicographic`: `by` accepts a single `remaining` descending metric, optionally followed by
   `chain-index` ascending, or chain index alone. Chain index is appended when omitted. Remaining
   requires `window: "binding"` or `window: {"name":"seven_day_fable"}`. Missing named windows are
-  unknown, not free capacity. Prefer binding for cross-provider policies.
+  unknown, not free capacity. The shipped `lexicographic-example` uses `binding`, so both providers
+  can compete and its margin can actually switch between them. Prefer binding across providers:
+  Codex never reports Anthropic's `seven_day_fable`, so ranking only that name would demote Codex
+  to unknown rather than balance the subscriptions.
 
 Optional `stickiness: "none"|"continuation"` defaults to continuation for remaining-bearing forms,
 none for chain-only. Optional `switchMargin` is finite in `[0,1]`, legal only with a leading remaining

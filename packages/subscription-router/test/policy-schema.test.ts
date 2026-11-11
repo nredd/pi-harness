@@ -4,6 +4,7 @@ import type { TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
 import { parseConfig } from "../src/config.js";
+import { compilePolicy, evaluatePolicy } from "../src/policy.js";
 import { POLICY_CASES } from "./policy-cases.js";
 
 const schema = JSON.parse(
@@ -21,6 +22,34 @@ it("ships valid opt-in examples without migrating legacy profile membership", ()
 		expect(Check(schema, document)).toBe(true);
 		expect(parseConfig(document).length).toBeGreaterThan(0);
 	}
+});
+
+it("lets both providers compete in the shipped lexicographic example", () => {
+	const document = JSON.parse(readFileSync(new URL("../examples/policies.json", import.meta.url), "utf8"));
+	const profile = parseConfig(document).find((entry) => entry.id === "lexicographic-example");
+	if (!profile) throw new Error("missing lexicographic example");
+	const members = profile.chain.map((ref, index) => ({
+		ref,
+		index,
+		filters: [],
+		snapshot: {
+			provider: ref.provider,
+			status: "available" as const,
+			retrievedAt: 0,
+			expiresAt: 2,
+			windows: [
+				{
+					name: index === 0 ? "seven_day_fable" : "7d",
+					scope: "provider" as const,
+					usedPercent: index === 0 ? 50 : 20,
+				},
+			],
+		},
+	}));
+	const previous = "anthropic/claude-fable-5-1";
+	expect(evaluatePolicy(compilePolicy(profile), members, 1, { reason: "user", previous }).chosen).toBe(
+		"openai-codex/gpt-6-astra",
+	);
 });
 
 it("describes legacy optional defaults and rejects outer mutual exclusion", () => {
