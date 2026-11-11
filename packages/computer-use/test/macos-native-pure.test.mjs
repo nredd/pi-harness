@@ -108,15 +108,26 @@ check(!targetHoldsFocus(frontmostPid: 10, focusedPid: 7, targetPid: 7), "a host 
 check(!targetHoldsFocus(frontmostPid: 7, focusedPid: 10, targetPid: 7), "a blocked focused panel does not hold focus")
 var polls = 0
 var slept: [Int] = []
-check(waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: { polls += 1; return polls == 4 }, sleepMs: { slept.append($0) }), "focus that settles within the bound is accepted")
+var clock = 0
+let advance: (Int) -> Void = { slept.append($0); clock += $0 }
+check(waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: { polls += 1; return polls == 4 }, sleepMs: advance, nowMs: { clock }), "focus that settles within the bound is accepted")
 check(polls == 4 && slept == [10, 10, 10], "polling sleeps between checks and stops once focus holds")
 polls = 0
 slept = []
-check(!waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: { polls += 1; return false }, sleepMs: { slept.append($0) }), "focus that never settles is refused")
+clock = 0
+check(!waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: { polls += 1; return false }, sleepMs: advance, nowMs: { clock }), "focus that never settles is refused")
 check(polls == 21 && slept.count == 20 && slept.reduce(0, +) == 200, "polling is bounded at 200 ms")
 polls = 0
-check(waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: { polls += 1; return true }, sleepMs: { _ in }), "already-focused target returns at once")
+clock = 0
+// A stalled focus probe (e.g. a hung app's AX call) burns wall time; the deadline is wall time, not step count.
+check(!waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: { polls += 1; clock += 150; return false }, sleepMs: { clock += $0 }, nowMs: { clock }), "a stalled probe is refused")
+check(polls == 2, "the wall-clock deadline stops after two stalled probes, not twenty-one")
+polls = 0
+check(waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: { polls += 1; return true }, sleepMs: { _ in }, nowMs: { 0 }), "already-focused target returns at once")
 check(polls == 1, "no polling when focus already holds")
+var axCalls = 0
+_ = targetHoldsFocus(frontmostPid: 10, focusedPid: { axCalls += 1; return 7 }(), targetPid: 7)
+check(axCalls == 0, "AX focus is not queried while another app is frontmost")
 let displayApps: [(id: String?, name: String)] = [("com.apple.Terminal", "Terminal"), ("com.example.Safe", "Safe"), (nil, "Unbundled"), ("COM.EXAMPLE.VAULT", "Vault")]
 check(itemsWithBlockedBundleId(displayApps, blocked: ["com.apple.terminal", "com.example.Vault"], bundleId: { $0.id }).map { $0.name } == ["Terminal", "Vault"], "display capture excludes exactly the blocked apps, case-insensitively")
 check(itemsWithBlockedBundleId(displayApps, blocked: [], bundleId: { $0.id }).isEmpty, "empty blocklist excludes nothing")

@@ -391,19 +391,20 @@ func hitTestVertexIndices(count: Int) -> Set<Int> {
 }
 
 /// Whether keyboard focus has moved to `targetPid`: it is frontmost and, when the AX focused app is known, focused.
-func targetHoldsFocus(frontmostPid: Int32?, focusedPid: Int32?, targetPid: Int32) -> Bool {
+func targetHoldsFocus(frontmostPid: Int32?, focusedPid: @autoclosure () -> Int32?, targetPid: Int32) -> Bool {
 	guard frontmostPid == targetPid else { return false }
-	return focusedPid == nil || focusedPid == targetPid
+	// Only ask AX once the cheap frontmost check passes; a hung focused app can stall an AX call.
+	let focused = focusedPid()
+	return focused == nil || focused == targetPid
 }
 
-/// Polls `holdsFocus` up to `maxMs` in `stepMs` sleeps (checking once first); true as soon as it holds.
-func waitForFocus(maxMs: Int, stepMs: Int, holdsFocus: () -> Bool, sleepMs: (Int) -> Void) -> Bool {
-	var waited = 0
+/// Polls `holdsFocus` in `stepMs` sleeps (checking once first) until it holds or `maxMs` of wall time (`nowMs`) pass.
+func waitForFocus(maxMs: Int, stepMs: Int, holdsFocus: () -> Bool, sleepMs: (Int) -> Void, nowMs: () -> Int) -> Bool {
+	let deadline = nowMs() + maxMs
 	while true {
 		if holdsFocus() { return true }
-		if waited >= maxMs { return false }
+		if nowMs() >= deadline { return false }
 		sleepMs(stepMs)
-		waited += stepMs
 	}
 }
 // END PURE
@@ -2466,7 +2467,8 @@ final class Bridge {
 			if hasAncestorRole(element, role: "AXWebArea") {
 				try rejectInStrictHeadless("Web text replacement requires synthesized keyboard input, which strict headless mode prohibits")
 				acquirePhysicalInputIfNeeded()
-				focusTargetForPhysicalInput()
+				// HID keys follow (cmd+a, text): the same focus wait and blocked-app check as typeText/keypress.
+				if delivery == "hid" { try refuseBlockedKeyboardAfterFocus(preserveFocus: false) } else { focusTargetForPhysicalInput() }
 				_ = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
 				let currentValue = stringAttribute(element, attribute: kAXValueAttribute as CFString) ?? ""
 				var range = CFRange(location: 0, length: (currentValue as NSString).length)
@@ -3333,7 +3335,10 @@ final class Bridge {
 	/// The pid of the system-wide AX focused application, or nil when AX cannot say.
 	private func systemFocusedPid() -> Int32? {
 		var focused: CFTypeRef?
-		guard AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(), kAXFocusedApplicationAttribute as CFString, &focused) == .success,
+		let systemWide = AXUIElementCreateSystemWide()
+		// Bound each focus probe: a hung focused app would otherwise block for the default AX messaging timeout.
+		_ = AXUIElementSetMessagingTimeout(systemWide, 0.1)
+		guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedApplicationAttribute as CFString, &focused) == .success,
 			let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else { return nil }
 		var pid: pid_t = 0
 		return AXUIElementGetPid(focused as! AXUIElement, &pid) == .success ? pid : nil
@@ -3358,7 +3363,7 @@ final class Bridge {
 	private func requireTargetFocus(pid: Int32) throws {
 		let held = waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: {
 			targetHoldsFocus(frontmostPid: NSWorkspace.shared.frontmostApplication?.processIdentifier, focusedPid: systemFocusedPid(), targetPid: pid)
-		}, sleepMs: { usleep(UInt32($0) * 1000) })
+		}, sleepMs: { usleep(UInt32($0) * 1000) }, nowMs: { Int(DispatchTime.now().uptimeNanoseconds / 1_000_000) })
 		if !held { throw BridgeFailure(message: "The target app did not take focus, so keyboard input was not sent", code: "focus_not_acquired") }
 	}
 

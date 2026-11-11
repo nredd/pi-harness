@@ -129,6 +129,7 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	assert.match(swift, /keyboardTargetRefusalPid\(frontmostPid: NSWorkspace\.shared\.frontmostApplication\?\.processIdentifier, focusedPid: systemFocusedPid()/, "helper must refuse blocked frontmost or focused apps for keys");
 	assert.match(swift, /case "type", "key":\n\t\t\ttry refuseBlockedKeyboard\(\)/, "helper must refuse blocked apps before typing or keys");
 	assert.equal(swift.match(/try refuseBlockedKeyboardAfterFocus\(preserveFocus: preserveFocus\)/g)?.length, 2, "act typeText and keypress must refuse a blocked focused app under HID delivery");
+	assert.match(swift, /if delivery == "hid" \{ try refuseBlockedKeyboardAfterFocus\(preserveFocus: false\) \} else \{ focusTargetForPhysicalInput\(\) \}\n\t+_ = AXUIElementSetAttributeValue\(element, kAXFocusedAttribute/, "web setText must wait for focus and refuse a blocked focused app before its HID keys");
 	const keyboardHelper = swift.match(/func refuseBlockedKeyboardAfterFocus[\s\S]*?\n\t\t\}\n/)?.[0] ?? "";
 	const keyboardOrder = ['guard delivery == "hid"', "focusTargetForPhysicalInput()", "try requireTargetFocus(pid: pid)", "try refuseBlockedKeyboardTarget("].map((needle) => keyboardHelper.indexOf(needle));
 	assert.ok(keyboardOrder.every((i) => i >= 0) && keyboardOrder.every((i, n) => n === 0 || i > keyboardOrder[n - 1]), "act keyboard focus must settle on the target before the blocked-app check");
