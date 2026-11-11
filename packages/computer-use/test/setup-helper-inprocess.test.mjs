@@ -192,7 +192,7 @@ async function makeHost({ platform = "darwin", hostArch = "arm64", env = {}, sou
 		if (command === "openssl") {
 			if (args[0] === "req") state.lockSeen = await realFs.readdir(osFake.tmpdir()).then((names) => names.filter((name) => name.endsWith(".lock")));
 			const key = args.includes("-legacy") ? "legacy" : args[0];
-			if (state.opensslFail.has(key)) throw state.opensslFail.get?.(key) ?? new Error(`openssl ${key} failed`);
+			if (state.opensslFail.has(key)) throw new Error(`openssl ${key} failed`);
 			return { stdout: "", stderr: "" };
 		}
 		if (command === "codesign") {
@@ -902,7 +902,7 @@ describe("macOS local helper install and signing", () => {
 
 	test("creation failures warn and fall back to ad-hoc, for Error and non-Error causes", async () => {
 		const cases = [
-			["both pkcs12 attempts fail", (host) => { host.state.opensslFail = new Set(["legacy", "pkcs12"]); }, /could not create a valid local signing identity: openssl legacy failed|openssl pkcs12 failed/],
+			["both pkcs12 attempts fail", (host) => { host.state.opensslFail = new Set(["legacy", "pkcs12"]); }, /could not create a valid local signing identity: openssl pkcs12 failed$/],
 			["security import fails", (host) => { host.state.securityImportFail = new Error("import denied"); }, /could not create a valid local signing identity: import denied$/],
 			["security import fails with a string", (host) => { host.state.securityImportFail = "plain string"; }, /could not create a valid local signing identity: plain string$/],
 			["imported cert is not a code-signing identity", () => {}, /could not create a valid local signing identity: Imported local signing certificate is not a valid code-signing identity\.$/],
