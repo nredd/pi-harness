@@ -31,7 +31,7 @@ jobs:
       - name: Private networks unreachable
         run: |
           fail=0
-          for target in 192.168.40.1:80 192.168.40.100:22 192.168.40.100:8006 100.85.85.113:22 10.0.0.1:80; do
+          for target in 10.0.0.1:80 172.16.0.1:80 192.168.0.1:80 192.168.255.254:22 100.64.0.1:22 100.100.100.100:22 169.254.169.254:80; do
             if timeout 5 bash -c "exec 3<>/dev/tcp/${target%:*}/${target#*:}" 2>/dev/null; then
               echo "::error::reachable: $target"; fail=1
             else
@@ -56,7 +56,7 @@ jobs:
       - name: Private networks unreachable
         run: |
           fail=0
-          for target in 192.168.1.1:80 192.168.40.1:80 192.168.40.100:22 100.85.85.113:22 100.99.73.79:22 10.0.0.1:80; do
+          for target in 10.0.0.1:80 172.16.0.1:80 192.168.0.1:80 192.168.255.254:22 100.64.0.1:22 100.100.100.100:22 169.254.169.254:80; do
             if /usr/bin/nc -z -G 3 "${target%:*}" "${target#*:}" 2>/dev/null; then
               echo "::error::reachable: $target"; fail=1
             else

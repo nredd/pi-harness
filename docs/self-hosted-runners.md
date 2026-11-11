@@ -32,7 +32,7 @@ Both register repo-scoped with single-use JIT configs: a runner takes one job an
 
 ## Smoke
 
-`.github/workflows/runner-smoke.yml` runs on same-repo PRs touching it and on `workflow_dispatch`. Each pool must show: runner name and arch, public internet reachable, private targets (`192.168.x`, `100.x` tailnet, `10.x`) blocked.
+`.github/workflows/runner-smoke.yml` runs on same-repo PRs touching it and on `workflow_dispatch`. Each pool must show: runner name and arch, public internet reachable, and non-identifying private, shared-address and link-local targets blocked. These probes do not prove every address is blocked. Keep any host-specific extra targets in runner-side environment or repository variables, never in the repository.
 
 ## Remaining
 
