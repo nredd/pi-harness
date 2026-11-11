@@ -565,7 +565,10 @@ def verify_release(
         if missing:
             raise ValueError(f"the snapshot records no integrity for installed asset(s) {', '.join(missing)}")
         verify_core_assets(
-            stack, workdir / "core", attest=partial(verify_provenance_anonymously, gh_bin=gh_bin)
+            stack,
+            workdir / "core",
+            attest=partial(verify_provenance_anonymously, gh_bin=gh_bin),
+            checksums=checksums,
         )
     except (OSError, ValueError, PromotionError, RuntimeError) as error:
         failure = detached_exception(VerificationError(f"Core release '{tag}' rejected: {error}"), error)

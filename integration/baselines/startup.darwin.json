@@ -1,0 +1,17 @@
+{
+  "bundled": {
+    "first_paint_s": 0.4266,
+    "frame_s": 0.4266,
+    "input_ready_s": 0.4437
+  },
+  "direct": {
+    "first_paint_s": 0.6932,
+    "frame_s": 0.7155,
+    "input_ready_s": 0.7338
+  },
+  "wrapper": {
+    "first_paint_s": 0.7384,
+    "frame_s": 0.7495,
+    "input_ready_s": 0.7685
+  }
+}

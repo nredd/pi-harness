@@ -162,7 +162,7 @@ describe.skipIf(process.env.PI_CU_LINUX_LIVE_SESSION !== "1")("live Linux E2E (i
 				assert.equal(semantic.details?.helper?.accessibility, true);
 				assert.equal(semantic.details?.helper?.protocolVersion, 4);
 				assert(
-					countOutlineNodes(semantic.details?.outline?.root) > 1,
+					Number(/\((?:\d+ of )?(\d+) nodes/.exec(semantic.content?.[0]?.text ?? "")?.[1] ?? 0) > 1,
 					"semantic observation returned no accessible descendants",
 				);
 
@@ -434,7 +434,7 @@ describe.skipIf(process.env.PI_CU_LINUX_LIVE_SESSION !== "1")("live Linux E2E (i
 					"target_closed action fabricated a successor capture",
 				);
 				assert.equal(
-					launched.details?.outline,
+					launched.details?.lookId,
 					undefined,
 					"target_closed action fabricated a successor outline",
 				);
@@ -693,23 +693,6 @@ function assertForegroundX11(execution) {
  */
 function rootIdentity(root) {
 	return `${root.pid}:${root.windowId ?? root.nativeWindowRef ?? root.windowTitle}`;
-}
-
-/**
- * Count an accessible-outline fixture tree.
- * @param {object|undefined} node Optional outline root.
- * @returns {number} Node count, zero for a missing root.
- * @throws {RangeError} On cyclic or excessively deep input.
- */
-function countOutlineNodes(node) {
-	if (!node) return 0;
-	return (
-		1 +
-		(node.children ?? []).reduce(
-			(sum, child) => sum + countOutlineNodes(child),
-			0,
-		)
-	);
 }
 
 /**

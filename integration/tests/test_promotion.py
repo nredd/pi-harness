@@ -46,7 +46,7 @@ from harness.promotion import (
     verify_required_checks,
 )
 from harness.publish_gate import PublishError, release_state, verify_tag_target
-from harness.release import LEGACY_CHECKSUMS
+from harness.release import LEGACY_CHECKSUMS, release_package_urls
 from harness.stack import Stack
 
 if TYPE_CHECKING:
@@ -734,6 +734,64 @@ def test_core_assets_are_hashed_and_attested_for_new_tags(tmp_path: Path) -> Non
     assert attested == [(NEW_ASSET, NEW_CORE_TAG)]
 
 
+def test_core_assets_also_attest_unrecorded_runtime_assets(tmp_path: Path) -> None:
+    """`pi-ai` and `pi-agent-core` are hashed against the release checksums and attested too.
+
+    Parameters:
+        tmp_path (Path): private fixture directory.
+
+    Returns:
+        None: attestation and refusals were observed.
+    """
+    digest = hashlib.sha256(ASSET_BYTES).hexdigest()
+    stack = core_stack(tmp_path, NEW_CORE_TAG, digest)
+    urls = release_package_urls(NEW_CORE_TAG)
+    published = dict.fromkeys(urls.values(), digest)
+    attested: list[str] = []
+    fetched: list[str] = []
+
+    def fetch(url: str, destination: Path) -> None:
+        """Record the URL and write the canned bytes.
+
+        Parameters:
+            url (str): requested asset URL.
+            destination (Path): file to write.
+
+        Returns:
+            None: the asset fixture bytes are written.
+        """
+        fetched.append(url)
+        destination.write_bytes(ASSET_BYTES)
+
+    verify_core_assets(
+        stack,
+        tmp_path / "core",
+        fetch,
+        lambda path, tag: attested.append(path.name),
+        checksums=published,
+    )
+    assert sorted(fetched) == sorted(urls.values())
+    assert sorted(attested) == sorted(url.rsplit("/", 1)[-1] for url in urls.values())
+    with pytest.raises(
+        AttestationError, match=r"publishes no checksum for 'earendil-works-pi-ai-1\.3\.0\.tgz'"
+    ):
+        verify_core_assets(
+            stack,
+            tmp_path / "missing",
+            fetch,
+            lambda path, tag: None,
+            checksums={u: d for u, d in published.items() if "pi-ai-" not in u},
+        )
+    with pytest.raises(AttestationError, match="expected"):
+        verify_core_assets(
+            stack,
+            tmp_path / "wrong",
+            fetch,
+            lambda path, tag: None,
+            checksums=published | {urls["pi-ai"]: "0" * 64},
+        )
+
+
 def test_core_assets_refuse_wrong_bytes_and_failed_provenance(tmp_path: Path) -> None:
     """A digest mismatch or a provenance failure stops promotion; a download failure is evidence-level."""
     stack = core_stack(tmp_path, NEW_CORE_TAG, "0" * 64)
@@ -1166,6 +1224,7 @@ def test_build_candidate_records_the_full_dispatch_first(
     monkeypatch.setattr(
         promotion_verify, "run_command", lambda *_args: subprocess.CompletedProcess([], 0, personal, "")
     )
+    monkeypatch.setattr(promotion, "release_checksums", lambda _tag: {})
     monkeypatch.setattr(promotion_verify, "verify_core", lambda *_args: None)
     monkeypatch.setattr(promotion_verify, "collect_owned_evidence", lambda *_args: [])
     monkeypatch.setattr(promotion_verify, "build_gates", build_gates)

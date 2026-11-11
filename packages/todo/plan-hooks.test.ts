@@ -340,7 +340,7 @@ describe("TaskDetails snapshot", () => {
 
 describe("settling with in_progress todos", () => {
 	const notices = (ctx: { ui: { notify: unknown } }) => (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls;
-	const ARMED = "armed: no todo-owned wake (monitor and agent notices list session wakes)";
+	const ARMED = "armed: no todo-owned wake (agent notices list session wakes; unlinked monitors arm no todo)";
 	const task = (id: number, extra: Record<string, unknown> = {}) => ({
 		id,
 		subject: `t${id}`,
@@ -578,7 +578,7 @@ describe("settling with nothing armed to wake the parent", () => {
 	};
 	const alive = (handle: string, file = CURRENT_FILE): Survivor => ({ handle, file, live: true });
 	const ELSEWHERE_NOTICE =
-		"Run ended with 1 in_progress todo, armed: no todo-owned wake (monitor and agent notices list session wakes); agent running for another session, which it wakes instead of this one: #1 t1 (@worker)";
+		"Run ended with 1 in_progress todo, armed: no todo-owned wake (agent notices list session wakes; unlinked monitors arm no todo); agent running for another session, which it wakes instead of this one: #1 t1 (@worker)";
 	const monitor = (bus: Map<string, Handler[]>, channel: string, id = "m1", sessionId = "s1") => {
 		for (const h of bus.get(channel) ?? []) void h({ sessionId, id, name: "ci" });
 	};
@@ -610,25 +610,164 @@ describe("settling with nothing armed to wake the parent", () => {
 		expect(reminder).toContain("Nothing is armed to wake you");
 		expect(reminder).toContain("- #1 t1\n");
 		expect(reminder).toContain("- #2 t2 (@release-team)");
+		expect(reminder).toContain("monitor_stop it and monitor_start it again with todo: <id>");
 		// Only the request right after the marker sees the list.
 		expect(await handler("context")({ messages: [user, marker, assistant] }, ctx)).toBeUndefined();
 	});
 
-	it("stays out of the way when a running monitor or background agent will wake the parent", async () => {
-		const { handler, ctx, bus } = await start(tasks({ id: 1 }));
+	it("stays out of the way when a running background agent will wake the parent", async () => {
+		const { handler, ctx } = await start(tasks({ id: 1 }));
 		const settle = handler("agent_before_settle");
-		monitor(bus, MONITOR_STARTED_EVENT);
-		expect(await settle(settleEvent([user, assistant]), ctx)).toBeUndefined();
-		expect(await handler("context")({ messages: [user, marker] }, ctx)).toBeUndefined();
-		// A stop for another monitor or session leaves it armed; its own stop disarms.
-		monitor(bus, MONITOR_STOPPED_EVENT, "m2");
-		monitor(bus, MONITOR_STOPPED_EVENT, "m1", "other");
-		expect(await settle(settleEvent([user, assistant]), ctx)).toBeUndefined();
-		monitor(bus, MONITOR_STOPPED_EVENT);
-		expect(await settle(settleEvent([user, assistant]), ctx)).toBeDefined();
-
 		applyAgentEvent("s1", SUBAGENT_STARTED_EVENT, { id: "a1", handle: "other-worker", wakesParent: true });
 		expect(await settle(settleEvent([user, assistant]), ctx)).toBeUndefined();
+		expect(await handler("context")({ messages: [user, marker] }, ctx)).toBeUndefined();
+	});
+
+	describe("monitors linked to a todo", () => {
+		const link = (bus: Map<string, Handler[]>, channel: string, todo?: number | number[], id = "m1", name = "ci") => {
+			for (const h of bus.get(channel) ?? [])
+				void h({
+					sessionId: "s1",
+					id,
+					name,
+					wake: false,
+					todos: todo === undefined ? undefined : Array.isArray(todo) ? todo : [todo],
+				});
+		};
+		const WAITING =
+			"Run ended with 1 in_progress todo, armed: monitor for #1; waiting on a monitor, which wakes the parent: #1 t1 (monitor ci)";
+
+		it("shows a todo with a live linked monitor as waiting once, then held again after it stops", async () => {
+			const { handler, ctx, bus } = await start(tasks({ id: 1 }));
+			link(bus, MONITOR_STARTED_EVENT, 1);
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			expect(notices(ctx)).toEqual([[WAITING, "info"]]);
+			expect(await handler("agent_before_settle")(settleEvent([user, assistant]), ctx)).toBeUndefined();
+			link(bus, MONITOR_STOPPED_EVENT, 1);
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			expect(notices(ctx)[1]).toEqual([expect.stringContaining("held by the parent: #1 t1"), "warning"]);
+			expect(await handler("agent_before_settle")(settleEvent([user, assistant]), ctx)).toBeDefined();
+		});
+
+		it("leaves a todo the monitor is not linked to held, and a linked one does not arm the session", async () => {
+			const { handler, ctx, bus } = await start(tasks({ id: 1 }, { id: 2 }));
+			link(bus, MONITOR_STARTED_EVENT, 2);
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			expect(notices(ctx)).toEqual([
+				[
+					expect.stringContaining(
+						"held by the parent: #1 t1; waiting on a monitor, which wakes the parent: #2 t2 (monitor ci)",
+					),
+					"warning",
+				],
+			]);
+			const result = (await handler("agent_before_settle")(settleEvent([user, assistant]), ctx)) as {
+				entries: Array<{ details: { held: number[] } }>;
+			};
+			expect(result.entries[0].details.held).toEqual([1]);
+		});
+
+		it("arms no todo for an unlinked or malformed-link monitor, and the held reminder still fires", async () => {
+			const { handler, ctx, bus } = await start(tasks({ id: 1 }));
+			monitor(bus, MONITOR_STARTED_EVENT);
+			link(bus, MONITOR_STARTED_EVENT, 0.5, "m2");
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			expect(notices(ctx)[0][1]).toBe("warning");
+			expect(notices(ctx)[0][0]).toContain("held by the parent: #1 t1");
+			expect(await handler("agent_before_settle")(settleEvent([user, assistant]), ctx)).toBeDefined();
+			// Stops for another monitor or session change nothing; its own stop is harmless.
+			monitor(bus, MONITOR_STOPPED_EVENT, "m1", "other");
+			monitor(bus, MONITOR_STOPPED_EVENT);
+			expect(await handler("agent_before_settle")(settleEvent([user, assistant]), ctx)).toBeDefined();
+		});
+
+		it("arms every todo of a monitor linked to several", async () => {
+			const { handler, ctx, bus } = await start(tasks({ id: 1 }, { id: 2 }, { id: 3 }));
+			link(bus, MONITOR_STARTED_EVENT, [1, 2]);
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			expect(notices(ctx)[0][0]).toContain("armed: monitor for #1, #2; held by the parent: #3 t3; waiting");
+			expect(notices(ctx)[0][0]).toContain("#1 t1 (monitor ci), #2 t2 (monitor ci)");
+		});
+
+		it("keeps the link of a plan todo that survives clear, drops the cleared one", async () => {
+			const snapshot = tasks({ id: 1 }, { id: 2 });
+			snapshot.tasks[0] = { ...snapshot.tasks[0], source: "plan" } as never;
+			const { handler, ctx, bus, call } = await start(snapshot);
+			link(bus, MONITOR_STARTED_EVENT, [1, 2]);
+			await call(ctx, { action: "clear" });
+			await call(ctx, { action: "create", subject: "reused id" });
+			await call(ctx, { action: "update", id: 3, status: "in_progress" });
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			expect(notices(ctx)[0][0]).toContain(
+				"held by the parent: #3 reused id; waiting on a monitor, which wakes the parent: #1 t1",
+			);
+		});
+
+		it("drops a link when its todo is cleared inside an ops batch, so a reused id is not armed", async () => {
+			const { handler, ctx, bus, call } = await start(tasks({ id: 1 }));
+			link(bus, MONITOR_STARTED_EVENT, 1);
+			await call(ctx, {
+				ops: [
+					{ action: "clear" },
+					{ action: "create", subject: "reused id" },
+					{ action: "update", id: 1, status: "in_progress" },
+				],
+			});
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			expect(notices(ctx)[0][1]).toBe("warning");
+			expect(notices(ctx)[0][0]).not.toContain("waiting on a monitor");
+		});
+
+		it("drops every link when tree navigation changes the todos, keeps them when nothing changed", async () => {
+			const { handler, ctx, bus } = await start(tasks({ id: 1 }));
+			link(bus, MONITOR_STARTED_EVENT, 1);
+			const branchWith = (data: unknown) => {
+				(ctx.sessionManager as unknown as { getBranch: () => unknown }).getBranch = () => [
+					{ type: "custom", customType: STATE_ENTRY_TYPE, data },
+				];
+			};
+			// The same state replayed (compaction) keeps the link.
+			branchWith(tasks({ id: 1 }));
+			await handler("session_compact")({}, ctx);
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			expect(notices(ctx)[0][0]).toContain("waiting on a monitor");
+			// Another branch's #1, even with the same subject, is not the todo the monitor was started for.
+			const other = tasks({ id: 1 });
+			other.tasks[0] = { ...other.tasks[0], description: "recreated on another branch" } as never;
+			branchWith(other);
+			await handler("session_tree")({}, ctx);
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			expect(notices(ctx)[1]).toEqual([expect.stringContaining("held by the parent: #1 t1"), "warning"]);
+		});
+
+		it("drops a link when its todo is cleared, so a reused id is not armed", async () => {
+			const { handler, ctx, bus, call } = await start(tasks({ id: 1 }));
+			link(bus, MONITOR_STARTED_EVENT, 1);
+			monitor(bus, MONITOR_STARTED_EVENT, "m2");
+			await call(ctx, { action: "clear" });
+			await call(ctx, { action: "create", subject: "reused id" });
+			await call(ctx, { action: "update", id: 1, status: "in_progress" });
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			expect(notices(ctx)[0][1]).toBe("warning");
+		});
+
+		it("names a monitor by id when its event carries no name and keeps the first of two on one todo", async () => {
+			const { handler, ctx, bus } = await start(tasks({ id: 1 }));
+			for (const h of bus.get(MONITOR_STARTED_EVENT) ?? []) void h({ sessionId: "s1", id: "m9", todos: [1] });
+			link(bus, MONITOR_STARTED_EVENT, 1, "m10", "later");
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			expect(notices(ctx)[0][0]).toContain("(monitor m9)");
+		});
+
+		it("forgets linked monitors when the session shuts down", async () => {
+			const { handler, ctx, bus } = await start(tasks({ id: 1 }));
+			link(bus, MONITOR_STARTED_EVENT, 1);
+			await handler("session_shutdown")({ reason: "quit" }, ctx);
+			await handler("session_start")({ reason: "startup" }, ctx);
+			await handler("agent_settled")({ type: "agent_settled" }, ctx);
+			expect(notices(ctx)[0][1]).toBe("warning");
+		});
 	});
 
 	it("does not count a running agent without a completion notice as armed", async () => {
@@ -698,7 +837,7 @@ describe("settling with nothing armed to wake the parent", () => {
 		await handler("agent_settled")({ type: "agent_settled" }, ctx);
 		await handler("agent_settled")({ type: "agent_settled" }, ctx);
 		const text =
-			"Run ended with 2 in_progress todos, armed: no todo-owned wake (monitor and agent notices list session wakes); owner agent not found after resume: #1 t1 (@0a1b2c3d-4e5f-6a7); agent running: #2 t2 (@alive running)";
+			"Run ended with 2 in_progress todos, armed: no todo-owned wake (agent notices list session wakes; unlinked monitors arm no todo); owner agent not found after resume: #1 t1 (@0a1b2c3d-4e5f-6a7); agent running: #2 t2 (@alive running)";
 		expect(notices(ctx)).toEqual([
 			[text, "warning"],
 			[text, "warning"],
@@ -743,7 +882,7 @@ describe("settling with nothing armed to wake the parent", () => {
 		await handler("agent_settled")({ type: "agent_settled" }, ctx);
 		expect(notices(ctx)).toEqual([
 			[
-				"Run ended with 1 in_progress todo, armed: no todo-owned wake (monitor and agent notices list session wakes); agent running: #1 t1 (@worker running)",
+				"Run ended with 1 in_progress todo, armed: no todo-owned wake (agent notices list session wakes; unlinked monitors arm no todo); agent running: #1 t1 (@worker running)",
 				"info",
 			],
 		]);
@@ -1007,8 +1146,7 @@ describe("settling with nothing armed to wake the parent", () => {
 	});
 
 	it("shows held work once while a wake is armed, and warns again when it is not", async () => {
-		const { handler, ctx, bus } = await start(tasks(...Array.from({ length: 10 }, (_, i) => ({ id: i + 1 }))));
-		monitor(bus, MONITOR_STARTED_EVENT);
+		const { handler, ctx } = await start(tasks(...Array.from({ length: 10 }, (_, i) => ({ id: i + 1 }))));
 		applyAgentEvent("s1", SUBAGENT_STARTED_EVENT, { id: "a1", handle: "worker", wakesParent: true });
 		const settled = () => handler("agent_settled")({ type: "agent_settled" }, ctx);
 		await settled();
@@ -1018,11 +1156,10 @@ describe("settling with nothing armed to wake the parent", () => {
 		expect(notices(ctx)[0][1]).toBe("info");
 		// Disarming warns, repeatedly; a person's prompt resets the armed dedupe.
 		applyAgentEvent("s1", "subagents:completed", { id: "a1" });
-		monitor(bus, MONITOR_STOPPED_EVENT);
 		await settled();
 		await settled();
 		expect(notices(ctx).map((n) => n[1])).toEqual(["info", "warning", "warning"]);
-		monitor(bus, MONITOR_STARTED_EVENT);
+		applyAgentEvent("s1", SUBAGENT_STARTED_EVENT, { id: "a2", handle: "worker2", wakesParent: true });
 		await settled();
 		await settled();
 		expect(notices(ctx).map((n) => n[1])).toEqual(["info", "warning", "warning", "info"]);

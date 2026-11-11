@@ -2352,7 +2352,7 @@ def subagents_manifest() -> dict[str, Any]:
 
 def test_subagents_contract_declares_its_runtime_dependencies_and_peer_floor() -> None:
     """Real dependencies and the fork's `>=1.1.0` peer floor are explicit allowances, not silent."""
-    files = ["src/index.ts"]
+    files = ["src/index.ts", "dist/index.ts"]
     contract = pc.SUBAGENTS_CONTRACT
     assert pc.audit_manifest(contract, subagents_manifest(), files) == []
     # The plugin default still rejects the same manifest: the allowance is per contract.
@@ -2433,7 +2433,10 @@ def test_subagents_pack_matches_contract(tmp_path: Path, sandbox: pc.Sandbox) ->
     source = pc.REPO_ROOT / "packages" / "subagents"
     on_disk = {path.relative_to(source).as_posix() for path in (source / "src").rglob("*") if path.is_file()}
     assert {name for name in artifact.files if name.startswith("src/")} == on_disk
-    assert set(artifact.files) - on_disk == {"LICENSE", "README.md", "package.json"}
+    built = {path.relative_to(source).as_posix() for path in (source / "dist").rglob("*") if path.is_file()}
+    assert {name for name in artifact.files if name.startswith("dist/")} == built
+    assert "dist/index.ts" in built
+    assert set(artifact.files) - on_disk - built == {"LICENSE", "README.md", "package.json"}
     assert not any(name.startswith(("test/", "docs/", "examples/", "media/")) for name in artifact.files)
 
 
@@ -3096,7 +3099,7 @@ def test_shared_runner_script_exits_with_main_status(tmp_path: Path) -> None:
 def test_audit_files_computer_use_exact_payload() -> None:
     """The pinned payload passes; stray, missing and duplicated paths are each reported."""
     packed = list(pc.COMPUTER_USE_CONTRACT.packed_files)
-    assert len(packed) == 91
+    assert len(packed) == 92
     assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed]) == []
     assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed, "src/stray.ts"])
     missing = pc.audit_files(pc.COMPUTER_USE_CONTRACT, [name for name in packed if name != "src/view.ts"])

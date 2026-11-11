@@ -1,0 +1,1150 @@
+{
+  "gap_s": 25.0,
+  "host": {
+    "cpus": 10,
+    "load": [
+      9.26,
+      8.0,
+      8.96
+    ],
+    "power": "Now drawing from 'AC Power'",
+    "system": "darwin"
+  },
+  "runs": 5,
+  "samples": {
+    "after": [
+      {
+        "first_paint_s": 0.8152034999984608,
+        "frame_s": 0.8152034999984608,
+        "input_ready_s": 0.8350499170010153,
+        "timings": {
+          "extensions:@gotgenes/pi-anthropic-auth/src/index.ts factory": 1,
+          "extensions:@gotgenes/pi-anthropic-auth/src/index.ts module import": 17,
+          "extensions:@nredd/pi-computer-use/extensions/computer-use.ts factory": 0,
+          "extensions:@nredd/pi-computer-use/extensions/computer-use.ts module import": 32,
+          "extensions:@nredd/pi-dev-tools/src/index.ts factory": 2,
+          "extensions:@nredd/pi-dev-tools/src/index.ts module import": 31,
+          "extensions:@nredd/pi-plan-mode/dist/index.ts factory": 0,
+          "extensions:@nredd/pi-plan-mode/dist/index.ts module import": 8,
+          "extensions:@nredd/pi-preset/extensions/expanded-footer.ts factory": 1,
+          "extensions:@nredd/pi-preset/extensions/expanded-footer.ts module import": 36,
+          "extensions:@nredd/pi-session-kit/src/index.ts factory": 2,
+          "extensions:@nredd/pi-session-kit/src/index.ts module import": 49,
+          "extensions:@nredd/pi-subagents/dist/index.ts factory": 15,
+          "extensions:@nredd/pi-subagents/dist/index.ts module import": 20,
+          "extensions:@nredd/pi-subscription-router/src/index.ts factory": 1,
+          "extensions:@nredd/pi-subscription-router/src/index.ts module import": 32,
+          "extensions:@nredd/pi-todo/index.ts factory": 1,
+          "extensions:@nredd/pi-todo/index.ts module import": 32,
+          "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts factory": 1,
+          "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts module import": 95,
+          "extensions:TOTAL": 435,
+          "extensions:builtin:codemode factory": 0,
+          "extensions:builtin:llama.cpp factory": 0,
+          "extensions:builtin:mcp factory": 1,
+          "extensions:builtin:tool-search factory": 0,
+          "extensions:pi-deferred-context-engine/index.js factory": 2,
+          "extensions:pi-deferred-context-engine/index.js module import": 21,
+          "extensions:pi-memory/index.ts factory": 0,
+          "extensions:pi-memory/index.ts module import": 4,
+          "extensions:pi-web-access/dist/index.js factory": 1,
+          "extensions:pi-web-access/dist/index.js module import": 30,
+          "main:TOTAL": 537,
+          "main:createAgentSession": 0,
+          "main:createAgentSessionRuntime": 513,
+          "main:createRuntime": 0,
+          "main:createSessionManager": 2,
+          "main:initTheme": 17,
+          "main:parseArgs": 4,
+          "main:prepareInitialMessage": 0,
+          "main:readPipedStdin": 0,
+          "main:resolveModelScope": 0,
+          "main:runMigrations": 1
+        }
+      },
+      {
+        "first_paint_s": 0.7310169589982252,
+        "frame_s": 0.7310169589982252,
+        "input_ready_s": 0.7528797919985664,
+        "timings": {
+          "extensions:@gotgenes/pi-anthropic-auth/src/index.ts factory": 1,
+          "extensions:@gotgenes/pi-anthropic-auth/src/index.ts module import": 15,
+          "extensions:@nredd/pi-computer-use/extensions/computer-use.ts factory": 0,
+          "extensions:@nredd/pi-computer-use/extensions/computer-use.ts module import": 25,
+          "extensions:@nredd/pi-dev-tools/src/index.ts factory": 2,
+          "extensions:@nredd/pi-dev-tools/src/index.ts module import": 23,
+          "extensions:@nredd/pi-plan-mode/dist/index.ts factory": 1,
+          "extensions:@nredd/pi-plan-mode/dist/index.ts module import": 6,
+          "extensions:@nredd/pi-preset/extensions/expanded-footer.ts factory": 1,
+          "extensions:@nredd/pi-preset/extensions/expanded-footer.ts module import": 31,
+          "extensions:@nredd/pi-session-kit/src/index.ts factory": 1,
+          "extensions:@nredd/pi-session-kit/src/index.ts module import": 38,
+          "extensions:@nredd/pi-subagents/dist/index.ts factory": 16,
+          "extensions:@nredd/pi-subagents/dist/index.ts module import": 17,
+          "extensions:@nredd/pi-subscription-router/src/index.ts factory": 1,
+          "extensions:@nredd/pi-subscription-router/src/index.ts module import": 32,
+          "extensions:@nredd/pi-todo/index.ts factory": 1,
+          "extensions:@nredd/pi-todo/index.ts module import": 25,
+          "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts factory": 1,
+          "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts module import": 87,
+          "extensions:TOTAL": 373,
+          "extensions:builtin:codemode factory": 0,
+          "extensions:builtin:llama.cpp factory": 1,
+          "extensions:builtin:mcp factory": 1,
+          "extensions:builtin:tool-search factory": 0,
+          "extensions:pi-deferred-context-engine/index.js factory": 1,
+          "extensions:pi-deferred-context-engine/index.js module import": 16,
+          "extensions:pi-memory/index.ts factory": 0,
+          "extensions:pi-memory/index.ts module import": 3,
+          "extensions:pi-web-access/dist/index.js factory": 1,
+          "extensions:pi-web-access/dist/index.js module import": 26,
+          "main:TOTAL": 465,
+          "main:createAgentSession": 0,
+          "main:createAgentSessionRuntime": 445,
+          "main:createRuntime": 0,
+          "main:createSessionManager": 2,
+          "main:initTheme": 12,
+          "main:parseArgs": 4,
+          "main:prepareInitialMessage": 0,
+          "main:readPipedStdin": 0,
+          "main:resolveModelScope": 1,
+          "main:runMigrations": 1
+        }
+      },
+      {
+        "first_paint_s": 0.8000344169995515,
+        "frame_s": 0.8000344169995515,
+        "input_ready_s": 0.818421167001361,
+        "timings": {
+          "extensions:@gotgenes/pi-anthropic-auth/src/index.ts factory": 1,
+          "extensions:@gotgenes/pi-anthropic-auth/src/index.ts module import": 17,
+          "extensions:@nredd/pi-computer-use/extensions/computer-use.ts factory": 0,
+          "extensions:@nredd/pi-computer-use/extensions/computer-use.ts module import": 29,
+          "extensions:@nredd/pi-dev-tools/src/index.ts factory": 1,
+          "extensions:@nredd/pi-dev-tools/src/index.ts module import": 27,
+          "extensions:@nredd/pi-plan-mode/dist/index.ts factory": 1,
+          "extensions:@nredd/pi-plan-mode/dist/index.ts module import": 6,
+          "extensions:@nredd/pi-preset/extensions/expanded-footer.ts factory": 0,
+          "extensions:@nredd/pi-preset/extensions/expanded-footer.ts module import": 36,
+          "extensions:@nredd/pi-session-kit/src/index.ts factory": 2,
+          "extensions:@nredd/pi-session-kit/src/index.ts module import": 44,
+          "extensions:@nredd/pi-subagents/dist/index.ts factory": 13,
+          "extensions:@nredd/pi-subagents/dist/index.ts module import": 20,
+          "extensions:@nredd/pi-subscription-router/src/index.ts factory": 1,
+          "extensions:@nredd/pi-subscription-router/src/index.ts module import": 37,
+          "extensions:@nredd/pi-todo/index.ts factory": 1,
+          "extensions:@nredd/pi-todo/index.ts module import": 26,
+          "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts factory": 2,
+          "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts module import": 89,
+          "extensions:TOTAL": 406,
+          "extensions:builtin:codemode factory": 0,
+          "extensions:builtin:llama.cpp factory": 0,
+          "extensions:builtin:mcp factory": 1,
+          "extensions:builtin:tool-search factory": 0,
+          "extensions:pi-deferred-context-engine/index.js factory": 2,
+          "extensions:pi-deferred-context-engine/index.js module import": 18,
+          "extensions:pi-memory/index.ts factory": 1,
+          "extensions:pi-memory/index.ts module import": 3,
+          "extensions:pi-web-access/dist/index.js factory": 2,
+          "extensions:pi-web-access/dist/index.js module import": 26,
+          "main:TOTAL": 481,
+          "main:createAgentSession": 1,
+          "main:createAgentSessionRuntime": 463,
+          "main:createRuntime": 0,
+          "main:createSessionManager": 2,
+          "main:initTheme": 9,
+          "main:parseArgs": 4,
+          "main:prepareInitialMessage": 0,
+          "main:readPipedStdin": 0,
+          "main:resolveModelScope": 0,
+          "main:runMigrations": 2
+        }
+      },
+      {
+        "first_paint_s": 0.4361597500028438,
+        "frame_s": 0.4361597500028438,
+        "input_ready_s": 0.452829166999436,
+        "timings": {
+          "extensions:@gotgenes/pi-anthropic-auth/src/index.ts factory": 0,
+          "extensions:@gotgenes/pi-anthropic-auth/src/index.ts module import": 4,
+          "extensions:@nredd/pi-computer-use/extensions/computer-use.ts factory": 0,
+          "extensions:@nredd/pi-computer-use/extensions/computer-use.ts module import": 7,
+          "extensions:@nredd/pi-dev-tools/src/index.ts factory": 1,
+          "extensions:@nredd/pi-dev-tools/src/index.ts module import": 6,
+          "extensions:@nredd/pi-plan-mode/dist/index.ts factory": 1,
+          "extensions:@nredd/pi-plan-mode/dist/index.ts module import": 2,
+          "extensions:@nredd/pi-preset/extensions/expanded-footer.ts factory": 1,
+          "extensions:@nredd/pi-preset/extensions/expanded-footer.ts module import": 17,
+          "extensions:@nredd/pi-session-kit/src/index.ts factory": 0,
+          "extensions:@nredd/pi-session-kit/src/index.ts module import": 11,
+          "extensions:@nredd/pi-subagents/dist/index.ts factory": 9,
+          "extensions:@nredd/pi-subagents/dist/index.ts module import": 8,
+          "extensions:@nredd/pi-subscription-router/src/index.ts factory": 1,
+          "extensions:@nredd/pi-subscription-router/src/index.ts module import": 23,
+          "extensions:@nredd/pi-todo/index.ts factory": 1,
+          "extensions:@nredd/pi-todo/index.ts module import": 6,
+          "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts factory": 2,
+          "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts module import": 26,
+          "extensions:TOTAL": 152,
+          "extensions:builtin:codemode factory": 0,
+          "extensions:builtin:llama.cpp factory": 1,
+          "extensions:builtin:mcp factory": 0,
+          "extensions:builtin:tool-search factory": 0,
+          "extensions:pi-deferred-context-engine/index.js factory": 1,
+          "extensions:pi-deferred-context-engine/index.js module import": 4,
+          "extensions:pi-memory/index.ts factory": 0,
+          "extensions:pi-memory/index.ts module import": 1,
+          "extensions:pi-web-access/dist/index.js factory": 1,
+          "extensions:pi-web-access/dist/index.js module import": 18,
+          "main:TOTAL": 206,
+          "main:createAgentSession": 0,
+          "main:createAgentSessionRuntime": 192,
+          "main:createRuntime": 0,
+          "main:createSessionManager": 2,
+          "main:initTheme": 9,
+          "main:parseArgs": 2,
+          "main:prepareInitialMessage": 0,
+          "main:readPipedStdin": 0,
+          "main:resolveModelScope": 0,
+          "main:runMigrations": 1
+        }
+      },
+      {
+        "first_paint_s": 0.7639117079997959,
+        "frame_s": 0.7639117079997959,
+        "input_ready_s": 0.7916754580000998,
+        "timings": {
+          "extensions:@gotgenes/pi-anthropic-auth/src/index.ts factory": 0,
+          "extensions:@gotgenes/pi-anthropic-auth/src/index.ts module import": 14,
+          "extensions:@nredd/pi-computer-use/extensions/computer-use.ts factory": 0,
+          "extensions:@nredd/pi-computer-use/extensions/computer-use.ts module import": 25,
+          "extensions:@nredd/pi-dev-tools/src/index.ts factory": 1,
+          "extensions:@nredd/pi-dev-tools/src/index.ts module import": 25,
+          "extensions:@nredd/pi-plan-mode/dist/index.ts factory": 0,
+          "extensions:@nredd/pi-plan-mode/dist/index.ts module import": 7,
+          "extensions:@nredd/pi-preset/extensions/expanded-footer.ts factory": 1,
+          "extensions:@nredd/pi-preset/extensions/expanded-footer.ts module import": 28,
+          "extensions:@nredd/pi-session-kit/src/index.ts factory": 1,
+          "extensions:@nredd/pi-session-kit/src/index.ts module import": 39,
+          "extensions:@nredd/pi-subagents/dist/index.ts factory": 13,
+          "extensions:@nredd/pi-subagents/dist/index.ts module import": 17,
+          "extensions:@nredd/pi-subscription-router/src/index.ts factory": 1,
+          "extensions:@nredd/pi-subscription-router/src/index.ts module import": 30,
+          "extensions:@nredd/pi-todo/index.ts factory": 1,
+          "extensions:@nredd/pi-todo/index.ts module import": 22,
+          "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts factory": 1,
+          "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts module import": 82,
+          "extensions:TOTAL": 357,
+          "extensions:builtin:codemode factory": 0,
+          "extensions:builtin:llama.cpp factory": 1,
+          "extensions:builtin:mcp factory": 0,
+          "extensions:builtin:tool-search factory": 0,
+          "extensions:pi-deferred-context-engine/index.js factory": 1,
+          "extensions:pi-deferred-context-engine/index.js module import": 15,
+          "extensions:pi-memory/index.ts factory": 1,
+          "extensions:pi-memory/index.ts module import": 3,
+          "extensions:pi-web-access/dist/index.js factory": 2,
+          "extensions:pi-web-access/dist/index.js module import": 26,
+          "main:TOTAL": 434,
+          "main:createAgentSession": 0,
+          "main:createAgentSessionRuntime": 414,
+          "main:createRuntime": 0,
+          "main:createSessionManager": 2,
+          "main:initTheme": 14,
+          "main:parseArgs": 4,
+          "main:prepareInitialMessage": 0,
+          "main:readPipedStdin": 0,
+          "main:resolveModelScope": 0,
+          "main:runMigrations": 0
+        }
+      }
+    ],
+    "before": [
+      {
+        "first_paint_s": 0.7139957920007873,
+        "frame_s": 0.7139957920007873,
+        "input_ready_s": 0.7318839590006974,
+        "timings": {
+          "extensions:@gotgenes/pi-anthropic-auth/src/index.ts factory": 0,
+          "extensions:@gotgenes/pi-anthropic-auth/src/index.ts module import": 5,
+          "extensions:@nredd/pi-computer-use/extensions/computer-use.ts factory": 0,
+          "extensions:@nredd/pi-computer-use/extensions/computer-use.ts module import": 7,
+          "extensions:@nredd/pi-dev-tools/src/index.ts factory": 1,
+          "extensions:@nredd/pi-dev-tools/src/index.ts module import": 6,
+          "extensions:@nredd/pi-plan-mode/dist/index.ts factory": 0,
+          "extensions:@nredd/pi-plan-mode/dist/index.ts module import": 3,
+          "extensions:@nredd/pi-preset/extensions/expanded-footer.ts factory": 0,
+          "extensions:@nredd/pi-preset/extensions/expanded-footer.ts module import": 19,
+          "extensions:@nredd/pi-session-kit/src/index.ts factory": 0,
+          "extensions:@nredd/pi-session-kit/src/index.ts module import": 10,
+          "extensions:@nredd/pi-subagents/src/index.ts factory": 9,
+          "extensions:@nredd/pi-subagents/src/index.ts module import": 283,
+          "extensions:@nredd/pi-subscription-router/src/index.ts factory": 0,
+          "extensions:@nredd/pi-subscription-router/src/index.ts module import": 22,
+          "extensions:@nredd/pi-todo/index.ts factory": 1,
+          "extensions:@nredd/pi-todo/index.ts module import": 6,
+          "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts factory": 1,
+          "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts module import": 26,
+          "extensions:TOTAL": 427,
+          "extensions:builtin:codemode factory": 0,
+          "extensions:builtin:llama.cpp factory": 1,
+          "extensions:builtin:mcp factory": 0,
+          "extensions:builtin:tool-search factory": 0,
+          "extensions:pi-deferred-context-engine/index.js factory": 1,
+          "extensions:pi-deferred-context-engine/index.js module import": 4,
+          "extensions:pi-memory/index.ts factory": 1,
+          "extensions:pi-memory/index.ts module import": 1,
+          "extensions:pi-web-access/dist/index.js factory": 1,
+          "extensions:pi-web-access/dist/index.js module import": 19,
+          "main:TOTAL": 484,
+          "main:createAgentSession": 0,
+          "main:createAgentSessionRuntime": 472,
+          "main:createRuntime": 0,
+          "main:createSessionManager": 3,
+          "main:initTheme": 7,
+          "main:parseArgs": 2,
+          "main:prepareInitialMessage": 0,
+          "main:readPipedStdin": 0,
+          "main:resolveModelScope": 0,
+          "main:runMigrations": 0
+        }
+      },
+      {
+        "first_paint_s": 1.1007431660000293,
+        "frame_s": 1.125610166000115,
+        "input_ready_s": 1.1464815409999574,
+        "timings": {
+          "extensions:@gotgenes/pi-anthropic-auth/src/index.ts factory": 0,
+          "extensions:@gotgenes/pi-anthropic-auth/src/index.ts module import": 18,
+          "extensions:@nredd/pi-computer-use/extensions/computer-use.ts factory": 0,
+          "extensions:@nredd/pi-computer-use/extensions/computer-use.ts module import": 29,
+          "extensions:@nredd/pi-dev-tools/src/index.ts factory": 2,
+          "extensions:@nredd/pi-dev-tools/src/index.ts module import": 28,
+          "extensions:@nredd/pi-plan-mode/dist/index.ts factory": 0,
+          "extensions:@nredd/pi-plan-mode/dist/index.ts module import": 7,
+          "extensions:@nredd/pi-preset/extensions/expanded-footer.ts factory": 1,
+          "extensions:@nredd/pi-preset/extensions/expanded-footer.ts module import": 41,
+          "extensions:@nredd/pi-session-kit/src/index.ts factory": 1,
+          "extensions:@nredd/pi-session-kit/src/index.ts module import": 40,
+          "extensions:@nredd/pi-subagents/src/index.ts factory": 14,
+          "extensions:@nredd/pi-subagents/src/index.ts module import": 391,
+          "extensions:@nredd/pi-subscription-router/src/index.ts factory": 1,
+          "extensions:@nredd/pi-subscription-router/src/index.ts module import": 32,
+          "extensions:@nredd/pi-todo/index.ts factory": 1,
+          "extensions:@nredd/pi-todo/index.ts module import": 29,
+          "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts factory": 2,
+          "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts module import": 90,
+          "extensions:TOTAL": 779,
+          "extensions:builtin:codemode factory": 0,
+          "extensions:builtin:llama.cpp factory": 0,
+          "extensions:builtin:mcp factory": 1,
+          "extensions:builtin:tool-search factory": 0,
+          "extensions:pi-deferred-context-engine/index.js factory": 2,
+          "extensions:pi-deferred-context-engine/index.js module import": 15,
+          "extensions:pi-memory/index.ts factory": 0,
+          "extensions:pi-memory/index.ts module import": 3,
+          "extensions:pi-web-access/dist/index.js factory": 2,
+          "extensions:pi-web-access/dist/index.js module import": 29,
+          "main:TOTAL": 857,
+          "main:createAgentSession": 0,
+          "main:createAgentSessionRuntime": 839,
+          "main:createRuntime": 0,
+          "main:createSessionManager": 3,
+          "main:initTheme": 9,
+          "main:parseArgs": 5,
+          "main:prepareInitialMessage": 0,
+          "main:readPipedStdin": 0,
+          "main:resolveModelScope": 0,
+          "main:runMigrations": 1
+        }
+      },
+      {
+        "first_paint_s": 0.7505196669990255,
+        "frame_s": 0.7505196669990255,
+        "input_ready_s": 0.7669021250003425,
+        "timings": {
+          "extensions:@gotgenes/pi-anthropic-auth/src/index.ts factory": 1,
+          "extensions:@gotgenes/pi-anthropic-auth/src/index.ts module import": 6,
+          "extensions:@nredd/pi-computer-use/extensions/computer-use.ts factory": 0,
+          "extensions:@nredd/pi-computer-use/extensions/computer-use.ts module import": 8,
+          "extensions:@nredd/pi-dev-tools/src/index.ts factory": 1,
+          "extensions:@nredd/pi-dev-tools/src/index.ts module import": 6,
+          "extensions:@nredd/pi-plan-mode/dist/index.ts factory": 1,
+          "extensions:@nredd/pi-plan-mode/dist/index.ts module import": 2,
+          "extensions:@nredd/pi-preset/extensions/expanded-footer.ts factory": 0,
+          "extensions:@nredd/pi-preset/extensions/expanded-footer.ts module import": 18,
+          "extensions:@nredd/pi-session-kit/src/index.ts factory": 1,
+          "extensions:@nredd/pi-session-kit/src/index.ts module import": 9,
+          "extensions:@nredd/pi-subagents/src/index.ts factory": 9,
+          "extensions:@nredd/pi-subagents/src/index.ts module import": 295,
+          "extensions:@nredd/pi-subscription-router/src/index.ts factory": 1,
+          "extensions:@nredd/pi-subscription-router/src/index.ts module import": 22,
+          "extensions:@nredd/pi-todo/index.ts factory": 0,
+          "extensions:@nredd/pi-todo/index.ts module import": 7,
+          "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts factory": 2,
+          "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts module import": 29,
+          "extensions:TOTAL": 444,
+          "extensions:builtin:codemode factory": 1,
+          "extensions:builtin:llama.cpp factory": 0,
+          "extensions:builtin:mcp factory": 0,
+          "extensions:builtin:tool-search factory": 0,
+          "extensions:pi-deferred-context-engine/index.js factory": 1,
+          "extensions:pi-deferred-context-engine/index.js module import": 4,
+          "extensions:pi-memory/index.ts factory": 0,
+          "extensions:pi-memory/index.ts module import": 1,
+          "extensions:pi-web-access/dist/index.js factory": 1,
+          "extensions:pi-web-access/dist/index.js module import": 18,
+          "main:TOTAL": 507,
+          "main:createAgentSession": 0,
+          "main:createAgentSessionRuntime": 493,
+          "main:createRuntime": 0,
+          "main:createSessionManager": 2,
+          "main:initTheme": 10,
+          "main:parseArgs": 2,
+          "main:prepareInitialMessage": 0,
+          "main:readPipedStdin": 0,
+          "main:resolveModelScope": 0,
+          "main:runMigrations": 0
+        }
+      },
+      {
+        "first_paint_s": 0.9600605829982669,
+        "frame_s": 0.9827414579995093,
+        "input_ready_s": 0.9998544579975714,
+        "timings": {
+          "extensions:@gotgenes/pi-anthropic-auth/src/index.ts factory": 0,
+          "extensions:@gotgenes/pi-anthropic-auth/src/index.ts module import": 15,
+          "extensions:@nredd/pi-computer-use/extensions/computer-use.ts factory": 0,
+          "extensions:@nredd/pi-computer-use/extensions/computer-use.ts module import": 26,
+          "extensions:@nredd/pi-dev-tools/src/index.ts factory": 2,
+          "extensions:@nredd/pi-dev-tools/src/index.ts module import": 24,
+          "extensions:@nredd/pi-plan-mode/dist/index.ts factory": 0,
+          "extensions:@nredd/pi-plan-mode/dist/index.ts module import": 7,
+          "extensions:@nredd/pi-preset/extensions/expanded-footer.ts factory": 0,
+          "extensions:@nredd/pi-preset/extensions/expanded-footer.ts module import": 25,
+          "extensions:@nredd/pi-session-kit/src/index.ts factory": 1,
+          "extensions:@nredd/pi-session-kit/src/index.ts module import": 37,
+          "extensions:@nredd/pi-subagents/src/index.ts factory": 13,
+          "extensions:@nredd/pi-subagents/src/index.ts module import": 355,
+          "extensions:@nredd/pi-subscription-router/src/index.ts factory": 1,
+          "extensions:@nredd/pi-subscription-router/src/index.ts module import": 28,
+          "extensions:@nredd/pi-todo/index.ts factory": 0,
+          "extensions:@nredd/pi-todo/index.ts module import": 23,
+          "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts factory": 2,
+          "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts module import": 81,
+          "extensions:TOTAL": 686,
+          "extensions:builtin:codemode factory": 0,
+          "extensions:builtin:llama.cpp factory": 0,
+          "extensions:builtin:mcp factory": 1,
+          "extensions:builtin:tool-search factory": 0,
+          "extensions:pi-deferred-context-engine/index.js factory": 2,
+          "extensions:pi-deferred-context-engine/index.js module import": 14,
+          "extensions:pi-memory/index.ts factory": 0,
+          "extensions:pi-memory/index.ts module import": 3,
+          "extensions:pi-web-access/dist/index.js factory": 2,
+          "extensions:pi-web-access/dist/index.js module import": 24,
+          "main:TOTAL": 744,
+          "main:createAgentSession": 0,
+          "main:createAgentSessionRuntime": 730,
+          "main:createRuntime": 0,
+          "main:createSessionManager": 2,
+          "main:initTheme": 8,
+          "main:parseArgs": 2,
+          "main:prepareInitialMessage": 1,
+          "main:readPipedStdin": 0,
+          "main:resolveModelScope": 0,
+          "main:runMigrations": 1
+        }
+      },
+      {
+        "first_paint_s": 1.0236350829982257,
+        "frame_s": 1.0236350829982257,
+        "input_ready_s": 1.0405642919977254,
+        "timings": {
+          "extensions:@gotgenes/pi-anthropic-auth/src/index.ts factory": 0,
+          "extensions:@gotgenes/pi-anthropic-auth/src/index.ts module import": 15,
+          "extensions:@nredd/pi-computer-use/extensions/computer-use.ts factory": 1,
+          "extensions:@nredd/pi-computer-use/extensions/computer-use.ts module import": 24,
+          "extensions:@nredd/pi-dev-tools/src/index.ts factory": 2,
+          "extensions:@nredd/pi-dev-tools/src/index.ts module import": 24,
+          "extensions:@nredd/pi-plan-mode/dist/index.ts factory": 0,
+          "extensions:@nredd/pi-plan-mode/dist/index.ts module import": 6,
+          "extensions:@nredd/pi-preset/extensions/expanded-footer.ts factory": 0,
+          "extensions:@nredd/pi-preset/extensions/expanded-footer.ts module import": 30,
+          "extensions:@nredd/pi-session-kit/src/index.ts factory": 1,
+          "extensions:@nredd/pi-session-kit/src/index.ts module import": 35,
+          "extensions:@nredd/pi-subagents/src/index.ts factory": 12,
+          "extensions:@nredd/pi-subagents/src/index.ts module import": 363,
+          "extensions:@nredd/pi-subscription-router/src/index.ts factory": 1,
+          "extensions:@nredd/pi-subscription-router/src/index.ts module import": 27,
+          "extensions:@nredd/pi-todo/index.ts factory": 1,
+          "extensions:@nredd/pi-todo/index.ts module import": 22,
+          "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts factory": 1,
+          "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts module import": 83,
+          "extensions:TOTAL": 694,
+          "extensions:builtin:codemode factory": 1,
+          "extensions:builtin:llama.cpp factory": 0,
+          "extensions:builtin:mcp factory": 0,
+          "extensions:builtin:tool-search factory": 0,
+          "extensions:pi-deferred-context-engine/index.js factory": 2,
+          "extensions:pi-deferred-context-engine/index.js module import": 14,
+          "extensions:pi-memory/index.ts factory": 1,
+          "extensions:pi-memory/index.ts module import": 3,
+          "extensions:pi-web-access/dist/index.js factory": 1,
+          "extensions:pi-web-access/dist/index.js module import": 24,
+          "main:TOTAL": 761,
+          "main:createAgentSession": 0,
+          "main:createAgentSessionRuntime": 749,
+          "main:createRuntime": 0,
+          "main:createSessionManager": 2,
+          "main:initTheme": 7,
+          "main:parseArgs": 2,
+          "main:prepareInitialMessage": 0,
+          "main:readPipedStdin": 0,
+          "main:resolveModelScope": 0,
+          "main:runMigrations": 1
+        }
+      }
+    ]
+  },
+  "summary": {
+    "after": {
+      "first_paint_s": {
+        "max": 0.8152,
+        "median": 0.7639,
+        "min": 0.4362,
+        "n": 5,
+        "p90": 0.8152
+      },
+      "frame_s": {
+        "max": 0.8152,
+        "median": 0.7639,
+        "min": 0.4362,
+        "n": 5,
+        "p90": 0.8152
+      },
+      "input_ready_s": {
+        "max": 0.835,
+        "median": 0.7917,
+        "min": 0.4528,
+        "n": 5,
+        "p90": 0.835
+      },
+      "phases_ms": {
+        "extensions:@gotgenes/pi-anthropic-auth/src/index.ts factory": {
+          "max": 1.0,
+          "median": 1.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 1.0
+        },
+        "extensions:@gotgenes/pi-anthropic-auth/src/index.ts module import": {
+          "max": 17.0,
+          "median": 15.0,
+          "min": 4.0,
+          "n": 5,
+          "p90": 17.0
+        },
+        "extensions:@nredd/pi-computer-use/extensions/computer-use.ts factory": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 0.0
+        },
+        "extensions:@nredd/pi-computer-use/extensions/computer-use.ts module import": {
+          "max": 32.0,
+          "median": 25.0,
+          "min": 7.0,
+          "n": 5,
+          "p90": 32.0
+        },
+        "extensions:@nredd/pi-dev-tools/src/index.ts factory": {
+          "max": 2.0,
+          "median": 1.0,
+          "min": 1.0,
+          "n": 5,
+          "p90": 2.0
+        },
+        "extensions:@nredd/pi-dev-tools/src/index.ts module import": {
+          "max": 31.0,
+          "median": 25.0,
+          "min": 6.0,
+          "n": 5,
+          "p90": 31.0
+        },
+        "extensions:@nredd/pi-plan-mode/dist/index.ts factory": {
+          "max": 1.0,
+          "median": 1.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 1.0
+        },
+        "extensions:@nredd/pi-plan-mode/dist/index.ts module import": {
+          "max": 8.0,
+          "median": 6.0,
+          "min": 2.0,
+          "n": 5,
+          "p90": 8.0
+        },
+        "extensions:@nredd/pi-preset/extensions/expanded-footer.ts factory": {
+          "max": 1.0,
+          "median": 1.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 1.0
+        },
+        "extensions:@nredd/pi-preset/extensions/expanded-footer.ts module import": {
+          "max": 36.0,
+          "median": 31.0,
+          "min": 17.0,
+          "n": 5,
+          "p90": 36.0
+        },
+        "extensions:@nredd/pi-session-kit/src/index.ts factory": {
+          "max": 2.0,
+          "median": 1.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 2.0
+        },
+        "extensions:@nredd/pi-session-kit/src/index.ts module import": {
+          "max": 49.0,
+          "median": 39.0,
+          "min": 11.0,
+          "n": 5,
+          "p90": 49.0
+        },
+        "extensions:@nredd/pi-subagents/dist/index.ts factory": {
+          "max": 16.0,
+          "median": 13.0,
+          "min": 9.0,
+          "n": 5,
+          "p90": 16.0
+        },
+        "extensions:@nredd/pi-subagents/dist/index.ts module import": {
+          "max": 20.0,
+          "median": 17.0,
+          "min": 8.0,
+          "n": 5,
+          "p90": 20.0
+        },
+        "extensions:@nredd/pi-subscription-router/src/index.ts factory": {
+          "max": 1.0,
+          "median": 1.0,
+          "min": 1.0,
+          "n": 5,
+          "p90": 1.0
+        },
+        "extensions:@nredd/pi-subscription-router/src/index.ts module import": {
+          "max": 37.0,
+          "median": 32.0,
+          "min": 23.0,
+          "n": 5,
+          "p90": 37.0
+        },
+        "extensions:@nredd/pi-todo/index.ts factory": {
+          "max": 1.0,
+          "median": 1.0,
+          "min": 1.0,
+          "n": 5,
+          "p90": 1.0
+        },
+        "extensions:@nredd/pi-todo/index.ts module import": {
+          "max": 32.0,
+          "median": 25.0,
+          "min": 6.0,
+          "n": 5,
+          "p90": 32.0
+        },
+        "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts factory": {
+          "max": 2.0,
+          "median": 1.0,
+          "min": 1.0,
+          "n": 5,
+          "p90": 2.0
+        },
+        "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts module import": {
+          "max": 95.0,
+          "median": 87.0,
+          "min": 26.0,
+          "n": 5,
+          "p90": 95.0
+        },
+        "extensions:TOTAL": {
+          "max": 435.0,
+          "median": 373.0,
+          "min": 152.0,
+          "n": 5,
+          "p90": 435.0
+        },
+        "extensions:builtin:codemode factory": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 0.0
+        },
+        "extensions:builtin:llama.cpp factory": {
+          "max": 1.0,
+          "median": 1.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 1.0
+        },
+        "extensions:builtin:mcp factory": {
+          "max": 1.0,
+          "median": 1.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 1.0
+        },
+        "extensions:builtin:tool-search factory": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 0.0
+        },
+        "extensions:pi-deferred-context-engine/index.js factory": {
+          "max": 2.0,
+          "median": 1.0,
+          "min": 1.0,
+          "n": 5,
+          "p90": 2.0
+        },
+        "extensions:pi-deferred-context-engine/index.js module import": {
+          "max": 21.0,
+          "median": 16.0,
+          "min": 4.0,
+          "n": 5,
+          "p90": 21.0
+        },
+        "extensions:pi-memory/index.ts factory": {
+          "max": 1.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 1.0
+        },
+        "extensions:pi-memory/index.ts module import": {
+          "max": 4.0,
+          "median": 3.0,
+          "min": 1.0,
+          "n": 5,
+          "p90": 4.0
+        },
+        "extensions:pi-web-access/dist/index.js factory": {
+          "max": 2.0,
+          "median": 1.0,
+          "min": 1.0,
+          "n": 5,
+          "p90": 2.0
+        },
+        "extensions:pi-web-access/dist/index.js module import": {
+          "max": 30.0,
+          "median": 26.0,
+          "min": 18.0,
+          "n": 5,
+          "p90": 30.0
+        },
+        "main:TOTAL": {
+          "max": 537.0,
+          "median": 465.0,
+          "min": 206.0,
+          "n": 5,
+          "p90": 537.0
+        },
+        "main:createAgentSession": {
+          "max": 1.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 1.0
+        },
+        "main:createAgentSessionRuntime": {
+          "max": 513.0,
+          "median": 445.0,
+          "min": 192.0,
+          "n": 5,
+          "p90": 513.0
+        },
+        "main:createRuntime": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 0.0
+        },
+        "main:createSessionManager": {
+          "max": 2.0,
+          "median": 2.0,
+          "min": 2.0,
+          "n": 5,
+          "p90": 2.0
+        },
+        "main:initTheme": {
+          "max": 17.0,
+          "median": 12.0,
+          "min": 9.0,
+          "n": 5,
+          "p90": 17.0
+        },
+        "main:parseArgs": {
+          "max": 4.0,
+          "median": 4.0,
+          "min": 2.0,
+          "n": 5,
+          "p90": 4.0
+        },
+        "main:prepareInitialMessage": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 0.0
+        },
+        "main:readPipedStdin": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 0.0
+        },
+        "main:resolveModelScope": {
+          "max": 1.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 1.0
+        },
+        "main:runMigrations": {
+          "max": 2.0,
+          "median": 1.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 2.0
+        }
+      }
+    },
+    "before": {
+      "first_paint_s": {
+        "max": 1.1007,
+        "median": 0.9601,
+        "min": 0.714,
+        "n": 5,
+        "p90": 1.1007
+      },
+      "frame_s": {
+        "max": 1.1256,
+        "median": 0.9827,
+        "min": 0.714,
+        "n": 5,
+        "p90": 1.1256
+      },
+      "input_ready_s": {
+        "max": 1.1465,
+        "median": 0.9999,
+        "min": 0.7319,
+        "n": 5,
+        "p90": 1.1465
+      },
+      "phases_ms": {
+        "extensions:@gotgenes/pi-anthropic-auth/src/index.ts factory": {
+          "max": 1.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 1.0
+        },
+        "extensions:@gotgenes/pi-anthropic-auth/src/index.ts module import": {
+          "max": 18.0,
+          "median": 15.0,
+          "min": 5.0,
+          "n": 5,
+          "p90": 18.0
+        },
+        "extensions:@nredd/pi-computer-use/extensions/computer-use.ts factory": {
+          "max": 1.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 1.0
+        },
+        "extensions:@nredd/pi-computer-use/extensions/computer-use.ts module import": {
+          "max": 29.0,
+          "median": 24.0,
+          "min": 7.0,
+          "n": 5,
+          "p90": 29.0
+        },
+        "extensions:@nredd/pi-dev-tools/src/index.ts factory": {
+          "max": 2.0,
+          "median": 2.0,
+          "min": 1.0,
+          "n": 5,
+          "p90": 2.0
+        },
+        "extensions:@nredd/pi-dev-tools/src/index.ts module import": {
+          "max": 28.0,
+          "median": 24.0,
+          "min": 6.0,
+          "n": 5,
+          "p90": 28.0
+        },
+        "extensions:@nredd/pi-plan-mode/dist/index.ts factory": {
+          "max": 1.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 1.0
+        },
+        "extensions:@nredd/pi-plan-mode/dist/index.ts module import": {
+          "max": 7.0,
+          "median": 6.0,
+          "min": 2.0,
+          "n": 5,
+          "p90": 7.0
+        },
+        "extensions:@nredd/pi-preset/extensions/expanded-footer.ts factory": {
+          "max": 1.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 1.0
+        },
+        "extensions:@nredd/pi-preset/extensions/expanded-footer.ts module import": {
+          "max": 41.0,
+          "median": 25.0,
+          "min": 18.0,
+          "n": 5,
+          "p90": 41.0
+        },
+        "extensions:@nredd/pi-session-kit/src/index.ts factory": {
+          "max": 1.0,
+          "median": 1.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 1.0
+        },
+        "extensions:@nredd/pi-session-kit/src/index.ts module import": {
+          "max": 40.0,
+          "median": 35.0,
+          "min": 9.0,
+          "n": 5,
+          "p90": 40.0
+        },
+        "extensions:@nredd/pi-subagents/src/index.ts factory": {
+          "max": 14.0,
+          "median": 12.0,
+          "min": 9.0,
+          "n": 5,
+          "p90": 14.0
+        },
+        "extensions:@nredd/pi-subagents/src/index.ts module import": {
+          "max": 391.0,
+          "median": 355.0,
+          "min": 283.0,
+          "n": 5,
+          "p90": 391.0
+        },
+        "extensions:@nredd/pi-subscription-router/src/index.ts factory": {
+          "max": 1.0,
+          "median": 1.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 1.0
+        },
+        "extensions:@nredd/pi-subscription-router/src/index.ts module import": {
+          "max": 32.0,
+          "median": 27.0,
+          "min": 22.0,
+          "n": 5,
+          "p90": 32.0
+        },
+        "extensions:@nredd/pi-todo/index.ts factory": {
+          "max": 1.0,
+          "median": 1.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 1.0
+        },
+        "extensions:@nredd/pi-todo/index.ts module import": {
+          "max": 29.0,
+          "median": 22.0,
+          "min": 6.0,
+          "n": 5,
+          "p90": 29.0
+        },
+        "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts factory": {
+          "max": 2.0,
+          "median": 2.0,
+          "min": 1.0,
+          "n": 5,
+          "p90": 2.0
+        },
+        "extensions:@quintinshaw/pi-dynamic-workflows/extensions/workflow.ts module import": {
+          "max": 90.0,
+          "median": 81.0,
+          "min": 26.0,
+          "n": 5,
+          "p90": 90.0
+        },
+        "extensions:TOTAL": {
+          "max": 779.0,
+          "median": 686.0,
+          "min": 427.0,
+          "n": 5,
+          "p90": 779.0
+        },
+        "extensions:builtin:codemode factory": {
+          "max": 1.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 1.0
+        },
+        "extensions:builtin:llama.cpp factory": {
+          "max": 1.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 1.0
+        },
+        "extensions:builtin:mcp factory": {
+          "max": 1.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 1.0
+        },
+        "extensions:builtin:tool-search factory": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 0.0
+        },
+        "extensions:pi-deferred-context-engine/index.js factory": {
+          "max": 2.0,
+          "median": 2.0,
+          "min": 1.0,
+          "n": 5,
+          "p90": 2.0
+        },
+        "extensions:pi-deferred-context-engine/index.js module import": {
+          "max": 15.0,
+          "median": 14.0,
+          "min": 4.0,
+          "n": 5,
+          "p90": 15.0
+        },
+        "extensions:pi-memory/index.ts factory": {
+          "max": 1.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 1.0
+        },
+        "extensions:pi-memory/index.ts module import": {
+          "max": 3.0,
+          "median": 3.0,
+          "min": 1.0,
+          "n": 5,
+          "p90": 3.0
+        },
+        "extensions:pi-web-access/dist/index.js factory": {
+          "max": 2.0,
+          "median": 1.0,
+          "min": 1.0,
+          "n": 5,
+          "p90": 2.0
+        },
+        "extensions:pi-web-access/dist/index.js module import": {
+          "max": 29.0,
+          "median": 24.0,
+          "min": 18.0,
+          "n": 5,
+          "p90": 29.0
+        },
+        "main:TOTAL": {
+          "max": 857.0,
+          "median": 744.0,
+          "min": 484.0,
+          "n": 5,
+          "p90": 857.0
+        },
+        "main:createAgentSession": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 0.0
+        },
+        "main:createAgentSessionRuntime": {
+          "max": 839.0,
+          "median": 730.0,
+          "min": 472.0,
+          "n": 5,
+          "p90": 839.0
+        },
+        "main:createRuntime": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 0.0
+        },
+        "main:createSessionManager": {
+          "max": 3.0,
+          "median": 2.0,
+          "min": 2.0,
+          "n": 5,
+          "p90": 3.0
+        },
+        "main:initTheme": {
+          "max": 10.0,
+          "median": 8.0,
+          "min": 7.0,
+          "n": 5,
+          "p90": 10.0
+        },
+        "main:parseArgs": {
+          "max": 5.0,
+          "median": 2.0,
+          "min": 2.0,
+          "n": 5,
+          "p90": 5.0
+        },
+        "main:prepareInitialMessage": {
+          "max": 1.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 1.0
+        },
+        "main:readPipedStdin": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 0.0
+        },
+        "main:resolveModelScope": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 0.0
+        },
+        "main:runMigrations": {
+          "max": 1.0,
+          "median": 1.0,
+          "min": 0.0,
+          "n": 5,
+          "p90": 1.0
+        }
+      }
+    }
+  }
+}

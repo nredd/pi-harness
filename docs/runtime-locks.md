@@ -34,13 +34,23 @@ source locks with the selection change; do not regenerate during promotion or re
 The initial committed lock was generated with npm 11.20.0. These are runtime locks, not the
 root development workspace `package-lock.json`.
 
-The agent graph overrides `pi-coding-agent` and `pi-tui` to the selected fork release
-assets and `pi-ai` to the core tag's upstream version. This prevents automatic peer
-resolution from following newer upstream releases. Pi's Node extension loader aliases
+Both graphs take all four fork packages (`pi-coding-agent`, `pi-tui`, `pi-agent-core`, `pi-ai`)
+from the selected core release assets, the same four the root `package.json` overrides. The core
+graph depends on `pi-coding-agent` and overrides the other three; the agent graph overrides all
+four, which also stops automatic peer resolution from following newer upstream releases. The fork
+`pi-ai`/`pi-agent-core` carry fixes upstream 1.3.0 lacks (e.g. nredd/pi#16), so installing upstream
+copies under the fork CLI is wrong. Pi's Node extension loader aliases
 ordinary Jiti imports to the running core (`forks/pi/packages/coding-agent/src/core/extensions/loader.ts`),
 but native imports or subprocesses need not use that loader. The agent graph therefore
-keeps the fork peer rather than assuming every import is aliased. The two fork assets
-still require the separately authenticated core SHA-256 during acquisition.
+keeps the fork peer rather than assuming every import is aliased.
+
+The stack records SHA-256 for the formula-consumed assets only (`pi-coding-agent`, `pi-tui`). The
+other two come from the release `SHA256SUMS` (`runtime_lock.core_checksums`; recorded digests win),
+and the installer and promotion (`promotion.verify_core_assets`) additionally download and
+`gh attestation verify` them, so all four are authenticated identically. Acquisition requires the
+release SHA-256 for every GitHub-hosted tarball. `test_every_fork_core_package_resolves_to_the_selected_release`
+requires every `@earendil-works/pi-{coding-agent,tui,agent-core,ai}` in both graphs on both targets to
+resolve to the selected release.
 
 ## Producer and consumer
 

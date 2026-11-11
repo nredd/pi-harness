@@ -2092,7 +2092,11 @@ def test_nonlegacy_core_truncation_is_exit_three(
     )
     core = snapshot.stack.core.model_copy(update={"tag": NEW_TAG})
     snapshot = snapshot.model_copy(update={"stack": snapshot.stack.model_copy(update={"core": core})})
-    sums = "".join(f"{digest}  {name}\n" for name, digest in core.integrity.items()).encode()
+    # The release publishes all four core tarballs; the stack records digests for only two of them.
+    agent_core = "earendil-works-pi-agent-core-1.3.0.tgz"
+    unrecorded = {agent_core: "a" * 64, "earendil-works-pi-ai-1.3.0.tgz": "b" * 64}
+    published = {**core.integrity, **unrecorded}
+    sums = "".join(f"{digest}  {name}\n" for name, digest in published.items()).encode()
 
     def reply(path: str) -> tuple[dict[str, str], bytes]:
         """Serve valid checksums, then a genuinely truncated chunked asset.
@@ -2125,7 +2129,8 @@ def test_nonlegacy_core_truncation_is_exit_three(
         assert len(requests) == 2
         assert requests[0].endswith("SHA256SUMS")
         assert requests[1].endswith(".tgz")
-    url = f"{base}/{NEW_TAG}/earendil-works-pi-coding-agent-1.3.0.tgz"
+    # Assets are verified in name order, so the first (and truncated) download is pi-agent-core.
+    url = f"{base}/{NEW_TAG}/{agent_core}"
     assert caplog.messages == [
         f"VERIFICATION FAILED, nothing changed: Core release '{NEW_TAG}' rejected: "
         f"Could not fetch '{url}': Incomplete response: received 0 bytes"

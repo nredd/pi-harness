@@ -642,6 +642,7 @@ COMPUTER_USE_CONTRACT = PackageContract(
         "src/platform/windows/backend.ts",
         "src/platform/windows/helper.ts",
         "src/root-selection.ts",
+        "src/outline-store.ts",
         "src/runtime.ts",
         "src/state.ts",
         "src/view.ts",
@@ -660,8 +661,13 @@ COMPUTER_USE_CONTRACT = PackageContract(
 SUBAGENTS_CONTRACT = PackageContract(
     name="@nredd/pi-subagents",
     directory="subagents",
-    required=("LICENSE", "README.md", "package.json", "src/index.ts"),
-    allowed=(re.compile(r"^(LICENSE|README\.md|package\.json)$"), re.compile(r"^src/.+\.ts$")),
+    required=("LICENSE", "README.md", "package.json", "src/index.ts", "dist/index.ts"),
+    allowed=(
+        re.compile(r"^(LICENSE|README\.md|package\.json)$"),
+        re.compile(r"^src/.+\.ts$"),
+        # `pi.extensions` targets the esbuild bundle: Jiti transforms ~80 `src/` modules per launch (#577).
+        re.compile(r"^dist/.+\.(ts|map)$"),
+    ),
     exposes_tools=frozenset({"Agent", "get_subagent_result", "steer_subagent", "SubagentWorkflow"}),
     runtime_dependencies=(("croner", "^10.0.1"), ("nanoid", "^5.1.16")),
     own_license=True,  # Imported with upstream's `Copyright (c) tintinweb` notice, which MIT requires.

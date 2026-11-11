@@ -156,14 +156,38 @@ def test_source_runtime_locks_match_the_selected_stack() -> None:
     assert set(runtime.platforms) == {"darwin-arm64", "linux-x64"}
     for graphs in runtime.platforms.values():
         assert all(graph.manifest == root_manifest(stack, kind) for kind, graph in graphs.items())
-        packages = graphs["agent"].lock["packages"]
-        urls = runtime_lock.release_package_urls(stack.core.tag)
-        for name in ("pi-coding-agent", "pi-tui"):
-            assert packages[f"node_modules/@earendil-works/{name}"]["resolved"] == urls[name]
-        assert (
-            packages["node_modules/@earendil-works/pi-ai"]["version"]
-            == (stack.core.tag.removeprefix("v").split("-", 1)[0])
-        )
+
+
+def test_every_fork_core_package_resolves_to_the_selected_release() -> None:
+    """Both graphs on both targets install all four `pi-*` core packages from the selected release assets."""
+    stack = Stack.model_validate_json((ROOT / "integration/stacks/personal.json").read_bytes())
+    runtime = RuntimeLocks.model_validate_json((ROOT / runtime_lock.SOURCE_LOCK).read_bytes())
+    urls = {
+        f"@earendil-works/{name}": url
+        for name, url in runtime_lock.release_package_urls(stack.core.tag).items()
+    }
+    assert len(urls) == 4
+    for graphs in runtime.platforms.values():
+        for graph in graphs.values():
+            packages = graph.lock["packages"]
+            fork = {
+                key.removeprefix("node_modules/"): entry
+                for key, entry in packages.items()
+                if key.startswith("node_modules/@earendil-works/pi-") and key.count("node_modules/") == 1
+            }
+            for name, url in urls.items():
+                assert fork[name]["resolved"] == url
+            # No nested second copy of any pi-* package can shadow the selected release.
+            assert not [
+                key
+                for key in packages
+                if key.rsplit("node_modules/", 1)[-1].startswith("@earendil-works/pi-")
+                and key.count("node_modules/") > 1
+            ]
+            overridden = {
+                n: graph.manifest["overrides"].get(n) for n in urls if n not in graph.manifest["dependencies"]
+            }
+            assert overridden == {n: u for n, u in urls.items() if n not in graph.manifest["dependencies"]}
 
 
 @pytest.mark.parametrize("target", [TOP, LEAF])
@@ -824,7 +848,23 @@ def replay_seams(
 
     monkeypatch.setattr(runtime_lock, "acquire", acquire_fixture)
     monkeypatch.setattr(runtime_lock, "install_graph", install_fixture)
+    monkeypatch.setattr(runtime_lock, "release_checksums", published_checksums)
     return acquired, installed
+
+
+def published_checksums(tag: str) -> dict[str, str]:
+    """Fixture `SHA256SUMS` covering every runtime asset with a distinct digest.
+
+    Parameters:
+        tag (str): core release tag.
+
+    Returns:
+        dict[str, str]: release URL -> fake SHA-256 for all four packages.
+    """
+    return {
+        url: hashlib.sha256(url.encode()).hexdigest()
+        for url in runtime_lock.release_package_urls(tag).values()
+    }
 
 
 def test_replay_source_audits_both_roots_then_smokes_core(
@@ -837,12 +877,41 @@ def test_replay_source_audits_both_roots_then_smokes_core(
     runtime_lock.replay_source(RuntimeLocks.model_validate(source_locks()), stack, tmp_path, "/fixture/npm")
     urls = runtime_lock.release_package_urls(stack.core.tag)
     digests = {
-        urls[name]: stack.core.integrity[urls[name].rsplit("/", 1)[-1]]
-        for name in ("pi-coding-agent", "pi-tui")
+        url: stack.core.integrity.get(url.rsplit("/", 1)[-1], published_checksums(stack.core.tag)[url])
+        for url in urls.values()
     }
+    assert set(digests) == set(urls.values())
     assert acquired == [("core", digests), ("agent", digests)]
     assert installed == ["core:/fixture/npm", "agent:/fixture/npm"]
     assert "byte audits passed: fixture 0 1" in caplog.text
+
+
+def test_core_checksums_prefer_recorded_digests_and_require_every_asset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Recorded stack digests win; an asset the release does not publish is refused.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): module seams.
+
+    Returns:
+        None: digest precedence and the refusal were observed.
+    """
+    stack = selected_stack()
+    monkeypatch.setattr(runtime_lock, "release_checksums", published_checksums)
+    checksums = runtime_lock.core_checksums(stack)
+    urls = runtime_lock.release_package_urls(stack.core.tag)
+    assert checksums[urls["pi-tui"]] == stack.core.integrity["earendil-works-pi-tui-1.3.0.tgz"]
+    assert checksums[urls["pi-ai"]] == published_checksums(stack.core.tag)[urls["pi-ai"]]
+    monkeypatch.setattr(
+        runtime_lock,
+        "release_checksums",
+        lambda tag: {u: d for u, d in published_checksums(tag).items() if "pi-ai-" not in u},
+    )
+    with pytest.raises(
+        RuntimeLockError, match=r"publishes no checksum for 'earendil-works-pi-ai-1\.3\.0\.tgz'"
+    ):
+        runtime_lock.core_checksums(stack)
 
 
 @pytest.mark.parametrize(("script", "message"), [(None, "No such file"), ("exit 3", "exit status 3")])

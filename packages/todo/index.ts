@@ -32,13 +32,14 @@ import {
 } from "./state/agents.ts";
 import { I18N_NAMESPACE } from "./state/i18n-bridge.ts";
 import { forkAncestry } from "./state/lineage.ts";
-import { applyMonitorEvent, forgetMonitors } from "./state/monitors.ts";
+import { applyMonitorEvent, forgetMonitors, keepLinks } from "./state/monitors.ts";
 import { replayFromBranch } from "./state/replay.ts";
 import {
 	clearActiveRenderSession,
 	evictSession,
 	getActiveRenderSession,
 	getRenderState,
+	getState,
 	replaceState,
 	setActiveRenderSession,
 	sid,
@@ -253,7 +254,13 @@ export default function (
 		let isForeground = false;
 		try {
 			const id = sid(ctx);
-			replaceState(id, replayFromBranch(ctx));
+			const before = getState(id);
+			const after = replayFromBranch(ctx);
+			replaceState(id, after);
+			// Ids can be reused on another branch and cannot be told apart from the same todo, so any
+			// change of state drops every link; a replay that changes nothing (compaction) keeps them.
+			const unchanged = JSON.stringify(before.tasks) === JSON.stringify(after.tasks);
+			keepLinks(id, () => unchanged);
 			isForeground = id === getActiveRenderSession();
 		} catch (e) {
 			if (!isStaleCtxError(e)) throw e;
