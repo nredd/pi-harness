@@ -659,10 +659,12 @@ def test_guest_setup_leaves_no_external_command_unbounded() -> None:
     setup = SETUP.read_text(encoding="utf-8")
     assert not re.search(r"\|\s*(ba)?sh\b", setup)
     body = setup.split("source_checkout=$WSL_HOST_WORKSPACE", 1)[1]
-    for line in body.splitlines():
-        stripped = line.strip()
-        if re.match(r"(curl|tar|npm|cp|bun|uv) ", stripped) or re.match(r"(ba)?sh ", stripped):
-            pytest.fail(f"unbounded command: {stripped}")
+    unbounded = [
+        stripped
+        for stripped in (line.strip() for line in body.splitlines())
+        if re.match(r"(curl|tar|npm|cp|bun|uv) ", stripped) or re.match(r"(ba)?sh ", stripped)
+    ]
+    assert not unbounded, unbounded
     for label in ("copy checkout", "extract node", "install npm", "install bun", "install uv", "install gh"):
         assert f'bounded "{label}" ' in setup
     assert 'bounded "install owned tools" 90 ' in setup

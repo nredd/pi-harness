@@ -76,7 +76,7 @@ class Replay(checks.GitHub):
             Any: Captured JSON evidence for the requested endpoint.
 
         Raises:
-            pytest.fail.Exception: The request has no captured response.
+            StopIteration: The request has no captured response.
         """
         self.commands.append(args)
         if args[:2] == ("pr", "checks"):
@@ -90,13 +90,15 @@ class Replay(checks.GitHub):
         }
         if endpoint in objects:
             return objects[endpoint]
-        if "/actions/jobs/" in endpoint:
-            return next(j for j in self.data["old_jobs"] if str(j["id"]) == endpoint.rsplit("/", 1)[1])
-        if "/actions/runs/" in endpoint:
-            return self.old_run
-        if "/check-suites/" in endpoint:
-            return self.data["suites"][endpoint.rsplit("/", 1)[1]]
-        pytest.fail(f"Unexpected request: {args}")
+        routes = {
+            "/actions/jobs/": lambda: next(
+                j for j in self.data["old_jobs"] if str(j["id"]) == endpoint.rsplit("/", 1)[1]
+            ),
+            "/actions/runs/": lambda: self.old_run,
+            "/check-suites/": lambda: self.data["suites"][endpoint.rsplit("/", 1)[1]],
+        }
+        # `next` without a default raises `StopIteration` for an uncaptured request: no silent replay.
+        return next(resolve for marker, resolve in routes.items() if marker in endpoint)()
 
     def page_response(self, endpoint: str) -> Any:
         """Return split captures to exercise real production pagination flattening.
@@ -108,16 +110,25 @@ class Replay(checks.GitHub):
             Any: Captured records split into synthetic REST response pages.
 
         Raises:
-            pytest.fail.Exception: The collection endpoint is unsupported.
+            StopIteration: The collection endpoint is unsupported.
         """
-        if "/check-runs?" in endpoint:
-            return [{"check_runs": self.data["check_runs"][:5]}, {"check_runs": self.data["check_runs"][5:]}]
-        if "/actions/runs?" in endpoint:
+        pages = {
+            "/check-runs?": lambda: [
+                {"check_runs": self.data["check_runs"][:5]},
+                {"check_runs": self.data["check_runs"][5:]},
+            ],
             # Newest first is NOT an admission assumption; deliberately put it on page two.
-            return [{"workflow_runs": self.data["runs"][1:]}, {"workflow_runs": self.data["runs"][:1]}]
-        if endpoint.endswith("/jobs?per_page=100"):
-            return [{"jobs": self.data["new_jobs"][:3]}, {"jobs": self.data["new_jobs"][3:]}]
-        pytest.fail(f"Unexpected page request: {endpoint}")
+            "/actions/runs?": lambda: [
+                {"workflow_runs": self.data["runs"][1:]},
+                {"workflow_runs": self.data["runs"][:1]},
+            ],
+            "/jobs?per_page=100": lambda: [
+                {"jobs": self.data["new_jobs"][:3]},
+                {"jobs": self.data["new_jobs"][3:]},
+            ],
+        }
+        # Unsupported collections raise `StopIteration` instead of falling through.
+        return next(page for marker, page in pages.items() if marker in endpoint)()
 
     def gate(self) -> None:
         """Exercise the production gate, not a separate fixture classifier.

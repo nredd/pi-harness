@@ -145,24 +145,14 @@ def test_reviewed_missing_source_is_explicitly_accounted(file: str) -> None:
         and Path(file).relative_to(package.root).as_posix() in inventory(ROOT, package)
     ]
     assert owners, file
-    if file.endswith(".py"):
-        # Python has a pytest-cov LCOV producer: measured and enforced at 0/0 like every owned package.
-        assert all(
-            package.status == "measured"
-            and package.goal == "100-percent"
-            and package.signals["primary"].enforcement == "enforced"
-            for package in owners
-        )
-    elif file.startswith("integration/probes/"):
-        # Since #377 every probe runs in process under `check-probes`: measured and enforced at 0/0.
-        assert all(
-            package.status == "measured"
-            and package.goal == "100-percent"
-            and package.signals["primary"].enforcement == "enforced"
-            for package in owners
-        )
-    else:
-        assert all(package.status == "pending" and package.note.strip() for package in owners)
+    # Python has a pytest-cov LCOV producer and, since #377, every probe runs in process under
+    # `check-probes`: each is measured and enforced at 0/0 like every owned package.
+    assert all(
+        package.status == "measured"
+        and package.goal == "100-percent"
+        and package.signals["primary"].enforcement == "enforced"
+        for package in owners
+    )
 
 
 def test_providers_are_measured_in_the_goal_at_zero() -> None:
@@ -305,11 +295,13 @@ def test_unshipped_computer_checks_have_individual_verification_reasons() -> Non
     directory = ROOT / "packages/computer-use"
     manifest = json.loads((directory / "package.json").read_text())
     helpers = {helper.path: helper.reason for helper in cfg.verification_helpers}
-    for path in directory.glob("scripts/check-*.mjs"):
-        if published_path(path.relative_to(directory), manifest["files"]):
-            continue
-        relative = path.relative_to(ROOT).as_posix()
-        assert helpers.get(relative, "").strip(), relative
+    unclassified = [
+        relative
+        for path in directory.glob("scripts/check-*.mjs")
+        if not published_path(path.relative_to(directory), manifest["files"])
+        and not helpers.get(relative := path.relative_to(ROOT).as_posix(), "").strip()
+    ]
+    assert not unclassified, unclassified
 
 
 @pytest.mark.parametrize(

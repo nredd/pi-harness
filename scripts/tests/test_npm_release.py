@@ -16,6 +16,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -964,20 +965,11 @@ def test_artifact_destination_checked_before_install(
     """
     output = repo / "artifacts" if case == "inside" else tmp_path
 
-    def forbid(*_args: object) -> str:
-        """No child process should run for an invalid destination.
-
-        Parameters:
-            *_args (object): Unexpected command arguments.
-
-        Returns:
-            str: Never returned; an invocation fails the test.
-        """
-        pytest.fail("Install ran before destination validation")
-
+    forbid = Mock(side_effect=AssertionError("Install ran before destination validation"))
     monkeypatch.setattr(nr, "command", forbid)
     with pytest.raises(nr.ReleaseError, match="new and outside"):
         nr.verify(repo, nr.resolve_target(repo, TAG), output)
+    forbid.assert_not_called()
 
 
 @pytest.mark.parametrize("suffix", ["", "/"], ids=["exact", "trailing-slash"])
@@ -1507,12 +1499,10 @@ def test_emit_outputs_outside_actions(monkeypatch: pytest.MonkeyPatch) -> None:
     """Skip output when the GitHub Actions output path is not set."""
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
 
-    def reject_open(*_args: object, **_kwargs: object) -> None:
-        """Reject any attempt to write without an Actions output file."""
-        pytest.fail("Unexpected output file access")
-
+    reject_open = Mock(side_effect=AssertionError("Unexpected output file access"))
     monkeypatch.setattr(Path, "open", reject_open)
     nr.emit_outputs(tarball="example.tgz")
+    reject_open.assert_not_called()
 
 
 def test_verify_refuses_a_packed_version_that_differs_from_the_tag(

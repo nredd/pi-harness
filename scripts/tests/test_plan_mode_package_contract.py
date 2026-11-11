@@ -556,10 +556,9 @@ def test_install_rejects_manifestless_strays(
     artifact = pc.PackedArtifact(
         pc.PLAN_MODE_CONTRACT, tmp_path / "package.tgz", "0.59.3-nredd.2", "sha512-x", "0" * 40, 1, ()
     )
-    real_run = pc.run
 
     def fake_run(cmd: list[Any], *, cwd: Path, **kwargs: Any) -> Any:
-        """Fake `npm install` plus a stray entry; `node` passes through.
+        """Fake `npm install` plus a stray entry.
 
         Parameters:
             cmd (list[Any]): Command.
@@ -567,10 +566,8 @@ def test_install_rejects_manifestless_strays(
             **kwargs (Any): Remaining `run` arguments.
 
         Returns:
-            Any: Real `node` result, else `None`.
+            None: Always.
         """
-        if Path(cmd[0]).name == "node":
-            return real_run(cmd, cwd=cwd, **kwargs)
         lay_out_install(cwd, packages, lock=lock_for(packages))
         target = cwd / stray
         if target.suffix:
@@ -652,10 +649,9 @@ def test_install_rejects_a_misnamed_directory(tmp_path: Path, monkeypatch: pytes
     """
     packages = good_install()
     packages["node_modules/a"] = {"name": "not-a", "dependencies": {"c": "1"}}
-    real_run = pc.run
 
     def fake_run(cmd: list[Any], *, cwd: Path, **kwargs: Any) -> Any:
-        """Fake `npm install` with a manifest name override; `node` passes through.
+        """Fake `npm install` with a manifest name override.
 
         Parameters:
             cmd (list[Any]): Command.
@@ -663,10 +659,8 @@ def test_install_rejects_a_misnamed_directory(tmp_path: Path, monkeypatch: pytes
             **kwargs (Any): Remaining `run` arguments.
 
         Returns:
-            Any: Real `node` result, else `None`.
+            None: Always.
         """
-        if Path(cmd[0]).name == "node":
-            return real_run(cmd, cwd=cwd, **kwargs)
         lay_out_install(cwd, packages, lock=lock_for(packages))
         return None
 
