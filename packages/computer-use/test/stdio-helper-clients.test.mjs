@@ -194,6 +194,27 @@ describe("Windows helper client", () => {
 		await assert.rejects(client.ensureInstalled(), /spawn ENOENT/);
 	});
 
+	test("an already aborted command signal rejects at once: no setup, spawn or request (#735)", async () => {
+		const engine = envelope("Windows", { look: ok(1) });
+		const { client, spawn } = await windows({ setup: () => (install(), { exitCode: 0 }), helper: { engine } });
+		assert.equal(await client.command("look"), 1, "a warm client: installed, validated and running");
+		const spawned = spawn.calls.length;
+		await assert.rejects(client.command("look", {}, { signal: AbortSignal.abort() }), /Operation aborted\./);
+		assert.equal(spawn.calls.length, spawned);
+		assert.equal(engine.requests.length, 1, "only the first command reached the helper");
+	});
+
+	test("a signal aborted while the install check is in flight sends nothing (#735)", async () => {
+		const engine = envelope("Windows", { look: ok(1) });
+		const { client } = await windows({ setup: () => (install(), { exitCode: 0 }), helper: { engine } });
+		assert.equal(await client.command("look"), 1);
+		const controller = new AbortController();
+		const aborted = client.command("look", {}, { signal: controller.signal });
+		controller.abort();
+		await assert.rejects(aborted, /Operation aborted\./);
+		assert.equal(engine.requests.length, 1, "only the first command reached the helper");
+	});
+
 	test("setup honours an already aborted signal without spawning", async () => {
 		const { client, spawn } = await windows({ helper: {} });
 		await assert.rejects(client.ensureInstalled(AbortSignal.abort()), /Operation aborted\./);
@@ -655,6 +676,37 @@ describe("Linux helper client", () => {
 		await vi.waitFor(() => assert.equal(engine.requests.at(-1).cmd, "hang"), { interval: 1 });
 		await vi.advanceTimersByTimeAsync(15_000);
 		await outcome;
+	});
+
+	test("an already aborted command signal rejects at once: no setup, spawn or request (#735)", async () => {
+		install();
+		const engine = linuxEngine({ look: ok(1) });
+		const { client, spawn } = await linux({ helper: { engine } });
+		assert.equal(await client.command("look"), 1, "a warm client: installed, validated and running");
+		const spawned = spawn.calls.length;
+		await assert.rejects(client.command("look", {}, { signal: AbortSignal.abort() }), /Operation aborted\./);
+		assert.equal(spawn.calls.length, spawned);
+		assert.equal(engine.requests.filter((request) => request.cmd === "look").length, 1, "only the first command reached the helper");
+	});
+
+	test("an already aborted signal on a cold client probes, sets up and spawns nothing (#735)", async () => {
+		install();
+		const { client, spawn } = await linux({ helper: { engine: linuxEngine({ look: ok(1) }) } });
+		await assert.rejects(client.command("look", {}, { signal: AbortSignal.abort() }), /Operation aborted\./);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		assert.equal(spawn.calls.length, 0);
+	});
+
+	test("a signal aborted while the install check is in flight sends nothing (#735)", async () => {
+		install();
+		const engine = linuxEngine({ look: ok(1) });
+		const { client } = await linux({ helper: { engine } });
+		assert.equal(await client.command("look"), 1);
+		const controller = new AbortController();
+		const aborted = client.command("look", {}, { signal: controller.signal });
+		controller.abort();
+		await assert.rejects(aborted, /Operation aborted\./);
+		assert.equal(engine.requests.filter((request) => request.cmd === "look").length, 1, "only the first command reached the helper");
 	});
 
 	test("aborting a command rejects it", async () => {

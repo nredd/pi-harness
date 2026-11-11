@@ -27,6 +27,10 @@ interface Pending<T> {
 	child: ChildProcessWithoutNullStreams;
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+	if (signal?.aborted) throw new Error("Operation aborted.");
+}
+
 async function isExecutable(filePath: string): Promise<boolean> {
 	try { await access(filePath, fsConstants.X_OK); return true; } catch { return false; }
 }
@@ -310,8 +314,13 @@ export class LinuxHelperClient {
 	}
 
 	async command<T>(cmd: string, args: Record<string, unknown> = {}, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<T> {
-		const child = await this.process(options?.signal);
-		return await this.send<T>(child, cmd, args, options?.timeoutMs, options?.signal);
+		const signal = options?.signal;
+		// A signal that is already aborted never fires again: refuse before installing, spawning or sending.
+		throwIfAborted(signal);
+		const child = await this.process(signal);
+		// ...and so does one aborted while the install check or helper start was in flight.
+		throwIfAborted(signal);
+		return await this.send<T>(child, cmd, args, options?.timeoutMs, signal);
 	}
 
 	private async send<T>(child: ChildProcessWithoutNullStreams, cmd: string, args: Record<string, unknown>, timeoutMs = COMMAND_TIMEOUT_MS, signal?: AbortSignal): Promise<T> {
