@@ -250,10 +250,29 @@ test("act_ui, observe_ui and find_roots enforce blocked_apps at the platform bac
 	const buttonRef = text(observed).match(/(@e\d+) button/)[1];
 	assert.ok(textRef, `text field ref missing from:\n${text(observed)}`);
 	await assert.rejects(() => call(executeAct, press), blocked("app_blocked"));
-	// The new actions go through the same target resolution, so they cannot reach a blocked app either.
-	for (const action of [{ action: "secondaryAction", ref: buttonRef, name: "AXShowMenu" }, { action: "selectText", ref: textRef, start: 0, length: 1 }, { action: "paste", ref: textRef, text: "x" }]) {
-		await assert.rejects(() => call(executeAct, { stateId, actions: [action] }), blocked("app_blocked"), `${action.action} must refuse a blocked target`);
-	}
+	// The new actions go through the same target resolution, so they cannot reach a blocked app either. Pinned to a
+	// darwin backend so the assertion holds on every host; elsewhere the platform gate refuses them first.
+	const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+	const withPlatform = async (platform, fn) => {
+		Object.defineProperty(process, "platform", { ...originalPlatform, value: platform });
+		try {
+			await fn();
+		} finally {
+			Object.defineProperty(process, "platform", originalPlatform);
+		}
+	};
+	const newActions = [{ action: "secondaryAction", ref: buttonRef, name: "AXShowMenu" }, { action: "selectText", ref: textRef, start: 0, length: 1 }, { action: "paste", ref: textRef, text: "x" }];
+	await withPlatform("darwin", async () => {
+		for (const action of newActions) {
+			await assert.rejects(() => call(executeAct, { stateId, actions: [action] }), blocked("app_blocked"), `${action.action} must refuse a blocked target`);
+		}
+	});
+	// A non-darwin backend has no implementation: coded unsupported_command, nothing delivered.
+	await withPlatform("linux", async () => {
+		for (const action of newActions) {
+			await assert.rejects(() => call(executeAct, { stateId, actions: [action] }), (error) => error.code === "unsupported_command" && new RegExp(`${action.action} is not supported on linux`).test(error.message), `${action.action} must be unsupported_command on linux`);
+		}
+	});
 	assert.equal(calls.act, 0, "blocked act_ui must not deliver input");
 	const readCalls = [];
 	currentPlatformBackend.readText = async (request) => {
