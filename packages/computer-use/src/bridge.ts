@@ -2023,6 +2023,8 @@ async function performBrowserTransaction(params: ActParams, actions: UiAction[],
 	if (condition) conditionScopeNode(restoreOutline(baseSnapshot.outline), condition);
 	const prepared = actions.map((action) => {
 		assertBrowserTransactionAction(action);
+		// Same rule and message as the desktop `keys()` preparation; an empty chord would "work" without sending anything.
+		if (action.action === "keypress" && (!Array.isArray(action.keys) || action.keys.length === 0)) throw new Error("keypress.keys must contain at least one key.");
 		if (action.action === "click" && action.ref && action.button && action.button !== "left") throw new Error("Browser ref clicks support only the left button; use coordinate clicks for right or middle buttons.");
 		const ref = trimOrUndefined(action.ref);
 		const target = ref ? baseSnapshot.targets.find((candidate) => candidate.ref === ref) : undefined;
@@ -2045,7 +2047,7 @@ async function performBrowserTransaction(params: ActParams, actions: UiAction[],
 			else if (action.action === "typeText") worked = target?.backendNodeId
 				? await cdpTypeForContext(contextId, target.backendNodeId, action.text ?? "", false)
 				: await cdpTypeFocusedForContext(contextId, action.text ?? "");
-			else if (action.action === "keypress") worked = await cdpKeypressForContext(contextId, action.keys ?? []);
+			else if (action.action === "keypress") worked = await cdpKeypressForContext(contextId, action.keys!);
 			else if (action.action === "scroll") worked = await cdpScrollForContext(contextId, toFiniteNumber(action.scrollX, 0), toFiniteNumber(action.scrollY, 0), target?.backendNodeId);
 			else if (action.action === "drag") worked = await cdpDragForContext(contextId, normalizeActionPath(action.path));
 			else worked = await cdpMouseForContext(contextId, action.x!, action.y!, "mouseMoved"); // `moveMouse`, the only action left

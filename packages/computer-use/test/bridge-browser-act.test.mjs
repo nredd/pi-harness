@@ -136,12 +136,22 @@ test("act_ui coordinate input reaches the page through CDP input events", async 
 	assert.deepEqual(mouse.slice(5).map(({ type, x, y }) => [type, x, y]), [["mousePressed", 1, 2], ["mouseMoved", 3, 4], ["mouseMoved", 5, 0], ["mouseMoved", 7, 0], ["mouseReleased", 7, 0]]);
 });
 
-test("browser text and key actions default their missing text and keys", async ({ onTestFinished }) => {
+test("browser text actions default their missing text", async ({ onTestFinished }) => {
 	const { act, stateId, refs, paramsOf } = await observePage(onTestFinished);
-	await act({ stateId, actions: [{ action: "setText", ref: refs.Email }, { action: "typeText", ref: refs.Email }, { action: "typeText" }, { action: "keypress" }] });
+	await act({ stateId, actions: [{ action: "setText", ref: refs.Email }, { action: "typeText", ref: refs.Email }, { action: "typeText" }] });
 	assert.deepEqual(paramsOf("Runtime.callFunctionOn").map((call) => call.arguments), [[{ value: "" }, { value: true }], [{ value: "" }, { value: false }]]);
 	assert.deepEqual(paramsOf("Input.insertText"), [{ text: "" }]);
-	assert.deepEqual(paramsOf("Input.dispatchKeyEvent"), []);
+});
+
+test("an empty browser keypress is rejected before the write epoch advances", async ({ onTestFinished }) => {
+	const { act, stateId, refs, methods } = await observePage(onTestFinished);
+	const baseline = methods().length;
+	for (const action of [{ action: "keypress" }, { action: "keypress", keys: [] }, { action: "keypress", keys: "a" }]) {
+		await assert.rejects(() => act({ stateId, actions: [{ action: "press", ref: refs.Save }, action] }), /^Error: keypress\.keys must contain at least one key\.$/);
+	}
+	assert.equal(methods().length, baseline, "the valid first step was not delivered either");
+	const ok = await act({ stateId, actions: [{ action: "press", ref: refs.Save }] });
+	assert.equal(ok.details.baseStateId, stateId, "the base state is still current");
 });
 
 test("a padded stateId resolves the same state and its refs", async ({ onTestFinished }) => {
