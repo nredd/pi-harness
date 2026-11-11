@@ -101,11 +101,7 @@ export class CdpTab {
 			await tab.send("Page.enable");
 			return tab;
 		} catch (error) {
-			try {
-				ws.close();
-			} catch {
-				// already closed
-			}
+			ws.close();
 			throw error;
 		}
 	}
@@ -118,11 +114,7 @@ export class CdpTab {
 		this.loadFired?.();
 		this.loadFired = undefined;
 		this.rejectAllPending(new Error("CDP connection closed."));
-		try {
-			this.ws.close();
-		} catch {
-			// already closed
-		}
+		this.ws.close();
 	}
 
 	/** Evaluates a JS expression in the page and returns its primitive value. */
@@ -238,7 +230,7 @@ export class CdpTab {
 			} catch (error) {
 				clearTimeout(timer);
 				this.pending.delete(id);
-				reject(error instanceof Error ? error : new Error(String(error)));
+				reject(error);
 			}
 		});
 	}
@@ -572,7 +564,8 @@ function cdpSnapshotOutline(snapshotId: string, nodes: unknown[]): { targets: Cd
 		timings: {},
 	}).parsedOutline!;
 	const modelRefByWire = parsed.wireRefToRef;
-	for (const target of targets) target.ref = modelRefByWire.get(target.ref) ?? target.ref;
+	// Every target's node was built into `rawOutline`, and `buildOutline` maps every node with a wire ref.
+	for (const target of targets) target.ref = modelRefByWire.get(target.ref)!;
 	return { targets, outline: serializeOutline(parsed) };
 }
 
