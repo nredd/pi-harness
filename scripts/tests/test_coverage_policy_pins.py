@@ -365,9 +365,9 @@ def test_ported_computer_suites_are_conventional_tests() -> None:
     cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
     helpers = {helper.path for helper in cfg.verification_helpers}
     suites = sorted((ROOT / "packages/computer-use/test").glob("*.test.mjs"))
-    # The 26 ported suites plus #551's SDK preparation and #637's headless browser regression suites
-    # #672's WSL2 diagnostics suite, #646's app policy suite and #648's outline store suite.
-    assert len(suites) == 31
+    # A floor, not an exact count: the 26 ported suites plus #551, #637, #672, #646 and #648 make 31.
+    # New suites (the #645 coverage work adds many) need no edit here; losing one still fails.
+    assert len(suites) >= 31
     assert (ROOT / "packages/computer-use/test/swift-sdk.test.mjs") in suites
     assert (ROOT / "packages/computer-use/test/managed-browser-headless.test.mjs") in suites
     for suite in suites:
