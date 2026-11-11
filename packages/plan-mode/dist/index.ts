@@ -1037,7 +1037,7 @@ function sameModel(model, reference) {
   return model?.provider === reference.provider && model.id === reference.modelId;
 }
 function createPlanModelSwitch(deps) {
-  const { pi, errorText, terminalModelReference } = deps;
+  const { pi, errorText, safeTerminalText, terminalModelReference } = deps;
   let epoch = 0;
   let transition = Promise.resolve();
   let switching = false;
@@ -1150,7 +1150,7 @@ function createPlanModelSwitch(deps) {
     if (!model) return { failure: "is no longer available" };
     try {
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-      return auth.ok ? { model } : { failure: `could not be authenticated: ${errorText(auth.error)}` };
+      return auth.ok ? { model } : { failure: `could not be authenticated: ${safeTerminalText(auth.error)}` };
     } catch (error) {
       return { failure: `could not be authenticated: ${errorText(error)}` };
     }
@@ -1351,6 +1351,7 @@ function planMode(pi, dependencies = {}) {
     captureManualThinkingLevel,
     restoreThinkingLevel,
     errorText,
+    safeTerminalText,
     terminalModelReference
   });
   const planExports = createPlanExportController({
@@ -2345,8 +2346,8 @@ function planMode(pi, dependencies = {}) {
     if (!sent) {
       state = { ...previousState, planModelSwitch: void 0 };
       readyPresentationIntent = previousIntent;
-      if (previousState.enabled) {
-        restoreWorkflowToolPolicy(previousState);
+      if (state.enabled) {
+        restoreWorkflowToolPolicy(state);
         publishModeContract("plan", ctx);
         applyPlanThinkingLevel();
         planModelSwitch.start(ctx, true);

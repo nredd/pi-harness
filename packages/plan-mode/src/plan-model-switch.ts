@@ -18,6 +18,7 @@ export interface PlanModelSwitchDependencies {
   captureManualThinkingLevel(): void;
   restoreThinkingLevel(): void;
   errorText(error: unknown): string;
+  safeTerminalText(value: string): string;
   terminalModelReference(model: ImplementationModelOverride): string;
 }
 
@@ -52,7 +53,7 @@ export function sameModel(model: { provider: string; id: string } | undefined, r
 }
 
 export function createPlanModelSwitch(deps: PlanModelSwitchDependencies): PlanModelSwitchController {
-  const { pi, errorText, terminalModelReference } = deps;
+  const { pi, errorText, safeTerminalText, terminalModelReference } = deps;
   /** Bumped by every Plan start, exit and session change so a queued model switch can tell it is stale. */
   let epoch = 0;
   /** Plan model switches run in order; `settled` exposes the tail. */
@@ -188,7 +189,7 @@ export function createPlanModelSwitch(deps: PlanModelSwitchDependencies): PlanMo
     if (!model) return { failure: "is no longer available" };
     try {
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-      return auth.ok ? { model } : { failure: `could not be authenticated: ${errorText(auth.error)}` };
+      return auth.ok ? { model } : { failure: `could not be authenticated: ${safeTerminalText(auth.error)}` };
     } catch (error: unknown) {
       return { failure: `could not be authenticated: ${errorText(error)}` };
     }

@@ -613,6 +613,26 @@ test("a failed Implement-here handoff re-applies the Plan model", async () => {
   assert.ok(host.latestState()?.planModelSwitch);
 });
 
+test("a failed Implement-here handoff drops the stale switch when the Plan model cannot be re-applied", async () => {
+  const host = createModelHost();
+  await host.sessionStart();
+  await host.plan("start");
+  await host.beforeAgentStart();
+  await host.completePlan();
+  host.mock.rawPi.sendUserMessage = () => {
+    throw new Error("handoff failed");
+  };
+  host.registry.getApiKeyAndHeaders = async (model) =>
+    model.provider === "router" ? { ok: false, error: "no key" } : { ok: true };
+  await host.plan("implement");
+  await host.beforeAgentStart();
+
+  assert.equal(host.latestState()?.enabled, true);
+  assert.deepEqual(host.current, PREVIOUS);
+  assert.equal(host.latestState()?.planModelSwitch, undefined);
+  assert.match(host.warnings().at(-1) ?? "", /could not be authenticated: no key; using the current model\./);
+});
+
 test("a failed Implement-here handoff keeps a fixed Plan thinking level", async () => {
   const host = createModelHost({ settings: { thinkingLevel: "xhigh" } });
   await host.sessionStart();

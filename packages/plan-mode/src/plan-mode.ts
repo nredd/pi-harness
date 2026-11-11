@@ -240,6 +240,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     captureManualThinkingLevel,
     restoreThinkingLevel,
     errorText,
+    safeTerminalText,
     terminalModelReference,
   });
   const planExports = createPlanExportController({
@@ -1426,8 +1427,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       // The queued model restore may already have run, so re-apply the Plan model afresh.
       state = { ...previousState, planModelSwitch: undefined };
       readyPresentationIntent = previousIntent;
-      if (previousState.enabled) {
-        restoreWorkflowToolPolicy(previousState);
+      if (state.enabled) {
+        restoreWorkflowToolPolicy(state);
         publishModeContract("plan", ctx);
         applyPlanThinkingLevel();
         // The queued restore resets thinking after this, so the switch re-applies Plan thinking first.
