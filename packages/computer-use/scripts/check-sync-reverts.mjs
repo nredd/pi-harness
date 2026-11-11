@@ -925,6 +925,14 @@ const cases = [
 		check: "test/desktop-tools.test.mjs",
 		failure: /native display capture dispatch must remain/,
 	},
+	{
+		name: "browser refs resolve from the hydrated state (#712)",
+		file: "src/bridge.ts",
+		before: "const target = ref ? baseSnapshot.targets.find((candidate) => candidate.ref === ref) : undefined;",
+		after: "const target = undefined;",
+		check: "test/bridge-browser-act.test.mjs",
+		failure: /requires an actionable @e ref/,
+	},
 ];
 
 try {
