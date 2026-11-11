@@ -162,6 +162,18 @@
 			}
 		},
 		{
+			"id": "browser-query-no-desktop-escalation",
+			"purpose": "search_ui and expand_ui on a browser state skip desktop OCR escalation and scoped looks (no controlled window to re-capture), and desktop wait_for with a blank stateId fails with the coded no-observation error instead of a TypeError",
+			"files": ["src/bridge.ts", "test/bridge-observe-query.test.mjs", "test/bridge-setup-look.test.mjs"],
+			"check": "test/bridge-observe-query.test.mjs",
+			"dropControls": ["search_ui skips OCR escalation on a browser state (#722)", "wait_for rejects a blank stateId with the coded error (#722)"],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "Bug fix found while covering bridge.ts (nredd/pi-harness#722); not filed"
+			}
+		},
+		{
 			"id": "platform-dead-arm-removal",
 			"purpose": "Delete platform arms with no caller instead of testing them: the unreachable win32 label in UnsupportedPlatformBackend and the redundant permissionSignal fallbacks in ensureMacosReady (ensurePermissions always forwards its own signal)",
 			"files": ["src/platform/index.ts", "src/platform/macos/permissions.ts", "test/permissions-browser.test.mjs", "test/platform-backends.test.mjs"],
@@ -578,6 +590,7 @@
 		"test/permissions-browser.test.mjs",
 		"test/platform-backends.test.mjs",
 		"test/bridge-setup-look.test.mjs",
+		"test/bridge-observe-query.test.mjs",
 		"test/app-policy.test.mjs",
 		"test/async.test.mjs",
 		"test/bounded-output.test.mjs",

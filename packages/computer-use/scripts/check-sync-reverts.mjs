@@ -595,6 +595,22 @@ const cases = [
 		failure: /Missing expected rejection/,
 	},
 	{
+		name: "search_ui skips OCR escalation on a browser state (#722)",
+		file: "src/bridge.ts",
+		before: "if (!isBrowserContextId(state.contextId) && shouldEscalateSearchOCR(",
+		after: "if (shouldEscalateSearchOCR(",
+		check: "test/bridge-observe-query.test.mjs",
+		failure: /No current controlled window/,
+	},
+	{
+		name: "wait_for rejects a blank stateId with the coded error (#722)",
+		file: "src/bridge.ts",
+		before: "stateId: currentCaptureOrThrow().stateId,",
+		after: "stateId: operationState().currentCapture!.stateId,",
+		check: "test/bridge-observe-query.test.mjs",
+		failure: /no raw TypeError|Cannot read properties/,
+	},
+	{
 		name: "openPermissionPane forwards the signal (#707)",
 		file: "src/platform/macos/permissions.ts",
 		before: '{ kind }, { signal: permissionSignal }',
