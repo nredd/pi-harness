@@ -683,18 +683,18 @@ function createSetup(argv, deps) {
 		const version = await packageVersion();
 		const infoPlistPath = path.join(helperAppPath, "Contents", "Info.plist");
 		const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>
-	<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-	<plist version="1.0"><dict>
-	<key>CFBundleIdentifier</key><string>${helperBundleId}</string>
-	<key>CFBundleName</key><string>pi-computer-use</string>
-	<key>CFBundleDisplayName</key><string>pi-computer-use</string>
-	<key>CFBundleExecutable</key><string>bridge</string>
-	<key>CFBundlePackageType</key><string>APPL</string>
-	<key>CFBundleShortVersionString</key><string>${version}</string>
-	<key>CFBundleVersion</key><string>${version}</string>
-	<key>LSMinimumSystemVersion</key><string>14.0</string>
-	<key>LSUIElement</key><true/>
-	</dict></plist>\n`;
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>${helperBundleId}</string>
+<key>CFBundleName</key><string>pi-computer-use</string>
+<key>CFBundleDisplayName</key><string>pi-computer-use</string>
+<key>CFBundleExecutable</key><string>bridge</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>${version}</string>
+<key>CFBundleVersion</key><string>${version}</string>
+<key>LSMinimumSystemVersion</key><string>14.0</string>
+<key>LSUIElement</key><true/>
+</dict></plist>\n`;
 
 		const sourceExecutable = await fs.readFile(sourcePath);
 		const sourceHash = createHash("sha256").update(sourceExecutable).digest("hex");

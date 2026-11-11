@@ -668,8 +668,22 @@ describe("macOS local helper install and signing", () => {
 		assert.deepEqual(rec.spawn.find(([command]) => command === "codesign"), ["codesign", "--force", "--deep", "-i", "com.injaneity.pi-computer-use", "--timestamp=none", "--sign", "-", host.dirs.app]);
 		assert.match(rec.warn[0], /signed helper ad-hoc; macOS may require permission review/);
 		const plist = await realFs.readFile(path.join(host.dirs.app, "Contents", "Info.plist"), "utf8");
-		assert.match(plist, /<key>CFBundleShortVersionString<\/key><string>1\.2\.3<\/string>/);
-		assert.match(plist, /<key>CFBundleIdentifier<\/key><string>com\.injaneity\.pi-computer-use<\/string>/);
+		// Byte-exact: an installed bundle is compared against this text to decide "already current".
+		assert.equal(plist, [
+			'<?xml version="1.0" encoding="UTF-8"?>',
+			'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+			'<plist version="1.0"><dict>',
+			"<key>CFBundleIdentifier</key><string>com.injaneity.pi-computer-use</string>",
+			"<key>CFBundleName</key><string>pi-computer-use</string>",
+			"<key>CFBundleDisplayName</key><string>pi-computer-use</string>",
+			"<key>CFBundleExecutable</key><string>bridge</string>",
+			"<key>CFBundlePackageType</key><string>APPL</string>",
+			"<key>CFBundleShortVersionString</key><string>1.2.3</string>",
+			"<key>CFBundleVersion</key><string>1.2.3</string>",
+			"<key>LSMinimumSystemVersion</key><string>14.0</string>",
+			"<key>LSUIElement</key><true/>",
+			"</dict></plist>\n",
+		].join("\n"));
 		assert.equal((await realFs.stat(path.join(host.dirs.app, "Contents", "MacOS", "bridge"))).mode & 0o777, 0o755);
 		const hash = createHash("sha256").update("bin v1").digest("hex");
 		assert.equal(await realFs.readFile(path.join(host.dirs.app, "Contents", "Resources", "source.sha256"), "utf8"), `${hash}\n`);
