@@ -67,3 +67,12 @@ test("load returns the newest entry when two copies of a state exist", async () 
 	}
 	assert.equal(loadStoredOutline("dup")?.lookId, "newer");
 });
+
+test("eviction drops the oldest states and keeps the newest", async () => {
+	const { saveStoredOutline, loadStoredOutline, serializeOutline } = await modules();
+	const outline = serializeOutline(outlineOf());
+	for (const id of ["a", "b", "c"]) saveStoredOutline(id, outline, 2);
+	assert.equal(loadStoredOutline("a"), undefined);
+	assert.ok(loadStoredOutline("b"));
+	assert.ok(loadStoredOutline("c"));
+});

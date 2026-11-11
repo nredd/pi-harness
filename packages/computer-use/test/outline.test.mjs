@@ -429,6 +429,8 @@ describe("foldToBudget", () => {
 	test("unnamed roles fall back to 'node' and singulars are not pluralised", () => {
 		const outline = outlineOf({ role: "AXWindow", children: [{ role: "AXGroup", children: [{ role: "AX" }, { role: "" }] }] });
 		assert.match(foldToBudget(outline, { maxDepth: 1 }).text, /\(2: 2 nodes\)$/);
+		const lone = outlineOf({ role: "AXWindow", children: [{ role: "AXGroup", children: [{ role: "AX" }] }] });
+		assert.match(foldToBudget(lone, { maxDepth: 1 }).text, /\(1: 1 node\)$/);
 		const one = outlineOf({ role: "AXWindow", children: [{ role: "AXGroup", children: [{ role: "AXButton" }] }] });
 		assert.match(foldToBudget(one, { maxDepth: 1 }).text, /\(1: 1 button\)$/);
 	});
@@ -625,7 +627,7 @@ describe("action matching via searchOutline", () => {
 });
 
 describe("graft without a wire-ref target", () => {
-	test("graft target without a wire ref is simply not reusable", () => {
+	test("a target without a wire ref still grafts and reuses matching children", () => {
 		const outline = outlineOf({ role: "AXWindow", children: [{ role: "AXGroup", children: [{ ref: "kid", role: "AXButton", title: "old" }] }] });
 		const scoped = outlineOf({ role: "AXGroup", children: [{ ref: "kid", role: "AXButton", title: "new" }] });
 		graftScopedOutline(outline, "@e2", scoped);
