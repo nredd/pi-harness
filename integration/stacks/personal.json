@@ -18,19 +18,19 @@
     },
     "npm:@gotgenes/pi-anthropic-auth@3.4.3",
     "npm:pi-web-access@0.43.0",
-    "npm:@nredd/pi-todo@2.14.0",
-    "npm:@nredd/pi-subagents@0.22.0-nredd.9",
+    "npm:@nredd/pi-todo@2.15.0",
+    "npm:@nredd/pi-subagents@0.22.0-nredd.10",
     "npm:@nredd/pi-subscription-router@0.6.0",
     "npm:@nredd/pi-plan-mode@0.59.3-nredd.4",
     "npm:@nredd/pi-dev-tools@0.8.0",
     "npm:pi-deferred-context-engine@0.5.0",
     "npm:@quintinshaw/pi-dynamic-workflows@3.14.0",
     "npm:pi-memory@0.4.2",
-    "npm:@nredd/pi-computer-use@0.6.2",
-    "npm:@nredd/pi-session-kit@0.10.0"
+    "npm:@nredd/pi-computer-use@0.7.0",
+    "npm:@nredd/pi-session-kit@0.11.0"
   ],
   "settings": {"quietStartup": true, "fullscreen": true},
   "disabled_extensions": {
-    "npm:@nredd/pi-computer-use@0.6.2": "Installed on both OSes, never loaded: macOS helper needs GUI/TCC; Linux has no supported helper. Native desktop tests remain opt-in."
+    "npm:@nredd/pi-computer-use@0.7.0": "Installed on both OSes, never loaded: macOS helper needs GUI/TCC; Linux has no supported helper. Native desktop tests remain opt-in."
   }
 }
