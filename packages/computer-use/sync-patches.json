@@ -166,7 +166,7 @@
 			"purpose": "search_ui and expand_ui on a browser state skip desktop OCR escalation and scoped looks (no controlled window to re-capture), and desktop wait_for with a blank stateId fails with the coded no-observation error instead of a TypeError",
 			"files": ["src/bridge.ts", "test/bridge-observe-query.test.mjs", "test/bridge-setup-look.test.mjs"],
 			"check": "test/bridge-observe-query.test.mjs",
-			"dropControls": ["search_ui skips OCR escalation on a browser state (#722)", "wait_for rejects a blank stateId with the coded error (#722)"],
+			"dropControls": ["search_ui skips OCR escalation on a browser state (#722)", "expand_ui skips the scoped look on a browser state (#722)", "wait_for rejects a blank stateId with the coded error (#722)"],
 			"upstream": {
 				"status": "harness-only",
 				"reference": "UPSTREAM.md",

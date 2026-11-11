@@ -603,6 +603,14 @@ const cases = [
 		failure: /No current controlled window/,
 	},
 	{
+		name: "expand_ui skips the scoped look on a browser state (#722)",
+		file: "src/bridge.ts",
+		before: "if (!isBrowserContextId(state.contextId) && (target.truncated || regionChanged)) {",
+		after: "if (target.truncated || regionChanged) {",
+		check: "test/bridge-observe-query.test.mjs",
+		failure: /No current controlled window/,
+	},
+	{
 		name: "wait_for rejects a blank stateId with the coded error (#722)",
 		file: "src/bridge.ts",
 		before: "stateId: currentCaptureOrThrow().stateId,",
