@@ -180,6 +180,8 @@ function formatConfigStatus(): string {
 		`headless: ${loaded.config.headless ? "enabled" : "disabled"}`,
 		`cursor_overlay: ${loaded.config.cursor_overlay ? "enabled" : "disabled"}`,
 		`activity_glow: ${loaded.config.activity_glow ? "enabled" : "disabled"}`,
+		`blocked_apps: ${loaded.config.blocked_apps.length ? loaded.config.blocked_apps.join(", ") : "(none)"} (system authentication agents are always blocked)`,
+		...loaded.blockedAppsErrors.map((error) => `blocked_apps error: ${error}`),
 		"",
 		"Sources:",
 		...loaded.sources.map((source) => `- ${source.path}: ${source.error ? `error: ${source.error}` : source.exists ? "loaded" : "not found"}`),

@@ -49,6 +49,89 @@ check(allowsFirstWindowFallback(windowId: nil, windowRef: nil), "unqualified may
 check(!allowsFirstWindowFallback(windowId: nil, windowRef: "ax:dlg"), "stale ref must not fall back to first window")
 check(!allowsFirstWindowFallback(windowId: 7, windowRef: nil), "id request must not fall back")
 
+// App blocklist and session lock
+check(isBlockedBundleId("com.apple.Terminal", blocked: ["com.apple.terminal"]), "bundle ids match case-insensitively")
+check(!isBlockedBundleId("com.apple.TextEdit", blocked: ["com.apple.Terminal"]), "unlisted app is allowed")
+check(!isBlockedBundleId(nil, blocked: ["com.apple.Terminal"]) && !isBlockedBundleId("", blocked: [""]), "no bundle id never matches")
+check(blockedBundleIdList([:]) == alwaysBlockedBundleIds, "system agents are blocked with no request list")
+check(isBlockedBundleId("com.apple.SecurityAgent", blocked: blockedBundleIdList(["blockedBundleIds": []])), "empty request list keeps system agents blocked")
+check(isBlockedBundleId("com.example.Vault", blocked: blockedBundleIdList(["blockedBundleIds": ["com.example.Vault", 7]])), "request list extends the blocklist")
+check(sessionIsLocked(["CGSSessionScreenIsLocked": true]), "screen-locked flag locks the session")
+check(sessionIsLocked(["CGSSessionScreenIsLocked": NSNumber(value: 1)]), "NSNumber lock flag locks the session")
+check(sessionIsLocked(["kCGSSessionOnConsoleKey": false]), "session off the console is unusable")
+check(!sessionIsLocked(["kCGSSessionOnConsoleKey": true]), "unlocked console session")
+check(!sessionIsLocked(["CGSSessionScreenIsLocked": false, "kCGSSessionOnConsoleKey": true]), "explicitly unlocked session")
+check(!sessionIsLocked([:]) && !sessionIsLocked(nil), "no lock flag and no session are not locked")
+check(["look", "act", "actBatch", "desktopInput", "captureDisplay", "axReadText", "focusWindow"].allSatisfy(commandRequiresUnlockedSession), "UI commands need an unlocked session")
+check(!["listApps", "listRoots", "getFrontmost", "diagnostics", "checkPermissions", "shutdown"].contains(where: commandRequiresUnlockedSession), "discovery and lifecycle commands work while locked")
+let lockedRefusal = lockedSessionRefusal(cmd: "act", session: ["CGSSessionScreenIsLocked": true])
+check(lockedRefusal?.code == "screen_locked" && lockedRefusal?.message.hasPrefix("screen_locked:") == true && lockedRefusal?.message.contains("'act'") == true, "locked act is refused with screen_locked")
+check(lockedSessionRefusal(cmd: "desktopInput", session: ["kCGSSessionOnConsoleKey": false])?.code == "screen_locked", "off-console desktopInput is refused with screen_locked")
+check(lockedSessionRefusal(cmd: "act", session: ["CGSSessionScreenIsLocked": false]) == nil, "unlocked act runs")
+check(lockedSessionRefusal(cmd: "listRoots", session: ["CGSSessionScreenIsLocked": true]) == nil, "discovery runs while locked")
+let windowList: [[String: Any]] = [
+	["kCGWindowOwnerPID": 50, "kCGWindowAlpha": 1.0, "kCGWindowBounds": ["X": 0, "Y": 0, "Width": 1000, "Height": 800]],
+	["kCGWindowOwnerPID": 20, "kCGWindowAlpha": 0.0, "kCGWindowBounds": ["X": 0, "Y": 0, "Width": 400, "Height": 400]],
+	["kCGWindowOwnerPID": 10, "kCGWindowAlpha": 1.0, "kCGWindowBounds": ["X": 100, "Y": 100, "Width": 200, "Height": 200]],
+	["kCGWindowOwnerPID": 30, "kCGWindowAlpha": 1.0, "kCGWindowBounds": ["X": 0, "Y": 0, "Width": 1000, "Height": 800]],
+]
+let blockedPids: Set<Int32> = [10]
+let isBlockedPid: (Int32) -> Bool = { blockedPids.contains($0) }
+check(blockedWindowOwnerPid(windowList, at: CGPoint(x: 150, y: 150), excludingPid: 99, isBlockedPid: isBlockedPid) == nil, "a layer-0 window of an unblocked app above a blocked one ends the scan")
+check(blockedWindowOwnerPid(windowList, at: CGPoint(x: 150, y: 150), excludingPid: 50, isBlockedPid: isBlockedPid) == 10, "own overlay and transparent windows are skipped")
+check(blockedWindowOwnerPid(windowList, at: CGPoint(x: 1500, y: 150), excludingPid: 99, isBlockedPid: isBlockedPid) == nil, "no window at the point")
+let overlayList: [[String: Any]] = [
+	["kCGWindowOwnerPID": 70, "kCGWindowLayer": 25, "kCGWindowAlpha": 1.0, "kCGWindowBounds": ["X": 0, "Y": 0, "Width": 1000, "Height": 800]],
+	["kCGWindowOwnerPID": 10, "kCGWindowLayer": 0, "kCGWindowAlpha": 1.0, "kCGWindowBounds": ["X": 100, "Y": 100, "Width": 200, "Height": 200]],
+	["kCGWindowOwnerPID": 30, "kCGWindowLayer": 0, "kCGWindowAlpha": 1.0, "kCGWindowBounds": ["X": 0, "Y": 0, "Width": 1000, "Height": 800]],
+]
+check(blockedWindowOwnerPid(overlayList, at: CGPoint(x: 150, y: 150), excludingPid: 99, isBlockedPid: isBlockedPid) == 10, "a full-screen overlay at a higher layer does not hide a blocked window")
+check(blockedWindowOwnerPid(overlayList, at: CGPoint(x: 500, y: 500), excludingPid: 99, isBlockedPid: isBlockedPid) == nil, "outside the blocked window nothing is refused")
+// Key focus can sit in a non-activating panel of a blocked app while another app is frontmost
+check(keyboardTargetRefusalPid(frontmostPid: 5, focusedPid: 10, isBlockedPid: isBlockedPid) == 10, "a blocked focused app is refused though the frontmost app is fine")
+check(keyboardTargetRefusalPid(frontmostPid: 10, focusedPid: nil, isBlockedPid: isBlockedPid) == 10, "a blocked frontmost app is refused when the focused app is unknown")
+check(keyboardTargetRefusalPid(frontmostPid: 5, focusedPid: nil, isBlockedPid: isBlockedPid) == nil, "unknown focus with an unblocked frontmost app runs")
+check(keyboardTargetRefusalPid(frontmostPid: 5, focusedPid: 6, isBlockedPid: isBlockedPid) == nil, "unblocked frontmost and focused apps run")
+// Coordinate act refuses a blocked window or AX hit at the point
+check(coordinateTargetRefusalPid(windows: overlayList, at: CGPoint(x: 150, y: 150), hitPid: nil, excludingPid: 99, isBlockedPid: isBlockedPid) == 10, "coordinate act refuses a blocked window at the point")
+check(coordinateTargetRefusalPid(windows: [], at: CGPoint(x: 1, y: 1), hitPid: 10, excludingPid: 99, isBlockedPid: isBlockedPid) == 10, "coordinate act refuses a blocked AX hit")
+check(coordinateTargetRefusalPid(windows: [], at: CGPoint(x: 1, y: 1), hitPid: 99, excludingPid: 99, isBlockedPid: isBlockedPid) == nil, "own AX hit is ignored")
+check(coordinateTargetRefusalPid(windows: overlayList, at: CGPoint(x: 500, y: 500), hitPid: 30, excludingPid: 99, isBlockedPid: isBlockedPid) == nil, "unblocked point runs")
+check(actPointerRefusalApplies(delivery: "hid"), "HID act runs the pointer refusal")
+check(!actPointerRefusalApplies(delivery: "pid"), "pid act skips the pointer refusal so a host terminal cannot block it")
+check(hitTestVertexIndices(count: 5) == [0, 4], "AX hit test runs at drag endpoints only")
+check(hitTestVertexIndices(count: 1) == [0], "a single point is its own endpoint")
+check(hitTestVertexIndices(count: 0).isEmpty, "no vertices, no hit tests")
+check(targetHoldsFocus(frontmostPid: 7, focusedPid: nil, targetPid: 7), "frontmost target with unknown AX focus holds focus")
+check(targetHoldsFocus(frontmostPid: 7, focusedPid: 7, targetPid: 7), "frontmost and focused target holds focus")
+check(!targetHoldsFocus(frontmostPid: 10, focusedPid: 7, targetPid: 7), "a host terminal still frontmost does not hold focus")
+check(!targetHoldsFocus(frontmostPid: 7, focusedPid: 10, targetPid: 7), "a blocked focused panel does not hold focus")
+var polls = 0
+var slept: [Int] = []
+var clock = 0
+let advance: (Int) -> Void = { slept.append($0); clock += $0 }
+check(waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: { polls += 1; return polls == 4 }, sleepMs: advance, nowMs: { clock }), "focus that settles within the bound is accepted")
+check(polls == 4 && slept == [10, 10, 10], "polling sleeps between checks and stops once focus holds")
+polls = 0
+slept = []
+clock = 0
+check(!waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: { polls += 1; return false }, sleepMs: advance, nowMs: { clock }), "focus that never settles is refused")
+check(polls == 21 && slept.count == 20 && slept.reduce(0, +) == 200, "polling is bounded at 200 ms")
+polls = 0
+clock = 0
+// A stalled focus probe (e.g. a hung app's AX call) burns wall time; the deadline is wall time, not step count.
+check(!waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: { polls += 1; clock += 150; return false }, sleepMs: { clock += $0 }, nowMs: { clock }), "a stalled probe is refused")
+check(polls == 2, "the wall-clock deadline stops after two stalled probes, not twenty-one")
+polls = 0
+check(waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: { polls += 1; return true }, sleepMs: { _ in }, nowMs: { 0 }), "already-focused target returns at once")
+check(polls == 1, "no polling when focus already holds")
+var axCalls = 0
+_ = targetHoldsFocus(frontmostPid: 10, focusedPid: { axCalls += 1; return 7 }(), targetPid: 7)
+check(axCalls == 0, "AX focus is not queried while another app is frontmost")
+let displayApps: [(id: String?, name: String)] = [("com.apple.Terminal", "Terminal"), ("com.example.Safe", "Safe"), (nil, "Unbundled"), ("COM.EXAMPLE.VAULT", "Vault")]
+check(itemsWithBlockedBundleId(displayApps, blocked: ["com.apple.terminal", "com.example.Vault"], bundleId: { $0.id }).map { $0.name } == ["Terminal", "Vault"], "display capture excludes exactly the blocked apps, case-insensitively")
+check(itemsWithBlockedBundleId(displayApps, blocked: [], bundleId: { $0.id }).isEmpty, "empty blocklist excludes nothing")
+
 // Drag interpolation
 let pts = interpolatedDragPoints(from: CGPoint(x: 0, y: 0), to: CGPoint(x: 100, y: 0), maxStep: 12)
 check(pts.count == 9 && pts.last == CGPoint(x: 100, y: 0), "100pt drag steps <=12 and ends exactly at target")

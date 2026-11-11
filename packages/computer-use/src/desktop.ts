@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentToolResult, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getComputerUseConfig } from "./config.ts";
+import { effectiveBlockedBundleIds, getComputerUseConfig } from "./config.ts";
 import { macosHelper } from "./platform/macos/helper.ts";
 
 /** Global-desktop tools: whole-screen capture and physical input in global point coordinates (macOS). */
@@ -148,7 +148,8 @@ export async function executeDesktopScreenshot(
 	assertDesktopControlAllowed();
 	const result = await withDesktopLock(() => macosHelper.command<{ displays: DisplayInfo[]; display: number; frame: DisplayInfo["frame"]; image: { jpegBase64: string; width: number; height: number } }>(
 		"captureDisplay",
-		{ display: params.display ?? 0, maxDimension: params.maxDimension ?? 1600 },
+		// The helper excludes blocked apps' windows from the capture.
+		{ display: params.display ?? 0, maxDimension: params.maxDimension ?? 1600, blockedBundleIds: effectiveBlockedBundleIds() },
 		{ signal, timeoutMs: 15_000 },
 	), signal);
 	const f = result.frame;
@@ -202,7 +203,9 @@ export async function executeDesktopInput(
 	assertDesktopControlAllowed();
 	validateDesktopInput(params);
 	const wire = params.action === "typeText" ? { ...params, action: "type" } : params.action === "keypress" ? { ...params, action: "key" } : params;
-	const result = await withDesktopLock(() => macosHelper.command<DesktopInputResult>("desktopInput", { ...wire }, { signal, timeoutMs: 30_000 }), signal);
+	// The helper refuses (`app_blocked`) when keys go to, or the pointer lands on, a blocked app, and `activateApp` of one.
+	const blockedBundleIds = effectiveBlockedBundleIds();
+	const result = await withDesktopLock(() => macosHelper.command<DesktopInputResult>("desktopInput", { ...wire, blockedBundleIds }, { signal, timeoutMs: 30_000 }), signal);
 	return {
 		content: [{ type: "text", text: desktopInputText(result) }],
 		details: { tool: "desktop_input", action: result.performed, ...(result.pid !== undefined ? { pid: result.pid, appName: result.appName } : {}), ...(result.truncated !== undefined ? { truncated: result.truncated, length: result.length } : {}) },

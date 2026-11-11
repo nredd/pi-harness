@@ -9,7 +9,7 @@ import { debuglog } from "node:util";
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { canRetryInForeground, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, strictHeadlessRejection, type ActionState, type PreparedAction } from "./actions.ts";
 import { cdpClickForContext, cdpDragForContext, cdpEvaluateForContext, cdpKeypressForContext, cdpMouseForContext, cdpNavigateContext, cdpScrollForContext, cdpSnapshotForContext, cdpTabForWindow, cdpTypeFocusedForContext, cdpTypeForContext, disconnectCdp, listCdpPageContexts, type CdpConsoleEntry, type CdpPageSnapshot } from "./cdp.ts";
-import { type ComputerUseConfig, getComputerUseConfig, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig } from "./config.ts";
+import { type ComputerUseConfig, getComputerUseConfig, isBlockedBundleId, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig } from "./config.ts";
 import { normalizeFindParams } from "./find-params.ts";
 import { noteAfterAct, noteFromLook, noteRegionKeyForRef, renderNote, type WindowNote } from "./note.ts";
 import { loadStoredOutline, saveStoredOutline } from "./outline-store.ts";
@@ -176,6 +176,7 @@ interface ListWindowsDetails {
 		pairing?: { confidence: "exact" | "high" | "low"; score: number };
 		zOrder: number;
 		browserUseAllowed: boolean;
+		blocked: boolean;
 		score: number;
 		url?: string;
 	}>;
@@ -616,6 +617,7 @@ function formatWindowLine(window: ListWindowsDetails["windows"][number]): string
 		window.isOnscreen ? "onscreen" : undefined,
 		window.isMinimized ? "minimized" : undefined,
 		window.browserUseAllowed ? undefined : "browser_use_disabled",
+		window.blocked ? "blocked" : undefined,
 	]
 		.filter(Boolean)
 		.join(", ");
@@ -635,6 +637,23 @@ function assertBrowserUseAllowed(target: { appName: string; bundleId?: string })
 			`Browser use is disabled by pi-computer-use config, so '${target.appName}' cannot be controlled. Enable browser_use in ~/.pi/agent/extensions/pi-computer-use.json or .pi/computer-use.json to allow browser windows.`,
 		);
 	}
+}
+
+/** Policy refusal raised before any native call; `code` mirrors the helper's coded errors. */
+class ComputerUseError extends Error {
+	constructor(readonly code: string, message: string) {
+		super(message);
+		this.name = "ComputerUseError";
+	}
+}
+
+/** Fail closed with `app_blocked` for password managers, credential UIs, terminals and system auth agents. */
+function assertAppNotBlocked(target: { appName: string; bundleId?: string }): void {
+	if (!isBlockedBundleId(target.bundleId)) return;
+	throw new ComputerUseError(
+		"app_blocked",
+		`app_blocked: '${target.appName}' (${target.bundleId}) is blocked by pi-computer-use policy, so it cannot be observed or controlled. Adjust blocked_apps in ~/.pi/agent/extensions/pi-computer-use.json (system authentication agents are always blocked).`,
+	);
 }
 
 function windowRecordIdentity(record: Pick<WindowRefRecord, "pid" | "windowId" | "nativeWindowRef" | "windowTitle" | "framePoints">): string {
@@ -776,6 +795,7 @@ export function nativeWindowRequest(target: Pick<CurrentTarget, "pid" | "windowI
 
 function setCurrentTarget(target: ResolvedTarget): void {
 	assertBrowserUseAllowed(target);
+	assertAppNotBlocked(target);
 	const windowRef = target.windowRef ?? storeWindowRefForTarget(target);
 	operationState().currentTarget = {
 		appName: target.appName,
@@ -1268,6 +1288,7 @@ function windowDetails(app: HelperApp, window: HelperWindow, config: ReturnType<
 		pairing: platformRootPairing(window),
 		zOrder: window.zOrder,
 		browserUseAllowed: config.browser_use || !currentPlatformBackend.isBrowserApp(app.appName, app.bundleId),
+		blocked: isBlockedBundleId(app.bundleId),
 		score: scoreWindow(window),
 	};
 }
@@ -1320,6 +1341,7 @@ async function performListWindows(params: FindParams, signal?: AbortSignal): Pro
 			isModal: false,
 			zOrder: Number.MAX_SAFE_INTEGER,
 			browserUseAllowed: true,
+			blocked: false,
 			score: 0,
 			url: page.url,
 		}));
@@ -1439,6 +1461,8 @@ async function performReadText(params: ReadTextParams, signal?: AbortSignal): Pr
 	}
 
 	validateStateId(params.stateId);
+	// A hydrated state restores its target without resolving it, so re-check the policy before the live read.
+	assertAppNotBlocked(currentTargetOrThrow());
 	if (!ref) throw new Error("read_text requires ref for desktop contexts. Call observe_ui/inspect_ui and use a text-bearing outline ref.");
 	const node = outlineNodeByRef(ref);
 	const state = operationState();

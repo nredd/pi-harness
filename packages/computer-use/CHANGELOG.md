@@ -4,6 +4,10 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- `blocked_apps` config (and `PI_COMPUTER_USE_BLOCKED_APPS`): `observe_ui`, `act_ui` and `desktop_input` fail closed with `app_blocked` for apps on a bundle-id list that defaults to password managers, Keychain Access and terminals. System authentication agents (`com.apple.SecurityAgent`, `com.apple.loginwindow`, `com.apple.coreservices.uiagent`, `com.apple.ScreenSaver.Engine`) are always blocked. `desktop_input` refuses `activateApp` of a blocked app, keys while one is frontmost and pointer input that lands on one, checked by the helper immediately before delivery. `find_roots` marks blocked roots `blocked`. Opt out with `"blocked_apps": []` in the user-global file only; project config and the environment variable only add ids. Keys are also refused while the focused (not just frontmost) app is blocked, and coordinate `act_ui` checks the target point like `desktop_input`. The helper also refuses UI commands with `screen_locked` while the macOS session is locked (nredd/pi-harness#646).
+
 ### Fixed
 
 - Linux under WSL2 (detected from `WSL_DISTRO_NAME`, `WSL_INTEROP` or `/proc/version`): `find_roots` with no (or no matching) roots and `observe_ui`/`act_ui`/`search_ui` with no frontmost window now say that Windows host windows are not reachable from the WSL2 guest and name nredd/pi-harness#668, instead of the bare "No roots"/"No frontmost window" text. Native Linux messages are unchanged. No Windows bridge is added (nredd/pi-harness#672).

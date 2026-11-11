@@ -287,6 +287,126 @@ func scrollWheelCounts(deltaX: Int, deltaY: Int) -> (wheel1: Int32, wheel2: Int3
 func scrollWritesConfirmed(x: ScrollAxisWrite, y: ScrollAxisWrite) -> Bool {
 	x != .unconfirmed && y != .unconfirmed
 }
+/// System authentication agents the helper refuses regardless of the request's list. Mirrors
+/// `ALWAYS_BLOCKED_BUNDLE_IDS` in `src/config.ts` (pinned by `test/app-policy.test.mjs`).
+let alwaysBlockedBundleIds: [String] = [
+	"com.apple.SecurityAgent",
+	"com.apple.loginwindow",
+	"com.apple.coreservices.uiagent",
+	"com.apple.ScreenSaver.Engine",
+]
+
+/// The request's `blockedBundleIds` (sent by the TypeScript policy) plus the always-blocked agents.
+func blockedBundleIdList(_ request: [String: Any]) -> [String] {
+	alwaysBlockedBundleIds + ((request["blockedBundleIds"] as? [Any]) ?? []).compactMap { $0 as? String }
+}
+
+/// Whether `bundleId` is on the list (case-insensitive). An app without a bundle id never matches.
+func isBlockedBundleId(_ bundleId: String?, blocked: [String]) -> Bool {
+	guard let bundleId, !bundleId.isEmpty else { return false }
+	return blocked.contains { $0.caseInsensitiveCompare(bundleId) == .orderedSame }
+}
+
+/// Whether the console session is locked, from `CGSessionCopyCurrentDictionary()`. `CGSSessionScreenIsLocked`
+/// is set while the lock screen is up; a session that is not on the console (fast user switch) is unusable for
+/// UI work too. No dictionary means no window-server session at all, where UI commands fail by themselves.
+func sessionIsLocked(_ session: [String: Any]?) -> Bool {
+	guard let session else { return false }
+	if (session["CGSSessionScreenIsLocked"] as? NSNumber)?.boolValue == true { return true }
+	if let onConsole = (session["kCGSSessionOnConsoleKey"] as? NSNumber)?.boolValue, !onConsole { return true }
+	return false
+}
+
+/// Commands that read or drive the UI and therefore fail with `screen_locked` while the session is locked.
+/// Discovery (`listApps`/`listRoots`/`getFrontmost`), diagnostics, permissions and shutdown stay available.
+func commandRequiresUnlockedSession(_ cmd: String) -> Bool {
+	["look", "act", "actBatch", "hitTest", "axWaitFor", "axReadText", "focusedElement", "focusWindow", "setWindowFrame", "captureDisplay", "desktopInput"].contains(cmd)
+}
+
+/// Message for an `app_blocked` refusal; the TypeScript layer words its own the same way.
+func appBlockedMessage(_ name: String, _ bundleId: String?) -> String {
+	"app_blocked: '\(name)' (\(bundleId ?? "unknown bundle id")) is blocked by pi-computer-use policy; adjust blocked_apps to allow it (system authentication agents are always blocked)"
+}
+
+/// The refusal `handleRequest` throws for `cmd` given the session dictionary, or nil when the command may run.
+func lockedSessionRefusal(cmd: String, session: [String: Any]?) -> (code: String, message: String)? {
+	guard commandRequiresUnlockedSession(cmd), sessionIsLocked(session) else { return nil }
+	return ("screen_locked", "screen_locked: the macOS session is locked, so '\(cmd)' is refused until it is unlocked")
+}
+
+/// Items whose bundle id is on the blocklist (case-insensitive), e.g. the `SCRunningApplication`s a display
+/// capture must exclude so a blocked app's pixels never reach the model.
+func itemsWithBlockedBundleId<T>(_ items: [T], blocked: [String], bundleId: (T) -> String?) -> [T] {
+	items.filter { isBlockedBundleId(bundleId($0), blocked: blocked) }
+}
+
+/// The blocked pid that keyboard input would reach: the frontmost app's, or the system-wide focused app's (a
+/// non-activating panel of a blocked app can hold key focus while another app is frontmost). nil when neither
+/// resolves to a blocked pid; an unknown focused app falls back to the frontmost check alone.
+func keyboardTargetRefusalPid(frontmostPid: Int32?, focusedPid: Int32?, isBlockedPid: (Int32) -> Bool) -> Int32? {
+	if let frontmostPid, isBlockedPid(frontmostPid) { return frontmostPid }
+	if let focusedPid, isBlockedPid(focusedPid) { return focusedPid }
+	return nil
+}
+
+/// The blocked pid a pointer event at `point` would reach: a blocked window above the first normal-layer window
+/// (`blockedWindowOwnerPid`), or the pid of the accessibility hit (`hitPid`, ignoring `excludingPid`), or nil.
+func coordinateTargetRefusalPid(windows: [[String: Any]], at point: CGPoint, hitPid: Int32?, excludingPid: Int32, isBlockedPid: (Int32) -> Bool) -> Int32? {
+	if let pid = blockedWindowOwnerPid(windows, at: point, excludingPid: excludingPid, isBlockedPid: isBlockedPid) { return pid }
+	if let hitPid, hitPid != excludingPid, isBlockedPid(hitPid) { return hitPid }
+	return nil
+}
+
+/// A blocked owner pid among the windows at `point`, from `CGWindowListCopyWindowInfo` entries (ordered front
+/// to back), or nil. Windows of `excludingPid` (our own click-through overlays) and fully transparent or empty
+/// windows are skipped. The scan refuses a blocked window anywhere above the first non-blocked normal-layer
+/// (layer 0) window containing the point, so a click-through overlay from another app (any layer above 0) cannot
+/// hide a blocked window beneath it; a normal-layer window of an unblocked app ends the scan.
+func blockedWindowOwnerPid(_ windows: [[String: Any]], at point: CGPoint, excludingPid: Int32, isBlockedPid: (Int32) -> Bool) -> Int32? {
+	for window in windows {
+		guard let pid = (window["kCGWindowOwnerPID"] as? NSNumber)?.int32Value, pid != excludingPid else { continue }
+		if let alpha = (window["kCGWindowAlpha"] as? NSNumber)?.doubleValue, alpha <= 0.01 { continue }
+		guard let bounds = window["kCGWindowBounds"] as? [String: Any],
+			let x = (bounds["X"] as? NSNumber)?.doubleValue, let y = (bounds["Y"] as? NSNumber)?.doubleValue,
+			let w = (bounds["Width"] as? NSNumber)?.doubleValue, let h = (bounds["Height"] as? NSNumber)?.doubleValue,
+			w > 0, h > 0 else { continue }
+		guard point.x >= x, point.x < x + w, point.y >= y, point.y < y + h else { continue }
+		if isBlockedPid(pid) { return pid }
+		if ((window["kCGWindowLayer"] as? NSNumber)?.intValue ?? 0) == 0 { return nil }
+	}
+	return nil
+}
+
+/// Whether `act` runs the blocked-window pointer check for a delivery mode. Pid delivery targets one app whose
+/// root window is already checked on the TypeScript side, so a host terminal covering the point must not refuse it;
+/// only HID events land on whatever is at the point.
+func actPointerRefusalApplies(delivery: String) -> Bool {
+	delivery == "hid"
+}
+
+/// The vertex indices that also get the accessibility hit test: the endpoints. Interior vertices are checked
+/// against the single window-list snapshot only.
+func hitTestVertexIndices(count: Int) -> Set<Int> {
+	count <= 0 ? [] : [0, count - 1]
+}
+
+/// Whether keyboard focus has moved to `targetPid`: it is frontmost and, when the AX focused app is known, focused.
+func targetHoldsFocus(frontmostPid: Int32?, focusedPid: @autoclosure () -> Int32?, targetPid: Int32) -> Bool {
+	guard frontmostPid == targetPid else { return false }
+	// Only ask AX once the cheap frontmost check passes; a hung focused app can stall an AX call.
+	let focused = focusedPid()
+	return focused == nil || focused == targetPid
+}
+
+/// Polls `holdsFocus` in `stepMs` sleeps (checking once first) until it holds or `maxMs` of wall time (`nowMs`) pass.
+func waitForFocus(maxMs: Int, stepMs: Int, holdsFocus: () -> Bool, sleepMs: (Int) -> Void, nowMs: () -> Int) -> Bool {
+	let deadline = nowMs() + maxMs
+	while true {
+		if holdsFocus() { return true }
+		if nowMs() >= deadline { return false }
+		sleepMs(stepMs)
+	}
+}
 // END PURE
 
 // BEGIN KEYBOARD LAYOUT (compiled standalone by test/macos-native-pure.test.mjs; Carbon only)
@@ -834,6 +954,9 @@ final class Bridge {
 
 	private func handleRequest(_ request: [String: Any], clientID: UUID?) throws -> Any {
 		let cmd = try stringArg(request, "cmd")
+		if let refusal = lockedSessionRefusal(cmd: cmd, session: CGSessionCopyCurrentDictionary() as? [String: Any]) {
+			throw BridgeFailure(message: refusal.message, code: refusal.code)
+		}
 
 		switch cmd {
 		case "diagnostics":
@@ -2246,6 +2369,23 @@ final class Bridge {
 			}
 		}
 
+		/// HID events land on whatever is at the point, which can be a blocked app's floating window. Runs after
+		/// focus and preflight, right before posting; pid delivery skips it (the target root is checked in TypeScript).
+		func refuseBlockedBeforePost(_ points: [CGPoint]) throws {
+			guard actPointerRefusalApplies(delivery: delivery) else { return }
+			try refuseBlockedPoints(points, blocked: blockedBundleIdList(request))
+		}
+
+		/// HID keys reach the focused app: settle focus on the target first, then refuse a blocked focused app.
+		func refuseBlockedKeyboardAfterFocus(preserveFocus: Bool) throws {
+			guard delivery == "hid" else { return }
+			if !preserveFocus {
+				focusTargetForPhysicalInput()
+				try requireTargetFocus(pid: pid)
+			}
+			try refuseBlockedKeyboardTarget(blocked: blockedBundleIdList(request))
+		}
+
 		func executeCoordinates(_ point: CGPoint) throws {
 			try rejectInStrictHeadless("Action requires synthesized pointer input, which strict headless mode prohibits")
 			guard element != nil || record.hasImage else {
@@ -2259,12 +2399,15 @@ final class Bridge {
 			switch action {
 			case "press", "click":
 				animateCursor(at: point)
+				try refuseBlockedBeforePost([point])
 				try postMouseClick(at: point, pid: pid, button: mouseButton(params["button"] as? String ?? "left"), clickCount: max(1, min(3, (params["clickCount"] as? NSNumber)?.intValue ?? 1)), delivery: delivery)
 			case "moveMouse":
 				animateCursor(at: point)
+				try refuseBlockedBeforePost([point])
 				try postMouseMove(to: point, pid: pid, delivery: delivery)
 			case "scroll":
 				animateCursor(at: point)
+				try refuseBlockedBeforePost([point])
 				try postScrollWheel(at: point, deltaX: wheelDeltaOverride?.x ?? (params["scrollX"] as? NSNumber)?.intValue ?? 0, deltaY: wheelDeltaOverride?.y ?? (params["scrollY"] as? NSNumber)?.intValue ?? 0, pid: pid, delivery: delivery)
 			case "drag":
 				guard let rawPath = params["path"] as? [[String: Any]], rawPath.count >= 2 else {
@@ -2277,6 +2420,7 @@ final class Bridge {
 					return lookPoint(record: record, x: x, y: y)
 				}
 				animateCursor(at: point)
+				try refuseBlockedBeforePost(points)
 				try postMouseDrag(points: points, pid: pid, delivery: delivery)
 			default:
 				throw BridgeFailure(message: "Action \(action) cannot use coordinate grounding", code: "invalid_args")
@@ -2323,7 +2467,8 @@ final class Bridge {
 			if hasAncestorRole(element, role: "AXWebArea") {
 				try rejectInStrictHeadless("Web text replacement requires synthesized keyboard input, which strict headless mode prohibits")
 				acquirePhysicalInputIfNeeded()
-				focusTargetForPhysicalInput()
+				// HID keys follow (cmd+a, text): the same focus wait and blocked-app check as typeText/keypress.
+				if delivery == "hid" { try refuseBlockedKeyboardAfterFocus(preserveFocus: false) } else { focusTargetForPhysicalInput() }
 				_ = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
 				let currentValue = stringAttribute(element, attribute: kAXValueAttribute as CFString) ?? ""
 				var range = CFRange(location: 0, length: (currentValue as NSString).length)
@@ -2367,7 +2512,8 @@ final class Bridge {
 				if focused == .success { performed["focused"] = true }
 			}
 			acquirePhysicalInputIfNeeded()
-			if delivery == "hid" && !preserveFocus { focusTargetForPhysicalInput() }
+			// HID keys reach the focused app, which a non-activating panel of a blocked app can be.
+			try refuseBlockedKeyboardAfterFocus(preserveFocus: preserveFocus)
 			let text = params["text"] as? String ?? ""
 			try postUnicodeText(text, pid: pid, delivery: delivery)
 			performed["grounding"] = "coordinates"
@@ -2401,7 +2547,7 @@ final class Bridge {
 				}
 			}
 			acquirePhysicalInputIfNeeded()
-			if delivery == "hid" && !preserveFocus { focusTargetForPhysicalInput() }
+			try refuseBlockedKeyboardAfterFocus(preserveFocus: preserveFocus)
 			try postKeyPress(keys: keys, pid: pid, delivery: delivery)
 			performed["grounding"] = "coordinates"
 		} else if let element, action == "scroll" {
@@ -3176,11 +3322,74 @@ final class Bridge {
 
 	// MARK: Whole-desktop control (global coordinates, HID delivery)
 
+	/// Throws `app_blocked` when keyboard input would reach a blocked app: the frontmost one, or the system-wide
+	/// focused one (a non-activating panel can hold key focus). An AX error leaves the frontmost check alone.
+	private func refuseBlockedKeyboardTarget(blocked: [String]) throws {
+		let isBlockedPid: (Int32) -> Bool = { isBlockedBundleId(NSRunningApplication(processIdentifier: $0)?.bundleIdentifier, blocked: blocked) }
+		if let pid = keyboardTargetRefusalPid(frontmostPid: NSWorkspace.shared.frontmostApplication?.processIdentifier, focusedPid: systemFocusedPid(), isBlockedPid: isBlockedPid) {
+			let app = NSRunningApplication(processIdentifier: pid)
+			throw BridgeFailure(message: appBlockedMessage(app?.localizedName ?? "app", app?.bundleIdentifier), code: "app_blocked")
+		}
+	}
+
+	/// The pid of the system-wide AX focused application, or nil when AX cannot say.
+	private func systemFocusedPid() -> Int32? {
+		var focused: CFTypeRef?
+		let systemWide = AXUIElementCreateSystemWide()
+		// Bound each focus probe: a hung focused app would otherwise block for the default AX messaging timeout.
+		_ = AXUIElementSetMessagingTimeout(systemWide, 0.1)
+		guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedApplicationAttribute as CFString, &focused) == .success,
+			let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else { return nil }
+		var pid: pid_t = 0
+		return AXUIElementGetPid(focused as! AXUIElement, &pid) == .success ? pid : nil
+	}
+
+	/// One on-screen window list snapshot, front to back, to reuse across the vertices of one action.
+	private func onScreenWindowList() -> [[String: Any]] {
+		CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+	}
+
+	/// Refuses every point against one window-list snapshot; the AX hit test runs only at the endpoints.
+	private func refuseBlockedPoints(_ points: [CGPoint], blocked: [String]) throws {
+		let windows = onScreenWindowList()
+		let hitIndices = hitTestVertexIndices(count: points.count)
+		for (index, point) in points.enumerated() {
+			try refuseBlockedPointer(at: point, blocked: blocked, windows: windows, axHitTest: hitIndices.contains(index))
+		}
+	}
+
+	/// Polls up to 200 ms for `pid` to become frontmost (and AX focused when known), so a deferred `activate()`
+	/// settles before the blocked-app check; throws `focus_not_acquired` when it never does.
+	private func requireTargetFocus(pid: Int32) throws {
+		let held = waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: {
+			targetHoldsFocus(frontmostPid: NSWorkspace.shared.frontmostApplication?.processIdentifier, focusedPid: systemFocusedPid(), targetPid: pid)
+		}, sleepMs: { usleep(UInt32($0) * 1000) }, nowMs: { Int(DispatchTime.now().uptimeNanoseconds / 1_000_000) })
+		if !held { throw BridgeFailure(message: "The target app did not take focus, so keyboard input was not sent", code: "focus_not_acquired") }
+	}
+
+	/// Throws `app_blocked` when a pointer event at `point` would reach a blocked app's window or accessibility element.
+	private func refuseBlockedPointer(at point: CGPoint, blocked: [String], windows: [[String: Any]]? = nil, axHitTest: Bool = true) throws {
+		let windows = windows ?? onScreenWindowList()
+		let isBlockedPid: (Int32) -> Bool = { isBlockedBundleId(NSRunningApplication(processIdentifier: $0)?.bundleIdentifier, blocked: blocked) }
+		// The window list cannot see through a click-through overlay that sits at layer 0; ask the accessibility hit test too.
+		var element: AXUIElement?
+		var hitPid: pid_t = 0
+		var hit: Int32?
+		if axHitTest, AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &element) == .success,
+			let element, AXUIElementGetPid(element, &hitPid) == .success { hit = hitPid }
+		if let pid = coordinateTargetRefusalPid(windows: windows, at: point, hitPid: hit, excludingPid: getpid(), isBlockedPid: isBlockedPid) {
+			let app = NSRunningApplication(processIdentifier: pid)
+			throw BridgeFailure(message: appBlockedMessage(app?.localizedName ?? "app", app?.bundleIdentifier), code: "app_blocked")
+		}
+	}
+
+
 	/// Capture one display, cursor included. Displays are ordered main first, then by x/y origin.
 	/// Returned `frame` is in global points (top-left origin), the space `desktopInput` consumes.
 	private func captureDisplay(_ request: [String: Any]) throws -> [String: Any] {
 		let index = max(0, optionalIntArg(request, "display") ?? 0)
 		let maxDimension = optionalIntArg(request, "maxDimension").map { max(1, $0) }
+		let blocked = blockedBundleIdList(request)
 		let semaphore = DispatchSemaphore(value: 0)
 		let result = Box<(CGImage, [[String: Any]], Int)?>(nil)
 		let failure = Box<Error?>(nil)
@@ -3202,7 +3411,10 @@ final class Bridge {
 				config.width = max(1, Int((display.frame.width * scale).rounded()))
 				config.height = max(1, Int((display.frame.height * scale).rounded()))
 				config.showsCursor = true
-				let image = try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(display: display, excludingWindows: []), configuration: config)
+				// Blocked apps' windows are excluded from the capture itself, so their pixels never leave the helper.
+				let excluded = itemsWithBlockedBundleId(shareable.applications, blocked: blocked) { $0.bundleIdentifier }
+				let filter = SCContentFilter(display: display, excludingApplications: excluded, exceptingWindows: [])
+				let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
 				let infos = displays.enumerated().map { offset, item -> [String: Any] in
 					["index": offset, "isMain": item.displayID == mainId, "frame": ["x": item.frame.minX, "y": item.frame.minY, "w": item.frame.width, "h": item.frame.height]]
 				}
@@ -3244,9 +3456,31 @@ final class Bridge {
 			}
 			return CGPoint(x: x, y: y)
 		}
+		let blocked = blockedBundleIdList(request)
+		func refuseBlockedWindow(at point: CGPoint) throws {
+			try refuseBlockedPointer(at: point, blocked: blocked)
+		}
+		func refuseBlockedKeyboard() throws {
+			try refuseBlockedKeyboardTarget(blocked: blocked)
+		}
+		switch action {
+		case "type", "key":
+			try refuseBlockedKeyboard()
+		case "moveMouse", "click", "scroll":
+			try refuseBlockedWindow(at: try point())
+		case "drag":
+			// Every vertex, not just the endpoints, so a path cannot route through a blocked window.
+			let vertices = (request["path"] as? [[String: Any]] ?? []).compactMap { raw -> CGPoint? in
+				guard let x = (raw["x"] as? NSNumber)?.doubleValue, let y = (raw["y"] as? NSNumber)?.doubleValue else { return nil }
+				return CGPoint(x: x, y: y)
+			}
+			try refuseBlockedPoints(vertices, blocked: blocked)
+		default:
+			break
+		}
 		switch action {
 		case "activateApp":
-			return try activateApp(try stringArg(request, "app"))
+			return try activateApp(try stringArg(request, "app"), blocked: blocked)
 		case "readClipboard":
 			guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else {
 				throw BridgeFailure(message: "The clipboard holds no text", code: "clipboard_empty")
@@ -3307,7 +3541,7 @@ final class Bridge {
 	/// the kernel (`_sandbox_extension_issue`) and wedge the daemon's serial Launch Services queue.
 	/// Unbundled executables have no bundle URL and get AX + `activate()` only. Fails with
 	/// `activation_failed` unless the app is frontmost within 5s.
-	private func activateApp(_ query: String) throws -> [String: Any] {
+	private func activateApp(_ query: String, blocked: [String]) throws -> [String: Any] {
 		let wanted = query.trimmingCharacters(in: .whitespaces)
 		guard !wanted.isEmpty, !wanted.contains("/") else { throw BridgeFailure(message: "activateApp requires an app name or bundle id (no paths)", code: "invalid_args") }
 		/// Bundle id beats display name beats executable name; two different apps sharing the winning name is an error.
@@ -3331,6 +3565,10 @@ final class Bridge {
 				.first { FileManager.default.fileExists(atPath: $0.path) }
 		guard running != nil || installed != nil else {
 			throw BridgeFailure(message: "No running or installed app named '\(wanted)'", code: "app_not_found")
+		}
+		let resolvedBundleId = running?.bundleIdentifier ?? installed.flatMap { Bundle(url: $0)?.bundleIdentifier }
+		if isBlockedBundleId(resolvedBundleId, blocked: blocked) {
+			throw BridgeFailure(message: appBlockedMessage(running?.localizedName ?? wanted, resolvedBundleId), code: "app_blocked")
 		}
 		var app = running
 		// Only fall back to an installed bundle when nothing is running: an unbundled process sharing a name with

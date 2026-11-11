@@ -122,7 +122,8 @@ test.skipIf(process.platform !== "darwin")("desktop helper wire mapping and gati
 	 */
 	macosHelper.command = async (name, args) => {
 		assert.equal(name, "captureDisplay");
-		assert.deepEqual(args, { display: 1, maxDimension: 1200 });
+		assert.deepEqual({ ...args, blockedBundleIds: undefined }, { display: 1, maxDimension: 1200, blockedBundleIds: undefined });
+		assert.ok(args.blockedBundleIds.includes("com.apple.SecurityAgent"), "capture carries the blocklist");
 		return { display: 1, displays: [{ index: 1, isMain: false, frame: { x: 341, y: -1080, w: 1920, h: 1080 } }], frame: { x: 341, y: -1080, w: 1920, h: 1080 }, image: { jpegBase64: "fixture", width: 1200, height: 675 } };
 	};
 	const screenshot = await executeDesktopScreenshot("s", { display: 1, maxDimension: 1200 });
@@ -179,10 +180,9 @@ test.skipIf(process.platform !== "darwin")("desktop helper wire mapping and gati
 		action: "activateApp",
 		app: "TextEdit",
 	});
-	assert.deepEqual(sent.at(-1).args, {
-		action: "activateApp",
-		app: "TextEdit",
-	});
+	assert.equal(sent.at(-1).args.action, "activateApp");
+	assert.equal(sent.at(-1).args.app, "TextEdit");
+	assert.ok(sent.at(-1).args.blockedBundleIds.includes("com.apple.SecurityAgent"), "desktop_input carries the blocklist");
 	assert.match(
 		activated.content[0].text,
 		/TextEdit \(pid 42\) is now the frontmost app/,

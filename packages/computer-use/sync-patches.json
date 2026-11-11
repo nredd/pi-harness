@@ -373,6 +373,60 @@
 			}
 		},
 		{
+			"id": "blocked-apps",
+			"purpose": "Fail closed with app_blocked for password managers, credential UIs, terminals and system auth agents (config blocked_apps; system agents always blocked), and with screen_locked for UI commands while the macOS session is locked",
+			"files": [
+				"src/config.ts",
+				"src/bridge.ts",
+				"src/desktop.ts",
+				"src/platform/macos/backend.ts",
+				"native/macos/bridge.swift",
+				"docs/content/docs/reference/configuration.mdx",
+				"test/app-policy.test.mjs",
+				"test/desktop-tools.test.mjs"
+			],
+			"check": "test/app-policy.test.mjs",
+			"dropControls": [
+				"blocked app target refusal (#646)",
+				"read_text blocked app re-check (#646)",
+				"always-blocked system agents (#646)",
+				"find_roots blocked marker (#646)",
+				"desktop_input blocklist wire (#646)",
+				"helper locked-session refusal (#646)",
+				"helper blocked-app input refusal (#646)",
+				"act coordinate input refusal (#646)",
+				"act keyboard focus refusal (#646)",
+				"web setText keyboard focus refusal (#646)",
+				"act pointer refusal runs after focus and preflight (#646)",
+				"drag shares one window list (#646)",
+				"act keyboard waits for target focus (#646)",
+				"act blocklist wire (#646)",
+				"display capture blocklist wire (#646)",
+				"display capture app exclusion (#646)",
+				"accessibility hit test for pointer input (#646)",
+				"project blocked_apps is additive only (#646)",
+				"blank blocklist env is unset (#646)",
+				"blocklist env is additive only (#646)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#646; same shape as unmerged upstream proposal injaneity/pi-computer-use#115 part 2, reimplemented from its description; not filed upstream"
+			}
+		},
+		{
+			"id": "locked-session-parsing",
+			"purpose": "Pure Swift lock-state parsing (CGSSessionCopyCurrentDictionary flags) and the commands refused while locked",
+			"files": ["native/macos/bridge.swift", "test/macos-native-pure.test.mjs"],
+			"check": "test/macos-native-pure.test.mjs",
+			"dropControls": ["screen-locked flag parsing (#646)", "overlay-proof blocked window scan (#646)", "focused app keyboard refusal (#646)", "act pid delivery skips pointer refusal (#646)", "drag AX hit test at endpoints only (#646)", "focus wait is bounded and settles (#646)", "focus wait wall-clock deadline (#646)", "target focus needs the target frontmost (#646)"],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#646; not filed upstream"
+			}
+		},
+		{
 			"id": "outline-store",
 			"purpose": "Keep full outlines out of the Pi session file: persist them in a capped agent-cache store keyed by stateId, restore from it, and still restore legacy inline outlines",
 			"files": [
@@ -456,6 +510,7 @@
 		"src/platform/types.ts",
 		"sync-patches.json",
 		"test/act-outcomes.test.mjs",
+		"test/app-policy.test.mjs",
 		"test/async.test.mjs",
 		"test/bounded-output.test.mjs",
 		"test/cleanup.test.mjs",
