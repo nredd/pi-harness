@@ -530,7 +530,8 @@
 			"check": "test/app-policy.test.mjs",
 			"dropControls": [
 				"paste blocked app keyboard refusal (#647)",
-				"paste re-checks blocked app before cmd+v (#647)"
+				"paste re-checks blocked app before cmd+v (#647)",
+				"paste stays off Universal Clipboard (#647)"
 			],
 			"upstream": {
 				"status": "harness-only",
@@ -548,7 +549,7 @@
 				"paste clipboard change fence (#647)",
 				"paste restores the clipboard when the body throws (#647)",
 				"paste unchanged value is unknown (#647)",
-				"paste presses the layout key for v (#647)",
+				"paste presses the command-map key for v (#647)",
 				"paste item is transient for clipboard managers (#647)",
 				"secondaryAction retries only a dead element (#647)"
 			],
