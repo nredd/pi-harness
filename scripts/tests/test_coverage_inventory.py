@@ -834,6 +834,8 @@ def test_swift_test_files_are_test_scope_but_other_swift_is_not() -> None:
     """
     assert is_test_path(Path("native/macos/agent_cursor_tests.swift"))
     assert not is_test_path(Path("native/macos/agent_cursor.swift"))
+    assert is_test_path(Path("native/linux/bridge-rs/tests/protocol_tests.rs"))
+    assert not is_test_path(Path("native/linux/bridge-rs/src/lib.rs"))
 
 
 def test_unmeasured_tree_is_tracked_and_reasoned(tmp_path: Path) -> None:

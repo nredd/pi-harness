@@ -243,10 +243,7 @@
     "computer-use": {
       "root": "packages/computer-use",
       "owned": ["src/**/*.ts", "src/**/*.mjs", "src/**/*.mts", "extensions/**/*.ts", "native/macos/*.swift", "native/windows/bridge-rs/src/**/*.rs", "native/linux/bridge-rs/src/**/*.rs", "scripts/build-native.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/docs-generators/*.mjs", "scripts/*.sh", "docs/**/*.ts", "docs/**/*.tsx", "docs/**/*.mjs"],
-      "exclusions": [
-        { "path": "docs/next-env.d.ts", "kind": "generated", "reason": "Next.js-generated declaration references only; no executable source." },
-        { "path": "src/platform/macos/helper-path.d.mts", "kind": "type-only", "reason": "Only TypeScript declarations for helper-path.mjs; emits no executable JavaScript." }
-      ],
+      "exclusions": [{ "path": "docs/next-env.d.ts", "kind": "generated", "reason": "Next.js-generated declaration references only; no executable source." }, { "path": "src/platform/macos/helper-path.d.mts", "kind": "type-only", "reason": "Only TypeScript declarations for helper-path.mjs; emits no executable JavaScript." }],
       "status": "pending",
       "goal": "excluded",
       "goal_reason": "Owner explicitly excludes computer-use from coverage maintenance; existing platform/native checks remain unchanged. Inventory remains visible, with no coverage claim.",

@@ -382,7 +382,7 @@ the same Git-listed traversal. Executable suffixes (`SOURCE_SUFFIXES`: TS/TSX/`.
 Python, Swift, Rust, `.sh`/`.bash`/`.ps1`) and extensionless files with a `#!` shebang must be inventoried.
 A suffix in neither `SOURCE_SUFFIXES` nor the known-inert `NON_SOURCE_SUFFIXES` (docs, data, images, ...)
 also fails, so a new language is classified deliberately (#694). Declaration files (`.d.ts`, `.d.mts`) pass
-only through a `type-only` exclusion. Whole directories stay out only via `unmeasured_trees` in
+only through a reasoned exclusion (`type-only`, or `generated` for tool output). Whole directories stay out only via `unmeasured_trees` in
 `coverage/policy.json`, each with a tracking issue and reason (today: `forks/`, #693). Shell and
 PowerShell under `scripts/` are the `shell-scripts` package, `pending` with no coverage claim (#695);
 `computer-use` owns `native/macos/*.swift`, so new Swift files join its inventory. Each file must be in a measured/pending inventory or have an explicit
