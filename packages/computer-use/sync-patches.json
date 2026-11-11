@@ -504,6 +504,61 @@
 				"reference": "UPSTREAM.md",
 				"detail": "injaneity/pi-computer-use#115 reports the same session bloat; nredd/pi-harness#648"
 			}
+		},
+		{
+			"id": "act-secondary-select-paste",
+			"purpose": "act_ui secondaryAction (named AX action validated against the element's advertised actions), selectText (AXSelectedTextRange) and paste (pasteboard plus cmd+v, strict headless rejection like typeText); macOS only, coded unsupported_command elsewhere",
+			"files": ["src/actions.ts", "src/bridge.ts", "src/platform/types.ts", "extensions/computer-use.ts", "docs/content/docs/reference/agent/tools.mdx", "test/act-outcomes.test.mjs"],
+			"check": "test/act-outcomes.test.mjs",
+			"dropControls": [
+				"secondaryAction advertised name check (#647)",
+				"paste strict headless rejection (#647)",
+				"macOS-only action platform refusal (#647)",
+				"paste is never retried in the foreground (#647)",
+				"browser state refuses the new actions with a code (#647)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#647; same shape as unmerged upstream proposal injaneity/pi-computer-use#115 part 3, reimplemented from its description; not filed upstream"
+			}
+		},
+		{
+			"id": "act-paste-blocked-app",
+			"purpose": "paste posts cmd+v, so the helper waits for target focus and refuses a blocked focused app before touching the clipboard and again right before cmd+v (restoring the clipboard), like typeText and keypress",
+			"files": ["native/macos/bridge.swift", "test/app-policy.test.mjs"],
+			"check": "test/app-policy.test.mjs",
+			"dropControls": [
+				"paste blocked app keyboard refusal (#647)",
+				"paste re-checks blocked app before cmd+v (#647)",
+				"paste stays off Universal Clipboard (#647)",
+				"paste restore is host-only (#647)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#647; not filed upstream"
+			}
+		},
+		{
+			"id": "act-select-paste-pure",
+			"purpose": "Pure Swift selectText range validation and the paste clipboard change-count fence",
+			"files": ["native/macos/bridge.swift", "test/macos-native-pure.test.mjs"],
+			"check": "test/macos-native-pure.test.mjs",
+			"dropControls": [
+				"selectText range bounds (#647)",
+				"paste clipboard change fence (#647)",
+				"paste restores the clipboard when the body throws (#647)",
+				"paste unchanged value is unknown (#647)",
+				"paste presses the command-map key for v (#647)",
+				"paste item is transient for clipboard managers (#647)",
+				"secondaryAction retries only a dead element (#647)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#647; not filed upstream"
+			}
 		}
 	],
 	"files": [

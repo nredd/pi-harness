@@ -132,5 +132,67 @@ test("act outcome contracts", async () => {
 	const twinLines = (await search({ text: "Save" }, twins)).split("\n").slice(1);
 	assert.deepEqual(twinLines, ['@e3 button "Save" [exact]', '  path: AXWindow "Doc" ▸ AXGroup "Left" ▸ AXButton "Save"', '@e5 button "Save" [exact]', '  path: AXWindow "Doc" ▸ AXGroup "Right" ▸ AXButton "Save"', '@e6 button "Save as" [prefix]'], "search_ui prints paths only for colliding matches");
 
+	// secondaryAction, selectText and paste: validation against the observed outline, stale refs, platform and headless gates.
+	const { prepareAction, strictHeadlessRejection, unsupportedActionRejection, canRetryInForeground } = await import("../src/actions.ts");
+	const menuButton = uiNode("@e2", "More", "AXButton", { wireRef: "w2", actions: ["AXPress", "AXShowMenu"] });
+	const field = uiNode("@e3", "Name", "AXTextField", { wireRef: "w3", actions: [], canPress: false, canSetValue: true, isTextInput: true });
+	const picture = uiNode("@e4", "Art", "AXImage", { actions: ["AXShowMenu"], pictureOnly: true });
+	const nodes = new Map([menuButton, field, picture].map((node) => [node.ref, node]));
+	const env = {
+		headless: false,
+		image: { width: 100, height: 100 },
+		node: (ref) => {
+			const node = nodes.get(ref);
+			if (!node) throw new Error(`Outline ref '${ref}' is stale or not available for the latest state.`);
+			return node;
+		},
+		center: () => ({ x: 5, y: 5 }),
+		validatePoint: () => undefined,
+	};
+	const prep = (action, focus = false, overrides = {}) => prepareAction(action, { currentFocus: focus }, { ...env, ...overrides });
+
+	let prepared = prep({ action: "secondaryAction", ref: "@e2", name: "AXShowMenu" });
+	assert.deepEqual([prepared.action, prepared.target, prepared.params], ["secondaryAction", { ref: "w2" }, { name: "AXShowMenu" }]);
+	assert.equal(prep({ action: "secondaryAction", ref: "@e2", name: "ShowMenu" }).params.name, "AXShowMenu", "bare names gain the AX prefix");
+	assert.throws(() => prep({ action: "secondaryAction", ref: "@e2", name: "AXCancel" }), /does not advertise AXCancel\. Advertised actions: AXPress, AXShowMenu/);
+	assert.throws(() => prep({ action: "secondaryAction", ref: "@e2" }), /requires name/);
+	assert.throws(() => prep({ action: "secondaryAction", name: "AXShowMenu" }), /requires a ref/);
+	assert.throws(() => prep({ action: "secondaryAction", ref: "@e9", name: "AXShowMenu" }), /stale or not available/, "stale refs fail like the existing actions");
+	assert.throws(() => prep({ action: "secondaryAction", ref: "@e4", name: "AXShowMenu" }), /pictureOnly/);
+
+	prepared = prep({ action: "selectText", ref: "@e3", start: 2, length: 3 });
+	assert.deepEqual([prepared.action, prepared.target, prepared.params], ["selectText", { ref: "w3" }, { start: 2, length: 3 }]);
+	assert.deepEqual(prep({ action: "selectText", ref: "@e3", start: 4 }).params, { start: 4, length: 0 }, "length defaults to a caret");
+	assert.throws(() => prep({ action: "selectText", ref: "@e2", start: 0 }), /not a text element/);
+	assert.throws(() => prep({ action: "selectText", ref: "@e3" }), /start must be a non-negative integer/);
+	assert.throws(() => prep({ action: "selectText", ref: "@e3", start: -1 }), /start must be/);
+	assert.throws(() => prep({ action: "selectText", ref: "@e3", start: 1.5 }), /start must be/);
+	assert.throws(() => prep({ action: "selectText", ref: "@e3", start: 0, length: -2 }), /length must be/);
+	assert.throws(() => prep({ action: "selectText", ref: "@e8", start: 0 }), /stale or not available/);
+
+	prepared = prep({ action: "paste", ref: "@e3", text: "你好" });
+	assert.deepEqual([prepared.action, prepared.target, prepared.params, prepared.usesCurrentFocus], ["paste", { ref: "w3" }, { text: "你好" }, false]);
+	prepared = prep({ action: "paste", text: "hi" }, true);
+	assert.equal(prepared.usesCurrentFocus, true, "ref-less paste follows the focus a click established");
+	assert.ok("focus" in prepared.target);
+	assert.throws(() => prep({ action: "paste", ref: "@e3", text: "" }), /non-empty/);
+	assert.throws(() => prep({ action: "paste", ref: "@e9", text: "x" }), /stale or not available/);
+
+	assert.match(strictHeadlessRejection({ action: "paste" }, true, "darwin"), /paste requires synthesized keyboard input.*foreground_required/);
+	for (const action of ["secondaryAction", "selectText"]) assert.equal(strictHeadlessRejection({ action }, true, "darwin"), undefined, `${action} is AX-only and allowed in strict headless mode`);
+	assert.equal(strictHeadlessRejection({ action: "paste" }, false, "darwin"), undefined);
+	for (const action of ["secondaryAction", "selectText", "paste"]) {
+		assert.equal(unsupportedActionRejection({ action }, "darwin"), undefined);
+		for (const platform of ["linux", "win32"]) assert.match(unsupportedActionRejection({ action }, platform), new RegExp(`${action} is not supported on ${platform}`));
+	}
+	assert.equal(unsupportedActionRejection({ action: "typeText" }, "linux"), undefined, "existing actions are untouched");
+	for (const headless of [false, true]) assert.equal(canRetryInForeground(prep({ action: "paste", ref: "@e3", text: "x" }), "didnt", headless), false, "paste is never retried: a slow target may still paste, so a retry could insert twice");
+	assert.equal(canRetryInForeground(prep({ action: "keypress", ref: "@e3", keys: ["a"] }), "didnt", false), true, "typeText and keypress keep their foreground retry");
+	for (const action of ["secondaryAction", "selectText", "paste"]) {
+		assert.throws(() => testing.assertBrowserTransactionAction({ action }), (error) => error.code === "unsupported_command" && /do not support/.test(error.message), `${action} in a browser state is a coded unsupported_command`);
+	}
+	assert.doesNotThrow(() => testing.assertBrowserTransactionAction({ action: "typeText" }));
+	assert.equal(canRetryInForeground(prep({ action: "selectText", ref: "@e3", start: 0 }), "didnt", false), false, "AX-only actions never escalate");
+
 	console.log("act outcome checks passed");
 });

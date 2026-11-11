@@ -102,7 +102,7 @@ act_ui({
 
 Steps run sequentially against one resource and retain helper checks. The native helper uses one root baseline and final settle for the transaction, and the bridge returns one final observation. If a transition can change the meaning of later refs or requires a decision, send one action, inspect the returned state, then continue.
 
-Clicks into editable regions establish foreground focus for later keyboard steps in the same transaction. Omit `ref` from `typeText` or `keypress` after such a click so input is sent to the editor established by that click:
+Clicks into editable regions establish foreground focus for later keyboard steps in the same transaction. Omit `ref` from `typeText`, `paste` or `keypress` after such a click so input is sent to the editor established by that click:
 
 ```ts
 act_ui({
@@ -114,6 +114,8 @@ act_ui({
   expect: { text: "hello" },
 })
 ```
+
+`secondaryAction` (`ref`, `name`) runs an accessibility action the element advertises, e.g. `AXShowMenu` to open a context menu; `inspect_ui` lists them. `selectText` (`ref`, `start`, `length`) sets the selection of a text element in UTF-16 units (`length` 0 places the caret). `paste` (`text`, optional `ref`) inserts through the pasteboard and cmd+v, then restores the previous clipboard, which suits input methods where per-key typing composes; like `typeText` it is refused in strict headless mode. These three are macOS-only and fail with `unsupported_command` elsewhere; browser (CDP) states do not support them.
 
 The runtime prefers background semantics when they are credible, verifies the result, and escalates side-effect-free failed keyboard input to foreground delivery automatically. Ambiguous pointer actions are never replayed blindly.
 

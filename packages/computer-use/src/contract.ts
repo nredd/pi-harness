@@ -67,8 +67,14 @@ export interface UiCondition {
 }
 
 export interface UiAction {
-	action: "press" | "click" | "setText" | "typeText" | "keypress" | "scroll" | "drag" | "moveMouse";
+	action: "press" | "click" | "setText" | "typeText" | "paste" | "keypress" | "secondaryAction" | "selectText" | "scroll" | "drag" | "moveMouse";
 	ref?: string;
+	/** `secondaryAction`: accessibility action the element advertises, e.g. `AXShowMenu`. */
+	name?: string;
+	/** `selectText`: UTF-16 offset where the selection starts. */
+	start?: number;
+	/** `selectText`: UTF-16 length of the selection; 0 places the caret. */
+	length?: number;
 	x?: number;
 	y?: number;
 	text?: string;
