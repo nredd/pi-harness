@@ -161,6 +161,18 @@ Plan-mode newer than `0.59.3-nredd.3` and subagents newer than `0.22.0-nredd.8` 
 
 Published: see the selection table under Combined stack selection.
 
+## Wave-3 release plan
+
+Planned versions, chosen by SemVer from `git log 1872f0cc..HEAD -- packages/<name>` (minor for added features or behavior, `-nredd.N` kept for the fork-suffixed package). Nothing here is a claim of publication; the table and receipt move with the pin PR after each `publish.yml` run succeeds.
+
+- `@nredd/pi-computer-use` `0.6.2` -> `0.7.0`: `blocked_apps` fail-closed policy and locked-session refusal, outline store moved out of the session file, WSL2 diagnostics, scroll fixes
+- `@nredd/pi-session-kit` `0.10.0` -> `0.11.0`: `monitor_start` `todo` link and `todos` on monitor events
+- `@nredd/pi-subagents` `0.22.0-nredd.9` -> `0.22.0-nredd.10`: prebundled runtime in `dist/`, faster startup, `TMPDIR` test sandbox
+- `@nredd/pi-todo` `2.14.0` -> `2.15.0`: monitor-linked todos reported as waiting on a monitor, unlinked monitors arm nothing
+- `@nredd/pi-dev-tools` stays `0.8.0`: only `test/` changed since its tag and `files` ships `src`, `LICENSE` and `README.md`, so the published bytes are current
+
+Core stays `v1.3.0-nredd.10`. `integration/stacks/personal.json` and `integration/stacks/runtime-locks.json` stay on the published selection until the pin PR, per [release verification](release-verification.md).
+
 ## Owned npm packages
 
 `.github/workflows/publish.yml` is the only automated publish path for `@nredd/pi-computer-use`,
