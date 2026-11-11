@@ -587,7 +587,7 @@ NON_SOURCE_SUFFIXES: frozenset[str] = frozenset(
 
 
 def is_test_path(path: Path) -> bool:
-    """Identify conventional tests, pytest `conftest.py` fixture modules and fixture directories.
+    """Identify conventional tests, `conftest.py`, Swift `*_tests.swift` and fixture directories.
 
     Parameters:
         path (Path): Repository- or package-relative source path.
@@ -842,7 +842,9 @@ def audit_inventory(root: Path, policy: Policy, files: set[str]) -> set[str]:
     Returns:
         set[str]: Unaccounted executable source paths; an empty set passes the audit.
     Raises:
-        ValueError: Ownership expansion fails or helper paths are absent, duplicated or production-owned.
+        ValueError: Ownership expansion fails, helper paths are absent, duplicated or production-owned,
+            an unmeasured tree is missing or overlaps owned source, or an exclusion glob matches nothing.
+        subprocess.CalledProcessError: Git cannot list the index for gitlinks.
     """
     covered = {file for files_in_scope in inventory_scopes(root, policy).values() for file in files_in_scope}
     helpers = {helper.path for helper in policy.verification_helpers}
@@ -854,9 +856,10 @@ def audit_inventory(root: Path, policy: Policy, files: set[str]) -> set[str]:
         )
     if helpers & covered:
         raise ValueError(f"Verification helpers overlap production inventory: '{sorted(helpers & covered)}'")
-    trees = check_unmeasured_trees(root, policy, covered)
+    links = gitlinks(root)
+    trees = check_unmeasured_trees(root, policy, covered, links)
     check_exclusions_match(policy, files)
-    unknown = {link for link in gitlinks(root) if not any(Path(link).is_relative_to(tree) for tree in trees)}
+    unknown = {link for link in links if not any(Path(link).is_relative_to(tree) for tree in trees)}
     for file in files:
         path = Path(file)
         if is_test_path(path) or any(path.is_relative_to(tree) for tree in trees):
@@ -889,7 +892,7 @@ def gitlinks(root: Path) -> set[str]:
     return {row.split("\t", 1)[1] for row in rows if row.startswith("160000 ")}
 
 
-def check_unmeasured_trees(root: Path, policy: Policy, covered: set[str]) -> list[Path]:
+def check_unmeasured_trees(root: Path, policy: Policy, covered: set[str], links: set[str]) -> list[Path]:
     """Validate each unmeasured tree against the tree, the packages and the inventory.
 
     The tracking issue's open state is not checked: the gate has no network.
@@ -898,12 +901,12 @@ def check_unmeasured_trees(root: Path, policy: Policy, covered: set[str]) -> lis
         root (Path): Absolute repository root.
         policy (Policy): Current policy.
         covered (set[str]): Repository-relative paths already owned by a package.
+        links (set[str]): Gitlink paths from `gitlinks`.
     Returns:
         list[Path]: Validated tree paths.
     Raises:
         ValueError: A tree is missing, is not a directory or gitlink, or overlaps owned source.
     """
-    links = gitlinks(root)
     trees = [Path(tree.path) for tree in policy.unmeasured_trees]
     for tree in trees:
         if not ((root / tree).is_dir() or tree.as_posix() in links):

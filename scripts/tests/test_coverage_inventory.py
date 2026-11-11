@@ -962,22 +962,34 @@ def test_gitlinks_must_be_covered_by_an_unmeasured_tree(tmp_path: Path) -> None:
     assert not audit_inventory(tmp_path, cfg, files)
 
 
-@pytest.mark.parametrize("pattern", ["src/**/*.ts", "dist/**"])
-def test_exclusion_glob_must_match_an_existing_file(tmp_path: Path, pattern: str) -> None:
+def test_exclusion_glob_must_match_an_existing_file(tmp_path: Path) -> None:
     """Refuse a dead exclusion glob instead of letting it pre-exempt future files.
 
     Parameters:
         tmp_path (Path): Disposable repository root.
-        pattern (str): Glob that matches nothing in the fixture, or one broad one that does.
     Returns:
-        None: Only the dead glob raises.
+        None: A glob matching nothing raises.
     Raises:
         AssertionError: A speculative exclusion is accepted.
     """
     cfg = scope_fixture(tmp_path)
-    cfg.packages["example"].exclusions = [Exclusion(path=pattern, kind="generated", reason="Build output.")]
-    if pattern.startswith("dist"):
-        with pytest.raises(ValueError, match="matches no existing file"):
-            audit_inventory(tmp_path, cfg, repository_files(tmp_path))
-    else:
+    cfg.packages["example"].exclusions = [Exclusion(path="dist/**", kind="generated", reason="Build output.")]
+    with pytest.raises(ValueError, match="matches no existing file"):
         audit_inventory(tmp_path, cfg, repository_files(tmp_path))
+
+
+def test_exclusion_glob_matching_an_existing_file_passes(tmp_path: Path) -> None:
+    """Accept an exclusion that hits a real file and exempts exactly it.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+    Returns:
+        None: The audit passes with the live exclusion.
+    Raises:
+        AssertionError: A live exclusion is rejected.
+    """
+    cfg = scope_fixture(tmp_path)
+    cfg.packages["example"].exclusions = [
+        Exclusion(path="src/kept.ts", kind="generated", reason="Build output.")
+    ]
+    assert not audit_inventory(tmp_path, cfg, repository_files(tmp_path))
