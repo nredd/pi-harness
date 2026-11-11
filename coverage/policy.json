@@ -261,7 +261,7 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 572, "functions": 203, "branches": 871 }, "linux": { "lines": 695, "functions": 238, "branches": 1124 } },
+          "max_uncovered": { "darwin": { "lines": 572, "functions": 203, "branches": 871 }, "linux": { "lines": 592, "functions": 211, "branches": 899 } },
           "reporters": ["text", "lcov"]
         }
       }

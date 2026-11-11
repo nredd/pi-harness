@@ -325,8 +325,8 @@ config reads both from the policy like every other producer, so a new module joi
 instead of dropping out. It stays
 `goal: "excluded"` with no 100% claim, but since #645 T0 the signal is **enforced**: its per-OS caps are the
 measured uncovered counts for lines, functions and branches (darwin **572 / 203 / 871**, local `npm test` on
-`6d913af1`; linux **695 / 238 / 1124**, hosted artifacts from run `43024823914` at `df95d355`, before #723, so an
-upper bound to tighten on the next hosted run). Statements carry no cap until #700. Subprocess-run scripts count
+`6d913af1` and hosted `owned (macos-14)`; linux **592 / 211 / 899**, the max of hosted `owned (ubuntu-24.04)`
+589/209/899 and `owned (wsl2)` 592/211/899 on #731 at `d1ebcfc0`). Statements carry no cap until #700. Subprocess-run scripts count
 only what the suites import. Files already at 0/0/0 on every OS are also pinned per file by
 `coverage.thresholds` in `packages/computer-use/vitest.config.ts` (the policy schema has no per-file pins).
 Per-file history and numbers are in [computer-use-coverage.md](computer-use-coverage.md). The native and

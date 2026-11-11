@@ -38,10 +38,9 @@ The signal is **enforced** since #645 T0, with caps equal to the measured per-OS
 | OS | Lines | Functions | Branches | Source |
 | --- | --- | --- | --- | --- |
 | darwin | 572 | 203 | 871 | local `npm test` at `6d913af1` |
-| linux (max of Ubuntu and WSL2) | 695 | 238 | 1124 | hosted `coverage-ubuntu-24.04-computer-use` 692/236/1124 and `coverage-wsl2-subagents-computer-use` 695/238/1124, CI run `43024823914` at `df95d355` (before #723) |
+| linux (max of Ubuntu and WSL2) | 592 | 211 | 899 | hosted `owned (ubuntu-24.04)` 589/209/899 and `owned (wsl2)` 592/211/899, PR #731 at `d1ebcfc0` (after #723) |
 
-The Linux numbers predate #723 (`bridge.ts` setup, targets and look), so they are an upper bound; the
-next hosted run on a commit at or after `6d913af1` should tighten them (never raise them). Statement
+Every later coverage PR lowers these caps to its own hosted numbers (never raises them). Statement
 accounting does not exist yet (#700), so statements carry no cap.
 
 Files at 0/0/0 on all three OSes in the hosted artifacts (`outline.ts`, `outline-store.ts`,
