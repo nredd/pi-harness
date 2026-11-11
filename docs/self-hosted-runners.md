@@ -12,6 +12,8 @@ Infra code and runbook live in the private `nredd/ci-runners` repo. This page is
 | `pi-macos` | MacBook Air (arm64) | One job at a time as the unprivileged hidden `ci` user. All `ci` processes killed and its home and `/tmp` files wiped before and after every job, runner restored from a root-owned golden copy. pf rules block `ci` from every private net. 50 min cap |
 | `pi-wsl2` | ARM64 Windows host | One job at a time inside a fresh WSL2 distro (linux-arm64), imported from a read-only golden image under a dedicated non-admin Windows user `ci`, so it gets its own utility VM apart from the owner's dev distros. Unregistered and the VM shut down after every job. NAT networking; a guest nftables deny set (private ranges, tailnet/CGNAT, link-local, the gateway, plus every non-default route prefix of the host at job start) is the enforced layer, and a calibrated Hyper-V firewall rule is best effort. `wsl.conf`: automount, interop and `appendWindowsPath` off, no sudo, IPv6 off. Runs only on AC with enough free disk. 50 min cap |
 
+`pi-wsl2` status: planned, not live. The isolation controls in its row and in the threat model below are the design; the native path has only run against stubs, and nothing is claimed as verified until the acceptance smoke and three real jobs have run (see Remaining).
+
 All register repo-scoped with single-use JIT configs: a runner takes one job and its registration dies with it. No org or user level runners, no runner groups to misconfigure, nothing persistent to steal. The PAT that mints configs (`Administration: write`, `Actions: read`, this repo only) lives root-only (SYSTEM and Administrators on Windows) on the host, never inside a VM or the `ci` account.
 
 ## Repo settings (enforced, check with `gh api`)
