@@ -414,9 +414,22 @@ def run_install_gh(tmp_path: Path, system: str, machine: str) -> subprocess.Comp
         ),
         encoding="utf-8",
     )
-    # macOS has no `sha256sum`; a stub that records its call proves the digest check ran and failed.
+    # macOS has no `sha256sum`: a portable stand-in that really verifies `<digest>  <path>` from stdin and records
+    # that it ran, so a wrong pinned digest or a wrong archive both fail the check for the right reason.
     (commands / "sha256sum").write_text(
-        f"#!/bin/sh\ntouch '{tmp_path}/sha256sum-ran'\nexit 1\n", encoding="utf-8"
+        textwrap.dedent(
+            f"""\
+            #!/usr/bin/env python3
+            import hashlib
+            import sys
+            from pathlib import Path
+
+            Path({str(tmp_path / "sha256sum-ran")!r}).touch()
+            digest, _, path = sys.stdin.readline().rstrip("\\n").partition("  ")
+            sys.exit(0 if hashlib.sha256(Path(path).read_bytes()).hexdigest() == digest else 1)
+            """
+        ),
+        encoding="utf-8",
     )
     (commands / "sha256sum").chmod(0o755)
     (commands / "curl").write_text(

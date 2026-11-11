@@ -48,6 +48,7 @@ targets=(192.168.1.1:80 10.0.0.1:80 172.16.0.1:80 100.64.0.1:22 100.100.100.100:
 if [ -n "${gateway:-}" ]; then targets+=("$gateway:445" "$gateway:135" "$gateway:53"); fi
 if [ -n "${SMOKE_HOST_IP:-}" ]; then targets+=("$SMOKE_HOST_IP:445" "$SMOKE_HOST_IP:3389" "$SMOKE_HOST_IP:5985"); fi
 dev_ports=${SMOKE_DEV_PORTS:-}
+if [ -z "$dev_ports" ]; then echo "note: SMOKE_DEV_PORTS is not set on this runner, so no dev loopback or dev address ports were probed"; fi
 if [ -n "${SMOKE_DEV_IP:-}" ]; then
   for port in $dev_ports; do targets+=("$SMOKE_DEV_IP:$port"); done
 fi
