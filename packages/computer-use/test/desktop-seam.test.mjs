@@ -195,7 +195,14 @@ describe("locks and leases", () => {
 	});
 
 	test("a transaction that never goes physical never takes the lock", async () => {
-		const result = await withDesktopTransaction(async () => "no input");
-		assert.equal(result, "no input");
+		let openGate;
+		const gate = new Promise((resolve) => { openGate = resolve; });
+		const rival = withDesktopLock(async () => { await gate; });
+		try {
+			assert.equal(await withDesktopTransaction(async () => "no input"), "no input", "completes while another caller holds the lock");
+		} finally {
+			openGate();
+			await rival;
+		}
 	});
 });
