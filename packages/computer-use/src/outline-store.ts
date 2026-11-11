@@ -26,7 +26,8 @@ function stateKey(stateId: string): string {
 function listEntries(dir: string): Array<{ name: string; key: string }> {
 	let names: string[];
 	try {
-		names = readdirSync(dir);
+		// Code-unit order is write-time order, so reversed is newest first.
+		names = readdirSync(dir).sort().reverse();
 	} catch {
 		return [];
 	}
@@ -35,14 +36,14 @@ function listEntries(dir: string): Array<{ name: string; key: string }> {
 		const match = ENTRY_NAME.exec(name);
 		if (match) entries.push({ name, key: match[3]! });
 	}
-	return entries.sort((a, b) => (a.name < b.name ? 1 : a.name > b.name ? -1 : 0));
+	return entries;
 }
 
 function removeQuietly(file: string): void {
 	try {
 		unlinkSync(file);
 	} catch (error) {
-		debugLog("outline store: could not remove %s: %s", file, error instanceof Error ? error.message : String(error));
+		debugLog("outline store: could not remove %s: %s", file, String(error));
 	}
 }
 
@@ -68,7 +69,7 @@ export function saveStoredOutline(stateId: string, outline: SerializedOutline, l
 		}
 	} catch (error) {
 		removeQuietly(tmp);
-		debugLog("outline store: could not save %s: %s", stateId, error instanceof Error ? error.message : String(error));
+		debugLog("outline store: could not save %s: %s", stateId, String(error));
 	}
 }
 
@@ -84,7 +85,7 @@ export function loadStoredOutline(stateId: string): SerializedOutline | undefine
 		if (parsed.stateId !== stateId || !outline?.root || typeof outline.lookId !== "string") return undefined;
 		return outline;
 	} catch (error) {
-		debugLog("outline store: could not read %s: %s", stateId, error instanceof Error ? error.message : String(error));
+		debugLog("outline store: could not read %s: %s", stateId, String(error));
 		return undefined;
 	}
 }
