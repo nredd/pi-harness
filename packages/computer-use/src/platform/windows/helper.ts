@@ -141,9 +141,10 @@ export class WindowsHelperClient {
 
 	async command<T>(cmd: string, args: Record<string, unknown> = {}, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<T> {
 		const signal = options?.signal;
+		// A signal that is already aborted never fires again: refuse before installing, spawning or sending.
+		throwIfAborted(signal);
 		const child = await this.process(signal);
-		// A signal that is already aborted never fires again, so it must be re-checked before sending. `process()`
-		// already refuses it before setup when cold; this covers a warm client and an abort during startup.
+		// ...and so does one aborted while the install check or helper start was in flight.
 		throwIfAborted(signal);
 		const id = randomUUID();
 		const timeoutMs = options?.timeoutMs ?? COMMAND_TIMEOUT_MS;

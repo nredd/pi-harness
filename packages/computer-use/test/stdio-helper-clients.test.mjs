@@ -204,6 +204,14 @@ describe("Windows helper client", () => {
 		assert.equal(engine.requests.length, 1, "only the first command reached the helper");
 	});
 
+	test("an already aborted signal does not respawn an exited helper (#735)", async () => {
+		const { client, spawn, children } = await windows({ setup: () => (install(), { exitCode: 0 }), helper: { engine: envelope("Windows", { look: ok(1) }) } });
+		assert.equal(await client.command("look"), 1);
+		children[0].exit(0);
+		await assert.rejects(client.command("look", {}, { signal: AbortSignal.abort() }), /Operation aborted\./);
+		assert.equal(helperSpawns(spawn).length, 1, "no replacement helper was spawned");
+	});
+
 	test("a signal aborted while the install check is in flight sends nothing (#735)", async () => {
 		const engine = envelope("Windows", { look: ok(1) });
 		const { client } = await windows({ setup: () => (install(), { exitCode: 0 }), helper: { engine } });
