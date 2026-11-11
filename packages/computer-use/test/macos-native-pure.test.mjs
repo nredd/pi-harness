@@ -301,7 +301,7 @@ if let us = layoutData("com.apple.keylayout.US") {
 let keyV: UInt16 = 9
 /// These layouts ship with macOS: a missing one fails the suite instead of silently skipping its checks.
 func requiredLayout(_ id: String) -> Data {
-	guard let data = layoutData(id) else { print("FAIL: required keyboard layout \(id) is not installed"); exit(1) }
+	guard let data = layoutData(id) else { print("FAIL: required keyboard layout \\(id) is not installed"); exit(1) }
 	checked += 1
 	return data
 }
