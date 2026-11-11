@@ -326,9 +326,9 @@ for id in ["com.apple.keylayout.Russian", "com.apple.keylayout.Ukrainian", "com.
 	let required = id.hasSuffix("Russian") || id.hasSuffix("Ukrainian")
 	if let layout = required ? requiredLayout(id) : layoutData(id) {
 		if !required { checked += 1 }
-		check(keyboardLayoutCharacter(layoutData: layout, keyCode: keyV, shift: false) != "v", "\(id) types no v on key 9")
-		check(keyboardLayoutCharacter(layoutData: layout, keyCode: keyV, modifierState: commandModifierState) == "v", "\(id) command map yields v on key 9")
-		check(pasteKeyCode(layoutData: layout) == keyV, "\(id) pastes with key code 9, it is not refused")
+		check(keyboardLayoutCharacter(layoutData: layout, keyCode: keyV, shift: false) != "v", "\\(id) types no v on key 9")
+		check(keyboardLayoutCharacter(layoutData: layout, keyCode: keyV, modifierState: commandModifierState) == "v", "\\(id) command map yields v on key 9")
+		check(pasteKeyCode(layoutData: layout) == keyV, "\\(id) pastes with key code 9, it is not refused")
 	}
 }
 if let danish = layoutData("com.apple.keylayout.Danish") {
