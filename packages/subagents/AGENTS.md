@@ -56,7 +56,7 @@ Cite code by symbol or quoted string (`spawnTopLevel` in `src/index.ts`), never 
 - `npm run lint:fix` auto-fixes most style issues.
 - `npm run test` runs the whole suite, including `*-e2e.test.ts` files. To iterate on a single file, run it directly: `npx vitest run test/<file>.test.ts`.
 - If you create or modify a test file, run it and iterate on the test or implementation until it passes.
-- `npm run build` compiles with `tsc`; run it only when verifying the build output or when requested.
+- `npm run build` regenerates the esbuild runtime bundle `dist/` from `src/` (`scripts/build-runtime.mjs`, #577). Rebuild and commit `dist/` with every `src/` change; `npm run check:runtime` fails on a stale, missing or extra `dist/` file.
 - `npm run bench` runs the benchmarks in `test/perf/*.bench.ts` (absolute timings, ~1 min). Opt-in: it is not part of the check suite, and `npm run test` never picks bench files up. `npm run bench:ab -- <ref>` benchmarks the working tree against another commit and prints the delta — use it for a PR's `## Performance` section. The `*.perf.test.ts` guards beside them assert operation counts, not time, and DO run in the normal suite.
 - For ad-hoc scripts, write them to a temp file (e.g. `/tmp`), run, edit if needed, remove when done. Don't embed multi-line scripts in `bash` commands.
 
@@ -150,7 +150,7 @@ Before a release:
   ```
   `PI_E2E_LIVE=1` swaps the scripted faux suite for the live one (the faux suite is `skipIf(LIVE)`).
   (`prepublishOnly` runs lint + typecheck + test + build; the live e2e is the smoke test to run by hand before publishing.)
-- Inspect the publish tarball with `npm pack --dry-run` and eyeball the output: the version is right, `src/` (pi loads `pi.extensions: ./src/index.ts`), `dist/`, `README.md`, `CHANGELOG.md` and `LICENSE` are present, and nothing stray slipped past `.npmignore`. Read-only; it writes no tarball. `prepublishOnly` builds but never checks what actually ships.
+- Inspect the publish tarball with `npm pack --dry-run` and eyeball the output: the version is right, `dist/` (pi loads `pi.extensions: ./dist/index.ts`, the prebuilt bundle), `src/`, `README.md`, `CHANGELOG.md` and `LICENSE` are present, and nothing stray slipped past `.npmignore`. Read-only; it writes no tarball. `prepublishOnly` builds but never checks what actually ships.
 
 **Never publish.** The user runs `npm version` / `npm publish` and any tagging manually. Do not run those commands unless the user explicitly asks.
 
