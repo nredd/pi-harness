@@ -62,8 +62,7 @@ export type PlanModeWorkflowToolPolicy =
   | { kind: "automatic"; desiredNames?: undefined; allowedNames: string[]; resolved: boolean }
   | { kind: "explicit"; desiredNames: string[]; allowedNames: string[]; resolved: boolean };
 
-export interface PlanModeState {
-  enabled: boolean;
+interface PlanModeStateBase {
   latestPlan?: string;
   latestPlanSource?: PlanCompletionSource;
   awaitingAction: boolean;
@@ -78,7 +77,6 @@ export interface PlanModeState {
   pendingImplementationRuntime?: PendingImplementationRuntime;
   selectedToolNames?: string[];
   selectedToolKeys?: string[];
-  workflowToolPolicy?: PlanModeWorkflowToolPolicy;
   previousThinkingLevel?: PlanModeFixedThinkingLevel;
   appliedThinkingLevel?: PlanModeFixedThinkingLevel;
   manualThinkingLevel?: PlanModeFixedThinkingLevel;
@@ -86,6 +84,31 @@ export interface PlanModeState {
   /** Start fresh switched this source back to the pre-Plan model; resuming the Plan re-applies the Plan model. */
   resumePlanModel?: true;
 }
+
+/** Plan is off: there is no workflow tool policy to enforce. */
+export interface DisabledPlanModeState extends PlanModeStateBase {
+  enabled: false;
+  workflowToolPolicy?: undefined;
+}
+
+/** Plan is on: the workflow tool policy is frozen, so enforcement never has to check for one. */
+export interface EnabledPlanModeState extends PlanModeStateBase {
+  enabled: true;
+  workflowToolPolicy: PlanModeWorkflowToolPolicy;
+}
+
+export type PlanModeState = DisabledPlanModeState | EnabledPlanModeState;
+
+/**
+ * A state read from a session branch. Sessions saved before the policy was persisted restore
+ * enabled without one; installing the state derives it, which yields an `EnabledPlanModeState`.
+ */
+export interface RestoredEnabledPlanModeState extends PlanModeStateBase {
+  enabled: true;
+  workflowToolPolicy?: PlanModeWorkflowToolPolicy;
+}
+
+export type RestoredPlanModeState = DisabledPlanModeState | RestoredEnabledPlanModeState;
 
 type SessionEntry = {
   type?: string;
@@ -98,7 +121,7 @@ type SessionEntry = {
   };
 };
 
-export function restorePlanModeState(entries: unknown[], stateEntryType: string): PlanModeState {
+export function restorePlanModeState(entries: unknown[], stateEntryType: string): RestoredPlanModeState {
   const branch = entries as SessionEntry[];
   let stateEntryIndex = -1;
   for (let index = branch.length - 1; index >= 0; index -= 1) {
@@ -121,8 +144,7 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
   const pendingImplementationRuntime = enabled
     ? undefined
     : normalizePendingImplementationRuntime(entry.data.pendingImplementationRuntime);
-  return {
-    enabled,
+  const base: PlanModeStateBase = {
     latestPlan,
     latestPlanSource: enabled
       ? ((persistedPlan ? persistedSource : undefined) ?? (recoveredPlan ? PLAN_MODE_COMPLETE_TOOL_NAME : undefined))
@@ -143,13 +165,15 @@ export function restorePlanModeState(entries: unknown[], stateEntryType: string)
     pendingImplementationRuntime,
     selectedToolNames: stringArray(entry.data.selectedToolNames),
     selectedToolKeys: stringArray(entry.data.selectedToolKeys),
-    workflowToolPolicy: enabled ? normalizeWorkflowToolPolicy(entry.data.workflowToolPolicy) : undefined,
     previousThinkingLevel: enabled ? fixedThinkingLevel(entry.data.previousThinkingLevel) : undefined,
     appliedThinkingLevel: enabled ? fixedThinkingLevel(entry.data.appliedThinkingLevel) : undefined,
     manualThinkingLevel: enabled ? fixedThinkingLevel(entry.data.manualThinkingLevel) : undefined,
     planModelSwitch: enabled ? normalizePlanModelSwitch(entry.data.planModelSwitch) : undefined,
     resumePlanModel: enabled && entry.data.resumePlanModel === true ? true : undefined,
   };
+  return enabled
+    ? { ...base, enabled, workflowToolPolicy: normalizeWorkflowToolPolicy(entry.data.workflowToolPolicy) }
+    : { ...base, enabled, workflowToolPolicy: undefined };
 }
 
 function restoreReproposalReview(

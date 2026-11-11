@@ -53,7 +53,13 @@ test("action controller forwards saved, ready, and current menu callbacks with t
   };
   const controller = createPlanActionController({
     loadInteractiveUi: async () => ui as InteractiveUi,
-    getState: () => ({ enabled: true, awaitingAction: true, declinedPlans: 0, latestPlan: "# Plan" }),
+    getState: () => ({
+      enabled: true,
+      awaitingAction: true,
+      declinedPlans: 0,
+      latestPlan: "# Plan",
+      workflowToolPolicy: { kind: "automatic" as const, allowedNames: [], resolved: true },
+    }),
     captureLifecycle: () => ({ signal: owner.signal, isCurrent: () => current }),
     statusText: () => "ready",
     getThinkingLevel: () => "medium",

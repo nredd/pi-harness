@@ -157,11 +157,12 @@ test("completion opens the ready menu once and does not send a follow-up", async
 test("fresh selection fails closed when automatic readiness has no command context", async () => {
   const context = createMockContext({ mode: "rpc", hasUI: true });
   const state = {
-    enabled: true,
+    enabled: true as const,
     awaitingAction: true,
     declinedPlans: 0,
     latestPlan: PLAN,
     latestPlanSource: "plan_mode_complete" as const,
+    workflowToolPolicy: { kind: "automatic" as const, allowedNames: [], resolved: true },
   };
   const result = await startFreshImplementationFromState(context.ctx, {
     getState: () => state,

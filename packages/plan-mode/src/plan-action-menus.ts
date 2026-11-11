@@ -25,7 +25,7 @@ const THINKING_LEVEL_DESCRIPTIONS: Record<PlanModeFixedThinkingLevel, string> = 
 interface PlanMenuOptions extends PlanEditOption {
   statusText: string;
   planThinkingLevel: PlanModeFixedThinkingLevel | undefined;
-  /** The model Start fresh treats as the plan's; defaults to the current model. */
+  /** The model Start fresh treats as the plan's, with the label the menu shows for it. */
   planModel: FreshPlanModel;
   implementationDefaults?: ImplementationRuntimeSelection;
   hasReadyPlan: boolean;
@@ -145,7 +145,7 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
 
 interface ReadyPlanMenuOptions extends PlanEditOption {
   planThinkingLevel: PlanModeFixedThinkingLevel | undefined;
-  /** The model Start fresh treats as the plan's; defaults to the current model. */
+  /** The model Start fresh treats as the plan's, with the label the menu shows for it. */
   planModel: FreshPlanModel;
   implementationDefaults?: ImplementationRuntimeSelection;
   implementationOutcome(): string;

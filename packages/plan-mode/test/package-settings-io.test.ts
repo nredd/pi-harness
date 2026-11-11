@@ -187,7 +187,7 @@ test("a non-Error read failure is reported as text", async () => {
 });
 
 const SAVED_PLAN_STATE = {
-  enabled: false,
+  enabled: false as const,
   awaitingAction: false,
   declinedPlans: 0,
   savedPlan: { plan: "# Plan", source: "plan_mode_complete" as const },

@@ -13,14 +13,16 @@ import {
   showPlanModePlan,
   updatePlanModeUi,
 } from "../src/presentation.js";
-import type { PlanModeState } from "../src/state.js";
+import type { DisabledPlanModeState, PlanModeState, PlanModeWorkflowToolPolicy } from "../src/state.js";
 import { createMockContext, createMockPi } from "./support.js";
 
-const BASE_STATE: PlanModeState = {
+const BASE_STATE: DisabledPlanModeState = {
   enabled: false,
   awaitingAction: false,
   declinedPlans: 0,
 };
+
+const PLAN_POLICY: PlanModeWorkflowToolPolicy = { kind: "automatic", allowedNames: [], resolved: true };
 
 function fgTrackingTheme() {
   const calls: Array<{ role: string; text: string }> = [];
@@ -57,7 +59,7 @@ test("sanitizes terminal and bidi controls before truncating Plan mode content",
 test("plain planning state has no above-editor widget, only a colored footer chip", () => {
   const { calls, theme } = fgTrackingTheme();
   const context = createMockContext({ hasUI: true, theme });
-  const state: PlanModeState = { ...BASE_STATE, enabled: true };
+  const state: PlanModeState = { ...BASE_STATE, enabled: true, workflowToolPolicy: PLAN_POLICY };
 
   updatePlanModeUi(context.ctx, state, () => "unused");
 
@@ -69,7 +71,13 @@ test("plain planning state has no above-editor widget, only a colored footer chi
 test("a ready plan keeps its one-line widget and switches the footer chip to ready", () => {
   const { theme } = fgTrackingTheme();
   const context = createMockContext({ hasUI: true, theme });
-  const state: PlanModeState = { ...BASE_STATE, enabled: true, latestPlan: "# Plan", awaitingAction: true };
+  const state: PlanModeState = {
+    ...BASE_STATE,
+    enabled: true,
+    workflowToolPolicy: PLAN_POLICY,
+    latestPlan: "# Plan",
+    awaitingAction: true,
+  };
 
   updatePlanModeUi(context.ctx, state, () => "unused");
 
