@@ -154,7 +154,9 @@ The `lint` and `format` commands check that their configured `src/` and `test/` 
 
 `test/scenarios/` covers terminal/retry/unconfirmed recovery, partial-stream refusal, cancellation,
 bounded retries, direct `subscription_usage` execution and all six balanced cases through the real
-router factory and core session harness, under Vitest and Bun. The coverage/ownership matrix and
+router factory and core session harness, under Vitest and Bun. Policy tests add pre-calculus golden
+receipts, deterministic exhaustive properties, offline normalized replay, strict failback, raw-remaining
+family caps, confirmed recovery and shared-runtime isolation. The coverage/ownership matrix and
 live-smoke proposal are [here](https://github.com/nredd/pi-harness/blob/main/packages/subscription-router/docs/hardening.md).
 
 `createSubscriptionRouter({ config, usage, tracker?, now? })` embeds an isolated router with explicit dependencies; the default export still loads agent config and shares usage/blocks process-wide. Scenarios inject a credential-free cache and quota clock; core retries use `baseDelayMs: 0`.

@@ -67,6 +67,34 @@ function quotaError(chain: ChainEntry, text = "insufficient_quota"): ProjectedSe
 const blocked: UsageDecision = { block: true, window: "five_hour", scope: "provider", resetAt: T0 + 60_000 };
 
 describe("SettleRecovery", () => {
+	it("terminal recovery forecasts the policy winner, not a parallel chain scan", async () => {
+		const third = { provider: "third", id: "third" };
+		const snapshots = Object.fromEntries(
+			[
+				[TERRA.provider, 80],
+				[third.provider, 10],
+			].map(([provider, usedPercent]) => [
+				provider,
+				{
+					provider,
+					status: "available",
+					retrievedAt: T0,
+					expiresAt: T0 + 60_000,
+					windows: [{ name: "weekly", scope: "provider", usedPercent }],
+				},
+			]),
+		) as Record<string, UsageSnapshot>;
+		const { recovery, env } = harness({ anthropic: blocked }, snapshots);
+		const profile: Profile = {
+			...PROFILE,
+			policy: { version: 1, kind: "remaining-balanced" },
+			chain: [...PROFILE.chain, third],
+		};
+		expect(await recovery.handle(settle(quotaError(SONNET)), profile, env, undefined)).toMatchObject({
+			kind: "continue",
+			to: "third/third",
+		});
+	});
 	it("omits the failed message and continues on the next chain model once usage confirms", async () => {
 		const { recovery, env, tracker } = harness({ anthropic: blocked });
 		const event = settle(quotaError(SONNET));

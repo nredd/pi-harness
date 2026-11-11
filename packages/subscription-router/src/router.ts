@@ -295,6 +295,7 @@ export class Router {
 	/** Cached-only fresh-dispatch forecast. Never records a decision or mutates affinity. */
 	explain(profile: Profile, env: RouteEnv): PolicyEvaluation {
 		const picked = this.pick(profile, env, undefined, { reason: "direct" });
+		if (profile.policy) return { ...picked.evaluation, forecast: true };
 		// Blocked members did not need a peek on the compatibility-sensitive selection path.
 		const members = picked.evaluation.members.map((row) => ({
 			ref: profile.chain[row.index] as ChainEntry,

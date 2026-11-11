@@ -72,7 +72,7 @@
           "items": {
             "type": "object", "required": ["model"],
             "properties": {
-              "model": { "type": "string", "pattern": "^(?!router/)[^/\\s]+/[^\\s]+$" },
+              "model": { "type": "string", "pattern": "^(?!router/)[^/]+/[\\s\\S]+$" },
               "thinking": { "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"] }
             }
           }

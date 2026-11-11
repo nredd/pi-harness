@@ -15,6 +15,14 @@ it.each(POLICY_CASES)("schema/runtime acceptance parity: $policy", ({ policy, va
 	if (valid) expect(() => parseConfig(document)).not.toThrow();
 	else expect(() => parseConfig(document)).toThrow();
 });
+it("ships valid opt-in examples without migrating legacy profile membership", () => {
+	for (const name of ["subscription-router", "policies"]) {
+		const document = JSON.parse(readFileSync(new URL(`../examples/${name}.json`, import.meta.url), "utf8"));
+		expect(Check(schema, document)).toBe(true);
+		expect(parseConfig(document).length).toBeGreaterThan(0);
+	}
+});
+
 it("describes legacy optional defaults and rejects outer mutual exclusion", () => {
 	for (const extra of [{}, { strategy: "balanced" }, { policy: { version: 1, kind: "strict-priority" } }])
 		expect(Check(schema, { profiles: { test: { ...extra, chain: [{ model: "p/a" }] } } })).toBe(true);

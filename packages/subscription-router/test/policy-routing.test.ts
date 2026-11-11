@@ -37,6 +37,7 @@ it("explain empty sets and registry failures without refreshing, tracing or leak
 		},
 	};
 	const result = router.explain(profile, env);
+	expect(router.explain({ ...profile, policy: undefined }, env).chosen).toBeNull();
 	expect(result).toMatchObject({
 		forecast: true,
 		chosen: null,
@@ -49,7 +50,10 @@ it("explain empty sets and registry failures without refreshing, tracing or leak
 	expect(usage.reads).toEqual([]);
 	const noPeek = new Router({ decisionFor: () => ({ block: true }) }, new ExhaustionTracker(clock.now), clock.now);
 	expect(
-		noPeek.explain(profile, { ...env, resolve: (entry) => ({ ...entry, api: "test" }) as unknown as Model<Api> }),
+		noPeek.explain(
+			{ ...profile, policy: undefined },
+			{ ...env, resolve: (entry) => ({ ...entry, api: "test" }) as unknown as Model<Api> },
+		),
 	).toMatchObject({ chosen: null, recheckAt: null });
 });
 
