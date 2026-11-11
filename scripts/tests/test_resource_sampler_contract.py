@@ -398,12 +398,12 @@ def leader_is_unreaped(pid: int) -> bool:
         pid (int): child process id.
 
     Returns:
-        bool: the leader still anchors its process group number.
+        bool: always `True`: the leader still anchors its process group number.
+
+    Raises:
+        ChildProcessError: `pid` was already reaped, which fails the test that recorded it.
     """
-    try:
-        os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
-    except ChildProcessError:
-        return False
+    os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
     return True
 
 

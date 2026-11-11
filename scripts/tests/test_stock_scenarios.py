@@ -906,8 +906,7 @@ def drive_packed_router(
             request = fp.RecordedRequest(model, ("user",), tuple(tools), "", route=None)
             RecordingProvider.created[PROVIDER_INDEX[name]].requests.append(request)
         events = [assistant_event(name, model) for name, model in answers]
-        if events:
-            events[-1]["message"]["stopReason"] = stop
+        events[-1]["message"]["stopReason"] = stop
         return pi_run(*events)
 
     monkeypatch.setattr(pc, "run_pi", dispatching)

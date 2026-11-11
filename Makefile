@@ -7,7 +7,7 @@ PY_CHECK = uv run --locked ruff format --check . && uv run --locked ruff check -
 # $(1) project dir (cwd, so LCOV paths are project-relative), $(2) extra uv flags, $(3) pytest paths, $(4) --cov source.
 define PY_GATE
 cd $(1) && uv run --locked $(2) ruff format --check . && uv run --locked $(2) ruff check --no-fix --ignore-noqa . && uv run --locked $(2) ty check
-cd $(1) && uv run --locked $(2) pytest $(3) -n auto --dist loadfile -p no:cacheprovider --cov=$(4) --cov-branch --cov-report=lcov:coverage/python/lcov.info --cov-report=term:skip-covered
+cd $(1) && uv run --locked $(2) pytest $(3) -n auto --dist loadfile -p no:cacheprovider --cov=$(4) --cov-branch --cov-report=lcov:coverage/python/lcov.info --cov-report=term:skip-covered --cov-fail-under=100
 endef
 
 help:  ## List targets

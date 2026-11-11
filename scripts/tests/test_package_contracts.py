@@ -26,10 +26,11 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from pydantic import ValidationError
@@ -117,21 +118,12 @@ def test_supplied_tarball_is_never_repacked(
     artifact = pc.pack(contract, tmp_path, sandbox)
     before = artifact.path.read_bytes()
 
-    def forbid_pack(*_args: object) -> pc.PackedArtifact:
-        """Refuse a rebuild of bytes that already passed verification.
-
-        Parameters:
-            *_args (object): Unexpected pack arguments.
-
-        Returns:
-            PackedArtifact: Never returned; any invocation fails the test.
-        """
-        pytest.fail("Supplied candidate was repacked")
-
+    forbid_pack = Mock(side_effect=AssertionError("Supplied candidate was repacked"))
     monkeypatch.setattr(pc, "pack", forbid_pack)
     supplied = pc.parse_tarballs([f"{contract.directory}={artifact.path}"], [contract])
     selected = pc.select_artifact(contract, tmp_path / "unused", sandbox, supplied)
     assert selected == artifact
+    forbid_pack.assert_not_called()
     assert artifact.path.read_bytes() == before
 
 
@@ -152,16 +144,7 @@ def test_stock_gate_audits_and_installs_supplied_bytes(
     """
     artifact = pc.pack(DEV_TOOLS, tmp_path, sandbox)
 
-    def forbid(*_args: object) -> pc.PackedArtifact:
-        """The stock gate must not rebuild the candidate.
-
-        Parameters:
-            *_args (object): Unexpected pack arguments.
-
-        Returns:
-            PackedArtifact: Never returned; any invocation fails the test.
-        """
-        pytest.fail("Candidate was repacked")
+    forbid = Mock(side_effect=AssertionError("Candidate was repacked"))
 
     def exercise(ctx: pc.Context) -> pc.DevToolsEvidence:
         """Check the installed artifact instead of starting Pi.
@@ -191,6 +174,7 @@ def test_stock_gate_audits_and_installs_supplied_bytes(
     report = pc.run_gate(work, tmp_path / "stock", ["dev-tools"], {"dev-tools": artifact.path})
     assert report.packages[DEV_TOOLS.name].integrity == artifact.integrity
     assert not list((work / "tarballs").iterdir())
+    forbid.assert_not_called()
 
 
 @pytest.mark.parametrize("case", ["missing", "broken", "identity", "filename", "manifest"])
@@ -867,8 +851,8 @@ def test_stop_hostile_child_kills_only_a_live_child(*, exited: bool) -> None:
         assert child.stdout.closed
     finally:
         # This test spawned `child`, so it may signal it; a failed assert must not leak the sleep.
-        if child.poll() is None:
-            child.kill()
+        # `kill` is a no-op once the child is reaped.
+        child.kill()
         child.wait(timeout=10)
 
 
@@ -922,13 +906,13 @@ def test_hostile_marker_startup_failure_reaps_actual_child(
     monkeypatch.setattr(pc, "wait_hostile_ready", observe)
     started = time.monotonic()
     limits = {"ready_timeout": 0.5} if expires else {}
-    with (
-        pytest.raises(pc.ContractError, match=message),
-        pc.start_hostile_child(
-            discovery_context(tmp_path, sandbox), tmp_path, "ab" * 16, script=script, **limits
-        ),
-    ):
-        pytest.fail("startup unexpectedly succeeded")
+    with pytest.raises(pc.ContractError, match=message), ExitStack() as stack:
+        # Entering raises; had startup succeeded, the stack would still reap the child.
+        stack.enter_context(
+            pc.start_hostile_child(
+                discovery_context(tmp_path, sandbox), tmp_path, "ab" * 16, script=script, **limits
+            )
+        )
     assert len(seen) == 1
     assert seen[0].returncode == status
     assert seen[0].stdout is not None
@@ -3077,11 +3061,10 @@ def test_shared_runner_unknown_package_exits_before_packing(
 ) -> None:
     """An undeclared package exits 1 without running the stock contract."""
 
-    def boom(*args: object, **kwargs: object) -> pc.ContractReport:
-        raise AssertionError("must not pack")
-
+    boom = Mock(side_effect=AssertionError("must not pack"))
     monkeypatch.setattr(nr, "run_stock_contract", boom)
     assert spc.main(["--package", "@nredd/nope", "--stock-prefix", str(tmp_path)]) == 1
+    boom.assert_not_called()
 
 
 def test_shared_runner_script_exits_with_main_status(tmp_path: Path) -> None:
