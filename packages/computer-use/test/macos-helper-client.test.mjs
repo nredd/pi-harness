@@ -660,6 +660,16 @@ describe("helper app path resolution", () => {
 		assert.equal(resolveMacosHelperAppPath({ ...base, directoryIsWritable: () => false }), path.join("/home/u", "Applications", "pi-computer-use.app"));
 	});
 
+	test("an omitted existence probe checks the real filesystem", () => {
+		const home = path.join(tmp, "home");
+		const missing = path.join(tmp, "missing", "pi-computer-use.app");
+		const present = path.join(tmp, "present", "pi-computer-use.app");
+		mkdirSync(present, { recursive: true });
+		const base = { env: {}, homeDir: home, directoryIsWritable: () => true };
+		assert.equal(resolveMacosHelperAppPath({ ...base, systemHelperAppPath: missing }), path.join(home, "Applications", "pi-computer-use.app"));
+		assert.equal(resolveMacosHelperAppPath({ ...base, systemHelperAppPath: present }), present);
+	});
+
 	test("an omitted home directory is os.homedir()", () => {
 		assert.equal(
 			resolveMacosHelperAppPath({ env: {}, systemHelperAppPath: "/x/pi-computer-use.app", fileExists: () => false }),
