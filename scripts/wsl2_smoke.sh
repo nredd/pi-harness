@@ -27,6 +27,8 @@ if [ "$(id -u)" -ne 0 ]; then ok 'non-root'; else bad 'running as root'; fi
 if [ "$(uname -m)" = aarch64 ]; then ok 'aarch64'; else bad "not aarch64: $(uname -m)"; fi
 if sudo -n true 2>/dev/null; then bad 'sudo works'; else ok 'no sudo'; fi
 # Unprivileged user namespaces are a root-in-namespace route to kernel attack surface: they must be off.
+limit=$(cat "$root"/proc/sys/user/max_user_namespaces 2>/dev/null || echo unreadable)
+if [ "$limit" != 0 ]; then bad "user.max_user_namespaces is $limit, not 0"; else ok 'user.max_user_namespaces is 0'; fi
 if ! command -v unshare >/dev/null 2>&1; then
   bad 'unshare is missing, so user namespaces cannot be checked'
 elif unshare -Urn true 2>/dev/null; then
@@ -48,6 +50,15 @@ if [ -n "${SMOKE_HOST_IP:-}" ]; then targets+=("$SMOKE_HOST_IP:445" "$SMOKE_HOST
 dev_ports=${SMOKE_DEV_PORTS:-}
 if [ -n "${SMOKE_DEV_IP:-}" ]; then
   for port in $dev_ports; do targets+=("$SMOKE_DEV_IP:$port"); done
+fi
+# A refused or dropped probe looks the same as a failed one, so prove the probe machinery works first: a public
+# TCP connection must open, and `timeout` must exist (a missing one would make every probe look blocked).
+if ! command -v timeout >/dev/null 2>&1; then
+  bad 'timeout is missing, so no probe can prove anything'
+elif tcp api.github.com 443; then
+  ok 'public positive control connected'
+else
+  bad 'probe machinery cannot open a public connection, so the blocked results below prove nothing'
 fi
 for target in "${targets[@]}"; do
   if tcp "${target%:*}" "${target##*:}"; then bad "reachable: $target"; else ok "blocked: $target"; fi

@@ -414,6 +414,11 @@ def run_install_gh(tmp_path: Path, system: str, machine: str) -> subprocess.Comp
         ),
         encoding="utf-8",
     )
+    # macOS has no `sha256sum`; a stub that records its call proves the digest check ran and failed.
+    (commands / "sha256sum").write_text(
+        f"#!/bin/sh\ntouch '{tmp_path}/sha256sum-ran'\nexit 1\n", encoding="utf-8"
+    )
+    (commands / "sha256sum").chmod(0o755)
     (commands / "curl").write_text(
         textwrap.dedent(
             """\
@@ -464,6 +469,7 @@ def test_install_gh_downloads_the_asset_of_its_architecture(tmp_path: Path, mach
     completed = run_install_gh(tmp_path, "Linux", machine)
     assert completed.returncode == 1
     assert f"for gh_{GH_VERSION}_{asset}.tar.gz; refusing to install" in completed.stderr
+    assert (tmp_path / "sha256sum-ran").is_file()
     pins = re.findall(r"^GH_SHA256_(AMD64|ARM64)=([0-9a-f]{64})$", INSTALL_GH.read_text(), re.MULTILINE)
     assert sorted(name for name, _ in pins) == ["AMD64", "ARM64"]
     assert len({digest for _, digest in pins}) == 2
@@ -1018,7 +1024,13 @@ def test_in_guest_setup_needs_a_runner_checkout_and_an_unprivileged_user(tmp_pat
 
 
 def run_smoke(
-    tmp_path: Path, blocked: bool, extra_env: dict[str, str] | None = None, userns: bool = False
+    tmp_path: Path,
+    blocked: bool,
+    extra_env: dict[str, str] | None = None,
+    *,
+    userns: bool = False,
+    ns_limit: str = "0",
+    control: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     """Run the real smoke script against stub network tools.
 
@@ -1027,13 +1039,23 @@ def run_smoke(
         blocked (bool): Whether private targets refuse connections (`timeout` exits 124 for them).
         extra_env (dict[str, str] | None): Extra environment, e.g. injected host targets.
         userns (bool): Whether `unshare -Urn` succeeds, i.e. unprivileged user namespaces are enabled.
+        ns_limit (str): Value of `user.max_user_namespaces`.
+        control (bool): Whether the public positive-control connection (port 443) opens.
 
     Returns:
         subprocess.CompletedProcess[str]: The smoke run; `aarch64` and a non-root, no-sudo user are stubbed.
     """
     commands = tmp_path / "commands"
     commands.mkdir()
-    refuse = 'case "$*" in *"/dev/tcp/"*) exit 124 ;; esac\n' if blocked else ""
+    refuse = (
+        (
+            'case "$*" in *"/443"*) '
+            + ("" if control else "exit 124 ")
+            + ';; *"/dev/tcp/"*) exit 124 ;; esac\n'
+        )
+        if blocked
+        else ""
+    )
     stubs = {
         "uname": '#!/bin/sh\ncase "$1" in -m) echo aarch64 ;; -r) echo 6.18-stub ;; *) echo Linux ;; esac\n',
         "id": '#!/bin/sh\ncase "$1" in -u) echo 1001 ;; *) echo runner ;; esac\n',
@@ -1051,6 +1073,8 @@ def run_smoke(
     root = tmp_path / "root"
     (root / "proc/sys/net/ipv6/conf/all").mkdir(parents=True)
     (root / "proc/sys/net/ipv6/conf/all/disable_ipv6").write_text("1\n")
+    (root / "proc/sys/user").mkdir(parents=True)
+    (root / "proc/sys/user/max_user_namespaces").write_text(f"{ns_limit}\n")
     env = (
         dict(os.environ)
         | {"PATH": f"{commands}{os.pathsep}{os.environ['PATH']}", "SMOKE_ROOT": str(root)}
@@ -1085,6 +1109,20 @@ def test_smoke_fails_when_unprivileged_user_namespaces_are_enabled(tmp_path: Pat
     result = run_smoke(tmp_path, blocked=True, userns=True)
     assert result.returncode == 1
     assert "::error::unprivileged user namespaces are enabled" in result.stdout
+
+
+def test_smoke_fails_when_the_user_namespace_limit_is_not_zero(tmp_path: Path) -> None:
+    """Read the sysctl itself: a failing `unshare` can have other causes than the limit being zero."""
+    result = run_smoke(tmp_path, blocked=True, ns_limit="1")
+    assert result.returncode == 1
+    assert "::error::user.max_user_namespaces is 1, not 0" in result.stdout
+
+
+def test_smoke_fails_when_the_positive_control_cannot_connect(tmp_path: Path) -> None:
+    """A failed public TCP probe makes every `blocked` line meaningless: fail instead of passing them."""
+    result = run_smoke(tmp_path, blocked=True, control=False)
+    assert result.returncode == 1
+    assert "::error::probe machinery cannot open a public connection" in result.stdout
 
 
 def test_smoke_fails_on_a_reachable_private_target(tmp_path: Path) -> None:
