@@ -31,10 +31,9 @@ Remove a row only after its check passes without the patch.
 Ledger order is deterministic so concurrent PRs append at distinct positions: `sync-patches.json` `files`, patches
 (by `id`), each patch's `files` and `dropControls`, the table rows below (by name) and the `check-sync-reverts.mjs` cases
 (by `name`) are sorted in code-unit order, enforced by `test/sync-ledger.test.mjs`. Every patch lists the `rows` it owns
-and every row must be owned by a patch. Any path that differs from upstream must be in `files`: CI runs
-`node scripts/check-upstream-sync.mjs --fetch` in the Ubuntu `computer-use` shard, which shallow-fetches the pinned
-upstream commit and fails on undeclared drift (or an absorbed patch). Locally pass a clean detached upstream worktree
-instead of `--fetch`.
+and every row must be owned by a patch. Any path that differs from upstream must be in `files`: `npm run check` ends with `check-upstream-sync.mjs --fetch-if-enabled`: CI sets `PI_CU_UPSTREAM_SYNC=1` on Linux, so the
+required Ubuntu `computer-use` shard shallow-fetches the pinned upstream commit and fails on undeclared drift (or an
+absorbed patch); elsewhere it prints NOT RUN. Locally run `--fetch`, or pass a clean detached upstream worktree.
 
 Status source: `~/code/review-notes/upstream-issues-drafts.md` is a local draft file,
 not a public upstream issue. Draft A covers desktop,

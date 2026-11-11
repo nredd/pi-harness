@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Compare tracked source trees, not installed output. Requires a clean detached upstream worktree, or
-// `--fetch` to shallow-fetch the pinned upstream commit into a temporary directory (CI).
+// `--fetch` to shallow-fetch the pinned upstream commit into a temporary directory. `--fetch-if-enabled` does the
+// same only when `PI_CU_UPSTREAM_SYNC=1` (set by CI on Linux; `npm run check` stays offline elsewhere).
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -10,8 +11,15 @@ import { fileURLToPath } from "node:url";
 import { validateUpstreamRows } from "./check-sync-ledger.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const arg = process.argv[2];
-assert.ok(arg, "Usage: npm run test:upstream-sync -- /path/to/upstream-worktree | --fetch");
+let arg = process.argv[2];
+assert.ok(arg, "Usage: npm run test:upstream-sync -- /path/to/upstream-worktree | --fetch | --fetch-if-enabled");
+if (arg === "--fetch-if-enabled") {
+	if (process.env.PI_CU_UPSTREAM_SYNC !== "1") {
+		console.log("NOT RUN upstream sync: set PI_CU_UPSTREAM_SYNC=1 to fetch the pinned upstream commit (CI does on Linux).");
+		process.exit(0);
+	}
+	arg = "--fetch";
+}
 const ledger = JSON.parse(readFileSync(path.join(root, "sync-patches.json"), "utf8"));
 const git = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 validateUpstreamRows(ledger, readFileSync(path.join(root, "UPSTREAM.md"), "utf8"));

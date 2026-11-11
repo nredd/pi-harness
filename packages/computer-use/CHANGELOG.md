@@ -11,7 +11,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Changed
 
-- `sync-patches.json` patches, `files`, `UPSTREAM.md` rows and `check-sync-reverts.mjs` cases are sorted (enforced by `test/sync-ledger.test.mjs`), each patch names its `UPSTREAM.md` `rows`, and `check-upstream-sync.mjs --fetch` runs in the Ubuntu `computer-use` CI shard against the pinned upstream commit; 14 previously undeclared drifted paths are now declared (nredd/pi-harness#720).
+- `sync-patches.json` patches, `files`, `UPSTREAM.md` rows and `check-sync-reverts.mjs` cases are sorted (enforced by `test/sync-ledger.test.mjs`), each patch names its `UPSTREAM.md` `rows`, and `npm run check` runs `check-upstream-sync.mjs` against the pinned upstream commit when `PI_CU_UPSTREAM_SYNC=1` (CI on Linux); 14 previously undeclared drifted paths are now declared (nredd/pi-harness#720).
 - `LinuxHelperClient` drops unreachable guards (an already-aborted check in `runProcess`, whose only caller passes a fresh signal, a redundant re-check in `process()` and identity checks on single-flight promises) and shares one settle handler per promise; behavior is unchanged (nredd/pi-harness#713, #645).
 - `scripts/setup-helper.mjs` exports `main(argv, deps)` (host seams injected, `import.meta` entry guard only at top level) so it is measured in process. CLI behavior is unchanged; two unreachable arms (a non-darwin check in the local signing path, a duplicate bundle-name check in archive search) are gone (nredd/pi-harness#704, #645).
 

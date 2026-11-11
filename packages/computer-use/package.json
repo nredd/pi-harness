@@ -92,7 +92,7 @@
     "coverage:rust": "node scripts/rust-coverage.mjs",
     "test:rust-coverage": "node ../../scripts/run-vitest.ts node test/rust-coverage.test.mjs --coverage.enabled=false",
     "test:upstream-sync": "node scripts/check-upstream-sync.mjs",
-    "check": "npm run typecheck && npm run docs:check && npm test && node scripts/check-package-assets.mjs && node scripts/check-commit-messages.mjs && node scripts/check-sync-reverts.mjs",
+    "check": "npm run typecheck && npm run docs:check && npm test && node scripts/check-package-assets.mjs && node scripts/check-commit-messages.mjs && node scripts/check-sync-reverts.mjs && node scripts/check-upstream-sync.mjs --fetch-if-enabled",
     "test": "node ../../scripts/run-vitest.ts node --coverage",
     "build:native": "node scripts/build-native.mjs",
     "build:windows": "node scripts/build-native.mjs --platform windows",
