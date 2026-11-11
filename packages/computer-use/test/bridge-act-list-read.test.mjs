@@ -17,7 +17,7 @@ vi.mock("../src/cdp.ts", async (importOriginal) => ({
 	cdpKeypressForContext: vi.fn(async () => true),
 }));
 
-const { executeFind, executeObserve, executeAct, executeReadText, executeNavigateBrowser } = bridge;
+const { executeFind, executeObserve, executeAct, executeReadText, executeNavigateBrowser, executeWaitFor } = bridge;
 const textField = (ref, extra = {}) => wireNode(ref, "AXTextField", ref, { canSetValue: true, isTextInput: true, actions: ["AXPress"], ...extra });
 
 let fake;
@@ -328,10 +328,18 @@ describe("read_text on stored output", () => {
 		const tail = await call(executeReadText, { ref, offset: 16 * 1024 * 1024 - 100 });
 		assert.equal(tail.details.hasMore, false);
 		assert.match(fake.text(tail), /\n\ncontinuation storage limit reached; rerun a more focused query for the remainder$/);
-	}, 60_000);
+	});
 
 	test("an unknown or evicted output ref is refused", async () => {
 		await assert.rejects(() => call(executeReadText, { ref: "@o9999" }), /Output ref '@o9999' is unavailable or was evicted\. Rerun the focused query\./);
+	});
+});
+
+describe("wait_for timeout", () => {
+	test("a non-numeric or non-finite timeout falls back to ten seconds", async () => {
+		const stateId = await observe();
+		for (const timeoutMs of ["soon", Number.NaN, Number.POSITIVE_INFINITY, null]) await call(executeWaitFor, { stateId, text: "Go", timeoutMs });
+		assert.deepEqual(fake.waits.map((wait) => wait.request.timeoutMs), [10_000, 10_000, 10_000, 10_000]);
 	});
 });
 
