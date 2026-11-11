@@ -194,7 +194,7 @@
 		},
 		{
 			"id": "bridge-browser-act-dead-arm-removal",
-			"purpose": "Delete bridge.ts and actions.ts arms the browser act, desktop act and managed-browser paths can never reach instead of testing them: the never-prepared wait action, the browser transaction guards and epoch fallbacks that a hydrated browser state always satisfies, the ref ownership re-check (the target comes from the same state), the unreachable CDP port allocation failure and the note fallback overwritten by the capture; a padded stateId now resolves browser refs like every other tool; the testing seam exposes managedBrowserExecutableCandidates",
+			"purpose": "Delete bridge.ts and actions.ts arms the browser act, desktop act and managed-browser paths can never reach instead of testing them: the never-prepared wait action, the browser transaction guards and epoch fallbacks that a hydrated browser state always satisfies, the ref ownership re-check (the target comes from the same state), the unreachable CDP port allocation failure and the note fallback overwritten by the capture, the root-delta fallback after the closed-root probe; a padded stateId now resolves browser refs like every other tool; the testing seam exposes managedBrowserExecutableCandidates",
 			"files": [
 				"src/actions.ts",
 				"src/bridge.ts",

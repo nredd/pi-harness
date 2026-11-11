@@ -106,6 +106,22 @@ test("a batch result without an outcome is treated as unknown, with or without a
 	assert.equal(terminal.details.execution.outcome, "worked");
 });
 
+test("a failing wait on a batch without an outcome still reaches the terminal result for a closed root", async ({ onTestFinished }) => {
+	vi.stubEnv("PI_COMPUTER_USE_HEADLESS", "1");
+	const { fake, act } = await observed(onTestFinished);
+	fake.actBatchResult = { performed: { delivery: "ax", transaction: true, actionCount: 1 }, steps: [{ outcome: "worked", performed: { delivery: "ax" } }] };
+	let closed = false;
+	fake.waitFor = async () => {
+		closed = true;
+		throw new Error("wait failed");
+	};
+	fake.listRootsHook = (query) => (closed ? [] : query?.pid ? fake.roots.filter((root) => root.pid === query.pid) : fake.roots);
+	const result = await act([press], { expect: { text: "Go", timeoutMs: 250 } });
+	assert.equal(result.details.status, "target_closed");
+	assert.equal(result.details.execution.verification.status, "failed");
+	assert.equal(result.details.execution.outcome, "didnt");
+});
+
 test("expect distinguishes a verified change from a preexisting condition and sends the scope and mode", async ({ onTestFinished }) => {
 	const { fake, act } = await observed(onTestFinished);
 	const verified = await act([press], { expect: { text: "Done", timeoutMs: 400 } });
@@ -234,7 +250,11 @@ test("a closed root with a replacement dialog names its successor, and a failed 
 	const dialog = desktopRoot({ pid: 1, windowId: 150, rootRef: "ax:dlg", windowRef: "ax:dlg", kind: "dialog", title: "Replace", isModal: true, isFocused: true });
 	const bare = desktopRoot({ pid: 1, windowId: 151, rootRef: "ax:bare", windowRef: "ax:bare", title: "" });
 	const menu = desktopRoot({ pid: 1, windowId: 152, rootRef: "ax:menu", windowRef: "ax:menu", kind: "menu", title: "Menu" });
-	const { fake, act } = await observed(onTestFinished, { roots: [desktopRoot({ pid: 1 }), dialog, bare, menu] });
+	// Live roots that cannot or need not match by `rootRef`: another app, one with only a `windowRef`, one with no native ref at all.
+	const stranger = desktopRoot({ pid: 3, windowId: 300, rootRef: "ax:stranger", windowRef: "ax:stranger" });
+	const nameless = { ...desktopRoot({ pid: 1, windowId: 153, title: "Nameless" }), rootRef: undefined, windowRef: undefined };
+	const windowOnly = { ...desktopRoot({ pid: 1, windowId: 154, windowRef: "ax:wonly", title: "WindowOnly" }), rootRef: undefined };
+	const { fake, act } = await observed(onTestFinished, { roots: [desktopRoot({ pid: 1 }), dialog, bare, menu, windowOnly, stranger] });
 	let closed = false;
 	fake.actResult = {
 		outcome: "worked",
@@ -246,23 +266,26 @@ test("a closed root with a replacement dialog names its successor, and a failed 
 			{ change: "focused", kind: "dialog", ref: "ax:dlg", pid: 1 },
 			{ change: "appeared", kind: "dialog", pid: 1 },
 			{ change: "appeared", kind: "dialog", ref: "ax:elsewhere", pid: 2 },
+			{ change: "appeared", kind: "window", ref: "ax:wonly", pid: 1 },
+			{ change: "appeared", kind: "window", ref: "ax:stranger", pid: 3 },
 		],
 	};
 	failCapture(fake, () => {
 		closed = true;
 	});
 	fake.listRootsHook = (query) => {
-		const roots = closed ? [dialog, bare, menu] : fake.roots;
-		return query?.pid ? roots.filter((root) => root.pid === query.pid) : roots;
+		if (closed) return [stranger, nameless, windowOnly, dialog, bare, menu];
+		return query?.pid ? fake.roots.filter((root) => root.pid === query.pid) : fake.roots;
 	};
 	const result = await act([press], { expect: { text: "Done", timeoutMs: 250 } });
 	assert.equal(result.details.cause, "replaced");
 	assert.deepEqual(result.details.successors.map(({ kind, title, isModal }) => ({ kind, title, isModal })), [
 		{ kind: "dialog", title: "Replace", isModal: true },
 		{ kind: "window", title: undefined, isModal: undefined },
+		{ kind: "window", title: undefined, isModal: undefined },
 	], "only appeared window, dialog and sheet roots that are still listed replace the target");
 	assert.ok(result.details.successors.every((successor) => /^@r\d+$/.test(successor.ref)));
-	assert.match(fake.text(result), /It was replaced by dialog "Replace" \(modal\), window "".$/m);
+	assert.match(fake.text(result), /It was replaced by dialog "Replace" \(modal\), window "", window "".$/m);
 	assert.equal(result.details.execution.verification.status, "failed", "the target closed before a presence postcondition could be verified");
 	assert.equal(result.details.execution.outcome, "didnt");
 	assert.equal(result.details.execution.error.code, "postcondition_failed");
@@ -393,4 +416,9 @@ test("a tool called without params runs with defaults instead of failing on the 
 	const found = await fake.call(fake.bridge.executeFind, undefined);
 	assert.equal(found.details.tool, "find_roots");
 	assert.equal(found.details.windows.length, 1);
+});
+
+test("an output ref skips the state lookup entirely", async ({ onTestFinished }) => {
+	const fake = await installFakeDesktop(onTestFinished);
+	await assert.rejects(() => fake.call(fake.bridge.executeReadText, { ref: "@o99", stateId: "ignored" }), /Output ref '@o99' is unavailable or was evicted\./);
 });

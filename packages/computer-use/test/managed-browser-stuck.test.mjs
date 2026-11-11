@@ -64,4 +64,17 @@ describe.skipIf(process.platform === "win32")("managed browser that outlives SIG
 			realKill("SIGKILL");
 		}
 	});
+
+	test("a browser that already exited is not signalled again at shutdown", async () => {
+		await testing.performLaunchBrowser({});
+		const child = spawned.children.at(-1);
+		const exited = new Promise((resolve) => child.once("exit", resolve));
+		child.kill("SIGKILL");
+		await exited;
+		const kill = vi.spyOn(child, "kill");
+		const { profile } = JSON.parse(fs.readFileSync(path.join(scratch, "launch.json"), "utf8"));
+		await shutdownComputerUseSession();
+		assert.deepEqual(kill.mock.calls.map(([signal]) => signal), ["SIGTERM"], "SIGTERM is sent but nothing waits on a browser that is already gone");
+		assert.equal(fs.existsSync(profile), false);
+	});
 });

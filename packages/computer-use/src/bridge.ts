@@ -1903,7 +1903,7 @@ export async function terminalDesktopActionResult(
 		}
 	}
 	const successors = targetClosed
-		? (execution.rootDelta ?? []).filter((delta) => delta.change === "appeared" && delta.pid === target.pid && REPLACEMENT_ROOT_KINDS.has(delta.kind) && Boolean(delta.ref) && liveRoots.some((root) => root.pid === target.pid && extensionRefForNative(target.pid, root.rootRef ?? root.windowRef ?? "") === delta.ref)).map((delta) => ({ ref: delta.ref, kind: delta.kind, title: delta.title, isModal: delta.isModal }))
+		? execution.rootDelta!.filter((delta) => delta.change === "appeared" && delta.pid === target.pid && REPLACEMENT_ROOT_KINDS.has(delta.kind) && Boolean(delta.ref) && liveRoots.some((root) => root.pid === target.pid && extensionRefForNative(target.pid, root.rootRef ?? root.windowRef ?? "") === delta.ref)).map((delta) => ({ ref: delta.ref, kind: delta.kind, title: delta.title, isModal: delta.isModal }))
 		: [];
 	const status = targetClosed ? "target_closed" : "post_action_observation_failed";
 	const rawMessage = error instanceof Error ? error.message : String(error);
