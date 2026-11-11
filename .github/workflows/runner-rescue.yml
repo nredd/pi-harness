@@ -30,10 +30,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PI_LINUX_HEARTBEAT: ${{ vars.PI_LINUX_HEARTBEAT }}
           PI_MACOS_HEARTBEAT: ${{ vars.PI_MACOS_HEARTBEAT }}
+          PI_WSL2_HEARTBEAT: ${{ vars.PI_WSL2_HEARTBEAT }}
           PI_POOLS_DISABLED: ${{ vars.PI_POOLS_DISABLED }}
         run: |
           flags=()
           if [ -n "$PI_POOLS_DISABLED" ]; then flags+=(--pools-disabled); fi
           python3 scripts/runner_rescue.py "${flags[@]}" \
             --pool-heartbeat "pi-linux=$PI_LINUX_HEARTBEAT" \
-            --pool-heartbeat "pi-macos=$PI_MACOS_HEARTBEAT"
+            --pool-heartbeat "pi-macos=$PI_MACOS_HEARTBEAT" \
+            --pool-heartbeat "pi-wsl2=$PI_WSL2_HEARTBEAT"

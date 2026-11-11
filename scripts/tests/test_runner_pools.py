@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import ci_paths
 import runner_pools
+import runner_rescue
 
 NOW = 1_800_000_000.0
 FRESH = str(int(NOW) - 30)
@@ -381,3 +382,121 @@ def test_main_rejects_a_mistyped_heartbeat_argument(tmp_path: Path) -> None:
     out.write_text("")
     argv = ["--full", "--event", "push", "--github-output", str(out), "--pool-heartbeat", "pi-mac=1"]
     assert ci_paths.main(argv) == 2
+
+
+# The real table, not the fixture: the ARM64 WSL2 pool (#736) routes its cells by the shipped estimates.
+WSL2_FIRST = ("owned", "wsl2", "subagents-computer-use")
+
+
+def wsl2_hosts(plan: dict[str, ci_paths.CellPlan]) -> dict[tuple[str, str], tuple[str, str, str]]:
+    """Flatten every `wsl2` shard and contract cell into `(job, variant)` -> `(runner, host, guest)`.
+
+    Parameters:
+        plan (dict[str, ci_paths.CellPlan]): The plan per check name.
+
+    Returns:
+        dict[tuple[str, str], tuple[str, str, str]]: What each cell would run on and how it reaches its guest.
+    """
+    cells = {("owned", s.name): (s.runner, s.host, s.guest) for s in plan["owned (wsl2)"].shards}
+    contracts = plan["contracts (wsl2)"]
+    cells[("contracts", "")] = (contracts.runner, contracts.host, "wsl2")
+    return cells
+
+
+def test_the_wsl2_pool_is_one_strict_slot_with_a_variable_of_its_own() -> None:
+    """`pi-wsl2` runs one job at a time and never queues a second one behind it."""
+    pool = runner_pools.POOLS["pi-wsl2"]
+    assert (pool.label, pool.variable, pool.slots, pool.queue_depth) == ("pi-wsl2", "PI_WSL2_HEARTBEAT", 1, 0)
+    assert runner_pools.OS_POOLS["wsl2"] == "pi-wsl2"
+    listed = {key for key in runner_pools.CELL_SECONDS if key[1] == "wsl2"}
+    assert listed == {WSL2_FIRST, ("owned", "wsl2", "ts"), ("contracts", "wsl2", "")}
+    assert all(runner_pools.CELL_SECONDS[key] >= runner_pools.MIN_HEAVY_S for key in listed)
+
+
+def test_every_pool_variable_reaches_classify_and_the_rescue() -> None:
+    """A pool whose heartbeat is missing from either workflow would look permanently down there."""
+    root = ci_paths.REPO_ROOT / ".github" / "workflows"
+    for workflow in ("ci.yml", "runner-rescue.yml"):
+        text = (root / workflow).read_text(encoding="utf-8")
+        for name, pool in runner_pools.POOLS.items():
+            assert f"{pool.variable}: ${{{{ vars.{pool.variable} }}}}" in text, (workflow, name)
+            assert f'--pool-heartbeat "{name}=${pool.variable}"' in text, (workflow, name)
+
+
+def test_the_rescue_watches_the_wsl2_label() -> None:
+    """A job stranded on a dead `pi-wsl2` is found by its label, like the other pools."""
+    assert "pi-wsl2" in runner_rescue.POOL_LABELS
+
+
+def test_a_hosted_wsl2_plan_reaches_its_guest_through_windows() -> None:
+    """With no pool up, every wsl2 cell keeps the x64 runner, the `windows` host and the `wsl2` guest."""
+    for capacity in (None, {}, {"pi-linux": 2, "pi-macos": 2}):
+        assert set(wsl2_hosts(full_plan(capacity=capacity)).values()) == {
+            ("windows-2025", "windows", "wsl2"),
+            ("", "windows", "wsl2"),
+        }
+
+
+def test_a_free_wsl2_slot_takes_one_cell_natively_and_keeps_the_guest() -> None:
+    """The longest cell goes native on `pi-wsl2`; the rest stay hosted, and coverage still sees `wsl2`."""
+    plan = full_plan(capacity={"pi-wsl2": 1})
+    cells = wsl2_hosts(plan)
+    assert cells[(WSL2_FIRST[0], WSL2_FIRST[2])] == ("pi-wsl2", "native", "wsl2")
+    assert cells[("owned", "ts")] == ("windows-2025", "windows", "wsl2")
+    assert cells[("contracts", "")] == ("", "windows", "wsl2")
+    assert plan["owned (wsl2)"].guest == "wsl2"
+    assert plan["owned (wsl2)"].shards[0].to_output()["host"] == "native"
+    assert plan["contracts (wsl2)"].to_output()["host"] == "windows"
+    assert not {n for n, c in plan.items() if "wsl2" not in n and c.host}
+
+
+def test_wsl2_routing_follows_the_capacity_it_is_given() -> None:
+    """Zero capacity routes nothing; a larger one (a test seam, the pool has one slot) routes every cell."""
+    assert {v[1] for v in wsl2_hosts(full_plan(capacity={"pi-wsl2": 0})).values()} == {"windows"}
+    routed = wsl2_hosts(full_plan(capacity={"pi-wsl2": 3}))
+    assert {v[1] for v in routed.values()} == {"native"}
+    assert routed[("contracts", "")] == ("pi-wsl2", "native", "wsl2")
+
+
+@pytest.mark.parametrize(
+    ("beat", "natives"),
+    [
+        (f"{FRESH}:1", 1),
+        (FRESH, 1),
+        (f"{FRESH}:0", 0),
+        (f"{FRESH}:-1", 0),
+        (f"{FRESH}:drain", 0),
+        (str(int(NOW) - runner_pools.HEARTBEAT_TTL_S - 1) + ":1", 0),
+        ("0", 0),
+        ("", 0),
+        ("garbled", 0),
+    ],
+)
+def test_the_wsl2_heartbeat_decides_between_native_and_hosted(beat: str, natives: int) -> None:
+    """Only a fresh, non-draining beat with a free slot routes; everything else is the hosted x64 cell."""
+    capacity = runner_pools.pool_capacity({"pi-wsl2": beat}, NOW, trusted=True)
+    cells = wsl2_hosts(full_plan(capacity=capacity))
+    assert sum(host == "native" for _, host, _ in cells.values()) == natives
+    assert all(guest == "wsl2" for _, _, guest in cells.values())
+    assert all((runner == "pi-wsl2") == (host == "native") for runner, host, _ in cells.values() if runner)
+
+
+def test_a_fork_pr_or_the_kill_switch_never_reaches_the_wsl2_pool(tmp_path: Path) -> None:
+    """`--no-pools` (what classify passes for a fork PR or `PI_POOLS_DISABLED`) leaves every cell hosted."""
+    assert runner_pools.pool_capacity({"pi-wsl2": f"{int(NOW)}:1"}, NOW, trusted=False) == {}
+    beat = str(int(time.time()))
+    for extra in ((), ("--no-pools",)):
+        plan = plan_with(tmp_path, f"wsl2-{len(extra)}", "--pool-heartbeat", f"pi-wsl2={beat}:1", *extra)
+        shards = plan["owned (wsl2)"]["shards"]
+        native = [s for s in shards if s["host"] == "native"]
+        assert len(native) == (0 if extra else 1)
+        assert {s["runner"] for s in shards if s["host"] == "windows"} == {"windows-2025"}
+        assert plan["contracts (wsl2)"]["host"] == "windows"
+        assert "runner" not in plan["contracts (wsl2)"]
+
+
+def test_two_shards_of_one_cell_can_both_take_a_pool(table: dict[Any, int]) -> None:
+    """Routing a second shard of a cell must not undo the first one's runner."""
+    routed = full_plan(capacity={"pi-macos": 2})
+    runners = plan_runners(routed)
+    assert runners[("owned", "macos-14", "ts")] == runners[("owned", "macos-14", "python")] == "pi-macos"

@@ -44,11 +44,16 @@ jobs:
           # A fork PR never gets a pool (a fork also controls its own workflow, so this is not the boundary).
           PI_LINUX_HEARTBEAT: ${{ vars.PI_LINUX_HEARTBEAT }}
           PI_MACOS_HEARTBEAT: ${{ vars.PI_MACOS_HEARTBEAT }}
+          PI_WSL2_HEARTBEAT: ${{ vars.PI_WSL2_HEARTBEAT }}
           # Maintainer kill switch: any non-empty value sends every cell back to hosted runners.
           PI_POOLS_DISABLED: ${{ vars.PI_POOLS_DISABLED }}
           UNTRUSTED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'true' || '' }}
         run: |
-          pools=(--pool-heartbeat "pi-linux=$PI_LINUX_HEARTBEAT" --pool-heartbeat "pi-macos=$PI_MACOS_HEARTBEAT")
+          pools=(
+            --pool-heartbeat "pi-linux=$PI_LINUX_HEARTBEAT"
+            --pool-heartbeat "pi-macos=$PI_MACOS_HEARTBEAT"
+            --pool-heartbeat "pi-wsl2=$PI_WSL2_HEARTBEAT"
+          )
           if [ -n "$UNTRUSTED" ] || [ -n "$PI_POOLS_DISABLED" ]; then pools+=(--no-pools); fi
           if [ "$EVENT" = workflow_dispatch ]; then
             # A frozen release-verification/<sha> ref can verify an older main
@@ -110,7 +115,9 @@ jobs:
     runs-on: &owned-shard-runner ${{ matrix.runner }}
     defaults: &owned-shard-defaults
       run:
-        shell: ${{ matrix.guest == 'wsl2' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash -e {0}' }}
+        # `defaults.run.shell` cannot read `runner.os`, so the plan's `host` picks it: a hosted wsl2 shard reaches its
+        # guest through `wsl.exe`, a pooled one (`native`) already runs inside the linux-arm64 distro.
+        shell: ${{ matrix.guest == 'wsl2' && matrix.host == 'windows' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash -e {0}' }}
     timeout-minutes: &owned-shard-timeout ${{ matrix.os == 'wsl2' && 45 || 30 }}
     steps: &owned-shard-steps
       - name: Select and verify Git Bash on the Windows host
@@ -137,7 +144,19 @@ jobs:
         id: tools
         with:
           guest: ${{ matrix.guest }}
+          host: ${{ matrix.host }}
           owned: 'true'
+      # The pooled ARM64 cell: prove the isolation first, then bootstrap in place (no copy, no `pi-ci` user; the
+      # golden image's tools are reused when their versions match the pins).
+      - name: Smoke the native guest
+        if: matrix.host == 'native'
+        run: bash scripts/wsl2_smoke.sh
+      - name: Bootstrap tools in the native guest
+        if: matrix.host == 'native'
+        env:
+          PI_WSL2_IN_GUEST: '1'
+          WSL_OWNED: 'true'
+        run: bash scripts/wsl2_setup.sh
       # Real reviewer reads need system binaries, not Pi's live latest-release download fallback.
       # Prebuilt release binaries from GitHub on both OSes: an Ubuntu apt mirror outage must not
       # block the Linux matrix. fd-find 10.4.2+ ships binstall metadata matching its release assets;
@@ -226,7 +245,7 @@ jobs:
           } >>"$GITHUB_STEP_SUMMARY"
       # WSL producers run on the guest Linux filesystem; artifact actions run on Windows.
       - uses: ./.github/actions/capture-ci-wsl
-        if: always() && matrix.os == 'wsl2' && steps.tools.outcome == 'success'
+        if: always() && matrix.os == 'wsl2' && runner.os == 'Windows' && steps.tools.outcome == 'success'
       # Reports only: the fan-in accounts for the whole cell. A shard that produces no report (computer-use) uploads
       # nothing, and the fan-in's accounting fails on any report the policy expects and no shard produced.
       - name: Preserve this shard's coverage reports
@@ -244,7 +263,7 @@ jobs:
             benchmarks/comparison/coverage/**/lcov.info
           if-no-files-found: ignore
       - uses: ./.github/actions/capture-ci-wsl
-        if: always() && matrix.os == 'wsl2' && steps.tools.outcome == 'success'
+        if: always() && matrix.os == 'wsl2' && runner.os == 'Windows' && steps.tools.outcome == 'success'
         with:
           cleanup: cleanup
           job-status: ${{ job.status }}
@@ -443,7 +462,8 @@ jobs:
     runs-on: ${{ !fromJSON(needs.classify.outputs.plan || '{}')[format('contracts ({0})', matrix.os)].run && 'ubuntu-24.04' || fromJSON(needs.classify.outputs.plan || '{}')[format('contracts ({0})', matrix.os)].runner || matrix.runner }}
     defaults:
       run:
-        shell: ${{ matrix.guest == 'wsl2' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash -e {0}' }}
+        # The plan's `host` for this cell, as in the owned shards: empty (a bypass cell) means hosted.
+        shell: ${{ matrix.guest == 'wsl2' && (fromJSON(needs.classify.outputs.plan || '{}')['contracts (wsl2)'].host || 'windows') == 'windows' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash -e {0}' }}
     timeout-minutes: ${{ matrix.os == 'wsl2' && 45 || 30 }}
     steps:
       - name: Select and verify Git Bash on the Windows host
@@ -486,6 +506,15 @@ jobs:
         if: steps.plan.outputs.run == 'true'
         with:
           guest: ${{ matrix.guest }}
+          host: ${{ matrix.guest == 'wsl2' && fromJSON(needs.classify.outputs.plan || '{}')['contracts (wsl2)'].host || '' }}
+      - name: Smoke the native guest
+        if: steps.plan.outputs.run == 'true' && matrix.guest == 'wsl2' && fromJSON(needs.classify.outputs.plan || '{}')['contracts (wsl2)'].host == 'native'
+        run: bash scripts/wsl2_smoke.sh
+      - name: Bootstrap tools in the native guest
+        if: steps.plan.outputs.run == 'true' && matrix.guest == 'wsl2' && fromJSON(needs.classify.outputs.plan || '{}')['contracts (wsl2)'].host == 'native'
+        env:
+          PI_WSL2_IN_GUEST: '1'
+        run: bash scripts/wsl2_setup.sh
       # Verifies the root core overrides before `npm ci`; the read-only token is for `gh attestation verify`.
       - name: Install
         if: steps.plan.outputs.run == 'true'
@@ -508,7 +537,7 @@ jobs:
         if: steps.plan.outputs.run == 'true'
         run: make check-todo-package-contract REPORT="$RUNNER_TEMP/todo-package-contracts.json"
       - uses: ./.github/actions/capture-ci-wsl
-        if: always() && matrix.os == 'wsl2' && steps.tools.outcome == 'success'
+        if: always() && matrix.os == 'wsl2' && runner.os == 'Windows' && steps.tools.outcome == 'success'
         with:
           cleanup: cleanup
           job-status: ${{ job.status }}
