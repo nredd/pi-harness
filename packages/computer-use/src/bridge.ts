@@ -1491,7 +1491,8 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 	}
 
 	const state = operationState();
-	const baseView = { stateId: state.currentCapture!.stateId, outline: state.currentOutline! };
+	// A blank `stateId` hydrates nothing; fail with the coded error like search, expand and inspect.
+	const baseView = { stateId: currentCaptureOrThrow().stateId, outline: state.currentOutline! };
 	let target = await resolveCurrentTarget(signal);
 	target = await ensureTargetWindowId(target, signal);
 	const scopeNode = conditionScopeNode(state.currentOutline!, condition);
@@ -1613,7 +1614,8 @@ async function performSearchUi(params: SearchUiParams, signal?: AbortSignal): Pr
 	let matches = ranked.matches;
 	let escalatedOCR = false;
 	const look = state.currentLook;
-	if (shouldEscalateSearchOCR(matches, text) && look && look.readText?.requested !== "never" && !look.readText?.executed) {
+	// A browser state has no desktop window to re-capture; report the outline matches as they are.
+	if (!isBrowserContextId(state.contextId) && shouldEscalateSearchOCR(matches, text) && look && look.readText?.requested !== "never" && !look.readText?.executed) {
 		const currentTarget = await ensureTargetWindowId(await resolveCurrentTarget(signal), signal);
 		// captureCurrentTarget adopts the new look/outline/capture into
 		// runtimeState, so refs in these matches stay actable. Keep the image
@@ -1648,7 +1650,8 @@ async function performExpandUi(params: ExpandUiParams, signal?: AbortSignal): Pr
 	const depth = Math.max(1, Math.min(8, Math.trunc(toFiniteNumber(params.depth, 3))));
 	const regionKey = noteRegionKeyForRef(outline, ref);
 	const regionChanged = Boolean(regionKey && state.currentNote?.regions.some((region) => region.key === regionKey && region.status === "changed"));
-	if (target.truncated || regionChanged) {
+	// A browser state has no desktop window to scope a look into; render the cached subtree as is.
+	if (!isBrowserContextId(state.contextId) && (target.truncated || regionChanged)) {
 		const currentTarget = await ensureTargetWindowId(await resolveCurrentTarget(signal), signal);
 		const targetWireRef = wireRefForNode(target);
 		const scoped = (await resourceScheduler.readAt(state.resourceKey!, state.epoch!, async () => await performLook(currentTarget, {
