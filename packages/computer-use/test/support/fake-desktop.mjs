@@ -65,11 +65,33 @@ export const desktopRoot = (fields = {}) => {
 	};
 };
 
+const BACKEND_KEYS = ["ensureReady", "listApps", "listRoots", "getFrontmost", "observe", "act", "actBatch", "waitFor", "isBrowserApp", "isChromeFamilyApp", "setActivity", "shutdown", "emptyRootsHint"];
+
+/**
+ * Build a complete wire look, independent of the fake's own tree.
+ * @param {object} [opts] `lookId`, `children`, `image` (false for an outline-only root) and `window` overrides.
+ * @returns {object} Wire look.
+ * @throws {never} Fixed construction cannot fail.
+ */
+export const lookPayload = ({ lookId = "look1", children, image = true, window = {} } = {}) => ({
+	lookId,
+	capturedAt: 1,
+	window: { windowId: 11, rootRef: "ax:w11", kind: "window", framePoints: { x: 0, y: 0, w: 300, h: 200 }, scaleFactor: 1, isModal: false, role: "AXWindow", subrole: "", ...window },
+	...(image ? { image: { jpegBase64: "AAAA", mimeType: "image/jpeg", width: 300, height: 200 } } : {}),
+	outline: wireNode("w", "AXWindow", "Main", {
+		label: "",
+		rect: { x: 0, y: 0, w: 300, h: 200 },
+		children: children ?? ["a", "b", "c"].map((ref) => wireButton(ref, ref)),
+	}),
+	timings: { captureMs: 0 },
+});
+
 /**
  * Install a scripted platform backend and return its controls.
  * `roots` is the live root listing, `tree` the children of the next look's window node, `frontmostPid`
  * picks the frontmost root, and `listRootsHook`, `lookPayload` and `waitFor` may be replaced to script
- * the backend. Every look and wait request is recorded.
+ * the backend. Every look, wait and act request is recorded. `apps` and `frontmost` override the listing
+ * derived from `roots` and `frontmostPid`; `browserApps`/`chromeApps` name the browser-family apps.
  * @param {(fn: () => void | Promise<void>) => void} onTestFinished Vitest cleanup registrar.
  * @param {object} [options] `roots` seeds the listing (the first root's pid is not auto-selected; set `frontmostPid`).
  * @returns {Promise<object>} Fake controls: `roots`, `tree`, `looks`, `waits`, `call`, `text`, `observe`, `bridge` and the hooks above.
@@ -79,10 +101,13 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 	const { currentPlatformBackend } = await import("../../src/platform/index.ts");
 	const bridge = await import("../../src/bridge.ts");
 	const { parseLookResponse } = await import("../../src/outline.ts");
-	const original = { ...currentPlatformBackend };
+	const saved = new Map(BACKEND_KEYS.map((key) => [key, Object.getOwnPropertyDescriptor(currentPlatformBackend, key)]));
 	onTestFinished(async () => {
 		await bridge.shutdownComputerUseSession();
-		Object.assign(currentPlatformBackend, original);
+		for (const [key, descriptor] of saved) {
+			if (descriptor) Object.defineProperty(currentPlatformBackend, key, descriptor);
+			else delete currentPlatformBackend[key];
+		}
 		rmSync(cwd, { recursive: true, force: true });
 	});
 
@@ -94,8 +119,19 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 		windowTitle: "Main",
 		readText: undefined,
 		image: undefined,
+		apps: undefined,
+		frontmost: undefined,
+		browserApps: new Set(),
+		chromeApps: new Set(),
+		diagnostics: undefined,
+		readyCalls: 0,
+		activity: [],
 		looks: [],
 		waits: [],
+		actCalls: [],
+		actResult: { outcome: "worked", performed: { delivery: "pid" } },
+		actBatchCalls: [],
+		actBatchResult: { outcome: "worked", performed: { delivery: "pid", transaction: true, actionCount: 1 }, steps: [{ outcome: "worked" }] },
 		lookSeq: 0,
 		/** Replaceable listing: receives the query, returns roots, or undefined for the default. */
 		listRootsHook: undefined,
@@ -125,10 +161,14 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 		};
 	};
 	Object.assign(currentPlatformBackend, {
-		ensureReady: async () => ({ permissionStatus: { accessibility: true, screenRecording: true }, lastPermissionCheckAt: Date.now() }),
-		listApps: async () => fake.roots.map((r) => ({ appName: r.appName, bundleId: r.bundleId, pid: r.pid, isFrontmost: r.pid === fake.frontmostPid })),
+		ensureReady: async () => {
+			fake.readyCalls++;
+			return { permissionStatus: { accessibility: true, screenRecording: true }, lastPermissionCheckAt: Date.now(), helperDiagnostics: fake.diagnostics };
+		},
+		listApps: async () => fake.apps ?? [...new Map(fake.roots.map((r) => [r.pid, { appName: r.appName, bundleId: r.bundleId, pid: r.pid, isFrontmost: r.pid === fake.frontmostPid }])).values()],
 		listRoots: async (query) => fake.listRootsHook?.(query) ?? (query?.pid ? fake.roots.filter((r) => r.pid === query.pid) : fake.roots),
 		getFrontmost: async () => {
+			if (fake.frontmost) return fake.frontmost;
 			const root = fake.roots.find((candidate) => candidate.pid === fake.frontmostPid) ?? fake.roots[0];
 			return { appName: root.appName, bundleId: root.bundleId, pid: root.pid, windowId: root.windowId };
 		},
@@ -136,6 +176,21 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 			fake.looks.push(request);
 			return parseLookResponse((fake.lookPayload ?? defaultLook)(request));
 		},
+		act: async (request) => {
+			fake.actCalls.push(request);
+			return fake.actResult;
+		},
+		actBatch: async (requests) => {
+			fake.actBatchCalls.push(requests);
+			return fake.actBatchResult;
+		},
+		isBrowserApp: (name) => fake.browserApps.has(name),
+		isChromeFamilyApp: (name) => fake.chromeApps.has(name),
+		setActivity: async (active) => {
+			fake.activity.push(active);
+		},
+		shutdown: async () => {},
+		emptyRootsHint: undefined,
 		waitFor: async (request, options) => {
 			fake.waits.push({ request, options });
 			return await fake.waitFor(request, options);
@@ -143,6 +198,7 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 	});
 
 	const ctx = { cwd, hasUI: false, ui: { notify() {} }, sessionManager: { getBranch: () => [] } };
+	fake.ctx = ctx;
 	fake.call = (executor, params, signal) => executor("t", params, signal, undefined, ctx);
 	fake.text = (result) => result.content.filter((c) => c.type === "text").map((c) => c.text).join("\n");
 	/** Observe the frontmost root and return `{ result, stateId, text }`. */
