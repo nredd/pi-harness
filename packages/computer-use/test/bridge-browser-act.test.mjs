@@ -4,6 +4,15 @@ import { afterEach, test, vi } from "vitest";
 import { cdpError, startFakeCdp } from "./fixtures/fake-cdp.mjs";
 import { installFakeDesktop } from "./support/fake-desktop.mjs";
 
+/**
+ * Build one `Accessibility.getFullAXTree` node.
+ * @param {string} nodeId Node id.
+ * @param {string} role AX role.
+ * @param {string} name Accessible name.
+ * @param {object} [extra] Extra node fields (`parentId`, `childIds`, `backendDOMNodeId`, ...).
+ * @returns {object} AX node.
+ * @throws {never} Pure constructor.
+ */
 const ax = (nodeId, role, name, extra = {}) => ({ nodeId, role: { type: "role", value: role }, name: { type: "computedString", value: name }, ...extra });
 
 /** Page with a link, a button, a textbox and a node without a backend id, all under one web area. */

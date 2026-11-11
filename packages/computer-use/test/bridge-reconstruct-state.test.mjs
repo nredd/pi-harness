@@ -3,7 +3,21 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { installFakeDesktop } from "./support/fake-desktop.mjs";
 
+/**
+ * Build one session branch entry.
+ * @param {string} toolName Tool that produced the result.
+ * @param {unknown} details Result details.
+ * @param {string} [role="toolResult"] Message role.
+ * @returns {object} Branch entry.
+ * @throws {never} Pure constructor.
+ */
 const message = (toolName, details, role = "toolResult") => ({ type: "message", message: { role, toolName, details } });
+/**
+ * Deep-copy JSON-shaped data, as a session file round trip would.
+ * @param {unknown} value Data to copy.
+ * @returns {any} Independent copy.
+ * @throws {never} Inputs are JSON-shaped.
+ */
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
 /**
@@ -111,7 +125,19 @@ test("a restored note survives and a re-restore clears what was there", async ({
 	assert.equal(fake.bridge.testing.savedState(stateId), undefined);
 });
 
+/**
+ * Build a `find_roots` branch entry.
+ * @param {unknown} windows The `windows` field of its details.
+ * @returns {object} Branch entry.
+ * @throws {never} Pure constructor.
+ */
 const findRoots = (windows) => message("find_roots", { tool: "find_roots", windows });
+/**
+ * Build one discovered window as `find_roots` records it.
+ * @param {object} [over] Field overrides.
+ * @returns {object} Window detail.
+ * @throws {never} Pure constructor.
+ */
 const root = (over = {}) => ({ windowRef: "@r4", pid: 7, app: "App", bundleId: "com.example.app", windowTitle: "Main", windowId: 11, nativeWindowRef: "ax:w11", ...over });
 
 /**

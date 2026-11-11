@@ -180,7 +180,7 @@ test("a failed successor capture with the window still listed is a terminal obse
 	assert.equal(result.details.baseStateId, stateId);
 	assert.deepEqual(result.details.error, { code: "post_action_observation_failed", message: "capture failed" });
 	assert.equal(result.details.cause, undefined);
-	assert.match(fake.text(result), /^The action was delivered, but its source root App1 — Main could not be observed afterward: capture failed\nNo successor state was created\./);
+	assert.match(fake.text(result), /^The action was delivered, but its source root App1 \u2014 Main could not be observed afterward: capture failed\nNo successor state was created\./);
 	await assert.rejects(() => act([press]), /State is stale for desktop-pid:1/, "the consumed state is not reused");
 });
 
@@ -229,7 +229,7 @@ test("a root that closed under the action is reported with a synthetic closed de
 	assert.deepEqual(result.details.successors, []);
 	assert.equal(result.details.error.code, "target_closed");
 	assert.deepEqual(result.details.execution.rootDelta, [{ change: "closed", kind: "window", ref: "@r1", title: "Main", pid: 1, metadata: { source: "post_action_identity_probe" } }]);
-	assert.match(fake.text(result), /^The action was delivered, and its source root App1 — Main closed before a successor observation could be captured\./);
+	assert.match(fake.text(result), /^The action was delivered, and its source root App1 \u2014 Main closed before a successor observation could be captured\./);
 });
 
 test("a helper closed delta for the target is not duplicated by the identity probe", async ({ onTestFinished }) => {
@@ -373,12 +373,12 @@ test("the highest-scoring of several foreground modals is the one named", async 
 	const { fake, act } = await observed(onTestFinished);
 	const delegate = currentPlatformBackend.act;
 	currentPlatformBackend.act = async (request) => {
-		fake.roots = [...fake.roots, modal(160, "Small", { framePoints: { x: 0, y: 0, w: 10, h: 10 } }), modal(161, "Large"), modal(162, "Offscreen", { isOnscreen: false })];
+		// The lower-scoring modal is listed first, so only the ranking puts the winner in front.
+		fake.roots = [...fake.roots, modal(160, "Loser", { isMain: false }), modal(161, "Winner"), modal(162, "Offscreen", { isOnscreen: false })];
 		return await delegate(request);
 	};
 	const note = fake.text(await act([press])).split("\n").at(-1);
-	assert.match(note, /^Note: dialog "(Small|Large)" is now a foreground modal/);
-	assert.doesNotMatch(note, /Offscreen/);
+	assert.match(note, /^Note: dialog "Winner" is now a foreground modal/);
 });
 
 test("no modal note when the acted root is gone from the listing, is itself modal, or the listing fails", async ({ onTestFinished }) => {
