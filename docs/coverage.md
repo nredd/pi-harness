@@ -382,10 +382,12 @@ the same Git-listed traversal. Executable suffixes (`SOURCE_SUFFIXES`: TS/TSX/`.
 Python, Swift, Rust, `.sh`/`.bash`/`.ps1`) and extensionless files with a `#!` shebang must be inventoried.
 A suffix in neither `SOURCE_SUFFIXES` nor the known-inert `NON_SOURCE_SUFFIXES` (docs, data, images, ...)
 also fails, so a new language is classified deliberately (#694). Declaration files (`.d.ts`, `.d.mts`) pass
-only through a reasoned exclusion (`type-only`, or `generated` for tool output). Whole directories stay out only via `unmeasured_trees` in
-`coverage/policy.json`, each with a tracking issue and reason (today: `forks/`, #693). Shell and
+only through a reasoned exclusion that matches an existing file under its package root: `type-only` for hand-written
+declarations, `generated` for tool output such as `docs/next-env.d.ts`. A dead glob fails the audit. Whole directories stay out only via `unmeasured_trees` in
+`coverage/policy.json`, each with a tracking issue and reason (today: `forks/`, #693). An entry must be a normalised, existing directory or gitlink, unique, and may not equal, sit inside or contain a package root or any owned file. Every gitlink (submodule, e.g. `forks/pi`) must be covered by an entry or the audit fails, so dropping the `forks` entry is caught. The audit does not check that the tracking issue is still open (the gate has no network). Shell and
 PowerShell under `scripts/` are the `shell-scripts` package, `pending` with no coverage claim (#695);
-`computer-use` owns `native/macos/*.swift`, so new Swift files join its inventory. Each file must be in a measured/pending inventory or have an explicit
+`computer-use` owns `native/macos/*.swift`, so new Swift files join its inventory.
+Makefiles (extensionless, no shebang) and YAML, including workflow and action inline `run:` steps, are inert by decision and not inventoried: measuring them is the open #695 owner decision. `test_makefiles_and_yaml_are_inert_by_decision_until_695` pins the exact tracked set (3 Makefiles, every `.github/**/*.yml` at the root and under `packages/computer-use` and `packages/subagents`), so a new one is a deliberate choice. Each file must be in a measured/pending inventory or have an explicit
 reasoned exclusion. Conventional test files (including pytest `conftest.py` and Swift `*_tests.swift`) are out of scope; arbitrary new implementation files
 are not. There is no implicit `*.config.*` exemption: executable tool configurations need an
 explicit owned/pending declaration or reasoned verification classification. The producer

@@ -100,11 +100,18 @@ class UnmeasuredTree(StrictModel):
         Returns:
             UnmeasuredTree: Validated tracked-unmeasured directory.
         Raises:
-            ValueError: The path is absolute, escapes or is the whole repository, or the reason is blank.
+            ValueError: The path is absolute, escapes, is unnormalised (e.g. `./x`, `x/`) or the whole
+                repository, or the reason is blank.
         """
         path = Path(self.path)
-        if path.is_absolute() or ".." in path.parts or not path.parts or not self.reason.strip():
-            raise ValueError("Unmeasured tree needs a relative, non-root path and a nonblank reason")
+        if (
+            path.is_absolute()
+            or ".." in path.parts
+            or not path.parts
+            or path.as_posix() != self.path
+            or not self.reason.strip()
+        ):
+            raise ValueError("Unmeasured tree needs a normalised relative, non-root path and a reason")
         return self
 
 
@@ -310,6 +317,22 @@ class Policy(StrictModel):
         default_factory=list,
         description="New reviewed declarations required for enforced-to-report-only signal transitions.",
     )
+
+    @model_validator(mode="after")
+    def distinct_unmeasured_trees(self) -> Policy:
+        """Reject duplicate or nested unmeasured trees, which would make one entry dead weight.
+
+        Parameters:
+            None.
+        Returns:
+            Policy: Validated unmeasured-tree declarations.
+        Raises:
+            ValueError: Two entries are equal or one is inside another.
+        """
+        paths = [Path(tree.path) for tree in self.unmeasured_trees]
+        if len(set(paths)) != len(paths) or any(a != b and a.is_relative_to(b) for a in paths for b in paths):
+            raise ValueError("Duplicate or nested `unmeasured_trees` paths")
+        return self
 
     @model_validator(mode="after")
     def zero_target(self) -> Policy:
@@ -581,16 +604,16 @@ def is_test_path(path: Path) -> bool:
     )
 
 
-def expand_inventory(package: Package, files: set[str]) -> set[str]:
-    """Expand production membership against a supplied repository file universe.
+def owned_matches(package: Package, files: set[str]) -> set[str]:
+    """Expand `owned` patterns, before exclusions, against a file universe.
 
     Parameters:
-        package (Package): Source patterns and reviewed exclusions.
+        package (Package): Source patterns.
         files (set[str]): Repository-relative paths from one specific tree.
     Returns:
-        set[str]: Package-relative executable source membership.
+        set[str]: Package-relative non-test paths matched by `owned`.
     Raises:
-        ValueError: A pattern is empty, a helper overlaps source, or a declaration exclusion is invalid.
+        ValueError: An owned pattern matches no files.
     """
     available = {
         Path(file).relative_to(package.root).as_posix()
@@ -605,6 +628,21 @@ def expand_inventory(package: Package, files: set[str]) -> set[str]:
         if not matches:
             raise ValueError(f"Owned pattern matches no files: '{package.root}/{pattern}'")
         owned |= matches
+    return owned
+
+
+def expand_inventory(package: Package, files: set[str]) -> set[str]:
+    """Expand production membership against a supplied repository file universe.
+
+    Parameters:
+        package (Package): Source patterns and reviewed exclusions.
+        files (set[str]): Repository-relative paths from one specific tree.
+    Returns:
+        set[str]: Package-relative executable source membership.
+    Raises:
+        ValueError: A pattern is empty, a helper overlaps source, or a declaration exclusion is invalid.
+    """
+    owned = owned_matches(package, files)
     if any(Path(file).full_match(pattern) for file in owned for pattern in package.test_helpers):
         raise ValueError("Test helper paths overlap the declared production inventory")
     for exclusion in package.exclusions:
@@ -816,8 +854,9 @@ def audit_inventory(root: Path, policy: Policy, files: set[str]) -> set[str]:
         )
     if helpers & covered:
         raise ValueError(f"Verification helpers overlap production inventory: '{sorted(helpers & covered)}'")
-    trees = [tree.path for tree in policy.unmeasured_trees]
-    unknown: set[str] = set()
+    trees = check_unmeasured_trees(root, policy, covered)
+    check_exclusions_match(policy, files)
+    unknown = {link for link in gitlinks(root) if not any(Path(link).is_relative_to(tree) for tree in trees)}
     for file in files:
         path = Path(file)
         if is_test_path(path) or any(path.is_relative_to(tree) for tree in trees):
@@ -834,6 +873,71 @@ def audit_inventory(root: Path, policy: Policy, files: set[str]) -> set[str]:
         if not excluded:
             unknown.add(file)
     return unknown
+
+
+def gitlinks(root: Path) -> set[str]:
+    """List submodule paths (mode 160000), which `ls-files --others` and `is_file` both hide.
+
+    Parameters:
+        root (Path): Absolute repository root.
+    Returns:
+        set[str]: Repository-relative gitlink paths in the index.
+    Raises:
+        subprocess.CalledProcessError: Git cannot read the index.
+    """
+    rows = git_read(root, ["ls-files", "-s", "-z"]).split("\0")
+    return {row.split("\t", 1)[1] for row in rows if row.startswith("160000 ")}
+
+
+def check_unmeasured_trees(root: Path, policy: Policy, covered: set[str]) -> list[Path]:
+    """Validate each unmeasured tree against the tree, the packages and the inventory.
+
+    The tracking issue's open state is not checked: the gate has no network.
+
+    Parameters:
+        root (Path): Absolute repository root.
+        policy (Policy): Current policy.
+        covered (set[str]): Repository-relative paths already owned by a package.
+    Returns:
+        list[Path]: Validated tree paths.
+    Raises:
+        ValueError: A tree is missing, is not a directory or gitlink, or overlaps owned source.
+    """
+    links = gitlinks(root)
+    trees = [Path(tree.path) for tree in policy.unmeasured_trees]
+    for tree in trees:
+        if not ((root / tree).is_dir() or tree.as_posix() in links):
+            raise ValueError(f"Unmeasured tree is not an existing directory or gitlink: '{tree}'")
+        for package in policy.packages.values():
+            base = Path(package.root)
+            if base != Path() and (tree.is_relative_to(base) or base.is_relative_to(tree)):
+                raise ValueError(f"Unmeasured tree overlaps package root '{package.root}': '{tree}'")
+        if any(Path(file).is_relative_to(tree) for file in covered):
+            raise ValueError(f"Unmeasured tree contains owned source: '{tree}'")
+    return trees
+
+
+def check_exclusions_match(policy: Policy, files: set[str]) -> None:
+    """Require every exclusion glob to hit an existing package file, so none is dead.
+
+    Generated outputs (e.g. `dist/**`) are exempted by the audit without being owned, so the match is
+    against the package root, not only the owned set.
+
+    Parameters:
+        policy (Policy): Current policy.
+        files (set[str]): Repository-relative working paths.
+    Returns:
+        None: Every exclusion matches at least one file under its package root.
+    Raises:
+        ValueError: An exclusion matches no existing file.
+    """
+    for name, package in policy.packages.items():
+        inside = [
+            Path(file).relative_to(package.root) for file in files if Path(file).is_relative_to(package.root)
+        ]
+        for item in package.exclusions:
+            if not any(path.full_match(item.path) for path in inside):
+                raise ValueError(f"Exclusion matches no existing file: '{name}': '{item.path}'")
 
 
 def is_executable_candidate(root: Path, path: Path) -> bool:

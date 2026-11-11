@@ -410,3 +410,52 @@ def test_unaudited_languages_are_owned_pending_or_tracked_unmeasured() -> None:
     assert cfg.packages["shell-scripts"].status == "pending"
     assert "#695" in cfg.packages["shell-scripts"].note
     assert [(t.path, t.issue) for t in cfg.unmeasured_trees] == [("forks", 693)]
+
+
+INERT_BY_DECISION = {
+    ".github/actions/capture-ci-wsl/action.yml",
+    ".github/actions/report-plan/action.yml",
+    ".github/actions/setup-ci-tools/action.yml",
+    ".github/actions/setup-ci-wsl/action.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/forks.yml",
+    ".github/workflows/installer.yml",
+    ".github/workflows/native-helper.yml",
+    ".github/workflows/promote-stack.yml",
+    ".github/workflows/publish.yml",
+    ".github/workflows/runner-rescue.yml",
+    ".github/workflows/runner-smoke.yml",
+    "Makefile",
+    "benchmarks/comparison/Makefile",
+    "integration/Makefile",
+    "packages/computer-use/.github/FUNDING.yml",
+    "packages/computer-use/.github/dependabot.yml",
+    "packages/computer-use/.github/workflows/ci.yml",
+    "packages/computer-use/.github/workflows/docs.yml",
+    "packages/computer-use/.github/workflows/npm-audit.yml",
+    "packages/computer-use/.github/workflows/publish-npm.yml",
+    "packages/subagents/.github/FUNDING.yml",
+    "packages/subagents/.github/workflows/ci.yml",
+}
+
+
+def test_makefiles_and_yaml_are_inert_by_decision_until_695() -> None:
+    """Pin the Makefiles and YAML the audit treats as inert, so adding one is a deliberate choice.
+
+    Parameters:
+        None.
+    Returns:
+        None: The tracked Makefile and YAML set equals the pinned list (#695).
+    Raises:
+        AssertionError: A new Makefile or workflow appeared, or one was removed, without updating the pin.
+    """
+    found = {
+        file
+        for file in repository_files(ROOT)
+        if not file.startswith("forks/")
+        and (Path(file).name == "Makefile" or Path(file).suffix in {".yml", ".yaml"})
+    }
+    assert found == INERT_BY_DECISION
+    doc = (ROOT / "docs/coverage.md").read_text()
+    assert "inert by decision" in doc
+    assert "#695" in doc

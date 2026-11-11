@@ -858,3 +858,126 @@ def test_unmeasured_tree_is_tracked_and_reasoned(tmp_path: Path) -> None:
     for bad in [{"path": "forks", "issue": 693, "reason": " "}, {"path": ".", "issue": 1, "reason": "x"}]:
         with pytest.raises(ValidationError):
             UnmeasuredTree.model_validate(bad)
+
+
+def tree(path: str) -> UnmeasuredTree:
+    """Build a reasoned unmeasured-tree declaration.
+
+    Parameters:
+        path (str): Repository-relative tree path.
+    Returns:
+        UnmeasuredTree: Entry citing a placeholder issue.
+    Raises:
+        ValidationError: The path is not a normalised relative non-root path.
+    """
+    return UnmeasuredTree(path=path, issue=693, reason="Open owner decision.")
+
+
+@pytest.mark.parametrize("path", ["packages", "packages/example", "packages/example/src"])
+def test_unmeasured_tree_cannot_cover_a_package(tmp_path: Path, path: str) -> None:
+    """Refuse a tree equal to, inside or containing a package root.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+        path (str): Overlapping tree path.
+    Returns:
+        None: The audit raises instead of exempting owned source.
+    Raises:
+        AssertionError: An owned tree is silently exempted.
+    """
+    cfg = scope_fixture(tmp_path)
+    cfg.unmeasured_trees = [tree(path)]
+    with pytest.raises(ValueError, match="overlaps package root"):
+        audit_inventory(tmp_path, cfg, repository_files(tmp_path))
+
+
+@pytest.mark.parametrize("path", ["./forks", "forks/", "../forks", "/forks", "."])
+def test_unmeasured_tree_path_must_be_normalised(path: str) -> None:
+    """Refuse spellings that would not compare equal to Git paths.
+
+    Parameters:
+        path (str): Unnormalised, escaping, absolute or root path.
+    Returns:
+        None: Validation rejects it.
+    Raises:
+        AssertionError: A malformed path is accepted.
+    """
+    with pytest.raises(ValidationError):
+        tree(path)
+
+
+def test_unmeasured_tree_must_be_an_existing_directory(tmp_path: Path) -> None:
+    """Refuse a missing path or a file in place of a directory.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+    Returns:
+        None: Both raise.
+    Raises:
+        AssertionError: A dead or file entry is accepted.
+    """
+    cfg = scope_fixture(tmp_path)
+    (tmp_path / "afile").write_text("x\n")
+    for path in ("missing", "afile"):
+        cfg.unmeasured_trees = [tree(path)]
+        with pytest.raises(ValueError, match="existing directory or gitlink"):
+            audit_inventory(tmp_path, cfg, repository_files(tmp_path))
+
+
+def test_duplicate_or_nested_unmeasured_trees_are_rejected() -> None:
+    """Refuse redundant entries.
+
+    Parameters:
+        None.
+    Returns:
+        None: Policy validation fails.
+    Raises:
+        AssertionError: A duplicate or nested entry is accepted.
+    """
+    for paths in (["forks", "forks"], ["forks", "forks/pi"]):
+        data = policy().model_dump()
+        data["unmeasured_trees"] = [tree(path).model_dump() for path in paths]
+        with pytest.raises(ValidationError, match="Duplicate or nested"):
+            Policy.model_validate(data)
+
+
+def test_gitlinks_must_be_covered_by_an_unmeasured_tree(tmp_path: Path) -> None:
+    """Make submodules first-class: an uncovered gitlink fails, so dropping the entry is caught.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+    Returns:
+        None: The gitlink fails without an entry and passes with one.
+    Raises:
+        AssertionError: A submodule is silently outside the inventory.
+    """
+    cfg = scope_fixture(tmp_path)
+    sha = git_read(tmp_path, ["rev-parse", "HEAD"]).strip()
+    git_read(tmp_path, ["update-index", "--add", "--cacheinfo", f"160000,{sha},forks/x"])
+    files = repository_files(tmp_path)
+    assert "forks/x" not in files
+    (tmp_path / "forks").mkdir(exist_ok=True)
+    assert audit_inventory(tmp_path, cfg, files) == {"forks/x"}
+    cfg.unmeasured_trees = [tree("forks")]
+    assert not audit_inventory(tmp_path, cfg, files)
+
+
+@pytest.mark.parametrize("pattern", ["src/**/*.ts", "dist/**"])
+def test_exclusion_glob_must_match_an_existing_file(tmp_path: Path, pattern: str) -> None:
+    """Refuse a dead exclusion glob instead of letting it pre-exempt future files.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+        pattern (str): Glob that matches nothing in the fixture, or one broad one that does.
+    Returns:
+        None: Only the dead glob raises.
+    Raises:
+        AssertionError: A speculative exclusion is accepted.
+    """
+    cfg = scope_fixture(tmp_path)
+    cfg.packages["example"].exclusions = [Exclusion(path=pattern, kind="generated", reason="Build output.")]
+    if pattern.startswith("dist"):
+        with pytest.raises(ValueError, match="matches no existing file"):
+            audit_inventory(tmp_path, cfg, repository_files(tmp_path))
+    else:
+        audit_inventory(tmp_path, cfg, repository_files(tmp_path))
