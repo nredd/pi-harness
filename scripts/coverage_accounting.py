@@ -103,7 +103,7 @@ class UnmeasuredTree(StrictModel):
             ValueError: The path is absolute, escapes or is the whole repository, or the reason is blank.
         """
         path = Path(self.path)
-        if path.is_absolute() or ".." in path.parts or path.parts in {(), (".",)} or not self.reason.strip():
+        if path.is_absolute() or ".." in path.parts or not path.parts or not self.reason.strip():
             raise ValueError("Unmeasured tree needs a relative, non-root path and a nonblank reason")
         return self
 
@@ -550,32 +550,17 @@ def parse_lcov(text: str, *, bare_sources: bool = False) -> dict[str, FileCovera
     return records
 
 
-SOURCE_SUFFIXES = frozenset(
-    {
-        ".ts",
-        ".tsx",
-        ".mts",
-        ".cts",
-        ".js",
-        ".jsx",
-        ".mjs",
-        ".cjs",
-        ".py",
-        ".swift",
-        ".rs",
-        ".sh",
-        ".bash",
-        ".ps1",
-    }
+SOURCE_SUFFIXES: frozenset[str] = frozenset(
+    {".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py"}
+    | {".swift", ".rs", ".sh", ".bash", ".ps1"}
 )
-# Suffixes that are known to carry no executable source. Anything in neither set fails the audit, so a
-# new language is classified deliberately rather than slipping through.
-NON_SOURCE_SUFFIXES = frozenset(
-    {
-        ".md", ".mdx", ".txt", ".json", ".jsonl", ".yml", ".yaml", ".toml", ".lock", ".conf", ".xml",
-        ".entitlements", ".css", ".info", ".map", ".snap", ".stderr", ".png", ".jpg", ".svg", ".mp4", ".mov",
-    }
-)  # fmt: skip
+# Suffixes known to carry no executable source. Anything in neither set fails the audit, so a new
+# language is classified deliberately rather than slipping through.
+NON_SOURCE_SUFFIXES: frozenset[str] = frozenset(
+    {".md", ".mdx", ".txt", ".json", ".jsonl", ".yml", ".yaml", ".toml", ".lock", ".conf", ".xml"}
+    | {".entitlements", ".css", ".info", ".map", ".snap", ".stderr"}
+    | {".png", ".jpg", ".svg", ".mp4", ".mov"}
+)
 
 
 def is_test_path(path: Path) -> bool:
@@ -860,7 +845,7 @@ def is_executable_candidate(root: Path, path: Path) -> bool:
     Returns:
         bool: Whether the file must be inventoried; unknown suffixes and extensionless shebang scripts are.
     Raises:
-        None.
+        None: An unreadable extensionless file counts as source, never as inert.
     """
     if path.suffix in SOURCE_SUFFIXES:
         return True
@@ -871,7 +856,7 @@ def is_executable_candidate(root: Path, path: Path) -> bool:
             with (root / path).open("rb") as handle:
                 return handle.read(2) == b"#!"
         except OSError:
-            return False
+            return True
     return True
 
 

@@ -397,9 +397,12 @@ def test_unaudited_languages_are_owned_pending_or_tracked_unmeasured() -> None:
     """
     cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
     covered = {file for scope in inventory_scopes(ROOT, cfg).values() for file in scope}
+    trees = [tree.path for tree in cfg.unmeasured_trees]
     files = repository_files(ROOT)
     for suffix in (".swift", ".sh", ".ps1"):
-        for file in {f for f in files if f.endswith(suffix) and not f.startswith("forks/")}:
+        for file in {
+            f for f in files if f.endswith(suffix) and not any(Path(f).is_relative_to(t) for t in trees)
+        }:
             assert file in covered or is_test_path(Path(file)), file
     assert "packages/computer-use/native/macos/agent_cursor_tests.swift" not in covered
     assert "packages/computer-use/scripts/make-signing-cert.sh" in covered

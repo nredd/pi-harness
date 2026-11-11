@@ -385,7 +385,7 @@ also fails, so a new language is classified deliberately (#694). Declaration fil
 only through a `type-only` exclusion. Whole directories stay out only via `unmeasured_trees` in
 `coverage/policy.json`, each with a tracking issue and reason (today: `forks/`, #693). Shell and
 PowerShell under `scripts/` are the `shell-scripts` package, `pending` with no coverage claim (#695);
-`computer-use` owns `native/macos/*.swift`, so new Swift files join its inventory. Each executable file must be included in a measured/pending inventory or have an explicit
+`computer-use` owns `native/macos/*.swift`, so new Swift files join its inventory. Each file must be in a measured/pending inventory or have an explicit
 reasoned exclusion. Conventional test files (including pytest `conftest.py` and Swift `*_tests.swift`) are out of scope; arbitrary new implementation files
 are not. There is no implicit `*.config.*` exemption: executable tool configurations need an
 explicit owned/pending declaration or reasoned verification classification. The producer

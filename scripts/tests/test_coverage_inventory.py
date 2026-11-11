@@ -753,10 +753,13 @@ def test_cli_rejects_unowned_workspaces_and_source(tmp_path: Path, path: str, me
         "packages/example/lib.mts",
         "packages/example/lib.cts",
         "packages/example/native/agent_cursor_extra.swift",
+        "scripts/new.wasm",
+        "packages/example/x.zig",
+        "scripts/Dockerfile.sh2",
     ],
 )
-def test_unowned_non_typescript_source_fails_the_audit(tmp_path: Path, path: str) -> None:
-    """Fail on every executable language, not only TS, Python and JavaScript (#694).
+def test_unowned_or_unknown_source_fails_closed(tmp_path: Path, path: str) -> None:
+    """Fail on every executable language and on suffixes in neither list (#694).
 
     Parameters:
         tmp_path (Path): Disposable repository root.
@@ -765,23 +768,6 @@ def test_unowned_non_typescript_source_fails_the_audit(tmp_path: Path, path: str
         None: The exact path is reported.
     Raises:
         AssertionError: A language outside the old suffix allowlist passes unowned.
-    """
-    cfg = scope_fixture(tmp_path)
-    write_script(tmp_path, path)
-    assert audit_inventory(tmp_path, cfg, repository_files(tmp_path)) == {path}
-
-
-@pytest.mark.parametrize("path", ["scripts/new.wasm", "packages/example/x.zig", "scripts/Dockerfile.sh2"])
-def test_unknown_suffix_fails_closed(tmp_path: Path, path: str) -> None:
-    """Treat a suffix in neither the source nor the known-inert list as unaccounted.
-
-    Parameters:
-        tmp_path (Path): Disposable repository root.
-        path (str): New file with an unclassified suffix.
-    Returns:
-        None: The file is reported until its kind is classified.
-    Raises:
-        AssertionError: An unknown suffix silently passes.
     """
     cfg = scope_fixture(tmp_path)
     write_script(tmp_path, path)
