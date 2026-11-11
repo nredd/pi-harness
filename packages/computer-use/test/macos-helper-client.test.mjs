@@ -1,7 +1,7 @@
 // Drives `MacosHelperClient` and the activity-glow connection against `support/fake-helper.mjs`: real
 // unix socket and NDJSON framing, faked `spawn` (ps, open, setup script). No Swift helper runs.
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants as fsConstants, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
@@ -612,10 +612,17 @@ describe("activity glow connection", () => {
 
 describe("helper app path resolution", () => {
 	test("defaults every probe to the host (env, home, system install, existsSync)", () => {
-		const resolved = resolveMacosHelperAppPath({ env: {} });
-		assert.ok([path.join("/Applications", "pi-computer-use.app"), path.join(os.homedir(), "Applications", "pi-computer-use.app")].includes(resolved));
+		const system = path.join("/Applications", "pi-computer-use.app");
+		let systemInstallUsable = existsSync(system);
+		try {
+			accessSync("/Applications", fsConstants.W_OK);
+		} catch {
+			systemInstallUsable = false;
+		}
+		const expected = systemInstallUsable ? system : path.join(os.homedir(), "Applications", "pi-computer-use.app");
+		assert.equal(resolveMacosHelperAppPath({ env: {} }), expected);
 		vi.stubEnv("PI_COMPUTER_USE_HELPER_APP_PATH", "  ");
-		assert.equal(path.basename(resolveMacosHelperAppPath()), "pi-computer-use.app");
+		assert.equal(resolveMacosHelperAppPath(), expected, "a blank override and no options use the same defaults");
 	});
 
 	test("uses the real filesystem for the system install when no probes are injected", () => {
