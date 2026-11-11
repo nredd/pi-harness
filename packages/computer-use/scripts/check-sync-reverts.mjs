@@ -228,8 +228,8 @@ const cases = [
 	{
 		name: "host-independent documentation inventory (harness sync)",
 		file: "scripts/docs-generators/generate-tool-reference.mjs",
-		before: "const tools = [...COMPUTER_USE_TOOLS, ...DESKTOP_TOOLS];",
-		after: "const tools = [...COMPUTER_USE_TOOLS];",
+		before: "const declaredTools = [...COMPUTER_USE_TOOLS, ...DESKTOP_TOOLS];",
+		after: "const declaredTools = [...COMPUTER_USE_TOOLS];",
 		check: "scripts/check-docs-platform.mjs",
 		failure: /generated references must be identical on linux/,
 	},

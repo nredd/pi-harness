@@ -10,8 +10,11 @@ const generators = ["generate-tool-reference.mjs", "generate-source-references.m
 const root = fileURLToPath(new URL("..", import.meta.url));
 for (const platform of ["linux", "darwin"]) {
 	const source = `Object.defineProperty(process, "platform", { value: ${JSON.stringify(platform)} });
-process.argv.push("--check");
-for (const generator of ${JSON.stringify(generators)}) await import(generator);`;
+for (const generator of ${JSON.stringify(generators)}) {
+	const { main } = await import(generator);
+	const code = main(["--check"]);
+	if (code !== 0) process.exit(code);
+}`;
 	const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", source], {
 		cwd: root,
 		encoding: "utf8",
