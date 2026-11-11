@@ -643,6 +643,14 @@ const cases = [
 		failure: /timed out/,
 	},
 	{
+		name: "Linux setup escalates to SIGKILL after the grace (#713)",
+		file: "src/platform/linux/helper.ts",
+		before: "}, SETUP_KILL_GRACE_MS).unref();",
+		after: "}, SETUP_KILL_GRACE_MS * 100).unref();",
+		check: "test/stdio-helper-clients.test.mjs",
+		failure: /Expected values to be strictly deep-equal/,
+	},
+	{
 		name: "Windows per-child line buffer (#725)",
 		file: "src/platform/windows/helper.ts",
 		before: 'child.stdout.on("data", (chunk: string) => { buffer = this.onStdout(buffer, chunk); });',

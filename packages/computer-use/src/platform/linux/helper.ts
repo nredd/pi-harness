@@ -32,7 +32,6 @@ async function isExecutable(filePath: string): Promise<boolean> {
 }
 
 async function runProcess(command: string, args: string[], timeoutMs: number, signal?: AbortSignal, env?: NodeJS.ProcessEnv): Promise<void> {
-	if (signal?.aborted) throw new Error("Operation aborted.");
 	await new Promise<void>((resolve, reject) => {
 		const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], env });
 		let stdout = "";
@@ -167,10 +166,8 @@ export class LinuxHelperClient {
 		if (!this.installPromise) {
 			const installPromise = this.install();
 			this.installPromise = installPromise;
-			installPromise.then(
-				() => { if (this.installPromise === installPromise) this.installPromise = undefined; },
-				() => { if (this.installPromise === installPromise) this.installPromise = undefined; },
-			);
+			const clear = () => { if (this.installPromise === installPromise) this.installPromise = undefined; };
+			installPromise.then(clear, clear);
 		}
 		await waitForShared(this.installPromise, signal);
 	}
@@ -210,7 +207,8 @@ export class LinuxHelperClient {
 			const message = error instanceof Error ? error.message : String(error);
 			throw new Error([message, rejected, message.includes("timed out") ? MANUAL_SETUP_HINT : undefined].filter(Boolean).join("\n"));
 		} finally {
-			if (this.setupAbort === setupAbort) this.setupAbort = undefined;
+			// `install()` is single-flight (`installPromise`) and `dispose()` is terminal, so no other install can own `setupAbort` here.
+			this.setupAbort = undefined;
 		}
 		abortIfDisposed();
 		const installed = await isExecutable(this.helperPath);
@@ -245,15 +243,12 @@ export class LinuxHelperClient {
 		await this.ensureInstalled(signal);
 		if (this.processPromise) return await waitForShared(this.processPromise, signal);
 		if (this.child && this.child.exitCode === null && !this.child.killed) return this.child;
-		if (!this.processPromise) {
-			const processPromise = this.startProcess();
-			this.processPromise = processPromise;
-			processPromise.then(
-				() => { if (this.processPromise === processPromise) this.processPromise = undefined; },
-				() => { if (this.processPromise === processPromise) this.processPromise = undefined; },
-			);
-		}
-		return await waitForShared(this.processPromise, signal);
+		const processPromise = this.startProcess();
+		this.processPromise = processPromise;
+		// Single-flight: the guard above means no other start can replace `processPromise` before this one settles.
+		const clear = () => { this.processPromise = undefined; };
+		processPromise.then(clear, clear);
+		return await waitForShared(processPromise, signal);
 	}
 
 	private async startProcess(): Promise<ChildProcessWithoutNullStreams> {
