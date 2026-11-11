@@ -108,7 +108,7 @@ def test_goal_exceptions_require_reason_and_report_only_signals() -> None:
         Policy.model_validate(data)
     package["goal_reason"] = "Verification infrastructure."
     package["signals"]["primary"]["enforcement"] = "enforced"
-    with pytest.raises(ValidationError, match="outside the global goal"):
+    with pytest.raises(ValidationError, match="must remain report-only"):
         Policy.model_validate(data)
 
 

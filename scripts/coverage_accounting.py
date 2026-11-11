@@ -238,7 +238,7 @@ class Package(StrictModel):
         if self.goal == "report-only" and any(
             signal.enforcement != "report-only" for signal in self.signals.values()
         ):
-            raise ValueError("Signals outside the global goal must remain report-only")
+            raise ValueError("Signals on a `report-only` goal must remain report-only")
         return self
 
 
