@@ -318,6 +318,57 @@ test("search_ui, expand_ui and inspect_ui query a saved browser observation", as
 	assert.equal(fake.looks.length, 0);
 });
 
+test("search_ui and expand_ui on a browser state never escalate to the desktop", async ({ onTestFinished }) => {
+	const fake = await installFakeDesktop(onTestFinished);
+	const { executeSearchUi, executeExpandUi } = fake.bridge;
+	const { stateId } = await observeBrowser(fake, [wireButton("go", "Go"), wireNode("lbl", "AXStaticText", "Label"), wireNode("grp", "AXGroup", "Truncated", { truncated: true, children: [] })]);
+
+	const missing = await fake.call(executeSearchUi, { stateId, text: "Missing" });
+	assert.equal(missing.details.totalMatches, 0);
+	assert.equal(missing.details.matches.length, 0);
+	assert.equal(fake.text(missing), "Found 0 outline matches; returned 0.\n");
+	const staticOnly = await fake.call(executeSearchUi, { stateId, text: "Label" });
+	assert.equal(staticOnly.details.totalMatches, 1, "static-text-only matches stay as found");
+	assert.doesNotMatch(fake.text(staticOnly), /OCR/);
+
+	const expanded = await fake.call(executeExpandUi, { stateId, ref: "@e4" });
+	assert.match(fake.text(expanded), /^@e4 AXGroup "Truncated"\npath: AXWebArea "Page" /);
+	assert.match(fake.text(expanded), /\[truncated\]/, "the cached subtree still shows the node as truncated");
+	assert.equal(fake.looks.length, 0, "no OCR or scoped look reaches the native helper");
+});
+
+test("wait_for with a blank stateId returns the coded error instead of a TypeError", async ({ onTestFinished }) => {
+	const fake = await installFakeDesktop(onTestFinished);
+	for (const stateId of ["", "   "]) {
+		await assert.rejects(() => fake.call(fake.bridge.executeWaitFor, { stateId, text: "Go" }), (error) => {
+			assert.ok(!(error instanceof TypeError), "no raw TypeError");
+			assert.match(error.message, /No observation state is available\. Call observe_ui first\./);
+			return true;
+		});
+	}
+	assert.equal(fake.waits.length, 0);
+});
+
+test("wait_for, search_ui and expand_ui work on a state evicted and reconstructed from the session branch", async ({ onTestFinished }) => {
+	const fake = await installFakeDesktop(onTestFinished);
+	const { executeWaitFor, executeSearchUi, executeExpandUi, reconstructStateFromBranch } = fake.bridge;
+	fake.tree = [wireNode("grp", "AXGroup", "Panel", { children: [wireButton("go", "Go")] })];
+	const { result, stateId } = await fake.observe();
+	const branch = { ...fake.ctx, sessionManager: { getBranch: () => [{ type: "message", message: { role: "toolResult", toolName: "observe_ui", details: JSON.parse(JSON.stringify(result.details)) } }] } };
+
+	reconstructStateFromBranch(fake.ctx);
+	await assert.rejects(() => fake.call(executeSearchUi, { stateId, text: "Go" }), /State '.+' is unavailable or was evicted/);
+	reconstructStateFromBranch(branch);
+
+	const found = await fake.call(executeSearchUi, { stateId, text: "Go" });
+	assert.equal(found.details.totalMatches, 1);
+	const expanded = await fake.call(executeExpandUi, { stateId, ref: "@e2" });
+	assert.match(fake.text(expanded), /AXButton "Go"/);
+	const waited = await fake.call(executeWaitFor, { stateId, text: "Go", timeoutMs: 100 });
+	assert.equal(waited.details.found, true);
+	assert.equal(waited.details.baseStateId, stateId);
+});
+
 test("root identity never crosses apps and prefers window id, then native ref, then title", async () => {
 	const { testing } = await import("../src/bridge.ts");
 	const root = (fields) => ({ appName: "App", pid: 1, windowTitle: "Untitled", windowId: 0, ...fields });

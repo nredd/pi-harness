@@ -429,10 +429,12 @@ describe("wait_for, search_ui and restored or browser states", () => {
 		assert.equal(request.includeImage, true);
 	});
 
-	test("a browser state has no desktop target to re-capture", async () => {
+	test("a browser state has no desktop target to re-capture, so search reports no matches", async () => {
 		const snapshot = { contextId: "browser:ctx", snapshotId: "B1", targetId: "t", title: "Page", url: "about:blank", capturedAt: 0, text: "", targets: [], outline: serializeOutline(parseLookResponse(lookPayload()).parsedOutline), diagnostics: { cdp: "connected", targetCount: 1 } };
 		bridge.testing.runInOperation(() => bridge.testing.browserObservationResult(snapshot, "cdp:t", 0, "observe_ui"));
-		await assert.rejects(() => call(executeSearchUi, { stateId: "B1", text: "nothing-like-this" }), /No current controlled window\. Call observe_ui first to choose a target window\./);
+		const result = await call(executeSearchUi, { stateId: "B1", text: "nothing-like-this" });
+		assert.equal(result.details.totalMatches, 0);
+		assert.match(textOf(result), /^Found 0 outline matches; returned 0\./);
 	});
 
 	test("a restored state without a root ref still names stale refs, without a root hint", async () => {
