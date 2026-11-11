@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { createWriteStream } from "node:fs";
+import { createWriteStream, rmSync } from "node:fs";
 import realFs from "node:fs/promises";
 import realOs from "node:os";
 import path from "node:path";
@@ -928,6 +928,24 @@ describe("macOS local helper install and signing", () => {
 		const rec = await runMain(host, []);
 		assert.equal(rec.exec.some(([command]) => command === "openssl"), false, "nothing is created");
 		assert.deepEqual(rec.spawn.find(([command]) => command === "codesign").slice(6, 8), ["--sign", LOCAL_FPR]);
+	});
+
+	test("a keychain that vanishes while waiting for the lock ends creation silently", async () => {
+		const host = await makeHost();
+		await prebuiltBinary(host, "arm64", "bin");
+		const keychain = path.join(host.dirs.home, "Library", "Keychains", "login.keychain-db");
+		await put(keychain, "kc");
+		let lookups = 0;
+		host.state.localListing = () => {
+			// Third lookup is the one inside the lock: the keychain goes away just before creation.
+			if (++lookups === 3) rmSync(keychain, { force: true });
+			return "";
+		};
+		const rec = await runMain(host, []);
+		assert.deepEqual(rec.warn.filter((line) => line.includes("could not create")), []);
+		assert.equal(rec.exec.some(([command]) => command === "openssl"), false, "nothing is created");
+		assert.equal(rec.exec.some(([command, sub]) => command === "security" && sub === "import"), false, "no import into a stale path");
+		assert.equal(rec.spawn.find(([command]) => command === "codesign")[7], "-");
 	});
 
 	test("a codesign failure aborts the install", async () => {

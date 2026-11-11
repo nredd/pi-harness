@@ -558,10 +558,13 @@ function createSetup(argv, deps) {
 		const keychain = await loginKeychainPath();
 		if (!keychain) return undefined;
 
-		return await ensureIdentityOnce(findLocalSigningIdentity, () => createLocalSigningIdentity(keychain), (callback) => withDirectoryLock(localSigningLockPath, callback));
+		return await ensureIdentityOnce(findLocalSigningIdentity, createLocalSigningIdentity, (callback) => withDirectoryLock(localSigningLockPath, callback));
 	}
 
-	async function createLocalSigningIdentity(keychain) {
+	async function createLocalSigningIdentity() {
+		// Re-resolve under the lock: another installer may have removed the keychain since the first lookup.
+		const keychain = await loginKeychainPath();
+		if (!keychain) return undefined;
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-computer-use-signing-"));
 		const password = `pi-computer-use-local-${pid}-${now()}`;
 		try {

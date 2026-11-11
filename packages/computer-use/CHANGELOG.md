@@ -10,7 +10,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Changed
 
-- `scripts/setup-helper.mjs` exports `main(argv, deps)` (host seams injected, `import.meta` entry guard only at top level) so it is measured in process. CLI behavior is unchanged; two unreachable arms (a non-darwin check in the local signing path, a duplicate bundle-name check in archive search) and a redundant keychain re-lookup are gone (nredd/pi-harness#704, #645).
+- `scripts/setup-helper.mjs` exports `main(argv, deps)` (host seams injected, `import.meta` entry guard only at top level) so it is measured in process. CLI behavior is unchanged; two unreachable arms (a non-darwin check in the local signing path, a duplicate bundle-name check in archive search) are gone (nredd/pi-harness#704, #645).
 
 ### Fixed
 
