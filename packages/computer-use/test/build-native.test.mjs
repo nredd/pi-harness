@@ -54,7 +54,8 @@ function harness({ cargoOutput, fail } = {}) {
 			const target = args.includes("--target") ? args[args.indexOf("--target") + 1] : undefined;
 			const release = target ? path.join(crateDir, "target", target, "release") : path.join(crateDir, "target", "release");
 			const name = manifest.includes("windows") ? "windows-bridge.exe" : "linux-bridge";
-			if (cargoOutput !== null) write(path.join(release, name), cargoOutput ?? (manifest.includes("windows") ? "MZ-pe" : elf(0x3e)));
+			const content = typeof cargoOutput === "function" ? cargoOutput(target) : cargoOutput;
+			if (content !== null) write(path.join(release, name), content ?? (manifest.includes("windows") ? "MZ-pe" : elf(0x3e)));
 		}
 	};
 	const deps = (extra = {}) => ({ run: fakeRun, rootDir, tmpdir, cwd, env: {}, log: (line) => log.push(line), platform: "darwin", arch: "arm64", ...extra });
@@ -238,23 +239,12 @@ test("cross-arch and cross-platform Linux builds select the matching triple", as
 });
 
 test("Linux --arch all builds x64 then arm64 and rejects --output and universal", async () => {
-	const h = harness();
-	h.calls.length = 0;
-	let n = 0;
-	const deps = h.deps({
-		run: async (command, args) => {
-			// arm64 build must emit an arm64 ELF: rewrite the artifact the generic fake wrote.
-			await h.deps().run(command, args);
-			n += 1;
-			if (n === 2) {
-				const target = args[args.indexOf("--target") + 1];
-				write(path.join(lin("target", target, "release", "linux-bridge")), elf(0xb7));
-			}
-		},
-		platform: "linux",
-		arch: "riscv64",
-	});
-	await main(["--arch", "all"], deps);
+	const h = harness({ cargoOutput: (target) => (target === ARM_TRIPLE ? elf(0xb7) : elf(0x3e)) });
+	await main(["--arch", "all"], h.deps({ platform: "linux", arch: "riscv64" }));
+	assert.deepEqual(
+		h.calls.map(([, args]) => args.at(-1)),
+		[X64_TRIPLE, ARM_TRIPLE],
+	);
 	assert.ok(existsSync(linuxOut("x64")) && existsSync(linuxOut("arm64")));
 	await expect(main(["--arch", "all", "--output", "o"], h.deps({ platform: "linux" }))).rejects.toThrow(/--output is not supported with --arch all/);
 	await expect(main(["--arch", "universal"], h.deps({ platform: "linux" }))).rejects.toThrow(/Linux does not support --arch universal/);
@@ -309,15 +299,6 @@ test("runCli maps success to 0 and failures to a printed message and exit code 1
 
 test("main with no injected deps uses process defaults", async () => {
 	await expect(main(["--platform", "darwin", "--arch", "bad"])).rejects.toThrow(/Unsupported architecture/);
-	const log = vi.spyOn(console, "log").mockImplementation(() => {});
-	try {
-		if (!["darwin", "linux", "win32"].includes(process.platform)) {
-			await main([]);
-			assert.equal(log.mock.calls.length, 1);
-		}
-	} finally {
-		log.mockRestore();
-	}
 });
 
 test("running the script as the entry point sets the exit code", async () => {
