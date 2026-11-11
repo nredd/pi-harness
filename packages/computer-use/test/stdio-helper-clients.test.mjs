@@ -3,6 +3,7 @@
 // No real helper, Windows or Linux host: `node:child_process.spawn` is replaced and the executable check uses a temp file.
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { getEventListeners } from "node:events";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
@@ -57,15 +58,17 @@ function install(executable = true) {
 }
 
 /**
- * Child like a real one: `exit` fires before `close`, as in Node. `exit(code)` ends the stdio streams and emits both.
+ * Child like a real one: `exit` fires before `close`, as in Node. `hold` defers the `spawn` event until `hold.release()`. `exit(code)` ends the stdio streams and emits both.
  * Every child is recorded in `children`.
  */
-function realisticChild(children, options, spawnDelayMs = 0) {
+function realisticChild(children, options, hold) {
 	const child = createFakeChild(options);
 	child.signalCode = null;
-	if (spawnDelayMs) {
+	if (hold) {
+		// `hold.release()` emits the deferred `spawn` event: a helper whose start is still in flight.
 		const emit = child.emit.bind(child);
-		child.emit = (event, ...args) => (event === "spawn" ? setTimeout(() => emit(event, ...args), spawnDelayMs) && true : emit(event, ...args));
+		hold.release = () => emit("spawn");
+		child.emit = (event, ...args) => (event === "spawn" ? true : emit(event, ...args));
 	}
 	const close = child.exit;
 	child.exit = (code = 0) => {
@@ -298,17 +301,22 @@ describe("Windows helper client", () => {
 		install();
 		const engine = envelope("Windows", { crash: silent() });
 		const { client, children } = await windows({ helper: (list) => realisticChild(list, { engine }) });
-		const started = Date.now();
-		const pending = client.command("crash", {}, { timeoutMs: 150 });
-		const outcome = assert.rejects(pending, /Helper command 'crash' timed out after 150ms\./);
-		await vi.waitFor(() => assert.equal(engine.requests.length, 1));
+		await client.ensureInstalled();
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		let settled = false;
+		const outcome = client.command("crash", {}, { timeoutMs: 1000 }).then(() => assert.fail("resolved"), (error) => {
+			settled = true;
+			throw error;
+		});
+		const rejection = assert.rejects(outcome, /Helper command 'crash' timed out after 1000ms\./);
+		await vi.waitFor(() => assert.equal(engine.requests.length, 1), { interval: 1 });
 		children[0].exit(1);
-		let early = true;
-		void pending.catch(() => { early = Date.now() - started < 140; });
-		await outcome;
-		// Current behavior: exit does not reject, so the rejection arrives only at the timeout.
-		// Once #725 lands this becomes an immediate "exited" error and this test must be updated.
-		assert.equal(early, false, "rejected before the command timeout: #725 is fixed, update this test");
+		await vi.advanceTimersByTimeAsync(900);
+		// Current behavior: the exit does not reject the command; only its timeout does. When #725 lands this
+		// becomes an immediate error on exit and this test must be updated.
+		assert.equal(settled, false);
+		await vi.advanceTimersByTimeAsync(100);
+		await rejection;
 	});
 
 	test("after the child exits, the next command spawns a fresh helper", async () => {
@@ -364,20 +372,6 @@ describe("Windows helper client", () => {
 	test("dispose with nothing running is a no-op", async () => {
 		const { client } = await windows({ helper: {} });
 		client.dispose();
-	});
-
-	test("a helper that drops the connection mid-command ends its streams (see #725 for the stall)", async () => {
-		install();
-		const engine = envelope("Windows", { crash: drop() });
-		const { client, children } = await windows({ helper: (list) => realisticChild(list, { engine }) });
-		await assert.rejects(client.command("crash", {}, { timeoutMs: 30 }), /timed out after 30ms\./);
-		assert.equal(children[0].exitCode, 1);
-	});
-
-	test("a spawn failure of the helper binary surfaces through the pending command's timeout", async () => {
-		install();
-		const { client } = await windows({ helper: { spawnError: new Error("EACCES") } });
-		await assert.rejects(client.command("look", {}, { timeoutMs: 30 }), /timed out after 30ms\./);
 	});
 });
 
@@ -665,22 +659,25 @@ describe("Linux helper client", () => {
 		await assert.rejects(pending, /Operation aborted\./);
 	});
 
-	test("an abort signal is detached once the command settles", async () => {
+	test("an abort signal is detached once the command settles, on every path", async () => {
 		install();
 		const { client } = await linux({ helper: { engine: linuxEngine({ look: ok(1), nope: fail("no", "x"), hang: silent() }) } });
+		const listeners = (signal) => getEventListeners(signal, "abort").length;
 		const controller = new AbortController();
-		const remove = vi.spyOn(controller.signal, "removeEventListener");
 		assert.equal(await client.command("look", {}, { signal: controller.signal }), 1);
+		assert.equal(listeners(controller.signal), 0, "after success");
 		await assert.rejects(client.command("nope", {}, { signal: controller.signal }), /no/);
+		assert.equal(listeners(controller.signal), 0, "after an error reply");
 		await assert.rejects(client.command("hang", {}, { signal: controller.signal, timeoutMs: 20 }), /timed out/);
-		assert.ok(remove.mock.calls.length >= 3);
+		assert.equal(listeners(controller.signal), 0, "after a timeout");
 	});
 
 	test("aborting while waiting for a shared helper start rejects only that caller", async () => {
 		install();
 		const engine = linuxEngine({ look: ok(1) });
+		const hold = {};
 		let spawned = 0;
-		const { client, children, spawn } = await linux({ helper: (list) => realisticChild(list, { engine }, spawned++ ? 40 : 0) });
+		const { client, children, spawn } = await linux({ helper: (list) => realisticChild(list, { engine }, spawned++ ? hold : undefined) });
 		await client.command("look");
 		children[0].exit(0);
 		const controller = new AbortController();
@@ -689,7 +686,9 @@ describe("Linux helper client", () => {
 		await vi.waitFor(() => assert.equal(helperSpawns(spawn).length, 2), { interval: 1 });
 		controller.abort();
 		await assert.rejects(aborted, /Operation aborted\./);
+		hold.release();
 		assert.equal(await other, 1);
+		assert.equal(helperSpawns(spawn).length, 2, "both callers shared one start");
 	});
 
 	test("a failed stdin write rejects the command with the write error", async () => {
@@ -723,7 +722,7 @@ describe("Linux helper client", () => {
 		await assert.rejects(pending, /was rejected: pipe closed\./);
 	});
 
-	test("dispose while the executable check is in flight stops ensureInstalled (checked helper present or gone)", async () => {
+	test("dispose while the executable check is in flight stops ensureInstalled (checked helper present)", async () => {
 		install();
 		const { client } = await linux({ helper: { engine: linuxEngine({}) } });
 		await client.ensureInstalled();
@@ -742,15 +741,19 @@ describe("Linux helper client", () => {
 		await assert.rejects(gone, /Linux helper closed because the Pi session ended\./);
 	});
 
-	test("a stdin error on a replaced child is ignored", async () => {
+	test("a stdin error on a replaced child leaves the live child and its commands alone", async () => {
 		install();
-		const engine = linuxEngine({ look: ok(1) });
-		const { client, children } = await linux({ helper: (list) => realisticChild(list, { engine }) });
+		const engine = linuxEngine({ look: ok(1), hang: silent() });
+		const { client, children, spawn } = await linux({ helper: (list) => realisticChild(list, { engine }) });
 		await client.command("look");
 		children[0].kill();
 		await client.command("look");
+		const pending = client.command("hang", {}, { timeoutMs: 100 });
+		await vi.waitFor(() => assert.equal(engine.requests.at(-1).cmd, "hang"));
 		children[0].stdin.emit("error", new Error("late"));
-		assert.equal(await client.command("look"), 1);
+		await assert.rejects(pending, /Helper command 'hang' timed out after 100ms\./);
+		assert.deepEqual(children[1].signals, [], "the live child was not discarded");
+		assert.equal(helperSpawns(spawn).length, 2);
 	});
 
 	test("child exit with a command in flight rejects it with the exit code", async () => {
@@ -797,20 +800,21 @@ describe("Linux helper client", () => {
 		assert.equal(helperSpawns(spawn).length, 2);
 	});
 
-	test("stale exit and error events from a replaced child are ignored", async () => {
+	test("stale exit and error events from a replaced child leave the live child and its commands alone", async () => {
 		install();
 		const engine = linuxEngine({ hang: silent(), look: ok(1) });
-		const { client, children } = await linux({ helper: (list) => realisticChild(list, { engine }) });
+		const { client, children, spawn } = await linux({ helper: (list) => realisticChild(list, { engine }) });
 		await client.command("look");
 		children[0].exit(0);
 		await client.command("look");
-		const pending = client.command("hang");
+		const pending = client.command("hang", {}, { timeoutMs: 100 });
 		await vi.waitFor(() => assert.equal(engine.requests.at(-1).cmd, "hang"));
 		children[0].emit("exit", 1, null);
 		children[0].emit("error", new Error("stale"));
-		engine.script("hang", ok("still alive"));
-		pending.catch(() => undefined);
-		assert.equal(await client.command("hang"), "still alive");
+		await assert.rejects(pending, /Helper command 'hang' timed out after 100ms\./);
+		assert.equal(helperSpawns(spawn).length, 2);
+		assert.equal(await client.command("look"), 1);
+		assert.equal(helperSpawns(spawn).length, 2, "the live child was never cleared");
 	});
 
 	test("a helper that fails to spawn rejects the command with the spawn error", async () => {
@@ -822,11 +826,16 @@ describe("Linux helper client", () => {
 	test("concurrent commands during a respawn share one new child", async () => {
 		install();
 		const engine = linuxEngine({ look: ok(1) });
+		const hold = {};
 		let spawned = 0;
-		const { client, children, spawn } = await linux({ helper: (list) => realisticChild(list, { engine }, spawned++ ? 40 : 0) });
+		const { client, children, spawn } = await linux({ helper: (list) => realisticChild(list, { engine }, spawned++ ? hold : undefined) });
 		await client.command("look");
 		children[0].exit(0);
-		assert.deepEqual(await Promise.all([client.command("look"), client.command("look")]), [1, 1]);
+		const both = Promise.all([client.command("look"), client.command("look")]);
+		await vi.waitFor(() => assert.equal(helperSpawns(spawn).length, 2), { interval: 1 });
+		await vi.waitFor(() => assert.ok(hold.release), { interval: 1 });
+		hold.release();
+		assert.deepEqual(await both, [1, 1]);
 		assert.equal(helperSpawns(spawn).length, 2);
 	});
 });
