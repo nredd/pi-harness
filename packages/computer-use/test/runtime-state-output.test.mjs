@@ -78,13 +78,30 @@ describe("ResourceScheduler", () => {
 		assert.deepEqual(log, ["first:start", "other", "first:end", "second"]);
 	});
 
-	test("a failed operation does not block its successors; drain waits for the tail", async () => {
+	test("a failed operation does not block its successors", async () => {
 		const scheduler = new ResourceScheduler();
 		const failed = scheduler.read("w", async () => { throw new Error("boom"); });
 		const after = scheduler.read("w", async () => "ok");
 		await assert.rejects(failed, /boom/);
 		assert.equal((await after).value, "ok");
-		await scheduler.drain();
+	});
+
+	test("drain and close wait for queued work", async () => {
+		for (const method of ["drain", "close"]) {
+			const scheduler = new ResourceScheduler();
+			let openGate;
+			const gate = new Promise((resolve) => { openGate = resolve; });
+			const running = scheduler.read("w", async () => { await gate; });
+			const queued = scheduler.read("w", async () => undefined);
+			let settled = false;
+			const waiting = scheduler[method]().then(() => { settled = true; });
+			await new Promise((resolve) => setImmediate(resolve));
+			assert.equal(settled, false, `${method} returned while work was pending`);
+			openGate();
+			await waiting;
+			await Promise.all([running, queued]);
+			assert.equal(settled, true);
+		}
 	});
 
 	test("after close new work is refused", async () => {
