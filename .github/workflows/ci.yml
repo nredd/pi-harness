@@ -186,6 +186,12 @@ jobs:
       - name: Owned gate check-ts (biome, tsc, Vitest on Node and Bun, computer-use checks)
         if: ${{ !cancelled() && steps.install.outcome == 'success' && contains(matrix.gates, 'check-ts') }}
         run: make check-ts WORKSPACES="${{ matrix.workspaces }}"
+      # Undeclared drift from the pinned upstream fails the required shard (#720). Linux only: the check compares
+      # source trees, so one OS is enough, and the network fetch is a single shallow commit.
+      - name: computer-use upstream sync ledger (shallow fetch of the pinned upstream commit)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && matrix.os == 'ubuntu-24.04' && matrix.shard == 'computer-use' }}
+        working-directory: packages/computer-use
+        run: node scripts/check-upstream-sync.mjs --fetch
       - name: Owned gate check-scripts (ruff, ty, pytest scripts, import audit)
         if: ${{ !cancelled() && steps.install.outcome == 'success' && contains(matrix.gates, 'check-scripts') }}
         run: make check-scripts
