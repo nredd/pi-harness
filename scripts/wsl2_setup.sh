@@ -80,7 +80,11 @@ test "$(node --version)" = "v$node_version"
 package_manager=$(node -p 'require("./package.json").packageManager')
 npm_version=${package_manager#*@}
 if ! baked "${npm_version%%+*}" npm --version; then
-  bounded "install npm" "$command_seconds" npm install --global "$package_manager"
+  # A baked node may live under a root-owned prefix: install into a prefix this user owns.
+  npm_prefix="$tool_dir/npm"
+  mkdir -p "$npm_prefix"
+  bounded "install npm" "$command_seconds" env npm_config_prefix="$npm_prefix" npm install --global "$package_manager"
+  export PATH="$npm_prefix/bin:$PATH"
 fi
 bun_version=$(tr -d '\r\n' < .bun-version)
 export BUN_INSTALL="$tool_dir/bun"

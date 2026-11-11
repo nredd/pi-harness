@@ -1018,7 +1018,7 @@ def test_in_guest_setup_needs_a_runner_checkout_and_an_unprivileged_user(tmp_pat
 
 
 def run_smoke(
-    tmp_path: Path, blocked: bool, extra_env: dict[str, str] | None = None
+    tmp_path: Path, blocked: bool, extra_env: dict[str, str] | None = None, userns: bool = False
 ) -> subprocess.CompletedProcess[str]:
     """Run the real smoke script against stub network tools.
 
@@ -1026,6 +1026,7 @@ def run_smoke(
         tmp_path (Path): Scratch directory.
         blocked (bool): Whether private targets refuse connections (`timeout` exits 124 for them).
         extra_env (dict[str, str] | None): Extra environment, e.g. injected host targets.
+        userns (bool): Whether `unshare -Urn` succeeds, i.e. unprivileged user namespaces are enabled.
 
     Returns:
         subprocess.CompletedProcess[str]: The smoke run; `aarch64` and a non-root, no-sudo user are stubbed.
@@ -1037,6 +1038,7 @@ def run_smoke(
         "uname": '#!/bin/sh\ncase "$1" in -m) echo aarch64 ;; -r) echo 6.18-stub ;; *) echo Linux ;; esac\n',
         "id": '#!/bin/sh\ncase "$1" in -u) echo 1001 ;; *) echo runner ;; esac\n',
         "sudo": "#!/bin/sh\nexit 1\n",
+        "unshare": f"#!/bin/sh\nexit {0 if userns else 1}\n",
         "curl": "#!/bin/sh\nexit 0\n",
         "ip": "#!/bin/sh\necho 'default via 172.20.0.1 dev eth0'\n",
         "nft": "#!/bin/sh\nexit 1\n",
@@ -1076,6 +1078,13 @@ def test_smoke_passes_when_every_private_target_is_blocked(tmp_path: Path) -> No
     ):
         assert f"blocked: {target}" in result.stdout, target
     assert "loopback:8080 closed" in result.stdout
+
+
+def test_smoke_fails_when_unprivileged_user_namespaces_are_enabled(tmp_path: Path) -> None:
+    """`unshare -Urn` working means root-in-namespace reaches kernel attack surface: a violation."""
+    result = run_smoke(tmp_path, blocked=True, userns=True)
+    assert result.returncode == 1
+    assert "::error::unprivileged user namespaces are enabled" in result.stdout
 
 
 def test_smoke_fails_on_a_reachable_private_target(tmp_path: Path) -> None:
