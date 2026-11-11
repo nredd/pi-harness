@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, describe, test, vi } from "vitest";
+import { afterEach, describe, test, vi } from "vitest";
 import {
 	cdpClickForContext,
 	cdpDragForContext,
@@ -56,6 +56,7 @@ async function flush(tab) {
 }
 
 /**
+ * Params of every command the fake received for a method.
  * @param {import('./fixtures/fake-cdp.mjs').FakeCdp} fake Endpoint.
  * @param {string} method CDP method.
  * @returns {object[]} Params of every `method` command, oldest first.
@@ -73,12 +74,27 @@ function resolvableNodes(fake) {
 	fake.handle("DOM.resolveNode", (params) => ({ object: { objectId: `object-${params.backendNodeId}` } }));
 }
 
-beforeEach(() => {
-	// Shrink the 5 s command and 10 s load budgets so timeout paths run in tens of milliseconds.
+/**
+ * Shrink the 5 s command and 10 s load budgets so a timeout path runs in tens of milliseconds.
+ * @returns {void}
+ * @throws {never} Installs a spy restored by `vi.restoreAllMocks`.
+ */
+function shrinkBudgets() {
 	vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) =>
 		realSetTimeout(callback, delay === 5_000 || delay === 10_000 ? 40 : delay, ...args),
 	);
-});
+}
+
+/**
+ * Make the 10 s load budget never fire, so a navigation can only return on a real load event.
+ * @returns {void}
+ * @throws {never} Installs a spy restored by `vi.restoreAllMocks`.
+ */
+function blockLoadBudget() {
+	vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) =>
+		realSetTimeout(delay === 10_000 ? () => {} : callback, delay === 10_000 ? 0 : delay, ...args),
+	);
+}
 
 afterEach(async () => {
 	disconnectCdp();
@@ -153,6 +169,7 @@ describe("connection lifecycle", () => {
 	});
 
 	test("an upgrade that never answers times out", async () => {
+		shrinkBudgets();
 		const fake = await fakeBrowser();
 		fake.hangUpgrade(true);
 		await assert.rejects(cdpEvaluateForContext("browser:fake", "1"), /Timed out connecting to CDP target/);
@@ -172,6 +189,7 @@ describe("connection lifecycle", () => {
 	});
 
 	test("a command that gets no reply times out and its late reply is ignored", async () => {
+		shrinkBudgets();
 		const fake = await fakeBrowser();
 		const tab = await connectedTab();
 		fake.handle("Runtime.evaluate", () => NO_REPLY);
@@ -217,6 +235,7 @@ describe("connection lifecycle", () => {
 	});
 
 	test("a reply that is not JSON never settles the command", async () => {
+		shrinkBudgets();
 		const fake = await fakeBrowser();
 		const tab = await connectedTab();
 		fake.handle("Runtime.evaluate", () => MALFORMED);
@@ -314,12 +333,21 @@ describe("events", () => {
 		assert.equal(entries.at(-1).text, "m24");
 	});
 
-	test("a load event outside a navigation is ignored", async () => {
+	test("a load event outside a navigation is not remembered by the next one", async () => {
 		const fake = await fakeBrowser();
+		blockLoadBudget();
 		const tab = await connectedTab();
 		fake.broadcast("Page.loadEventFired", {});
 		await flush(tab);
-		assert.equal(tab.isOpen, true);
+		let settled = false;
+		const navigation = tab.navigate("https://example.test/").then(() => {
+			settled = true;
+		});
+		await fake.connections[0].waitForRequest("Page.navigate");
+		await new Promise((resolve) => realSetTimeout(resolve, 50));
+		assert.equal(settled, false, "a stale load event must not satisfy a later navigation");
+		fake.broadcast("Page.loadEventFired", {});
+		await navigation;
 	});
 
 	test("the connect handshake enables the Runtime and Page domains in order", async () => {
@@ -330,25 +358,23 @@ describe("events", () => {
 });
 
 describe("navigation", () => {
-	test("returns when the load event fires", async () => {
+	test("returns only on the load event, not on the load budget", async () => {
 		const fake = await fakeBrowser();
+		blockLoadBudget();
 		fake.handle("Page.navigate", (_params, ctx) => {
 			setImmediate(() => ctx.connection.emit("Page.loadEventFired", {}));
 			return { frameId: "f" };
 		});
-		const started = Date.now();
 		const tab = await connectedTab();
 		await tab.navigate("https://example.test/");
-		assert(Date.now() - started < 30, "should not wait for the load budget");
 		assert.deepEqual(paramsOf(fake, "Page.navigate"), [{ url: "https://example.test/" }]);
 	});
 
 	test("stops waiting after the load budget when load never fires", async () => {
+		shrinkBudgets();
 		const fake = await fakeBrowser();
 		const tab = await connectedTab();
-		const started = Date.now();
 		await tab.navigate("https://spa.test/");
-		assert(Date.now() - started >= 30, "should have waited for the load budget");
 		assert.equal(paramsOf(fake, "Page.navigate").length, 1);
 	});
 
@@ -365,13 +391,17 @@ describe("navigation", () => {
 		await navigation;
 	});
 
-	test("a failed navigation rejects and later loads are ignored", async () => {
+	test("a failed navigation rejects and the next one waits for its own load", async () => {
 		const fake = await fakeBrowser();
+		blockLoadBudget();
 		fake.handle("Page.navigate", () => cdpError("Cannot navigate to invalid URL"));
 		const tab = await connectedTab();
 		await assert.rejects(tab.navigate("nope"), /Cannot navigate to invalid URL/);
-		fake.broadcast("Page.loadEventFired", {});
-		await flush(tab);
+		fake.handle("Page.navigate", (_params, ctx) => {
+			setImmediate(() => ctx.connection.emit("Page.loadEventFired", {}));
+			return {};
+		});
+		await tab.navigate("https://example.test/");
 	});
 
 	test("`cdpNavigateContext` navigates a fresh connection and closes it", async () => {
@@ -492,10 +522,10 @@ describe("page actions", () => {
 		["drag", (id) => cdpDragForContext(id, [{ x: 0, y: 0 }, { x: 1, y: 1 }])],
 		["navigate", (id) => cdpNavigateContext(id, "https://example.test/")],
 		["evaluate", (id) => cdpEvaluateForContext(id, "1")],
-	])("%s reports no result for non-browser, unknown or detached contexts and never connects", async (_name, run) => {
+	])("%s reports no result for non-browser, unknown or detached contexts and never connects", async (name, run) => {
 		const fake = await fakeBrowser({ targets: [{ id: "detached", webSocketDebuggerUrl: null }] });
 		const outcomes = await Promise.all([run("tab:1"), run("browser:gone"), run("browser:detached")]);
-		const expected = _name === "evaluate" ? undefined : false;
+		const expected = name === "evaluate" ? undefined : false;
 		assert.deepEqual(outcomes, [expected, expected, expected]);
 		assert.equal(fake.upgraded.length, 0);
 	});
@@ -658,6 +688,7 @@ describe("same-titled tabs", () => {
 		fake.handle("Runtime.evaluate", (_params, ctx) => ({ result: { value: byTarget[ctx.targetId]?.visible ? "visible" : "hidden" } }));
 	}
 
+	// Two tabs with identical titles, and a window frame matching `frame` (here) or far from it (there).
 	const twins = [{ id: "one", title: "Same" }, { id: "two", title: "Same" }];
 	const here = { left: 100, top: 100, width: 800, height: 600 };
 	const there = { left: 1500, top: 100, width: 800, height: 600 };
@@ -721,7 +752,7 @@ describe("same-titled tabs", () => {
 		assert.equal(await cdpTabForWindow("Solo", frame), tab, "an erroring bounds query is also trusted");
 	});
 
-	test("a cached tab that left the controlled window is not reused", async () => {
+	test("a cached tab outside the controlled window is re-picked from discovery and its open connection reused", async () => {
 		const fake = await fakeBrowser({ targets: [{ id: "solo", title: "Solo" }] });
 		scriptWindows(fake, { solo: { bounds: here, visible: true } });
 		const tab = await cdpTabForWindow("Solo", frame);
@@ -772,6 +803,15 @@ describe("snapshots", () => {
 		fake.handle("Accessibility.getFullAXTree", () => ({ nodes }));
 	}
 
+	/**
+	 * Build one `Accessibility.getFullAXTree` node.
+	 * @param {string} nodeId Node id.
+	 * @param {string} role AX role.
+	 * @param {string} name Accessible name.
+	 * @param {object} [extra] Extra node fields (`parentId`, `childIds`, `backendDOMNodeId`, ...).
+	 * @returns {object} AX node.
+	 * @throws {never} Pure constructor.
+	 */
 	const ax = (nodeId, role, name, extra = {}) => ({ nodeId, role: { type: "role", value: role }, name: { type: "computedString", value: name }, ...extra });
 
 	test("returns no snapshot for unknown or detached contexts", async () => {
@@ -827,7 +867,7 @@ describe("snapshots", () => {
 		const snapshot = await cdpSnapshotForContext("browser:fake");
 		assert(snapshot);
 		assert.deepEqual(snapshot.targets.map((target) => target.name).sort(), ["Anonymous", "First", "Loop", "Orphan"]);
-		assert.match(snapshot.outline.text ?? JSON.stringify(snapshot.outline), /Browser page|First/);
+		assert.match(JSON.stringify(snapshot.outline), /Browser page/, "several roots are wrapped in a synthetic document");
 	});
 
 	test("every interactive role is classified and others are not", async () => {

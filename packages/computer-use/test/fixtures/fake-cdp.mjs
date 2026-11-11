@@ -266,7 +266,9 @@ export async function startFakeCdp({ port = 0, id = "fake", title = "Fake", url 
 	let listRequests = 0;
 	let nextSession = 1;
 
+	// `path` is `page/<id>` or `browser/<id>`.
 	const wsUrl = (path) => `ws://127.0.0.1:${boundPort}/devtools/${path}`;
+	// Discovery entry for one target; `webSocketDebuggerUrl: null` omits the field.
 	const describe = (target) => {
 		const info = { id: target.id, type: target.type ?? "page", title: target.title ?? "", url: target.url ?? "about:blank" };
 		if (target.webSocketDebuggerUrl !== null) info.webSocketDebuggerUrl = target.webSocketDebuggerUrl ?? wsUrl(`page/${target.id}`);
