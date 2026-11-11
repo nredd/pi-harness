@@ -222,10 +222,8 @@
 			],
 			"files": [
 				"src/bridge.ts",
-				"src/state.ts",
 				"test/bridge-observe-query.test.mjs",
-				"test/bridge-setup-look.test.mjs",
-				"test/bridge-wait-for.test.mjs"
+				"test/bridge-setup-look.test.mjs"
 			],
 			"check": "test/bridge-observe-query.test.mjs",
 			"dropControls": [
@@ -302,15 +300,13 @@
 		},
 		{
 			"id": "coverage-test-harness",
-			"purpose": "Scriptable fake helper, fake browser and in-process test files added by the computer-use coverage work; test-only, no shipped behavior",
+			"purpose": "Scriptable fake helper and fake browser from the macOS helper client coverage work (#724, #721), plus one dead guard deleted from `src/platform/macos/helper.ts` (`await this.tail` instead of a `.catch` on a promise that never rejects)",
 			"rows": [
 				"Coverage test harness"
 			],
 			"files": [
+				"src/platform/macos/helper.ts",
 				"test/fake-helper.test.mjs",
-				"test/fixtures/fake-browser.mjs",
-				"test/managed-browser-profile.test.mjs",
-				"test/setup-helper-inprocess.test.mjs",
 				"test/support/fake-browser.mjs",
 				"test/support/fake-helper.mjs"
 			],
@@ -621,12 +617,36 @@
 			}
 		},
 		{
+			"id": "managed-browser-private-profile",
+			"purpose": "`launch_browser` gives each managed browser a private `mkdtemp` profile dir (owner-only, removed on exit or shutdown) instead of the fixed `pi-<browser>-cdp-<port>` name another account could squat, escalates to SIGKILL when a relaunch or failed launch stops a browser, and orders launches before shutdown",
+			"rows": [
+				"Managed browser private profile"
+			],
+			"files": [
+				"docs/content/docs/reference/configuration.mdx",
+				"src/bridge.ts",
+				"src/config.ts",
+				"test/fixtures/fake-browser.mjs",
+				"test/managed-browser-profile.test.mjs"
+			],
+			"check": "test/managed-browser-profile.test.mjs",
+			"dropControls": [
+				"managed browser profile dir is owner-only (#519)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#519, #528, #558; not filed"
+			}
+		},
+		{
 			"id": "outline-dead-arm-removal",
-			"purpose": "Coverage-driven cleanup of outline.ts: the unreachable `0 children` fallback in folded summaries and the optional `preserveWireRef` default are gone; unnamed roles fold as `node`, not upstream's `nodes`",
+			"purpose": "Coverage-driven cleanup of outline.ts: the unreachable `0 children` fallback in folded summaries and the optional `preserveWireRef` default are gone; unnamed roles fold as `node`, not upstream's `nodes`; `outline-store.ts` sorts the directory listing once (newest first) instead of per call and logs `String(error)`",
 			"rows": [
 				"Outline dead-arm removal"
 			],
 			"files": [
+				"src/outline-store.ts",
 				"src/outline.ts",
 				"test/outline-store-edges.test.mjs",
 				"test/outline.test.mjs"
@@ -707,6 +727,27 @@
 				"status": "harness-only",
 				"reference": "UPSTREAM.md",
 				"detail": "Coverage-driven dead code removal (nredd/pi-harness#707); not filed"
+			}
+		},
+		{
+			"id": "query-handler-dead-arm-removal",
+			"purpose": "Coverage-driven deletion in bridge.ts query handlers: the browser `wait_for` guards for a missing resource identity, base snapshot or final observation (a saved browser state always carries them, so `finish` takes the last snapshot and epoch as arguments), the `windowRef` conditional in the observe summary, the `lastSearchOcrEscalatedLookId` once-per-look guard in `performSearchUi` (an escalated look already has `readText.executed`) and its `state.ts` field, and unreachable `resourceKey`/`epoch`/`outline` checks",
+			"rows": [
+				"Query handler dead-arm removal"
+			],
+			"files": [
+				"src/bridge.ts",
+				"src/state.ts",
+				"test/bridge-wait-for.test.mjs"
+			],
+			"check": "test/bridge-wait-for.test.mjs",
+			"dropControls": [
+				"browser wait_for reports the matched condition (#711)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "Coverage-driven dead code removal (nredd/pi-harness#711); not filed"
 			}
 		},
 		{
@@ -795,6 +836,27 @@
 				"status": "candidate",
 				"reference": "UPSTREAM.md",
 				"detail": "Open upstream PR injaneity/pi-computer-use#114 (unmerged, MIT, author credited); carried from its head, not filed by us"
+			}
+		},
+		{
+			"id": "setup-helper-in-process",
+			"purpose": "`scripts/setup-helper.mjs` exports `main(argv, deps)` with host seams injected so it runs in process; CLI behavior is unchanged, and a non-darwin check in the local signing path, a duplicate bundle-name arm in archive search and a redundant keychain re-lookup are deleted",
+			"rows": [
+				"Setup helper in-process"
+			],
+			"files": [
+				"scripts/setup-helper.mjs",
+				"test/linux-build-scripts.test.mjs",
+				"test/setup-helper-inprocess.test.mjs"
+			],
+			"check": "test/setup-helper-inprocess.test.mjs",
+			"dropControls": [
+				"setup-helper release checksum verification (#704)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "Coverage-driven refactor (nredd/pi-harness#704); not filed"
 			}
 		},
 		{

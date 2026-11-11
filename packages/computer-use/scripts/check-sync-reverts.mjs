@@ -260,6 +260,14 @@ const cases = [
 		failure: /coded unsupported_command/,
 	},
 	{
+		name: "browser wait_for reports the matched condition (#711)",
+		file: "src/bridge.ts",
+		before: "if (present !== gone) return finish(snapshot, epoch, true);",
+		after: "if (present !== gone) return finish(snapshot, epoch, false);",
+		check: "test/bridge-wait-for.test.mjs",
+		failure: /wait_for polls a browser page until the condition appears/,
+	},
+	{
 		name: "coded stale root outcome (50cbfe2)",
 		file: "src/bridge.ts",
 		before:
@@ -375,7 +383,7 @@ const cases = [
 		before: 'body: { ok: true, result } });',
 		after: 'body: { ok: false, result } });',
 		check: "test/fake-helper.test.mjs",
-		failure: /AssertionError|expected/i,
+		failure: /serves requests, scripted errors with codes, and unknown commands/,
 	},
 	{
 		name: "find_roots blocked marker (#646)",
@@ -494,6 +502,14 @@ const cases = [
 		after: "return undefined;",
 		check: "test/act-outcomes.test.mjs",
 		failure: /is not supported on|did not match|must be of type string/,
+	},
+	{
+		name: "managed browser profile dir is owner-only (#519)",
+		file: "src/bridge.ts",
+		before: "const profileDir = await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`));",
+		after: "const profileDir = await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`));\n\tawait (await import(\"node:fs/promises\")).chmod(profileDir, 0o755);",
+		check: "test/managed-browser-profile.test.mjs",
+		failure: /launch uses a private profile dir that ignores a squatted fixed name/,
 	},
 	{
 		name: "observe_ui rejects a non-string root (#709)",
@@ -745,6 +761,14 @@ const cases = [
 		check: "test/macos-native-pure.test.mjs",
 		failure: /range past the end is refused/,
 		darwinOnly: true,
+	},
+	{
+		name: "setup-helper release checksum verification (#704)",
+		file: "scripts/setup-helper.mjs",
+		before: "if (actual !== expected.toLowerCase()) {",
+		after: "if (false) {",
+		check: "test/setup-helper-inprocess.test.mjs",
+		failure: /a wrong checksum is rejected before extraction/,
 	},
 	{
 		name: "single root delta mapping (50cbfe2/4d596ca)",

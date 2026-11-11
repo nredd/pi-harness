@@ -23,20 +23,42 @@ if (arg === "--fetch-if-enabled") {
 const ledger = JSON.parse(readFileSync(path.join(root, "sync-patches.json"), "utf8"));
 const git = (cwd, args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 validateUpstreamRows(ledger, readFileSync(path.join(root, "UPSTREAM.md"), "utf8"));
+const FETCH_ATTEMPTS = 3;
+const FETCH_TIMEOUT_MS = 120_000;
 let scratch;
 let upstream = arg;
-if (arg === "--fetch") {
-	scratch = mkdtempSync(path.join(os.tmpdir(), "cu-upstream-"));
-	upstream = path.join(scratch, "upstream");
-	execFileSync("git", ["init", "--quiet", upstream]);
-	const url = "https://github.com/injaneity/pi-computer-use.git";
-	git(upstream, ["fetch", "--quiet", "--depth", "1", url, ledger.upstream]);
-	git(upstream, ["checkout", "--quiet", "--detach", "FETCH_HEAD"]);
-}
 try {
+	if (arg === "--fetch") {
+		scratch = mkdtempSync(path.join(os.tmpdir(), "cu-upstream-"));
+		upstream = path.join(scratch, "upstream");
+		fetchPinnedUpstream(upstream);
+	}
 	compare();
 } finally {
 	if (scratch) rmSync(scratch, { recursive: true, force: true });
+}
+
+/** Shallow-fetch the pinned upstream commit into `dir`, retrying transient network failures.
+ * @param {string} dir Empty directory to initialise as a detached checkout.
+ * @returns {void}
+ * @throws {Error} "upstream fetch failed (not drift)" once every attempt fails.
+ */
+function fetchPinnedUpstream(dir) {
+	const url = "https://github.com/injaneity/pi-computer-use.git";
+	const run = (args) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", stdio: "pipe", timeout: FETCH_TIMEOUT_MS });
+	let failure;
+	for (let attempt = 1; attempt <= FETCH_ATTEMPTS; attempt++) {
+		try {
+			execFileSync("git", ["init", "--quiet", dir], { timeout: FETCH_TIMEOUT_MS });
+			run(["fetch", "--quiet", "--depth", "1", url, ledger.upstream]);
+			run(["checkout", "--quiet", "--detach", "FETCH_HEAD"]);
+			return;
+		} catch (error) {
+			failure = error;
+			console.error(`upstream fetch attempt ${attempt}/${FETCH_ATTEMPTS} failed: ${error.message.split("\n")[0]}`);
+		}
+	}
+	throw new Error(`upstream fetch failed (not drift): ${failure.message.split("\n")[0]}`);
 }
 
 function compare() {
