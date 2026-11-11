@@ -317,7 +317,7 @@ function countDescendants(node: OutlineNode): { total: number; roles: Map<string
 
 function roleName(role: string): string {
 	const stripped = role.replace(/^AX/, "").toLowerCase();
-	return stripped || "nodes";
+	return stripped || "node";
 }
 
 function plural(count: number, singular: string): string {

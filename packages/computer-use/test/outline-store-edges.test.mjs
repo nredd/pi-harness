@@ -27,7 +27,7 @@ test("a missing store directory, stray files and unreadable states are all toler
 	const dir = outlineStoreDir();
 	for (const stray of ["README", "0-1-abc.json", `.tmp-${"0".repeat(32)}.json`]) fs.writeFileSync(`${dir}/${stray}`, "x");
 	saveStoredOutline("other", outline, 1);
-	assert.deepEqual(fs.readdirSync(dir).filter((name) => /^\d{16}-/.test(name)).length, 1, "only well-formed entries are counted and evicted");
+	assert.equal(fs.readdirSync(dir).filter((name) => /^\d{16}-/.test(name)).length, 1, "only well-formed entries are counted and evicted");
 	assert.ok(fs.existsSync(`${dir}/README`), "unrelated files are never deleted");
 	assert.ok(loadStoredOutline("other"));
 	assert.equal(loadStoredOutline("real"), undefined);

@@ -1,13 +1,21 @@
 // Pure-module coverage for src/outline.ts: parse fallbacks, search, serialization and the scoped graft (#702).
 import assert from "node:assert/strict";
-import { describe, expect, test } from "vitest";
+import { describe, test } from "vitest";
 import {
+	controlLine,
 	countOutlineNodes,
+	foldToBudget,
 	graftScopedOutline,
+	isInteractiveControl,
 	nodeByRef,
+	outlineNodeLabel,
+	outlineNodePath,
 	parseLookResponse,
+	rankedTextMatch,
+	renderInteractiveControls,
 	restoreOutline,
 	searchOutline,
+	searchOutlineRanked,
 	serializeOutline,
 	serializeOutlineNodeShallow,
 	serializeOutlineSearchMatch,
@@ -257,7 +265,7 @@ describe("graftScopedOutline", () => {
 		const outline = graftBase();
 		const target = outline.nodes[1];
 		const originalRect = { ...target.rect };
-		const returned = graftScopedOutline(outline, "@e2", scopedLook().root ? scopedLook() : undefined);
+		const returned = graftScopedOutline(outline, "@e2", scopedLook());
 		assert.equal(returned, target);
 		assert.equal(target.ref, "@e2");
 		assert.equal(target.wireRef, "pane", "preserveWireRef keeps the live wire ref");
@@ -369,7 +377,7 @@ describe("graftScopedOutline", () => {
 		const scoped = outlineOf({ ref: "t", children: [{ ref: "n1" }, { ref: "n2" }] });
 		graftScopedOutline(outline, "@e07x", scoped);
 		assert.deepEqual(outline.nodes.slice(2).map((node) => node.ref), ["@e1", "@e2"], "refs that are not @e<digits> count as 0");
-		expect(outline.nodes[1].ref).toBe("@e07x");
+		assert.equal(outline.nodes[1].ref, "@e07x");
 	});
 
 	test("target found by wire ref keeps the ref it was addressed by", () => {
@@ -378,8 +386,6 @@ describe("graftScopedOutline", () => {
 		assert.equal(outline.nodes[1].ref, "pane", "targetRef is written back verbatim");
 	});
 });
-
-const { foldToBudget, renderInteractiveControls, searchOutlineRanked, rankedTextMatch, isInteractiveControl, controlLine, outlineNodeLabel, outlineNodePath } = await import("../src/outline.ts");
 
 describe("foldToBudget", () => {
 	const folded = () =>
@@ -416,9 +422,9 @@ describe("foldToBudget", () => {
 		assert.equal(result.fullUnfoldLineCount, 15);
 	});
 
-	test("unnamed roles fall back to 'nodes' and singulars are not pluralised", () => {
+	test("unnamed roles fall back to 'node' and singulars are not pluralised", () => {
 		const outline = outlineOf({ role: "AXWindow", children: [{ role: "AXGroup", children: [{ role: "AX" }, { role: "" }] }] });
-		assert.match(foldToBudget(outline, { maxDepth: 1 }).text, /\(2: 2 nodess?\)$/);
+		assert.match(foldToBudget(outline, { maxDepth: 1 }).text, /\(2: 2 nodes\)$/);
 		const one = outlineOf({ role: "AXWindow", children: [{ role: "AXGroup", children: [{ role: "AXButton" }] }] });
 		assert.match(foldToBudget(one, { maxDepth: 1 }).text, /\(1: 1 button\)$/);
 	});
@@ -614,7 +620,7 @@ describe("action matching via searchOutline", () => {
 	});
 });
 
-describe("fold edge cases", () => {
+describe("graft without a wire-ref target", () => {
 	test("graft target without a wire ref is simply not reusable", () => {
 		const outline = outlineOf({ role: "AXWindow", children: [{ role: "AXGroup", children: [{ ref: "kid", role: "AXButton", title: "old" }] }] });
 		const scoped = outlineOf({ role: "AXGroup", children: [{ ref: "kid", role: "AXButton", title: "new" }] });
