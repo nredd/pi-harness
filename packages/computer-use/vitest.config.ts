@@ -9,6 +9,22 @@ const {
 	readFileSync(new URL("../../coverage/policy.json", import.meta.url), "utf8"),
 ).packages["computer-use-vitest"];
 
+/**
+ * Files already at 0 uncovered lines, functions and branches on every OS (#645 T0). The policy schema has
+ * no per-file pins, so Vitest enforces them: any regression fails `npm test` even inside the aggregate cap.
+ */
+const ZERO_UNCOVERED_FILES = [
+	"scripts/build-native.mjs",
+	"scripts/docs-generators/generate-source-references.mjs",
+	"scripts/docs-generators/generate-tool-reference.mjs",
+	"scripts/rust-coverage.mjs",
+	"scripts/setup-helper.mjs",
+	"src/outline-store.ts",
+	"src/outline.ts",
+	"src/platform/macos/helper-path.mjs",
+	"src/platform/macos/helper.ts",
+];
+
 export default defineConfig({
 	test: {
 		dir: "test",
@@ -23,7 +39,7 @@ export default defineConfig({
 		// own derived budgets.
 		testTimeout: 20_000,
 		setupFiles: ["../../integration/inprocess/verification/home-setup.ts"],
-		// `istanbul` like the other Pi-loading packages; report-only, see `coverage/policy.json`.
+		// `istanbul` like the other Pi-loading packages; caps in `coverage/policy.json`.
 		coverage: {
 			provider: "istanbul",
 			reporter: ["text", "lcov"],
@@ -31,6 +47,9 @@ export default defineConfig({
 			reportOnFailure: true,
 			include: owned,
 			exclude: exclusions.map(({ path }) => path),
+			thresholds: Object.fromEntries(
+				ZERO_UNCOVERED_FILES.map((path) => [path, { lines: 100, functions: 100, branches: 100 }]),
+			),
 		},
 	},
 });

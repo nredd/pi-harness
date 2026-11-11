@@ -12,10 +12,11 @@ base policy. Eligible package tooling/examples remain pending goal blockers, not
 `goal: "report-only"` identifies verification infrastructure (helpers and
 producer configurations). `goal: "excluded"` records the owner's computer-use
 coverage-maintenance exclusion. Both require a nonblank
-`goal_reason`; neither removes any source from the inventory audit. Measured signals outside the
-goal must be report-only and still require complete, valid reports and per-OS references.
-There is no mode with a nonzero line/function floor: `goal: ratchet` (#314) was deleted (#386) and the schema
-rejects it, in the current policy and in a base read alike.
+`goal_reason`; neither removes any source from the inventory audit. Measured signals on a
+`report-only` goal must be report-only; an `excluded` package may enforce measured caps (#645,
+`computer-use-vitest`). Both still require complete, valid reports and per-OS references.
+`goal: ratchet` (#314) was deleted (#386) and the schema rejects it, in the current policy and in a
+base read alike; an enforced `excluded` signal is the only nonzero floor and can only tighten.
 
 The initial integration checkpoint is recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/main-integration.md).
 Facade validation and the actual hosted producer failure diagnosis are recorded
@@ -67,7 +68,7 @@ fails (`Branch producer missing`), so a producer that silently stops emitting `B
 Carve-outs: the native `bun test` subset signal (session-kit `/bun`) writes no branch records
 and declares no cap until #320 moves it to Vitest-on-Bun Istanbul (blocked on Bun `worker.terminate()` latency);
 `computer-use-vitest` is owner-excluded (`goal: excluded`), the only
-goal that may carry branch records without a cap.
+goal that may carry branch records without a cap; it now declares one anyway (#645).
 
 Branch units differ by producer: Istanbul and Bun count AST arms (including an implicit `else` and each
 logical operand), coverage.py counts jump arcs, so caps are only comparable within one signal. Both
@@ -317,23 +318,24 @@ The generated stats CLI bundle has a reasoned generated-artifact exclusion; its 
 
 `computer-use` is explicitly **not measured, tracked** for its native Swift/Rust sources and the
 documentation site. Since #347 its suites run under Vitest, and the separate `computer-use-vitest`
-policy entry (same root) measures the 33 executable JS/TS runtime modules with Istanbul: `src`,
+policy entry (same root) measures the 35 executable JS/TS runtime modules with Istanbul: `src`,
 `extensions`, `setup-helper.mjs`, `build-native.mjs`, `rust-coverage.mjs` and the documentation
 generators, with the declaration-only `src/platform/types.ts` excluded as type-only. Its Vitest
 config reads both from the policy like every other producer, so a new module joins the report
 instead of dropping out. It stays
-`goal: "excluded"` and report-only, with no 100% claim; subprocess-run scripts count only what the
-suites import. First references: macOS **2061 lines / 539 functions** uncovered (local
-`npm test` on `9aad6172`, unchanged when re-measured with the glob `include` on the #353 follow-up), Linux **2088 / 548** (hosted `coverage-ubuntu-24.04` artifact, run
-`41748291074`, same commit). Current caps: macOS **1975 / 517** (measured, local `npm test` with coverage on the #523 branch
-after its launch/shutdown serialization fix), Linux **2006 / 528** (cap, not measured on the #523 branch; the
-#508 head `37672471` measured it in hosted run `42035244330`). The native and
+`goal: "excluded"` with no 100% claim, but since #645 T0 the signal is **enforced**: its per-OS caps are the
+measured uncovered counts for lines, functions and branches (darwin **572 / 203 / 871**, local `npm test` on
+`6d913af1`; linux **695 / 238 / 1124**, hosted artifacts from run `43024823914` at `df95d355`, before #723, so an
+upper bound to tighten on the next hosted run). Statements carry no cap until #700. Subprocess-run scripts count
+only what the suites import. Files already at 0/0/0 on every OS are also pinned per file by
+`coverage.thresholds` in `packages/computer-use/vitest.config.ts` (the policy schema has no per-file pins).
+Per-file history and numbers are in [computer-use-coverage.md](computer-use-coverage.md). The native and
 live suites (`linux-native`, `macos-helper-live`, `linux-live`) also run under Vitest now; skipped off
 their platform or opt-in, and `linux-native` counts only the `src/platform/linux/helper.ts` client it imports. Its TS entries and
 native sources stay in inventory. The owner explicitly excludes this package from coverage maintenance, so it does not block
 the global flip. Imported documentation-site TS/TSX/configuration is likewise inventory-only under
 that exclusion; the documentation generators and optional `scripts/rust-coverage.mjs` tooling are
-measured only by the report-only signal above, never gated. The plan for lifting the exclusion (TS and Swift, seams, phases) is [here](computer-use-coverage.md). The opt-in Rust report is never collected by normal checks; its
+measured by the enforced ratchet signal above. The plan for lifting the exclusion (TS and Swift, seams, phases) is [here](computer-use-coverage.md). The opt-in Rust report is never collected by normal checks; its
 mocked argument/path/error tests still run. Existing native/platform checks remain unchanged.
 `dev-tools` emits primary Istanbul after #155/#195. Since #320 its Bun report comes from the same
 full Vitest suite on Bun through `scripts/run-vitest.ts bun`, not a native `bun test` subset.

@@ -235,7 +235,7 @@ class Package(StrictModel):
             and self.signals["primary"].enforcement != "enforced"
         ):
             raise ValueError("Primary signals must remain enforced")
-        if self.goal != "100-percent" and any(
+        if self.goal == "report-only" and any(
             signal.enforcement != "report-only" for signal in self.signals.values()
         ):
             raise ValueError("Signals outside the global goal must remain report-only")
