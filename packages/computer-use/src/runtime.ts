@@ -30,9 +30,7 @@ export class StateStore<T> {
 		this.records.delete(record.stateId);
 		this.records.set(record.stateId, record);
 		while (this.records.size > this.limit) {
-			const oldest = this.records.keys().next().value as string | undefined;
-			if (!oldest) break;
-			this.records.delete(oldest);
+			this.records.delete(this.records.keys().next().value!);
 		}
 	}
 
@@ -94,7 +92,7 @@ export class ResourceScheduler {
 	}
 
 	async drain(): Promise<void> {
-		await Promise.all([...this.resources.values()].map((record) => record.tail.catch(() => undefined)));
+		await Promise.all([...this.resources.values()].map((record) => record.tail));
 	}
 
 	async close(): Promise<void> {
@@ -118,8 +116,9 @@ export class ResourceScheduler {
 		const previous = record.tail;
 		let release!: () => void;
 		const next = new Promise<void>((resolve) => { release = resolve; });
-		record.tail = previous.catch(() => undefined).then(() => next);
-		await previous.catch(() => undefined);
+		// `tail` only ever resolves (`next` is released in `finally`), so `previous` never rejects.
+		record.tail = previous.then(() => next);
+		await previous;
 		try {
 			return await work(record);
 		} finally {
