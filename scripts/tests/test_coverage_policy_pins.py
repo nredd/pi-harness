@@ -365,11 +365,42 @@ def test_ported_computer_suites_are_conventional_tests() -> None:
     cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
     helpers = {helper.path for helper in cfg.verification_helpers}
     suites = sorted((ROOT / "packages/computer-use/test").glob("*.test.mjs"))
-    # A floor, not an exact count: the 26 ported suites plus #551, #637, #672, #646 and #648 make 31.
-    # New suites (the #645 coverage work adds many) need no edit here; losing one still fails.
-    assert len(suites) >= 31
-    assert (ROOT / "packages/computer-use/test/swift-sdk.test.mjs") in suites
-    assert (ROOT / "packages/computer-use/test/managed-browser-headless.test.mjs") in suites
+    # The 26 ported suites plus #551, #637, #672, #646 and #648, by name: losing or renaming any fails,
+    # while new suites (the #645 coverage work adds many) need no edit here.
+    required = {
+        "act-outcomes.test.mjs",
+        "app-policy.test.mjs",
+        "async.test.mjs",
+        "bounded-output.test.mjs",
+        "cleanup.test.mjs",
+        "commit-messages.test.mjs",
+        "desktop-tools.test.mjs",
+        "find-params.test.mjs",
+        "invariants.test.mjs",
+        "linux-build-scripts.test.mjs",
+        "linux-live.test.mjs",
+        "linux-native.test.mjs",
+        "local-signing.test.mjs",
+        "macos-helper-live.test.mjs",
+        "macos-helper-path.test.mjs",
+        "macos-native-pure.test.mjs",
+        "macos-observe-target.test.mjs",
+        "managed-browser-headless.test.mjs",
+        "managed-browser-profile.test.mjs",
+        "outline-store.test.mjs",
+        "platform-linux.test.mjs",
+        "platform-windows.test.mjs",
+        "runtime-concurrency.test.mjs",
+        "rust-coverage.test.mjs",
+        "session-lifecycle.test.mjs",
+        "swift-sdk.test.mjs",
+        "sync-ledger.test.mjs",
+        "tool-schemas.test.mjs",
+        "unpaired-act.test.mjs",
+        "windows-build-scripts.test.mjs",
+        "wsl2-diagnostics.test.mjs",
+    }
+    assert required <= {suite.name for suite in suites}
     for suite in suites:
         assert is_test_path(suite.relative_to(ROOT))
     for moved in [
