@@ -821,6 +821,14 @@ const cases = [
 		failure: /restore must be host-only/,
 		darwinOnly: true,
 	},
+	{
+		name: "CDP snapshot maps wire refs to model refs (#708)",
+		file: "src/cdp.ts",
+		before: "target.ref = modelRefByWire.get(target.ref)!;",
+		after: "target.ref = target.ref;",
+		check: "test/cdp-client.test.mjs",
+		failure: /wire refs are mapped to model refs/,
+	},
 ];
 
 try {
