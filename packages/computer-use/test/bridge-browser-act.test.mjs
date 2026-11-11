@@ -52,7 +52,7 @@ async function observePage(onTestFinished, { nodes = PAGE, text = "Hello page" }
 	const root = found.details.windows.find((window) => window.kind === "browser_page").windowRef;
 	const observed = await desktop.call(desktop.bridge.executeObserve, { root });
 	const stateId = observed.details.stateId;
-	/** Refs by accessible name for `stateId`. */
+	/** Refs by accessible name for `id`. */
 	const refsOf = (id) => Object.fromEntries(desktop.bridge.testing.savedState(id).value.snapshot.targets.map((target) => [target.name, target.ref]));
 	return {
 		desktop,
@@ -159,6 +159,7 @@ test("a drag without a path reports the failure and leaves the page without inpu
 test("browser actions reject bad targets before any input", async ({ onTestFinished }) => {
 	const { act, stateId, refs, refsOf, methods } = await observePage(onTestFinished);
 	const baseline = methods().length;
+	/** Assert that one action is rejected with `pattern`. */
 	const rejects = (action, pattern) => assert.rejects(() => act({ stateId, actions: [action] }), pattern);
 	await rejects({ action: "click", ref: refs.Save, button: "right" }, /Browser ref clicks support only the left button/);
 	await rejects({ action: "press", ref: "@e99" }, new RegExp(`Browser press requires an actionable @e ref owned by ${stateId}`));
@@ -173,6 +174,7 @@ test("browser actions reject bad targets before any input", async ({ onTestFinis
 
 test("act_ui validates targets and the transaction size before dispatch", async ({ onTestFinished }) => {
 	const { act, stateId, refs } = await observePage(onTestFinished);
+	/** Assert that the transaction `params` are rejected with `pattern`. */
 	const rejects = (params, pattern) => assert.rejects(() => act({ stateId, ...params }), pattern);
 	await rejects({ actions: [] }, /act_ui\.actions must contain at least one action\./);
 	await rejects({}, /act_ui\.actions must contain at least one action\./);
@@ -244,12 +246,15 @@ test("expect fails when the page disappears while polling", async ({ onTestFinis
 	await assert.rejects(() => act({ stateId, actions: [{ action: "press", ref: refs.Save }], expect: { text: "Done", timeoutMs: 100 } }), /Browser root 'browser:page1' is no longer available\. Observe it again\./);
 });
 
-test("an aborted postcondition wait stops the transaction", async ({ onTestFinished }) => {
-	const { act, stateId, refs } = await observePage(onTestFinished);
+test("an abort during the first postcondition poll stops the transaction after the action was delivered", async ({ onTestFinished }) => {
+	const { act, stateId, refs, cdp, page, paramsOf } = await observePage(onTestFinished);
 	const abort = new AbortController();
-	const pending = act({ stateId, actions: [{ action: "press", ref: refs.Save }], expect: { text: "Never", timeoutMs: 20_000 } }, abort.signal);
-	setTimeout(() => abort.abort(), 150);
-	await assert.rejects(pending, /abort/i);
+	cdp.handle("Accessibility.getFullAXTree", () => {
+		abort.abort();
+		return { nodes: page.nodes };
+	});
+	await assert.rejects(() => act({ stateId, actions: [{ action: "press", ref: refs.Save }], expect: { text: "Never", timeoutMs: 20_000 } }, abort.signal), /^Error: Operation aborted\.$/);
+	assert.equal(paramsOf("Runtime.callFunctionOn").length, 1, "the press was delivered before the wait was cancelled");
 });
 
 test("a CDP error from the page propagates and still consumes the write epoch", async ({ onTestFinished }) => {
@@ -274,6 +279,7 @@ test("navigate_browser navigates, waits for load and returns the successor state
 
 test("navigate_browser validates its target and url", async ({ onTestFinished }) => {
 	const { desktop, stateId, methods } = await observePage(onTestFinished);
+	/** Call `navigate_browser`. */
 	const navigate = (params) => desktop.call(desktop.bridge.executeNavigateBrowser, params);
 	await assert.rejects(() => navigate({ stateId, url: "file:///etc/passwd" }), /navigate_browser\.url must be an absolute HTTP\(S\) URL\./);
 	await assert.rejects(() => navigate({ stateId }), /navigate_browser\.url must be an absolute HTTP\(S\) URL\./);
@@ -300,6 +306,7 @@ test("evaluate_browser returns the value with the successor state", async ({ onT
 
 test("evaluate_browser validates its target and expression and reports a gone page", async ({ onTestFinished }) => {
 	const { desktop, cdp, stateId } = await observePage(onTestFinished);
+	/** Call `evaluate_browser`. */
 	const evaluate = (params) => desktop.call(desktop.bridge.executeEvaluateBrowser, params);
 	await assert.rejects(() => evaluate({ stateId, expression: "  " }), /evaluate_browser\.expression must be non-empty JavaScript\./);
 	await assert.rejects(() => evaluate({ stateId, expression: 5 }), /evaluate_browser\.expression must be non-empty JavaScript\./);

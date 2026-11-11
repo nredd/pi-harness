@@ -65,6 +65,7 @@ test("entries that are not tool results of this extension are ignored", async ({
 
 test("desktop results missing a usable target or capture are skipped", async ({ onTestFinished }) => {
 	const { fake, details, stateId, restore } = await sessionWith(onTestFinished);
+	/** Build a branch entry from `details` after `mutate` broke one field. */
 	const without = (mutate) => {
 		const copy = clone(details);
 		mutate(copy);

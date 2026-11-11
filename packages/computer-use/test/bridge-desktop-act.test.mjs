@@ -87,6 +87,7 @@ test("a batch result without an outcome is treated as unknown, with or without a
 	vi.stubEnv("PI_COMPUTER_USE_HEADLESS", "1");
 	const { fake } = await observed(onTestFinished);
 	fake.actBatchResult = { performed: { delivery: "ax", transaction: true, actionCount: 1 }, steps: [{ outcome: "worked", performed: { delivery: "ax" } }] };
+	/** Observe, then run one press with extra `act_ui` params; returns the result. */
 	const run = async (extra = {}) => {
 		const { stateId } = await fake.observe();
 		return await fake.call(fake.bridge.executeAct, { stateId, actions: [press], ...extra });
@@ -369,6 +370,7 @@ test("a foreground modal that opened in front of the acted root is noted in the 
 });
 
 test("the highest-scoring of several foreground modals is the one named", async ({ onTestFinished }) => {
+	/** Build a focused modal dialog root of the acted app. */
 	const modal = (windowId, title, over = {}) => desktopRoot({ pid: 1, windowId, rootRef: `ax:m${windowId}`, windowRef: `ax:m${windowId}`, kind: "dialog", title, isModal: true, isFocused: true, zOrder: -1, ...over });
 	const { fake, act } = await observed(onTestFinished);
 	const delegate = currentPlatformBackend.act;
@@ -383,6 +385,7 @@ test("the highest-scoring of several foreground modals is the one named", async 
 
 test("no modal note when the acted root is gone from the listing, is itself modal, or the listing fails", async ({ onTestFinished }) => {
 	const { fake } = await observed(onTestFinished);
+	/** Run one press while `listing` answers the acted app's root listing; returns the result text. */
 	const noteFor = async (listing) => {
 		const { stateId } = await fake.observe();
 		let acted = false;
