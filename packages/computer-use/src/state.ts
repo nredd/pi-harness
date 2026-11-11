@@ -39,7 +39,6 @@ export interface OperationState {
 	currentNote?: WindowNote;
 	resourceKey?: string;
 	epoch?: number;
-	lastSearchOcrEscalatedLookId?: string;
 	browserSnapshot?: CdpPageSnapshot;
 	contextId?: string;
 }
