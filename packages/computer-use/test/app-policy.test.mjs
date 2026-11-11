@@ -126,11 +126,29 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	const body = swift.match(/let alwaysBlockedBundleIds: \[String\] = \[([\s\S]*?)\]/)?.[1] ?? "";
 	assert.deepEqual([...body.matchAll(/"([^"]+)"/g)].map((m) => m[1]), SYSTEM_AGENTS);
 	assert.match(swift, /lockedSessionRefusal\(cmd: cmd, session: CGSessionCopyCurrentDictionary\(\)/, "helper must refuse UI commands while locked");
-	assert.match(swift, /keyboardTargetRefusalPid\(frontmostPid: NSWorkspace\.shared\.frontmostApplication\?\.processIdentifier, focusedPid: focusedPid/, "helper must refuse blocked frontmost or focused apps for keys");
+	assert.match(swift, /keyboardTargetRefusalPid\(frontmostPid: NSWorkspace\.shared\.frontmostApplication\?\.processIdentifier, focusedPid: systemFocusedPid()/, "helper must refuse blocked frontmost or focused apps for keys");
 	assert.match(swift, /case "type", "key":\n\t\t\ttry refuseBlockedKeyboard\(\)/, "helper must refuse blocked apps before typing or keys");
-	assert.equal(swift.match(/if delivery == "hid" \{ try refuseBlockedKeyboardTarget\(blocked: blockedBundleIdList\(request\)\) \}/g)?.length, 2, "act typeText and keypress must refuse a blocked focused app under HID delivery");
-	assert.match(swift, /Every vertex, not just the endpoints[\s\S]*?refuseBlockedWindow\(at: CGPoint/, "desktop_input drag must check every path vertex");
-	assert.match(swift, /try refuseBlockedPointer\(at: point, blocked: blockedBundleIdList\(request\)\)/, "act coordinate input must refuse blocked windows");
+	assert.equal(swift.match(/try refuseBlockedKeyboardAfterFocus\(preserveFocus: preserveFocus\)/g)?.length, 2, "act typeText and keypress must refuse a blocked focused app under HID delivery");
+	const keyboardHelper = swift.match(/func refuseBlockedKeyboardAfterFocus[\s\S]*?\n\t\t\}\n/)?.[0] ?? "";
+	const keyboardOrder = ['guard delivery == "hid"', "focusTargetForPhysicalInput()", "try requireTargetFocus(pid: pid)", "try refuseBlockedKeyboardTarget("].map((needle) => keyboardHelper.indexOf(needle));
+	assert.ok(keyboardOrder.every((i) => i >= 0) && keyboardOrder.every((i, n) => n === 0 || i > keyboardOrder[n - 1]), "act keyboard focus must settle on the target before the blocked-app check");
+	assert.match(keyboardHelper, /if !preserveFocus \{[\s\S]*?requireTargetFocus[\s\S]*?\}\n\t\t\ttry refuseBlockedKeyboardTarget/, "preserveFocus skips only the focus wait, never the blocked-app check");
+	assert.match(swift, /Every vertex, not just the endpoints[\s\S]*?try refuseBlockedPoints\(vertices/, "desktop_input drag must check every path vertex");
+	const coordinates = swift.match(/func executeCoordinates[\s\S]*?\n\t\tfunc refreshElement/)?.[0] ?? "";
+	const focusAt = coordinates.indexOf("focusTargetForPhysicalInput()");
+	const preflightAt = coordinates.indexOf("try preflight(point)");
+	assert.ok(focusAt > 0 && preflightAt > focusAt, "executeCoordinates must focus, then preflight");
+	assert.ok(!coordinates.slice(0, preflightAt).includes("refuseBlocked"), "act coordinate input must not refuse before focus and preflight");
+	for (const post of ["postMouseClick(", "postMouseMove(", "postScrollWheel(", "postMouseDrag("]) {
+		const postAt = coordinates.indexOf(`try ${post}`);
+		const refuseAt = coordinates.lastIndexOf("try refuseBlockedBeforePost(", postAt);
+		assert.ok(refuseAt > preflightAt && postAt > refuseAt, `act coordinate input must refuse a blocked app after preflight and immediately before ${post}`);
+		assert.ok(!coordinates.slice(refuseAt, postAt).includes("case "), `the pointer check must sit in the ${post} case`);
+	}
+	assert.match(coordinates, /try refuseBlockedBeforePost\(points\)/, "act drag must check every vertex");
+	assert.match(swift, /guard actPointerRefusalApplies\(delivery: delivery\) else \{ return \}\n\t\t\ttry refuseBlockedPoints\(/, "act pointer refusal is gated on HID delivery");
+	assert.match(swift, /private func refuseBlockedPoints[\s\S]*?let windows = onScreenWindowList\(\)[\s\S]*?for \(index, point\) in points\.enumerated\(\)[\s\S]*?windows: windows, axHitTest: hitIndices\.contains\(index\)/, "one window list per action, AX hit test at endpoints only");
+	assert.match(swift, /try refuseBlockedPoints\(vertices, blocked: blocked\)/, "desktop_input drag must share the per-action window list");
 	assert.match(swift, /SCContentFilter\(display: display, excludingApplications: excluded, exceptingWindows: \[\]\)/, "display capture must exclude blocked apps");
 	assert.match(swift, /AXUIElementCopyElementAtPosition\(AXUIElementCreateSystemWide\(\)/, "pointer input must also hit-test through accessibility");
 	assert.match(swift, /return \("screen_locked", "screen_locked:/);

@@ -97,6 +97,26 @@ check(coordinateTargetRefusalPid(windows: overlayList, at: CGPoint(x: 150, y: 15
 check(coordinateTargetRefusalPid(windows: [], at: CGPoint(x: 1, y: 1), hitPid: 10, excludingPid: 99, isBlockedPid: isBlockedPid) == 10, "coordinate act refuses a blocked AX hit")
 check(coordinateTargetRefusalPid(windows: [], at: CGPoint(x: 1, y: 1), hitPid: 99, excludingPid: 99, isBlockedPid: isBlockedPid) == nil, "own AX hit is ignored")
 check(coordinateTargetRefusalPid(windows: overlayList, at: CGPoint(x: 500, y: 500), hitPid: 30, excludingPid: 99, isBlockedPid: isBlockedPid) == nil, "unblocked point runs")
+check(actPointerRefusalApplies(delivery: "hid"), "HID act runs the pointer refusal")
+check(!actPointerRefusalApplies(delivery: "pid"), "pid act skips the pointer refusal so a host terminal cannot block it")
+check(hitTestVertexIndices(count: 5) == [0, 4], "AX hit test runs at drag endpoints only")
+check(hitTestVertexIndices(count: 1) == [0], "a single point is its own endpoint")
+check(hitTestVertexIndices(count: 0).isEmpty, "no vertices, no hit tests")
+check(targetHoldsFocus(frontmostPid: 7, focusedPid: nil, targetPid: 7), "frontmost target with unknown AX focus holds focus")
+check(targetHoldsFocus(frontmostPid: 7, focusedPid: 7, targetPid: 7), "frontmost and focused target holds focus")
+check(!targetHoldsFocus(frontmostPid: 10, focusedPid: 7, targetPid: 7), "a host terminal still frontmost does not hold focus")
+check(!targetHoldsFocus(frontmostPid: 7, focusedPid: 10, targetPid: 7), "a blocked focused panel does not hold focus")
+var polls = 0
+var slept: [Int] = []
+check(waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: { polls += 1; return polls == 4 }, sleepMs: { slept.append($0) }), "focus that settles within the bound is accepted")
+check(polls == 4 && slept == [10, 10, 10], "polling sleeps between checks and stops once focus holds")
+polls = 0
+slept = []
+check(!waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: { polls += 1; return false }, sleepMs: { slept.append($0) }), "focus that never settles is refused")
+check(polls == 21 && slept.count == 20 && slept.reduce(0, +) == 200, "polling is bounded at 200 ms")
+polls = 0
+check(waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: { polls += 1; return true }, sleepMs: { _ in }), "already-focused target returns at once")
+check(polls == 1, "no polling when focus already holds")
 let displayApps: [(id: String?, name: String)] = [("com.apple.Terminal", "Terminal"), ("com.example.Safe", "Safe"), (nil, "Unbundled"), ("COM.EXAMPLE.VAULT", "Vault")]
 check(itemsWithBlockedBundleId(displayApps, blocked: ["com.apple.terminal", "com.example.Vault"], bundleId: { $0.id }).map { $0.name } == ["Terminal", "Vault"], "display capture excludes exactly the blocked apps, case-insensitively")
 check(itemsWithBlockedBundleId(displayApps, blocked: [], bundleId: { $0.id }).isEmpty, "empty blocklist excludes nothing")

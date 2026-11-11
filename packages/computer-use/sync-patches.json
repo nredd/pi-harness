@@ -396,6 +396,9 @@
 				"helper blocked-app input refusal (#646)",
 				"act coordinate input refusal (#646)",
 				"act keyboard focus refusal (#646)",
+				"act pointer refusal runs after focus and preflight (#646)",
+				"drag shares one window list (#646)",
+				"act keyboard waits for target focus (#646)",
 				"act blocklist wire (#646)",
 				"display capture blocklist wire (#646)",
 				"display capture app exclusion (#646)",
@@ -415,7 +418,7 @@
 			"purpose": "Pure Swift lock-state parsing (CGSSessionCopyCurrentDictionary flags) and the commands refused while locked",
 			"files": ["native/macos/bridge.swift", "test/macos-native-pure.test.mjs"],
 			"check": "test/macos-native-pure.test.mjs",
-			"dropControls": ["screen-locked flag parsing (#646)", "overlay-proof blocked window scan (#646)", "focused app keyboard refusal (#646)"],
+			"dropControls": ["screen-locked flag parsing (#646)", "overlay-proof blocked window scan (#646)", "focused app keyboard refusal (#646)", "act pid delivery skips pointer refusal (#646)", "drag AX hit test at endpoints only (#646)", "focus wait is bounded and settles (#646)", "target focus needs the target frontmost (#646)"],
 			"upstream": {
 				"status": "harness-only",
 				"reference": "UPSTREAM.md",
