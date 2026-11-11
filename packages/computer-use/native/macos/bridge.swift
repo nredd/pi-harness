@@ -2469,6 +2469,8 @@ final class Bridge {
 			}
 			acquirePhysicalInputIfNeeded()
 			if delivery == "hid" && !preserveFocus { focusTargetForPhysicalInput() }
+			// HID keys reach the focused app, which a non-activating panel of a blocked app can be.
+			if delivery == "hid" { try refuseBlockedKeyboardTarget(blocked: blockedBundleIdList(request)) }
 			let text = params["text"] as? String ?? ""
 			try postUnicodeText(text, pid: pid, delivery: delivery)
 			performed["grounding"] = "coordinates"
@@ -2503,6 +2505,7 @@ final class Bridge {
 			}
 			acquirePhysicalInputIfNeeded()
 			if delivery == "hid" && !preserveFocus { focusTargetForPhysicalInput() }
+			if delivery == "hid" { try refuseBlockedKeyboardTarget(blocked: blockedBundleIdList(request)) }
 			try postKeyPress(keys: keys, pid: pid, delivery: delivery)
 			performed["grounding"] = "coordinates"
 		} else if let element, action == "scroll" {
@@ -3396,7 +3399,8 @@ final class Bridge {
 		case "moveMouse", "click", "scroll":
 			try refuseBlockedWindow(at: try point())
 		case "drag":
-			let ends = (request["path"] as? [[String: Any]]).map { [$0.first, $0.last].compactMap { $0 } } ?? []
+			// Every vertex, not just the endpoints, so a path cannot route through a blocked window.
+			let ends = request["path"] as? [[String: Any]] ?? []
 			for end in ends {
 				if let x = (end["x"] as? NSNumber)?.doubleValue, let y = (end["y"] as? NSNumber)?.doubleValue { try refuseBlockedWindow(at: CGPoint(x: x, y: y)) }
 			}

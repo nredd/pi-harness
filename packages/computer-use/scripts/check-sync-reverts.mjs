@@ -428,6 +428,14 @@ const cases = [
 		failure: /act coordinate input must refuse/,
 	},
 	{
+		name: "act keyboard focus refusal (#646)",
+		file: "native/macos/bridge.swift",
+		before: 'if delivery == "hid" { try refuseBlockedKeyboardTarget(blocked: blockedBundleIdList(request)) }\n\t\t\ttry postKeyPress(',
+		after: "try postKeyPress(",
+		check: "test/app-policy.test.mjs",
+		failure: /act typeText and keypress must refuse/,
+	},
+	{
 		name: "act blocklist wire (#646)",
 		file: "src/platform/macos/backend.ts",
 		before: "cursorOverlay: getComputerUseConfig().cursor_overlay, blockedBundleIds: effectiveBlockedBundleIds() }",

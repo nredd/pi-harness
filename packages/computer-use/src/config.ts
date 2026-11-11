@@ -289,10 +289,10 @@ A list of macOS bundle ids that Pi refuses to observe or control. The default li
 
 The system authentication agents `com.apple.SecurityAgent`, `com.apple.loginwindow`, `com.apple.coreservices.uiagent` and `com.apple.ScreenSaver.Engine` are always blocked and cannot be removed by this option.
 
-A blocked target fails with the coded error `app_blocked`:
+A blocked target fails with the coded error `app_blocked`. `act_ui` coordinate input and HID typing get the same pointer and focus checks:
 
 - `observe_ui`, `act_ui` and every tool that resolves a root (e.g. `read_text`, `wait_for`) refuse a root owned by a blocked app. `act_ui` re-checks on every call, so adding an app to the list stops a state observed earlier.
-- `desktop_input` refuses `activateApp` of a blocked app, refuses `typeText` and `keypress` while a blocked app is frontmost, and refuses `moveMouse`, `click`, `scroll` and `drag` whose pointer (or drag endpoint) lands on a blocked app's window. The helper checks immediately before it delivers the input, but a key sequence that itself switches apps (e.g. `cmd+tab`) or a focus change in the middle of delivery is not re-checked, so this is a guard against mistakes, not a sandbox. Clipboard actions are not input delivery and are not blocked.
+- `desktop_input` refuses `activateApp` of a blocked app, refuses `typeText` and `keypress` while a blocked app is frontmost or holds key focus, and refuses `moveMouse`, `click`, `scroll` and `drag` whose pointer (or any drag path vertex) lands on a blocked app's window. The helper checks immediately before it delivers the input, but a key sequence that itself switches apps (e.g. `cmd+tab`) or a focus change in the middle of delivery is not re-checked, so this is a guard against mistakes, not a sandbox. Clipboard actions are not input delivery and are not blocked.
 - `find_roots` still lists blocked roots, marked `blocked`, so the model learns why they cannot be used.
 
 Only the user-global file can replace the list. A project `.pi/computer-use.json` is writable by the repository and by the agent itself, so its `blocked_apps` is only unioned into the effective list: it can add ids, never remove one, and `[]` there changes nothing. The environment is treated the same way, because a repository can set it too (`.envrc`, direnv, a launch script). The user-global list replaces the default, it does not extend it, so the explicit opt-out is a literal `"blocked_apps": []` in `~/.pi/agent/extensions/pi-computer-use.json`; copy the defaults and append to extend them.

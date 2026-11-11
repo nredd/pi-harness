@@ -395,6 +395,7 @@
 				"helper locked-session refusal (#646)",
 				"helper blocked-app input refusal (#646)",
 				"act coordinate input refusal (#646)",
+				"act keyboard focus refusal (#646)",
 				"act blocklist wire (#646)",
 				"display capture blocklist wire (#646)",
 				"display capture app exclusion (#646)",

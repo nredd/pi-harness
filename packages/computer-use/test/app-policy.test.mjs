@@ -128,6 +128,8 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	assert.match(swift, /lockedSessionRefusal\(cmd: cmd, session: CGSessionCopyCurrentDictionary\(\)/, "helper must refuse UI commands while locked");
 	assert.match(swift, /keyboardTargetRefusalPid\(frontmostPid: NSWorkspace\.shared\.frontmostApplication\?\.processIdentifier, focusedPid: focusedPid/, "helper must refuse blocked frontmost or focused apps for keys");
 	assert.match(swift, /case "type", "key":\n\t\t\ttry refuseBlockedKeyboard\(\)/, "helper must refuse blocked apps before typing or keys");
+	assert.equal(swift.match(/if delivery == "hid" \{ try refuseBlockedKeyboardTarget\(blocked: blockedBundleIdList\(request\)\) \}/g)?.length, 2, "act typeText and keypress must refuse a blocked focused app under HID delivery");
+	assert.match(swift, /Every vertex, not just the endpoints[\s\S]*?refuseBlockedWindow\(at: CGPoint/, "desktop_input drag must check every path vertex");
 	assert.match(swift, /try refuseBlockedPointer\(at: point, blocked: blockedBundleIdList\(request\)\)/, "act coordinate input must refuse blocked windows");
 	assert.match(swift, /SCContentFilter\(display: display, excludingApplications: excluded, exceptingWindows: \[\]\)/, "display capture must exclude blocked apps");
 	assert.match(swift, /AXUIElementCopyElementAtPosition\(AXUIElementCreateSystemWide\(\)/, "pointer input must also hit-test through accessibility");
