@@ -39,6 +39,8 @@ export const drop = () => ({ kind: "drop" });
 export const silent = () => ({ kind: "silent" });
 /** Envelope profile only: reply with a different `protocolVersion` than the server's. */
 export const withProtocol = (protocolVersion, action = ok()) => ({ kind: "protocol", protocolVersion, action });
+/** Deliver `action`, then end the helper process `ms` later (the transport's `engine.onExit`). */
+export const exitAfter = (ms, action = ok()) => ({ kind: "exit", ms, action });
 /** Run `fn` (e.g. flip a flag, stop the server), then deliver `action`. */
 export const effect = (fn, action = ok()) => ({ kind: "effect", fn, action });
 
@@ -59,11 +61,13 @@ export function defaultDiagnostics(protocolVersion, overrides = {}) {
  * Protocol engine, transport-free. `handleLine(line, io)` parses one request line and plays the scripted
  * action through `io = { write(text), end(), sleep(ms) }`. `requests` records every parsed request.
  */
-export function createHelperEngine({ profile = "flat", protocolVersion = 7, handlers = {}, diagnostics = {} } = {}) {
+export function createHelperEngine({ profile = "flat", protocolVersion = 7, handlers = {}, diagnostics = {}, platform = "Windows" } = {}) {
 	const queues = new Map();
 	const engine = {
 		profile,
 		protocolVersion,
+		/** Envelope profile only: the name in the protocol-mismatch message ("Windows" or "Linux"). */
+		platform,
 		diagnostics: { ...diagnostics },
 		requests: [],
 		handlers: { ...handlers },
@@ -72,18 +76,41 @@ export function createHelperEngine({ profile = "flat", protocolVersion = 7, hand
 			engine.handlers[cmd] = handler;
 			queues.delete(cmd);
 		},
+		/** Called by the transport; the real helper exits ~0.2 s after replying to `shutdown`. */
+		onExit: undefined,
 		async handleLine(line, io) {
+			const trimmed = line.trim();
+			if (!trimmed) return;
+			const invalid = (message, id) => play(fail(message, "invalid_request"), io, id);
 			let request;
 			try {
-				request = JSON.parse(line);
-			} catch {
-				await play(fail("invalid json"), io, undefined);
+				request = JSON.parse(trimmed);
+			} catch (error) {
+				// Swift answers id "invalid"; Rust echoes the id it can extract, else "unknown".
+				await invalid(profile === "envelope" ? `Invalid request: ${error.message}` : "Input was not valid JSON", profile === "envelope" ? "unknown" : "invalid");
 				return;
 			}
-			const args = profile === "envelope" ? (request.args ?? {}) : omit(request, ["id", "cmd"]);
-			const parsed = { id: request.id, cmd: request.cmd, args, raw: request };
+			const isObject = request !== null && typeof request === "object" && !Array.isArray(request);
+			if (profile === "flat") {
+				if (!isObject) return await invalid("Request must be a JSON object", "invalid");
+				const parsed = { id: typeof request.id === "string" ? request.id : "invalid", cmd: request.cmd, args: omit(request, ["id", "cmd"]), raw: request };
+				engine.requests.push(parsed);
+				await play(await resolve(parsed), io, parsed.id);
+				return;
+			}
+			// Envelope (serde `Request`): protocolVersion number, id string, cmd string, args present.
+			const id = isObject && typeof request.id === "string" ? request.id : "unknown";
+			const missing = ["protocolVersion", "id", "cmd", "args"].find((key) => !isObject || !(key in request));
+			if (missing) return await invalid(`Invalid request: missing field \`${missing}\``, id);
+			if (typeof request.protocolVersion !== "number" || typeof request.id !== "string" || typeof request.cmd !== "string") {
+				return await invalid("Invalid request: invalid type", id);
+			}
+			if (request.protocolVersion !== protocolVersion) {
+				return await invalid(`Unsupported ${engine.platform} helper protocol ${request.protocolVersion}; expected ${protocolVersion}. Restart Pi to use the installed helper.`, id);
+			}
+			const parsed = { id, cmd: request.cmd, args: request.args, raw: request };
 			engine.requests.push(parsed);
-			await play(await resolve(parsed), io, parsed.id);
+			await play(await resolve(parsed), io, id);
 		},
 	};
 
@@ -91,8 +118,10 @@ export function createHelperEngine({ profile = "flat", protocolVersion = 7, hand
 		let handler = engine.handlers[request.cmd];
 		if (handler === undefined) {
 			if (request.cmd === "diagnostics") return ok(defaultDiagnostics(protocolVersion, engine.diagnostics));
-			if (request.cmd === "shutdown") return ok({});
-			return fail(`unknown command: ${request.cmd}`, "unknown_command");
+			// Real helpers reply, then exit ~0.2 s later (bridge.swift `shutdown`); relaunch is the test's job.
+			if (request.cmd === "shutdown") return exitAfter(200, ok({ shuttingDown: true }));
+			// Swift: `unknown_command`; both Rust helpers: `unsupported_command`. Same message text.
+			return fail(`Unknown command '${request.cmd}'`, profile === "envelope" ? "unsupported_command" : "unknown_command");
 		}
 		if (Array.isArray(handler)) {
 			const index = queues.get(request.cmd) ?? 0;
@@ -136,6 +165,10 @@ export function createHelperEngine({ profile = "flat", protocolVersion = 7, hand
 			case "protocol":
 				await play(action.action, io, id, action.protocolVersion);
 				return;
+			case "exit":
+				setTimeout(() => engine.onExit?.(), action.ms);
+				await play(action.action, io, id, version);
+				return;
 			case "effect":
 				await action.fn(engine);
 				await play(action.action, io, id, version);
@@ -157,13 +190,18 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Attach the engine to a duplex-ish `{on("data"), write, end}` byte stream, framing by newline. */
 function serveStream(engine, input, io) {
 	let buffer = "";
+	// Swift `processClient` handles one connection's lines in order; Rust helpers run requests concurrently.
+	let tail = Promise.resolve();
 	input.setEncoding?.("utf8");
 	input.on("data", (chunk) => {
 		buffer += chunk;
 		for (let newline = buffer.indexOf("\n"); newline >= 0; newline = buffer.indexOf("\n")) {
 			const line = buffer.slice(0, newline).trim();
 			buffer = buffer.slice(newline + 1);
-			if (line) void engine.handleLine(line, { ...io, sleep: delay });
+			if (!line) continue;
+			const run = () => engine.handleLine(line, { ...io, sleep: delay });
+			if (engine.profile === "flat") tail = tail.then(run, run);
+			else void run();
 		}
 	});
 }
@@ -190,6 +228,7 @@ export async function startFakeHelper({ socketPath, ...engineOptions }) {
 	const fake = {
 		engine,
 		socketPath,
+		relaunch: undefined,
 		get connections() {
 			return connections;
 		},
@@ -199,6 +238,13 @@ export async function startFakeHelper({ socketPath, ...engineOptions }) {
 		script: engine.script,
 		get diagnostics() {
 			return engine.diagnostics;
+		},
+		/**
+		 * After the helper exits (shutdown), bring the server back `delayMs` later with `diagnostics` patched in:
+		 * the launcher relaunching the app. Off by default (`relaunchAfterExit(false)` turns it off), like an external socket with nobody to relaunch it.
+		 */
+		relaunchAfterExit(options = {}) {
+			fake.relaunch = options === false ? undefined : { delayMs: 100, diagnostics: {}, ...options };
 		},
 		/** Destroy open connections but keep listening: the helper crashed and a client reconnects. */
 		disconnectAll() {
@@ -228,6 +274,14 @@ export async function startFakeHelper({ socketPath, ...engineOptions }) {
 			server = undefined;
 			if (closing) await new Promise((resolve) => closing.close(resolve));
 		},
+	};
+	engine.onExit = () => {
+		void fake.stop().then(() => {
+			if (fake.relaunch) setTimeout(() => {
+				Object.assign(engine.diagnostics, fake.relaunch.diagnostics);
+				void fake.start();
+			}, fake.relaunch.delayMs);
+		});
 	};
 	await fake.start();
 	return fake;
@@ -260,6 +314,7 @@ export function createFakeChild({ engine, stdout = "", stderr = "", exitCode, sp
 		return true;
 	};
 	if (engine) {
+		engine.onExit = () => child.exit(0);
 		serveStream(engine, child.stdin, {
 			write: (text) => child.stdout.write(text),
 			end: () => child.exit(1),

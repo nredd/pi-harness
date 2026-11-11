@@ -1,7 +1,7 @@
 // Drives `MacosHelperClient` and the activity-glow connection against `support/fake-helper.mjs`: real
 // unix socket and NDJSON framing, faked `spawn` (ps, open, setup script). No Swift helper runs.
 import assert from "node:assert/strict";
-import { accessSync, chmodSync, constants as fsConstants, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
@@ -19,7 +19,6 @@ import {
 	slow,
 	split,
 	startFakeHelper,
-	effect,
 } from "./support/fake-helper.mjs";
 
 // Cases that wait out the client's own fixed timers (30 x 100 ms probe loop, 400 ms restart pause, 2 s glow
@@ -62,7 +61,7 @@ async function load({ external, fake, spawn }) {
 	vi.resetModules();
 	vi.stubEnv("PI_COMPUTER_USE_HELPER_APP_PATH", appPath);
 	if (external) vi.stubEnv("PI_CU_SOCKET_PATH", fake.socketPath);
-	else delete process.env.PI_CU_SOCKET_PATH;
+	else vi.stubEnv("PI_CU_SOCKET_PATH", undefined);
 	if (spawn) {
 		vi.doMock("node:child_process", async (original) => ({ ...(await original()), spawn }));
 	}
@@ -133,11 +132,11 @@ describe("daemon commands over the socket", () => {
 		assert.equal(client.daemonAvailable, false);
 	});
 
-	test("times out on a silent or disconnected helper with a transport error", async () => {
-		const fake = await fakeOn({ handlers: { hang: silent(), crash: drop(), late: slow(400, ok({})) } });
+	test("times out on a silent or slow helper with a transport error", async () => {
+		const fake = await fakeOn({ handlers: { hang: silent(), late: slow(400, ok({})) } });
 		const { MacosHelperClient, HelperTransportError } = await load({ external: true, fake });
 		const client = new MacosHelperClient();
-		for (const cmd of ["hang", "crash", "late"]) {
+		for (const cmd of ["hang", "late"]) {
 			await assert.rejects(client.command(cmd, {}, { timeoutMs: 60 }), (error) => {
 				assert.ok(error instanceof HelperTransportError, cmd);
 				assert.equal(error.name, "HelperTransportError");
@@ -146,6 +145,23 @@ describe("daemon commands over the socket", () => {
 			});
 			assert.equal(client.daemonAvailable, false, `${cmd} forces a re-probe`);
 		}
+	});
+
+	// Known bug, filed as #725: `daemonCommand` registers no `close`/`end` handler, so a helper that
+	// disconnects without replying is only noticed when the command timeout fires. When #725 is fixed this
+	// should reject promptly with a `HelperTransportError`; flip the bound and delete this comment.
+	test("a helper that disconnects mid-command stalls until the command timeout (#725)", async () => {
+		const fake = await fakeOn({ handlers: { crash: drop() } });
+		const { MacosHelperClient, HelperTransportError } = await load({ external: true, fake });
+		const client = new MacosHelperClient();
+		const started = Date.now();
+		await assert.rejects(client.command("crash", {}, { timeoutMs: 300 }), (error) => {
+			assert.ok(error instanceof HelperTransportError);
+			assert.match(error.message, /timed out after 300ms/);
+			return true;
+		});
+		assert.ok(Date.now() - started >= 250, "the rejection came from the timeout, not from the disconnect");
+		assert.equal(client.daemonAvailable, false);
 	});
 
 	test("an abort signal cancels an in-flight command", async () => {
@@ -208,6 +224,7 @@ describe("daemon availability", () => {
 		const fake = await fakeOn();
 		const { MacosHelperClient, HELPER_APP_PATH } = await load({ external: true, fake });
 		const client = new MacosHelperClient();
+		fake.relaunchAfterExit();
 		await client.restart();
 		assert.deepEqual(
 			fake.requests.map((request) => request.cmd),
@@ -215,11 +232,22 @@ describe("daemon availability", () => {
 		);
 		assert.equal(fake.requests[1].raw.id.startsWith("req_"), true);
 
-		fake.script("shutdown", effect(() => fake.stop(), ok()));
+		// The default shutdown exits the fake; with no relaunch it stays down.
+		fake.relaunchAfterExit(false);
 		await assert.rejects(client.restart(), (error) => {
 			assert.equal(error.message, `pi-computer-use helper did not come back after restart. Helper app: ${HELPER_APP_PATH}`);
 			return true;
 		});
+	}, SLOW_MS);
+
+	test("restart ignores a failing shutdown and reconnects to the surviving daemon", async () => {
+		const fake = await fakeOn({ handlers: { shutdown: fail("cannot stop", "internal_error") } });
+		const { MacosHelperClient } = await load({ external: true, fake });
+		await new MacosHelperClient().restart();
+		assert.deepEqual(
+			fake.requests.map((request) => request.cmd),
+			["diagnostics", "shutdown", "diagnostics"],
+		);
 	}, SLOW_MS);
 
 	test("an external socket is never installed or launched", async () => {
@@ -297,7 +325,7 @@ describe("ensureProtocol", () => {
 		const fake = await fakeOn({ diagnostics: { executablePath: executable, ...diagnostics } });
 		const spawn = createFakeSpawn(ps ?? psFor(etime));
 		const mod = await load({ external: true, fake, spawn });
-		if (afterRestart) fake.script("shutdown", effect(() => Object.assign(fake.diagnostics, afterRestart), ok({})));
+		fake.relaunchAfterExit({ diagnostics: afterRestart });
 		return { fake, spawn, ...mod, client: new mod.MacosHelperClient() };
 	}
 
@@ -611,18 +639,42 @@ describe("activity glow connection", () => {
 });
 
 describe("helper app path resolution", () => {
-	test("defaults every probe to the host (env, home, system install, existsSync)", () => {
-		const system = path.join("/Applications", "pi-computer-use.app");
-		let systemInstallUsable = existsSync(system);
-		try {
-			accessSync("/Applications", fsConstants.W_OK);
-		} catch {
-			systemInstallUsable = false;
-		}
-		const expected = systemInstallUsable ? system : path.join(os.homedir(), "Applications", "pi-computer-use.app");
-		assert.equal(resolveMacosHelperAppPath({ env: {} }), expected);
+	test("an omitted system path is /Applications/pi-computer-use.app", () => {
+		const probed = [];
+		const resolved = resolveMacosHelperAppPath({
+			env: {},
+			homeDir: "/home/u",
+			fileExists: (candidate) => {
+				probed.push(candidate);
+				return false;
+			},
+		});
+		assert.deepEqual(probed, [path.join("/Applications", "pi-computer-use.app")]);
+		assert.equal(resolved, path.join("/home/u", "Applications", "pi-computer-use.app"));
+	});
+
+	test("an injected writability probe decides the system install", () => {
+		const system = "/x/pi-computer-use.app";
+		const base = { env: {}, homeDir: "/home/u", systemHelperAppPath: system, fileExists: () => true };
+		assert.equal(resolveMacosHelperAppPath({ ...base, directoryIsWritable: (dir) => dir === "/x" }), system);
+		assert.equal(resolveMacosHelperAppPath({ ...base, directoryIsWritable: () => false }), path.join("/home/u", "Applications", "pi-computer-use.app"));
+	});
+
+	test("an omitted home directory is os.homedir()", () => {
+		assert.equal(
+			resolveMacosHelperAppPath({ env: {}, systemHelperAppPath: "/x/pi-computer-use.app", fileExists: () => false }),
+			path.join(os.homedir(), "Applications", "pi-computer-use.app"),
+		);
+	});
+
+	test("an omitted env is process.env, and a blank override is ignored", () => {
+		vi.stubEnv("PI_COMPUTER_USE_HELPER_APP_PATH", "rel/custom.app");
+		assert.equal(resolveMacosHelperAppPath(), path.resolve("rel/custom.app"));
 		vi.stubEnv("PI_COMPUTER_USE_HELPER_APP_PATH", "  ");
-		assert.equal(resolveMacosHelperAppPath(), expected, "a blank override and no options use the same defaults");
+		assert.equal(
+			resolveMacosHelperAppPath({ homeDir: "/home/u", systemHelperAppPath: "/x/pi-computer-use.app", fileExists: () => false }),
+			path.join("/home/u", "Applications", "pi-computer-use.app"),
+		);
 	});
 
 	test("uses the real filesystem for the system install when no probes are injected", () => {
