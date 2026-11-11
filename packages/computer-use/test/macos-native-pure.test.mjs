@@ -124,6 +124,7 @@ check(!waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: { polls += 1; clock += 1
 check(polls == 2, "the wall-clock deadline stops after two stalled probes, not twenty-one")
 polls = 0
 check(waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: { polls += 1; return true }, sleepMs: { _ in }, nowMs: { 0 }), "already-focused target returns at once")
+check(polls == 1, "no polling when focus already holds")
 
 // selectText range validation, paste clipboard fence and outcome classification
 check(selectionRangeIssue(start: 0, length: 0, valueLength: 5) == nil, "caret at the start is valid")
@@ -142,7 +143,6 @@ check(pasteOutcome(valueBefore: nil, valueAfter: "a") == "unknown" && pasteOutco
 check(selectionOutcome(requested: (2, 3), readBack: (2, 3)) == "worked", "matching read-back proves the selection")
 check(selectionOutcome(requested: (2, 3), readBack: (0, 0)) == "didnt", "a rewritten range is a failure")
 check(selectionOutcome(requested: (2, 3), readBack: nil) == "unknown", "no read-back is unknown")
-check(polls == 1, "no polling when focus already holds")
 var axCalls = 0
 _ = targetHoldsFocus(frontmostPid: 10, focusedPid: { axCalls += 1; return 7 }(), targetPid: 7)
 check(axCalls == 0, "AX focus is not queried while another app is frontmost")

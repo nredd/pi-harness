@@ -2728,7 +2728,7 @@ final class Bridge {
 		let windowChanged = beforeFocusedWindow != focusedWindowSummary(pid: pid) || beforeSheetCount != afterSheetCount
 		var outcome = preflightCapsUnknown ? "unknown" : "unknown"
 		var evidence: [String: Any] = [:]
-		if let element, action == "press" || action == "click" {
+		if let element, action == "press" || action == "click" || action == "secondaryAction" {
 			let afterValue = stringAttribute(element, attribute: kAXValueAttribute as CFString)
 			let afterSelected = stringAttribute(element, attribute: kAXSelectedTextAttribute as CFString)
 			if beforeValue != afterValue || beforeSelected != afterSelected || windowChanged {
@@ -2754,11 +2754,7 @@ final class Bridge {
 			for type in item.types { if let data = item.data(forType: type) { entry[type] = data } }
 			return entry
 		}
-		pasteboard.clearContents()
-		guard pasteboard.setString(text, forType: .string) else {
-			throw BridgeFailure(message: "The clipboard rejected the text", code: "clipboard_write_failed")
-		}
-		let ownChangeCount = pasteboard.changeCount
+		var ownChangeCount = Int.min
 		func restore() -> Bool {
 			guard clipboardRestoreIsSafe(changeCountAfterWrite: ownChangeCount, changeCountNow: pasteboard.changeCount) else { return false }
 			pasteboard.clearContents()
@@ -2767,9 +2763,16 @@ final class Bridge {
 				for (type, data) in entry { item.setData(data, forType: type) }
 				return item
 			}
-			if !items.isEmpty { pasteboard.writeObjects(items) }
-			return true
+			return items.isEmpty || pasteboard.writeObjects(items)
 		}
+		pasteboard.clearContents()
+		ownChangeCount = pasteboard.changeCount
+		guard pasteboard.setString(text, forType: .string) else {
+			// The clear already wiped the clipboard: put it back before failing.
+			_ = restore()
+			throw BridgeFailure(message: "The clipboard rejected the text", code: "clipboard_write_failed")
+		}
+		ownChangeCount = pasteboard.changeCount
 		do {
 			try body()
 		} catch {

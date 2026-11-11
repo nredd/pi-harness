@@ -116,11 +116,11 @@ function secondaryActionName(action: UiAction, node: OutlineNode): string {
 
 function selection(action: UiAction, node: OutlineNode): { start: number; length: number } {
 	if (!node.isTextInput && !node.canSetValue) throw new Error(`${node.ref} is not a text element, so selectText is unavailable.`);
-	const start = action.start;
+	const start = action.start ?? Number.NaN;
 	const length = action.length ?? 0;
-	if (!Number.isInteger(start) || start! < 0) throw new Error("selectText.start must be a non-negative integer.");
+	if (!Number.isInteger(start) || start < 0) throw new Error("selectText.start must be a non-negative integer.");
 	if (!Number.isInteger(length) || length < 0) throw new Error("selectText.length must be a non-negative integer.");
-	return { start: start!, length };
+	return { start, length };
 }
 
 function containsEditable(node: OutlineNode): boolean {
