@@ -181,7 +181,7 @@ describe("ensureMacosReady", () => {
 		const commands = fakes.macos.command.mock.calls.map(([command]) => command);
 		assert.deepEqual(commands.filter((command) => command !== "checkPermissions"), ["registerPermissions", "openPermissionPane", "openPermissionPane"]);
 		assert.deepEqual(fakes.macos.command.mock.calls.find(([command]) => command === "registerPermissions"), ["registerPermissions", {}, { signal, timeoutMs: 15_000 }]);
-		assert.deepEqual(fakes.macos.command.mock.calls.filter(([command]) => command === "openPermissionPane").map(([, args]) => args), [{ kind: "accessibility" }, { kind: "screenRecording" }]);
+		assert.deepEqual(fakes.macos.command.mock.calls.filter(([command]) => command === "openPermissionPane").map(([, args, options]) => [args, options]), [[{ kind: "accessibility" }, { signal }], [{ kind: "screenRecording" }, { signal }]], "openPermissionPane forwards the signal");
 		assert.deepEqual(fakes.macos.restart.mock.calls, [[signal], [signal]]);
 		assert.deepEqual(ctx.notices, [["Still missing after restart: accessibility and screenRecording. If these permissions were enabled before this install/update, macOS invalidated the old grants because pi-computer-use.app was re-signed. Re-enable both toggles for the newly signed helper. If a toggle is already on, switch it off and on again. Then choose Recheck again.", "warning"], ["pi-computer-use is ready.", "info"]]);
 		assert.match(ctx.prompts[0].prompt, /^pi-computer-use needs macOS permissions for its helper app\.\nAccessibility: missing; Screen Recording: missing; \(Screen Recording reads granted/);
