@@ -297,26 +297,28 @@ describe("Windows helper client", () => {
 		await assert.rejects(client.command("diagnostics"), (error) => error.code === "ERR_STREAM_DESTROYED");
 	});
 
-	test("#725: a child exiting with a command in flight leaves it waiting for the command timeout", async () => {
+	test("#725: a child exiting with a command in flight rejects at once with helper_disconnected", async () => {
 		install();
 		const engine = envelope("Windows", { crash: silent() });
 		const { client, children } = await windows({ helper: (list) => realisticChild(list, { engine }) });
-		await client.ensureInstalled();
-		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-		let settled = false;
-		const outcome = client.command("crash", {}, { timeoutMs: 1000 }).then(() => assert.fail("resolved"), (error) => {
-			settled = true;
-			throw error;
-		});
-		const rejection = assert.rejects(outcome, /Helper command 'crash' timed out after 1000ms\./);
-		await vi.waitFor(() => assert.equal(engine.requests.length, 1), { interval: 1 });
+		// A long timeout: only the disconnect can settle this before the test's own deadline.
+		const pending = client.command("crash", {}, { timeoutMs: 600_000 });
+		await vi.waitFor(() => assert.equal(engine.requests.length, 1));
 		children[0].exit(1);
-		await vi.advanceTimersByTimeAsync(900);
-		// Current behavior: the exit does not reject the command; only its timeout does. When #725 lands this
-		// becomes an immediate error on exit and this test must be updated.
-		assert.equal(settled, false);
-		await vi.advanceTimersByTimeAsync(100);
-		await rejection;
+		await assert.rejects(pending, (error) => error.code === "helper_disconnected" && /exited before replying/.test(error.message));
+	});
+
+	test("a dead child's close does not fail a command pending on its successor", async () => {
+		install();
+		const engine = envelope("Windows", { look: ok(1), hang: silent() });
+		const { client, children } = await windows({ helper: (list) => realisticChild(list, { engine }) });
+		await client.command("look");
+		children[0].kill();
+		const pending = client.command("hang", {}, { timeoutMs: 150 });
+		await vi.waitFor(() => assert.equal(children.length, 2));
+		await vi.waitFor(() => assert.equal(engine.requests.at(-1).cmd, "hang"));
+		children[0].emit("close", 1, null);
+		await assert.rejects(pending, (error) => error.code === undefined && /timed out after 150ms\./.test(error.message));
 	});
 
 	test("after the child exits, the next command spawns a fresh helper", async () => {
@@ -773,19 +775,14 @@ describe("Linux helper client", () => {
 		const first = client.command("hang");
 		await vi.waitFor(() => assert.equal(engine.requests.at(-1).cmd, "hang"));
 		children[0].emit("exit", null, "SIGKILL");
+		children[0].emit("close", null, "SIGKILL");
 		await assert.rejects(first, /Linux helper exited on SIGKILL\./);
 		const second = client.command("hang");
 		await vi.waitFor(() => assert.equal(children.length, 2));
 		await vi.waitFor(() => assert.equal(engine.requests.at(-1).cmd, "hang"));
 		children[1].emit("exit", null, null);
+		children[1].emit("close", null, null);
 		await assert.rejects(second, /Linux helper exited with code unknown\./);
-	});
-
-	test("a helper that drops the connection mid-command rejects with its exit code", async () => {
-		install();
-		const engine = linuxEngine({ crash: drop() });
-		const { client } = await linux({ helper: (list) => realisticChild(list, { engine }) });
-		await assert.rejects(client.command("crash"), /Linux helper exited with code 1\./);
 	});
 
 	test("a runtime child error rejects in-flight commands and the next command respawns", async () => {
@@ -810,6 +807,7 @@ describe("Linux helper client", () => {
 		const pending = client.command("hang", {}, { timeoutMs: 100 });
 		await vi.waitFor(() => assert.equal(engine.requests.at(-1).cmd, "hang"));
 		children[0].emit("exit", 1, null);
+		children[0].emit("close", 1, null);
 		children[0].emit("error", new Error("stale"));
 		await assert.rejects(pending, /Helper command 'hang' timed out after 100ms\./);
 		assert.equal(helperSpawns(spawn).length, 2);

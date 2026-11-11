@@ -475,6 +475,23 @@
 			}
 		},
 		{
+			"id": "linux-helper-dead-arm-removal",
+			"purpose": "Delete unreachable LinuxHelperClient guards instead of testing them: the already-aborted check in runProcess, the redundant processPromise re-check and the identity checks on single-flight setupAbort/processPromise; the Linux setup SIGKILL grace stays proven",
+			"files": [
+				"src/platform/linux/helper.ts",
+				"test/stdio-helper-clients.test.mjs",
+				"test/wsl-detection.test.mjs",
+				"test/support/fake-helper.mjs"
+			],
+			"check": "test/stdio-helper-clients.test.mjs",
+			"dropControls": ["Linux setup escalates to SIGKILL after the grace (#713)"],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "Coverage-driven dead code removal (nredd/pi-harness#713); not filed"
+			}
+		},
+		{
 			"id": "helper-disconnect-windows",
 			"purpose": "Reject pending Windows helper commands with coded helper_disconnected when the helper process closes, instead of waiting out the command timeout",
 			"files": ["src/platform/windows/helper.ts", "test/windows-helper-client.test.mjs"],
@@ -658,6 +675,9 @@
 		"test/outline-store.test.mjs",
 		"test/platform-linux.test.mjs",
 		"test/linux-helper-client.test.mjs",
+		"test/stdio-helper-clients.test.mjs",
+		"test/wsl-detection.test.mjs",
+		"test/support/fake-helper.mjs",
 		"test/macos-helper-client.test.mjs",
 		"test/platform-windows.test.mjs",
 		"test/windows-helper-client.test.mjs",
