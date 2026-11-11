@@ -53,12 +53,16 @@ it("keeps spawn-time HOME while isolating each Pi and XDG fixture", async () => 
 		expect(process.env.HOME).toBe(launchHome);
 		expect(process.env.PI_CODING_AGENT_DIR).toBe(join(fixture.root, "agent"));
 		expect(process.env.XDG_CONFIG_HOME).toBe(join(fixture.root, ".config"));
+		// Subagent task dirs follow os.tmpdir(), so they land in the fixture and go with it (#678).
+		expect(tmpdir()).toBe(join(fixture.root, "tmp"));
+		expect(existsSync(tmpdir())).toBe(true);
 		expect(fixture.root).not.toBe(home.root);
 	} finally {
 		await fixture.cleanup();
 	}
 	expect(process.env.PI_CODING_AGENT_DIR).toBe(join(home.root, "agent"));
 	expect(process.env.XDG_CONFIG_HOME).toBe(join(home.root, ".config"));
+	expect(tmpdir()).toBe(join(home.root, "tmp"));
 });
 
 it("loads real fork and owned entries against one host", async () => {
