@@ -11,7 +11,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Changed
 
-- `LinuxHelperClient` drops three unreachable guards (an already-aborted check in `runProcess`, whose only caller passes a fresh signal, and two identity checks on single-flight promises) and shares one settle handler per promise; behavior is unchanged (nredd/pi-harness#713, #645).
+- `LinuxHelperClient` drops unreachable guards (an already-aborted check in `runProcess`, whose only caller passes a fresh signal, a redundant re-check in `process()` and identity checks on single-flight promises) and shares one settle handler per promise; behavior is unchanged (nredd/pi-harness#713, #645).
 - `scripts/setup-helper.mjs` exports `main(argv, deps)` (host seams injected, `import.meta` entry guard only at top level) so it is measured in process. CLI behavior is unchanged; two unreachable arms (a non-darwin check in the local signing path, a duplicate bundle-name check in archive search) are gone (nredd/pi-harness#704, #645).
 
 ### Fixed
