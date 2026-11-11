@@ -368,8 +368,8 @@ class FileCoverage:
     uncovered_functions: int
     branches: int
     uncovered_branches: int
-    statements: int = 0
-    uncovered_statements: int = 0
+    statements: int | None = None
+    uncovered_statements: int | None = None
 
 
 def split_function_hits(value: str) -> tuple[int, str]:
@@ -1393,7 +1393,7 @@ def check_statement_cap(
         raise ValueError("Missing statement cap: this signal must declare `statements` and `json-summary`")
     if cap.statements is not None and not declared:
         raise ValueError("Statement producer missing: a statement cap is declared without `json-summary`")
-    if declared and not sum(counters.statements for counters in records.values()):
+    if declared and not sum(counters.statements or 0 for counters in records.values()):
         raise ValueError("Statement producer missing: the summary has no statements")
 
 
@@ -1470,7 +1470,7 @@ def account(
                 uncovered_lines = sum(c.uncovered_lines for c in records.values())
                 uncovered_functions = sum(c.uncovered_functions for c in records.values())
                 uncovered_branches = sum(c.uncovered_branches for c in records.values())
-                uncovered_statements = sum(c.uncovered_statements for c in records.values())
+                uncovered_statements = sum(c.uncovered_statements or 0 for c in records.values())
                 for path, counters in sorted(records.items()):
                     item = {"package": name, "signal": signal_name, "os": runner_os, "file": path} | vars(
                         counters
@@ -1710,14 +1710,16 @@ def main() -> int:
         label = f"{result['package']}/{result['signal']}"
         counters = totals.setdefault(label, {})
         for metric in FileCoverage.__dataclass_fields__:
-            value = cast(int, result[metric])
-            counters[metric] = counters.get(metric, 0) + value
+            value = cast(int | None, result[metric])
+            # Null (statements of a signal that reads none) stays absent rather than reading as 0.
+            if value is not None:
+                counters[metric] = counters.get(metric, 0) + value
     # A producer without branch or statement records proposes no such cap; the checks would reject one.
     floors = {
         label: {
             args.os: {"lines": counts["uncovered_lines"], "functions": counts["uncovered_functions"]}
             | ({"branches": counts["uncovered_branches"]} if counts["branches"] else {})
-            | ({"statements": counts["uncovered_statements"]} if counts["statements"] else {})
+            | ({"statements": counts["uncovered_statements"]} if counts.get("statements") else {})
         }
         for label, counts in totals.items()
     }

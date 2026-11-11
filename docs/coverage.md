@@ -58,7 +58,9 @@ LCOV has no statement records, so Istanbul and V8 Vitest producers also write `j
 (`coverage-summary.json` next to `lcov.info`; `reporters` in the policy, `test.coverage.reporter` in each config
 and `scripts/run-vitest.ts bun` move together). `coverage_accounting.py` reads each file's `statements`
 total and covered count from it, keyed by resolved path against the same scoped LCOV record set, and adds
-`statements`/`uncovered_statements` to every file and signal total in `coverage/summary.json`.
+`statements`/`uncovered_statements` to the file records and signal totals in `coverage/summary.json`
+for signals that read a summary. Signals that don't (coverage.py, native `bun test`) report `null` per file
+and omit the total, so an unmeasured counter never reads as fully covered.
 `max_uncovered.<os>.statements` follows `branches`: the base ratchet only lets it go down, dropping a key the
 base had is a weakening, and `target.statements` is 0, so every 100-percent primary is held to 0 uncovered
 statements. Every enforced primary and Bun Vitest signal caps 0. `computer-use-vitest` caps its measured

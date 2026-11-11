@@ -7,6 +7,7 @@ References:
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -14,7 +15,7 @@ import pytest
 from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from coverage_fixtures import ROOT, policy, setup_report, statement_policy, write_summary
+from coverage_fixtures import ROOT, SCRIPT, commit_base, policy, setup_report, statement_policy, write_summary
 
 from coverage_accounting import Policy, account, check_ratchet, signal_comparisons
 
@@ -72,6 +73,36 @@ def test_fully_covered_statements_pass_and_are_reported(tmp_path: Path) -> None:
     comparison = signal_comparisons(statement_policy(1), totals, sys.platform)["example/primary"]
     assert comparison["reference"] == {"lines": 0, "functions": 0, "statements": 1}
     assert comparison["delta"] == {"lines": 0, "functions": 0, "statements": 0}
+
+
+def test_signals_without_statements_report_null_not_zero(tmp_path: Path) -> None:
+    """Keep unmeasured statements out of the per-file records and totals.
+
+    Parameters:
+        tmp_path (Path): Disposable report root.
+    Returns:
+        None: A signal that reads no summary reports null statements, not a clean zero.
+    Raises:
+        AssertionError: Unmeasured statements read as fully covered.
+    """
+    setup_report(tmp_path)
+    cfg = statement_policy(None, producer="coverage.py", reporters=["text", "lcov"])
+    results, errors = account(tmp_path, cfg)
+    assert errors == []
+    assert [(r["statements"], r["uncovered_statements"]) for r in results] == [(None, None)]
+    commit_base(tmp_path, cfg)
+    summary = tmp_path / "summary.json"
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPT), "--root", str(tmp_path), "--measure", "--summary", str(summary)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    document = json.loads(summary.read_text())
+    assert "statements" not in document["packages"]["example/primary"]
+    assert "statements" not in document["measured_floors"]["example/primary"][sys.platform]
+    assert document["files"][0]["statements"] is None
 
 
 def test_relative_summary_keys_resolve_against_the_package_root(tmp_path: Path) -> None:
