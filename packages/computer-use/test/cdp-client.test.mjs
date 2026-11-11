@@ -288,11 +288,11 @@ describe("connection lifecycle", () => {
 		await assert.rejects(cdpMouseForContext("browser:fake", 1n, 2, "mousePressed"), TypeError);
 	});
 
-	test("the server answers client pings and echoes the close handshake", async () => {
+	test("the client answers a server ping and echoes the close handshake", async () => {
 		const fake = await fakeBrowser();
 		const tab = await connectedTab();
 		fake.connections[0].sendFrame(9, "hi");
-		await flush(tab);
+		await vi.waitFor(() => assert(fake.connections[0].received.some((frame) => frame.opcode === 10 && frame.payload.toString() === "hi")));
 		tab.close();
 		await vi.waitFor(() => assert.equal(fake.connections[0].closed, true));
 		assert(fake.connections[0].received.some((frame) => frame.opcode === 8));
@@ -626,6 +626,12 @@ describe("tab lookup by window", () => {
 		fake.setTargets([{ id: "a", title: "A" }, { id: "b", title: "B" }]);
 		assert.equal(await cdpTabForWindow("Neither"), undefined);
 		assert.equal(await cdpTabForWindow(""), undefined);
+	});
+
+	test("an untitled tab never matches a window title", async () => {
+		await fakeBrowser({ targets: [{ id: "blank", title: "" }, { id: "docs", title: "Docs" }] });
+		assert.equal(await cdpTabForWindow("Mail"), undefined);
+		assert.equal((await cdpTabForWindow("Docs"))?.targetId, "docs");
 	});
 
 	test("an exact title beats prefix matches", async () => {

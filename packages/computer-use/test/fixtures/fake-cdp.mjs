@@ -360,10 +360,6 @@ export async function startFakeCdp({ port = 0, id = "fake", title = "Fake", url 
 					socket.end(websocketFrame(frame.payload, OPCODE.close));
 					continue;
 				}
-				if (frame.opcode === OPCODE.ping) {
-					connection.sendFrame(OPCODE.pong, frame.payload);
-					continue;
-				}
 				if (frame.opcode === OPCODE.text || frame.opcode === OPCODE.continuation) fragments.push(frame.payload);
 				else continue;
 				if (!frame.fin) continue;
