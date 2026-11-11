@@ -46,18 +46,14 @@ The in-repo legacy benchmark harness was removed because it targeted old direct 
 
 ## Commit messages
 
-Use:
-
-```text
-feat|chore|refactor|fix(<scope>): <summary>
-```
+Use a capitalized imperative subject, at most 72 characters, with no trailing period and no conventional-commit prefix (`feat:`, `fix(scope):`). `scripts/check-commit-messages.mjs` enforces this.
 
 Examples:
 
 ```text
-feat(scene): add label association
-fix(config): document strict AX env vars
-refactor(extension): simplify public tool surface
+Add label association to scene output
+Document strict AX env vars
+Simplify the public tool surface
 ```
 
 Check a range locally with:
