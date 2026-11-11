@@ -603,8 +603,8 @@ and Bun are 0 uncovered branches on darwin and on linux (ubuntu-24.04 and wsl2, 
 
 The in-process `@nredd/pi-stack-tests` reviewer suite executes real Pi `grep`/`find` tools
 under both Node and Bun. Each launcher gets a fresh disposable home, so a managed binary
-fetched during the Node pass is not available to Bun. Ubuntu owned CI installs
-`ripgrep` and `fd-find` via apt before tests (skipped when the image already has them; bounded, see `docs/ci.md`). macOS uses SHA-pinned `taiki-e/install-action`
+fetched during the Node pass is not available to Bun. Ubuntu and macOS owned CI
+install them before tests with SHA-pinned `taiki-e/install-action` (no apt mirror on the path, see `docs/ci.md`)
 with exact `ripgrep@14.1.1` and `fd-find@10.5.0` versions (its cargo-binstall fallback for these
 crates). `BINSTALL_DISABLE_STRATEGIES=compile` makes a missing prebuilt fail the step instead of
 compiling from source; `fd-find` before 10.4.2 has no binstall metadata matching its release

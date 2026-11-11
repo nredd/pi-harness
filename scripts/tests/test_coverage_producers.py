@@ -333,7 +333,7 @@ def test_accounting_and_artifacts_follow_tests_even_on_failure() -> None:
 
 
 def test_reviewer_dependencies_are_provisioned_before_owned_tests() -> None:
-    """Require offline reviewer reads and explicit Ubuntu binary provisioning.
+    """Require offline reviewer reads and prebuilt reviewer binaries on Ubuntu and macOS.
 
     Parameters:
         None.
@@ -344,23 +344,19 @@ def test_reviewer_dependencies_are_provisioned_before_owned_tests() -> None:
     """
     shard, _ = owned_jobs()
     owned = yaml.safe_dump(shard, width=1000)
-    install = shard.index(step_named(shard, "Install reviewer read dependencies (Ubuntu)"))
+    install_step = step_named(shard, "Install reviewer read dependencies")
+    install = shard.index(install_step)
     verify = shard.index(step_named(shard, "Verify reviewer read dependencies"))
     assert install < verify < shard.index(step_named(shard, "Owned gate "))
-    assert "install --yes ripgrep fd-find" in owned
-    ubuntu = step_named(shard, "Install reviewer read dependencies (Ubuntu)")
-    assert ubuntu["if"] == "matrix.os == 'ubuntu-24.04'"
-    assert ubuntu["timeout-minutes"] == 5
-    assert "command -v rg" in ubuntu["run"]
-    assert_bounded_apt(ubuntu["run"])
+    # Prebuilt GitHub release binaries on Ubuntu and macOS: no apt mirror on the critical path.
+    assert install_step["if"] == "matrix.os == 'ubuntu-24.04' || runner.os == 'macOS'"
+    assert install_step["uses"] == "taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283"
+    assert install_step["with"]["tool"] == "ripgrep@14.1.1,fd-find@10.5.0"
+    assert install_step["env"]["BINSTALL_DISABLE_STRATEGIES"] == "compile"
+    assert "run" not in install_step
     apt = (ROOT / "scripts/wsl2_apt.sh").read_text()
     packages = apt.split("packages=(", 1)[1].splitlines()[0].rstrip(")").split()
     assert {"ripgrep", "fd-find"}.issubset(packages)
-    mac_install = shard.index(step_named(shard, "Install reviewer read dependencies (macOS)"))
-    assert mac_install < verify
-    assert "tool: ripgrep@14.1.1,fd-find@10.5.0" in owned
-    assert "BINSTALL_DISABLE_STRATEGIES: compile" in owned
-    assert "taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283" in owned
     assert "rg --version" in owned
     assert "fdfind --version" in owned
     reviewer = (ROOT / "integration/inprocess/reviewer.test.ts").read_text()
