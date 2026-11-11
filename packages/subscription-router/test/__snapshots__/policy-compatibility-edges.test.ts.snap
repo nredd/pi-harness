@@ -1,0 +1,4203 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`preserves boundary route, full status, decision JSON/text, confirmation and wake receipts 1`] = `
+"[
+  {
+    "state": "hysteresis-below",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.59999999,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: score 0.500, limiting weekly\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.500, limiting weekly\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "hysteresis-equal",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: score 0.500, limiting weekly\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.500, limiting weekly\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "hysteresis-above",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.60000001,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: score 0.500, limiting weekly\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.500, limiting weekly\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "roundoff-clamp",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.002000000000002,
+                "window": "weekly",
+                "roundoff": 1.7763568394002505e-14
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.0024000000000001798,
+                "window": "weekly",
+                "roundoff": 1.7763568394002505e-14
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.002000000000002,
+                "window": "weekly",
+                "roundoff": 1.7763568394002505e-14
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.002, limiting weekly, data 0m old\\n    b/terra: score 0.002, limiting weekly, data 0m old\\n    a/opus: score 0.002, limiting weekly, data 0m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: score 0.002, limiting weekly\\n  b/terra: score 0.002, limiting weekly\\n  a/opus: score 0.002, limiting weekly\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.002, limiting weekly, data 0m old\\n    b/terra: score 0.002, limiting weekly, data 0m old\\n    a/opus: score 0.002, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "roundoff-tiny",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 9.992007221626409e-16,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 1.9984014443252818e-15,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 9.992007221626409e-16,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.000, limiting weekly, data 0m old\\n    b/terra: score 0.000, limiting weekly, data 0m old\\n    a/opus: score 0.000, limiting weekly, data 0m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: score 0.000, limiting weekly\\n  b/terra: score 0.000, limiting weekly\\n  a/opus: score 0.000, limiting weekly\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.000, limiting weekly, data 0m old\\n    b/terra: score 0.000, limiting weekly, data 0m old\\n    a/opus: score 0.000, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "missing-reset",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: score 0.500, limiting weekly\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.500, limiting weekly\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "missing-duration",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: score 0.500, limiting weekly\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.500, limiting weekly\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "reset-equal",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "fallback",
+                "reason": "no applicable active windows"
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "fallback",
+                "reason": "no applicable active windows"
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: fallback: no applicable active windows, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: no applicable active windows, data 0m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: fallback: no applicable active windows\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: fallback: no applicable active windows\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: fallback: no applicable active windows, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: no applicable active windows, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "reset-past",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "fallback",
+                "reason": "no applicable active windows"
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "fallback",
+                "reason": "no applicable active windows"
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: fallback: no applicable active windows, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: no applicable active windows, data 0m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: fallback: no applicable active windows\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: fallback: no applicable active windows\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: fallback: no applicable active windows, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: no applicable active windows, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "grace-before",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.99,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16,
+                "stale": 899999
+              },
+              "ageMs": 899999
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.99,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16,
+                "stale": 899999
+              },
+              "ageMs": 899999
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.990, limiting weekly, stale 14m, data 14m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.990, limiting weekly, stale 14m, data 14m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: score 0.990, limiting weekly, stale 14m\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.990, limiting weekly, stale 14m\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.990, limiting weekly, stale 14m, data 14m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.990, limiting weekly, stale 14m, data 14m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "grace-equal",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.99,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16,
+                "stale": 900000
+              },
+              "ageMs": 900000
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.99,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16,
+                "stale": 900000
+              },
+              "ageMs": 900000
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.990, limiting weekly, stale 15m, data 15m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.990, limiting weekly, stale 15m, data 15m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: score 0.990, limiting weekly, stale 15m\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.990, limiting weekly, stale 15m\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.990, limiting weekly, stale 15m, data 15m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.990, limiting weekly, stale 15m, data 15m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "grace-after",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "fallback",
+                "reason": "usage stale"
+              },
+              "ageMs": 900001
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "fallback",
+                "reason": "usage stale"
+              },
+              "ageMs": 900001
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: fallback: usage stale, data 15m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: usage stale, data 15m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: fallback: usage stale\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: fallback: usage stale\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: fallback: usage stale, data 15m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: usage stale, data 15m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "stale-unlimited",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "fallback",
+                "reason": "no applicable active windows"
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "fallback",
+                "reason": "no applicable active windows"
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: fallback: no applicable active windows, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: no applicable active windows, data 0m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: fallback: no applicable active windows\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: fallback: no applicable active windows\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: fallback: no applicable active windows, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: no applicable active windows, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "family-overlap",
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "b/terra",
+          "candidates": [
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.4,
+                "window": "opus-weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": [
+            {
+              "model": "a/sonnet",
+              "reason": "sonnet-weekly exhausted"
+            }
+          ]
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> b/terra (ordered)\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.400, limiting opus-weekly, data 0m old\\n    a/sonnet: sonnet-weekly exhausted"
+    ],
+    "status": [
+      "router/edges (ordered) -> b/terra\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.400, limiting opus-weekly\\n  a/sonnet: sonnet-weekly exhausted\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> b/terra (ordered)\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.400, limiting opus-weekly, data 0m old\\n    a/sonnet: sonnet-weekly exhausted"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "state": "all-blocked",
+    "route": {
+      "name": "ChainExhaustedError",
+      "message": "router/edges: every model is unavailable (a/sonnet: weekly exhausted; b/terra: weekly exhausted; a/opus: weekly exhausted). Earliest reset 2030-01-01T01:00:00Z."
+    },
+    "entries": [],
+    "decisionText": [],
+    "status": [
+      "router/edges (ordered) -> exhausted\\n  a/sonnet: weekly exhausted\\n  b/terra: weekly exhausted\\n  a/opus: weekly exhausted"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": false,
+      "resetAt": 1893459600000,
+      "wait": true
+    }
+  },
+  {
+    "state": "confirmed-retry",
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "retry",
+          "chosen": "b/terra",
+          "candidates": [
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": [
+            {
+              "model": "a/sonnet",
+              "reason": "weekly exhausted, resets 2030-01-01T01:00:00Z"
+            },
+            {
+              "model": "a/opus",
+              "reason": "weekly exhausted, resets 2030-01-01T01:00:00Z"
+            }
+          ]
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges retry -> b/terra (ordered)\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/sonnet: weekly exhausted, resets 2030-01-01T01:00:00Z\\n    a/opus: weekly exhausted, resets 2030-01-01T01:00:00Z"
+    ],
+    "status": [
+      "router/edges (ordered) -> b/terra\\n  b/terra: score 0.600, limiting weekly\\n  a/sonnet: weekly exhausted, resets 2030-01-01T01:00:00Z\\n  a/opus: weekly exhausted, resets 2030-01-01T01:00:00Z\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges retry -> b/terra (ordered)\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/sonnet: weekly exhausted, resets 2030-01-01T01:00:00Z\\n    a/opus: weekly exhausted, resets 2030-01-01T01:00:00Z"
+    ],
+    "reads": [
+      {
+        "provider": "a",
+        "fresh": true,
+        "notBefore": 1893456000000,
+        "aborted": false
+      }
+    ],
+    "blocks": [
+      {
+        "provider": "a",
+        "window": "weekly",
+        "until": 1893459600000,
+        "resetKnown": true,
+        "confirmations": 1
+      }
+    ],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "state": "partial-retry",
+    "route": {
+      "name": "Error",
+      "message": "subscription-router: refusing to replay a partial response; retry explicitly."
+    },
+    "entries": [],
+    "decisionText": [],
+    "status": [
+      "router/edges (ordered) -> b/terra\\n  b/terra: score 0.600, limiting weekly\\n  a/sonnet: weekly exhausted, resets 2030-01-01T01:00:00Z\\n  a/opus: weekly exhausted, resets 2030-01-01T01:00:00Z"
+    ],
+    "reads": [
+      {
+        "provider": "a",
+        "fresh": true,
+        "notBefore": 1893456000000,
+        "aborted": false
+      }
+    ],
+    "blocks": [
+      {
+        "provider": "a",
+        "window": "weekly",
+        "until": 1893459600000,
+        "resetKnown": true,
+        "confirmations": 1
+      }
+    ],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "state": "nonquota-retry",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [],
+    "decisionText": [],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: score 0.500, limiting weekly\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.500, limiting weekly"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "cancelled",
+    "route": {
+      "name": "Error",
+      "message": "synthetic cancellation"
+    },
+    "entries": [],
+    "decisionText": [],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: score 0.500, limiting weekly\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.500, limiting weekly"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "state": "cancelled-confirmation",
+    "route": {
+      "name": "Error",
+      "message": "synthetic cancellation"
+    },
+    "entries": [],
+    "decisionText": [],
+    "status": [
+      "router/edges (ordered) -> b/terra\\n  b/terra: score 0.600, limiting weekly\\n  a/sonnet: weekly exhausted\\n  a/opus: weekly exhausted"
+    ],
+    "reads": [
+      {
+        "provider": "a",
+        "fresh": true,
+        "notBefore": 1893456000000,
+        "aborted": true
+      }
+    ],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "state": "no-credentials",
+    "route": {
+      "name": "ChainExhaustedError",
+      "message": "router/edges: every model is unavailable (a/sonnet: not available (unknown model or no credentials); b/terra: not available (unknown model or no credentials); a/opus: not available (unknown model or no credentials)). Earliest reset an unknown time."
+    },
+    "entries": [],
+    "decisionText": [],
+    "status": [
+      "router/edges (ordered) -> exhausted\\n  a/sonnet: not available (unknown model or no credentials)\\n  b/terra: not available (unknown model or no credentials)\\n  a/opus: not available (unknown model or no credentials)"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "hysteresis-below",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.59999999,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: score 0.500, limiting weekly\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.500, limiting weekly\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "hysteresis-equal",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: score 0.500, limiting weekly\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.500, limiting weekly\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "hysteresis-above",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.60000001,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: score 0.500, limiting weekly\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.500, limiting weekly\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "roundoff-clamp",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.002000000000002,
+                "window": "weekly",
+                "roundoff": 1.7763568394002505e-14
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.0024000000000001798,
+                "window": "weekly",
+                "roundoff": 1.7763568394002505e-14
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.002000000000002,
+                "window": "weekly",
+                "roundoff": 1.7763568394002505e-14
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.002, limiting weekly, data 0m old\\n    b/terra: score 0.002, limiting weekly, data 0m old\\n    a/opus: score 0.002, limiting weekly, data 0m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: score 0.002, limiting weekly\\n  b/terra: score 0.002, limiting weekly\\n  a/opus: score 0.002, limiting weekly\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.002, limiting weekly, data 0m old\\n    b/terra: score 0.002, limiting weekly, data 0m old\\n    a/opus: score 0.002, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "roundoff-tiny",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 9.992007221626409e-16,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 1.9984014443252818e-15,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 9.992007221626409e-16,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.000, limiting weekly, data 0m old\\n    b/terra: score 0.000, limiting weekly, data 0m old\\n    a/opus: score 0.000, limiting weekly, data 0m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: score 0.000, limiting weekly\\n  b/terra: score 0.000, limiting weekly\\n  a/opus: score 0.000, limiting weekly\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.000, limiting weekly, data 0m old\\n    b/terra: score 0.000, limiting weekly, data 0m old\\n    a/opus: score 0.000, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "missing-reset",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: score 0.500, limiting weekly\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.500, limiting weekly\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "missing-duration",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: score 0.500, limiting weekly\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.500, limiting weekly\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "reset-equal",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "fallback",
+                "reason": "no applicable active windows"
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "fallback",
+                "reason": "no applicable active windows"
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: fallback: no applicable active windows, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: no applicable active windows, data 0m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: fallback: no applicable active windows\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: fallback: no applicable active windows\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: fallback: no applicable active windows, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: no applicable active windows, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "reset-past",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "fallback",
+                "reason": "no applicable active windows"
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "fallback",
+                "reason": "no applicable active windows"
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: fallback: no applicable active windows, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: no applicable active windows, data 0m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: fallback: no applicable active windows\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: fallback: no applicable active windows\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: fallback: no applicable active windows, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: no applicable active windows, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "grace-before",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.99,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16,
+                "stale": 899999
+              },
+              "ageMs": 899999
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.99,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16,
+                "stale": 899999
+              },
+              "ageMs": 899999
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.990, limiting weekly, stale 14m, data 14m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.990, limiting weekly, stale 14m, data 14m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: score 0.990, limiting weekly, stale 14m\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.990, limiting weekly, stale 14m\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.990, limiting weekly, stale 14m, data 14m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.990, limiting weekly, stale 14m, data 14m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "grace-equal",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.99,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16,
+                "stale": 900000
+              },
+              "ageMs": 900000
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.99,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16,
+                "stale": 900000
+              },
+              "ageMs": 900000
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.990, limiting weekly, stale 15m, data 15m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.990, limiting weekly, stale 15m, data 15m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: score 0.990, limiting weekly, stale 15m\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.990, limiting weekly, stale 15m\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: score 0.990, limiting weekly, stale 15m, data 15m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.990, limiting weekly, stale 15m, data 15m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "grace-after",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "fallback",
+                "reason": "usage stale"
+              },
+              "ageMs": 900001
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "fallback",
+                "reason": "usage stale"
+              },
+              "ageMs": 900001
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: fallback: usage stale, data 15m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: usage stale, data 15m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: fallback: usage stale\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: fallback: usage stale\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: fallback: usage stale, data 15m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: usage stale, data 15m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "stale-unlimited",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "fallback",
+                "reason": "no applicable active windows"
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "fallback",
+                "reason": "no applicable active windows"
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: fallback: no applicable active windows, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: no applicable active windows, data 0m old"
+    ],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: fallback: no applicable active windows\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: fallback: no applicable active windows\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (ordered)\\n    a/sonnet: fallback: no applicable active windows, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: no applicable active windows, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "family-overlap",
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "user",
+          "chosen": "b/terra",
+          "candidates": [
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.4,
+                "window": "opus-weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": [
+            {
+              "model": "a/sonnet",
+              "reason": "sonnet-weekly exhausted"
+            }
+          ]
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> b/terra (ordered)\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.400, limiting opus-weekly, data 0m old\\n    a/sonnet: sonnet-weekly exhausted"
+    ],
+    "status": [
+      "router/edges (ordered) -> b/terra\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.400, limiting opus-weekly\\n  a/sonnet: sonnet-weekly exhausted\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> b/terra (ordered)\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.400, limiting opus-weekly, data 0m old\\n    a/sonnet: sonnet-weekly exhausted"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "all-blocked",
+    "route": {
+      "name": "ChainExhaustedError",
+      "message": "router/edges: every model is unavailable (a/sonnet: weekly exhausted; b/terra: weekly exhausted; a/opus: weekly exhausted). Earliest reset 2030-01-01T01:00:00Z."
+    },
+    "entries": [],
+    "decisionText": [],
+    "status": [
+      "router/edges (ordered) -> exhausted\\n  a/sonnet: weekly exhausted\\n  b/terra: weekly exhausted\\n  a/opus: weekly exhausted"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": false,
+      "resetAt": 1893459600000,
+      "wait": true
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "confirmed-retry",
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "ordered",
+          "reason": "retry",
+          "chosen": "b/terra",
+          "candidates": [
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": [
+            {
+              "model": "a/sonnet",
+              "reason": "weekly exhausted, resets 2030-01-01T01:00:00Z"
+            },
+            {
+              "model": "a/opus",
+              "reason": "weekly exhausted, resets 2030-01-01T01:00:00Z"
+            }
+          ]
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges retry -> b/terra (ordered)\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/sonnet: weekly exhausted, resets 2030-01-01T01:00:00Z\\n    a/opus: weekly exhausted, resets 2030-01-01T01:00:00Z"
+    ],
+    "status": [
+      "router/edges (ordered) -> b/terra\\n  b/terra: score 0.600, limiting weekly\\n  a/sonnet: weekly exhausted, resets 2030-01-01T01:00:00Z\\n  a/opus: weekly exhausted, resets 2030-01-01T01:00:00Z\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges retry -> b/terra (ordered)\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/sonnet: weekly exhausted, resets 2030-01-01T01:00:00Z\\n    a/opus: weekly exhausted, resets 2030-01-01T01:00:00Z"
+    ],
+    "reads": [
+      {
+        "provider": "a",
+        "fresh": true,
+        "notBefore": 1893456000000,
+        "aborted": false
+      }
+    ],
+    "blocks": [
+      {
+        "provider": "a",
+        "window": "weekly",
+        "until": 1893459600000,
+        "resetKnown": true,
+        "confirmations": 1
+      }
+    ],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "partial-retry",
+    "route": {
+      "name": "Error",
+      "message": "subscription-router: refusing to replay a partial response; retry explicitly."
+    },
+    "entries": [],
+    "decisionText": [],
+    "status": [
+      "router/edges (ordered) -> b/terra\\n  b/terra: score 0.600, limiting weekly\\n  a/sonnet: weekly exhausted, resets 2030-01-01T01:00:00Z\\n  a/opus: weekly exhausted, resets 2030-01-01T01:00:00Z"
+    ],
+    "reads": [
+      {
+        "provider": "a",
+        "fresh": true,
+        "notBefore": 1893456000000,
+        "aborted": false
+      }
+    ],
+    "blocks": [
+      {
+        "provider": "a",
+        "window": "weekly",
+        "until": 1893459600000,
+        "resetKnown": true,
+        "confirmations": 1
+      }
+    ],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "nonquota-retry",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [],
+    "decisionText": [],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: score 0.500, limiting weekly\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.500, limiting weekly"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "cancelled",
+    "route": {
+      "name": "Error",
+      "message": "synthetic cancellation"
+    },
+    "entries": [],
+    "decisionText": [],
+    "status": [
+      "router/edges (ordered) -> a/sonnet\\n  a/sonnet: score 0.500, limiting weekly\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.500, limiting weekly"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "cancelled-confirmation",
+    "route": {
+      "name": "Error",
+      "message": "synthetic cancellation"
+    },
+    "entries": [],
+    "decisionText": [],
+    "status": [
+      "router/edges (ordered) -> b/terra\\n  b/terra: score 0.600, limiting weekly\\n  a/sonnet: weekly exhausted\\n  a/opus: weekly exhausted"
+    ],
+    "reads": [
+      {
+        "provider": "a",
+        "fresh": true,
+        "notBefore": 1893456000000,
+        "aborted": true
+      }
+    ],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "state": "no-credentials",
+    "route": {
+      "name": "ChainExhaustedError",
+      "message": "router/edges: every model is unavailable (a/sonnet: not available (unknown model or no credentials); b/terra: not available (unknown model or no credentials); a/opus: not available (unknown model or no credentials)). Earliest reset an unknown time."
+    },
+    "entries": [],
+    "decisionText": [],
+    "status": [
+      "router/edges (ordered) -> exhausted\\n  a/sonnet: not available (unknown model or no credentials)\\n  b/terra: not available (unknown model or no credentials)\\n  a/opus: not available (unknown model or no credentials)"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "hysteresis-below",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "balanced",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.59999999,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (balanced)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "status": [
+      "router/edges (balanced) -> b/terra\\n  a/sonnet: score 0.500, limiting weekly\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.500, limiting weekly\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (balanced)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "hysteresis-equal",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "balanced",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (balanced)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "status": [
+      "router/edges (balanced) -> b/terra\\n  a/sonnet: score 0.500, limiting weekly\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.500, limiting weekly\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (balanced)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "hysteresis-above",
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "balanced",
+          "reason": "user",
+          "chosen": "b/terra",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.60000001,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> b/terra (balanced)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "status": [
+      "router/edges (balanced) -> b/terra\\n  a/sonnet: score 0.500, limiting weekly\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.500, limiting weekly\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> b/terra (balanced)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "roundoff-clamp",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "balanced",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.002000000000002,
+                "window": "weekly",
+                "roundoff": 1.7763568394002505e-14
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.0024000000000001798,
+                "window": "weekly",
+                "roundoff": 1.7763568394002505e-14
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.002000000000002,
+                "window": "weekly",
+                "roundoff": 1.7763568394002505e-14
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (balanced)\\n    a/sonnet: score 0.002, limiting weekly, data 0m old\\n    b/terra: score 0.002, limiting weekly, data 0m old\\n    a/opus: score 0.002, limiting weekly, data 0m old"
+    ],
+    "status": [
+      "router/edges (balanced) -> b/terra\\n  a/sonnet: score 0.002, limiting weekly\\n  b/terra: score 0.002, limiting weekly\\n  a/opus: score 0.002, limiting weekly\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (balanced)\\n    a/sonnet: score 0.002, limiting weekly, data 0m old\\n    b/terra: score 0.002, limiting weekly, data 0m old\\n    a/opus: score 0.002, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "roundoff-tiny",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "balanced",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 9.992007221626409e-16,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 1.9984014443252818e-15,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 9.992007221626409e-16,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (balanced)\\n    a/sonnet: score 0.000, limiting weekly, data 0m old\\n    b/terra: score 0.000, limiting weekly, data 0m old\\n    a/opus: score 0.000, limiting weekly, data 0m old"
+    ],
+    "status": [
+      "router/edges (balanced) -> b/terra\\n  a/sonnet: score 0.000, limiting weekly\\n  b/terra: score 0.000, limiting weekly\\n  a/opus: score 0.000, limiting weekly\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (balanced)\\n    a/sonnet: score 0.000, limiting weekly, data 0m old\\n    b/terra: score 0.000, limiting weekly, data 0m old\\n    a/opus: score 0.000, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "missing-reset",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "balanced",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (balanced)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "status": [
+      "router/edges (balanced) -> b/terra\\n  a/sonnet: score 0.500, limiting weekly\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.500, limiting weekly\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (balanced)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "missing-duration",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "balanced",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.5,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (balanced)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "status": [
+      "router/edges (balanced) -> b/terra\\n  a/sonnet: score 0.500, limiting weekly\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.500, limiting weekly\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (balanced)\\n    a/sonnet: score 0.500, limiting weekly, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.500, limiting weekly, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "reset-equal",
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "balanced",
+          "reason": "user",
+          "chosen": "b/terra",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "fallback",
+                "reason": "no applicable active windows"
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "fallback",
+                "reason": "no applicable active windows"
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> b/terra (balanced)\\n    a/sonnet: fallback: no applicable active windows, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: no applicable active windows, data 0m old"
+    ],
+    "status": [
+      "router/edges (balanced) -> b/terra\\n  a/sonnet: fallback: no applicable active windows\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: fallback: no applicable active windows\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> b/terra (balanced)\\n    a/sonnet: fallback: no applicable active windows, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: no applicable active windows, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "reset-past",
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "balanced",
+          "reason": "user",
+          "chosen": "b/terra",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "fallback",
+                "reason": "no applicable active windows"
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "fallback",
+                "reason": "no applicable active windows"
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> b/terra (balanced)\\n    a/sonnet: fallback: no applicable active windows, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: no applicable active windows, data 0m old"
+    ],
+    "status": [
+      "router/edges (balanced) -> b/terra\\n  a/sonnet: fallback: no applicable active windows\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: fallback: no applicable active windows\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> b/terra (balanced)\\n    a/sonnet: fallback: no applicable active windows, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: no applicable active windows, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "grace-before",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "balanced",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.99,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16,
+                "stale": 899999
+              },
+              "ageMs": 899999
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.99,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16,
+                "stale": 899999
+              },
+              "ageMs": 899999
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (balanced)\\n    a/sonnet: score 0.990, limiting weekly, stale 14m, data 14m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.990, limiting weekly, stale 14m, data 14m old"
+    ],
+    "status": [
+      "router/edges (balanced) -> a/sonnet\\n  a/sonnet: score 0.990, limiting weekly, stale 14m\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.990, limiting weekly, stale 14m\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (balanced)\\n    a/sonnet: score 0.990, limiting weekly, stale 14m, data 14m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.990, limiting weekly, stale 14m, data 14m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "grace-equal",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "balanced",
+          "reason": "user",
+          "chosen": "a/sonnet",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "measured",
+                "score": 0.99,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16,
+                "stale": 900000
+              },
+              "ageMs": 900000
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.99,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16,
+                "stale": 900000
+              },
+              "ageMs": 900000
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> a/sonnet (balanced)\\n    a/sonnet: score 0.990, limiting weekly, stale 15m, data 15m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.990, limiting weekly, stale 15m, data 15m old"
+    ],
+    "status": [
+      "router/edges (balanced) -> a/sonnet\\n  a/sonnet: score 0.990, limiting weekly, stale 15m\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.990, limiting weekly, stale 15m\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> a/sonnet (balanced)\\n    a/sonnet: score 0.990, limiting weekly, stale 15m, data 15m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.990, limiting weekly, stale 15m, data 15m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "a/sonnet"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "grace-after",
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "balanced",
+          "reason": "user",
+          "chosen": "b/terra",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "fallback",
+                "reason": "usage stale"
+              },
+              "ageMs": 900001
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "fallback",
+                "reason": "usage stale"
+              },
+              "ageMs": 900001
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> b/terra (balanced)\\n    a/sonnet: fallback: usage stale, data 15m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: usage stale, data 15m old"
+    ],
+    "status": [
+      "router/edges (balanced) -> b/terra\\n  a/sonnet: fallback: usage stale\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: fallback: usage stale\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> b/terra (balanced)\\n    a/sonnet: fallback: usage stale, data 15m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: usage stale, data 15m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "stale-unlimited",
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "balanced",
+          "reason": "user",
+          "chosen": "b/terra",
+          "candidates": [
+            {
+              "model": "a/sonnet",
+              "quota": {
+                "kind": "fallback",
+                "reason": "no applicable active windows"
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "fallback",
+                "reason": "no applicable active windows"
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": []
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> b/terra (balanced)\\n    a/sonnet: fallback: no applicable active windows, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: no applicable active windows, data 0m old"
+    ],
+    "status": [
+      "router/edges (balanced) -> b/terra\\n  a/sonnet: fallback: no applicable active windows\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: fallback: no applicable active windows\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> b/terra (balanced)\\n    a/sonnet: fallback: no applicable active windows, data 0m old\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: fallback: no applicable active windows, data 0m old"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "family-overlap",
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "balanced",
+          "reason": "user",
+          "chosen": "b/terra",
+          "candidates": [
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            },
+            {
+              "model": "a/opus",
+              "quota": {
+                "kind": "measured",
+                "score": 0.4,
+                "window": "opus-weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": [
+            {
+              "model": "a/sonnet",
+              "reason": "sonnet-weekly exhausted"
+            }
+          ]
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges user -> b/terra (balanced)\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.400, limiting opus-weekly, data 0m old\\n    a/sonnet: sonnet-weekly exhausted"
+    ],
+    "status": [
+      "router/edges (balanced) -> b/terra\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.400, limiting opus-weekly\\n  a/sonnet: sonnet-weekly exhausted\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges user -> b/terra (balanced)\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/opus: score 0.400, limiting opus-weekly, data 0m old\\n    a/sonnet: sonnet-weekly exhausted"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "all-blocked",
+    "route": {
+      "name": "ChainExhaustedError",
+      "message": "router/edges: every model is unavailable (a/sonnet: weekly exhausted; b/terra: weekly exhausted; a/opus: weekly exhausted). Earliest reset 2030-01-01T01:00:00Z."
+    },
+    "entries": [],
+    "decisionText": [],
+    "status": [
+      "router/edges (balanced) -> exhausted\\n  a/sonnet: weekly exhausted\\n  b/terra: weekly exhausted\\n  a/opus: weekly exhausted"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": false,
+      "resetAt": 1893459600000,
+      "wait": true
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "confirmed-retry",
+    "route": {
+      "model": {
+        "provider": "b",
+        "id": "terra",
+        "api": "test"
+      },
+      "thinkingLevel": "low"
+    },
+    "entries": [
+      {
+        "type": "router:decision",
+        "data": {
+          "at": 1893456000000,
+          "profile": "edges",
+          "strategy": "balanced",
+          "reason": "retry",
+          "chosen": "b/terra",
+          "candidates": [
+            {
+              "model": "b/terra",
+              "quota": {
+                "kind": "measured",
+                "score": 0.6,
+                "window": "weekly",
+                "roundoff": 8.881784197001252e-16
+              },
+              "ageMs": 0
+            }
+          ],
+          "blocked": [
+            {
+              "model": "a/sonnet",
+              "reason": "weekly exhausted, resets 2030-01-01T01:00:00Z"
+            },
+            {
+              "model": "a/opus",
+              "reason": "weekly exhausted, resets 2030-01-01T01:00:00Z"
+            }
+          ]
+        }
+      }
+    ],
+    "decisionText": [
+      "2030-01-01T00:00:00Z router/edges retry -> b/terra (balanced)\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/sonnet: weekly exhausted, resets 2030-01-01T01:00:00Z\\n    a/opus: weekly exhausted, resets 2030-01-01T01:00:00Z"
+    ],
+    "status": [
+      "router/edges (balanced) -> b/terra\\n  b/terra: score 0.600, limiting weekly\\n  a/sonnet: weekly exhausted, resets 2030-01-01T01:00:00Z\\n  a/opus: weekly exhausted, resets 2030-01-01T01:00:00Z\\nlast decisions (newest last):\\n2030-01-01T00:00:00Z router/edges retry -> b/terra (balanced)\\n    b/terra: score 0.600, limiting weekly, data 0m old\\n    a/sonnet: weekly exhausted, resets 2030-01-01T01:00:00Z\\n    a/opus: weekly exhausted, resets 2030-01-01T01:00:00Z"
+    ],
+    "reads": [
+      {
+        "provider": "a",
+        "fresh": true,
+        "notBefore": 1893456000000,
+        "aborted": false
+      }
+    ],
+    "blocks": [
+      {
+        "provider": "a",
+        "window": "weekly",
+        "until": 1893459600000,
+        "resetKnown": true,
+        "confirmations": 1
+      }
+    ],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "partial-retry",
+    "route": {
+      "name": "Error",
+      "message": "subscription-router: refusing to replay a partial response; retry explicitly."
+    },
+    "entries": [],
+    "decisionText": [],
+    "status": [
+      "router/edges (balanced) -> b/terra\\n  b/terra: score 0.600, limiting weekly\\n  a/sonnet: weekly exhausted, resets 2030-01-01T01:00:00Z\\n  a/opus: weekly exhausted, resets 2030-01-01T01:00:00Z"
+    ],
+    "reads": [
+      {
+        "provider": "a",
+        "fresh": true,
+        "notBefore": 1893456000000,
+        "aborted": false
+      }
+    ],
+    "blocks": [
+      {
+        "provider": "a",
+        "window": "weekly",
+        "until": 1893459600000,
+        "resetKnown": true,
+        "confirmations": 1
+      }
+    ],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "nonquota-retry",
+    "route": {
+      "model": {
+        "provider": "a",
+        "id": "sonnet",
+        "api": "test"
+      },
+      "thinkingLevel": "high"
+    },
+    "entries": [],
+    "decisionText": [],
+    "status": [
+      "router/edges (balanced) -> b/terra\\n  a/sonnet: score 0.500, limiting weekly\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.500, limiting weekly"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "cancelled",
+    "route": {
+      "name": "Error",
+      "message": "synthetic cancellation"
+    },
+    "entries": [],
+    "decisionText": [],
+    "status": [
+      "router/edges (balanced) -> b/terra\\n  a/sonnet: score 0.500, limiting weekly\\n  b/terra: score 0.600, limiting weekly\\n  a/opus: score 0.500, limiting weekly"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "cancelled-confirmation",
+    "route": {
+      "name": "Error",
+      "message": "synthetic cancellation"
+    },
+    "entries": [],
+    "decisionText": [],
+    "status": [
+      "router/edges (balanced) -> b/terra\\n  b/terra: score 0.600, limiting weekly\\n  a/sonnet: weekly exhausted\\n  a/opus: weekly exhausted"
+    ],
+    "reads": [
+      {
+        "provider": "a",
+        "fresh": true,
+        "notBefore": 1893456000000,
+        "aborted": true
+      }
+    ],
+    "blocks": [],
+    "admission": {
+      "ok": true,
+      "resolvedModel": "b/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "state": "no-credentials",
+    "route": {
+      "name": "ChainExhaustedError",
+      "message": "router/edges: every model is unavailable (a/sonnet: not available (unknown model or no credentials); b/terra: not available (unknown model or no credentials); a/opus: not available (unknown model or no credentials)). Earliest reset an unknown time."
+    },
+    "entries": [],
+    "decisionText": [],
+    "status": [
+      "router/edges (balanced) -> exhausted\\n  a/sonnet: not available (unknown model or no credentials)\\n  b/terra: not available (unknown model or no credentials)\\n  a/opus: not available (unknown model or no credentials)"
+    ],
+    "reads": [],
+    "blocks": [],
+    "admission": {
+      "ok": true
+    }
+  }
+]"
+`;
+
+exports[`preserves overlapping exact-snapshot confirmations in both completion orders 1`] = `
+"[
+  {
+    "newerFirst": false,
+    "routes": [
+      {
+        "model": {
+          "provider": "other",
+          "id": "terra",
+          "api": "test"
+        },
+        "thinkingLevel": "off"
+      },
+      {
+        "model": {
+          "provider": "other",
+          "id": "terra",
+          "api": "test"
+        },
+        "thinkingLevel": "off"
+      }
+    ],
+    "reads": 2,
+    "decisions": [
+      {
+        "at": 1700000000001,
+        "profile": "race",
+        "strategy": "ordered",
+        "reason": "retry",
+        "chosen": "other/terra",
+        "candidates": [
+          {
+            "model": "other/terra",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage missing"
+            }
+          }
+        ],
+        "blocked": [
+          {
+            "model": "anthropic/sonnet",
+            "reason": "five_hour exhausted, resets 2023-11-14T22:14:20Z"
+          }
+        ]
+      },
+      {
+        "at": 1700000000001,
+        "profile": "race",
+        "strategy": "ordered",
+        "reason": "retry",
+        "chosen": "other/terra",
+        "candidates": [
+          {
+            "model": "other/terra",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage missing"
+            }
+          }
+        ],
+        "blocked": [
+          {
+            "model": "anthropic/sonnet",
+            "reason": "five_hour exhausted, resets 2023-11-14T22:14:20Z"
+          }
+        ]
+      }
+    ],
+    "text": [
+      "2023-11-14T22:13:20Z router/race retry -> other/terra (ordered)\\n    other/terra: fallback: usage missing, no data\\n    anthropic/sonnet: five_hour exhausted, resets 2023-11-14T22:14:20Z",
+      "2023-11-14T22:13:20Z router/race retry -> other/terra (ordered)\\n    other/terra: fallback: usage missing, no data\\n    anthropic/sonnet: five_hour exhausted, resets 2023-11-14T22:14:20Z"
+    ],
+    "blocks": [
+      {
+        "provider": "anthropic",
+        "window": "five_hour",
+        "until": 1700000060001,
+        "resetKnown": true,
+        "confirmations": 2
+      }
+    ],
+    "cached": {
+      "provider": "anthropic",
+      "status": "available",
+      "retrievedAt": 1700000000001,
+      "expiresAt": 1700000300001,
+      "windows": [
+        {
+          "name": "five_hour",
+          "usedPercent": 100,
+          "resetAt": 1700000060001,
+          "durationMs": 18000000,
+          "spanSource": "reported",
+          "scope": "provider"
+        }
+      ]
+    },
+    "admission": {
+      "ok": true,
+      "resolvedModel": "other/terra"
+    }
+  },
+  {
+    "newerFirst": true,
+    "routes": [
+      {
+        "model": {
+          "provider": "other",
+          "id": "terra",
+          "api": "test"
+        },
+        "thinkingLevel": "off"
+      },
+      {
+        "model": {
+          "provider": "other",
+          "id": "terra",
+          "api": "test"
+        },
+        "thinkingLevel": "off"
+      }
+    ],
+    "reads": 2,
+    "decisions": [
+      {
+        "at": 1700000000001,
+        "profile": "race",
+        "strategy": "ordered",
+        "reason": "retry",
+        "chosen": "other/terra",
+        "candidates": [
+          {
+            "model": "other/terra",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage missing"
+            }
+          }
+        ],
+        "blocked": [
+          {
+            "model": "anthropic/sonnet",
+            "reason": "five_hour exhausted, resets 2023-11-14T22:14:20Z"
+          }
+        ]
+      },
+      {
+        "at": 1700000000001,
+        "profile": "race",
+        "strategy": "ordered",
+        "reason": "retry",
+        "chosen": "other/terra",
+        "candidates": [
+          {
+            "model": "other/terra",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage missing"
+            }
+          }
+        ],
+        "blocked": [
+          {
+            "model": "anthropic/sonnet",
+            "reason": "five_hour exhausted, resets 2023-11-14T22:14:20Z"
+          }
+        ]
+      }
+    ],
+    "text": [
+      "2023-11-14T22:13:20Z router/race retry -> other/terra (ordered)\\n    other/terra: fallback: usage missing, no data\\n    anthropic/sonnet: five_hour exhausted, resets 2023-11-14T22:14:20Z",
+      "2023-11-14T22:13:20Z router/race retry -> other/terra (ordered)\\n    other/terra: fallback: usage missing, no data\\n    anthropic/sonnet: five_hour exhausted, resets 2023-11-14T22:14:20Z"
+    ],
+    "blocks": [
+      {
+        "provider": "anthropic",
+        "window": "five_hour",
+        "until": 1700000060001,
+        "resetKnown": true,
+        "confirmations": 2
+      }
+    ],
+    "cached": {
+      "provider": "anthropic",
+      "status": "available",
+      "retrievedAt": 1700000000001,
+      "expiresAt": 1700000300001,
+      "windows": [
+        {
+          "name": "five_hour",
+          "usedPercent": 100,
+          "resetAt": 1700000060001,
+          "durationMs": 18000000,
+          "spanSource": "reported",
+          "scope": "provider"
+        }
+      ]
+    },
+    "admission": {
+      "ok": true,
+      "resolvedModel": "other/terra"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "newerFirst": false,
+    "routes": [
+      {
+        "model": {
+          "provider": "other",
+          "id": "terra",
+          "api": "test"
+        },
+        "thinkingLevel": "off"
+      },
+      {
+        "model": {
+          "provider": "other",
+          "id": "terra",
+          "api": "test"
+        },
+        "thinkingLevel": "off"
+      }
+    ],
+    "reads": 2,
+    "decisions": [
+      {
+        "at": 1700000000001,
+        "profile": "race",
+        "strategy": "ordered",
+        "reason": "retry",
+        "chosen": "other/terra",
+        "candidates": [
+          {
+            "model": "other/terra",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage missing"
+            }
+          }
+        ],
+        "blocked": [
+          {
+            "model": "anthropic/sonnet",
+            "reason": "five_hour exhausted, resets 2023-11-14T22:14:20Z"
+          }
+        ]
+      },
+      {
+        "at": 1700000000001,
+        "profile": "race",
+        "strategy": "ordered",
+        "reason": "retry",
+        "chosen": "other/terra",
+        "candidates": [
+          {
+            "model": "other/terra",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage missing"
+            }
+          }
+        ],
+        "blocked": [
+          {
+            "model": "anthropic/sonnet",
+            "reason": "five_hour exhausted, resets 2023-11-14T22:14:20Z"
+          }
+        ]
+      }
+    ],
+    "text": [
+      "2023-11-14T22:13:20Z router/race retry -> other/terra (ordered)\\n    other/terra: fallback: usage missing, no data\\n    anthropic/sonnet: five_hour exhausted, resets 2023-11-14T22:14:20Z",
+      "2023-11-14T22:13:20Z router/race retry -> other/terra (ordered)\\n    other/terra: fallback: usage missing, no data\\n    anthropic/sonnet: five_hour exhausted, resets 2023-11-14T22:14:20Z"
+    ],
+    "blocks": [
+      {
+        "provider": "anthropic",
+        "window": "five_hour",
+        "until": 1700000060001,
+        "resetKnown": true,
+        "confirmations": 2
+      }
+    ],
+    "cached": {
+      "provider": "anthropic",
+      "status": "available",
+      "retrievedAt": 1700000000001,
+      "expiresAt": 1700000300001,
+      "windows": [
+        {
+          "name": "five_hour",
+          "usedPercent": 100,
+          "resetAt": 1700000060001,
+          "durationMs": 18000000,
+          "spanSource": "reported",
+          "scope": "provider"
+        }
+      ]
+    },
+    "admission": {
+      "ok": true,
+      "resolvedModel": "other/terra"
+    }
+  },
+  {
+    "strategy": "ordered",
+    "newerFirst": true,
+    "routes": [
+      {
+        "model": {
+          "provider": "other",
+          "id": "terra",
+          "api": "test"
+        },
+        "thinkingLevel": "off"
+      },
+      {
+        "model": {
+          "provider": "other",
+          "id": "terra",
+          "api": "test"
+        },
+        "thinkingLevel": "off"
+      }
+    ],
+    "reads": 2,
+    "decisions": [
+      {
+        "at": 1700000000001,
+        "profile": "race",
+        "strategy": "ordered",
+        "reason": "retry",
+        "chosen": "other/terra",
+        "candidates": [
+          {
+            "model": "other/terra",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage missing"
+            }
+          }
+        ],
+        "blocked": [
+          {
+            "model": "anthropic/sonnet",
+            "reason": "five_hour exhausted, resets 2023-11-14T22:14:20Z"
+          }
+        ]
+      },
+      {
+        "at": 1700000000001,
+        "profile": "race",
+        "strategy": "ordered",
+        "reason": "retry",
+        "chosen": "other/terra",
+        "candidates": [
+          {
+            "model": "other/terra",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage missing"
+            }
+          }
+        ],
+        "blocked": [
+          {
+            "model": "anthropic/sonnet",
+            "reason": "five_hour exhausted, resets 2023-11-14T22:14:20Z"
+          }
+        ]
+      }
+    ],
+    "text": [
+      "2023-11-14T22:13:20Z router/race retry -> other/terra (ordered)\\n    other/terra: fallback: usage missing, no data\\n    anthropic/sonnet: five_hour exhausted, resets 2023-11-14T22:14:20Z",
+      "2023-11-14T22:13:20Z router/race retry -> other/terra (ordered)\\n    other/terra: fallback: usage missing, no data\\n    anthropic/sonnet: five_hour exhausted, resets 2023-11-14T22:14:20Z"
+    ],
+    "blocks": [
+      {
+        "provider": "anthropic",
+        "window": "five_hour",
+        "until": 1700000060001,
+        "resetKnown": true,
+        "confirmations": 2
+      }
+    ],
+    "cached": {
+      "provider": "anthropic",
+      "status": "available",
+      "retrievedAt": 1700000000001,
+      "expiresAt": 1700000300001,
+      "windows": [
+        {
+          "name": "five_hour",
+          "usedPercent": 100,
+          "resetAt": 1700000060001,
+          "durationMs": 18000000,
+          "spanSource": "reported",
+          "scope": "provider"
+        }
+      ]
+    },
+    "admission": {
+      "ok": true,
+      "resolvedModel": "other/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "newerFirst": false,
+    "routes": [
+      {
+        "model": {
+          "provider": "other",
+          "id": "terra",
+          "api": "test"
+        },
+        "thinkingLevel": "off"
+      },
+      {
+        "model": {
+          "provider": "other",
+          "id": "terra",
+          "api": "test"
+        },
+        "thinkingLevel": "off"
+      }
+    ],
+    "reads": 2,
+    "decisions": [
+      {
+        "at": 1700000000001,
+        "profile": "race",
+        "strategy": "balanced",
+        "reason": "retry",
+        "chosen": "other/terra",
+        "candidates": [
+          {
+            "model": "other/terra",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage missing"
+            }
+          }
+        ],
+        "blocked": [
+          {
+            "model": "anthropic/sonnet",
+            "reason": "five_hour exhausted, resets 2023-11-14T22:14:20Z"
+          }
+        ]
+      },
+      {
+        "at": 1700000000001,
+        "profile": "race",
+        "strategy": "balanced",
+        "reason": "retry",
+        "chosen": "other/terra",
+        "candidates": [
+          {
+            "model": "other/terra",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage missing"
+            }
+          }
+        ],
+        "blocked": [
+          {
+            "model": "anthropic/sonnet",
+            "reason": "five_hour exhausted, resets 2023-11-14T22:14:20Z"
+          }
+        ]
+      }
+    ],
+    "text": [
+      "2023-11-14T22:13:20Z router/race retry -> other/terra (balanced)\\n    other/terra: fallback: usage missing, no data\\n    anthropic/sonnet: five_hour exhausted, resets 2023-11-14T22:14:20Z",
+      "2023-11-14T22:13:20Z router/race retry -> other/terra (balanced)\\n    other/terra: fallback: usage missing, no data\\n    anthropic/sonnet: five_hour exhausted, resets 2023-11-14T22:14:20Z"
+    ],
+    "blocks": [
+      {
+        "provider": "anthropic",
+        "window": "five_hour",
+        "until": 1700000060001,
+        "resetKnown": true,
+        "confirmations": 2
+      }
+    ],
+    "cached": {
+      "provider": "anthropic",
+      "status": "available",
+      "retrievedAt": 1700000000001,
+      "expiresAt": 1700000300001,
+      "windows": [
+        {
+          "name": "five_hour",
+          "usedPercent": 100,
+          "resetAt": 1700000060001,
+          "durationMs": 18000000,
+          "spanSource": "reported",
+          "scope": "provider"
+        }
+      ]
+    },
+    "admission": {
+      "ok": true,
+      "resolvedModel": "other/terra"
+    }
+  },
+  {
+    "strategy": "balanced",
+    "newerFirst": true,
+    "routes": [
+      {
+        "model": {
+          "provider": "other",
+          "id": "terra",
+          "api": "test"
+        },
+        "thinkingLevel": "off"
+      },
+      {
+        "model": {
+          "provider": "other",
+          "id": "terra",
+          "api": "test"
+        },
+        "thinkingLevel": "off"
+      }
+    ],
+    "reads": 2,
+    "decisions": [
+      {
+        "at": 1700000000001,
+        "profile": "race",
+        "strategy": "balanced",
+        "reason": "retry",
+        "chosen": "other/terra",
+        "candidates": [
+          {
+            "model": "other/terra",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage missing"
+            }
+          }
+        ],
+        "blocked": [
+          {
+            "model": "anthropic/sonnet",
+            "reason": "five_hour exhausted, resets 2023-11-14T22:14:20Z"
+          }
+        ]
+      },
+      {
+        "at": 1700000000001,
+        "profile": "race",
+        "strategy": "balanced",
+        "reason": "retry",
+        "chosen": "other/terra",
+        "candidates": [
+          {
+            "model": "other/terra",
+            "quota": {
+              "kind": "fallback",
+              "reason": "usage missing"
+            }
+          }
+        ],
+        "blocked": [
+          {
+            "model": "anthropic/sonnet",
+            "reason": "five_hour exhausted, resets 2023-11-14T22:14:20Z"
+          }
+        ]
+      }
+    ],
+    "text": [
+      "2023-11-14T22:13:20Z router/race retry -> other/terra (balanced)\\n    other/terra: fallback: usage missing, no data\\n    anthropic/sonnet: five_hour exhausted, resets 2023-11-14T22:14:20Z",
+      "2023-11-14T22:13:20Z router/race retry -> other/terra (balanced)\\n    other/terra: fallback: usage missing, no data\\n    anthropic/sonnet: five_hour exhausted, resets 2023-11-14T22:14:20Z"
+    ],
+    "blocks": [
+      {
+        "provider": "anthropic",
+        "window": "five_hour",
+        "until": 1700000060001,
+        "resetKnown": true,
+        "confirmations": 2
+      }
+    ],
+    "cached": {
+      "provider": "anthropic",
+      "status": "available",
+      "retrievedAt": 1700000000001,
+      "expiresAt": 1700000300001,
+      "windows": [
+        {
+          "name": "five_hour",
+          "usedPercent": 100,
+          "resetAt": 1700000060001,
+          "durationMs": 18000000,
+          "spanSource": "reported",
+          "scope": "provider"
+        }
+      ]
+    },
+    "admission": {
+      "ok": true,
+      "resolvedModel": "other/terra"
+    }
+  }
+]"
+`;
+
+exports[`preserves terminal partial refusal and empty-output recovery receipts 1`] = `
+"[
+  {
+    "partial": false,
+    "outcome": {
+      "kind": "continue",
+      "from": "a/sonnet",
+      "to": "b/terra",
+      "result": {
+        "entries": [
+          {
+            "type": "context_edit",
+            "targetId": "failed",
+            "replacement": null
+          }
+        ],
+        "continue": true
+      }
+    },
+    "reads": 1,
+    "blocks": [
+      {
+        "provider": "a",
+        "window": "weekly",
+        "until": 1893456060000,
+        "resetKnown": true,
+        "confirmations": 1
+      }
+    ]
+  },
+  {
+    "partial": true,
+    "outcome": {
+      "kind": "none"
+    },
+    "reads": 0,
+    "blocks": []
+  },
+  {
+    "strategy": "ordered",
+    "partial": false,
+    "outcome": {
+      "kind": "continue",
+      "from": "a/sonnet",
+      "to": "b/terra",
+      "result": {
+        "entries": [
+          {
+            "type": "context_edit",
+            "targetId": "failed",
+            "replacement": null
+          }
+        ],
+        "continue": true
+      }
+    },
+    "reads": 1,
+    "blocks": [
+      {
+        "provider": "a",
+        "window": "weekly",
+        "until": 1893456060000,
+        "resetKnown": true,
+        "confirmations": 1
+      }
+    ]
+  },
+  {
+    "strategy": "ordered",
+    "partial": true,
+    "outcome": {
+      "kind": "none"
+    },
+    "reads": 0,
+    "blocks": []
+  },
+  {
+    "strategy": "balanced",
+    "partial": false,
+    "outcome": {
+      "kind": "continue",
+      "from": "a/sonnet",
+      "to": "b/terra",
+      "result": {
+        "entries": [
+          {
+            "type": "context_edit",
+            "targetId": "failed",
+            "replacement": null
+          }
+        ],
+        "continue": true
+      }
+    },
+    "reads": 1,
+    "blocks": [
+      {
+        "provider": "a",
+        "window": "weekly",
+        "until": 1893456060000,
+        "resetKnown": true,
+        "confirmations": 1
+      }
+    ]
+  },
+  {
+    "strategy": "balanced",
+    "partial": true,
+    "outcome": {
+      "kind": "none"
+    },
+    "reads": 0,
+    "blocks": []
+  }
+]"
+`;

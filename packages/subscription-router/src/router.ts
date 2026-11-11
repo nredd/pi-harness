@@ -179,14 +179,41 @@ export class Router {
 
 	/** Why `model` is blocked, or undefined when it is eligible. */
 	blockedBy(model: ModelRef): { reason: string; resetAt?: number } | undefined {
+		const rejection = this.quotaFilters(model).find(({ result }) => result.outcome === "reject")?.result;
+		return rejection?.outcome === "reject" ? { reason: rejection.reason, resetAt: rejection.recheckAt } : undefined;
+	}
+
+	/** Shared capture for admission, legacy affinity and policy selection, in historical dependency order. */
+	private quotaFilters(model: ModelRef): SafetyFilter[] {
 		const mark = this.tracker.blocking(model);
-		if (mark) {
-			const kind = mark.resetKnown ? "resets" : "backing off until";
-			return { reason: `${mark.window} exhausted, ${kind} ${isoSeconds(mark.until)}`, resetAt: mark.until };
-		}
+		const confirmed: SafetyFilter = {
+			name: "confirmed-quota",
+			result: mark
+				? {
+						outcome: "reject",
+						reason: `${mark.window} exhausted, ${mark.resetKnown ? "resets" : "backing off until"} ${isoSeconds(mark.until)}`,
+						recheckAt: mark.until,
+					}
+				: { outcome: "pass" },
+		};
+		if (mark)
+			return [
+				confirmed,
+				{
+					name: "cached-exhaustion",
+					result: { outcome: "unknown", reason: "not evaluated after confirmed block", rule: "reject" },
+				},
+			];
 		const decision = this.usage.decisionFor(model);
-		if (decision.block) return { reason: `${decision.window ?? "quota"} exhausted`, resetAt: decision.resetAt };
-		return undefined;
+		return [
+			confirmed,
+			{
+				name: "cached-exhaustion",
+				result: decision.block
+					? { outcome: "reject", reason: `${decision.window ?? "quota"} exhausted`, recheckAt: decision.resetAt }
+					: { outcome: "pass" },
+			},
+		];
 	}
 
 	/**
@@ -242,26 +269,7 @@ export class Router {
 				continue;
 			}
 			// Preserve historical resolve -> tracker -> usage -> peek ordering and each dependency's clock.
-			const mark = this.tracker.blocking(model);
-			filters.push({
-				name: "confirmed-quota",
-				result: mark
-					? {
-							outcome: "reject",
-							reason: `${mark.window} exhausted, ${mark.resetKnown ? "resets" : "backing off until"} ${isoSeconds(mark.until)}`,
-							recheckAt: mark.until,
-						}
-					: { outcome: "pass" },
-			});
-			const decision = mark ? undefined : this.usage.decisionFor(model);
-			filters.push({
-				name: "cached-exhaustion",
-				result: mark
-					? { outcome: "unknown", reason: "not evaluated after confirmed block", rule: "reject" }
-					: decision?.block
-						? { outcome: "reject", reason: `${decision.window ?? "quota"} exhausted`, recheckAt: decision.resetAt }
-						: { outcome: "pass" },
-			});
+			filters.push(...this.quotaFilters(model));
 			const rejection = filters.find(({ result }) => result.outcome === "reject")?.result;
 			if (rejection?.outcome === "reject")
 				blocked.push({ entry, reason: rejection.reason, resetAt: rejection.recheckAt, quota: true });
