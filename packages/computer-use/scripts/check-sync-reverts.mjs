@@ -602,6 +602,22 @@ const cases = [
 		check: "test/outline-store.test.mjs",
 		failure: /Expected values to be strictly equal|expected undefined/,
 	},
+	{
+		name: "macOS helper disconnect fails fast (#725)",
+		file: "src/platform/macos/helper.ts",
+		before: '\t\t\tsocket.on("end", onDisconnect);\n\t\t\tsocket.on("close", onDisconnect);\n',
+		after: "",
+		check: "test/macos-helper-client.test.mjs",
+		failure: /timed out/,
+	},
+	{
+		name: "Windows helper exit rejects pending commands (#725)",
+		file: "src/platform/windows/helper.ts",
+		before: 'child.on("close", () => this.rejectPending(child));',
+		after: "/* pending rejection dropped */",
+		check: "test/windows-helper-client.test.mjs",
+		failure: /timed out/,
+	},
 ];
 
 try {

@@ -18,6 +18,7 @@ interface Pending<T> {
 	resolve(value: T): void;
 	reject(error: Error): void;
 	timer: NodeJS.Timeout;
+	child: ChildProcessWithoutNullStreams;
 }
 
 async function isExecutable(filePath: string): Promise<boolean> {
@@ -89,9 +90,23 @@ export class WindowsHelperClient {
 		child.stdout.on("data", (chunk: string) => this.onStdout(chunk));
 		child.on("exit", () => { if (this.child === child) this.child = undefined; });
 		child.on("error", () => { if (this.child === child) this.child = undefined; });
+		// `close` fires after stdout drained, so replies already written are delivered first.
+		child.on("close", () => this.rejectPending(child));
 		this.child = child;
 		this.buffer = "";
 		return child;
+	}
+
+	/** Fail every request still waiting on `child` now, instead of at its command timeout. */
+	private rejectPending(child: ChildProcessWithoutNullStreams): void {
+		for (const [id, pending] of this.pending) {
+			if (pending.child !== child) continue;
+			this.pending.delete(id);
+			clearTimeout(pending.timer);
+			const error = new Error("Windows helper exited before replying.") as Error & { code?: string };
+			error.code = "helper_disconnected";
+			pending.reject(error);
+		}
 	}
 
 	private onStdout(chunk: string): void {
@@ -126,7 +141,7 @@ export class WindowsHelperClient {
 		const timeoutMs = options?.timeoutMs ?? COMMAND_TIMEOUT_MS;
 		return await new Promise<T>((resolve, reject) => {
 			const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`Helper command '${cmd}' timed out after ${timeoutMs}ms.`)); }, timeoutMs);
-			this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timer });
+			this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timer, child });
 			child.stdin.write(`${JSON.stringify({ protocolVersion: WINDOWS_HELPER_PROTOCOL_VERSION, id, cmd, args })}\n`, (error) => {
 				if (!error) return;
 				this.pending.delete(id);

@@ -24,9 +24,12 @@ const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 const SETUP_HELPER_SCRIPT = path.join(PACKAGE_ROOT, "scripts", "setup-helper.mjs");
 
 export class HelperTransportError extends Error {
-	constructor(message: string) {
+	readonly code?: string;
+
+	constructor(message: string, code?: string) {
 		super(message);
 		this.name = "HelperTransportError";
+		this.code = code;
 	}
 }
 
@@ -207,27 +210,44 @@ export class MacosHelperClient {
 			const id = `req_${++this.requestSequence}`;
 			const socket = net.createConnection(HELPER_SOCKET_PATH);
 			let buffer = "";
-			const timer = setTimeout(() => { socket.destroy(); reject(new HelperTransportError(`Daemon command '${cmd}' timed out after ${timeoutMs}ms.`)); }, timeoutMs);
-			const cleanup = () => { clearTimeout(timer); signal?.removeEventListener("abort", onAbort); };
-			const onAbort = () => { socket.destroy(); cleanup(); reject(new Error("Operation aborted.")); };
-			signal?.addEventListener("abort", onAbort, { once: true });
-			socket.setEncoding("utf8");
-			socket.on("connect", () => socket.write(`${JSON.stringify({ id, cmd, ...args })}\n`));
-			socket.on("data", (chunk) => {
+			let settled = false;
+			// First outcome wins: the `close` that follows a reply, timeout, abort or error must not settle again.
+			// Socket listeners die with the socket; the timer and the abort listener are released here.
+			const settle = (finish: () => void) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				signal?.removeEventListener("abort", onAbort);
+				finish();
+			};
+			const timer = setTimeout(() => settle(() => { socket.destroy(); reject(new HelperTransportError(`Daemon command '${cmd}' timed out after ${timeoutMs}ms.`)); }), timeoutMs);
+			const onAbort = () => settle(() => { socket.destroy(); reject(new Error("Operation aborted.")); });
+			const onConnect = () => socket.write(`${JSON.stringify({ id, cmd, ...args })}\n`);
+			const onData = (chunk: string) => {
 				buffer += chunk;
 				const newline = buffer.indexOf("\n");
 				if (newline < 0) return;
-				cleanup();
-				socket.end();
-				try {
-					const parsed = JSON.parse(buffer.slice(0, newline));
-					if (parsed.ok === true) resolve(parsed.result as T);
-					else reject(new HelperCommandError(parsed?.error?.message ?? `Daemon command '${cmd}' failed.`, parsed?.error?.code));
-				} catch (error) {
-					reject(error);
-				}
-			});
-			socket.on("error", (error) => { cleanup(); reject(new HelperTransportError(error.message)); });
+				settle(() => {
+					socket.end();
+					try {
+						const parsed = JSON.parse(buffer.slice(0, newline));
+						if (parsed.ok === true) resolve(parsed.result as T);
+						else reject(new HelperCommandError(parsed?.error?.message ?? `Daemon command '${cmd}' failed.`, parsed?.error?.code));
+					} catch (error) {
+						reject(error);
+					}
+				});
+			};
+			const onError = (error: Error) => settle(() => reject(new HelperTransportError(error.message)));
+			// The helper crashed or dropped the socket before a full reply line: fail now, not at the timeout.
+			const onDisconnect = () => settle(() => { socket.destroy(); reject(new HelperTransportError(`Helper disconnected before replying to '${cmd}'.`, "helper_disconnected")); });
+			signal?.addEventListener("abort", onAbort, { once: true });
+			socket.setEncoding("utf8");
+			socket.on("connect", onConnect);
+			socket.on("data", onData);
+			socket.on("error", onError);
+			socket.on("end", onDisconnect);
+			socket.on("close", onDisconnect);
 		});
 	}
 

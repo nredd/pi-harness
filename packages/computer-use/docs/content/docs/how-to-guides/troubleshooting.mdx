@@ -59,6 +59,10 @@ node scripts/setup-helper.mjs --runtime
 
 There is no `--force` installer option. If replacement is refused because only an ad-hoc signing identity is available, prefer a signed helper or managed local signing identity. Set `PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1` only when intentionally replacing a development helper.
 
+## Recover from a helper that disconnected mid-command
+
+If the macOS helper crashes or drops its socket, or the Windows helper exits, while a command is waiting for its reply, the command fails at once with a transport error whose `code` is `helper_disconnected`, not after the command timeout. The next command probes and relaunches the helper. Repeated disconnects point at a helper crash; check Console for `pi-computer-use` crash reports.
+
 ## Grant macOS permissions
 
 Grant Accessibility and Screen Recording to the resolved `pi-computer-use.app`, normally `~/Applications/pi-computer-use.app`, then choose Recheck. Recheck restarts the helper before checking again.
