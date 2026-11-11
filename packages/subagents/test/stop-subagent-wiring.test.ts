@@ -283,6 +283,33 @@ describe("/agents -> Stop all running", () => {
     expect(menus[1]).toContain("Scheduled jobs (1)");
   });
 
+  it("aborts a live workflow run and counts it", async () => {
+    await boot({ workflowsEnabled: true });
+    const signals: AbortSignal[] = [];
+    vi.mocked(runAgent).mockImplementation(
+      (_ctx: any, _type: any, _prompt: any, opts: any) =>
+        new Promise((resolve) => {
+          signals.push(opts.signal);
+          opts.signal.addEventListener("abort", () => resolve({ responseText: "", aborted: true, steered: false } as any), { once: true });
+        }) as any,
+    );
+    const started = await booted.tools.get("SubagentWorkflow").execute(
+      "tc-wf",
+      { script: 'export const meta = { name: "wf699", description: "x" }; return await agent("work", { agentType: "general-purpose" });' },
+      undefined,
+      undefined,
+      context(),
+    );
+    expect(textOf(started)).toContain("Task ID:");
+    await vi.waitFor(() => expect(signals).toHaveLength(1));
+
+    const { menus, notify } = await agentsMenu([options => options.find(o => o.startsWith("Stop all running ("))], true);
+
+    expect(menus[0]).toContain("Stop all running (1)");
+    expect(notify).toHaveBeenCalledWith("Stopped 0 agent(s) and 1 workflow(s).", "info");
+    expect(signals[0].aborted).toBe(true);
+  });
+
   it("stops nothing when the confirmation is declined", async () => {
     await boot();
     heldRuns();
