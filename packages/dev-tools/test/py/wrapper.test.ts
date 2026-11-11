@@ -194,6 +194,27 @@ describe("uv executable boundary", () => {
 		]);
 	});
 
+	it("passes each `select` rule to ruff as its own --select flag", async () => {
+		const f = setup();
+		f.script(`${RECORD_ARGV}; echo 'All checks passed!'`, "/bin/sh");
+		await f.call("py_lint", { select: ["E501", "F401"], paths: ["a.py"] }, f.root);
+		expect(argvLog(f.root)).toEqual([
+			[
+				"run",
+				"--frozen",
+				"ruff",
+				"check",
+				"--output-format",
+				"concise",
+				"--no-cache",
+				"--select=E501",
+				"--select=F401",
+				"--",
+				"a.py",
+			],
+		]);
+	});
+
 	it("shows stdout for a tool error that wrote nothing to stderr", async () => {
 		const f = setup();
 		f.script("echo \"error: unexpected argument '--bogus' found\"; exit 2", "/bin/sh");

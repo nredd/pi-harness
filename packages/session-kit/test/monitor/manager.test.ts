@@ -266,4 +266,18 @@ describe("MonitorManager", () => {
 			await other.dispose();
 		}
 	});
+
+	it("forgets the oldest finished monitors beyond the retained ten", async () => {
+		const ids: string[] = [];
+		for (let i = 0; i < 11; i++) {
+			const info = await mgr.start({ argv: node(`console.log("done ${i}")`), name: `f${i}` }, tmp.dir);
+			ids.push(info.id);
+			await waitFor(() => mgr.info(info.id)?.status !== "running");
+		}
+		expect(mgr.info(ids[0] as string)).toBeDefined();
+		// pruning runs on the next start
+		const live = await mgr.start({ argv: node(STAY), name: "live" }, tmp.dir);
+		expect(mgr.info(ids[0] as string)).toBeUndefined();
+		expect(mgr.list().map((m) => m.id)).toEqual([...ids.slice(1), live.id]);
+	});
 });
