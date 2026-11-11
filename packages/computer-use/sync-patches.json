@@ -513,7 +513,9 @@
 			"dropControls": [
 				"secondaryAction advertised name check (#647)",
 				"paste strict headless rejection (#647)",
-				"macOS-only action platform refusal (#647)"
+				"macOS-only action platform refusal (#647)",
+				"paste is never retried in the foreground (#647)",
+				"browser state refuses the new actions with a code (#647)"
 			],
 			"upstream": {
 				"status": "harness-only",
@@ -526,7 +528,10 @@
 			"purpose": "paste posts cmd+v, so the helper waits for target focus and refuses a blocked focused app before touching the clipboard, like typeText and keypress",
 			"files": ["native/macos/bridge.swift", "test/app-policy.test.mjs"],
 			"check": "test/app-policy.test.mjs",
-			"dropControls": ["paste blocked app keyboard refusal (#647)"],
+			"dropControls": [
+				"paste blocked app keyboard refusal (#647)",
+				"paste re-checks blocked app before cmd+v (#647)"
+			],
 			"upstream": {
 				"status": "harness-only",
 				"reference": "UPSTREAM.md",
@@ -540,7 +545,12 @@
 			"check": "test/macos-native-pure.test.mjs",
 			"dropControls": [
 				"selectText range bounds (#647)",
-				"paste clipboard change fence (#647)"
+				"paste clipboard change fence (#647)",
+				"paste restores the clipboard when the body throws (#647)",
+				"paste unchanged value is unknown (#647)",
+				"paste presses the layout key for v (#647)",
+				"paste item is transient for clipboard managers (#647)",
+				"secondaryAction retries only a dead element (#647)"
 			],
 			"upstream": {
 				"status": "harness-only",

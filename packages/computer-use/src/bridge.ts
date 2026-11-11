@@ -320,7 +320,7 @@ const runtimeState: RuntimeState = {
 
 const savedStates = new SavedStates();
 /** Test seam: lets scripts run bridge internals inside an operation state. */
-export const testing = { savedState: (stateId: string) => savedStates.get(stateId), runInOperation: <T>(fn: () => T, state: OperationState = {}): T => savedStates.operations.run(state, fn), buildToolResult, browserObservationResult, waitForViewText, sameRootIdentity, performSearchUi, performLaunchBrowser, removeProfileDirsOnExit, managedBrowserNeedsHeadless, managedBrowserArgs };
+export const testing = { assertBrowserTransactionAction, savedState: (stateId: string) => savedStates.get(stateId), runInOperation: <T>(fn: () => T, state: OperationState = {}): T => savedStates.operations.run(state, fn), buildToolResult, browserObservationResult, waitForViewText, sameRootIdentity, performSearchUi, performLaunchBrowser, removeProfileDirsOnExit, managedBrowserNeedsHeadless, managedBrowserArgs };
 let resourceScheduler = new ResourceScheduler();
 
 function operationState(): OperationState {
@@ -2022,6 +2022,10 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 	}, signal));
 }
 
+function assertBrowserTransactionAction(action: UiAction): void {
+	if (!BROWSER_TRANSACTION_ACTIONS.has(action.action)) throw new ComputerUseError("unsupported_command", `Browser transactions do not support '${action.action}'.`);
+}
+
 async function performBrowserTransaction(params: ActParams, actions: UiAction[], signal?: AbortSignal): Promise<AgentToolResult<BrowserObservationDetails>> {
 	const contextId = browserContextForOperation();
 	if (!contextId) throw new Error("Browser transaction requires a browser observation state.");
@@ -2031,7 +2035,7 @@ async function performBrowserTransaction(params: ActParams, actions: UiAction[],
 	const condition = params.expect ? validateCondition(params.expect) : undefined;
 	if (condition) conditionScopeNode(restoreOutline(baseSnapshot.outline), condition);
 	const prepared = actions.map((action) => {
-		if (!BROWSER_TRANSACTION_ACTIONS.has(action.action)) throw new Error(`Browser transactions do not support '${action.action}'.`);
+		assertBrowserTransactionAction(action);
 		if (action.action === "click" && action.ref && action.button && action.button !== "left") throw new Error("Browser ref clicks support only the left button; use coordinate clicks for right or middle buttons.");
 		const target = browserSnapshotTarget(params.stateId, trimOrUndefined(action.ref));
 		if ((action.action === "press" || action.action === "setText" || (action.action === "click" && action.ref) || (action.action === "typeText" && action.ref)) && !Number.isFinite(target?.backendNodeId)) {

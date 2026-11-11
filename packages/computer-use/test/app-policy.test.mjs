@@ -130,6 +130,12 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	assert.match(swift, /case "type", "key":\n\t\t\ttry refuseBlockedKeyboard\(\)/, "helper must refuse blocked apps before typing or keys");
 	assert.equal(swift.match(/try refuseBlockedKeyboardAfterFocus\(preserveFocus: preserveFocus\)/g)?.length, 3, "act typeText, paste and keypress must refuse a blocked focused app under HID delivery");
 	assert.match(swift, /try refuseBlockedKeyboardAfterFocus\(preserveFocus: preserveFocus\)\n\t+let restored = try withTemporaryClipboard/, "paste must refuse a blocked focused app before it touches the clipboard");
+	const pasteBody = swift.match(/let restored = try withTemporaryClipboard\(text\) \{[\s\S]*?\n\t\t\t\}\n/)?.[0] ?? "";
+	const recheckAt = pasteBody.indexOf("try refuseBlockedKeyboardTarget(blocked: blockedBundleIdList(request))");
+	assert.ok(recheckAt > 0 && recheckAt < pasteBody.indexOf("try postKeyCode("), "paste must re-check the focused app after the clipboard snapshot and right before cmd+v");
+	assert.match(swift, /return try withRestoredClipboard\(write: \{[\s\S]*?\}, restore: restore, body: body\)/, "the temporary clipboard must restore on every exit, including a refusal in the body");
+	const restoreHelper = swift.match(/func withRestoredClipboard[\s\S]*?\n\}\n/)?.[0] ?? "";
+	assert.match(restoreHelper, /catch \{\n\t\t_ = restore\(\)\n\t\tthrow error/, "a throwing write or body restores the clipboard before rethrowing");
 	assert.match(swift, /if delivery == "hid" \{ try refuseBlockedKeyboardAfterFocus\(preserveFocus: false\) \} else \{ focusTargetForPhysicalInput\(\) \}\n\t+_ = AXUIElementSetAttributeValue\(element, kAXFocusedAttribute/, "web setText must wait for focus and refuse a blocked focused app before its HID keys");
 	const keyboardHelper = swift.match(/func refuseBlockedKeyboardAfterFocus[\s\S]*?\n\t\t\}\n/)?.[0] ?? "";
 	const keyboardOrder = ['guard delivery == "hid"', "focusTargetForPhysicalInput()", "try requireTargetFocus(pid: pid)", "try refuseBlockedKeyboardTarget("].map((needle) => keyboardHelper.indexOf(needle));

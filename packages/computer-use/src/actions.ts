@@ -187,8 +187,9 @@ export function unsupportedActionRejection(action: UiAction, platform: string): 
 	return `${action.action} is not supported on ${platform}; it is currently implemented by the macOS helper only`;
 }
 
+/** Foreground retry is never offered for `paste`: a slow target may still paste, so a retry could insert twice. */
 export function canRetryInForeground(action: PreparedAction, outcome: "worked" | "didnt" | "unknown", headless: boolean): boolean {
-	return !headless && outcome === "didnt" && (action.action === "typeText" || action.action === "paste" || action.action === "keypress");
+	return !headless && outcome === "didnt" && (action.action === "typeText" || action.action === "keypress");
 }
 
 export function outcomeAfterCheck(current: "worked" | "didnt" | "unknown", check: "verified" | "preexisting" | "failed"): "worked" | "didnt" | "unknown" {

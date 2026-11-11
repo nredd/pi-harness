@@ -186,8 +186,12 @@ test("act outcome contracts", async () => {
 		for (const platform of ["linux", "win32"]) assert.match(unsupportedActionRejection({ action }, platform), new RegExp(`${action} is not supported on ${platform}`));
 	}
 	assert.equal(unsupportedActionRejection({ action: "typeText" }, "linux"), undefined, "existing actions are untouched");
-	assert.equal(canRetryInForeground(prep({ action: "paste", ref: "@e3", text: "x" }), "didnt", false), true, "a failed paste restored the clipboard, so a foreground retry is safe");
-	assert.equal(canRetryInForeground(prep({ action: "paste", ref: "@e3", text: "x" }), "didnt", true), false);
+	for (const headless of [false, true]) assert.equal(canRetryInForeground(prep({ action: "paste", ref: "@e3", text: "x" }), "didnt", headless), false, "paste is never retried: a slow target may still paste, so a retry could insert twice");
+	assert.equal(canRetryInForeground(prep({ action: "keypress", ref: "@e3", keys: ["a"] }), "didnt", false), true, "typeText and keypress keep their foreground retry");
+	for (const action of ["secondaryAction", "selectText", "paste"]) {
+		assert.throws(() => testing.assertBrowserTransactionAction({ action }), (error) => error.code === "unsupported_command" && /do not support/.test(error.message), `${action} in a browser state is a coded unsupported_command`);
+	}
+	assert.doesNotThrow(() => testing.assertBrowserTransactionAction({ action: "typeText" }));
 	assert.equal(canRetryInForeground(prep({ action: "selectText", ref: "@e3", start: 0 }), "didnt", false), false, "AX-only actions never escalate");
 
 	console.log("act outcome checks passed");
