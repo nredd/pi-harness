@@ -190,6 +190,7 @@ async function makeHost({ platform = "darwin", hostArch = "arm64", env = {}, sou
 			throw sysError("not found", "ENOENT");
 		}
 		if (command === "openssl") {
+			if (args[0] === "req") state.lockSeen = await realFs.readdir(osFake.tmpdir()).then((names) => names.filter((name) => name.endsWith(".lock")));
 			const key = args.includes("-legacy") ? "legacy" : args[0];
 			if (state.opensslFail.has(key)) throw state.opensslFail.get?.(key) ?? new Error(`openssl ${key} failed`);
 			return { stdout: "", stderr: "" };
@@ -794,8 +795,34 @@ describe("macOS local helper install and signing", () => {
 		host.state.securityImportFail = new Error("import denied");
 		const rec = await runMain(host, []);
 		assert.equal(rec.spawn.find(([command]) => command === "codesign")[7], "-");
-		assert.match(rec.warn.find((line) => line.includes("could not create")), /Imported local signing certificate is not a valid code-signing identity|import denied/);
-		assert.equal(rec.exec.filter(([command, sub]) => command === "security" && sub === "find-identity").length >= 3, true);
+		// The identity is resolved twice (to pick the install path, then to sign), each failing the same way.
+		const warning = "[pi-computer-use] could not create a valid local signing identity: import denied";
+		assert.deepEqual(rec.warn.filter((line) => line.includes("could not create")), [warning, warning]);
+		// Per resolution: Developer ID lookup, local lookup, once more before the lock and once inside it.
+		assert.equal(rec.exec.filter(([command, sub]) => command === "security" && sub === "find-identity").length, 8);
+		assert.deepEqual(host.state.lockSeen, ["pi-computer-use-local-signing-user.lock"]);
+	});
+
+	test("with several identities listed, the first matching one is used", async () => {
+		const host = await makeHost();
+		await prebuiltBinary(host, "arm64", "bin");
+		host.state.devIdOutput = [
+			`  1) ${"C".repeat(40)} "Apple Development: Someone"`,
+			`  2) ${DEV_FPR} "Developer ID Application: First (TEAM000001)"`,
+			`  3) ${"D".repeat(40)} "Developer ID Application: Second (TEAM000002)"`,
+		].join("\n");
+		let rec = await runMain(host, []);
+		assert.equal(rec.spawn.find(([command]) => command === "codesign")[7], DEV_FPR);
+
+		const local = await makeHost();
+		await prebuiltBinary(local, "arm64", "bin");
+		local.state.localListing = () => [
+			`  1) ${"C".repeat(40)} "Some Other Identity" (CSSMERR_TP_NOT_TRUSTED)`,
+			`  2) ${LOCAL_FPR} "${LOCAL_CN}" (CSSMERR_TP_NOT_TRUSTED)`,
+			`  3) ${"E".repeat(40)} "${LOCAL_CN}" (CSSMERR_TP_NOT_TRUSTED)`,
+		].join("\n");
+		rec = await runMain(local, []);
+		assert.equal(rec.spawn.find(([command]) => command === "codesign")[7], LOCAL_FPR);
 	});
 
 	test("an existing local identity is used by fingerprint and announced", async () => {
@@ -846,6 +873,7 @@ describe("macOS local helper install and signing", () => {
 			assert.deepEqual(rec.spawn.find(([command]) => command === "codesign").slice(6, 8), ["--sign", LOCAL_FPR]);
 			const leftovers = (await realFs.readdir(host.dirs.tmp)).filter((name) => name.startsWith("pi-computer-use-signing-"));
 			assert.deepEqual(leftovers, [], "scratch key material is removed");
+			assert.deepEqual(host.state.lockSeen, ["pi-computer-use-local-signing-501.lock"], "creation runs under the uid-named lock");
 			assert.equal(await present(path.join(host.dirs.tmp, "pi-computer-use-local-signing-501.lock")), false, "lock released");
 		});
 	}
@@ -1001,7 +1029,7 @@ describe("macOS release download", () => {
 		}
 	});
 
-		test("a throwing asset fetch is reported as a failed download", async () => {
+	test("a throwing asset fetch is reported as a failed download", async () => {
 		const host = await makeHost();
 		host.state.fetchRoutes.set(ZIP_URL, () => { throw new Error("socket hang up"); });
 		const rec = await runMain(host, []);
@@ -1226,9 +1254,10 @@ describe("runCancellable in process", () => {
 		let run = start(child, live);
 		handlers.get("exit")();
 		assert.deepEqual(signalled, [[-4_000_001, 0], [-4_000_001, "SIGKILL"]]);
+		// The reaping probes never reach ESRCH; the fast clock ends the budget at once.
+		fastForwardClock();
 		child.emit("close", 0, null);
-		// The reaping probes above never reach ESRCH, so the exit fallback stays armed; settle by throwing.
-		run.promise.catch(() => {});
+		await assert.rejects(run.promise, /remained non-empty after SIGKILL cleanup/);
 
 		// After a successful reap the id may be recycled: the backstop must stay silent.
 		signalled.length = 0;
@@ -1272,8 +1301,9 @@ describe("runCancellable in process", () => {
 		const run = start(child, (pid, signal) => { calls.push(signal); if (signal === 0) throw sysError("eperm", "EPERM"); return true; }, () => { throw new Error("ps timed out"); });
 		handlers.get("exit")();
 		assert.deepEqual(calls, [0]);
+		fastForwardClock();
 		child.emit("close", 0, null);
-		run.promise.catch(() => {});
+		await assert.rejects(run.promise, /^Error: eperm$/);
 	});
 
 	/**

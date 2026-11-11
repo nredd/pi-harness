@@ -346,7 +346,7 @@ export async function ensureIdentityOnce(findIdentity, createIdentity, withLock)
  * @param {string[]} argv CLI arguments after the script name.
  * @param {SetupDeps} deps Host seams.
  * @returns {{setup: () => Promise<void>, isPostinstall: boolean}} The install entry point and whether `--postinstall` was passed.
- * @throws {never} Construction only reads paths and flags.
+ * @throws {Error} When `resolveMacosHelperAppPath` cannot probe the filesystem.
  */
 function createSetup(argv, deps) {
 	const { platform, hostArch, env, pid, uid, rootDir, fs, os, spawn, execFile, runCancellable, fetch, createWriteStream, pipeline, now, sleep, console } = deps;
