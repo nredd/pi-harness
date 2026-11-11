@@ -525,7 +525,7 @@
 		},
 		{
 			"id": "act-paste-blocked-app",
-			"purpose": "paste posts cmd+v, so the helper waits for target focus and refuses a blocked focused app before touching the clipboard, like typeText and keypress",
+			"purpose": "paste posts cmd+v, so the helper waits for target focus and refuses a blocked focused app before touching the clipboard and again right before cmd+v (restoring the clipboard), like typeText and keypress",
 			"files": ["native/macos/bridge.swift", "test/app-policy.test.mjs"],
 			"check": "test/app-policy.test.mjs",
 			"dropControls": [
