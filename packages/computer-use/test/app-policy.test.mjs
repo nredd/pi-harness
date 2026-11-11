@@ -37,19 +37,23 @@ test("blocked_apps config: defaults, user JSON, env and the always-blocked syste
 	assert.deepEqual(list(), ["com.example.Vault"], "user JSON list replaces the default, trimmed and deduplicated");
 	assert.ok(isBlockedBundleId("com.example.vault") && !isBlockedBundleId("com.apple.Terminal"));
 
+	// Env is additive: a repo can set it (.envrc, launch script), so it can add ids but never remove one.
+	writeFileSync(userFile, "{}");
 	process.env[ENV] = "com.example.A, com.example.B";
-	assert.deepEqual(list(), ["com.example.A", "com.example.B"], "env overrides the user file");
-
-	// Blank env is unset, never an opt-out; only `none` opts out.
+	assert.deepEqual(list(), [...DEFAULT_BLOCKED_APPS, "com.example.A", "com.example.B"], "env is unioned into the defaults");
+	writeFileSync(userFile, JSON.stringify({ blocked_apps: ["com.example.Vault"] }));
+	assert.deepEqual(list(), ["com.example.Vault", "com.example.A", "com.example.B"], "env is unioned into the user file list");
 	for (const blank of ["", "   ", ",", " , ,"]) {
 		process.env[ENV] = blank;
-		writeFileSync(userFile, "{}");
-		assert.deepEqual(list(), [...DEFAULT_BLOCKED_APPS], `blank env ${JSON.stringify(blank)} keeps the defaults`);
+		assert.deepEqual(list(), ["com.example.Vault"], `blank env ${JSON.stringify(blank)} is unset`);
 	}
-	process.env[ENV] = " None ";
-	assert.deepEqual(list(), []);
-	assert.ok(!isBlockedBundleId("com.apple.Terminal"));
-	assert.deepEqual(effectiveBlockedBundleIds(), SYSTEM_AGENTS);
+	// `none` is not an opt-out: it is just an (inert) id.
+	writeFileSync(userFile, "{}");
+	for (const none of ["none", " None "]) {
+		process.env[ENV] = none;
+		assert.ok(list().length >= DEFAULT_BLOCKED_APPS.length, `env ${none} must not shrink the list`);
+		assert.ok(isBlockedBundleId("com.apple.Terminal"), `env ${none} must not opt out`);
+	}
 	delete process.env[ENV];
 
 	// Only a literal [] in the USER file opts out.
@@ -122,7 +126,9 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	const body = swift.match(/let alwaysBlockedBundleIds: \[String\] = \[([\s\S]*?)\]/)?.[1] ?? "";
 	assert.deepEqual([...body.matchAll(/"([^"]+)"/g)].map((m) => m[1]), SYSTEM_AGENTS);
 	assert.match(swift, /lockedSessionRefusal\(cmd: cmd, session: CGSessionCopyCurrentDictionary\(\)/, "helper must refuse UI commands while locked");
-	assert.match(swift, /guard let app, isBlockedBundleId\(app\.bundleIdentifier, blocked: blocked\) else \{ return \}/, "helper must refuse blocked apps for keys and pointer input");
+	assert.match(swift, /keyboardTargetRefusalPid\(frontmostPid: NSWorkspace\.shared\.frontmostApplication\?\.processIdentifier, focusedPid: focusedPid/, "helper must refuse blocked frontmost or focused apps for keys");
+	assert.match(swift, /case "type", "key":\n\t\t\ttry refuseBlockedKeyboard\(\)/, "helper must refuse blocked apps before typing or keys");
+	assert.match(swift, /try refuseBlockedPointer\(at: point, blocked: blockedBundleIdList\(request\)\)/, "act coordinate input must refuse blocked windows");
 	assert.match(swift, /SCContentFilter\(display: display, excludingApplications: excluded, exceptingWindows: \[\]\)/, "display capture must exclude blocked apps");
 	assert.match(swift, /AXUIElementCopyElementAtPosition\(AXUIElementCreateSystemWide\(\)/, "pointer input must also hit-test through accessibility");
 	assert.match(swift, /return \("screen_locked", "screen_locked:/);
@@ -218,10 +224,9 @@ test("act_ui, observe_ui and find_roots enforce blocked_apps at the platform bac
 	assert.equal(readCalls.length, 0, "blocked read_text must not reach the helper");
 	assert.ok((await call(executeFind, { app: "Safe" })).details.windows.every((w) => w.blocked), "find_roots reflects the new list");
 
-	// Opt-out: `none` allows Terminal again, system agents stay blocked.
+	// The env var cannot opt out: `none` leaves Terminal blocked.
 	process.env[ENV] = "none";
-	await call(executeObserve, { root: refOf("Terminal"), mode: "semantic" });
-	await assert.rejects(() => call(executeObserve, { root: refOf("SecurityAgent") }), blocked("app_blocked"));
+	await assert.rejects(() => call(executeObserve, { root: refOf("Terminal") }), blocked("app_blocked"));
 });
 
 test.skipIf(process.platform !== "darwin")("desktop_input sends the effective blocklist and surfaces the helper's coded refusals", async ({ onTestFinished }) => {
@@ -235,6 +240,9 @@ test.skipIf(process.platform !== "darwin")("desktop_input sends the effective bl
 	});
 	process.env[ENV] = "com.example.Vault";
 	loadComputerUseConfig(mkdtempSync(path.join(os.tmpdir(), "cu-policy-")));
+	const { effectiveBlockedBundleIds } = await import("../src/config.ts");
+	const expected = effectiveBlockedBundleIds();
+	assert.ok(SYSTEM_AGENTS.every((id) => expected.includes(id)) && expected.includes("com.example.Vault"));
 	const sent = [];
 	macosHelper.command = async (name, args) => {
 		sent.push({ name, args });
@@ -244,7 +252,7 @@ test.skipIf(process.platform !== "darwin")("desktop_input sends the effective bl
 		await assert.rejects(() => executeDesktopInput("d", params), (error) => error.code === "app_blocked");
 	}
 	assert.equal(sent.length, 3);
-	for (const { args } of sent) assert.deepEqual(args.blockedBundleIds, [...SYSTEM_AGENTS, "com.example.Vault"]);
+	for (const { args } of sent) assert.deepEqual(args.blockedBundleIds, expected);
 
 	// desktop_screenshot sends it too, so the helper can exclude the blocked apps from the capture.
 	sent.length = 0;
@@ -255,5 +263,33 @@ test.skipIf(process.platform !== "darwin")("desktop_input sends the effective bl
 	};
 	await executeDesktopScreenshot("d", {}, undefined, undefined, undefined);
 	assert.equal(sent[0].name, "captureDisplay");
-	assert.deepEqual(sent[0].args.blockedBundleIds, [...SYSTEM_AGENTS, "com.example.Vault"]);
+	assert.deepEqual(sent[0].args.blockedBundleIds, expected);
+});
+
+test("macOS act and actBatch send the effective blocklist so coordinate input is checked in the helper", async ({ onTestFinished }) => {
+	const { macosHelper } = await import("../src/platform/macos/helper.ts");
+	const { macosBackend } = await import("../src/platform/macos/backend.ts");
+	const { loadComputerUseConfig } = await import("../src/config.ts");
+	const command = macosHelper.command;
+	onTestFinished(() => {
+		macosHelper.command = command;
+	});
+	process.env[ENV] = "com.example.Vault";
+	loadComputerUseConfig(mkdtempSync(path.join(os.tmpdir(), "cu-policy-")));
+	const sent = [];
+	macosHelper.command = async (name, args) => {
+		sent.push({ name, args });
+		return { outcome: "worked", steps: [] };
+	};
+	const request = { lookId: "l1", pid: 1, target: { kind: "coordinates", x: 1, y: 2 }, policy: "foreground", action: "click", params: { delivery: "hid" } };
+	await macosBackend.act(request);
+	await macosBackend.actBatch([request, request]);
+	const { effectiveBlockedBundleIds } = await import("../src/config.ts");
+	const expected = effectiveBlockedBundleIds();
+	assert.ok(expected.includes("com.example.Vault"));
+	assert.equal(sent[0].name, "act");
+	assert.deepEqual(sent[0].args.blockedBundleIds, expected);
+	assert.equal(sent[1].name, "actBatch");
+	assert.equal(sent[1].args.actions.length, 2);
+	for (const action of sent[1].args.actions) assert.deepEqual(action.blockedBundleIds, expected);
 });

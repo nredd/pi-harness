@@ -94,12 +94,9 @@ function parseBundleIdArray(value: unknown): BundleIds {
 	return { ids: [...new Set((value as string[]).map((item) => item.trim()))] };
 }
 
-/** `PI_COMPUTER_USE_BLOCKED_APPS`: blank is unset (undefined), `none` is the explicit opt-out, else a comma list. */
-function parseBundleIdEnv(value: string | undefined): string[] | undefined {
-	const ids = [...new Set((value ?? "").split(",").map((item) => item.trim()).filter(Boolean))];
-	if (ids.length === 0) return undefined;
-	if (ids.length === 1 && ids[0].toLowerCase() === "none") return [];
-	return ids;
+/** `PI_COMPUTER_USE_BLOCKED_APPS`: a comma list of ids to ADD to the blocklist; blank is unset. The env can never remove an id (a repo's `.envrc` can set it). */
+function parseBundleIdEnv(value: string | undefined): string[] {
+	return [...new Set((value ?? "").split(",").map((item) => item.trim()).filter(Boolean))];
 }
 
 function normalizePartial(raw: unknown): Partial<ComputerUseConfig> {
@@ -161,8 +158,6 @@ function readEnv(): Partial<ComputerUseConfig> {
 	if (activityGlow !== undefined) out.activity_glow = activityGlow;
 	const managedBrowser = process.env.PI_COMPUTER_USE_MANAGED_BROWSER;
 	if (managedBrowser === "helium" || managedBrowser === "chrome") out.managed_browser = managedBrowser;
-	const blockedApps = parseBundleIdEnv(process.env.PI_COMPUTER_USE_BLOCKED_APPS);
-	if (blockedApps) out.blocked_apps = blockedApps;
 	return out;
 }
 
@@ -179,7 +174,8 @@ export function loadComputerUseConfig(cwd: string): LoadedComputerUseConfig {
 		if (source.values) Object.assign(config, source.values);
 	}
 	Object.assign(config, env);
-	config.blocked_apps = [...new Set([...config.blocked_apps, ...sources.flatMap((source) => source.blockedAppsAdd ?? [])])];
+	// Project files and the environment, both repo-controllable, can only add ids.
+	config.blocked_apps = [...new Set([...config.blocked_apps, ...sources.flatMap((source) => source.blockedAppsAdd ?? []), ...parseBundleIdEnv(process.env.PI_COMPUTER_USE_BLOCKED_APPS)])];
 	activeConfig = config;
 	activeLoadedConfig = { config, sources, env, blockedAppsErrors };
 	return activeLoadedConfig;
@@ -299,9 +295,9 @@ A blocked target fails with the coded error `app_blocked`:
 - `desktop_input` refuses `activateApp` of a blocked app, refuses `typeText` and `keypress` while a blocked app is frontmost, and refuses `moveMouse`, `click`, `scroll` and `drag` whose pointer (or drag endpoint) lands on a blocked app's window. The helper checks immediately before it delivers the input, but a key sequence that itself switches apps (e.g. `cmd+tab`) or a focus change in the middle of delivery is not re-checked, so this is a guard against mistakes, not a sandbox. Clipboard actions are not input delivery and are not blocked.
 - `find_roots` still lists blocked roots, marked `blocked`, so the model learns why they cannot be used.
 
-Only the user-global file and the environment can replace the list. A project `.pi/computer-use.json` is writable by the repository and by the agent itself, so its `blocked_apps` is only unioned into the effective list: it can add ids, never remove one, and `[]` there changes nothing. The user-global list replaces the default, it does not extend it, so the explicit opt-out is a literal `"blocked_apps": []` in `~/.pi/agent/extensions/pi-computer-use.json`; copy the defaults and append to extend them.
+Only the user-global file can replace the list. A project `.pi/computer-use.json` is writable by the repository and by the agent itself, so its `blocked_apps` is only unioned into the effective list: it can add ids, never remove one, and `[]` there changes nothing. The environment is treated the same way, because a repository can set it too (`.envrc`, direnv, a launch script). The user-global list replaces the default, it does not extend it, so the explicit opt-out is a literal `"blocked_apps": []` in `~/.pi/agent/extensions/pi-computer-use.json`; copy the defaults and append to extend them.
 
-A `blocked_apps` value that is not an array of non-blank strings (e.g. `[{"id": "..."}]`, `[123]`, `[" "]`) is a configuration error, not an opt-out: the previous list stays in force and `/computer-use` prints the error. Bundle ids compare case-insensitively. A root without a bundle id (e.g. an unbundled process) cannot be matched. The environment variable `PI_COMPUTER_USE_BLOCKED_APPS` takes a comma-separated list and overrides the user file; a blank value (empty, whitespace, only commas) is treated as unset, and the explicit opt-out is `none`.
+A `blocked_apps` value that is not an array of non-blank strings (e.g. `[{"id": "..."}]`, `[123]`, `[" "]`) is a configuration error, not an opt-out: the previous list stays in force and `/computer-use` prints the error. Bundle ids compare case-insensitively. A root without a bundle id (e.g. an unbundled process) cannot be matched. The environment variable `PI_COMPUTER_USE_BLOCKED_APPS` takes a comma-separated list of ids that are added to the effective list; it never removes one, a blank value (empty, whitespace, only commas) is treated as unset, and there is no environment opt-out (`none` is just an id that matches nothing). Trust model: the environment and project config are additive only; the user-global file is the only place that can opt out, and `PI_CODING_AGENT_DIR` selects which file that is, so it must be controlled by the operator, not by a repository.
 
 Known limits. This is a guard against mistakes, not a sandbox:
 
@@ -331,7 +327,6 @@ PI_COMPUTER_USE_CURSOR_OVERLAY=1
 PI_COMPUTER_USE_ACTIVITY_GLOW=0
 PI_COMPUTER_USE_ACTIVITY_GLOW=1
 PI_COMPUTER_USE_BLOCKED_APPS=com.apple.Terminal,com.example.Vault
-PI_COMPUTER_USE_BLOCKED_APPS=none
 PI_COMPUTER_USE_DELIVERY_POLICY=default
 PI_COMPUTER_USE_DELIVERY_POLICY=foreground
 PI_COMPUTER_USE_CDP_PORT=9222

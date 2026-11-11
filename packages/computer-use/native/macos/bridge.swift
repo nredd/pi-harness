@@ -340,6 +340,23 @@ func itemsWithBlockedBundleId<T>(_ items: [T], blocked: [String], bundleId: (T) 
 	items.filter { isBlockedBundleId(bundleId($0), blocked: blocked) }
 }
 
+/// The blocked pid that keyboard input would reach: the frontmost app's, or the system-wide focused app's (a
+/// non-activating panel of a blocked app can hold key focus while another app is frontmost). nil when neither
+/// resolves to a blocked pid; an unknown focused app falls back to the frontmost check alone.
+func keyboardTargetRefusalPid(frontmostPid: Int32?, focusedPid: Int32?, isBlockedPid: (Int32) -> Bool) -> Int32? {
+	if let frontmostPid, isBlockedPid(frontmostPid) { return frontmostPid }
+	if let focusedPid, isBlockedPid(focusedPid) { return focusedPid }
+	return nil
+}
+
+/// The blocked pid a pointer event at `point` would reach: a blocked window above the first normal-layer window
+/// (`blockedWindowOwnerPid`), or the pid of the accessibility hit (`hitPid`, ignoring `excludingPid`), or nil.
+func coordinateTargetRefusalPid(windows: [[String: Any]], at point: CGPoint, hitPid: Int32?, excludingPid: Int32, isBlockedPid: (Int32) -> Bool) -> Int32? {
+	if let pid = blockedWindowOwnerPid(windows, at: point, excludingPid: excludingPid, isBlockedPid: isBlockedPid) { return pid }
+	if let hitPid, hitPid != excludingPid, isBlockedPid(hitPid) { return hitPid }
+	return nil
+}
+
 /// A blocked owner pid among the windows at `point`, from `CGWindowListCopyWindowInfo` entries (ordered front
 /// to back), or nil. Windows of `excludingPid` (our own click-through overlays) and fully transparent or empty
 /// windows are skipped. The scan refuses a blocked window anywhere above the first non-blocked normal-layer
@@ -2326,6 +2343,15 @@ final class Bridge {
 			guard element != nil || record.hasImage else {
 				throw BridgeFailure(message: "Coordinate grounding is unavailable for this outline-only root", code: "coordinate_unavailable_for_root")
 			}
+			// HID/pid pointer events land on whatever is at the point, which can be a blocked app's floating window.
+			try refuseBlockedPointer(at: point, blocked: blockedBundleIdList(request))
+			if action == "drag", let rawPath = params["path"] as? [[String: Any]] {
+				for raw in rawPath {
+					if let x = (raw["x"] as? NSNumber)?.doubleValue, let y = (raw["y"] as? NSNumber)?.doubleValue {
+						try refuseBlockedPointer(at: lookPoint(record: record, x: x, y: y), blocked: blockedBundleIdList(request))
+					}
+				}
+			}
 			performed["grounding"] = "coordinates"
 			if delivery == "pid" { performed["verification"] = "caller_required" }
 			acquirePhysicalInputIfNeeded()
@@ -3251,6 +3277,40 @@ final class Bridge {
 
 	// MARK: Whole-desktop control (global coordinates, HID delivery)
 
+	/// Throws `app_blocked` when keyboard input would reach a blocked app: the frontmost one, or the system-wide
+	/// focused one (a non-activating panel can hold key focus). An AX error leaves the frontmost check alone.
+	private func refuseBlockedKeyboardTarget(blocked: [String]) throws {
+		let isBlockedPid: (Int32) -> Bool = { isBlockedBundleId(NSRunningApplication(processIdentifier: $0)?.bundleIdentifier, blocked: blocked) }
+		var focusedPid: Int32?
+		var focused: CFTypeRef?
+		if AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(), kAXFocusedApplicationAttribute as CFString, &focused) == .success,
+			let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() {
+			var pid: pid_t = 0
+			if AXUIElementGetPid(focused as! AXUIElement, &pid) == .success { focusedPid = pid }
+		}
+		if let pid = keyboardTargetRefusalPid(frontmostPid: NSWorkspace.shared.frontmostApplication?.processIdentifier, focusedPid: focusedPid, isBlockedPid: isBlockedPid) {
+			let app = NSRunningApplication(processIdentifier: pid)
+			throw BridgeFailure(message: appBlockedMessage(app?.localizedName ?? "app", app?.bundleIdentifier), code: "app_blocked")
+		}
+	}
+
+	/// Throws `app_blocked` when a pointer event at `point` would reach a blocked app's window or accessibility element.
+	private func refuseBlockedPointer(at point: CGPoint, blocked: [String]) throws {
+		let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+		let isBlockedPid: (Int32) -> Bool = { isBlockedBundleId(NSRunningApplication(processIdentifier: $0)?.bundleIdentifier, blocked: blocked) }
+		// The window list cannot see through a click-through overlay that sits at layer 0; ask the accessibility hit test too.
+		var element: AXUIElement?
+		var hitPid: pid_t = 0
+		var hit: Int32?
+		if AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &element) == .success,
+			let element, AXUIElementGetPid(element, &hitPid) == .success { hit = hitPid }
+		if let pid = coordinateTargetRefusalPid(windows: windows, at: point, hitPid: hit, excludingPid: getpid(), isBlockedPid: isBlockedPid) {
+			let app = NSRunningApplication(processIdentifier: pid)
+			throw BridgeFailure(message: appBlockedMessage(app?.localizedName ?? "app", app?.bundleIdentifier), code: "app_blocked")
+		}
+	}
+
+
 	/// Capture one display, cursor included. Displays are ordered main first, then by x/y origin.
 	/// Returned `frame` is in global points (top-left origin), the space `desktopInput` consumes.
 	private func captureDisplay(_ request: [String: Any]) throws -> [String: Any] {
@@ -3324,27 +3384,15 @@ final class Bridge {
 			return CGPoint(x: x, y: y)
 		}
 		let blocked = blockedBundleIdList(request)
-		func refuseBlocked(_ app: NSRunningApplication?) throws {
-			guard let app, isBlockedBundleId(app.bundleIdentifier, blocked: blocked) else { return }
-			throw BridgeFailure(message: appBlockedMessage(app.localizedName ?? "app", app.bundleIdentifier), code: "app_blocked")
-		}
 		func refuseBlockedWindow(at point: CGPoint) throws {
-			let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
-			let isBlockedPid: (Int32) -> Bool = { isBlockedBundleId(NSRunningApplication(processIdentifier: $0)?.bundleIdentifier, blocked: blocked) }
-			if let pid = blockedWindowOwnerPid(windows, at: point, excludingPid: getpid(), isBlockedPid: isBlockedPid) {
-				try refuseBlocked(NSRunningApplication(processIdentifier: pid))
-			}
-			// The window list cannot see through a click-through overlay that sits at layer 0; ask the accessibility hit test too.
-			var element: AXUIElement?
-			var hitPid: pid_t = 0
-			if AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &element) == .success,
-				let element, AXUIElementGetPid(element, &hitPid) == .success, hitPid != getpid(), isBlockedPid(hitPid) {
-				try refuseBlocked(NSRunningApplication(processIdentifier: hitPid))
-			}
+			try refuseBlockedPointer(at: point, blocked: blocked)
+		}
+		func refuseBlockedKeyboard() throws {
+			try refuseBlockedKeyboardTarget(blocked: blocked)
 		}
 		switch action {
 		case "type", "key":
-			try refuseBlocked(NSWorkspace.shared.frontmostApplication)
+			try refuseBlockedKeyboard()
 		case "moveMouse", "click", "scroll":
 			try refuseBlockedWindow(at: try point())
 		case "drag":
