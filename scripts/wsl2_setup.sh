@@ -134,5 +134,5 @@ if [ "$in_guest" = 1 ]; then
   # to keep this script's own precedence (a tool it just installed must beat a stale baked copy).
   tr ':' '\n' <<< "$PATH" | while IFS= read -r directory; do
     case "$directory" in "$HOME"/*) printf '%s\n' "$directory" ;; esac
-  done | tac >> "${GITHUB_PATH:?GITHUB_PATH is required in guest mode}"
+  done | awk '{ line[NR] = $0 } END { for (i = NR; i > 0; i--) print line[i] }' >> "${GITHUB_PATH:?GITHUB_PATH is required in guest mode}"
 fi
