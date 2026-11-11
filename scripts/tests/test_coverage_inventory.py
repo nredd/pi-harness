@@ -33,6 +33,7 @@ from coverage_accounting import (
     Policy,
     Reclassification,
     Signal,
+    UnmeasuredTree,
     VerificationHelper,
     account,
     audit_inventory,
@@ -40,6 +41,8 @@ from coverage_accounting import (
     git_read,
     inventory,
     inventory_scopes,
+    is_executable_candidate,
+    is_test_path,
     repository_files,
 )
 
@@ -736,3 +739,299 @@ def test_cli_rejects_unowned_workspaces_and_source(tmp_path: Path, path: str, me
     )
     assert result.returncode == 1
     assert json.loads(summary.read_text())["errors"] == [message]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "packages/example/entry.swift",
+        "packages/example/bridge-rs/src/portal.rs",
+        "scripts/new_gate.sh",
+        "scripts/new_gate.bash",
+        "scripts/new_gate.ps1",
+        "packages/example/panel.tsx",
+        "packages/example/panel.jsx",
+        "packages/example/lib.mts",
+        "packages/example/lib.cts",
+        "packages/example/native/agent_cursor_extra.swift",
+        "scripts/new.wasm",
+        "packages/example/x.zig",
+        "scripts/Dockerfile.sh2",
+    ],
+)
+def test_unowned_or_unknown_source_fails_closed(tmp_path: Path, path: str) -> None:
+    """Fail on every executable language and on suffixes in neither list (#694).
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+        path (str): New unowned source path in a non-TS language.
+    Returns:
+        None: The exact path is reported.
+    Raises:
+        AssertionError: A language outside the old suffix allowlist passes unowned.
+    """
+    cfg = scope_fixture(tmp_path)
+    write_script(tmp_path, path)
+    assert audit_inventory(tmp_path, cfg, repository_files(tmp_path)) == {path}
+
+
+def test_extensionless_shebang_script_fails_but_data_passes(tmp_path: Path) -> None:
+    """Catch extensionless scripts by shebang while leaving inert extensionless files alone.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+    Returns:
+        None: Only the shebang file is reported; test-directory fixtures and known data pass.
+    Raises:
+        AssertionError: An extensionless script evades the audit, or data is flagged.
+    """
+    cfg = scope_fixture(tmp_path)
+    for path, text in {
+        "scripts/run-thing": "#!/bin/sh\necho hi\n",
+        "scripts/Makefile": "all:\n",
+        "scripts/notes.md": "# notes\n",
+        "scripts/data.json": "{}\n",
+        "scripts/tests/fake-ssh": "#!/bin/sh\n",
+    }.items():
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+    assert audit_inventory(tmp_path, cfg, repository_files(tmp_path)) == {"scripts/run-thing"}
+
+
+def test_declaration_files_need_a_type_only_exclusion(tmp_path: Path) -> None:
+    """Accept a `.d.mts` declaration only through an owned `type-only` exclusion.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+    Returns:
+        None: Unclassified fails; owned plus excluded passes.
+    Raises:
+        AssertionError: A declaration file passes without a reasoned exclusion.
+    """
+    cfg = scope_fixture(tmp_path)
+    path = "packages/example/src/helper.d.mts"
+    write_script(tmp_path, path)
+    files = repository_files(tmp_path)
+    assert audit_inventory(tmp_path, cfg, files) == {path}
+    package = cfg.packages["example"]
+    package.owned = [*package.owned, "src/**/*.mts"]
+    package.exclusions = [
+        *package.exclusions,
+        Exclusion(path="src/helper.d.mts", kind="type-only", reason="Declarations only; no executable code."),
+    ]
+    assert not audit_inventory(tmp_path, cfg, files)
+
+
+def test_swift_test_files_are_test_scope_but_other_swift_is_not() -> None:
+    """Pin the Swift test naming convention used by `agent_cursor_tests.swift`.
+
+    Parameters:
+        None.
+    Returns:
+        None: `*_tests.swift` is test scope; ordinary Swift is production.
+    Raises:
+        AssertionError: Test or production classification is wrong.
+    """
+    assert is_test_path(Path("native/macos/agent_cursor_tests.swift"))
+    assert not is_test_path(Path("native/macos/agent_cursor.swift"))
+    assert is_test_path(Path("native/linux/bridge-rs/tests/protocol_tests.rs"))
+    assert not is_test_path(Path("native/linux/bridge-rs/src/lib.rs"))
+
+
+def test_unmeasured_tree_is_tracked_and_reasoned(tmp_path: Path) -> None:
+    """Allow a whole tree to stay out of inventory only through a tracked, reasoned policy entry.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+    Returns:
+        None: The tree fails without an entry, passes with one, and blank entries are rejected.
+    Raises:
+        AssertionError: `forks/` is skipped implicitly or an unreasoned entry is accepted.
+    """
+    cfg = scope_fixture(tmp_path)
+    path = "forks/pi/packages/x/src/new.ts"
+    write_script(tmp_path, path)
+    files = repository_files(tmp_path)
+    assert audit_inventory(tmp_path, cfg, files) == {path}
+    cfg.unmeasured_trees = [UnmeasuredTree(path="forks", issue=693, reason="Open owner decision.")]
+    assert not audit_inventory(tmp_path, cfg, files)
+    for bad in [{"path": "forks", "issue": 693, "reason": " "}, {"path": ".", "issue": 1, "reason": "x"}]:
+        with pytest.raises(ValidationError):
+            UnmeasuredTree.model_validate(bad)
+
+
+def tree(path: str) -> UnmeasuredTree:
+    """Build a reasoned unmeasured-tree declaration.
+
+    Parameters:
+        path (str): Repository-relative tree path.
+    Returns:
+        UnmeasuredTree: Entry citing a placeholder issue.
+    Raises:
+        ValidationError: The path is not a normalised relative non-root path.
+    """
+    return UnmeasuredTree(path=path, issue=693, reason="Open owner decision.")
+
+
+@pytest.mark.parametrize("path", ["packages", "packages/example", "packages/example/src"])
+def test_unmeasured_tree_cannot_cover_a_package(tmp_path: Path, path: str) -> None:
+    """Refuse a tree equal to, inside or containing a package root.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+        path (str): Overlapping tree path.
+    Returns:
+        None: The audit raises instead of exempting owned source.
+    Raises:
+        AssertionError: An owned tree is silently exempted.
+    """
+    cfg = scope_fixture(tmp_path)
+    cfg.unmeasured_trees = [tree(path)]
+    with pytest.raises(ValueError, match="overlaps package root"):
+        audit_inventory(tmp_path, cfg, repository_files(tmp_path))
+
+
+@pytest.mark.parametrize("path", ["./forks", "forks/", "../forks", "/forks", "."])
+def test_unmeasured_tree_path_must_be_normalised(path: str) -> None:
+    """Refuse spellings that would not compare equal to Git paths.
+
+    Parameters:
+        path (str): Unnormalised, escaping, absolute or root path.
+    Returns:
+        None: Validation rejects it.
+    Raises:
+        AssertionError: A malformed path is accepted.
+    """
+    with pytest.raises(ValidationError):
+        tree(path)
+
+
+def test_unmeasured_tree_must_be_an_existing_directory(tmp_path: Path) -> None:
+    """Refuse a missing path or a file in place of a directory.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+    Returns:
+        None: Both raise.
+    Raises:
+        AssertionError: A dead or file entry is accepted.
+    """
+    cfg = scope_fixture(tmp_path)
+    (tmp_path / "afile").write_text("x\n")
+    for path in ("missing", "afile"):
+        cfg.unmeasured_trees = [tree(path)]
+        with pytest.raises(ValueError, match="existing directory or gitlink"):
+            audit_inventory(tmp_path, cfg, repository_files(tmp_path))
+
+
+def test_duplicate_or_nested_unmeasured_trees_are_rejected() -> None:
+    """Refuse redundant entries.
+
+    Parameters:
+        None.
+    Returns:
+        None: Policy validation fails.
+    Raises:
+        AssertionError: A duplicate or nested entry is accepted.
+    """
+    for paths in (["forks", "forks"], ["forks", "forks/pi"]):
+        data = policy().model_dump()
+        data["unmeasured_trees"] = [tree(path).model_dump() for path in paths]
+        with pytest.raises(ValidationError, match="Duplicate or nested"):
+            Policy.model_validate(data)
+
+
+def test_gitlinks_must_be_covered_by_an_unmeasured_tree(tmp_path: Path) -> None:
+    """Make submodules first-class: an uncovered gitlink fails, so dropping the entry is caught.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+    Returns:
+        None: The gitlink fails without an entry and passes with one.
+    Raises:
+        AssertionError: A submodule is silently outside the inventory.
+    """
+    cfg = scope_fixture(tmp_path)
+    sha = git_read(tmp_path, ["rev-parse", "HEAD"]).strip()
+    git_read(tmp_path, ["update-index", "--add", "--cacheinfo", f"160000,{sha},forks/x"])
+    files = repository_files(tmp_path)
+    assert "forks/x" not in files
+    (tmp_path / "forks").mkdir(exist_ok=True)
+    assert audit_inventory(tmp_path, cfg, files) == {"forks/x"}
+    cfg.unmeasured_trees = [tree("forks")]
+    assert not audit_inventory(tmp_path, cfg, files)
+
+
+def test_exclusion_glob_must_match_an_existing_file(tmp_path: Path) -> None:
+    """Refuse a dead exclusion glob instead of letting it pre-exempt future files.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+    Returns:
+        None: A glob matching nothing raises.
+    Raises:
+        AssertionError: A speculative exclusion is accepted.
+    """
+    cfg = scope_fixture(tmp_path)
+    cfg.packages["example"].exclusions = [Exclusion(path="dist/**", kind="generated", reason="Build output.")]
+    with pytest.raises(ValueError, match="matches no existing file"):
+        audit_inventory(tmp_path, cfg, repository_files(tmp_path))
+
+
+def test_exclusion_glob_matching_an_existing_file_passes(tmp_path: Path) -> None:
+    """Accept an exclusion that hits a real file and exempts exactly it.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+    Returns:
+        None: The audit passes with the live exclusion.
+    Raises:
+        AssertionError: A live exclusion is rejected.
+    """
+    cfg = scope_fixture(tmp_path)
+    cfg.packages["example"].exclusions = [
+        Exclusion(path="src/kept.ts", kind="generated", reason="Build output.")
+    ]
+    assert not audit_inventory(tmp_path, cfg, repository_files(tmp_path))
+
+
+def test_unmeasured_tree_cannot_contain_owned_source(tmp_path: Path) -> None:
+    """Refuse a tree that holds owned files even when no package root overlaps it.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+    Returns:
+        None: A root-level package owning `tools/a.mjs` blocks an entry for `tools`.
+    Raises:
+        AssertionError: Owned source is silently exempted.
+    """
+    cfg = scope_fixture(tmp_path)
+    write_script(tmp_path, "tools/a.mjs")
+    cfg.packages["tooling"] = Package(
+        root=".",
+        owned=["tools/*.mjs"],
+        exclusions=[],
+        status="pending",
+        note="Fixture package rooted at the repository.",
+        goal="excluded",
+        goal_reason="Fixture.",
+        signals={},
+    )
+    cfg.unmeasured_trees = [tree("tools")]
+    with pytest.raises(ValueError, match="contains owned source: 'tools'"):
+        audit_inventory(tmp_path, cfg, repository_files(tmp_path))
+
+
+def test_unreadable_extensionless_path_counts_as_source(tmp_path: Path) -> None:
+    """Fail closed when an extensionless path cannot be sniffed (a directory raises on every OS).
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+    Returns:
+        None: The unreadable path is a candidate rather than inert.
+    Raises:
+        AssertionError: A read error lets a file pass as inert.
+    """
+    (tmp_path / "scripts/odd").mkdir(parents=True)
+    assert is_executable_candidate(tmp_path, Path("scripts/odd"))

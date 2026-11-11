@@ -86,6 +86,35 @@ class Exclusion(StrictModel):
         return self
 
 
+class UnmeasuredTree(StrictModel):
+    path: str = Field(min_length=1, description="Repository-relative directory outside the inventory.")
+    issue: int = Field(ge=1, description="Tracking issue number for the open coverage decision.")
+    reason: str = Field(min_length=1, description="Why the tree is not inventoried yet.")
+
+    @model_validator(mode="after")
+    def reasoned_tree(self) -> UnmeasuredTree:
+        """Require a concrete directory and a substantive reason, never a blanket skip.
+
+        Parameters:
+            None.
+        Returns:
+            UnmeasuredTree: Validated tracked-unmeasured directory.
+        Raises:
+            ValueError: The path is absolute, escapes, is unnormalised (e.g. `./x`, `x/`) or the whole
+                repository, or the reason is blank.
+        """
+        path = Path(self.path)
+        if (
+            path.is_absolute()
+            or ".." in path.parts
+            or not path.parts
+            or path.as_posix() != self.path
+            or not self.reason.strip()
+        ):
+            raise ValueError("Unmeasured tree needs a normalised relative, non-root path and a reason")
+        return self
+
+
 class VerificationHelper(StrictModel):
     path: str = Field(min_length=1, description="Exact repository-relative verification-only file path.")
     reason: str = Field(
@@ -275,6 +304,10 @@ class Policy(StrictModel):
         default_factory=list,
         description="Per-file reasoned verification harness classifications, never production.",
     )
+    unmeasured_trees: list[UnmeasuredTree] = Field(
+        default_factory=list,
+        description="Whole directories not inventoried, each tied to an open tracking issue.",
+    )
     reclassifications: list[Reclassification] = Field(
         default_factory=list,
         description="Explicit reviewed source-membership changes relative to the PR base.",
@@ -284,6 +317,22 @@ class Policy(StrictModel):
         default_factory=list,
         description="New reviewed declarations required for enforced-to-report-only signal transitions.",
     )
+
+    @model_validator(mode="after")
+    def distinct_unmeasured_trees(self) -> Policy:
+        """Reject duplicate or nested unmeasured trees, which would make one entry dead weight.
+
+        Parameters:
+            None.
+        Returns:
+            Policy: Validated unmeasured-tree declarations.
+        Raises:
+            ValueError: Two entries are equal or one is inside another.
+        """
+        paths = [Path(tree.path) for tree in self.unmeasured_trees]
+        if len(set(paths)) != len(paths) or any(a != b and a.is_relative_to(b) for a in paths for b in paths):
+            raise ValueError("Duplicate or nested `unmeasured_trees` paths")
+        return self
 
     @model_validator(mode="after")
     def zero_target(self) -> Policy:
@@ -524,8 +573,21 @@ def parse_lcov(text: str, *, bare_sources: bool = False) -> dict[str, FileCovera
     return records
 
 
+SOURCE_SUFFIXES: frozenset[str] = frozenset(
+    {".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".py"}
+    | {".swift", ".rs", ".sh", ".bash", ".ps1"}
+)
+# Suffixes known to carry no executable source. Anything in neither set fails the audit, so a new
+# language is classified deliberately rather than slipping through.
+NON_SOURCE_SUFFIXES: frozenset[str] = frozenset(
+    {".md", ".mdx", ".txt", ".json", ".jsonl", ".yml", ".yaml", ".toml", ".lock", ".conf", ".xml"}
+    | {".entitlements", ".css", ".info", ".map", ".snap", ".stderr"}
+    | {".png", ".jpg", ".svg", ".mp4", ".mov"}
+)
+
+
 def is_test_path(path: Path) -> bool:
-    """Identify conventional tests, pytest `conftest.py` fixture modules and fixture directories.
+    """Identify conventional tests, `conftest.py`, Swift `*_tests.swift` and fixture directories.
 
     Parameters:
         path (Path): Repository- or package-relative source path.
@@ -537,20 +599,21 @@ def is_test_path(path: Path) -> bool:
     return (
         any(part in {"test", "tests", ".test-support", "fixtures"} for part in path.parts)
         or path.name.endswith(".test.ts")
+        or path.name.endswith("_tests.swift")
         or (path.suffix == ".py" and (path.name.startswith("test_") or path.name == "conftest.py"))
     )
 
 
-def expand_inventory(package: Package, files: set[str]) -> set[str]:
-    """Expand production membership against a supplied repository file universe.
+def owned_matches(package: Package, files: set[str]) -> set[str]:
+    """Expand `owned` patterns, before exclusions, against a file universe.
 
     Parameters:
-        package (Package): Source patterns and reviewed exclusions.
+        package (Package): Source patterns.
         files (set[str]): Repository-relative paths from one specific tree.
     Returns:
-        set[str]: Package-relative executable source membership.
+        set[str]: Package-relative non-test paths matched by `owned`.
     Raises:
-        ValueError: A pattern is empty, a helper overlaps source, or a declaration exclusion is invalid.
+        ValueError: An owned pattern matches no files.
     """
     available = {
         Path(file).relative_to(package.root).as_posix()
@@ -565,6 +628,21 @@ def expand_inventory(package: Package, files: set[str]) -> set[str]:
         if not matches:
             raise ValueError(f"Owned pattern matches no files: '{package.root}/{pattern}'")
         owned |= matches
+    return owned
+
+
+def expand_inventory(package: Package, files: set[str]) -> set[str]:
+    """Expand production membership against a supplied repository file universe.
+
+    Parameters:
+        package (Package): Source patterns and reviewed exclusions.
+        files (set[str]): Repository-relative paths from one specific tree.
+    Returns:
+        set[str]: Package-relative executable source membership.
+    Raises:
+        ValueError: A pattern is empty, a helper overlaps source, or a declaration exclusion is invalid.
+    """
+    owned = owned_matches(package, files)
     if any(Path(file).full_match(pattern) for file in owned for pattern in package.test_helpers):
         raise ValueError("Test helper paths overlap the declared production inventory")
     for exclusion in package.exclusions:
@@ -755,7 +833,7 @@ def check_inventory_ratchet(root: Path, current: Policy, base: Policy, revision:
 
 
 def audit_inventory(root: Path, policy: Policy, files: set[str]) -> set[str]:
-    """Find owned executable TS, Python and JavaScript absent from reviewed scope.
+    """Find executable source absent from reviewed scope, failing closed on unknown suffixes.
 
     Parameters:
         root (Path): Absolute repository root.
@@ -764,7 +842,9 @@ def audit_inventory(root: Path, policy: Policy, files: set[str]) -> set[str]:
     Returns:
         set[str]: Unaccounted executable source paths; an empty set passes the audit.
     Raises:
-        ValueError: Ownership expansion fails or helper paths are absent, duplicated or production-owned.
+        ValueError: Ownership expansion fails, helper paths are absent, duplicated or production-owned,
+            an unmeasured tree is missing or overlaps owned source, or an exclusion glob matches nothing.
+        subprocess.CalledProcessError: Git cannot list the index for gitlinks.
     """
     covered = {file for files_in_scope in inventory_scopes(root, policy).values() for file in files_in_scope}
     helpers = {helper.path for helper in policy.verification_helpers}
@@ -776,14 +856,15 @@ def audit_inventory(root: Path, policy: Policy, files: set[str]) -> set[str]:
         )
     if helpers & covered:
         raise ValueError(f"Verification helpers overlap production inventory: '{sorted(helpers & covered)}'")
-    unknown: set[str] = set()
+    links = gitlinks(root)
+    trees = check_unmeasured_trees(root, policy, covered, links)
+    check_exclusions_match(policy, files)
+    unknown = {link for link in links if not any(Path(link).is_relative_to(tree) for tree in trees)}
     for file in files:
         path = Path(file)
-        if (
-            path.suffix not in {".ts", ".py", ".mjs", ".cjs", ".js"}
-            or is_test_path(path)
-            or path.parts[0] == "forks"
-        ):
+        if is_test_path(path) or any(path.is_relative_to(tree) for tree in trees):
+            continue
+        if not is_executable_candidate(root, path):
             continue
         if file in covered or file in helpers:
             continue
@@ -795,6 +876,95 @@ def audit_inventory(root: Path, policy: Policy, files: set[str]) -> set[str]:
         if not excluded:
             unknown.add(file)
     return unknown
+
+
+def gitlinks(root: Path) -> set[str]:
+    """List submodule paths (mode 160000), which `ls-files --others` and `is_file` both hide.
+
+    Parameters:
+        root (Path): Absolute repository root.
+    Returns:
+        set[str]: Repository-relative gitlink paths in the index.
+    Raises:
+        subprocess.CalledProcessError: Git cannot read the index.
+    """
+    rows = git_read(root, ["ls-files", "-s", "-z"]).split("\0")
+    return {row.split("\t", 1)[1] for row in rows if row.startswith("160000 ")}
+
+
+def check_unmeasured_trees(root: Path, policy: Policy, covered: set[str], links: set[str]) -> list[Path]:
+    """Validate each unmeasured tree against the tree, the packages and the inventory.
+
+    The tracking issue's open state is not checked: the gate has no network.
+
+    Parameters:
+        root (Path): Absolute repository root.
+        policy (Policy): Current policy.
+        covered (set[str]): Repository-relative paths already owned by a package.
+        links (set[str]): Gitlink paths from `gitlinks`.
+    Returns:
+        list[Path]: Validated tree paths.
+    Raises:
+        ValueError: A tree is missing, is not a directory or gitlink, or overlaps owned source.
+    """
+    trees = [Path(tree.path) for tree in policy.unmeasured_trees]
+    for tree in trees:
+        if not ((root / tree).is_dir() or tree.as_posix() in links):
+            raise ValueError(f"Unmeasured tree is not an existing directory or gitlink: '{tree}'")
+        for package in policy.packages.values():
+            base = Path(package.root)
+            if base != Path() and (tree.is_relative_to(base) or base.is_relative_to(tree)):
+                raise ValueError(f"Unmeasured tree overlaps package root '{package.root}': '{tree}'")
+        if any(Path(file).is_relative_to(tree) for file in covered):
+            raise ValueError(f"Unmeasured tree contains owned source: '{tree}'")
+    return trees
+
+
+def check_exclusions_match(policy: Policy, files: set[str]) -> None:
+    """Require every exclusion glob to hit an existing package file, so none is dead.
+
+    Generated outputs (e.g. `dist/**`) are exempted by the audit without being owned, so the match is
+    against the package root, not only the owned set.
+
+    Parameters:
+        policy (Policy): Current policy.
+        files (set[str]): Repository-relative working paths.
+    Returns:
+        None: Every exclusion matches at least one file under its package root.
+    Raises:
+        ValueError: An exclusion matches no existing file.
+    """
+    for name, package in policy.packages.items():
+        inside = [
+            Path(file).relative_to(package.root) for file in files if Path(file).is_relative_to(package.root)
+        ]
+        for item in package.exclusions:
+            if not any(path.full_match(item.path) for path in inside):
+                raise ValueError(f"Exclusion matches no existing file: '{name}': '{item.path}'")
+
+
+def is_executable_candidate(root: Path, path: Path) -> bool:
+    """Fail closed: every file is executable source unless its kind is positively known to be inert.
+
+    Parameters:
+        root (Path): Absolute repository root, used to sniff extensionless files.
+        path (Path): Repository-relative path.
+    Returns:
+        bool: Whether the file must be inventoried; unknown suffixes and extensionless shebang scripts are.
+    Raises:
+        None: An unreadable extensionless file counts as source, never as inert.
+    """
+    if path.suffix in SOURCE_SUFFIXES:
+        return True
+    if path.suffix in NON_SOURCE_SUFFIXES:
+        return False
+    if path.suffix == "":
+        try:
+            with (root / path).open("rb") as handle:
+                return handle.read(2) == b"#!"
+        except OSError:
+            return True
+    return True
 
 
 def check_enforcement_changes(current: Policy, base: Policy) -> None:
