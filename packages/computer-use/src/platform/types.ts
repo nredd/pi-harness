@@ -169,7 +169,10 @@ export type PlatformActRequest = PlatformActRequestBase & (
 	| { action: "press" | "click"; params: { button?: PlatformMouseButton; clickCount?: number } & PlatformActDeliveryParam }
 	| { action: "setText"; params: { text: string } & PlatformActDeliveryParam }
 	| { action: "typeText"; params: { text: string } & PlatformActDeliveryParam }
+	| { action: "paste"; params: { text: string } & PlatformActDeliveryParam }
 	| { action: "keypress"; params: { keys: string[] } & PlatformActDeliveryParam }
+	| { action: "secondaryAction"; params: { name: string } & PlatformActDeliveryParam }
+	| { action: "selectText"; params: { start: number; length: number } & PlatformActDeliveryParam }
 	| { action: "scroll"; params: { scrollX: number; scrollY: number } & PlatformActDeliveryParam }
 	| { action: "drag"; params: { path: PlatformPoint[] } & PlatformActDeliveryParam }
 	| { action: "moveMouse"; params: PlatformActDeliveryParam }

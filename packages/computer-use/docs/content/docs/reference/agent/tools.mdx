@@ -127,7 +127,10 @@ Pass dependent click/type steps together and use expect for observable completio
 | `click` | `x`: `number` (required); `y`: `number` (required); `button`: `left` \| `right` \| `middle` (optional); `clickCount`: `number` (optional) minimum: `1`, maximum: `3`. |
 | `setText` | `ref`: `string` (required); `text`: `string` (required) |
 | `typeText` | `ref`: `string` (optional); `text`: `string` (required) |
+| `paste` | `ref`: `string` (optional); `text`: `string` (required) |
 | `keypress` | `ref`: `string` (optional); `keys`: array of `string` (required) minItems: `1`. |
+| `secondaryAction` | `ref`: `string` (required); `name`: `string` (required) |
+| `selectText` | `ref`: `string` (required); `start`: `integer` (required) minimum: `0`.; `length`: `integer` (optional) minimum: `0`. |
 | `scroll` | `ref`: `string` (optional); `scrollX`: `number` (optional); `scrollY`: `number` (optional) |
 | `drag` | `path`: array of object (x: `number`, y: `number`) (required) minItems: `2`. |
 | `moveMouse` | `x`: `number` (required); `y`: `number` (required) |

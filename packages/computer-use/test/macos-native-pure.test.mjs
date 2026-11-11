@@ -124,6 +124,24 @@ check(!waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: { polls += 1; clock += 1
 check(polls == 2, "the wall-clock deadline stops after two stalled probes, not twenty-one")
 polls = 0
 check(waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: { polls += 1; return true }, sleepMs: { _ in }, nowMs: { 0 }), "already-focused target returns at once")
+
+// selectText range validation, paste clipboard fence and outcome classification
+check(selectionRangeIssue(start: 0, length: 0, valueLength: 5) == nil, "caret at the start is valid")
+check(selectionRangeIssue(start: 5, length: 0, valueLength: 5) == nil, "caret at the end is valid")
+check(selectionRangeIssue(start: 1, length: 4, valueLength: 5) == nil, "range ending at the end is valid")
+check(selectionRangeIssue(start: 1, length: 5, valueLength: 5) != nil, "range past the end is refused")
+check(selectionRangeIssue(start: 6, length: 0, valueLength: 5) != nil, "caret past the end is refused")
+check(selectionRangeIssue(start: -1, length: 0, valueLength: 5) != nil, "negative start is refused")
+check(selectionRangeIssue(start: 0, length: -1, valueLength: nil) != nil, "negative length is refused even without a value")
+check(selectionRangeIssue(start: 99, length: 9, valueLength: nil) == nil, "unreadable value defers to the element")
+check(clipboardRestoreIsSafe(changeCountAfterWrite: 7, changeCountNow: 7), "untouched clipboard is restored")
+check(!clipboardRestoreIsSafe(changeCountAfterWrite: 7, changeCountNow: 8), "a newer clipboard write is never overwritten")
+check(pasteOutcome(valueBefore: "a", valueAfter: "ab") == "worked", "changed value proves the paste")
+check(pasteOutcome(valueBefore: "a", valueAfter: "a") == "didnt", "unchanged value is a failed paste")
+check(pasteOutcome(valueBefore: nil, valueAfter: "a") == "unknown" && pasteOutcome(valueBefore: "a", valueAfter: nil) == "unknown", "unreadable value is unknown")
+check(selectionOutcome(requested: (2, 3), readBack: (2, 3)) == "worked", "matching read-back proves the selection")
+check(selectionOutcome(requested: (2, 3), readBack: (0, 0)) == "didnt", "a rewritten range is a failure")
+check(selectionOutcome(requested: (2, 3), readBack: nil) == "unknown", "no read-back is unknown")
 check(polls == 1, "no polling when focus already holds")
 var axCalls = 0
 _ = targetHoldsFocus(frontmostPid: 10, focusedPid: { axCalls += 1; return 7 }(), targetPid: 7)

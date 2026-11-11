@@ -128,7 +128,8 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	assert.match(swift, /lockedSessionRefusal\(cmd: cmd, session: CGSessionCopyCurrentDictionary\(\)/, "helper must refuse UI commands while locked");
 	assert.match(swift, /keyboardTargetRefusalPid\(frontmostPid: NSWorkspace\.shared\.frontmostApplication\?\.processIdentifier, focusedPid: systemFocusedPid()/, "helper must refuse blocked frontmost or focused apps for keys");
 	assert.match(swift, /case "type", "key":\n\t\t\ttry refuseBlockedKeyboard\(\)/, "helper must refuse blocked apps before typing or keys");
-	assert.equal(swift.match(/try refuseBlockedKeyboardAfterFocus\(preserveFocus: preserveFocus\)/g)?.length, 2, "act typeText and keypress must refuse a blocked focused app under HID delivery");
+	assert.equal(swift.match(/try refuseBlockedKeyboardAfterFocus\(preserveFocus: preserveFocus\)/g)?.length, 3, "act typeText, paste and keypress must refuse a blocked focused app under HID delivery");
+	assert.match(swift, /try refuseBlockedKeyboardAfterFocus\(preserveFocus: preserveFocus\)\n\t+let restored = try withTemporaryClipboard/, "paste must refuse a blocked focused app before it touches the clipboard");
 	assert.match(swift, /if delivery == "hid" \{ try refuseBlockedKeyboardAfterFocus\(preserveFocus: false\) \} else \{ focusTargetForPhysicalInput\(\) \}\n\t+_ = AXUIElementSetAttributeValue\(element, kAXFocusedAttribute/, "web setText must wait for focus and refuse a blocked focused app before its HID keys");
 	const keyboardHelper = swift.match(/func refuseBlockedKeyboardAfterFocus[\s\S]*?\n\t\t\}\n/)?.[0] ?? "";
 	const keyboardOrder = ['guard delivery == "hid"', "focusTargetForPhysicalInput()", "try requireTargetFocus(pid: pid)", "try refuseBlockedKeyboardTarget("].map((needle) => keyboardHelper.indexOf(needle));
@@ -189,7 +190,7 @@ test("act_ui, observe_ui and find_roots enforce blocked_apps at the platform bac
 		lookId: `look${++calls.observe}`,
 		capturedAt: 1,
 		window: { windowId: 100, rootRef: "ax:w1", kind: "window", framePoints: roots[0].framePoints, scaleFactor: 1, isModal: false, role: "AXWindow", subrole: "AXStandardWindow", metadata: {} },
-		outline: { ref: "w", wireRef: "w", role: "AXWindow", subrole: "AXStandardWindow", title: "Main", label: "", value: "", actions: [], rect: { x: 0, y: 0, w: 300, h: 200 }, children: [{ ref: "b", wireRef: "b", role: "AXButton", subrole: "", title: "Go", label: "Go", value: "", actions: ["AXPress"], rect: { x: 10, y: 10, w: 50, h: 20 }, children: [] }] },
+		outline: { ref: "w", wireRef: "w", role: "AXWindow", subrole: "AXStandardWindow", title: "Main", label: "", value: "", actions: [], rect: { x: 0, y: 0, w: 300, h: 200 }, children: [{ ref: "b", wireRef: "b", role: "AXButton", subrole: "", title: "Go", label: "Go", value: "", actions: ["AXPress", "AXShowMenu"], rect: { x: 10, y: 10, w: 50, h: 20 }, children: [] }, { ref: "t", wireRef: "t", role: "AXTextField", subrole: "", title: "Name", label: "Name", value: "abc", actions: [], canSetValue: true, isTextInput: true, rect: { x: 10, y: 40, w: 50, h: 20 }, children: [] }] },
 		timings: { captureMs: 0, describeMs: 0, readTextMs: 0 },
 	});
 	Object.assign(currentPlatformBackend, {
@@ -234,7 +235,14 @@ test("act_ui, observe_ui and find_roots enforce blocked_apps at the platform bac
 	const stateId = text(observed).match(/stateId ([0-9a-f-]{36})/)[1];
 	const press = { stateId, actions: [{ action: "press", ref: text(observed).match(/(@e\d+) button/)[1] }] };
 	process.env[ENV] = "com.example.Safe";
+	const textRef = text(observed).match(/(@e\d+) textfield/)?.[1] ?? text(observed).match(/(@e\d+) [a-z]*[Tt]ext[a-z]*field/)?.[1];
+	const buttonRef = text(observed).match(/(@e\d+) button/)[1];
+	assert.ok(textRef, `text field ref missing from:\n${text(observed)}`);
 	await assert.rejects(() => call(executeAct, press), blocked("app_blocked"));
+	// The new actions go through the same target resolution, so they cannot reach a blocked app either.
+	for (const action of [{ action: "secondaryAction", ref: buttonRef, name: "AXShowMenu" }, { action: "selectText", ref: textRef, start: 0, length: 1 }, { action: "paste", ref: textRef, text: "x" }]) {
+		await assert.rejects(() => call(executeAct, { stateId, actions: [action] }), blocked("app_blocked"), `${action.action} must refuse a blocked target`);
+	}
 	assert.equal(calls.act, 0, "blocked act_ui must not deliver input");
 	const readCalls = [];
 	currentPlatformBackend.readText = async (request) => {

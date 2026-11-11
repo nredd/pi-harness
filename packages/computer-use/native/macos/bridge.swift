@@ -407,6 +407,37 @@ func waitForFocus(maxMs: Int, stepMs: Int, holdsFocus: () -> Bool, sleepMs: (Int
 		sleepMs(stepMs)
 	}
 }
+/// Why `selectText` cannot place a selection of `length` UTF-16 units at `start`, or nil when it can.
+/// `valueLength` is the element's current text length in UTF-16 units, nil when the value is not readable
+/// (the range is then left for the element to accept or refuse).
+func selectionRangeIssue(start: Int, length: Int, valueLength: Int?) -> String? {
+	if start < 0 || length < 0 { return "selectText start and length must be non-negative" }
+	guard let valueLength else { return nil }
+	if start > valueLength || length > valueLength - start {
+		return "selectText range \(start)+\(length) is outside the text (\(valueLength) UTF-16 units)"
+	}
+	return nil
+}
+
+/// `paste` restores the user's clipboard only while nothing else has written to it since the temporary write
+/// (`changeCount` fence). A newer write, by the user or another app, is never overwritten.
+func clipboardRestoreIsSafe(changeCountAfterWrite: Int, changeCountNow: Int) -> Bool {
+	changeCountAfterWrite == changeCountNow
+}
+
+/// Outcome of a `paste`: the target's value changing proves it landed. Without a readable value (or with an
+/// unchanged one) the paste is `unknown` when nothing was observable and `didnt` when the value stayed put.
+func pasteOutcome(valueBefore: String?, valueAfter: String?) -> String {
+	guard let valueBefore, let valueAfter else { return "unknown" }
+	return valueBefore != valueAfter ? "worked" : "didnt"
+}
+
+/// `selectText` outcome from the range read back after the write: a match proves it, a different range means
+/// the element rewrote it, no readable range proves nothing.
+func selectionOutcome(requested: (location: Int, length: Int), readBack: (location: Int, length: Int)?) -> String {
+	guard let readBack else { return "unknown" }
+	return readBack.location == requested.location && readBack.length == requested.length ? "worked" : "didnt"
+}
 // END PURE
 
 // BEGIN KEYBOARD LAYOUT (compiled standalone by test/macos-native-pure.test.mjs; Carbon only)
@@ -2436,6 +2467,10 @@ final class Bridge {
 			return refreshed
 		}
 
+		if element == nil, action == "secondaryAction" || action == "selectText" {
+			throw BridgeFailure(message: "\(action) requires a ref", code: "invalid_args")
+		}
+
 		if let element, action == "press" || action == "click" {
 			let elementRole = stringAttribute(element, attribute: kAXRoleAttribute as CFString) ?? ""
 			let textRoles: Set<String> = ["AXTextField", "AXTextArea", "AXTextView", "AXSearchField", "AXComboBox", "AXEditableText", "AXSecureTextField"]
@@ -2523,6 +2558,90 @@ final class Bridge {
 				let changed = afterValue != (beforeValue ?? "")
 				return finish(["outcome": changed ? "worked" : "didnt", "performed": performed, "evidence": ["value": afterValue, "valueChanged": changed]])
 			}
+		} else if let element, action == "secondaryAction" {
+			// AX-only: runs one action the element itself advertises, checked live against its current action list.
+			guard let name = params["name"] as? String, name.hasPrefix("AX"), name.count > 2 else {
+				throw BridgeFailure(message: "secondaryAction requires an AX action name", code: "invalid_args")
+			}
+			var targetElement = element
+			if !supportsAction(targetElement, action: name as CFString) {
+				guard let refreshed = refreshElement(), supportsAction(refreshed, action: name as CFString) else {
+					throw BridgeFailure(message: "Element does not advertise \(name)", code: "action_unsupported")
+				}
+				targetElement = refreshed
+			}
+			var status = AXUIElementPerformAction(targetElement, name as CFString)
+			if status != .success, let refreshed = refreshElement(), supportsAction(refreshed, action: name as CFString) {
+				status = AXUIElementPerformAction(refreshed, name as CFString)
+			}
+			performed["grounding"] = "description"
+			performed["delivery"] = "ax"
+			performed["action"] = name
+			guard status == .success else {
+				return finish(["outcome": "didnt", "performed": performed, "error": ["code": "ax_action_failed", "message": "\(name) failed (AXError \(status.rawValue))"]])
+			}
+			// Menus and sheets open asynchronously; the root delta and window check below see them.
+			usleep(60_000)
+		} else if let element, action == "selectText" {
+			// AX-only: AXSelectedTextRange is in UTF-16 units, like NSString.
+			guard let start = (params["start"] as? NSNumber)?.intValue else {
+				throw BridgeFailure(message: "selectText requires start", code: "invalid_args")
+			}
+			let length = (params["length"] as? NSNumber)?.intValue ?? 0
+			let valueLength = stringAttribute(element, attribute: kAXValueAttribute as CFString).map { ($0 as NSString).length }
+			if let issue = selectionRangeIssue(start: start, length: length, valueLength: valueLength) {
+				throw BridgeFailure(message: issue, code: "invalid_args")
+			}
+			var range = CFRange(location: start, length: length)
+			guard let axRange = AXValueCreate(.cfRange, &range) else {
+				throw BridgeFailure(message: "Could not encode the selection range", code: "invalid_args")
+			}
+			var targetElement = element
+			var status = AXUIElementSetAttributeValue(targetElement, kAXSelectedTextRangeAttribute as CFString, axRange)
+			if status != .success, let refreshed = refreshElement() {
+				targetElement = refreshed
+				status = AXUIElementSetAttributeValue(targetElement, kAXSelectedTextRangeAttribute as CFString, axRange)
+			}
+			performed["grounding"] = "description"
+			performed["delivery"] = "ax"
+			guard status == .success else {
+				return finish(["outcome": "didnt", "performed": performed, "error": ["code": "ax_write_failed", "message": "The element refused AXSelectedTextRange (AXError \(status.rawValue))"]])
+			}
+			var readBack: (location: Int, length: Int)?
+			if let raw = copyAttribute(targetElement, attribute: kAXSelectedTextRangeAttribute as CFString), CFGetTypeID(raw) == AXValueGetTypeID() {
+				var actual = CFRange()
+				if AXValueGetValue(raw as! AXValue, .cfRange, &actual) { readBack = (actual.location, actual.length) }
+			}
+			var evidence: [String: Any] = [:]
+			if let readBack { evidence["selection"] = ["start": readBack.location, "length": readBack.length] }
+			return finish(["outcome": selectionOutcome(requested: (start, length), readBack: readBack), "performed": performed, "evidence": evidence])
+		} else if action == "paste" {
+			try rejectInStrictHeadless("Paste requires synthesized keyboard input, which strict headless mode prohibits")
+			let preserveFocus = params["preserveFocus"] as? Bool ?? false
+			let text = params["text"] as? String ?? ""
+			guard !text.isEmpty else { throw BridgeFailure(message: "paste requires non-empty text", code: "invalid_args") }
+			if let element {
+				let focused = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+				if focused == .success { performed["focused"] = true }
+			}
+			acquirePhysicalInputIfNeeded()
+			// cmd+v reaches the focused app under HID delivery: refuse a blocked one BEFORE the clipboard is touched.
+			try refuseBlockedKeyboardAfterFocus(preserveFocus: preserveFocus)
+			let restored = try withTemporaryClipboard(text) {
+				try postKeyPress(keys: ["cmd", "v"], pid: pid, delivery: delivery)
+				// The target reads the pasteboard asynchronously: wait for the value to move (or a floor) before restoring.
+				for attempt in 0..<10 {
+					usleep(30_000)
+					if attempt >= 2, let element, stringAttribute(element, attribute: kAXValueAttribute as CFString) != beforeValue { break }
+				}
+			}
+			performed["grounding"] = "coordinates"
+			performed["clipboardRestored"] = restored
+			let afterValue = element.flatMap { stringAttribute($0, attribute: kAXValueAttribute as CFString) }
+			let outcome = pasteOutcome(valueBefore: element == nil ? nil : beforeValue, valueAfter: afterValue)
+			var evidence: [String: Any] = [:]
+			if let afterValue { evidence["value"] = afterValue; evidence["valueChanged"] = afterValue != (beforeValue ?? "") }
+			return finish(["outcome": outcome, "performed": performed, "evidence": evidence])
 		} else if action == "keypress" {
 			try rejectInStrictHeadless("Keypress requires synthesized keyboard input, which strict headless mode prohibits")
 			let preserveFocus = params["preserveFocus"] as? Bool ?? false
@@ -2624,6 +2743,40 @@ final class Bridge {
 		var response: [String: Any] = ["outcome": outcome, "performed": performed]
 		if !evidence.isEmpty { response["evidence"] = evidence }
 		return finish(response)
+	}
+
+	/// Writes `text` to the general pasteboard, runs `body`, then restores the previous contents (every item and
+	/// type) unless something else wrote to the pasteboard in the meantime. Returns whether it restored.
+	private func withTemporaryClipboard(_ text: String, _ body: () throws -> Void) throws -> Bool {
+		let pasteboard = NSPasteboard.general
+		let saved: [[NSPasteboard.PasteboardType: Data]] = (pasteboard.pasteboardItems ?? []).map { item in
+			var entry: [NSPasteboard.PasteboardType: Data] = [:]
+			for type in item.types { if let data = item.data(forType: type) { entry[type] = data } }
+			return entry
+		}
+		pasteboard.clearContents()
+		guard pasteboard.setString(text, forType: .string) else {
+			throw BridgeFailure(message: "The clipboard rejected the text", code: "clipboard_write_failed")
+		}
+		let ownChangeCount = pasteboard.changeCount
+		func restore() -> Bool {
+			guard clipboardRestoreIsSafe(changeCountAfterWrite: ownChangeCount, changeCountNow: pasteboard.changeCount) else { return false }
+			pasteboard.clearContents()
+			let items = saved.map { entry -> NSPasteboardItem in
+				let item = NSPasteboardItem()
+				for (type, data) in entry { item.setData(data, forType: type) }
+				return item
+			}
+			if !items.isEmpty { pasteboard.writeObjects(items) }
+			return true
+		}
+		do {
+			try body()
+		} catch {
+			_ = restore()
+			throw error
+		}
+		return restore()
 	}
 
 	private func actBatch(_ request: [String: Any]) throws -> [String: Any] {
@@ -4599,9 +4752,13 @@ Actions and the successor capture stay on the root the state belongs to; `act_ui
 
 Eligible presses use `AXPress`, text replacement writes `AXValue`, and semantic scrolling searches the target and ancestor chain for AX scroll actions. These paths are described in [Accessibility and AX](./accessibility.mdx).
 
+`secondaryAction` runs one named AX action (e.g. `AXShowMenu`) that the element currently advertises; the bridge validates the name against the `inspect_ui` actions, and the helper re-checks it live. `selectText` writes `AXSelectedTextRange` (UTF-16 units) and reads it back. Both are AX-only: they never fall back to coordinates and stay allowed in strict headless mode. `secondaryAction` reports `worked` only when a value, selection or window change is observed, otherwise `unknown`; an opened menu appears in `rootDelta`. Both are implemented on macOS only; Linux and Windows fail them with `unsupported_command`.
+
 ## Synthesized delivery
 
 Web-backed editable controls and controls without usable AX actions can require synthesized keyboard or pointer events. Background events use [`CGEvent.postToPid(_:)`](https://developer.apple.com/documentation/coregraphics/cgevent/posttopid%28_%3A%29). Foreground delivery activates and raises the target before posting at the [CG event tap](https://developer.apple.com/documentation/coregraphics/cgevent/post%28tap%3A%29).
+
+`paste` writes the text to the general pasteboard, posts `cmd+v`, then restores every item of the previous clipboard, unless something else wrote to the clipboard in the meantime (`performed.clipboardRestored` says which). It is the robust path for input methods that compose per-key typing. It posts a keyboard event, so under HID delivery it waits for the target to take focus and refuses a blocked focused app before the clipboard is touched, exactly like `typeText`. Delivery by `cmd+v` follows the active keyboard layout's key code for `v`.
 
 These are synthesized events, not physical hardware input. Before foreground coordinate delivery, the helper hit-tests the intended point with AX. An unrelated resolved element produces `occluded_target`; an unavailable or coarse result remains unknown rather than proving visibility.
 
@@ -4610,7 +4767,7 @@ These are synthesized events, not physical hardware input. Before foreground coo
 `headless: true` is a strict prohibition, not a preference. It maps the transaction to the native `ax_only` policy. The helper fails these actions with `foreground_required` before it posts events or activates the target:
 
 - coordinate delivery: raw `x`/`y` targets, `moveMouse`, `drag`, and press, click, `setText`, or scroll requests whose Accessibility operation is unavailable or fails;
-- `typeText` and `keypress`, including ref-targeted requests;
+- `typeText`, `paste` and `keypress`, including ref-targeted requests;
 - `setText` inside web content, which needs synthesized keyboard input.
 
 The bridge returns that error instead of retrying in the foreground. `ax_only` actions never display the agent cursor overlay.

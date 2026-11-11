@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { debuglog } from "node:util";
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { canRetryInForeground, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, strictHeadlessRejection, type ActionState, type PreparedAction } from "./actions.ts";
+import { canRetryInForeground, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, strictHeadlessRejection, unsupportedActionRejection, type ActionState, type PreparedAction } from "./actions.ts";
 import { cdpClickForContext, cdpDragForContext, cdpEvaluateForContext, cdpKeypressForContext, cdpMouseForContext, cdpNavigateContext, cdpScrollForContext, cdpSnapshotForContext, cdpTabForWindow, cdpTypeFocusedForContext, cdpTypeForContext, disconnectCdp, listCdpPageContexts, type CdpConsoleEntry, type CdpPageSnapshot } from "./cdp.ts";
 import { type ComputerUseConfig, getComputerUseConfig, isBlockedBundleId, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig } from "./config.ts";
 import { normalizeFindParams } from "./find-params.ts";
@@ -1154,7 +1154,10 @@ function helperActRequest(target: ResolvedTarget, action: NativePreparedAction, 
 			case "click": return { ...base, action: action.action, params: { ...action.params, delivery } };
 			case "setText": return { ...base, action: action.action, params: { text: action.params.text, delivery } };
 			case "typeText": return { ...base, action: action.action, params: { text: action.params.text, delivery } };
+			case "paste": return { ...base, action: action.action, params: { text: action.params.text, delivery } };
 			case "keypress": return { ...base, action: action.action, params: { keys: action.params.keys, delivery } };
+			case "secondaryAction": return { ...base, action: action.action, params: { name: action.params.name, delivery } };
+			case "selectText": return { ...base, action: action.action, params: { start: action.params.start, length: action.params.length, delivery } };
 			case "scroll": return { ...base, action: action.action, params: { scrollX: action.params.scrollX, scrollY: action.params.scrollY, delivery } };
 			case "drag": return { ...base, action: action.action, params: { path: action.params.path, delivery } };
 			case "moveMouse": return { ...base, action: action.action, params: { delivery } };
@@ -1735,6 +1738,8 @@ async function dispatchUiAction(action: UiAction, target: ResolvedTarget, look: 
 function preflightUiTransaction(actions: UiAction[], look: LookResponse, headless: boolean): void {
 	const actionState: ActionState = { currentFocus: false };
 	for (const action of actions) {
+		const unsupported = unsupportedActionRejection(action, process.platform);
+		if (unsupported) throw new ComputerUseError("unsupported_command", unsupported);
 		const rejection = strictHeadlessRejection(action, headless, process.platform);
 		if (rejection) throw new Error(rejection);
 		const prepared = prepareUiAction(action, actionState, look, headless);
@@ -2733,7 +2738,7 @@ act_ui({
 
 Steps run sequentially against one resource and retain helper checks. The native helper uses one root baseline and final settle for the transaction, and the bridge returns one final observation. If a transition can change the meaning of later refs or requires a decision, send one action, inspect the returned state, then continue.
 
-Clicks into editable regions establish foreground focus for later keyboard steps in the same transaction. Omit `ref` from `typeText` or `keypress` after such a click so input is sent to the editor established by that click:
+Clicks into editable regions establish foreground focus for later keyboard steps in the same transaction. Omit `ref` from `typeText`, `paste` or `keypress` after such a click so input is sent to the editor established by that click:
 
 ```ts
 act_ui({
@@ -2745,6 +2750,8 @@ act_ui({
   expect: { text: "hello" },
 })
 ```
+
+`secondaryAction` (`ref`, `name`) runs an accessibility action the element advertises, e.g. `AXShowMenu` to open a context menu; `inspect_ui` lists them. `selectText` (`ref`, `start`, `length`) sets the selection of a text element in UTF-16 units (`length` 0 places the caret). `paste` (`text`, optional `ref`) inserts through the pasteboard and cmd+v, then restores the previous clipboard, which suits input methods where per-key typing composes; like `typeText` it is refused in strict headless mode. These three are macOS-only and fail with `unsupported_command` elsewhere.
 
 The runtime prefers background semantics when they are credible, verifies the result, and escalates side-effect-free failed keyboard input to foreground delivery automatically. Ambiguous pointer actions are never replayed blindly.
 
