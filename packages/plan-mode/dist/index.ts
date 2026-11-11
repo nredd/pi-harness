@@ -467,8 +467,7 @@ function restorePlanModeState(entries, stateEntryType) {
   const activeImplementation = enabled ? void 0 : normalizeActiveImplementation(entry.data.activeImplementation);
   const savedPlan = enabled || activeImplementation ? void 0 : normalizeSavedPlan(entry.data.savedPlan);
   const pendingImplementationRuntime = enabled ? void 0 : normalizePendingImplementationRuntime(entry.data.pendingImplementationRuntime);
-  return {
-    enabled,
+  const base = {
     latestPlan,
     latestPlanSource: enabled ? (persistedPlan ? persistedSource : void 0) ?? (recoveredPlan ? PLAN_MODE_COMPLETE_TOOL_NAME : void 0) : void 0,
     awaitingAction: enabled && latestPlan !== void 0,
@@ -485,13 +484,13 @@ function restorePlanModeState(entries, stateEntryType) {
     pendingImplementationRuntime,
     selectedToolNames: stringArray(entry.data.selectedToolNames),
     selectedToolKeys: stringArray(entry.data.selectedToolKeys),
-    workflowToolPolicy: enabled ? normalizeWorkflowToolPolicy(entry.data.workflowToolPolicy) : void 0,
     previousThinkingLevel: enabled ? fixedThinkingLevel(entry.data.previousThinkingLevel) : void 0,
     appliedThinkingLevel: enabled ? fixedThinkingLevel(entry.data.appliedThinkingLevel) : void 0,
     manualThinkingLevel: enabled ? fixedThinkingLevel(entry.data.manualThinkingLevel) : void 0,
     planModelSwitch: enabled ? normalizePlanModelSwitch(entry.data.planModelSwitch) : void 0,
     resumePlanModel: enabled && entry.data.resumePlanModel === true ? true : void 0
   };
+  return enabled ? { ...base, enabled, workflowToolPolicy: normalizeWorkflowToolPolicy(entry.data.workflowToolPolicy) } : { ...base, enabled, workflowToolPolicy: void 0 };
 }
 function restoreReproposalReview(value, legacyGate, declinedPlans, latestPlan) {
   if (value === "required" || value === "confirmed") return value;
@@ -1033,6 +1032,153 @@ function createPlanExportController(options) {
   };
 }
 
+// src/plan-model-switch.ts
+function sameModel(model, reference) {
+  return model?.provider === reference.provider && model.id === reference.modelId;
+}
+function createPlanModelSwitch(deps) {
+  const { pi, errorText, terminalModelReference } = deps;
+  let epoch = 0;
+  let transition = Promise.resolve();
+  let switching = false;
+  function enqueue(next) {
+    transition = transition.then(next);
+  }
+  function start(ctx, reapplyThinking = false) {
+    const startEpoch = ++epoch;
+    if (reapplyThinking) {
+      enqueue(async () => {
+        if (startEpoch !== epoch || !deps.getState().enabled) return;
+        deps.applyPlanThinkingLevel();
+        deps.persistState();
+      });
+    }
+    const tier = deps.getSettings().planModel;
+    if (tier) enqueue(() => applyPlanModel(ctx, tier, startEpoch));
+  }
+  async function applyPlanModel(ctx, tier, applyEpoch) {
+    const target = planModelTarget(tier);
+    const previous = ctx.model;
+    const isCurrent = () => applyEpoch === epoch && deps.getState().enabled;
+    if (!isCurrent() || !previous || sameModel(previous, target)) return;
+    const fallback = (failure) => ctx.ui.notify(
+      `Plan model ${tier} (${terminalModelReference(target)}) ${failure}; using the current model.`,
+      "warning"
+    );
+    const resolved = await resolveAuthenticatedModel(ctx, target);
+    if (!isCurrent()) return;
+    if ("failure" in resolved) {
+      fallback(resolved.failure);
+      return;
+    }
+    const thinkingBefore = pi.getThinkingLevel();
+    try {
+      if (!await switchModel(resolved.model, thinkingBefore)) {
+        fallback("could not be applied");
+        return;
+      }
+    } catch (error) {
+      fallback(`could not be applied: ${errorText(error)}`);
+      return;
+    }
+    const modelSwitch = {
+      applied: target,
+      previous: { provider: previous.provider, modelId: previous.id },
+      thinkingBefore,
+      thinkingAfter: pi.getThinkingLevel()
+    };
+    if (!isCurrent()) {
+      await restorePlanModel(ctx, modelSwitch, thinkingBefore);
+      return;
+    }
+    const state = deps.getState();
+    deps.setState({
+      ...state,
+      ...state.appliedThinkingLevel ? { appliedThinkingLevel: modelSwitch.thinkingAfter } : {},
+      planModelSwitch: modelSwitch
+    });
+    deps.persistState();
+  }
+  function restore(ctx) {
+    epoch += 1;
+    const modelSwitch = deps.getState().planModelSwitch;
+    deps.setState({ ...deps.getState(), planModelSwitch: void 0 });
+    if (!modelSwitch || !sameModel(ctx.model, modelSwitch.applied)) {
+      deps.restoreThinkingLevel();
+      return;
+    }
+    deps.captureManualThinkingLevel();
+    const current = pi.getThinkingLevel();
+    const thinking = deps.getState().previousThinkingLevel ?? (current === modelSwitch.thinkingAfter ? modelSwitch.thinkingBefore : current);
+    deps.setState({ ...deps.getState(), appliedThinkingLevel: void 0, previousThinkingLevel: void 0 });
+    enqueue(() => restorePlanModel(ctx, modelSwitch, thinking));
+  }
+  async function restorePlanModel(ctx, modelSwitch, thinking) {
+    const resolved = await resolveAuthenticatedModel(ctx, modelSwitch.previous);
+    let failure = "could not be applied";
+    if ("failure" in resolved) failure = resolved.failure;
+    else {
+      try {
+        if (await switchModel(resolved.model, thinking)) return;
+      } catch (error) {
+        failure = `could not be applied: ${errorText(error)}`;
+      }
+    }
+    if (pi.getThinkingLevel() !== thinking) pi.setThinkingLevel(thinking);
+    ctx.ui.notify(
+      `Previous model ${terminalModelReference(modelSwitch.previous)} ${failure}; Pi stays on ${terminalModelReference(modelSwitch.applied)}.`,
+      "warning"
+    );
+  }
+  async function switchModel(model, thinking) {
+    switching = true;
+    try {
+      if (!await pi.setModel(model)) return false;
+      if (pi.getThinkingLevel() !== thinking) pi.setThinkingLevel(thinking);
+      return true;
+    } finally {
+      switching = false;
+    }
+  }
+  async function resolveAuthenticatedModel(ctx, reference) {
+    let model;
+    try {
+      model = ctx.modelRegistry.find(reference.provider, reference.modelId);
+    } catch (error) {
+      return { failure: `could not be resolved: ${errorText(error)}` };
+    }
+    if (!model) return { failure: "is no longer available" };
+    try {
+      const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+      return auth.ok ? { model } : { failure: `could not be authenticated: ${errorText(auth.error)}` };
+    } catch (error) {
+      return { failure: `could not be authenticated: ${errorText(error)}` };
+    }
+  }
+  function freshModel(ctx) {
+    const state = deps.getState();
+    const modelSwitch = state.enabled ? state.planModelSwitch : void 0;
+    if (modelSwitch && sameModel(ctx.model, modelSwitch.applied)) {
+      return { model: { ...modelSwitch.previous }, label: "previous model" };
+    }
+    return {
+      model: ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : void 0,
+      label: "same as plan"
+    };
+  }
+  return {
+    start,
+    restore,
+    freshModel,
+    invalidate: () => {
+      epoch += 1;
+    },
+    settled: () => transition,
+    isSwitching: () => switching,
+    resolveAuthenticatedModel
+  };
+}
+
 // src/required-tools.ts
 var REQUIRED_PLAN_MODE_TOOL_NAMES = [PLAN_MODE_QUESTION_TOOL_NAME, PLAN_MODE_COMPLETE_TOOL_NAME];
 function planModeHelperToolsAvailable(toolNames) {
@@ -1157,7 +1303,7 @@ function planMode(pi, dependencies = {}) {
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
     if (!interactiveUiPromise) {
-      interactiveUiPromise = import("./chunks/interactive-ui-FXEM7EL7.ts").catch((error) => {
+      interactiveUiPromise = import("./chunks/interactive-ui-5G3K5ENL.ts").catch((error) => {
         interactiveUiPromise = void 0;
         throw error;
       });
@@ -1187,15 +1333,26 @@ function planMode(pi, dependencies = {}) {
   let menuController = new AbortController();
   let settingsWatch;
   let settingsReloadTimer;
-  let planModelEpoch = 0;
-  let planModelTransition = Promise.resolve();
-  let switchingPlanModel = false;
   let freshSourceSession;
   const implementationRetention = createImplementationRetentionCoordinator();
   const finalizationRequest = createFinalizationRequestCoordinator();
   const headlessTurns = createHeadlessTurns(dependencies.headlessTurnStartTimeoutMs);
   const planApprovals = createPlanApprovals(pi);
   const persistState = () => pi.appendEntry(STATE_ENTRY_TYPE, state);
+  const planModelSwitch = createPlanModelSwitch({
+    pi,
+    getState: () => state,
+    setState: (next) => {
+      state = next;
+    },
+    getSettings: () => settings,
+    persistState,
+    applyPlanThinkingLevel,
+    captureManualThinkingLevel,
+    restoreThinkingLevel,
+    errorText,
+    terminalModelReference
+  });
   const planExports = createPlanExportController({
     getState: () => state,
     getSettings: () => settings,
@@ -1211,7 +1368,7 @@ function planMode(pi, dependencies = {}) {
     // ExtensionContext.thinkingLevel was added after the supported Pi 0.80.6 floor.
     // ExtensionAPI has exposed the same runtime value throughout that compatibility range.
     getThinkingLevel: () => pi.getThinkingLevel(),
-    getFreshPlanModel,
+    getFreshPlanModel: (ctx) => planModelSwitch.freshModel(ctx),
     getSettings: () => settings,
     implementationOutcome,
     getExportDestination: (ctx) => planExports.getDestination(ctx),
@@ -1506,7 +1663,7 @@ function planMode(pi, dependencies = {}) {
     workflowAllowedToolNames = void 0;
     pendingWorkflowToolPolicy = void 0;
     implementationRetention.reset();
-    planModelEpoch += 1;
+    planModelSwitch.invalidate();
     settings = { thinkingLevel: "inherit" };
     const branch = ctx.sessionManager.getBranch();
     const restoredState = restorePlanModeState(branch, STATE_ENTRY_TYPE);
@@ -1564,12 +1721,12 @@ function planMode(pi, dependencies = {}) {
   });
   pi.on("model_select", (event) => {
     const modelSwitch = state.planModelSwitch;
-    if (switchingPlanModel || !modelSwitch || sameModel(event.model, modelSwitch.applied)) return;
+    if (planModelSwitch.isSwitching() || !modelSwitch || sameModel(event.model, modelSwitch.applied)) return;
     state = { ...state, planModelSwitch: void 0 };
     persistState();
   });
   pi.on("thinking_level_select", (event) => {
-    if (switchingPlanModel || !state.enabled || !state.appliedThinkingLevel) return;
+    if (planModelSwitch.isSwitching() || !state.enabled || !state.appliedThinkingLevel) return;
     if (event.level !== state.appliedThinkingLevel) {
       state = {
         ...state,
@@ -1611,10 +1768,10 @@ function planMode(pi, dependencies = {}) {
     }
     captureManualThinkingLevel();
     if (freshSourceSession === shutdownSession && state.enabled && state.planModelSwitch) {
-      restorePlanRuntime(ctx);
+      planModelSwitch.restore(ctx);
       state = { ...state, resumePlanModel: true };
       persistState();
-      await planModelTransition;
+      await planModelSwitch.settled();
     } else {
       persistState();
       if (state.enabled) restoreThinkingLevel();
@@ -1683,7 +1840,6 @@ function planMode(pi, dependencies = {}) {
     if (!allowedToolNames.has(event.toolName)) {
       return {
         block: true,
-        // Entering Plan and restoring an enabled state both set the policy before any tool call.
         reason: workflowDesiredToolNames(state.workflowToolPolicy).has(event.toolName) ? `Plan mode blocks tool '${event.toolName}' because it was not available when the active Plan workflow froze its tool policy. Exit Plan mode, then start again after the tool is available.` : `Plan mode blocks tool '${event.toolName}' because it is not selected by the Plan policy. Exit Plan mode, then enable it with /plan tools or defaultPlanTools before starting again.`
       };
     }
@@ -1749,7 +1905,7 @@ function planMode(pi, dependencies = {}) {
     }
   });
   pi.on("before_agent_start", async (event, ctx) => {
-    await planModelTransition;
+    await planModelSwitch.settled();
     refreshStateForFirstPrompt(ctx);
     planApprovals.announceLatest(ctx);
     if (event.messageType === "custom") return;
@@ -1853,12 +2009,13 @@ function planMode(pi, dependencies = {}) {
         activeImplementation: void 0,
         pendingImplementationRuntime: void 0,
         selectedToolNames: candidate.selectedToolNames,
-        selectedToolKeys: candidate.selectedToolKeys
+        selectedToolKeys: candidate.selectedToolKeys,
+        workflowToolPolicy: selectedWorkflowToolPolicy(false, candidate)
       };
-      beginWorkflowToolPolicy();
+      beginWorkflowToolPolicy(state.workflowToolPolicy);
       applyPlanThinkingLevel();
       persistState();
-      startPlanModel(ctx);
+      planModelSwitch.start(ctx);
       updateUi(ctx);
       return true;
     } catch (error) {
@@ -1903,7 +2060,7 @@ function planMode(pi, dependencies = {}) {
       manualThinkingLevel: void 0
     };
     if (wasEnabled) {
-      restorePlanRuntime(ctx);
+      planModelSwitch.restore(ctx);
       state = { ...state, manualThinkingLevel: void 0 };
     }
     persistState();
@@ -2111,7 +2268,7 @@ function planMode(pi, dependencies = {}) {
       workflowToolPolicy: void 0,
       manualThinkingLevel: void 0
     };
-    restorePlanRuntime(ctx);
+    planModelSwitch.restore(ctx);
     state = { ...state, manualThinkingLevel: void 0 };
     persistState();
     updateUi(ctx);
@@ -2177,7 +2334,7 @@ function planMode(pi, dependencies = {}) {
       manualThinkingLevel: void 0
     };
     if (wasEnabled) {
-      restorePlanRuntime(ctx);
+      planModelSwitch.restore(ctx);
       state = { ...state, manualThinkingLevel: void 0 };
     }
     planApprovals.record(ctx, plan);
@@ -2188,11 +2345,11 @@ function planMode(pi, dependencies = {}) {
     if (!sent) {
       state = { ...previousState, planModelSwitch: void 0 };
       readyPresentationIntent = previousIntent;
-      if (wasEnabled) {
-        restoreWorkflowToolPolicy(state.workflowToolPolicy);
+      if (previousState.enabled) {
+        restoreWorkflowToolPolicy(previousState);
         publishModeContract("plan", ctx);
         applyPlanThinkingLevel();
-        startPlanModel(ctx, true);
+        planModelSwitch.start(ctx, true);
       }
       persistState();
       updateUi(ctx);
@@ -2222,7 +2379,7 @@ function planMode(pi, dependencies = {}) {
     if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
     const tools = selectableTools();
     const activeToolNames = new Set(safeGetActiveTools());
-    const initialSelectedNames = snapshotPlanModeSelectedNames(tools, toolSelectionSnapshot());
+    const initialSelectedNames = snapshotPlanModeSelectedNames(tools, toolSelectionSnapshot(state));
     const retainsInactiveSelection = state.selectedToolNames !== void 0 || state.selectedToolKeys !== void 0 || settings.defaultPlanTools !== void 0;
     const retainedInactiveNames = retainsInactiveSelection ? initialSelectedNames : /* @__PURE__ */ new Set();
     const registeredNames = new Set(tools.map((tool) => tool.name));
@@ -2230,7 +2387,7 @@ function planMode(pi, dependencies = {}) {
     await ui.showPlanLaunchMenu(ctx, {
       statusText: planModeHelperToolsAvailable(safeGetActiveTools()) ? "Status: Off \u2014 visible Plan helpers stay inactive until /plan starts." : "Status: Off \u2014 required Plan helpers are unavailable under the active tool policy.",
       initialScreen,
-      getSelectedNames: () => snapshotPlanModeSelectedNames(tools, toolSelectionSnapshot()),
+      getSelectedNames: () => snapshotPlanModeSelectedNames(tools, toolSelectionSnapshot(state)),
       toolSummary: (selectedNames) => {
         const allowed = tools.filter(
           (tool) => planModeToolAvailability(tool, activeToolNames) === "available" && selectedNames.has(tool.name) && canSelectToolInPlanMode(tool)
@@ -2359,14 +2516,12 @@ function planMode(pi, dependencies = {}) {
   function workflowDesiredToolNames(policy) {
     return new Set(policy.kind === "automatic" ? automaticPlanModeToolNames() : policy.desiredNames);
   }
-  function selectedWorkflowToolPolicy(resolved) {
-    const desiredNames = desiredPlanModeToolNames();
+  function selectedWorkflowToolPolicy(resolved, selection) {
+    const desiredNames = desiredPlanModeToolNames(selection);
     const allowedNames = resolvePlanModePolicyToolNames(desiredNames);
-    return toolPolicySelectionIsExplicit() ? { kind: "explicit", desiredNames, allowedNames, resolved } : { kind: "automatic", allowedNames, resolved };
+    return toolPolicySelectionIsExplicit(selection) ? { kind: "explicit", desiredNames, allowedNames, resolved } : { kind: "automatic", allowedNames, resolved };
   }
-  function beginWorkflowToolPolicy() {
-    const policy = selectedWorkflowToolPolicy(false);
-    state = { ...state, workflowToolPolicy: policy };
+  function beginWorkflowToolPolicy(policy) {
     pendingWorkflowToolPolicy = { generation: workflowGeneration, mode: "resolve" };
     workflowAllowedToolNames = policy.allowedNames;
   }
@@ -2379,7 +2534,7 @@ function planMode(pi, dependencies = {}) {
     }
     const policy = state.workflowToolPolicy;
     const expectedResolved = pending.mode === "revalidate";
-    if (!policy || policy.resolved !== expectedResolved) {
+    if (policy.resolved !== expectedResolved) {
       pendingWorkflowToolPolicy = void 0;
       return;
     }
@@ -2394,12 +2549,12 @@ function planMode(pi, dependencies = {}) {
     if (policyChanged) persistState();
     updateUi(ctx);
   }
-  function toolPolicySelectionIsExplicit() {
-    return state.selectedToolNames !== void 0 || state.selectedToolKeys !== void 0 || settings.defaultPlanTools !== void 0;
+  function toolPolicySelectionIsExplicit(selection) {
+    return selection.selectedToolNames !== void 0 || selection.selectedToolKeys !== void 0 || settings.defaultPlanTools !== void 0;
   }
-  function desiredPlanModeToolNames() {
+  function desiredPlanModeToolNames(selection) {
     const tools = availablePlanPolicyTools();
-    return Array.from(snapshotPlanModeSelectedNames(tools, toolSelectionSnapshot()));
+    return Array.from(snapshotPlanModeSelectedNames(tools, toolSelectionSnapshot(selection)));
   }
   function automaticPlanModeToolNames() {
     return Array.from(snapshotPlanModeSelectedNames(availablePlanPolicyTools(), {}));
@@ -2415,10 +2570,11 @@ function planMode(pi, dependencies = {}) {
     );
     return policy.allowedNames.filter((name) => currentlyAllowed.has(name));
   }
-  function restoreWorkflowToolPolicy(policy) {
+  function restoreWorkflowToolPolicy(candidate) {
+    const policy = candidate.workflowToolPolicy;
     let nextPolicy;
     if (!policy) {
-      nextPolicy = selectedWorkflowToolPolicy(true);
+      nextPolicy = selectedWorkflowToolPolicy(true, candidate);
     } else if (policy.resolved) {
       nextPolicy = policy;
     } else {
@@ -2427,7 +2583,7 @@ function planMode(pi, dependencies = {}) {
         allowedNames: resolveWorkflowToolPolicy(policy)
       };
     }
-    state = { ...state, workflowToolPolicy: nextPolicy };
+    state = { ...candidate, enabled: true, workflowToolPolicy: nextPolicy };
     workflowAllowedToolNames = nextPolicy.resolved ? revalidateFrozenWorkflowToolPolicy(nextPolicy) : nextPolicy.allowedNames;
     pendingWorkflowToolPolicy = {
       generation: workflowGeneration,
@@ -2445,10 +2601,10 @@ function planMode(pi, dependencies = {}) {
     const selectedNames = new Set(desiredNames);
     return availablePlanPolicyTools().filter((tool) => selectedNames.has(tool.name) && canSelectToolInPlanMode(tool)).map((tool) => tool.name);
   }
-  function toolSelectionSnapshot() {
+  function toolSelectionSnapshot(selection) {
     return {
-      selectedToolNames: state.selectedToolNames,
-      selectedToolKeys: state.selectedToolKeys,
+      selectedToolNames: selection.selectedToolNames,
+      selectedToolKeys: selection.selectedToolKeys,
       defaultPlanTools: settings.defaultPlanTools
     };
   }
@@ -2548,7 +2704,7 @@ function planMode(pi, dependencies = {}) {
         }
       };
       if (intent.model) {
-        const resolved = await resolveAuthenticatedModel(ctx, intent.model);
+        const resolved = await planModelSwitch.resolveAuthenticatedModel(ctx, intent.model);
         if (!isCurrent()) return "stale";
         if ("failure" in resolved) {
           notifyCurrent2(
@@ -2657,140 +2813,14 @@ function planMode(pi, dependencies = {}) {
     }
     state = { ...state, appliedThinkingLevel: void 0, previousThinkingLevel: void 0 };
   }
-  function queuePlanModelTransition(transition) {
-    planModelTransition = planModelTransition.then(transition);
-  }
-  function startPlanModel(ctx, reapplyThinking = false) {
-    const epoch = ++planModelEpoch;
-    if (reapplyThinking) {
-      queuePlanModelTransition(async () => {
-        if (epoch !== planModelEpoch || !state.enabled) return;
-        applyPlanThinkingLevel();
-        persistState();
-      });
-    }
-    const tier = settings.planModel;
-    if (tier) queuePlanModelTransition(() => applyPlanModel(ctx, tier, epoch));
-  }
   function resumePlanModel(ctx) {
     if (!state.resumePlanModel) return;
     state = { ...state, resumePlanModel: void 0 };
     persistState();
-    startPlanModel(ctx);
-  }
-  async function applyPlanModel(ctx, tier, epoch) {
-    const target = planModelTarget(tier);
-    const previous = ctx.model;
-    const isCurrent = () => epoch === planModelEpoch && state.enabled;
-    if (!isCurrent() || !previous || sameModel(previous, target)) return;
-    const fallback = (failure) => ctx.ui.notify(
-      `Plan model ${tier} (${terminalModelReference(target)}) ${failure}; using the current model.`,
-      "warning"
-    );
-    const resolved = await resolveAuthenticatedModel(ctx, target);
-    if (!isCurrent()) return;
-    if ("failure" in resolved) {
-      fallback(resolved.failure);
-      return;
-    }
-    const thinkingBefore = pi.getThinkingLevel();
-    try {
-      if (!await switchModel(resolved.model, thinkingBefore)) {
-        fallback("could not be applied");
-        return;
-      }
-    } catch (error) {
-      fallback(`could not be applied: ${errorText(error)}`);
-      return;
-    }
-    const modelSwitch = {
-      applied: target,
-      previous: { provider: previous.provider, modelId: previous.id },
-      thinkingBefore,
-      thinkingAfter: pi.getThinkingLevel()
-    };
-    if (!isCurrent()) {
-      await restorePlanModel(ctx, modelSwitch, thinkingBefore);
-      return;
-    }
-    state = {
-      ...state,
-      ...state.appliedThinkingLevel ? { appliedThinkingLevel: modelSwitch.thinkingAfter } : {},
-      planModelSwitch: modelSwitch
-    };
-    persistState();
-  }
-  function restorePlanRuntime(ctx) {
-    planModelEpoch += 1;
-    const modelSwitch = state.planModelSwitch;
-    state = { ...state, planModelSwitch: void 0 };
-    if (!modelSwitch || !sameModel(ctx.model, modelSwitch.applied)) {
-      restoreThinkingLevel();
-      return;
-    }
-    captureManualThinkingLevel();
-    const current = pi.getThinkingLevel();
-    const thinking = state.previousThinkingLevel ?? (current === modelSwitch.thinkingAfter ? modelSwitch.thinkingBefore : current);
-    state = { ...state, appliedThinkingLevel: void 0, previousThinkingLevel: void 0 };
-    queuePlanModelTransition(() => restorePlanModel(ctx, modelSwitch, thinking));
-  }
-  async function restorePlanModel(ctx, modelSwitch, thinking) {
-    const resolved = await resolveAuthenticatedModel(ctx, modelSwitch.previous);
-    let failure = "could not be applied";
-    if ("failure" in resolved) failure = resolved.failure;
-    else {
-      try {
-        if (await switchModel(resolved.model, thinking)) return;
-      } catch (error) {
-        failure = `could not be applied: ${errorText(error)}`;
-      }
-    }
-    if (pi.getThinkingLevel() !== thinking) pi.setThinkingLevel(thinking);
-    ctx.ui.notify(
-      `Previous model ${terminalModelReference(modelSwitch.previous)} ${failure}; Pi stays on ${terminalModelReference(modelSwitch.applied)}.`,
-      "warning"
-    );
-  }
-  async function switchModel(model, thinking) {
-    switchingPlanModel = true;
-    try {
-      if (!await pi.setModel(model)) return false;
-      if (pi.getThinkingLevel() !== thinking) pi.setThinkingLevel(thinking);
-      return true;
-    } finally {
-      switchingPlanModel = false;
-    }
-  }
-  async function resolveAuthenticatedModel(ctx, reference) {
-    let model;
-    try {
-      model = ctx.modelRegistry.find(reference.provider, reference.modelId);
-    } catch (error) {
-      return { failure: `could not be resolved: ${errorText(error)}` };
-    }
-    if (!model) return { failure: "is no longer available" };
-    try {
-      const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-      return auth.ok ? { model } : { failure: `could not be authenticated: ${safeTerminalText(auth.error)}` };
-    } catch (error) {
-      return { failure: `could not be authenticated: ${errorText(error)}` };
-    }
+    planModelSwitch.start(ctx);
   }
   function errorText(error) {
     return safeTerminalText(error instanceof Error ? error.message : String(error));
-  }
-  function sameModel(model, reference) {
-    return model?.provider === reference.provider && model.id === reference.modelId;
-  }
-  function getFreshPlanModel(ctx) {
-    const modelSwitch = state.enabled ? state.planModelSwitch : void 0;
-    if (modelSwitch && sameModel(ctx.model, modelSwitch.applied)) {
-      return { model: { ...modelSwitch.previous }, label: "previous model" };
-    }
-    return {
-      model: ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : void 0,
-      label: "same as plan"
-    };
   }
   function safeGetActiveTools() {
     try {
@@ -2821,7 +2851,7 @@ function planMode(pi, dependencies = {}) {
         try {
           assertPlanModeHelperToolsAvailable(safeGetActiveTools());
         } catch {
-          if (wasEnabled) restorePlanRuntime(ctx);
+          if (wasEnabled) planModelSwitch.restore(ctx);
           state = { enabled: false, awaitingAction: false, declinedPlans: 0 };
           workflowAllowedToolNames = void 0;
           pendingWorkflowToolPolicy = void 0;
@@ -2833,11 +2863,11 @@ function planMode(pi, dependencies = {}) {
       }
       if (wasEnabled && !candidate.enabled) {
         readyPresentationIntent = void 0;
-        restorePlanRuntime(ctx);
+        planModelSwitch.restore(ctx);
       }
-      state = candidate;
-      const policyChanged = state.enabled ? restoreWorkflowToolPolicy(state.workflowToolPolicy) : false;
-      if (!state.enabled) {
+      const policyChanged = candidate.enabled ? restoreWorkflowToolPolicy(candidate) : false;
+      if (!candidate.enabled) {
+        state = candidate;
         workflowAllowedToolNames = void 0;
         pendingWorkflowToolPolicy = void 0;
       }
@@ -2867,7 +2897,7 @@ function planMode(pi, dependencies = {}) {
     readyPresentationIntent = void 0;
     try {
       publishModeContract("normal", ctx);
-      restorePlanRuntime(ctx);
+      planModelSwitch.restore(ctx);
     } finally {
       state = previousState;
       workflowAllowedToolNames = void 0;

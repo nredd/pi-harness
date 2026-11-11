@@ -125,7 +125,13 @@ test("restoration skips non-completion messages before recovering the last compl
 test("active plan status reports the frozen tool summary", () => {
   assert.equal(
     planModeStatusText(
-      { enabled: true, awaitingAction: true, declinedPlans: 0, latestPlan: "# Ready" },
+      {
+        enabled: true,
+        awaitingAction: true,
+        declinedPlans: 0,
+        latestPlan: "# Ready",
+        workflowToolPolicy: { kind: "automatic" as const, allowedNames: [], resolved: true },
+      },
       () => "read only",
     ),
     "Plan mode is active and a proposed plan is ready. read only",
@@ -149,7 +155,13 @@ test("message and widget components remain renderable after invalidation", () =>
   const context = createMockContext({ hasUI: true, mode: "tui", theme });
   updatePlanModeUi(
     context.ctx,
-    { enabled: true, awaitingAction: true, declinedPlans: 0, latestPlan: "# Task" },
+    {
+      enabled: true,
+      awaitingAction: true,
+      declinedPlans: 0,
+      latestPlan: "# Task",
+      workflowToolPolicy: { kind: "automatic" as const, allowedNames: [], resolved: true },
+    },
     () => "read",
   );
   const factory = context.widgets.get("plan-mode-plan") as (tui: unknown, theme: Theme) => Component;
@@ -195,7 +207,13 @@ test("export failures are visible headlessly and never overwrite or create inval
     assert.match(interactive.notifications.at(-1)?.message ?? "", /No completed plan/);
     assert.equal(interactive.notifications.at(-1)?.level, "warning");
     await assert.rejects(exportPlanToFile("# Plan", "x".repeat(300), directory), /ENAMETOOLONG/);
-    const state = { enabled: true, awaitingAction: true, declinedPlans: 0, latestPlan: "# Plan" };
+    const state = {
+      enabled: true as const,
+      awaitingAction: true,
+      declinedPlans: 0,
+      latestPlan: "# Plan",
+      workflowToolPolicy: { kind: "automatic" as const, allowedNames: [], resolved: true },
+    };
     assert.throws(() => resolvePlanExportPath("bad\0path", directory), /NUL/);
     await writeFile(join(directory, "blocker"), "owned");
     await assert.rejects(exportPlanToFile("# Plan", "blocker/plan.md", directory), /ENOTDIR|EEXIST/);

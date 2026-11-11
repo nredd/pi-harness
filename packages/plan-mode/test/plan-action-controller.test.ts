@@ -70,6 +70,7 @@ test("user-opened fresh actions stop after menu disposal", async () => {
       declinedPlans: 0,
       latestPlan: "# Plan",
       latestPlanSource: "plan_mode_complete",
+      workflowToolPolicy: { kind: "automatic" as const, allowedNames: [], resolved: true },
     }),
     captureLifecycle: () => ({
       signal: new AbortController().signal,
