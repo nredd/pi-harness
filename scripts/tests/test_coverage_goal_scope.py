@@ -92,7 +92,7 @@ def test_goal_downgrade_cannot_bypass_base_ratchet() -> None:
 
 
 def test_goal_exceptions_require_reason_and_report_only_signals() -> None:
-    """Reject blank scope explanations and enforced signals outside the goal.
+    """Reject blank scope explanations and enforced signals on a `report-only` goal.
 
     Parameters:
         None.
@@ -108,12 +108,30 @@ def test_goal_exceptions_require_reason_and_report_only_signals() -> None:
         Policy.model_validate(data)
     package["goal_reason"] = "Verification infrastructure."
     package["signals"]["primary"]["enforcement"] = "enforced"
-    with pytest.raises(ValidationError, match="outside the global goal"):
+    with pytest.raises(ValidationError, match="must remain report-only"):
         Policy.model_validate(data)
 
 
+def test_excluded_goal_may_enforce_ratchet_caps() -> None:
+    """Allow an owner-excluded package to enforce its measured caps (#645) without joining the zero goal.
+
+    Parameters:
+        None.
+    Returns:
+        None: `excluded` validates with an enforced signal.
+    Raises:
+        AssertionError: The enforced excluded signal is rejected or never enforced.
+    """
+    data = report_only_policy().model_dump()
+    package = data["packages"]["example"]
+    package["goal"] = "excluded"
+    package["signals"]["primary"]["enforcement"] = "enforced"
+    cfg = Policy.model_validate(data)
+    assert cfg.packages["example"].signals["primary"].enforcement == "enforced"
+
+
 def test_ratchet_goal_is_rejected() -> None:
-    """Keep the deleted `ratchet` mode from returning: no package may sit on a nonzero floor.
+    """Keep the deleted `ratchet` mode from returning: no package may be on a `ratchet` goal.
 
     Parameters:
         None.

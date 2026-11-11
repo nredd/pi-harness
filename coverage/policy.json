@@ -247,7 +247,7 @@
       "status": "pending",
       "goal": "excluded",
       "goal_reason": "Owner explicitly excludes computer-use from coverage maintenance; existing platform/native checks remain unchanged. Inventory remains visible, with no coverage claim.",
-      "note": "Not measured, tracked: native Swift/Rust and the documentation site have no maintained coverage producer. Its JS/TS runtime source is also measured, report-only, by `computer-use-vitest` (#347). Shipped setup-helper.mjs, build-native.mjs and src/ JavaScript remain inventoried production source, never verification helpers.",
+      "note": "Not measured, tracked: native Swift/Rust and the documentation site have no maintained coverage producer. Its JS/TS runtime source is also measured, with enforced ratchet caps, by `computer-use-vitest` (#347, #645). Shipped setup-helper.mjs, build-native.mjs and src/ JavaScript remain inventoried production source, never verification helpers.",
       "signals": {}
     },
     "computer-use-vitest": {
@@ -256,14 +256,12 @@
       "exclusions": [{ "path": "src/platform/types.ts", "kind": "type-only", "reason": "Only TypeScript declarations; emits no executable JavaScript." }],
       "status": "measured",
       "goal": "excluded",
-      "goal_reason": "Owner excludes computer-use from coverage maintenance; this measures its JS/TS runtime source under the Vitest suites from #347 with no 100% claim. `computer-use` keeps the full inventory.",
-      "note": "Istanbul over the package's Vitest suites; subprocess-run scripts (setup/build/docs generators) count only what the suites import. References are the first local macOS and hosted Linux runs, see docs/coverage.md.",
+      "goal_reason": "Owner excludes computer-use from coverage maintenance; this measures its JS/TS runtime source under the Vitest suites from #347 with enforced uncovered-count ratchet caps (#645), not a 100% claim. `computer-use` keeps the full inventory.",
+      "note": "Istanbul over the package's Vitest suites; subprocess-run scripts (setup/build/docs generators) count only what the suites import. Caps are the measured per-OS uncovered counts (#645 T0), see docs/coverage.md.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "enforcement": "report-only",
-          "reason": "Report-only at first under the owner's computer-use coverage exclusion: https://github.com/nredd/pi-harness/issues/347.",
-          "max_uncovered": { "darwin": { "lines": 1975, "functions": 517 }, "linux": { "lines": 2006, "functions": 528 } },
+          "max_uncovered": { "darwin": { "lines": 572, "functions": 203, "branches": 871 }, "linux": { "lines": 592, "functions": 211, "branches": 900 } },
           "reporters": ["text", "lcov"]
         }
       }

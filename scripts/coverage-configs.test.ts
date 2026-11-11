@@ -15,6 +15,7 @@ interface Coverage {
 	reportOnFailure: boolean;
 	include: string[];
 	exclude: string[];
+	thresholds?: Record<string, Record<string, number>>;
 }
 
 interface Entry {
@@ -141,6 +142,19 @@ const PRODUCERS: Producer[] = [
 	},
 ];
 
+/** Files at 0/0/0 on every OS; adding or dropping a pin in the configuration must change this list too (#645). */
+const ZERO_UNCOVERED_FILES = [
+	"scripts/build-native.mjs",
+	"scripts/docs-generators/generate-source-references.mjs",
+	"scripts/docs-generators/generate-tool-reference.mjs",
+	"scripts/rust-coverage.mjs",
+	"scripts/setup-helper.mjs",
+	"src/outline-store.ts",
+	"src/outline.ts",
+	"src/platform/macos/helper-path.mjs",
+	"src/platform/macos/helper.ts",
+];
+
 const POLICY_URL = new URL("../coverage/policy.json", import.meta.url);
 
 /** Policy entries the faked `readFileSync` serves; null serves the real file. */
@@ -228,3 +242,31 @@ for (const producer of PRODUCERS) {
 		await assert.rejects(producer.load(), TypeError);
 	});
 }
+
+test("computer-use-vitest is an enforced ratchet with a cap for every counter on both OSes (#645)", () => {
+	const signal = realPolicy()["computer-use-vitest"]?.signals.primary as
+		| { enforcement?: string; max_uncovered: Record<string, Record<string, number>> }
+		| undefined;
+	assert.ok(signal, "computer-use-vitest has a primary signal");
+	assert.notEqual(signal.enforcement, "report-only");
+	assert.deepEqual(Object.keys(signal.max_uncovered).sort(), ["darwin", "linux"]);
+	for (const caps of Object.values(signal.max_uncovered)) {
+		assert.deepEqual(Object.keys(caps).sort(), ["branches", "functions", "lines"]);
+		for (const cap of Object.values(caps)) assert.ok(Number.isInteger(cap) && cap >= 0);
+	}
+});
+
+test("computer-use pins every file already at zero uncovered, each owned (#645)", async () => {
+	const producer = PRODUCERS.find(({ policy }) => policy === "computer-use-vitest");
+	assert.ok(producer);
+	const { thresholds, include } = await coverageOf(producer);
+	assert.ok(thresholds, "the configuration pins files");
+	const root = fileURLToPath(new URL("../packages/computer-use/", import.meta.url));
+	const owned = new Set(include.flatMap((pattern) => globSync(pattern, { cwd: root })));
+	const pinned = Object.keys(thresholds);
+	assert.deepEqual(pinned.sort(), [...ZERO_UNCOVERED_FILES]);
+	for (const path of pinned) {
+		assert.ok(owned.has(path), `${path} is an owned source file`);
+		assert.deepEqual(thresholds[path], { lines: 100, functions: 100, branches: 100 });
+	}
+});

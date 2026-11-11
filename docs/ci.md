@@ -143,7 +143,7 @@ by #160. Accounting rejects enforced partial Bun inventories. Any later enforced
 flip requires a new reasoned `enforcement_changes` entry relative to base; standing reasons or
 historical approvals cannot silently waive enforcement. Initial policy introduction is allowed.
 Enforced-to-enforced floors ratchet per OS; advisory references do not become hidden budgets.
-`computer-use` stays not measured, tracked for its native Swift/Rust and documentation site. Its 33 JS/TS runtime modules are measured by the report-only `computer-use-vitest` signal (#347). `dev-tools` uses #195's primary Istanbul decision with
+`computer-use` stays not measured, tracked for its native Swift/Rust and documentation site. Its 35 JS/TS runtime modules are measured by the enforced `computer-use-vitest` ratchet (#347, #645): per-OS uncovered lines, functions and branches may not grow. `dev-tools` uses #195's primary Istanbul decision with
 all 23 executable modules and zero uncovered lines/functions on both hosted OSes after #155.
 Its Bun signal runs the same full Vitest suite on Bun and is enforced at 0/0 since #320. Python `scripts/` and `integration/harness/` are measured by `PY_GATE`, `benchmarks/comparison` by `check-benchmark` on macOS (see `docs/coverage.md`). The Vitest
 producer configurations are measured by `import-audit` (#380, see `docs/coverage.md`).
