@@ -10,6 +10,7 @@ import {
 	createFakeChild,
 	createFakeSpawn,
 	drop,
+	effect,
 	fail,
 	malformed,
 	ok,
@@ -147,21 +148,54 @@ describe("daemon commands over the socket", () => {
 		}
 	});
 
-	// Known bug, filed as #725: `daemonCommand` registers no `close`/`end` handler, so a helper that
-	// disconnects without replying is only noticed when the command timeout fires. When #725 is fixed this
-	// should reject promptly with a `HelperTransportError`; flip the bound and delete this comment.
-	test("a helper that disconnects mid-command stalls until the command timeout (#725)", async () => {
+	// #725: a helper that drops the socket before replying fails at once with a coded transport error,
+	// not at the command timeout. Timing is asserted as "well before the timeout" (no exact bound).
+	test("a helper that disconnects mid-command rejects at once with helper_disconnected (#725)", async () => {
 		const fake = await fakeOn({ handlers: { crash: drop() } });
 		const { MacosHelperClient, HelperTransportError } = await load({ external: true, fake });
 		const client = new MacosHelperClient();
+		const timeoutMs = 30_000;
 		const started = Date.now();
-		await assert.rejects(client.command("crash", {}, { timeoutMs: 300 }), (error) => {
+		await assert.rejects(client.command("crash", {}, { timeoutMs }), (error) => {
 			assert.ok(error instanceof HelperTransportError);
-			assert.match(error.message, /timed out after 300ms/);
+			assert.equal(error.code, "helper_disconnected");
+			assert.match(error.message, /disconnected before replying to 'crash'/);
+			assert.doesNotMatch(error.message, /timed out/);
 			return true;
 		});
-		assert.ok(Date.now() - started >= 250, "the rejection came from the timeout, not from the disconnect");
+		assert.ok(Date.now() - started < timeoutMs / 2, "the disconnect must not wait out the command timeout");
 		assert.equal(client.daemonAvailable, false);
+	});
+
+	test("a partial reply cut off by a disconnect is a disconnect, and the next command still works", async () => {
+		const fake = await fakeOn();
+		fake.script("half", effect(() => setTimeout(() => fake.disconnectAll(), 20), raw('{"id":"req_2","ok":tr')));
+		const { MacosHelperClient } = await load({ external: true, fake });
+		const client = new MacosHelperClient();
+		await assert.rejects(client.command("half", {}, { timeoutMs: 30_000 }), (error) => error.code === "helper_disconnected");
+		assert.equal(client.daemonAvailable, false);
+		assert.equal((await client.command("diagnostics")).protocolVersion, 7);
+	});
+
+	test("a reply that is followed at once by a disconnect resolves, not helper_disconnected (#725)", async () => {
+		const fake = await fakeOn();
+		fake.script("last", effect(() => setTimeout(() => fake.disconnectAll(), 0), ok({ done: true })));
+		const { MacosHelperClient } = await load({ external: true, fake });
+		const client = new MacosHelperClient();
+		assert.deepEqual(await client.command("last", {}, { timeoutMs: 30_000 }), { done: true });
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		assert.equal(client.daemonAvailable, true, "the close after a settled reply is ignored");
+	});
+
+	test("a disconnect releases the abort listener, so a later abort cannot settle the command again (#725)", async () => {
+		const fake = await fakeOn({ handlers: { crash: drop() } });
+		const { MacosHelperClient } = await load({ external: true, fake });
+		const client = new MacosHelperClient();
+		const controller = new AbortController();
+		const removed = vi.spyOn(controller.signal, "removeEventListener");
+		await assert.rejects(client.command("crash", {}, { signal: controller.signal, timeoutMs: 30_000 }), (error) => error.code === "helper_disconnected");
+		assert.ok(removed.mock.calls.some(([type]) => type === "abort"), "the abort listener is removed on disconnect");
+		controller.abort();
 	});
 
 	test("an abort signal cancels an in-flight command", async () => {

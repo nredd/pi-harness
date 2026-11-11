@@ -439,6 +439,42 @@
 			}
 		},
 		{
+			"id": "helper-disconnect-macos",
+			"purpose": "Fail a command at once with coded helper_disconnected when the macOS helper drops the socket before replying, instead of waiting out the command timeout",
+			"files": ["src/platform/macos/helper.ts", "test/macos-helper-client.test.mjs"],
+			"check": "test/macos-helper-client.test.mjs",
+			"dropControls": ["macOS helper disconnect fails fast (#725)"],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#725; not filed upstream"
+			}
+		},
+		{
+			"id": "helper-disconnect-linux",
+			"purpose": "Fail pending Linux helper commands only once the helper's stdout is drained (close, not exit), and frame each helper process's output separately",
+			"files": ["src/platform/linux/helper.ts", "test/linux-helper-client.test.mjs"],
+			"check": "test/linux-helper-client.test.mjs",
+			"dropControls": ["Linux pending requests fail on close, after stdout drains (#725)", "Linux per-child line buffer (#725)"],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#725; not filed upstream"
+			}
+		},
+		{
+			"id": "helper-disconnect-windows",
+			"purpose": "Reject pending Windows helper commands with coded helper_disconnected when the helper process closes, instead of waiting out the command timeout",
+			"files": ["src/platform/windows/helper.ts", "test/windows-helper-client.test.mjs"],
+			"check": "test/windows-helper-client.test.mjs",
+			"dropControls": ["Windows helper exit rejects pending commands (#725)", "Windows per-child line buffer (#725)"],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#725; not filed upstream"
+			}
+		},
+		{
 			"id": "outline-store",
 			"purpose": "Keep full outlines out of the Pi session file: persist them in a capped agent-cache store keyed by stateId, restore from it, and still restore legacy inline outlines",
 			"files": [
@@ -522,6 +558,7 @@
 		"src/platform/macos/backend.ts",
 		"src/platform/macos/helper.ts",
 		"src/platform/types.ts",
+		"src/platform/windows/helper.ts",
 		"sync-patches.json",
 		"test/act-outcomes.test.mjs",
 		"test/bridge-setup-look.test.mjs",
@@ -549,7 +586,10 @@
 		"test/managed-browser-headless.test.mjs",
 		"test/outline-store.test.mjs",
 		"test/platform-linux.test.mjs",
+		"test/linux-helper-client.test.mjs",
+		"test/macos-helper-client.test.mjs",
 		"test/platform-windows.test.mjs",
+		"test/windows-helper-client.test.mjs",
 		"test/runtime-concurrency.test.mjs",
 		"test/rust-coverage-errors.test.mjs",
 		"test/rust-coverage.test.mjs",

@@ -602,6 +602,46 @@ const cases = [
 		check: "test/outline-store.test.mjs",
 		failure: /Expected values to be strictly equal|expected undefined/,
 	},
+	{
+		name: "macOS helper disconnect fails fast (#725)",
+		file: "src/platform/macos/helper.ts",
+		before: '\t\t\tsocket.on("end", onDisconnect);\n\t\t\tsocket.on("close", onDisconnect);\n',
+		after: "",
+		check: "test/macos-helper-client.test.mjs",
+		failure: /timed out/,
+	},
+	{
+		name: "Windows helper exit rejects pending commands (#725)",
+		file: "src/platform/windows/helper.ts",
+		before: 'child.on("close", () => this.rejectPending(child));',
+		after: "/* pending rejection dropped */",
+		check: "test/windows-helper-client.test.mjs",
+		failure: /timed out/,
+	},
+	{
+		name: "Linux pending requests fail on close, after stdout drains (#725)",
+		file: "src/platform/linux/helper.ts",
+		before: 'child.on("close", (code, signalName) => {',
+		after: 'child.on("exit", (code, signalName) => {',
+		check: "test/linux-helper-client.test.mjs",
+		failure: /Linux helper exited with code 0/,
+	},
+	{
+		name: "Linux per-child line buffer (#725)",
+		file: "src/platform/linux/helper.ts",
+		before: 'child.stdout.on("data", (chunk: string) => { buffer = this.onStdout(buffer, chunk); });',
+		after: 'child.stdout.on("data", (chunk: string) => { const g = globalThis as { tail?: string }; g.tail = this.onStdout(g.tail ?? "", chunk); });',
+		check: "test/linux-helper-client.test.mjs",
+		failure: /timed out/,
+	},
+	{
+		name: "Windows per-child line buffer (#725)",
+		file: "src/platform/windows/helper.ts",
+		before: 'child.stdout.on("data", (chunk: string) => { buffer = this.onStdout(buffer, chunk); });',
+		after: 'child.stdout.on("data", (chunk: string) => { const g = globalThis as { tail?: string }; g.tail = this.onStdout(g.tail ?? "", chunk); });',
+		check: "test/windows-helper-client.test.mjs",
+		failure: /timed out/,
+	},
 ];
 
 try {

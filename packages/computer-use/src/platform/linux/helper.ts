@@ -24,6 +24,7 @@ interface Pending<T> {
 	resolve(value: T): void;
 	reject(error: Error): void;
 	timer: NodeJS.Timeout;
+	child: ChildProcessWithoutNullStreams;
 }
 
 async function isExecutable(filePath: string): Promise<boolean> {
@@ -107,7 +108,6 @@ export class LinuxHelperClient {
 	private installPromise?: Promise<void>;
 	private child?: ChildProcessWithoutNullStreams;
 	private processPromise?: Promise<ChildProcessWithoutNullStreams>;
-	private buffer = "";
 	/** Set by `dispose()`, which is terminal: nothing may probe, set up, spawn or assign `child` afterwards. */
 	private disposed = false;
 	private setupAbort?: AbortController;
@@ -141,13 +141,14 @@ export class LinuxHelperClient {
 		child.unref();
 	}
 
-	private rejectPending(error: Error): void {
-		for (const pending of this.pending.values()) {
+	/** Reject in-flight commands: all of them, or only those sent to `child` when it is given. */
+	private rejectPending(error: Error, child?: ChildProcessWithoutNullStreams): void {
+		for (const [id, pending] of this.pending) {
+			if (child && pending.child !== child) continue;
+			this.pending.delete(id);
 			clearTimeout(pending.timer);
 			pending.reject(error);
 		}
-		this.pending.clear();
-		this.buffer = "";
 	}
 
 	/**
@@ -265,11 +266,14 @@ export class LinuxHelperClient {
 		child.stdin.on("error", (error) => {
 			if (this.child === child) this.discardChild(error);
 		});
-		child.stdout.on("data", (chunk: string) => this.onStdout(chunk));
-		child.on("exit", (code, signalName) => {
-			if (this.child !== child) return;
-			this.child = undefined;
-			this.rejectPending(new Error(`Linux helper exited${signalName ? ` on ${signalName}` : ` with code ${code ?? "unknown"}`}.`));
+		// Each child frames its own lines, so a dead child's partial output cannot corrupt its successor's replies.
+		let buffer = "";
+		child.stdout.on("data", (chunk: string) => { buffer = this.onStdout(buffer, chunk); });
+		// `exit` can fire while stdout still holds a complete reply: only forget the child here so the next
+		// command respawns, and fail what is still pending once `close` says stdout is drained.
+		child.on("exit", () => { if (this.child === child) this.child = undefined; });
+		child.on("close", (code, signalName) => {
+			this.rejectPending(new Error(`Linux helper exited${signalName ? ` on ${signalName}` : ` with code ${code ?? "unknown"}`}.`), child);
 		});
 		child.on("error", (error) => {
 			if (this.child !== child) return;
@@ -277,20 +281,20 @@ export class LinuxHelperClient {
 			this.rejectPending(error);
 		});
 		this.child = child;
-		this.buffer = "";
 		return await new Promise<ChildProcessWithoutNullStreams>((resolve, reject) => {
 			child.once("spawn", () => resolve(child));
 			child.once("error", reject);
 		});
 	}
 
-	private onStdout(chunk: string): void {
-		this.buffer += chunk;
+	/** Settle the requests answered by the complete lines in `buffer + chunk`; returns the unfinished tail. */
+	private onStdout(previous: string, chunk: string): string {
+		let buffer = previous + chunk;
 		for (;;) {
-			const newline = this.buffer.indexOf("\n");
-			if (newline < 0) return;
-			const line = this.buffer.slice(0, newline).trim();
-			this.buffer = this.buffer.slice(newline + 1);
+			const newline = buffer.indexOf("\n");
+			if (newline < 0) return buffer;
+			const line = buffer.slice(0, newline).trim();
+			buffer = buffer.slice(newline + 1);
 			if (!line) continue;
 			let parsed: any;
 			try { parsed = JSON.parse(line); } catch { continue; }
@@ -329,6 +333,7 @@ export class LinuxHelperClient {
 				reject(new Error(`Helper command '${cmd}' timed out after ${timeoutMs}ms.`));
 			}, timeoutMs);
 			this.pending.set(id, {
+				child,
 				resolve: (value) => { signal?.removeEventListener("abort", onAbort); resolve(value as T); },
 				reject: (error) => { signal?.removeEventListener("abort", onAbort); reject(error); },
 				timer,
