@@ -41,6 +41,7 @@ from coverage_accounting import (
     git_read,
     inventory,
     inventory_scopes,
+    is_executable_candidate,
     is_test_path,
     repository_files,
 )
@@ -993,3 +994,44 @@ def test_exclusion_glob_matching_an_existing_file_passes(tmp_path: Path) -> None
         Exclusion(path="src/kept.ts", kind="generated", reason="Build output.")
     ]
     assert not audit_inventory(tmp_path, cfg, repository_files(tmp_path))
+
+
+def test_unmeasured_tree_cannot_contain_owned_source(tmp_path: Path) -> None:
+    """Refuse a tree that holds owned files even when no package root overlaps it.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+    Returns:
+        None: A root-level package owning `tools/a.mjs` blocks an entry for `tools`.
+    Raises:
+        AssertionError: Owned source is silently exempted.
+    """
+    cfg = scope_fixture(tmp_path)
+    write_script(tmp_path, "tools/a.mjs")
+    cfg.packages["tooling"] = Package(
+        root=".",
+        owned=["tools/*.mjs"],
+        exclusions=[],
+        status="pending",
+        note="Fixture package rooted at the repository.",
+        goal="excluded",
+        goal_reason="Fixture.",
+        signals={},
+    )
+    cfg.unmeasured_trees = [tree("tools")]
+    with pytest.raises(ValueError, match="contains owned source"):
+        audit_inventory(tmp_path, cfg, repository_files(tmp_path))
+
+
+def test_unreadable_extensionless_path_counts_as_source(tmp_path: Path) -> None:
+    """Fail closed when an extensionless path cannot be sniffed (a directory raises on every OS).
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+    Returns:
+        None: The unreadable path is a candidate rather than inert.
+    Raises:
+        AssertionError: A read error lets a file pass as inert.
+    """
+    (tmp_path / "scripts/odd").mkdir(parents=True)
+    assert is_executable_candidate(tmp_path, Path("scripts/odd"))
