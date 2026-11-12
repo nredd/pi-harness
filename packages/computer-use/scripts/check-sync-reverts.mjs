@@ -106,6 +106,24 @@ const cases = [
 		failure: /target-dir/,
 	},
 	{
+		name: "LookNode preserves child order (#769)",
+		file: "native/macos/bridge.swift",
+		before: '"children": children.map { $0.payload() },',
+		after: '"children": children.reversed().map { $0.payload() },',
+		check: "test/macos-native-pure.test.mjs",
+		failure: /recursive payload preserves child order/,
+		darwinOnly: true,
+	},
+	{
+		name: "LookNode serializes optional flags (#769)",
+		file: "native/macos/bridge.swift",
+		before: 'if offscreen { output["offscreen"] = true }',
+		after: 'if offscreen { output["offscreen"] = false }',
+		check: "test/macos-native-pure.test.mjs",
+		failure: /nested payload serializes every optional field and capability exactly/,
+		darwinOnly: true,
+	},
+	{
 		name: "Outline store write (#648)",
 		file: "src/bridge.ts",
 		before: "saveStoredOutline(result.capture.stateId, serializeOutline(result.outline));",
@@ -551,6 +569,15 @@ const cases = [
 		darwinOnly: true,
 	},
 	{
+		name: "look transfer preserves destination refs (#769)",
+		file: "native/macos/bridge.swift",
+		before: "refsByOwner[to, default: []].append(contentsOf: moved)",
+		after: "refsByOwner[to] = moved",
+		check: "test/macos-native-pure.test.mjs",
+		failure: /successor eviction removes original destination refs/,
+		darwinOnly: true,
+	},
+	{
 		name: "look-owned ref eviction (400f784/50cbfe2)",
 		file: "native/macos/bridge.swift",
 		before: "for ref in refsByOwner.removeValue(forKey: owner) ?? [] { removeElement(ref) }",
@@ -934,6 +961,15 @@ const cases = [
 		failure: /desktop_input must not interleave inside a physical act_ui transaction/,
 	},
 	{
+		name: "unequal windows receive distinct refs (#769)",
+		file: "native/macos/bridge.swift",
+		before: "if CFEqual(existing, window) {",
+		after: "if CFEqual(existing, existing) {",
+		check: "test/macos-native-pure.test.mjs",
+		failure: /unequal window handle receives a distinct ref/,
+		darwinOnly: true,
+	},
+	{
 		name: "unnamed role folds as node (#717)",
 		file: "src/outline.ts",
 		before: 'return stripped || "node";',
@@ -991,6 +1027,11 @@ try {
 	validateLedger(ledger, cases);
 	validateUpstreamRows(ledger, upstreamMarkdown);
 	validateLedgerOrder(ledger, upstreamMarkdown, readFileSync(fileURLToPath(import.meta.url), "utf8"));
+	if (process.argv.includes("--validate-only")) {
+		console.log("Sync ledger and actual revert cases validated");
+		rmSync(sandboxRoot, { recursive: true, force: true });
+		process.exit(0);
+	}
 	// Test sources/fixtures are intentionally NOT the npm payload: package.json `files` excludes
 	// them. Keep this self-contained package-root fixture list aligned with the checks selected above.
 	for (const entry of [

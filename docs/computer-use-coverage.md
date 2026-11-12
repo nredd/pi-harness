@@ -28,84 +28,60 @@ gated (`linux-*`, `windows-*`, `macos-helper-live`).
 
 ### TypeScript (`computer-use-vitest`, 35 modules, Istanbul)
 
-Istanbul text summary: statements 82.84%, branches 74.67%, functions 79.98%, lines 85.24%. The policy
-reads the lcov rollup, which gives **572 uncovered lines, 871 uncovered branches, 203 uncovered
-functions** on macOS. `src/platform/types.ts` is excluded as type-only and stays so (no executable
-output).
+Hosted run `43173083073` on PR HEAD `e1df877e` measured the enforced signal:
 
-The signal is **enforced** since #645 T0, with caps equal to the measured per-OS uncovered counts:
+| Host | Lines | Functions | Branches | Statements | Job |
+| --- | --- | --- | --- | --- | --- |
+| macOS | 1 | 0 | 1 | 1 | `131037037506` |
+| Ubuntu | 1 | 0 | 1 | 1 | `131037793558` |
+| WSL2 | 1 | 0 | 1 | 1 | `131041874646` |
 
-| OS | Lines | Functions | Branches | Source |
+The `darwin` caps equal macOS; `linux` caps take the per-counter maximum of Ubuntu and WSL2.
+Each cap is lower than or equal to the previous 168/25/313/236 baseline. The 34 files
+at 0/0/0/0 on all three hosts are pinned in `packages/computer-use/vitest.config.ts`; the exact
+list is tested in `scripts/coverage-configs.test.ts`. The helpers from #749 were already pinned.
+
+macOS per-file uncovered counts (lines / functions / branches / statements):
+
+| File | Lines | Functions | Branches | Statements |
 | --- | --- | --- | --- | --- |
-| darwin | 572 | 203 | 871 | local `npm test` at `6d913af1` |
-| linux (max of Ubuntu and WSL2) | 592 | 211 | 900 | hosted `owned (ubuntu-24.04)` 589/209/900 and `owned (wsl2)` 592/211/900, PR #731 merged with main `9de93b4c` (after #723, #732, #733) |
+| `extensions/computer-use.ts` | 0/51 | 0/10 | 0/30 | 0/63 |
+| `scripts/build-native.mjs` | 0/154 | 0/23 | 0/120 | 0/167 |
+| `scripts/docs-generators/generate-source-references.mjs` | 0/85 | 0/22 | 0/55 | 0/106 |
+| `scripts/docs-generators/generate-tool-reference.mjs` | 0/65 | 0/15 | 0/68 | 0/79 |
+| `scripts/rust-coverage.mjs` | 0/62 | 0/6 | 0/56 | 0/67 |
+| `scripts/setup-helper.mjs` | 0/433 | 0/102 | 0/284 | 0/508 |
+| `src/actions.ts` | 0/87 | 0/23 | 0/149 | 0/108 |
+| `src/bridge.ts` | 1/1052 | 0/242 | 1/1162 | 1/1236 |
+| `src/cdp.ts` | 0/270 | 0/85 | 0/174 | 0/326 |
+| `src/config.ts` | 0/82 | 0/21 | 0/86 | 0/115 |
+| `src/contract.ts` | 0/1 | 0/0 | 0/0 | 0/1 |
+| `src/desktop.ts` | 0/67 | 0/21 | 0/88 | 0/85 |
+| `src/find-params.ts` | 0/7 | 0/2 | 0/12 | 0/8 |
+| `src/note.ts` | 0/74 | 0/18 | 0/85 | 0/88 |
+| `src/outline-store.ts` | 0/42 | 0/7 | 0/14 | 0/47 |
+| `src/outline.ts` | 0/317 | 0/92 | 0/302 | 0/400 |
+| `src/output.ts` | 0/77 | 0/11 | 0/50 | 0/95 |
+| `src/permissions.ts` | 0/26 | 0/11 | 0/18 | 0/35 |
+| `src/platform/architecture.ts` | 0/8 | 0/2 | 0/8 | 0/9 |
+| `src/platform/coerce.ts` | 0/7 | 0/3 | 0/15 | 0/9 |
+| `src/platform/index.ts` | 0/21 | 0/15 | 0/7 | 0/24 |
+| `src/platform/linux/backend.ts` | 0/47 | 0/26 | 0/79 | 0/54 |
+| `src/platform/linux/helper.ts` | 0/200 | 0/49 | 0/96 | 0/246 |
+| `src/platform/linux/wsl.ts` | 0/12 | 0/5 | 0/10 | 0/14 |
+| `src/platform/macos/backend.ts` | 0/39 | 0/20 | 0/55 | 0/44 |
+| `src/platform/macos/browser.ts` | 0/30 | 0/8 | 0/24 | 0/32 |
+| `src/platform/macos/helper-path.mjs` | 0/16 | 0/2 | 0/17 | 0/17 |
+| `src/platform/macos/helper.ts` | 0/233 | 0/68 | 0/83 | 0/271 |
+| `src/platform/macos/permissions.ts` | 0/34 | 0/10 | 0/33 | 0/34 |
+| `src/platform/windows/backend.ts` | 0/49 | 0/25 | 0/71 | 0/55 |
+| `src/platform/windows/helper.ts` | 0/98 | 0/24 | 0/46 | 0/135 |
+| `src/root-selection.ts` | 0/13 | 0/2 | 0/29 | 0/22 |
+| `src/runtime.ts` | 0/47 | 0/22 | 0/9 | 0/56 |
+| `src/state.ts` | 0/16 | 0/6 | 0/20 | 0/19 |
+| `src/view.ts` | 0/85 | 0/25 | 0/76 | 0/106 |
 
-Every later coverage PR lowers these caps to its own hosted numbers (never raises them). Statement
-accounting does not exist yet (#700), so statements carry no cap.
-
-Files at 0/0/0 on all three OSes in the hosted artifacts (`outline.ts`, `outline-store.ts`,
-`setup-helper.mjs`, `build-native.mjs`, both docs generators, `rust-coverage.mjs`, `macos/helper.ts`,
-`macos/helper-path.mjs`; `contract.ts` has one line and no functions or branches, so it is not pinned) are additionally locked per file by `coverage.thresholds` in
-`packages/computer-use/vitest.config.ts`, so a regression there fails `npm test` itself. `cdp.ts` joins
-that list when #726 merges.
-
-| File | Lines missed/total | Branches missed/total | Functions missed/total | Uncovered lines |
-| --- | --- | --- | --- | --- |
-| `extensions/computer-use.ts` | 20/51 | 29/30 | 8/10 | 175-176,184,187,234-235,240-243,247-250,254-256,260-262 |
-| `scripts/build-native.mjs` | 0/154 | 0/120 | 0/23 | none |
-| `scripts/docs-generators/generate-source-references.mjs` | 0/85 | 0/55 | 0/22 | none |
-| `scripts/docs-generators/generate-tool-reference.mjs` | 0/65 | 0/68 | 0/15 | none |
-| `scripts/rust-coverage.mjs` | 0/62 | 0/56 | 0/6 | none |
-| `scripts/setup-helper.mjs` | 0/433 | 0/284 | 0/102 | none |
-| `src/actions.ts` | 8/58 | 20/102 | 3/18 | 38,42-43,103,105-108 |
-| `src/bridge.ts` | 164/1063 | 312/1199 | 25/242 | 1103,1123-1129,1155-1160,1173-1174,1285-1290,1294-1295,1299-1306,1308,1327-1331,1335-1339,1351-1354,1357,1361-1371,1377-1381,1387-1388,1397,... |
-| `src/cdp.ts` | 144/272 | 138/178 | 54/85 | 91-92,104-105,109,140-141,143-144,146,148,153,157,161-163,165,169,173-177,182,186-190,194-197,200,206-209,214-216,223-224,232-233,239-241,... |
-| `src/config.ts` | 3/82 | 25/86 | 1/21 | 84,143,189 |
-| `src/contract.ts` | 0/1 | 0/0 | 0/0 | none |
-| `src/desktop.ts` | 0/67 | 6/88 | 0/21 | none |
-| `src/find-params.ts` | 0/7 | 0/12 | 0/2 | none |
-| `src/note.ts` | 8/74 | 31/85 | 0/18 | 118,149,162-163,165,192-194 |
-| `src/outline-store.ts` | 0/42 | 0/14 | 0/7 | none |
-| `src/outline.ts` | 0/317 | 0/302 | 0/92 | none |
-| `src/output.ts` | 7/79 | 16/52 | 0/11 | 51-56,66 |
-| `src/permissions.ts` | 26/26 | 18/18 | 11/11 | 52,56,60,64,73-74,76,80,82-83,85-89,91-92,94-95,97,100-103,105,110 |
-| `src/platform/architecture.ts` | 0/8 | 2/8 | 0/2 | none |
-| `src/platform/coerce.ts` | 0/7 | 0/15 | 0/3 | none |
-| `src/platform/index.ts` | 16/21 | 3/9 | 14/15 | 32-33,37,40-51,58 |
-| `src/platform/linux/backend.ts` | 5/47 | 18/79 | 2/26 | 109,116,120,155,158 |
-| `src/platform/linux/helper.ts` | 26/202 | 40/102 | 13/49 | 48,50,53-54,83-87,89-90,93-94,238,252,271-272,275-277,306-308,327-329 |
-| `src/platform/linux/wsl.ts` | 5/12 | 1/10 | 3/5 | 18-19,21-22,24 |
-| `src/platform/macos/backend.ts` | 26/39 | 45/55 | 11/20 | 8-9,11,13-16,23,27-28,37-38,40-43,83,92,95,99,106-109,111,146 |
-| `src/platform/macos/browser.ts` | 22/30 | 17/24 | 5/8 | 57,61,65-66,68-70,82,85-88,90-91,93,101-106,108 |
-| `src/platform/macos/helper-path.mjs` | 0/16 | 0/17 | 0/2 | none |
-| `src/platform/macos/helper.ts` | 0/219 | 0/81 | 0/62 | none |
-| `src/platform/macos/permissions.ts` | 33/36 | 41/41 | 12/12 | 23,27-28,33,37,51,55-57,86,94-96,98-99,101-102,104,107-108,111-112,114,117,120,125,127,131-132,134,136,142,145 |
-| `src/platform/windows/backend.ts` | 48/49 | 71/71 | 25/25 | 8,12,15,18,21,23,25,28,30,35-36,45,49-52,77-81,86-87,91-94,96-97,102,105,108-110,113-116,119,122,125,128,131,134,136-137,139-140 |
-| `src/platform/windows/helper.ts` | 7/88 | 12/42 | 8/21 | 42-43,58-59,132-134 |
-| `src/root-selection.ts` | 0/13 | 0/29 | 0/2 | none |
-| `src/runtime.ts` | 2/49 | 3/11 | 5/25 | 48,66 |
-| `src/state.ts` | 0/16 | 4/20 | 0/6 | none |
-| `src/view.ts` | 2/87 | 19/76 | 3/25 | 78,142 |
-| **Total** | **572/3877** | **871/3439** | **203/1014** | |
-
-Fully covered (0/0/0) modules: `src/contract.ts`, `src/outline.ts`, `src/outline-store.ts`,
-`src/platform/macos/helper.ts`, `src/platform/macos/helper-path.mjs`, `scripts/setup-helper.mjs`,
-`scripts/build-native.mjs`, both docs generators and `scripts/rust-coverage.mjs` (#704, #705, #717, #718,
-#724). At 0 lines/functions but with branches missing: `src/desktop.ts` 6, `src/platform/architecture.ts` 2,
-`src/state.ts` 4.
-
-Largest remaining gaps, in order of size:
-
-- `src/bridge.ts` holds 164 lines / 312 branches / 25 functions, mostly the act paths and the tail of the
-  file (#710 to #712).
-- `src/cdp.ts` (144 lines, 138 branches, 54 functions) has `test/fixtures/fake-cdp.mjs` but the WebSocket
-  client paths (errors, closes, timeouts, frames) are unreached until #726.
-- Backends and permissions: `src/permissions.ts`, `src/platform/macos/permissions.ts`,
-  `src/platform/macos/backend.ts`, `src/platform/macos/browser.ts`, `src/platform/windows/backend.ts`,
-  `src/platform/index.ts`; no test drives permission prompting (#707).
-- `src/platform/linux/helper.ts` 26 and `windows/helper.ts` 7 uncovered lines (#713); both are plain TS and
-  only need a fake child, not a Windows or Linux host.
-- `extensions/computer-use.ts` 20 lines (#703).
+Only `src/bridge.ts` remains uncovered on all three hosts: the missing-target path in `currentTargetOrThrow` (#755).
 
 ### Swift (`native/macos`, llvm-cov)
 
