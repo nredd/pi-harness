@@ -307,11 +307,31 @@ still requires a reasoned `reclassifications` entry. Root-level `.test.mjs` file
 `scripts/check-biome-paths.test.mjs` and `scripts/router_contract.test.mjs` need their own verification-helper entry; classifying the
 implementation helper does not implicitly classify its regression test.
 
+`computer-use-async/primary` (#759) independently measures the whole
+`packages/computer-use/scripts/check-async.mjs`, not the 35-file runtime slice.
+`npm run test:async --workspace @nredd/pi-computer-use` runs retained real-process
+`async.test.mjs` checks, real preload marker-write refusal in `async-observer.test.mjs`,
+and deterministic `async-safety.test.mjs` boundary tests with one worker, emitting `packages/computer-use/coverage/async/lcov.info`. The package's
+`check` runs it on macOS, Ubuntu and WSL2, and existing artifact globs collect it.
+Missing selected-host reports fail accounting, never become zero counters. Its
+verification-only goal/signal is report-only, while Vitest independently enforces
+100% lines/functions/branches/statements for this exact file. Runtime caps are unchanged.
+
+On darwin, the existing 14 async tests measured L/F/B/S misses of 4/0/13/7
+(101/17/55/108 total). Adding deterministic syscall, stream and timer cases measures
+0/0/0/0 over those same denominators. The tests assert completed-PID ownership,
+probe-only group cleanup, EPERM polling, TERM/KILL failure retention, no-shell argv,
+independent byte caps and primary/cleanup error identity. The sync-revert mutation
+that treats EPERM as quiescence must fail. Generated preload text is emitted by the
+measured helper, but its execution in Node subprocesses is *behavior evidence*, not
+separate instrumented preload coverage. The other nine computer-use verification
+helpers remain unmeasured under #697; no all-layer 100% claim follows from this slice.
+
 Shipped runtime code is NEVER a verification helper. In particular, computer-use's published
 `setup-helper.mjs`, `build-native.mjs` and `src/platform/macos/helper-path.mjs` remain owned,
 measurement-pending production source because computer-use has no standard coverage runner.
-Its non-shipped `check-*.mjs` assertion scripts and `pi-cubench-agent.mjs` benchmark harness have
-individual verification reasons. Runtime builder scripts
+Its non-shipped `check-*.mjs` assertion scripts (except measured `check-async.mjs`) and
+`pi-cubench-agent.mjs` benchmark harness have individual verification reasons. Runtime builder scripts
 and runnable workflow examples are explicitly pending source, not verification exemptions.
 The generated stats CLI bundle has a reasoned generated-artifact exclusion; its original
 `src/stats/cli.ts` remains owned and measured.

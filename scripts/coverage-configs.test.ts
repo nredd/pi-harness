@@ -36,6 +36,13 @@ interface Producer {
 
 const PRODUCERS: Producer[] = [
 	{
+		config: "packages/computer-use/vitest.async.config.ts",
+		policy: "computer-use-async",
+		provider: "istanbul",
+		reportsDirectory: "coverage/async",
+		load: () => import("../packages/computer-use/vitest.async.config.ts"),
+	},
+	{
 		config: "packages/computer-use/vitest.config.ts",
 		policy: "computer-use-vitest",
 		provider: "istanbul",
@@ -242,6 +249,14 @@ for (const producer of PRODUCERS) {
 		await assert.rejects(producer.load(), TypeError);
 	});
 }
+
+test("computer-use async verification pins the whole helper at zero L/F/B/S", async () => {
+	const producer = PRODUCERS.find(({ policy }) => policy === "computer-use-async");
+	assert.ok(producer);
+	assert.deepEqual((await coverageOf(producer)).thresholds, {
+		"scripts/check-async.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 },
+	});
+});
 
 test("computer-use-vitest is an enforced ratchet with a cap for every counter on both OSes (#645)", () => {
 	const signal = realPolicy()["computer-use-vitest"]?.signals.primary as

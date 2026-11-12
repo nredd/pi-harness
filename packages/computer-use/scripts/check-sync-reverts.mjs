@@ -18,6 +18,14 @@ const sandbox = path.join(sandboxRoot, "packages", "computer-use");
 const nodeModules = path.join(repository, "node_modules");
 const cases = [
 	{
+		name: "Async helper refuses EPERM as group quiescence (#759)",
+		file: "scripts/check-async.mjs",
+		before: 'if (error.code === "ESRCH") return;',
+		after: 'if (error.code === "ESRCH" || error.code === "EPERM") return;',
+		check: "test/async-safety.test.mjs",
+		failure: /persistent EPERM exhausts TERM and KILL budgets instead of reporting success/,
+	},
+	{
 		name: "CDP snapshot maps wire refs to model refs (#708)",
 		file: "src/cdp.ts",
 		before: "target.ref = modelRefByWire.get(target.ref)!;",

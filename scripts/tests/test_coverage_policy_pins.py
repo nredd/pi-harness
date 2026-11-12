@@ -29,6 +29,7 @@ from coverage_accounting import (
     Reclassification,
     Signal,
     VerificationHelper,
+    account,
     audit_inventory,
     inventory,
     inventory_scopes,
@@ -217,7 +218,7 @@ def test_root_script_helpers_are_measured_by_import_audit_at_zero() -> None:
         "scripts/run-vitest.ts",
         *configs,
     }
-    assert len(configs) == 15, configs
+    assert len(configs) == 16, configs
     assert "coverage-configurations" not in cfg.packages
     assert audit.goal == "100-percent"
     primary = audit.signals["primary"]
@@ -282,6 +283,61 @@ def test_shipped_computer_javascript_is_pending_production_not_verification() ->
     assert not {(Path(package.root) / path).as_posix() for path in shipped} & helpers
 
 
+def test_async_helper_is_independently_measured_at_zero() -> None:
+    """Keep the full async helper measured separately from the runtime inventory.
+
+    Parameters:
+        None.
+    Returns:
+        None: The exact source, mandatory report and per-OS zero caps stay pinned.
+    Raises:
+        AssertionError: The helper disappears, rejoins verification exclusions or loses enforcement.
+    """
+    cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
+    package = cfg.packages["computer-use-async"]
+    assert package.status == "measured"
+    assert package.goal == "report-only"
+    assert package.root == "packages/computer-use"
+    assert package.owned == ["scripts/check-async.mjs"]
+    assert not package.exclusions
+    assert "scripts/check-async.mjs" not in inventory(ROOT, cfg.packages["computer-use-vitest"])
+    assert not any(helper.path.endswith("/check-async.mjs") for helper in cfg.verification_helpers)
+    signal = package.signals["primary"]
+    assert signal.report == "coverage/async/lcov.info"
+    assert signal.enforcement == "report-only"
+    assert signal.reason.strip()
+    assert not signal.skip_hosts
+    assert not signal.gate
+    assert set(signal.max_uncovered) == {"darwin", "linux"}
+    for counts in signal.max_uncovered.values():
+        assert counts.lines == counts.functions == counts.branches == 0
+    manifest = json.loads((ROOT / package.root / "package.json").read_text())
+    assert "npm run test:async" in manifest["scripts"]["check"]
+    assert "--config vitest.async.config.ts --coverage" in manifest["scripts"]["test:async"]
+
+
+@pytest.mark.parametrize(("runner_os", "host"), [("darwin", "macos"), ("linux", "ubuntu"), ("linux", "wsl2")])
+def test_async_helper_missing_host_report_fails(tmp_path: Path, runner_os: str, host: str) -> None:
+    """Reject missing selected-host artifacts instead of reporting a false zero.
+
+    Parameters:
+        tmp_path (Path): Empty report-artifact directory.
+        runner_os (str): Declared measurement platform.
+        host (str): Selected CI guest class.
+    Returns:
+        None: Every declared host fails accounting without its async report.
+    Raises:
+        AssertionError: Missing coverage is silently skipped or represented by zero counters.
+    """
+    cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
+    cfg.packages = {"computer-use-async": cfg.packages["computer-use-async"]}
+    results, errors = account(ROOT, cfg, runner_os, tmp_path, host=host)
+    assert results == []
+    assert len(errors) == 1
+    assert errors[0].startswith("computer-use-async/primary:")
+    assert "coverage/async/lcov.info" in errors[0]
+
+
 def test_unshipped_computer_checks_have_individual_verification_reasons() -> None:
     """Require concrete classifications for every non-shipped computer-use check harness.
 
@@ -296,11 +352,16 @@ def test_unshipped_computer_checks_have_individual_verification_reasons() -> Non
     directory = ROOT / "packages/computer-use"
     manifest = json.loads((directory / "package.json").read_text())
     helpers = {helper.path: helper.reason for helper in cfg.verification_helpers}
+    measured = {
+        (Path(cfg.packages["computer-use-async"].root) / path).as_posix()
+        for path in inventory(ROOT, cfg.packages["computer-use-async"])
+    }
     unclassified = [
         relative
         for path in directory.glob("scripts/check-*.mjs")
         if not published_path(path.relative_to(directory), manifest["files"])
         and not helpers.get(relative := path.relative_to(ROOT).as_posix(), "").strip()
+        and relative not in measured
     ]
     assert not unclassified, unclassified
 

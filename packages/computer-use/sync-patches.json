@@ -148,6 +148,28 @@
 			}
 		},
 		{
+			"id": "async-safety-coverage",
+			"purpose": "Measure the whole verification-only async helper with deterministic safety controls and retained real child-process checks, independently of runtime caps",
+			"rows": [
+				"Async helper safety coverage"
+			],
+			"files": [
+				"scripts/check-async.mjs",
+				"test/async-observer.test.mjs",
+				"test/async-safety.test.mjs",
+				"vitest.async.config.ts"
+			],
+			"check": "test/async-safety.test.mjs",
+			"dropControls": [
+				"Async helper refuses EPERM as group quiescence (#759)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#759; new verification-only tests stay local, not filed upstream"
+			}
+		},
+		{
 			"id": "blocked-apps",
 			"purpose": "Fail closed with app_blocked for password managers, credential UIs, terminals and system auth agents (config blocked_apps; system agents always blocked), and with screen_locked for UI commands while the macOS session is locked",
 			"rows": [
@@ -1189,6 +1211,8 @@
 		"test/act-outcomes.test.mjs",
 		"test/actions-prepare.test.mjs",
 		"test/app-policy.test.mjs",
+		"test/async-observer.test.mjs",
+		"test/async-safety.test.mjs",
 		"test/async.test.mjs",
 		"test/bounded-output.test.mjs",
 		"test/bridge-act-list-read.test.mjs",
@@ -1256,6 +1280,7 @@
 		"test/windows-helper-client.test.mjs",
 		"test/wsl-detection.test.mjs",
 		"test/wsl2-diagnostics.test.mjs",
+		"vitest.async.config.ts",
 		"vitest.config.ts"
 	]
 }
