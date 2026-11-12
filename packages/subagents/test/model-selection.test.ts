@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { explainModel, modelConfigurationWarnings } from "../src/model-explanation.js";
 import { setAgentModels, setModelAliases, setModelScopeProvider } from "../src/model-resolver.js";
 import { setScopeModelsEnabled } from "../src/model-scope.js";
 import { admitModelSelection, describeSelection, type ModelSelection, selectModel } from "../src/model-selection.js";
 import { setModelTiers } from "../src/model-tiers.js";
+import { loadSettings } from "../src/settings.js";
 
 let dir: string;
 let registry: ModelRegistry;
@@ -115,6 +117,110 @@ describe("selectModel", () => {
       fallback: { input: "does-not-exist", used: "selection-test/parent" },
     });
     expect(select(undefined, "does-not-exist")).toContain('Model not found: "does-not-exist"');
+  });
+});
+
+describe("effective model explanation", () => {
+  it.each([
+    ["explicit", { scout: ref("typed"), "*": ref("wildcard") }, ref("definition"), "gpt", "param"],
+    ["type", { scout: ref("typed"), "*": ref("wildcard") }, ref("definition"), undefined, "agentModels:type"],
+    ["wildcard", { "*": ref("wildcard") }, ref("definition"), undefined, "agentModels:*"],
+    ["definition", {}, ref("definition"), undefined, "definition"],
+    ["parent", {}, undefined, undefined, "parent"],
+    ["missing", {}, "fixture/missing", undefined, "definition"],
+    ["unmapped", {}, "@missing", undefined, "definition"],
+    ["static", {}, "@cheap", undefined, "definition"],
+    ["routed", {}, "@review", undefined, "definition"],
+    ["alias", {}, "portable", undefined, "definition"],
+    ["unknown explicit", {}, undefined, "missing", "param"],
+  ] as const)("matches dispatch without admission: %s", (_name, overrides, definitionModel, paramModel, source) => {
+    setAgentModels(overrides);
+    setModelAliases({ portable: [ref("explicit")] });
+    setModelTiers({ cheap: [ref("typed")], review: ["router/default"] }, undefined);
+    const request = { agentType: "Scout", definitionModel, paramModel, parentModel: registry.find("selection-test", "parent"), registry, cwd: dir };
+    const selection = selectModel(request);
+    const explanation = explainModel(request);
+    expect(explanation.source).toBe(source);
+    if (typeof selection === "string") {
+      expect(explanation.outcome).toBe("error");
+      expect(explanation.text).not.toContain("Available models:");
+    } else {
+      expect(explanation.outcome).toBe(selection.outcome);
+      expect(explanation.selected).toBe(`${selection.model?.provider}/${selection.model?.id}`);
+    }
+    expect(explanation.text).toContain("Admitted physical model: unknown");
+    expect(explanation.text).toContain("Answering model: unknown");
+    expect(explanation.text).toContain("not a reservation");
+    expect(explanation.text).not.toContain("localhost");
+    if (source === "agentModels:type") expect(explanation.text).toContain(`Shadowed definition: ${ref("definition")}`);
+    if (_name === "routed") {
+      expect(explanation.virtual).toBe(true);
+      expect(explanation.text).toContain("Exact binding: routed router/default");
+    }
+    if (_name === "static") expect(explanation.text).toContain(`Exact binding: static ${ref("typed")}`);
+  });
+
+  it.each(["error", "inherit"] as const)("reports configured failure policy truthfully: %s", mode => {
+    setModelTiers({}, { onUnmapped: mode, onUnavailable: mode });
+    const request = { agentType: "Scout", definitionModel: "@absent", parentModel: undefined, registry, cwd: dir };
+    expect(explainModel(request).summary).toContain(mode === "error" ? "error; no dispatch" : "fallback: inherit");
+    expect(explainModel(request).summary.includes("fallback: inherit")).toBe(mode === "inherit");
+    expect(explainModel(request).text).toContain(`unmapped=${mode}; unavailable=${mode}`);
+    expect(explainModel(request).text).toContain("Exact binding: unmapped");
+    expect(explainModel(request).selected).toBeUndefined();
+  });
+
+  it("explains enterprise whole-field replacement rather than a merged personal binding", () => {
+    const agentDir = join(dir, "agent");
+    mkdirSync(agentDir);
+    vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+    writeFileSync(join(agentDir, "subagents.json"), JSON.stringify({
+      agentModels: { scout: "@personal", "*": "@personal" }, modelTiers: { personal: [ref("typed")] },
+      modelResolution: { onUnmapped: "error", onUnavailable: "error" },
+    }));
+    writeFileSync(join(agentDir, "enterprise.local.json"), JSON.stringify({ version: 1, subagents: {
+      agentModels: { "*": "@work" }, modelTiers: { work: [ref("explicit")] },
+      modelResolution: { onUnmapped: "inherit", onUnavailable: "inherit" },
+    } }), { mode: 0o600 });
+    const settings = loadSettings(dir);
+    setAgentModels(settings.agentModels);
+    setModelTiers(settings.modelTiers, settings.modelResolution);
+    const request = { agentType: "Scout", definitionModel: ref("definition"), paramModel: "  ", parentModel: registry.find("selection-test", "parent"), registry, cwd: dir };
+    expect(selectModel(request)).toMatchObject({ source: "agentModels:*", model: { id: "explicit" } });
+    const explanation = explainModel(request);
+    expect(explanation).toMatchObject({ source: "agentModels:*", selected: ref("explicit"), outcome: "resolved" });
+    expect(explanation.text).toContain(`Shadowed definition: ${ref("definition")}`);
+    expect(explanation.text).not.toContain("personal");
+    expect(explanation.text).toContain("unmapped=inherit; unavailable=inherit");
+  });
+
+  it("never discloses raw errors, unsafe requests, overlays or object parameters", () => {
+    const request = { agentType: "Scout", paramModel: "!credential-command https://private.invalid", parentModel: undefined, registry, cwd: dir };
+    const explanation = explainModel(request);
+    expect(explanation.text).toContain("[redacted]");
+    expect(explanation.text).not.toMatch(/credential-command|private.invalid|Available models|fixture-not-a-secret/);
+    expect(explainModel({ ...request, paramModel: registry.find("selection-test", "explicit") }).selected).toBe(ref("explicit"));
+    expect(explainModel({ ...request, paramModel: undefined }).text).toContain("Selected: unknown");
+  });
+
+  it("uses only registered metadata for startup diagnostics, not credential or quota availability", () => {
+    setModelTiers({ cheap: [ref("typed")] }, { onUnavailable: "error", onUnmapped: "error" });
+    const getAvailable = vi.spyOn(registry, "getAvailable").mockImplementation(() => { throw new Error("must not inspect credentials"); });
+    const request = { agentType: "Scout", definitionModel: "@cheap", parentModel: undefined, registry, cwd: dir };
+    expect(modelConfigurationWarnings([request])).toEqual([]);
+    expect(modelConfigurationWarnings([{ ...request, definitionModel: "@missing" }])).toEqual([expect.stringContaining("error; no dispatch")]);
+    expect(getAvailable).not.toHaveBeenCalled();
+  });
+
+  it("keeps scope refusals private and trusted scope warnings visible", () => {
+    vi.stubEnv("PI_CODING_AGENT_DIR", "");
+    const homeDir = join(dir, "home");
+    mkdirSync(join(homeDir, ".pi", "agent"), { recursive: true });
+    writeFileSync(join(homeDir, ".pi", "agent", "settings.json"), JSON.stringify({ enabledModels: [ref("parent")] }));
+    setScopeModelsEnabled(true);
+    const request = { homeDir, agentType: "Scout", parentModel: undefined, registry, cwd: dir };
+    expect(explainModel({ ...request, definitionModel: ref("typed") }).text).toContain("Scope warning:");
+    expect(explainModel({ ...request, paramModel: ref("typed") }).outcome).toBe("error");
   });
 });
 

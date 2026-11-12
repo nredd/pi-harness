@@ -47,9 +47,10 @@ import { cwdParam, isolationParam, resolveAgentInvocationConfig, resolveCwdParam
 import { describeMention, handleBase, isReservedHandle, parseMention, resolveHandleToType, stripAgentPrefix } from "./mention.js";
 import { runMentionClone } from "./mention-clone.js";
 import { applyModelCallEvent, type ModelCallEvent } from "./model-call.js";
+import { explainModel, modelConfigurationWarnings } from "./model-explanation.js";
 import { type ModelFallback, type ModelRegistry, setAgentModels, setModelAliases, setModelScopeProvider } from "./model-resolver.js";
 import { isScopeModelsEnabled, setScopeModelsEnabled } from "./model-scope.js";
-import { admitModelSelection, describeSelection, modelIdentityNote, modelRequest, modelSelectionNote, selectModel } from "./model-selection.js";
+import { admitModelSelection, describeSelection, modelIdentityNote, modelSelectionNote, selectModel } from "./model-selection.js";
 import { configuredTierNames, tierDisclosure } from "./model-tiers.js";
 import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.js";
 import { clipNotice, DEFAULT_NOTIFICATION_RESULT_CHARS, fairShares, GROUP_PREVIEW_RESULT_CHARS, NOTIFICATION_RESULT_CHARS_CEILING, type NoticeFrame, type NoticeParts, PREVIEW_RESULT_CHARS, previewResult, renderNotice } from "./notification-result.js";
@@ -1180,6 +1181,12 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       throw err;
     }
     canonicalAgentsLoaded = true;
+    // Factories have registered models and canonical discovery has applied trust.
+    // Report structural mistakes only; dispatch still owns the configured failure policy.
+    for (const warning of modelConfigurationWarnings(getAllTypes().flatMap(agentType => {
+      const cfg = getAgentConfig(agentType);
+      return cfg?.enabled === false ? [] : [{ homeDir: options.homeDir, agentType, definitionModel: cfg?.model, parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd }];
+    }))) ctx.ui.notify(warning, "warning");
     // The type list in the `Agent` description and parameters was built from the
     // activation load; rebuild it from the canonical one before any provider turn.
     refreshAgentTool();
@@ -3816,22 +3823,7 @@ Terse command-style prompts produce shallow, generic work.
   // through `registerCommand`, which every test mocks.
 
   function getModelLabel(type: string, registry: ModelRegistry, cwd: string): string {
-    const cfg = getAgentConfig(type);
-    const input = modelRequest(type, cfg?.model).requested;
-    if (!input) return "inherit";
-    const label = getModelLabelFromConfig(input);
-    const selection = selectModel({ homeDir: options.homeDir, agentType: type, definitionModel: cfg?.model, parentModel: undefined, registry, cwd });
-    if (typeof selection === "string" || selection.outcome === "fallback" || !selection.model) {
-      return `${label} (unavailable, fallback: inherit)`;
-    }
-    const resolved = selection.model;
-    // Surface what it actually resolved to when that differs from the config —
-    // e.g. a provider fallback or a looser version pin. Cosmetic separator/date
-    // differences are normalized away so an effectively-identical match stays quiet.
-    const resolvedFull = `${resolved.provider}/${resolved.id}`;
-    const norm = (s: string) => s.toLowerCase().replace(/\./g, "-").replace(/-\d{8}$/, "");
-    if (norm(input) === norm(resolvedFull)) return label;
-    return `${label} (→ ${resolvedFull.replace(/-\d{8}$/, "")})`;
+    return explainModel({ homeDir: options.homeDir, agentType: type, definitionModel: getAgentConfig(type)?.model, parentModel: currentCtx?.model, registry, cwd }).summary;
   }
 
   async function showAgentsMenu(ctx: ExtensionCommandContext) {
@@ -4061,6 +4053,8 @@ Terse command-style prompts produce shallow, generic work.
       menuOptions = ["Edit", "Disable", "Delete", "Back"];
     }
 
+    menuOptions.splice(menuOptions.length - 1, 0, "Explain model");
+
     // Name the package in the title: this menu's options are the read-only set,
     // and "which package do I have to uninstall or allowlist away" is the
     // question they raise.
@@ -4068,7 +4062,9 @@ Terse command-style prompts produce shallow, generic work.
     const choice = await ctx.ui.select(pkgName ? `${name} — ${pkgName}` : name, menuOptions);
     if (!choice || choice === "Back") return;
 
-    if (choice === "Edit" && file) {
+    if (choice === "Explain model") {
+      ctx.ui.notify(explainModel({ homeDir: options.homeDir, agentType: name, definitionModel: cfg.model, parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd }).text, "info");
+    } else if (choice === "Edit" && file) {
       const content = readFileSync(file.path, "utf-8");
       const edited = await ctx.ui.editor(`Edit ${name}`, content);
       if (edited !== undefined && edited !== content) {

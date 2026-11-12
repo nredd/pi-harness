@@ -31,21 +31,35 @@ export interface ModelSelection {
   tierParent?: Model<Api>;
 }
 
-/** Choose the input once: explicit parameter > type > wildcard > definition; blank strings are unset. */
-export function modelRequest(type: string, definitionModel?: string, paramModel?: string | Model<Api> | null): {
-  requested?: string;
-  source: ModelSource;
-} {
-  if (paramModel != null && (typeof paramModel !== "string" || paramModel.trim() !== "")) {
-    return { requested: typeof paramModel === "string" ? paramModel : `${paramModel.provider}/${paramModel.id}`, source: "param" };
-  }
+/** Inputs in dispatch precedence order, including shadowed defaults; blank strings are unset. */
+export function modelInputs(type: string, definitionModel?: string, paramModel?: string | Model<Api> | null): { requested?: string; source: ModelSource }[] {
   const overrides = getAgentModels();
-  const typed = overrides.get(type.toLowerCase());
-  if (typed?.trim()) return { requested: typed, source: "agentModels:type" };
-  const wildcard = overrides.get("*");
-  if (wildcard?.trim()) return { requested: wildcard, source: "agentModels:*" };
-  if (definitionModel?.trim()) return { requested: definitionModel, source: "definition" };
-  return { source: "parent" };
+  const inputs: { requested?: string; source: ModelSource }[] = [
+    { source: "param", requested: paramModel == null ? undefined : typeof paramModel === "string" ? paramModel : `${paramModel.provider}/${paramModel.id}` },
+    { source: "agentModels:type", requested: overrides.get(type.toLowerCase()) },
+    { source: "agentModels:*", requested: overrides.get("*") },
+    { source: "definition", requested: definitionModel },
+  ];
+  return [...inputs.filter(input => input.requested?.trim()), { source: "parent" }];
+}
+
+/** Choose the input once: explicit parameter > type > wildcard > definition > parent. */
+export function modelRequest(type: string, definitionModel?: string, paramModel?: string | Model<Api> | null): { requested?: string; source: ModelSource } {
+  return modelInputs(type, definitionModel, paramModel)[0]!;
+}
+
+/** Resolve trusted tier/legacy configuration without registry or admission work. */
+export function modelInputBinding(input: { requested?: string; source: ModelSource }, agentType: string): TierBinding | undefined {
+  const requested = input.requested?.trim();
+  if (!requested) return undefined;
+  const legacy = getModelAliases().get(requested.toLowerCase());
+  const legacyBinding = legacy ? parseTierBinding("legacy", legacy) : undefined;
+  // Preserve existing enterprise manifests during the built-in Explore migration.
+  // An explicit cheap binding always wins, even when it is unavailable.
+  const cheapCompatibility = requested === "@cheap" && agentType === "Explore" && input.source === "definition"
+    ? parseTierBinding("cheap", getModelAliases().get("claude-haiku-4-5")) : undefined;
+  return requested.startsWith("@") ? tierBinding(requested.slice(1)) ?? cheapCompatibility
+    : legacyBinding ? { ...legacyBinding, tier: requested } : undefined;
 }
 
 /**
@@ -70,14 +84,7 @@ export function selectModel(request: {
   if (input.requested) {
     const requested = input.requested.trim();
     const legacy = getModelAliases().get(requested.toLowerCase());
-    const legacyBinding = legacy ? parseTierBinding("legacy", legacy) : undefined;
-    // Preserve existing enterprise manifests during the built-in Explore migration.
-    // An explicit cheap binding always wins, even when it is unavailable.
-    const cheapCompatibility = requested === "@cheap" && request.agentType === "Explore"
-      && input.source === "definition"
-      ? parseTierBinding("cheap", getModelAliases().get("claude-haiku-4-5")) : undefined;
-    const binding = requested.startsWith("@") ? tierBinding(requested.slice(1)) ?? cheapCompatibility
-      : legacyBinding ? { ...legacyBinding, tier: requested } : undefined;
+    const binding = modelInputBinding(input, request.agentType);
     if (requested.startsWith("@") || legacy) {
       const tier = requested.startsWith("@") ? requested.slice(1) : requested;
       const refs = binding?.kind === "routed" ? [binding.profile] : binding?.members ?? [];
