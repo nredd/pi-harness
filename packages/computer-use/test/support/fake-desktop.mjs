@@ -65,7 +65,7 @@ export const desktopRoot = (fields = {}) => {
 	};
 };
 
-const BACKEND_KEYS = ["ensureReady", "listApps", "listRoots", "getFrontmost", "observe", "act", "actBatch", "waitFor", "isBrowserApp", "isChromeFamilyApp", "setActivity", "shutdown", "emptyRootsHint"];
+const BACKEND_KEYS = ["ensureReady", "listApps", "listRoots", "getFrontmost", "observe", "act", "actBatch", "readText", "waitFor", "isBrowserApp", "isChromeFamilyApp", "setActivity", "shutdown", "emptyRootsHint"];
 
 /**
  * Build a complete wire look, independent of the fake's own tree.
@@ -130,6 +130,11 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 		waits: [],
 		actCalls: [],
 		actResult: { outcome: "worked", performed: { delivery: "pid" } },
+		/** Replaceable act backend: receives the request and the call options, returns a result, or undefined for `actResult`. */
+		actHook: undefined,
+		readTexts: [],
+		/** Replaceable `readText` backend: receives the request and returns a native text page. */
+		readTextResult: async () => ({ text: "", offset: 0, limit: 0, totalChars: 0, hasMore: false }),
 		actBatchCalls: [],
 		actBatchResult: { outcome: "worked", performed: { delivery: "pid", transaction: true, actionCount: 1 }, steps: [{ outcome: "worked" }] },
 		lookSeq: 0,
@@ -176,9 +181,13 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 			fake.looks.push(request);
 			return parseLookResponse((fake.lookPayload ?? defaultLook)(request));
 		},
-		act: async (request) => {
+		act: async (request, options) => {
 			fake.actCalls.push(request);
-			return fake.actResult;
+			return (await fake.actHook?.(request, options)) ?? fake.actResult;
+		},
+		readText: async (request) => {
+			fake.readTexts.push(request);
+			return await fake.readTextResult(request);
 		},
 		actBatch: async (requests) => {
 			fake.actBatchCalls.push(requests);

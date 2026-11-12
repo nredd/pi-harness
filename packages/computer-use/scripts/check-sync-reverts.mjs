@@ -731,6 +731,14 @@ const cases = [
 		failure: /Missing expected rejection|app_blocked/,
 	},
 	{
+		name: "read_text forwards the desktop offset (#710)",
+		file: "src/bridge.ts",
+		before: "offset: Math.max(0, Math.trunc(toFiniteNumber(params.offset, 0))),",
+		after: "offset: 0,",
+		check: "test/bridge-act-list-read.test.mjs",
+		failure: /true !== false/,
+	},
+	{
 		name: "replacement root kind filtering (50cbfe2)",
 		file: "src/bridge.ts",
 		before: "REPLACEMENT_ROOT_KINDS.has(delta.kind)",
