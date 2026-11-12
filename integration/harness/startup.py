@@ -1,13 +1,12 @@
 """Measure launch-to-first-frame and input-ready latency of an installed `pi` in a real pane.
 
-Unlike `scenarios/bench/test_startup.py` (faux provider, sandbox home), this drives whatever
-`pi` the user would run, against the user's real profile, read only: nothing is typed except a
-marker that is never submitted, and no provider is called. Run it with
-`uv run python -m harness.startup`, see `docs/startup-latency.md`.
+Unlike `scenarios/bench/test_startup.py`, this accepts an explicit installed `pi` and profile.
+It loads a temporary local extension and submits only its nonce-bearing command, never a model
+prompt. Use a synthetic sandbox when measuring without live-profile startup side effects.
+Run with `uv run python -m harness.startup`, see `docs/startup-latency.md`.
 
-Readiness is observable without a provider: once the footer is drawn, a marker is typed and the
-time until the editor echoes it is `input_ready_s`. Typing earlier would be echoed by the tty's
-cooked mode and prove nothing.
+`input_ready_s` requires acknowledgement from the command handler after the footer is drawn.
+Screen echo alone, including a cooked tty echoing typed characters, proves no readiness.
 
 References:
 - Pi `PI_TIMING=1` startup phases: `packages/coding-agent/src/core/timings.ts` in the core fork
@@ -28,6 +27,7 @@ import statistics
 import subprocess
 import tempfile
 import time
+import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -39,7 +39,21 @@ LOGGER = logging.getLogger(__name__)
 
 SOCKET_ROOT = Path("/tmp")
 SAMPLE_TIMEOUT_S = 60.0
-MARKER = "q9z"
+READINESS_METHOD = "command-dispatch-v1"
+READY_EXTENSION = """\
+import { writeFileSync } from "node:fs";
+export default function startupReady(pi) {
+    const nonce = process.env.PI_STARTUP_NONCE;
+    pi.registerCommand(`harness-startup-ready-${nonce}`, {
+        description: "No-provider startup readiness probe",
+        handler: async (args) => {
+            if (args !== nonce) throw new Error("Startup readiness nonce mismatch");
+            writeFileSync(process.env.PI_STARTUP_ACK, nonce);
+        },
+    });
+    writeFileSync(process.env.PI_STARTUP_REGISTERED, nonce);
+}
+"""
 # Footer text of the owner's preset; override with `--frame-pattern` for another profile.
 DEFAULT_FRAME_PATTERN = r"\bctx\b"
 MILESTONES = ("first_paint_s", "frame_s", "input_ready_s")
@@ -138,6 +152,23 @@ class Sample:
     timings: dict[str, int]
 
 
+def _acknowledged(path: Path, nonce: str) -> bool:
+    """Check a bounded nonce acknowledgement, treating an absent file as not yet ready.
+
+    Parameters:
+        path (Path): private fixture output.
+        nonce (str): this launch's unpredictable token.
+
+    Returns:
+        bool: only an exact nonce, with no suffix or whitespace, matches.
+    """
+    try:
+        with path.open() as stream:
+            return stream.read(len(nonce) + 1) == nonce
+    except FileNotFoundError:
+        return False
+
+
 def sample(
     argv: list[str],
     *,
@@ -157,37 +188,55 @@ def sample(
         Sample: milestones and parsed phases.
 
     Raises:
-        TimeoutError: the UI never drew the footer or echoed the marker.
+        ValueError: `timeout_s` is not finite and positive.
+        TimeoutError: the footer, command registration or dispatch acknowledgement never arrived.
     """
+    if not math.isfinite(timeout_s) or timeout_s <= 0:
+        raise ValueError("`timeout_s` must be finite and positive")
+    frame = re.compile(frame_pattern, re.MULTILINE)
     scratch = Path(tempfile.mkdtemp(prefix="pis-", dir=SOCKET_ROOT))
     stderr_path = scratch / "stderr"
     workdir = scratch / "work"
     workdir.mkdir()
     pane = TmuxPane(socket=scratch / "pane.sock", name="startup")
-    frame = re.compile(frame_pattern, re.MULTILINE)
+    nonce = uuid.uuid4().hex
+    extension = scratch / "ready.mjs"
+    extension.write_text(READY_EXTENSION)
+    registered = scratch / "registered"
+    ack = scratch / "ack"
     marks: dict[str, float] = {}
-    screen = ""
+    submitted = False
     try:
         started = time.monotonic()
         pane.start(
-            ["/bin/sh", "-c", STDERR_WRAPPER, "sh", *argv],
+            ["/bin/sh", "-c", STDERR_WRAPPER, "sh", *argv, "-e", str(extension)],
             workdir,
-            env | {"PI_STARTUP_STDERR": str(stderr_path)},
+            env
+            | {
+                "PI_STARTUP_STDERR": str(stderr_path),
+                "PI_STARTUP_NONCE": nonce,
+                "PI_STARTUP_REGISTERED": str(registered),
+                "PI_STARTUP_ACK": str(ack),
+            },
         )
         while time.monotonic() - started < timeout_s:
             screen = pane.capture()
             elapsed = time.monotonic() - started
             if screen.strip():
                 marks.setdefault("first_paint_s", elapsed)
-            if "frame_s" not in marks and frame.search(screen):
-                marks["frame_s"] = elapsed
-                pane.type_text(MARKER)
-            elif "frame_s" in marks and MARKER in screen:
-                marks["input_ready_s"] = elapsed
+            if frame.search(screen):
+                marks.setdefault("frame_s", elapsed)
+            if "frame_s" in marks and not submitted and _acknowledged(registered, nonce):
+                pane.type_text(f"/harness-startup-ready-{nonce} {nonce}")
+                pane.send_keys("Escape")
+                pane.send_keys("Enter")
+                submitted = True
+            if submitted and _acknowledged(ack, nonce):
+                marks["input_ready_s"] = time.monotonic() - started
                 break
             time.sleep(POLL_INTERVAL_S / 10)
         else:
-            raise TimeoutError(f"No ready UI within {timeout_s}s, marks={marks}\n{screen}")
+            raise TimeoutError(f"No ready UI within {timeout_s}s, marks={marks}, submitted={submitted}")
         return Sample(**marks, timings=parse_timings(stderr_path.read_text(errors="replace")))
     finally:
         pane.kill()
@@ -252,6 +301,7 @@ def run(
             for phase in phases
         }
     return {
+        "readiness_method": READINESS_METHOD,
         "host": host_state(),
         "runs": runs,
         "gap_s": gap_s,
@@ -275,7 +325,7 @@ def medians(report: dict[str, Any]) -> dict[str, dict[str, float]]:
     }
 
 
-def regressions(report: dict[str, Any], baseline: dict[str, dict[str, float]]) -> list[str]:
+def regressions(report: dict[str, Any], baseline: dict[str, Any]) -> list[str]:
     """List milestones whose median exceeds the baseline by more than `REGRESSION_THRESHOLD`.
 
     Labels or milestones absent from the baseline are reported, not skipped: a gate that passes
@@ -283,14 +333,16 @@ def regressions(report: dict[str, Any], baseline: dict[str, dict[str, float]]) -
 
     Parameters:
         report (dict[str, Any]): output of `run`.
-        baseline (dict[str, dict[str, float]]): previously recorded `medians`.
+        baseline (dict[str, Any]): versioned readiness method and recorded `medians`.
 
     Returns:
         list[str]: one message per problem, empty when within bounds.
     """
+    if baseline.get("readiness_method") != READINESS_METHOD:
+        return ["Incompatible readiness baseline: require command-dispatch-v1; preserve legacy echo history"]
     problems: list[str] = []
     for label, current in medians(report).items():
-        recorded = baseline.get(label)
+        recorded = baseline["medians"].get(label)
         if recorded is None:
             problems.append(f"No baseline for variant `{label}`")
             continue
@@ -351,7 +403,12 @@ def main(argv: list[str] | None = None) -> int:
         args.output.write_text(text + "\n")
     print(text)
     if args.record:
-        args.record.write_text(json.dumps(medians(report), indent=2, sort_keys=True) + "\n")
+        args.record.write_text(
+            json.dumps(
+                {"readiness_method": READINESS_METHOD, "medians": medians(report)}, indent=2, sort_keys=True
+            )
+            + "\n"
+        )
     if args.baseline:
         problems = regressions(report, json.loads(args.baseline.read_text()))
         for problem in problems:

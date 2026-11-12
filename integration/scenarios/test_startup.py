@@ -14,14 +14,52 @@ import pytest
 
 from harness.interactive import launch_tui
 from harness.paths import FAUX_EXTENSION, pi_command
+from harness.sandbox import build_sandbox
+from harness.startup import sample
 from scenarios.test_stack import wait_dead
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from harness.sandbox import Sandbox
 
 pytestmark = pytest.mark.stack
 MESSAGE = "STARTUP-BOUNDARY-FAILURE"
 HELD = "HELD-MESSAGE-MUST-NOT-LEAK"
+
+
+def test_startup_readiness_native_dispatch_without_network(tmp_path: Path) -> None:
+    """The real CLI dispatches the fixture command without any model or network request."""
+    box = build_sandbox(tmp_path / "readiness")
+    requests = box.root / "requests.jsonl"
+    network = box.root / "network"
+    guard = box.root / "no-network.mjs"
+    guard.write_text(
+        'import net from "node:net";\n'
+        'import http from "node:http";\n'
+        'import https from "node:https";\n'
+        'import { appendFileSync } from "node:fs";\n'
+        'import { syncBuiltinESMExports } from "node:module";\n'
+        'function blocked() { appendFileSync(process.env.NETWORK_LOG, "attempt\\n"); '
+        'throw new Error("Network forbidden in readiness test"); }\n'
+        "globalThis.fetch = blocked; net.Socket.prototype.connect = blocked;\n"
+        "http.request = http.get = https.request = https.get = blocked;\n"
+        "syncBuiltinESMExports();\n"
+    )
+    result = sample(
+        [*pi_command(), "-e", str(FAUX_EXTENSION), "--model", "faux/main"],
+        env=box.env(
+            {
+                "HARNESS_REQUEST_LOG": str(requests),
+                "NETWORK_LOG": str(network),
+                "NODE_OPTIONS": f"--import={guard}",
+            }
+        ),
+        frame_pattern=r"\bmain\b",
+    )
+    assert 0 < result.first_paint_s <= result.frame_s <= result.input_ready_s
+    assert not requests.exists(), "Readiness dispatched a provider request"
+    assert not network.exists(), "Startup attempted network access"
 
 
 @pytest.mark.parametrize("mode", ["text", "json", "rpc", "tui"])
