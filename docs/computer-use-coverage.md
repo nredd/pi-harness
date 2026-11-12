@@ -249,8 +249,9 @@ Run `npm run coverage:swift --workspace @nredd/pi-computer-use` on macOS; other 
 `NOT RUN` without writing a fake empty report. The macOS `test:macos-native` suite runs the same
 producer once as part of the hosted package gate. It replaces two sliced-source compiles with
 one complete-source compile. `headless_tests.swift` retains pure/ref/keyboard assertions and
-cursor-motion assertions without creating AppKit windows, instantiating `Bridge`, posting input,
-capturing screens or reading/writing the clipboard. AX handles and installed keyboard layout
+cursor-motion assertions and constructs injected `Bridge` instances for request-framing tests without
+creating AppKit windows, starting the live daemon, posting input, capturing screens or reading/writing
+the clipboard. AX handles and installed keyboard layout
 data are used without querying live application trees. Live INV-17 is not this producer.
 
 `helper_entry.swift` contains the unchanged shipped startup function. The test define suppresses

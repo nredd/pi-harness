@@ -1271,7 +1271,7 @@ def parse_statement_summary(text: str, base: Path) -> dict[str, tuple[int, int]]
             raise ValueError(f"Malformed statement counter: '{key}'")
         if covered > total:
             raise ValueError(f"Inconsistent statement counter: '{key}'")
-        resolved = Path(os.path.normpath(Path(key) if Path(key).is_absolute() else base / key)).as_posix()
+        resolved = (Path(key) if Path(key).is_absolute() else base / key).resolve().as_posix()
         if resolved in files:
             raise ValueError(f"Duplicate statement summary source: '{key}'")
         files[resolved] = (total, covered)
