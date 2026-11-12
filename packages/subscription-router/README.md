@@ -212,14 +212,22 @@ These local records are private operational state, not public debugging artifact
 receipts suppress repeat use of a grant even if the provider's offer response has not caught up;
 the provider's reported count is displayed, never locally decremented or fabricated.
 
-Timeout, cancellation after dispatch, lost completion or reload leaves that original attempt
-unresolved, blocking new grants. Inspection never replays it. A separate **Reconcile SAME** action
+Publication itself establishes the unresolved barrier, even if this process later fails identity
+validation, is cancelled before its own dispatch, encounters an error/missing method or crashes.
+Another process may already be reconciling that published claim. A process-local observation cannot
+prove global non-dispatch. `noCredit` and `nothingToReset` remain distinct reported refusals, but
+also retain the barrier: neither fences another same-key request that may still be in flight.
+Timeout, lost completion or reload likewise leaves that original attempt unresolved, blocking new grants. Inspection never replays it. A separate **Reconcile SAME** action
 requires another explicit confirmation, reads current offers/account state, and uses the original
 grant and provider idempotency key. It may consume that original FREE grant if the first request
 never completed; it cannot select another grant or UUID. Concurrent idempotent successes are
-equivalent. A verified pre-mutation failure, including a missing JSON-RPC method, is recorded separately,
-permitting a later fresh attempt. A missing method during reconciliation does not clear the prior
-unresolved attempt.
+equivalent. Only `reset`/`alreadyRedeemed` may publish a terminal receipt. There is no time-based
+expiry, stale-lock reclamation or automatic replay. This intentionally favors a retained barrier
+over silently spending another grant. If reconciliation keeps refusing or the client lacks the
+method, use the official UI; Pi does not invent a safe release from those observations.
+Legacy `notDispatched`/refusal receipts are treated as unresolved, not trusted as safe release.
+A following legacy attempt makes that journal inconsistent and fails closed; an immutable legacy
+receipt is never overwritten to manufacture certainty. Use the official UI for that quarantined state.
 Unknown or conflicting outcomes remain blocked rather than being guessed successful or retried
 automatically. Do not delete the ledger to bypass unresolved work.
 
@@ -284,6 +292,11 @@ a backend-completed/lost-response attempt survives reload, reconciles with the o
 records exactly one spend. Unit/boundary tests cover zero/expired/ineligible/unknown grants,
 version/capability/auth mismatches, private-state validation, cancellation, concurrent claims,
 pre-reset read races, uncertain outcomes and success followed by refresh/receipt failure.
+`test/codex-cross-process.test.ts` uses two actual isolated controller processes, IPC barriers and
+shared real journal files. It pauses the publisher after claim publication, dispatches reconciliation
+from the other process, then exercises identity/cancel/error/missing-method/refusal/crash outcomes
+and response loss. Fresh grants remain blocked until explicit original-key success; reload never
+replays a consume. These tests run under both Node and Bun, without provider network traffic.
 No authenticated LIVE redemption or paid call is part of development tests; live provider behavior
 and runtime client installation are NOT RUN by these synthetic proofs. Paid purchase, extra-usage
 enablement and automatic redemption remain excluded.

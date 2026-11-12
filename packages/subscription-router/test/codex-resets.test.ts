@@ -287,7 +287,7 @@ describe("account-bound confirmed FREE redemption", () => {
 		await expect(h.service.redeem(h.ctx, preview, "fixture-grant", true)).rejects.toMatchObject({
 			kind: "unsupported",
 		});
-		expect((await stored().entries())[0]?.outcome).toBe("notDispatched");
+		expect((await stored().entries())[0]?.outcome).toBeUndefined();
 		await rm(root, { recursive: true, force: true });
 		h.consume(async () => {
 			throw new Error("lost completion");
@@ -324,12 +324,12 @@ describe("account-bound confirmed FREE redemption", () => {
 		await expect(h.service.redeem(h.ctx, preview, "fixture-grant", true)).rejects.toMatchObject({ kind: "unverified" });
 		expect(h.requests.some((request) => request.method.endsWith("/consume"))).toBe(false);
 	});
-	it("settles pre-dispatch cancellation/identity failure as notDispatched, never inventing success", async () => {
+	it("retains published claims after local pre-dispatch identity failure", async () => {
 		const h = setup();
 		const preview = await h.inspect();
 		h.failCheck(2);
 		await expect(h.service.redeem(h.ctx, preview, "fixture-grant", true)).rejects.toThrow("Account changed");
-		expect((await stored().entries())[0]?.outcome).toBe("notDispatched");
+		expect((await stored().entries())[0]?.outcome).toBeUndefined();
 	});
 	it("rejects mismatched reconciliation keys/grants and unknown consume results", async () => {
 		const h = setup();

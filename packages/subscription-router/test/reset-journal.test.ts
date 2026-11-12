@@ -50,15 +50,28 @@ describe("private durable append-only reset journal", () => {
 		expect(next.sequence).toBe(2);
 		await journal().settle(next, "nothingToReset");
 		expect(await journal().entries()).toHaveLength(2);
-		const retry = await journal().claim("other", NOW, NOW + 1000);
-		await journal().settle(retry, "alreadyRedeemed");
+		await expect(journal().claim("other", NOW, NOW + 1000)).rejects.toThrow("unresolved");
+		await journal().settle(next, "noCredit");
+		await journal().settle(next, "notDispatched");
+		expect((await journal().entries())[1]?.outcome).toBeUndefined();
+		await journal().settle(next, "alreadyRedeemed");
 		await expect(journal().claim("other", NOW, NOW + 1000)).rejects.toThrow("already-used");
-		await expect(journal().settle(retry, "noCredit")).rejects.toThrow("Conflicting");
-		const refused = await journal().claim("third", NOW, NOW + 1000);
-		await journal().settle(refused, "noCredit");
-		await expect(journal().settle(refused, "reset")).rejects.toThrow("Conflicting");
-		await expect(journal().settle(attempt, "noCredit")).rejects.toThrow("Conflicting");
+		await journal().settle(next, "noCredit");
+		expect((await journal().entries())[1]?.outcome).toBe("alreadyRedeemed");
+		await expect(journal().settle(next, "reset")).resolves.toBeUndefined();
 	});
+	it.each(["notDispatched", "noCredit", "nothingToReset"])(
+		"retains legacy %s barriers and rejects unsafe suffixes",
+		async (outcome) => {
+			const attempt = await journal().claim("grant", NOW, NOW + 1000);
+			await put("outcome-1.json", { version: 1, key: attempt.key, outcome });
+			expect((await journal().entries())[0]?.outcome).toBeUndefined();
+			await expect(journal().claim("other", NOW, NOW + 1000)).rejects.toThrow("unresolved");
+			await expect(journal().settle(attempt, "reset")).rejects.toThrow("Conflicting");
+			await put("attempt-2.json", { ...attempt, sequence: 2 });
+			await expect(journal().entries()).rejects.toThrow("inconsistent");
+		},
+	);
 	it("fails closed for invalid binding, insecure directories and symlink state", async () => {
 		expect(() => new ResetJournal(root, "../outside")).toThrow("Invalid");
 		expect(() => new ResetJournal(root, "../outside", binding)).toThrow("Invalid");

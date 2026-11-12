@@ -134,10 +134,10 @@ export class ResetJournal {
 				(result !== undefined && (!Check(OutcomeSchema, result) || result.key !== attempt.key))
 			)
 				throw new CodexResetError("journal", "Codex reset journal is inconsistent; reconcile through the official UI.");
-			entries.push({
-				attempt,
-				outcome: result === undefined ? undefined : (result as Static<typeof OutcomeSchema>).outcome,
-			});
+			const outcome = result === undefined ? undefined : (result as Static<typeof OutcomeSchema>).outcome;
+			// Legacy local failures/refusals do not prove that another same-key consume is absent.
+			// Treat them as pending too; an unsafe legacy suffix is rejected by the prefix check.
+			entries.push({ attempt, outcome: outcome === "reset" || outcome === "alreadyRedeemed" ? outcome : undefined });
 		}
 		if (names.some((name) => /^outcome-/.test(name) && !sequences.includes(Number(name.slice(8, -5)))))
 			throw new CodexResetError("journal", "Codex reset receipt has no matching attempt.");
@@ -170,11 +170,12 @@ export class ResetJournal {
 		return attempt;
 	}
 
-	/** Only supported, known outcomes settle an attempt. Absent receipt means pending/unknown, including after reload. */
+	/** Only successful consumption releases a published barrier; refusals cannot fence another in-flight caller. */
 	async settle(attempt: ResetAttempt, outcome: ResetOutcome): Promise<void> {
 		const receipt = { version: 1, key: attempt.key, outcome };
 		if (!Check(OutcomeSchema, receipt) || attempt.binding !== this.binding || attempt.scope !== this.scope)
 			throw new CodexResetError("journal", "Invalid Codex reset receipt.");
+		if (outcome !== "reset" && outcome !== "alreadyRedeemed") return;
 		const path = join(this.directory, `outcome-${attempt.sequence}.json`);
 		if (!(await publish(path, receipt))) {
 			const existing = await read(path);

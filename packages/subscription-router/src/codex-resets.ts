@@ -274,13 +274,13 @@ export class CodexResets {
 			return { outcome, quotaRefreshed, offersRefreshed };
 		} catch (error) {
 			if (attempt && error instanceof CodexResetError && error.kind === "unsupported") {
-				if (!reconcile) await journal.settle(attempt, "notDispatched");
 				throw new CodexResetError(
 					"unsupported",
 					"Codex does not support this documented consume method; no fallback attempted. Any prior unresolved attempt is retained.",
 				);
 			}
-			if (attempt && !dispatched && !reconcile) await journal.settle(attempt, "notDispatched");
+			// A published claim is already visible to other processes. Local non-dispatch cannot
+			// release it: a reconciler may have dispatched the same key and lost its response.
 			if (confirmedOutcome === "reset" || confirmedOutcome === "alreadyRedeemed")
 				throw new CodexResetError(
 					"journal",
