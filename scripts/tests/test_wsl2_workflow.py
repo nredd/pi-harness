@@ -737,10 +737,19 @@ def dns_failure_stubs(commands: Path, tools: str, log: Path) -> dict[str, str]:
     timeout = shutil.which("timeout")
     assert timeout is not None, "GNU timeout is required for the diagnostic failure fixture"
     stubs: dict[str, str] = {}
-    stubs["timeout"] = f'#!/bin/sh\nexec {shlex.quote(timeout)} "$@"\n'
-    stubs["apt-get"] = (
-        f'#!/bin/sh\nprintf "%s\\n" "$*" >> {shlex.quote(str(log))}\n'
-        'echo "Could not resolve fixture mirror" >&2\nexit 100\n'
+    stubs["timeout"] = textwrap.dedent(
+        f"""\
+        #!/bin/sh
+        exec {shlex.quote(timeout)} "$@"
+        """
+    )
+    stubs["apt-get"] = textwrap.dedent(
+        f"""\
+        #!/bin/sh
+        printf "%s\\n" "$*" >> {shlex.quote(str(log))}
+        echo "Could not resolve fixture mirror" >&2
+        exit 100
+        """
     )
     for name in ("bash", "mkdir", "sed", "grep"):
         binary = shutil.which(name)
@@ -756,7 +765,12 @@ def dns_failure_stubs(commands: Path, tools: str, log: Path) -> dict[str, str]:
             "system-classification": "exit 2",
         }[tools]
         for name in ("getent", "resolvectl"):
-            stubs[name] = f"#!/bin/sh\n{body}\n"
+            stubs[name] = textwrap.dedent(
+                f"""\
+                #!/bin/sh
+                {body}
+                """
+            )
         classification = (
             "private.invalid 192.0.2.19 SECRET=fixture"
             if tools == "invalid-classification"
@@ -767,7 +781,12 @@ def dns_failure_stubs(commands: Path, tools: str, log: Path) -> dict[str, str]:
             assert awk is not None
             (commands / "awk").symlink_to(awk)
         else:
-            stubs["awk"] = f"#!/bin/sh\nprintf '%s\\n' {shlex.quote(classification)}\n"
+            stubs["awk"] = textwrap.dedent(
+                f"""\
+                #!/bin/sh
+                printf '%s\\n' {shlex.quote(classification)}
+                """
+            )
     return stubs
 
 
@@ -856,7 +875,13 @@ def run_apt(
         stubs |= dns_failure_stubs(commands, dns_tools, log)
     else:
         # Other apt fixtures must never reach the host resolver either.
-        stubs |= {"getent": "#!/bin/sh\nexit 2\n", "resolvectl": "#!/bin/sh\nexit 2\n"}
+        unavailable = textwrap.dedent(
+            """\
+            #!/bin/sh
+            exit 2
+            """
+        )
+        stubs |= dict.fromkeys(("getent", "resolvectl"), unavailable)
     if broken_cache_copy:
         # Only writes into the host cache fail; seeding the archives from it still works.
         last = 'for a in "$@"; do t=$a; done\n'
