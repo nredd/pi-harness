@@ -28,79 +28,60 @@ gated (`linux-*`, `windows-*`, `macos-helper-live`).
 
 ### TypeScript (`computer-use-vitest`, 35 modules, Istanbul)
 
-Istanbul text summary: statements 93.01% (4378/4707) on macOS. The policy
-reads the lcov rollup, which gives **215 uncovered lines, 464 uncovered branches, 43 uncovered
-functions** and (from the `json-summary` report) **329 uncovered statements** on macOS. `src/platform/types.ts` is excluded as type-only and stays so (no executable
-output).
+Hosted run `43151253223` on PR HEAD `8c7f6487` measured the enforced signal:
 
-The signal is **enforced** since #645 T0, with caps equal to the measured per-OS uncovered counts:
-
-| OS | Lines | Functions | Branches | Statements | Source |
+| Host | Lines | Functions | Branches | Statements | Job |
 | --- | --- | --- | --- | --- | --- |
-| darwin | 215 | 43 | 464 | 329 | hosted `owned (macos-14)`, main `1e93038c` (after #726, #730, #733, #734), run `43111303814` |
-| linux (max of Ubuntu and WSL2) | 234 | 48 | 488 | 354 | hosted `owned (ubuntu-24.04)` and `owned (wsl2)`, both 234/48/488 and 354 statements (4353/4707 covered), same run |
+| macOS | 168 | 25 | 313 | 236 | `130970325724` |
+| Ubuntu | 168 | 25 | 313 | 236 | `130968037667` |
+| WSL2 | 168 | 25 | 312 | 235 | `130971881797` |
 
-Every later coverage PR lowers these caps to its own hosted numbers (never raises them). Statements are
-read from `coverage-summary.json` since #700 and capped per OS like the other counters; the main run above
-predates the statement counter, so its statement numbers come from the shard's Vitest `Statements` summary line.
+The `darwin` caps equal macOS; `linux` caps take the per-counter maximum of Ubuntu and WSL2.
+Each cap is lower than the previous 215/43/464/329 and 234/48/488/354 baseline. The 34 files
+at 0/0/0/0 on all three hosts are pinned in `packages/computer-use/vitest.config.ts`; the exact
+list is tested in `scripts/coverage-configs.test.ts`. The helpers from #749 were already pinned.
 
-Files at 0/0/0 on all three OSes in the hosted artifacts (`outline.ts`, `outline-store.ts`,
-`setup-helper.mjs`, `build-native.mjs`, both docs generators, `rust-coverage.mjs`, `macos/helper.ts`,
-`macos/helper-path.mjs`, plus since #700 `cdp.ts`, `contract.ts`, `find-params.ts`, `permissions.ts`,
-`root-selection.ts`, `platform/coerce.ts`, `platform/index.ts`, `platform/{linux,macos,windows}/backend.ts`,
-`platform/linux/{helper,wsl}.ts`, `platform/macos/{browser,permissions}.ts` and `platform/windows/helper.ts`;
-24 files in all) are additionally locked per file (lines, functions, branches and statements at 100) by `coverage.thresholds` in
-`packages/computer-use/vitest.config.ts`, so a regression there fails `npm test` itself.
+macOS per-file uncovered counts (lines / functions / branches / statements):
 
-| File | Lines missed/total | Branches missed/total | Functions missed/total | Uncovered lines |
+| File | Lines | Functions | Branches | Statements |
 | --- | --- | --- | --- | --- |
-| `extensions/computer-use.ts` | 20/51 | 29/30 | 8/10 | 178-179,187,190,237-238,243-246,250-253,257-259,263-265 |
-| `scripts/build-native.mjs` | 0/154 | 0/120 | 0/23 | none |
-| `scripts/docs-generators/generate-source-references.mjs` | 0/85 | 0/55 | 0/22 | none |
-| `scripts/docs-generators/generate-tool-reference.mjs` | 0/65 | 0/68 | 0/15 | none |
-| `scripts/rust-coverage.mjs` | 0/62 | 0/56 | 0/6 | none |
-| `scripts/setup-helper.mjs` | 0/433 | 0/284 | 0/102 | none |
-| `src/actions.ts` | 5/87 | 16/149 | 1/23 | 41,149,153-155 |
-| `src/bridge.ts` | 168/1069 | 313/1206 | 25/243 | 524,1103,1123-1129,1155-1163,1176-1177,1288-1293,1297-1298,1302-1309,1311,1330-1334,1338-1342,1354-1357,1360,1364-1374,1380-1384,1390-1391,... |
-| `src/cdp.ts` | 0/270 | 0/174 | 0/85 | none |
-| `src/config.ts` | 3/82 | 25/86 | 1/21 | 84,143,189 |
-| `src/contract.ts` | 0/1 | 0/0 | 0/0 | none |
-| `src/desktop.ts` | 0/67 | 6/88 | 0/21 | none |
-| `src/find-params.ts` | 0/7 | 0/12 | 0/2 | none |
-| `src/note.ts` | 8/74 | 31/85 | 0/18 | 118,149,162-163,165,192-194 |
-| `src/outline-store.ts` | 0/42 | 0/14 | 0/7 | none |
-| `src/outline.ts` | 0/317 | 0/302 | 0/92 | none |
-| `src/output.ts` | 7/79 | 16/52 | 0/11 | 51-56,66 |
-| `src/permissions.ts` | 0/26 | 0/18 | 0/11 | none |
-| `src/platform/architecture.ts` | 0/8 | 2/8 | 0/2 | none |
-| `src/platform/coerce.ts` | 0/7 | 0/15 | 0/3 | none |
-| `src/platform/index.ts` | 0/21 | 0/7 | 0/15 | none |
-| `src/platform/linux/backend.ts` | 0/47 | 0/79 | 0/26 | none |
-| `src/platform/linux/helper.ts` | 0/196 | 0/94 | 0/48 | none |
-| `src/platform/linux/wsl.ts` | 0/12 | 0/10 | 0/5 | none |
-| `src/platform/macos/backend.ts` | 0/39 | 0/55 | 0/20 | none |
-| `src/platform/macos/browser.ts` | 0/30 | 0/24 | 0/8 | none |
-| `src/platform/macos/helper-path.mjs` | 0/16 | 0/17 | 0/2 | none |
-| `src/platform/macos/helper.ts` | 0/232 | 0/83 | 0/68 | none |
-| `src/platform/macos/permissions.ts` | 0/34 | 0/33 | 0/10 | none |
-| `src/platform/windows/backend.ts` | 0/49 | 0/71 | 0/25 | none |
-| `src/platform/windows/helper.ts` | 0/94 | 0/44 | 0/23 | none |
-| `src/root-selection.ts` | 0/13 | 0/29 | 0/2 | none |
-| `src/runtime.ts` | 2/49 | 3/11 | 5/25 | 48,66 |
-| `src/state.ts` | 0/16 | 4/20 | 0/6 | none |
-| `src/view.ts` | 2/87 | 19/76 | 3/25 | 78,142 |
-| **Total** | **215/3921** | **464/3475** | **43/1025** | |
+| `extensions/computer-use.ts` | 0/51 | 0/10 | 0/30 | 0/63 |
+| `scripts/build-native.mjs` | 0/154 | 0/23 | 0/120 | 0/167 |
+| `scripts/docs-generators/generate-source-references.mjs` | 0/85 | 0/22 | 0/55 | 0/106 |
+| `scripts/docs-generators/generate-tool-reference.mjs` | 0/65 | 0/15 | 0/68 | 0/79 |
+| `scripts/rust-coverage.mjs` | 0/62 | 0/6 | 0/56 | 0/67 |
+| `scripts/setup-helper.mjs` | 0/433 | 0/102 | 0/284 | 0/508 |
+| `src/actions.ts` | 0/87 | 0/23 | 0/149 | 0/108 |
+| `src/bridge.ts` | 168/1069 | 25/243 | 313/1206 | 236/1261 |
+| `src/cdp.ts` | 0/270 | 0/85 | 0/174 | 0/326 |
+| `src/config.ts` | 0/82 | 0/21 | 0/86 | 0/115 |
+| `src/contract.ts` | 0/1 | 0/0 | 0/0 | 0/1 |
+| `src/desktop.ts` | 0/67 | 0/21 | 0/88 | 0/85 |
+| `src/find-params.ts` | 0/7 | 0/2 | 0/12 | 0/8 |
+| `src/note.ts` | 0/74 | 0/18 | 0/85 | 0/88 |
+| `src/outline-store.ts` | 0/42 | 0/7 | 0/14 | 0/47 |
+| `src/outline.ts` | 0/317 | 0/92 | 0/302 | 0/400 |
+| `src/output.ts` | 0/77 | 0/11 | 0/50 | 0/95 |
+| `src/permissions.ts` | 0/26 | 0/11 | 0/18 | 0/35 |
+| `src/platform/architecture.ts` | 0/8 | 0/2 | 0/8 | 0/9 |
+| `src/platform/coerce.ts` | 0/7 | 0/3 | 0/15 | 0/9 |
+| `src/platform/index.ts` | 0/21 | 0/15 | 0/7 | 0/24 |
+| `src/platform/linux/backend.ts` | 0/47 | 0/26 | 0/79 | 0/54 |
+| `src/platform/linux/helper.ts` | 0/200 | 0/49 | 0/96 | 0/246 |
+| `src/platform/linux/wsl.ts` | 0/12 | 0/5 | 0/10 | 0/14 |
+| `src/platform/macos/backend.ts` | 0/39 | 0/20 | 0/55 | 0/44 |
+| `src/platform/macos/browser.ts` | 0/30 | 0/8 | 0/24 | 0/32 |
+| `src/platform/macos/helper-path.mjs` | 0/16 | 0/2 | 0/17 | 0/17 |
+| `src/platform/macos/helper.ts` | 0/233 | 0/68 | 0/83 | 0/271 |
+| `src/platform/macos/permissions.ts` | 0/34 | 0/10 | 0/33 | 0/34 |
+| `src/platform/windows/backend.ts` | 0/49 | 0/25 | 0/71 | 0/55 |
+| `src/platform/windows/helper.ts` | 0/98 | 0/24 | 0/46 | 0/135 |
+| `src/root-selection.ts` | 0/13 | 0/2 | 0/29 | 0/22 |
+| `src/runtime.ts` | 0/47 | 0/22 | 0/9 | 0/56 |
+| `src/state.ts` | 0/16 | 0/6 | 0/20 | 0/19 |
+| `src/view.ts` | 0/85 | 0/25 | 0/76 | 0/106 |
 
-Fully covered (0/0/0) modules are the 24 pinned files above. At 0 lines/functions but with branches missing:
-`src/desktop.ts` 6, `src/platform/architecture.ts` 2, `src/state.ts` 4 (not pinned).
-
-Largest remaining gaps, in order of size (macOS):
-
-- `src/bridge.ts` holds 168 lines / 313 branches / 25 functions, mostly the act paths and the tail of the
-  file (#710 to #712).
-- `extensions/computer-use.ts` 20 lines, 29 branches, 8 functions (#703).
-- `src/note.ts` 8 lines / 31 branches, `src/config.ts` 3 / 25, `src/view.ts` 2 / 19, `src/output.ts` 7 / 16,
-  `src/actions.ts` 5 / 16, `src/runtime.ts` 2 / 3 / 5 functions.
+Only `src/bridge.ts` remains uncovered on macOS. The WSL2 branch and statement counts are each one lower.
 
 ### Swift (`native/macos`, llvm-cov)
 

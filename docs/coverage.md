@@ -347,9 +347,9 @@ generators, with the declaration-only `src/platform/types.ts` excluded as type-o
 config reads both from the policy like every other producer, so a new module joins the report
 instead of dropping out. It stays
 `goal: "excluded"` with no 100% claim, but since #645 T0 the signal is **enforced**: its per-OS caps are the
-measured uncovered counts for lines, functions and branches (darwin **215 / 43 / 464**, hosted `owned (macos-14)` on main `1e93038c`; linux **234 / 48 / 488**, the max of hosted `owned (ubuntu-24.04)`
-and `owned (wsl2)`, identical). Since #700 it also caps statements (darwin **329**, linux **354**). Subprocess-run scripts count
-only what the suites import. Files already at 0/0/0 on every OS are also pinned per file by
+measured uncovered counts for lines, functions, branches and statements (darwin **168 / 25 / 313 / 236**;
+linux **168 / 25 / 313 / 236**, the maximum of Ubuntu and WSL2), from hosted run `43151253223`.
+Subprocess-run scripts count only what the suites import. Files already at 0/0/0/0 on every OS are pinned per file by
 `coverage.thresholds` in `packages/computer-use/vitest.config.ts` (the policy schema has no per-file pins).
 Per-file history and numbers are in [computer-use-coverage.md](computer-use-coverage.md). The native and
 live suites (`linux-native`, `macos-helper-live`, `linux-live`) also run under Vitest now; skipped off

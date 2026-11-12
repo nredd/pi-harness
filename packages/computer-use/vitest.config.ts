@@ -14,17 +14,24 @@ const {
  * no per-file pins, so Vitest enforces them: any regression fails `npm test` even inside the aggregate cap.
  */
 const ZERO_UNCOVERED_FILES = [
+	"extensions/computer-use.ts",
 	"scripts/build-native.mjs",
 	"scripts/docs-generators/generate-source-references.mjs",
 	"scripts/docs-generators/generate-tool-reference.mjs",
 	"scripts/rust-coverage.mjs",
 	"scripts/setup-helper.mjs",
+	"src/actions.ts",
 	"src/cdp.ts",
+	"src/config.ts",
 	"src/contract.ts",
+	"src/desktop.ts",
 	"src/find-params.ts",
+	"src/note.ts",
 	"src/outline-store.ts",
 	"src/outline.ts",
+	"src/output.ts",
 	"src/permissions.ts",
+	"src/platform/architecture.ts",
 	"src/platform/coerce.ts",
 	"src/platform/index.ts",
 	"src/platform/linux/backend.ts",
@@ -38,6 +45,9 @@ const ZERO_UNCOVERED_FILES = [
 	"src/platform/windows/backend.ts",
 	"src/platform/windows/helper.ts",
 	"src/root-selection.ts",
+	"src/runtime.ts",
+	"src/state.ts",
+	"src/view.ts",
 ];
 
 export default defineConfig({
