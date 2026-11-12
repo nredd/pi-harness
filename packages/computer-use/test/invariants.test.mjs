@@ -251,8 +251,9 @@ test("INV-17b macOS activity glow is configurable, headless-safe, and connection
 	assert(extensionTs.includes('pi.on("tool_execution_start"') && extensionTs.includes('pi.on("agent_end"'), "extension does not track computer-use activity lifecycle");
 	assert(extensionTs.includes("config.headless") && extensionTs.includes("config.activity_glow"), "activity glow is not configurable or headless-safe");
 	assert(macosHelperTs.includes("class MacosActivityGlowConnection") && macosHelperTs.includes('cmd: "setActivityGlow"'), "activity glow does not use a persistent helper connection");
-	assert(swift.includes('case "setActivityGlow"') && swift.includes("activityGlow.disconnect(clientID)"), "native helper does not clear activity state on disconnect");
-	assert(swift.includes('"activityGlowActive": activityGlow.isActive'), "helper diagnostics cannot verify activity ownership");
+	assert(swift.includes("activityGlow: ActivityGlowController? = ActivityGlowController()"), "native helper must construct the real glow controller by default");
+	assert(swift.includes('case "setActivityGlow"') && swift.includes("activityGlow?.disconnect(clientID)"), "native helper does not clear activity state on disconnect");
+	assert(swift.includes('"activityGlowActive": activityGlow?.isActive ?? false'), "helper diagnostics cannot verify activity ownership");
 	assert(activityGlowSwift.includes("activeClients = Set<UUID>()"), "native activity state is not client-owned");
 	assert(activityGlowSwift.includes("window.ignoresMouseEvents = true") && activityGlowSwift.includes("window.sharingType = .readOnly"), "activity glow can accept input or is hidden from user screen recordings");
 	assert(swift.includes("SCContentFilter(desktopIndependentWindow"), "agent captures must stay per-window so the capturable activity glow cannot leak into observations");

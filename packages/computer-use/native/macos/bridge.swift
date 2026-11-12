@@ -807,7 +807,7 @@ final class InputSuppressionGuard {
 final class Bridge {
 	private let protocolVersion = 7
 	private let refStore = AXRefStore()
-	private let activityGlow = ActivityGlowController()
+	private let activityGlow: ActivityGlowController?
 	private let inputSuppressionGuard = InputSuppressionGuard()
 	private let physicalInputLock = NSRecursiveLock()
 	private let supportsAgentCursor = CommandLine.arguments.contains("serve")
@@ -824,11 +824,13 @@ final class Bridge {
 
 	/// Narrow IO boundaries; defaults preserve the daemon's real dispatch and transport.
 	init(
+		activityGlow: ActivityGlowController? = ActivityGlowController(),
 		dispatchRequest: (([String: Any], UUID?) throws -> Any)? = nil,
 		readSession: @escaping () -> [String: Any]? = { CGSessionCopyCurrentDictionary() as? [String: Any] },
 		writeOutput: @escaping (Data) throws -> Void = { try FileHandle.standardOutput.write(contentsOf: $0) },
 		writeSocket: @escaping (Int32, UnsafeRawPointer, Int) -> Int = { Darwin.send($0, $1, $2, 0) }
 	) {
+		self.activityGlow = activityGlow
 		self.dispatchRequest = dispatchRequest
 		self.readSession = readSession
 		self.writeOutput = writeOutput
@@ -913,7 +915,7 @@ final class Bridge {
 
 	private func processClient(_ client: Int32) {
 		let clientID = UUID()
-		defer { activityGlow.disconnect(clientID) }
+		defer { activityGlow?.disconnect(clientID) }
 		let clientInput = FileHandle(fileDescriptor: client, closeOnDealloc: true)
 		var buffer = Data()
 		let newline = Data([0x0A])
@@ -1073,7 +1075,7 @@ final class Bridge {
 			guard let clientID, let active = boolArg(request, "active") else {
 				throw BridgeFailure(message: "Activity glow requires a connected client and boolean 'active' value", code: "invalid_args")
 			}
-			activityGlow.setActive(active, for: clientID)
+			activityGlow?.setActive(active, for: clientID)
 			return ["active": active]
 		case "shutdown":
 			// Reply first, then exit: the caller relaunches the helper to get a
@@ -1236,7 +1238,7 @@ final class Bridge {
 			"arch": arch,
 			"accessibility": permissions["accessibility"] ?? false,
 			"screenRecording": permissions["screenRecording"] ?? false,
-			"activityGlowActive": activityGlow.isActive,
+			"activityGlowActive": activityGlow?.isActive ?? false,
 			"recentCompletedRequestIds": completedRequestIds(),
 		]
 		if let parentPath {

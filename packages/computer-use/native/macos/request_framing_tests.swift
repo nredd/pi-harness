@@ -15,7 +15,7 @@ func runRequestFramingAssertions() {
 	var frames: [Data] = []
 	var requests: [String] = []
 	let client = UUID()
-	let bridge = Bridge(dispatchRequest: { request, receivedClient in
+	let bridge = Bridge(activityGlow: nil, dispatchRequest: { request, receivedClient in
 		check(receivedClient == nil || receivedClient == client, "client identity preserved")
 		requests.append(request["id"] as? String ?? "invalid")
 		if request["cmd"] as? String == "refuse" { throw BridgeFailure(message: "refused", code: "blocked") }
@@ -65,7 +65,7 @@ func runRequestFramingAssertions() {
 	let entered = DispatchSemaphore(value: 0)
 	let release = DispatchSemaphore(value: 0)
 	let done = DispatchSemaphore(value: 0)
-	let ordered = Bridge(dispatchRequest: { _, _ in ["ok": true] }, writeSocket: { _, _, count in
+	let ordered = Bridge(activityGlow: nil, dispatchRequest: { _, _ in ["ok": true] }, writeSocket: { _, _, count in
 		entered.signal(); _ = release.wait(timeout: .now() + 5); return count
 	})
 	DispatchQueue.global().async { ordered.handleLine("{\"id\":\"pending\"}", to: 42); done.signal() }
@@ -78,7 +78,7 @@ func runRequestFramingAssertions() {
 	var sockets: [Int32] = [-1, -1]
 	if socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets) == 0 {
 		defer { close(sockets[0]); close(sockets[1]) }
-		Bridge().send(["id": "socketpair"], to: sockets[0])
+		Bridge(activityGlow: nil).send(["id": "socketpair"], to: sockets[0])
 		_ = shutdown(sockets[0], SHUT_WR)
 		let reader = FileHandle(fileDescriptor: sockets[1], closeOnDealloc: false)
 		let data = reader.readDataToEndOfFile()
@@ -87,7 +87,7 @@ func runRequestFramingAssertions() {
 
 	var bytes = Data()
 	var remaining: [Int] = []
-	let short = Bridge(writeSocket: { socket, pointer, count in
+	let short = Bridge(activityGlow: nil, writeSocket: { socket, pointer, count in
 		check(socket == 42, "socket forwarded"); remaining.append(count)
 		let sent = min(3, count); bytes.append(pointer.assumingMemoryBound(to: UInt8.self), count: sent); return sent
 	})
@@ -96,7 +96,7 @@ func runRequestFramingAssertions() {
 	check(remaining.count > 1 && zip(remaining, remaining.dropFirst()).allSatisfy { $0 - $1 == 3 }, "short writes advance offset and remaining length")
 	for result in [0, -1] {
 		var calls = 0
-		let stopped = Bridge(dispatchRequest: { _, _ in [:] }, writeSocket: { _, _, _ in calls += 1; return result })
+		let stopped = Bridge(activityGlow: nil, dispatchRequest: { _, _ in [:] }, writeSocket: { _, _, _ in calls += 1; return result })
 		stopped.handleLine("{\"id\":\"failed-write\"}", to: 42)
 		check(calls == 1 && stopped.completedRequestIds() == ["failed-write"], "nonpositive write stops and still records processed request")
 	}
@@ -105,12 +105,12 @@ func runRequestFramingAssertions() {
 	bridge.send(["invalid": Date()], to: 42)
 	check(frames.count == before, "invalid output JSON is silently dropped")
 	var stdioCalls = 0
-	Bridge(writeOutput: { _ in stdioCalls += 1; throw NSError(domain: "fixture", code: 1) }).send(["ok": true])
+	Bridge(activityGlow: nil, writeOutput: { _ in stdioCalls += 1; throw NSError(domain: "fixture", code: 1) }).send(["ok": true])
 	check(stdioCalls == 1, "stdio write failure remains ignored")
 
 	var sessionReads = 0
 	var routed: [Data] = []
-	let actual = Bridge(readSession: { sessionReads += 1; return ["CGSSessionScreenIsLocked": true] }, writeOutput: { routed.append($0) })
+	let actual = Bridge(activityGlow: nil, readSession: { sessionReads += 1; return ["CGSSessionScreenIsLocked": true] }, writeOutput: { routed.append($0) })
 	failure("invalid_args", "Missing string argument 'cmd'") { try actual.handleRequest([:], clientID: nil) }
 	check(sessionReads == 0, "missing command validated before session read")
 	failure("unknown_command", "Unknown command 'fixture-unknown'") { try actual.handleRequest(["cmd": "fixture-unknown"], clientID: nil) }

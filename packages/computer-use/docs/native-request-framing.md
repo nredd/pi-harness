@@ -1,8 +1,10 @@
 # Native request framing tests
 
 `request_framing_tests.swift` exercises actual `Bridge` buffering, NDJSON responses, completion
-bookkeeping and argument coercion. Only dispatch, session reads and output syscalls are injected;
-production defaults still use the real command router, CG session and transport. Tests cover
+bookkeeping and argument coercion. Dispatch, session reads and output syscalls are injected;
+all test instances also pass `activityGlow: nil` to avoid eagerly constructing the glow controller's
+`NSScreen`/`NSWindow` objects. Production defaults still create the real glow controller and use
+the real command router, CG session and transport. Tests cover
 split UTF-8 frames, invalid input, exact error envelopes, response-before-completion ordering,
 32-ID recency/eviction, short writes and silent write failures. A disposable socket pair also
 exercises the default `Darwin.send` writer without connecting to the daemon.
