@@ -66,9 +66,17 @@ test("collects tests once with locked manifests and renders all formats from iso
 		assert.equal(commands.filter(({ args }) => args.includes("test")).length, 1);
 		assert.equal(new Set(commands.map(({ options }) => options.env.CARGO_TARGET_DIR)).size, 1);
 		assert.ok(commands.every(({ options }) => options.env.CARGO_TARGET_DIR.startsWith(output)));
-		const run = path.join(output, readdirSync(output)[0]);
+		const run = path.join(
+			output,
+			readdirSync(output).find((entry) => entry.startsWith("linux-") || entry.startsWith("windows-")),
+		);
+		assert.deepEqual(readFileSync(path.join(output, "coverage.json")), readFileSync(path.join(run, "coverage.json")));
+		assert.ok(commands.slice(1).every(({ args }) => args.includes("--disable-default-ignore-filename-regex")));
 		assert.match(readFileSync(path.join(run, "summary.txt"), "utf8"), /TOTAL/);
-		assert.ok(JSON.parse(readFileSync(path.join(run, "metadata.json"), "utf8")).elapsedSeconds >= 0);
+		const metadata = JSON.parse(readFileSync(path.join(run, "metadata.json"), "utf8"));
+		assert.ok(metadata.elapsedSeconds >= 0);
+		assert.equal(metadata.commandSeconds.length, 4);
+		assert.ok(metadata.commandSeconds.every((seconds) => seconds >= 0));
 		assert.throws(
 			() => runCoverage([], () => ({ status: 0, stdout: "cargo-llvm-cov wrong" })),
 			/Expected cargo-llvm-cov/,

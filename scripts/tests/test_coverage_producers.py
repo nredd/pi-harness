@@ -333,6 +333,40 @@ def test_accounting_and_artifacts_follow_tests_even_on_failure() -> None:
     assert artifacts["with"]["name"] == "coverage-${{ matrix.os }}"
 
 
+def test_native_ubuntu_rust_producer_is_pinned_and_preserved() -> None:
+    """Require a maintained native producer, raw artifacts and explicit unsupported hosts.
+
+    Parameters:
+        None.
+    Returns:
+        None: Ubuntu collection and selected-host accounting remain wired together.
+    Raises:
+        AssertionError: Pins, resource limits, artifacts or source-complete ownership drift.
+    """
+    shard, fan_in = owned_jobs()
+    setup = step_named(shard, "Install pinned native Ubuntu coverage tools")
+    collect = step_named(shard, "Collect native Ubuntu Rust coverage")
+    assert setup["if"] == collect["if"]
+    assert "matrix.os == 'ubuntu-24.04'" in collect["if"]
+    assert "contains(matrix.workspaces, 'packages/computer-use')" in collect["if"]
+    assert shard.index(setup) < shard.index(collect)
+    assert setup["env"] == collect["env"] == {"CARGO_BUILD_JOBS": "2", "RUSTUP_TOOLCHAIN": "1.97.1"}
+    assert "--component llvm-tools-preview" in setup["run"]
+    assert "cargo-llvm-cov --version 0.9.1 --locked" in setup["run"]
+    assert "--crate linux --output coverage/native-linux" in collect["run"]
+    for steps, prefix in ((shard, "Preserve this shard"), (fan_in, "Preserve independent")):
+        artifacts = step_named(steps, prefix)["with"]["path"]
+        for filename in ("coverage.json", "setup.log", "*/metadata.json", "*/summary.txt", "*/*.log"):
+            assert f"packages/computer-use/coverage/native-linux/{filename}" in artifacts
+    cfg = json.loads((ROOT / "coverage/policy.json").read_text())["packages"]["computer-use-linux-native"]
+    assert cfg["owned"] == ["native/linux/bridge-rs/src/**/*.rs"]
+    signal = cfg["signals"]["primary"]
+    assert signal["producer"] == "llvm-cov"
+    assert signal["skip_os"] == ["darwin"]
+    assert signal["skip_hosts"] == ["wsl2"]
+    assert signal["enforcement"] == "report-only"
+
+
 def test_reviewer_dependencies_are_provisioned_before_owned_tests() -> None:
     """Require offline reviewer reads and prebuilt reviewer binaries on Ubuntu and macOS.
 

@@ -18,6 +18,15 @@ coverage-maintenance exclusion. Both require a nonblank
 `goal: ratchet` (#314) was deleted (#386) and the schema rejects it, in the current policy and in a
 base read alike; an enforced `excluded` signal is the only nonzero floor and can only tighten.
 
+Native LLVM signals declare `producer: "llvm-cov"` and remain report-only until runtime attribution
+is resolved. `computer-use-linux-native/primary` reads raw JSON rather than inventing LCOV branch
+rows: its summary carries lines/functions/regions and explicitly omits unproduced branch counts.
+Rust modules anywhere under `src`, including nested test/fixture modules, remain in the complete
+source inventory. Only conservative module/re-export-only source can validate an absent LLVM map.
+Explicit `skip_os` and `skip_hosts` declare unsupported cells as NOT RUN; selected cells still fail
+on missing reports. Adding skipped platforms to an established signal fails the base ratchet.
+See the native Linux producer and attribution limitations [here](../packages/computer-use/docs/rust-coverage.md).
+
 The initial integration checkpoint is recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/main-integration.md).
 Facade validation and the actual hosted producer failure diagnosis are recorded
 [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/facade-followup.md). Git fixture isolation, both hosted artifacts and the
@@ -360,8 +369,10 @@ and runnable workflow examples are explicitly pending source, not verification e
 The generated stats CLI bundle has a reasoned generated-artifact exclusion; its original
 `src/stats/cli.ts` remains owned and measured.
 
-`computer-use` retains the complete native/documentation inventory; Rust and the documentation
-site remain **not measured, tracked**. The separate `computer-use-swift` report-only/excluded
+`computer-use` retains the complete native/documentation inventory; Windows Rust and the documentation
+site remain **not measured, tracked**. Native Ubuntu Linux Rust is measured separately by the
+report-only/excluded `computer-use-linux-native` signal (#758); regions are not branches or statements,
+and inline/source test hits do not establish runtime coverage. The separate `computer-use-swift` report-only/excluded
 signal (#757) links every shipped Swift source into a headless instrumented binary on macOS.
 It preserves actual per-file LLVM lines/functions/regions and profile/toolchain metadata in the
 `computer-use-swift-macos-14` hosted artifact, with line/function LCOV in ordinary accounting.
@@ -376,8 +387,8 @@ generators, with the declaration-only `src/platform/types.ts` excluded as type-o
 config reads both from the policy like every other producer, so a new module joins the report
 instead of dropping out. It stays
 `goal: "excluded"` with no 100% claim, but since #645 T0 the signal is **enforced**: its per-OS caps are the
-measured uncovered counts for lines, functions, branches and statements (darwin **1 / 0 / 1 / 1**;
-linux **1 / 0 / 1 / 1**, the maximum of Ubuntu and WSL2), from hosted run `43173083073`.
+measured uncovered counts for lines, functions, branches and statements (darwin **0 / 0 / 0 / 0**;
+linux **0 / 0 / 0 / 0**). The earlier `1 / 0 / 1 / 1` receipt from run `43173083073` is historical.
 Subprocess-run scripts count only what the suites import. Files already at 0/0/0/0 on every OS are pinned per file by
 `coverage.thresholds` in `packages/computer-use/vitest.config.ts` (the policy schema has no per-file pins).
 Per-file history and numbers are in [computer-use-coverage.md](computer-use-coverage.md). The native and

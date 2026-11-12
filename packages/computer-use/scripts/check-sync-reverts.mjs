@@ -156,6 +156,14 @@ const cases = [
 		failure: /Missing cargo-llvm-cov/,
 	},
 	{
+		name: "Rust coverage complete source filenames",
+		file: "scripts/rust-coverage.mjs",
+		before: '"--disable-default-ignore-filename-regex",\n\t\t\t\tformat,',
+		after: "format,",
+		check: "test/rust-coverage.test.mjs",
+		failure: /AssertionError|false == true/,
+	},
+	{
 		name: "StateStore evicts past an empty stateId (#703)",
 		file: "src/runtime.ts",
 		before: "this.records.delete(this.records.keys().next().value!);",

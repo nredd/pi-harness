@@ -249,8 +249,9 @@ Run `npm run coverage:swift --workspace @nredd/pi-computer-use` on macOS; other 
 `NOT RUN` without writing a fake empty report. The macOS `test:macos-native` suite runs the same
 producer once as part of the hosted package gate. It replaces two sliced-source compiles with
 one complete-source compile. `headless_tests.swift` retains pure/ref/keyboard assertions and
-cursor-motion assertions without creating AppKit windows, instantiating `Bridge`, posting input,
-capturing screens or reading/writing the clipboard. AX handles and installed keyboard layout
+cursor-motion assertions and constructs injected `Bridge` instances for request-framing tests without
+creating AppKit windows, starting the live daemon, posting input, capturing screens or reading/writing
+the clipboard. AX handles and installed keyboard layout
 data are used without querying live application trees. Live INV-17 is not this producer.
 
 `helper_entry.swift` contains the unchanged shipped startup function. The test define suppresses
@@ -337,13 +338,23 @@ Documentation site (the Next.js sources under `packages/computer-use/docs`) and 
 inventory entry. T7/S6 must either give them producers or an owner-approved reclassification; this doc does not
 decide that.
 
-## Rust (out of scope, numbers only)
+## Rust (native Ubuntu producer, runtime closure pending)
 
 Re-measured 2026-11-09 with `CARGO_BUILD_JOBS=2 node scripts/rust-coverage.mjs --crate linux`
 (26.9s, 33 passed / 1 ignored), identical to [rust-coverage.md](../packages/computer-use/docs/rust-coverage.md):
 Linux crate **1163/2609 lines (44.58%), 125/295 functions (42.37%), 1681/4315 regions (38.96%)**.
-LLVM emits no Rust branch records either, so regions are again the branch signal. Windows crate: NOT RUN on macOS/Linux.
-A follow-up should reuse the `World`/seam approach for `atspi.rs`, `x11.rs`, `wayland.rs` and the Windows UIA/capture code.
+This historical macOS-hosted receipt is not a native Ubuntu baseline. LLVM regions are regions,
+NOT branches; absent Rust branch/statement records remain unmeasured. #758 adds maintained Ubuntu
+collection and source-complete report-only `computer-use-linux-native/primary` accounting, including
+separately named `cfg(test)` modules under `src`. Native absolute paths normalize to the package
+inventory; missing executable maps fail. A map-free module/re-export-only source is conservatively
+validated, not given fabricated executable counters. Inline/source test hits can inflate runtime
+coverage, so this is not runtime 100%. See [rust-coverage.md](../packages/computer-use/docs/rust-coverage.md)
+for pinned tools, artifacts, runtime and hosted per-file references.
+
+Windows-native crate coverage remains UNMEASURED under #696. WSL/ARM64 cells do not produce this
+Ubuntu-only signal. Headless Rust tests do not prove AT-SPI/X11/Wayland sessions or physical input.
+#696 retains runtime seams for `atspi.rs`, `x11.rs`, `wayland.rs` and Windows UIA/capture policy.
 
 ## Constraints and risks
 
