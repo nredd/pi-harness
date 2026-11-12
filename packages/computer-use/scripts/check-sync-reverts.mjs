@@ -204,6 +204,14 @@ const cases = [
 		failure: /timed out/,
 	},
 	{
+		name: "Windows helper post-write abort (#750)",
+		file: "src/platform/windows/helper.ts",
+		before: '\t\t\tsignal?.addEventListener("abort", onAbort, { once: true });',
+		after: "/* post-write abort listener dropped */",
+		check: "test/windows-helper-client.test.mjs",
+		failure: /post-write abort must remove the pending request immediately/,
+	},
+	{
 		name: "Windows helper refuses a signal aborted during startup (#735)",
 		file: "src/platform/windows/helper.ts",
 		before: '\t\t// ...and so does one aborted while the install check or helper start was in flight.\n\t\tthrowIfAborted(signal);\n',
