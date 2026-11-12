@@ -35,6 +35,7 @@ BUN_COVERAGE_ARGS = [
     "--coverage.provider=istanbul",
     "--coverage.reporter=text",
     "--coverage.reporter=lcov",
+    "--coverage.reporter=json-summary",
     "--coverage.reportsDirectory=coverage/bun",
 ]
 

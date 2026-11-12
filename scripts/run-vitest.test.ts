@@ -39,6 +39,7 @@ const BUN_COVERAGE = [
 	"--coverage.provider=istanbul",
 	"--coverage.reporter=text",
 	"--coverage.reporter=lcov",
+	"--coverage.reporter=json-summary",
 	"--coverage.reportsDirectory=coverage/bun",
 ];
 const CHILD_STATUS = 7;

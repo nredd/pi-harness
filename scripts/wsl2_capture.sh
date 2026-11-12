@@ -74,18 +74,28 @@ done
 # uploaded by ci.yml; no guest source, dependency tree, HOME or environment crosses here.
 shopt -s nullglob
 for report in "$WSL_HOST_WORKSPACE"/packages/*/coverage/*/lcov.info \
+  "$WSL_HOST_WORKSPACE"/packages/*/coverage/*/coverage-summary.json \
   "$WSL_HOST_WORKSPACE"/integration/inprocess/coverage/*/lcov.info \
+  "$WSL_HOST_WORKSPACE"/integration/inprocess/coverage/*/coverage-summary.json \
   "$WSL_HOST_WORKSPACE"/integration/probes/coverage/*/lcov.info \
+  "$WSL_HOST_WORKSPACE"/integration/probes/coverage/*/coverage-summary.json \
   "$WSL_HOST_WORKSPACE"/integration/providers/coverage/*/lcov.info \
+  "$WSL_HOST_WORKSPACE"/integration/providers/coverage/*/coverage-summary.json \
   "$WSL_HOST_WORKSPACE"/scripts/coverage/*/lcov.info \
+  "$WSL_HOST_WORKSPACE"/scripts/coverage/*/coverage-summary.json \
   "$WSL_HOST_WORKSPACE"/coverage/summary.json; do
   rm -f "$report"
 done
 for report in "$worktree"/packages/*/coverage/*/lcov.info \
+  "$worktree"/packages/*/coverage/*/coverage-summary.json \
   "$worktree"/integration/inprocess/coverage/*/lcov.info \
+  "$worktree"/integration/inprocess/coverage/*/coverage-summary.json \
   "$worktree"/integration/probes/coverage/*/lcov.info \
+  "$worktree"/integration/probes/coverage/*/coverage-summary.json \
   "$worktree"/integration/providers/coverage/*/lcov.info \
+  "$worktree"/integration/providers/coverage/*/coverage-summary.json \
   "$worktree"/scripts/coverage/*/lcov.info \
+  "$worktree"/scripts/coverage/*/coverage-summary.json \
   "$worktree"/coverage/summary.json; do
   [ -f "$report" ] || continue
   relative=${report#"$worktree/"}

@@ -217,7 +217,9 @@ def test_wsl2_capture_mirrors_only_coverage_reports_and_clears_stale_files(tmp_p
     (guest / ".ci-temp/tool-path").write_text(os.environ["PATH"])
     reports = [
         "packages/example/coverage/primary/lcov.info",
+        "packages/example/coverage/primary/coverage-summary.json",
         "packages/example/coverage/bun/lcov.info",
+        "packages/example/coverage/bun/coverage-summary.json",
         "integration/inprocess/coverage/primary/lcov.info",
         "integration/probes/coverage/primary/lcov.info",
         "integration/providers/coverage/primary/lcov.info",

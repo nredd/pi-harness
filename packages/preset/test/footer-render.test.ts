@@ -21,6 +21,7 @@ async function mount(useDefaultClock = false, homeDir?: string) {
 	let branchChanged = () => {};
 	const usage = { input: 100, output: 20, cacheRead: 300, cacheWrite: 40, cost: { total: 0.125 } };
 	const entries: unknown[] = [];
+	const branch: unknown[] = [];
 	const model = { id: "example", provider: "example-provider", reasoning: true, contextWindow: 128000 };
 	const ctx = {
 		mode: "tui",
@@ -29,7 +30,7 @@ async function mount(useDefaultClock = false, homeDir?: string) {
 		thinkingLevel: "high",
 		modelRegistry: { isUsingOAuth: () => false },
 		getContextUsage: () => undefined as { percent: number | null; contextWindow: number } | undefined,
-		sessionManager: { getEntries: () => entries, getBranch: () => [], getSessionName: () => "session" },
+		sessionManager: { getEntries: () => entries, getBranch: () => branch, getSessionName: () => "session" },
 		ui: {
 			setFooter: (value: Factory) => {
 				factory = value;
@@ -69,7 +70,20 @@ async function mount(useDefaultClock = false, homeDir?: string) {
 				]),
 		},
 	);
-	return { ctx, entries, usage, component, paint, clock, off, render, emit, branchChanged, reply: () => quotaReply };
+	return {
+		ctx,
+		entries,
+		branch,
+		usage,
+		component,
+		paint,
+		clock,
+		off,
+		render,
+		emit,
+		branchChanged,
+		reply: () => quotaReply,
+	};
 }
 
 it("default clock polls on cadence and disposal cancels native timers", async () => {
@@ -259,6 +273,40 @@ it("renders a session with no model as no-model, zero window, no subscription co
 		expect(stats).toContain("no-model");
 		expect(stats).not.toContain("(sub)");
 		expect(stats).not.toContain("thinking");
+	} finally {
+		f.component.dispose?.();
+	}
+});
+
+it("renders a virtual selection with no branch history as unresolved, never an invented model", async () => {
+	const f = await mount();
+	try {
+		Object.assign(f.ctx.model, { api: "pi-virtual", provider: "router", id: "deep" });
+		expect(f.component.render(240)[1]).toContain("deep • high (unresolved)");
+		expect(f.component.render(240)[1]).not.toContain("->");
+	} finally {
+		f.component.dispose?.();
+	}
+});
+
+it("does not guess selection ownership for unmarked historical assistant responses", async () => {
+	const f = await mount();
+	try {
+		Object.assign(f.ctx.model, { api: "pi-virtual", provider: "router", id: "deep" });
+		f.branch.push({
+			type: "message",
+			message: {
+				role: "assistant",
+				api: "fixture",
+				provider: "faux",
+				model: "alpha",
+				thinkingLevel: "low",
+				usage: f.usage,
+				stopReason: "stop",
+			},
+		});
+		expect(f.component.render(240)[1]).toContain("deep • high (unresolved)");
+		expect(f.component.render(240)[1]).not.toContain("alpha");
 	} finally {
 		f.component.dispose?.();
 	}

@@ -10,7 +10,7 @@ export default defineConfig({
   test: {
     coverage: {
       provider: "istanbul",
-      reporter: ["text", "lcov"],
+      reporter: ["text", "lcov", "json-summary"],
       reportsDirectory: "coverage/runtime-build-tooling",
       reportOnFailure: true,
       include: owned,
