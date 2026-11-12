@@ -39,3 +39,24 @@ def test_candidate_child_install_authenticates_root_overrides_first() -> None:
     assert "env" not in workflow
     assert "env" not in workflow["jobs"]["core"]
     assert workflow["permissions"] == {"contents": "read"}
+
+
+def test_candidate_child_inputs_trigger_the_fork_gate() -> None:
+    """Run source probes when their code, shared support or build inputs change."""
+    workflow = yaml.safe_load((ROOT / ".github/workflows/forks.yml").read_text())
+    inputs = {
+        "forks/**",
+        ".gitmodules",
+        ".github/workflows/forks.yml",
+        "Makefile",
+        "integration/core-source/**",
+        "integration/inprocess/support.ts",
+        "packages/subagents/**",
+        "packages/dev-tools/biome.json",
+        "package.json",
+        "package-lock.json",
+        ".npmrc",
+        ".node-version",
+    }
+    for event in ("pull_request", "push"):
+        assert inputs <= set(workflow[True][event]["paths"])

@@ -3,10 +3,34 @@ name: Forks
 
 on:
   pull_request:
-    paths: [forks/**, .gitmodules, .github/workflows/forks.yml]
+    paths:
+      - forks/**
+      - .gitmodules
+      - .github/workflows/forks.yml
+      - Makefile
+      - integration/core-source/**
+      - integration/inprocess/support.ts
+      - packages/subagents/**
+      - packages/dev-tools/biome.json
+      - package.json
+      - package-lock.json
+      - .npmrc
+      - .node-version
   push:
     branches: [main]
-    paths: [forks/**, .gitmodules, .github/workflows/forks.yml]
+    paths:
+      - forks/**
+      - .gitmodules
+      - .github/workflows/forks.yml
+      - Makefile
+      - integration/core-source/**
+      - integration/inprocess/support.ts
+      - packages/subagents/**
+      - packages/dev-tools/biome.json
+      - package.json
+      - package-lock.json
+      - .npmrc
+      - .node-version
   workflow_dispatch:
   workflow_call:
 
