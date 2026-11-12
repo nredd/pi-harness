@@ -86,3 +86,9 @@ jobs:
         run: npm run build:daemon --workspace packages/env
       - name: Test (isolated HOME, no credentials)
         run: ./test.sh
+      - name: Install owned packages for candidate-core child verification
+        working-directory: .
+        run: npm ci --ignore-scripts
+      - name: Verify assembled direct and routed child compaction on candidate core
+        working-directory: .
+        run: make check-core-compaction
