@@ -3215,28 +3215,6 @@ function finalTurnError(session, startIndex) {
   }
   return void 0;
 }
-var STALE_CTX_RETRY_DELAYS_MS = [1e3, 3e3, 9e3];
-var STALE_CTX_RETRY_PROMPT = "Your previous step was interrupted by a session reload before it produced output. Continue the task from where you left off.";
-function sleep(ms, signal, clock) {
-  return new Promise((resolve6) => {
-    if (signal?.aborted) return resolve6();
-    const done = () => {
-      timer.cancel();
-      signal?.removeEventListener("abort", done);
-      resolve6();
-    };
-    const timer = clock.setTimeout(done, ms);
-    signal?.addEventListener("abort", done, { once: true });
-  });
-}
-async function retryStaleCtx(session, startIndex, signal, delays = STALE_CTX_RETRY_DELAYS_MS, clock = realClock) {
-  for (const delay of delays) {
-    if (!isStaleCtxError(finalTurnError(session, startIndex))) return;
-    await sleep(delay, signal, clock);
-    if (signal?.aborted) return;
-    await session.prompt(STALE_CTX_RETRY_PROMPT);
-  }
-}
 function mayFollowUp(session, startIndex, signal) {
   return !signal?.aborted && staleCtxOutcome(session, startIndex) === void 0;
 }
@@ -3271,7 +3249,7 @@ function staleCtxOutcome(session, startIndex) {
   const error = finalTurnError(session, startIndex);
   if (!isStaleCtxError(error)) return void 0;
   return {
-    failure: `interrupted by a session reload or replacement; the agent's model runtime went stale and retries did not recover it: ${error}`,
+    failure: `The agent's extension context became stale; the invalidation trigger is unknown. No successor context is available, so the run was not retried. Existing history is retained: ${error}`,
     partial: partialProgress(session, startIndex)
   };
 }
@@ -3649,7 +3627,6 @@ async function runAgent(ctx, type, prompt, options) {
   let structuredRetried = false;
   try {
     if (options.signal?.aborted !== true) await session.prompt(effectivePrompt);
-    await retryStaleCtx(session, startLen, options.signal, options.staleRetryDelaysMs, options.clock);
     if (run.steered && mayFollowUp(session, startLen, options.signal) && !endedWithReport(session, startLen)) {
       run.finalizing = true;
       const reported = await forceFinalReport(session, startLen, options.signal);
@@ -3686,7 +3663,6 @@ async function resumeAgent(session, prompt, options) {
   const run = observeRun(session, { ...options, maxTurns: resolveEffectiveMaxTurns(options.type, options.maxTurns) });
   try {
     if (options.signal?.aborted !== true) await session.prompt(prompt);
-    await retryStaleCtx(session, startLen, options.signal, options.staleRetryDelaysMs, options.clock);
     if (run.steered && mayFollowUp(session, startLen, options.signal) && !endedWithReport(session, startLen)) {
       run.finalizing = true;
       if (await forceFinalReport(session, startLen, options.signal)) run.aborted = false;
@@ -4573,7 +4549,6 @@ ${record.error}`);
     record.ranThisRun = record.status === "running";
     const promise = runAgent(ctx, type, prompt, {
       pi,
-      clock: this.clock,
       homeDir: options.homeDir ?? this.homeDir,
       agentId: id,
       model: options.modelSelection?.model,
@@ -4932,7 +4907,6 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
     try {
       record.ranThisRun = record.status === "running";
       this.settleOutcome(record, await resumeAgent(record.session, prompt, {
-        clock: this.clock,
         type: record.type,
         maxTurns: options?.maxTurns ?? record.invocation?.maxTurns,
         onTurnEnd: options?.onTurnEnd,
@@ -5045,7 +5019,6 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
     };
     record.ranThisRun = true;
     const promise = resumeAgent(record.session, prompt, {
-      clock: this.clock,
       type: record.type,
       maxTurns: options.maxTurns ?? record.invocation?.maxTurns,
       onTurnEnd: options.onTurnEnd,
@@ -6653,7 +6626,6 @@ export {
   inChildSessionContext,
   runInChildSessionContext,
   bindChildResourceLoader,
-  realClock,
   isUnsafeName,
   isSymlink,
   safeReadFile,
@@ -6661,6 +6633,7 @@ export {
   cwdParam,
   resolveCwdParam,
   resolveAgentInvocationConfig,
+  realClock,
   tierDisclosure,
   parseTierBinding,
   setModelTiers,
@@ -6771,4 +6744,4 @@ export {
   RESULT_MAX_CHARS,
   ConversationViewer
 };
-//# sourceMappingURL=chunk-23UB6B5K.ts.map
+//# sourceMappingURL=chunk-TMSESUK2.ts.map
