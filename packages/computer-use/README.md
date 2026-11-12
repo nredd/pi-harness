@@ -44,6 +44,11 @@ The normal loop is find a root, observe it, then query or act from the returned 
 `observe_ui` now defaults to compact controls; `detail: "outline"` returns the structural view.
 Upstream's opt-in `activity_glow` is retained and defaults to false.
 
+On CDP browser states, `act_ui` `moveMouse` requires explicit `x`/`y` coordinates; a `ref`
+target fails with `invalid_args` rather than sending absent coordinates. Browser `keypress` requires
+a non-empty `keys` array (`invalid_args`). Both checks run before any batch step is delivered or
+the observation epoch advances. Desktop ref movement is unchanged.
+
 ## Documentation
 
 - [Getting started](./docs/content/docs/tutorials/getting-started.mdx)
