@@ -125,7 +125,8 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	const swift = readFileSync(new URL("../native/macos/bridge.swift", import.meta.url), "utf8");
 	const body = swift.match(/let alwaysBlockedBundleIds: \[String\] = \[([\s\S]*?)\]/)?.[1] ?? "";
 	assert.deepEqual([...body.matchAll(/"([^"]+)"/g)].map((m) => m[1]), SYSTEM_AGENTS);
-	assert.match(swift, /lockedSessionRefusal\(cmd: cmd, session: CGSessionCopyCurrentDictionary\(\)/, "helper must refuse UI commands while locked");
+	assert.match(swift, /readSession: @escaping \(\) -> \[String: Any\]\? = \{ CGSessionCopyCurrentDictionary\(\) as\? \[String: Any\] \}/, "helper must read the actual session by default");
+	assert.match(swift, /lockedSessionRefusal\(cmd: cmd, session: readSession\(\)\)/, "helper must refuse UI commands while locked");
 	assert.match(swift, /keyboardTargetRefusalPid\(frontmostPid: NSWorkspace\.shared\.frontmostApplication\?\.processIdentifier, focusedPid: systemFocusedPid()/, "helper must refuse blocked frontmost or focused apps for keys");
 	assert.match(swift, /case "type", "key":\n\t\t\ttry refuseBlockedKeyboard\(\)/, "helper must refuse blocked apps before typing or keys");
 	assert.equal(swift.match(/try refuseBlockedKeyboardAfterFocus\(preserveFocus: preserveFocus\)/g)?.length, 3, "act typeText, paste and keypress must refuse a blocked focused app under HID delivery");

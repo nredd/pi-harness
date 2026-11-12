@@ -103,7 +103,7 @@ async function makeHost({ platform = "darwin", hostArch = "arm64", env = {}, sou
 	await realFs.mkdir(dirs.tmp, { recursive: true });
 	await put(path.join(dirs.root, "package.json"), JSON.stringify({ version: "1.2.3" }));
 	if (sources) {
-		for (const file of ["activity_glow.swift", "agent_cursor.swift", "agent_cursor_motion.swift", "bridge.swift"]) {
+		for (const file of ["activity_glow.swift", "agent_cursor.swift", "agent_cursor_motion.swift", "bridge.swift", "helper_entry.swift"]) {
 			await put(path.join(dirs.root, "native", "macos", file), "// swift");
 		}
 	}

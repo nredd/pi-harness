@@ -39,7 +39,6 @@
     { "path": "packages/computer-use/scripts/check-sync-ledger.mjs", "reason": "Non-shipped sync provenance/disposition validator consumed by negative-control checks." },
     { "path": "packages/computer-use/scripts/check-sync-reverts.mjs", "reason": "Non-shipped disposable patch-drop controls prove carried behaviors remain necessary." },
     { "path": "packages/computer-use/scripts/check-upstream-sync.mjs", "reason": "Non-shipped pinned-upstream source comparison rejects undeclared drift." },
-    { "path": "packages/computer-use/scripts/check-async.mjs", "reason": "Non-shipped readiness and bounded subprocess helpers used only by verification check harnesses." },
     { "path": "scripts/check-biome-paths.test.mjs", "reason": "Non-shipped regression test exercises real Biome valid/missing-path behavior and preflight rejection; verification only, not a runtime entrypoint." },
     { "path": "scripts/router_contract.test.mjs", "reason": "Non-shipped Vitest suite runs the packed-router contract fixture in process against virtual mocks of its placeholder imports; verification only, not a runtime entrypoint." },
     { "path": "integration/inprocess/verification/home-setup.ts", "reason": "Vitest setup entry that only calls the measured `installHomeGuard` in `home-guard.ts`; Vitest hard-excludes a config's own `setupFiles` from coverage, so no producer can measure it. Never shipped." },
@@ -242,12 +241,12 @@
     },
     "computer-use": {
       "root": "packages/computer-use",
-      "owned": ["src/**/*.ts", "src/**/*.mjs", "src/**/*.mts", "extensions/**/*.ts", "native/macos/*.swift", "native/windows/bridge-rs/src/**/*.rs", "native/linux/bridge-rs/src/**/*.rs", "scripts/build-native.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/docs-generators/*.mjs", "scripts/*.sh", "docs/**/*.ts", "docs/**/*.tsx", "docs/**/*.mjs"],
+      "owned": ["src/**/*.ts", "src/**/*.mjs", "src/**/*.mts", "extensions/**/*.ts", "native/macos/*.swift", "native/windows/bridge-rs/src/**/*.rs", "native/linux/bridge-rs/src/**/*.rs", "scripts/build-native.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs", "scripts/docs-generators/*.mjs", "scripts/*.sh", "docs/**/*.ts", "docs/**/*.tsx", "docs/**/*.mjs"],
       "exclusions": [{ "path": "docs/next-env.d.ts", "kind": "generated", "reason": "Next.js-generated declaration references only; no executable source." }, { "path": "src/platform/macos/helper-path.d.mts", "kind": "type-only", "reason": "Only TypeScript declarations for helper-path.mjs; emits no executable JavaScript." }],
       "status": "pending",
       "goal": "excluded",
       "goal_reason": "Owner explicitly excludes computer-use from coverage maintenance; existing platform/native checks remain unchanged. Inventory remains visible, with no coverage claim.",
-      "note": "Not measured, tracked: native Swift/Windows Rust and the documentation site have no maintained coverage producer. Native Linux Rust is separately measured report-only by computer-use-linux-native (#758). Its JS/TS runtime source is also measured, with enforced ratchet caps, by `computer-use-vitest` (#347, #645). Shipped setup-helper.mjs, build-native.mjs and src/ JavaScript remain inventoried production source, never verification helpers.",
+      "note": "Full inventory: Swift and native Linux Rust are measured separately by computer-use-swift and computer-use-linux-native; Windows Rust and the documentation site remain unmeasured. JS/TS runtime source is separately measured by computer-use-vitest (#347, #645). Shipped setup-helper.mjs, build-native.mjs and src/ JavaScript remain inventoried production source, never verification helpers.",
       "signals": {}
     },
     "computer-use-linux-native": {
@@ -272,9 +271,47 @@
         }
       }
     },
+    "computer-use-async": {
+      "root": "packages/computer-use",
+      "owned": ["scripts/check-async.mjs"],
+      "exclusions": [],
+      "status": "measured",
+      "goal": "report-only",
+      "goal_reason": "Non-shipped verification tooling has a report-only maintenance goal, independently pinned at zero by its producer (#759).",
+      "note": "Istanbul imports the complete real helper with deterministic boundary mocks and retained real child-process tests. Generated preload source is exercised by subprocess refusal tests, not measured as a separate source file.",
+      "signals": {
+        "primary": {
+          "report": "coverage/async/lcov.info",
+          "enforcement": "report-only",
+          "reason": "Verification-only maintenance goal; the dedicated Vitest producer enforces a per-file zero L/F/B/S pin (#759). Missing or invalid selected-host reports still fail accounting.",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
+          "reporters": ["text", "lcov"]
+        }
+      }
+    },
+    "computer-use-swift": {
+      "root": "packages/computer-use",
+      "owned": ["native/macos/*.swift"],
+      "exclusions": [],
+      "status": "measured",
+      "goal": "excluded",
+      "goal_reason": "Report-only real-source Swift baseline for #757, not native 100%. Thin live adapters remain documented exceptions under #645; policy above them still needs deterministic seams.",
+      "note": "Full production source linked into one headless instrumented binary. Raw LLVM JSON preserves regions separately; LCOV accounts lines/functions, not fabricated branches or statements. Local initial reference; exact-HEAD hosted artifact must confirm it before merge.",
+      "signals": {
+        "primary": {
+          "report": "coverage/swift/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 4113, "functions": 765, "branches": null } },
+          "reporters": ["text", "lcov"],
+          "enforcement": "report-only",
+          "reason": "#757 establishes the full-source baseline for #645 deterministic S1-S5 closures; no all-native coverage claim.",
+          "skip_hosts": ["linux", "wsl2"],
+          "gate": "check-ts"
+        }
+      }
+    },
     "computer-use-vitest": {
       "root": "packages/computer-use",
-      "owned": ["src/**/*.ts", "src/**/*.mjs", "extensions/**/*.ts", "scripts/build-native.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/docs-generators/*.mjs"],
+      "owned": ["src/**/*.ts", "src/**/*.mjs", "extensions/**/*.ts", "scripts/build-native.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs", "scripts/docs-generators/*.mjs"],
       "exclusions": [{ "path": "src/platform/types.ts", "kind": "type-only", "reason": "Only TypeScript declarations; emits no executable JavaScript." }],
       "status": "measured",
       "goal": "excluded",

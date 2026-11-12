@@ -79,7 +79,7 @@ test("macOS arm64 build compiles with swiftc, chmods and ad-hoc signs", async ()
 		assert.equal(swift[swift.indexOf(framework) - 1], "-framework");
 	}
 	const sources = swift.filter((arg) => arg.endsWith(".swift")).map((arg) => path.relative(path.join(rootDir, "native", "macos"), arg));
-	assert.deepEqual(sources, ["activity_glow.swift", "agent_cursor.swift", "agent_cursor_motion.swift", "bridge.swift"]);
+	assert.deepEqual(sources, ["activity_glow.swift", "agent_cursor.swift", "agent_cursor_motion.swift", "bridge.swift", "helper_entry.swift"]);
 	assert.equal(swift.at(-2), "-o");
 	assert.equal(swift.at(-1), mac("arm64", "bridge"));
 	assert.deepEqual(h.calls[1][1], ["--force", "-i", "com.injaneity.pi-computer-use", "--timestamp=none", "--sign", "-", mac("arm64", "bridge")]);

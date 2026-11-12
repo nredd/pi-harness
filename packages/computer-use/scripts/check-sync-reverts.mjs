@@ -18,6 +18,14 @@ const sandbox = path.join(sandboxRoot, "packages", "computer-use");
 const nodeModules = path.join(repository, "node_modules");
 const cases = [
 	{
+		name: "Async helper refuses EPERM as group quiescence (#759)",
+		file: "scripts/check-async.mjs",
+		before: 'if (error.code === "ESRCH") return;',
+		after: 'if (error.code === "ESRCH" || error.code === "EPERM") return;',
+		check: "test/async-safety.test.mjs",
+		failure: /persistent EPERM exhausts TERM and KILL budgets instead of reporting success/,
+	},
+	{
 		name: "CDP snapshot maps wire refs to model refs (#708)",
 		file: "src/cdp.ts",
 		before: "target.ref = modelRefByWire.get(target.ref)!;",
@@ -151,6 +159,14 @@ const cases = [
 		before: "validateUpstream(patch.upstream, patch.id);",
 		after: "/* carried upstream validation dropped */",
 		check: "test/sync-ledger.test.mjs",
+		failure: /Missing expected exception/,
+	},
+	{
+		name: "Swift producer rejects wrong-binary profiles (#757)",
+		file: "scripts/swift-coverage.mjs",
+		before: 'throw new Error("Wrong-binary or empty Swift profile");',
+		after: 'return; /* profile identity check dropped */',
+		check: "test/swift-coverage.test.mjs",
 		failure: /Missing expected exception/,
 	},
 	{
@@ -538,7 +554,7 @@ const cases = [
 		name: "look-owned ref eviction (400f784/50cbfe2)",
 		file: "native/macos/bridge.swift",
 		before: "for ref in refsByOwner.removeValue(forKey: owner) ?? [] { removeElement(ref) }",
-		after: "/* owned refs leaked */",
+		after: "_ = owner /* owned refs leaked */",
 		check: "test/macos-native-pure.test.mjs",
 		failure: /dropping a look frees only its refs/,
 		darwinOnly: true,
@@ -753,6 +769,24 @@ const cases = [
 		after: "true",
 		check: "test/act-outcomes.test.mjs",
 		failure: /menus, dead and foreign roots must not count as replacements/,
+	},
+	{
+		name: "request completion eviction (#770)",
+		file: "native/macos/bridge.swift",
+		before: "recentCompletedRequestIds.removeFirst(recentCompletedRequestIds.count - 32)",
+		after: "recentCompletedRequestIds.removeFirst(0)",
+		check: "test/macos-native-pure.test.mjs",
+		failure: /completion eviction keeps latest 32/,
+		darwinOnly: true,
+	},
+	{
+		name: "request short-write offset (#770)",
+		file: "native/macos/bridge.swift",
+		before: "base.advanced(by: offset), raw.count - offset",
+		after: "base, raw.count - offset",
+		check: "test/macos-native-pure.test.mjs",
+		failure: /short writes preserve full NDJSON/,
+		darwinOnly: true,
 	},
 	{
 		name: "screen-locked flag parsing (#646)",
