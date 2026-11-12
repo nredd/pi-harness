@@ -1501,7 +1501,7 @@ def account(
                         )
                         + (
                             f", statements={uncovered_statements - (reference.statements or 0):+d}"
-                            if counted
+                            if counted and reads_statements(signal)
                             else ""
                         )
                     )
@@ -1574,7 +1574,7 @@ def signal_comparisons(
             )
             | (
                 {"statements": counts["uncovered_statements"] - reference.statements}
-                if reference.statements is not None
+                if reference.statements is not None and "uncovered_statements" in counts
                 else {}
             )
             if reference is not None

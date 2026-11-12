@@ -105,6 +105,36 @@ def test_signals_without_statements_report_null_not_zero(tmp_path: Path) -> None
     assert document["files"][0]["statements"] is None
 
 
+def test_missing_statement_reporter_writes_failure_summary(tmp_path: Path) -> None:
+    """Retain the actionable failure and omit the unmeasured delta when a cap lacks its reporter.
+
+    Parameters:
+        tmp_path (Path): Disposable report root.
+    Returns:
+        None: The CLI exits nonzero and writes its failure summary without inventing a zero delta.
+    Raises:
+        AssertionError: The CLI crashes, loses the error or claims to have measured statements.
+    """
+    setup_report(tmp_path)
+    commit_base(tmp_path, statement_policy(0, reporters=["text", "lcov"]))
+    summary = tmp_path / "summary.json"
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPT), "--root", str(tmp_path), "--base", "HEAD", "--summary", str(summary)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 1
+    assert PRODUCER_MISSING in completed.stderr
+    assert "Traceback" not in completed.stderr
+    assert "statements=+0" not in completed.stderr
+    document = json.loads(summary.read_text())
+    assert any(PRODUCER_MISSING in error for error in document["errors"])
+    assert "uncovered_statements" not in document["packages"]["example/primary"]
+    assert "statements" not in document["signals"]["example/primary"]["delta"]
+    assert document["signals"]["example/primary"]["reference"]["statements"] == 0
+
+
 def test_relative_summary_keys_resolve_against_the_package_root(tmp_path: Path) -> None:
     """Match a summary keyed by a package-relative path to the LCOV record.
 

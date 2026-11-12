@@ -60,7 +60,8 @@ and `scripts/run-vitest.ts bun` move together). `coverage_accounting.py` reads e
 total and covered count from it, keyed by resolved path against the same scoped LCOV record set, and adds
 `statements`/`uncovered_statements` to the file records and signal totals in `coverage/summary.json`
 for signals that read a summary. Signals that don't (coverage.py, native `bun test`) report `null` per file
-and omit the total, so an unmeasured counter never reads as fully covered.
+and omit the total and comparison delta, so an unmeasured counter never reads as fully covered. A cap
+without its reporter still fails validation and writes `coverage/summary.json` with the actionable error.
 `max_uncovered.<os>.statements` follows `branches`: the base ratchet only lets it go down, dropping a key the
 base had is a weakening, and `target.statements` is 0, so every 100-percent primary is held to 0 uncovered
 statements. Every enforced primary and Bun Vitest signal caps 0. `computer-use-vitest` caps its measured
