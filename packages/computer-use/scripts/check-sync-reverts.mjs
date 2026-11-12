@@ -114,6 +114,14 @@ const cases = [
 		failure: /Missing cargo-llvm-cov/,
 	},
 	{
+		name: "StateStore evicts past an empty stateId (#703)",
+		file: "src/runtime.ts",
+		before: "this.records.delete(this.records.keys().next().value!);",
+		after: "const oldest = this.records.keys().next().value; if (!oldest) break; this.records.delete(oldest);",
+		check: "test/runtime-state-output.test.mjs",
+		failure: /an empty restored stateId does not disable eviction|3 !== 1/,
+	},
+	{
 		name: "Structured upstream disposition reference validation",
 		file: "scripts/check-sync-ledger.mjs",
 		before: "validateUpstream(patch.upstream, patch.id);",
@@ -526,6 +534,14 @@ const cases = [
 		after: '{ kind }, {}',
 		check: "test/permissions-browser.test.mjs",
 		failure: /openPermissionPane forwards the signal/,
+	},
+	{
+		name: "output store evicts the oldest entry past 64 MiB (#703)",
+		file: "src/output.ts",
+		before: "while (outputBytes > OUTPUT_STORE_MAX_BYTES && outputs.size > 1) {",
+		after: "while (false) {",
+		check: "test/runtime-state-output.test.mjs",
+		failure: /the oldest entry was evicted/,
 	},
 	{
 		name: "overlay-proof blocked window scan (#646)",
