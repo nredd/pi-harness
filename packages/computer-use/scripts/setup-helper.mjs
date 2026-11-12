@@ -359,7 +359,7 @@ function createSetup(argv, deps) {
 	const linuxHelperDestPath = env.PI_COMPUTER_USE_LINUX_HELPER_PATH || path.join(os.homedir(), ".pi", "agent", "helpers", "pi-computer-use", "linux-bridge");
 	// The packed crate lives in the (often root-owned, read-only) npm install, so cargo builds into the user's cache.
 	const linuxBuildTargetDir = path.join(env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "pi-computer-use", "linux-bridge-target");
-	const helperSourcePaths = ["activity_glow.swift", "agent_cursor.swift", "agent_cursor_motion.swift", "bridge.swift"]
+	const helperSourcePaths = ["activity_glow.swift", "agent_cursor.swift", "agent_cursor_motion.swift", "bridge.swift", "helper_entry.swift"]
 		.map((file) => path.join(rootDir, "native", "macos", file));
 	const packageJsonPath = path.join(rootDir, "package.json");
 	const localSigningLockPath = path.join(os.tmpdir(), `pi-computer-use-local-signing-${uid ?? "user"}.lock`);

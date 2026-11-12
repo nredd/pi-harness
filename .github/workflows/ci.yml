@@ -248,6 +248,15 @@ jobs:
             echo "### check-benchmark: NOT RUN"
             echo "$why This is not a pass."
           } >>"$GITHUB_STEP_SUMMARY"
+      # `macos-native-pure` compiles real shipped Swift sources once during the package gate.
+      # Retain raw region/profile evidence separately; fan-in still consumes its validated LCOV.
+      - name: Preserve real-source Swift coverage
+        if: always() && matrix.guest == 'macos' && contains(matrix.workspaces, 'packages/computer-use')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: computer-use-swift-${{ matrix.os }}
+          path: packages/computer-use/coverage/swift/
+          if-no-files-found: error
       # WSL producers run on the guest Linux filesystem; artifact actions run on Windows.
       - uses: ./.github/actions/capture-ci-wsl
         if: always() && matrix.os == 'wsl2' && runner.os == 'Windows' && steps.tools.outcome == 'success'

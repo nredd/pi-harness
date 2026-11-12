@@ -363,6 +363,7 @@ describeMacosOnly("swiftc", () => {
 			"native/macos/agent_cursor.swift",
 			"native/macos/agent_cursor_motion.swift",
 			"native/macos/bridge.swift",
+			"native/macos/helper_entry.swift",
 		], { cwd: root, label: "INV-8 Swift source typecheck", timeoutMs: 65_000 });
 	});
 

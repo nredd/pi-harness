@@ -14,6 +14,7 @@ const macosSourcePaths = [
 	"agent_cursor.swift",
 	"agent_cursor_motion.swift",
 	"bridge.swift",
+	"helper_entry.swift",
 ].map((file) => path.join("native", "macos", file));
 const linuxTargets = { x64: "x86_64-unknown-linux-gnu", arm64: "aarch64-unknown-linux-gnu" };
 const archTriples = {

@@ -1040,6 +1040,38 @@
 			}
 		},
 		{
+			"id": "swift-real-source-coverage",
+			"purpose": "Measure all shipped Swift source through a real-source headless entry without dropping unexecuted startup or UI code",
+			"rows": [
+				"Swift real-source coverage"
+			],
+			"files": [
+				"docs/content/docs/reference/platforms/macos/root-targeting.mdx",
+				"native/macos/bridge.swift",
+				"native/macos/headless_tests.swift",
+				"native/macos/helper_entry.swift",
+				"package.json",
+				"scripts/build-native.mjs",
+				"scripts/check-package-assets.mjs",
+				"scripts/setup-helper.mjs",
+				"scripts/swift-coverage.mjs",
+				"test/build-native.test.mjs",
+				"test/invariants.test.mjs",
+				"test/macos-native-pure.test.mjs",
+				"test/setup-helper-inprocess.test.mjs",
+				"test/swift-coverage.test.mjs"
+			],
+			"check": "test/swift-coverage.test.mjs",
+			"dropControls": [
+				"Swift producer rejects wrong-binary profiles (#757)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#757; not filed upstream"
+			}
+		},
+		{
 			"id": "upstream-disposition-validation",
 			"purpose": "Require structured upstream status and a valid reviewable reference for every carried patch",
 			"rows": [
@@ -1145,12 +1177,15 @@
 		"docs/content/docs/reference/codebase.mdx",
 		"docs/content/docs/reference/configuration.mdx",
 		"docs/content/docs/reference/platforms/macos/actions.mdx",
+		"docs/content/docs/reference/platforms/macos/root-targeting.mdx",
 		"docs/content/docs/tutorials/getting-started.mdx",
 		"docs/macos-root-targeting.md",
 		"docs/rust-coverage.md",
 		"docs/src/components/brand.tsx",
 		"extensions/computer-use.ts",
 		"native/macos/bridge.swift",
+		"native/macos/headless_tests.swift",
+		"native/macos/helper_entry.swift",
 		"package-lock.json",
 		"package.json",
 		"prebuilt/macos/arm64/bridge",
@@ -1186,6 +1221,7 @@
 		"scripts/fixtures/event-probe.swift",
 		"scripts/rust-coverage.mjs",
 		"scripts/setup-helper.mjs",
+		"scripts/swift-coverage.mjs",
 		"src/actions.ts",
 		"src/bridge.ts",
 		"src/cdp.ts",
@@ -1272,6 +1308,7 @@
 		"test/support/fake-helper.mjs",
 		"test/support/outline-nodes.mjs",
 		"test/support/swift-sdk.mjs",
+		"test/swift-coverage.test.mjs",
 		"test/swift-sdk.test.mjs",
 		"test/sync-ledger.test.mjs",
 		"test/tool-schemas.test.mjs",
