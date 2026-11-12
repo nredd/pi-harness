@@ -241,6 +241,27 @@
 			}
 		},
 		{
+			"id": "bridge-read-text-dead-arm-removal",
+			"purpose": "Delete the unreachable browser snapshot and live resource identity guards in read_text; hydrated states supply both, and readAt still validates the epoch",
+			"rows": [
+				"Bridge read_text dead-arm removal"
+			],
+			"files": [
+				"src/bridge.ts",
+				"test/bridge-act-list-read.test.mjs",
+				"test/support/fake-desktop.mjs"
+			],
+			"check": "test/bridge-act-list-read.test.mjs",
+			"dropControls": [
+				"read_text forwards the desktop offset (#710)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "Coverage-driven dead code removal (nredd/pi-harness#710); not filed"
+			}
+		},
+		{
 			"id": "browser-query-no-desktop-escalation",
 			"purpose": "search_ui and expand_ui on a browser state skip desktop OCR escalation and scoped looks (no controlled window to re-capture), and desktop wait_for with a blank stateId fails with the coded no-observation error instead of a TypeError",
 			"rows": [
@@ -1170,6 +1191,7 @@
 		"test/app-policy.test.mjs",
 		"test/async.test.mjs",
 		"test/bounded-output.test.mjs",
+		"test/bridge-act-list-read.test.mjs",
 		"test/bridge-browser-act.test.mjs",
 		"test/bridge-desktop-act.test.mjs",
 		"test/bridge-observe-query.test.mjs",

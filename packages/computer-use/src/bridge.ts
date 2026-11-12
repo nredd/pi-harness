@@ -1350,8 +1350,7 @@ async function performReadText(params: ReadTextParams, signal?: AbortSignal): Pr
 	}
 	const contextId = operationState().contextId;
 	if (isBrowserContextId(contextId)) {
-		const snapshot = operationState().browserSnapshot;
-		if (!snapshot || snapshot.contextId !== contextId) throw new Error(`Browser state '${params.stateId}' is unavailable. Observe the browser root again.`);
+		const snapshot = operationState().browserSnapshot!;
 		if (!ref) throw new Error("read_text requires an @e ref for browser contexts; use the outline root ref for whole-page text.");
 		const outline = restoreOutline(snapshot.outline);
 		const node = nodeByRef(outline, ref);
@@ -1369,8 +1368,7 @@ async function performReadText(params: ReadTextParams, signal?: AbortSignal): Pr
 	if (!ref) throw new Error("read_text requires ref for desktop contexts. Call observe_ui/inspect_ui and use a text-bearing outline ref.");
 	const node = outlineNodeByRef(ref);
 	const state = operationState();
-	if (!state.resourceKey || state.epoch === undefined) throw new Error("The observation has no live resource identity. Observe again.");
-	const raw = (await resourceScheduler.readAt(state.resourceKey, state.epoch, async () => await currentPlatformBackend.readText({
+	const raw = (await resourceScheduler.readAt(state.resourceKey!, state.epoch!, async () => await currentPlatformBackend.readText({
 		lookId: state.currentOutline!.lookId,
 		elementRef: wireRefForNode(node),
 		offset: Math.max(0, Math.trunc(toFiniteNumber(params.offset, 0))),
