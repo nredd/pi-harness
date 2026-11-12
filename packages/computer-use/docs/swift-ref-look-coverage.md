@@ -21,7 +21,8 @@ exists in these types; adding one or platform symbol interposition solely for th
 bookkeeping tests would expand the runtime/build scope. The only other CF operation
 on handles is identity comparison.
 
-Local measurement against `c00e4196` (baseline: the hosted #765 LLVM artifact):
+Historical local measurement against `c00e4196` (baseline: the hosted #765 LLVM artifact,
+before the request-framing source and tests landed):
 
 | `bridge.swift` metric | Before uncovered / total | After uncovered / total |
 | --- | --- | --- |
@@ -31,8 +32,14 @@ Local measurement against `c00e4196` (baseline: the hosted #765 LLVM artifact):
 | LCOV line records | 3824 / 4111 | 3766 / 4111 |
 | LCOV function records | 716 / 797 | 712 / 797 |
 
+After rebasing onto `995fe3b1`, a fresh combined local producer run measured
+`bridge.swift` LLVM uncovered L/F/regions `4511/662/2132` of `5161/791/2471`;
+LCOV uncovered L/F `3537/673` of `4122/802`. These are actual combined measurements,
+not a sum of independent deltas. Request-framing changes the production denominator.
+Exact-HEAD hosted evidence remains required.
+
 Swift LLVM regions are not branch outcomes or statements; B/S are not measured.
-All other production Swift file totals and uncovered counts are unchanged. No
+In the historical comparison all other production Swift file totals and uncovered counts were unchanged. No
 policy caps are changed from local evidence. Hosted exact-HEAD artifacts remain
 required before tightening the selected host's ratchet.
 
