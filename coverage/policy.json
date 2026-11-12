@@ -257,7 +257,7 @@
       "status": "measured",
       "goal": "excluded",
       "goal_reason": "Owner excludes computer-use from coverage maintenance; this measures its JS/TS runtime source under the Vitest suites from #347 with enforced uncovered-count ratchet caps (#645), not a 100% claim. `computer-use` keeps the full inventory.",
-      "note": "Istanbul over the package's Vitest suites; subprocess-run scripts (setup/build/docs generators) count only what the suites import. Caps are the measured per-OS uncovered counts (#645 T0), see docs/coverage.md.",
+      "note": "Istanbul over the package's Vitest suites; subprocess-run scripts (setup/build/docs generators) count only what the suites import. The #755 dead-target removal measures 0 uncovered lines/functions/branches/statements locally on macOS and in Ubuntu CI at f488662; WSL2 must execute before the final bridge per-file zero pin and cross-host cap ratchet. Existing caps remain unchanged pending that evidence, see docs/computer-use-coverage.md.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
