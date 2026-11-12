@@ -152,7 +152,16 @@ function realSampler(lose: ReadonlySet<number> = new Set(), deadlineScan?: numbe
 						/* Exhaust the real producer's scan budget, not an injected deadline snapshot. */
 					}
 				}
-				const real = await pending;
+				const observed = await pending;
+				// Linux can also lose its clock-tick probe when the deadline expires. Force that second
+				// reason on every host so the child-discovery control covers the actual CI failure.
+				const real =
+					state.samples.length === deadlineScan && !observed.coverage.reasons.includes("clock-ticks-unavailable")
+						? {
+								...observed,
+								coverage: { ...observed.coverage, reasons: [...observed.coverage.reasons, "clock-ticks-unavailable"] },
+							}
+						: observed;
 				const sample = lose.has(state.samples.length)
 					? {
 							...real,
@@ -586,10 +595,14 @@ describe("resource_snapshot on the real host through the published sampler", () 
 			);
 			expect(error).toBeInstanceOf(Error);
 			const message = String(error);
+			const coverageLine = message.split("\n").find((line) => line.startsWith("scan 3: 0 processes, coverage "));
+			expect(coverageLine).toBeDefined();
+			const coverage = JSON.parse(coverageLine?.split("coverage ")[1]?.split(", durationMs=")[0] ?? "null");
+			expect(coverage.reasons).toContain(reason);
+			if (reason === "deadline") expect(coverage.reasons).toContain("clock-ticks-unavailable");
 			expect(message).toContain(
-				`missing process metadata: field \`processes\`: process metadata unavailable (${reason})`,
+				`missing process metadata: field \`processes\`: process metadata unavailable (${coverage.reasons.join(", ")})`,
 			);
-			expect(message).toContain("scan 3: 0 processes, coverage");
 			expect(message).not.toContain("scan 4:");
 			expect(message).toContain(`reason \`${reason}\``);
 			expect(message).toContain('"durationMs":');
