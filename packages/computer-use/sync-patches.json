@@ -910,18 +910,20 @@
 		},
 		{
 			"id": "rust-coverage",
-			"purpose": "Report native Rust LCOV and per-file line/function/region summaries without thresholds",
+			"purpose": "Report native Rust LCOV and per-file line/function/region summaries without thresholds; disable default filename exclusions and publish validated accounting output (#758)",
 			"rows": [
 				"Rust coverage"
 			],
 			"files": [
 				"docs/rust-coverage.md",
 				"scripts/rust-coverage.mjs",
+				"test/rust-coverage-errors.test.mjs",
 				"test/rust-coverage.test.mjs"
 			],
 			"check": "test/rust-coverage.test.mjs",
 			"dropControls": [
-				"Rust coverage actionable missing-tool error"
+				"Rust coverage actionable missing-tool error",
+				"Rust coverage complete source filenames"
 			],
 			"upstream": {
 				"status": "proposed-after-issue-first",

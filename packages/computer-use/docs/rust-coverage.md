@@ -1,11 +1,24 @@
 # Rust coverage (report-only)
 
-The native bridge crates retain their normal tests. `coverage:rust` is a separate opt-in report,
-not a percentage gate and not collected by `make check`, release requirements or CI. The repo
-coverage policy inventories this tooling under owner-excluded computer-use, with no measurement
-signal or threshold. The script's deterministic argument/path/tool-error tests *are* in the package check.
-A failed test, instrumentation error or empty/wrong-crate report returns nonzero. No thresholds,
-coverage service or source-file exclusion filters are used.
+The native bridge crates retain their normal tests. Native Ubuntu CI additionally runs
+`coverage:rust` in the computer-use shard with Rust `1.97.1`, matching `llvm-tools-preview`,
+cargo-llvm-cov `0.9.1` and two build jobs. `computer-use-linux-native/primary` consumes its raw LLVM
+JSON, report-only and excluded from the global target pending #696. A failed test, instrumentation
+error, missing/empty/malformed report or missing executable source map fails the selected-host gate.
+macOS, Windows-hosted WSL and native ARM64 WSL-replacement cells report this signal NOT RUN.
+They do not borrow Ubuntu counters. This is not a Windows-native producer.
+
+All report commands disable cargo-llvm-cov's default filename exclusions. Accounting structurally
+scopes the complete `native/linux/bridge-rs/src/**/*.rs` inventory, including separately named
+`cfg(test)` source modules, and normalizes hosted absolute paths to package-relative paths.
+Conventional `tests/` integration source and dependencies are outside that production scope.
+A missing source map is accepted only for a conservatively validated module/re-export-only file
+(such as `lib.rs`), recorded as zero executable units, not fabricated executable lines.
+Inline and separately named source test functions are included in LLVM counters. Passing them can
+inflate apparent runtime coverage, so neither their hits nor this producer establish runtime 100%.
+Regions remain LLVM regions, NEVER branches. LLVM's absent branch/statement data is unmeasured,
+not a zero-branch/zero-statement success. Raw LCOV remains available for inspection; accounting
+uses LLVM JSON because LCOV's absent `BRDA` records cannot express native regions.
 
 ## Pinned installation and execution
 
@@ -44,6 +57,11 @@ temp directory, not the source tree. Each run gets its own `CARGO_TARGET_DIR` an
 Collect the whole printed directory for review. The logs include test counts and test runtime;
 metadata time includes build, tests and all report formats. Compiler output is retained, not
 replaced with an invented test count. Doc tests run normally but are not separately instrumented.
+The output parent also contains a stable `coverage.json` accounting entry, published only after
+report validation; raw reports/logs remain under the unique run directory. CI uploads these files,
+not instrumented build products. `setup.log` records pinned-tool setup runtime; `metadata.json`
+records build/test/report runtime. A second uninstrumented test build remains in the existing
+packed-source/diagnostics contract, deliberately not replaced by coverage instrumentation.
 
 ## Measured baseline
 
@@ -75,9 +93,9 @@ input delivery remain unverified. Windows coverage cannot run on macOS/Linux; th
 that request rather than presenting portable stubs as Windows coverage. Windows counts/runtime
 are unknown. The existing WSL job is a Linux runtime, not a Windows-native crate test job.
 
-No CI coverage wiring in this PR: the fresh local run fits three minutes, but native Ubuntu's
-combined pinned-tool installation and instrumented-build time has not been measured, so the
-owner's <~3-minute CI budget cannot yet be guaranteed. The required Linux suite still runs normal
-Rust tests independently. No new Windows job is invented. A later optional artifact step can use
-the existing pinned install/upload actions once its Ubuntu runtime is measured; test/report errors
-must stay visible (`continue-on-error: false`), with no coverage thresholds.
+Native Ubuntu's new hosted baseline and setup/producer runtime are pending the first #758 CI
+receipt. The historical macOS table above is NOT its floor. Native artifacts preserve raw per-file
+lines/functions/regions, setup/run/command logs and elapsed metadata. No Windows-native runtime,
+actual AT-SPI/X11/Wayland desktop behavior, focus, physical input or display acceptance is claimed.
+Narrow documented live-adapter limitations remain; ordinary platform policy/error paths are not
+blanket exemptions. #696 retains deterministic runtime seam closure and the Windows producer.

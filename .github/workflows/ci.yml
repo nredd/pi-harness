@@ -210,6 +210,28 @@ jobs:
           # shallow fetch, and the check compares source trees, so one OS is enough.
           PI_CU_UPSTREAM_SYNC: ${{ matrix.os == 'ubuntu-24.04' && '1' || '' }}
         run: make check-ts WORKSPACES="${{ matrix.workspaces }}"
+      - name: Install pinned native Ubuntu coverage tools
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && matrix.os == 'ubuntu-24.04' && contains(matrix.workspaces, 'packages/computer-use') }}
+        timeout-minutes: 8
+        env:
+          CARGO_BUILD_JOBS: '2'
+          RUSTUP_TOOLCHAIN: '1.97.1'
+        run: |
+          mkdir -p packages/computer-use/coverage/native-linux
+          {
+            time rustup toolchain install 1.97.1 --profile minimal --component llvm-tools-preview
+            time cargo +1.97.1 install cargo-llvm-cov --version 0.9.1 --locked --root "$RUNNER_TEMP/cu-cov-tools"
+            rustup run 1.97.1 rustc --version --verbose
+          } 2>&1 | tee packages/computer-use/coverage/native-linux/setup.log
+          echo "$(dirname "$(rustup which --toolchain 1.97.1 cargo)")" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/cu-cov-tools/bin" >> "$GITHUB_PATH"
+      - name: Collect native Ubuntu Rust coverage (headless, report-only)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && matrix.os == 'ubuntu-24.04' && contains(matrix.workspaces, 'packages/computer-use') }}
+        timeout-minutes: 8
+        env:
+          CARGO_BUILD_JOBS: '2'
+          RUSTUP_TOOLCHAIN: '1.97.1'
+        run: npm run coverage:rust --workspace @nredd/pi-computer-use -- --crate linux --output coverage/native-linux
       - name: Owned gate check-scripts (ruff, ty, pytest scripts, import audit)
         if: ${{ !cancelled() && steps.install.outcome == 'success' && contains(matrix.gates, 'check-scripts') }}
         run: make check-scripts
@@ -260,6 +282,12 @@ jobs:
           name: coverage-${{ matrix.os }}-${{ matrix.shard }}
           path: |
             packages/*/coverage/**/lcov.info
+            packages/computer-use/coverage/native-linux/coverage.json
+            packages/computer-use/coverage/native-linux/setup.log
+            packages/computer-use/coverage/native-linux/*/coverage.json
+            packages/computer-use/coverage/native-linux/*/metadata.json
+            packages/computer-use/coverage/native-linux/*/summary.txt
+            packages/computer-use/coverage/native-linux/*/*.log
             integration/inprocess/coverage/**/lcov.info
             integration/probes/coverage/**/lcov.info
             integration/providers/coverage/**/lcov.info
@@ -398,6 +426,12 @@ jobs:
           name: coverage-${{ matrix.os }}
           path: |
             packages/*/coverage/**/lcov.info
+            packages/computer-use/coverage/native-linux/coverage.json
+            packages/computer-use/coverage/native-linux/setup.log
+            packages/computer-use/coverage/native-linux/*/coverage.json
+            packages/computer-use/coverage/native-linux/*/metadata.json
+            packages/computer-use/coverage/native-linux/*/summary.txt
+            packages/computer-use/coverage/native-linux/*/*.log
             integration/inprocess/coverage/**/lcov.info
             integration/probes/coverage/**/lcov.info
             integration/providers/coverage/**/lcov.info

@@ -26,10 +26,14 @@ test("validates crate/arguments and resolves output paths without shell interpol
 });
 
 test("missing cargo tool gives actionable pinned install documentation", () => {
-	const result = spawnSync(process.execPath, [fileURLToPath(new URL("../scripts/rust-coverage.mjs", import.meta.url))], {
-		env: { ...process.env, PATH: "" },
-		encoding: "utf8",
-	});
+	const result = spawnSync(
+		process.execPath,
+		[fileURLToPath(new URL("../scripts/rust-coverage.mjs", import.meta.url))],
+		{
+			env: { ...process.env, PATH: "" },
+			encoding: "utf8",
+		},
+	);
 	assert.equal(result.status, 1);
 	assert.match(
 		result.stderr,
@@ -66,7 +70,12 @@ test("collects tests once with locked manifests and renders all formats from iso
 		assert.equal(commands.filter(({ args }) => args.includes("test")).length, 1);
 		assert.equal(new Set(commands.map(({ options }) => options.env.CARGO_TARGET_DIR)).size, 1);
 		assert.ok(commands.every(({ options }) => options.env.CARGO_TARGET_DIR.startsWith(output)));
-		const run = path.join(output, readdirSync(output)[0]);
+		const run = path.join(
+			output,
+			readdirSync(output).find((entry) => entry.startsWith("linux-") || entry.startsWith("windows-")),
+		);
+		assert.deepEqual(readFileSync(path.join(output, "coverage.json")), readFileSync(path.join(run, "coverage.json")));
+		assert.ok(commands.slice(1).every(({ args }) => args.includes("--disable-default-ignore-filename-regex")));
 		assert.match(readFileSync(path.join(run, "summary.txt"), "utf8"), /TOTAL/);
 		assert.ok(JSON.parse(readFileSync(path.join(run, "metadata.json"), "utf8")).elapsedSeconds >= 0);
 		assert.throws(

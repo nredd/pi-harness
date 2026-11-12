@@ -159,13 +159,16 @@ class Signal(StrictModel):
     reason: str = Field(
         default="", description="Mandatory explanation and migration issue for report-only signals."
     )
-    producer: Literal["lcov", "coverage.py"] = Field(
+    producer: Literal["lcov", "coverage.py", "llvm-cov"] = Field(
         default="lcov",
         description="Report writer; only coverage.py legitimately writes a bare record for an empty source.",
     )
     skip_hosts: list[str] = Field(
         default_factory=list,
         description="CI hosts whose gate list never runs this signal's producer; reported NOT RUN there.",
+    )
+    skip_os: list[Literal["darwin", "linux"]] = Field(
+        default_factory=list, description="Explicitly unsupported producer platforms, reported NOT RUN."
     )
     gate: str = Field(
         default="",
@@ -187,6 +190,8 @@ class Signal(StrictModel):
             raise ValueError("A report-only signal requires a nonblank `reason`")
         if self.max_uncovered.keys() - {"darwin", "linux"}:
             raise ValueError("Coverage floors support only measured darwin/linux OSes")
+        if self.producer == "llvm-cov" and self.enforcement != "report-only":
+            raise ValueError("LLVM native signals remain report-only until runtime attribution is resolved")
         if not {"text", "lcov"}.issubset(self.reporters):
             raise ValueError("Coverage signals require both text and lcov reporters")
         if self.files is not None and (not self.files or len(set(self.files)) != len(self.files)):
@@ -360,6 +365,14 @@ class FileCoverage:
     uncovered_functions: int
     branches: int
     uncovered_branches: int
+
+
+@dataclass(frozen=True)
+class NativeFileCoverage(FileCoverage):
+    """LLVM region counters, never translated to LCOV branch records."""
+
+    regions: int = 0
+    uncovered_regions: int = 0
 
 
 def split_function_hits(value: str) -> tuple[int, str]:
@@ -596,6 +609,10 @@ def is_test_path(path: Path) -> bool:
     Raises:
         None.
     """
+    # Rust modules inside src belong to the instrumented source denominator, even when named
+    # tests/fixtures. Only conventional test/fixture directories OUTSIDE src are excluded.
+    if path.suffix == ".rs" and "src" in path.parts:
+        path = Path(*path.parts[: path.parts.index("src")])
     return (
         any(part in {"test", "tests", ".test-support", "fixtures"} for part in path.parts)
         or path.name.endswith(".test.ts")
@@ -1066,6 +1083,8 @@ def check_signal_ratchet(label: str, new: Signal, old: Signal) -> None:
         ValueError: A host is newly skipped, the gate changes, an OS floor disappears or an enforced
             counter (including a branch cap) is raised or dropped.
     """
+    if not set(new.skip_os) <= set(old.skip_os):
+        raise ValueError(f"Cannot add skipped platforms: '{label}'")
     if not set(new.skip_hosts) <= set(old.skip_hosts):
         raise ValueError(f"Cannot add skipped hosts: '{label}'")
     if new.gate != old.gate:
@@ -1075,6 +1094,112 @@ def check_signal_ratchet(label: str, new: Signal, old: Signal) -> None:
             raise ValueError(f"Missing OS floor: '{label}/{runner_os}'")
         if old.enforcement == new.enforcement == "enforced" and loosens(new.max_uncovered[runner_os], floor):
             raise ValueError(f"Ratchet violation: '{label}/{runner_os}'")
+
+
+class LLVMMetric(BaseModel):
+    """One native LLVM count pair; percentages never enter accounting."""
+
+    model_config = ConfigDict(strict=True)
+    count: int = Field(ge=0)
+    covered: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def bounded(self) -> LLVMMetric:
+        """Reject impossible covered counts before computing misses.
+
+        Parameters:
+            None.
+        Returns:
+            LLVMMetric: Validated total and covered counts.
+        Raises:
+            ValueError: Covered units exceed the total.
+        """
+        if self.covered > self.count:
+            raise ValueError("LLVM covered count exceeds total")
+        return self
+
+
+class LLVMFile(BaseModel):
+    """Required portion of an LLVM file record, not its optional display fields."""
+
+    model_config = ConfigDict(strict=True)
+    filename: str
+    summary: dict[str, LLVMMetric]
+
+
+class LLVMData(BaseModel):
+    """One binary's exported file map."""
+
+    files: list[LLVMFile]
+
+
+class LLVMReport(BaseModel):
+    """Raw llvm-cov export; multiple data maps require an explicit merge upstream."""
+
+    type: Literal["llvm.coverage.json.export"]
+    data: list[LLVMData] = Field(min_length=1, max_length=1)
+
+
+# Deliberately conservative: only module/re-export declarations can validate a missing map.
+# This is not a Rust parser and will reject, never exempt, an unfamiliar source construct.
+RUST_DECLARATIONS = re.compile(r"(?:\s*(?:pub\s+mod\s+\w+\s*;|pub\s+use\s+[\w:{},\s]+;))*\s*")
+RUST_LINE_COMMENT = re.compile(r"//[^\n]*")
+
+
+def llvm_records(
+    root: Path, package: Package, signal: Signal, expected: set[str], reports_root: Path | None
+) -> dict[str, FileCoverage]:
+    """Read native counters with complete source membership and honest region units.
+
+    Parameters:
+        root (Path): Source checkout, used to validate map-free declaration modules.
+        package (Package): Structurally scoped native source inventory.
+        signal (Signal): Raw LLVM JSON producer declaration.
+        expected (set[str]): Every owned Rust source, including separately named test modules in src.
+        reports_root (Path | None): Downloaded artifact root, otherwise the checkout.
+    Returns:
+        dict[str, FileCoverage]: File counters, with regions separate from unproduced branches.
+    Raises:
+        ValueError: Malformed, duplicate, missing executable or zero-total source data.
+        OSError: A report or classified source cannot be read.
+    """
+    report = LLVMReport.model_validate_json(
+        ((reports_root or root) / package.root / signal.report).read_text()
+    )
+    records: dict[str, NativeFileCoverage] = {}
+    marker = f"/{package.root}/"
+    for file in report.data[0].files:
+        filename = file.filename.replace("\\", "/")
+        relative = filename.split(marker, 1)[1] if marker in filename else filename
+        if relative not in expected:
+            # Dependency/sysroot/integration-test files are not production source. An unknown
+            # source inside the package is an inventory error, never a filename-based exemption.
+            if marker in filename and not is_test_path(Path(relative)):
+                raise ValueError(f"LLVM source outside inventory: '{relative}'")
+            continue
+        if relative in records:
+            raise ValueError(f"Duplicate LLVM source: '{relative}'")
+        if not {"lines", "functions", "regions"} <= file.summary.keys():
+            raise ValueError(f"LLVM source lacks line/function/region counters: '{relative}'")
+        lines, functions, regions = (file.summary[key] for key in ("lines", "functions", "regions"))
+        records[relative] = NativeFileCoverage(
+            lines.count,
+            lines.count - lines.covered,
+            functions.count,
+            functions.count - functions.covered,
+            0,
+            0,
+            regions.count,
+            regions.count - regions.covered,
+        )
+    for relative in sorted(expected - records.keys()):
+        source = (root / package.root / relative).read_text()
+        if not RUST_DECLARATIONS.fullmatch(RUST_LINE_COMMENT.sub("", source)):
+            raise ValueError(f"Expected executable LLVM source missing: '{relative}'")
+        records[relative] = NativeFileCoverage(0, 0, 0, 0, 0, 0)
+    if not sum(c.regions for c in records.values()) or not sum(c.lines for c in records.values()):
+        raise ValueError("Zero total native executable regions/lines")
+    return dict(records)
 
 
 def scoped_records(
@@ -1095,6 +1220,8 @@ def scoped_records(
         ValueError: LCOV, membership, expected files or total owned executable lines are invalid.
     """
     expected = set(signal.files) if signal.files is not None else inventory(root, package)
+    if signal.producer == "llvm-cov":
+        return llvm_records(root, package, signal, expected, reports_root)
     raw = parse_lcov(
         ((reports_root or root) / package.root / signal.report).read_text(),
         bare_sources=signal.producer == "coverage.py",
@@ -1165,18 +1292,23 @@ def validate_signal_inventory(owned: set[str], signal_name: str, signal: Signal)
         raise ValueError("Enforced Bun signal must measure every owned executable file")
 
 
-def not_run_reason(signal: Signal, host: str | None, skipped_gates: frozenset[str]) -> str:
+def not_run_reason(
+    signal: Signal, host: str | None, skipped_gates: frozenset[str], runner_os: str = sys.platform
+) -> str:
     """Return why this run has no producer for a signal, or an empty string when the report is required.
 
     Parameters:
         signal (Signal): Signal declaration.
         host (str | None): CI host class, or null outside CI.
         skipped_gates (frozenset[str]): Make targets this run planned but skipped.
+        runner_os (str): Measured platform selecting explicit native producer skips.
     Returns:
         str: The NOT RUN reason, empty when the signal must be accounted.
     Raises:
         None.
     """
+    if runner_os in signal.skip_os:
+        return f"OS '{runner_os}' has no native producer"
     if host is not None and host in signal.skip_hosts:
         return f"host '{host}' has no producer in that cell"
     if signal.gate and signal.gate in skipped_gates:
@@ -1284,7 +1416,7 @@ def account(
             continue
         for signal_name, signal in package.signals.items():
             label = f"{name}/{signal_name}"
-            reason = not_run_reason(signal, host, skipped_gates)
+            reason = not_run_reason(signal, host, skipped_gates, runner_os)
             if reason:
                 LOGGER.warning(f"NOT RUN: '{label}': {reason}")
                 continue
@@ -1300,7 +1432,9 @@ def account(
                     item = {"package": name, "signal": signal_name, "os": runner_os, "file": path} | vars(
                         counters
                     )
-                    results.append(item)
+                    results.append(
+                        item | ({"branch_metric": "not-produced"} if signal.producer == "llvm-cov" else {})
+                    )
                     LOGGER.info(f"{label} {path}: {counters}")
                 LOGGER.info(
                     f"{label}/{runner_os} ({signal.enforcement}): "
@@ -1515,7 +1649,10 @@ def main() -> int:
     for result in results:
         label = f"{result['package']}/{result['signal']}"
         counters = totals.setdefault(label, {})
-        for metric in FileCoverage.__dataclass_fields__:
+        metrics = tuple(FileCoverage.__dataclass_fields__)
+        if "regions" in result:
+            metrics += ("regions", "uncovered_regions")
+        for metric in metrics:
             value = cast(int, result[metric])
             counters[metric] = counters.get(metric, 0) + value
     # A producer without branch records proposes no branch cap; `check_branch_cap` would reject one.

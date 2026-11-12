@@ -25,13 +25,25 @@ afterEach(() => {
 });
 
 /** Fake `cargo`: answers `--version`, then writes (or withholds) each report. */
-function fakeCargo({ version = { status: 0, stdout: `cargo-llvm-cov ${TOOL_VERSION}\n` }, lcov = goodLcov, json = goodJson, summary = "TOTAL 100%\n", failOn } = {}) {
+function fakeCargo({
+	version = { status: 0, stdout: `cargo-llvm-cov ${TOOL_VERSION}\n` },
+	lcov = goodLcov,
+	json = goodJson,
+	summary = "TOTAL 100%\n",
+	failOn,
+} = {}) {
 	const calls = [];
 	const spawn = (_command, args, options) => {
 		if (args.includes("--version")) return version;
 		calls.push({ args, options });
 		const verb = args[1];
-		const format = args.includes("--lcov") ? "lcov" : args.includes("--json") ? "json" : verb === "report" ? "summary" : "test";
+		const format = args.includes("--lcov")
+			? "lcov"
+			: args.includes("--json")
+				? "json"
+				: verb === "report"
+					? "summary"
+					: "test";
 		if (failOn === format) return format === "test" ? { status: 101, stderr: "boom" } : { status: 2 };
 		const index = args.indexOf("--output-path");
 		if (index !== -1) {
@@ -43,7 +55,11 @@ function fakeCargo({ version = { status: 0, stdout: `cargo-llvm-cov ${TOOL_VERSI
 	return { spawn, calls };
 }
 
-const runDir = () => path.join(output, readdirSync(output)[0]);
+const runDir = () =>
+	path.join(
+		output,
+		readdirSync(output).find((entry) => entry.startsWith(`${crate}-`)),
+	);
 
 test("rejects the Linux crate on hosts that can not build it", () => {
 	assert.throws(() => parseArgs(["--crate", "linux"], "win32"), /Linux crate coverage requires Linux or macOS/);
@@ -58,16 +74,31 @@ test("a bad crate fails before any process is spawned", () => {
 });
 
 test("a missing or broken cargo-llvm-cov reports the pinned install docs", () => {
-	for (const version of [{ error: new Error("ENOENT"), status: null, stdout: "" }, { status: 1, stdout: "" }]) {
-		assert.throws(() => runCoverage(["--output", output], () => version), /Missing cargo-llvm-cov; install pinned cargo-llvm-cov/);
+	for (const version of [
+		{ error: new Error("ENOENT"), status: null, stdout: "" },
+		{ status: 1, stdout: "" },
+	]) {
+		assert.throws(
+			() => runCoverage(["--output", output], () => version),
+			/Missing cargo-llvm-cov; install pinned cargo-llvm-cov/,
+		);
 	}
 	assert.deepEqual(readdirSync(output), [], "nothing is created before the tool check passes");
 });
 
 test("a failed cargo step reports the exit status, keeps the log and still writes metadata", () => {
+	writeFileSync(path.join(output, "coverage.json"), "stale report");
 	const { spawn, calls } = fakeCargo({ failOn: "test" });
-	assert.throws(() => runCoverage(["--output", output], spawn), /cargo llvm-cov failed \(101\); inspect .*run\.log; install matching llvm-tools-preview/);
+	assert.throws(
+		() => runCoverage(["--output", output], spawn),
+		/cargo llvm-cov failed \(101\); inspect .*run\.log; install matching llvm-tools-preview/,
+	);
 	assert.equal(calls.length, 1, "stops at the first failure");
+	assert.equal(
+		existsSync(path.join(output, "coverage.json")),
+		false,
+		"a failed run cannot reuse stale accounting output",
+	);
 	assert.match(readFileSync(path.join(runDir(), "run.log"), "utf8"), /boom/);
 	const metadata = JSON.parse(readFileSync(path.join(runDir(), "metadata.json"), "utf8"));
 	assert.equal(metadata.crate, crate);
@@ -76,9 +107,15 @@ test("a failed cargo step reports the exit status, keeps the log and still write
 });
 
 test("a spawn error is reported by message and report-stage failures are fatal", () => {
-	const spawnError = (_command, args) => (args.includes("--version") ? { status: 0, stdout: `cargo-llvm-cov ${TOOL_VERSION}` } : { error: new Error("spawn ETIMEDOUT") });
+	const spawnError = (_command, args) =>
+		args.includes("--version")
+			? { status: 0, stdout: `cargo-llvm-cov ${TOOL_VERSION}` }
+			: { error: new Error("spawn ETIMEDOUT") };
 	assert.throws(() => runCoverage(["--output", output], spawnError), /cargo llvm-cov failed \(spawn ETIMEDOUT\)/);
-	assert.throws(() => runCoverage(["--output", output], fakeCargo({ failOn: "lcov" }).spawn), /cargo llvm-cov failed \(2\)/);
+	assert.throws(
+		() => runCoverage(["--output", output], fakeCargo({ failOn: "lcov" }).spawn),
+		/cargo llvm-cov failed \(2\)/,
+	);
 });
 
 test.each([
@@ -86,9 +123,21 @@ test.each([
 	["missing JSON", { json: null }, /Empty coverage report: coverage\.json/],
 	["empty summary", { summary: "\n" }, /Empty coverage report: summary\.txt/],
 	["JSON without data", { json: "{}" }, /Coverage report has no intended crate source/],
-	["JSON entry without files", { json: JSON.stringify({ data: [{}] }) }, /Coverage report has no intended crate source/],
-	["JSON for another crate", { json: JSON.stringify({ data: [{ files: [{ filename: "other/bridge-rs/src/lib.rs" }] }] }) }, /Coverage report has no intended crate source/],
-	["LCOV for another crate", { lcov: "SF:other/src/lib.rs\nend_of_record\n" }, /LCOV report has no intended crate source/],
+	[
+		"JSON entry without files",
+		{ json: JSON.stringify({ data: [{}] }) },
+		/Coverage report has no intended crate source/,
+	],
+	[
+		"JSON for another crate",
+		{ json: JSON.stringify({ data: [{ files: [{ filename: "other/bridge-rs/src/lib.rs" }] }] }) },
+		/Coverage report has no intended crate source/,
+	],
+	[
+		"LCOV for another crate",
+		{ lcov: "SF:other/src/lib.rs\nend_of_record\n" },
+		/LCOV report has no intended crate source/,
+	],
 	["summary without totals", { summary: "Filename Regions\n" }, /Coverage summary has no totals/],
 ])("rejects %s", (_name, overrides, message) => {
 	assert.throws(() => runCoverage(["--output", output], fakeCargo(overrides).spawn), message);
@@ -97,7 +146,10 @@ test.each([
 
 test("accepts Windows-style separators in report paths", () => {
 	const windows = JSON.stringify({ data: [{ files: [{ filename: `C:\\x\\${crate}\\bridge-rs\\src\\lib.rs` }] }] });
-	runCoverage(["--output", output], fakeCargo({ json: windows, lcov: `SF:C:\\x\\${crate}\\bridge-rs\\src\\lib.rs\n` }).spawn);
+	runCoverage(
+		["--output", output],
+		fakeCargo({ json: windows, lcov: `SF:C:\\x\\${crate}\\bridge-rs\\src\\lib.rs\n` }).spawn,
+	);
 	assert.match(readFileSync(path.join(runDir(), "summary.txt"), "utf8"), /TOTAL/);
 });
 
@@ -117,7 +169,8 @@ test("defaults the output directory to the OS tmpdir and honours CARGO_BUILD_JOB
 });
 
 test("a run without stdout or stderr still logs cleanly", () => {
-	const spawn = (_command, args) => (args.includes("--version") ? { status: 0, stdout: `cargo-llvm-cov ${TOOL_VERSION}` } : { status: 1 });
+	const spawn = (_command, args) =>
+		args.includes("--version") ? { status: 0, stdout: `cargo-llvm-cov ${TOOL_VERSION}` } : { status: 1 };
 	assert.throws(() => runCoverage(["--output", output], spawn), /cargo llvm-cov failed \(1\)/);
 	assert.equal(readFileSync(path.join(runDir(), "run.log"), "utf8"), "\n");
 });

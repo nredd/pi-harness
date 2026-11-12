@@ -8,6 +8,17 @@ and unchanged binary bytes; no source assertion or generated-runtime comparison 
 CI is the gate. Local runs are for development. Hosted runners by default, plus the heaviest cells, which move to self-hosted pools while those have room (see [Self-hosted pools](#self-hosted-pools)). No stored credentials or secrets.
 The publish job alone requests a short-lived npm OIDC identity.
 
+The native Ubuntu computer-use shard also installs Rust `1.97.1`/matching LLVM tools and
+cargo-llvm-cov `0.9.1`, with at most two Cargo jobs, then collects the Linux crate headlessly.
+`coverage/native-linux/coverage.json` is the required raw LLVM accounting entry; unique run
+subdirectories retain LCOV, per-file text, raw JSON, metadata and logs, with setup timings in
+`setup.log`. Build products are not uploaded. The fan-in consumes these artifacts through the
+report-only `computer-use-linux-native/primary` signal. Removing its selected-host report fails
+accounting, even though uncovered counts are advisory. No native branch/statement producer or
+live desktop acceptance is claimed. macOS, WSL and ARM64 replacement cells explicitly skip this
+Ubuntu-only signal. The ordinary packed-source/diagnostics contract is unchanged. Native source
+scope and remaining limitations are documented [here](../packages/computer-use/docs/rust-coverage.md).
+
 The `stack` job's `Report coverage exclusions` summary writes only `GITHUB_STEP_SUMMARY` text.
 The workflow contract executes that step's actual body with the test runner's `/bin/bash` in
 an isolated directory, checks production output-failure propagation, and checks scoped exclusions
