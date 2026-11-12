@@ -9,6 +9,9 @@ for that exact workflow, tag ref and source digest, denying self-hosted runners.
 all native test-host dependencies, the Gitlink, digest guard, personal stack and both runtime
 lock targets move together; no owned npm package version changes. See
 [the train](core-release-train.md) for lock drift and the separate combined-gate/promotion boundary.
+The generated [artifact receipt](../releases/2026-11-12-core-nredd.11.json) records the clean
+selection commit `19f31f02cf56233381e9d8fe97a80bac29afcede`, all four authenticated asset digests,
+and canonical/release workflow identities. It is an artifact/source record, not promotion approval.
 This npm tarball publication does not establish standalone binary #72 or live-install acceptance.
 
 Before publishing, require [full frozen-candidate verification](release-verification.md).
