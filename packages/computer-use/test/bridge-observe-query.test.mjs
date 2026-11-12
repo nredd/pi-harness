@@ -1,5 +1,6 @@
 // observe_ui, search_ui, expand_ui and inspect_ui through the public executors with a fake backend.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test, vi } from "vitest";
 import { desktopRoot, installFakeDesktop, wireButton, wireNode } from "./support/fake-desktop.mjs";
 import { observeBrowser } from "./support/fake-browser.mjs";
@@ -335,6 +336,32 @@ test("search_ui and expand_ui on a browser state never escalate to the desktop",
 	assert.match(fake.text(expanded), /^@e4 AXGroup "Truncated"\npath: AXWebArea "Page" /);
 	assert.match(fake.text(expanded), /\[truncated\]/, "the cached subtree still shows the node as truncated");
 	assert.equal(fake.looks.length, 0, "no OCR or scoped look reaches the native helper");
+});
+
+// This is a dead-code removal control, not evidence of native behavior. The call-path
+// proof is in docs/computer-use-coverage.md; public boundary assertions follow below.
+test("the unreachable missing-target guard stays deleted (#755)", () => {
+	const source = readFileSync(new URL("../src/bridge.ts", import.meta.url), "utf8");
+	assert.doesNotMatch(source, /No current controlled window\./, "the unreachable missing-target guard must not return");
+});
+
+test("desktop executors reject absent observations before target resolution", async ({ onTestFinished }) => {
+	const fake = await installFakeDesktop(onTestFinished);
+	const requests = [
+		[fake.bridge.executeReadText, { ref: "@e1" }],
+		[fake.bridge.executeWaitFor, { text: "Go" }],
+		[fake.bridge.executeSearchUi, { text: "Go" }],
+		[fake.bridge.executeExpandUi, { ref: "@e1" }],
+		[fake.bridge.executeInspectUi, { ref: "@e1" }],
+		[fake.bridge.executeAct, { actions: [{ action: "press", ref: "@e1" }] }],
+	];
+	for (const [executor, params] of requests) {
+		for (const stateId of [undefined, "", "   "]) {
+			await assert.rejects(() => fake.call(executor, { ...params, stateId }), /No observation state is available\. Call observe_ui first\./);
+		}
+	}
+	assert.equal(fake.looks.length, 0);
+	assert.equal(fake.waits.length, 0);
 });
 
 test("wait_for with a blank stateId returns the coded error instead of a TypeError", async ({ onTestFinished }) => {

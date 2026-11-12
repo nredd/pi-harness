@@ -292,7 +292,6 @@ interface RuntimeState {
 }
 
 
-const MISSING_TARGET_ERROR = "No current controlled window. Call observe_ui first to choose a target window.";
 const CURRENT_TARGET_GONE_ERROR =
 	"The current controlled window is no longer available. Call observe_ui to choose a new target window.";
 
@@ -516,14 +515,6 @@ function imageFallbackReason(
 		return { reason: "browser_wait_verification", message: "Browser content may have changed visually during wait, so an image is attached for fallback." }
 	}
 	return undefined
-}
-
-function currentTargetOrThrow(): CurrentTarget {
-	const target = operationState().currentTarget;
-	if (!target) {
-		throw new Error(MISSING_TARGET_ERROR);
-	}
-	return target;
 }
 
 function emptyActivation(): ActivationFlags {
@@ -795,7 +786,9 @@ async function resolveTargetByWindowSelector(selector: string, signal?: AbortSig
  * transactions pass `false` so actions and the successor capture stay on the root the state belongs to.
  */
 async function resolveCurrentTarget(signal?: AbortSignal, options: { preferModal?: boolean } = {}): Promise<ResolvedTarget> {
-	const current = currentTargetOrThrow();
+	// Selection checks/sets the target; desktop state consumers first require a capture.
+	// Saved desktop captures always hydrate with a target (see the #755 call-path proof).
+	const current = operationState().currentTarget!;
 	const windows = await listWindows(current.pid, signal);
 	if (!windows.length) {
 		throw new Error(CURRENT_TARGET_GONE_ERROR);
@@ -1364,7 +1357,7 @@ async function performReadText(params: ReadTextParams, signal?: AbortSignal): Pr
 
 	currentCaptureOrThrow();
 	// A hydrated state restores its target without resolving it, so re-check the policy before the live read.
-	assertAppNotBlocked(currentTargetOrThrow());
+	assertAppNotBlocked(operationState().currentTarget!);
 	if (!ref) throw new Error("read_text requires ref for desktop contexts. Call observe_ui/inspect_ui and use a text-bearing outline ref.");
 	const node = outlineNodeByRef(ref);
 	const state = operationState();

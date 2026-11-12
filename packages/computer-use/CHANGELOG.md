@@ -11,6 +11,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Changed
 
+- Delete the unreachable `currentTargetOrThrow` missing-window guard after tracing all public callers; absent observations still fail at the capture boundary and browser states stay on CDP (nredd/pi-harness#755).
 - `StateStore`, `ResourceScheduler`, the output store and `stabilizeRefs` drop dead arms (the empty-key eviction guard, never-rejecting `tail` catches, a fresh-ref collision loop); an empty restored `stateId` no longer disables `StateStore` eviction (it used to stop the loop and let the store grow unbounded); otherwise behavior is unchanged. `extensions/computer-use.ts`, `desktop.ts` and the pure modules are covered on every OS through the `process.platform` seam (nredd/pi-harness#703, #645).
 - `sync-patches.json` patches, `files`, `UPSTREAM.md` rows and `check-sync-reverts.mjs` cases are sorted (enforced by `test/sync-ledger.test.mjs`), each patch names its `UPSTREAM.md` `rows`, and `npm run check` runs `check-upstream-sync.mjs` against the pinned upstream commit when `PI_CU_UPSTREAM_SYNC=1` (CI on Linux); 14 previously undeclared drifted paths are now declared (nredd/pi-harness#720).
 - `LinuxHelperClient` drops unreachable guards (an already-aborted check in `runProcess`, whose only caller passes a fresh signal, a redundant re-check in `process()` and identity checks on single-flight promises) and shares one settle handler per promise; behavior is unchanged (nredd/pi-harness#713, #645).
