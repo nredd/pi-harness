@@ -1189,11 +1189,20 @@ def llvm_records(
             regions.count,
             regions.count - regions.covered,
         )
-    for relative in sorted(expected - records.keys()):
+    for relative in sorted(expected):
+        counters = records.get(relative)
+        if counters is not None and (counters.lines or counters.functions or counters.regions):
+            continue
         source = (root / package.root / relative).read_text()
         if not RUST_DECLARATIONS.fullmatch(RUST_LINE_COMMENT.sub("", source)):
-            raise ValueError(f"Expected executable LLVM source missing: '{relative}'")
-        records[relative] = NativeFileCoverage(0, 0, 0, 0, 0, 0)
+            reason = (
+                "Expected executable LLVM source missing"
+                if counters is None
+                else "Unvalidated zero-executable LLVM source"
+            )
+            raise ValueError(f"{reason}: '{relative}'")
+        if counters is None:
+            records[relative] = NativeFileCoverage(0, 0, 0, 0, 0, 0)
     if not sum(c.regions for c in records.values()) or not sum(c.lines for c in records.values()):
         raise ValueError("Zero total native executable regions/lines")
     return dict(records)

@@ -13,7 +13,7 @@ All report commands disable cargo-llvm-cov's default filename exclusions. Accoun
 scopes the complete `native/linux/bridge-rs/src/**/*.rs` inventory, including separately named
 `cfg(test)` source modules, and normalizes hosted absolute paths to package-relative paths.
 Conventional `tests/` integration source and dependencies are outside that production scope.
-A missing source map is accepted only for a conservatively validated module/re-export-only file
+A missing or zero-executable source map is accepted only for a conservatively validated module/re-export-only file
 (such as `lib.rs`), recorded as zero executable units, not fabricated executable lines.
 Inline and separately named source test functions are included in LLVM counters. Passing them can
 inflate apparent runtime coverage, so neither their hits nor this producer establish runtime 100%.

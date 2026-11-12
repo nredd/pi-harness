@@ -171,6 +171,36 @@ def test_native_refuses_invalid_exports(tmp_path: Path, case: str) -> None:
     assert account(tmp_path, cfg, "linux")[1]
 
 
+def test_native_present_zero_map_cannot_hide_executable_source(tmp_path: Path) -> None:
+    """Reject a zero map for executable source even when other files have regions.
+
+    Parameters:
+        tmp_path (Path): Disposable source and mixed LLVM report root.
+    Returns:
+        None: A zeroed executable source fails while a declaration-only map passes.
+    Raises:
+        AssertionError: A zeroed source silently disappears from the denominator.
+    """
+    cfg, report, output = native_fixture(tmp_path)
+    files = report["data"][0]["files"]
+    for metric in files[0]["summary"].values():
+        metric |= {"count": 0, "covered": 0}
+    output.write_text(json.dumps(report))
+    assert "zero-executable" in account(tmp_path, cfg, "linux")[1][0]
+    files[0]["filename"] = "/runner/checkout/pkg/src/lib.rs"
+    output.write_text(json.dumps(report))
+    assert "Expected executable LLVM source missing" in account(tmp_path, cfg, "linux")[1][0]
+    (tmp_path / "pkg/src/main.rs").write_text("pub mod child;\n")
+    assert not account(tmp_path, cfg, "linux")[1]
+    for name in ("policy_tests.rs", "tests/mod.rs"):
+        (tmp_path / "pkg/src" / name).write_text("pub mod child;\n")
+    for file in files:
+        for metric in file["summary"].values():
+            metric |= {"count": 0, "covered": 0}
+    output.write_text(json.dumps(report))
+    assert "Zero total native executable regions/lines" in account(tmp_path, cfg, "linux")[1][0]
+
+
 def test_native_dependency_paths_and_declaration_fail_closed(tmp_path: Path) -> None:
     """Ignore external libraries, but reject executable additions to a map-free module.
 
