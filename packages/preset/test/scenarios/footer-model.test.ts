@@ -1,8 +1,9 @@
 /** Physical request metadata reaches the real replacement footer without changing selection. */
 import { type ExtensionFactory, type ModelRouteContext, SessionManager } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
 import type { InteractiveHarness } from "@earendil-works/pi-coding-agent/testing/interactive";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
 import { afterEach, expect, it } from "vitest";
 import { deferred, FooterFixture, WIDTHS } from "./support.ts";
 
@@ -140,6 +141,67 @@ it("never guesses while routing, clears prior dispatch, and renders live physica
 	} finally {
 		release.resolve();
 		finishStream.resolve();
+		await turn;
+	}
+});
+
+it("clears the previous physical label while a tool continuation routes to another model", async () => {
+	const entered = deferred<void>();
+	const release = deferred<void>();
+	let requests = 0;
+	const route: ExtensionFactory = (pi) => {
+		pi.registerVirtualModel({
+			provider: "router",
+			id: "deep",
+			name: "Fixture",
+			thinkingLevels: ["medium"],
+			async route(_request, ctx) {
+				if (++requests === 2) {
+					entered.resolve();
+					await release.promise;
+				}
+				return {
+					model: model(ctx, "faux", requests === 1 ? "alpha" : "beta"),
+					thinkingLevel: requests === 1 ? "low" : "high",
+				};
+			},
+		});
+		pi.registerTool({
+			name: "fixture_tool",
+			label: "Fixture tool",
+			description: "Complete one offline tool call",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text", text: "fixture result" }], details: undefined }),
+		});
+	};
+	fixture = new FooterFixture();
+	const host = await fixture.start({
+		columns: 240,
+		models: [
+			{ id: "alpha", reasoning: true },
+			{ id: "beta", reasoning: true },
+		],
+		useModelRuntimeStream: true,
+		extensionFactories: [route, selectProfile("deep")],
+	});
+	host.harness.setResponses([
+		fauxAssistantMessage(fauxToolCall("fixture_tool", {}), { stopReason: "toolUse" }),
+		fauxAssistantMessage("continued answer"),
+	]);
+	const turn = host.harness.session.prompt("one tool then continue");
+	try {
+		await entered.promise;
+		await host.settle();
+		expect(host.harness.eventsOfType("tool_execution_end")).toHaveLength(1);
+		expect(stats(host)).toContain("deep • medium (routing)");
+		expect(stats(host)).not.toContain("alpha");
+		expect(stats(host)).not.toContain("beta");
+		release.resolve();
+		await turn;
+		await host.settle();
+		expect(stats(host)).toContain("-> (faux) beta • high");
+	} finally {
+		release.resolve();
 		await turn;
 	}
 });

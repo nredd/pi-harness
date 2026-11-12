@@ -128,7 +128,7 @@ export function createExpandedFooter(
 			repaint?.();
 		};
 		pi.on("model_select", resetRoute);
-		pi.on("agent_start", () => {
+		pi.on("turn_start", () => {
 			live = undefined;
 			running = true;
 			repaint?.();
