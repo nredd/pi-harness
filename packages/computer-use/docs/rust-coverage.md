@@ -128,6 +128,16 @@ through its zero denominator. Both branch and statement metrics remain UNMEASURE
 report-only references are L/F = 1442/170; region units are preserved independently in per-file and
 aggregate accounting output, not coerced into the policy's LCOV branch budget.
 
+Exact-HEAD producer verification: run [43214341839](https://github.com/nredd/pi-harness/actions/runs/43214341839),
+head `3d97e8962b9ebb32a2b084b3a421875571ed90cf`, Ubuntu artifact `13943427896`, archive SHA-256
+`a002612e80a4a94191723e6ff9ee0cc1e2a4c624677c93d7d3d3b08d6774dfcb`. Accounting JSON and raw JSON
+both hash to `41b52bde5cffc0b8da851e4d9e057361ab0c36e37f8fbb0731a4d9bccd6a3034`; raw LCOV hashes
+to `89ca2eb9004d47248dfb734e91179599a983fe2efd80625d5e9176826d1c6790`. Raw JSON and LCOV each
+contain all seven executable mapped source files; `lib.rs` remains the validated 0/0 declaration.
+Accounting reports the same 1442/170/2625 uncovered source units as the earlier baseline; removing
+the accounting JSON fails closed. Build/test/report runtime was 33.328s. This receipt belongs to
+that exact prior HEAD, not any subsequent commit. The shard passed; the full run failed separately.
+
 Native artifacts preserve raw per-file lines/functions/regions, setup/run/command logs and elapsed metadata. No Windows-native runtime,
 actual AT-SPI/X11/Wayland desktop behavior, focus, physical input or display acceptance is claimed.
 Narrow documented live-adapter limitations remain; ordinary platform policy/error paths are not

@@ -166,7 +166,7 @@ def test_native_refuses_invalid_exports(tmp_path: Path, case: str) -> None:
             for file in files:
                 for metric in file["summary"].values():
                     metric |= {"count": 0, "covered": 0}
-        elif case == "unknown-source":
+        else:
             files[0]["filename"] = "/runner/checkout/pkg/src/unowned.rs"
         output.write_text(json.dumps(report))
     assert account(tmp_path, cfg, "linux")[1]
