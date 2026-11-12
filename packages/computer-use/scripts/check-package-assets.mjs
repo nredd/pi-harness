@@ -17,6 +17,7 @@ const expected = [
 	"package/native/macos/agent_cursor.swift",
 	"package/native/macos/agent_cursor_motion.swift",
 	"package/native/macos/bridge.swift",
+	"package/native/macos/helper_entry.swift",
 	"package/prebuilt/macos/arm64/bridge",
 	"package/prebuilt/macos/x64/bridge",
 ];

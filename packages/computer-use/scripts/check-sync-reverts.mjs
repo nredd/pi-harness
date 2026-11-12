@@ -154,6 +154,14 @@ const cases = [
 		failure: /Missing expected exception/,
 	},
 	{
+		name: "Swift producer rejects wrong-binary profiles (#757)",
+		file: "scripts/swift-coverage.mjs",
+		before: 'throw new Error("Wrong-binary or empty Swift profile");',
+		after: 'return; /* profile identity check dropped */',
+		check: "test/swift-coverage.test.mjs",
+		failure: /Missing expected exception/,
+	},
+	{
 		name: "WSL2 empty-roots hint (#672)",
 		file: "src/platform/linux/backend.ts",
 		before: "emptyRootsHint: () => wslNoWindowsHint(),",

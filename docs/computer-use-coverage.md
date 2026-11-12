@@ -109,38 +109,47 @@ Largest remaining gaps, in order of size:
 
 ### Swift (`native/macos`, llvm-cov)
 
-Swift has no maintained producer. Real measurement with an instrumented rebuild of all four shipped
-sources plus a run of the helper (`shutdown` only, to get a valid denominator), and the two existing
-compiled-test regions instrumented the same way:
+The maintained `computer-use-swift/primary` producer (#757) links the real production files,
+including the unexecuted helper entry, into one headless binary. No regex extraction or copied
+production implementation is measured. The previous sliced-source numbers are retired as a
+current baseline.
 
-```sh
-S=packages/computer-use/native/macos
-swiftc -Onone -profile-generate -profile-coverage-mapping -target arm64-apple-macosx14.0 \
-  -framework ApplicationServices -framework AppKit -framework ScreenCaptureKit -framework Foundation -framework SwiftUI \
-  $S/activity_glow.swift $S/agent_cursor.swift $S/agent_cursor_motion.swift $S/bridge.swift -o full
-echo '{"id":"1","cmd":"shutdown"}' | LLVM_PROFILE_FILE=full.profraw ./full
-xcrun llvm-profdata merge -sparse full.profraw -o full.profdata   # use `$(xcrun -f llvm-profdata)`
-xcrun llvm-cov report -instr-profile=full.profdata ./full
-```
+Local initial reference on macOS arm64, Apple Swift 6.4.2 (the hosted exact-HEAD receipt must confirm it):
 
-| File | Executable lines | Regions | Functions | Covered by suites today |
-| --- | --- | --- | --- | --- |
-| `bridge.swift` | 4586 | 2136 | 694 | 163 lines (3.6%): `PURE` region 134/139 + `KEYBOARD LAYOUT` region 29/30, compiled by `test/macos-native-pure.test.mjs` |
-| `agent_cursor.swift` | 162 | 38 | 19 | 88 lines (54.3%), INV-17 |
-| `agent_cursor_motion.swift` | 212 | 92 | 25 | 201 lines (94.8%), INV-17 |
-| `activity_glow.swift` | 152 | 39 | 27 | none; the 79 lines hit by a bare `shutdown` run are startup only |
+| File | Lines missed/total | Functions missed/total | LLVM regions missed/total |
+| --- | --- | --- | --- |
+| `bridge.swift` | 4810/5149 | 705/786 | 2250/2464 |
+| `agent_cursor.swift` | 162/162 | 19/19 | 38/38 |
+| `agent_cursor_motion.swift` | 11/212 | 1/25 | 19/92 |
+| `activity_glow.swift` | 152/152 | 27/27 | 39/39 |
+| `helper_entry.swift` | 5/5 | 1/1 | 3/3 |
+| Total | 5140/5680 | 753/858 | 2349/2636 |
 
-Test harness note: INV-17 (`test/invariants.test.mjs`) compiles `agent_cursor*.swift` plus
-`agent_cursor_tests.swift` and reports 81.62% lines (506 incl. the test file) / 74.14% regions;
-the `PURE` and `KEYBOARD LAYOUT` regions of `bridge.swift` are cut out by regex at test time. Nothing
-else in the 3550-line `final class Bridge` (163 methods) is compiled by any test, only by
-`build-native` and the live test, which does not collect coverage.
+These are LLVM source-view executable counters, not physical source lengths or Istanbul statements.
+LLVM's own LCOV export has different DA/FNDA denominators (line gaps and function instantiations).
+It even prints source-view LF/FNF summaries that disagree with those rows. The producer validates
+those summaries against LLVM JSON, then recomputes LCOV summaries from its actual records so
+shared accounting can validate them rather than accepting inconsistent totals:
 
-Branch units: Swift emits no branch records (`llvm-cov export` returns an empty `branches` array,
-confirmed above), so **regions are the Swift branch signal**. Every `if`/`guard` arm, `switch` case,
-`??`, ternary arm and `&&`/`||` operand is a region. The converter below writes each missed region
-as a `BRDA` row so `check-coverage` treats it like any other signal (a 0-region report with executable
-lines fails "Branch producer missing" the same as for Istanbul).
+| File | LCOV lines missed/rows | LCOV functions missed/rows |
+| --- | --- | --- |
+| `bridge.swift` | 3824/4111 | 716/797 |
+| `agent_cursor.swift` | 131/131 | 19/19 |
+| `agent_cursor_motion.swift` | 11/200 | 1/25 |
+| `activity_glow.swift` | 142/142 | 28/28 |
+| `helper_entry.swift` | 5/5 | 1/1 |
+| Total | 4113/4589 | 765/870 |
+
+Both units are retained in `summary.json`; the unmodified native export is
+`llvm-lcov.info.txt`. Policy's advisory line/function references use the LCOV-record units.
+No LLVM JSON lines, functions or regions are deleted to make those counters agree.
+Swift emits no branch outcomes here. Regions remain a distinct unit in raw `llvm.json` and
+`summary.json`; they are NEVER renamed to `BRDA`, branches or statements. LCOV accounts
+lines/functions only, with a null branch reference. No all-native 100% claim is made.
+Existing INV-17 window-lifecycle assertions remain separate behavior evidence, not coverage
+evidence for this headless producer.
+
+The following approximate area map is historical design context, not a current denominator:
 
 Where `Bridge` touches the system directly today (call sites in `bridge.swift`): `AXUIElement*` 143,
 `CGEvent*` 35, `NSWorkspace` 17, `CGWindowList*` 9, ScreenCaptureKit `SC*` 8, `FileHandle`/`FileManager`
@@ -212,38 +221,44 @@ land it before the next upstream sync or carry it as a recorded patch in `sync-p
 
 ## Swift measurement
 
-- `scripts/swift-coverage.mjs`, modeled on `scripts/rust-coverage.mjs`: build instrumented test binary
-  (`-profile-generate -profile-coverage-mapping`, all production sources minus `entry.swift`, plus `world_fake.swift`
-  and `tests/*.swift`), run with `LLVM_PROFILE_FILE=<dir>/%p.profraw`, merge, `llvm-cov export` JSON, emit
-  `coverage/swift/lcov.info` with `DA`, `FN`/`FNDA` and one `BRDA` per region (hit count, `-` for unreachable line).
-  `world_fake.swift` and `tests/` are non-shipped verification code, classified individually under the policy's `verification_helpers` (never llvm-cov filters); no shipped source is excluded.
-- Two producers merged into one profdata: (a) in-process unit tests with `FakeWorld`; (b) black-box protocol
-  tests, a TS Vitest suite spawning the instrumented helper (stdin NDJSON mode, then `serve --socket` mode) with
-  a fixture world selected by `PI_CU_WORLD_FIXTURE`, which only `world_fake.swift` reads. (b) covers `run`,
-  `runServer`, `processClient`, `handleLine`, `send`, signal/exit paths (`exit(0)`, `exit(1)`, lock contention)
-  that cannot run in-process; `exit` flushes profraw through the profile runtime's atexit hook.
-- Policy: new package-level signal `computer-use-swift`, `darwin` only (like `python-benchmarks`), `goal`
-  `100-percent`, per-OS reference from a hosted `macos-14` run, `max_uncovered.darwin` lines/functions/branches
-  starting at the measured values and ratcheting down per phase.
+Run `npm run coverage:swift --workspace @nredd/pi-computer-use` on macOS; other hosts print
+`NOT RUN` without writing a fake empty report. The macOS `test:macos-native` suite runs the same
+producer once as part of the hosted package gate. It replaces two sliced-source compiles with
+one complete-source compile. `headless_tests.swift` retains pure/ref/keyboard assertions and
+cursor-motion assertions without creating AppKit windows, instantiating `Bridge`, posting input,
+capturing screens or reading/writing the clipboard. AX handles and installed keyboard layout
+data are used without querying live application trees. Live INV-17 is not this producer.
+
+`helper_entry.swift` contains the unchanged shipped startup function. The test define suppresses
+ONLY its `@main` attribute; all executable startup code remains compiled, mapped and uncovered.
+Both production builders and the packed-source contract include the new entry source.
+
+The fresh `coverage/swift/` directory contains the binary, profraw, merged profdata, raw LLVM
+JSON, profile function dump, validated package-relative LCOV and SHA256/toolchain/argv/per-file
+metadata. CI preserves that directory as `computer-use-swift-macos-14` and passes LCOV through the
+ordinary shard fan-in. Exact artifact naming follows the matrix OS. New/missing production
+sources, foreign paths, duplicate/empty profiles, malformed counters and failed tools refuse
+collection. Mach-O profiles do not supply binary IDs, so each compile uses a unique Swift module
+identity; every recorded profile function must belong to that binary's coverage map. Another
+build of the same source cannot masquerade as its profile. No user-supplied old profile is merged.
+
+The separate native signal stays report-only/excluded while #645 closes deterministic policy
+gaps. Missing selected-host output fails accounting even though uncovered-count references are
+advisory. Linux and WSL2 skip by declared host policy. Raw regions remain reviewable even though
+the shared accounting schema currently supports only lines/functions/branches (and Istanbul
+statements where available), not a native region cap.
 
 ## Live adapters decision (owner)
 
-`LiveAX`, `LiveSink`, `LiveWindowServer`, `LiveScreenshotter`, `LiveWorkspace`, `LiveInputSources`,
-`LivePermissions` wrap real system calls. Kept to one expression per method (no branching, no policy), they
-still have to execute for 0 uncovered lines. Hosted `macos-14` cannot grant Accessibility or Screen
-Recording to a freshly built helper, so these can only be covered on a TCC-granted host. Options:
+The owner decision in [#645 comment 6772202242](https://github.com/nredd/pi-harness/issues/645#issuecomment-6772202242)
+allows narrow thin live AX/CGEvent/ScreenCaptureKit adapter exceptions until a dedicated
+TCC-granted runner exists. This supersedes the older rejected-exemption text. An exception is
+NOT coverage, and this producer does not remove those lines from its raw denominator.
 
-1. Run `test:macos-live` (disposable fixture app windows from `scripts/fixtures/alert-app.swift` and
-   `event-probe.swift`, plus a restorable clipboard round trip) against the instrumented helper on the
-   self-hosted macOS runner (`docs/self-hosted-runners.md`) with TCC pre-granted, and merge its profraw
-   into the `computer-use-swift` producer. Recommended. Needs a runner decision and a pre-granted TCC
-   database for the instrumented binary's identifier.
-2. Move the live adapters into a `verification_helpers`-style exclusion. Rejected: shipped runtime code is
-   never a verification helper (coverage.md), and policy forbids widening exclusions to pass.
-3. Leave `computer-use-swift` at a nonzero live-adapter cap. Rejected: the Swift signal is not enforced at a nonzero cap; only `computer-use-vitest` is, as the T0 ratchet.
-
-Until option 1 is available, phases S0-S4 get everything behind the seam to 0 and leave only the adapter
-files uncovered; the Swift signal stays report-only and the goal stays `excluded` for that file set.
+No whole `Bridge`, AppKit state, errors, timing, fallback or business policy is exempt. Until
+live calls are isolated behind deterministic seams, those misses remain visible and unfinished.
+Subsequent S1-S5 work must cover the policy using real-source tests; a future dedicated runner
+can measure the thin physical adapters. This PR neither grants TCC nor exercises the desktop.
 
 ## Phases
 

@@ -336,10 +336,18 @@ and runnable workflow examples are explicitly pending source, not verification e
 The generated stats CLI bundle has a reasoned generated-artifact exclusion; its original
 `src/stats/cli.ts` remains owned and measured.
 
-`computer-use` is explicitly **not measured, tracked** for its native Swift/Rust sources and the
-documentation site. Since #347 its suites run under Vitest, and the separate `computer-use-vitest`
-policy entry (same root) measures the 35 executable JS/TS runtime modules with Istanbul: `src`,
-`extensions`, `setup-helper.mjs`, `build-native.mjs`, `rust-coverage.mjs` and the documentation
+`computer-use` retains the complete native/documentation inventory; Rust and the documentation
+site remain **not measured, tracked**. The separate `computer-use-swift` report-only/excluded
+signal (#757) links every shipped Swift source into a headless instrumented binary on macOS.
+It preserves actual per-file LLVM lines/functions/regions and profile/toolchain metadata in the
+`computer-use-swift-macos-14` hosted artifact, with line/function LCOV in ordinary accounting.
+Regions are not branches or statements; no `BRDA` is fabricated. Missing selected-host reports
+fail closed; Linux/WSL2 explicitly report NOT RUN. The owner permits narrow thin live
+AX/CGEvent/ScreenCaptureKit adapter exceptions until a dedicated TCC runner, not blanket native
+or policy exemptions. These misses remain in raw reports. See the real-source command, initial
+local per-file baseline and remaining policy work [here](computer-use-coverage.md#swift-measurement). Since #347 its suites run under Vitest, and the separate `computer-use-vitest`
+policy entry (same root) measures the 36 executable JS/TS runtime/producer modules with Istanbul: `src`,
+`extensions`, `setup-helper.mjs`, `build-native.mjs`, `rust-coverage.mjs`, `swift-coverage.mjs` and the documentation
 generators, with the declaration-only `src/platform/types.ts` excluded as type-only. Its Vitest
 config reads both from the policy like every other producer, so a new module joins the report
 instead of dropping out. It stays

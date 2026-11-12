@@ -45,7 +45,7 @@ private struct CapturedWindowImage {
 	let frame: CGRect
 }
 
-// BEGIN PURE (compiled standalone by test/macos-native-pure.test.mjs; Foundation + ApplicationServices only)
+// BEGIN PURE (headless_tests.swift links this production file without instantiating Bridge)
 /// Native refs for AX windows and elements. Window refs are deduped and live for the process
 /// (bounded by the number of windows). Element refs are minted fresh per look: refs owned by a look
 /// are dropped when that look ages out (`dropElements(owner:)`); unowned refs (element queries)
@@ -4683,14 +4683,6 @@ final class Bridge {
 
 }
 
-@main
-struct PiComputerUseHelper {
-	static func main() {
-		_ = NSApplication.shared
-		NSApp.setActivationPolicy(CommandLine.arguments.contains("serve") ? .accessory : .prohibited)
-		Bridge().run()
-	}
-}
 
 /*
 PI_DOCS_REFERENCE_BEGIN reference/platforms/macos/accessibility
@@ -4897,7 +4889,7 @@ Native refs live in the helper's `refStore` and are only valid while the helper 
 
 ## Tests
 
-`npm run test:macos-target`, `test:macos-native` (compiles the `PURE` region of `bridge.swift`), `test:act-outcomes`.
+`npm run test:macos-target`, `test:macos-native` (links the real production Swift sources with a headless test entry), `test:act-outcomes`.
 PI_DOCS_REFERENCE_END
 */
 
