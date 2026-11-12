@@ -60,6 +60,7 @@ from harness.release import (
     verify_public_attestation,
     verify_root_overrides,
 )
+from tests.runtime_fixtures import model_supported_platform
 
 
 class HTTPBody(io.BytesIO):
@@ -2086,6 +2087,7 @@ def test_nonlegacy_core_truncation_is_exit_three(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """The real non-legacy checksum/asset verification path normalizes a broken chunked transfer."""
+    model_supported_platform(monkeypatch)
     snapshot = promotion.load_promoted_snapshot(
         (Path(__file__).parent / "fixtures" / "stack-snapshot-24889f7.json").read_bytes(),
         "24889f7896be7157bf9077a41465a3b29620879f",

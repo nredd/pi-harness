@@ -34,7 +34,15 @@ from harness.runtime_lock import (
     root_manifest,
 )
 from harness.stack import Stack, source_string
-from tests.runtime_fixtures import LEAF, TOP, fixture_graph, integrity, native_npm, package_bytes
+from tests.runtime_fixtures import (
+    LEAF,
+    TOP,
+    fixture_graph,
+    integrity,
+    model_supported_platform,
+    native_npm,
+    package_bytes,
+)
 
 ROOT = Path(__file__).parents[2]
 
@@ -804,6 +812,7 @@ def replay_seams(
     Returns:
         tuple[list[tuple[str, dict[str, str] | None]], list[str]]: acquisitions and installed roots.
     """
+    model_supported_platform(monkeypatch)
     acquired: list[tuple[str, dict[str, str] | None]] = []
     installed: list[str] = []
 
