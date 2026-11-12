@@ -43,11 +43,6 @@ export function modelInputs(type: string, definitionModel?: string, paramModel?:
   return [...inputs.filter(input => input.requested?.trim()), { source: "parent" }];
 }
 
-/** Choose the input once: explicit parameter > type > wildcard > definition > parent. */
-export function modelRequest(type: string, definitionModel?: string, paramModel?: string | Model<Api> | null): { requested?: string; source: ModelSource } {
-  return modelInputs(type, definitionModel, paramModel)[0]!;
-}
-
 /** Resolve trusted tier/legacy configuration without registry or admission work. */
 export function modelInputBinding(input: { requested?: string; source: ModelSource }, agentType: string): TierBinding | undefined {
   const requested = input.requested?.trim();
@@ -62,14 +57,8 @@ export function modelInputBinding(input: { requested?: string; source: ModelSour
     : legacyBinding ? { ...legacyBinding, tier: requested } : undefined;
 }
 
-/**
- * Choose an exact configured input or tier binding before record creation.
- * Only explicit non-tier tool inputs retain fuzzy matching. Tier admission is
- * asynchronous and completes through admitModelSelection before startup; this
- * synchronous preflight preserves spawn's immediate-id and validation contract.
- * An already-open resume keeps the record and does not select again.
- */
-export function selectModel(request: {
+/** Inputs shared by dispatch selection and registration-only validation. */
+export interface ModelSelectionRequest {
   homeDir?: string;
   agentType: string;
   definitionModel?: string;
@@ -78,8 +67,11 @@ export function selectModel(request: {
   registry: ModelRegistry;
   cwd: string;
   agentLabel?: string;
-}): ModelSelection | string {
-  const input = modelRequest(request.agentType, request.definitionModel, request.paramModel);
+}
+
+/** Shared resolution before scope checking; structural validation must not populate live scope caches. */
+function prepareModelSelection(request: ModelSelectionRequest): ModelSelection | string {
+  const input = modelInputs(request.agentType, request.definitionModel, request.paramModel)[0]!;
   let selection: ModelSelection = { ...input, model: request.parentModel, outcome: "inherited" };
   if (input.requested) {
     const requested = input.requested.trim();
@@ -114,14 +106,33 @@ export function selectModel(request: {
       }
     }
   }
+  return selection;
+}
+
+/**
+ * Choose an exact configured input or tier binding before record creation, then enforce scope.
+ * Only explicit non-tier inputs retain fuzzy matching. Admission completes asynchronously
+ * through admitModelSelection; an already-open resume keeps its existing selection.
+ */
+export function selectModel(request: ModelSelectionRequest): ModelSelection | string {
+  const selection = prepareModelSelection(request);
+  if (typeof selection === "string") return selection;
   const scope = checkModelScope({
     model: selection.model, cwd: request.cwd, modelRegistry: request.registry,
-    callerSupplied: input.source === "param" && !selection.tierBinding && !selection.tier, agentLabel: request.agentLabel ?? request.agentType,
-    modelInput: input.requested, homeDir: request.homeDir,
+    callerSupplied: selection.source === "param" && !selection.tierBinding && !selection.tier, agentLabel: request.agentLabel ?? request.agentType,
+    modelInput: selection.requested, homeDir: request.homeDir,
   });
   if (scope.kind === "error") return scope.message;
   if (scope.kind === "warn") selection.scopeWarning = scope.message;
   return selection;
+}
+
+/** Registration-only configuration errors, deliberately excluding live availability and scope evaluation. */
+export function hasModelConfigurationError(request: Omit<ModelSelectionRequest, "paramModel">): boolean {
+  const registered = request.registry.getAll?.() ?? [];
+  const getRegistered = () => registered;
+  const registry = { find: (provider: string, id: string) => registered.find(model => model.provider === provider && model.id === id), getAll: getRegistered, getAvailable: getRegistered };
+  return typeof prepareModelSelection({ ...request, paramModel: undefined, registry }) === "string";
 }
 
 /** Label an admitted physical model before any response, without replacing the virtual selection. */

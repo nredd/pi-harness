@@ -1,6 +1,6 @@
 /** Read-only, allowlisted projections of the real dispatch selector. Never admit or route. */
 import { isVirtualModel } from "./model-resolver.js";
-import { modelInputBinding, modelInputs, selectModel } from "./model-selection.js";
+import { hasModelConfigurationError, modelInputBinding, modelInputs, selectModel } from "./model-selection.js";
 import { getModelResolution } from "./model-tiers.js";
 
 /** Only model references, not commands, endpoints, diagnostics or model overlays, reach the UI. */
@@ -55,12 +55,8 @@ export function explainModel(request: Parameters<typeof selectModel>[0]): ModelE
 /** Registration-only validation after trusted discovery. No live credential or quota availability checks. */
 export function modelConfigurationWarnings(requests: Parameters<typeof selectModel>[0][]): string[] {
   return requests.flatMap(request => {
-    // getAll/find inspect registered metadata; getAvailable would mix live auth into structural validation.
-    const registered = request.registry.getAll?.() ?? [];
-    const getRegistered = () => registered;
-    const registry = { find: (provider: string, id: string) => registered.find(model => model.provider === provider && model.id === id), getAll: getRegistered, getAvailable: getRegistered };
-    const explanation = explainModel({ ...request, registry });
-    return explanation.outcome === "error"
-      ? [`Model configuration for ${safeRef(request.agentType)}: ${explanation.summary}. Registration-only check; credentials and quota were not checked.`] : [];
+    const winner = modelInputs(request.agentType, request.definitionModel)[0]!;
+    return hasModelConfigurationError(request)
+      ? [`Model configuration for ${safeRef(request.agentType)}: ${winner.source}: ${safeRef(winner.requested)} (error; no dispatch). Registration-only check; credentials and quota were not checked.`] : [];
   });
 }

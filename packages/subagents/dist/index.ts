@@ -75,6 +75,7 @@ import {
   handleBase,
   hasAgentBadge,
   hasFallback,
+  hasModelConfigurationError,
   inChildSessionContext,
   invalidatePackageCache,
   isDefaultsDisabled,
@@ -149,7 +150,7 @@ import {
   toReportedUsage,
   withLeadingFlag,
   writeInitialEntry
-} from "./chunks/chunk-GNF4RSXO.ts";
+} from "./chunks/chunk-23UB6B5K.ts";
 
 // src/index.ts
 import { existsSync as existsSync7, mkdirSync as mkdirSync4, readFileSync as readFileSync7, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "node:fs";
@@ -770,11 +771,8 @@ function explainModel(request) {
 }
 function modelConfigurationWarnings(requests) {
   return requests.flatMap((request) => {
-    const registered = request.registry.getAll?.() ?? [];
-    const getRegistered = () => registered;
-    const registry = { find: (provider, id) => registered.find((model) => model.provider === provider && model.id === id), getAll: getRegistered, getAvailable: getRegistered };
-    const explanation = explainModel({ ...request, registry });
-    return explanation.outcome === "error" ? [`Model configuration for ${safeRef(request.agentType)}: ${explanation.summary}. Registration-only check; credentials and quota were not checked.`] : [];
+    const winner = modelInputs(request.agentType, request.definitionModel)[0];
+    return hasModelConfigurationError(request) ? [`Model configuration for ${safeRef(request.agentType)}: ${winner.source}: ${safeRef(winner.requested)} (error; no dispatch). Registration-only check; credentials and quota were not checked.`] : [];
   });
 }
 
@@ -4098,7 +4096,7 @@ var WorkflowDialog = class {
 
 // src/ui/workflow-menu.ts
 async function showWorkflowDialog(ctx, task, deps) {
-  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-GJ42Y5AO.ts");
+  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-LCSI2KCI.ts");
   let overlay;
   await ctx.ui.custom(
     (tui, theme, _keybindings, done) => new WorkflowDialog(

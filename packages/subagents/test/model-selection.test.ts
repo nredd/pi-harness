@@ -212,6 +212,24 @@ describe("effective model explanation", () => {
     expect(getAvailable).not.toHaveBeenCalled();
   });
 
+  it("does not poison live scope availability with the registration-only snapshot", () => {
+    vi.stubEnv("PI_CODING_AGENT_DIR", "");
+    const homeDir = join(dir, "home");
+    mkdirSync(join(homeDir, ".pi", "agent"), { recursive: true });
+    registry.registerProvider("registered-only", {
+      api: "openai-completions", baseUrl: "http://localhost:1",
+      models: [{ id: "unavailable", name: "Unavailable", reasoning: false, input: ["text"],
+        contextWindow: 1000, maxTokens: 100, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+    });
+    writeFileSync(join(homeDir, ".pi", "agent", "settings.json"), JSON.stringify({ enabledModels: ["registered-only/unavailable"] }));
+    setScopeModelsEnabled(true);
+    const request = { homeDir, agentType: "Scout", definitionModel: ref("typed"), parentModel: undefined, registry, cwd: dir };
+    expect(modelConfigurationWarnings([request])).toEqual([]);
+    // Normal scope resolution matches no available models and remains a no-op.
+    expect(selectModel({ ...request, paramModel: ref("explicit") })).toMatchObject({ model: { id: "explicit" }, outcome: "resolved" });
+    expect(explainModel({ ...request, paramModel: ref("explicit") }).outcome).toBe("resolved");
+  });
+
   it("keeps scope refusals private and trusted scope warnings visible", () => {
     vi.stubEnv("PI_CODING_AGENT_DIR", "");
     const homeDir = join(dir, "home");
