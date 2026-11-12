@@ -24,17 +24,20 @@ describe("router on a runtime shared with a child session", () => {
 	});
 
 	/** The parent, and a child whose load has rebound `router/spike`. */
-	async function startChild() {
+	async function startChild(kind?: "strict-priority" | "remaining-balanced") {
 		const clock = new Clock();
 		const usage = new CachedUsage(clock);
 		usage.set("spike-a", 0);
-		scenario = await startRouter(usage);
+		scenario = await startRouter(usage, kind ? { version: 1, kind } : "ordered");
 		const child = await createHarness({
 			modelRuntime: scenario.harness.session.modelRuntime,
 			useModelRuntimeStream: true,
 			extensionFactories: [
 				createSubscriptionRouter({
-					config: { ok: true, profiles: [PROFILE] },
+					config: {
+						ok: true,
+						profiles: [{ ...PROFILE, ...(kind ? { strategy: undefined, policy: { version: 1, kind } as const } : {}) }],
+					},
 					usage,
 					tracker: scenario.tracker,
 					now: clock.now,
@@ -57,13 +60,16 @@ describe("router on a runtime shared with a child session", () => {
 		await expect(route(child)).resolves.toMatchObject({ model: { provider: "spike-a" } });
 	});
 
-	it("keeps routing the parent after the child that rebound the route is disposed", async () => {
-		const { scenario, child } = await startChild();
-		await child.session.bindExtensions({ mode: "rpc" });
-		child.session.dispose();
-		scenario.providers[0].setResponses([fauxAssistantMessage("routed")]);
-		const [message] = await prompt(scenario);
-		expect(message).toMatchObject({ provider: "spike-a", stopReason: "stop" });
-		expect(message?.errorMessage).toBeUndefined();
-	});
+	it.each([undefined, "strict-priority", "remaining-balanced"] as const)(
+		"keeps routing the parent after rebinding child disposal (%s)",
+		async (kind) => {
+			const { scenario, child } = await startChild(kind);
+			await child.session.bindExtensions({ mode: "rpc" });
+			child.session.dispose();
+			scenario.providers[0].setResponses([fauxAssistantMessage("routed")]);
+			const [message] = await prompt(scenario);
+			expect(message).toMatchObject({ provider: "spike-a", stopReason: "stop" });
+			expect(message?.errorMessage).toBeUndefined();
+		},
+	);
 });

@@ -1,10 +1,11 @@
 # Quota fairness contract
 
-This specifies the existing policy, not a new scheduler. No defaults, configuration or
-provider calls change; the stale-data grace window and decision log below are the only
-routing-visible additions. Fairness means balancing **normalized quota
-headroom per window, adjusted for reset pace**, not equal requests, tokens, dollars,
-latency or local session usage. Provider percentages are account-wide observations:
+This specifies legacy `balanced`, not a scheduler. Versioned opt-in policies are documented
+[here](policies.md): `remaining-balanced` maximizes binding raw remaining instead of reset pace,
+with zero margin and continuation-only stickiness by default; `strict-priority` intentionally
+provides no balancing guarantee. Legacy defaults and behavior remain unchanged.
+Legacy fairness means balancing **normalized quota headroom per window, adjusted for reset pace**,
+not equal requests, tokens, dollars, latency or local session usage. Provider percentages are account-wide observations:
 other Pi sessions, other clients and outside use contribute to them.
 
 ## Actual policy

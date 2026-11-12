@@ -26,6 +26,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { parseRef, refKey } from "./model-ref.js";
+import { type PolicyV1, parsePolicy } from "./policy.js";
 
 export const CONFIG_FILE = "subscription-router.json";
 
@@ -65,6 +66,7 @@ export type Strategy = "ordered" | "balanced";
 
 export interface Profile {
 	strategy?: Strategy;
+	policy?: PolicyV1;
 	id: string;
 	name: string;
 	chain: ChainEntry[];
@@ -119,7 +121,15 @@ export function parseConfig(raw: unknown): Profile[] {
 		const where = `profiles.${id}`;
 		if (!PROFILE_ID.test(id)) throw new Error(`${where}: id must match ${PROFILE_ID}`);
 		if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${where}: expected an object`);
-		const { name, chain, exhaustionPolicy, maxWaitMinutes, strategy } = value as Record<string, unknown>;
+		const { name, chain, exhaustionPolicy, maxWaitMinutes, strategy, policy, policyByCaller } = value as Record<
+			string,
+			unknown
+		>;
+		if (policy !== undefined && strategy !== undefined)
+			throw new Error(`${where}: policy and strategy are mutually exclusive`);
+		if (policy !== undefined && policyByCaller !== undefined)
+			throw new Error(`${where}.policyByCaller: unsupported in policy v1`);
+		const parsedPolicy = policy === undefined ? undefined : parsePolicy(policy, `${where}.policy`);
 		if (strategy !== undefined && strategy !== "ordered" && strategy !== "balanced") {
 			throw new Error(`${where}.strategy: expected ordered or balanced`);
 		}
@@ -138,6 +148,7 @@ export function parseConfig(raw: unknown): Profile[] {
 			name: typeof name === "string" ? name : `Router ${id}`,
 			chain: entries,
 			...(strategy === undefined ? {} : { strategy }),
+			...(parsedPolicy === undefined ? {} : { policy: parsedPolicy }),
 		};
 		return exhaustion ? { ...base, exhaustion } : base;
 	});

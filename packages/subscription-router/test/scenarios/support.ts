@@ -96,7 +96,7 @@ export interface RouterScenario {
 /** Bind the real factory and three authenticated faux providers in one session, with no shared-symbol edits. */
 export async function startRouter(
 	usage: CachedUsage,
-	strategy: Profile["strategy"] = "ordered",
+	strategy: Profile["strategy"] | Profile["policy"] = "ordered",
 	extensions: ExtensionFactory[] = [],
 	settings: NonNullable<Parameters<typeof createHarness>[0]>["settings"] = {},
 ): Promise<RouterScenario> {
@@ -108,8 +108,11 @@ export async function startRouter(
 	const profile: Profile = {
 		id: "spike",
 		name: "Router spike",
-		strategy,
-		chain: PHYSICAL.slice(0, strategy === "balanced" ? 3 : 2).map(([provider, id]) => ({ provider, id })),
+		...(typeof strategy === "object" ? { policy: strategy } : { strategy }),
+		chain: PHYSICAL.slice(0, strategy === "balanced" || typeof strategy === "object" ? 3 : 2).map(([provider, id]) => ({
+			provider,
+			id,
+		})),
 	};
 	let harness: Harness | undefined;
 	try {

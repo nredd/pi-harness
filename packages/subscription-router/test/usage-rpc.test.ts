@@ -100,6 +100,44 @@ afterEach(() => {
 });
 
 describe("router usage RPC", () => {
+	it("explain validates flags/profile and is a cached, sanitized, nonpersisting forecast", async () => {
+		const profile: Profile = {
+			id: "new",
+			name: "New",
+			policy: { version: 1, kind: "remaining-balanced" },
+			chain: [{ provider: "anthropic", id: "sonnet" }],
+		};
+		const h = await harness(false, [profile]);
+		const notify = vi.fn();
+		const ctx = {
+			scopedModels: [],
+			ui: { notify },
+			modelRegistry: { find: (provider: string, id: string) => ({ provider, id }), hasConfiguredAuth: () => true },
+		} as unknown as ExtensionCommandContext;
+		for (const action of ["explain", "explain new --bad", "explain new --json --json"]) {
+			await h.status(ctx, action);
+			expect(notify.mock.calls.at(-1)).toEqual(["subscription-router: expected explain <profile> [--json]", "error"]);
+		}
+		await h.status(ctx, "explain missing");
+		expect(notify.mock.calls.at(-1)).toEqual(["subscription-router: unknown profile 'missing'", "error"]);
+		await h.status(ctx, "explain new --json");
+		expect(JSON.parse(notify.mock.calls.at(-1)?.[0] as string)).toMatchObject({
+			version: 1,
+			forecast: true,
+			reason: "direct",
+			caller: "unknown",
+			chosen: "anthropic/sonnet",
+		});
+		await h.status(ctx, "explain new");
+		expect(notify.mock.calls.at(-1)?.[0]).toContain("Cached fresh-dispatch forecast");
+		expect(h.fetch).not.toHaveBeenCalled();
+		expect(h.pi.appendEntry).not.toHaveBeenCalled();
+		await h.status(
+			{ ...ctx, modelRegistry: { ...ctx.modelRegistry, find: () => undefined } } as unknown as ExtensionCommandContext,
+			"explain new",
+		);
+		expect(notify.mock.calls.at(-1)?.[0]).toContain("-> exhausted");
+	});
 	it("records the historical decision in full, and status renders it apart from the forecast", async () => {
 		vi.useFakeTimers({ now: 1_700_000_000_000 });
 		const profile: Profile = {
@@ -271,6 +309,49 @@ describe("router usage RPC", () => {
 		const session = Object.assign(Object.create(ctx), { sessionManager }) as ExtensionCommandContext;
 		return { session, appendEntry, routeContext: { modelRegistry: ctx.modelRegistry, session, appendEntry } };
 	}
+
+	it("keeps versioned policy traces requester-local, bounded and deduplicated", async () => {
+		const profile: Profile = {
+			id: "new",
+			name: "New",
+			policy: { version: 1, kind: "remaining-balanced" },
+			chain: [{ provider: "synthetic", id: "a" }],
+		};
+		const h = await harness(false, [profile]);
+		const notify = vi.fn();
+		const ctx = {
+			scopedModels: [],
+			ui: { notify },
+			modelRegistry: { find: (provider: string, id: string) => ({ provider, id }), hasConfiguredAuth: () => true },
+		} as unknown as ExtensionCommandContext;
+		const first = requesterContext(ctx);
+		const second = requesterContext(ctx);
+		const registration = vi.mocked(h.pi.registerVirtualModel).mock.calls[0]?.[0];
+		for (let i = 0; i < 7; i++)
+			await registration?.route(
+				{
+					reason: "continuation",
+					thinkingLevel: "off",
+					previous: { model: { provider: "synthetic", id: "a" } },
+				} as never,
+				first.routeContext as never,
+			);
+		expect(first.appendEntry).toHaveBeenCalledTimes(1);
+		expect(first.appendEntry.mock.calls[0]?.[1]).toMatchObject({
+			version: 1,
+			evaluation: { override: "sticky", caller: "unknown" },
+		});
+		expect(second.appendEntry).not.toHaveBeenCalled();
+		await h.status(first.session);
+		expect(
+			String(notify.mock.calls.at(-1)?.[0])
+				.split("\n")
+				.filter((line) => line.includes("router/new continuation ->")),
+		).toHaveLength(5);
+		await h.status(second.session);
+		expect(notify.mock.calls.at(-1)?.[0]).not.toContain("last decisions");
+		expect(h.pi.appendEntry).not.toHaveBeenCalled();
+	});
 
 	it("logs a requested route to the requester, deduplicated, with its own status history", async () => {
 		const { h, ctx, notify, tick } = await routed();
