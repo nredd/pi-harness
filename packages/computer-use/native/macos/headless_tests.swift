@@ -320,7 +320,7 @@ print("macos keyboard layout checks passed (\(checked) reference sources)")
 }
 @main
 struct HeadlessTests {
- @MainActor static func main() { runPureAssertions(); runKeyboardAssertions(); testMotionLifecycle() }
+ @MainActor static func main() { runPureAssertions(); runKeyboardAssertions(); runRequestFramingAssertions(); testMotionLifecycle() }
     @MainActor
     static func testMotionLifecycle() {
         let renderer = AgentCursorRenderer()

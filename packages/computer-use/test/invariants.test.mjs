@@ -298,7 +298,8 @@ test("INV-20 bounded broad root discovery", () => {
 	assert(ts.includes("return await collectWindowDetails(apps, config, signal)"), "filtered find_roots does not retain per-app discovery");
 	assert(swift.includes("signal(SIGPIPE, SIG_IGN)"), "helper daemon does not ignore process-wide SIGPIPE");
 	assert(swift.includes("SO_NOSIGPIPE"), "helper sockets can terminate the daemon on a late response");
-	assert(swift.includes("Darwin.send(responseSocket"), "helper socket responses do not use failure-tolerant writes");
+	assert(swift.includes("Darwin.send($0, $1, $2, 0)"), "helper default transport does not use failure-tolerant writes");
+	assert(swift.includes("writeSocket(responseSocket, base.advanced(by: offset), raw.count - offset)"), "helper socket responses bypass the short-write transport");
 	assert(swift.includes("recentCompletedRequestIds"), "helper diagnostics cannot establish abandoned-request completion");
 });
 

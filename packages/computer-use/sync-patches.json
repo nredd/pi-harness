@@ -911,6 +911,36 @@
 			}
 		},
 		{
+			"id": "request-framing-headless",
+			"purpose": "Exercise real Bridge framing, completion, short-write transport and argument coercion without live desktop operations",
+			"rows": [
+				"Request framing headless"
+			],
+			"files": [
+				"README.md",
+				"docs/content/docs/reference/codebase.mdx",
+				"docs/native-request-framing.md",
+				"native/macos/bridge.swift",
+				"native/macos/headless_tests.swift",
+				"native/macos/request_framing_tests.swift",
+				"scripts/check-sync-reverts.mjs",
+				"scripts/swift-coverage.mjs",
+				"test/app-policy.test.mjs",
+				"test/invariants.test.mjs",
+				"test/swift-coverage.test.mjs"
+			],
+			"check": "test/macos-native-pure.test.mjs",
+			"dropControls": [
+				"request completion eviction (#770)",
+				"request short-write offset (#770)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#770; not filed upstream"
+			}
+		},
+		{
 			"id": "root-outcomes",
 			"purpose": "Report coded stale roots and only live same-process replacement roots",
 			"rows": [
@@ -1180,12 +1210,14 @@
 		"docs/content/docs/reference/platforms/macos/root-targeting.mdx",
 		"docs/content/docs/tutorials/getting-started.mdx",
 		"docs/macos-root-targeting.md",
+		"docs/native-request-framing.md",
 		"docs/rust-coverage.md",
 		"docs/src/components/brand.tsx",
 		"extensions/computer-use.ts",
 		"native/macos/bridge.swift",
 		"native/macos/headless_tests.swift",
 		"native/macos/helper_entry.swift",
+		"native/macos/request_framing_tests.swift",
 		"package-lock.json",
 		"package.json",
 		"prebuilt/macos/arm64/bridge",
