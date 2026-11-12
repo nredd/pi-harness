@@ -6,7 +6,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Added
 
-- Real-source Swift ref ownership and look payload assertions cover transfer guards, exact lookup, FIFO snapshot eviction, optional fields and recursive child order without AX queries. Destination ownership, optional flags and child order have executable mutation controls; runtime behavior is unchanged (nredd/pi-harness#769).
+- Real-source Swift ref ownership and look payload assertions cover transfer guards, exact lookup, FIFO snapshot eviction, optional fields and recursive child order without AX queries. Window equality, destination ownership, optional flags and child order have executable mutation controls. Distinct handles use an owned non-GUI child PID, reaped before assertions; a source-level guard rejects AX queries/actions. Runtime behavior is unchanged (nredd/pi-harness#769).
 
 - `test:async` measures the complete verification-only `scripts/check-async.mjs` at zero uncovered lines/functions/branches/statements with deterministic safety-path tests and retained real child-process checks, independently of runtime caps. Missing selected-host reports fail accounting; the other verification scripts remain unmeasured (nredd/pi-harness#759).
 - `coverage:swift` links complete production Swift sources into a headless test binary and preserves per-file LLVM/profile evidence in hosted macOS CI. The new native signal is report-only, not a 100% claim; thin live adapters remain documented exceptions and all unexecuted source stays visible (nredd/pi-harness#757).

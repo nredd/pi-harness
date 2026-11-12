@@ -953,6 +953,15 @@ const cases = [
 		failure: /desktop_input must not interleave inside a physical act_ui transaction/,
 	},
 	{
+		name: "unequal windows receive distinct refs (#769)",
+		file: "native/macos/bridge.swift",
+		before: "if CFEqual(existing, window) {",
+		after: "if CFEqual(existing, existing) {",
+		check: "test/macos-native-pure.test.mjs",
+		failure: /unequal window handle receives a distinct ref/,
+		darwinOnly: true,
+	},
+	{
 		name: "unnamed role folds as node (#717)",
 		file: "src/outline.ts",
 		before: 'return stripped || "node";',

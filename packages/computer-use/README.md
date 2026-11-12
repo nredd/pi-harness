@@ -64,10 +64,11 @@ Owner-only smoke commands and rollback are recorded in `UPSTREAM.md`.
 `npm run coverage:swift` links all shipped Swift sources with the headless assertions.
 `native/macos/ref_look_tests.swift` checks real `AXRefStore` ownership and snapshots plus
 `LookNode.payload()` keys, flags, rectangles and recursive child order. It only constructs
-self-process AX handles and synthetic nodes, never queries AX attributes. The sync-revert
-controls mutate destination ownership, optional flags and child order. Unexecuted live code
+self-process/managed-child AX handles and synthetic nodes, never queries AX attributes.
+The child is reaped before assertions; a source-level guard forbids AX queries/actions.
+The sync-revert controls mutate window equality, destination ownership, optional flags and child order. Unexecuted live code
 stays in the denominator; this slice does not claim whole-file coverage or change runtime behavior.
-Local measurements and the remaining unequal-window region are recorded
+Local measurements and the unequal-window fixture lifecycle are recorded
 [here](./docs/swift-ref-look-coverage.md).
 
 `npm run test:linux` uses disposable protocol children, not a native desktop helper. Its closed-stdin

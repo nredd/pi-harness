@@ -1071,7 +1071,7 @@
 		},
 		{
 			"id": "swift-ownership-look-coverage",
-			"purpose": "Assert real AXRefStore ownership and LookNode payload serialization with self-process handles and synthetic nodes, without AX queries or runtime changes",
+			"purpose": "Assert real AXRefStore ownership and LookNode payload serialization with owned-process handles and synthetic nodes, without AX queries or runtime changes",
 			"rows": [
 				"Swift ref/look coverage"
 			],
@@ -1081,13 +1081,15 @@
 				"native/macos/ref_look_tests.swift",
 				"scripts/check-sync-reverts.mjs",
 				"scripts/swift-coverage.mjs",
+				"test/ref-look-safety.test.mjs",
 				"test/swift-coverage.test.mjs"
 			],
 			"check": "test/macos-native-pure.test.mjs",
 			"dropControls": [
 				"LookNode preserves child order (#769)",
 				"LookNode serializes optional flags (#769)",
-				"look transfer preserves destination refs (#769)"
+				"look transfer preserves destination refs (#769)",
+				"unequal windows receive distinct refs (#769)"
 			],
 			"upstream": {
 				"status": "harness-only",
@@ -1356,6 +1358,7 @@
 		"test/platform-backends.test.mjs",
 		"test/platform-linux.test.mjs",
 		"test/platform-windows.test.mjs",
+		"test/ref-look-safety.test.mjs",
 		"test/runtime-concurrency.test.mjs",
 		"test/runtime-state-output.test.mjs",
 		"test/rust-coverage-errors.test.mjs",

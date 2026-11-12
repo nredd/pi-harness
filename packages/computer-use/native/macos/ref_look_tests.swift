@@ -21,9 +21,37 @@ func runRefLookAssertions() {
   // Constructing application handles and comparing CF identity does not contact the AX server.
   let element = AXUIElementCreateApplication(getpid())
   let equivalent = AXUIElementCreateApplication(getpid())
+  // Own the other PID rather than naming an unrelated app. cat waits only for this pipe's EOF.
+  // Reap it BEFORE any assertion can exit(1); refs below are inert handles even after child exit.
+  let fixture = Process()
+  let input = Pipe()
+  fixture.executableURL = URL(fileURLWithPath: "/bin/cat")
+  fixture.standardInput = input
+  fixture.standardOutput = FileHandle.nullDevice
+  fixture.standardError = FileHandle.nullDevice
+  do {
+    try fixture.run()
+  } catch {
+    print("FAIL: cannot start isolated PID fixture: \(error)")
+    exit(1)
+  }
+  let distinct = AXUIElementCreateApplication(fixture.processIdentifier)
+  input.fileHandleForWriting.closeFile()
+  fixture.waitUntilExit()
+  check(
+    fixture.terminationStatus == 0 && !fixture.isRunning, "isolated PID fixture exits and is reaped"
+  )
+  check(!CFEqual(element, distinct), "different owned fixture PID produces an unequal AX handle")
   let store = AXRefStore(unownedCapacity: 2)
   let window = store.storeWindow(element)
   check(store.storeWindow(equivalent) == window, "equal window handles reuse the exact ref")
+  let distinctWindow = store.storeWindow(distinct)
+  check(distinctWindow != window, "unequal window handle receives a distinct ref")
+  check(
+    store.storeWindow(distinct) == distinctWindow, "distinct window handle is deduped on repeat")
+  check(
+    sameElement(store.window(for: distinctWindow), distinct),
+    "distinct ref resolves to the exact fixture handle")
   check(sameElement(store.window(for: window), element), "window lookup returns the stored handle")
   check(store.window(for: "missing") == nil, "missing window lookup is nil")
   let snapshot = AXRefStore.Snapshot(
