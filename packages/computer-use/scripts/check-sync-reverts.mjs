@@ -546,7 +546,7 @@ const cases = [
 		name: "look-owned ref eviction (400f784/50cbfe2)",
 		file: "native/macos/bridge.swift",
 		before: "for ref in refsByOwner.removeValue(forKey: owner) ?? [] { removeElement(ref) }",
-		after: "/* owned refs leaked */",
+		after: "_ = owner /* owned refs leaked */",
 		check: "test/macos-native-pure.test.mjs",
 		failure: /dropping a look frees only its refs/,
 		darwinOnly: true,

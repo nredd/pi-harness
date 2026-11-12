@@ -114,7 +114,7 @@ including the unexecuted helper entry, into one headless binary. No regex extrac
 production implementation is measured. The previous sliced-source numbers are retired as a
 current baseline.
 
-Local initial reference on macOS arm64, Apple Swift 6.4.2 (the hosted exact-HEAD receipt must confirm it):
+Local initial reference on macOS arm64, Apple Swift 6.4.2. Hosted CI run `43183937349`, artifact `13929575830`, at prior HEAD `1a737e20` measured the same per-file counters with Apple Swift 6.4. The surrounding job failed later in the sync-ledger gate; a final-HEAD hosted receipt is still required:
 
 | File | Lines missed/total | Functions missed/total | LLVM regions missed/total |
 | --- | --- | --- | --- |

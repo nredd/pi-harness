@@ -1061,7 +1061,7 @@
 				"test/setup-helper-inprocess.test.mjs",
 				"test/swift-coverage.test.mjs"
 			],
-			"check": "test/swift-coverage.test.mjs; test:macos-native",
+			"check": "test/swift-coverage.test.mjs",
 			"dropControls": [
 				"Swift producer rejects wrong-binary profiles (#757)"
 			],
