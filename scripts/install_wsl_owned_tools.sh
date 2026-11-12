@@ -10,6 +10,11 @@ ref=$(node --input-type=module -e '
   console.log(refs[0][1]);
 ')
 tool_dir=${1:?Tool directory required}
+case "$(uname -m)" in
+  x86_64) runner_arch=X64 ;;
+  aarch64 | arm64) runner_arch=ARM64 ;;
+  *) echo "install_wsl_owned_tools: unsupported architecture $(uname -m)" >&2; exit 1 ;;
+esac
 mkdir -p "$tool_dir/install-action"
 curl --fail --location --retry 3 --connect-timeout 15 --max-time 45 --output "$tool_dir/install-action.tar.gz" \
   "https://codeload.github.com/taiki-e/install-action/tar.gz/$ref"
@@ -19,7 +24,7 @@ paths="$tool_dir/install-action-paths"
 env -u GH_TOKEN -u GITHUB_TOKEN -u DEFAULT_GITHUB_TOKEN \
   INPUT_TOOL=rust+rustfmt+clippy,cargo-nextest INPUT_CHECKSUM=true INPUT_FALLBACK=none \
   GITHUB_ACTION_PATH="$tool_dir/install-action" GITHUB_PATH="$paths" \
-  RUNNER_OS=Linux RUNNER_ARCH=X64 ACTION_USER_AGENT="taiki-e/install-action ($ref)" \
+  RUNNER_OS=Linux RUNNER_ARCH="$runner_arch" ACTION_USER_AGENT="taiki-e/install-action ($ref)" \
   bash --noprofile --norc "$tool_dir/install-action/main.sh"
 while IFS= read -r directory; do
   export PATH="$directory:$PATH"

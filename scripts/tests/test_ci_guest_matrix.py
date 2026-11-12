@@ -1508,7 +1508,7 @@ def test_owned_shards_keep_the_guest_boundary() -> None:
     # One artifact name per shard: two shards of one run cannot upload the same name.
     assert diagnostics[0]["with"]["name"] == "wsl2-diagnostics-owned-${{ matrix.shard }}"
     setup = next(step for step in steps if step.get("id") == "tools")
-    assert setup["with"] == {"guest": "${{ matrix.guest }}", "owned": "true"}
+    assert setup["with"] == {"guest": "${{ matrix.guest }}", "host": "${{ matrix.host }}", "owned": "true"}
     capture = [step for step in steps if step.get("uses") == "./.github/actions/capture-ci-wsl"]
     upload = next(step for step in steps if step.get("name") == "Preserve this shard's coverage reports")
     assert steps.index(capture[0]) < steps.index(upload) < steps.index(capture[1])
@@ -1771,7 +1771,10 @@ def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> Non
     }
     owned = cfg["owned-shards-ubuntu"]["steps"]
     arm = next(step for step in owned if step.get("name") == "Add the aarch64 Linux compile target")
-    assert arm["if"] == "matrix.guest != 'macos' && contains(matrix.workspaces, 'packages/computer-use')"
+    assert (
+        arm["if"] == "matrix.guest != 'macos' && matrix.host != 'native' "
+        "&& contains(matrix.workspaces, 'packages/computer-use')"
+    )
     contracts = [step["run"] for step in cfg["contracts"]["steps"] if "run" in step]
     for target in (
         "check-package-contracts",
@@ -2560,3 +2563,82 @@ def test_release_verify_restores_the_ci_npm_cache_without_saving() -> None:
     assert pin < locate < restore < install
     assert steps[restore]["uses"].split("@")[1] == ci_cache["uses"].split("@")[1]
     assert steps[restore]["with"] == ci_cache["with"]
+
+
+NATIVE_HOST_STEPS = ("Smoke the native guest", "Bootstrap tools in the native guest")
+
+
+@pytest.mark.parametrize("job_name", ["owned-shards-wsl2", "contracts"])
+def test_the_native_guest_is_bootstrapped_in_place_and_only_there(job_name: str) -> None:
+    """A pooled cell smokes, then runs `wsl2_setup.sh` in guest mode; a hosted one runs neither (#736)."""
+    steps = jobs()[job_name]["steps"]
+    native = [step for step in steps if step.get("name") in NATIVE_HOST_STEPS]
+    assert [step["name"] for step in native] == list(NATIVE_HOST_STEPS)
+    assert all("== 'native'" in step["if"] for step in native)
+    smoke, bootstrap = native
+    assert smoke["run"] == "bash scripts/wsl2_smoke.sh"
+    assert bootstrap["env"]["PI_WSL2_IN_GUEST"] == "1"
+    assert bootstrap["run"] == "bash scripts/wsl2_setup.sh"
+    tools = next(step for step in steps if step.get("id") == "tools")
+    assert steps.index(tools) < steps.index(smoke) < steps.index(bootstrap)
+    assert "shell" not in smoke
+    assert "shell" not in bootstrap
+
+
+@pytest.mark.parametrize("job_name", ["owned-shards-wsl2", "contracts"])
+def test_windows_only_wsl_steps_never_run_on_the_native_host(job_name: str) -> None:
+    """Capture and diagnostics drive `wsl.exe`; they need a Windows runner, not just a `wsl2` matrix value."""
+    steps = jobs()[job_name]["steps"]
+    capture = [step for step in steps if step.get("uses") == "./.github/actions/capture-ci-wsl"]
+    assert capture
+    assert all("runner.os == 'Windows'" in step["if"] for step in capture)
+    for step in steps:
+        if step.get("shell") == "pwsh" or "wsl2-diagnostics" in str(step.get("with", {}).get("path", "")):
+            assert "runner.os == 'Windows'" in step["if"], step.get("name")
+
+
+def test_the_windows_shell_is_keyed_on_the_planned_host() -> None:
+    """`defaults.run.shell` cannot read `runner.os`: only a hosted (`windows`) cell gets `wsl2_host.sh`."""
+    owned = jobs()["owned-shards-wsl2"]["defaults"]["run"]["shell"]
+    assert owned.startswith("${{ matrix.guest == 'wsl2' && matrix.host == 'windows' && format(")
+    contracts = jobs()["contracts"]["defaults"]["run"]["shell"]
+    plan = "fromJSON(needs.classify.outputs.plan || '{}')['contracts (wsl2)'].host"
+    assert f"({plan} || 'windows') == 'windows'" in contracts
+    for shell in (owned, contracts):
+        assert "runner.os" not in shell
+        assert shell.endswith("|| 'bash -e {0}' }}")
+
+
+def test_setup_ci_tools_skips_the_host_side_wsl_setup_for_the_native_host() -> None:
+    """The pooled guest is already a distro: no `Vampire/setup-wsl`, and the Windows default is unchanged."""
+    action = yaml.safe_load((ROOT / ".github/actions/setup-ci-tools/action.yml").read_text())
+    assert action["inputs"]["host"]["default"] == "windows"
+    setup = next(s for s in action["runs"]["steps"] if s.get("uses") == "./.github/actions/setup-ci-wsl")
+    assert setup["if"] == "inputs.guest == 'wsl2' && inputs.host != 'native'"
+    contracts = next(s for s in jobs()["contracts"]["steps"] if s.get("id") == "tools")
+    assert "contracts (wsl2)'].host" in contracts["with"]["host"]
+
+
+def test_every_action_in_the_pool_workflows_stays_pinned_to_a_full_sha() -> None:
+    """Repo setting `sha_pinning_required`: no `uses:` may name a tag or branch."""
+    for workflow in ("ci.yml", "runner-smoke.yml", "runner-rescue.yml"):
+        text = (ROOT / ".github/workflows" / workflow).read_text()
+        for ref in re.findall(r"^\s*(?:-\s+)?uses:\s*(\S+)", text, re.MULTILINE):
+            assert ref.startswith("./") or re.fullmatch(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}", ref), (
+                workflow,
+                ref,
+            )
+
+
+def test_the_smoke_workflow_covers_the_wsl2_pool_for_same_repo_runs_only() -> None:
+    """`runner-smoke.yml` smokes `pi-wsl2` with the shared script, behind the same same-repo guard."""
+    workflow = yaml.safe_load((ROOT / ".github/workflows/runner-smoke.yml").read_text())
+    job = workflow["jobs"]["pi-wsl2"]
+    assert job["runs-on"] == ["self-hosted", "pi-wsl2"]
+    # No pool, no runner with the label: a PR-triggered job would queue forever, so PRs wait for the heartbeat
+    # variable and only a manual dispatch runs the acceptance smoke before it exists.
+    assert "workflow_dispatch" in job["if"]
+    assert "vars.PI_WSL2_HEARTBEAT != ''" in job["if"]
+    assert "head.repo.full_name == github.repository" in job["if"]
+    assert any(step.get("run") == "bash scripts/wsl2_smoke.sh" for step in job["steps"])
+    assert "scripts/wsl2_smoke.sh" in workflow[True]["pull_request"]["paths"]

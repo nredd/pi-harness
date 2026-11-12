@@ -414,6 +414,24 @@ def run_install_gh(tmp_path: Path, system: str, machine: str) -> subprocess.Comp
         ),
         encoding="utf-8",
     )
+    # macOS has no `sha256sum`: a portable stand-in that verifies the digest and path from stdin and
+    # records that it ran, so a wrong pinned digest or archive fails the check for the right reason.
+    (commands / "sha256sum").write_text(
+        textwrap.dedent(
+            f"""\
+            #!/usr/bin/env python3
+            import hashlib
+            import sys
+            from pathlib import Path
+
+            Path({str(tmp_path / "sha256sum-ran")!r}).touch()
+            digest, _, path = sys.stdin.readline().rstrip("\\n").partition("  ")
+            sys.exit(0 if hashlib.sha256(Path(path).read_bytes()).hexdigest() == digest else 1)
+            """
+        ),
+        encoding="utf-8",
+    )
+    (commands / "sha256sum").chmod(0o755)
     (commands / "curl").write_text(
         textwrap.dedent(
             """\
@@ -447,12 +465,30 @@ def test_install_gh_refuses_a_tarball_that_does_not_match_the_pinned_sha256(tmp_
     assert not (tmp_path / "gh" / "bin").exists()
 
 
-def test_install_gh_refuses_unsupported_platforms_before_downloading(tmp_path: Path) -> None:
-    """Fail closed off linux/x86_64 instead of installing the wrong binary."""
-    completed = run_install_gh(tmp_path, "Linux", "aarch64")
+@pytest.mark.parametrize(("system", "machine"), [("Darwin", "arm64"), ("Linux", "riscv64")])
+def test_install_gh_refuses_unsupported_platforms_before_downloading(
+    tmp_path: Path, system: str, machine: str
+) -> None:
+    """Fail closed off linux/x86_64 and linux/aarch64 instead of installing the wrong binary."""
+    completed = run_install_gh(tmp_path, system, machine)
     assert completed.returncode == 1
-    assert "supports only linux/x86_64" in completed.stderr
+    assert "supports only linux/x86_64 and linux/aarch64" in completed.stderr
     assert not (tmp_path / "gh").exists()
+
+
+@pytest.mark.parametrize(("machine", "asset"), [("x86_64", "linux_amd64"), ("aarch64", "linux_arm64")])
+def test_install_gh_downloads_the_asset_of_its_architecture(tmp_path: Path, machine: str, asset: str) -> None:
+    """Pick the amd64 or arm64 tarball by `uname -m` and pin a distinct digest for each."""
+    completed = run_install_gh(tmp_path, "Linux", machine)
+    assert completed.returncode == 1
+    assert f"for gh_{GH_VERSION}_{asset}.tar.gz; refusing to install" in completed.stderr
+    assert (tmp_path / "sha256sum-ran").is_file()
+    pins = re.findall(r"^GH_SHA256_(AMD64|ARM64)=([0-9a-f]{64})$", INSTALL_GH.read_text(), re.MULTILINE)
+    assert sorted(name for name, _ in pins) == ["AMD64", "ARM64"]
+    assert len({digest for _, digest in pins}) == 2
+
+
+GH_VERSION = cast("re.Match[str]", re.search(r"^GH_VERSION=(\S+)$", INSTALL_GH.read_text(), re.MULTILINE))[1]
 
 
 def test_install_gh_requires_one_directory_argument() -> None:
@@ -571,6 +607,8 @@ def guest_setup_env(tmp_path: Path, stubs: dict[str, str]) -> tuple[dict[str, st
     commands.mkdir()
     log = tmp_path / "timeout.log"
     defaults = {
+        # The hosted fallback is x64 whatever machine runs this test.
+        "uname": "#!/bin/sh\necho x86_64\n",
         "findmnt": "#!/bin/sh\nprintf ext4\n",
         "ps": "#!/bin/sh\necho 'PID PPID ELAPSED STAT COMMAND'\necho '42 1 05:00 S synthetic-stuck-apt'\n",
         # The copy stub plants the pins the real checkout carries.
@@ -889,3 +927,234 @@ def test_apt_prerequisites_name_a_hang_on_both_mirrors(tmp_path: Path) -> None:
     assert "synthetic-stuck-apt" in result.stderr
     assert "every mirror failed" in result.stderr
     assert not log.exists()
+
+
+SMOKE = ROOT / "scripts" / "wsl2_smoke.sh"
+
+
+def native_guest(tmp_path: Path, versions: dict[str, str]) -> tuple[dict[str, str], Path, Path]:
+    """Build an in-guest bootstrap fixture: a checkout on "ext4", stub tools and a recording `curl`.
+
+    Parameters:
+        tmp_path (Path): Scratch directory.
+        versions (dict[str, str]): Overrides of the stub tools' versions (`node`, `npm`, `bun`, `uv`).
+
+    Returns:
+        tuple[dict[str, str], Path, Path]: Environment for `wsl2_setup.sh`, the workspace and the log of
+            every command that would have downloaded something.
+    """
+    workspace = tmp_path / "workspace"
+    (workspace / ".git").mkdir(parents=True)
+    (workspace / "scripts").mkdir()
+    shutil.copy(INSTALL_GH, workspace / "scripts" / "install_gh_linux.sh")
+    (workspace / ".node-version").write_text("22.0.0\n", encoding="utf-8")
+    (workspace / ".bun-version").write_text("1.4.4\n", encoding="utf-8")
+    (workspace / "package.json").write_text("{}", encoding="utf-8")
+    home = tmp_path / "home"
+    gh_bin = home / ".cache" / "pi-harness-wsl2-tools" / "gh" / "bin"
+    gh_bin.mkdir(parents=True)
+    (gh_bin / "gh").write_text(f"#!/bin/sh\necho 'gh version {GH_VERSION} (2026-01-01)'\n", encoding="utf-8")
+    (gh_bin / "gh").chmod(0o755)
+    downloads = tmp_path / "downloads.log"
+    reported = {"node": "22.0.0", "npm": "11.0.0", "bun": "1.4.4", "uv": "0.13.1"} | versions
+    stubs = {
+        "uname": "#!/bin/sh\necho aarch64\n",
+        "findmnt": "#!/bin/sh\nprintf ext4\n",
+        "timeout": '#!/bin/sh\nshift 2\nexec "$@"\n',
+        "node": f'#!/bin/sh\ncase "$1" in -p) echo npm@11.0.0 ;; *) echo v{reported["node"]} ;; esac\n',
+        "npm": f"#!/bin/sh\necho {reported['npm']}\n",
+        "bun": f"#!/bin/sh\necho {reported['bun']}\n",
+        "uv": f"#!/bin/sh\necho 'uv {reported['uv']} (abc 2026-01-01)'\n",
+        "curl": f'#!/bin/sh\necho "curl $*" >> {shlex.quote(str(downloads))}\nexit 99\n',
+    }
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    for name, body in stubs.items():
+        (commands / name).write_text(body, encoding="utf-8")
+        (commands / name).chmod(0o755)
+    env = {
+        "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+        "HOME": str(home),
+        "PI_WSL2_IN_GUEST": "1",
+        "GITHUB_WORKSPACE": str(workspace),
+        "RUNNER_TEMP": str(tmp_path / "temp"),
+        "GITHUB_PATH": str(tmp_path / "github_path"),
+    }
+    return env, workspace, downloads
+
+
+def test_in_guest_setup_reuses_baked_tools_and_never_touches_the_windows_side(tmp_path: Path) -> None:
+    """Matching versions mean no download, no `/mnt` check, no copy; the tool path goes to GITHUB_PATH."""
+    env, workspace, downloads = native_guest(tmp_path, {})
+    result = subprocess.run(
+        ["/bin/bash", str(SETUP)], cwd=workspace, env=env, capture_output=True, check=False, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert not downloads.exists()
+    assert not (tmp_path / "home" / "pi-harness-ci").exists()
+    tool_dirs = Path(env["GITHUB_PATH"]).read_text().splitlines()
+    assert str(tmp_path / "home" / ".cache" / "pi-harness-wsl2-tools" / "gh" / "bin") in tool_dirs
+    identity = (tmp_path / "temp" / "wsl2-diagnostics" / "identity.txt").read_text()
+    assert "Arch: aarch64" in identity
+    assert (workspace / ".ci-temp" / "tool-path").is_file()
+    # The runner prepends each line, so the file must list the PATH's home directories in reverse.
+    home_dirs = [
+        d
+        for d in (workspace / ".ci-temp" / "tool-path").read_text().strip().split(":")
+        if d.startswith(str(tmp_path / "home"))
+    ]
+    assert tool_dirs == home_dirs[::-1]
+
+
+@pytest.mark.parametrize(
+    ("versions", "url"),
+    [
+        ({"node": "21.0.0"}, "https://nodejs.org/dist/v22.0.0/node-v22.0.0-linux-arm64.tar.xz"),
+        ({"bun": "1.0.0"}, "https://bun.sh/install"),
+        ({"uv": "0.1.0"}, "https://astral.sh/uv/0.13.1/install.sh"),
+    ],
+)
+def test_in_guest_setup_downloads_only_the_tool_whose_version_drifted(
+    tmp_path: Path, versions: dict[str, str], url: str
+) -> None:
+    """A mismatch fetches that tool (for the guest's own architecture); the matching ones are reused."""
+    env, workspace, downloads = native_guest(tmp_path, versions)
+    result = subprocess.run(
+        ["/bin/bash", str(SETUP)], cwd=workspace, env=env, capture_output=True, check=False, text=True
+    )
+    assert result.returncode == 99
+    assert [line.split()[-1] for line in downloads.read_text().splitlines()] == [url]
+
+
+def test_in_guest_setup_needs_a_runner_checkout_and_an_unprivileged_user(tmp_path: Path) -> None:
+    """Refuse a workspace that is not a Git checkout instead of bootstrapping nothing."""
+    env, workspace, _ = native_guest(tmp_path, {})
+    shutil.rmtree(workspace / ".git")
+    result = subprocess.run(
+        ["/bin/bash", str(SETUP)], cwd=workspace, env=env, capture_output=True, check=False, text=True
+    )
+    assert result.returncode != 0
+
+
+def run_smoke(
+    tmp_path: Path,
+    blocked: bool,
+    extra_env: dict[str, str] | None = None,
+    *,
+    userns: bool = False,
+    ns_limit: str = "0",
+    control: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    """Run the real smoke script against stub network tools.
+
+    Parameters:
+        tmp_path (Path): Scratch directory.
+        blocked (bool): Whether private targets refuse connections (`timeout` exits 124 for them).
+        extra_env (dict[str, str] | None): Extra environment, e.g. injected host targets.
+        userns (bool): Whether `unshare -Urn` succeeds, i.e. unprivileged user namespaces are enabled.
+        ns_limit (str): Value of `user.max_user_namespaces`.
+        control (bool): Whether the public positive-control connection (port 443) opens.
+
+    Returns:
+        subprocess.CompletedProcess[str]: The smoke run; `aarch64` and a non-root, no-sudo user are stubbed.
+    """
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    refuse = (
+        (
+            'case "$*" in *"/443"*) '
+            + ("" if control else "exit 124 ")
+            + ';; *"/dev/tcp/"*) exit 124 ;; esac\n'
+        )
+        if blocked
+        else ""
+    )
+    stubs = {
+        "uname": '#!/bin/sh\ncase "$1" in -m) echo aarch64 ;; -r) echo 6.18-stub ;; *) echo Linux ;; esac\n',
+        "id": '#!/bin/sh\ncase "$1" in -u) echo 1001 ;; *) echo runner ;; esac\n',
+        "sudo": "#!/bin/sh\nexit 1\n",
+        "unshare": f"#!/bin/sh\nexit {0 if userns else 1}\n",
+        "curl": "#!/bin/sh\nexit 0\n",
+        "ip": "#!/bin/sh\necho 'default via 172.20.0.1 dev eth0'\n",
+        "nft": "#!/bin/sh\nexit 1\n",
+        "findmnt": "#!/bin/sh\nexit 1\n",
+        "timeout": f"#!/bin/sh\nshift\n{refuse}exit 0\n",
+    }
+    for name, body in stubs.items():
+        (commands / name).write_text(body, encoding="utf-8")
+        (commands / name).chmod(0o755)
+    root = tmp_path / "root"
+    (root / "proc/sys/net/ipv6/conf/all").mkdir(parents=True)
+    (root / "proc/sys/net/ipv6/conf/all/disable_ipv6").write_text("1\n")
+    (root / "proc/sys/user").mkdir(parents=True)
+    (root / "proc/sys/user/max_user_namespaces").write_text(f"{ns_limit}\n")
+    env = (
+        dict(os.environ)
+        | {"PATH": f"{commands}{os.pathsep}{os.environ['PATH']}", "SMOKE_ROOT": str(root)}
+        | (extra_env or {})
+    )
+    return subprocess.run(["/bin/bash", str(SMOKE)], env=env, capture_output=True, check=False, text=True)
+
+
+def test_smoke_passes_when_every_private_target_is_blocked(tmp_path: Path) -> None:
+    """Probe the generic private classes and the gateway, and every injected host and dev target."""
+    result = run_smoke(
+        tmp_path,
+        blocked=True,
+        extra_env={"SMOKE_HOST_IP": "172.20.0.2", "SMOKE_DEV_IP": "172.20.0.9", "SMOKE_DEV_PORTS": "22 8080"},
+    )
+    assert result.returncode == 0, result.stdout
+    assert "::error::" not in result.stdout
+    for target in (
+        "192.168.1.1:80",
+        "100.100.100.100:80",
+        "169.254.169.254:80",
+        "172.20.0.1:445",
+        "172.20.0.2:3389",
+        "172.20.0.9:8080",
+    ):
+        assert f"blocked: {target}" in result.stdout, target
+    assert "loopback:8080 closed" in result.stdout
+
+
+def test_smoke_fails_when_unprivileged_user_namespaces_are_enabled(tmp_path: Path) -> None:
+    """`unshare -Urn` working means root-in-namespace reaches kernel attack surface: a violation."""
+    result = run_smoke(tmp_path, blocked=True, userns=True)
+    assert result.returncode == 1
+    assert "::error::unprivileged user namespaces are enabled" in result.stdout
+
+
+def test_smoke_fails_when_the_user_namespace_limit_is_not_zero(tmp_path: Path) -> None:
+    """Read the sysctl itself: a failing `unshare` can have other causes than the limit being zero."""
+    result = run_smoke(tmp_path, blocked=True, ns_limit="1")
+    assert result.returncode == 1
+    assert "::error::user.max_user_namespaces is 1, not 0" in result.stdout
+
+
+def test_smoke_fails_when_the_positive_control_cannot_connect(tmp_path: Path) -> None:
+    """A failed public TCP probe makes every `blocked` line meaningless: fail instead of passing them."""
+    result = run_smoke(tmp_path, blocked=True, control=False)
+    assert result.returncode == 1
+    assert "::error::probe machinery cannot open a public connection" in result.stdout
+
+
+def test_smoke_fails_on_a_reachable_private_target(tmp_path: Path) -> None:
+    """A connection that opens to a private range is a violation, named with its address."""
+    result = run_smoke(tmp_path, blocked=False)
+    assert result.returncode == 1
+    assert "::error::reachable: 192.168.1.1:80" in result.stdout
+    assert "::error::reachable: 172.20.0.1:445" in result.stdout
+
+
+def test_smoke_hardcodes_no_host_or_dev_address() -> None:
+    """Host and dev addresses come from the environment; the script names only generic ranges."""
+    addresses = set(re.findall(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", SMOKE.read_text(encoding="utf-8")))
+    assert addresses == {
+        "192.168.1.1",
+        "10.0.0.1",
+        "172.16.0.1",
+        "100.64.0.1",
+        "100.100.100.100",
+        "169.254.169.254",
+        "127.0.0.1",
+    }

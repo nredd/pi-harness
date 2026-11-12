@@ -4,6 +4,11 @@ inputs:
   guest:
     description: Execution environment, linux, macos or wsl2
     required: true
+  host:
+    description: >-
+      Where a wsl2 guest runs: `windows` (hosted, through wsl.exe; the default) or `native` (the self-hosted
+      linux-arm64 pool, whose caller runs `scripts/wsl2_setup.sh` in place of the host-side WSL setup)
+    default: windows
   owned:
     description: Install the native owned-gate toolchain
     default: 'false'
@@ -16,7 +21,7 @@ runs:
   using: composite
   steps:
     - uses: ./.github/actions/setup-ci-wsl
-      if: inputs.guest == 'wsl2'
+      if: inputs.guest == 'wsl2' && inputs.host != 'native'
       with:
         owned: ${{ inputs.owned }}
     - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
