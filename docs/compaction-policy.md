@@ -38,7 +38,8 @@ core source, then runs `integration/core-source/compaction-children.test.ts` in 
 and environment with no credentials. The real `Agent` tool creates direct and routed children
 on the shared model runtime. Faux requests verify the automatic fallback after a large read,
 child-local settings, and isolation from the parent and a later sibling with an explicit target.
-No transport calls a provider. The existing `Forks` workflow runs this target after its native
+No transport calls a provider. Fixture teardown restores the prior agent-directory environment
+even if harness construction or shutdown rejects. The existing `Forks` workflow runs this target after its native
 core gate, after installing the root owned dependencies. No installed host is replaced.
 
 The owner separately authorized release coordination in #774. Preparation remains draft until
