@@ -739,7 +739,11 @@ class DnsToolMode(StrEnum):
 
 
 def test_dns_timeout_fixture_is_import_safe() -> None:
-    """Import the timeout fixture without starting a subprocess."""
+    """Import the timeout fixture without starting a subprocess.
+
+    Returns:
+        None: The fixture exposes its main function without executing it.
+    """
     namespace = runpy.run_path(str(ROOT / "scripts/tests/fixtures/wsl_timeout.py"))
     assert callable(namespace["main"])
 
