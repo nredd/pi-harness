@@ -15,7 +15,7 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal, cast
 
@@ -39,6 +39,12 @@ FACADE_EXPORT = re.compile(
 )
 
 
+# Deliberately conservative: only module/re-export declarations can validate a missing map.
+# This is not a Rust parser and will reject, never exempt, an unfamiliar source construct.
+RUST_DECLARATIONS = re.compile(r"(?:\s*(?:pub\s+mod\s+\w+\s*;|pub\s+use\s+[\w:{},\s]+;))*\s*")
+RUST_LINE_COMMENT = re.compile(r"//[^\n]*")
+
+
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -52,6 +58,14 @@ class Counts(StrictModel):
         description=(
             "Stored uncovered-branch cap or advisory reference; null only for producers without branch "
             "records or `goal: excluded` packages."
+        ),
+    )
+    statements: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Stored uncovered-statement cap or advisory reference, read from the Istanbul/V8 `json-summary` "
+            "report; null for producers without one (coverage.py statements are its lines)."
         ),
     )
 
@@ -159,13 +173,16 @@ class Signal(StrictModel):
     reason: str = Field(
         default="", description="Mandatory explanation and migration issue for report-only signals."
     )
-    producer: Literal["lcov", "coverage.py"] = Field(
+    producer: Literal["lcov", "coverage.py", "llvm-cov"] = Field(
         default="lcov",
         description="Report writer; only coverage.py legitimately writes a bare record for an empty source.",
     )
     skip_hosts: list[str] = Field(
         default_factory=list,
         description="CI hosts whose gate list never runs this signal's producer; reported NOT RUN there.",
+    )
+    skip_os: list[Literal["darwin", "linux"]] = Field(
+        default_factory=list, description="Explicitly unsupported producer platforms, reported NOT RUN."
     )
     gate: str = Field(
         default="",
@@ -187,6 +204,8 @@ class Signal(StrictModel):
             raise ValueError("A report-only signal requires a nonblank `reason`")
         if self.max_uncovered.keys() - {"darwin", "linux"}:
             raise ValueError("Coverage floors support only measured darwin/linux OSes")
+        if self.producer == "llvm-cov" and self.enforcement != "report-only":
+            raise ValueError("LLVM native signals remain report-only until runtime attribution is resolved")
         if not {"text", "lcov"}.issubset(self.reporters):
             raise ValueError("Coverage signals require both text and lcov reporters")
         if self.files is not None and (not self.files or len(set(self.files)) != len(self.files)):
@@ -345,8 +364,8 @@ class Policy(StrictModel):
         Raises:
             ValueError: A final target counter is nonzero.
         """
-        if self.target.lines or self.target.functions or self.target.branches:
-            raise ValueError("The target must be zero uncovered lines, functions and branches")
+        if self.target.lines or self.target.functions or self.target.branches or self.target.statements:
+            raise ValueError("The target must be zero uncovered lines, functions, branches and statements")
         return self
 
 
@@ -360,6 +379,16 @@ class FileCoverage:
     uncovered_functions: int
     branches: int
     uncovered_branches: int
+    statements: int | None = None
+    uncovered_statements: int | None = None
+
+
+@dataclass(frozen=True)
+class NativeFileCoverage(FileCoverage):
+    """LLVM region counters, never translated to LCOV branch records."""
+
+    regions: int = 0
+    uncovered_regions: int = 0
 
 
 def split_function_hits(value: str) -> tuple[int, str]:
@@ -596,6 +625,10 @@ def is_test_path(path: Path) -> bool:
     Raises:
         None.
     """
+    # Rust modules inside src belong to the instrumented source denominator, even when named
+    # tests/fixtures. Only conventional test/fixture directories OUTSIDE src are excluded.
+    if path.suffix == ".rs" and "src" in path.parts:
+        path = Path(*path.parts[: path.parts.index("src")])
     return (
         any(part in {"test", "tests", ".test-support", "fixtures"} for part in path.parts)
         or path.name.endswith(".test.ts")
@@ -1009,7 +1042,7 @@ def loosens(budget: Counts, floor: Counts) -> bool:
         budget (Counts): Current budget.
         floor (Counts): Base budget.
     Returns:
-        bool: Whether any counter rises, or a branch cap the base had is dropped.
+        bool: Whether any counter rises, or a branch or statement cap the base had is dropped.
     Raises:
         None.
     """
@@ -1017,6 +1050,10 @@ def loosens(budget: Counts, floor: Counts) -> bool:
         budget.lines > floor.lines
         or budget.functions > floor.functions
         or (floor.branches is not None and (budget.branches is None or budget.branches > floor.branches))
+        or (
+            floor.statements is not None
+            and (budget.statements is None or budget.statements > floor.statements)
+        )
     )
 
 
@@ -1064,8 +1101,10 @@ def check_signal_ratchet(label: str, new: Signal, old: Signal) -> None:
         None: The signal preserves the base ratchet.
     Raises:
         ValueError: A host is newly skipped, the gate changes, an OS floor disappears or an enforced
-            counter (including a branch cap) is raised or dropped.
+            counter (including a branch or statement cap) is raised or dropped.
     """
+    if not set(new.skip_os) <= set(old.skip_os):
+        raise ValueError(f"Cannot add skipped platforms: '{label}'")
     if not set(new.skip_hosts) <= set(old.skip_hosts):
         raise ValueError(f"Cannot add skipped hosts: '{label}'")
     if new.gate != old.gate:
@@ -1077,7 +1116,245 @@ def check_signal_ratchet(label: str, new: Signal, old: Signal) -> None:
             raise ValueError(f"Ratchet violation: '{label}/{runner_os}'")
 
 
+class LLVMMetric(BaseModel):
+    model_config = ConfigDict(strict=True)
+    count: int = Field(ge=0, description="Total native LLVM units; percentages never enter accounting.")
+    covered: int = Field(ge=0, description="Executed native LLVM units, bounded by the total.")
+
+    @model_validator(mode="after")
+    def bounded(self) -> LLVMMetric:
+        """Reject impossible covered counts before computing misses.
+
+        Parameters:
+            None.
+        Returns:
+            LLVMMetric: Validated total and covered counts.
+        Raises:
+            ValueError: Covered units exceed the total.
+        """
+        if self.covered > self.count:
+            raise ValueError("LLVM covered count exceeds total")
+        return self
+
+
+class LLVMFile(BaseModel):
+    model_config = ConfigDict(strict=True)
+    filename: str = Field(description="Raw LLVM source path before policy-root normalization.")
+    summary: dict[str, LLVMMetric] = Field(description="Required native line/function/region counters.")
+
+
+class LLVMData(BaseModel):
+    files: list[LLVMFile] = Field(description="One binary's exported file map.")
+
+
+class LLVMReport(BaseModel):
+    type: Literal["llvm.coverage.json.export"] = Field(description="Native LLVM export discriminator.")
+    version: Literal["3.1.0"] = Field(description="Export schema from the pinned Rust/LLVM producer.")
+    data: list[LLVMData] = Field(
+        min_length=1,
+        max_length=1,
+        description="Single source map; multiple maps need an explicit upstream merge.",
+    )
+
+
+def llvm_records(
+    root: Path, package: Package, signal: Signal, expected: set[str], reports_root: Path | None
+) -> dict[str, FileCoverage]:
+    """Read native counters with complete source membership and honest region units.
+
+    Parameters:
+        root (Path): Source checkout, used to validate map-free declaration modules.
+        package (Package): Structurally scoped native source inventory.
+        signal (Signal): Raw LLVM JSON producer declaration.
+        expected (set[str]): Every owned Rust source, including separately named test modules in src.
+        reports_root (Path | None): Downloaded artifact root, otherwise the checkout.
+    Returns:
+        dict[str, FileCoverage]: File counters, with regions separate from unproduced branches.
+    Raises:
+        ValueError: Malformed, duplicate, missing executable or zero-total source data.
+        OSError: A report or classified source cannot be read.
+    """
+    report = LLVMReport.model_validate_json(
+        ((reports_root or root) / package.root / signal.report).read_text()
+    )
+    records: dict[str, NativeFileCoverage] = {}
+    marker = f"/{package.root}/"
+    for file in report.data[0].files:
+        filename = file.filename.replace("\\", "/")
+        relative = filename.split(marker, 1)[1] if marker in filename else filename
+        if relative not in expected:
+            # Dependency/sysroot/integration-test files are not production source. An unknown
+            # source inside the package is an inventory error, never a filename-based exemption.
+            if marker in filename and not is_test_path(Path(relative)):
+                raise ValueError(f"LLVM source outside inventory: '{relative}'")
+            continue
+        if relative in records:
+            raise ValueError(f"Duplicate LLVM source: '{relative}'")
+        if not {"lines", "functions", "regions"} <= file.summary.keys():
+            raise ValueError(f"LLVM source lacks line/function/region counters: '{relative}'")
+        lines, functions, regions = (file.summary[key] for key in ("lines", "functions", "regions"))
+        records[relative] = NativeFileCoverage(
+            lines.count,
+            lines.count - lines.covered,
+            functions.count,
+            functions.count - functions.covered,
+            0,
+            0,
+            regions=regions.count,
+            uncovered_regions=regions.count - regions.covered,
+        )
+    for relative in sorted(expected):
+        counters = records.get(relative)
+        if counters is not None and (counters.lines or counters.functions or counters.regions):
+            continue
+        source = (root / package.root / relative).read_text()
+        if not RUST_DECLARATIONS.fullmatch(RUST_LINE_COMMENT.sub("", source)):
+            reason = (
+                "Expected executable LLVM source missing"
+                if counters is None
+                else "Unvalidated zero-executable LLVM source"
+            )
+            raise ValueError(f"{reason}: '{relative}'")
+        if counters is None:
+            records[relative] = NativeFileCoverage(0, 0, 0, 0, 0, 0)
+    if not sum(c.regions for c in records.values()) or not sum(c.lines for c in records.values()):
+        raise ValueError("Zero total native executable regions/lines")
+    return dict(records)
+
+
+def reads_statements(signal: Signal) -> bool:
+    """Whether the signal's producer writes a statement summary this accounting must read.
+
+    Parameters:
+        signal (Signal): The signal under check.
+    Returns:
+        bool: True when `json-summary` is a declared reporter.
+    Raises:
+        None.
+    """
+    return "json-summary" in signal.reporters
+
+
+def parse_statement_summary(text: str, base: Path) -> dict[str, tuple[int, int]]:
+    """Parse an Istanbul or V8 `json-summary` report into per-file statement totals.
+
+    Parameters:
+        text (str): Complete `coverage-summary.json` document.
+        base (Path): Directory that relative source keys are resolved against.
+    Returns:
+        dict[str, tuple[int, int]]: Normalized POSIX source path -> (statements, covered statements).
+            Absolute keys stay anchored to the producing checkout; see `statement_counts`.
+    Raises:
+        ValueError: The document is malformed, empty, duplicated or inconsistent.
+    """
+    try:
+        document = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Malformed statement summary: {error}") from error
+    if not isinstance(document, dict) or not isinstance(document.get("total"), dict):
+        raise ValueError("Malformed statement summary: no `total` entry")
+    files: dict[str, tuple[int, int]] = {}
+    for key, entry in document.items():
+        if key == "total":
+            continue
+        counter = entry.get("statements") if isinstance(entry, dict) else None
+        total = counter.get("total") if isinstance(counter, dict) else None
+        covered = counter.get("covered") if isinstance(counter, dict) else None
+        if not (
+            isinstance(total, int)
+            and isinstance(covered, int)
+            and not isinstance(total, bool)
+            and not isinstance(covered, bool)
+            and total >= 0
+            and covered >= 0
+        ):
+            raise ValueError(f"Malformed statement counter: '{key}'")
+        if covered > total:
+            raise ValueError(f"Inconsistent statement counter: '{key}'")
+        resolved = (Path(key) if Path(key).is_absolute() else base / key).resolve().as_posix()
+        if resolved in files:
+            raise ValueError(f"Duplicate statement summary source: '{key}'")
+        files[resolved] = (total, covered)
+    if not files:
+        raise ValueError("Empty statement summary")
+    return files
+
+
+def statement_counts(
+    summary: dict[str, tuple[int, int]], root: Path, resolved: Path
+) -> tuple[int, int] | None:
+    """Find one source's statement totals, wherever the producing checkout lived.
+
+    Istanbul and V8 key `coverage-summary.json` by absolute path, while the fan-in accounts reports on a
+    different runner than the one that produced them (macOS reports are replayed on Ubuntu). An exact match
+    wins; otherwise the repository-relative path must be the unique suffix of one summary key.
+
+    Parameters:
+        summary (dict[str, tuple[int, int]]): Parsed per-file totals.
+        root (Path): Absolute repository root the LCOV record was resolved against.
+        resolved (Path): The record's resolved source path under `root`.
+    Returns:
+        tuple[int, int] | None: (statements, covered), or None when no key names the source.
+    Raises:
+        ValueError: More than one summary key matches the repository-relative path.
+    """
+    exact = summary.get(resolved.as_posix())
+    if exact is not None:
+        return exact
+    suffix = "/" + resolved.relative_to(root.resolve()).as_posix()
+    matches = [counts for key, counts in summary.items() if key.endswith(suffix)]
+    if len(matches) > 1:
+        raise ValueError(f"Ambiguous statement summary source: '{suffix[1:]}'")
+    return matches[0] if matches else None
+
+
+def read_statement_summary(
+    root: Path, package: Package, signal: Signal, reports_root: Path | None
+) -> dict[str, tuple[int, int]]:
+    """Read the `coverage-summary.json` written next to the signal's LCOV report.
+
+    Parameters:
+        root (Path): Absolute repository root.
+        package (Package): Package whose root anchors the report.
+        signal (Signal): Signal declaring the `json-summary` reporter.
+        reports_root (Path | None): Downloaded artifact root, or null for working-tree reports.
+    Returns:
+        dict[str, tuple[int, int]]: Per-file statement totals keyed by normalized path.
+    Raises:
+        ValueError: The summary is missing, malformed or empty.
+    """
+    path = ((reports_root or root) / package.root / signal.report).with_name("coverage-summary.json")
+    try:
+        text = path.read_text()
+    except OSError as error:
+        raise ValueError(f"Statement producer missing: cannot read '{path.name}': {error}") from error
+    return parse_statement_summary(text, root / package.root)
+
+
 def scoped_records(
+    root: Path, policy: Policy, package: Package, signal: Signal, reports_root: Path | None = None
+) -> dict[str, FileCoverage]:
+    """Dispatch native or LCOV source accounting.
+
+    Parameters:
+        root (Path): Repository source root.
+        policy (Policy): Complete owned source policy.
+        package (Package): Owning package.
+        signal (Signal): Independent producer declaration.
+        reports_root (Path | None): Downloaded reports root or null for the checkout.
+    Returns:
+        dict[str, FileCoverage]: Validated package-relative counters.
+    Raises:
+        OSError: A report or source cannot be read.
+        ValueError: Report or inventory validation fails.
+    """
+    if signal.producer == "llvm-cov":
+        expected = set(signal.files) if signal.files is not None else inventory(root, package)
+        return llvm_records(root, package, signal, expected, reports_root)
+    return scoped_lcov_records(root, policy, package, signal, reports_root)
+
+
+def scoped_lcov_records(
     root: Path, policy: Policy, package: Package, signal: Signal, reports_root: Path | None = None
 ) -> dict[str, FileCoverage]:
     """Validate report membership without merging counters across packages.
@@ -1098,6 +1375,9 @@ def scoped_records(
     raw = parse_lcov(
         ((reports_root or root) / package.root / signal.report).read_text(),
         bare_sources=signal.producer == "coverage.py",
+    )
+    statements = (
+        read_statement_summary(root, package, signal, reports_root) if reads_statements(signal) else None
     )
     records: dict[str, FileCoverage] = {}
     known = {
@@ -1135,7 +1415,14 @@ def scoped_records(
             raise ValueError(f"Report file not in policy: '{relative}'")
         if relative in records:
             raise ValueError(f"Duplicate normalized source: '{relative}'")
-        records[relative] = counters
+        counted = counters
+        if statements is not None:
+            found = statement_counts(statements, root, resolved)
+            if found is None:
+                raise ValueError(f"Statements missing for source: '{relative}'")
+            total, covered = found
+            counted = replace(counters, statements=total, uncovered_statements=total - covered)
+        records[relative] = counted
     missing = expected - records.keys()
     if missing:
         raise ValueError(f"Expected files missing: '{sorted(missing)}'")
@@ -1165,18 +1452,23 @@ def validate_signal_inventory(owned: set[str], signal_name: str, signal: Signal)
         raise ValueError("Enforced Bun signal must measure every owned executable file")
 
 
-def not_run_reason(signal: Signal, host: str | None, skipped_gates: frozenset[str]) -> str:
+def not_run_reason(
+    signal: Signal, host: str | None, skipped_gates: frozenset[str], runner_os: str = sys.platform
+) -> str:
     """Return why this run has no producer for a signal, or an empty string when the report is required.
 
     Parameters:
         signal (Signal): Signal declaration.
         host (str | None): CI host class, or null outside CI.
         skipped_gates (frozenset[str]): Make targets this run planned but skipped.
+        runner_os (str): Measured platform selecting explicit native producer skips.
     Returns:
         str: The NOT RUN reason, empty when the signal must be accounted.
     Raises:
         None.
     """
+    if runner_os in signal.skip_os:
+        return f"OS '{runner_os}' has no native producer"
     if host is not None and host in signal.skip_hosts:
         return f"host '{host}' has no producer in that cell"
     if signal.gate and signal.gate in skipped_gates:
@@ -1228,19 +1520,60 @@ def check_branch_cap(package: Package, signal: Signal, cap: Counts, records: dic
         )
 
 
-def describe(lines: int, functions: int, branches: int | None) -> str:
+def check_statement_cap(
+    policy: Policy, package: Package, signal: Signal, cap: Counts, records: dict[str, FileCoverage]
+) -> None:
+    """Require a statement cap exactly when the producer writes a statement summary.
+
+    Once `target.statements` is declared, every enforced Istanbul/V8 signal must declare both the
+    `json-summary` reporter and a cap, so a producer that stops writing statements fails closed instead
+    of reading as zero uncovered. coverage.py signals are exempt: its statements are its lines.
+
+    Parameters:
+        policy (Policy): Policy whose `target.statements` switches the requirement on.
+        package (Package): Package whose goal may exempt a report-only signal from statement caps.
+        signal (Signal): The signal under check.
+        cap (Counts): The signal's declared per-OS budget or reference.
+        records (dict[str, FileCoverage]): The signal's validated, scoped report records.
+    Returns:
+        None: The declared cap matches the producer's statement output.
+    Raises:
+        ValueError: A required cap or reporter is missing, a cap has no summary, or the summary has no
+            statements.
+    """
+    declared = reads_statements(signal)
+    exempt = package.goal == "excluded" and signal.enforcement == "report-only"
+    required = (
+        policy.target.statements is not None
+        and signal.enforcement == "enforced"
+        and signal.producer == "lcov"
+    )
+    if (declared or required) and cap.statements is None and not exempt:
+        raise ValueError("Missing statement cap: this signal must declare `statements` and `json-summary`")
+    if cap.statements is not None and not declared:
+        raise ValueError("Statement producer missing: a statement cap is declared without `json-summary`")
+    if declared and not sum(counters.statements or 0 for counters in records.values()):
+        raise ValueError("Statement producer missing: the summary has no statements")
+
+
+def describe(lines: int, functions: int, branches: int | None, statements: int | None = None) -> str:
     """Format uncovered counters for budget messages.
 
     Parameters:
         lines (int): Uncovered lines.
         functions (int): Uncovered functions.
         branches (int | None): Uncovered branches, or null when the signal has no branch cap.
+        statements (int | None): Uncovered statements, or null when the signal has no statement cap.
     Returns:
-        str: Human-readable counter list; branches appear only when capped.
+        str: Human-readable counter list; branches and statements appear only when capped.
     Raises:
         None.
     """
-    return f"{lines} lines, {functions} functions" + ("" if branches is None else f", {branches} branches")
+    return (
+        f"{lines} lines, {functions} functions"
+        + ("" if branches is None else f", {branches} branches")
+        + ("" if statements is None else f", {statements} statements")
+    )
 
 
 def account(
@@ -1284,7 +1617,7 @@ def account(
             continue
         for signal_name, signal in package.signals.items():
             label = f"{name}/{signal_name}"
-            reason = not_run_reason(signal, host, skipped_gates)
+            reason = not_run_reason(signal, host, skipped_gates, runner_os)
             if reason:
                 LOGGER.warning(f"NOT RUN: '{label}': {reason}")
                 continue
@@ -1296,24 +1629,37 @@ def account(
                 uncovered_lines = sum(c.uncovered_lines for c in records.values())
                 uncovered_functions = sum(c.uncovered_functions for c in records.values())
                 uncovered_branches = sum(c.uncovered_branches for c in records.values())
+                uncovered_statements = sum(c.uncovered_statements or 0 for c in records.values())
                 for path, counters in sorted(records.items()):
                     item = {"package": name, "signal": signal_name, "os": runner_os, "file": path} | vars(
                         counters
                     )
-                    results.append(item)
+                    results.append(
+                        {
+                            key: value
+                            for key, value in item.items()
+                            if key not in {"branches", "uncovered_branches"}
+                        }
+                        | {"branch_metric": "not-produced"}
+                        if signal.producer == "llvm-cov"
+                        else item
+                    )
                     LOGGER.info(f"{label} {path}: {counters}")
                 LOGGER.info(
                     f"{label}/{runner_os} ({signal.enforcement}): "
                     f"uncovered lines={uncovered_lines}, functions={uncovered_functions}, "
                     f"branches={uncovered_branches}"
+                    + (f", statements={uncovered_statements}" if reads_statements(signal) else "")
                 )
                 reference = signal.max_uncovered.get(runner_os)
                 if reference is not None:
                     capped = reference.branches is not None
+                    counted = reference.statements is not None
                     LOGGER.info(
                         f"{label}/{runner_os}: reference lines={reference.lines}, "
                         f"functions={reference.functions}"
                         + (f", branches={reference.branches}" if capped else "")
+                        + (f", statements={reference.statements}" if counted else "")
                         + f"; delta lines={uncovered_lines - reference.lines:+d}, "
                         f"functions={uncovered_functions - reference.functions:+d}"
                         + (
@@ -1321,16 +1667,25 @@ def account(
                             if capped
                             else ""
                         )
+                        + (
+                            f", statements={uncovered_statements - (reference.statements or 0):+d}"
+                            if counted and reads_statements(signal)
+                            else ""
+                        )
                     )
                 if measure:
                     continue
                 declared = signal.max_uncovered[runner_os]
                 check_branch_cap(package, signal, declared, records)
-                # Until `target.branches` locks it, a 100-percent primary keeps its own branch cap.
+                check_statement_cap(policy, package, signal, declared, records)
+                # Until `target.branches`/`target.statements` lock them, a 100-percent primary keeps its caps.
+                fallback = {
+                    key: getattr(declared, key)
+                    for key in ("branches", "statements")
+                    if getattr(policy.target, key) is None
+                }
                 budget = (
-                    policy.target.model_copy(
-                        update={"branches": declared.branches} if policy.target.branches is None else {}
-                    )
+                    policy.target.model_copy(update=fallback)
                     if policy.enforce_target and package.goal == "100-percent" and signal_name == "primary"
                     else declared
                 )
@@ -1338,13 +1693,15 @@ def account(
                     uncovered_lines > budget.lines
                     or uncovered_functions > budget.functions
                     or (budget.branches is not None and uncovered_branches > budget.branches)
+                    or (budget.statements is not None and uncovered_statements > budget.statements)
                 ):
                     measured = describe(
                         uncovered_lines,
                         uncovered_functions,
                         uncovered_branches if budget.branches is not None else None,
+                        uncovered_statements if budget.statements is not None else None,
                     )
-                    allowed = describe(budget.lines, budget.functions, budget.branches)
+                    allowed = describe(budget.lines, budget.functions, budget.branches, budget.statements)
                     raise ValueError(f"Budget exceeded: {measured} uncovered, budget {allowed}")
             except (OSError, ValueError) as error:
                 errors.append(f"{label}: {error}")
@@ -1381,6 +1738,11 @@ def signal_comparisons(
             | (
                 {"branches": counts["uncovered_branches"] - reference.branches}
                 if reference.branches is not None
+                else {}
+            )
+            | (
+                {"statements": counts["uncovered_statements"] - reference.statements}
+                if reference.statements is not None and "uncovered_statements" in counts
                 else {}
             )
             if reference is not None
@@ -1515,14 +1877,19 @@ def main() -> int:
     for result in results:
         label = f"{result['package']}/{result['signal']}"
         counters = totals.setdefault(label, {})
-        for metric in FileCoverage.__dataclass_fields__:
-            value = cast(int, result[metric])
-            counters[metric] = counters.get(metric, 0) + value
-    # A producer without branch records proposes no branch cap; `check_branch_cap` would reject one.
+        metrics = tuple(metric for metric in FileCoverage.__dataclass_fields__ if metric in result)
+        if "regions" in result:
+            metrics += ("regions", "uncovered_regions")
+        for metric in metrics:
+            value = cast(int | None, result[metric])
+            if value is not None:
+                counters[metric] = counters.get(metric, 0) + value
+    # Missing branch or statement records are never proposed as a cap.
     floors = {
         label: {
             args.os: {"lines": counts["uncovered_lines"], "functions": counts["uncovered_functions"]}
-            | ({"branches": counts["uncovered_branches"]} if counts["branches"] else {})
+            | ({"branches": counts["uncovered_branches"]} if counts.get("branches", 0) else {})
+            | ({"statements": counts["uncovered_statements"]} if counts.get("statements") else {})
         }
         for label, counts in totals.items()
     }

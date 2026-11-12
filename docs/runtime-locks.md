@@ -105,6 +105,27 @@ This downloads the source-selected graph, replays and audits both roots, then st
 verified core with `--version` in a private HOME. It proves source-lock runtime compatibility,
 NOT verification of a published supplemental attestation. Do not run harness scenarios locally.
 
+Replay emits at most twelve `Runtime replay` INFO records on a successful run: selection,
+release checksums, acquisition across both graphs, four installation phases per graph
+(archive verification, cache import, offline install, installed-byte audit), and version smoke.
+Each record contains only a fixed phase label, `status=ok|error` and monotonic `elapsed_ms`.
+Cache-import records additionally report `total`, `attempted` and `completed` native cache
+calls, deduplicated by archive path within each graph exactly as before. A failed call counts
+as attempted but not completed. Installation phases repeat in the selected graphs' iteration
+order; the counts are per graph, not a shared-cache hit/miss estimate. Sum them for replay totals.
+The same four installation records are emitted by installer staging. A phase emits its single
+record on exit, including exception unwinding; a process killed mid-phase cannot report that
+phase's duration. No per-archive logging, exception text, URLs, paths, package identities,
+environment values or version-command output is added to these diagnostics. Existing failure
+propagation, integrity and installed-byte checks, cache behavior and timeouts are unchanged.
+
+The observed Ubuntu replay in run `43270745821` took 32m50s without intermediate timings.
+Its 459 cache additions do NOT identify the cause. Use the subsequent exact-HEAD personal
+`stack` CI logs' phase records to distinguish acquisition, cache import, offline install and
+byte auditing before proposing optimization. Synthetic archive tests exercise actual offline
+npm replay and audits with deterministic clock values; they are diagnostic-contract evidence,
+not a reproduction of that historical runner duration or proof of a speed improvement.
+
 The retained installer acceptance default `stack/24889f7` has no supplemental asset.
 Acceptance explicitly tests its refusal and reports successful-install/rerun/consent/kill
 acceptance as NOT RUN for that exact historical selection. After the first ordinary,

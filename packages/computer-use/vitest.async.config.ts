@@ -15,7 +15,7 @@ export default defineConfig({
 		setupFiles: ["../../integration/inprocess/verification/home-setup.ts"],
 		coverage: {
 			provider: "istanbul",
-			reporter: ["text", "lcov"],
+			reporter: ["text", "lcov", "json-summary"],
 			reportsDirectory: "coverage/async",
 			reportOnFailure: true,
 			include: owned,

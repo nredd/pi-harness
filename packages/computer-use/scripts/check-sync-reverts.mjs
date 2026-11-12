@@ -106,6 +106,24 @@ const cases = [
 		failure: /target-dir/,
 	},
 	{
+		name: "LookNode preserves child order (#769)",
+		file: "native/macos/bridge.swift",
+		before: '"children": children.map { $0.payload() },',
+		after: '"children": children.reversed().map { $0.payload() },',
+		check: "test/macos-native-pure.test.mjs",
+		failure: /recursive payload preserves child order/,
+		darwinOnly: true,
+	},
+	{
+		name: "LookNode serializes optional flags (#769)",
+		file: "native/macos/bridge.swift",
+		before: 'if offscreen { output["offscreen"] = true }',
+		after: 'if offscreen { output["offscreen"] = false }',
+		check: "test/macos-native-pure.test.mjs",
+		failure: /nested payload serializes every optional field and capability exactly/,
+		darwinOnly: true,
+	},
+	{
 		name: "Outline store write (#648)",
 		file: "src/bridge.ts",
 		before: "saveStoredOutline(result.capture.stateId, serializeOutline(result.outline));",
@@ -136,6 +154,14 @@ const cases = [
 		after: "Tool unavailable; install pinned",
 		check: "test/rust-coverage.test.mjs",
 		failure: /Missing cargo-llvm-cov/,
+	},
+	{
+		name: "Rust coverage complete source filenames",
+		file: "scripts/rust-coverage.mjs",
+		before: '"--disable-default-ignore-filename-regex",\n\t\t\t\tformat,',
+		after: "format,",
+		check: "test/rust-coverage.test.mjs",
+		failure: /AssertionError|false == true/,
 	},
 	{
 		name: "StateStore evicts past an empty stateId (#703)",
@@ -176,6 +202,14 @@ const cases = [
 		after: "/* pending rejection dropped */",
 		check: "test/windows-helper-client.test.mjs",
 		failure: /timed out/,
+	},
+	{
+		name: "Windows helper post-write abort (#750)",
+		file: "src/platform/windows/helper.ts",
+		before: '\t\t\tsignal?.addEventListener("abort", onAbort, { once: true });',
+		after: "/* post-write abort listener dropped */",
+		check: "test/windows-helper-client.test.mjs",
+		failure: /post-write abort must remove the pending request immediately/,
 	},
 	{
 		name: "Windows helper refuses a signal aborted during startup (#735)",
@@ -306,6 +340,30 @@ const cases = [
 		check: "test/macos-native-pure.test.mjs",
 		failure: /unowned refs capped at 3/,
 		darwinOnly: true,
+	},
+	{
+		name: "bridge missing-target dead guard (#755)",
+		file: "src/bridge.ts",
+		before: "const current = operationState().currentTarget!;",
+		after: 'const current = operationState().currentTarget; if (!current) throw new Error("No current controlled window. Call observe_ui first to choose a target window.");',
+		check: "test/bridge-observe-query.test.mjs",
+		failure: /the unreachable missing-target guard must not return/,
+	},
+	{
+		name: "browser empty keypress reports invalid_args (#748)",
+		file: "src/bridge.ts",
+		before: 'throw new ComputerUseError("invalid_args", "keypress.keys must contain at least one key.");',
+		after: 'throw new Error("keypress.keys must contain at least one key.");',
+		check: "test/bridge-browser-act.test.mjs",
+		failure: /an empty browser keypress is rejected before the write epoch advances/,
+	},
+	{
+		name: "browser moveMouse refuses ref targets before delivery (#748)",
+		file: "src/bridge.ts",
+		before: 'if (action.action === "moveMouse" && action.ref) throw new ComputerUseError("invalid_args", "Browser moveMouse requires x/y coordinates; ref targets are not supported.");',
+		after: "/* ref-only moveMouse forwards absent x/y to CDP */",
+		check: "test/bridge-browser-act.test.mjs",
+		failure: /browser moveMouse refs reject with invalid_args before any delivery or epoch change/,
 	},
 	{
 		name: "browser refs resolve from the hydrated state (#712)",
@@ -439,7 +497,8 @@ const cases = [
 		before: "if (!isBrowserContextId(state.contextId) && (target.truncated || regionChanged)) {",
 		after: "if (target.truncated || regionChanged) {",
 		check: "test/bridge-observe-query.test.mjs",
-		failure: /No current controlled window/,
+		// Restoring native routing now breaks the target invariant, not the deleted dead guard.
+		failure: /Cannot read properties of undefined \(reading 'pid'\)/,
 	},
 	{
 		name: "fake helper success replies (#724)",
@@ -540,6 +599,15 @@ const cases = [
 		after: "guard false else { return }",
 		check: "test/macos-native-pure.test.mjs",
 		failure: /refs handed to a successor look survive the base look's eviction/,
+		darwinOnly: true,
+	},
+	{
+		name: "look transfer preserves destination refs (#769)",
+		file: "native/macos/bridge.swift",
+		before: "refsByOwner[to, default: []].append(contentsOf: moved)",
+		after: "refsByOwner[to] = moved",
+		check: "test/macos-native-pure.test.mjs",
+		failure: /successor eviction removes original destination refs/,
 		darwinOnly: true,
 	},
 	{
@@ -741,7 +809,7 @@ const cases = [
 	{
 		name: "read_text blocked app re-check (#646)",
 		file: "src/bridge.ts",
-		before: "\tassertAppNotBlocked(currentTargetOrThrow());",
+		before: "\tassertAppNotBlocked(operationState().currentTarget!);",
 		after: "\t/* read_text policy dropped */",
 		check: "test/app-policy.test.mjs",
 		failure: /Missing expected rejection|app_blocked/,
@@ -840,7 +908,8 @@ const cases = [
 		before: "if (!isBrowserContextId(state.contextId) && shouldEscalateSearchOCR(",
 		after: "if (shouldEscalateSearchOCR(",
 		check: "test/bridge-observe-query.test.mjs",
-		failure: /No current controlled window/,
+		// Restoring native routing now breaks the target invariant, not the deleted dead guard.
+		failure: /Cannot read properties of undefined \(reading 'pid'\)/,
 	},
 	{
 		name: "secondaryAction advertised name check (#647)",
@@ -926,6 +995,15 @@ const cases = [
 		failure: /desktop_input must not interleave inside a physical act_ui transaction/,
 	},
 	{
+		name: "unequal windows receive distinct refs (#769)",
+		file: "native/macos/bridge.swift",
+		before: "if CFEqual(existing, window) {",
+		after: "if CFEqual(existing, existing) {",
+		check: "test/macos-native-pure.test.mjs",
+		failure: /unequal window handle receives a distinct ref/,
+		darwinOnly: true,
+	},
+	{
 		name: "unnamed role folds as node (#717)",
 		file: "src/outline.ts",
 		before: 'return stripped || "node";',
@@ -983,6 +1061,11 @@ try {
 	validateLedger(ledger, cases);
 	validateUpstreamRows(ledger, upstreamMarkdown);
 	validateLedgerOrder(ledger, upstreamMarkdown, readFileSync(fileURLToPath(import.meta.url), "utf8"));
+	if (process.argv.includes("--validate-only")) {
+		console.log("Sync ledger and actual revert cases validated");
+		rmSync(sandboxRoot, { recursive: true, force: true });
+		process.exit(0);
+	}
 	// Test sources/fixtures are intentionally NOT the npm payload: package.json `files` excludes
 	// them. Keep this self-contained package-root fixture list aligned with the checks selected above.
 	for (const entry of [

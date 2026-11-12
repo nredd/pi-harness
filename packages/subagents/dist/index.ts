@@ -64,6 +64,7 @@ import {
   getLifetimeCost,
   getLifetimeTotal,
   getMaxSubagentDepth,
+  getModelResolution,
   getOutputTranscriptDefault,
   getPackageAgentsGate,
   getPackageWorkflowsGate,
@@ -74,6 +75,7 @@ import {
   handleBase,
   hasAgentBadge,
   hasFallback,
+  hasModelConfigurationError,
   inChildSessionContext,
   invalidatePackageCache,
   isDefaultsDisabled,
@@ -85,14 +87,16 @@ import {
   isTierDisclosure,
   isTopLevelAgent,
   isUnsafeName,
+  isVirtualModel,
   isWorktreeIsolationEnabled,
   isolationParam,
   loadCustomAgents,
   markConsumed,
   mayPark,
   modelIdentityNote,
+  modelInputBinding,
+  modelInputs,
   modelRef,
-  modelRequest,
   modelSelectionNote,
   normalizeMaxTurns,
   packageNameForPath,
@@ -146,7 +150,7 @@ import {
   toReportedUsage,
   withLeadingFlag,
   writeInitialEntry
-} from "./chunks/chunk-MSGGFB5Q.ts";
+} from "./chunks/chunk-TMSESUK2.ts";
 
 // src/index.ts
 import { existsSync as existsSync7, mkdirSync as mkdirSync4, readFileSync as readFileSync7, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "node:fs";
@@ -730,6 +734,46 @@ ${agentMentionReminder(type)}`);
     session?.dispose?.();
   }
   return spawned ? { spawned: true } : { spawned: false, error: "the conversation clone did not start it" };
+}
+
+// src/model-explanation.ts
+function safeRef(value) {
+  return value && /^@?[a-zA-Z0-9][a-zA-Z0-9._/@-]*$/.test(value) && !value.includes("//") ? value : value === void 0 ? "session default" : "[redacted]";
+}
+function explainModel(request) {
+  const inputs = modelInputs(request.agentType, request.definitionModel, request.paramModel);
+  const winner = inputs[0];
+  const selection = selectModel(request);
+  const outcome = typeof selection === "string" ? "error" : selection.outcome;
+  const model = typeof selection === "string" ? void 0 : selection.model;
+  const selected = model ? safeRef(`${model.provider}/${model.id}`) : void 0;
+  const virtual = isVirtualModel(model);
+  const binding = modelInputBinding(winner, request.agentType);
+  const policy = getModelResolution();
+  const requested = safeRef(winner.requested);
+  const summary = `${winner.source}: ${requested}${selected && selected !== requested ? ` -> ${selected}` : ""} (${outcome === "error" ? "error; no dispatch" : outcome === "fallback" ? "unavailable, fallback: inherit" : outcome})`;
+  const lines = [
+    summary,
+    "Precedence: explicit dispatch > agentModels[type] > agentModels[*] > definition > parent.",
+    ...inputs.slice(1).map((input) => `Shadowed ${input.source}: ${safeRef(input.source === "parent" && request.parentModel ? `${request.parentModel.provider}/${request.parentModel.id}` : input.requested)}`),
+    `Failure policy: unmapped=${policy.onUnmapped ?? "inherit"}; unavailable=${policy.onUnavailable ?? "inherit"}; unresolved explicit literal=error.`
+  ];
+  if (binding) lines.push(binding.kind === "routed" ? `Exact binding: routed ${safeRef(binding.profile)}` : `Exact binding: static ${binding.members.map(safeRef).join(" -> ")}`);
+  else if (winner.requested?.trim().startsWith("@")) lines.push("Exact binding: unmapped.");
+  lines.push(
+    `Selected: ${selected ?? "unknown"}${virtual ? " (virtual)" : ""}.`,
+    "Admitted physical model: unknown (no admission requested).",
+    "Answering model: unknown (only an assistant response establishes this).",
+    "Configuration preview only, not a reservation. No quota forecast or provider request is made; dispatch reselects and admits at start."
+  );
+  if (typeof selection !== "string" && selection.scopeWarning) lines.push("Scope warning: selected model is outside enabled scope; trusted configuration remains authoritative.");
+  return { source: winner.source, outcome, selected, virtual, summary, text: lines.join("\n") };
+}
+function modelConfigurationWarnings(requests) {
+  return requests.flatMap((request) => {
+    const winner = modelInputs(request.agentType, request.definitionModel)[0];
+    return hasModelConfigurationError(request) ? [`Model configuration for ${safeRef(request.agentType)}: ${winner.source}: ${safeRef(winner.requested)} (error; no dispatch). Registration-only check; credentials and quota were not checked.`] : [];
+  });
 }
 
 // src/xml.ts
@@ -4052,7 +4096,7 @@ var WorkflowDialog = class {
 
 // src/ui/workflow-menu.ts
 async function showWorkflowDialog(ctx, task, deps) {
-  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-A7AMRDVY.ts");
+  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-ZTHBHXTU.ts");
   let overlay;
   await ctx.ui.custom(
     (tui, theme, _keybindings, done) => new WorkflowDialog(
@@ -7109,6 +7153,10 @@ Full transcript available at: ${record.outputFile}` : "";
       throw err;
     }
     canonicalAgentsLoaded = true;
+    for (const warning of modelConfigurationWarnings(getAllTypes().flatMap((agentType) => {
+      const cfg = getAgentConfig(agentType);
+      return cfg?.enabled === false ? [] : [{ homeDir: options.homeDir, agentType, definitionModel: cfg?.model, parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd }];
+    }))) ctx.ui.notify(warning, "warning");
     refreshAgentTool();
     if (ctx.hasUI) {
       widget.setUICtx(ctx.ui);
@@ -8892,21 +8940,6 @@ Description: ${record.description}
       );
     }
   }));
-  function getModelLabel(type, registry, cwd) {
-    const cfg = getAgentConfig(type);
-    const input = modelRequest(type, cfg?.model).requested;
-    if (!input) return "inherit";
-    const label = getModelLabelFromConfig(input);
-    const selection = selectModel({ homeDir: options.homeDir, agentType: type, definitionModel: cfg?.model, parentModel: void 0, registry, cwd });
-    if (typeof selection === "string" || selection.outcome === "fallback" || !selection.model) {
-      return `${label} (unavailable, fallback: inherit)`;
-    }
-    const resolved = selection.model;
-    const resolvedFull = `${resolved.provider}/${resolved.id}`;
-    const norm = (s) => s.toLowerCase().replace(/\./g, "-").replace(/-\d{8}$/, "");
-    if (norm(input) === norm(resolvedFull)) return label;
-    return `${label} (\u2192 ${resolvedFull.replace(/-\d{8}$/, "")})`;
-  }
   async function showAgentsMenu(ctx) {
     reloadCustomAgents();
     const allNames = getAllTypes();
@@ -8975,7 +9008,7 @@ Description: ${record.description}
     const configs = allNames.map((name) => getAgentConfig(name));
     const items = allNames.map((name, i) => {
       const cfg2 = configs[i];
-      const model = getModelLabel(name, ctx.modelRegistry, ctx.cwd);
+      const model = explainModel({ homeDir: options.homeDir, agentType: name, definitionModel: cfg2?.model, parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd }).summary;
       return {
         id: name,
         label: `${sourceIndicator(cfg2)}${name}`,
@@ -9085,10 +9118,13 @@ Description: ${record.description}
     } else {
       menuOptions = ["Edit", "Disable", "Delete", "Back"];
     }
+    menuOptions.splice(menuOptions.length - 1, 0, "Explain model");
     const pkgName = packageNameOf(cfg);
     const choice = await ctx.ui.select(pkgName ? `${name} \u2014 ${pkgName}` : name, menuOptions);
     if (!choice || choice === "Back") return;
-    if (choice === "Edit" && file) {
+    if (choice === "Explain model") {
+      ctx.ui.notify(explainModel({ homeDir: options.homeDir, agentType: name, definitionModel: cfg.model, parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd }).text, "info");
+    } else if (choice === "Edit" && file) {
       const content = readFileSync7(file.path, "utf-8");
       const edited = await ctx.ui.editor(`Edit ${name}`, content);
       if (edited !== void 0 && edited !== content) {

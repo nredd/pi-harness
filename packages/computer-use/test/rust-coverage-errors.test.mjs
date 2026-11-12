@@ -43,7 +43,11 @@ function fakeCargo({ version = { status: 0, stdout: `cargo-llvm-cov ${TOOL_VERSI
 	return { spawn, calls };
 }
 
-const runDir = () => path.join(output, readdirSync(output)[0]);
+const runDir = () =>
+	path.join(
+		output,
+		readdirSync(output).find((entry) => entry.startsWith(`${crate}-`)),
+	);
 
 test("rejects the Linux crate on hosts that can not build it", () => {
 	assert.throws(() => parseArgs(["--crate", "linux"], "win32"), /Linux crate coverage requires Linux or macOS/);
@@ -65,9 +69,18 @@ test("a missing or broken cargo-llvm-cov reports the pinned install docs", () =>
 });
 
 test("a failed cargo step reports the exit status, keeps the log and still writes metadata", () => {
+	writeFileSync(path.join(output, "coverage.json"), "stale report");
 	const { spawn, calls } = fakeCargo({ failOn: "test" });
-	assert.throws(() => runCoverage(["--output", output], spawn), /cargo llvm-cov failed \(101\); inspect .*run\.log; install matching llvm-tools-preview/);
+	assert.throws(
+		() => runCoverage(["--output", output], spawn),
+		/cargo llvm-cov failed \(101\); inspect .*run\.log; install matching llvm-tools-preview/,
+	);
 	assert.equal(calls.length, 1, "stops at the first failure");
+	assert.equal(
+		existsSync(path.join(output, "coverage.json")),
+		false,
+		"a failed run cannot reuse stale accounting output",
+	);
 	assert.match(readFileSync(path.join(runDir(), "run.log"), "utf8"), /boom/);
 	const metadata = JSON.parse(readFileSync(path.join(runDir(), "metadata.json"), "utf8"));
 	assert.equal(metadata.crate, crate);

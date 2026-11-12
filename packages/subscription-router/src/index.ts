@@ -9,6 +9,7 @@
  * load their own copy of this module, sees the same confirmed blocks.
  */
 
+import { join } from "node:path";
 import {
 	type ExtensionAPI,
 	type ExtensionContext,
@@ -16,6 +17,8 @@ import {
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { showCodexResets } from "./codex-reset-command.js";
+import { CodexResets } from "./codex-resets.js";
 import {
 	type ChainEntry,
 	type ConfigResult,
@@ -28,6 +31,8 @@ import { ExhaustionTracker } from "./exhaustion.js";
 import { refKey } from "./model-ref.js";
 import { compilePolicy } from "./policy.js";
 import { SettleRecovery } from "./recovery.js";
+import { ResetView, refreshSchedules } from "./reset-view.js";
+import { formatResets } from "./resets.js";
 import { formatDecision, type RouteDecision, type RouteEnv, Router } from "./router.js";
 import { formatScore } from "./selection.js";
 import { COLLECTED_PROVIDERS, type RegistryContext, UsageService } from "./usage.js";
@@ -47,7 +52,8 @@ const DECISION_ENTRY = "router:decision";
 const RECENT_DECISIONS = 5;
 
 /** The usage cache surface consumed by the extension, including routing decisions. */
-export type RouterUsage = Pick<UsageService, "get" | "peek" | "decisionFor" | "format" | "formatForPrompt">;
+export type RouterUsage = Pick<UsageService, "get" | "peek" | "decisionFor" | "format" | "formatForPrompt"> &
+	Partial<Pick<UsageService, "invalidate">>;
 
 /** Explicit dependencies isolate embedded sessions from process-global quota and credentials. */
 export interface SubscriptionRouterOptions {
@@ -55,11 +61,13 @@ export interface SubscriptionRouterOptions {
 	usage: RouterUsage;
 	tracker?: ExhaustionTracker;
 	now?: () => number;
+	codexResets?: Pick<CodexResets, "inspect" | "redeem">;
 }
 
 interface Shared {
 	usage: RouterUsage;
 	tracker: ExhaustionTracker;
+	codex?: CodexResets;
 }
 
 /** Decisions of one requesting session, for `/router status` and persistence de-duplication. */
@@ -159,9 +167,15 @@ function handleRpc(
 export function createSubscriptionRouter(options?: SubscriptionRouterOptions): ExtensionFactory {
 	return async (pi: ExtensionAPI): Promise<void> => {
 		const now = options?.now ?? Date.now;
-		const { usage, tracker } = options
+		const state: Shared = options
 			? { usage: options.usage, tracker: options.tracker ?? new ExhaustionTracker(now) }
 			: shared();
+		const { usage, tracker } = state;
+		let codexResets = options?.codexResets;
+		if (!codexResets) {
+			state.codex ??= new CodexResets({ root: join(getAgentDir(), "router-codex-resets"), usage, tracker, now });
+			codexResets = state.codex;
+		}
 		const registrantState: SessionDecisions = { recent: [], persisted: new Map() };
 		/**
 		 * Remember a decision for `/router status` and append it to the session log unless the profile
@@ -297,7 +311,7 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 
 		pi.registerCommand("router", {
 			description:
-				"Subscription router: status (default), explain <profile> [--json], refresh, or reset confirmed blocks",
+				"Subscription router: status, explain <profile> [--json], resets [refresh|codex], refresh, or reset LOCAL blocks",
 			handler: async (args, ctx) => {
 				const action = args.trim() || "status";
 				if (action.split(/\s+/)[0] === "explain") {
@@ -321,13 +335,57 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 					);
 					return;
 				}
+				if (action === "resets codex") {
+					await showCodexResets(pi, ctx, codexResets, now);
+					return;
+				}
+				if (action.split(/\s+/)[0] === "resets") {
+					if (action !== "resets" && action !== "resets refresh") {
+						ctx.ui.notify("subscription-router: expected resets [refresh|codex]", "error");
+						return;
+					}
+					const providers = sessionProviders(ctx, profiles);
+					let refresh = action === "resets refresh";
+					do {
+						const results = refresh ? await refreshSchedules(ctx, usage, providers) : [];
+						const text = formatResets(
+							providers,
+							(provider) => {
+								const result = results.find((snapshot) => snapshot.provider === provider);
+								const cached = usage.peek(provider);
+								// A cancelled/deadline-limited caller must not erase last-known windows.
+								return result && result.windows.length === 0 && cached?.windows.length
+									? { ...cached, status: "stale", message: result.message }
+									: (result ?? cached);
+							},
+							now(),
+						);
+						if (ctx.mode !== "tui") {
+							pi.sendMessage({ customType: "router:resets", content: text, display: true }, { triggerTurn: false });
+							return;
+						}
+						refresh = await ctx.ui.custom<boolean>(
+							(tui, _theme, _kb, done) =>
+								new ResetView(
+									text,
+									() => tui.terminal.rows,
+									() => tui.requestRender(),
+									done,
+								),
+						);
+					} while (refresh);
+					return;
+				}
 				if (action === "reset") {
 					tracker.clear();
-					ctx.ui.notify("subscription-router: cleared confirmed blocks", "info");
+					ctx.ui.notify("subscription-router: cleared LOCAL confirmed blocks only; provider quota unchanged", "info");
 					return;
 				}
 				if (action !== "status" && action !== "refresh") {
-					ctx.ui.notify(`subscription-router: unknown action "${action}" (status, refresh, reset)`, "error");
+					ctx.ui.notify(
+						`subscription-router: unknown action "${action}" (status, resets [refresh|codex], refresh, reset)`,
+						"error",
+					);
 					return;
 				}
 				const providers = sessionProviders(ctx, profiles);

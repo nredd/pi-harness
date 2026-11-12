@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { type ConfigResult, loadConfig, type Profile } from "../src/config.js";
 import { ExhaustionTracker } from "../src/exhaustion.js";
 import subscriptionRouter from "../src/index.js";
+import { ResetView } from "../src/reset-view.js";
 import { UsageService, type UsageSnapshot } from "../src/usage.js";
 
 vi.mock("../src/config.js", async (original) => ({
@@ -45,6 +46,7 @@ async function harness(startSession = true, profiles: Profile[] = [], config: Co
 		registerCommand: vi.fn(),
 		registerVirtualModel: vi.fn(),
 		appendEntry: vi.fn(),
+		sendMessage: vi.fn(),
 	} as unknown as ExtensionAPI;
 	await subscriptionRouter(pi);
 	if (startSession) {
@@ -100,6 +102,121 @@ afterEach(() => {
 });
 
 describe("router usage RPC", () => {
+	it("opens reset schedules cached-only, closes/cancels without reads, and bounds explicit refresh", async () => {
+		const h = await harness(false);
+		const notify = vi.fn();
+		const screens: string[] = [];
+		const choices = [false, true, false, false, false];
+		let cancelRefresh = false;
+		const custom = vi.fn(async (factory: Parameters<ExtensionCommandContext["ui"]["custom"]>[0]) => {
+			let finish: (value: unknown) => void = () => {};
+			const result = new Promise((resolve) => {
+				finish = resolve;
+			});
+			const component = await factory(
+				{ terminal: { rows: 40 }, requestRender: vi.fn() } as never,
+				{ fg: (_color: string, text: string) => text } as never,
+				{} as never,
+				finish,
+			);
+			try {
+				component.render(120);
+				if (component instanceof ResetView) {
+					screens.push(component.render(120).join("\n"));
+					component.handleInput(choices.shift() ? "r" : "q");
+				} else if (cancelRefresh) component.handleInput?.("\u001b");
+				return await result;
+			} finally {
+				if ("dispose" in component) component.dispose?.();
+			}
+		});
+		const ctx = {
+			mode: "tui",
+			scopedModels: [{ model: { provider: "anthropic" } }],
+			ui: { notify, custom },
+		} as unknown as ExtensionCommandContext;
+		await h.status(ctx, "resets invalid");
+		expect(notify).toHaveBeenLastCalledWith("subscription-router: expected resets [refresh|codex]", "error");
+		await h.status(ctx, "resets");
+		expect(h.fetch).not.toHaveBeenCalled();
+		expect(custom).toHaveBeenCalledTimes(1);
+		await h.status(ctx, "resets");
+		expect(h.fetch).toHaveBeenCalledTimes(1);
+		await h.status(ctx, "resets refresh");
+		expect(h.fetch).toHaveBeenCalledTimes(1);
+		expect(custom).toHaveBeenCalledTimes(6);
+		expect(screens.at(-1)).toContain("once per minute");
+		expect(screens.at(-1)).toContain("24% used");
+		h.advance(MINUTE);
+		cancelRefresh = true;
+		await h.status(ctx, "resets refresh");
+		expect(screens.at(-1)).toContain("cancelled");
+		expect(screens.at(-1)).toContain("24% used");
+		expect(h.pi.appendEntry).not.toHaveBeenCalled();
+	});
+
+	it("coalesces schedule refresh with a shared read without clearing confirmed blocks", async () => {
+		const h = await harness(false);
+		const ctx = {
+			mode: "json",
+			scopedModels: [{ model: { provider: "anthropic" } }],
+		} as unknown as ExtensionCommandContext;
+		let release: () => void = () => {};
+		let started: () => void = () => {};
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const ready = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		h.fetch.mockImplementationOnce(async () => {
+			started();
+			await held;
+			return new Response(JSON.stringify({ five_hour: { utilization: 10 } }));
+		});
+		h.tracker.mark(
+			{ provider: "anthropic", id: "sample" },
+			{ block: true, window: "weekly", resetAt: Date.now() + MINUTE },
+		);
+		const blocks = h.tracker.active();
+		const warm = h.usage.get(ctx, "anthropic");
+		await ready;
+		const command = h.status(ctx, "resets refresh");
+		release();
+		await Promise.all([warm, command]);
+		expect(h.fetch).toHaveBeenCalledTimes(1);
+		expect(h.tracker.active()).toEqual(blocks);
+		expect(h.pi.sendMessage).toHaveBeenCalledWith(
+			expect.objectContaining({ content: expect.stringContaining("10% used") }),
+			{ triggerTurn: false },
+		);
+	});
+
+	it("reports non-TUI schedules without a model turn and keeps windows on caller cancellation", async () => {
+		vi.useFakeTimers({ now: T0 });
+		const h = await harness(false);
+		const controller = new AbortController();
+		const ctx = {
+			mode: "print",
+			scopedModels: [{ model: { provider: "anthropic" } }],
+			signal: controller.signal,
+			ui: { notify: vi.fn() },
+		} as unknown as ExtensionCommandContext;
+		await h.usage.get(ctx, "anthropic");
+		controller.abort();
+		await h.status(ctx, "resets refresh");
+		expect(h.fetch).toHaveBeenCalledTimes(1);
+		expect(h.pi.sendMessage).toHaveBeenLastCalledWith(
+			{ customType: "router:resets", display: true, content: expect.stringContaining("cancelled") },
+			{ triggerTurn: false },
+		);
+		const message = vi.mocked(h.pi.sendMessage).mock.calls.at(-1)?.[0];
+		expect(message?.content).toContain("24% used");
+		expect(message?.content).toContain("stale");
+		expect(h.tracker.active()).toEqual([]);
+		expect(h.pi.appendEntry).not.toHaveBeenCalled();
+	});
+
 	it("explain validates flags/profile and is a cached, sanitized, nonpersisting forecast", async () => {
 		const profile: Profile = {
 			id: "new",

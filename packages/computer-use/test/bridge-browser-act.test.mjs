@@ -147,11 +147,23 @@ test("an empty browser keypress is rejected before the write epoch advances", as
 	const { act, stateId, refs, methods } = await observePage(onTestFinished);
 	const baseline = methods().length;
 	for (const action of [{ action: "keypress" }, { action: "keypress", keys: [] }, { action: "keypress", keys: "a" }]) {
-		await assert.rejects(() => act({ stateId, actions: [{ action: "press", ref: refs.Save }, action] }), /^Error: keypress\.keys must contain at least one key\.$/);
+		await assert.rejects(() => act({ stateId, actions: [{ action: "press", ref: refs.Save }, action] }), (error) => error.code === "invalid_args" && error.message === "keypress.keys must contain at least one key.");
 	}
 	assert.equal(methods().length, baseline, "the valid first step was not delivered either");
 	const ok = await act({ stateId, actions: [{ action: "press", ref: refs.Save }] });
 	assert.equal(ok.details.baseStateId, stateId, "the base state is still current");
+});
+
+test("browser moveMouse refs reject with invalid_args before any delivery or epoch change", async ({ onTestFinished }) => {
+	const { act, stateId, refs, methods, paramsOf } = await observePage(onTestFinished);
+	const baseline = methods().length;
+	for (const ref of [refs.Save, ` ${refs.Save} `, "@e99"]) {
+		await assert.rejects(() => act({ stateId, actions: [{ action: "press", ref: refs.Save }, { action: "moveMouse", ref }] }), (error) => error.code === "invalid_args" && error.message === "Browser moveMouse requires x/y coordinates; ref targets are not supported.");
+	}
+	assert.equal(methods().length, baseline, "preflight did not deliver even the valid prefix");
+	const result = await act({ stateId, actions: [{ action: "moveMouse", x: 0, y: 0 }] });
+	assert.equal(result.details.baseStateId, stateId, "rejection did not consume the base epoch");
+	assert.deepEqual(paramsOf("Input.dispatchMouseEvent"), [{ type: "mouseMoved", x: 0, y: 0, button: "none", clickCount: 1 }]);
 });
 
 test("a padded stateId resolves the same state and its refs", async ({ onTestFinished }) => {

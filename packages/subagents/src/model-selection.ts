@@ -31,31 +31,34 @@ export interface ModelSelection {
   tierParent?: Model<Api>;
 }
 
-/** Choose the input once: explicit parameter > type > wildcard > definition; blank strings are unset. */
-export function modelRequest(type: string, definitionModel?: string, paramModel?: string | Model<Api> | null): {
-  requested?: string;
-  source: ModelSource;
-} {
-  if (paramModel != null && (typeof paramModel !== "string" || paramModel.trim() !== "")) {
-    return { requested: typeof paramModel === "string" ? paramModel : `${paramModel.provider}/${paramModel.id}`, source: "param" };
-  }
+/** Inputs in dispatch precedence order, including shadowed defaults; blank strings are unset. */
+export function modelInputs(type: string, definitionModel?: string, paramModel?: string | Model<Api> | null): { requested?: string; source: ModelSource }[] {
   const overrides = getAgentModels();
-  const typed = overrides.get(type.toLowerCase());
-  if (typed?.trim()) return { requested: typed, source: "agentModels:type" };
-  const wildcard = overrides.get("*");
-  if (wildcard?.trim()) return { requested: wildcard, source: "agentModels:*" };
-  if (definitionModel?.trim()) return { requested: definitionModel, source: "definition" };
-  return { source: "parent" };
+  const inputs: { requested?: string; source: ModelSource }[] = [
+    { source: "param", requested: paramModel == null ? undefined : typeof paramModel === "string" ? paramModel : `${paramModel.provider}/${paramModel.id}` },
+    { source: "agentModels:type", requested: overrides.get(type.toLowerCase()) },
+    { source: "agentModels:*", requested: overrides.get("*") },
+    { source: "definition", requested: definitionModel },
+  ];
+  return [...inputs.filter(input => input.requested?.trim()), { source: "parent" }];
 }
 
-/**
- * Choose an exact configured input or tier binding before record creation.
- * Only explicit non-tier tool inputs retain fuzzy matching. Tier admission is
- * asynchronous and completes through admitModelSelection before startup; this
- * synchronous preflight preserves spawn's immediate-id and validation contract.
- * An already-open resume keeps the record and does not select again.
- */
-export function selectModel(request: {
+/** Resolve trusted tier/legacy configuration without registry or admission work. */
+export function modelInputBinding(input: { requested?: string; source: ModelSource }, agentType: string): TierBinding | undefined {
+  const requested = input.requested?.trim();
+  if (!requested) return undefined;
+  const legacy = getModelAliases().get(requested.toLowerCase());
+  const legacyBinding = legacy ? parseTierBinding("legacy", legacy) : undefined;
+  // Preserve existing enterprise manifests during the built-in Explore migration.
+  // An explicit cheap binding always wins, even when it is unavailable.
+  const cheapCompatibility = requested === "@cheap" && agentType === "Explore" && input.source === "definition"
+    ? parseTierBinding("cheap", getModelAliases().get("claude-haiku-4-5")) : undefined;
+  return requested.startsWith("@") ? tierBinding(requested.slice(1)) ?? cheapCompatibility
+    : legacyBinding ? { ...legacyBinding, tier: requested } : undefined;
+}
+
+/** Inputs shared by dispatch selection and registration-only validation. */
+export interface ModelSelectionRequest {
   homeDir?: string;
   agentType: string;
   definitionModel?: string;
@@ -64,20 +67,16 @@ export function selectModel(request: {
   registry: ModelRegistry;
   cwd: string;
   agentLabel?: string;
-}): ModelSelection | string {
-  const input = modelRequest(request.agentType, request.definitionModel, request.paramModel);
+}
+
+/** Shared resolution before scope checking; structural validation must not populate live scope caches. */
+function prepareModelSelection(request: ModelSelectionRequest): ModelSelection | string {
+  const input = modelInputs(request.agentType, request.definitionModel, request.paramModel)[0]!;
   let selection: ModelSelection = { ...input, model: request.parentModel, outcome: "inherited" };
   if (input.requested) {
     const requested = input.requested.trim();
     const legacy = getModelAliases().get(requested.toLowerCase());
-    const legacyBinding = legacy ? parseTierBinding("legacy", legacy) : undefined;
-    // Preserve existing enterprise manifests during the built-in Explore migration.
-    // An explicit cheap binding always wins, even when it is unavailable.
-    const cheapCompatibility = requested === "@cheap" && request.agentType === "Explore"
-      && input.source === "definition"
-      ? parseTierBinding("cheap", getModelAliases().get("claude-haiku-4-5")) : undefined;
-    const binding = requested.startsWith("@") ? tierBinding(requested.slice(1)) ?? cheapCompatibility
-      : legacyBinding ? { ...legacyBinding, tier: requested } : undefined;
+    const binding = modelInputBinding(input, request.agentType);
     if (requested.startsWith("@") || legacy) {
       const tier = requested.startsWith("@") ? requested.slice(1) : requested;
       const refs = binding?.kind === "routed" ? [binding.profile] : binding?.members ?? [];
@@ -107,14 +106,33 @@ export function selectModel(request: {
       }
     }
   }
+  return selection;
+}
+
+/**
+ * Choose an exact configured input or tier binding before record creation, then enforce scope.
+ * Only explicit non-tier inputs retain fuzzy matching. Admission completes asynchronously
+ * through admitModelSelection; an already-open resume keeps its existing selection.
+ */
+export function selectModel(request: ModelSelectionRequest): ModelSelection | string {
+  const selection = prepareModelSelection(request);
+  if (typeof selection === "string") return selection;
   const scope = checkModelScope({
     model: selection.model, cwd: request.cwd, modelRegistry: request.registry,
-    callerSupplied: input.source === "param" && !selection.tierBinding && !selection.tier, agentLabel: request.agentLabel ?? request.agentType,
-    modelInput: input.requested, homeDir: request.homeDir,
+    callerSupplied: selection.source === "param" && !selection.tierBinding && !selection.tier, agentLabel: request.agentLabel ?? request.agentType,
+    modelInput: selection.requested, homeDir: request.homeDir,
   });
   if (scope.kind === "error") return scope.message;
   if (scope.kind === "warn") selection.scopeWarning = scope.message;
   return selection;
+}
+
+/** Registration-only configuration errors, deliberately excluding live availability and scope evaluation. */
+export function hasModelConfigurationError(request: Omit<ModelSelectionRequest, "paramModel">): boolean {
+  const registered = request.registry.getAll?.() ?? [];
+  const getRegistered = () => registered;
+  const registry = { find: (provider: string, id: string) => registered.find(model => model.provider === provider && model.id === id), getAll: getRegistered, getAvailable: getRegistered };
+  return typeof prepareModelSelection({ ...request, paramModel: undefined, registry }) === "string";
 }
 
 /** Label an admitted physical model before any response, without replacing the virtual selection. */

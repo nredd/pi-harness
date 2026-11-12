@@ -26,6 +26,21 @@ install-owned: verify-root-overrides  ## Verify root core overrides, then instal
 install-benchmark:  ## Install benchmarks/comparison, only `check-benchmark` reads it
 	cd benchmarks/comparison && env -u GH_TOKEN uv sync --locked --all-extras
 
+.PHONY: check-core-compaction
+check-core-compaction:  ## Assembled child compaction on built candidate forks/pi, isolated from real auth
+	npm run build --workspace packages/subagents
+	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json integration/core-source
+	node_modules/.bin/tsc -p integration/core-source/tsconfig.json
+	@sandbox=$$(mktemp -d); trap 'rm -rf "$$sandbox"' EXIT; \
+	mkdir -p "$$sandbox/home" "$$sandbox/tmp"; \
+	env -i PATH="$$PATH" HOME="$$sandbox/home" USERPROFILE="$$sandbox/home" \
+	  XDG_CONFIG_HOME="$$sandbox/home/.config" XDG_CACHE_HOME="$$sandbox/home/.cache" \
+	  TMPDIR="$$sandbox/tmp" TMP="$$sandbox/tmp" TEMP="$$sandbox/tmp" \
+	  PI_OFFLINE=1 PI_NO_LOCAL_LLM=1 JITI_FS_CACHE=false AWS_EC2_METADATA_DISABLED=true \
+	  GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 \
+	  node --import ./forks/pi/packages/coding-agent/src/experimental/source-resolver.ts \
+	  --test --test-concurrency=1 --test-timeout=120000 integration/core-source/compaction-children.test.ts
+
 check: check-ts check-scripts check-integration check-benchmark  ## Owned-code gates only (NOT forks, NOT the full stack)
 	$(MAKE) check-coverage
 

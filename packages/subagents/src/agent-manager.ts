@@ -1256,7 +1256,6 @@ export class AgentManager {
     record.ranThisRun = record.status === "running";
     const promise = runAgent(ctx, type, prompt, {
       pi,
-      clock: this.clock,
       homeDir: options.homeDir ?? this.homeDir,
       agentId: id,
       model: options.modelSelection?.model,
@@ -1771,7 +1770,6 @@ export class AgentManager {
       // Positive evidence for the reap notice: only a live signal means the prompt runs.
       record.ranThisRun = record.status === "running";
       this.settleOutcome(record, await resumeAgent(record.session, prompt, {
-        clock: this.clock,
         type: record.type,
         maxTurns: options?.maxTurns ?? record.invocation?.maxTurns,
         onTurnEnd: options?.onTurnEnd,
@@ -1907,7 +1905,6 @@ export class AgentManager {
 
     record.ranThisRun = true;
     const promise = resumeAgent(record.session, prompt, {
-      clock: this.clock,
       type: record.type,
       maxTurns: options.maxTurns ?? record.invocation?.maxTurns,
       onTurnEnd: options.onTurnEnd,

@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "target": { "lines": 0, "functions": 0, "branches": 0 },
+  "target": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 },
   "enforce_target": true,
   "unmeasured_trees": [
     { "path": "forks", "issue": 693, "reason": "Carried core fork patches have no coverage producer; diff coverage vs explicit exclusion is an open owner decision." }
@@ -59,14 +59,14 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "enforcement": "enforced",
-          "reporters": ["text", "lcov"]
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -83,14 +83,14 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "enforcement": "enforced",
-          "reporters": ["text", "lcov"]
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -103,15 +103,15 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
 
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "enforcement": "enforced",
-          "reporters": ["text", "lcov"]
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -124,15 +124,15 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
 
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "enforcement": "enforced",
-          "reporters": ["text", "lcov"]
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -148,8 +148,8 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
@@ -186,14 +186,14 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "enforcement": "enforced",
-          "reporters": ["text", "lcov"]
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -206,15 +206,15 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
 
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "enforcement": "enforced",
-          "reporters": ["text", "lcov"]
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -227,15 +227,15 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
 
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "enforcement": "enforced",
-          "reporters": ["text", "lcov"]
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -246,8 +246,30 @@
       "status": "pending",
       "goal": "excluded",
       "goal_reason": "Owner explicitly excludes computer-use from coverage maintenance; existing platform/native checks remain unchanged. Inventory remains visible, with no coverage claim.",
-      "note": "Full inventory: Swift is measured separately by computer-use-swift; native Rust and the documentation site remain not measured, tracked. Its JS/TS runtime source is also measured, with enforced ratchet caps, by `computer-use-vitest` (#347, #645). Shipped setup-helper.mjs, build-native.mjs and src/ JavaScript remain inventoried production source, never verification helpers.",
+      "note": "Full inventory: Swift and native Linux Rust are measured separately by computer-use-swift and computer-use-linux-native; Windows Rust and the documentation site remain unmeasured. JS/TS runtime source is separately measured by computer-use-vitest (#347, #645). Shipped setup-helper.mjs, build-native.mjs and src/ JavaScript remain inventoried production source, never verification helpers.",
       "signals": {}
+    },
+    "computer-use-linux-native": {
+      "root": "packages/computer-use",
+      "owned": ["native/linux/bridge-rs/src/**/*.rs"],
+      "exclusions": [],
+      "status": "measured",
+      "goal": "excluded",
+      "goal_reason": "Native runtime closure remains #696; headless tests do not prove desktop adapters or exclude their policy logic.",
+      "note": "Native Ubuntu receipt 43183336941 at 793ad317354e12f696204cbdcbe5b11b4dee4433, artifact 13927707571: uncovered L/F/regions 1442/170/2625. Includes inline and separately named cfg(test) modules in src; no branch or statement producer. Windows and WSL remain unmeasured by this signal.",
+      "signals": {
+        "primary": {
+          "report": "coverage/native-linux/coverage.json",
+          "producer": "llvm-cov",
+          "max_uncovered": { "linux": { "lines": 1442, "functions": 170 } },
+          "enforcement": "report-only",
+          "reason": "Source-complete Ubuntu producer baseline (#758); runtime and inline-test attribution closure remains #696, not a native 100-percent claim.",
+          "reporters": ["text", "lcov", "json"],
+          "skip_os": ["darwin"],
+          "skip_hosts": ["wsl2"],
+          "gate": "check-ts"
+        }
+      }
     },
     "computer-use-async": {
       "root": "packages/computer-use",
@@ -262,8 +284,8 @@
           "report": "coverage/async/lcov.info",
           "enforcement": "report-only",
           "reason": "Verification-only maintenance goal; the dedicated Vitest producer enforces a per-file zero L/F/B/S pin (#759). Missing or invalid selected-host reports still fail accounting.",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -294,12 +316,12 @@
       "status": "measured",
       "goal": "excluded",
       "goal_reason": "Owner excludes computer-use from coverage maintenance; this measures its JS/TS runtime source under the Vitest suites from #347 with enforced uncovered-count ratchet caps (#645), not a 100% claim. `computer-use` keeps the full inventory.",
-      "note": "Istanbul over the package's Vitest suites; subprocess-run scripts (setup/build/docs generators) count only what the suites import. Caps are the measured per-OS uncovered counts (#645 T0), see docs/coverage.md.",
+      "note": "Istanbul over the package's Vitest suites; subprocess-run scripts count only what the suites import. At #755 CI HEAD 3a162381, macOS, Ubuntu and WSL2 each measured zero uncovered lines, functions, branches and statements; see docs/computer-use-coverage.md.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 572, "functions": 203, "branches": 871 }, "linux": { "lines": 592, "functions": 211, "branches": 900 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -322,8 +344,8 @@
       "signals": {
         "primary": {
           "report": "coverage/runtime-build-tooling/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -336,8 +358,8 @@
       "signals": {
         "primary": {
           "report": "coverage/workflow-examples/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -399,8 +421,8 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -424,8 +446,8 @@
       "signals": {
         "primary": {
           "report": "scripts/coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -438,8 +460,8 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -452,14 +474,14 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "enforcement": "enforced",
-          "reporters": ["text", "lcov"]
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     }

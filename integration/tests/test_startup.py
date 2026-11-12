@@ -14,12 +14,12 @@ from harness import startup
 if TYPE_CHECKING:
     from pathlib import Path
 
-# Draws a footer after a short delay, prints one `PI_TIMING` block to stderr, then idles on stdin.
+# Pi prints `PI_TIMING` before starting its interactive UI; preserve that ordering.
 FAKE_PI = (
-    "import sys,time;time.sleep(0.2);print('footer ctx 1%',flush=True);"
+    "import sys,time;time.sleep(0.2);"
     "sys.stderr.write('--- Startup Timings: main ---\\n  TOTAL: 7ms\\n"
     "--- Startup Timings: extensions ---\\n  /h/node_modules/@a/b/index.ts module import: 3ms\\n');"
-    "sys.stderr.flush();sys.stdin.readline()"
+    "sys.stderr.flush();print('footer ctx 1%',flush=True);sys.stdin.readline()"
 )
 TIMING_BLOCK = """\
 --- Startup Timings: main ---

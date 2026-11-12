@@ -123,7 +123,8 @@ Surfaces:
 - Child sessions share the parent's model runtime and re-register `router/*` into it, so one activation's route serves every session on that runtime. Routing reads only the model registry, never that activation's extension ctx, so it survives the disposal of whichever child loaded last
 - `router:decision` entries go to the requesting session through `ctx.appendEntry` when core's `route` context carries one (core with request-owned routing), and are never written through a possibly disposed registrant. Older cores and raw `ModelRuntime` calls carry no requester identity: entries then go to the session that last registered the route and are dropped once that session is disposed
 - `router:decision` session entries: one per profile's first scored pick in a session and each later change of chosen model, not every route. This slows growth but is not a hard bound: entries are never pruned, flapping between models and every session restart still append (profile, reason, chosen model, each candidate's score, limiting window, stale flag and data age, ineligible entries). Sticky continuations and repeat picks of the same model are not persisted; status still lists the last five. Read them from the session file to prove why a model was picked
-- `/router [status|refresh|reset]`: cached-only fresh-dispatch forecast, explicit refresh, or clear all blocks. Status explains each eligible candidate's score and limiting window, unlimited quota, or fallback reason, plus ineligible entries. Status also lists the last five routing decisions of the current session (of the process, on a core without request-owned routing). The forecast uses chain-order ties without a session incumbent, like admission; an existing balanced conversation additionally applies its previous-model hysteresis/stickiness
+- `/router resets [refresh]`: cached provider schedule view, or explicit bounded read-only refresh. Details and the free-reset capability boundary are below.
+- `/router [status|refresh|reset]`: cached-only fresh-dispatch forecast, explicit refresh, or clear all LOCAL confirmed blocks. `reset` does not reset provider quota, redeem a grant, or modify usage counters. Status explains each eligible candidate's score and limiting window, unlimited quota, or fallback reason, plus ineligible entries. Status also lists the last five routing decisions of the current session (of the process, on a core without request-owned routing). The forecast uses chain-order ties without a session incumbent, like admission; an existing balanced conversation additionally applies its previous-model hysteresis/stickiness
 - `pi.events` RPC with the pi-subagents envelope (`{ requestId, ... }`, reply on `<channel>:reply:<requestId>` as `{ success, data | error }`):
   - `router:rpc:admit` `{ model }` -> `{ ok, resolvedModel?, resetAt?, wait? }` (`wait`, only when refused: the caller may park until `resetAt`, see `exhaustionPolicy`; a physical model uses the default `wait` policy). Unknown models are admitted. A `router/*` profile is refused only when a quota block leaves no entry eligible; a chain unusable for config or credential reasons is admitted so the child reports the real cause. Before the first `session_start`, everything is admitted
   - `router:rpc:usage` `{ refresh?: boolean }` -> `{ snapshots, blocks }`. Omitted refresh is cached-only. `refresh: true` reads both collected providers through the ordinary five-minute cache, shared in-flight requests, endpoint timeout and failure backoff; it is not a forced refresh. Before session start it remains cached-only. The personal TUI footer uses this RPC once a minute to show provider-wide remaining quota for both subscriptions, independent of the selected model
@@ -141,6 +142,166 @@ Core owns OAuth acquisition, refresh and persistence. The router bounds its wait
 lookup to 10 seconds, then reports a sanitized error and backs off; it cannot cancel core's lookup.
 The subsequent usage HTTP request has its own 10-second timeout. No token or response body appears
 in usage errors. These bounds do not prove live OAuth refresh or revocation behavior.
+
+## Reset schedules and free Codex resets
+
+`/router resets` opens cached schedules without a network read. Each provider shows last checked
+local date/time, IANA timezone, UTC offset and UTC instant. Windows retain last-known usage,
+provider/family applicability, reported versus assumed duration and scheduled reset with relative
+time. Expired snapshots stay visibly stale. A passed reset says **needs verification**, never
+fabricated replenishment. Missing schedules, unavailable credentials and request failures stay
+unknown/unavailable/error, not zero usage. Snapshot freshness does not verify an elapsed reset.
+
+In the native Pi screen, `j`/`k`, arrows and Page Up/Down scroll wrapped text; `q`/Escape closes.
+`r` explicitly refreshes usage, with Escape cancelling that caller's wait. Shared reads may still
+complete into the cache. `/router resets refresh` also works in non-TUI modes, which emit a
+non-triggering transcript message rather than opening a custom screen. Refresh uses the existing
+per-provider once/minute manual allowance, shared in-flight reads, 10s credential/10s HTTP deadlines
+and failure backoff. Closing the cached screen does not consume the refresh allowance.
+
+Scheduled replenishment is not a banked grant, paid instant reset, extra usage billing, or the
+local block-clear command. `/router resets codex` explicitly lists banked FREE reset offers through
+the documented first-party app-server. It requires **Codex 0.167.2** on `PATH`; other versions,
+missing methods, unsupported external auth and invalid response shapes fail explicitly, with no
+guessed command, private HTTP fallback or terminal scraping. The version probe expects exactly
+`codex-cli 0.167.2`, matching the pinned `codex-cli` crate's Clap version surface. No client is
+installed/upgraded here.
+The default cached schedule screen still performs no grant read. Unknown balance/detail fields are
+not verified zero, ineligibility or unlimited expiry. Usage credit balances are not reset grants.
+
+Offer reads coalesce and are limited to once/minute/Pi principal-workspace context within the shared router process;
+failures back off for that minute and retain visibly stale prior offers. The returned count is
+authoritative even when details are capped. Opaque grant/account IDs and arbitrary provider
+strings are not rendered; the view shows reported status and grant/expiry times. Per-grant window
+applicability and history remain explicitly unreported when the API supplies none. Missing/expired
+expiry, unknown reset type/status, zero/unknown balance and unverified main-quota eligibility do
+not enable a fresh consume. The provider is the final eligibility authority.
+
+With UI support, select a FREE grant, then separately confirm the current Pi account/workspace,
+main quota, one-grant consumption and expiry. The adapter revalidates identity, grant terms and
+live eligibility after confirmation. Print/JSON output lists offers without exposing redemption;
+RPC supports the same explicit selection/confirmation dialogs, never a model-callable consume tool.
+There are no paid purchase, extra-usage enablement or automatic-redemption paths. Embedded usage
+adapters must support targeted `invalidate`; otherwise redemption is explicitly disabled while
+read-only listing remains usable. Restart Pi after package updates to replace old process-global
+usage/controller instances.
+
+Account binding uses Pi's existing Codex OAuth credential owner, including refresh. A dedicated
+`codex app-server --listen stdio://` process receives the documented experimental
+`chatgptAuthTokens` login after initialization opts into `experimentalApi`. Its home, Codex home
+and working directory are a private empty temporary directory, so neither a separate CLI login
+nor project Codex configuration is inherited. Tokens travel only over private stdio, not argv,
+logs, transcript messages or the journal. The JWT subject and workspace must remain identical
+through token rotation; optional user metadata is not substituted for a missing subject. Changes
+abort the operation. This is not independent JWT signature
+verification or an executable-attestation claim: Pi owns credentials, the provider verifies them,
+and the user-installed first-party client is trusted. Credential waits are bounded to 10s, RPCs
+to 25s, and client version checks to 3s. Stderr is discarded. Cleanup escalates to SIGKILL after
+1s and bounds exit confirmation to 3s; unconfirmed exit retains private temporary state.
+
+A versioned append-only ledger under `<agentDir>/router-codex-resets/<workspace-digest>/` stores
+only identity/workspace digests, the logical attempt UUID, opaque selected grant ID, creation/expiry
+times and known outcome.
+Directories/files are `0700`/`0600`; insecure, symlinked, oversized or corrupt state fails closed.
+The [schema](schemas/codex-reset-journal.schema.json) matches runtime validation. Fully written
+records are fsynced and exclusively published before dispatch. Concurrent fresh attempts compete
+for the same workspace sequence, so only one wins; in-process active attempts are also shared
+across reloads. Switching principals in the same workspace cannot bypass unresolved work, and
+reconciliation refuses a different principal until the original account context is restored.
+These local records are private operational state, not public debugging artifacts. Known successful
+receipts suppress repeat use of a grant even if the provider's offer response has not caught up;
+the provider's reported count is displayed, never locally decremented or fabricated.
+
+Publication itself establishes the unresolved barrier, even if this process later fails identity
+validation, is cancelled before its own dispatch, encounters an error/missing method or crashes.
+Another process may already be reconciling that published claim. A process-local observation cannot
+prove global non-dispatch. `noCredit` and `nothingToReset` remain distinct reported refusals, but
+also retain the barrier: neither fences another same-key request that may still be in flight.
+The command reports that refusal separately from the UNKNOWN global outcome and requires
+**Reconcile SAME**, never claiming that no grant was consumed.
+Timeout, lost completion or reload likewise leaves that original attempt unresolved, blocking new grants. Inspection never replays it. A separate **Reconcile SAME** action
+requires another explicit confirmation, reads current offers/account state, and uses the original
+grant and provider idempotency key. It may consume that original FREE grant if the first request
+never completed; it cannot select another grant or UUID. Concurrent idempotent successes are
+equivalent. Only `reset`/`alreadyRedeemed` may publish a terminal receipt. There is no time-based
+expiry, stale-lock reclamation or automatic replay. This intentionally favors a retained barrier
+over silently spending another grant. If reconciliation keeps refusing or the client lacks the
+method, use the official UI; Pi does not invent a safe release from those observations.
+Legacy `notDispatched`/refusal receipts are treated as unresolved, not trusted as safe release.
+A following legacy attempt makes that journal inconsistent and fails closed; an immutable legacy
+receipt is never overwritten to manufacture certainty. Use the official UI for that quarantined state.
+Unknown or conflicting outcomes remain blocked rather than being guessed successful or retried
+automatically. Do not delete the ledger to bypass unresolved work.
+
+Confirmed success invalidates only Codex usage evidence and pre-reset read ownership, then reads
+banked offers and authoritative quota separately, even if saving the known outcome receipt fails.
+The unresolved attempt remains retained, but a local persistence failure cannot keep pre-reset
+quota evidence authoritative. A failed/cancelled refresh does not erase a
+confirmed redemption, justify another grant, invent new allowance or zero counters. Only fresh,
+exact window/provider/family evidence can reconcile a corresponding confirmed block; unrelated
+blocks stay untouched. Late pre-reset reads cannot re-confirm old exhaustion after invalidation.
+The command emits no wake/resume event: parked work retains ordinary re-admission and goals/loops
+still require explicit resume.
+
+Official handoff: in Codex CLI, `/usage` -> **Redeem reset**. If absent, use desktop
+**Settings > Usage & billing** or web **Usage settings**. Verify account/workspace, covered
+allowances and expiry there before confirming a FREE banked reset. **Buy an instant reset** is a
+separate paid flow, excluded here. If completion is uncertain, inspect Usage/history before trying
+again; do not spend another grant to test success. Then refresh schedules in Pi. This remains the
+handoff for unavailable clients/capabilities and unreported grant terms. `/router reset` remains a
+LOCAL block-clear command, not server quota or grant consumption.
+
+### Provider contract evidence and staged design
+
+Research checked 2026-11-12, without authenticated requests, terminal scraping or provider mutations.
+Executable adapter proofs use synthetic clients, not an authenticated installed Codex:
+
+- The official [reset guide](https://help.openai.com/en/articles/20001498-how-resets-work-in-codex)
+  documents discretionary free banked grants, grant-specific expiry, covered main allowances,
+  eligibility, the CLI handoff and 30-day banked history. Product UI alone is not API evidence.
+- OpenAI Codex release `rust-v0.167.2`, published 2026-11-11, resolves through annotated tag
+  `08a3b12b3298577534a28b62ed976acf8de66eda` to commit
+  `ce21072c90d32c40af7a55b60b2fb35c84a43a6a`. Its first-party protocol
+  [source](https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/app-server-protocol/src/protocol/common.rs)
+  declares `account/rateLimits/read` and `account/rateLimitResetCredit/consume` without an
+  experimental method annotation. The version-pinned
+  [processor](https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/app-server/src/request_processors/account_processor/rate_limit_resets.rs)
+  requires Codex-backed authentication, a nonempty idempotency key and an optional nonempty grant ID.
+  The pinned [CLI](https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/cli/src/main.rs)
+  uses Clap's version surface from its
+  [crate](https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/cli/Cargo.toml), `codex-cli`.
+- Crucially, the public [app-server docs](https://developers.openai.com/codex/app-server/),
+  sections **Rate limits (ChatGPT)** and **Earned rate-limit resets (ChatGPT)**, independently
+  document this JSON-RPC contract. This is a supported first-party client surface, not permission
+  to automate its private backend. `rateLimitResetCredits: null` means unknown; `credits: null`
+  means count-only; a fetched empty array is distinct. `availableCount` is authoritative because
+  details can be capped. Detail rows report ID, reset type, status, grant/expiry times and optional
+  title/description, not necessarily full history or quota applicability.
+- The documented consume call uses one UUID per logical attempt, reused only for that attempt.
+  `reset` and `alreadyRedeemed` are success; `nothingToReset` and `noCredit` are distinct refusals.
+  Refresh `account/rateLimits/read` afterward; never derive new windows from the consume response.
+- No standalone noninteractive `codex reset` command was verified. No direct provider HTTP
+  listing/redemption contract was established. Anthropic
+  [extra usage](https://support.claude.com/en/articles/12429409-extra-usage-for-paid-claude-plans)
+  is paid consumption, not a free reset. Paid weekly resets are a
+  [separate product](https://help.openai.com/en/articles/20001507-paid-weekly-work-and-codex-rate-limit-resets).
+
+Stage 1 is the router-owned cached schedule interpreter/native view. Stage 2 adds the isolated,
+account-bound first-party adapter, actual offer listing and explicitly confirmed FREE consumption
+above, without SessionKit or a universal redemption framework. `test/scenarios/codex-resets.test.ts`
+executes the real Pi command and adapter against a real credential-free faux app-server process:
+a backend-completed/lost-response attempt survives reload, reconciles with the original key, and
+records exactly one spend. Unit/boundary tests cover zero/expired/ineligible/unknown grants,
+version/capability/auth mismatches, private-state validation, cancellation, concurrent claims,
+pre-reset read races, uncertain outcomes and success followed by refresh/receipt failure.
+`test/codex-cross-process.test.ts` uses two actual isolated controller processes, IPC barriers and
+shared real journal files. It pauses the publisher after claim publication, dispatches reconciliation
+from the other process, then exercises identity/cancel/error/missing-method/refusal/crash outcomes
+and response loss. Fresh grants remain blocked until explicit original-key success; reload never
+replays a consume. These tests run under both Node and Bun, without provider network traffic.
+No authenticated LIVE redemption or paid call is part of development tests; live provider behavior
+and runtime client installation are NOT RUN by these synthetic proofs. Paid purchase, extra-usage
+enablement and automatic redemption remain excluded.
 
 Development:
 
@@ -161,6 +322,6 @@ exhaustive properties, offline normalized replay, strict failback, raw-remaining
 family caps, confirmed recovery and shared-runtime isolation. The coverage/ownership matrix and
 live-smoke proposal are [here](https://github.com/nredd/pi-harness/blob/main/packages/subscription-router/docs/hardening.md).
 
-`createSubscriptionRouter({ config, usage, tracker?, now? })` embeds an isolated router with explicit dependencies; the default export still loads agent config and shares usage/blocks process-wide. Scenarios inject a credential-free cache and quota clock; core retries use `baseDelayMs: 0`.
+`createSubscriptionRouter({ config, usage, tracker?, now?, codexResets? })` embeds an isolated router with explicit dependencies; the default export still loads agent config and shares usage/blocks process-wide. Scenarios inject a credential-free cache and quota clock; core retries use `baseDelayMs: 0`.
 
 `integration/inprocess/router-admission.test.ts` covers `wait`, `fail` and `capped` with the real router/subagents factories on one fake clock under Vitest and Bun. The optional-router absence case is `packages/subagents/test/session-scenarios.test.ts` / `absent admission RPC admits physical child`. All 13 former shell cases have native receipts in `docs/verification-rebuild.md`; the shell runner and its unused faux helpers are deleted. No installed Pi, owner checkout or `PI_SUBAGENTS_DIR` is needed.

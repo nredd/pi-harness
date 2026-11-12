@@ -1455,6 +1455,24 @@ def test_real_workspace_tarballs_pass_audit(
     assert artifact.integrity.startswith("sha512-")
 
 
+def test_router_contract_requires_only_the_reset_schema_not_private_state() -> None:
+    """Require the shipped schema without admitting private operational records.
+
+    Parameters:
+        None.
+    Returns:
+        None: The schema is required and private journal records remain forbidden.
+    Raises:
+        AssertionError: The contract omits the schema or permits private state.
+    """
+    contract = next(c for c in pc.CONTRACTS if c.directory == "subscription-router")
+    schema = "schemas/codex-reset-journal.schema.json"
+    assert schema in contract.required
+    assert any(pattern.fullmatch(schema) for pattern in contract.allowed)
+    for private_record in ("schemas/attempt-1.json", "schemas/private-state.schema.json"):
+        assert not any(pattern.fullmatch(private_record) for pattern in contract.allowed)
+
+
 def test_router_contract_requires_the_cheap_profile() -> None:
     """Require the published cheap example without broadly allowing JSON files.
 

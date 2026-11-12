@@ -263,6 +263,26 @@
 			}
 		},
 		{
+			"id": "bridge-missing-target-dead-arm-removal",
+			"purpose": "Delete the unreachable missing-target guard after tracing selection, desktop hydration, browser routing and capture preconditions; preserve the public no-observation error",
+			"rows": [
+				"Bridge missing-target dead-arm removal"
+			],
+			"files": [
+				"src/bridge.ts",
+				"test/bridge-observe-query.test.mjs"
+			],
+			"check": "test/bridge-observe-query.test.mjs",
+			"dropControls": [
+				"bridge missing-target dead guard (#755)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "Coverage-driven dead code removal (nredd/pi-harness#755); not filed"
+			}
+		},
+		{
 			"id": "bridge-read-text-dead-arm-removal",
 			"purpose": "Delete the unreachable browser snapshot and live resource identity guards in read_text; hydrated states supply both, and readAt still validates the epoch",
 			"rows": [
@@ -281,6 +301,32 @@
 				"status": "harness-only",
 				"reference": "UPSTREAM.md",
 				"detail": "Coverage-driven dead code removal (nredd/pi-harness#710); not filed"
+			}
+		},
+		{
+			"id": "browser-input-preflight",
+			"purpose": "Reject browser moveMouse refs and code empty keypress as invalid_args before batch delivery or epoch changes; retain explicit CDP coordinates and desktop behavior",
+			"rows": [
+				"Browser input preflight"
+			],
+			"files": [
+				"CHANGELOG.md",
+				"README.md",
+				"UPSTREAM.md",
+				"scripts/check-sync-reverts.mjs",
+				"src/bridge.ts",
+				"sync-patches.json",
+				"test/bridge-browser-act.test.mjs"
+			],
+			"check": "test/bridge-browser-act.test.mjs",
+			"dropControls": [
+				"browser empty keypress reports invalid_args (#748)",
+				"browser moveMouse refuses ref targets before delivery (#748)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#748; not filed upstream"
 			}
 		},
 		{
@@ -597,6 +643,29 @@
 				"status": "harness-only",
 				"reference": "UPSTREAM.md",
 				"detail": "nredd/pi-harness#725; not filed upstream"
+			}
+		},
+		{
+			"id": "helper-post-write-abort-windows",
+			"purpose": "Reject post-write Windows helper cancellation promptly and clean pending requests, timers and listeners on every completion and write-error path; ignore late replies without cancelling native work",
+			"rows": [
+				"Helper post-write cancellation"
+			],
+			"files": [
+				"CHANGELOG.md",
+				"README.md",
+				"scripts/check-sync-reverts.mjs",
+				"src/platform/windows/helper.ts",
+				"test/windows-helper-client.test.mjs"
+			],
+			"check": "test/windows-helper-client.test.mjs",
+			"dropControls": [
+				"Windows helper post-write abort (#750)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#750; not filed upstream"
 			}
 		},
 		{
@@ -962,18 +1031,20 @@
 		},
 		{
 			"id": "rust-coverage",
-			"purpose": "Report native Rust LCOV and per-file line/function/region summaries without thresholds",
+			"purpose": "Report native Rust LCOV and per-file line/function/region summaries without thresholds; disable default filename exclusions and publish validated accounting output (#758)",
 			"rows": [
 				"Rust coverage"
 			],
 			"files": [
 				"docs/rust-coverage.md",
 				"scripts/rust-coverage.mjs",
+				"test/rust-coverage-errors.test.mjs",
 				"test/rust-coverage.test.mjs"
 			],
 			"check": "test/rust-coverage.test.mjs",
 			"dropControls": [
-				"Rust coverage actionable missing-tool error"
+				"Rust coverage actionable missing-tool error",
+				"Rust coverage complete source filenames"
 			],
 			"upstream": {
 				"status": "proposed-after-issue-first",
@@ -1067,6 +1138,35 @@
 				"status": "candidate",
 				"reference": "UPSTREAM.md",
 				"detail": "Guards the act-preflight deviation carried from open upstream PR injaneity/pi-computer-use#112; not filed by us"
+			}
+		},
+		{
+			"id": "swift-ownership-look-coverage",
+			"purpose": "Assert real AXRefStore ownership and LookNode payload serialization with owned-process handles and synthetic nodes, without AX queries or runtime changes",
+			"rows": [
+				"Swift ref/look coverage"
+			],
+			"files": [
+				"docs/swift-ref-look-coverage.md",
+				"native/macos/bridge.swift",
+				"native/macos/headless_tests.swift",
+				"native/macos/ref_look_tests.swift",
+				"scripts/check-sync-reverts.mjs",
+				"scripts/swift-coverage.mjs",
+				"test/ref-look-safety.test.mjs",
+				"test/swift-coverage.test.mjs"
+			],
+			"check": "test/macos-native-pure.test.mjs",
+			"dropControls": [
+				"LookNode preserves child order (#769)",
+				"LookNode serializes optional flags (#769)",
+				"look transfer preserves destination refs (#769)",
+				"unequal windows receive distinct refs (#769)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#769; verification-only tests, not filed upstream"
 			}
 		},
 		{
@@ -1216,11 +1316,13 @@
 		"docs/native-request-framing.md",
 		"docs/rust-coverage.md",
 		"docs/src/components/brand.tsx",
+		"docs/swift-ref-look-coverage.md",
 		"extensions/computer-use.ts",
 		"native/macos/bridge.swift",
 		"native/macos/cursor_motion_tests.swift",
 		"native/macos/headless_tests.swift",
 		"native/macos/helper_entry.swift",
+		"native/macos/ref_look_tests.swift",
 		"native/macos/request_framing_tests.swift",
 		"package-lock.json",
 		"package.json",
@@ -1332,6 +1434,7 @@
 		"test/platform-backends.test.mjs",
 		"test/platform-linux.test.mjs",
 		"test/platform-windows.test.mjs",
+		"test/ref-look-safety.test.mjs",
 		"test/runtime-concurrency.test.mjs",
 		"test/runtime-state-output.test.mjs",
 		"test/rust-coverage-errors.test.mjs",
