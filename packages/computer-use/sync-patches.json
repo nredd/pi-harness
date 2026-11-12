@@ -425,6 +425,50 @@
 			}
 		},
 		{
+			"id": "helper-aborted-signal-macos",
+			"purpose": "macOS daemonCommand rejects with Operation aborted before connecting when the AbortSignal is already aborted, instead of sending the request",
+			"files": [
+				"src/platform/macos/helper.ts",
+				"test/macos-helper-client.test.mjs"
+			],
+			"check": "test/macos-helper-client.test.mjs",
+			"dropControls": [
+				"macOS helper refuses an already aborted signal (#735)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#735; not filed upstream"
+			},
+			"rows": [
+				"Helper already-aborted signal"
+			]
+		},
+		{
+			"id": "helper-aborted-signal-stdio",
+			"purpose": "Linux and Windows helper command() reject at once with Operation aborted when the AbortSignal is already aborted, before or during the install check and helper start, instead of sending the request and waiting out the command timeout",
+			"files": [
+				"src/platform/linux/helper.ts",
+				"src/platform/windows/helper.ts",
+				"test/stdio-helper-clients.test.mjs"
+			],
+			"check": "test/stdio-helper-clients.test.mjs",
+			"dropControls": [
+				"Linux helper refuses a signal aborted during startup (#735)",
+				"Linux helper refuses an already aborted signal (#735)",
+				"Windows helper refuses a signal aborted during startup (#735)",
+				"Windows helper refuses an already aborted signal (#735)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#735; not filed upstream"
+			},
+			"rows": [
+				"Helper already-aborted signal"
+			]
+		},
+		{
 			"id": "helper-disconnect-linux",
 			"purpose": "Fail pending Linux helper commands only once the helper's stdout is drained (close, not exit), and frame each helper process's output separately",
 			"rows": [
