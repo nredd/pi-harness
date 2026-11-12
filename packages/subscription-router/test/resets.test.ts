@@ -58,8 +58,8 @@ describe("reset schedule presentation", () => {
 		expect(text).toContain("missing: unknown (not checked)");
 		expect(text).toContain("unavailable: unavailable");
 		expect(text).toContain("error: error");
-		expect(text).toContain("Offer discovery: unavailable in Pi (not integrated)");
-		expect(text).toContain("Free redemption: unavailable in Pi (not integrated)");
+		expect(text).toContain("Offer discovery: /router resets codex");
+		expect(text).toContain("Free redemption: supported only after grant selection");
 		expect(text).toContain("Balance, eligibility, expiry and history: unknown, not verified zero");
 		expect(text).toContain("/usage -> Redeem reset");
 	});

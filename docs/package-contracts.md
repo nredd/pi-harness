@@ -73,7 +73,10 @@ What each package must satisfy:
   `test_session_kit_readme_links_only_packed_files`) and
   `dist/` + `docs/` (plan-mode, additionally pinned by `packed_files`/`packed_patterns`). computer-use is
   also pinned by exact `packed_files`, including upstream's moved `docs/content/docs` pages and
-  `activity_glow.swift` alongside the cursor/helper sources.
+  `activity_glow.swift` alongside the cursor/helper sources. The router requires its exact
+  `schemas/subscription-router.schema.json` and `schemas/codex-reset-journal.schema.json`, plus
+  its declared policy examples/docs. Private reset attempt/outcome records are not package inputs;
+  adding the journal schema does not broadly admit other JSON files.
   Tests, fixtures, `e2e/`, lint/TS/vitest config and planning docs must not ship. Before this change
   none of the tarballs had a `LICENSE` and all shipped `test/` plus dev config
 - Packed `LICENSE` is byte-identical to the root `LICENSE`, except imported packages marked `own_license`,

@@ -24,9 +24,10 @@ package has a per-file or per-OS allowance. Bun signals are enforced at 0/0 for 
 Every migration PR requires separate Standards and Spec reviewer subagents against its final HEAD,
 including documentation, fork, dotfiles, and automated promotion changes.
 
-The subscription router's `/router resets [refresh]` shows cached provider replenishment schedules
-and an official free Codex reset handoff. Offer discovery/redemption are not integrated in Pi;
-contract evidence and the staged safety design are [here](packages/subscription-router/README.md#reset-schedules-and-free-codex-resets).
+The subscription router's `/router resets [refresh]` shows cached replenishment schedules.
+`/router resets codex` lists actual FREE grants and offers explicitly confirmed, account-bound
+redemption through the verified first-party Codex app-server contract. Exact client requirements,
+durable reconciliation and the official fallback are [here](packages/subscription-router/README.md#reset-schedules-and-free-codex-resets).
 
 `packages/resource-sampler` is the Pi-independent `@nredd/pi-resource-sampler` ESM library for
 bounded, privacy-safe interval host sampling. It has no Pi entrypoint or runtime dependencies.
