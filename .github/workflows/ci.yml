@@ -185,6 +185,10 @@ jobs:
       # only the shard's workspaces, each package's own `npm run check` in npm workspace order.
       - name: Owned gate check-ts (biome, tsc, Vitest on Node and Bun, computer-use checks)
         if: ${{ !cancelled() && steps.install.outcome == 'success' && contains(matrix.gates, 'check-ts') }}
+        env:
+          # computer-use's `check` also diffs its tree against the pinned upstream commit (#720). Linux only: one
+          # shallow fetch, and the check compares source trees, so one OS is enough.
+          PI_CU_UPSTREAM_SYNC: ${{ matrix.os == 'ubuntu-24.04' && '1' || '' }}
         run: make check-ts WORKSPACES="${{ matrix.workspaces }}"
       - name: Owned gate check-scripts (ruff, ty, pytest scripts, import audit)
         if: ${{ !cancelled() && steps.install.outcome == 'success' && contains(matrix.gates, 'check-scripts') }}
