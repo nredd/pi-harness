@@ -4,9 +4,11 @@
 and adds the native `showTimestamps` path with real todo and subagent renderers at 80x24 and
 120x40. It enables the setting through `/settings`, uses recorded parent call-context times,
 expands a child row, toggles timestamps without collapsing it, exercises `Ctrl+O`, reloads,
-and resizes. Nested child details do not receive another core timestamp.
+and resizes. Exact viewer-local fixture labels are asserted in their owning entry's leading
+rule, ignoring only renderer-owned blank padding. A taller expanded viewport counts every timestamp label, including current-time
+values, so nested child details cannot receive another core timestamp unnoticed.
 
-This test change depends on nredd/pi#30 and an authorized core release containing it. The
+This test change depends on nredd/pi#32 (which implements issue nredd/pi#30) and an authorized core release containing it. The
 selected released host does not yet have the setting, so the new tests intentionally fail
 with an explicit release-prerequisite assertion. Do not skip them, add a feature-detection
 fallback, spoof release identity, or replace the pinned host in committed test configuration.
