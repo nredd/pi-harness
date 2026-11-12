@@ -39,6 +39,7 @@ Layout:
 - `packages/`: independently versioned plugins and optional preset, including imported `@nredd/pi-computer-use`. Its packed contract proves stock-Pi loading and the model-visible tool surface; native desktop behavior is explicitly NOT RUN without an interactive macOS TCC-granted session.
 - `forks/pi`: exact upstream core source commit (submodule), with its native build system. See
   [fork ownership](docs/forks.md).
+- `integration/core-source/`: source-candidate direct/routed child compaction verification, run by `make check-core-compaction` and `Forks` CI, separate from the release host. Policy [here](docs/compaction-policy.md); coordinated release preparation and admission blockers [here](docs/core-release-train.md).
 - `integration/inprocess/`: private `A-stack` scenarios on core's real harness, Vitest + Bun: Plan/todos, goals/loops, subagent delivery, router quota/admission. Assertion destinations and clock boundaries: [here](docs/verification-rebuild.md).
 - `integration/scenarios/`: retained process/terminal boundaries, opt-in live checks and benchmarks.
   CI runs D/E; bench F is NOT RUN and live G is never CI. No unported non-boundary scenarios remain.
