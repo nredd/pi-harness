@@ -2,7 +2,7 @@
 
 Source dependency: [nredd/pi#28](https://github.com/nredd/pi/pull/28), based on
 `52b517bd246b19f5b75fa70bd6e01b952a18583f` (`nredd/v1.3.0`), with candidate
-`a8715607c5e2e59457f0982879e2d5278dc8237a`. The original harness Gitlink was
+`cf1915f2935d7651220c8788e6df2c1f05aeb69e`. The original harness Gitlink was
 `4d857379f37f83397871a66c522abbe8469a003d`. The intervening fork commit is the landed
 unavailable-tools fix, not the unrelated upstream-sync work in core PR `#26`.
 
@@ -13,7 +13,10 @@ capacity uses the 128000 application cap without inventing a hard window. The ex
 model override wins over the exact physical override, ordinary target and default. A positive
 safe integer explicitly sets the working target; `"contextWindow"` is the legacy opt-out.
 
-Reserve, retained-history and summary output budgets remain independent. The recommendation
+Reserve, retained-history and summary output budgets remain independent. The entire pending
+input suffix stays verbatim until its answering request dispatches. Large extension context
+must not cause an earlier user instruction in that batch to be summarized before its first
+answer. Summary dispatches and failed request gates do not release the pending batch. The recommendation
 mapping is empty: provider product defaults and examples do not establish a universal Pi
 quality optimum. Sources and retrieved passages live in the Gitlinked core's
 `packages/coding-agent/docs/compaction-policy-evidence.md`.
