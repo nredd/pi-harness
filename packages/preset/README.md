@@ -49,6 +49,14 @@ local themes, skills, agents and their configuration. Restart sessions after act
 - Word labels when they fit with the selected model, compact labels otherwise. Every row is
   width-bounded, including provider, model and thinking-level labels. Context warnings are
   strictly above 70%/90%; `(auto)` is always displayed, not the live compaction toggle.
+- Virtual selections keep the selected profile/level, then show `-> (provider) model` from the
+  actual assistant request metadata. The dispatched thinking level appears only when core records
+  it, never copied from the selected level. Pending requests show `(routing)` until physical
+  metadata arrives; idle selections with no attributed request show `(unresolved)`. Physical errors
+  and cancellation show `(error)` / `(aborted)` beside the attempted model. A routing failure never
+  reuses an older physical label. Model changes reset attribution; reload/resume reconstruct it
+  from the current branch, stopping at its latest model change. Defaults, `/model`, tier bindings
+  and quota admission/fallback remain unchanged: the virtual profile stays selected.
 - Cost is shown for nonzero totals or subscriptions (OAuth or `kimi-coding`). The hit rate is
   from the latest prompt-bearing assistant on the current branch, not cumulative session totals.
 - Cache temperature uses the model's positive finite `promptCache.short` in seconds, default
@@ -253,7 +261,7 @@ The provider used for that receipt is ephemeral; it does not change coverage pol
 - `test/scenarios/`: real core `createInteractiveHarness`/`VirtualTerminal` footer scenarios and mode-correct headless binds, run under Vitest and Bun; no Pi process, tmux, timer preloads or wall-clock waits.
 - `createExpandedFooter({ clock, timeZone, homeDir })` optionally injects one clock, an IANA zone pinning reset labels, and a home for cwd presentation (all default to process values) for deferred startup, quota polling/staleness and cache expiry. Its local `FooterClock`/`TimerHandle` interfaces mirror `packages/session-kit/src/clock.ts`: `now()` reads time; `setTimeout()` and `setInterval()` return handles owning `cancel()`. The default uses unreferenced real timers, 60s polls, 12s replies and the 50ms cache repaint margin.
 - `test/*.test.ts` and support code are checked by strict TypeScript; preserved `test/footer-*.test.mjs` helper assertions stay JavaScript. Everything under `extensions/`, `lib/` and `test/` is Biome-formatted.
-- The footer now differs from its [source snapshot](../../docs/source-provenance.md) by the optional factory/clock seam. `lib/footer-quota.ts` additionally drops OpenAI 5h, shows Anthropic 5h only when reported, adds reset times, router window-identity handling and width-fitting rows; `lib/footer-cache.ts` remains byte-identical. The migrated helper tests use static sibling imports and Vitest instead of `node:test`.
+- The footer now differs from its [source snapshot](../../docs/source-provenance.md) by the optional factory/clock seam and routed physical model/thinking labels. `lib/footer-quota.ts` additionally drops OpenAI 5h, shows Anthropic 5h only when reported, adds reset times, router window-identity handling and width-fitting rows; `lib/footer-cache.ts` remains byte-identical. The migrated helper tests use static sibling imports and Vitest instead of `node:test`.
 - All live dotfiles helper assertions exist here, except the OpenAI 5h and quota row-text expectations, which this package deliberately superseded (see the quota row above). `test/footer-render.test.ts` adds previously uncovered usage-entry totals, token-format boundaries, subscription detection, context warning thresholds, cwd/status handling and model labels. Footer-only adoption is independent of the deferred full profile split (#21). Once `0.2.0` is published and promoted, the dotfiles `remove-footer` change drops its own copy and only installs/configures this footer.
 
 Discovery tests redirect `HOME`, `USERPROFILE`, `PI_CODING_AGENT_DIR`, `TMPDIR`/`TMP`/`TEMP`, `XDG_*`,

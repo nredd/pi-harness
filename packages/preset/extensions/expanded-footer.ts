@@ -22,7 +22,12 @@
 
 import { homedir } from "node:os";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	ExtensionFactory,
+	MessageStartEvent,
+} from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { analyzeCache, cacheTtlSeconds, formatCacheMarker } from "../lib/footer-cache.ts";
 import { createQuotaPoller, fitQuotaRows } from "../lib/footer-quota.ts";
@@ -67,6 +72,17 @@ function addUsage(
 	totals.cost += usage.cost.total;
 }
 
+/** Latest request on this selection/branch, including physical errors, never a predicted route. */
+function routedResponse(ctx: ExtensionContext, live: MessageStartEvent["message"] | undefined) {
+	if (live?.role === "assistant") return live;
+	for (const entry of ctx.sessionManager.getBranch().slice().reverse()) {
+		// Do not attribute the previous selection's response to a newly selected profile.
+		if (entry.type === "model_change") return undefined;
+		if (entry.type === "message" && entry.message.role === "assistant") return entry.message;
+	}
+	return undefined;
+}
+
 /** Mirrors packages/session-kit/src/clock.ts: handles own cancellation, not Node timer methods. */
 export interface TimerHandle {
 	cancel(): void;
@@ -103,19 +119,48 @@ export function createExpandedFooter(
 ): ExtensionFactory {
 	const clock = options.clock ?? realClock;
 	return (pi: ExtensionAPI) => {
+		let live: MessageStartEvent["message"] | undefined;
+		let running = false;
+		let repaint: (() => void) | undefined;
+		const resetRoute = () => {
+			live = undefined;
+			running = false;
+			repaint?.();
+		};
+		pi.on("model_select", resetRoute);
+		pi.on("agent_start", () => {
+			live = undefined;
+			running = true;
+			repaint?.();
+		});
+		const observeMessage = (event: Pick<MessageStartEvent, "message">) => {
+			if (event.message.role !== "assistant") return;
+			live = event.message;
+			repaint?.();
+		};
+		pi.on("message_start", observeMessage);
+		pi.on("message_update", observeMessage);
+		pi.on("message_end", observeMessage);
+		pi.on("agent_end", resetRoute);
 		let stopQuota: (() => void) | undefined;
 		const stopPoller = () => {
 			stopQuota?.();
 			stopQuota = undefined;
 		};
 
-		pi.on("session_shutdown", async () => stopPoller());
+		pi.on("session_shutdown", async () => {
+			repaint = undefined;
+			resetRoute();
+			stopPoller();
+		});
 
 		pi.on("session_start", async (_event, ctx) => {
+			resetRoute();
 			if (ctx.mode !== "tui") return;
 			stopPoller();
 
 			ctx.ui.setFooter((tui, theme, footerData) => {
+				repaint = () => tui.requestRender();
 				const unsub = footerData.onBranchChange(() => tui.requestRender());
 				stopPoller();
 				const quota = createQuotaPoller({
@@ -149,6 +194,7 @@ export function createExpandedFooter(
 
 				return {
 					dispose() {
+						repaint = undefined;
 						unsub();
 						coldTimer?.cancel();
 						disposeQuota();
@@ -251,6 +297,21 @@ export function createExpandedFooter(
 							rightSideBase = level === "off" ? `${modelName} • thinking off` : `${modelName} • ${level}`;
 						}
 
+						const virtual = ctx.model?.api === "pi-virtual";
+						if (virtual) {
+							// Assistant metadata is the same physical identity used by core and subagent rows.
+							// The selected thinking level above is an input, not the routed reasoning budget.
+							const response = running && !live ? undefined : routedResponse(ctx, live);
+							if (response && response.api !== "pi-virtual") {
+								const level = response.thinkingLevel === undefined ? "" : ` • ${response.thinkingLevel}`;
+								const status =
+									response.stopReason === "error" || response.stopReason === "aborted"
+										? ` (${response.stopReason})`
+										: "";
+								rightSideBase += ` -> (${response.provider}) ${response.model}${level}${status}`;
+							} else rightSideBase += running ? " (routing)" : " (unresolved)";
+						}
+
 						function buildLine(tier: "full" | "compact"): string {
 							let statsLeft = buildParts(tier).join(" ");
 							let statsLeftWidth = visibleWidth(statsLeft);
@@ -260,7 +321,7 @@ export function createExpandedFooter(
 							}
 
 							let rightSide = rightSideBase;
-							if (footerData.getAvailableProviderCount() > 1 && ctx.model) {
+							if (!virtual && footerData.getAvailableProviderCount() > 1 && ctx.model) {
 								const withProvider = `(${ctx.model.provider}) ${rightSideBase}`;
 								if (statsLeftWidth + minPadding + visibleWidth(withProvider) <= width) {
 									rightSide = withProvider;

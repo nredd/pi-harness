@@ -264,6 +264,17 @@ it("renders a session with no model as no-model, zero window, no subscription co
 	}
 });
 
+it("renders a virtual selection with no branch history as unresolved, never an invented model", async () => {
+	const f = await mount();
+	try {
+		Object.assign(f.ctx.model, { api: "pi-virtual", provider: "router", id: "deep" });
+		expect(f.component.render(240)[1]).toContain("deep • high (unresolved)");
+		expect(f.component.render(240)[1]).not.toContain("->");
+	} finally {
+		f.component.dispose?.();
+	}
+});
+
 it("reads an unset thinking level on a reasoning model as thinking off", async () => {
 	const f = await mount();
 	try {
