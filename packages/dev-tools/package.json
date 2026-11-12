@@ -23,7 +23,7 @@
     "pi-extension"
   ],
   "dependencies": {
-    "@nredd/pi-resource-sampler": "0.2.0"
+    "@nredd/pi-resource-sampler": "0.2.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

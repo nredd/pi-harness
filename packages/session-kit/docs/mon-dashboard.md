@@ -7,7 +7,7 @@ it only warns; it never samples there.
 ## Source
 
 `src/mon/source.ts` is a thin mapping over the published `@nredd/pi-resource-sampler`, declared
-as the exact runtime dependency `0.2.0` (`0.1.0` leaked argv-style process titles as macOS names
+as the exact runtime dependency `0.2.1` (`0.1.0` leaked argv-style process titles as macOS names
 and could fake Bun host CPU). No collector lives in session-kit. Each open view creates
 one sampler (its own CPU baseline) and disposes it on close; disposal aborts and awaits any active
 sample, including its `ps` child on macOS. Mapping rules:
@@ -80,7 +80,7 @@ sample, including its `ps` child on macOS. Mapping rules:
   executable names (`pi` runs as `node`), and decaying `ps %cpu` versus interval CPU.
   Load averages are not percentages. Process CPU is interval CPU, where 100% is one logical CPU and
   multithreaded processes can exceed 100%.
-- The registry dependency is `0.2.0`. On native-capable macOS it supplies used/swap memory,
+- The source registry dependency is `0.2.1`, which removes the known Linux `/proc` iterator PID-exit race (the historical WSL incident's errno remains unproven). On native-capable macOS it supplies used/swap memory,
   footprint and interval process CPU; unsupported or inaccessible metrics remain `--`, never zero
   or an invented total-free fallback. Both consumer registry-resolution tests require those
   published bytes rather than a workspace link.
@@ -110,7 +110,7 @@ no model tool, persists no history, sends no model messages and does no network 
 ## Verification
 
 - `npm run check` in `packages/session-kit`. The root lock pins a nested registry install
-  (`packages/session-kit/node_modules/@nredd/pi-resource-sampler`, exact `0.2.0` tarball and
+  (`packages/session-kit/node_modules/@nredd/pi-resource-sampler`, exact `0.2.1` tarball and
   integrity), so tests run the published bytes, not the same-version workspace that npm would
   otherwise link. `source.test.ts` fails if resolution ever reaches the workspace.
   - `test/mon/source.test.ts`: two actual host observations (warming, then measured), a real poll's

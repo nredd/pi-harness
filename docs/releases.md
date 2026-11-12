@@ -69,6 +69,10 @@ owner's policy decision. Publication is not live-provider acceptance or activati
 
 ## Combined stack selection
 
+Current source now pins registry sampler `0.2.1` in both dev-tools and session-kit (#557).
+This consumer dependency update does not republish either plugin, change the selected stack or activate
+an install. The selection below describes the already-published artifacts, not current source.
+
 The 2026-11-11 selection in `integration/stacks/personal.json` uses core
 `v1.3.0-nredd.10` at `4d857379f37f83397871a66c522abbe8469a003d` and the packages below,
 republished with fresh provenance after the history purge (#638). Plan-mode and subagents move

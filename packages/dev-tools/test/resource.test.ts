@@ -35,7 +35,7 @@ const nativeDarwinCpu =
 	(Boolean(process.versions.bun) ||
 		Number(process.versions.node.split(".")[0]) > 26 ||
 		(Number(process.versions.node.split(".")[0]) === 26 && Number(process.versions.node.split(".")[1]) >= 1));
-/** What sampler 0.2.0 reports for a child exec'd from `process.execPath`: Darwin `p_comm` holds 16 bytes. */
+/** What sampler 0.2.1 reports for a child exec'd from `process.execPath`: Darwin `p_comm` holds 16 bytes. */
 const EXECUTABLE = basename(realpathSync(process.execPath)).slice(0, process.platform === "darwin" ? 16 : undefined);
 
 function completed(stdout: string): RunResult {
@@ -139,13 +139,20 @@ function options(make: (monotonicTimeMs: number) => ResourceSnapshot, extra: Res
 }
 
 /** Spy on the real published sampler: its raw samples, and its disposal. */
-function realSampler(lose: ReadonlySet<number> = new Set()) {
+function realSampler(lose: ReadonlySet<number> = new Set(), deadlineScan?: number) {
 	const state = { disposed: 0, samples: [] as ResourceSnapshot[] };
 	const createSampler = (samplerOptions: SamplerOptions): ResourceSampler => {
 		const sampler = createResourceSampler(samplerOptions);
 		return {
 			async sample(signal) {
-				const real = await sampler.sample(signal);
+				const pending = sampler.sample(signal);
+				if (state.samples.length === deadlineScan) {
+					const deadline = performance.now() + (samplerOptions.maxDurationMs ?? 1000) + 20;
+					while (performance.now() < deadline) {
+						/* Exhaust the real producer's scan budget, not an injected deadline snapshot. */
+					}
+				}
+				const real = await pending;
 				const sample = lose.has(state.samples.length)
 					? {
 							...real,
@@ -167,9 +174,10 @@ function realSampler(lose: ReadonlySet<number> = new Set()) {
 
 /**
  * Spawn a real idle child and check the tool's window against the sampler's own full scans. `lose` holds 0-based scan
- * indexes whose listing is replaced by a `process-collection-unavailable` scan, as a PID exiting mid-listing does.
+ * indexes whose listing is replaced by a `process-collection-unavailable` scan. `deadlineScan` exhausts one real
+ * scan's budget. These controls model failure classes, not the unrecorded errno of the WSL incident.
  */
-async function checkRealChildDiscovery(lose: ReadonlySet<number>): Promise<void> {
+async function checkRealChildDiscovery(lose: ReadonlySet<number>, deadlineScan?: number): Promise<void> {
 	// Idle and small: inclusion is asserted against the sampler's full unranked scan, not a host-dependent top-50
 	// rank. The scan need not be complete (a process exiting mid-scan marks it partial); the known child must be
 	// in it, and a miss reports the coverage so a truncated scan is never mistaken for a missing child.
@@ -179,17 +187,23 @@ async function checkRealChildDiscovery(lose: ReadonlySet<number>): Promise<void>
 	await supervise(child, 5000, async () => {
 		const pid = child.pid;
 		if (pid === undefined) throw new Error("child did not start");
-		const real = realSampler(lose);
+		const real = realSampler(lose, deadlineScan);
 		const snapshot = await resourceSnapshot(50, { createSampler: real.createSampler }, undefined, 200);
+		expect(real.state.disposed).toBe(1);
+		expect(real.state.samples.length).toBeLessThanOrEqual(4);
 		// Resampling slides the reported window to the last two scans; earlier scans may be the lost ones.
 		const baseline = real.state.samples.at(-2);
 		const raw = real.state.samples.at(-1);
-		if (baseline === undefined || raw === undefined || snapshot.processes.status !== "available")
-			throw new Error("missing process metadata");
+		if (baseline === undefined || raw === undefined || snapshot.processes.status !== "available") {
+			const reason = snapshot.processes.status === "unavailable" ? snapshot.processes.reason : "missing sample pair";
+			throw new Error(
+				`${await describeProcessLoss("processes", reason, real.state.samples)}\nchild ${pid}: exitCode=${child.exitCode}, signalCode=${child.signalCode}`,
+			);
+		}
 		const earlier = JSON.stringify(real.state.samples.slice(0, -2).map((sample) => sample.coverage));
 		expect(lose.size === 0 || real.state.samples.length > 2, "injected loss did not force a resample").toBe(true);
 		// A failed baseline collection leaves every end-scan process warming; name that cause, not the symptom.
-		// Published 0.2.0 still hits it when any PID exits mid-listing (#499, sampler README).
+		// Sampler 0.2.1 removes the known /proc iterator race; collection failures still require a healthy pair.
 		expect(baseline.coverage.reasons, `baseline of the reported window; earlier scans ${earlier}`).not.toContain(
 			"process-collection-unavailable",
 		);
@@ -347,7 +361,7 @@ describe("resource fixture ownership", () => {
 describe("resource_snapshot on the real host through the published sampler", () => {
 	it("resolves the exact registry sampler, never the workspace copy", async () => {
 		const manifest = JSON.parse(await readFile(join(PACKAGE_ROOT, "package.json"), "utf8"));
-		expect(manifest.dependencies).toEqual({ "@nredd/pi-resource-sampler": "0.2.0" });
+		expect(manifest.dependencies).toEqual({ "@nredd/pi-resource-sampler": "0.2.1" });
 		const { stdout } = await execFileAsync(
 			process.execPath,
 			["--input-type=module", "-e", "console.log(import.meta.resolve('@nredd/pi-resource-sampler'))"],
@@ -357,12 +371,12 @@ describe("resource_snapshot on the real host through the published sampler", () 
 		const installed = join(PACKAGE_ROOT, "node_modules", "@nredd", "pi-resource-sampler");
 		expect(resolved).toBe(join(installed, "dist", "index.js"));
 		expect((await lstat(installed)).isSymbolicLink()).toBe(false);
-		expect(JSON.parse(await readFile(join(installed, "package.json"), "utf8")).version).toBe("0.2.0");
+		expect(JSON.parse(await readFile(join(installed, "package.json"), "utf8")).version).toBe("0.2.1");
 	});
 
 	it("reports a real registry producer's interrupted Linux enumeration through the tool schema", async () => {
-		// The disposable Node process forces Linux and injects an ENOENT from the published producer's
-		// /proc iterator. On macOS this models the Linux path; it is not a native Linux execution.
+		// The disposable Node process forces Linux and injects an EACCES from the published producer's
+		// names-only /proc readdir. On macOS this models the Linux path; it is not a native Linux execution.
 		const { stdout } = await execFileAsync("node", [join(PACKAGE_ROOT, "test", "resource-producer-fixture.mjs")], {
 			cwd: PACKAGE_ROOT,
 		});
@@ -557,6 +571,31 @@ describe("resource_snapshot on the real host through the published sampler", () 
 		"discovers the child in the reported window after the %s scan loses its listing",
 		(_name, index) => checkRealChildDiscovery(new Set([index])),
 		20_000,
+	);
+
+	it.runIf(process.platform === "darwin" || process.platform === "linux").each([
+		["process-collection-unavailable", new Set([1, 3]), undefined],
+		["deadline", new Set([1]), 3],
+	] as const)(
+		"diagnoses terminal %s through the real child-discovery guard after recovery is exhausted",
+		async (reason, lose, deadlineScan) => {
+			const started = performance.now();
+			const error = await checkRealChildDiscovery(lose, deadlineScan).then(
+				() => undefined,
+				(error: unknown) => error,
+			);
+			expect(error).toBeInstanceOf(Error);
+			const message = String(error);
+			expect(message).toContain(
+				`missing process metadata: field \`processes\`: process metadata unavailable (${reason})`,
+			);
+			expect(message).toContain("scan 3: 0 processes, coverage");
+			expect(message).not.toContain("scan 4:");
+			expect(message).toContain(`reason \`${reason}\``);
+			expect(message).toContain('"durationMs":');
+			expect(message).toContain("exitCode=null, signalCode=null");
+			expect(performance.now() - started).toBeLessThan(5000);
+		},
 	);
 
 	it.runIf(process.platform === "darwin" || process.platform === "linux")(
@@ -1142,7 +1181,7 @@ describe("process metadata loss diagnostics", () => {
 		expect(message).toContain("reason `process-collection-unavailable`: the whole process listing failed");
 		expect(message).toContain("reason `mystery`: unknown to this harness");
 		expect(message).toContain("FAIL readlink /proc/42/exe: ENOENT readlink no such file");
-		expect(message).toContain("FAIL opendir /proc: plain");
+		expect(message).toContain("FAIL readdir /proc: plain");
 		expect(message).toContain("ok   read /proc/42/stat: 10 bytes");
 		expect(message).toContain('"processes":[]');
 	});

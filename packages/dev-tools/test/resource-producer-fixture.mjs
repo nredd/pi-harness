@@ -3,7 +3,9 @@ import { registerHooks } from "node:module";
 import { pathToFileURL } from "node:url";
 
 const osShim = `export * from 'node:os'; export function platform() { return 'linux'; }`;
-const fsShim = `export * from 'node:fs/promises'; export async function opendir() { return { async *[Symbol.asyncIterator]() { const error = new Error('injected vanished PID'); error.code = 'ENOENT'; throw error; } }; }`;
+// 0.2.1 uses names-only readdir, not opendir's implicit per-entry lstat. This models a whole listing failure,
+// not the removed mid-iteration PID-exit mechanism or the unknown errno of the historical incident.
+const fsShim = `export * from 'node:fs/promises'; export async function readdir() { const error = new Error('injected listing failure'); error.code = 'EACCES'; throw error; }`;
 registerHooks({
 	resolve(specifier, context, nextResolve) {
 		if (context.parentURL?.includes("/pi-resource-sampler/dist/")) {

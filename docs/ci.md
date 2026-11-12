@@ -603,14 +603,19 @@ that a bounded host scan always includes the test process. Real-sampler cancella
 exercise the published sampler; the host-dependent polling smoke is not in the coverage-gated suite.
 
 The dev-tools real-host `resource_snapshot` smoke requires process metadata and includes the producer's
-unavailable reason in its failure. Separate controls exercise registry sampler `0.2.0` through the tool
-schema with an injected Linux enumeration failure and a genuinely exhausted scan budget. The injected
-Linux path on macOS is not a native Linux run.
+unavailable reason in its failure, including child discovery after recovery is exhausted. Diagnostics retain
+all scan coverage, durations, terminal reason and the child's exit/signal status. Separate controls exercise
+registry sampler `0.2.1` through the tool schema with an injected names-only Linux enumeration failure and a
+genuinely exhausted scan budget. Live-child helper-seam controls force healthy/lost/healthy/lost scans and
+a final real deadline after an earlier loss, without weakening healthy-host assertions or the four-scan bound.
+The injected Linux path on macOS is not a native Linux run.
 
 `resource_snapshot` also resamples, at most twice more, when either scan of the window reports
 `process-collection-unavailable` (#557), sliding the window to the latest pair of scans. Failures that
-outlast the two resamples still report the producer's reason (or leave a lost baseline's entries `warming`). This works around
-published sampler `0.2.0` without a pin bump; the sampler source fix (#499) still needs its release.
+outlast the two resamples still report the producer's reason (or leave a lost baseline's entries `warming`). Both source consumers now pin published sampler `0.2.1`, whose names-only `/proc` enumeration removes
+the known iterator race (#499). The historical #557 WSL incidents did not record a producer errno; the
+newer incident's final unavailable collection is established, not its underlying syscall failure.
+Synthetic controls are diagnostic evidence only. Native WSL CI on the PR HEAD remains required.
 
 Hosted Ubuntu apt steps (#655): `Install tmux (Linux)` (both sites) and the `forks.yml` system dependencies skip apt when the runner image already has the tools (`command -v tmux`, `dpkg -s` for the dev libraries). Otherwise they run with `timeout-minutes: 5` and `-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o DPkg::Lock::Timeout=120`, so a stalled mirror or held dpkg lock fails that step fast instead of burning the 30 minute job budget (runs `42756722827` and `42763778363` were cancelled inside apt). Not a flake to rerun: a step that hits the 5 minute bound is a real failure to investigate. `Install reviewer read dependencies` installs prebuilt `ripgrep` and `fd-find` release binaries with `taiki-e/install-action` on both Ubuntu and macOS, so an apt mirror outage (2026-11-11: every Linux owned shard timed out in apt) cannot block the Linux matrix.
 
@@ -621,9 +626,9 @@ Flake policy (migration plan section 7):
   failed. The rerun must pass. Both attempts stay in the run's attempt history; name the flake in the PR
 - Known timing-sensitive suites: session-kit `monitor` and `diff` reaping, dev-tools kill escalation,
   core `chord`/`durable` 5 s timeouts. They were green alone and flaky on a loaded laptop
-- dev-tools real-host `resource_snapshot` child sample on Linux (#499): published sampler `0.2.0` drops
-  the whole baseline when a process exits mid-`/proc` scan, so the child reads `warming` or
-  `process-collection-unavailable`. Fixed in sampler source, flaky until `0.2.1` is pinned
+- Historical dev-tools child-sample race (#499): sampler `0.2.0` could drop the whole baseline on a
+  mid-`/proc` PID exit. Source consumers now pin `0.2.1`, which removes that iterator mechanism.
+  A new missing-metadata failure is a correctness blocker, not permission to retry
 - `npm` SIGABRT on the `pi-macos` pool (#542): the job log's shell line reads
   `<pid> Abort trap: 6  npm ci ...` or `npm install ...`, the step exits 134 with no npm error output,
   the runner is `pi-macos-*` and no other step failed. Cause: macOS LaunchServices aborts in

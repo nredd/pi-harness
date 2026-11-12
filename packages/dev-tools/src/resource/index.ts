@@ -22,8 +22,8 @@ const MAX_INTERVAL_MS = 5_000;
 /** Per-scan sampler budget. Generous so a loaded host still reports complete coverage when it can. */
 const SAMPLE_BUDGET_MS = 1_000;
 /**
- * Extra sample rounds after a scan lost its process listing. Published sampler `0.2.0` fails a whole `/proc` scan
- * when any PID exits mid-listing (#499); the next scan on a live host almost always succeeds.
+ * Extra sample rounds after a scan lost its process listing. Sampler `0.2.1` removes the known `/proc` iterator
+ * race (#499); other collection failures still get the same bounded recovery, never an unbounded retry.
  */
 const MAX_RESAMPLES = 2;
 const COMMAND_TIMEOUT_MS = 3_000;
