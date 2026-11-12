@@ -186,7 +186,7 @@ describe("index menu and branch races", () => {
       }),
     });
     await bound.boot.commands.get("agents").handler("", bound.context);
-    expect(stripTerminalSequences(rendered.join("\n"))).toContain("portable (→ index-final-lifecycle/child)");
+    expect(stripTerminalSequences(rendered.join("\n"))).toContain("definition: portable -> index-final-lifecycle/child (resolved)");
     expect(provider.state.callCount).toBe(0);
   });
 

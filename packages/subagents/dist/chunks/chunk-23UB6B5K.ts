@@ -1611,27 +1611,31 @@ var PARKED_RESUME_DELAY_MS = 1e4;
 var LEGACY_MODEL_PINS = /* @__PURE__ */ new Map([
   ["claude-haiku-4-5", "anthropic/claude-haiku-4-5"]
 ]);
-function modelRequest(type, definitionModel, paramModel) {
-  if (paramModel != null && (typeof paramModel !== "string" || paramModel.trim() !== "")) {
-    return { requested: typeof paramModel === "string" ? paramModel : `${paramModel.provider}/${paramModel.id}`, source: "param" };
-  }
+function modelInputs(type, definitionModel, paramModel) {
   const overrides = getAgentModels();
-  const typed = overrides.get(type.toLowerCase());
-  if (typed?.trim()) return { requested: typed, source: "agentModels:type" };
-  const wildcard = overrides.get("*");
-  if (wildcard?.trim()) return { requested: wildcard, source: "agentModels:*" };
-  if (definitionModel?.trim()) return { requested: definitionModel, source: "definition" };
-  return { source: "parent" };
+  const inputs = [
+    { source: "param", requested: paramModel == null ? void 0 : typeof paramModel === "string" ? paramModel : `${paramModel.provider}/${paramModel.id}` },
+    { source: "agentModels:type", requested: overrides.get(type.toLowerCase()) },
+    { source: "agentModels:*", requested: overrides.get("*") },
+    { source: "definition", requested: definitionModel }
+  ];
+  return [...inputs.filter((input) => input.requested?.trim()), { source: "parent" }];
 }
-function selectModel(request) {
-  const input = modelRequest(request.agentType, request.definitionModel, request.paramModel);
+function modelInputBinding(input, agentType) {
+  const requested = input.requested?.trim();
+  if (!requested) return void 0;
+  const legacy = getModelAliases().get(requested.toLowerCase());
+  const legacyBinding = legacy ? parseTierBinding("legacy", legacy) : void 0;
+  const cheapCompatibility = requested === "@cheap" && agentType === "Explore" && input.source === "definition" ? parseTierBinding("cheap", getModelAliases().get("claude-haiku-4-5")) : void 0;
+  return requested.startsWith("@") ? tierBinding(requested.slice(1)) ?? cheapCompatibility : legacyBinding ? { ...legacyBinding, tier: requested } : void 0;
+}
+function prepareModelSelection(request) {
+  const input = modelInputs(request.agentType, request.definitionModel, request.paramModel)[0];
   let selection = { ...input, model: request.parentModel, outcome: "inherited" };
   if (input.requested) {
     const requested = input.requested.trim();
     const legacy = getModelAliases().get(requested.toLowerCase());
-    const legacyBinding = legacy ? parseTierBinding("legacy", legacy) : void 0;
-    const cheapCompatibility = requested === "@cheap" && request.agentType === "Explore" && input.source === "definition" ? parseTierBinding("cheap", getModelAliases().get("claude-haiku-4-5")) : void 0;
-    const binding = requested.startsWith("@") ? tierBinding(requested.slice(1)) ?? cheapCompatibility : legacyBinding ? { ...legacyBinding, tier: requested } : void 0;
+    const binding = modelInputBinding(input, request.agentType);
     if (requested.startsWith("@") || legacy) {
       const tier = requested.startsWith("@") ? requested.slice(1) : requested;
       const refs = binding?.kind === "routed" ? [binding.profile] : binding?.members ?? [];
@@ -1658,18 +1662,29 @@ function selectModel(request) {
       }
     }
   }
+  return selection;
+}
+function selectModel(request) {
+  const selection = prepareModelSelection(request);
+  if (typeof selection === "string") return selection;
   const scope = checkModelScope({
     model: selection.model,
     cwd: request.cwd,
     modelRegistry: request.registry,
-    callerSupplied: input.source === "param" && !selection.tierBinding && !selection.tier,
+    callerSupplied: selection.source === "param" && !selection.tierBinding && !selection.tier,
     agentLabel: request.agentLabel ?? request.agentType,
-    modelInput: input.requested,
+    modelInput: selection.requested,
     homeDir: request.homeDir
   });
   if (scope.kind === "error") return scope.message;
   if (scope.kind === "warn") selection.scopeWarning = scope.message;
   return selection;
+}
+function hasModelConfigurationError(request) {
+  const registered = request.registry.getAll?.() ?? [];
+  const getRegistered = () => registered;
+  const registry = { find: (provider, id) => registered.find((model) => model.provider === provider && model.id === id), getAll: getRegistered, getAvailable: getRegistered };
+  return typeof prepareModelSelection({ ...request, paramModel: void 0, registry }) === "string";
 }
 function describeSelection(selection, registry) {
   const admitted = selection?.tier?.kind === "routed" ? selection.tier.admitted : void 0;
@@ -6650,10 +6665,12 @@ export {
   parseTierBinding,
   setModelTiers,
   configuredTierNames,
+  getModelResolution,
   isTierDisclosure,
   setModelAliases,
   setAgentModels,
   setModelScopeProvider,
+  isVirtualModel,
   readEnabledModels,
   resolveEnabledModels,
   isScopeModelsEnabled,
@@ -6664,8 +6681,10 @@ export {
   describeBlock,
   QUOTA_RESTART_GRACE_MS,
   PARKED_RESUME_DELAY_MS,
-  modelRequest,
+  modelInputs,
+  modelInputBinding,
   selectModel,
+  hasModelConfigurationError,
   describeSelection,
   modelIdentityNote,
   modelSelectionNote,
@@ -6752,4 +6771,4 @@ export {
   RESULT_MAX_CHARS,
   ConversationViewer
 };
-//# sourceMappingURL=chunk-MSGGFB5Q.ts.map
+//# sourceMappingURL=chunk-23UB6B5K.ts.map
