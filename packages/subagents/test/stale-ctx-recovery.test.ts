@@ -4,15 +4,13 @@
  * (what core does on reload and session replacement) killed a running background
  * child with a stale-ctx error and "No output". Refs #581: core now routes with the
  * requesting session's context, so a parent reload no longer interrupts a child.
- * Retry still bounds any other stale-ctx route failure, injected via `routeBroken`.
+ * Other stale-ctx route failures terminate without re-prompting the same runtime (#779).
  */
 import { join } from "node:path";
 import { type AgentSession, type ExtensionFactory, SessionManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resumeAgent, retryStaleCtx, staleCtxOutcome } from "../src/agent-runner.js";
-import * as worktrees from "../src/worktree.js";
-import { FakeClock } from "./helpers/fake-clock.js";
+import { resumeAgent, staleCtxOutcome } from "../src/agent-runner.js";
 import { answer, barrier, calls, ScenarioSession, spawn } from "./helpers/scenario-session.js";
 
 let fixture: ScenarioSession;
@@ -25,7 +23,7 @@ afterEach(async () => {
 /** Flip to make routing die with the stale-ctx error without touching the real runner. */
 const routeBroken = { on: false };
 
-/** A real virtual model whose route reads the requesting session's ctx; injected stale failures still exercise recovery. */
+/** A real virtual model whose route reads the requesting session's ctx; injected stale failures exercise terminal reporting. */
 function routedModel(getModel: () => unknown): ExtensionFactory {
   return pi => {
     pi.registerVirtualModel({
@@ -39,41 +37,6 @@ function routedModel(getModel: () => unknown): ExtensionFactory {
       },
     });
   };
-}
-
-/** The default backoff schedule: the extension clock must be asked for exactly these sleeps, in order. */
-const BACKOFF_DELAYS_MS = [1_000, 3_000, 9_000];
-
-/**
- * Let a recovering child finish without waiting out its backoff: whenever the fixture clock has been asked for
- * the next scheduled backoff delay (1s, 3s, 9s), advance it by exactly that delay, so fake time never moves
- * past other timers or when no sleep is armed. Returns how many sleeps were advanced; a run that timed its
- * backoff on native timers never asks the clock, so the caller's count assertion fails. `since` is how many
- * one-shot timers the clock had scheduled before the recovery under test began.
- */
-async function settleThroughBackoff(record: { promise?: Promise<unknown> }, since: number) {
-  let settled = false;
-  let advances = 0;
-  let cursor = since;
-  const finished = Promise.resolve(record.promise).then(() => { settled = true; }, () => { settled = true; });
-  while (!settled) {
-    const next = BACKOFF_DELAYS_MS[advances];
-    const armed = next === undefined ? -1 : fixture.clock.timeoutDelays.indexOf(next, cursor);
-    if (next !== undefined && armed >= 0) {
-      cursor = armed + 1;
-      advances++;
-      fixture.clock.advance(next);
-    }
-    await new Promise(resolve => setImmediate(resolve));
-  }
-  await finished;
-  await record.promise;
-  return advances;
-}
-
-/** Re-prompts after the task prompt: each one followed exactly one backoff sleep. */
-function retries(record: { session?: { messages: { role: string }[] } }) {
-  return (record.session?.messages.filter(m => m.role === "user").length ?? 0) - 1;
 }
 
 /** Spawn a background child that runs one held tool, so its next model step happens after we act. */
@@ -96,7 +59,7 @@ async function startHeldChild(responses: ReturnType<typeof answer>[], virtual = 
   await hold.entered;
   const id = h.session.messages.filter(m => m.role === "toolResult" && m.toolName === "Agent").flatMap(m => m.content).find(p => p.type === "text")?.text.match(/Agent ID: (\S+)/)?.[1];
   if (!id) throw new Error("Missing spawn id");
-  return { h, timersBefore: fixture.clock.timeoutDelays.length, hold, physical, record: fixture.record(id), executions: () => executions };
+  return { h, hold, record: fixture.record(id), executions: () => executions };
 }
 
 it("#581: routes during the parent's invalidated reload gap without retrying", { timeout: 30_000 }, async () => {
@@ -127,32 +90,12 @@ it("#581: routes during the parent's invalidated reload gap without retrying", {
   expect(record.session?.messages.filter(m => m.role === "user")).toHaveLength(1);
 });
 
-it("retries a stale-ctx route failure once routing recovers, without replaying the tool batch", { timeout: 30_000 }, async () => {
-  const { hold, record, executions, timersBefore } = await startHeldChild([answer("CHILD DONE")]);
-  routeBroken.on = true;
-  hold.release();
-  await untilBackoff(record);
-  routeBroken.on = false;
-  const advances = await settleThroughBackoff(record, timersBefore);
-  expect(advances).toBe(1);
-  expect(retries(record)).toBe(advances);
-  expect(record.error).toBeUndefined();
-  expect(record.status).toBe("completed");
-  expect(record.result).toBe("CHILD DONE");
-  // Recovery re-prompts the model; it must never replay the tool batch.
-  expect(executions()).toBe(1);
-  expect(record.session?.messages.filter(m => m.role === "toolResult")).toHaveLength(1);
-  // One original task prompt plus one continue prompt: the task is not re-sent.
-  expect(record.session?.messages.filter(m => m.role === "user")).toHaveLength(2);
-});
-
 it("reports later tool activity after earlier prose when a real child fails", { timeout: 30_000 }, async () => {
-  const { hold, record, timersBefore } = await startHeldChild([], true, true);
+  const { hold, record } = await startHeldChild([], true, true);
   routeBroken.on = true;
   hold.release();
-  const advances = await settleThroughBackoff(record, timersBefore);
-  expect(advances).toBe(BACKOFF_DELAYS_MS.length);
-  expect(retries(record)).toBe(advances);
+  await record.promise;
+  expect(record.session?.messages.filter(m => m.role === "user")).toHaveLength(1);
   expect(record.status).toBe("error");
   expect(record.error).toContain("This extension ctx is stale");
   expect(record.result).toContain("Earlier progress:");
@@ -194,174 +137,14 @@ function deadSession(prompt: () => Promise<void>) {
   } as unknown as AgentSession;
 }
 
-it("retries a bounded number of times, then reports an interruption with the last tool output", async () => {
-  const prompts = vi.fn(async () => {});
-  const session = deadSession(prompts);
-  await retryStaleCtx(session, 0, undefined, [0, 0, 0]);
-  expect(prompts).toHaveBeenCalledTimes(3);
-  const outcome = staleCtxOutcome(session, 0);
-  expect(outcome?.failure).toMatch(/interrupted by a session reload/);
-  expect(outcome?.partial).toContain("Latest activity: bash (completed)");
-  expect(outcome?.partial).not.toContain("pushed branch redd/x");
-});
-
-it("does not retry when the final step failed for another reason", async () => {
-  const prompts = vi.fn(async () => {});
-  const session = deadSession(prompts);
-  (session.messages.at(-1) as { errorMessage: string }).errorMessage = "overloaded";
-  await retryStaleCtx(session, 0, undefined, [0]);
-  expect(prompts).not.toHaveBeenCalled();
-  expect(staleCtxOutcome(session, 0)).toBeUndefined();
-});
-
-/** Wait until the child's last step is the stale-ctx error, i.e. recovery is in its first backoff. */
-async function untilBackoff(record: { session?: { messages: { role: string }[] } }) {
-  await vi.waitFor(() => expect(record.session?.messages.at(-1)).toMatchObject({ stopReason: "error" }), { timeout: 10_000 });
-}
-
-it("stopping an agent during backoff sends no further prompt", { timeout: 30_000 }, async () => {
-  const { hold, record } = await startHeldChild([answer("NEVER SENT")]);
-  routeBroken.on = true;
-  hold.release();
-  await untilBackoff(record);
-  const users = record.session?.messages.filter(m => m.role === "user").length;
-  const started = Date.now();
-  record.abortController?.abort();
-  await record.promise;
-  expect(Date.now() - started).toBeLessThan(5_000);
-  expect(record.session?.messages.filter(m => m.role === "user")).toHaveLength(users ?? -1);
-});
-
-it("quit while recovery waits aborts the agent and sends no further prompt", { timeout: 30_000 }, async () => {
-  const { h, hold, record } = await startHeldChild([answer("NEVER SENT")]);
-  routeBroken.on = true;
-  hold.release();
-  await untilBackoff(record);
-  const users = record.session?.messages.filter(m => m.role === "user").length;
-  const started = Date.now();
-  await h.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
-  await record.promise;
-  expect(Date.now() - started).toBeLessThan(5_000);
-  expect(record.session?.messages.filter(m => m.role === "user")).toHaveLength(users ?? -1);
-});
-
-describe("backoff timing and timers", () => {
-  afterEach(() => vi.useRealTimers());
-
-  it("waits 1s, 3s, then 9s between re-prompts by default", async () => {
-    vi.useFakeTimers();
-    const prompts = vi.fn(async () => {});
-    const done = retryStaleCtx(deadSession(prompts), 0, undefined);
-    await vi.advanceTimersByTimeAsync(999);
-    expect(prompts).toHaveBeenCalledTimes(0);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(prompts).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(2_999);
-    expect(prompts).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(prompts).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(8_999);
-    expect(prompts).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(prompts).toHaveBeenCalledTimes(3);
-    await done;
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("times the backoff on the injected clock, not native timers", async () => {
-    const clock = new FakeClock();
-    const reprompted: (() => void)[] = [];
-    const prompts = vi.fn(async () => { reprompted.shift()?.(); });
-    const controller = new AbortController();
-    const firstPrompt = new Promise<void>(resolve => reprompted.push(resolve));
-    const done = retryStaleCtx(deadSession(prompts), 0, controller.signal, [1_000, 3_000], clock);
-    clock.advance(999);
-    expect(prompts).not.toHaveBeenCalled();
-    clock.advance(1);
-    // The re-prompt lands within microtasks of the advance; a native timer would lose to the next macrotask.
-    await Promise.race([firstPrompt, new Promise(resolve => setImmediate(resolve))]);
-    expect(prompts).toHaveBeenCalledTimes(1);
-    // Whether or not the second wait is armed yet, an abort leaves nothing pending on the clock.
-    controller.abort();
-    await done;
-    expect(clock.pending).toBe(0);
-    expect(prompts).toHaveBeenCalledTimes(1);
-  });
-
-  it("leaves no shutdown deadline when a real child's teardown overlaps the final re-prompt", async () => {
-    const { h, hold, record } = await startHeldChild([answer("CHILD DONE")]);
-    hold.release();
-    await record.promise;
-
-    // Git pruning is intentionally detached on quit. Its live child-process
-    // timeout is unrelated to the shutdown race this test measures.
-    const prune = vi.spyOn(worktrees, "pruneWorktrees").mockResolvedValue();
-    try {
-      vi.useFakeTimers();
-      const prompts = vi.fn(async () => {
-        // Deliberately pin teardown to the final re-prompt: an earlier 3s
-        // shutdown deadline would expire during the 13s backoff and hide the leak.
-        if (prompts.mock.calls.length === 3) await h.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
-      });
-      const done = retryStaleCtx(deadSession(prompts), 0, undefined);
-      await vi.advanceTimersByTimeAsync(13_000);
-      await done;
-
-      expect(prompts).toHaveBeenCalledTimes(3);
-      expect(record.session?.messages.at(-1)).toMatchObject({ stopReason: "stop" });
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      prune.mockRestore();
-    }
-  });
-
-  it("an abort mid-backoff ends the wait, sends nothing and leaks no timer", async () => {
-    vi.useFakeTimers();
-    const prompts = vi.fn(async () => {});
-    const controller = new AbortController();
-    const done = retryStaleCtx(deadSession(prompts), 0, controller.signal);
-    await vi.advanceTimersByTimeAsync(500);
-    controller.abort();
-    await done;
-    expect(prompts).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("an already-aborted signal never waits or prompts", async () => {
-    vi.useFakeTimers();
-    const prompts = vi.fn(async () => {});
-    const controller = new AbortController();
-    controller.abort();
-    await retryStaleCtx(deadSession(prompts), 0, controller.signal);
-    expect(prompts).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-});
-
-it("re-prompts with a continue message, never an earlier user prompt", async () => {
-  const prompts = vi.fn(async (_text: string) => {});
-  const session = deadSession(prompts);
-  await retryStaleCtx(session, 0, undefined, [0]);
-  const sent = prompts.mock.calls[0]?.[0] ?? "";
-  expect(sent).toMatch(/Continue the task/);
-  for (const m of session.messages) {
-    if (m.role === "user") expect(sent).not.toBe((m.content as { text: string }[])[0].text);
-  }
-});
-
 describe("resumeAgent", () => {
-  afterEach(() => vi.useRealTimers());
-
-  /** A resumed session whose first step dies stale, then (optionally) recovers on the retry. */
-  function resumed(recovers: boolean) {
+  /** A resumed session whose first step dies stale. */
+  function resumed() {
     const messages: unknown[] = [{ role: "user", content: [{ type: "text", text: "earlier" }] }];
     const stale = "This extension ctx is stale after session replacement or reload. Do not use a captured pi.";
-    let calls = 0;
     const prompt = vi.fn(async () => {
-      calls++;
       messages.push({ role: "user", content: [{ type: "text", text: "p" }] });
-      if (calls === 1 || !recovers) messages.push({ role: "assistant", stopReason: "error", errorMessage: stale, content: [] });
-      else messages.push({ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "RESUMED OK" }] });
+      messages.push({ role: "assistant", stopReason: "error", errorMessage: stale, content: [] });
     });
     const session = { messages, prompt, subscribe: () => () => {}, abort: async () => {} } as unknown as AgentSession;
     return { session, prompt };
@@ -384,7 +167,7 @@ describe("resumeAgent", () => {
       },
       abort: async () => {},
     } as unknown as AgentSession;
-    const result = await resumeAgent(session, "go", { type: "general-purpose", staleRetryDelaysMs: [] });
+    const result = await resumeAgent(session, "go", { type: "general-purpose" });
     expect(result.text).toBe("Earlier progress:\npartial stream\n\nLatest activity: bash (completed).");
     expect(result.failure).toContain("This extension ctx is stale");
   });
@@ -404,43 +187,16 @@ describe("resumeAgent", () => {
       },
       abort: async () => {},
     } as unknown as AgentSession;
-    const result = await resumeAgent(session, "go", { type: "general-purpose", staleRetryDelaysMs: [] });
+    const result = await resumeAgent(session, "go", { type: "general-purpose" });
     expect(result.text).toBe("Checking");
   });
 
-  it("recovers a resumed run that died on a stale ctx", async () => {
-    vi.useFakeTimers();
-    const { session, prompt } = resumed(true);
-    const run = resumeAgent(session, "go on", { type: "general-purpose" });
-    await vi.advanceTimersByTimeAsync(1_000);
-    const result = await run;
-    expect(prompt).toHaveBeenCalledTimes(2);
-    expect(result.text).toBe("RESUMED OK");
-    expect(result.failure).toBeUndefined();
-  });
-
-  it("times a resumed run's backoff on the clock it is given", async () => {
-    const { session, prompt } = resumed(true);
-    const clock = new FakeClock();
-    const run = resumeAgent(session, "go on", { type: "general-purpose", clock });
-    // The first prompt returns within microtasks; the retry only follows the 1s sleep on that clock.
-    await new Promise(resolve => setImmediate(resolve));
-    expect(prompt).toHaveBeenCalledTimes(1);
-    clock.advance(1_000);
-    // Microtasks finish the retry; a native timer would lose to the next macrotask and leave one prompt.
-    await new Promise(resolve => setImmediate(resolve));
-    expect(prompt).toHaveBeenCalledTimes(2);
-    expect((await run).text).toBe("RESUMED OK");
-  });
-
   it("reports an interruption when a resumed run never recovers", async () => {
-    vi.useFakeTimers();
-    const { session, prompt } = resumed(false);
+    const { session, prompt } = resumed();
     const run = resumeAgent(session, "go on", { type: "general-purpose" });
-    await vi.advanceTimersByTimeAsync(13_000);
     const result = await run;
-    expect(prompt).toHaveBeenCalledTimes(4);
-    expect(result.failure).toMatch(/interrupted by a session reload/);
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(result.failure).toContain("extension context became stale");
   });
 });
 
