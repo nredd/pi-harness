@@ -39,6 +39,12 @@ FACADE_EXPORT = re.compile(
 )
 
 
+# Deliberately conservative: only module/re-export declarations can validate a missing map.
+# This is not a Rust parser and will reject, never exempt, an unfamiliar source construct.
+RUST_DECLARATIONS = re.compile(r"(?:\s*(?:pub\s+mod\s+\w+\s*;|pub\s+use\s+[\w:{},\s]+;))*\s*")
+RUST_LINE_COMMENT = re.compile(r"//[^\n]*")
+
+
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -1135,12 +1141,6 @@ class LLVMReport(BaseModel):
         max_length=1,
         description="Single source map; multiple maps need an explicit upstream merge.",
     )
-
-
-# Deliberately conservative: only module/re-export declarations can validate a missing map.
-# This is not a Rust parser and will reject, never exempt, an unfamiliar source construct.
-RUST_DECLARATIONS = re.compile(r"(?:\s*(?:pub\s+mod\s+\w+\s*;|pub\s+use\s+[\w:{},\s]+;))*\s*")
-RUST_LINE_COMMENT = re.compile(r"//[^\n]*")
 
 
 def llvm_records(
