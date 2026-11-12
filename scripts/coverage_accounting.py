@@ -1097,11 +1097,9 @@ def check_signal_ratchet(label: str, new: Signal, old: Signal) -> None:
 
 
 class LLVMMetric(BaseModel):
-    """One native LLVM count pair; percentages never enter accounting."""
-
     model_config = ConfigDict(strict=True)
-    count: int = Field(ge=0)
-    covered: int = Field(ge=0)
+    count: int = Field(ge=0, description="Total native LLVM units; percentages never enter accounting.")
+    covered: int = Field(ge=0, description="Executed native LLVM units, bounded by the total.")
 
     @model_validator(mode="after")
     def bounded(self) -> LLVMMetric:
@@ -1120,24 +1118,23 @@ class LLVMMetric(BaseModel):
 
 
 class LLVMFile(BaseModel):
-    """Required portion of an LLVM file record, not its optional display fields."""
-
     model_config = ConfigDict(strict=True)
-    filename: str
-    summary: dict[str, LLVMMetric]
+    filename: str = Field(description="Raw LLVM source path before policy-root normalization.")
+    summary: dict[str, LLVMMetric] = Field(description="Required native line/function/region counters.")
 
 
 class LLVMData(BaseModel):
-    """One binary's exported file map."""
-
-    files: list[LLVMFile]
+    files: list[LLVMFile] = Field(description="One binary's exported file map.")
 
 
 class LLVMReport(BaseModel):
-    """Raw llvm-cov export; multiple data maps require an explicit merge upstream."""
-
-    type: Literal["llvm.coverage.json.export"]
-    data: list[LLVMData] = Field(min_length=1, max_length=1)
+    type: Literal["llvm.coverage.json.export"] = Field(description="Native LLVM export discriminator.")
+    version: Literal["3.1.0"] = Field(description="Export schema from the pinned Rust/LLVM producer.")
+    data: list[LLVMData] = Field(
+        min_length=1,
+        max_length=1,
+        description="Single source map; multiple maps need an explicit upstream merge.",
+    )
 
 
 # Deliberately conservative: only module/re-export declarations can validate a missing map.
@@ -1433,7 +1430,14 @@ def account(
                         counters
                     )
                     results.append(
-                        item | ({"branch_metric": "not-produced"} if signal.producer == "llvm-cov" else {})
+                        {
+                            key: value
+                            for key, value in item.items()
+                            if key not in {"branches", "uncovered_branches"}
+                        }
+                        | {"branch_metric": "not-produced"}
+                        if signal.producer == "llvm-cov"
+                        else item
                     )
                     LOGGER.info(f"{label} {path}: {counters}")
                 LOGGER.info(
@@ -1649,7 +1653,7 @@ def main() -> int:
     for result in results:
         label = f"{result['package']}/{result['signal']}"
         counters = totals.setdefault(label, {})
-        metrics = tuple(FileCoverage.__dataclass_fields__)
+        metrics = tuple(metric for metric in FileCoverage.__dataclass_fields__ if metric in result)
         if "regions" in result:
             metrics += ("regions", "uncovered_regions")
         for metric in metrics:
@@ -1659,7 +1663,7 @@ def main() -> int:
     floors = {
         label: {
             args.os: {"lines": counts["uncovered_lines"], "functions": counts["uncovered_functions"]}
-            | ({"branches": counts["uncovered_branches"]} if counts["branches"] else {})
+            | ({"branches": counts["uncovered_branches"]} if counts.get("branches", 0) else {})
         }
         for label, counts in totals.items()
     }

@@ -60,7 +60,8 @@ replaced with an invented test count. Doc tests run normally but are not separat
 The output parent also contains a stable `coverage.json` accounting entry, published only after
 report validation; raw reports/logs remain under the unique run directory. CI uploads these files,
 not instrumented build products. `setup.log` records pinned-tool setup runtime; `metadata.json`
-records build/test/report runtime. A second uninstrumented test build remains in the existing
+records total build/test/report runtime plus `commandSeconds` for each corresponding `commands`
+entry (test/build and each report rendering separately). A second uninstrumented test build remains in the existing
 packed-source/diagnostics contract, deliberately not replaced by coverage instrumentation.
 
 ## Measured baseline
@@ -93,9 +94,41 @@ input delivery remain unverified. Windows coverage cannot run on macOS/Linux; th
 that request rather than presenting portable stubs as Windows coverage. Windows counts/runtime
 are unknown. The existing WSL job is a Linux runtime, not a Windows-native crate test job.
 
-Native Ubuntu's new hosted baseline and setup/producer runtime are pending the first #758 CI
-receipt. The historical macOS table above is NOT its floor. Native artifacts preserve raw per-file
-lines/functions/regions, setup/run/command logs and elapsed metadata. No Windows-native runtime,
+## Native Ubuntu reference
+
+Run [43183336941](https://github.com/nredd/pi-harness/actions/runs/43183336941), source
+`793ad317354e12f696204cbdcbe5b11b4dee4433`, artifact `13927707571`
+(`coverage-ubuntu-24.04-computer-use`), Ubuntu x86_64, Rust `1.97.1`, LLVM `22.1.6`,
+cargo-llvm-cov `0.9.1`, two jobs. Setup: toolchain **7.958s**, collector install **40.316s**.
+Instrumented build **24.87s**; full build/test/report **25.198s**. Combined setup/collection
+**73.472s**, excluding ordinary package checks. Tests: **33 passed, 1 ignored**, no failures;
+the ignored AT-SPI case requires a live session. This producer succeeded despite the initial
+package gate's separately fixed drop-control anchor failure; it is producer evidence, not a
+claim that the entire initial CI run passed.
+
+The source-scoped counters below are uncovered/total, not percentages or raw LLVM `TOTAL`.
+Raw totals also include dependencies and conventional integration-test source. Accounting excludes
+those by structural ownership, never by default filename filters.
+
+| Linux source | Lines | Functions | Regions |
+| --- | --- | --- | --- |
+| `src/atspi.rs` | 283/558 | 33/62 | 503/838 |
+| `src/error.rs` | 12/18 | 4/5 | 20/24 |
+| `src/lib.rs` | 0/0 | 0/0 | 0/0 |
+| `src/main.rs` | 543/970 | 60/100 | 1014/1634 |
+| `src/protocol.rs` | 0/18 | 0/2 | 0/10 |
+| `src/state.rs` | 42/243 | 11/35 | 63/433 |
+| `src/wayland.rs` | 39/43 | 5/6 | 58/64 |
+| `src/x11.rs` | 523/759 | 57/85 | 967/1312 |
+| **Source total** | **1442/2609** | **170/295** | **2625/4315** |
+
+`lib.rs` has no LLVM map and passes conservative module/re-export-only validation. Its 0/0 is
+non-executable classification, not covered executable code. Per-file output preserves this distinction
+through its zero denominator. Both branch and statement metrics remain UNMEASURED. The stored
+report-only references are L/F = 1442/170; region units are preserved independently in per-file and
+aggregate accounting output, not coerced into the policy's LCOV branch budget.
+
+Native artifacts preserve raw per-file lines/functions/regions, setup/run/command logs and elapsed metadata. No Windows-native runtime,
 actual AT-SPI/X11/Wayland desktop behavior, focus, physical input or display acceptance is claimed.
 Narrow documented live-adapter limitations remain; ordinary platform policy/error paths are not
 blanket exemptions. #696 retains deterministic runtime seam closure and the Windows producer.

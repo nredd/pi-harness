@@ -77,7 +77,10 @@ test("collects tests once with locked manifests and renders all formats from iso
 		assert.deepEqual(readFileSync(path.join(output, "coverage.json")), readFileSync(path.join(run, "coverage.json")));
 		assert.ok(commands.slice(1).every(({ args }) => args.includes("--disable-default-ignore-filename-regex")));
 		assert.match(readFileSync(path.join(run, "summary.txt"), "utf8"), /TOTAL/);
-		assert.ok(JSON.parse(readFileSync(path.join(run, "metadata.json"), "utf8")).elapsedSeconds >= 0);
+		const metadata = JSON.parse(readFileSync(path.join(run, "metadata.json"), "utf8"));
+		assert.ok(metadata.elapsedSeconds >= 0);
+		assert.equal(metadata.commandSeconds.length, 4);
+		assert.ok(metadata.commandSeconds.every((seconds) => seconds >= 0));
 		assert.throws(
 			() => runCoverage([], () => ({ status: 0, stdout: "cargo-llvm-cov wrong" })),
 			/Expected cargo-llvm-cov/,

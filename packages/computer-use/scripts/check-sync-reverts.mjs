@@ -134,8 +134,8 @@ const cases = [
 	{
 		name: "Rust coverage complete source filenames",
 		file: "scripts/rust-coverage.mjs",
-		before: '"--disable-default-ignore-filename-regex", format',
-		after: "format",
+		before: '"--disable-default-ignore-filename-regex",\n\t\t\t\tformat,',
+		after: "format,",
 		check: "test/rust-coverage.test.mjs",
 		failure: /AssertionError|false == true/,
 	},

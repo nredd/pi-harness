@@ -49,6 +49,7 @@ def native_fixture(root: Path) -> tuple[Policy, dict[str, Any], Path]:
     metric = {"count": 3, "covered": 1, "percent": 33.3333}
     report: dict[str, Any] = {
         "type": "llvm.coverage.json.export",
+        "version": "3.1.0",
         "data": [
             {
                 "files": [

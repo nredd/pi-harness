@@ -76,8 +76,10 @@ export function runCoverage(args, spawn = spawnSync) {
 	};
 	const started = Date.now();
 	const commands = [];
+	const commandSeconds = [];
 	const execute = (parameters) => {
 		commands.push(parameters);
+		const commandStarted = Date.now();
 		const result = spawn("cargo", ["llvm-cov", ...parameters], {
 			cwd: root,
 			env,
@@ -85,6 +87,7 @@ export function runCoverage(args, spawn = spawnSync) {
 			timeout: 900_000,
 			maxBuffer: 32 * 1024 * 1024,
 		});
+		commandSeconds.push((Date.now() - commandStarted) / 1000);
 		writeFileSync(path.join(run, "commands.log"), `${commands.map((command) => JSON.stringify(command)).join("\n")}\n`);
 		writeFileSync(path.join(run, "run.log"), `${result.stdout ?? ""}\n${result.stderr ?? ""}`, { flag: "a" });
 		if (result.error || result.status !== 0)
@@ -140,6 +143,7 @@ export function runCoverage(args, spawn = spawnSync) {
 					tool: version.stdout.trim(),
 					elapsedSeconds: (Date.now() - started) / 1000,
 					commands,
+					commandSeconds,
 				},
 				null,
 				2,

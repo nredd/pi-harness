@@ -247,7 +247,7 @@
       "status": "pending",
       "goal": "excluded",
       "goal_reason": "Owner explicitly excludes computer-use from coverage maintenance; existing platform/native checks remain unchanged. Inventory remains visible, with no coverage claim.",
-      "note": "Not measured, tracked: native Swift/Rust and the documentation site have no maintained coverage producer. Its JS/TS runtime source is also measured, with enforced ratchet caps, by `computer-use-vitest` (#347, #645). Shipped setup-helper.mjs, build-native.mjs and src/ JavaScript remain inventoried production source, never verification helpers.",
+      "note": "Not measured, tracked: native Swift/Windows Rust and the documentation site have no maintained coverage producer. Native Linux Rust is separately measured report-only by computer-use-linux-native (#758). Its JS/TS runtime source is also measured, with enforced ratchet caps, by `computer-use-vitest` (#347, #645). Shipped setup-helper.mjs, build-native.mjs and src/ JavaScript remain inventoried production source, never verification helpers.",
       "signals": {}
     },
     "computer-use-linux-native": {
@@ -257,12 +257,12 @@
       "status": "measured",
       "goal": "excluded",
       "goal_reason": "Native runtime closure remains #696; headless tests do not prove desktop adapters or exclude their policy logic.",
-      "note": "Native Ubuntu LLVM line/function/region accounting includes inline and separately named cfg(test) modules in src. No branch or statement producer; Windows and WSL remain unmeasured by this signal. Initial hosted reference pending #758.",
+      "note": "Native Ubuntu receipt 43183336941 at 793ad317354e12f696204cbdcbe5b11b4dee4433, artifact 13927707571: uncovered L/F/regions 1442/170/2625. Includes inline and separately named cfg(test) modules in src; no branch or statement producer. Windows and WSL remain unmeasured by this signal.",
       "signals": {
         "primary": {
           "report": "coverage/native-linux/coverage.json",
           "producer": "llvm-cov",
-          "max_uncovered": {},
+          "max_uncovered": { "linux": { "lines": 1442, "functions": 170 } },
           "enforcement": "report-only",
           "reason": "Source-complete Ubuntu producer baseline (#758); runtime and inline-test attribution closure remains #696, not a native 100-percent claim.",
           "reporters": ["text", "lcov", "json"],
