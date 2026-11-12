@@ -28,16 +28,16 @@ gated (`linux-*`, `windows-*`, `macos-helper-live`).
 
 ### TypeScript (`computer-use-vitest`, 35 modules, Istanbul)
 
-Hosted run `43151253223` on PR HEAD `8c7f6487` measured the enforced signal:
+Hosted run `43173083073` on PR HEAD `e1df877e` measured the enforced signal:
 
 | Host | Lines | Functions | Branches | Statements | Job |
 | --- | --- | --- | --- | --- | --- |
-| macOS | 168 | 25 | 313 | 236 | `130970325724` |
-| Ubuntu | 168 | 25 | 313 | 236 | `130968037667` |
-| WSL2 | 168 | 25 | 312 | 235 | `130971881797` |
+| macOS | 1 | 0 | 1 | 1 | `131037037506` |
+| Ubuntu | 1 | 0 | 1 | 1 | `131037793558` |
+| WSL2 | 1 | 0 | 1 | 1 | `131041874646` |
 
 The `darwin` caps equal macOS; `linux` caps take the per-counter maximum of Ubuntu and WSL2.
-Each cap is lower than the previous 215/43/464/329 and 234/48/488/354 baseline. The 34 files
+Each cap is lower than or equal to the previous 168/25/313/236 baseline. The 34 files
 at 0/0/0/0 on all three hosts are pinned in `packages/computer-use/vitest.config.ts`; the exact
 list is tested in `scripts/coverage-configs.test.ts`. The helpers from #749 were already pinned.
 
@@ -52,7 +52,7 @@ macOS per-file uncovered counts (lines / functions / branches / statements):
 | `scripts/rust-coverage.mjs` | 0/62 | 0/6 | 0/56 | 0/67 |
 | `scripts/setup-helper.mjs` | 0/433 | 0/102 | 0/284 | 0/508 |
 | `src/actions.ts` | 0/87 | 0/23 | 0/149 | 0/108 |
-| `src/bridge.ts` | 168/1069 | 25/243 | 313/1206 | 236/1261 |
+| `src/bridge.ts` | 1/1052 | 0/242 | 1/1162 | 1/1236 |
 | `src/cdp.ts` | 0/270 | 0/85 | 0/174 | 0/326 |
 | `src/config.ts` | 0/82 | 0/21 | 0/86 | 0/115 |
 | `src/contract.ts` | 0/1 | 0/0 | 0/0 | 0/1 |
@@ -81,7 +81,7 @@ macOS per-file uncovered counts (lines / functions / branches / statements):
 | `src/state.ts` | 0/16 | 0/6 | 0/20 | 0/19 |
 | `src/view.ts` | 0/85 | 0/25 | 0/76 | 0/106 |
 
-Only `src/bridge.ts` remains uncovered on macOS. The WSL2 branch and statement counts are each one lower.
+Only `src/bridge.ts` remains uncovered on all three hosts: the missing-target path in `currentTargetOrThrow` (#755).
 
 ### Swift (`native/macos`, llvm-cov)
 
