@@ -27,7 +27,10 @@ On this canonical source, local offline build and `npm run check` passed. The as
 settings and parent/sibling isolation. Existing generated subagents module-type warning remains.
 In-process lint passed (57 files), and types passed before the uncommitted developer probe.
 
-The unchanged `.10` root overrides passed all four asset checksum/provenance checks. The real
+The unchanged `.10` root overrides passed all four asset checksum/provenance checks. Forks
+CI now runs that same preflight before installing root dependencies for the child probe, with
+the read-only token scoped to the preflight step only. A regression binds ordering and token
+scope; it failed before the workflow fix and passed afterward. The real
 released-host transcript gate remains RED: 3 passed, 2 failed explicitly requiring #32.
 The unchanged exact Gitlink identity test fails because `ee059aa40` has no release tag.
 A temporary, uncommitted candidate alias config passed all five transcript cases on Node and

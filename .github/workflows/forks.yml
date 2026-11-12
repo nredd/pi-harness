@@ -86,6 +86,11 @@ jobs:
         run: npm run build:daemon --workspace packages/env
       - name: Test (isolated HOME, no credentials)
         run: ./test.sh
+      - name: Verify root core overrides before child install
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: make verify-root-overrides
       - name: Install owned packages for candidate-core child verification
         working-directory: .
         run: npm ci --ignore-scripts
