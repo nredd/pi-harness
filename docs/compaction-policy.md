@@ -1,10 +1,12 @@
 # Compaction operating targets
 
-Source dependency: [nredd/pi#28](https://github.com/nredd/pi/pull/28), based on
-`52b517bd246b19f5b75fa70bd6e01b952a18583f` (`nredd/v1.3.0`), with candidate
-`569a2e9219a351d0e109f909392291927dfe1641`. The original harness Gitlink was
-`4d857379f37f83397871a66c522abbe8469a003d`. The intervening fork commit is the landed
-unavailable-tools fix, not the unrelated upstream-sync work in core PR `#26`.
+Source dependency: merged [nredd/pi#28](https://github.com/nredd/pi/pull/28) at
+`7ace73f14`, followed by navigation #31 and timestamps #32. The coordinated candidate is
+canonical `nredd/v1.3.0` commit `ee059aa4050a221a83dae782f4575b1258e84b45`, not
+pre-squash source `569a2e9219a351d0e109f909392291927dfe1641`. The original harness Gitlink
+was `4d857379f37f83397871a66c522abbe8469a003d`. The intervening unavailable-tools fix is
+landed; unrelated upstream-sync core PR #26 is excluded. Release coordination is tracked in
+[#774](https://github.com/nredd/pi-harness/issues/774).
 
 Core owns the shared policy used by direct, virtual and child sessions. `targetTokens` defaults
 to `"auto"`: our application fallback is `min(128000, floor(0.5 * B))`, with `B` equal to
@@ -39,10 +41,11 @@ child-local settings, and isolation from the parent and a later sibling with an 
 No transport calls a provider. The existing `Forks` workflow runs this target after its native
 core gate, after installing the root owned dependencies. No installed host is replaced.
 
-This PR only coordinates source and verification. It does not publish core, change release or
-stack selections, edit live configuration, or activate this behavior. Merge core first. The harness Gitlink PR remains draft: the existing shipped-stack identity
-test requires an exact released tag, so an untagged source candidate cannot pass `make check`
-while the shipped stack still selects the old release. That invariant is unchanged. A later,
-separately authorized release and matching stack coordination are prerequisites to admitting the
-Gitlink update. No release is authorized in this issue. Parent owns that coordination, critics,
-CI observation and merges.
+The owner separately authorized release coordination in #774. Preparation remains draft until
+`v1.3.0-nredd.11` is signed, published and authenticated, and all dependencies, overrides,
+locks and stack selections match it. The exact-release identity gate stays unchanged: this
+untagged candidate cannot pass `make check` against the old selected release. Do not merge the
+Gitlink alone. Preserve #754's child probes and #767's timestamp tests together; the original
+PRs stay open until the coordinated replacement lands. Parent owns pre-tag admission, final
+critics, CI observation, protected merges and the owner-only promotion environment approval.
+Preparation is not publication, promotion or live activation.

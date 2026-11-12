@@ -8,11 +8,14 @@ and resizes. Exact viewer-local fixture labels are asserted in their owning entr
 rule, ignoring only renderer-owned blank padding. A taller expanded viewport counts every timestamp label, including current-time
 values, so nested child details cannot receive another core timestamp unnoticed.
 
-This test change depends on nredd/pi#32 (which implements issue nredd/pi#30) and an authorized core release containing it. The
-selected released host does not yet have the setting, so the new tests intentionally fail
-with an explicit release-prerequisite assertion. Do not skip them, add a feature-detection
-fallback, spoof release identity, or replace the pinned host in committed test configuration.
-No release, version, stack, package override, lockfile, or Gitlink changes are included here.
+Core nredd/pi#32 (issue nredd/pi#30) is merged at
+`ee059aa4050a221a83dae782f4575b1258e84b45`. Authorized release coordination in
+[#774](https://github.com/nredd/pi-harness/issues/774) combines these tests from #767 with
+#754's compaction child verification. The selected `.10` released host still lacks the
+setting, so these tests intentionally fail with an explicit release-prerequisite assertion.
+Do not skip them, add feature-detection fallback, spoof release identity or replace the pinned
+host in committed test configuration. Before admission, the coordinated train must select the
+authenticated release coherently across its Gitlink, dependencies, overrides, locks and stack.
 
 Gates from the integration workspace:
 
