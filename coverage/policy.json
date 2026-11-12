@@ -266,7 +266,7 @@
           "reason": "Source-complete Ubuntu producer baseline (#758); runtime and inline-test attribution closure remains #696, not a native 100-percent claim.",
           "reporters": ["text", "lcov", "json"],
           "skip_os": ["darwin"],
-          "skip_hosts": ["windows", "native"],
+          "skip_hosts": ["wsl2"],
           "gate": "check-ts"
         }
       }

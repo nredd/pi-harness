@@ -72,7 +72,7 @@ def native_fixture(root: Path) -> tuple[Policy, dict[str, Any], Path]:
         enforcement="report-only",
         reason="Native producer baseline #758",
         skip_os=["darwin"],
-        skip_hosts=["windows", "native"],
+        skip_hosts=["wsl2"],
     )
     package = Package(
         root="pkg",
@@ -113,10 +113,9 @@ def test_native_complete_source_regions_and_missing_report(tmp_path: Path) -> No
     assert test_module["branch_metric"] == "not-produced"
     assert next(item for item in results if item["file"] == "src/lib.rs")["regions"] == 0
     output.unlink()
-    assert "No such file" in account(tmp_path, cfg, "linux")[1][0]
-    assert account(tmp_path, cfg, "darwin") == ([], [])
-    assert account(tmp_path, cfg, "linux", host="windows") == ([], [])
-    assert account(tmp_path, cfg, "linux", host="native") == ([], [])
+    assert "No such file" in account(tmp_path, cfg, "linux", host="linux")[1][0]
+    assert account(tmp_path, cfg, "darwin", host="macos") == ([], [])
+    assert account(tmp_path, cfg, "linux", host="wsl2") == ([], [])
 
 
 @pytest.mark.parametrize(

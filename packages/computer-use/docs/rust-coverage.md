@@ -5,8 +5,9 @@ The native bridge crates retain their normal tests. Native Ubuntu CI additionall
 cargo-llvm-cov `0.9.1` and two build jobs. `computer-use-linux-native/primary` consumes its raw LLVM
 JSON, report-only and excluded from the global target pending #696. A failed test, instrumentation
 error, missing/empty/malformed report or missing executable source map fails the selected-host gate.
-macOS, Windows-hosted WSL and native ARM64 WSL-replacement cells report this signal NOT RUN.
-They do not borrow Ubuntu counters. This is not a Windows-native producer.
+macOS and WSL guest cells, including native ARM64 WSL replacements, report this signal NOT RUN.
+Accounting selects the CI guest value `wsl2`, not the Windows/native host class; Ubuntu's `linux`
+guest still requires the report. They do not borrow Ubuntu counters. This is not a Windows-native producer.
 
 All report commands disable cargo-llvm-cov's default filename exclusions. Accounting structurally
 scopes the complete `native/linux/bridge-rs/src/**/*.rs` inventory, including separately named

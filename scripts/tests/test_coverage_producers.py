@@ -362,7 +362,7 @@ def test_native_ubuntu_rust_producer_is_pinned_and_preserved() -> None:
     signal = cfg["signals"]["primary"]
     assert signal["producer"] == "llvm-cov"
     assert signal["skip_os"] == ["darwin"]
-    assert signal["skip_hosts"] == ["windows", "native"]
+    assert signal["skip_hosts"] == ["wsl2"]
     assert signal["enforcement"] == "report-only"
 
 
