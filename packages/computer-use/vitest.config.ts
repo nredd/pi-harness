@@ -19,6 +19,7 @@ const ZERO_UNCOVERED_FILES = [
 	"scripts/docs-generators/generate-tool-reference.mjs",
 	"scripts/rust-coverage.mjs",
 	"scripts/setup-helper.mjs",
+	"src/bridge.ts",
 	"src/outline-store.ts",
 	"src/outline.ts",
 	"src/platform/macos/helper-path.mjs",
@@ -47,9 +48,13 @@ export default defineConfig({
 			reportOnFailure: true,
 			include: owned,
 			exclude: exclusions.map(({ path }) => path),
-			thresholds: Object.fromEntries(
-				ZERO_UNCOVERED_FILES.map((path) => [path, { lines: 100, functions: 100, branches: 100 }]),
-			),
+			thresholds: {
+				// The aggregate policy does not yet account statements (#742).
+				statements: 100,
+				...Object.fromEntries(
+					ZERO_UNCOVERED_FILES.map((path) => [path, { lines: 100, functions: 100, branches: 100 }]),
+				),
+			},
 		},
 	},
 });

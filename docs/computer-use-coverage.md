@@ -43,20 +43,21 @@ and reconstructed observations. A separate, explicitly structural removal contro
 obsolete guard returns; it is not a claim of native behavior. Coverage pins and caps are changed
 only after measurements, never to hide a reachable failure.
 
-At source HEAD `f48866292248d65f6d091e3c8cf500a0b49dec96`, local macOS `npm run check`
-passed (966 tests, 15 skipped), and Ubuntu CI run `43182504205`, job `131061723744`,
-passed (958 tests, 23 skipped). Both report L/F/B/S uncovered **0/0/0/0**, totals
-3902/1022/3429/4676; all 35 files, including `src/bridge.ts`, are fully covered.
+At source HEAD `3a1623815c57f814c67ec655692c6430c27e7ca5`, CI run `43184600748`
+measured macOS (job `131068948733`, 966 tests, 15 skipped), Ubuntu (job `131068948709`,
+958 tests, 23 skipped) and WSL2 (job `131068948676`, 958 tests, 23 skipped). Each reports
+L/F/B/S uncovered **0/0/0/0**, totals 3902/1022/3429/4676; all 35 files, including
+`src/bridge.ts`, are fully covered.
 The initial public-executor suite failed 1 removal assertion before deletion, then all
 19 tests passed. `check-sync-reverts.mjs` actually restores the guard and proves the
 removal assertion fails; all existing controls also pass after updating their deleted-error
 anchors/expectations. This is structural dead-code protection, not live native coverage.
 
-That PR's WSL owned cell was path-skipped, NOT measured. The policy measurement note is
-updated to request a real WSL run through the existing changed-path classifier; caps are
-not lowered and `bridge.ts` is not zero-pinned until its own-head reports from all three
-hosts confirm zero. #742 owns statement accounting and its policy ratchet; keep the final
-zero counts when integrating the two changes, without altering its checkout.
+The aggregate L/F/B caps are now zero on both policy platforms, and `src/bridge.ts` has
+per-file L/F/B zero thresholds. Vitest enforces aggregate statement coverage at 100%; #742
+owns statement accounting in policy and must retain the measured zero statement cap when
+integrating this change. The overall `computer-use` inventory remains excluded: this result
+covers its TypeScript/Vitest slice, not unmeasured native Swift, Rust or documentation code.
 
 ## Baseline
 
