@@ -2,7 +2,7 @@
 
 Source dependency: [nredd/pi#28](https://github.com/nredd/pi/pull/28), based on
 `52b517bd246b19f5b75fa70bd6e01b952a18583f` (`nredd/v1.3.0`), with candidate
-`cf1915f2935d7651220c8788e6df2c1f05aeb69e`. The original harness Gitlink was
+`569a2e9219a351d0e109f909392291927dfe1641`. The original harness Gitlink was
 `4d857379f37f83397871a66c522abbe8469a003d`. The intervening fork commit is the landed
 unavailable-tools fix, not the unrelated upstream-sync work in core PR `#26`.
 
@@ -16,7 +16,9 @@ safe integer explicitly sets the working target; `"contextWindow"` is the legacy
 Reserve, retained-history and summary output budgets remain independent. The entire pending
 input suffix stays verbatim until its answering request dispatches. Large extension context
 must not cause an earlier user instruction in that batch to be summarized before its first
-answer. Summary dispatches and failed request gates do not release the pending batch. The recommendation
+answer. Committed `turn_end` and `agent_before_settle` batches share that registration,
+including provider-visible `display: false` custom messages; previews register nothing.
+Summary dispatches and failed request gates do not release the pending batch. The recommendation
 mapping is empty: provider product defaults and examples do not establish a universal Pi
 quality optimum. Sources and retrieved passages live in the Gitlinked core's
 `packages/coding-agent/docs/compaction-policy-evidence.md`.
