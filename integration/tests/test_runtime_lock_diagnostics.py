@@ -80,7 +80,18 @@ def test_synthetic_source_replay_records_actual_native_phases(
     check_output = runtime_lock.subprocess.check_output
 
     def smoke_or_native(*args: Any, **kwargs: Any) -> Any:
-        """Run actual native npm but return hostile version output at the smoke boundary."""
+        """Run actual native npm but return hostile version output at the smoke boundary.
+
+        Parameters:
+            *args (Any): selected executable and argument list.
+            **kwargs (Any): unchanged subprocess options.
+
+        Returns:
+            Any: native subprocess output or synthetic hostile version text.
+
+        Raises:
+            OSError | runtime_lock.subprocess.SubprocessError: native npm fails.
+        """
         if args[0][-1] == "--version":
             return HOSTILE
         return check_output(*args, **kwargs)
@@ -151,11 +162,32 @@ def test_install_failure_records_partial_counts_and_propagates_unchanged(
     attempted = 0
 
     def fail(*args: Any, **kwargs: Any) -> None:
-        """Raise the same hostile exception object without formatting it into a log."""
+        """Raise the same hostile exception object without formatting it into a log.
+
+        Parameters:
+            *args (Any): unused operation arguments.
+            **kwargs (Any): unused operation options.
+
+        Returns:
+            None: never returns normally.
+
+        Raises:
+            RuntimeLockError: the unchanged synthetic operation failure.
+        """
         raise error
 
     def run(*args: Any) -> None:
-        """Fail a selected cache invocation or native offline install."""
+        """Fail a selected cache invocation or native offline install.
+
+        Parameters:
+            *args (Any): native executable, operation arguments and environment.
+
+        Returns:
+            None: unselected operations complete without running npm.
+
+        Raises:
+            RuntimeLockError: the selected operation fails with hostile details.
+        """
         nonlocal attempted
         if args[1][0] == "cache":
             attempted += 1
@@ -231,7 +263,19 @@ def test_source_failure_reports_status_without_exception_details(
     runtime = RuntimeLocks.model_validate_json((ROOT / runtime_lock.SOURCE_LOCK).read_bytes())
 
     def fail(*args: Any, **kwargs: Any) -> Any:
-        """Raise an operation-appropriate exception carrying private-looking data."""
+        """Raise an operation-appropriate exception carrying private-looking data.
+
+        Parameters:
+            *args (Any): unused source operation arguments.
+            **kwargs (Any): unused source operation options.
+
+        Returns:
+            Any: never returns normally.
+
+        Raises:
+            OSError: the smoke subprocess cannot start.
+            RuntimeLockError: an earlier source phase fails.
+        """
         if phase == "smoke":
             raise OSError(HOSTILE)
         raise RuntimeLockError(HOSTILE)
