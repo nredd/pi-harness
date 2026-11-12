@@ -12,6 +12,54 @@ no `// coverage:ignore`, no widened globs, no waived files. Unreachable code is 
 unreachable by types, as in the dev-tools precedent (the unused no-op mutex initializer).
 Every closed gap needs a test that fails without the behavior, not an executed line.
 
+## Missing-target call-path proof (#755)
+
+The remaining `src/bridge.ts` missing-target guard is dead, not a missing public error path.
+`executeTool` creates an isolated `OperationState` for each request via `SavedStates.hydrate`:
+no state yields `{}`, desktop records always restore both target and capture, browser records
+restore a CDP context without a desktop target. Session reconstruction also saves desktop records
+only after constructing both target and capture. No public input can mutate this operation state.
+
+The two former `currentTargetOrThrow` consumers are:
+
+- `performReadText`: output refs return first, browser states return through CDP, and desktop
+  reads require `currentCaptureOrThrow` before accessing the paired target.
+- `resolveCurrentTarget`: `resolveTargetByWindowSelector` calls it only after checking the current
+  target; `resolveTargetForObserve` does the same or selects the frontmost target. All selection
+  paths set the target before returning. `ensureTargetWindowId` is reached only with a selected
+  target or a hydrated desktop target. `captureCurrentTarget` receives the selected target from
+  observe, or runs after desktop capture validation. `performWaitFor` and `performDesktopTransaction`
+  require a capture first; `performSearchUi` and `performExpandUi` require an outline (which requires
+  a capture) and exclude browser contexts from native recapture.
+
+`clearDesktopOperationState` clears the capture and target together only on terminal transaction
+outcomes, which return without further resolution. Async-local operations cannot clear each other's
+targets. The guard and unused error constant are deleted, not ignored or pinned to success.
+
+`test/bridge-observe-query.test.mjs` verifies all six desktop state consumers reject missing,
+empty and whitespace states at the public executor boundary without reaching native capture/wait.
+Existing suites cover selected/frontmost roots, hydrated desktop reads/waits/acts, browser queries
+and reconstructed observations. A separate, explicitly structural removal control fails when the
+obsolete guard returns; it is not a claim of native behavior. Coverage pins and caps are changed
+only after measurements, never to hide a reachable failure.
+
+At source HEAD `3a1623815c57f814c67ec655692c6430c27e7ca5`, CI run `43184600748`
+measured macOS (job `131068948733`, 966 tests, 15 skipped), Ubuntu (job `131068948709`,
+958 tests, 23 skipped) and WSL2 (job `131068948676`, 958 tests, 23 skipped). Each reports
+L/F/B/S uncovered **0/0/0/0**, totals 3902/1022/3429/4676; all 35 files, including
+`src/bridge.ts`, are fully covered.
+The initial public-executor suite failed 1 removal assertion before deletion, then all
+19 tests passed. `check-sync-reverts.mjs` actually restores the guard and proves the
+removal assertion fails; all existing controls also pass after updating their deleted-error
+anchors/expectations. This is structural dead-code protection, not live native coverage.
+
+The aggregate L/F/B/S caps are now zero on both policy platforms, and all 35 files from that
+measurement, including `src/bridge.ts`, have per-file L/F/B/S zero thresholds. #742 supplies
+statement accounting and `json-summary`. The later Swift coverage producer adds another owned
+script; the earlier 35-file measurement does not establish its coverage. The overall
+`computer-use` inventory remains excluded: this result covers the TypeScript/Vitest slice,
+not all native Swift, Rust or documentation code.
+
 ## Baseline
 
 Measured 2026-11-11 on macOS (Apple Silicon, Node 26.13.0) at `6d913af1` (main after #717, #718, #719,
@@ -81,7 +129,7 @@ macOS per-file uncovered counts (lines / functions / branches / statements):
 | `src/state.ts` | 0/16 | 0/6 | 0/20 | 0/19 |
 | `src/view.ts` | 0/85 | 0/25 | 0/76 | 0/106 |
 
-Only `src/bridge.ts` remains uncovered on all three hosts: the missing-target path in `currentTargetOrThrow` (#755).
+At the earlier baseline only `src/bridge.ts` remained uncovered on all three hosts; #755 removes that dead path as documented above.
 
 ### Swift (`native/macos`, llvm-cov)
 

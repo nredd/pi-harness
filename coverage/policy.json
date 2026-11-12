@@ -284,8 +284,8 @@
           "report": "coverage/async/lcov.info",
           "enforcement": "report-only",
           "reason": "Verification-only maintenance goal; the dedicated Vitest producer enforces a per-file zero L/F/B/S pin (#759). Missing or invalid selected-host reports still fail accounting.",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -316,11 +316,11 @@
       "status": "measured",
       "goal": "excluded",
       "goal_reason": "Owner excludes computer-use from coverage maintenance; this measures its JS/TS runtime source under the Vitest suites from #347 with enforced uncovered-count ratchet caps (#645), not a 100% claim. `computer-use` keeps the full inventory.",
-      "note": "Istanbul over the package's Vitest suites; subprocess-run scripts (setup/build/docs generators) count only what the suites import. Caps are the measured per-OS uncovered counts from hosted run 43173083073, see docs/coverage.md.",
+      "note": "Istanbul over the package's Vitest suites; subprocess-run scripts count only what the suites import. At #755 CI HEAD 3a162381, macOS, Ubuntu and WSL2 each measured zero uncovered lines, functions, branches and statements; see docs/computer-use-coverage.md.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 1, "functions": 0, "branches": 1, "statements": 1 }, "linux": { "lines": 1, "functions": 0, "branches": 1, "statements": 1 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "reporters": ["text", "lcov", "json-summary"]
         }
       }

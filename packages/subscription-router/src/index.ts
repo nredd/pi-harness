@@ -28,6 +28,8 @@ import { ExhaustionTracker } from "./exhaustion.js";
 import { refKey } from "./model-ref.js";
 import { compilePolicy } from "./policy.js";
 import { SettleRecovery } from "./recovery.js";
+import { ResetView, refreshSchedules } from "./reset-view.js";
+import { formatResets } from "./resets.js";
 import { formatDecision, type RouteDecision, type RouteEnv, Router } from "./router.js";
 import { formatScore } from "./selection.js";
 import { COLLECTED_PROVIDERS, type RegistryContext, UsageService } from "./usage.js";
@@ -297,7 +299,7 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 
 		pi.registerCommand("router", {
 			description:
-				"Subscription router: status (default), explain <profile> [--json], refresh, or reset confirmed blocks",
+				"Subscription router: status, explain <profile> [--json], resets [refresh], refresh, or reset LOCAL blocks",
 			handler: async (args, ctx) => {
 				const action = args.trim() || "status";
 				if (action.split(/\s+/)[0] === "explain") {
@@ -321,13 +323,53 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 					);
 					return;
 				}
+				if (action.split(/\s+/)[0] === "resets") {
+					if (action !== "resets" && action !== "resets refresh") {
+						ctx.ui.notify("subscription-router: expected resets [refresh]", "error");
+						return;
+					}
+					const providers = sessionProviders(ctx, profiles);
+					let refresh = action === "resets refresh";
+					do {
+						const results = refresh ? await refreshSchedules(ctx, usage, providers) : [];
+						const text = formatResets(
+							providers,
+							(provider) => {
+								const result = results.find((snapshot) => snapshot.provider === provider);
+								const cached = usage.peek(provider);
+								// A cancelled/deadline-limited caller must not erase last-known windows.
+								return result && result.windows.length === 0 && cached?.windows.length
+									? { ...cached, status: "stale", message: result.message }
+									: (result ?? cached);
+							},
+							now(),
+						);
+						if (ctx.mode !== "tui") {
+							pi.sendMessage({ customType: "router:resets", content: text, display: true }, { triggerTurn: false });
+							return;
+						}
+						refresh = await ctx.ui.custom<boolean>(
+							(tui, _theme, _kb, done) =>
+								new ResetView(
+									text,
+									() => tui.terminal.rows,
+									() => tui.requestRender(),
+									done,
+								),
+						);
+					} while (refresh);
+					return;
+				}
 				if (action === "reset") {
 					tracker.clear();
-					ctx.ui.notify("subscription-router: cleared confirmed blocks", "info");
+					ctx.ui.notify("subscription-router: cleared LOCAL confirmed blocks only; provider quota unchanged", "info");
 					return;
 				}
 				if (action !== "status" && action !== "refresh") {
-					ctx.ui.notify(`subscription-router: unknown action "${action}" (status, refresh, reset)`, "error");
+					ctx.ui.notify(
+						`subscription-router: unknown action "${action}" (status, resets [refresh], refresh, reset)`,
+						"error",
+					);
 					return;
 				}
 				const providers = sessionProviders(ctx, profiles);

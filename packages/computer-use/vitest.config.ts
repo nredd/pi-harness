@@ -21,6 +21,7 @@ const ZERO_UNCOVERED_FILES = [
 	"scripts/rust-coverage.mjs",
 	"scripts/setup-helper.mjs",
 	"src/actions.ts",
+	"src/bridge.ts",
 	"src/cdp.ts",
 	"src/config.ts",
 	"src/contract.ts",

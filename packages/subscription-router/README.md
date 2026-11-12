@@ -123,7 +123,8 @@ Surfaces:
 - Child sessions share the parent's model runtime and re-register `router/*` into it, so one activation's route serves every session on that runtime. Routing reads only the model registry, never that activation's extension ctx, so it survives the disposal of whichever child loaded last
 - `router:decision` entries go to the requesting session through `ctx.appendEntry` when core's `route` context carries one (core with request-owned routing), and are never written through a possibly disposed registrant. Older cores and raw `ModelRuntime` calls carry no requester identity: entries then go to the session that last registered the route and are dropped once that session is disposed
 - `router:decision` session entries: one per profile's first scored pick in a session and each later change of chosen model, not every route. This slows growth but is not a hard bound: entries are never pruned, flapping between models and every session restart still append (profile, reason, chosen model, each candidate's score, limiting window, stale flag and data age, ineligible entries). Sticky continuations and repeat picks of the same model are not persisted; status still lists the last five. Read them from the session file to prove why a model was picked
-- `/router [status|refresh|reset]`: cached-only fresh-dispatch forecast, explicit refresh, or clear all blocks. Status explains each eligible candidate's score and limiting window, unlimited quota, or fallback reason, plus ineligible entries. Status also lists the last five routing decisions of the current session (of the process, on a core without request-owned routing). The forecast uses chain-order ties without a session incumbent, like admission; an existing balanced conversation additionally applies its previous-model hysteresis/stickiness
+- `/router resets [refresh]`: cached provider schedule view, or explicit bounded read-only refresh. Details and the free-reset capability boundary are below.
+- `/router [status|refresh|reset]`: cached-only fresh-dispatch forecast, explicit refresh, or clear all LOCAL confirmed blocks. `reset` does not reset provider quota, redeem a grant, or modify usage counters. Status explains each eligible candidate's score and limiting window, unlimited quota, or fallback reason, plus ineligible entries. Status also lists the last five routing decisions of the current session (of the process, on a core without request-owned routing). The forecast uses chain-order ties without a session incumbent, like admission; an existing balanced conversation additionally applies its previous-model hysteresis/stickiness
 - `pi.events` RPC with the pi-subagents envelope (`{ requestId, ... }`, reply on `<channel>:reply:<requestId>` as `{ success, data | error }`):
   - `router:rpc:admit` `{ model }` -> `{ ok, resolvedModel?, resetAt?, wait? }` (`wait`, only when refused: the caller may park until `resetAt`, see `exhaustionPolicy`; a physical model uses the default `wait` policy). Unknown models are admitted. A `router/*` profile is refused only when a quota block leaves no entry eligible; a chain unusable for config or credential reasons is admitted so the child reports the real cause. Before the first `session_start`, everything is admitted
   - `router:rpc:usage` `{ refresh?: boolean }` -> `{ snapshots, blocks }`. Omitted refresh is cached-only. `refresh: true` reads both collected providers through the ordinary five-minute cache, shared in-flight requests, endpoint timeout and failure backoff; it is not a forced refresh. Before session start it remains cached-only. The personal TUI footer uses this RPC once a minute to show provider-wide remaining quota for both subscriptions, independent of the selected model
@@ -141,6 +142,83 @@ Core owns OAuth acquisition, refresh and persistence. The router bounds its wait
 lookup to 10 seconds, then reports a sanitized error and backs off; it cannot cancel core's lookup.
 The subsequent usage HTTP request has its own 10-second timeout. No token or response body appears
 in usage errors. These bounds do not prove live OAuth refresh or revocation behavior.
+
+## Reset schedules and free Codex resets
+
+`/router resets` opens cached schedules without a network read. Each provider shows last checked
+local date/time, IANA timezone, UTC offset and UTC instant. Windows retain last-known usage,
+provider/family applicability, reported versus assumed duration and scheduled reset with relative
+time. Expired snapshots stay visibly stale. A passed reset says **needs verification**, never
+fabricated replenishment. Missing schedules, unavailable credentials and request failures stay
+unknown/unavailable/error, not zero usage. Snapshot freshness does not verify an elapsed reset.
+
+In the native Pi screen, `j`/`k`, arrows and Page Up/Down scroll wrapped text; `q`/Escape closes.
+`r` explicitly refreshes usage, with Escape cancelling that caller's wait. Shared reads may still
+complete into the cache. `/router resets refresh` also works in non-TUI modes, which emit a
+non-triggering transcript message rather than opening a custom screen. Refresh uses the existing
+per-provider once/minute manual allowance, shared in-flight reads, 10s credential/10s HTTP deadlines
+and failure backoff. Closing the cached screen does not consume the refresh allowance.
+
+Scheduled replenishment is not a banked grant, paid instant reset, extra usage billing, or the
+local block-clear command. Offer discovery and free redemption are **unavailable in Pi (not
+integrated)**. Balance, eligibility, expiry and history are unknown, NOT verified zero/ineligible.
+Usage credit balances are not free reset grants. No provider mutation or paid call is implemented.
+
+Official handoff: in Codex CLI, `/usage` -> **Redeem reset**. If absent, use desktop
+**Settings > Usage & billing** or web **Usage settings**. Verify account/workspace, covered
+allowances and expiry there before confirming a FREE banked reset. **Buy an instant reset** is a
+separate paid flow, excluded here. If completion is uncertain, inspect Usage/history before trying
+again; do not spend another grant to test success. Then refresh schedules in Pi. No reset action
+here wakes parked work, resumes goals/loops, clears confirmed blocks or replays side effects.
+
+### Provider contract evidence and staged design
+
+Research checked 2026-11-12, without authenticated requests, CLI execution, scraping or mutations:
+
+- The official [reset guide](https://help.openai.com/en/articles/20001498-how-resets-work-in-codex)
+  documents discretionary free banked grants, grant-specific expiry, covered main allowances,
+  eligibility, the CLI handoff and 30-day banked history. Product UI alone is not API evidence.
+- OpenAI Codex release `rust-v0.167.2`, published 2026-11-11, resolves through annotated tag
+  `08a3b12b3298577534a28b62ed976acf8de66eda` to commit
+  `ce21072c90d32c40af7a55b60b2fb35c84a43a6a`. Its first-party protocol
+  [source](https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/app-server-protocol/src/protocol/common.rs)
+  declares `account/rateLimits/read` and `account/rateLimitResetCredit/consume` without an
+  experimental method annotation. The version-pinned
+  [processor](https://github.com/openai/codex/blob/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/app-server/src/request_processors/account_processor/rate_limit_resets.rs)
+  requires Codex-backed authentication, a nonempty idempotency key and an optional nonempty grant ID.
+- Crucially, the public [app-server docs](https://developers.openai.com/codex/app-server/),
+  sections **Rate limits (ChatGPT)** and **Earned rate-limit resets (ChatGPT)**, independently
+  document this JSON-RPC contract. This is a supported first-party client surface, not permission
+  to automate its private backend. `rateLimitResetCredits: null` means unknown; `credits: null`
+  means count-only; a fetched empty array is distinct. `availableCount` is authoritative because
+  details can be capped. Detail rows report ID, reset type, status, grant/expiry times and optional
+  title/description, not necessarily full history or quota applicability.
+- The documented consume call uses one UUID per logical attempt, reused only for that attempt.
+  `reset` and `alreadyRedeemed` are success; `nothingToReset` and `noCredit` are distinct refusals.
+  Refresh `account/rateLimits/read` afterward; never derive new windows from the consume response.
+- No standalone noninteractive `codex reset` command was verified. No direct provider HTTP
+  listing/redemption contract was established. Anthropic
+  [extra usage](https://support.claude.com/en/articles/12429409-extra-usage-for-paid-claude-plans)
+  is paid consumption, not a free reset. Paid weekly resets are a
+  [separate product](https://help.openai.com/en/articles/20001507-paid-weekly-work-and-codex-rate-limit-resets).
+
+Stage 1 ships the router-owned schedule interpreter and native view over existing snapshots,
+without SessionKit, new collectors or admission/recovery changes. The supported Codex app-server
+contract is recorded, not falsely labelled unsupported. Its **Pi integration is not implemented**:
+Pi's OAuth usage collector is not a Codex account/session transport, and assuming the user's
+separate CLI account matches Pi would be unsafe. The official interactive handoff remains usable.
+
+Stage 2 must own a version-checked first-party app-server adapter and explicitly bind the account
+context without exposing identifiers. Use reported offers only; missing fields stay unknown.
+Confirmation must show FREE grant consumption, covered quota and expiry after revalidating
+eligibility. Serialize/dedupe attempts with a durable logical-attempt UUID and supported idempotency.
+Timeout, cancellation after dispatch, lost completion and reload must persist an uncertain outcome,
+reconcile before retry, and never automatically replay a mutation. Separate verified redemption
+success from a later refresh failure. Invalidate only affected usage caches and reconcile blocks
+from authoritative evidence, not local counter changes. Preserve normal parked-work re-admission
+and explicit goal/loop resume. This stage needs synthetic zero/expired/ineligible/permission,
+concurrency, uncertain-outcome/reload and success-then-refresh-failure tests before enabling actions.
+Paid purchase, extra-usage enablement and automatic redemption remain excluded in both stages.
 
 Development:
 
