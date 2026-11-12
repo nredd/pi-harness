@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test, vi } from "vitest";
-import { convert, main, sources, validateProfile } from "../scripts/swift-coverage.mjs";
+import { convert, main, sources, testSources, validateProfile } from "../scripts/swift-coverage.mjs";
 
 const root = "/fixture";
 function fixture(packageRoot = root) {
@@ -158,8 +158,7 @@ test("Swift producer refuses absent, empty, duplicate profiles and tool failure"
 		const packageRoot = mkdtempSync(path.join(os.tmpdir(), "cu-swift-producer-"));
 		mkdirSync(path.join(packageRoot, "native/macos"), { recursive: true });
 		for (const source of sources) writeFileSync(path.join(packageRoot, source), "fixture\n");
-		writeFileSync(path.join(packageRoot, "native/macos/headless_tests.swift"), "fixture");
-		writeFileSync(path.join(packageRoot, "native/macos/request_framing_tests.swift"), "fixture");
+		for (const source of testSources) writeFileSync(path.join(packageRoot, source), "fixture");
 		writeFileSync(path.join(packageRoot, "native/macos/README.md"), "fixture");
 		if (mode === "inventory") writeFileSync(path.join(packageRoot, "native/macos/new.swift"), "fixture");
 		let moduleName;
@@ -175,7 +174,7 @@ test("Swift producer refuses absent, empty, duplicate profiles and tool failure"
 				if (args.includes("--version")) return "Swift fixture";
 				assert.ok(args.includes("-profile-coverage-mapping"));
 				assert.ok(args.includes(path.join(packageRoot, "native/macos/helper_entry.swift")));
-				assert.ok(args.includes(path.join(packageRoot, "native/macos/request_framing_tests.swift")));
+				for (const source of testSources) assert.ok(args.includes(path.join(packageRoot, source)));
 				moduleName = args[args.indexOf("-module-name") + 1];
 				writeFileSync(path.join(dir, "headless-tests"), "binary");
 				return "";
