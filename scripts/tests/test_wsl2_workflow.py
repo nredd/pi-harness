@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import os
 import re
+import runpy
 import shlex
 import shutil
 import subprocess
+import sys
 import textwrap
 from enum import StrEnum
 from pathlib import Path
@@ -736,6 +738,12 @@ class DnsToolMode(StrEnum):
     SYSTEM_CLASSIFICATION = "system-classification"
 
 
+def test_dns_timeout_fixture_is_import_safe() -> None:
+    """Import the timeout fixture without starting a subprocess."""
+    namespace = runpy.run_path(str(ROOT / "scripts/tests/fixtures/wsl_timeout.py"))
+    assert callable(namespace["main"])
+
+
 def dns_failure_stubs(commands: Path, tools: DnsToolMode, log: Path) -> dict[str, str]:
     """Build isolated DNS failure tools with real timeout and shell processes.
 
@@ -746,13 +754,12 @@ def dns_failure_stubs(commands: Path, tools: DnsToolMode, log: Path) -> dict[str
     Returns:
         dict[str, str]: Fixture bodies; supporting real tools are symlinked separately.
     """
-    timeout = shutil.which(DnsToolMode.TIMEOUT)
-    assert timeout is not None, "GNU timeout is required for the diagnostic failure fixture"
+    timeout_fixture = ROOT / "scripts/tests/fixtures/wsl_timeout.py"
     stubs: dict[str, str] = {}
     stubs[DnsToolMode.TIMEOUT] = textwrap.dedent(
         f"""\
         #!/bin/sh
-        exec {shlex.quote(timeout)} "$@"
+        exec {shlex.quote(sys.executable)} {shlex.quote(str(timeout_fixture))} "$@"
         """
     )
     stubs["apt-get"] = textwrap.dedent(
