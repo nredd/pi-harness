@@ -8,7 +8,7 @@ import {
 	createLsTool,
 	type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage, type Harness } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage, fauxToolCall, type Harness } from "@earendil-works/pi-coding-agent/testing";
 import { createInteractiveHarness, type InteractiveHarness } from "@earendil-works/pi-coding-agent/testing/interactive";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, expect, it } from "vitest";
@@ -242,4 +242,91 @@ it("all real stack entries settle into one expandable row", async () => {
 			`${entry.key}\n${collapsed.rows.join("\n")}`,
 		).toBe(false);
 	}
+});
+
+/** Native settings UI, deliberately failing until the selected released core contains nredd/pi#30. */
+async function timestamps(enabled: boolean): Promise<void> {
+	host.input("/settings");
+	host.input("\r");
+	await host.settle();
+	host.input("Show timestamps");
+	await host.settle();
+	const row = host.viewport().find((line) => /Show timestamps\s+(true|false)/.test(line));
+	expect(row, "Requires a released core containing nredd/pi#30; do not bypass the core identity gate").toBeDefined();
+	if (!row?.includes(String(enabled))) {
+		host.input("\r");
+		await host.settle();
+	}
+	host.input("\x1b");
+	await host.settle();
+}
+
+// nredd/pi#30: real todo and subagent renderers must share the native timestamp seam.
+it.each([
+	[80, 24],
+	[120, 40],
+])("recorded timestamps preserve real extension rows at %ix%i", async (columns, rows) => {
+	stack = await GoalStack.create();
+	const [child] = stack.registerPhysical([{ provider: "kid", id: "child" }]);
+	if (!child) throw new Error("Missing child provider");
+	const h = await start(columns, rows, [
+		await stack.subagents(),
+		stack.router([{ provider: "kid", id: "child" }]),
+		await loadFork("rpiv-todo"),
+	]);
+	const model = child.getModel();
+	h.session.modelRuntime.registerProvider(model.provider, {
+		baseUrl: model.baseUrl,
+		apiKey: "faux",
+		api: child.api,
+		models: child.models,
+	});
+	child.setResponses([fauxAssistantMessage("CHILD TIMESTAMP PROOF")]);
+	await timestamps(true);
+	h.setResponses([
+		fauxAssistantMessage([fauxToolCall("todo", { action: "create", subject: "Timestamped task" })], {
+			timestamp: Date.parse("2000-06-01T12:00:00Z"),
+			stopReason: "toolUse",
+		}),
+		fauxAssistantMessage(
+			[
+				fauxToolCall("Agent", {
+					subagent_type: "general-purpose",
+					description: "timestamp child",
+					prompt: "work",
+					model: "kid/child",
+					run_in_background: false,
+				}),
+			],
+			{ timestamp: Date.parse("2001-06-01T12:00:00Z"), stopReason: "toolUse" },
+		),
+		fauxAssistantMessage(FINAL, { timestamp: Date.parse("2002-06-01T12:00:00Z") }),
+	]);
+	await run(h);
+	const labelRows = () =>
+		host.viewport().filter((line) => /^┄ 200[012]-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{2}:\d{2}┄/.test(line));
+	expect(labelRows(), host.viewport().join("\n")).toHaveLength(3);
+	for (const year of [2000, 2001, 2002])
+		expect(labelRows().filter((line) => line.includes(String(year)))).toHaveLength(1);
+	const agentRow = () => host.viewport().findIndex((line) => /^▸ .*timestamp child/.test(line));
+	expect(agentRow(), host.viewport().join("\n")).toBeGreaterThan(0);
+	await click(agentRow());
+	expect(host.viewport().some((line) => /^▾ .*timestamp child/.test(line))).toBe(true);
+	await timestamps(false);
+	expect(labelRows()).toHaveLength(0);
+	expect(host.viewport().some((line) => /^▾ .*timestamp child/.test(line))).toBe(true);
+	await timestamps(true);
+	expect(host.viewport().some((line) => /^▾ .*timestamp child/.test(line))).toBe(true);
+	host.input("\x0f");
+	await host.settle();
+	host.input("\x0f");
+	await host.settle();
+	host.input("/reload");
+	host.input("\r");
+	await host.settle();
+	expect(labelRows(), host.viewport().join("\n")).toHaveLength(3);
+	expect(h.session.getLastAssistantText()).toBe(FINAL);
+	host.resize(40, rows);
+	await host.settle();
+	expect(labelRows()).toHaveLength(3);
 });
