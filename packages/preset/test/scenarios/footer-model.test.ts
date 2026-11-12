@@ -206,6 +206,137 @@ it("clears the previous physical label while a tool continuation routes to anoth
 	}
 });
 
+it.each([
+	["virtual to virtual", false, false, "stop", false],
+	["direct to virtual", true, false, "stop", false],
+	["virtual away and back", false, true, "stop", false],
+	["virtual through direct and back", false, true, "stop", true],
+	["cancelled old response", false, false, "aborted", false],
+	["tool continuation under new selection", false, false, "toolUse", false],
+] as const)(
+	"does not attribute a previous selection's late response: %s",
+	async (name, direct, bounce, stopReason, viaDirect) => {
+		const entered = deferred<void>();
+		const release = deferred<void>();
+		const ended = deferred<void>();
+		const finish = deferred<void>();
+		let held = false;
+		let heldEnd = false;
+		const routes: ExtensionFactory = (pi) => {
+			for (const [id, physical] of [
+				["deep", "alpha"],
+				["fast", "beta"],
+			]) {
+				if (!id || !physical) throw new Error("Invalid fixture pair");
+				pi.registerVirtualModel({
+					provider: "router",
+					id,
+					name: id,
+					thinkingLevels: ["medium"],
+					route: (_request, ctx) => ({ model: model(ctx, "faux", physical), thinkingLevel: "low" }),
+				});
+			}
+			pi.registerTool({
+				name: "old_request_tool",
+				label: "Old request tool",
+				description: "Complete an offline tool call",
+				parameters: Type.Object({}),
+				execute: async () => ({ content: [{ type: "text", text: "done" }], details: undefined }),
+			});
+			pi.on("message_update", async () => {
+				if (!held) {
+					held = true;
+					entered.resolve();
+					await release.promise;
+				}
+			});
+			pi.on("message_end", async (event) => {
+				if (event.message.role === "assistant" && !heldEnd) {
+					heldEnd = true;
+					ended.resolve();
+					await finish.promise;
+				}
+			});
+		};
+		fixture = new FooterFixture();
+		const options = {
+			columns: 240,
+			models: [
+				{ id: "alpha", reasoning: true },
+				{ id: "beta", reasoning: true },
+			],
+			useModelRuntimeStream: true,
+			extensionFactories: [routes, ...(direct ? [] : [selectProfile("deep")])],
+		};
+		let host = await fixture.start(options);
+		host.harness.setResponses([
+			fauxAssistantMessage(stopReason === "toolUse" ? fauxToolCall("old_request_tool", {}) : "old selection response", {
+				stopReason,
+				errorMessage: stopReason === "aborted" ? "fixture cancellation" : undefined,
+			}),
+			fauxAssistantMessage("continued under new selection"),
+		]);
+		const turn = host.harness.session.prompt("old request");
+		try {
+			await entered.promise;
+			const fast = host.harness.session.modelRuntime.getModel("router", "fast");
+			const deep = host.harness.session.modelRuntime.getModel("router", "deep");
+			if (!fast || !deep) throw new Error("Missing fixture profile");
+			await host.harness.session.setModel(viaDirect ? host.harness.getModel() : fast);
+			if (bounce) await host.harness.session.setModel(deep);
+			await host.settle();
+			expect(stats(host)).not.toContain("->");
+			release.resolve();
+			await ended.promise;
+			await host.settle();
+			// The old final event has reached the footer, but has not yet been persisted.
+			expect(stats(host)).toContain("(unresolved)");
+			expect(stats(host)).not.toContain("->");
+			finish.resolve();
+			await turn;
+			await host.settle();
+			const expected = stopReason === "toolUse" ? "-> (faux) beta • low" : "(unresolved)";
+			expect(stats(host)).toContain(expected);
+			if (stopReason !== "toolUse") expect(stats(host)).not.toContain("->");
+			// Rebuild from persisted history, not an in-memory rejection of the old stream.
+			host.input("/reload");
+			host.input("\r");
+			await host.settle();
+			expect(stats(host)).toContain(expected);
+			if (stopReason !== "toolUse") expect(stats(host)).not.toContain("->");
+			if (name === "virtual to virtual") {
+				const file = host.harness.sessionManager.getSessionFile();
+				if (!file) throw new Error("Missing persisted race fixture");
+				await host.dispose();
+				const manager = SessionManager.open(file);
+				host = await fixture.start({
+					...options,
+					extensionFactories: [routes],
+					sessionManager: manager,
+					sessionStartEvent: { type: "session_start", reason: "resume" },
+				});
+				const restored = host.harness.session.modelRuntime.getModel("router", "fast");
+				if (!restored) throw new Error("Missing restored race selection");
+				host.harness.session.state.model = restored;
+				host.harness.session.state.thinkingLevel = "medium";
+				host.harness.session.state.messages = manager.buildSessionContext().messages;
+				host.resize(241, 40);
+				await host.settle();
+				expect(stats(host)).toContain("(unresolved)");
+				expect(stats(host)).not.toContain("->");
+			}
+			host.harness.setResponses([fauxAssistantMessage("new selection response")]);
+			await host.harness.session.prompt("new request");
+			await host.settle();
+			expect(stats(host)).toContain(`-> (faux) ${bounce ? "alpha" : "beta"} • low`);
+		} finally {
+			release.resolve();
+			finish.resolve();
+			await turn;
+		}
+	},
+);
+
 it("restores only the resumed branch's physical response and clears a cancelled route", async () => {
 	const entered = deferred<void>();
 	const release = deferred<void>();

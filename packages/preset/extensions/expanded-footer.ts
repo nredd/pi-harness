@@ -72,13 +72,27 @@ function addUsage(
 	totals.cost += usage.cost.total;
 }
 
-/** Latest request on this selection/branch, including physical errors, never a predicted route. */
+/** Request boundaries contain no identity/payload data; ordering establishes selection ownership. */
+const REQUEST_ENTRY = "preset:footer-request";
+
+/** A selection epoch, not a model name: switching away and back must invalidate old requests. */
+function selectionKey(ctx: ExtensionContext): string | null {
+	for (const entry of ctx.sessionManager.getBranch().slice().reverse()) {
+		if (entry.type === "model_change") return entry.id;
+	}
+	return null;
+}
+
+/** Latest request owned by this selection/branch, never a late reply from an older selection. */
 function routedResponse(ctx: ExtensionContext, live: MessageStartEvent["message"] | undefined) {
 	if (live?.role === "assistant") return live;
+	let response: Extract<MessageStartEvent["message"], { role: "assistant" }> | undefined;
 	for (const entry of ctx.sessionManager.getBranch().slice().reverse()) {
-		// Do not attribute the previous selection's response to a newly selected profile.
 		if (entry.type === "model_change") return undefined;
-		if (entry.type === "message" && entry.message.role === "assistant") return entry.message;
+		if (entry.type === "message" && entry.message.role === "assistant" && !response) response = entry.message;
+		// A model change between request start and completion means the response belongs elsewhere.
+		// Unmarked legacy history cannot prove ownership, so remains unresolved until a new request.
+		if (entry.type === "custom" && entry.customType === REQUEST_ENTRY) return response;
 	}
 	return undefined;
 }
@@ -121,20 +135,25 @@ export function createExpandedFooter(
 	return (pi: ExtensionAPI) => {
 		let live: MessageStartEvent["message"] | undefined;
 		let running = false;
+		let requestSelection: string | null | undefined;
 		let repaint: (() => void) | undefined;
 		const resetRoute = () => {
 			live = undefined;
 			running = false;
+			requestSelection = undefined;
 			repaint?.();
 		};
 		pi.on("model_select", resetRoute);
-		pi.on("turn_start", () => {
+		pi.on("turn_start", (_event, ctx) => {
+			if (ctx.mode !== "tui") return;
 			live = undefined;
 			running = true;
+			requestSelection = selectionKey(ctx);
+			pi.appendEntry(REQUEST_ENTRY);
 			repaint?.();
 		});
-		const observeMessage = (event: Pick<MessageStartEvent, "message">) => {
-			if (event.message.role !== "assistant") return;
+		const observeMessage = (event: Pick<MessageStartEvent, "message">, ctx: ExtensionContext) => {
+			if (event.message.role !== "assistant" || requestSelection !== selectionKey(ctx)) return;
 			live = event.message;
 			repaint?.();
 		};
@@ -301,7 +320,9 @@ export function createExpandedFooter(
 						if (virtual) {
 							// Assistant metadata is the same physical identity used by core and subagent rows.
 							// The selected thinking level above is an input, not the routed reasoning budget.
-							const response = running && !live ? undefined : routedResponse(ctx, live);
+							const ownsRequest = requestSelection === selectionKey(ctx);
+							const pending = running && ownsRequest;
+							const response = pending && !live ? undefined : routedResponse(ctx, ownsRequest ? live : undefined);
 							if (response && response.api !== "pi-virtual") {
 								const level = response.thinkingLevel === undefined ? "" : ` • ${response.thinkingLevel}`;
 								const status =
@@ -309,7 +330,7 @@ export function createExpandedFooter(
 										? ` (${response.stopReason})`
 										: "";
 								rightSideBase += ` -> (${response.provider}) ${response.model}${level}${status}`;
-							} else rightSideBase += running ? " (routing)" : " (unresolved)";
+							} else rightSideBase += pending ? " (routing)" : " (unresolved)";
 						}
 
 						function buildLine(tier: "full" | "compact"): string {

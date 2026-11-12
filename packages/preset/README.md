@@ -54,8 +54,11 @@ local themes, skills, agents and their configuration. Restart sessions after act
   it, never copied from the selected level. Pending requests show `(routing)` until physical
   metadata arrives; idle selections with no attributed request show `(unresolved)`. Physical errors
   and cancellation show `(error)` / `(aborted)` beside the attempted model. A routing failure never
-  reuses an older physical label. Model changes reset attribution; reload/resume reconstruct it
-  from the current branch, stopping at its latest model change. Defaults, `/model`, tier bindings
+  reuses an older physical label. Each TUI `turn_start` appends a non-context
+  `preset:footer-request` entry with no identity or payload data. A response is attributed only
+  when that boundary follows the current branch's latest model change; an older request finishing
+  after a selection switch is ignored, even after switching away/back, reload or resume. Unmarked
+  historical responses remain unresolved until a new request establishes ownership. Defaults, `/model`, tier bindings
   and quota admission/fallback remain unchanged: the virtual profile stays selected.
 - Cost is shown for nonzero totals or subscriptions (OAuth or `kimi-coding`). The hit rate is
   from the latest prompt-bearing assistant on the current branch, not cumulative session totals.
