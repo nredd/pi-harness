@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 from pathlib import Path
 from typing import Any
@@ -19,7 +20,7 @@ from harness import startup
 
 # Pi emits timings before UI; this protocol stub is NOT native-Pi readiness proof.
 # Native dispatch coverage lives in scenarios/test_startup.py.
-FAKE_PI = """\
+FAKE_PI = textwrap.dedent("""\
 import os,sys,time
 from pathlib import Path
 sys.stderr.write('--- Startup Timings: main ---\\n  TOTAL: 7ms\\n'
@@ -37,7 +38,7 @@ line = sys.stdin.readline().replace('\\x1b', '').strip()
 if mode != 'missing' and line == f'/harness-startup-ready-{nonce} {nonce}':
     Path(os.environ['PI_STARTUP_ACK']).write_text(nonce if mode == 'valid' else 'wrong-nonce')
 time.sleep(30)
-"""
+""")
 TIMING_BLOCK = """\
 --- Startup Timings: main ---
   parseArgs: 1ms
@@ -162,7 +163,14 @@ REPORT: dict[str, Any] = {
 
 
 def baseline(value: float) -> dict[str, Any]:
-    """Build a compatible command-dispatch baseline at a fixed milestone value."""
+    """Build a compatible command-dispatch baseline at a fixed milestone value.
+
+    Parameters:
+        value (float): all milestone medians, in seconds.
+
+    Returns:
+        dict[str, Any]: method-tagged fixture baseline.
+    """
     return {
         "readiness_method": startup.READINESS_METHOD,
         "medians": {"a": dict.fromkeys(startup.MILESTONES, value)},
@@ -208,13 +216,26 @@ def test_module_entrypoint_exits_with_main_status(tmp_path: Path, monkeypatch: p
 def test_missing_or_malformed_ack_cleans_process_and_scratch(
     tmp_path: Path, mode: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Echo/early footer, absent handler and wrong nonce never satisfy dispatch readiness."""
+    """Check readiness verdicts and cleanup independently of screen echo.
+
+    Parameters:
+        tmp_path (Path): private PID marker directory.
+        mode (str): stub registration/acknowledgement behavior.
+        monkeypatch (pytest.MonkeyPatch): tracks the sampler's scratch allocation.
+    """
     pid_file = tmp_path / "pid"
     created: list[Path] = []
     original = tempfile.mkdtemp
 
     def tracked_mkdtemp(**kwargs: Any) -> str:
-        """Record the real short socket directory without extending its path."""
+        """Record the real short socket directory without extending its path.
+
+        Parameters:
+            **kwargs (Any): original `mkdtemp` arguments.
+
+        Returns:
+            str: allocated socket directory.
+        """
         directory = original(**kwargs)
         created.append(Path(directory))
         return directory
@@ -250,20 +271,28 @@ def test_cooked_echo_is_not_ready() -> None:
 
 @pytest.mark.parametrize("timeout", [0.0, -1.0, float("nan"), float("inf")])
 def test_invalid_timeout_is_rejected(timeout: float) -> None:
-    """Reject invalid timeouts before allocating a pane."""
+    """Reject invalid timeouts before allocating a pane.
+
+    Parameters:
+        timeout (float): invalid deadline interval.
+    """
     with pytest.raises(ValueError, match="finite and positive"):
         startup.sample([], env={}, timeout_s=timeout)
 
 
 def test_readiness_handler_rejects_wrong_nonce(tmp_path: Path) -> None:
-    """Exercise the exact shipped JS handler; only a matching argument writes an ack."""
+    """Exercise the exact shipped JS handler; only a matching argument writes an ack.
+
+    Parameters:
+        tmp_path (Path): private extension and acknowledgement directory.
+    """
     node = shutil.which("node")
     assert node is not None
     extension = tmp_path / "ready.mjs"
     extension.write_text(startup.READY_EXTENSION)
     ack = tmp_path / "ack"
     registered = tmp_path / "registered"
-    script = """\
+    script = textwrap.dedent("""\
 import { existsSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 const { default: install } = await import(pathToFileURL(process.argv[1]).href);
@@ -278,7 +307,7 @@ catch (error) { if (error.message !== 'Startup readiness nonce mismatch') throw 
 if (existsSync(process.env.PI_STARTUP_ACK)) throw new Error('Bad nonce acknowledged');
 await handler('token');
 if (readFileSync(process.env.PI_STARTUP_ACK, 'utf8') !== 'token') throw new Error('No ack');
-"""
+""")
     subprocess.run(
         [node, "--input-type=module", "-e", script, str(extension)],
         env={

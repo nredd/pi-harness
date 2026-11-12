@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import textwrap
 from typing import TYPE_CHECKING
 
 import pytest
@@ -29,22 +30,28 @@ HELD = "HELD-MESSAGE-MUST-NOT-LEAK"
 
 
 def test_startup_readiness_native_dispatch_without_network(tmp_path: Path) -> None:
-    """The real CLI dispatches the fixture command without any model or network request."""
+    """The real CLI dispatches the fixture command without any model or network request.
+
+    Parameters:
+        tmp_path (Path): isolated synthetic HOME and network guard directory.
+    """
     box = build_sandbox(tmp_path / "readiness")
     requests = box.root / "requests.jsonl"
     network = box.root / "network"
     guard = box.root / "no-network.mjs"
     guard.write_text(
-        'import net from "node:net";\n'
-        'import http from "node:http";\n'
-        'import https from "node:https";\n'
-        'import { appendFileSync } from "node:fs";\n'
-        'import { syncBuiltinESMExports } from "node:module";\n'
-        'function blocked() { appendFileSync(process.env.NETWORK_LOG, "attempt\\n"); '
-        'throw new Error("Network forbidden in readiness test"); }\n'
-        "globalThis.fetch = blocked; net.Socket.prototype.connect = blocked;\n"
-        "http.request = http.get = https.request = https.get = blocked;\n"
-        "syncBuiltinESMExports();\n"
+        textwrap.dedent(
+            'import net from "node:net";\n'
+            'import http from "node:http";\n'
+            'import https from "node:https";\n'
+            'import { appendFileSync } from "node:fs";\n'
+            'import { syncBuiltinESMExports } from "node:module";\n'
+            'function blocked() { appendFileSync(process.env.NETWORK_LOG, "attempt\\n"); '
+            'throw new Error("Network forbidden in readiness test"); }\n'
+            "globalThis.fetch = blocked; net.Socket.prototype.connect = blocked;\n"
+            "http.request = http.get = https.request = https.get = blocked;\n"
+            "syncBuiltinESMExports();\n"
+        )
     )
     result = sample(
         [*pi_command(), "-e", str(FAUX_EXTENSION), "--model", "faux/main"],

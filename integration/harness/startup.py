@@ -26,6 +26,7 @@ import shutil
 import statistics
 import subprocess
 import tempfile
+import textwrap
 import time
 import uuid
 from dataclasses import asdict, dataclass
@@ -40,7 +41,7 @@ LOGGER = logging.getLogger(__name__)
 SOCKET_ROOT = Path("/tmp")
 SAMPLE_TIMEOUT_S = 60.0
 READINESS_METHOD = "command-dispatch-v1"
-READY_EXTENSION = """\
+READY_EXTENSION = textwrap.dedent("""\
 import { writeFileSync } from "node:fs";
 export default function startupReady(pi) {
     const nonce = process.env.PI_STARTUP_NONCE;
@@ -53,7 +54,7 @@ export default function startupReady(pi) {
     });
     writeFileSync(process.env.PI_STARTUP_REGISTERED, nonce);
 }
-"""
+""")
 # Footer text of the owner's preset; override with `--frame-pattern` for another profile.
 DEFAULT_FRAME_PATTERN = r"\bctx\b"
 MILESTONES = ("first_paint_s", "frame_s", "input_ready_s")
