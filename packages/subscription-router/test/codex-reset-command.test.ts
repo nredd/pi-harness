@@ -117,14 +117,21 @@ it("distinguishes successful redemption from post-success refresh failure and se
 	for (const result of [
 		{ outcome: "alreadyRedeemed", quotaRefreshed: false, offersRefreshed: false },
 		{ outcome: "noCredit", quotaRefreshed: false, offersRefreshed: false },
+		{ outcome: "nothingToReset", quotaRefreshed: false, offersRefreshed: false },
 	]) {
 		const h = fixture(["Use FREE grant 1"], true);
 		h.ctx.signal = new AbortController().signal;
 		h.service.redeem.mockResolvedValue(result as never);
 		await showCodexResets(h.pi, h.ctx, h.service);
-		expect(h.notify.mock.calls.at(-1)?.[0]).toContain(
-			result.outcome === "noCredit" ? "No grant consumed" : "Do NOT redeem again",
-		);
+		const message = h.notify.mock.calls.at(-1)?.[0];
+		if (result.outcome === "alreadyRedeemed") expect(message).toContain("Do NOT redeem again");
+		else {
+			expect(message).toContain(`Codex refused this request (${result.outcome})`);
+			expect(message).toContain("UNKNOWN");
+			expect(message).toContain("Reconcile SAME");
+			expect(message).toContain("Do NOT consume another grant");
+			expect(message).not.toContain("No grant consumed");
+		}
 	}
 });
 it("only reconciles the same unresolved grant/key after another explicit confirmation", async () => {

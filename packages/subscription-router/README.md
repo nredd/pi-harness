@@ -217,6 +217,8 @@ validation, is cancelled before its own dispatch, encounters an error/missing me
 Another process may already be reconciling that published claim. A process-local observation cannot
 prove global non-dispatch. `noCredit` and `nothingToReset` remain distinct reported refusals, but
 also retain the barrier: neither fences another same-key request that may still be in flight.
+The command reports that refusal separately from the UNKNOWN global outcome and requires
+**Reconcile SAME**, never claiming that no grant was consumed.
 Timeout, lost completion or reload likewise leaves that original attempt unresolved, blocking new grants. Inspection never replays it. A separate **Reconcile SAME** action
 requires another explicit confirmation, reads current offers/account state, and uses the original
 grant and provider idempotency key. It may consume that original FREE grant if the first request

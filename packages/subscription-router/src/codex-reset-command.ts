@@ -120,7 +120,7 @@ export async function showCodexResets(
 			ctx.ui.notify(
 				result.outcome === "reset" || result.outcome === "alreadyRedeemed"
 					? `FREE reset confirmed (${result.outcome}). ${result.quotaRefreshed ? "Authoritative quota refreshed." : "Quota refresh FAILED or was cancelled; redemption remains confirmed. Do NOT redeem again."} ${result.offersRefreshed ? "Banked offers refreshed." : "Banked offer refresh failed; inspect before another grant."} Parked work/goals/loops are not resumed.`
-					: `No grant consumed: ${result.outcome}.`,
+					: `Codex refused this request (${result.outcome}). The published attempt remains unresolved; another same-key request may have consumed the grant. Its global outcome is UNKNOWN. Inspect, then explicitly Reconcile SAME. Do NOT consume another grant to test success. If reconciliation keeps refusing, use the official Usage UI.`,
 				"info",
 			);
 			return;
