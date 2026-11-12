@@ -39,7 +39,6 @@
     { "path": "packages/computer-use/scripts/check-sync-ledger.mjs", "reason": "Non-shipped sync provenance/disposition validator consumed by negative-control checks." },
     { "path": "packages/computer-use/scripts/check-sync-reverts.mjs", "reason": "Non-shipped disposable patch-drop controls prove carried behaviors remain necessary." },
     { "path": "packages/computer-use/scripts/check-upstream-sync.mjs", "reason": "Non-shipped pinned-upstream source comparison rejects undeclared drift." },
-    { "path": "packages/computer-use/scripts/check-async.mjs", "reason": "Non-shipped readiness and bounded subprocess helpers used only by verification check harnesses." },
     { "path": "scripts/check-biome-paths.test.mjs", "reason": "Non-shipped regression test exercises real Biome valid/missing-path behavior and preflight rejection; verification only, not a runtime entrypoint." },
     { "path": "scripts/router_contract.test.mjs", "reason": "Non-shipped Vitest suite runs the packed-router contract fixture in process against virtual mocks of its placeholder imports; verification only, not a runtime entrypoint." },
     { "path": "integration/inprocess/verification/home-setup.ts", "reason": "Vitest setup entry that only calls the measured `installHomeGuard` in `home-guard.ts`; Vitest hard-excludes a config's own `setupFiles` from coverage, so no producer can measure it. Never shipped." },
@@ -249,6 +248,24 @@
       "goal_reason": "Owner explicitly excludes computer-use from coverage maintenance; existing platform/native checks remain unchanged. Inventory remains visible, with no coverage claim.",
       "note": "Not measured, tracked: native Swift/Rust and the documentation site have no maintained coverage producer. Its JS/TS runtime source is also measured, with enforced ratchet caps, by `computer-use-vitest` (#347, #645). Shipped setup-helper.mjs, build-native.mjs and src/ JavaScript remain inventoried production source, never verification helpers.",
       "signals": {}
+    },
+    "computer-use-async": {
+      "root": "packages/computer-use",
+      "owned": ["scripts/check-async.mjs"],
+      "exclusions": [],
+      "status": "measured",
+      "goal": "report-only",
+      "goal_reason": "Non-shipped verification tooling has a report-only maintenance goal, independently pinned at zero by its producer (#759).",
+      "note": "Istanbul imports the complete real helper with deterministic boundary mocks and retained real child-process tests. Generated preload source is exercised by subprocess refusal tests, not measured as a separate source file.",
+      "signals": {
+        "primary": {
+          "report": "coverage/async/lcov.info",
+          "enforcement": "report-only",
+          "reason": "Verification-only maintenance goal; the dedicated Vitest producer enforces a per-file zero L/F/B/S pin (#759). Missing or invalid selected-host reports still fail accounting.",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
+          "reporters": ["text", "lcov"]
+        }
+      }
     },
     "computer-use-vitest": {
       "root": "packages/computer-use",
