@@ -774,6 +774,31 @@
 			}
 		},
 		{
+			"id": "pure-module-dead-arm-removal",
+			"purpose": "Delete dead arms in the pure modules instead of testing them: the empty-key guard in the `StateStore` eviction loop (its removal also fixes an empty restored `stateId` stopping eviction, so the store grew unbounded), the missing-entry guard in the output-store eviction loop (a non-empty map always yields a key), the never-rejecting `tail` catches in `ResourceScheduler`, and the unreachable fresh-ref collision loop in `stabilizeRefs`",
+			"files": [
+				"src/output.ts",
+				"src/runtime.ts",
+				"src/view.ts",
+				"test/note-view.test.mjs",
+				"test/runtime-state-output.test.mjs",
+				"test/support/outline-nodes.mjs"
+			],
+			"check": "test/runtime-state-output.test.mjs",
+			"dropControls": [
+				"StateStore evicts past an empty stateId (#703)",
+				"output store evicts the oldest entry past 64 MiB (#703)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "Coverage-driven dead code removal (nredd/pi-harness#703); not filed"
+			},
+			"rows": [
+				"Pure-module dead-arm removal"
+			]
+		},
+		{
 			"id": "query-handler-dead-arm-removal",
 			"purpose": "Coverage-driven deletion in bridge.ts query handlers: the browser `wait_for` guards for a missing resource identity, base snapshot or final observation (a saved browser state always carries them, so `finish` takes the last snapshot and epoch as arguments), the `windowRef` conditional in the observe summary, the `lastSearchOcrEscalatedLookId` once-per-look guard in `performSearchUi` (an escalated look already has `readText.executed`) and its `state.ts` field, and unreachable `resourceKey`/`epoch`/`outline` checks",
 			"rows": [
@@ -1100,6 +1125,7 @@
 		"src/desktop.ts",
 		"src/outline-store.ts",
 		"src/outline.ts",
+		"src/output.ts",
 		"src/platform/index.ts",
 		"src/platform/linux/backend.ts",
 		"src/platform/linux/helper.ts",
@@ -1109,9 +1135,12 @@
 		"src/platform/macos/permissions.ts",
 		"src/platform/types.ts",
 		"src/platform/windows/helper.ts",
+		"src/runtime.ts",
 		"src/state.ts",
+		"src/view.ts",
 		"sync-patches.json",
 		"test/act-outcomes.test.mjs",
+		"test/actions-prepare.test.mjs",
 		"test/app-policy.test.mjs",
 		"test/async.test.mjs",
 		"test/bounded-output.test.mjs",
@@ -1122,8 +1151,11 @@
 		"test/cdp-client.test.mjs",
 		"test/cleanup.test.mjs",
 		"test/commit-messages.test.mjs",
+		"test/config-load.test.mjs",
+		"test/desktop-seam.test.mjs",
 		"test/desktop-tools.test.mjs",
 		"test/docs-generators.test.mjs",
+		"test/extension-entry.test.mjs",
 		"test/fake-cdp.test.mjs",
 		"test/fake-helper.test.mjs",
 		"test/find-params.test.mjs",
@@ -1142,6 +1174,7 @@
 		"test/macos-observe-target.test.mjs",
 		"test/managed-browser-headless.test.mjs",
 		"test/managed-browser-profile.test.mjs",
+		"test/note-view.test.mjs",
 		"test/outline-store-edges.test.mjs",
 		"test/outline-store.test.mjs",
 		"test/outline.test.mjs",
@@ -1150,6 +1183,7 @@
 		"test/platform-linux.test.mjs",
 		"test/platform-windows.test.mjs",
 		"test/runtime-concurrency.test.mjs",
+		"test/runtime-state-output.test.mjs",
 		"test/rust-coverage-errors.test.mjs",
 		"test/rust-coverage.test.mjs",
 		"test/session-lifecycle.test.mjs",
@@ -1158,6 +1192,7 @@
 		"test/support/fake-browser.mjs",
 		"test/support/fake-desktop.mjs",
 		"test/support/fake-helper.mjs",
+		"test/support/outline-nodes.mjs",
 		"test/support/swift-sdk.mjs",
 		"test/swift-sdk.test.mjs",
 		"test/sync-ledger.test.mjs",

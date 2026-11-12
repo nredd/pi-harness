@@ -48,9 +48,7 @@ function storeOutput(value: string): StoredOutput {
 	outputs.set(entry.ref, entry);
 	outputBytes += entry.storedBytes;
 	while (outputBytes > OUTPUT_STORE_MAX_BYTES && outputs.size > 1) {
-		const oldestRef = outputs.keys().next().value as string | undefined;
-		if (!oldestRef) break;
-		const oldest = outputs.get(oldestRef)!;
+		const [oldestRef, oldest] = outputs.entries().next().value!;
 		outputs.delete(oldestRef);
 		outputBytes -= oldest.storedBytes;
 		try { unlinkSync(oldest.filePath); } catch { /* already removed */ }
