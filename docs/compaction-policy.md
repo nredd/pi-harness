@@ -1,11 +1,12 @@
 # Compaction operating targets
 
 Source dependency: merged [nredd/pi#28](https://github.com/nredd/pi/pull/28) at
-`7ace73f14`, followed by navigation #31 and timestamps #32. The coordinated candidate is
-canonical `nredd/v1.3.0` commit `ee059aa4050a221a83dae782f4575b1258e84b45`, not
-pre-squash source `569a2e9219a351d0e109f909392291927dfe1641`. The original harness Gitlink
-was `4d857379f37f83397871a66c522abbe8469a003d`. The intervening unavailable-tools fix is
-landed; unrelated upstream-sync core PR #26 is excluded. Release coordination is tracked in
+`7ace73f14`, followed by navigation #31, timestamps #32, disabled-budget correction #34
+and selection preservation #36. The selected release is `v1.3.0-nredd.11` at canonical
+`640d64bcd4da08231232b5c08acd48b88ee1fd45`; earlier `ee059aa40` and pre-squash
+`569a2e921` were preparation sources only. The original harness Gitlink was
+`4d857379f37f83397871a66c522abbe8469a003d`. The unavailable-tools fix is landed;
+unrelated upstream-sync core PR #26 is excluded. Release coordination is tracked in
 [#774](https://github.com/nredd/pi-harness/issues/774).
 
 Core owns the shared policy used by direct, virtual and child sessions. `targetTokens` defaults
@@ -44,11 +45,11 @@ after its native core gate and authenticated root dependency installation. Probe
 subagents and build-input changes trigger the workflow as well as core Gitlink changes.
 No installed host is replaced.
 
-The owner separately authorized release coordination in #774. Preparation remains draft until
-`v1.3.0-nredd.11` is signed, published and authenticated, and all dependencies, overrides,
-locks and stack selections match it. The exact-release identity gate stays unchanged: this
-untagged candidate cannot pass `make check` against the old selected release. Do not merge the
-Gitlink alone. Preserve #754's child probes and #767's timestamp tests together; the original
-PRs stay open until the coordinated replacement lands. Parent owns pre-tag admission, final
-critics, CI observation, protected merges and the owner-only promotion environment approval.
-Preparation is not publication, promotion or live activation.
+The owner separately authorized release coordination in #774. `v1.3.0-nredd.11` is now
+signed, published and authenticated; this train selects it across all dependencies, overrides,
+locks and stack inputs. The earlier untagged Gitlink/old-host gate failures are historical,
+not current results. The exact-release identity gate stays unchanged; do not merge the Gitlink
+alone. Preserve #754's child probes and #767's timestamp tests together; the originals stay
+open until this coherent replacement lands. Parent owns final critics, CI observation,
+protected merges and the owner-only promotion environment approval. Source probes and npm
+publication do not establish combined-stack admission, promotion or live activation.

@@ -11,11 +11,12 @@ values, so nested child details cannot receive another core timestamp unnoticed.
 Core nredd/pi#32 (issue nredd/pi#30) is merged at
 `ee059aa4050a221a83dae782f4575b1258e84b45`. Authorized release coordination in
 [#774](https://github.com/nredd/pi-harness/issues/774) combines these tests from #767 with
-#754's compaction child verification. The selected `.10` released host still lacks the
-setting, so these tests intentionally fail with an explicit release-prerequisite assertion.
-Do not skip them, add feature-detection fallback, spoof release identity or replace the pinned
-host in committed test configuration. Before admission, the coordinated train must select the
-authenticated release coherently across its Gitlink, dependencies, overrides, locks and stack.
+#754's compaction child verification. This train now selects authenticated
+`v1.3.0-nredd.11` at `640d64bcd4da08231232b5c08acd48b88ee1fd45` coherently across its
+Gitlink, dependencies, overrides, locks and stack. The earlier `.10` host intentionally failed
+the explicit release-prerequisite assertion because it lacked the setting; that preparation
+failure is historical, not the current gate result. Do not skip the assertions, add feature-detection
+fallback, spoof release identity or replace the pinned host in committed test configuration.
 
 Gates from the integration workspace:
 
@@ -28,5 +29,6 @@ node ../../scripts/run-vitest.ts bun transcript.test.ts --maxWorkers=1
 
 `make verify-root-overrides` must continue to verify real released-core identities. A local
 source-candidate developer probe is useful before release but is not this gate, CI evidence,
-or permission to merge this dependent change. Parent release/pin ownership must resolve the
-prerequisite in a separately authorized change, then run the unchanged gates on exact HEAD.
+or permission to merge this dependent change. Publication resolved the release prerequisite;
+the unchanged gates still run on the artifact-backed exact HEAD before parent merge admission.
+Combined verification, promotion and live activation remain separate.
