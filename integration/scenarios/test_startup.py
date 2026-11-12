@@ -9,12 +9,14 @@ from __future__ import annotations
 import json
 import subprocess
 import textwrap
+import uuid
 from typing import TYPE_CHECKING
 
 import pytest
 
 from harness.interactive import launch_tui
 from harness.paths import FAUX_EXTENSION, pi_command
+from harness.runtime_hooks import runtime_hooks
 from harness.sandbox import build_sandbox
 from harness.startup import sample
 from scenarios.test_stack import wait_dead
@@ -38,32 +40,40 @@ def test_startup_readiness_native_dispatch_without_network(tmp_path: Path) -> No
     box = build_sandbox(tmp_path / "readiness")
     requests = box.root / "requests.jsonl"
     network = box.root / "network"
+    loaded = box.root / "guard-loaded"
+    nonce = uuid.uuid4().hex
     guard = box.root / "no-network.mjs"
     guard.write_text(
         textwrap.dedent(
             'import net from "node:net";\n'
             'import http from "node:http";\n'
             'import https from "node:https";\n'
-            'import { appendFileSync } from "node:fs";\n'
+            'import { appendFileSync, writeFileSync } from "node:fs";\n'
             'import { syncBuiltinESMExports } from "node:module";\n'
             'function blocked() { appendFileSync(process.env.NETWORK_LOG, "attempt\\n"); '
             'throw new Error("Network forbidden in readiness test"); }\n'
             "globalThis.fetch = blocked; net.Socket.prototype.connect = blocked;\n"
             "http.request = http.get = https.request = https.get = blocked;\n"
             "syncBuiltinESMExports();\n"
+            "writeFileSync(process.env.GUARD_LOADED, process.env.GUARD_NONCE);\n"
         )
     )
+    env = box.env(
+        {
+            "HARNESS_REQUEST_LOG": str(requests),
+            "NETWORK_LOG": str(network),
+            "GUARD_LOADED": str(loaded),
+            "GUARD_NONCE": nonce,
+        }
+    )
+    env |= runtime_hooks([guard], env=env)
     result = sample(
         [*pi_command(), "-e", str(FAUX_EXTENSION), "--model", "faux/main"],
-        env=box.env(
-            {
-                "HARNESS_REQUEST_LOG": str(requests),
-                "NETWORK_LOG": str(network),
-                "NODE_OPTIONS": f"--import={guard}",
-            }
-        ),
+        env=env,
         frame_pattern=r"\bmain\b",
     )
+    assert loaded.is_file(), "Network guard preload did not acknowledge loading"
+    assert loaded.read_text() == nonce, "Network guard preload acknowledgement nonce mismatch"
     assert 0 < result.first_paint_s <= result.frame_s <= result.input_ready_s
     assert not requests.exists(), "Readiness dispatched a provider request"
     assert not network.exists(), "Startup attempted network access"

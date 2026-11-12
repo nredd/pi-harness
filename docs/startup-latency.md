@@ -14,8 +14,12 @@ Readiness correction (#782):
   unchanged; record any future quiet-runner baseline in a NEW file, never overwrite the history below.
 - Unit tests cover cooked echo, early footer, missing/malformed acknowledgements, nonce rejection,
   timeout and process/scratch teardown. The native faux CLI scenario dispatches the real handler in a
-  synthetic HOME, with a network-denying preload and zero provider requests. It is correctness coverage,
-  not a performance gate. No latency budgets or thresholds changed.
+  synthetic HOME, with a network-denying preload and zero provider requests. The preload uses shared
+  `runtime_hooks` for both Node and compiled Bun, preserving supplied runtime flags. A per-run loaded
+  acknowledgement is required before absence of network/provider logs can count as evidence; missing,
+  malformed or failed preloads fail closed. Node and a small actual compiled Bun fixture exercise guard
+  admission separately from the native faux dispatch. This is correctness coverage, not a performance
+  gate. No latency budgets or thresholds changed.
 - #577 remains OPEN: phase attribution, exact profile-equivalent identities and five first/naturally-warm
   samples per fresh/resumed cell still need controlled measurement. No new latency regression is claimed.
 
