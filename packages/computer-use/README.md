@@ -61,6 +61,15 @@ their platform or opt-in as skipped; this package remains outside the coverage g
 starts, restarts and stops its own helper instance on the test home's socket, never the shared daemon.
 Owner-only smoke commands and rollback are recorded in `UPSTREAM.md`.
 
+`npm run coverage:swift` links all shipped Swift sources with the headless assertions.
+`native/macos/ref_look_tests.swift` checks real `AXRefStore` ownership and snapshots plus
+`LookNode.payload()` keys, flags, rectangles and recursive child order. It only constructs
+self-process AX handles and synthetic nodes, never queries AX attributes. The sync-revert
+controls mutate destination ownership, optional flags and child order. Unexecuted live code
+stays in the denominator; this slice does not claim whole-file coverage or change runtime behavior.
+Local measurements and the remaining unequal-window region are recorded
+[here](./docs/swift-ref-look-coverage.md).
+
 `npm run test:linux` uses disposable protocol children, not a native desktop helper. Its closed-stdin
 fixture initializes stdout before closing fd `0` (lazy pipe initialization aborts Node 26.12 on Darwin),
 acknowledges verified closure while alive, and requires real `EPIPE` rejection plus child cleanup.

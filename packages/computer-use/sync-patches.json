@@ -1070,6 +1070,32 @@
 			}
 		},
 		{
+			"id": "swift-ownership-look-coverage",
+			"purpose": "Assert real AXRefStore ownership and LookNode payload serialization with self-process handles and synthetic nodes, without AX queries or runtime changes",
+			"rows": [
+				"Swift ref/look coverage"
+			],
+			"files": [
+				"docs/swift-ref-look-coverage.md",
+				"native/macos/headless_tests.swift",
+				"native/macos/ref_look_tests.swift",
+				"scripts/check-sync-reverts.mjs",
+				"scripts/swift-coverage.mjs",
+				"test/swift-coverage.test.mjs"
+			],
+			"check": "test/macos-native-pure.test.mjs",
+			"dropControls": [
+				"LookNode preserves child order (#769)",
+				"LookNode serializes optional flags (#769)",
+				"look transfer preserves destination refs (#769)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#769; verification-only tests, not filed upstream"
+			}
+		},
+		{
 			"id": "swift-real-source-coverage",
 			"purpose": "Measure all shipped Swift source through a real-source headless entry without dropping unexecuted startup or UI code",
 			"rows": [
@@ -1213,10 +1239,12 @@
 		"docs/native-request-framing.md",
 		"docs/rust-coverage.md",
 		"docs/src/components/brand.tsx",
+		"docs/swift-ref-look-coverage.md",
 		"extensions/computer-use.ts",
 		"native/macos/bridge.swift",
 		"native/macos/headless_tests.swift",
 		"native/macos/helper_entry.swift",
+		"native/macos/ref_look_tests.swift",
 		"native/macos/request_framing_tests.swift",
 		"package-lock.json",
 		"package.json",
