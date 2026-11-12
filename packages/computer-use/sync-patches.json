@@ -193,6 +193,32 @@
 			}
 		},
 		{
+			"id": "bridge-browser-act-dead-arm-removal",
+			"purpose": "Delete bridge.ts and actions.ts arms the browser act, desktop act and managed-browser paths can never reach instead of testing them: the never-prepared wait action, the browser transaction guards and epoch fallbacks that a hydrated browser state always satisfies, the ref ownership re-check (the target comes from the same state), the unreachable CDP port allocation failure and the note fallback overwritten by the capture, the root-delta fallback after the closed-root probe; a padded stateId now resolves browser refs like every other tool; the testing seam exposes managedBrowserExecutableCandidates; browser keypress with no keys is rejected up front like desktop",
+			"files": [
+				"src/actions.ts",
+				"src/bridge.ts",
+				"test/bridge-browser-act.test.mjs",
+				"test/bridge-desktop-act.test.mjs",
+				"test/bridge-reconstruct-state.test.mjs",
+				"test/managed-browser-launch.test.mjs",
+				"test/managed-browser-observe.test.mjs",
+				"test/managed-browser-stuck.test.mjs"
+			],
+			"check": "test/bridge-browser-act.test.mjs",
+			"dropControls": [
+				"browser refs resolve from the hydrated state (#712)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "Coverage-driven dead code removal (nredd/pi-harness#712); not filed"
+			},
+			"rows": [
+				"Bridge browser act dead-arm removal"
+			]
+		},
+		{
 			"id": "bridge-dead-arm-removal",
 			"purpose": "Delete bridge.ts arms with no public caller instead of testing them: the numeric/text root selector, the inert delivery-policy env reader (already dead in the #178 resync), validateStateId stale/window arms, and unreachable guards and fallbacks; non-string observe_ui root is rejected, not dropped",
 			"rows": [
@@ -1144,7 +1170,10 @@
 		"test/app-policy.test.mjs",
 		"test/async.test.mjs",
 		"test/bounded-output.test.mjs",
+		"test/bridge-browser-act.test.mjs",
+		"test/bridge-desktop-act.test.mjs",
 		"test/bridge-observe-query.test.mjs",
+		"test/bridge-reconstruct-state.test.mjs",
 		"test/bridge-setup-look.test.mjs",
 		"test/bridge-wait-for.test.mjs",
 		"test/build-native.test.mjs",
@@ -1173,7 +1202,10 @@
 		"test/macos-native-pure.test.mjs",
 		"test/macos-observe-target.test.mjs",
 		"test/managed-browser-headless.test.mjs",
+		"test/managed-browser-launch.test.mjs",
+		"test/managed-browser-observe.test.mjs",
 		"test/managed-browser-profile.test.mjs",
+		"test/managed-browser-stuck.test.mjs",
 		"test/note-view.test.mjs",
 		"test/outline-store-edges.test.mjs",
 		"test/outline-store.test.mjs",
