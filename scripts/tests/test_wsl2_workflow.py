@@ -13,6 +13,7 @@ import shlex
 import shutil
 import subprocess
 import textwrap
+from enum import StrEnum
 from pathlib import Path
 from typing import cast
 
@@ -724,20 +725,31 @@ PACKAGES = (
 APT_FLAGS = "install --yes --no-install-recommends"
 
 
-def dns_failure_stubs(commands: Path, tools: str, log: Path) -> dict[str, str]:
+class DnsToolMode(StrEnum):
+    """Diagnostic outcomes available to the isolated apt failure fixtures."""
+
+    FAILED = "failed"
+    TIMEOUT = "timeout"
+    MISSING = "missing"
+    RESOLVED = "resolved"
+    INVALID_CLASSIFICATION = "invalid-classification"
+    SYSTEM_CLASSIFICATION = "system-classification"
+
+
+def dns_failure_stubs(commands: Path, tools: DnsToolMode, log: Path) -> dict[str, str]:
     """Build isolated DNS failure tools with real timeout and shell processes.
 
     Parameters:
         commands (Path): Executable directory, without inherited host resolver tools.
-        tools (str): Diagnostic fixture outcome mode.
+        tools (DnsToolMode): Diagnostic fixture outcome mode.
         log (Path): Apt invocation log, proving no install occurs.
     Returns:
         dict[str, str]: Fixture bodies; supporting real tools are symlinked separately.
     """
-    timeout = shutil.which("timeout")
+    timeout = shutil.which(DnsToolMode.TIMEOUT)
     assert timeout is not None, "GNU timeout is required for the diagnostic failure fixture"
     stubs: dict[str, str] = {}
-    stubs["timeout"] = textwrap.dedent(
+    stubs[DnsToolMode.TIMEOUT] = textwrap.dedent(
         f"""\
         #!/bin/sh
         exec {shlex.quote(timeout)} "$@"
@@ -755,14 +767,14 @@ def dns_failure_stubs(commands: Path, tools: str, log: Path) -> dict[str, str]:
         binary = shutil.which(name)
         assert binary is not None
         (commands / name).symlink_to(binary)
-    if tools != "missing":
+    if tools != DnsToolMode.MISSING:
         body = {
-            "failed": 'echo "192.0.2.19 private.invalid SECRET=fixture"; '
+            DnsToolMode.FAILED: 'echo "192.0.2.19 private.invalid SECRET=fixture"; '
             'echo "192.0.2.19 private.invalid SECRET=fixture" >&2; exit 2',
-            "timeout": "exec /bin/sleep 30",
-            "resolved": 'echo "192.0.2.19 private.invalid SECRET=fixture"; exit 0',
-            "invalid-classification": "exit 2",
-            "system-classification": "exit 2",
+            DnsToolMode.TIMEOUT: "exec /bin/sleep 30",
+            DnsToolMode.RESOLVED: 'echo "192.0.2.19 private.invalid SECRET=fixture"; exit 0',
+            DnsToolMode.INVALID_CLASSIFICATION: "exit 2",
+            DnsToolMode.SYSTEM_CLASSIFICATION: "exit 2",
         }[tools]
         for name in ("getent", "resolvectl"):
             stubs[name] = textwrap.dedent(
@@ -773,10 +785,10 @@ def dns_failure_stubs(commands: Path, tools: str, log: Path) -> dict[str, str]:
             )
         classification = (
             "private.invalid 192.0.2.19 SECRET=fixture"
-            if tools == "invalid-classification"
+            if tools == DnsToolMode.INVALID_CLASSIFICATION
             else "loopback-only"
         )
-        if tools == "system-classification":
+        if tools == DnsToolMode.SYSTEM_CLASSIFICATION:
             awk = shutil.which("awk")
             assert awk is not None
             (commands / "awk").symlink_to(awk)
@@ -803,7 +815,7 @@ def run_apt(
     broken_cache_copy: bool = False,
     install_status: int = 0,
     dns_failure: bool = False,
-    dns_tools: str = "failed",
+    dns_tools: DnsToolMode = DnsToolMode.FAILED,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     """Run the real apt script with stub `id`, `timeout`, `apt-get` and `ps`.
 
@@ -819,7 +831,7 @@ def run_apt(
         broken_cache_copy (bool): Model a host cache write failing (`cp` into `cache/` exits 1).
         install_status (int): Offline installation exit status, after successful fetches.
         dns_failure (bool): Fail both mirrors with captured DNS errors; use real diagnostic bounds.
-        dns_tools (str): Diagnostic fixture mode: failed, timeout, missing, resolved,
+        dns_tools (DnsToolMode): Diagnostic fixture mode: failed, timeout, missing, resolved,
             system-classification or invalid-classification.
 
     Returns:
@@ -1024,15 +1036,15 @@ def test_apt_prerequisites_name_a_hang_on_both_mirrors(tmp_path: Path) -> None:
     assert not log.exists()
 
 
-@pytest.mark.parametrize(
-    "tools", ["failed", "timeout", "missing", "resolved", "invalid-classification", "system-classification"]
-)
-def test_apt_dns_failure_retains_only_bounded_allowlisted_evidence(tmp_path: Path, tools: str) -> None:
+@pytest.mark.parametrize("tools", list(DnsToolMode))
+def test_apt_dns_failure_retains_only_bounded_allowlisted_evidence(
+    tmp_path: Path, tools: DnsToolMode
+) -> None:
     """Replay both-mirror failure through the real trap, without DNS or root installation.
 
     Parameters:
         tmp_path (Path): Disposable apt filesystem and host-visible artifact destination.
-        tools (str): Optional tool behavior, including actual sleeping processes.
+        tools (DnsToolMode): Optional tool behavior, including actual sleeping processes.
     Returns:
         None: Original failure survives; only safe diagnostic labels reach logs/artifacts.
     """
@@ -1049,25 +1061,39 @@ def test_apt_dns_failure_retains_only_bounded_allowlisted_evidence(tmp_path: Pat
         value in result.stdout + result.stderr + report
         for value in ("192.0.2.19", "private.invalid", "SECRET")
     )
-    classification = "unavailable" if tools in ("missing", "invalid-classification") else "loopback-only"
-    if tools == "system-classification":
+    classification = (
+        "unavailable"
+        if tools in (DnsToolMode.MISSING, DnsToolMode.INVALID_CLASSIFICATION)
+        else "loopback-only"
+    )
+    if tools == DnsToolMode.SYSTEM_CLASSIFICATION:
         assert re.search(
             r"configured-resolver=(?:loopback-only|nonloopback-present|none|unavailable)\n", report
         )
     else:
         assert f"configured-resolver={classification}" in report
-    if tools == "missing":
+    if tools == DnsToolMode.MISSING:
         assert "getent=unavailable" in report
         assert "resolvectl=unavailable" in report
     else:
-        outcome = "failed" if tools in ("invalid-classification", "system-classification") else tools
+        outcome = (
+            DnsToolMode.FAILED
+            if tools in (DnsToolMode.INVALID_CLASSIFICATION, DnsToolMode.SYSTEM_CLASSIFICATION)
+            else tools
+        )
         for tool in ("getent", "resolvectl"):
             for name in ("azure.archive.ubuntu.com", "archive.ubuntu.com"):
                 assert f"{tool} {name}={outcome}" in report
 
 
 def test_apt_dns_capture_preserves_an_offline_install_failure_status(tmp_path: Path) -> None:
-    """Keep a non-1 apt status and original error, without retrying a failed offline install."""
+    """Keep a non-1 apt status and original error, without retrying a failed offline install.
+
+    Parameters:
+        tmp_path (Path): Disposable apt filesystem.
+    Returns:
+        None: The original status and error survive diagnostic capture.
+    """
     result, _, log = run_apt(tmp_path, install_status=47)
     assert result.returncode == 47
     assert "FAILED: apt-get install (status 47)" in result.stderr
@@ -1076,7 +1102,13 @@ def test_apt_dns_capture_preserves_an_offline_install_failure_status(tmp_path: P
 
 
 def test_apt_success_does_not_collect_dns_evidence(tmp_path: Path) -> None:
-    """Successful setup adds no resolver probes or diagnostic artifacts."""
+    """Successful setup adds no resolver probes or diagnostic artifacts.
+
+    Parameters:
+        tmp_path (Path): Disposable apt filesystem.
+    Returns:
+        None: Successful setup emits no DNS diagnostics.
+    """
     result, _, _ = run_apt(tmp_path)
     assert result.returncode == 0
     assert "wsl2-dns:" not in result.stdout + result.stderr
@@ -1084,7 +1116,13 @@ def test_apt_success_does_not_collect_dns_evidence(tmp_path: Path) -> None:
 
 
 def test_apt_dns_artifact_write_failure_cannot_mask_original_failure(tmp_path: Path) -> None:
-    """An unwritable artifact destination preserves log diagnostics and the apt failure."""
+    """An unwritable artifact destination preserves log diagnostics and the apt failure.
+
+    Parameters:
+        tmp_path (Path): Disposable filesystem containing a directory instead of an artifact file.
+    Returns:
+        None: Log diagnostics and the original failure remain available.
+    """
     (tmp_path / "apt-dns.txt").mkdir()
     result, _, log = run_apt(tmp_path, dns_failure=True)
     assert result.returncode == 1
@@ -1094,7 +1132,13 @@ def test_apt_dns_artifact_write_failure_cannot_mask_original_failure(tmp_path: P
 
 
 def test_apt_dns_blocked_artifact_write_is_bounded_without_masking_failure(tmp_path: Path) -> None:
-    """Even opening a FIFO with no reader cannot hang the apt failure trap."""
+    """Even opening a FIFO with no reader cannot hang the apt failure trap.
+
+    Parameters:
+        tmp_path (Path): Disposable filesystem containing a FIFO instead of an artifact file.
+    Returns:
+        None: The outer capture deadline stops blocked IO and preserves the apt failure.
+    """
     os.mkfifo(tmp_path / "apt-dns.txt")
     result, _, log = run_apt(tmp_path, dns_failure=True)
     assert result.returncode == 1
