@@ -46,11 +46,35 @@ branches are capped per signal ([branch caps](#branch-caps)), and Bun signals fo
 base-relative facade ledger regression for the `b51e177` main merge are recorded
 [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/tier-main-merge.md).
 
-The target is **100% of owned executable source lines, functions AND branches**, measured by each
-package's primary runner (`target` in `coverage/policy.json` is 0/0/0). This is source coverage, not
+The target is **100% of owned executable source lines, functions, branches AND statements**, measured by each
+package's primary runner (`target` in `coverage/policy.json` is 0/0/0/0). This is source coverage, not
 proof that every behavior is asserted. Every subsequently closed gap needs a test that fails
 without the change. Phase 0 adds accounting; the final integration also tests worker-error settlement and remaining
 cross-platform collector paths without removing guards.
+
+### Statement caps
+
+LCOV has no statement records, so Istanbul and V8 Vitest producers also write `json-summary`
+(`coverage-summary.json` next to `lcov.info`; `reporters` in the policy, `test.coverage.reporter` in each config
+and `scripts/run-vitest.ts bun` move together). `coverage_accounting.py` reads each file's `statements`
+total and covered count from it, keyed by resolved path against the same scoped LCOV record set, and adds
+`statements`/`uncovered_statements` to the file records and signal totals in `coverage/summary.json`
+for signals that read a summary. Signals that don't (coverage.py, native `bun test`) report `null` per file
+and omit the total and comparison delta, so an unmeasured counter never reads as fully covered. A cap
+without its reporter still fails validation and writes `coverage/summary.json` with the actionable error.
+`max_uncovered.<os>.statements` follows `branches`: the base ratchet only lets it go down, dropping a key the
+base had is a weakening, and `target.statements` is 0, so every 100-percent primary is held to 0 uncovered
+statements. Every enforced primary and Bun Vitest signal caps 0. `computer-use-vitest` caps its measured
+per-OS uncovered statements (see [computer-use-coverage.md](computer-use-coverage.md)).
+
+It fails closed. With `target.statements` set, an enforced Istanbul/V8 signal needs the `json-summary`
+reporter and a cap (`Missing statement cap`); a cap without a readable, non-empty summary, or a summary
+with no statements, fails (`Statement producer missing`); an LCOV source with no summary entry fails
+(`Statements missing for source`). The CI shard and fan-in artifacts and the WSL capture carry
+`coverage-summary.json` beside `lcov.info`.
+Carve-outs: coverage.py signals (statements are its lines, so no counter), the native `bun test` subset
+(session-kit `/bun`, report-only) and report-only `goal: excluded` signals carry no statement cap.
+Statement units differ (Istanbul AST statements, V8 AST remap), so caps compare within one signal only.
 
 ### Branch caps
 
@@ -87,7 +111,7 @@ tiebreak in `packages/dev-tools/src/resource/index.ts`, and `stop_hostile_child(
 tests now pin all three. Caps are references, not waivers: they never rise, and `target.branches` is 0.
 
 `coverage/policy.json` is the reviewed inventory and the only threshold policy. Its target is
-zero uncovered lines, functions and branches. Schema version 2 keys each signal's transitional `max_uncovered`
+zero uncovered lines, functions, branches and statements. Schema version 2 keys each signal's transitional `max_uncovered`
 integer budgets (or report-only reference numbers) by runner OS: `darwin` (`macos-14`) and
 `linux` (`ubuntu-24.04`), never rounded
 percentages or platform averages. The `owned (wsl2)` cell's shards run the same producers inside Ubuntu
@@ -142,7 +166,7 @@ and linux. Since #380 it also owns all 15 Vitest producer configurations (`packa
 `packages/todo/.vitest.config.ts`, `integration/{inprocess,probes,providers}/vitest.config.ts` and
 `scripts/vitest.config.ts`), and the pending `coverage-configurations` package is deleted (reclassified
 file by file). Vitest loads a config outside its own instrumentation, so `scripts/coverage-configs.test.ts`
-imports each one as a module and asserts the resolved `test.coverage`: provider, the `text` + `lcov`
+imports each one as a module and asserts the resolved `test.coverage`: provider, the `text`, `lcov` + `json-summary`
 reporters, `reportsDirectory`, `reportOnFailure`, and `include`/`exclude` equal to the config's own policy
 entry. A second pass serves a synthetic policy giving every package a distinct inventory, so a config
 reading another package's key fails, and a third serves a policy without the package, which must make the
@@ -202,7 +226,7 @@ rely on that default. Native `bun test` subset measurements are NOT the owned-so
 Bun 1.3.14 native coverage omits never-imported files. Full Vitest-on-Bun producers now use
 Istanbul for router, preset, sampler, todo, plan-mode, dev-tools, subagents and inprocess through `scripts/run-vitest.ts bun`.
 They inherit the full primary instrumentation inventory (no `files` subset). The launcher's
-`bun` engine appends the provider, the `text` and `lcov` reporters (Vitest's dotted options) and
+`bun` engine appends the provider, the `text`, `lcov` and `json-summary` reporters (Vitest's dotted options) and
 `coverage/bun`, so each `test:bun` passes only package arguments. The sampler retains one
 worker. The launcher also sets `PI_EXPECT_BUN_RUNTIME=1`, which subagents' real-loader test reads to prove it ran on
 the pinned Bun. session-kit alone keeps a native subset, and its policy explicitly lists the files currently measured by each signal;
@@ -352,10 +376,9 @@ generators, with the declaration-only `src/platform/types.ts` excluded as type-o
 config reads both from the policy like every other producer, so a new module joins the report
 instead of dropping out. It stays
 `goal: "excluded"` with no 100% claim, but since #645 T0 the signal is **enforced**: its per-OS caps are the
-measured uncovered counts for lines, functions and branches (darwin **572 / 203 / 871**, local `npm test` on
-`6d913af1` and hosted `owned (macos-14)`; linux **592 / 211 / 900**, the max of hosted `owned (ubuntu-24.04)`
-589/209/900 and `owned (wsl2)` 592/211/900 on #731 merged with main `9de93b4c`). Statements carry no cap until #700. Subprocess-run scripts count
-only what the suites import. Files already at 0/0/0 on every OS are also pinned per file by
+measured uncovered counts for lines, functions, branches and statements (darwin **1 / 0 / 1 / 1**;
+linux **1 / 0 / 1 / 1**, the maximum of Ubuntu and WSL2), from hosted run `43173083073`.
+Subprocess-run scripts count only what the suites import. Files already at 0/0/0/0 on every OS are pinned per file by
 `coverage.thresholds` in `packages/computer-use/vitest.config.ts` (the policy schema has no per-file pins).
 Per-file history and numbers are in [computer-use-coverage.md](computer-use-coverage.md). The native and
 live suites (`linux-native`, `macos-helper-live`, `linux-live`) also run under Vitest now; skipped off
@@ -555,8 +578,8 @@ uv run --locked --project integration python scripts/coverage_accounting.py --me
 
 Use a checkout matching the artifact's production source and inventory. `--reports-root` reads the
 artifact's repository-relative report paths while ownership validation uses that checkout. JSON
-`measured_floors` contains each `package/signal -> OS -> {lines, functions, branches}` (`branches` only
-when the report has branch records); the logged unified diff
+`measured_floors` contains each `package/signal -> OS -> {lines, functions, branches, statements}` (`branches` and
+`statements` only when the report has branch records or a statement summary); the logged unified diff
 proposes only that OS's measured counters. Review it and edit the policy manually; it is never
 written or auto-committed. `--measure` rejects `--base` so it cannot be confused with ratchet evidence.
 Replay the artifact as a gate by dropping `--measure` and adding `--base origin/main`; the summary's

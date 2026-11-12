@@ -269,11 +269,16 @@ jobs:
           name: coverage-${{ matrix.os }}-${{ matrix.shard }}
           path: |
             packages/*/coverage/**/lcov.info
+            packages/*/coverage/**/coverage-summary.json
             integration/inprocess/coverage/**/lcov.info
+            integration/inprocess/coverage/**/coverage-summary.json
             integration/probes/coverage/**/lcov.info
+            integration/probes/coverage/**/coverage-summary.json
             integration/providers/coverage/**/lcov.info
+            integration/providers/coverage/**/coverage-summary.json
             integration/coverage/**/lcov.info
             scripts/coverage/**/lcov.info
+            scripts/coverage/**/coverage-summary.json
             benchmarks/comparison/coverage/**/lcov.info
           if-no-files-found: ignore
       - uses: ./.github/actions/capture-ci-wsl
@@ -407,11 +412,16 @@ jobs:
           name: coverage-${{ matrix.os }}
           path: |
             packages/*/coverage/**/lcov.info
+            packages/*/coverage/**/coverage-summary.json
             integration/inprocess/coverage/**/lcov.info
+            integration/inprocess/coverage/**/coverage-summary.json
             integration/probes/coverage/**/lcov.info
+            integration/probes/coverage/**/coverage-summary.json
             integration/providers/coverage/**/lcov.info
+            integration/providers/coverage/**/coverage-summary.json
             integration/coverage/**/lcov.info
             scripts/coverage/**/lcov.info
+            scripts/coverage/**/coverage-summary.json
             benchmarks/comparison/coverage/**/lcov.info
             coverage/summary.json
           if-no-files-found: error

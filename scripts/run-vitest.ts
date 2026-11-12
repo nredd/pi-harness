@@ -13,6 +13,7 @@ const BUN_COVERAGE_ARGS = [
 	"--coverage.provider=istanbul",
 	"--coverage.reporter=text",
 	"--coverage.reporter=lcov",
+	"--coverage.reporter=json-summary",
 	"--coverage.reportsDirectory=coverage/bun",
 ];
 // Set for every Bun child so a suite can assert it really runs on the pinned Bun, not a Node fallback.

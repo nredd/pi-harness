@@ -1656,7 +1656,7 @@ def test_fan_in_downloads_exactly_its_own_shard_uploads() -> None:
         }
         assert not fnmatch.fnmatchcase(render(fan_in_upload["with"]["name"], {"matrix.os": os_name}), pattern)
     # The shards upload reports only; the fan-in's accounting writes the one summary.
-    assert "summary.json" not in shard_upload["with"]["path"]
+    assert "coverage/summary.json" not in shard_upload["with"]["path"]
     assert shard_upload["with"]["path"] + "coverage/summary.json\n" == fan_in_upload["with"]["path"]
 
 
