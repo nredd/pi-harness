@@ -251,8 +251,9 @@ test("INV-17b macOS activity glow is configurable, headless-safe, and connection
 	assert(extensionTs.includes('pi.on("tool_execution_start"') && extensionTs.includes('pi.on("agent_end"'), "extension does not track computer-use activity lifecycle");
 	assert(extensionTs.includes("config.headless") && extensionTs.includes("config.activity_glow"), "activity glow is not configurable or headless-safe");
 	assert(macosHelperTs.includes("class MacosActivityGlowConnection") && macosHelperTs.includes('cmd: "setActivityGlow"'), "activity glow does not use a persistent helper connection");
-	assert(swift.includes('case "setActivityGlow"') && swift.includes("activityGlow.disconnect(clientID)"), "native helper does not clear activity state on disconnect");
-	assert(swift.includes('"activityGlowActive": activityGlow.isActive'), "helper diagnostics cannot verify activity ownership");
+	assert(swift.includes("activityGlow: ActivityGlowController? = ActivityGlowController()"), "native helper must construct the real glow controller by default");
+	assert(swift.includes('case "setActivityGlow"') && swift.includes("activityGlow?.disconnect(clientID)"), "native helper does not clear activity state on disconnect");
+	assert(swift.includes('"activityGlowActive": activityGlow?.isActive ?? false'), "helper diagnostics cannot verify activity ownership");
 	assert(activityGlowSwift.includes("activeClients = Set<UUID>()"), "native activity state is not client-owned");
 	assert(activityGlowSwift.includes("window.ignoresMouseEvents = true") && activityGlowSwift.includes("window.sharingType = .readOnly"), "activity glow can accept input or is hidden from user screen recordings");
 	assert(swift.includes("SCContentFilter(desktopIndependentWindow"), "agent captures must stay per-window so the capturable activity glow cannot leak into observations");
@@ -298,7 +299,8 @@ test("INV-20 bounded broad root discovery", () => {
 	assert(ts.includes("return await collectWindowDetails(apps, config, signal)"), "filtered find_roots does not retain per-app discovery");
 	assert(swift.includes("signal(SIGPIPE, SIG_IGN)"), "helper daemon does not ignore process-wide SIGPIPE");
 	assert(swift.includes("SO_NOSIGPIPE"), "helper sockets can terminate the daemon on a late response");
-	assert(swift.includes("Darwin.send(responseSocket"), "helper socket responses do not use failure-tolerant writes");
+	assert(swift.includes("Darwin.send($0, $1, $2, 0)"), "helper default transport does not use failure-tolerant writes");
+	assert(swift.includes("writeSocket(responseSocket, base.advanced(by: offset), raw.count - offset)"), "helper socket responses bypass the short-write transport");
 	assert(swift.includes("recentCompletedRequestIds"), "helper diagnostics cannot establish abandoned-request completion");
 });
 
