@@ -5,14 +5,14 @@
  * failure (e.g. an ephemeral WSL runner) is self-explaining.
  */
 
-import { opendir, readFile, readlink, stat } from "node:fs/promises";
+import { readdir, readFile, readlink, stat } from "node:fs/promises";
 import { basename } from "node:path";
 import type { ResourceSnapshot } from "@nredd/pi-resource-sampler";
 
 /** What each sampler coverage reason means in terms of the host read that produced it. */
 export const REASON_MEANING: Readonly<Record<string, string>> = {
 	"process-collection-unavailable":
-		"the whole process listing failed (Linux /proc opendir/readdir iterator threw, e.g. a PID exiting mid-listing, or the Darwin ps read failed)",
+		"the whole process listing failed (Linux /proc names-only readdir threw, or the Darwin ps read failed); the producer does not preserve errno",
 	"process-unreadable-or-changed":
 		"a per-PID read failed (/proc/<pid>/stat, statm or exe unreadable, or the PID exited)",
 	deadline: "the scan budget elapsed before the listing finished",
@@ -37,7 +37,7 @@ export interface ProbeResult {
 export interface HostProbes {
 	readonly platform: NodeJS.Platform;
 	readonly pid: number;
-	/** Entry count via `opendir` iteration, the sampler's listing mechanism (its implicit lstat can reject mid-listing). */
+	/** Entry count via names-only `readdir`, the pinned sampler's listing mechanism. */
 	readonly countDir: (path: string) => Promise<number>;
 	readonly readlink: (path: string) => Promise<string>;
 	readonly stat: (path: string) => Promise<unknown>;
@@ -47,11 +47,7 @@ export interface HostProbes {
 export const realProbes: HostProbes = {
 	platform: process.platform,
 	pid: process.pid,
-	countDir: async (path) => {
-		let count = 0;
-		for await (const _entry of await opendir(path)) count++;
-		return count;
-	},
+	countDir: async (path) => (await readdir(path)).length,
 	readlink: (path) => readlink(path),
 	stat: (path) => stat(path),
 	readFile: (path) => readFile(path, "utf8"),
@@ -79,7 +75,7 @@ export async function probeHost(probes: HostProbes = realProbes): Promise<ProbeR
 	if (probes.platform !== "linux") return [];
 	const self = `/proc/${probes.pid}`;
 	return Promise.all([
-		probe("opendir /proc", async () => `${await probes.countDir("/proc")} entries`),
+		probe("readdir /proc", async () => `${await probes.countDir("/proc")} entries`),
 		// Basename only, like the sampler's own executable rule: a full path can name the runner's layout.
 		probe(`readlink ${self}/exe`, async () => `-> ${basename(await probes.readlink(`${self}/exe`))}`),
 		probe(`stat ${self}`, async () => {
@@ -103,7 +99,7 @@ export async function describeProcessLoss(
 	samples.forEach((sample, index) => {
 		const reasons = sample.coverage.reasons;
 		lines.push(
-			`scan ${index}: ${sample.processes.length} processes, coverage ${JSON.stringify(sample.coverage)}`,
+			`scan ${index}: ${sample.processes.length} processes, coverage ${JSON.stringify(sample.coverage)}, durationMs=${sample.durationMs}`,
 			...reasons.map((reason) => `  reason \`${reason}\`: ${REASON_MEANING[reason] ?? "unknown to this harness"}`),
 		);
 	});

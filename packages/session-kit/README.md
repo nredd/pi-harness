@@ -7,7 +7,7 @@ this package. `0.6.0` keeps passive monitor output only in the monitor ring buff
 
 ## Standalone use
 
-The packed tarball is self-contained: Pi host modules (`@earendil-works/pi-*`, `typebox`) are `*` peers supplied by Pi, and no sibling plugin is required. Its only runtime dependency is the exact published `@nredd/pi-resource-sampler@0.2.0` library (no Pi imports), which npm installs from the registry for `/mon`. Verified by installing the tarball alone and running it in exact stock Pi 1.3.0 (see the repository's `docs/package-contracts.md`). Optional fork integrations (subagents, Plan mode) are absent in that setup; the exercised behavior does not need them.
+The packed tarball is self-contained: Pi host modules (`@earendil-works/pi-*`, `typebox`) are `*` peers supplied by Pi, and no sibling plugin is required. Its only runtime dependency in current source is the exact published `@nredd/pi-resource-sampler@0.2.1` library (no Pi imports), which npm installs from the registry for `/mon`. Verified by installing the tarball alone and running it in exact stock Pi 1.3.0 (see the repository's `docs/package-contracts.md`). Optional fork integrations (subagents, Plan mode) are absent in that setup; the exercised behavior does not need them.
 
 Session-scoped pi extensions for tmux users. No daemon, supervisor, core patch or cross-pane
 registry. Each runtime owns its goal, loops and monitors; persisted goal state follows the active
