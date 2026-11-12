@@ -8940,9 +8940,6 @@ Description: ${record.description}
       );
     }
   }));
-  function getModelLabel(type, registry, cwd) {
-    return explainModel({ homeDir: options.homeDir, agentType: type, definitionModel: getAgentConfig(type)?.model, parentModel: currentCtx?.model, registry, cwd }).summary;
-  }
   async function showAgentsMenu(ctx) {
     reloadCustomAgents();
     const allNames = getAllTypes();
@@ -9011,7 +9008,7 @@ Description: ${record.description}
     const configs = allNames.map((name) => getAgentConfig(name));
     const items = allNames.map((name, i) => {
       const cfg2 = configs[i];
-      const model = getModelLabel(name, ctx.modelRegistry, ctx.cwd);
+      const model = explainModel({ homeDir: options.homeDir, agentType: name, definitionModel: cfg2?.model, parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd }).summary;
       return {
         id: name,
         label: `${sourceIndicator(cfg2)}${name}`,

@@ -48,7 +48,7 @@ import { describeMention, handleBase, isReservedHandle, parseMention, resolveHan
 import { runMentionClone } from "./mention-clone.js";
 import { applyModelCallEvent, type ModelCallEvent } from "./model-call.js";
 import { explainModel, modelConfigurationWarnings } from "./model-explanation.js";
-import { type ModelFallback, type ModelRegistry, setAgentModels, setModelAliases, setModelScopeProvider } from "./model-resolver.js";
+import { type ModelFallback, setAgentModels, setModelAliases, setModelScopeProvider } from "./model-resolver.js";
 import { isScopeModelsEnabled, setScopeModelsEnabled } from "./model-scope.js";
 import { admitModelSelection, describeSelection, modelIdentityNote, modelSelectionNote, selectModel } from "./model-selection.js";
 import { configuredTierNames, tierDisclosure } from "./model-tiers.js";
@@ -3822,10 +3822,6 @@ Terse command-style prompts produce shallow, generic work.
   // so they are reachable from tests — this command handler is only registered
   // through `registerCommand`, which every test mocks.
 
-  function getModelLabel(type: string, registry: ModelRegistry, cwd: string): string {
-    return explainModel({ homeDir: options.homeDir, agentType: type, definitionModel: getAgentConfig(type)?.model, parentModel: currentCtx?.model, registry, cwd }).summary;
-  }
-
   async function showAgentsMenu(ctx: ExtensionCommandContext) {
     reloadCustomAgents();
     const allNames = getAllTypes();
@@ -3930,7 +3926,7 @@ Terse command-style prompts produce shallow, generic work.
     // it: the `▪` badge says a package won, not which one.
     const items: SettingItem[] = allNames.map((name, i) => {
       const cfg = configs[i];
-      const model = getModelLabel(name, ctx.modelRegistry, ctx.cwd);
+      const model = explainModel({ homeDir: options.homeDir, agentType: name, definitionModel: cfg?.model, parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd }).summary;
       return {
         id: name,
         label: `${sourceIndicator(cfg)}${name}`,
