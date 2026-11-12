@@ -304,6 +304,32 @@
 			}
 		},
 		{
+			"id": "browser-input-preflight",
+			"purpose": "Reject browser moveMouse refs and code empty keypress as invalid_args before batch delivery or epoch changes; retain explicit CDP coordinates and desktop behavior",
+			"rows": [
+				"Browser input preflight"
+			],
+			"files": [
+				"CHANGELOG.md",
+				"README.md",
+				"UPSTREAM.md",
+				"scripts/check-sync-reverts.mjs",
+				"src/bridge.ts",
+				"sync-patches.json",
+				"test/bridge-browser-act.test.mjs"
+			],
+			"check": "test/bridge-browser-act.test.mjs",
+			"dropControls": [
+				"browser empty keypress reports invalid_args (#748)",
+				"browser moveMouse refuses ref targets before delivery (#748)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#748; not filed upstream"
+			}
+		},
+		{
 			"id": "browser-query-no-desktop-escalation",
 			"purpose": "search_ui and expand_ui on a browser state skip desktop OCR escalation and scoped looks (no controlled window to re-capture), and desktop wait_for with a blank stateId fails with the coded no-observation error instead of a TypeError",
 			"rows": [

@@ -350,6 +350,22 @@ const cases = [
 		failure: /the unreachable missing-target guard must not return/,
 	},
 	{
+		name: "browser empty keypress reports invalid_args (#748)",
+		file: "src/bridge.ts",
+		before: 'throw new ComputerUseError("invalid_args", "keypress.keys must contain at least one key.");',
+		after: 'throw new Error("keypress.keys must contain at least one key.");',
+		check: "test/bridge-browser-act.test.mjs",
+		failure: /an empty browser keypress is rejected before the write epoch advances/,
+	},
+	{
+		name: "browser moveMouse refuses ref targets before delivery (#748)",
+		file: "src/bridge.ts",
+		before: 'if (action.action === "moveMouse" && action.ref) throw new ComputerUseError("invalid_args", "Browser moveMouse requires x/y coordinates; ref targets are not supported.");',
+		after: "/* ref-only moveMouse forwards absent x/y to CDP */",
+		check: "test/bridge-browser-act.test.mjs",
+		failure: /browser moveMouse refs reject with invalid_args before any delivery or epoch change/,
+	},
+	{
 		name: "browser refs resolve from the hydrated state (#712)",
 		file: "src/bridge.ts",
 		before: "const target = ref ? baseSnapshot.targets.find((candidate) => candidate.ref === ref) : undefined;",
