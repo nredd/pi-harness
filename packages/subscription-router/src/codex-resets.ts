@@ -230,41 +230,45 @@ export class CodexResets {
 					"Codex returned an unknown consume outcome. Reconcile before any new attempt.",
 				);
 			confirmedOutcome = outcome;
-			await journal.settle(attempt, outcome);
-			this.cache.delete(binding);
 			let quotaRefreshed = false;
 			let offersRefreshed = false;
-			if (outcome === "reset" || outcome === "alreadyRedeemed") {
-				// Do not clear local blocks or counters. The authoritative collector refresh owns new quota evidence.
-				this.options.usage.invalidate(CODEX_PROVIDER);
-				try {
-					await session.checkIdentity();
-					const offers = parseOffers(
-						await session.request(
-							"account/rateLimits/read",
-							{ supportsLunaReserve: false, excludeResetCreditDetails: false },
+			try {
+				await journal.settle(attempt, outcome);
+			} finally {
+				// Provider success remains authoritative even if local receipt durability fails.
+				this.cache.delete(binding);
+				if (outcome === "reset" || outcome === "alreadyRedeemed") {
+					// Do not clear local blocks or counters. The authoritative collector refresh owns new quota evidence.
+					this.options.usage.invalidate(CODEX_PROVIDER);
+					try {
+						await session.checkIdentity();
+						const offers = parseOffers(
+							await session.request(
+								"account/rateLimits/read",
+								{ supportsLunaReserve: false, excludeResetCreditDetails: false },
+								signal,
+							),
+							this.now(),
+						);
+						await session.checkIdentity();
+						this.cache.set(binding, { offers, attemptedAt: this.now() });
+						offersRefreshed = true;
+					} catch {
+						/* Grant consumption is confirmed independently of offer-list refresh. */
+					}
+					try {
+						await session.checkIdentity();
+						const refreshed = await this.options.usage.get(ctx, CODEX_PROVIDER, {
+							fresh: true,
+							notBefore: this.now(),
 							signal,
-						),
-						this.now(),
-					);
-					await session.checkIdentity();
-					this.cache.set(binding, { offers, attemptedAt: this.now() });
-					offersRefreshed = true;
-				} catch {
-					/* Grant consumption is confirmed independently of offer-list refresh. */
-				}
-				try {
-					await session.checkIdentity();
-					const refreshed = await this.options.usage.get(ctx, CODEX_PROVIDER, {
-						fresh: true,
-						notBefore: this.now(),
-						signal,
-					});
-					await session.checkIdentity();
-					quotaRefreshed = refreshed.status === "available" && refreshed.expiresAt > this.now();
-					if (quotaRefreshed) this.options.tracker?.reconcile(refreshed);
-				} catch {
-					/* Redemption remains confirmed even when identity/refresh subsequently fails. */
+						});
+						await session.checkIdentity();
+						quotaRefreshed = refreshed.status === "available" && refreshed.expiresAt > this.now();
+						if (quotaRefreshed) this.options.tracker?.reconcile(refreshed);
+					} catch {
+						/* Redemption remains confirmed even when identity/refresh subsequently fails. */
+					}
 				}
 			}
 			return { outcome, quotaRefreshed, offersRefreshed };

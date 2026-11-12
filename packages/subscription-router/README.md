@@ -224,7 +224,9 @@ Unknown or conflicting outcomes remain blocked rather than being guessed success
 automatically. Do not delete the ledger to bypass unresolved work.
 
 Confirmed success invalidates only Codex usage evidence and pre-reset read ownership, then reads
-banked offers and authoritative quota separately. A failed/cancelled refresh does not erase a
+banked offers and authoritative quota separately, even if saving the known outcome receipt fails.
+The unresolved attempt remains retained, but a local persistence failure cannot keep pre-reset
+quota evidence authoritative. A failed/cancelled refresh does not erase a
 confirmed redemption, justify another grant, invent new allowance or zero counters. Only fresh,
 exact window/provider/family evidence can reconcile a corresponding confirmed block; unrelated
 blocks stay untouched. Late pre-reset reads cannot re-confirm old exhaustion after invalidation.

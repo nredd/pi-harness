@@ -251,11 +251,30 @@ describe("account-bound confirmed FREE redemption", () => {
 		await expect(embedded.redeem(h.ctx, preview, "fixture-grant", true)).rejects.toThrow("redemption is disabled");
 		for (const outcome of ["reset", "alreadyRedeemed", "noCredit"]) {
 			await rm(root, { recursive: true, force: true });
+			h.usage.invalidate("openai-codex");
+			h.fetch.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify({ rate_limit: { primary_window: { used_percent: 100, limit_window_seconds: 604800 } } }),
+				),
+			);
+			await h.usage.get(h.ctx, "openai-codex");
+			h.tracker.mark({ provider: "openai-codex", id: "sample" }, { block: true, window: "7d" });
+			const invalidate = vi.spyOn(h.usage, "invalidate");
 			h.consume(async () => ({ outcome }));
 			vi.spyOn(ResetJournal.prototype, "settle").mockRejectedValueOnce(new Error("synthetic write failure"));
 			await expect(h.service.redeem(h.ctx, preview, "fixture-grant", true)).rejects.toThrow(
 				outcome === "noCredit" ? "UNKNOWN" : "confirmed by Codex",
 			);
+			expect((await stored().entries())[0]?.outcome).toBeUndefined();
+			if (outcome === "noCredit") {
+				expect(invalidate).not.toHaveBeenCalled();
+				expect(h.usage.peek("openai-codex")?.windows[0]?.usedPercent).toBe(100);
+			} else {
+				expect(invalidate).toHaveBeenCalledWith("openai-codex");
+				expect(h.usage.peek("openai-codex")?.windows[0]?.usedPercent).toBe(10);
+				expect(h.tracker.active().some((mark) => mark.provider === "openai-codex")).toBe(false);
+				expect(h.requests.at(-1)?.method).toBe("account/rateLimits/read");
+			}
 			vi.restoreAllMocks();
 		}
 	});
