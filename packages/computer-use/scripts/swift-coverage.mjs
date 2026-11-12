@@ -14,7 +14,7 @@ export const sources = [
 	"bridge.swift",
 	"helper_entry.swift",
 ].map((name) => `native/macos/${name}`);
-const testSource = "native/macos/headless_tests.swift";
+const testSources = ["native/macos/headless_tests.swift", "native/macos/cursor_motion_tests.swift"];
 
 function count(value) {
 	if (!Number.isSafeInteger(value) || value < 0) throw new Error("Invalid LLVM counter");
@@ -28,7 +28,7 @@ export function convert(json, lcov, packageRoot = root) {
 	const files = new Map();
 	const normalize = (filename) => {
 		const relative = path.relative(packageRoot, filename);
-		if (path.resolve(packageRoot, relative) !== filename || ![...sources, testSource].includes(relative))
+		if (path.resolve(packageRoot, relative) !== filename || ![...sources, ...testSources].includes(relative))
 			throw new Error(`Wrong source path: ${filename}`);
 		return relative;
 	};
@@ -172,7 +172,7 @@ export function main({
 		"-Onone",
 		"-warnings-as-errors",
 		...sources.map((source) => path.join(packageRoot, source)),
-		path.join(packageRoot, testSource),
+		...testSources.map((source) => path.join(packageRoot, source)),
 		"-o",
 		binary,
 	];
