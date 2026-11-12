@@ -620,6 +620,29 @@
 			}
 		},
 		{
+			"id": "helper-post-write-abort-windows",
+			"purpose": "Reject post-write Windows helper cancellation promptly and clean pending requests, timers and listeners on every completion and write-error path; ignore late replies without cancelling native work",
+			"rows": [
+				"Helper post-write cancellation"
+			],
+			"files": [
+				"CHANGELOG.md",
+				"README.md",
+				"scripts/check-sync-reverts.mjs",
+				"src/platform/windows/helper.ts",
+				"test/windows-helper-client.test.mjs"
+			],
+			"check": "test/windows-helper-client.test.mjs",
+			"dropControls": [
+				"Windows helper post-write abort (#750)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#750; not filed upstream"
+			}
+		},
+		{
 			"id": "helper-replacement",
 			"purpose": "Stop the managed daemon before replacing the helper bundle",
 			"rows": [

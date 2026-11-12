@@ -21,6 +21,10 @@ than the npm install directory, and need Cargo plus a C linker. See the
 [Linux guide](./docs/content/docs/how-to-guides/linux.mdx). Windows source remains in the repository;
 Windows helpers and crate sources are not packed. If the Linux helper's input stream fails, in-flight
 requests are rejected and the helper is stopped; a later request starts a fresh helper.
+Windows helper commands reject with `Operation aborted.` when their signal aborts after sending,
+without waiting for the command deadline. Cancellation clears the local pending request, timer and
+listener; late replies are ignored. It does not stop native work already sent or kill the helper.
+Deterministic client tests use scripted stdio helpers, not Windows UI or native coverage.
 
 ## Tools
 
