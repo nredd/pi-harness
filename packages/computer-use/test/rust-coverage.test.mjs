@@ -26,14 +26,10 @@ test("validates crate/arguments and resolves output paths without shell interpol
 });
 
 test("missing cargo tool gives actionable pinned install documentation", () => {
-	const result = spawnSync(
-		process.execPath,
-		[fileURLToPath(new URL("../scripts/rust-coverage.mjs", import.meta.url))],
-		{
-			env: { ...process.env, PATH: "" },
-			encoding: "utf8",
-		},
-	);
+	const result = spawnSync(process.execPath, [fileURLToPath(new URL("../scripts/rust-coverage.mjs", import.meta.url))], {
+		env: { ...process.env, PATH: "" },
+		encoding: "utf8",
+	});
 	assert.equal(result.status, 1);
 	assert.match(
 		result.stderr,

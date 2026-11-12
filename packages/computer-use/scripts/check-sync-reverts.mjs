@@ -44,8 +44,7 @@ const cases = [
 	{
 		name: "Linux helper refuses a signal aborted during startup (#735)",
 		file: "src/platform/linux/helper.ts",
-		before:
-			"\t\t// ...and so does one aborted while the install check or helper start was in flight.\n\t\tthrowIfAborted(signal);\n",
+		before: '\t\t// ...and so does one aborted while the install check or helper start was in flight.\n\t\tthrowIfAborted(signal);\n',
 		after: "",
 		check: "test/stdio-helper-clients.test.mjs",
 		failure: /Missing expected rejection/,
@@ -53,7 +52,7 @@ const cases = [
 	{
 		name: "Linux helper refuses an already aborted signal (#735)",
 		file: "src/platform/linux/helper.ts",
-		before: "\t\tthrowIfAborted(signal);\n\t\tconst child = await this.process(signal);\n",
+		before: '\t\tthrowIfAborted(signal);\n\t\tconst child = await this.process(signal);\n',
 		after: "\t\tconst child = await this.process(signal);\n",
 		check: "test/stdio-helper-clients.test.mjs",
 		failure: /Expected values to be strictly equal/,
@@ -70,8 +69,7 @@ const cases = [
 		name: "Linux per-child line buffer (#725)",
 		file: "src/platform/linux/helper.ts",
 		before: 'child.stdout.on("data", (chunk: string) => { buffer = this.onStdout(buffer, chunk); });',
-		after:
-			'child.stdout.on("data", (chunk: string) => { const g = globalThis as { tail?: string }; g.tail = this.onStdout(g.tail ?? "", chunk); });',
+		after: 'child.stdout.on("data", (chunk: string) => { const g = globalThis as { tail?: string }; g.tail = this.onStdout(g.tail ?? "", chunk); });',
 		check: "test/linux-helper-client.test.mjs",
 		failure: /timed out/,
 	},
@@ -174,8 +172,7 @@ const cases = [
 	{
 		name: "Windows helper refuses a signal aborted during startup (#735)",
 		file: "src/platform/windows/helper.ts",
-		before:
-			"\t\t// ...and so does one aborted while the install check or helper start was in flight.\n\t\tthrowIfAborted(signal);\n",
+		before: '\t\t// ...and so does one aborted while the install check or helper start was in flight.\n\t\tthrowIfAborted(signal);\n',
 		after: "",
 		check: "test/stdio-helper-clients.test.mjs",
 		failure: /Missing expected rejection/,
@@ -183,7 +180,7 @@ const cases = [
 	{
 		name: "Windows helper refuses an already aborted signal (#735)",
 		file: "src/platform/windows/helper.ts",
-		before: "\t\tthrowIfAborted(signal);\n\t\tconst child = await this.process(signal);\n",
+		before: '\t\tthrowIfAborted(signal);\n\t\tconst child = await this.process(signal);\n',
 		after: "\t\tconst child = await this.process(signal);\n",
 		check: "test/stdio-helper-clients.test.mjs",
 		failure: /no replacement helper was spawned/,
@@ -192,8 +189,7 @@ const cases = [
 		name: "Windows per-child line buffer (#725)",
 		file: "src/platform/windows/helper.ts",
 		before: 'child.stdout.on("data", (chunk: string) => { buffer = this.onStdout(buffer, chunk); });',
-		after:
-			'child.stdout.on("data", (chunk: string) => { const g = globalThis as { tail?: string }; g.tail = this.onStdout(g.tail ?? "", chunk); });',
+		after: 'child.stdout.on("data", (chunk: string) => { const g = globalThis as { tail?: string }; g.tail = this.onStdout(g.tail ?? "", chunk); });',
 		check: "test/windows-helper-client.test.mjs",
 		failure: /timed out/,
 	},
@@ -250,8 +246,7 @@ const cases = [
 		name: "act pointer refusal runs after focus and preflight (#646)",
 		file: "native/macos/bridge.swift",
 		before: 'focusTargetForPhysicalInput()\n\t\t\tif delivery == "hid" { try preflight(point) }',
-		after:
-			'try refuseBlockedBeforePost([point])\n\t\t\tfocusTargetForPhysicalInput()\n\t\t\tif delivery == "hid" { try preflight(point) }',
+		after: 'try refuseBlockedBeforePost([point])\n\t\t\tfocusTargetForPhysicalInput()\n\t\t\tif delivery == "hid" { try preflight(point) }',
 		check: "test/app-policy.test.mjs",
 		failure: /must not refuse before focus and preflight/,
 	},
@@ -274,8 +269,8 @@ const cases = [
 	{
 		name: "blank blocklist env is unset (#646)",
 		file: "src/config.ts",
-		before: ".map((item) => item.trim()).filter(Boolean))];\n}",
-		after: ".map((item) => item.trim()))];\n}",
+		before: '.map((item) => item.trim()).filter(Boolean))];\n}',
+		after: '.map((item) => item.trim()))];\n}',
 		check: "test/app-policy.test.mjs",
 		failure: /default list applies|keeps defaults|cannot opt out|blank env|deep-equal/,
 	},
@@ -316,7 +311,7 @@ const cases = [
 		name: "browser state refuses the new actions with a code (#647)",
 		file: "src/bridge.ts",
 		before: 'throw new ComputerUseError("unsupported_command", `Browser transactions do not support',
-		after: "throw new Error(`Browser transactions do not support",
+		after: 'throw new Error(`Browser transactions do not support',
 		check: "test/act-outcomes.test.mjs",
 		failure: /coded unsupported_command/,
 	},
@@ -390,7 +385,7 @@ const cases = [
 	{
 		name: "desktop_input blocklist wire (#646)",
 		file: "src/desktop.ts",
-		before: "{ ...wire, blockedBundleIds }",
+		before: '{ ...wire, blockedBundleIds }',
 		after: "{ ...wire }",
 		check: "test/app-policy.test.mjs",
 		failure: /deep-equal|blockedBundleIds|undefined/,
@@ -441,8 +436,8 @@ const cases = [
 	{
 		name: "fake helper success replies (#724)",
 		file: "test/support/fake-helper.mjs",
-		before: "body: { ok: true, result } });",
-		after: "body: { ok: false, result } });",
+		before: 'body: { ok: true, result } });',
+		after: 'body: { ok: false, result } });',
 		check: "test/fake-helper.test.mjs",
 		failure: /serves requests, scripted errors with codes, and unknown commands/,
 	},
@@ -559,8 +554,7 @@ const cases = [
 	{
 		name: "macOS helper refuses an already aborted signal (#735)",
 		file: "src/platform/macos/helper.ts",
-		before:
-			"\t\t// An already-aborted signal never fires again, so the request would be sent and wait out its timeout.\n\t\tthrowIfAborted(signal);\n",
+		before: '\t\t// An already-aborted signal never fires again, so the request would be sent and wait out its timeout.\n\t\tthrowIfAborted(signal);\n',
 		after: "",
 		check: "test/macos-helper-client.test.mjs",
 		failure: /Missing expected rejection/,
@@ -577,8 +571,7 @@ const cases = [
 		name: "managed browser profile dir is owner-only (#519)",
 		file: "src/bridge.ts",
 		before: "const profileDir = await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`));",
-		after:
-			'const profileDir = await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`));\n\tawait (await import("node:fs/promises")).chmod(profileDir, 0o755);',
+		after: "const profileDir = await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`));\n\tawait (await import(\"node:fs/promises\")).chmod(profileDir, 0o755);",
 		check: "test/managed-browser-profile.test.mjs",
 		failure: /launch uses a private profile dir that ignores a squatted fixed name/,
 	},
@@ -593,8 +586,8 @@ const cases = [
 	{
 		name: "openPermissionPane forwards the signal (#707)",
 		file: "src/platform/macos/permissions.ts",
-		before: "{ kind }, { signal: permissionSignal }",
-		after: "{ kind }, {}",
+		before: '{ kind }, { signal: permissionSignal }',
+		after: '{ kind }, {}',
 		check: "test/permissions-browser.test.mjs",
 		failure: /openPermissionPane forwards the signal/,
 	},
@@ -644,8 +637,7 @@ const cases = [
 	{
 		name: "paste item is transient for clipboard managers (#647)",
 		file: "native/macos/bridge.swift",
-		before:
-			'let pasteTransientTypeIdentifiers = ["org.nspasteboard.TransientType", "org.nspasteboard.AutoGeneratedType", "org.nspasteboard.ConcealedType"]',
+		before: 'let pasteTransientTypeIdentifiers = ["org.nspasteboard.TransientType", "org.nspasteboard.AutoGeneratedType", "org.nspasteboard.ConcealedType"]',
 		after: "let pasteTransientTypeIdentifiers: [String] = []",
 		check: "test/macos-native-pure.test.mjs",
 		failure: /transient, auto-generated and concealed/,
@@ -654,8 +646,7 @@ const cases = [
 	{
 		name: "paste presses the command-map key for v (#647)",
 		file: "native/macos/bridge.swift",
-		before:
-			"(0..<UInt16(128)).first { keyboardLayoutCharacter(layoutData: layoutData, keyCode: $0, modifierState: commandModifierState) == character }",
+		before: "(0..<UInt16(128)).first { keyboardLayoutCharacter(layoutData: layoutData, keyCode: $0, modifierState: commandModifierState) == character }",
 		after: "nil",
 		check: "test/macos-native-pure.test.mjs",
 		failure: /plain Dvorak cmd\+v follows the layout/,
@@ -691,8 +682,7 @@ const cases = [
 	{
 		name: "paste stays off Universal Clipboard (#647)",
 		file: "native/macos/bridge.swift",
-		before:
-			"it must not sync to the user's other devices.\n\t\t\tpasteboard.prepareForNewContents(with: .currentHostOnly)",
+		before: "it must not sync to the user's other devices.\n\t\t\tpasteboard.prepareForNewContents(with: .currentHostOnly)",
 		after: "it must not sync to the user's other devices.\n\t\t\tpasteboard.clearContents()",
 		check: "test/app-policy.test.mjs",
 		failure: /Universal Clipboard/,
@@ -871,8 +861,7 @@ const cases = [
 	{
 		name: "strict headless TS rejection drift (upstream #112 deviation)",
 		file: "src/actions.ts",
-		before:
-			'if (action.action !== "typeText" && action.action !== "keypress" && action.action !== "paste") return undefined;',
+		before: 'if (action.action !== "typeText" && action.action !== "keypress" && action.action !== "paste") return undefined;',
 		after: 'if (action.action !== "typeText") return undefined;',
 		check: "test/invariants.test.mjs",
 		failure: /drifted from bridge\.swift/,
@@ -880,8 +869,7 @@ const cases = [
 	{
 		name: "strict headless keyboard preflight (upstream #112 deviation)",
 		file: "src/actions.ts",
-		before:
-			'if (action.action !== "typeText" && action.action !== "keypress" && action.action !== "paste") return undefined;',
+		before: 'if (action.action !== "typeText" && action.action !== "keypress" && action.action !== "paste") return undefined;',
 		after: "return undefined;",
 		check: "test/unpaired-act.test.mjs",
 		failure: /Missing expected rejection/,
@@ -889,8 +877,7 @@ const cases = [
 	{
 		name: "strict headless native rejection drift (upstream #112 deviation)",
 		file: "native/macos/bridge.swift",
-		before:
-			'} else if action == "keypress" {\n\t\t\ttry rejectInStrictHeadless("Keypress requires synthesized keyboard input, which strict headless mode prohibits")\n',
+		before: '} else if action == "keypress" {\n\t\t\ttry rejectInStrictHeadless("Keypress requires synthesized keyboard input, which strict headless mode prohibits")\n',
 		after: '} else if action == "keypress" {\n',
 		check: "test/invariants.test.mjs",
 		failure: /drifted from bridge\.swift/,
@@ -940,8 +927,7 @@ const cases = [
 	{
 		name: "web setText keyboard focus refusal (#646)",
 		file: "native/macos/bridge.swift",
-		before:
-			'if delivery == "hid" { try refuseBlockedKeyboardAfterFocus(preserveFocus: false) } else { focusTargetForPhysicalInput() }',
+		before: 'if delivery == "hid" { try refuseBlockedKeyboardAfterFocus(preserveFocus: false) } else { focusTargetForPhysicalInput() }',
 		after: "focusTargetForPhysicalInput()",
 		check: "test/app-policy.test.mjs",
 		failure: /web setText must wait for focus/,
