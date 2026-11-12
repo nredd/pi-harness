@@ -209,6 +209,16 @@ describe("daemon commands over the socket", () => {
 		await assert.rejects(pending, /Operation aborted\./);
 	});
 
+	test("an already aborted signal rejects at once and no request reaches the helper (#735)", async () => {
+		const fake = await fakeOn({ handlers: { look: ok(1) } });
+		const { MacosHelperClient } = await load({ external: true, fake });
+		const client = new MacosHelperClient();
+		await assert.rejects(client.command("look", {}, { signal: AbortSignal.abort() }), /Operation aborted\./);
+		await assert.rejects(client.daemonCommand("look", {}, 5_000, AbortSignal.abort()), /Operation aborted\./);
+		assert.equal(fake.requests.length, 0);
+		assert.equal(await client.command("look"), 1, "the client still works afterwards");
+	});
+
 	test("a socket connection error is a transport error, and a non-Error rejection is wrapped", async () => {
 		const fake = await fakeOn();
 		const { MacosHelperClient, HelperTransportError } = await load({ external: true, fake });

@@ -206,6 +206,8 @@ export class MacosHelperClient {
 	}
 
 	async daemonCommand<T>(cmd: string, args: Record<string, unknown>, timeoutMs: number, signal?: AbortSignal): Promise<T> {
+		// An already-aborted signal never fires again, so the request would be sent and wait out its timeout.
+		throwIfAborted(signal);
 		return await new Promise<T>((resolve, reject) => {
 			const id = `req_${++this.requestSequence}`;
 			const socket = net.createConnection(HELPER_SOCKET_PATH);
