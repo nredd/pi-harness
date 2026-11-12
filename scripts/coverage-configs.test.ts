@@ -15,7 +15,7 @@ interface Coverage {
 	reportOnFailure: boolean;
 	include: string[];
 	exclude: string[];
-	thresholds?: Record<string, Record<string, number>>;
+	thresholds?: Record<string, number | Record<string, number>>;
 }
 
 interface Entry {
@@ -149,6 +149,7 @@ const ZERO_UNCOVERED_FILES = [
 	"scripts/docs-generators/generate-tool-reference.mjs",
 	"scripts/rust-coverage.mjs",
 	"scripts/setup-helper.mjs",
+	"src/bridge.ts",
 	"src/outline-store.ts",
 	"src/outline.ts",
 	"src/platform/macos/helper-path.mjs",
@@ -263,10 +264,12 @@ test("computer-use pins every file already at zero uncovered, each owned (#645)"
 	assert.ok(thresholds, "the configuration pins files");
 	const root = fileURLToPath(new URL("../packages/computer-use/", import.meta.url));
 	const owned = new Set(include.flatMap((pattern) => globSync(pattern, { cwd: root })));
-	const pinned = Object.keys(thresholds);
+	const { statements, ...fileThresholds } = thresholds;
+	assert.equal(statements, 100, "aggregate statements stay fully covered until policy accounts for them");
+	const pinned = Object.keys(fileThresholds);
 	assert.deepEqual(pinned.sort(), [...ZERO_UNCOVERED_FILES]);
 	for (const path of pinned) {
 		assert.ok(owned.has(path), `${path} is an owned source file`);
-		assert.deepEqual(thresholds[path], { lines: 100, functions: 100, branches: 100 });
+		assert.deepEqual(fileThresholds[path], { lines: 100, functions: 100, branches: 100 });
 	}
 });
