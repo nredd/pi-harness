@@ -68,7 +68,9 @@ self-process/managed-child AX handles and synthetic nodes, never queries AX attr
 The child is reaped before assertions; a source-level guard forbids AX queries/actions.
 The sync-revert controls mutate window equality, destination ownership, optional flags and child order. Unexecuted live code
 stays in the denominator; this slice does not claim whole-file coverage or change runtime behavior.
-Local measurements and the unequal-window fixture lifecycle are recorded
+`node scripts/check-sync-reverts.mjs --validate-only` checks the real revert-case inventory
+against the ledger without running mutations; the normal command still runs every applicable
+mutation. Local measurements and the unequal-window fixture lifecycle are recorded
 [here](./docs/swift-ref-look-coverage.md).
 
 `npm run test:linux` uses disposable protocol children, not a native desktop helper. Its closed-stdin

@@ -1019,6 +1019,11 @@ try {
 	validateLedger(ledger, cases);
 	validateUpstreamRows(ledger, upstreamMarkdown);
 	validateLedgerOrder(ledger, upstreamMarkdown, readFileSync(fileURLToPath(import.meta.url), "utf8"));
+	if (process.argv.includes("--validate-only")) {
+		console.log("Sync ledger and actual revert cases validated");
+		rmSync(sandboxRoot, { recursive: true, force: true });
+		process.exit(0);
+	}
 	// Test sources/fixtures are intentionally NOT the npm payload: package.json `files` excludes
 	// them. Keep this self-contained package-root fixture list aligned with the checks selected above.
 	for (const entry of [

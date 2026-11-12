@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { test } from "vitest";
 import {
 	upstreamRowNames,
@@ -42,6 +44,14 @@ test("accepts complete structured metadata and rejects each missing status/drop 
 	assert.throws(() => validateLedger(ledger, []), /unknown drop control/);
 	assert.throws(() => validateLedger(ledger, [{ ...control, file: "src/b.ts" }]), /not owned/);
 	assert.throws(() => validateLedger(ledger, [{ ...control, check: "wrong" }]), /mismatch/);
+});
+
+test("real revert inventory agrees with the checked-in ledger", () => {
+	const script = fileURLToPath(new URL("../scripts/check-sync-reverts.mjs", import.meta.url));
+	const result = spawnSync(process.execPath, [script, "--validate-only"], { encoding: "utf8", timeout: 10_000 });
+	assert.ifError(result.error);
+	assert.equal(result.status, 0, result.stderr);
+	assert.match(result.stdout, /Sync ledger and actual revert cases validated/);
 });
 
 test("every checked-in disposition rejects missing status or reference; every patch requires its drop control", () => {

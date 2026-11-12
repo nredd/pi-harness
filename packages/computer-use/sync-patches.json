@@ -1077,6 +1077,7 @@
 			],
 			"files": [
 				"docs/swift-ref-look-coverage.md",
+				"native/macos/bridge.swift",
 				"native/macos/headless_tests.swift",
 				"native/macos/ref_look_tests.swift",
 				"scripts/check-sync-reverts.mjs",
