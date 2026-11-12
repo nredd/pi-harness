@@ -326,6 +326,14 @@ const cases = [
 		darwinOnly: true,
 	},
 	{
+		name: "bridge missing-target dead guard (#755)",
+		file: "src/bridge.ts",
+		before: "const current = operationState().currentTarget!;",
+		after: 'const current = operationState().currentTarget; if (!current) throw new Error("No current controlled window. Call observe_ui first to choose a target window.");',
+		check: "test/bridge-observe-query.test.mjs",
+		failure: /the unreachable missing-target guard must not return/,
+	},
+	{
 		name: "browser refs resolve from the hydrated state (#712)",
 		file: "src/bridge.ts",
 		before: "const target = ref ? baseSnapshot.targets.find((candidate) => candidate.ref === ref) : undefined;",
@@ -457,7 +465,8 @@ const cases = [
 		before: "if (!isBrowserContextId(state.contextId) && (target.truncated || regionChanged)) {",
 		after: "if (target.truncated || regionChanged) {",
 		check: "test/bridge-observe-query.test.mjs",
-		failure: /No current controlled window/,
+		// Restoring native routing now breaks the target invariant, not the deleted dead guard.
+		failure: /Cannot read properties of undefined \(reading 'pid'\)/,
 	},
 	{
 		name: "fake helper success replies (#724)",
@@ -768,7 +777,7 @@ const cases = [
 	{
 		name: "read_text blocked app re-check (#646)",
 		file: "src/bridge.ts",
-		before: "\tassertAppNotBlocked(currentTargetOrThrow());",
+		before: "\tassertAppNotBlocked(operationState().currentTarget!);",
 		after: "\t/* read_text policy dropped */",
 		check: "test/app-policy.test.mjs",
 		failure: /Missing expected rejection|app_blocked/,
@@ -867,7 +876,8 @@ const cases = [
 		before: "if (!isBrowserContextId(state.contextId) && shouldEscalateSearchOCR(",
 		after: "if (shouldEscalateSearchOCR(",
 		check: "test/bridge-observe-query.test.mjs",
-		failure: /No current controlled window/,
+		// Restoring native routing now breaks the target invariant, not the deleted dead guard.
+		failure: /Cannot read properties of undefined \(reading 'pid'\)/,
 	},
 	{
 		name: "secondaryAction advertised name check (#647)",

@@ -15,7 +15,7 @@ interface Coverage {
 	reportOnFailure: boolean;
 	include: string[];
 	exclude: string[];
-	thresholds?: Record<string, Record<string, number>>;
+	thresholds?: Record<string, number | Record<string, number>>;
 }
 
 interface Entry {
@@ -149,7 +149,7 @@ const PRODUCERS: Producer[] = [
 	},
 ];
 
-/** Files at 0/0/0 on every OS; adding or dropping a pin in the configuration must change this list too (#645). */
+/** Files at 0/0/0/0 on every OS; adding or dropping a pin must change this list too (#645). */
 const ZERO_UNCOVERED_FILES = [
 	"extensions/computer-use.ts",
 	"scripts/build-native.mjs",
@@ -158,6 +158,7 @@ const ZERO_UNCOVERED_FILES = [
 	"scripts/rust-coverage.mjs",
 	"scripts/setup-helper.mjs",
 	"src/actions.ts",
+	"src/bridge.ts",
 	"src/cdp.ts",
 	"src/config.ts",
 	"src/contract.ts",

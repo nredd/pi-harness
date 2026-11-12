@@ -24,6 +24,11 @@ requests are rejected and the helper is stopped; a later request starts a fresh 
 
 ## Tools
 
+State-consuming desktop tools require an observation; missing or blank `stateId` fails with
+`No observation state is available. Call observe_ui first.` The obsolete internal missing-window
+guard is removed without changing this boundary; the call-path proof is in the harness
+[coverage policy](../../docs/computer-use-coverage.md#missing-target-call-path-proof-755).
+
 All platforms retain `find_roots`, `observe_ui`, `search_ui`, `expand_ui`, `inspect_ui`, `act_ui`,
 `read_text`, `wait_for`, `launch_browser`, `navigate_browser`, and `evaluate_browser`.
 macOS additionally registers `desktop_screenshot` and `desktop_input` (including app activation and

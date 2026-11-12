@@ -263,6 +263,26 @@
 			}
 		},
 		{
+			"id": "bridge-missing-target-dead-arm-removal",
+			"purpose": "Delete the unreachable missing-target guard after tracing selection, desktop hydration, browser routing and capture preconditions; preserve the public no-observation error",
+			"rows": [
+				"Bridge missing-target dead-arm removal"
+			],
+			"files": [
+				"src/bridge.ts",
+				"test/bridge-observe-query.test.mjs"
+			],
+			"check": "test/bridge-observe-query.test.mjs",
+			"dropControls": [
+				"bridge missing-target dead guard (#755)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "Coverage-driven dead code removal (nredd/pi-harness#755); not filed"
+			}
+		},
+		{
 			"id": "bridge-read-text-dead-arm-removal",
 			"purpose": "Delete the unreachable browser snapshot and live resource identity guards in read_text; hydrated states supply both, and readAt still validates the epoch",
 			"rows": [
