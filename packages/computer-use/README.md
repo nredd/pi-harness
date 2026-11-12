@@ -53,6 +53,8 @@ source-bound references, and `npm run docs:check` validates them without buildin
 
 ## Checks and release
 
+[Native request framing tests](docs/native-request-framing.md) cover real Swift protocol paths without desktop access.
+
 `npm run check` runs the owned deterministic package checks. Vitest reports native and live suites off
 their platform or opt-in as skipped; this package remains outside the coverage gate. Never run
 `test:macos-live` on an occupied desktop: it manipulates fixture windows, apps, and the clipboard. It

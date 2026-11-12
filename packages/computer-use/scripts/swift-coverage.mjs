@@ -14,7 +14,7 @@ export const sources = [
 	"bridge.swift",
 	"helper_entry.swift",
 ].map((name) => `native/macos/${name}`);
-const testSources = ["native/macos/headless_tests.swift", "native/macos/cursor_motion_tests.swift"];
+const testSources = ["native/macos/headless_tests.swift", "native/macos/cursor_motion_tests.swift", "native/macos/request_framing_tests.swift"];
 
 function count(value) {
 	if (!Number.isSafeInteger(value) || value < 0) throw new Error("Invalid LLVM counter");

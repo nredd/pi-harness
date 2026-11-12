@@ -807,7 +807,7 @@ final class InputSuppressionGuard {
 final class Bridge {
 	private let protocolVersion = 7
 	private let refStore = AXRefStore()
-	private let activityGlow = ActivityGlowController()
+	private let activityGlow: ActivityGlowController?
 	private let inputSuppressionGuard = InputSuppressionGuard()
 	private let physicalInputLock = NSRecursiveLock()
 	private let supportsAgentCursor = CommandLine.arguments.contains("serve")
@@ -817,7 +817,25 @@ final class Bridge {
 	private var enhancedAccessibilityPids = Set<Int32>()
 	private let enhancedAccessibilityLock = NSLock()
 	private var stdinBuffer = Data()
-	private var output = FileHandle.standardOutput
+	private let dispatchRequest: (([String: Any], UUID?) throws -> Any)?
+	private let readSession: () -> [String: Any]?
+	private let writeOutput: (Data) throws -> Void
+	private let writeSocket: (Int32, UnsafeRawPointer, Int) -> Int
+
+	/// Narrow IO boundaries; defaults preserve the daemon's real dispatch and transport.
+	init(
+		activityGlow: ActivityGlowController? = ActivityGlowController(),
+		dispatchRequest: (([String: Any], UUID?) throws -> Any)? = nil,
+		readSession: @escaping () -> [String: Any]? = { CGSessionCopyCurrentDictionary() as? [String: Any] },
+		writeOutput: @escaping (Data) throws -> Void = { try FileHandle.standardOutput.write(contentsOf: $0) },
+		writeSocket: @escaping (Int32, UnsafeRawPointer, Int) -> Int = { Darwin.send($0, $1, $2, 0) }
+	) {
+		self.activityGlow = activityGlow
+		self.dispatchRequest = dispatchRequest
+		self.readSession = readSession
+		self.writeOutput = writeOutput
+		self.writeSocket = writeSocket
+	}
 	private var nextLookId: UInt64 = 0
 	private var lookRecords: [String: LookRecord] = [:]
 	private var lookRecordOrder: [String] = []
@@ -843,8 +861,7 @@ final class Bridge {
 				if data.isEmpty {
 					exit(0)
 				}
-				stdinBuffer.append(data)
-				processBufferedInput()
+				receiveInput(data)
 			}
 		}
 	}
@@ -898,7 +915,7 @@ final class Bridge {
 
 	private func processClient(_ client: Int32) {
 		let clientID = UUID()
-		defer { activityGlow.disconnect(clientID) }
+		defer { activityGlow?.disconnect(clientID) }
 		let clientInput = FileHandle(fileDescriptor: client, closeOnDealloc: true)
 		var buffer = Data()
 		let newline = Data([0x0A])
@@ -915,6 +932,12 @@ final class Bridge {
 		clientInput.closeFile()
 	}
 
+	/// Append arbitrary byte chunks; incomplete NDJSON frames remain buffered.
+	func receiveInput(_ data: Data) {
+		stdinBuffer.append(data)
+		processBufferedInput()
+	}
+
 	private func processBufferedInput() {
 		let newline = Data([0x0A])
 		while let range = stdinBuffer.range(of: newline) {
@@ -927,7 +950,7 @@ final class Bridge {
 		}
 	}
 
-	private func handleLine(_ line: String, to responseSocket: Int32? = nil, clientID: UUID? = nil) {
+	func handleLine(_ line: String, to responseSocket: Int32? = nil, clientID: UUID? = nil) {
 		let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
 		guard !trimmed.isEmpty else { return }
 
@@ -947,7 +970,7 @@ final class Bridge {
 			completionId = id
 
 			do {
-				let result = try handleRequest(object, clientID: clientID)
+				let result = try dispatchRequest?(object, clientID) ?? handleRequest(object, clientID: clientID)
 				send([
 					"id": id,
 					"ok": true,
@@ -993,7 +1016,7 @@ final class Bridge {
 		}
 	}
 
-	private func send(_ payload: [String: Any], to responseSocket: Int32? = nil) {
+	func send(_ payload: [String: Any], to responseSocket: Int32? = nil) {
 		guard JSONSerialization.isValidJSONObject(payload),
 			let data = try? JSONSerialization.data(withJSONObject: payload),
 			let line = String(data: data, encoding: .utf8),
@@ -1003,21 +1026,21 @@ final class Bridge {
 		}
 
 		guard let responseSocket else {
-			try? output.write(contentsOf: out)
+			try? writeOutput(out)
 			return
 		}
 		out.withUnsafeBytes { raw in
 			guard let base = raw.baseAddress else { return }
 			var offset = 0
 			while offset < raw.count {
-				let sent = Darwin.send(responseSocket, base.advanced(by: offset), raw.count - offset, 0)
+				let sent = writeSocket(responseSocket, base.advanced(by: offset), raw.count - offset)
 				if sent <= 0 { return }
 				offset += sent
 			}
 		}
 	}
 
-	private func recordCompletedRequest(_ id: String) {
+	func recordCompletedRequest(_ id: String) {
 		completedRequestLock.lock()
 		recentCompletedRequestIds.removeAll { $0 == id }
 		recentCompletedRequestIds.append(id)
@@ -1027,15 +1050,15 @@ final class Bridge {
 		completedRequestLock.unlock()
 	}
 
-	private func completedRequestIds() -> [String] {
+	func completedRequestIds() -> [String] {
 		completedRequestLock.lock()
 		defer { completedRequestLock.unlock() }
 		return recentCompletedRequestIds
 	}
 
-	private func handleRequest(_ request: [String: Any], clientID: UUID?) throws -> Any {
+	func handleRequest(_ request: [String: Any], clientID: UUID?) throws -> Any {
 		let cmd = try stringArg(request, "cmd")
-		if let refusal = lockedSessionRefusal(cmd: cmd, session: CGSessionCopyCurrentDictionary() as? [String: Any]) {
+		if let refusal = lockedSessionRefusal(cmd: cmd, session: readSession()) {
 			throw BridgeFailure(message: refusal.message, code: refusal.code)
 		}
 
@@ -1052,7 +1075,7 @@ final class Bridge {
 			guard let clientID, let active = boolArg(request, "active") else {
 				throw BridgeFailure(message: "Activity glow requires a connected client and boolean 'active' value", code: "invalid_args")
 			}
-			activityGlow.setActive(active, for: clientID)
+			activityGlow?.setActive(active, for: clientID)
 			return ["active": active]
 		case "shutdown":
 			// Reply first, then exit: the caller relaunches the helper to get a
@@ -1108,21 +1131,21 @@ final class Bridge {
 		}
 	}
 
-	private func stringArg(_ request: [String: Any], _ key: String) throws -> String {
+	func stringArg(_ request: [String: Any], _ key: String) throws -> String {
 		if let value = request[key] as? String {
 			return value
 		}
 		throw BridgeFailure(message: "Missing string argument '\(key)'", code: "invalid_args")
 	}
 
-	private func optionalStringArg(_ request: [String: Any], _ key: String) -> String? {
+	func optionalStringArg(_ request: [String: Any], _ key: String) -> String? {
 		if let value = request[key] as? String {
 			return value
 		}
 		return nil
 	}
 
-	private func intArg(_ request: [String: Any], _ key: String) throws -> Int {
+	func intArg(_ request: [String: Any], _ key: String) throws -> Int {
 		if let value = request[key] as? Int {
 			return value
 		}
@@ -1136,11 +1159,11 @@ final class Bridge {
 	}
 
 	/// `windowId` from the wire, treating invalid ids as absent (unpaired roots have no CG window).
-	private func positiveWindowId(_ request: [String: Any]) -> UInt32? {
+	func positiveWindowId(_ request: [String: Any]) -> UInt32? {
 		normalizedWindowId(optionalIntArg(request, "windowId"))
 	}
 
-	private func optionalIntArg(_ request: [String: Any], _ key: String) -> Int? {
+	func optionalIntArg(_ request: [String: Any], _ key: String) -> Int? {
 		if let value = request[key] as? Int {
 			return value
 		}
@@ -1153,13 +1176,13 @@ final class Bridge {
 		return nil
 	}
 
-	private func boolArg(_ request: [String: Any], _ key: String) -> Bool? {
+	func boolArg(_ request: [String: Any], _ key: String) -> Bool? {
 		if let value = request[key] as? Bool { return value }
 		if let value = request[key] as? NSNumber { return value.boolValue }
 		return nil
 	}
 
-	private func doubleArg(_ request: [String: Any], _ key: String) throws -> Double {
+	func doubleArg(_ request: [String: Any], _ key: String) throws -> Double {
 		if let value = request[key] as? Double {
 			return value
 		}
@@ -1215,7 +1238,7 @@ final class Bridge {
 			"arch": arch,
 			"accessibility": permissions["accessibility"] ?? false,
 			"screenRecording": permissions["screenRecording"] ?? false,
-			"activityGlowActive": activityGlow.isActive,
+			"activityGlowActive": activityGlow?.isActive ?? false,
 			"recentCompletedRequestIds": completedRequestIds(),
 		]
 		if let parentPath {
