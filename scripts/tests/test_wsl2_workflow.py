@@ -1038,6 +1038,11 @@ def test_in_guest_setup_needs_a_runner_checkout_and_an_unprivileged_user(tmp_pat
     assert result.returncode != 0
 
 
+DISABLED_WSL_POLICY = (
+    "[automount]\nenabled=false\nmountFsTab=false\n[interop]\nenabled=false\nappendWindowsPath=false\n"
+)
+
+
 def run_smoke(
     tmp_path: Path,
     blocked: bool,
@@ -1046,6 +1051,8 @@ def run_smoke(
     userns: bool = False,
     ns_limit: str = "0",
     control: bool = True,
+    policy: str | None = DISABLED_WSL_POLICY,
+    policy_stat: str = "0 644",
 ) -> subprocess.CompletedProcess[str]:
     """Run the real smoke script against stub network tools.
 
@@ -1056,6 +1063,8 @@ def run_smoke(
         userns (bool): Whether `unshare -Urn` succeeds, i.e. unprivileged user namespaces are enabled.
         ns_limit (str): Value of `user.max_user_namespaces`.
         control (bool): Whether the public positive-control connection (port 443) opens.
+        policy (str | None): Fixture configuration, or None for a missing file.
+        policy_stat (str): Stub owner and octal permissions reported by stat.
 
     Returns:
         subprocess.CompletedProcess[str]: The smoke run; `aarch64` and a non-root, no-sudo user are stubbed.
@@ -1080,12 +1089,21 @@ def run_smoke(
         "ip": "#!/bin/sh\necho 'default via 172.20.0.1 dev eth0'\n",
         "nft": "#!/bin/sh\nexit 1\n",
         "findmnt": "#!/bin/sh\nexit 1\n",
+        "stat": f'#!/bin/sh\n[ -f "$3" ] || exit 1\nprintf "%s\\n" {shlex.quote(policy_stat)}\n',
         "timeout": f"#!/bin/sh\nshift\n{refuse}exit 0\n",
     }
     for name, body in stubs.items():
         (commands / name).write_text(body, encoding="utf-8")
         (commands / name).chmod(0o755)
     root = tmp_path / "root"
+    (root / "etc").mkdir(parents=True)
+    if policy is not None:
+        (root / "etc/wsl.conf").write_text(policy, encoding="utf-8")
+    # WSL can retain these paths even when an actual Windows executable is rejected.
+    (root / "proc/sys/fs/binfmt_misc").mkdir(parents=True)
+    (root / "proc/sys/fs/binfmt_misc/WSLInterop").touch()
+    (root / "run/WSL").mkdir(parents=True)
+    (root / "run/WSL/17_interop").touch()
     (root / "proc/sys/net/ipv6/conf/all").mkdir(parents=True)
     (root / "proc/sys/net/ipv6/conf/all/disable_ipv6").write_text("1\n")
     (root / "proc/sys/user").mkdir(parents=True)
@@ -1117,6 +1135,39 @@ def test_smoke_passes_when_every_private_target_is_blocked(tmp_path: Path) -> No
     ):
         assert f"blocked: {target}" in result.stdout, target
     assert "loopback:8080 closed" in result.stdout
+    assert "interop and automount are explicitly disabled" in result.stdout
+    assert "note: WSLInterop registration present" in result.stdout
+    assert "note: WSL broker paths present" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        None,
+        "not an ini file",
+        "[interop]\nenabled=false\n",
+        DISABLED_WSL_POLICY.replace("enabled=false", "enabled=true"),
+        DISABLED_WSL_POLICY.replace("appendWindowsPath=false", "appendWindowsPath=true"),
+        DISABLED_WSL_POLICY + "[interop]\nenabled=true\n",
+        "[DEFAULT]\nenabled=false\nappendWindowsPath=false\nmountFsTab=false\n[interop]\n[automount]\n",
+        DISABLED_WSL_POLICY.replace("enabled=false", "enabled=off"),
+        DISABLED_WSL_POLICY.replace("enabled=false", "enabled=no"),
+        DISABLED_WSL_POLICY.replace("enabled=false", "enabled=0"),
+    ],
+)
+def test_smoke_rejects_missing_ambiguous_or_enabled_policy(tmp_path: Path, policy: str | None) -> None:
+    """Residual plumbing is harmless only alongside an explicitly disabled, valid policy."""
+    result = run_smoke(tmp_path, blocked=True, policy=policy)
+    assert result.returncode == 1
+    assert "::error::wsl.conf does not explicitly disable interop and automount" in result.stdout
+
+
+@pytest.mark.parametrize("policy_stat", ["1001 644", "0 664", "0 646", "0 invalid"])
+def test_smoke_rejects_unprotected_policy(tmp_path: Path, policy_stat: str) -> None:
+    """The runner must not supply a writable configuration to make the policy check pass."""
+    result = run_smoke(tmp_path, blocked=True, policy_stat=policy_stat)
+    assert result.returncode == 1
+    assert "::error::wsl.conf is missing or not protected" in result.stdout
 
 
 def test_smoke_fails_when_unprivileged_user_namespaces_are_enabled(tmp_path: Path) -> None:

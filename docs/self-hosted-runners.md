@@ -40,6 +40,8 @@ All register repo-scoped with single-use JIT configs: a runner takes one job and
 
 `.github/workflows/runner-smoke.yml` runs on same-repo PRs touching it and on `workflow_dispatch`. Each pool must show: runner name and arch, public internet reachable, private targets (`192.168.x`, `100.x` tailnet, `10.x`) blocked. `pi-wsl2` runs `scripts/wsl2_smoke.sh`, which also checks non-root, no sudo, aarch64, IPv6 off, no `/mnt/c`, no WSL interop, no Windows path or `.exe` on `PATH`, no drvfs/9p mounts and closed loopback ports. The host's address and the dev environment's address and ports come from the runner's environment (`SMOKE_HOST_IP`, `SMOKE_DEV_IP`, `SMOKE_DEV_PORTS`), never from this repository. The same script is the first step of every `pi-wsl2` cell in `ci.yml`.
 
+The WSL smoke requires a root-owned, non-group/world-writable `/etc/wsl.conf` with explicit `false` values for interop, Windows PATH injection, automount and fstab mounting in their respective sections. Inherited `[DEFAULT]` settings and boolean aliases such as `off`, `no` or `0` do not satisfy this check. WSL may retain binfmt registrations or broker paths even with execution disabled; those are diagnostic notes, not evidence of access. Mount, PATH and Windows-command checks remain blocking. Image acceptance must separately verify rejection of a checksum-verified Windows executable, including explicit broker overrides; mocked smoke fixtures do not prove that runtime property.
+
 ## Remaining
 
 - `pi-macos` availability: a sleeping laptop leaves its jobs queued forever. `caffeinate -s` keeps it awake on AC; add a hosted fallback (route to hosted when no `pi-macos` runner is online or the job queues past N minutes) before making `pi-macos` a required cell
