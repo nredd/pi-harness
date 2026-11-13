@@ -691,22 +691,23 @@ Flake policy (migration plan section 7):
   process, any other runner, or with other output is a new correctness failure and blocks. The
   allowance lapses when a macOS update removes the `_LSApplicationCheckIn` abort, or when a different
   signature appears, which blocks
-- Runner-supervisor interruption on self-hosted macOS runners (#761): the job's check-run annotation reads
+- Runner-supervisor kill on self-hosted macOS runners (#761): the job's check-run annotation reads
   `The self-hosted runner lost communication with the server`, a step stays `in_progress` with no
-  conclusion, the job log is missing (`gh run view --log-failed` reports `log not found`) and no test
-  assertion exists. Runs `43177772438` (two jobs, attempt 1) and `43201041536` (one job, attempt 1) match.
-  For both, the runner supervisor logged `idle past ttl, killing` for the exact runner while its job was
-  executing (07:57:54 and 10:55:03 UTC), and GitHub marked the job failed only later (08:06:54 and 11:04:10
-  UTC). Why the scheduler classified those runners as idle is NOT established. Mitigation `nredd/ci-runners#4`
-  is merged; it counts as fixed only once deployed. The failed job is neither a pass nor a repository failure.
-  To triage: read the annotation (`gh api repos/nredd/pi-harness/check-runs/<job id>/annotations`), then the
-  supervisor log for that exact runner (owner only). Only with BOTH matching (annotation, plus a supervisor
-  kill of that runner while the job ran) is ONE fresh rerun of each affected whole job allowed, when nothing
-  else failed; it must pass, and both attempts stay in the attempt history. Several jobs lost to the same
-  supervisor kill are one incident. Until the rerun passes, the cell is a failed required check. A matching
-  annotation with an unavailable supervisor log or no kill of that runner, a log-less failure without the
-  annotation, or any other failure is a new signature and blocks. Once the fix is deployed, a recurrence
-  blocks; record each occurrence on #761 (run, job, runner). Never read missing logs as a pass
+  conclusion, the job log is missing (`gh run view --log-failed` reports `log not found`, the logs API
+  returns 404) and no test assertion exists. Attempt 1 of `43177772438` (two jobs) and of `43201041536`
+  (one job) match. In each the supervisor logged `idle past ttl, killing` for the exact runner while its job
+  was executing, and GitHub marked the job failed later: `43177772438` killed 2026-11-12 07:57:54 UTC, failed
+  08:06:54; `43201041536` killed 2026-11-12 10:55:03, failed 11:04:10. Why the scheduler classified those
+  runners as idle is NOT established. Mitigation `nredd/ci-runners#4` is merged; it counts as fixed only once
+  deployed. The failed job proves nothing about the repository. To triage: read the annotation (`gh api
+  repos/nredd/pi-harness/check-runs/<job id>/annotations`), then the supervisor log for that exact runner
+  (runner owner only). Before the fix is deployed, and only with BOTH matching (annotation, plus a supervisor
+  kill of that runner while the job ran), ONE fresh rerun of each affected whole job is allowed when nothing
+  else failed; it must pass, and both attempts stay in the attempt history. Jobs lost to the same supervisor
+  event are one incident. Until the rerun passes, the cell is a failed required check. A matching annotation
+  with an unavailable supervisor log or no kill of that runner, a log-less failure without the annotation,
+  or any other failure is a new signature and blocks. After the fix is deployed, a recurrence blocks;
+  record each occurrence on #761 (run, job, runner). Never read missing logs as a pass
 - Subagents' genuine manager-reload fixture also includes synchronous TypeScript preparation and child
   imports inside its 5 s test deadline. PR #138's macOS failure reported that deadline at 5597 ms
   ([here](https://github.com/nredd/pi-harness/actions/runs/40369078357/job/121734701111)). Controlled
