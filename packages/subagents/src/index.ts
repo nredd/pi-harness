@@ -59,6 +59,7 @@ import { getPackageAgentsGate, getPackageWorkflowsGate, invalidatePackageCache, 
 import { answerPlanGateQueries, PLAN_PARK_REFUSAL, PLAN_SCHEDULE_REFUSAL, planningNow, planSteerBlocked, planSteerRefusal } from "./plan-mode-children.js";
 import { getBudgetPolicy, setBudgetPolicy } from "./process-budget.js";
 import { checkAdmission, describeBlock, mayPark, modelRef, QUOTA_RESTART_GRACE_MS } from "./quota-admission.js";
+import { savedAgentNote } from "./saved-agent-record.js";
 import { SubagentScheduler } from "./schedule.js";
 import { resolveStorePath, ScheduleStore } from "./schedule-store.js";
 import { applyAndEmitLoaded, loadSettings, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
@@ -755,6 +756,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       id: record.id, type: record.type, description: record.description,
       status: record.status, result: record.result, error: record.error,
       startedAt: record.startedAt, completedAt: record.completedAt,
+      ...(record.outputFile ? { outputFile: record.outputFile } : {}),
+      ...(record.sessionFile ? { sessionFile: record.sessionFile } : {}),
       ...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
       ...(record.modelTier ? { modelTier: record.modelTier } : {}),
     };
@@ -1202,6 +1205,18 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
       unwatchDetached?.();
       unwatchDetached = watchDetached(sessionFile, () => deliverDetached(sessionFile));
       deliverDetached(sessionFile);
+    }
+    // A process restart loses the manager, not the saved parent or its output files.
+    // Restore diagnostics only: never invent a running record, re-prompt a child,
+    // or mistake a restart for a TTL eviction. Live/detached records take priority.
+    const saved = new Map<string, NonNullable<ReturnType<typeof savedAgentNote>>>();
+    for (const entry of ctx.sessionManager?.getBranch?.() ?? []) {
+      if (entry.type !== "custom" || entry.customType !== "subagents:record") continue;
+      const note = savedAgentNote(entry.data);
+      if (note) saved.set(note.id, note);
+    }
+    for (const note of saved.values()) {
+      if (!resolveAgentRef(note.id) && !manager.getEvictedNote(note.id)) manager.rememberEvicted(note);
     }
     announceSurvivors();
     unwatchAnnounce ??= pi.events.on("subagents:announce_survivors", announceSurvivors);

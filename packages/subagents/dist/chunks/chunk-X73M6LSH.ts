@@ -3969,7 +3969,8 @@ function describeEvicted(note) {
   const disclosure = modelSelectionNote(note);
   const fallback = disclosure ? `
 ${disclosure}` : "";
-  return `Agent "${note.id}" (${note.description}) ${note.status}, evicted after ${note.evictedAfterMin} min${where}${fallback}`;
+  const state2 = note.fromSavedSession ? `last recorded status: ${note.status}, recovered from saved parent session (no live registry record)` : `${note.status}, evicted after ${note.evictedAfterMin} min`;
+  return `Agent "${note.id}" (${note.description}) ${state2}${where}${fallback}`;
 }
 var MAX_TOMBSTONES = 100;
 function assertValidSpawnCwd(cwd) {
@@ -6744,4 +6745,4 @@ export {
   RESULT_MAX_CHARS,
   ConversationViewer
 };
-//# sourceMappingURL=chunk-TMSESUK2.ts.map
+//# sourceMappingURL=chunk-X73M6LSH.ts.map

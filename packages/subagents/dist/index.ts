@@ -150,7 +150,7 @@ import {
   toReportedUsage,
   withLeadingFlag,
   writeInitialEntry
-} from "./chunks/chunk-TMSESUK2.ts";
+} from "./chunks/chunk-X73M6LSH.ts";
 
 // src/index.ts
 import { existsSync as existsSync7, mkdirSync as mkdirSync4, readFileSync as readFileSync7, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "node:fs";
@@ -823,6 +823,24 @@ function fairShares(lengths, cap) {
     remaining--;
   }
   return shares;
+}
+
+// src/saved-agent-record.ts
+function savedAgentNote(data) {
+  if (!data || typeof data !== "object") return void 0;
+  const row = data;
+  if (typeof row.id !== "string" || typeof row.type !== "string" || typeof row.description !== "string") return void 0;
+  if (row.status !== "completed" && row.status !== "steered" && row.status !== "error" && row.status !== "aborted" && row.status !== "stopped") return void 0;
+  const transcript = typeof row.outputFile === "string" ? row.outputFile : typeof row.sessionFile === "string" ? row.sessionFile : void 0;
+  return {
+    id: row.id,
+    type: row.type,
+    description: row.description,
+    status: row.status,
+    evictedAfterMin: 0,
+    fromSavedSession: true,
+    ...transcript ? { transcript } : {}
+  };
 }
 
 // src/schedule.ts
@@ -4096,7 +4114,7 @@ var WorkflowDialog = class {
 
 // src/ui/workflow-menu.ts
 async function showWorkflowDialog(ctx, task, deps) {
-  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-ZTHBHXTU.ts");
+  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-GUPF3OPK.ts");
   let overlay;
   await ctx.ui.custom(
     (tui, theme, _keybindings, done) => new WorkflowDialog(
@@ -6907,6 +6925,8 @@ ${notifications}${trailer}`,
       error: record.error,
       startedAt: record.startedAt,
       completedAt: record.completedAt,
+      ...record.outputFile ? { outputFile: record.outputFile } : {},
+      ...record.sessionFile ? { sessionFile: record.sessionFile } : {},
       ...record.modelFallback ? { modelFallback: record.modelFallback } : {},
       ...record.modelTier ? { modelTier: record.modelTier } : {}
     };
@@ -7170,6 +7190,15 @@ Full transcript available at: ${record.outputFile}` : "";
       unwatchDetached?.();
       unwatchDetached = watchDetached(sessionFile, () => deliverDetached(sessionFile));
       deliverDetached(sessionFile);
+    }
+    const saved = /* @__PURE__ */ new Map();
+    for (const entry of ctx.sessionManager?.getBranch?.() ?? []) {
+      if (entry.type !== "custom" || entry.customType !== "subagents:record") continue;
+      const note = savedAgentNote(entry.data);
+      if (note) saved.set(note.id, note);
+    }
+    for (const note of saved.values()) {
+      if (!resolveAgentRef(note.id) && !manager.getEvictedNote(note.id)) manager.rememberEvicted(note);
     }
     announceSurvivors();
     unwatchAnnounce ??= pi.events.on("subagents:announce_survivors", announceSurvivors);
