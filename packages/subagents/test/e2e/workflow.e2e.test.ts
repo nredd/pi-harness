@@ -27,6 +27,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { encodeCwd } from "../../src/output-file.js";
 import { readJournal } from "../../src/workflow/journal.js";
 import { workflowConcurrency } from "../../src/workflow/runtime.js";
+import { hermeticDir } from "../helpers/boot-extension.js";
 import { runPrintMode, toolCallsNamed, toolResultsNamed } from "../helpers/print-mode-runner.js";
 
 /**
@@ -94,7 +95,8 @@ describe("Workflow end to end", () => {
     { nested: false, stop: true },
     { nested: true, stop: true },
   ])("retains background ownership after parent return (codemode=$nested, stop=$stop)", async ({ nested, stop }) => {
-    const cwd = workflowProject();
+    const project = hermeticDir({ settings: { workflowsEnabled: true } });
+    const cwd = project.dir;
     const input = join(cwd, "input.txt");
     writeFileSync(input, "WORKFLOW-READ-RESULT");
     // Seventeen items always exceed the runtime's maximum sixteen permits.
@@ -109,33 +111,35 @@ describe("Workflow end to end", () => {
     const barrier = new Promise<void>(resolve => { release = resolve; });
     let stopId: string | undefined;
     let stopSent = false;
-    const run = await runPrintMode({
-      prompt: "launch synthetic fanout",
-      cwd,
-      live: false,
-      hold: false,
-      maxModelCalls: 128,
-      extensionFactories: [createCodemodeExtension({ mode: "on" })],
-      onParentSession: session => session.setActiveToolsByName([...session.getActiveToolNames(), "codemode"]),
-      respond: async context => {
-        const text = asText(context);
-        if (!isParentContext(context)) {
-          if (!text.includes("WORKFLOW-READ-RESULT")) return fauxToolCall("read", { path: input });
-          readResults.push(text);
-          await barrier;
-          return fauxText("CHILD-FINISHED");
-        }
-        if (stopId !== undefined && !stopSent) {
-          stopSent = true;
-          return fauxToolCall("stop_subagent", { agent_id: stopId });
-        }
-        if (text.includes("Task ID")) return fauxText("PARENT-RETURNED");
-        return nested
-          ? fauxToolCall("codemode", { code: `text(await tools.SubagentWorkflow(${JSON.stringify(params)}));` })
-          : fauxToolCall("SubagentWorkflow", params);
-      },
-    });
+    let run: Awaited<ReturnType<typeof runPrintMode>> | undefined;
     try {
+      run = await runPrintMode({
+        prompt: "launch synthetic fanout",
+        cwd,
+        live: false,
+        hold: false,
+        maxModelCalls: 128,
+        extensionFactories: [createCodemodeExtension({ mode: "on" })],
+        onParentSession: session => session.setActiveToolsByName([...session.getActiveToolNames(), "codemode"]),
+        respond: async context => {
+          const text = asText(context);
+          if (!isParentContext(context)) {
+            if (!text.includes("WORKFLOW-READ-RESULT")) return fauxToolCall("read", { path: input });
+            readResults.push(text);
+            await barrier;
+            return fauxText("CHILD-FINISHED");
+          }
+          if (stopId !== undefined && !stopSent) {
+            stopSent = true;
+            return fauxToolCall("stop_subagent", { agent_id: stopId });
+          }
+          if (text.includes("Task ID")) return fauxText("PARENT-RETURNED");
+          return nested
+            ? fauxToolCall("codemode", { code: `text(await tools.SubagentWorkflow(${JSON.stringify(params)}));` })
+            : fauxToolCall("SubagentWorkflow", params);
+        },
+      });
+      const session = run.parentSession;
       expect(run.responseText).toBe("PARENT-RETURNED");
       const launch = toolResultsNamed(run.parentSession, nested ? "codemode" : "SubagentWorkflow").join("\n");
       const id = launch.match(/Task ID: (wf_[a-z0-9]+)/)?.[1];
@@ -150,7 +154,7 @@ describe("Workflow end to end", () => {
         await run.parentSession.prompt("stop the workflow");
       }
       release();
-      const notifications = () => run.parentSession.messages.filter(message =>
+      const notifications = () => session.messages.filter(message =>
         message.role === "custom" && typeof message.content === "string" && message.content.includes(`<task-id>${id}</task-id>`),
       );
       expect(await waitFor(() => notifications().length > 0)).toBe(true);
@@ -171,8 +175,8 @@ describe("Workflow end to end", () => {
       }
     } finally {
       release();
-      await run.dispose();
-      rmSync(cwd, { recursive: true, force: true });
+      await run?.dispose();
+      project.restore();
     }
   }, 90_000);
 
