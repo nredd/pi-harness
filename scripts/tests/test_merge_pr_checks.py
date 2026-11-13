@@ -632,6 +632,7 @@ def reviewer_template_report(axis: str, sha: str, *, inline_none: bool, no_spec:
     "mode",
     [
         "green",
+        "empty-repo",
         "head-drift",
         "unresolved-review",
         "optional-failure",
@@ -780,6 +781,7 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
             sha,
             "standards-id",
             "standards-id" if mode == "duplicate-id" else "spec-id",
+            *(["", ""] if mode == "empty-repo" else []),
         ],
         env=os.environ
         | {
@@ -799,6 +801,7 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
     assert not poisoned.exists(), result.stderr
     if mode in (
         "green",
+        "empty-repo",
         "poisoned-path",
         "git-quoted-source",
         "read-quoted-source",

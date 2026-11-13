@@ -90,14 +90,9 @@ describe("merge boundary", () => {
 		]);
 	});
 	it.each(
-		[
-			[],
-			[...argv, "", "r", "extra"],
-			["1", "bad", "s", "p"],
-			["1", sha, "s", "s"],
-			["1", sha, "!", "p"],
-			["1", sha, "s", "!"],
-		].map((args) => ({ args })),
+		[[], ["1", "bad", "s", "p"], ["1", sha, "s", "s"], ["1", sha, "!", "p"], ["1", sha, "s", "!"]].map((args) => ({
+			args,
+		})),
 	)("refuses invalid argv $args", ({ args }) => {
 		expect(main(args, env)).toBe(1);
 		expect(calls).not.toHaveBeenCalled();
@@ -126,6 +121,11 @@ describe("merge boundary", () => {
 		});
 		expect(main(argv, env)).toBe(1);
 		expect(calls).toHaveBeenCalledTimes(failure + 1);
+	});
+	it("preserves empty repository default and ignores legacy trailing arguments", () => {
+		merge([...argv, "", "", "legacy-extra"], env);
+		expect(calls.mock.calls[1]?.[1]).toContain("nredd/pi-harness");
+		expect(calls.mock.calls[1]?.[1]?.[0]).toEqual(expect.stringContaining("merge_pr_checks.py"));
 	});
 	it("preserves non-harness repositories", () => {
 		merge([...argv, "", "example/project"], env);

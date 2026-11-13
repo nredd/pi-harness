@@ -145,9 +145,9 @@ export function otherChecks(gh: string, pr: string, repo: string, sha: string): 
 
 /** Validate every input and read-only gate before posting a receipt and requesting a pinned merge. */
 export function merge(argv: string[], env: NodeJS.ProcessEnv): void {
-	if (argv.length < 4 || argv.length > 6)
+	if (argv.length < 4)
 		throw new Error("Usage: merge-pr.sh <pr> <full-sha> <standards-task-id> <spec-task-id> [history-file] [repo]");
-	const [pr, sha, std, spec, history = "", repo = "nredd/pi-harness"] = argv as [
+	const [pr, sha, std, spec, history = "", repository = ""] = argv as [
 		string,
 		string,
 		string,
@@ -155,6 +155,8 @@ export function merge(argv: string[], env: NodeJS.ProcessEnv): void {
 		string?,
 		string?,
 	];
+	// Match the shell's ${6:-default}: empty and absent both select the harness.
+	const repo = repository || "nredd/pi-harness";
 	if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error("Expected full reviewed HEAD SHA");
 	if (std === spec) throw new Error("Standards and Spec require distinct transcript IDs");
 	if (!/^[a-zA-Z0-9-]+$/.test(std) || !/^[a-zA-Z0-9-]+$/.test(spec)) throw new Error("Invalid transcript ID");
