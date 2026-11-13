@@ -44,8 +44,10 @@ function isOutstandingFailure(record: AgentRecord): boolean {
 const FLEET_KEY = "fleet";
 /** Max fleet rows shown at once; extras collapse into indicator rows. */
 const MAX_AGENT_ROWS = 5;
-/** Agent rows left when overflow reserves the two indicator rows. */
-const OVERFLOW_AGENT_ROWS = Math.max(1, MAX_AGENT_ROWS - 2);
+/** Agent rows left in the block once an overflowing window shows both indicators. */
+const MIDDLE_AGENT_ROWS = Math.max(1, MAX_AGENT_ROWS - 2);
+/** Agent rows at a scroll edge: the edge's unused indicator slot holds one more row. */
+const EDGE_AGENT_ROWS = MAX_AGENT_ROWS - 1;
 /** Re-render cadence so elapsed/token stats tick while agents run. */
 const TICK_MS = 200;
 /** How long a finished agent lingers in the list before it drops out. */
@@ -839,17 +841,27 @@ export class FleetList {
     lines.push("");
     lines.push(truncateToWidth(`  ${this.bullet(0, sel, theme)} main`, width));
 
-    // At the cap, the row block holds rows alone. Once it overflows, reserve
-    // two of those slots for indicators, keeping the block exactly cap lines
-    // tall while the selected row stays in the agent window.
+    // At the cap, the row block holds rows alone. Once it overflows, the block
+    // is still exactly cap lines: an edge shows one indicator plus EDGE rows,
+    // the middle both indicators plus MIDDLE rows. No slot is ever blank.
+    // Selection-follow: the selected row sits at the window's bottom edge.
     const overflow = rows.length > MAX_AGENT_ROWS;
-    const visible = Math.min(overflow ? OVERFLOW_AGENT_ROWS : MAX_AGENT_ROWS, rows.length);
     const selRow = Math.max(0, sel - 1);
-    const start = selRow < visible ? 0 : selRow - visible + 1;
+    let start = 0;
+    let visible = rows.length;
+    if (overflow) {
+      if (selRow < EDGE_AGENT_ROWS) {
+        visible = EDGE_AGENT_ROWS;
+      } else if (selRow === rows.length - 1) {
+        visible = EDGE_AGENT_ROWS;
+        start = rows.length - EDGE_AGENT_ROWS;
+      } else {
+        visible = MIDDLE_AGENT_ROWS;
+        start = selRow - MIDDLE_AGENT_ROWS + 1;
+      }
+    }
     const hiddenBelow = rows.length - (start + visible);
 
-    // Keep both indicator slots in the row-block budget. Empty edge slots go
-    // below the visible content, never between main and the first child.
     // Column widths come from EVERY agent row, not the window, so scrolling
     // never shifts a column; a column too wide for the terminal is dropped
     // lowest-value first, never state, elapsed, tokens or cost.
@@ -868,7 +880,7 @@ export class FleetList {
       width - flagWidth,
     );
     if (start > 0) {
-      lines.push(rightAlign("", theme.fg("dim", `↑ ${start} more: ${summarizeHidden(rows.slice(0, start))}`), width));
+      lines.push(this.renderOverflow(`↑ ${start} more: ${summarizeHidden(rows.slice(0, start))}`, width, theme));
     }
     for (let a = start; a < start + visible; a++) {
       const row = rows[a];
@@ -880,13 +892,17 @@ export class FleetList {
       );
     }
     if (hiddenBelow > 0) {
-      lines.push(rightAlign("", theme.fg("dim", `↓ ${hiddenBelow} more: ${summarizeHidden(rows.slice(start + visible))}`), width));
-    } else if (overflow) lines.push("");
-    if (start === 0 && overflow) lines.push("");
+      lines.push(this.renderOverflow(`↓ ${hiddenBelow} more: ${summarizeHidden(rows.slice(start + visible))}`, width, theme));
+    }
     // pi stacks below-editor widgets directly on its footer with no spacer (#351).
     lines.push("");
 
     return lines;
+  }
+
+  /** Overflow indicator: dim, left-aligned with its arrow in the bullet column, truncated never wrapped. */
+  private renderOverflow(text: string, width: number, theme: Theme): string {
+    return truncateToWidth("  " + theme.fg("dim", text), width);
   }
 
   private bullet(rosterIndex: number, sel: number, theme: Theme): string {
