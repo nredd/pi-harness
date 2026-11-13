@@ -324,8 +324,8 @@ interface ThinkingCase {
   virtualLevels: readonly ModelThinkingLevel[];
   /** Whether the physical model supports reasoning; core clamps the routed level to `off` without it. */
   reasoning: boolean;
-  /** Level the Agent call asks for. */
-  asked: ModelThinkingLevel;
+  /** Level the Agent call asks for; `undefined` omits the parameter. */
+  asked: ModelThinkingLevel | undefined;
   /** Exact tag at the routing point: the session level, clamped to what the virtual model offers. */
   routing: string;
   /** Exact tag once answered: the level the physical request ran at. */
@@ -350,7 +350,7 @@ async function thinkTags(c: ThinkingCase): Promise<{ routing: string; answered: 
     // Like a real router: the session's level passes through unchanged.
     route: async request => ({ model, thinkingLevel: request.thinkingLevel }),
   });
-  h.setResponses([calls(spawn("probe child", { model: "vroute/default", thinking: c.asked })), answer("SPAWNED")]);
+  h.setResponses([calls(spawn("probe child", { model: "vroute/default", ...(c.asked ? { thinking: c.asked } : {}) })), answer("SPAWNED")]);
   await h.session.prompt("go");
   await stream.entered;
   const ran = stream.seen.options?.reasoning;
@@ -374,10 +374,55 @@ it.each<ThinkingCase>([
   { name: "non-reasoning physical model runs at off", virtualLevels: ["off", "low", "high"], reasoning: false, asked: "high", routing: "think:high", answered: "think:off (asked high)", ran: undefined },
   { name: "unoffered level clamps down with the asked form", virtualLevels: ["off", "low"], reasoning: true, asked: "high", routing: "think:low (asked high)", answered: "think:low (asked high)", ran: "low" },
   { name: "off-only virtual model clamps to off", virtualLevels: ["off"], reasoning: true, asked: "high", routing: "think:off (asked high)", answered: "think:off (asked high)", ran: undefined },
+  { name: "no ask shows the plain effective level", virtualLevels: ["off", "low", "high"], reasoning: false, asked: undefined, routing: "think:high", answered: "think:off", ran: undefined },
 ])("virtual child row shows the exact thinking level: $name", async c => {
   const { routing, answered, ran } = await thinkTags(c);
   expect(ran).toBe(c.ran);
   expect(routing).toContain(`vroute default (routing) \u00b7 ${c.routing} \u00b7`);
   expect(answered).toContain(`physical \u00b7 ${c.answered} \u00b7`);
   expect(answered).not.toContain("(routing)");
+});
+
+/** Two turns through one virtual model: the router picks a different physical model per turn. */
+async function twoTurnTags(turns: readonly [boolean, boolean]): Promise<{ first: string; second: string }> {
+  fixture = new ScenarioSession();
+  const hold = fixture.heldTool();
+  const one = fixture.physical("fauxone", "one", [calls({ name: "hold", args: {} })], turns[0]);
+  const two = fixture.physical("fauxtwo", "two", [answer("CHILD DONE")], turns[1]);
+  const h = await fixture.start({ terminal: true });
+  const models = [one.getModel(), two.getModel()];
+  let routed = 0;
+  h.session.modelRuntime.registerVirtualModel({
+    provider: "vroute",
+    id: "default",
+    name: "vroute default",
+    thinkingLevels: ["off", "low", "high"],
+    route: async request => ({ model: models[Math.min(routed++, 1)], thinkingLevel: request.thinkingLevel }),
+  });
+  h.setResponses([calls(spawn("probe child", { model: "vroute/default", thinking: "high" })), answer("SPAWNED")]);
+  await h.session.prompt("go");
+  await hold.entered;
+  const host = fixture.host;
+  if (!host) throw new Error("No terminal host");
+  fixture.clock.advance(200);
+  await host.settle();
+  host.input(TOGGLE);
+  await host.settle();
+  const row = () => host.viewport().find(line => /^\s+[●○] Agent\s+probe child/.test(line)) ?? "";
+  const first = row();
+  hold.release();
+  await h.session.agent.waitForIdle();
+  fixture.clock.advance(200);
+  await host.settle();
+  return { first, second: row() };
+}
+
+it("virtual child row follows the latest response across turns", async () => {
+  const flipped = await twoTurnTags([false, true]);
+  expect(flipped.first).toContain("one \u00b7 think:off (asked high) \u00b7");
+  expect(flipped.second).toContain("two \u00b7 think:high \u00b7");
+  expect(flipped.second).not.toContain("asked");
+  const back = await twoTurnTags([true, false]);
+  expect(back.first).toContain("one \u00b7 think:high \u00b7");
+  expect(back.second).toContain("two \u00b7 think:off (asked high) \u00b7");
 });

@@ -73,7 +73,7 @@ function relabelFromResponse(record: AgentRecord, message: AssistantMessageInfo 
   // Idempotent per response; a message without a level (legacy) leaves the row as is.
   const ran = message?.thinkingLevel;
   if (ran) {
-    const requested = record.invocation.requestedThinking ?? record.invocation.thinking;
+    const requested = record.askedThinking;
     record.invocation.thinking = ran;
     record.invocation.requestedThinking = requested && requested !== ran ? requested : undefined;
   }
@@ -1342,6 +1342,9 @@ export class AgentManager {
           // Read the kept request first: a caller's level survives being clamped
           // AND, one line later, being replaced by the effective one.
           const requested = record.invocation.requestedThinking ?? record.invocation.thinking;
+          // Snapshot before the writeback below: once the session level lands in
+          // `thinking`, "no ask" is indistinguishable from "asked for the default".
+          record.askedThinking = requested;
           Object.assign(
             record.invocation,
             record.modelTier?.kind === "routed" && record.modelTier.admitted

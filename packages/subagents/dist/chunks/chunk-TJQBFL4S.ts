@@ -3929,7 +3929,7 @@ function relabelFromResponse(record, message) {
   Object.assign(record.invocation, physical);
   const ran = message?.thinkingLevel;
   if (ran) {
-    const requested = record.invocation.requestedThinking ?? record.invocation.thinking;
+    const requested = record.askedThinking;
     record.invocation.thinking = ran;
     record.invocation.requestedThinking = requested && requested !== ran ? requested : void 0;
   }
@@ -4611,6 +4611,7 @@ ${record.error}`);
         if (session.model) {
           record.invocation ??= {};
           const requested = record.invocation.requestedThinking ?? record.invocation.thinking;
+          record.askedThinking = requested;
           Object.assign(
             record.invocation,
             record.modelTier?.kind === "routed" && record.modelTier.admitted ? describeSelection(options.modelSelection, ctx.modelRegistry) : isVirtualModel(session.model) ? describeVirtualModel(session.model) : describeModel(session.model)
@@ -6753,4 +6754,4 @@ export {
   RESULT_MAX_CHARS,
   ConversationViewer
 };
-//# sourceMappingURL=chunk-MAQH3MEG.ts.map
+//# sourceMappingURL=chunk-TJQBFL4S.ts.map
