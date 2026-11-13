@@ -1053,6 +1053,27 @@
 			}
 		},
 		{
+			"id": "rust-protocol-state-tests",
+			"purpose": "Exercise the real Linux protocol, state and error implementations without a desktop; preserve defensive guards and register the dedicated Cargo suite (#801)",
+			"rows": [
+				"Rust protocol/state tests"
+			],
+			"files": [
+				"docs/rust-protocol-state-coverage.md",
+				"native/linux/bridge-rs/tests/protocol_state_errors.rs",
+				"test/rust-protocol-state-registration.test.mjs"
+			],
+			"check": "test/rust-protocol-state-registration.test.mjs",
+			"dropControls": [
+				"Rust protocol/state Cargo registration (#801)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "Headless deterministic coverage tests (nredd/pi-harness#801); upstream production source unchanged, not filed"
+			}
+		},
+		{
 			"id": "scroll-bar-fallback",
 			"purpose": "Scroll SwiftUI/AppKit scroll areas by writing a settable AXScrollBar value between AX scroll actions and the wheel fallback, only for the target's own scroll area (or one an AX hit test against the target's own app resolves to, deviating from upstream's nearest-ancestor walk) and delivering every requested axis (deviating from upstream's first-axis-wins), treating an accepted but unconfirmed write as delivered with an `unknown` outcome rather than adding a wheel scroll",
 			"rows": [
@@ -1312,9 +1333,11 @@
 		"docs/macos-root-targeting.md",
 		"docs/native-request-framing.md",
 		"docs/rust-coverage.md",
+		"docs/rust-protocol-state-coverage.md",
 		"docs/src/components/brand.tsx",
 		"docs/swift-ref-look-coverage.md",
 		"extensions/computer-use.ts",
+		"native/linux/bridge-rs/tests/protocol_state_errors.rs",
 		"native/macos/bridge.swift",
 		"native/macos/headless_tests.swift",
 		"native/macos/helper_entry.swift",
@@ -1435,6 +1458,7 @@
 		"test/runtime-state-output.test.mjs",
 		"test/rust-coverage-errors.test.mjs",
 		"test/rust-coverage.test.mjs",
+		"test/rust-protocol-state-registration.test.mjs",
 		"test/session-lifecycle.test.mjs",
 		"test/setup-helper-inprocess.test.mjs",
 		"test/stdio-helper-clients.test.mjs",
