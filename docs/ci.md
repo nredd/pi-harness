@@ -19,6 +19,16 @@ live desktop acceptance is claimed. macOS, WSL and ARM64 replacement cells expli
 Ubuntu-only signal. The ordinary packed-source/diagnostics contract is unchanged. Native source
 scope and remaining limitations are documented [here](../packages/computer-use/docs/rust-coverage.md).
 
+`computer-use Rust (windows-x64)` separately uses hosted `windows-2025`, pinned Rust/LLVM and
+cargo-llvm-cov versions above, and two build jobs. It checks a native x64 MSVC compiler, formatting,
+all-target compilation, Clippy, docs, real crate tests and raw LLVM JSON/LCOV, then runs the opt-in
+Windows build/install routing tests with disposable destinations. It uploads source-bound metadata
+and raw reports as `computer-use-rust-windows-x64`. The Ubuntu fan-in additionally depends on this
+job and refuses any non-success outcome when computer-use is selected. This preserves the twelve
+required check names, without depending on a WSL slot, Linux producer or ARM64 pool activation.
+Windows native coverage is report-only, not a borrowed Ubuntu accounting signal or a claim of
+live desktop behavior; absent branches/statements stay unmeasured.
+
 The `stack` job's `Report coverage exclusions` summary writes only `GITHUB_STEP_SUMMARY` text.
 The workflow contract executes that step's actual body with the test runner's `/bin/bash` in
 an isolated directory, checks production output-failure propagation, and checks scoped exclusions
@@ -121,7 +131,8 @@ and fails closed on missing/invalid input or a missing OS floor. Hosted artifact
 establish per-runner floors. `owned (wsl2)`'s shards run inside Ubuntu on WSL2, and its fan-in
 explicitly enforces the same Linux floors as native Ubuntu. Each WSL shard exports its LCOV reports
 from the Linux filesystem before Windows uploads them; the fan-in accounts and uploads `coverage-wsl2`.
-No counters are combined across runners. Native Windows coverage is not measured. WSL contract
+No counters are combined across runners. Native Windows has its separate raw LLVM producer;
+it does not contribute to the Linux guest coverage accounting. WSL contract
 scenarios remain separate acceptance evidence, not owned-source coverage. To regenerate a review-only policy diff from an
 artifact, run `uv run --locked --project integration python scripts/coverage_accounting.py --measure
 --os linux --reports-root /tmp/cov-linux --summary /tmp/measured-linux.json` (use `darwin` and its

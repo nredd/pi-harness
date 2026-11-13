@@ -407,8 +407,11 @@ validated, not given fabricated executable counters. Inline/source test hits can
 coverage, so this is not runtime 100%. See [rust-coverage.md](../packages/computer-use/docs/rust-coverage.md)
 for pinned tools, artifacts, runtime and hosted per-file references.
 
-Windows-native crate coverage remains UNMEASURED under #696. WSL/ARM64 cells do not produce this
-Ubuntu-only signal. Headless Rust tests do not prove AT-SPI/X11/Wayland sessions or physical input.
+#696 adds a separate hosted `windows-2025` x64 compiler/test/LLVM producer, with source-hash
+metadata and raw artifacts. Native measurements require that exact-HEAD job's receipt; none are
+inferred from a cross-check or WSL run. Its failure holds the existing required Ubuntu fan-in.
+Windows is not part of the Ubuntu-only accounting signal; per-file Windows policy integration
+remains separate. WSL/ARM64 cells do not produce this Ubuntu-only signal. Headless Rust tests do not prove AT-SPI/X11/Wayland sessions or physical input.
 #696 retains runtime seams for `atspi.rs`, `x11.rs`, `wayland.rs` and Windows UIA/capture policy.
 
 ## Constraints and risks
