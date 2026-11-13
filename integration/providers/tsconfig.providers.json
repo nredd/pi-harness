@@ -13,6 +13,7 @@
     "types": ["node"]
   },
   "files": [
+    "bun_runtime.test.ts",
     "extension_inventory.test.ts",
     "extension_inventory.ts",
     "faux.test.ts",

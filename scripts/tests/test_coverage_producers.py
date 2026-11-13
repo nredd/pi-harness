@@ -18,17 +18,15 @@ from typing import Any
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-NATIVE_BUN_TEST = re.compile(r"(?:\w+=\S+ )*bun test ")
-# Packages still on a native `bun test` subset. #320 retires one per slice; none may come back.
-# session-kit stays: Bun's worker.terminate() of a spinning regex outlasts its matcher test's bound (#320).
-NATIVE_BUN_PACKAGES = {"session-kit"}
-
-
 LAUNCHER = "node ../../scripts/run-vitest.ts bun"
 # Package-specific Vitest options only; the launcher owns every coverage flag.
 LAUNCHER_PACKAGE_ARGS = {
     "resource-sampler": " --maxWorkers=1",
     "todo": " --config .vitest.config.ts",
+    "session-kit": (
+        " --exclude test/scenarios/home-injection.test.ts && "
+        f"{LAUNCHER} test/scenarios/home-injection.test.ts --coverage.enabled=false"
+    ),
 }
 BUN_COVERAGE_ARGS = [
     "--coverage",
@@ -202,32 +200,23 @@ def test_benchmark_signal_matches_its_check_benchmark_producer() -> None:
 
 
 def test_declared_bun_commands_delegate_coverage_to_the_launcher() -> None:
-    """Keep every Vitest-on-Bun producer on the launcher, and native subsets on both reporters.
+    """Keep every declared Bun producer on Vitest/Istanbul through the isolated launcher.
 
     Parameters:
         None.
     Returns:
-        None: Vitest-on-Bun manifests pass only package arguments; native subsets keep both reporters.
+        None: Manifests pass only package arguments and the separate home-injection canary.
     Raises:
         AssertionError: A manifest bypasses the launcher, restates coverage flags, drops a reporter
             or a retired native subset returns.
     """
     manifests = [*ROOT.glob("packages/*/package.json"), ROOT / "integration/inprocess/package.json"]
-    native = set()
     for manifest in manifests:
         command = json.loads(manifest.read_text())["scripts"].get("test:bun")
         if not command:
             continue
-        # Native Bun commands may carry an env prefix such as `JITI_FS_CACHE=false` (#352).
-        if NATIVE_BUN_TEST.match(command):
-            native.add(manifest.parent.name)
-            assert "--coverage-reporter=text" in command, manifest
-            assert "--coverage-reporter=lcov" in command, manifest
-            assert "--coverage-dir=coverage/bun" in command, manifest
-        else:
-            expected = LAUNCHER + LAUNCHER_PACKAGE_ARGS.get(manifest.parent.name, "")
-            assert command == expected, manifest
-    assert native == NATIVE_BUN_PACKAGES
+        expected = LAUNCHER + LAUNCHER_PACKAGE_ARGS.get(manifest.parent.name, "")
+        assert command == expected, manifest
 
 
 def test_generated_coverage_is_ignored_by_whole_workspace_linters() -> None:
@@ -264,6 +253,13 @@ def test_node_helper_gates_run_vitest_through_the_launcher() -> None:
         assert f"node {launcher} node --coverage\n" in recipe
         assert recipe.endswith(f"node {launcher} bun --coverage.enabled=false")
     assert "cd integration/providers && node ../../scripts/run-vitest.ts node --coverage\n" in makefile
+    assert "cd integration/providers && node ../../scripts/run-vitest.ts bun\n" in makefile
+    manifest = json.loads((ROOT / "packages/subagents/package.json").read_text())
+    assert manifest["scripts"]["test:workflow-examples"] == (
+        "node ../../scripts/run-vitest.ts node --config vitest.workflow-examples.config.ts --coverage && "
+        "node ../../scripts/run-vitest.ts bun --config vitest.workflow-examples.config.ts "
+        "--coverage.reportsDirectory=coverage/workflow-examples-bun"
+    )
     assert "node --test" not in makefile
     assert "/.bin/c8 " not in makefile
     for config in [

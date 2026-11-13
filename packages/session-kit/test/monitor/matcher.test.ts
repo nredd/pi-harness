@@ -2,6 +2,22 @@ import { describe, expect, it } from "vitest";
 import { BoundedMatcher, MATCH_QUEUE_BYTES } from "../../src/monitor/matcher.ts";
 
 describe("BoundedMatcher", () => {
+	it.each([
+		["^-value$", "-value"],
+		["^\u0000$", "\u0000"],
+		["^\ud800$", "\ud800"],
+	])("transports regex source %j without argv parsing or UTF-8 corruption", async (source, text) => {
+		const matcher = new BoundedMatcher(source);
+		const matched: boolean[] = [];
+		try {
+			matcher.test(text, (value) => matched.push(value));
+			matcher.test("other", (value) => matched.push(value));
+			await matcher.drain();
+			expect(matched).toEqual([true, false]);
+		} finally {
+			await matcher.close();
+		}
+	});
 	it("preserves regex semantics and callback order through final draining", async () => {
 		const matcher = new BoundedMatcher("^ERROR\\b");
 		const matched: boolean[] = [];
@@ -26,6 +42,11 @@ describe("BoundedMatcher", () => {
 
 	it("interrupts a stuck regex and awaits worker cleanup on close", async () => {
 		const matcher = new BoundedMatcher("^(a+)+$");
+		// Complete a real match first: close must interrupt running regex work, not only startup.
+		const ready: boolean[] = [];
+		matcher.test("a", (value) => ready.push(value));
+		await matcher.drain();
+		expect(ready).toEqual([true]);
 		const matched: boolean[] = [];
 		matcher.test(`${"a".repeat(4096)}!`, (value) => matched.push(value));
 		await new Promise((resolve) => setTimeout(resolve, 60));

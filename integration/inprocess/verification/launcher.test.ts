@@ -183,15 +183,27 @@ test("scripts that bypass the launcher disable jiti's fs cache themselves", () =
 		"packages/plan-mode test:dist",
 		"packages/preset test",
 		"packages/resource-sampler test",
-		"packages/session-kit test",
-		"packages/session-kit test:bun",
 		"packages/subagents bench",
 		"packages/subagents test:e2e",
 		"packages/subagents test:watch",
-		"packages/subagents test:workflow-examples",
 		"packages/subscription-router test",
 		"packages/todo test",
 	]);
+});
+
+test.each([
+	{ workspace: "packages/session-kit", name: "test", engines: ["node", "node"] },
+	{ workspace: "packages/session-kit", name: "test:bun", engines: ["bun", "bun"] },
+	{ workspace: "packages/subagents", name: "test:workflow-examples", engines: ["node", "bun"] },
+])("$workspace $name delegates every test launch to the shared cache guard", ({ workspace, name, engines }) => {
+	const root = fileURLToPath(new URL("../../../", import.meta.url));
+	const script: string = JSON.parse(readFileSync(join(root, workspace, "package.json"), "utf8")).scripts[name];
+	expect(directLaunches(script)).toEqual([]);
+	const actual = script.split(SHELL_SEPARATOR).flatMap((part) => {
+		const launch = /^node \.\.\/\.\.\/scripts\/run-vitest\.ts (node|bun)(?=\s|$)/.exec(part.trim());
+		return launch ? [launch[1]] : [];
+	});
+	expect(actual).toEqual(engines);
 });
 
 test("launcher refuses an unknown engine before spawning", () => {

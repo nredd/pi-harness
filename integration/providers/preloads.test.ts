@@ -9,6 +9,28 @@ import { ExtensionStartupError } from "@earendil-works/pi-coding-agent";
 import { afterAll, beforeAll, test, vi } from "vitest";
 import guardAuthTransport from "./auth_guard.mjs";
 import { verifyTransport } from "./auth_transport.mjs";
+import { runtimeBun } from "./bun_runtime.mjs";
+
+// Model preload-before-import ordering for the in-process fixture. Bun does not retroactively
+// refresh named builtin exports through syncBuiltinESMExports. A real subprocess below independently
+// verifies named imports with the actual preload order; these getters only keep this shared test
+// process from retaining exports captured BEFORE installation.
+vi.mock("node:child_process", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:child_process")>();
+	const { createRequire } = await import("node:module");
+	const live: typeof actual = createRequire(import.meta.url)("node:child_process");
+	return {
+		...actual,
+		get spawnSync() {
+			return live.spawnSync;
+		},
+		get execFileSync() {
+			return live.execFileSync;
+		},
+	};
+});
+
+vi.mock("./bun_runtime.mjs", () => ({ runtimeBun: vi.fn() }));
 
 // One forked worker per file (`vitest.config.ts`): the redirect preload replaces `fetch` and the
 // `child_process` exports for the whole process, exactly as `node --import` does, and installs once.
@@ -44,8 +66,7 @@ let blockedLog = "";
 let redirectDescriptor: PropertyDescriptor | undefined;
 
 function setBun(present: boolean): void {
-	if (present) Reflect.set(globalThis, "Bun", fakeBun);
-	else Reflect.deleteProperty(globalThis, "Bun");
+	vi.mocked(runtimeBun).mockReturnValue(present ? fakeBun : undefined);
 }
 
 /** Import a module fresh, so a top-level script or a failed import runs again. */
@@ -87,6 +108,21 @@ afterAll(async () => {
 	setBun(false);
 	await new Promise((resolve) => server.close(resolve));
 	rmSync(root, { recursive: true, force: true });
+});
+
+test("the real engine preload blocks later named builtin imports before they can launch a process", () => {
+	const code = `import { spawnSync, execFileSync } from 'node:child_process';
+		import assert from 'node:assert/strict';
+		for (const run of [spawnSync, execFileSync]) {
+			assert.throws(() => run('/harness-never-exists/security'), /harness blocked/);
+		}`;
+	const preload = new URL("./redirect_anthropic.mjs", import.meta.url).pathname;
+	const flag = process.versions.bun ? "--preload" : "--import";
+	const result = originalSpawnSync(process.execPath, [flag, preload, "--input-type=module", "-e", code], {
+		encoding: "utf8",
+		env: { PATH: process.env.PATH, HARNESS_ANTHROPIC_MOCK: mock, HARNESS_AUTH_NONCE: NONCE },
+	});
+	assert.equal(result.status, 0, result.stderr);
 });
 
 test("without the redirect preload the transport check and the startup guard fail closed", async () => {
@@ -310,10 +346,10 @@ test("a second install without HARNESS_BLOCKED_LOG still blocks, with and withou
 	vi.stubEnv("HARNESS_AUTH_NONCE", NONCE);
 	try {
 		setBun(true);
-		await assert.rejects(importFresh("./redirect_anthropic.mjs"), /Cannot redefine property/);
+		await assert.rejects(importFresh("./redirect_anthropic.mjs"), TypeError);
 		assert.throws(() => fakeBun.spawn(["security"]), /harness blocked `security` via Bun\.spawn/);
 		setBun(false);
-		await assert.rejects(importFresh("./redirect_anthropic.mjs"), /Cannot redefine property/);
+		await assert.rejects(importFresh("./redirect_anthropic.mjs"), TypeError);
 		assert.throws(
 			() => execFileSync("claude", ["--version"]),
 			/harness blocked `claude` via child_process\.execFileSync/,

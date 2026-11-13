@@ -7,6 +7,17 @@ afterEach(() => {
 });
 
 describe("mon polling ownership", () => {
+	it("does not schedule again when the update callback closes the poll", async () => {
+		vi.useFakeTimers();
+		const source: MonSource = { sample: vi.fn(async () => snapshot()), dispose: vi.fn() };
+		const poll = new MonPoll(source, () => void poll.dispose());
+		poll.start();
+		await vi.advanceTimersByTimeAsync(0);
+		await poll.dispose();
+		expect(source.sample).toHaveBeenCalledOnce();
+		expect(source.dispose).toHaveBeenCalledOnce();
+		expect(vi.getTimerCount()).toBe(0);
+	});
 	it.each(["initial", "timer"])(
 		"contains %s probe cleanup rejection while exposing stale state and retaining cleanup failure",
 		async (stage) => {
