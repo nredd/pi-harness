@@ -401,7 +401,7 @@ def is_documentation_path(path: str) -> bool:
     """
     if path in TESTED_DOCUMENTATION:
         return False
-    if path == "PLAN.md" or (path.startswith("docs/") and path.endswith(".md")):
+    if path.startswith("docs/") and path.endswith(".md"):
         return True
     if "/" not in path and path.endswith(".md"):
         return True

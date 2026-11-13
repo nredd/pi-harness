@@ -1,8 +1,7 @@
 # pi-computer-use
 
 `@nredd/pi-computer-use` lets Pi agents observe and control desktop apps and CDP browser pages.
-This workspace tracks upstream `injaneity/pi-computer-use` with the carried patches and exact sync
-procedure recorded in [UPSTREAM.md](./UPSTREAM.md).
+This workspace is a fork of `injaneity/pi-computer-use`; see [Upstream](#upstream).
 
 ## Install
 
@@ -30,8 +29,7 @@ Deterministic client tests use scripted stdio helpers, not Windows UI or native 
 
 State-consuming desktop tools require an observation; missing or blank `stateId` fails with
 `No observation state is available. Call observe_ui first.` The obsolete internal missing-window
-guard is removed without changing this boundary; the call-path proof is in the harness
-[coverage policy](../../docs/computer-use-coverage.md#missing-target-call-path-proof-755).
+guard is removed without changing this boundary (#755).
 
 All platforms retain `find_roots`, `observe_ui`, `search_ui`, `expand_ui`, `inspect_ui`, `act_ui`,
 `read_text`, `wait_for`, `launch_browser`, `navigate_browser`, and `evaluate_browser`.
@@ -67,17 +65,23 @@ source-bound references, and `npm run docs:check` validates them without buildin
 
 ## Checks and release
 
-[Native request framing tests](docs/native-request-framing.md) cover real Swift protocol paths without desktop access.
-
 `npm run check` runs the owned deterministic package checks. Vitest reports native and live suites off
 their platform or opt-in as skipped; this package remains outside the coverage gate. Never run
 `test:macos-live` on an occupied desktop: it manipulates fixture windows, apps, and the clipboard. It
 starts, restarts and stops its own helper instance on the test home's socket, never the shared daemon.
-Owner-only smoke commands and rollback are recorded in `UPSTREAM.md`.
+`npm run test:macos-live` and the TCC-granted smoke are owner-only and NOT RUN in CI.
+
+`npm run coverage:rust` needs Rust `1.97.1` with `llvm-tools-preview` and `cargo-llvm-cov` `0.9.1`, with
+that rustup toolchain first on `PATH` (never a Homebrew `rustc` sysroot):
+
+```sh
+rustup toolchain install 1.97.1 --profile minimal --component llvm-tools-preview
+cargo +1.97.1 install cargo-llvm-cov --version 0.9.1 --locked
+export PATH="$(dirname "$(rustup which --toolchain 1.97.1 cargo)"):$PATH"
+```
 
 `npm run coverage:swift` runs real-source headless motion and native assertions with one Swift
-compiler worker. The [motion coverage notes](./docs/cursor-motion-coverage.md) describe analytic
-geometry, clock/lifecycle checks, the clamp mutation control and honestly retained numerical guards.
+compiler worker. It covers analytic geometry, clock/lifecycle checks and the clamp mutation control.
 This does not run the live overlay suite or prove physical pointer behavior.
 
 `npm run coverage:swift` links all shipped Swift sources with the headless assertions.
@@ -89,8 +93,7 @@ The sync-revert controls mutate window equality, destination ownership, optional
 stays in the denominator; this slice does not claim whole-file coverage or change runtime behavior.
 `node scripts/check-sync-reverts.mjs --validate-only` checks the real revert-case inventory
 against the ledger without running mutations; the normal command still runs every applicable
-mutation. Local measurements and the unequal-window fixture lifecycle are recorded
-[here](./docs/swift-ref-look-coverage.md).
+mutation.
 
 `npm run test:linux` uses disposable protocol children, not a native desktop helper. Its closed-stdin
 fixture initializes stdout before closing fd `0` (lazy pipe initialization aborts Node 26.12 on Darwin),
@@ -107,6 +110,14 @@ Linux source-build cleanup gives its detached compiler group a bounded TERM/KILL
 KILL syscall alone is not treated as success: setup fails if the group cannot be confirmed empty, and
 keeps a fresh-probe-guarded exit-time KILL backstop while ownership remains signalable. Only ESRCH
 proves quiescence; permission or unexpected syscall errors surface uncertainty and revoke signalling.
+
+## Upstream
+
+- Fork of `injaneity/pi-computer-use`. The pinned base commit is `upstream` in `sync-patches.json`
+- `sync-patches.json` is the whole ledger: every carried patch has a purpose, files, a check, executable drop controls and an upstream disposition. `files` is the exact set that differs from the base
+- `npm run test:sync-reverts` reverts each patch in a scratch copy and requires its check to fail. `PI_CU_UPSTREAM_SYNC=1 npm run test:upstream-sync -- --fetch` (CI, Linux) fails on undeclared drift from the base
+- We do not track upstream continuously. To re-sync, apply `git diff <old-base> <new-base>` (minus `package-lock.json` and `prebuilt/`) with `git apply --3way --directory=packages/computer-use`, resolve against the ledger, update `upstream` and `files`, then run `npm run docs:generate`, `npm run check` and `make check-computer-use-package-contract`
+- Keep the local bundle path and signing identity across a sync: changing either forces TCC re-grants
 
 ## Signing certificate setup
 

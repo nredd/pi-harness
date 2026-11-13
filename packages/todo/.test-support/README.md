@@ -37,8 +37,6 @@ Test census:
 - After measured coverage closure: 408 Vitest tests in 29 files pass on Node and Bun.
   `test:bun` runs the full suite through `scripts/run-vitest.ts bun`, including both
   real interactive settled-row regressions, not a separate two-test native suite.
-  Engine versions, coverage measurements and mutation receipts are documented
-  [here](../docs/coverage-closure.md).
 
 `settled-row.ts` mounts the real core interactive harness and VirtualTerminal,
 registering this fork's renderers with a snapshot-less legacy result. Both update

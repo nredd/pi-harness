@@ -6,7 +6,7 @@ below describes legacy deployment, not installation or candidate verification of
 
 ## Standalone use
 
-The packed tarball is self-contained: Pi host modules (`@earendil-works/pi-*`, `typebox`) are `*` peers supplied by Pi, there are no runtime dependencies and no sibling plugin is required. Verified by installing the tarball alone and running it in exact stock Pi 1.3.0 (see the repository's `docs/package-contracts.md`). Optional fork integrations (subagents, Plan mode) are absent in that setup; the exercised behavior does not need them.
+The packed tarball is self-contained: Pi host modules (`@earendil-works/pi-*`, `typebox`) are `*` peers supplied by Pi, there are no runtime dependencies and no sibling plugin is required. Verified by installing the tarball alone and running it in exact stock Pi 1.3.0 (`make check-package-contracts`). Optional fork integrations (subagents, Plan mode) are absent in that setup; the exercised behavior does not need them.
 
 `router/<profile>` virtual models for pi (>= 0.99) that route across included subscription quota.
 Each profile has a chain of physical models and an optional routing strategy. Ordered routing
@@ -323,9 +323,8 @@ router factory and core session harness, under Vitest and Bun. Policy tests add 
 receipts (including full status, numeric/timing boundaries, confirmation races, cancellation and partial
 output), a Git-blob-pinned merge-base oracle with 4,096 seeded differential cases, deterministic
 exhaustive properties, offline normalized replay, strict failback, raw-remaining
-family caps, confirmed recovery and shared-runtime isolation. The coverage/ownership matrix and
-live-smoke proposal are [here](https://github.com/nredd/pi-harness/blob/main/packages/subscription-router/docs/hardening.md).
+family caps, confirmed recovery and shared-runtime isolation.
 
 `createSubscriptionRouter({ config, usage, tracker?, now?, codexResets? })` embeds an isolated router with explicit dependencies; the default export still loads agent config and shares usage/blocks process-wide. Scenarios inject a credential-free cache and quota clock; core retries use `baseDelayMs: 0`.
 
-`integration/inprocess/router-admission.test.ts` covers `wait`, `fail` and `capped` with the real router/subagents factories on one fake clock under Vitest and Bun. The optional-router absence case is `packages/subagents/test/session-scenarios.test.ts` / `absent admission RPC admits physical child`. All 13 former shell cases have native receipts in `docs/verification-rebuild.md`; the shell runner and its unused faux helpers are deleted. No installed Pi, owner checkout or `PI_SUBAGENTS_DIR` is needed.
+`integration/inprocess/router-admission.test.ts` covers `wait`, `fail` and `capped` with the real router/subagents factories on one fake clock under Vitest and Bun. The optional-router absence case is `packages/subagents/test/session-scenarios.test.ts` / `absent admission RPC admits physical child`. No installed Pi, owner checkout or `PI_SUBAGENTS_DIR` is needed.

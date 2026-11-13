@@ -4,6 +4,10 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ## [Unreleased]
 
+### Removed
+
+- `UPSTREAM.md` is no longer shipped or maintained. `sync-patches.json` is the whole carried-patch ledger (its per-patch `rows` are gone) and the README's Upstream section holds the re-sync notes.
+
 ### Added
 
 - Gate actual AppKit cursor overlay lifecycle behind exact `PI_COMPUTER_USE_LIVE=1`; default invariants retain motion, compiler and fake gate-refusal assertions and report the live check as `NOT RUN`. Source mutation controls never execute the unsafe fixture (nredd/pi-harness#819).

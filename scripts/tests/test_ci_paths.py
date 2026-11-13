@@ -99,7 +99,7 @@ def classify_change(repo: Path, files: dict[str, str]) -> ci_paths.ChangeClassif
     [
         "docs/ci.md",
         "CONTRIBUTING.md",
-        "PLAN.md",
+        "NOTES.md",
         "packages/dev-tools/README.md",
         "packages/session-kit/CHANGELOG.md",
     ],
@@ -288,14 +288,14 @@ def test_write_github_output_preserves_changed_file_list(tmp_path: Path) -> None
     """
     output = tmp_path / "output"
     result = ci_paths.ChangeClassification(
-        paths=("docs/ci.md", "PLAN.md"), docs_only=True, inputs={"wsl_inputs": False, "stack_inputs": False}
+        paths=("docs/ci.md", "NOTES.md"), docs_only=True, inputs={"wsl_inputs": False, "stack_inputs": False}
     )
     ci_paths.write_github_output(output, result, ci_paths.plan_cells(result, "push"))
     contents = output.read_text(encoding="utf-8")
     assert "docs_only=true\n" in contents
     assert "wsl_inputs=false\n" in contents
     assert "stack_inputs=false\n" in contents
-    assert "docs/ci.md\nPLAN.md\n" in contents
+    assert "docs/ci.md\nNOTES.md\n" in contents
 
 
 @pytest.mark.parametrize(
@@ -378,7 +378,7 @@ def test_wsl_inputs_accept_paths_the_guest_path_reads(repo: Path, path: str) -> 
     "path",
     [
         "docs/ci.md",
-        "PLAN.md",
+        "NOTES.md",
         "packages/dev-tools/src/index.ts",
         "integration/harness/stack.py",
         "scripts/merge_pr_checks.py",

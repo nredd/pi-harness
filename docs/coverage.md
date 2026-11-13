@@ -25,7 +25,6 @@ Rust modules anywhere under `src`, including nested test/fixture modules, remain
 source inventory. Only conservative module/re-export-only source can validate an absent LLVM map.
 Explicit `skip_os` and `skip_hosts` declare unsupported cells as NOT RUN; selected cells still fail
 on missing reports. Adding skipped platforms to an established signal fails the base ratchet.
-See the native Linux producer and attribution limitations [here](../packages/computer-use/docs/rust-coverage.md).
 
 The initial integration checkpoint is recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/main-integration.md).
 Facade validation and the actual hosted producer failure diagnosis are recorded
@@ -74,7 +73,7 @@ without its reporter still fails validation and writes `coverage/summary.json` w
 `max_uncovered.<os>.statements` follows `branches`: the base ratchet only lets it go down, dropping a key the
 base had is a weakening, and `target.statements` is 0, so every 100-percent primary is held to 0 uncovered
 statements. Every enforced primary and Bun Vitest signal caps 0. `computer-use-vitest` caps its measured
-per-OS uncovered statements (see [computer-use-coverage.md](computer-use-coverage.md)).
+per-OS uncovered statements.
 
 It fails closed. With `target.statements` set, an enforced Istanbul/V8 signal needs the `json-summary`
 reporter and a cap (`Missing statement cap`); a cap without a readable, non-empty summary, or a summary
@@ -408,8 +407,7 @@ It preserves actual per-file LLVM lines/functions/regions and profile/toolchain 
 Regions are not branches or statements; no `BRDA` is fabricated. Missing selected-host reports
 fail closed; Linux/WSL2 explicitly report NOT RUN. The owner permits narrow thin live
 AX/CGEvent/ScreenCaptureKit adapter exceptions until a dedicated TCC runner, not blanket native
-or policy exemptions. These misses remain in raw reports. See the real-source command, initial
-local per-file baseline and remaining policy work [here](computer-use-coverage.md#swift-measurement). Since #347 its suites run under Vitest, and the separate `computer-use-vitest`
+or policy exemptions. These misses remain in raw reports. Since #347 its suites run under Vitest, and the separate `computer-use-vitest`
 policy entry (same root) measures the 36 executable JS/TS runtime/producer modules with Istanbul: `src`,
 `extensions`, `setup-helper.mjs`, `build-native.mjs`, `rust-coverage.mjs`, `swift-coverage.mjs` and the documentation
 generators, with the declaration-only `src/platform/types.ts` excluded as type-only. Its Vitest
@@ -420,13 +418,13 @@ measured uncovered counts for lines, functions, branches and statements (darwin 
 linux **0 / 0 / 0 / 0**). The earlier `1 / 0 / 1 / 1` receipt from run `43173083073` is historical.
 Subprocess-run scripts count only what the suites import. Files already at 0/0/0/0 on every OS are pinned per file by
 `coverage.thresholds` in `packages/computer-use/vitest.config.ts` (the policy schema has no per-file pins).
-Per-file history and numbers are in [computer-use-coverage.md](computer-use-coverage.md). The native and
+The native and
 live suites (`linux-native`, `macos-helper-live`, `linux-live`) also run under Vitest now; skipped off
 their platform or opt-in, and `linux-native` counts only the `src/platform/linux/helper.ts` client it imports. Its TS entries and
 native sources stay in inventory. The owner explicitly excludes this package from coverage maintenance, so it does not block
 the global flip. Imported documentation-site TS/TSX/configuration is likewise inventory-only under
 that exclusion; the documentation generators and optional `scripts/rust-coverage.mjs` tooling are
-measured by the enforced ratchet signal above. The plan for lifting the exclusion (TS and Swift, seams, phases) is [here](computer-use-coverage.md). The opt-in Rust report is never collected by normal checks; its
+measured by the enforced ratchet signal above. The opt-in Rust report is never collected by normal checks; its
 mocked argument/path/error tests still run. Existing native/platform checks remain unchanged.
 `dev-tools` emits primary Istanbul after #155/#195. Since #320 its Bun report comes from the same
 full Vitest suite on Bun through `scripts/run-vitest.ts bun`, not a native `bun test` subset.

@@ -338,8 +338,8 @@ test("search_ui and expand_ui on a browser state never escalate to the desktop",
 	assert.equal(fake.looks.length, 0, "no OCR or scoped look reaches the native helper");
 });
 
-// This is a dead-code removal control, not evidence of native behavior. The call-path
-// proof is in docs/computer-use-coverage.md; public boundary assertions follow below.
+// This is a dead-code removal control, not evidence of native behavior (#755); public
+// boundary assertions follow below.
 test("the unreachable missing-target guard stays deleted (#755)", () => {
 	const source = readFileSync(new URL("../src/bridge.ts", import.meta.url), "utf8");
 	assert.doesNotMatch(source, /No current controlled window\./, "the unreachable missing-target guard must not return");

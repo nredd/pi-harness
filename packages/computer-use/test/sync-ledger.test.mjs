@@ -3,12 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test } from "vitest";
-import {
-	upstreamRowNames,
-	validateLedger,
-	validateLedgerOrder,
-	validateUpstreamRows,
-} from "../scripts/check-sync-ledger.mjs";
+import { validateLedger, validateLedgerOrder } from "../scripts/check-sync-ledger.mjs";
 
 const control = { name: "remove behavior", file: "src/a.ts", check: "check-a.mjs" };
 const ledger = {
@@ -26,7 +21,7 @@ const ledger = {
 		{
 			id: "a",
 			purpose: "Retain behavior",
-			upstream: { status: "harness-only", reference: "UPSTREAM.md" },
+			upstream: { status: "harness-only", reference: "README.md" },
 			files: [control.file],
 			check: control.check,
 			dropControls: [control.name],
@@ -99,15 +94,15 @@ test("requires reviewable local references, allowing the explicit workstation dr
 		null,
 		"",
 		" ",
-		" UPSTREAM.md",
-		"UPSTREAM.md ",
+		" README.md",
+		"README.md ",
 		{},
 		[],
 		7,
 		"not a reference",
-		"../UPSTREAM.md",
+		"../README.md",
 		"/etc/passwd",
-		"docs/../UPSTREAM.md",
+		"docs/../README.md",
 		"missing-file.md",
 		"docs",
 		"https://example.com/draft",
@@ -142,7 +137,7 @@ test("merged upstream and release requests require real upstream PR/issue URL sh
 			undefined,
 			"",
 			" ",
-			"UPSTREAM.md",
+			"README.md",
 			"~/code/review-notes/upstream-issues-drafts.md",
 			"#95",
 			"injaneity/pi-computer-use#116",
@@ -166,11 +161,10 @@ test("merged upstream and release requests require real upstream PR/issue URL sh
 
 const read = (name) => readFileSync(new URL(`../${name}`, import.meta.url), "utf8");
 
-test("checked-in ledger lists, UPSTREAM.md rows and revert cases are sorted so PRs append without conflicts", () => {
+test("checked-in ledger lists and revert cases are sorted so PRs append without conflicts", () => {
 	const checkedIn = JSON.parse(read("sync-patches.json"));
-	validateLedgerOrder(checkedIn, read("UPSTREAM.md"), read("scripts/check-sync-reverts.mjs"));
-	const markdown = read("UPSTREAM.md");
 	const reverts = read("scripts/check-sync-reverts.mjs");
+	validateLedgerOrder(checkedIn, reverts);
 	const swap = (items) => [items[1], items[0], ...items.slice(2)];
 	const unsorted = [
 		() => ({ ...checkedIn, files: swap(checkedIn.files) }),
@@ -178,24 +172,6 @@ test("checked-in ledger lists, UPSTREAM.md rows and revert cases are sorted so P
 		() => ({ ...checkedIn, patches: [{ ...checkedIn.patches[0], files: ["b", "a"] }] }),
 		() => ({ ...checkedIn, patches: [{ ...checkedIn.patches[0], dropControls: ["b", "a"] }] }),
 	];
-	for (const make of unsorted) assert.throws(() => validateLedgerOrder(make(), markdown, reverts), /sorted/);
-	const rows = markdown.split("\n").filter((line) => upstreamRowNames(line).length > 0);
-	const swapped = markdown.replace(rows[0], "\u0000").replace(rows[1], rows[0]).replace("\u0000", rows[1]);
-	assert.throws(() => validateLedgerOrder(checkedIn, swapped, reverts), /UPSTREAM\.md rows must be sorted/);
-	assert.throws(
-		() => validateLedgerOrder(checkedIn, markdown, '\t\tname: "b",\n\t\tname: "a",\n'),
-		/cases must be sorted/,
-	);
-});
-
-test("every sync-patches.json patch has an UPSTREAM.md row and every row has a patch", () => {
-	const checkedIn = JSON.parse(read("sync-patches.json"));
-	const markdown = read("UPSTREAM.md");
-	validateUpstreamRows(checkedIn, markdown);
-	const [row] = upstreamRowNames(markdown);
-	assert.throws(() => validateUpstreamRows(checkedIn, `${markdown}\n| Orphan | x | y | z |\n`), /without a sync-patches/);
-	assert.throws(() => validateUpstreamRows(checkedIn, markdown.replace(`| ${row} |`, "| Renamed |")), /no UPSTREAM\.md row/);
-	const missing = structuredClone(checkedIn);
-	delete missing.patches[0].rows;
-	assert.throws(() => validateUpstreamRows(missing, markdown), /rows required/);
+	for (const make of unsorted) assert.throws(() => validateLedgerOrder(make(), reverts), /sorted/);
+	assert.throws(() => validateLedgerOrder(checkedIn, '\t\tname: "b",\n\t\tname: "a",\n'), /cases must be sorted/);
 });

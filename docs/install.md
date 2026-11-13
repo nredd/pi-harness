@@ -36,7 +36,7 @@ The installer never reads, copies or writes credentials or personal state. After
 - Log in: run `pi`, then `/login`, or set your own provider API keys.
 - Choose default and enabled models and any router profiles.
 - Add memory, MCP servers, personal prompts, skills or themes if you want them.
-- `@nredd/pi-computer-use` stays off on both platforms, disabled by installer policy. Its macOS helper needs Screen Recording and Accessibility (TCC) permissions you grant yourself; opt-in Linux setup is documented [here](../packages/computer-use/docs/linux.md).
+- `@nredd/pi-computer-use` stays off on both platforms, disabled by installer policy. Its macOS helper needs Screen Recording and Accessibility (TCC) permissions you grant yourself; opt-in Linux setup is documented [here](../packages/computer-use/docs/content/docs/how-to-guides/linux.mdx).
 
 `auth.json`, `models.json`, sessions, memory and every other file in the agent directory are never touched. Machine-specific configuration (dotfiles, enterprise overlays) stays out of the snapshot by design.
 

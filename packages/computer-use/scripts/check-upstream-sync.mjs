@@ -8,7 +8,6 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "nod
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { validateUpstreamRows } from "./check-sync-ledger.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 /** Compare actual tracked source trees; network fetches are explicit and injectable, never implicit on import. */
@@ -30,7 +29,6 @@ export function main(
 	}
 	const ledger = JSON.parse(readFileSync(path.join(root, "sync-patches.json"), "utf8"));
 	const git = (cwd, args) => deps.exec("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
-	validateUpstreamRows(ledger, readFileSync(path.join(root, "UPSTREAM.md"), "utf8"));
 	const FETCH_ATTEMPTS = 3;
 	const FETCH_TIMEOUT_MS = 120_000;
 	let scratch;

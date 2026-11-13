@@ -25,7 +25,7 @@ The snapshot's `stack` JSON obeys the canonical-JSON rules in `integration/READM
 
 The module rejects unknown fields, malformed SHAs, non-personal stacks, digest mismatch, duplicate evidence, and owned-package evidence that is not exactly the stack's `@nredd/` sources.
 
-The snapshot schema remains strict v1 and retains its historical owned-only integrity boundary. New promotions additionally publish and independently attest strict `dependency-graph.json`, containing its own schema version, exact `source_sha`, and source-selected complete native runtime locks bound to the canonical stack digest. The hardened standalone installer requires BOTH assets; historical snapshot-only promotions are unsupported, never silently downgraded. Existing dotfiles snapshot-v1 consumers are unchanged and do not gain installer runtime-byte guarantees. Source selection, threat model and bootstrap acceptance limits are documented [here](runtime-locks.md).
+The snapshot schema remains strict v1 and retains its historical owned-only integrity boundary. New promotions additionally publish and independently attest strict `dependency-graph.json`, containing its own schema version, exact `source_sha`, and source-selected complete native runtime locks bound to the canonical stack digest. The hardened standalone installer requires BOTH assets; historical snapshot-only promotions are unsupported, never silently downgraded. Existing dotfiles snapshot-v1 consumers are unchanged and do not gain installer runtime-byte guarantees.
 
 ## What gets verified
 
@@ -47,8 +47,7 @@ MacBook `SHA256:YHzjQXY3SPl20zOMMOoNz8o4dk+eOZEi8FA+vS6nwFY` (retained for histo
 and Mac mini (`nick-mac`) `SHA256:+16+g7/7VKDJ2svgiuGIbfPnPF9pKKSU/h51+K9iHdk`.
 The latter is owner-approved for `.8` and future releases. No wildcard principal, skipped
 verification, new legacy exception, Gitlink move, or stack/pin change is implied.
-The [trust-location audit](source-provenance.md#core-release-signer-trust) records the separate
-core, harness, dotfiles and tap boundaries.
+Core, harness, dotfiles and tap keep separate trust boundaries.
 
 The CI evidence is the only coupling to CI: run IDs are read with `gh run list/view`, the `actions: read` and `checks: read` permissions are granted, and an unreadable response fails with an explicit error.
 

@@ -7,7 +7,7 @@ this package. `0.6.0` keeps passive monitor output only in the monitor ring buff
 
 ## Standalone use
 
-The packed tarball is self-contained: Pi host modules (`@earendil-works/pi-*`, `typebox`) are `*` peers supplied by Pi, and no sibling plugin is required. Its only runtime dependency in current source is the exact published `@nredd/pi-resource-sampler@0.2.1` library (no Pi imports), which npm installs from the registry for `/mon`. Verified by installing the tarball alone and running it in exact stock Pi 1.3.0 (see the repository's `docs/package-contracts.md`). Optional fork integrations (subagents, Plan mode) are absent in that setup; the exercised behavior does not need them.
+The packed tarball is self-contained: Pi host modules (`@earendil-works/pi-*`, `typebox`) are `*` peers supplied by Pi, and no sibling plugin is required. Its only runtime dependency in current source is the exact published `@nredd/pi-resource-sampler@0.2.1` library (no Pi imports), which npm installs from the registry for `/mon`. Verified by installing the tarball alone and running it in exact stock Pi 1.3.0 (`make check-package-contracts`). Optional fork integrations (subagents, Plan mode) are absent in that setup; the exercised behavior does not need them.
 
 Session-scoped pi extensions for tmux users. No daemon, supervisor, core patch or cross-pane
 registry. Each runtime owns its goal, loops and monitors; persisted goal state follows the active
@@ -299,4 +299,3 @@ registration fixtures lock that ordering. The overwritten no-op resolver initial
 not a reachable validation or lifecycle path.
 `npm run check` runs Biome, TypeScript, the full Vitest suite and `bun test test/scenarios` (Bun 1.4.4).
 Cross-extension Plan/subagent/todo interactions and OS terminal boundaries remain in the integration tier;
-`docs/verification-rebuild.md` at the monorepo root tracks their destinations.

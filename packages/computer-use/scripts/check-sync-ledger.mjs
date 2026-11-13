@@ -88,48 +88,19 @@ export function validateLedger(ledger, controls) {
 
 const isSorted = (values) => values.every((value, index) => index === 0 || values[index - 1] < value);
 
-/** Table row names in `UPSTREAM.md`: the first cell of every `| name | ... |` line below the header.
- * @param {string} markdown `UPSTREAM.md` source.
- * @returns {string[]} Row names in document order.
- */
-export function upstreamRowNames(markdown) {
-	return markdown
-		.split("\n")
-		.filter((line) => line.startsWith("| ") && !line.startsWith("| Patch |") && !line.startsWith("| ---"))
-		.map((line) => line.split("|")[1].trim());
-}
-
 /** Require deterministic order so concurrent PRs append at distinct, stable positions instead of conflicting.
  * @param {object} ledger Parsed sync-patches.json.
- * @param {string} markdown `UPSTREAM.md` source.
  * @param {string} revertsSource `check-sync-reverts.mjs` source (its `cases` list).
  * @returns {void}
  * @throws {AssertionError} If any ledger list is not strictly sorted (code-unit order).
  */
-export function validateLedgerOrder(ledger, markdown, revertsSource) {
+export function validateLedgerOrder(ledger, revertsSource) {
 	assert.ok(isSorted(ledger.files), "sync-patches.json `files` must be sorted and unique");
 	assert.ok(isSorted(ledger.patches.map((patch) => patch.id)), "sync-patches.json patches must be sorted by id");
 	for (const patch of ledger.patches) {
 		assert.ok(isSorted(patch.files), `${patch.id}: files must be sorted and unique`);
 		assert.ok(isSorted(patch.dropControls), `${patch.id}: dropControls must be sorted and unique`);
 	}
-	assert.ok(isSorted(upstreamRowNames(markdown)), "UPSTREAM.md rows must be sorted by name");
 	const names = [...revertsSource.matchAll(/^\t\tname: "(.*)",$/gm)].map((match) => match[1]);
 	assert.ok(isSorted(names), "check-sync-reverts.mjs cases must be sorted by name");
-}
-
-/** Require each patch's `rows` to name `UPSTREAM.md` rows, and each row to be named by a patch.
- * @param {object} ledger Parsed sync-patches.json.
- * @param {string} markdown `UPSTREAM.md` source.
- * @returns {void}
- * @throws {AssertionError} On a patch without a row or a row without a patch.
- */
-export function validateUpstreamRows(ledger, markdown) {
-	const rows = new Set(upstreamRowNames(markdown));
-	for (const patch of ledger.patches) {
-		assert.ok(Array.isArray(patch.rows) && patch.rows.length > 0, `${patch.id}: rows required`);
-		for (const row of patch.rows) assert.ok(rows.has(row), `${patch.id}: no UPSTREAM.md row named ${JSON.stringify(row)}`);
-	}
-	const claimed = new Set(ledger.patches.flatMap((patch) => patch.rows));
-	for (const row of rows) assert.ok(claimed.has(row), `UPSTREAM.md row without a sync-patches.json patch: ${row}`);
 }

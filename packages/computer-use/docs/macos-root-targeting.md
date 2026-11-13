@@ -1,6 +1,6 @@
 # macOS root targeting
 
-Carried behavior notes for `@nredd/pi-computer-use`. Root targeting is now based on upstream PR #95; see [sync provenance](../UPSTREAM.md) for the current base, remaining patches, and verification limits.
+Carried behavior notes for `@nredd/pi-computer-use`. Root targeting is now based on upstream PR #95; `sync-patches.json` records the current base and remaining patches.
 
 ## Target contract
 

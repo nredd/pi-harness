@@ -73,8 +73,7 @@ const extension = createSubagentsExtension({ clock });
 
 `SubagentsExtensionOptions` accepts `clock?: Clock` and `homeDir?: string`. An explicit home binds
 user-scoped discovery, settings and child-session paths without mutating `HOME`; omitted homes keep
-call-time host defaults. Explicit agent/session directory overrides still win. The boundary audit and
-test seams are documented [here](docs/home-injection.md).
+call-time host defaults. Explicit agent/session directory overrides still win.
 
 The exported clock contract matches session-kit's scheduling boundary:
 
@@ -123,8 +122,7 @@ and `createInteractiveHarness`/`VirtualTerminal`, real child sessions and git, o
 clock, promise-held tools/streams and raw SGR mouse input. Homes, settings and provider credentials
 are fixtures; no installed pi, tmux or real-clock sleeps are needed. Existing old-host strict-mode
 coverage explicitly removes the optional SDK export; the shared faux runtime uses the host's real
-`withBeforeProviderRequest` facade. Maintainer guidance on public index callback
-coverage and retained safety guards is [here](../../docs/subagents-index-continuation.md).
+`withBeforeProviderRequest` facade.
 
 ### Other hosts
 
@@ -1362,7 +1360,6 @@ This is useful for creating agents that inherit extension tools but should not h
 docs/                 # Long-form guides (shipped to npm; README links out to them)
   workflows.md        # SubagentWorkflow: writing, editing, saving and re-running scripts
   rpc.md              # Cross-extension integration: pi.events, subagents:rpc:*, manager registry
-  home-injection.md   # Injected home boundaries, call-time defaults and filesystem canaries
 examples/
   workflows/          # Runnable examples, executed by test/workflow-examples.test.ts
   agent-tool-description.md

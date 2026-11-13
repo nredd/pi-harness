@@ -293,7 +293,7 @@
       "status": "measured",
       "goal": "excluded",
       "goal_reason": "Owner excludes computer-use from coverage maintenance; this measures its JS/TS runtime source under the Vitest suites from #347 with enforced uncovered-count ratchet caps (#645), not a 100% claim. `computer-use` keeps the full inventory.",
-      "note": "Istanbul over the package's Vitest suites; subprocess-run scripts count only what the suites import. At #755 CI HEAD 3a162381, macOS, Ubuntu and WSL2 each measured zero uncovered lines, functions, branches and statements; see docs/computer-use-coverage.md.",
+      "note": "Istanbul over the package's Vitest suites; subprocess-run scripts count only what the suites import. At #755 CI HEAD 3a162381, macOS, Ubuntu and WSL2 each measured zero uncovered lines, functions, branches and statements.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",

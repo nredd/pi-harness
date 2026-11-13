@@ -500,7 +500,6 @@ COMPUTER_USE_CONTRACT = PackageContract(
     required=(
         "LICENSE",
         "README.md",
-        "UPSTREAM.md",
         "package.json",
         "extensions/computer-use.ts",
         "scripts/build-native.mjs",
@@ -531,7 +530,6 @@ COMPUTER_USE_CONTRACT = PackageContract(
     allowed=(
         re.compile(r"^(LICENSE|README\.md|package\.json)$"),
         re.compile(r"^assets/reference/img\.jpg$"),
-        re.compile(r"^UPSTREAM\.md$"),
         re.compile(r"^docs/(?:README|macos-root-targeting)\.md$"),
         re.compile(r"^docs/content/docs/(?:[a-z-]+/)*[a-z-]+\.(?:mdx|json)$"),
         re.compile(r"^extensions/[a-z-]+\.ts$"),
@@ -566,7 +564,6 @@ COMPUTER_USE_CONTRACT = PackageContract(
     packed_files=(
         "LICENSE",
         "README.md",
-        "UPSTREAM.md",
         "assets/reference/img.jpg",
         "docs/README.md",
         "docs/content/docs/explanation/action-pipeline.mdx",

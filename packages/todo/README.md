@@ -64,8 +64,7 @@ run inside that same suite on both engines. The test host
 pins core `v1.3.0-nredd.10` release tarballs. Unpublished upstream mock helpers
 are vendored under `.test-support/`; provenance and test counts are documented
 [here](.test-support/README.md). Tests inject temporary homes and use faux providers, never
-a pi process or credentials. The measured line/function coverage and mutation receipts
-are documented [here](docs/coverage-closure.md); coverage policy remains separate.
+a pi process or credentials.
 
 Settled update/delete rows with a valid result snapshot retain that historical
 subject. Legacy/error rows without one still read the live store and now call
