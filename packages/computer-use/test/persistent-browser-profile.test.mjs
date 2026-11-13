@@ -167,6 +167,23 @@ describe.skipIf(process.platform === "win32")("persistent managed profile", () =
 		}
 	});
 
+	test("fails closed when a configured root cannot be resolved for a reason other than absence", async () => {
+		const file = path.join(home, "not-a-directory");
+		fs.writeFileSync(file, "synthetic");
+		process.env.XDG_CONFIG_HOME = path.join(file, "child");
+		await assert.rejects(testing.persistentBrowserProfile(profile), { code: "ENOTDIR" });
+	});
+
+	test.each(["XDG_CONFIG_HOME", "CHROME_CONFIG_HOME"])("rejects defaults under an aliased %s", async (variable) => {
+		const realRoot = path.join(home, "real-config");
+		const alias = path.join(home, "config-alias");
+		const directory = path.join(realRoot, "google-chrome");
+		fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+		fs.symlinkSync(realRoot, alias);
+		process.env[variable] = alias;
+		await assert.rejects(testing.persistentBrowserProfile(directory), /default browser/);
+	});
+
 	test.each([".pi-computer-use.lock", "SingletonLock", "SingletonCookie", "SingletonSocket"])("refuses existing %s without removing it or starting a browser", async (name) => {
 		const lock = path.join(profile, name);
 		// Chromium's SingletonLock can be a dangling symlink; lstat, not exists, must detect it.

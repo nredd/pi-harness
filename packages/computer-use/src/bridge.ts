@@ -2414,6 +2414,16 @@ async function persistentBrowserProfile(configured: string): Promise<string> {
 	if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid!() || (info.mode & 0o777) !== 0o700) throw new Error("managed_browser_profile must be a real directory owned by the current user with mode 0700.");
 	const canonical = await realpath(directory);
 	const home = await realpath(os.homedir());
+	// Resolve only configured parent roots, never enumerate or inspect browser profile contents.
+	const configuredRoots = await Promise.all([process.env.XDG_CONFIG_HOME, process.env.CHROME_CONFIG_HOME].filter((root): root is string => Boolean(root)).map(async (root) => {
+		const absolute = path.resolve(root);
+		try {
+			return await realpath(absolute);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return absolute;
+			throw error;
+		}
+	}));
 	const defaults = [
 		path.join(home, "Library/Application Support/Google/Chrome"),
 		path.join(home, "Library/Application Support/Chromium"),
@@ -2426,9 +2436,7 @@ async function persistentBrowserProfile(configured: string): Promise<string> {
 		path.join(home, ".config/google-chrome-beta"),
 		path.join(home, ".config/google-chrome-unstable"),
 		path.join(home, ".config/helium"),
-		...[process.env.XDG_CONFIG_HOME, process.env.CHROME_CONFIG_HOME].filter((root): root is string => Boolean(root)).flatMap((root) => ["google-chrome", "google-chrome-beta", "google-chrome-unstable"].map((name) => path.resolve(root, name))),
-		path.join(process.env.XDG_CONFIG_HOME || path.join(home, ".config"), "chromium"),
-		path.join(process.env.XDG_CONFIG_HOME || path.join(home, ".config"), "helium"),
+		...configuredRoots.flatMap((root) => ["google-chrome", "google-chrome-beta", "google-chrome-unstable", "chromium", "helium"].map((name) => path.join(root, name))),
 	];
 	if (canonical === home || defaults.some((root) => canonical === root || canonical.startsWith(`${root}${path.sep}`) || root.startsWith(`${canonical}${path.sep}`))) throw new Error("managed_browser_profile must not use a default browser data directory (or its ancestor/descendants).");
 	// Walk metadata only. A checkout's .git may be a directory or a worktree marker file.
