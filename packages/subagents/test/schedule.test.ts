@@ -347,8 +347,48 @@ describe("SubagentScheduler — fire path", () => {
     });
     expect(scheduler.getNextRun(job.id)).toBeDefined();
     vi.advanceTimersByTime(10_000);
-    store.update(job.id, { lastRun: new Date(Date.now()).toISOString() });
+    expect(manager.spawn).toHaveBeenCalledTimes(1);
     expect(scheduler.getNextRun(job.id)).toBeUndefined();
+  });
+
+  it("a sparse job is disabled at the deadline, not at its next tick", () => {
+    const job = scheduler.addJob({
+      name: "sparse", description: "sparse", schedule: "1h until +90s",
+      subagent_type: "general-purpose", prompt: "x",
+    });
+    vi.advanceTimersByTime(89_000);
+    expect(store.get(job.id)?.enabled).toBe(true);
+    vi.advanceTimersByTime(2_000);
+    expect(store.get(job.id)?.enabled).toBe(false);
+    expect(manager.spawn).not.toHaveBeenCalled();
+  });
+
+  it("an expired deadline job releases its name; a paused one before its deadline does not", () => {
+    const add = (name: string) =>
+      scheduler.addJob({ name, description: name, schedule: "1h until +5m", subagent_type: "general-purpose", prompt: "x" });
+    const paused = add("paused");
+    scheduler.updateJob(paused.id, { enabled: false });
+    expect(() => add("paused")).toThrow(/already exists/);
+    const expiring = add("expiring");
+    vi.advanceTimersByTime(6 * 60_000);
+    expect(add("expiring").id).not.toBe(expiring.id);
+  });
+
+  it("a one-shot disabled before it ever ran keeps its name", () => {
+    const job = scheduler.addJob({ name: "idle", description: "idle", schedule: "+1h", subagent_type: "general-purpose", prompt: "x" });
+    scheduler.updateJob(job.id, { enabled: false });
+    expect(() => scheduler.addJob({ name: "idle", description: "idle", schedule: "+1h", subagent_type: "general-purpose", prompt: "x" })).toThrow(/already exists/);
+  });
+
+  it("a deadline beyond the timer range is still enforced by the tick", () => {
+    const job = scheduler.addJob({
+      name: "far", description: "far", schedule: "1h until +40d",
+      subagent_type: "general-purpose", prompt: "x",
+    });
+    expect(store.get(job.id)?.enabled).toBe(true);
+    vi.advanceTimersByTime(41 * 86_400_000);
+    expect(manager.spawn).toHaveBeenCalledTimes(40 * 24 - 1);
+    expect(store.get(job.id)?.enabled).toBe(false);
   });
 
   it("an expired deadline job found at start is disabled, never armed", () => {

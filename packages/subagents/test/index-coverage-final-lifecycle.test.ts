@@ -373,9 +373,9 @@ describe("index scheduler and file errors", () => {
     expect(invalid.content[0].text).toContain('Invalid schedule "not a schedule". Use 6-field cron');
     const result = await schedule("+1h");
     expect(result.content[0].text).toContain('Scheduled "private schedule"');
+    expect(result.content[0].text).not.toContain("until:");
     const bounded = await schedule("1h until 2099-01-01T00:00:00Z", "bounded schedule");
     expect(bounded.content[0].text).toContain("until: 2099-01-01T00:00:00.000Z");
-    expect(result.content[0].text).not.toContain("until:");
     const path = resolveStorePath(env.dir, "index-final-parent");
     expect(new ScheduleStore(path).list()).toMatchObject([{ name: "private schedule" }, { name: "bounded schedule" }]);
     await bound.boot.commands.get("agents").handler("", bound.context);

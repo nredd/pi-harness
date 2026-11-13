@@ -846,6 +846,7 @@ function savedAgentNote(data) {
 // src/schedule.ts
 import { Cron } from "croner";
 import { nanoid } from "nanoid";
+var MAX_TIMER_MS = 2147483647;
 var SubagentScheduler = class _SubagentScheduler {
   constructor(options = {}) {
     this.options = options;
@@ -855,6 +856,7 @@ var SubagentScheduler = class _SubagentScheduler {
   clock;
   jobs = /* @__PURE__ */ new Map();
   intervals = /* @__PURE__ */ new Map();
+  deadlines = /* @__PURE__ */ new Map();
   scheduled = /* @__PURE__ */ new Map();
   admissions = /* @__PURE__ */ new Map();
   /** Newest pending admission per job that wrote "running", with the status it replaced. */
@@ -880,6 +882,8 @@ var SubagentScheduler = class _SubagentScheduler {
     this.jobs.clear();
     for (const t of this.intervals.values()) t.cancel();
     this.intervals.clear();
+    for (const t of this.deadlines.values()) t.cancel();
+    this.deadlines.clear();
     for (const admissions of this.admissions.values()) for (const admission of admissions) admission.abort();
     this.admissions.clear();
     this.pendingRuns.clear();
@@ -927,7 +931,7 @@ var SubagentScheduler = class _SubagentScheduler {
   addJob(input) {
     const store = this.requireStore();
     for (const old of store.list()) {
-      if (old.name === input.name && _SubagentScheduler.isFinished(old)) this.removeJob(old.id);
+      if (old.name === input.name && this.isFinished(old)) this.removeJob(old.id);
     }
     if (store.hasName(input.name)) {
       throw new Error(`A scheduled job named "${input.name}" already exists.`);
@@ -960,9 +964,10 @@ var SubagentScheduler = class _SubagentScheduler {
    * True once a job can never fire again and is not mid-run: a fired one-shot,
    * or a repeating job whose `until` deadline passed. Its name is reusable.
    */
-  static isFinished(job) {
+  isFinished(job) {
     if (job.enabled || job.lastStatus === "running") return false;
-    return job.scheduleType === "once" || job.until !== void 0;
+    if (job.scheduleType === "once") return job.lastRun !== void 0 || job.lastStatus === "error";
+    return this.pastDeadline(job);
   }
   /** Next-run time as ISO, or undefined if not currently armed or past the deadline. */
   getNextRun(jobId) {
@@ -1015,6 +1020,10 @@ var SubagentScheduler = class _SubagentScheduler {
         const cron = new Cron(job.schedule, () => this.executeJob(job.id));
         this.jobs.set(job.id, cron);
       }
+      const untilMs = job.until === void 0 ? void 0 : new Date(job.until).getTime() - this.clock.now();
+      if (untilMs !== void 0 && untilMs <= MAX_TIMER_MS && this.scheduled.has(job.id)) {
+        this.deadlines.set(job.id, this.clock.setTimeout(() => this.expireJob(job), untilMs));
+      }
     } catch (err) {
       this.scheduled.delete(job.id);
       this.emit({ type: "error", jobId: job.id, error: err instanceof Error ? err.message : String(err) });
@@ -1044,6 +1053,8 @@ var SubagentScheduler = class _SubagentScheduler {
       t.cancel();
       this.intervals.delete(id);
     }
+    this.deadlines.get(id)?.cancel();
+    this.deadlines.delete(id);
   }
   /**
    * Fire a job: persist running state, spawn (bypassing the concurrency
@@ -1213,12 +1224,12 @@ var SubagentScheduler = class _SubagentScheduler {
       const base = _SubagentScheduler.detectSchedule(bounded[1], now);
       if (base.type === "once") throw new Error(`Invalid schedule "${s}". "until" only applies to cron or interval schedules.`);
       const deadline = _SubagentScheduler.parseRelativeTime(bounded[2], now) ?? bounded[2];
-      const d = new Date(deadline);
-      if (!/^\d{4}-\d{2}-\d{2}T/.test(deadline) || Number.isNaN(d.getTime())) {
+      const until = new Date(deadline);
+      if (!/^\d{4}-\d{2}-\d{2}T/.test(deadline) || Number.isNaN(until.getTime())) {
         throw new Error(`Invalid deadline "${bounded[2]}" in "${s}". Use an ISO timestamp or "+10m"-style relative time.`);
       }
-      if (d.getTime() <= now) throw new Error(`Deadline ${d.toISOString()} is in the past.`);
-      return { ...base, until: d.toISOString() };
+      if (until.getTime() <= now) throw new Error(`Deadline ${until.toISOString()} is in the past.`);
+      return { ...base, until: until.toISOString() };
     }
     const trimmed = s.trim();
     const rel = _SubagentScheduler.parseRelativeTime(trimmed, now);

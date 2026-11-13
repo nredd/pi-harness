@@ -51,6 +51,9 @@ export interface NewJobInput {
   quotaParked?: boolean;
 }
 
+/** Longest delay a native timer honors (2^31 - 1 ms). */
+const MAX_TIMER_MS = 2_147_483_647;
+
 /** What `start()` binds, captured by a fire so a later session switch cannot leak into it. */
 interface BoundSession {
   store: ScheduleStore;
@@ -69,6 +72,7 @@ export class SubagentScheduler {
   private readonly clock: Clock;
   private jobs = new Map<string, Cron>();
   private intervals = new Map<string, TimerHandle>();
+  private deadlines = new Map<string, TimerHandle>();
   private scheduled = new Map<string, object>();
   private admissions = new Map<string, Set<AbortController>>();
   /** Newest pending admission per job that wrote "running", with the status it replaced. */
@@ -101,6 +105,8 @@ export class SubagentScheduler {
     this.jobs.clear();
     for (const t of this.intervals.values()) t.cancel();
     this.intervals.clear();
+    for (const t of this.deadlines.values()) t.cancel();
+    this.deadlines.clear();
     for (const admissions of this.admissions.values()) for (const admission of admissions) admission.abort();
     this.admissions.clear();
     this.pendingRuns.clear();
@@ -153,7 +159,7 @@ export class SubagentScheduler {
     const store = this.requireStore();
     // A finished job only holds its name for display; a new job may reuse it.
     for (const old of store.list()) {
-      if (old.name === input.name && SubagentScheduler.isFinished(old)) this.removeJob(old.id);
+      if (old.name === input.name && this.isFinished(old)) this.removeJob(old.id);
     }
     if (store.hasName(input.name)) {
       throw new Error(`A scheduled job named "${input.name}" already exists.`);
@@ -189,9 +195,10 @@ export class SubagentScheduler {
    * True once a job can never fire again and is not mid-run: a fired one-shot,
    * or a repeating job whose `until` deadline passed. Its name is reusable.
    */
-  static isFinished(job: ScheduledSubagent): boolean {
+  private isFinished(job: ScheduledSubagent): boolean {
     if (job.enabled || job.lastStatus === "running") return false;
-    return job.scheduleType === "once" || job.until !== undefined;
+    if (job.scheduleType === "once") return job.lastRun !== undefined || job.lastStatus === "error";
+    return this.pastDeadline(job);
   }
 
   /** Next-run time as ISO, or undefined if not currently armed or past the deadline. */
@@ -255,6 +262,12 @@ export class SubagentScheduler {
         const cron = new Cron(job.schedule, () => this.executeJob(job.id));
         this.jobs.set(job.id, cron);
       }
+      // Disable at the deadline itself, not at the next (possibly days away) tick.
+      // Beyond the timer range the tick check still enforces it.
+      const untilMs = job.until === undefined ? undefined : new Date(job.until).getTime() - this.clock.now();
+      if (untilMs !== undefined && untilMs <= MAX_TIMER_MS && this.scheduled.has(job.id)) {
+        this.deadlines.set(job.id, this.clock.setTimeout(() => this.expireJob(job), untilMs));
+      }
     } catch (err) {
       // Nothing armed, so no token: a stale entry would admit a fire for a job with no timer.
       this.scheduled.delete(job.id);
@@ -288,6 +301,8 @@ export class SubagentScheduler {
       t.cancel();
       this.intervals.delete(id);
     }
+    this.deadlines.get(id)?.cancel();
+    this.deadlines.delete(id);
   }
 
   /**
@@ -496,12 +511,12 @@ export class SubagentScheduler {
       const base = SubagentScheduler.detectSchedule(bounded[1], now);
       if (base.type === "once") throw new Error(`Invalid schedule "${s}". "until" only applies to cron or interval schedules.`);
       const deadline = SubagentScheduler.parseRelativeTime(bounded[2], now) ?? bounded[2];
-      const d = new Date(deadline);
-      if (!/^\d{4}-\d{2}-\d{2}T/.test(deadline) || Number.isNaN(d.getTime())) {
+      const until = new Date(deadline);
+      if (!/^\d{4}-\d{2}-\d{2}T/.test(deadline) || Number.isNaN(until.getTime())) {
         throw new Error(`Invalid deadline "${bounded[2]}" in "${s}". Use an ISO timestamp or "+10m"-style relative time.`);
       }
-      if (d.getTime() <= now) throw new Error(`Deadline ${d.toISOString()} is in the past.`);
-      return { ...base, until: d.toISOString() };
+      if (until.getTime() <= now) throw new Error(`Deadline ${until.toISOString()} is in the past.`);
+      return { ...base, until: until.toISOString() };
     }
     const trimmed = s.trim();
     // "+10m" — relative one-shot
