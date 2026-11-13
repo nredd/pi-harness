@@ -365,19 +365,22 @@ describe("index scheduler and file errors", () => {
     });
     const confirm = vi.fn(async () => true);
     const bound = await bind({ select, confirm });
-    const schedule = (expression: string) => bound.boot.tools.get("Agent").execute("schedule", {
-      subagent_type: "general-purpose", prompt: "later", description: "private schedule", schedule: expression, run_in_background: true,
+    const schedule = (expression: string, description = "private schedule") => bound.boot.tools.get("Agent").execute("schedule", {
+      subagent_type: "general-purpose", prompt: "later", description, schedule: expression, run_in_background: true,
     }, undefined, undefined, bound.context);
     const invalid = await schedule("not a schedule");
     expect(invalid.content[0].text).not.toContain('Scheduled "');
     expect(invalid.content[0].text).toContain('Invalid schedule "not a schedule". Use 6-field cron');
     const result = await schedule("+1h");
     expect(result.content[0].text).toContain('Scheduled "private schedule"');
+    const bounded = await schedule("1h until 2099-01-01T00:00:00Z", "bounded schedule");
+    expect(bounded.content[0].text).toContain("until: 2099-01-01T00:00:00.000Z");
+    expect(result.content[0].text).not.toContain("until:");
     const path = resolveStorePath(env.dir, "index-final-parent");
-    expect(new ScheduleStore(path).list()).toMatchObject([{ name: "private schedule" }]);
+    expect(new ScheduleStore(path).list()).toMatchObject([{ name: "private schedule" }, { name: "bounded schedule" }]);
     await bound.boot.commands.get("agents").handler("", bound.context);
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("private schedule"), expect.any(String));
-    expect(new ScheduleStore(path).list()).toEqual([]);
+    expect(new ScheduleStore(path).list()).toMatchObject([{ name: "bounded schedule" }]);
     expect(provider.state.callCount).toBe(0);
   });
 

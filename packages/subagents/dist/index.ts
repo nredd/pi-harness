@@ -909,6 +909,7 @@ var SubagentScheduler = class _SubagentScheduler {
       schedule: detected.normalized,
       scheduleType: detected.type,
       intervalMs: detected.intervalMs,
+      until: detected.until,
       subagent_type: input.subagent_type,
       prompt: input.prompt,
       model: input.model,
@@ -925,6 +926,9 @@ var SubagentScheduler = class _SubagentScheduler {
   /** Add a job, persist, and arm if enabled. Returns the stored job. */
   addJob(input) {
     const store = this.requireStore();
+    for (const old of store.list()) {
+      if (old.name === input.name && _SubagentScheduler.isFinished(old)) this.removeJob(old.id);
+    }
     if (store.hasName(input.name)) {
       throw new Error(`A scheduled job named "${input.name}" already exists.`);
     }
@@ -952,8 +956,21 @@ var SubagentScheduler = class _SubagentScheduler {
     this.emit({ type: "updated", job: updated });
     return updated;
   }
-  /** Next-run time as ISO, or undefined if not currently armed. */
+  /**
+   * True once a job can never fire again and is not mid-run: a fired one-shot,
+   * or a repeating job whose `until` deadline passed. Its name is reusable.
+   */
+  static isFinished(job) {
+    if (job.enabled || job.lastStatus === "running") return false;
+    return job.scheduleType === "once" || job.until !== void 0;
+  }
+  /** Next-run time as ISO, or undefined if not currently armed or past the deadline. */
   getNextRun(jobId) {
+    const next = this.nextRunUnbounded(jobId);
+    const until = this.store?.get(jobId)?.until;
+    return next && until && new Date(next).getTime() >= new Date(until).getTime() ? void 0 : next;
+  }
+  nextRunUnbounded(jobId) {
     const cron = this.jobs.get(jobId);
     if (cron) return cron.nextRun()?.toISOString();
     const job = this.store?.get(jobId);
@@ -968,6 +985,10 @@ var SubagentScheduler = class _SubagentScheduler {
   // ── Scheduling primitives ────────────────────────────────────────────
   scheduleJob(job) {
     const store = this.requireStore();
+    if (this.pastDeadline(job)) {
+      this.expireJob(job);
+      return;
+    }
     this.scheduled.set(job.id, {});
     try {
       if (job.scheduleType === "interval" && job.intervalMs) {
@@ -999,6 +1020,16 @@ var SubagentScheduler = class _SubagentScheduler {
       this.emit({ type: "error", jobId: job.id, error: err instanceof Error ? err.message : String(err) });
     }
   }
+  pastDeadline(job) {
+    return job.until !== void 0 && this.clock.now() >= new Date(job.until).getTime();
+  }
+  /** The deadline passed: stop timers and disable without firing. */
+  expireJob(job) {
+    this.unscheduleJob(job.id);
+    const patch = { enabled: false, nextRun: void 0 };
+    this.requireStore().update(job.id, patch);
+    this.emit({ type: "updated", job: { ...job, ...patch } });
+  }
   unscheduleJob(id) {
     this.scheduled.delete(id);
     for (const admission of this.admissions.get(id) ?? []) admission.abort();
@@ -1028,6 +1059,10 @@ var SubagentScheduler = class _SubagentScheduler {
     if (!store || !pi || !ctx || !manager || !scheduled) return;
     const job = store.get(id);
     if (!job?.enabled) return;
+    if (this.pastDeadline(job)) {
+      this.expireJob(job);
+      return;
+    }
     const previous = this.pendingRuns.get(id);
     const prior = previous ? previous.prior : job.lastStatus;
     this.pendingRuns.delete(id);
@@ -1173,6 +1208,18 @@ var SubagentScheduler = class _SubagentScheduler {
    * relative requires the leading "+" to disambiguate.
    */
   static detectSchedule(s, now = Date.now()) {
+    const bounded = s.trim().match(/^(.*\S)\s+until\s+(\S+)$/i);
+    if (bounded) {
+      const base = _SubagentScheduler.detectSchedule(bounded[1], now);
+      if (base.type === "once") throw new Error(`Invalid schedule "${s}". "until" only applies to cron or interval schedules.`);
+      const deadline = _SubagentScheduler.parseRelativeTime(bounded[2], now) ?? bounded[2];
+      const d = new Date(deadline);
+      if (!/^\d{4}-\d{2}-\d{2}T/.test(deadline) || Number.isNaN(d.getTime())) {
+        throw new Error(`Invalid deadline "${bounded[2]}" in "${s}". Use an ISO timestamp or "+10m"-style relative time.`);
+      }
+      if (d.getTime() <= now) throw new Error(`Deadline ${d.toISOString()} is in the past.`);
+      return { ...base, until: d.toISOString() };
+    }
     const trimmed = s.trim();
     const rel = _SubagentScheduler.parseRelativeTime(trimmed, now);
     if (rel !== null) return { type: "once", normalized: rel };
@@ -1190,7 +1237,7 @@ var SubagentScheduler = class _SubagentScheduler {
     const cronCheck = _SubagentScheduler.validateCronExpression(trimmed);
     if (cronCheck.valid) return { type: "cron", normalized: trimmed };
     throw new Error(
-      `Invalid schedule "${s}". Use 6-field cron (e.g. "0 0 9 * * 1" \u2014 9am every Monday), interval ("5m"/"1h"), or one-shot ("+10m" / ISO).`
+      `Invalid schedule "${s}". Use 6-field cron (e.g. "0 0 9 * * 1" \u2014 9am every Monday), interval ("5m"/"1h"), or one-shot ("+10m" / ISO). Append " until <ISO|+2h>" to a cron or interval to stop at a deadline.`
     );
   }
   /** 6-field cron — 'second minute hour dom month dow'. */
@@ -2930,6 +2977,7 @@ function formatDetails(j, scheduler) {
   return [
     `name:      ${j.name}`,
     `schedule:  ${j.schedule} (${j.scheduleType})`,
+    ...j.until ? [`until:     ${j.until}`] : [],
     `agent:     ${j.subagent_type}`,
     `prompt:    ${j.prompt.slice(0, 200)}${j.prompt.length > 200 ? "\u2026" : ""}`,
     `created:   ${j.createdAt}`,
@@ -7764,7 +7812,7 @@ Full transcript available at: ${record.outputFile}` : "";
   const scheduleParamShape = {
     schedule: Type.Optional(
       Type.String({
-        description: 'Opt-in only \u2014 fire later instead of now. Omit to run immediately (the default, almost always correct). Formats: 6-field cron ("0 0 9 * * 1" = 9am Mon), interval ("5m"/"1h"), one-shot ("+10m" or ISO). Forces run_in_background; incompatible with inherit_context and resume. Returns job ID.'
+        description: 'Opt-in only \u2014 fire later instead of now. Omit to run immediately (the default, almost always correct). Formats: 6-field cron ("0 0 9 * * 1" = 9am Mon), interval ("5m"/"1h"), one-shot ("+10m" or ISO). Append " until <ISO or +2h>" to a cron or interval to stop firing at a deadline (e.g. "30m until +6h"), instead of re-arming by hand. Forces run_in_background; incompatible with inherit_context and resume. Returns job ID.'
       })
     )
   };
@@ -8112,7 +8160,7 @@ Terse command-style prompts produce shallow, generic work.
           });
           const next = scheduler.getNextRun(job.id);
           return textResult(
-            `${fallbackNoteFor(void 0)}Scheduled "${job.name}" (id: ${job.id}, type: ${job.scheduleType}). Next run: ${next ?? "(unknown)"}. Manage via /agents \u2192 Scheduled jobs.`
+            `${fallbackNoteFor(void 0)}Scheduled "${job.name}" (id: ${job.id}, type: ${job.scheduleType}${job.until ? `, until: ${job.until}` : ""}). Next run: ${next ?? "(unknown)"}. Manage via /agents \u2192 Scheduled jobs.`
           );
         } catch (err) {
           return textResult(errorMessage(err));

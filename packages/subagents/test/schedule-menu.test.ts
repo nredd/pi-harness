@@ -140,6 +140,18 @@ describe("showSchedulesMenu", () => {
       expect(confirm.mock.calls[0][0]).not.toContain(NAME_A);
     });
 
+    it("shows a deadline job's until in the confirm dialog", async () => {
+      scheduler.addJob({
+        name: "poller", description: "poller", schedule: "5m until 2099-01-01T00:00:00Z",
+        subagent_type: "general-purpose", prompt: "go",
+      });
+      const { ctx, confirm } = makeCtx({ pick: (labels) => labels[0] });
+
+      await showSchedulesMenu(ctx, scheduler);
+
+      expect(confirm.mock.calls[0][1]).toContain("until:     2099-01-01T00:00:00.000Z");
+    });
+
     it("cancels the right job past the single-digit boundary", async () => {
       // 11 rows: insurance against any refactor that parses the number back out
       // of the label and confuses "1" with "11".

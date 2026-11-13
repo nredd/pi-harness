@@ -313,6 +313,102 @@ describe("SubagentScheduler — fire path", () => {
     expect(manager.spawn).toHaveBeenCalledTimes(1);
   });
 
+  it("deadline job fires on cadence, then disables without firing at the deadline", () => {
+    const job = scheduler.addJob({
+      name: "poll", description: "poll", schedule: "10s until +35s",
+      subagent_type: "general-purpose", prompt: "poll",
+    });
+    expect(job.until).toBeDefined();
+    expect(job.schedule).toBe("10s");
+
+    vi.advanceTimersByTime(35_000);
+    expect(manager.spawn).toHaveBeenCalledTimes(3);
+    vi.advanceTimersByTime(5_000);
+    expect(manager.spawn).toHaveBeenCalledTimes(3);
+    expect(store.get(job.id)?.enabled).toBe(false);
+    vi.advanceTimersByTime(60_000);
+    expect(manager.spawn).toHaveBeenCalledTimes(3);
+  });
+
+  it("a tick exactly at the deadline does not fire", () => {
+    const job = scheduler.addJob({
+      name: "edge", description: "edge", schedule: "10s until +20s",
+      subagent_type: "general-purpose", prompt: "x",
+    });
+    vi.advanceTimersByTime(20_000);
+    expect(manager.spawn).toHaveBeenCalledTimes(1);
+    expect(store.get(job.id)?.enabled).toBe(false);
+  });
+
+  it("getNextRun is undefined once the next tick passes the deadline", () => {
+    const job = scheduler.addJob({
+      name: "cap", description: "cap", schedule: "10s until +15s",
+      subagent_type: "general-purpose", prompt: "x",
+    });
+    expect(scheduler.getNextRun(job.id)).toBeDefined();
+    vi.advanceTimersByTime(10_000);
+    store.update(job.id, { lastRun: new Date(Date.now()).toISOString() });
+    expect(scheduler.getNextRun(job.id)).toBeUndefined();
+  });
+
+  it("an expired deadline job found at start is disabled, never armed", () => {
+    const job = scheduler.addJob({
+      name: "old", description: "old", schedule: "10s until +5s",
+      subagent_type: "general-purpose", prompt: "x",
+    });
+    scheduler.stop();
+    vi.advanceTimersByTime(60_000);
+    scheduler.start(pi, ctx, manager, store);
+    vi.advanceTimersByTime(60_000);
+    expect(manager.spawn).not.toHaveBeenCalled();
+    expect(store.get(job.id)?.enabled).toBe(false);
+  });
+
+  it("a fired one-shot releases its name once it settles", async () => {
+    scheduler.addJob({
+      name: "Monitor", description: "Monitor", schedule: "+1s",
+      subagent_type: "general-purpose", prompt: "once",
+    });
+    vi.advanceTimersByTime(2_000);
+    await vi.waitFor(() => expect(scheduler.list()[0]?.lastStatus).toBe("success"));
+    const again = scheduler.addJob({
+      name: "Monitor", description: "Monitor", schedule: "+1s",
+      subagent_type: "general-purpose", prompt: "again",
+    });
+    expect(scheduler.list().map(j => j.id)).toEqual([again.id]);
+  });
+
+  it("armed jobs and a running one-shot keep their names", () => {
+    const add = (name: string, schedule: string) =>
+      scheduler.addJob({ name, description: name, schedule, subagent_type: "general-purpose", prompt: "x" });
+    add("armed", "+1h");
+    expect(() => add("armed", "+1h")).toThrow(/already exists/);
+    add("rec", "1h until +5h");
+    expect(() => add("rec", "1h")).toThrow(/already exists/);
+    const stale = add("plain", "1h");
+    scheduler.updateJob(stale.id, { enabled: false });
+    // disabled but never bounded: not finished, name still held
+    expect(() => add("plain", "1h")).toThrow(/already exists/);
+    add("run", "+1s");
+    vi.advanceTimersByTime(2_000);
+    // fired and disabled, but its agent has not settled yet
+    expect(() => add("run", "+1h")).toThrow(/already exists/);
+  });
+
+  it("rejects bad deadlines", () => {
+    const bad = (schedule: string) => () =>
+      scheduler.addJob({ name: schedule, description: "d", schedule, subagent_type: "general-purpose", prompt: "x" });
+    expect(bad("10s until nonsense")).toThrow(/Invalid deadline/);
+    expect(bad("10s until 2000-01-01T00:00:00Z")).toThrow(/in the past/);
+    expect(bad("+10m until +1h")).toThrow(/only applies to cron or interval/);
+    expect(bad("0 0 9 * * 1 until +0s")).toThrow(/in the past/);
+  });
+
+  it("cron deadline jobs parse", () => {
+    const d = SubagentScheduler.detectSchedule("0 */15 * * * * until 2099-01-01T00:00:00Z");
+    expect(d).toMatchObject({ type: "cron", normalized: "0 */15 * * * *", until: "2099-01-01T00:00:00.000Z" });
+  });
+
   it("fire passes bypassQueue: true to manager.spawn", () => {
     scheduler.addJob({
       name: "every-1s", description: "x", schedule: "1s",

@@ -454,6 +454,8 @@ export interface ScheduledSubagent {
   scheduleType: "cron" | "once" | "interval";
   /** Computed at create time for interval/once. */
   intervalMs?: number;
+  /** ISO deadline for a repeating job: no fire at or after it. */
+  until?: string;
 
   // spawn params (subset of Agent tool params; no inherit_context, no resume)
   subagent_type: SubagentType;
