@@ -570,6 +570,7 @@ INERT_BY_DECISION = {
     ".github/workflows/publish.yml",
     ".github/workflows/runner-rescue.yml",
     ".github/workflows/runner-smoke.yml",
+    ".github/workflows/wsl-watchdog.yml",
     "Makefile",
     "benchmarks/comparison/Makefile",
     "integration/Makefile",
