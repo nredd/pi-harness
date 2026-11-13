@@ -314,11 +314,12 @@ test("revert gate refuses surviving mutations, wrong failures, launch errors and
 		reverts([], {
 			...deps,
 			platform: "darwin",
-			cases: [{ ...control, check: "test/probe.test.mjs", timeoutMs: 550_000 }],
+			cases: [{ ...control, check: "test/probe.test.mjs" }],
 			spawn: (_cmd, args, options) => {
-				assert.equal(options.timeout, 550_000);
-				for (const entry of cases.filter((entry) => entry.check === "test/invariants.test.mjs"))
-					assert.equal(entry.timeoutMs, 550_000);
+				assert.equal(options.timeout, 90_000);
+				const parity = cases.filter((entry) => entry.check === "test/strict-headless-invariant.test.mjs");
+				assert.equal(parity.length, 2);
+				for (const entry of parity) assert.equal(entry.timeoutMs, undefined);
 				assert.match(args[0], /run-vitest.ts$/);
 				assert.equal(args.at(-1), "--coverage.enabled=false");
 				return { status: 1, stdout: "expected mutation", stderr: "" };

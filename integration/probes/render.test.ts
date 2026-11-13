@@ -102,7 +102,8 @@ test("times warmup plus requested forced and steady frames and appends one recor
 	assert.equal(record.steady_frames_ms.length, 3);
 	for (const ms of [...record.frames_ms, ...record.steady_frames_ms]) assert.ok(ms >= 0);
 	assert.ok(record.heap_used > 0);
-	assert.equal(record.gc, typeof (globalThis as { gc?: unknown }).gc === "function");
+	const host = globalThis as { gc?: unknown; Bun?: { gc?: unknown } };
+	assert.equal(record.gc, typeof host.gc === "function" || typeof host.Bun?.gc === "function");
 	assert.equal(record.width, 132);
 	assert.equal(record.height, 41);
 });

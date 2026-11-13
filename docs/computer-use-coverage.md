@@ -92,11 +92,10 @@ passed 27 tests, measuring L/F/B/S **279/46/165/314**, all covered. Actual tar a
 disposable Git histories, source-tree comparison, documentation generators and an expected-failure
 mutation child run offline. Injected boundaries cover launch failures, retry exhaustion, wrong
 failures, surviving mutations and cleanup without a network fetch or live helper. The full
-package gate exposed an existing 90s outer drop-control deadline terminating the entire
-`invariants` suite before its 300s SDK hook could finish. Only its two drift controls now allow
-550s: SDK hook 300s + source test 90s + cache-control test 90s + cursor test 50s + launcher 20s.
-Inner SDK/source deadlines, all assertions and expected-failure matching remain unchanged;
-other controls retain 90s. Both outer-deadline branches are tested. These numbers
+package gate previously hit its 90s outer deadline while the two drift controls ran the entire
+`invariants` suite, including SDK setup. #825 moves those controls to the same static parity test
+without native compilation; all controls retain the original 90s limit and expected-failure matching.
+These numbers
 are a scoped measurement, not whole-package or cross-platform evidence. CI run 43363268531
 failed because the mutated `check-docs.mjs` returned success. A path-alias repro shows how:
 `process.argv[1]` can retain a symlinked temporary path while `import.meta.url` resolves the real

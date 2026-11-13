@@ -160,6 +160,14 @@ export const cases = [
 		failure: /AssertionError|false == true/,
 	},
 	{
+		name: "Rust coverage numeric exit-code sentinel (#807)",
+		file: "test/rust-coverage-errors.test.mjs",
+		before: "process.exitCode = 0;\n\t\tprocess.argv = [argv[0], undefined,",
+		after: "process.exitCode = undefined;\n\t\tprocess.argv = [argv[0], undefined,",
+		check: "test/rust-coverage-errors.test.mjs",
+		failure: /Expected values to be strictly equal/,
+	},
+	{
 		name: "Rust protocol/state Cargo registration (#801)",
 		file: "native/linux/bridge-rs/tests/protocol_state_errors.rs",
 		before: "#[test]\nfn every_error_has_the_stable_wire_code_and_display()",
@@ -662,6 +670,14 @@ export const cases = [
 		failure: /is not supported on|did not match|must be of type string/,
 	},
 	{
+		name: "managed browser fixture clock waits for startup (#817)",
+		file: "test/managed-browser-launch.test.mjs",
+		before: 'fs.existsSync(path.join(scratch, "launch.json")) ? (skew += 6_000) : 0',
+		after: "skew += 6_000",
+		check: "test/managed-browser-launch.test.mjs",
+		failure: /timeout fixture clock must not advance before child startup acknowledgement/,
+	},
+	{
 		name: "managed browser profile dir is owner-only (#519)",
 		file: "src/bridge.ts",
 		before: "const profileDir = await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`));",
@@ -989,10 +1005,8 @@ export const cases = [
 		before:
 			'if (action.action !== "typeText" && action.action !== "keypress" && action.action !== "paste") return undefined;',
 		after: 'if (action.action !== "typeText") return undefined;',
-		check: "test/invariants.test.mjs",
+		check: "test/strict-headless-invariant.test.mjs",
 		failure: /drifted from bridge\.swift/,
-		// Whole suite: SDK hook 300s + INV-8 90s + cache control 90s + INV-17 50s + launcher 20s.
-		timeoutMs: 550_000,
 	},
 	{
 		name: "strict headless keyboard preflight (upstream #112 deviation)",
@@ -1009,10 +1023,8 @@ export const cases = [
 		before:
 			'} else if action == "keypress" {\n\t\t\ttry rejectInStrictHeadless("Keypress requires synthesized keyboard input, which strict headless mode prohibits")\n',
 		after: '} else if action == "keypress" {\n',
-		check: "test/invariants.test.mjs",
+		check: "test/strict-headless-invariant.test.mjs",
 		failure: /drifted from bridge\.swift/,
-		// Same whole-suite budget as the TS drift control; inner source deadlines remain unchanged.
-		timeoutMs: 550_000,
 	},
 	{
 		name: "target focus needs the target frontmost (#646)",
@@ -1169,7 +1181,7 @@ export function main(
 					cwd: sandbox,
 					env,
 					encoding: "utf8",
-					timeout: test.timeoutMs ?? 90_000,
+					timeout: 90_000,
 					maxBuffer: 8 * 1024 * 1024,
 				});
 				assert.ifError(result.error);

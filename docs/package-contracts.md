@@ -99,7 +99,7 @@ What each package must satisfy:
   may import only `node:` builtins: the standalone
   check runs before relative-import resolution, so `../src/index.ts` is rejected even if it exists
 - Imports are read with the repository's installed TypeScript 7.0.2 parser (`scripts/import_audit.ts`
-  via `typescript/unstable/sync`, which drives the bundled `tsgo`; no new dependency, one batched
+  via `typescript/unstable/async`, which drives the bundled `tsgo` on Node and Bun without Node-private pipe descriptors; no new dependency, one batched
   `node` run per package). It sees static imports and re-exports (including `import type`),
   `import x = require()`, `import("x")` types, dynamic `import()` and `require()` calls, with plain
   string and no-substitution template specifiers resolved. A computed specifier (template with
