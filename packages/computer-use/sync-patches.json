@@ -1099,6 +1099,29 @@
 			}
 		},
 		{
+			"id": "signing-cert-node",
+			"purpose": "Port deterministic certificate setup to measured Node host seams while retaining the documented shell command and a tiny unmeasured Bash silent-password reader",
+			"rows": [
+				"Signing certificate Node port"
+			],
+			"files": [
+				"package.json",
+				"scripts/make-signing-cert.mjs",
+				"scripts/make-signing-cert.sh",
+				"test/make-signing-cert.test.mjs",
+				"tsconfig.signing.json"
+			],
+			"check": "test/make-signing-cert.test.mjs",
+			"dropControls": [
+				"signing certificate stops after command refusal (#803)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#803; MIT-derived from the imported upstream shell script, not filed upstream"
+			}
+		},
+		{
 			"id": "site-working-directory",
 			"purpose": "Run imported website commands from the package rather than the harness root",
 			"rows": [
@@ -1353,6 +1376,8 @@
 		"scripts/docs-generators/generate-tool-reference.mjs",
 		"scripts/fixtures/alert-app.swift",
 		"scripts/fixtures/event-probe.swift",
+		"scripts/make-signing-cert.mjs",
+		"scripts/make-signing-cert.sh",
 		"scripts/rust-coverage.mjs",
 		"scripts/setup-helper.mjs",
 		"scripts/swift-coverage.mjs",
@@ -1417,6 +1442,7 @@
 		"test/macos-helper-path.test.mjs",
 		"test/macos-native-pure.test.mjs",
 		"test/macos-observe-target.test.mjs",
+		"test/make-signing-cert.test.mjs",
 		"test/managed-browser-headless.test.mjs",
 		"test/managed-browser-launch.test.mjs",
 		"test/managed-browser-observe.test.mjs",
@@ -1452,6 +1478,7 @@
 		"test/windows-helper-client.test.mjs",
 		"test/wsl-detection.test.mjs",
 		"test/wsl2-diagnostics.test.mjs",
+		"tsconfig.signing.json",
 		"vitest.async.config.ts",
 		"vitest.config.ts"
 	]

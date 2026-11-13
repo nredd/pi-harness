@@ -946,6 +946,14 @@ const cases = [
 		failure: /a wrong checksum is rejected before extraction/,
 	},
 	{
+		name: "signing certificate stops after command refusal (#803)",
+		file: "scripts/make-signing-cert.mjs",
+		before: "if (status !== 0) return status;",
+		after: "/* command refusal ignored */",
+		check: "test/make-signing-cert.test.mjs",
+		failure: /command refusal at step 2|command refusal at step 3/,
+	},
+	{
 		name: "single root delta mapping (50cbfe2/4d596ca)",
 		file: "src/bridge.ts",
 		before: "if (!execution.rootDelta?.length) return;",

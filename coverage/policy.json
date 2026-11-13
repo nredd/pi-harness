@@ -241,7 +241,7 @@
     },
     "computer-use": {
       "root": "packages/computer-use",
-      "owned": ["src/**/*.ts", "src/**/*.mjs", "src/**/*.mts", "extensions/**/*.ts", "native/macos/*.swift", "native/windows/bridge-rs/src/**/*.rs", "native/linux/bridge-rs/src/**/*.rs", "scripts/build-native.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs", "scripts/docs-generators/*.mjs", "scripts/*.sh", "docs/**/*.ts", "docs/**/*.tsx", "docs/**/*.mjs"],
+      "owned": ["src/**/*.ts", "src/**/*.mjs", "src/**/*.mts", "extensions/**/*.ts", "native/macos/*.swift", "native/windows/bridge-rs/src/**/*.rs", "native/linux/bridge-rs/src/**/*.rs", "scripts/build-native.mjs", "scripts/make-signing-cert.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs", "scripts/docs-generators/*.mjs", "scripts/*.sh", "docs/**/*.ts", "docs/**/*.tsx", "docs/**/*.mjs"],
       "exclusions": [{ "path": "docs/next-env.d.ts", "kind": "generated", "reason": "Next.js-generated declaration references only; no executable source." }, { "path": "src/platform/macos/helper-path.d.mts", "kind": "type-only", "reason": "Only TypeScript declarations for helper-path.mjs; emits no executable JavaScript." }],
       "status": "pending",
       "goal": "excluded",
@@ -311,7 +311,7 @@
     },
     "computer-use-vitest": {
       "root": "packages/computer-use",
-      "owned": ["src/**/*.ts", "src/**/*.mjs", "extensions/**/*.ts", "scripts/build-native.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs", "scripts/docs-generators/*.mjs"],
+      "owned": ["src/**/*.ts", "src/**/*.mjs", "extensions/**/*.ts", "scripts/build-native.mjs", "scripts/make-signing-cert.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs", "scripts/docs-generators/*.mjs"],
       "exclusions": [{ "path": "src/platform/types.ts", "kind": "type-only", "reason": "Only TypeScript declarations; emits no executable JavaScript." }],
       "status": "measured",
       "goal": "excluded",

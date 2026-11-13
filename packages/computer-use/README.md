@@ -99,6 +99,22 @@ KILL syscall alone is not treated as success: setup fails if the group cannot be
 keeps a fresh-probe-guarded exit-time KILL backstop while ownership remains signalable. Only ESRCH
 proves quiescence; permission or unexpected syscall errors surface uncertainty and revoke signalling.
 
+## Signing certificate setup
+
+From this package directory, `./scripts/make-signing-cert.sh [output-dir]` still creates
+`key.pem`, `cert.pem` and `id.p12` (default `./signing`) for the upstream self-signed release
+workflow. Keep those files permanently; this does not guarantee persistent TCC grants.
+The existing Node minimum, Bash and OpenSSL requirements are unchanged. The harness release
+workflow does not invoke this command or import a signing identity.
+
+`scripts/make-signing-cert.mjs` owns directory/config creation, OpenSSL arguments, failure
+propagation and successful cleanup. Tests inject every external command and use disposable
+files, never a real identity, Keychain, trust operation or credential prompt. Istanbul measures
+only that Node code with L/F/B/S zero thresholds. The three-line shell compatibility launcher
+and Bash `read -r -s` password fragment are explicitly **unmeasured shell**, not covered Node
+logic. The latter preserves Bash's terminal editing, whitespace, EOF and interrupt semantics
+without a new password-input dependency. Remaining shell work belongs to #695.
+
 ## License
 
 MIT, retaining upstream's copyright in `LICENSE`.
