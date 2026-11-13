@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
@@ -110,8 +111,12 @@ def test_installs_the_pinned_action_for_the_architecture(tmp_path: Path, machine
     assert curl[curl.index("--output") + 1] == str(target / "install-action.tar.gz")
     assert "--fail" in curl
     assert curl[curl.index("--retry") + 1] == "3"
-    assert tools.CURL_BOUNDS == ["--connect-timeout", "15", "--max-time", "45"]
-    assert all(bound in curl for bound in tools.CURL_BOUNDS)
+    assert curl[curl.index("--connect-timeout") : curl.index("--connect-timeout") + 4] == [
+        "--connect-timeout",
+        "15",
+        "--max-time",
+        "45",
+    ]
     tar = fake.calls[2][0]
     assert tar[1:] == [
         "-xzf",
@@ -132,8 +137,14 @@ def test_installs_the_pinned_action_for_the_architecture(tmp_path: Path, machine
     assert main_env["KEEP"] == "1"
     assert not {"GH_TOKEN", "GITHUB_TOKEN", "DEFAULT_GITHUB_TOKEN"} & main_env.keys()
     probes = [argv for argv, _ in fake.calls[4:]]
-    assert probes == [list(probe) for probe in tools.VERSION_PROBES]
-    expected = "/fake/a:/fake/b:/usr/bin"
+    assert probes == [
+        ["rustc", "--version"],
+        ["cargo", "--version"],
+        ["cargo", "fmt", "--version"],
+        ["cargo", "clippy", "--version"],
+        ["cargo", "nextest", "--version"],
+    ]
+    expected = "/fake/b:/fake/a:/usr/bin"
     assert all(env is not None and env["PATH"] == expected for _, env in fake.calls[4:])
     assert (target / "owned-tool-path").read_text() == f"{expected}\n"
 
@@ -142,13 +153,13 @@ def test_path_receipt_ignores_empty_and_unterminated_lines(tmp_path: Path) -> No
     """An empty entry would put the working directory on PATH; a torn final line is not a complete write."""
     fake = Fake(paths="/fake/a\n\n/fake/b\n/torn")
     assert run_main(tmp_path / "tools", fake) == 0
-    assert (tmp_path / "tools/owned-tool-path").read_text() == "/fake/a:/fake/b:/usr/bin\n"
+    assert (tmp_path / "tools/owned-tool-path").read_text() == "/fake/b:/fake/a:/usr/bin\n"
 
 
 def test_path_receipt_defaults_to_the_standard_search_path(tmp_path: Path) -> None:
     """A parent without `PATH` still yields a usable receipt."""
     assert run_main(tmp_path / "tools", Fake(paths=""), {}) == 0
-    assert (tmp_path / "tools/owned-tool-path").read_text().rstrip("\n") == tools.os.defpath
+    assert (tmp_path / "tools/owned-tool-path").read_text().rstrip("\n") == os.defpath
 
 
 def test_main_reads_the_process_environment_by_default(
@@ -165,12 +176,12 @@ def test_main_reads_the_process_environment_by_default(
     assert main_env["PATH"] == "/usr/bin"
 
 
-@pytest.mark.parametrize("argv", [[], [""]])
+@pytest.mark.parametrize("argv", [[], [""], ["a", "b"]])
 def test_requires_a_tool_directory(argv: list[str], capsys: pytest.CaptureFixture[str]) -> None:
     """A missing directory fails before any command runs."""
     fake = Fake()
     assert tools.main(argv, fake, {}) == 1
-    assert "tool directory required" in capsys.readouterr().err
+    assert "exactly one tool directory required" in capsys.readouterr().err
     assert not fake.calls
 
 
@@ -204,7 +215,7 @@ def test_refuses_unsupported_architectures_before_downloading(
     """Off x86_64/aarch64 the installer names the architecture and touches nothing."""
     fake = Fake(machine=machine)
     assert run_main(tmp_path / "tools", fake) == 1
-    assert f"unsupported architecture {machine}\n" in capsys.readouterr().err
+    assert f"unsupported architecture '{machine}'\n" in capsys.readouterr().err
     assert fake.names() == []
     assert not (tmp_path / "tools").exists()
 
@@ -257,4 +268,4 @@ def test_runs_as_a_script_from_the_checkout_root(checkout: Path) -> None:
         [sys.executable, tools.__file__], cwd=checkout, capture_output=True, text=True, check=False
     )
     assert completed.returncode == 1
-    assert "tool directory required" in completed.stderr
+    assert "exactly one tool directory required" in completed.stderr

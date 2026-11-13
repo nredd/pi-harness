@@ -11,6 +11,10 @@ Inputs (a missing one is a failure, never a default):
 
 The first ordinary-step failure status is retained in `$RUNNER_TEMP/first-failure`, including adapter
 preflight failures and a SIGTERM (e.g. from `timeout`), which exits 143 after cleanup.
+
+References:
+    https://docs.github.com/actions/writing-workflows/workflow-syntax-for-github-actions#jobsjob_idstepsshell
+    https://learn.microsoft.com/windows/wsl/basic-commands#run-a-specific-linux-distribution
 """
 
 from __future__ import annotations

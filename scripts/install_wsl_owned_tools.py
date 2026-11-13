@@ -76,8 +76,9 @@ def _path_entries(receipt: Path) -> list[str]:
         receipt (Path): The `GITHUB_PATH` file, one directory per newline-terminated line.
 
     Returns:
-        list[str]: Non-empty directories in file order. An empty entry would put the working directory on
-            `PATH` and an unterminated final line was never a complete write, so neither is returned.
+        list[str]: Non-empty directories in file order; the caller prepends them one by one. An empty entry
+            would put the working directory on `PATH`, and an unterminated final line was never a complete
+            write, so neither is returned.
     """
     return [line for line in receipt.read_text(encoding="utf-8").split("\n")[:-1] if line]
 
@@ -119,7 +120,8 @@ def _install(tool_dir: Path, ref: str, runner_arch: str, run: Runner, environ: M
     main_sh = ["bash", "--noprofile", "--norc", str(action_dir / "main.sh")]
     if status := run_command(main_sh, run, env=action_env)[0]:
         return status
-    search = os.pathsep.join([*_path_entries(receipt), environ.get("PATH", os.defpath)])
+    # Each receipt line is prepended in turn, so the last line written ends up first on PATH.
+    search = os.pathsep.join([*reversed(_path_entries(receipt)), environ.get("PATH", os.defpath)])
     probe_env = dict(environ) | {"PATH": search}
     for probe in VERSION_PROBES:
         if status := run_command(probe, run, env=probe_env)[0]:
@@ -142,13 +144,13 @@ def main(argv: Sequence[str], run: Runner = subprocess.run, environ: Mapping[str
             a filesystem error, else the failing command's status.
     """
     env = os.environ if environ is None else environ
+    if len(argv) != 1 or not argv[0]:
+        return _fail("exactly one tool directory required")
     if (ref := _pinned_ref(SETUP_ACTION)) is None:
         return _fail("expected one authoritative install-action SHA")
-    if len(argv) < 1 or not argv[0]:
-        return _fail("tool directory required")
     machine = run_command(["uname", "-m"], run, capture=True)[1].rstrip("\n")
     if (runner_arch := RUNNER_ARCHES.get(machine)) is None:
-        return _fail(f"unsupported architecture {machine}")
+        return _fail(f"unsupported architecture '{machine}'")
     try:
         return _install(Path(argv[0]), ref, runner_arch, run, env)
     except OSError as exc:

@@ -8,7 +8,7 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +20,7 @@ import wsl2_run as adapter
 
 
 @pytest.fixture(autouse=True)
-def _isolate_process_state(monkeypatch: pytest.MonkeyPatch) -> Any:
+def _isolate_process_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """`main` installs a SIGTERM handler and the adapter changes directory; restore both."""
     monkeypatch.chdir(Path.cwd())
     previous = signal.getsignal(signal.SIGTERM)

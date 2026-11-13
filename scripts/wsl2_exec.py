@@ -3,6 +3,10 @@
 `install_gh_linux.py`, `install_wsl_owned_tools.py` and `wsl2_run.py` run on the WSL guest's system `python3`
 (3.12) before any uv environment exists, so this module is standard library only. Commands are resolved
 through `PATH` on purpose: the CI fixtures stub them.
+
+References:
+    https://docs.python.org/3/library/subprocess.html
+    https://www.gnu.org/software/bash/manual/html_node/Exit-Status.html
 """
 
 from __future__ import annotations

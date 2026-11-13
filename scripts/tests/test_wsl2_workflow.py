@@ -718,6 +718,8 @@ def test_guest_setup_leaves_no_external_command_unbounded() -> None:
     for label in ("copy checkout", "extract node", "install npm", "install bun", "install uv", "install gh"):
         assert f'bounded "{label}" ' in setup
     assert 'bounded "install owned tools" 90 ' in setup
+    owned_tools = (ROOT / "scripts/install_wsl_owned_tools.py").read_text(encoding="utf-8")
+    assert 'CURL_BOUNDS = ["--connect-timeout", "15", "--max-time", "45"]' in owned_tools
 
 
 APT = ROOT / "scripts" / "wsl2_apt.sh"
@@ -1183,6 +1185,7 @@ def native_guest(tmp_path: Path, versions: dict[str, str]) -> tuple[dict[str, st
     (workspace / "scripts").mkdir()
     shutil.copy(INSTALL_GH, workspace / "scripts" / "install_gh_linux.sh")
     shutil.copy(INSTALL_GH_PY, workspace / "scripts" / "install_gh_linux.py")
+    shutil.copy(INSTALL_GH_PY.with_name("wsl2_exec.py"), workspace / "scripts" / "wsl2_exec.py")
     (workspace / ".node-version").write_text("22.0.0\n", encoding="utf-8")
     (workspace / ".bun-version").write_text("1.4.4\n", encoding="utf-8")
     (workspace / "package.json").write_text("{}", encoding="utf-8")
