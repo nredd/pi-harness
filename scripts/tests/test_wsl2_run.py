@@ -21,7 +21,14 @@ import wsl2_run as adapter
 
 @pytest.fixture(autouse=True)
 def _isolate_process_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """`main` installs a SIGTERM handler and the adapter changes directory; restore both."""
+    """`main` installs a SIGTERM handler and the adapter changes directory; restore both.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Restores the working directory afterwards.
+
+    Yields:
+        None: Control to the test.
+    """
     monkeypatch.chdir(Path.cwd())
     previous = signal.getsignal(signal.SIGTERM)
     yield
@@ -148,7 +155,7 @@ def test_a_step_killed_by_a_signal_reports_the_shell_status(guest: tuple[Path, d
     assert first_failure(worktree) == "143\n"
 
 
-@pytest.mark.parametrize("directory", ["..", "../escape", "integration/../..", "escape-link", "/tmp"])
+@pytest.mark.parametrize("directory", ["..", "../escape", "integration/../..", "escape-link"])
 def test_refuses_an_escaping_directory(
     guest: tuple[Path, dict[str, str]], directory: str, capfd: pytest.CaptureFixture[str]
 ) -> None:
@@ -162,6 +169,19 @@ def test_refuses_an_escaping_directory(
     assert "escapes guest checkout" in captured.err
     assert "unexpected-gate" not in captured.out
     assert first_failure(worktree) == "1\n"
+
+
+def test_an_absolute_step_directory_never_replaces_the_checkout(
+    guest: tuple[Path, dict[str, str]], capfd: pytest.CaptureFixture[str]
+) -> None:
+    """The directory is appended to the checkout like `cd -P "$worktree/$dir"`, never joined over it."""
+    worktree, env = guest
+    env["WSL_STEP_DIRECTORY"] = str(worktree / "integration")
+    Path(env["WSL_STEP_SCRIPT"]).write_text("echo unexpected-gate\n")
+    assert adapter.main(Host(), env) == 1
+    captured = capfd.readouterr()
+    assert "escapes guest checkout or is unavailable" in captured.err
+    assert "unexpected-gate" not in captured.out
 
 
 def test_refuses_an_unavailable_directory(
