@@ -35,6 +35,9 @@ const EXTRA_DECISION_INPUTS = [
   "node script.js",
   "git status --help",
   "git -C . -C /etc status",
+  "git -C /etc -C . status",
+  "git -C /etc push",
+  "git -C . push",
   "git status",
   "git branch",
   "git -C /work/repo status",
@@ -73,11 +76,14 @@ const REJECTED: [string, string, RegExp][] = [
   ["sort -o out in", "-o", /argument/],
   ["sed -i s/a/b/ f", "-i", /argument/],
   ["git branch -D x", "-D", /reviewed `git branch` validator/],
-  ["git -C /etc status", "/etc", /reviewed `git`/],
+  ["git -C /etc status", "/etc", /`git -C` directory/],
   ["sed s/a/b/ f", "s/a/b/", /reviewed `sed` validator/],
   ["tsc --noEmit --incremental", "--incremental", /reviewed `tsc` validator/],
   ["npm run build", "build", /reviewed `npm run` validator/],
-  ["git -C . -C /etc status", "/etc", /reviewed `git`/],
+  ["git -C . -C /etc status", "/etc", /`git -C` directory/],
+  ["git -C /etc -C . status", "/etc", /`git -C` directory/],
+  ["git -C /etc push", "/etc", /`git -C` directory/],
+  ["git -C . push", "git push", /allowlist/],
   ["hostname foo", "foo", /reviewed `hostname` validator/],
   ["tasklist", "tasklist", /only allowed on Windows/],
   ["frobnicate x", "frobnicate", /allowlist/],
@@ -139,6 +145,8 @@ test("an explanation never offers `safeSubcommands` for a command that is alread
     "node script.js",
     "git status --help",
     "git -C . -C /etc status",
+    "git -C /etc -C . status",
+    "git -C /etc push",
   ]) {
     const blocked = explainBlockedCommand(command, {}, { ...options, platform: "linux" });
     assert.ok(blocked, command);
@@ -148,7 +156,7 @@ test("an explanation never offers `safeSubcommands` for a command that is alread
 
 // Segments whose command/subcommand is already reviewed: a `safeSubcommands` hint would be wrong.
 const REVIEWED =
-  /^(git (?:-C \S+ |--no-pager )*(?:status|log|diff|show|branch|remote|ls-files|grep)|sed|hostname|tasklist)\b/;
+  /^(git (?:-C \S+ |--no-pager )*(?:status|log|diff|show|branch|remote|ls-files|grep)|npm (?:audit|run)|tsc|node|python3?|biome|ruff|ty|sed|hostname|tasklist)\b/;
 
 test("no rejected table input suggests an opt-in for an already-reviewed command", () => {
   for (const [command] of REJECTED) {

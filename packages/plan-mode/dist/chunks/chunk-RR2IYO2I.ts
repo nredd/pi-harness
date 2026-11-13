@@ -189,26 +189,14 @@ function explainBlockedCommand(command, safeSubcommands = {}, {
     }
     const paths = { base, roots, homeDir };
     if (!isSafeSegment(segment.text, safeSubcommands, paths, platform)) {
-      return { segment: segment.text, ...explainUnsafeSegment(segment.text, safeSubcommands, platform) };
+      return { segment: segment.text, ...explainUnsafeSegment(segment.text, safeSubcommands, platform, paths) };
     }
   }
   return void 0;
 }
-var SUBCOMMAND_COMMANDS = /* @__PURE__ */ new Set([
-  "git",
-  "gh",
-  "npm",
-  "cargo",
-  "go",
-  "node",
-  "python",
-  "python3",
-  "tsc",
-  "biome",
-  "ruff",
-  "ty"
-]);
-function explainUnsafeSegment(segment, safeSubcommands, platform) {
+var NOT_ALLOWLISTED_REASON = "not on the read-only allowlist; opt in via `safeSubcommands`";
+var SUBCOMMAND_COMMANDS = /* @__PURE__ */ new Set(["gh", "npm", "cargo", "go"]);
+function explainUnsafeSegment(segment, safeSubcommands, platform, paths) {
   const prefix = matchConfiguredPrefix(segment, safeSubcommands);
   const tokens = shellWords(segment);
   const first = tokens?.[0];
@@ -244,18 +232,18 @@ function explainUnsafeSegment(segment, safeSubcommands, platform) {
   const unsafeArgument = args.find((argument) => !hasSafeArguments(command, [argument]));
   if (unsafeArgument !== void 0) return { token: unsafeArgument, reason: `argument not allowed for \`${first}\`` };
   if (!hasSafeArguments(command, args)) return { token: first, reason: `arguments not allowed for \`${first}\`` };
-  const reviewed = explainReviewedRejection(command, first, args, safeSubcommands, platform);
+  const reviewed = explainReviewedRejection(command, first, args, safeSubcommands, platform, paths);
   if (reviewed) return reviewed;
   const subcommand = SUBCOMMAND_COMMANDS.has(command) ? args.find((argument) => !argument.startsWith("-")) : void 0;
   return {
     token: subcommand === void 0 ? first : `${first} ${subcommand}`,
-    reason: "not on the read-only allowlist (opt in via `safeSubcommands`)"
+    reason: NOT_ALLOWLISTED_REASON
   };
 }
 function validatorRejection(label, token) {
   return { token, reason: `arguments rejected by the reviewed \`${label}\` validator` };
 }
-function explainReviewedRejection(command, first, args, safeSubcommands, platform) {
+function explainReviewedRejection(command, first, args, safeSubcommands, platform, paths) {
   if (command === "hostname") return validatorRejection("hostname", args[0] ?? first);
   if (command === "tasklist") {
     return platform === "win32" ? validatorRejection("tasklist", args[0] ?? first) : { token: first, reason: "`tasklist` is only allowed on Windows" };
@@ -263,7 +251,7 @@ function explainReviewedRejection(command, first, args, safeSubcommands, platfor
   if (command === "sed") {
     return validatorRejection("sed", args.find((argument) => !argument.startsWith("-")) ?? args[0] ?? first);
   }
-  if (command === "git") return explainGitRejection(first, args, safeSubcommands);
+  if (command === "git") return explainGitRejection(first, args, safeSubcommands, paths);
   if (["node", "python", "python3", "tsc", "biome", "ruff", "ty"].includes(command)) {
     const forbidden = args.find((argument) => /^--(incremental|tsBuildInfoFile|generateTrace)(=|$)/.test(argument));
     return validatorRejection(command, forbidden ?? args[0] ?? first);
@@ -276,31 +264,30 @@ function explainReviewedRejection(command, first, args, safeSubcommands, platfor
   }
   return void 0;
 }
-function explainGitRejection(first, args, safeSubcommands) {
+function explainGitRejection(first, args, safeSubcommands, paths) {
   let index = 0;
-  let directory;
   while (index < args.length && (args[index] === "--no-pager" || args[index] === "-C")) {
-    if (args[index] === "-C") directory = args[index + 1];
-    index += args[index] === "-C" ? 2 : 1;
+    if (args[index] === "-C") {
+      const directory = args[index + 1];
+      if (resolveDirectory(directory, paths.base, paths.roots, paths.homeDir) === void 0) {
+        return { token: directory ?? "-C", reason: "`git -C` directory outside the allowed roots" };
+      }
+      index += 2;
+    } else {
+      index += 1;
+    }
   }
   const subcommand = args[index]?.toLowerCase();
   if (!subcommand) return void 0;
   if (subcommand.startsWith("-")) return { token: subcommand, reason: "unsupported git option before the subcommand" };
   const validator = BUILTIN_GIT_VALIDATORS[subcommand] ?? (safeSubcommands.git?.includes(subcommand) ? CONFIGURABLE_GIT_VALIDATORS[subcommand] : void 0);
-  if (!validator) return void 0;
+  if (!validator) return { token: `${first} ${subcommand}`, reason: NOT_ALLOWLISTED_REASON };
   const label = `git ${subcommand}`;
   const subcommandArgs = args.slice(index + 1);
   const unsafe = subcommandArgs.find(
     (argument) => !hasSafeGitArguments(subcommand, [argument]) || !validator([argument])
   );
-  if (unsafe !== void 0) return validatorRejection(label, unsafe);
-  if (!(hasSafeGitArguments(subcommand, subcommandArgs) && validator(subcommandArgs))) {
-    return validatorRejection(label, label);
-  }
-  return {
-    token: directory ?? first,
-    reason: "`git -C` directory outside the allowed roots (reviewed `git` validator)"
-  };
+  return validatorRejection(label, unsafe ?? label);
 }
 function wordAround(segment, index) {
   let from = index;
@@ -2726,4 +2713,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-X27XKZ3Y.ts.map
+//# sourceMappingURL=chunk-RR2IYO2I.ts.map

@@ -296,27 +296,16 @@ export function explainBlockedCommand(
     }
     const paths: PathPolicy = { base, roots, homeDir };
     if (!isSafeSegment(segment.text, safeSubcommands, paths, platform)) {
-      return { segment: segment.text, ...explainUnsafeSegment(segment.text, safeSubcommands, platform) };
+      return { segment: segment.text, ...explainUnsafeSegment(segment.text, safeSubcommands, platform, paths) };
     }
   }
   return undefined;
 }
 
+const NOT_ALLOWLISTED_REASON = "not on the read-only allowlist; opt in via `safeSubcommands`";
+
 /** Commands whose policy turns on a subcommand, so the subcommand is part of the offending token. */
-const SUBCOMMAND_COMMANDS = new Set([
-  "git",
-  "gh",
-  "npm",
-  "cargo",
-  "go",
-  "node",
-  "python",
-  "python3",
-  "tsc",
-  "biome",
-  "ruff",
-  "ty",
-]);
+const SUBCOMMAND_COMMANDS = new Set(["gh", "npm", "cargo", "go"]);
 
 /**
  * Names the token that made {@link isSafeSegment} reject `segment`. Mirrors that function's order
@@ -326,6 +315,7 @@ function explainUnsafeSegment(
   segment: string,
   safeSubcommands: SafeSubcommands,
   platform: NodeJS.Platform,
+  paths: PathPolicy,
 ): SyntaxRejection {
   const prefix = matchConfiguredPrefix(segment, safeSubcommands);
   const tokens = shellWords(segment);
@@ -367,12 +357,12 @@ function explainUnsafeSegment(
   const unsafeArgument = args.find((argument) => !hasSafeArguments(command, [argument]));
   if (unsafeArgument !== undefined) return { token: unsafeArgument, reason: `argument not allowed for \`${first}\`` };
   if (!hasSafeArguments(command, args)) return { token: first, reason: `arguments not allowed for \`${first}\`` };
-  const reviewed = explainReviewedRejection(command, first, args, safeSubcommands, platform);
+  const reviewed = explainReviewedRejection(command, first, args, safeSubcommands, platform, paths);
   if (reviewed) return reviewed;
   const subcommand = SUBCOMMAND_COMMANDS.has(command) ? args.find((argument) => !argument.startsWith("-")) : undefined;
   return {
     token: subcommand === undefined ? first : `${first} ${subcommand}`,
-    reason: "not on the read-only allowlist (opt in via `safeSubcommands`)",
+    reason: NOT_ALLOWLISTED_REASON,
   };
 }
 
@@ -392,6 +382,7 @@ function explainReviewedRejection(
   args: string[],
   safeSubcommands: SafeSubcommands,
   platform: NodeJS.Platform,
+  paths: PathPolicy,
 ): SyntaxRejection | undefined {
   if (command === "hostname") return validatorRejection("hostname", args[0] ?? first);
   if (command === "tasklist") {
@@ -402,7 +393,7 @@ function explainReviewedRejection(
   if (command === "sed") {
     return validatorRejection("sed", args.find((argument) => !argument.startsWith("-")) ?? args[0] ?? first);
   }
-  if (command === "git") return explainGitRejection(first, args, safeSubcommands);
+  if (command === "git") return explainGitRejection(first, args, safeSubcommands, paths);
   if (["node", "python", "python3", "tsc", "biome", "ruff", "ty"].includes(command)) {
     const forbidden = args.find((argument) => /^--(incremental|tsBuildInfoFile|generateTrace)(=|$)/.test(argument));
     return validatorRejection(command, forbidden ?? args[0] ?? first);
@@ -421,12 +412,19 @@ function explainGitRejection(
   first: string,
   args: string[],
   safeSubcommands: SafeSubcommands,
+  paths: PathPolicy,
 ): SyntaxRejection | undefined {
   let index = 0;
-  let directory: string | undefined;
   while (index < args.length && (args[index] === "--no-pager" || args[index] === "-C")) {
-    if (args[index] === "-C") directory = args[index + 1];
-    index += args[index] === "-C" ? 2 : 1;
+    if (args[index] === "-C") {
+      const directory = args[index + 1];
+      if (resolveDirectory(directory, paths.base, paths.roots, paths.homeDir) === undefined) {
+        return { token: directory ?? "-C", reason: "`git -C` directory outside the allowed roots" };
+      }
+      index += 2;
+    } else {
+      index += 1;
+    }
   }
   const subcommand = args[index]?.toLowerCase();
   if (!subcommand) return undefined;
@@ -436,21 +434,13 @@ function explainGitRejection(
     (safeSubcommands.git?.includes(subcommand as SafeGitSubcommand)
       ? (CONFIGURABLE_GIT_VALIDATORS as Record<string, ArgumentValidator>)[subcommand]
       : undefined);
-  if (!validator) return undefined;
+  if (!validator) return { token: `${first} ${subcommand}`, reason: NOT_ALLOWLISTED_REASON };
   const label = `git ${subcommand}`;
   const subcommandArgs = args.slice(index + 1);
   const unsafe = subcommandArgs.find(
     (argument) => !hasSafeGitArguments(subcommand, [argument]) || !validator([argument]),
   );
-  if (unsafe !== undefined) return validatorRejection(label, unsafe);
-  if (!(hasSafeGitArguments(subcommand, subcommandArgs) && validator(subcommandArgs))) {
-    return validatorRejection(label, label);
-  }
-  // Arguments are fine, so the global `-C <dir>` was rejected.
-  return {
-    token: directory ?? first,
-    reason: "`git -C` directory outside the allowed roots (reviewed `git` validator)",
-  };
+  return validatorRejection(label, unsafe ?? label);
 }
 
 /** The whitespace-delimited chunk of `segment` that contains `index`. */
