@@ -46,8 +46,16 @@ def generate(action: Path, destination: Path) -> None:
         destination (Path): Disposable fixture directory.
 
     Raises:
+        FileNotFoundError: Action input is not a regular file.
+        NotADirectoryError: Destination already exists as a non-directory.
         ValueError: Production deadline no longer matches the known fixture seam.
     """
+    action = Path(str(action)).resolve()
+    destination = Path(str(destination)).resolve()
+    if not action.is_file():
+        raise FileNotFoundError(f"Action path is not a file: '{action}'")
+    if destination.exists() and not destination.is_dir():
+        raise NotADirectoryError(f"Destination is not a directory: '{destination}'")
     source = action.read_text(encoding="utf-8")
     launch = extract_step(source, "Start WSL setup watchdog")
     if launch.count("$seconds = 300") != 1:

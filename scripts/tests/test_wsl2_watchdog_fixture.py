@@ -90,6 +90,35 @@ def test_generate_validates_report_before_writing(tmp_path: Path) -> None:
     assert not destination.exists()
 
 
+@pytest.mark.parametrize("directory_input", [False, True])
+def test_generate_rejects_invalid_action_path(tmp_path: Path, *, directory_input: bool) -> None:
+    """Reject missing or non-file inputs before creating any output.
+
+    Parameters:
+        tmp_path (Path): Disposable invalid action and destination directory.
+        directory_input (bool): Whether the invalid input is an existing directory.
+    """
+    action = tmp_path / "action.yml"
+    if directory_input:
+        action.mkdir()
+    with pytest.raises(FileNotFoundError, match="Action path is not a file"):
+        generate(action, tmp_path / "output")
+    assert not (tmp_path / "output").exists()
+
+
+def test_generate_rejects_non_directory_output(tmp_path: Path) -> None:
+    """Reject an existing file destination without overwriting it.
+
+    Parameters:
+        tmp_path (Path): Disposable file destination.
+    """
+    destination = tmp_path / "output"
+    destination.write_text("preserve this fixture")
+    with pytest.raises(NotADirectoryError, match="Destination is not a directory"):
+        generate(ACTION, destination)
+    assert destination.read_text() == "preserve this fixture"
+
+
 def test_command_line_generates_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Exercise the same explicit-path CLI used on Windows, without invoking PowerShell locally.
 
