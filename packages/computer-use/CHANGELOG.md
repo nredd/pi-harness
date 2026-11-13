@@ -6,6 +6,8 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Added
 
+- Deterministic finite-input tests close the five remaining cursor-motion LLVM regions and ten pure-key/selection policy regions in `bridge.swift`. Numerical safeguards stay intact; no live desktop input, capture or TCC runs (nredd/pi-harness#810, #645).
+
 - Real-source Swift ref ownership and look payload assertions cover transfer guards, exact lookup, FIFO snapshot eviction, optional fields and recursive child order without AX queries. Window equality, destination ownership, optional flags and child order have executable mutation controls. Distinct handles use an owned non-GUI child PID, reaped before assertions; a source-level guard rejects AX queries/actions. Runtime behavior is unchanged (nredd/pi-harness#769).
 
 - `test:async` measures the complete verification-only `scripts/check-async.mjs` at zero uncovered lines/functions/branches/statements with deterministic safety-path tests and retained real child-process checks, independently of runtime caps. Missing selected-host reports fail accounting; the other verification scripts remain unmeasured (nredd/pi-harness#759).

@@ -19,6 +19,51 @@ func runCursorMotionAssertions() {
                           x1: 9, y1: 14, th1: to)
     }
 
+    // Direct pure seams cover numeric boundaries that normal overlay timing cannot reach.
+    let rotation = AgentCursorRenderer()
+    check(near(rotation.rotateToward(current: 0, desired: -2 * .pi + 0.05, maxStep: 0.1), 0.05),
+          "negative wrapped turn takes the short positive correction")
+    check(near(rotation.rotateToward(current: 0, desired: 2 * .pi + 0.4, maxStep: 0.1), 0.1),
+          "positive wrapped turn respects the step bound")
+    check(near(rotation.rotateToward(current: 0, desired: -0.05, maxStep: 0.1), -0.05),
+          "short negative turn does not overshoot")
+    check(mod2pi(-Double.leastNonzeroMagnitude) == 2 * .pi,
+          "negative subnormal remainder receives the floating point correction")
+    check(mod2pi(Double.leastNonzeroMagnitude) == Double.leastNonzeroMagnitude,
+          "positive subnormal remainder is retained")
+
+    // Same-turn circle centers nearly coincide. Cancellation makes the expanded squared
+    // distance negative in one candidate, while the opposite-turn candidate stays valid.
+    let separation = 0.00627
+    let angle = asin(separation / 2)
+    for sign in [-1.0, 1.0] {
+        let end = CGPoint(x: separation * 80, y: 0)
+        guard let path = planDubins(x0: 0, y0: 0, th0: -sign * angle,
+                                   x1: end.x, y1: end.y, th1: sign * angle,
+                                   R: 80, endVisualHeading: 0, targetPoint: end) else {
+            check(false, "near-coincident circle centers retain a feasible candidate")
+            return
+        }
+        check(path.length.isFinite && path.length > 0, "cancellation candidate is rejected without poisoning the path")
+        let endpoint = path.sample(at: path.length)
+        // Cancellation near coincident centers costs a few millionths of a pixel.
+        check(hypot(endpoint.x - end.x, endpoint.y - end.y) < 0.00001,
+              "numerically feasible path still reaches its endpoint")
+    }
+
+    // All candidate arithmetic overflows for these finite poses. The renderer must use
+    // its linear fallback, not retain a nonfinite candidate. No real pointer is moved.
+    let extreme = AgentCursorRenderer()
+    let extremeStart = CGPoint(x: 1e200, y: 0)
+    extreme.setInitialPosition(extremeStart)
+    extreme.moveTo(point: CGPoint(x: -1e200, y: 0))
+    extreme.tick(now: 0)
+    extreme.tick(now: 0.01)
+    check(extreme.position.x.isFinite && extreme.position.y.isFinite && extreme.heading.isFinite,
+          "finite extreme coordinates fall back without nonfinite motion")
+    check(near(extreme.heading, .pi / 4), "linear numerical fallback retains the visual heading")
+    extreme.cancelAnimation()
+
     let line = linear(0, .pi / 2)
     state(line.sample(at: -10), 3, 6, 0, "linear distance clamps below zero")
     state(line.sample(at: 5), 6, 10, .pi / 4, "linear midpoint interpolates position and heading")
