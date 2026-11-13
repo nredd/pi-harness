@@ -60,31 +60,88 @@ DEFAULT_FRAME_PATTERN = r"\bctx\b"
 MILESTONES = ("first_paint_s", "frame_s", "input_ready_s")
 SECTION = re.compile(r"^--- Startup Timings: (\w+) ---$")
 PHASE = re.compile(r"^\s+(.*?): (\d+)ms$")
-PACKAGE_PREFIX = re.compile(r".*/node_modules/")
+FIXTURE_LABEL = re.compile(r"fixture-[a-z0-9][a-z0-9-]{0,63}")
+MAX_TIMING_BYTES = 64 * 1024
+MAX_TIMING_LINES = 1024
+MAX_EXTENSION_LABELS = 128
+MAX_PHASE_MS = 86_400_000
+MAIN_PHASES = frozenset(
+    (
+        "parseArgs",
+        "runMigrations",
+        "firstTimeSetup",
+        "createSessionManager",
+        "createRuntime",
+        "createAgentSessionRuntime",
+        "resourceLoader.reload",
+        "readPipedStdin",
+        "prepareInitialMessage",
+        "initTheme",
+        "resolveModelScope",
+        "createAgentSession",
+        "interactiveMode.init",
+        "TOTAL",
+    )
+)
 STDERR_WRAPPER = '"$@" 2>"$PI_STARTUP_STDERR"'
 
 
-def parse_timings(stderr: str) -> dict[str, int]:
-    """Parse `PI_TIMING=1` output into `section:phase` -> milliseconds.
+def parse_timings(stderr: str, *, extension_labels: dict[str, str] | None = None) -> dict[str, int]:
+    """Parse bounded `PI_TIMING=1` output, allowing only known or explicitly synthetic labels.
 
-    Extension paths are shortened to the part after `node_modules/`, which drops the home directory.
+    Unknown phases are omitted, not attributed to another phase. Core's legacy counters use a
+    wall clock and do not establish complete monotonic startup intervals or handler completion.
 
     Parameters:
-        stderr (str): captured stderr.
+        stderr (str): captured stderr, at most 64 KiB and 1024 lines.
+        extension_labels (dict[str, str] | None): exact extension paths mapped to unique
+            `fixture-*` aliases. Never derive this map from a live profile or arbitrary stderr.
 
     Returns:
-        dict[str, int]: phase durations, empty when no timing block was printed.
+        dict[str, int]: sanitized durations; missing phases remain absent, not zero.
+
+    Raises:
+        ValueError: bounds, fixture aliases or accepted phase records are invalid or ambiguous.
     """
+    if len(stderr) > MAX_TIMING_BYTES or len(stderr.encode("utf-8")) > MAX_TIMING_BYTES:
+        raise ValueError("Startup timing input exceeds byte limit")
+    lines = stderr.splitlines()
+    if len(lines) > MAX_TIMING_LINES:
+        raise ValueError("Startup timing input exceeds line limit")
+    labels = extension_labels or {}
+    if (
+        len(labels) > MAX_EXTENSION_LABELS
+        or len(set(labels.values())) != len(labels)
+        or any(FIXTURE_LABEL.fullmatch(label) is None for label in labels.values())
+    ):
+        raise ValueError("Startup timing fixture aliases must be bounded, synthetic and unique")
+    extension_phases = {
+        f"{path} {operation}": f"{label} {operation}"
+        for path, label in labels.items()
+        for operation in ("module import", "factory")
+    }
     timings: dict[str, int] = {}
     section: str | None = None
-    for line in stderr.splitlines():
-        header = SECTION.match(line)
+    for line in lines:
+        header = SECTION.fullmatch(line)
         if header:
             section = header.group(1)
             continue
-        phase = PHASE.match(line)
-        if phase and section:
-            timings[f"{section}:{PACKAGE_PREFIX.sub('', phase.group(1))}"] = int(phase.group(2))
+        if line.startswith("---"):
+            section = None
+        phase = PHASE.fullmatch(line)
+        if not phase:
+            continue
+        label, duration = phase.groups()
+        if section == "main" and label in MAIN_PHASES:
+            key = f"main:{label}"
+        elif section == "extensions" and (label == "TOTAL" or label in extension_phases):
+            key = f"extensions:{extension_phases.get(label, label)}"
+        else:
+            continue
+        if len(duration) > 8 or int(duration) > MAX_PHASE_MS or key in timings:
+            raise ValueError("Startup timing phase is out of range or duplicated")
+        timings[key] = int(duration)
     return timings
 
 
@@ -176,6 +233,7 @@ def sample(
     env: dict[str, str],
     frame_pattern: str = DEFAULT_FRAME_PATTERN,
     timeout_s: float = SAMPLE_TIMEOUT_S,
+    extension_labels: dict[str, str] | None = None,
 ) -> Sample:
     """Launch `argv` once in a fresh pane and time its first frame and input readiness.
 
@@ -184,16 +242,18 @@ def sample(
         env (dict[str, str]): complete pane environment.
         frame_pattern (str): regex matching the footer once the UI is drawn.
         timeout_s (float): give up after this long.
+        extension_labels (dict[str, str] | None): explicit synthetic extension aliases.
 
     Returns:
         Sample: milestones and parsed phases.
 
     Raises:
-        ValueError: `timeout_s` is not finite and positive.
+        ValueError: timeout, fixture aliases or captured timing records fail validation.
         TimeoutError: the footer, command registration or dispatch acknowledgement never arrived.
     """
     if not math.isfinite(timeout_s) or timeout_s <= 0:
         raise ValueError("`timeout_s` must be finite and positive")
+    parse_timings("", extension_labels=extension_labels)
     frame = re.compile(frame_pattern, re.MULTILINE)
     scratch = Path(tempfile.mkdtemp(prefix="pis-", dir=SOCKET_ROOT))
     stderr_path = scratch / "stderr"
@@ -238,7 +298,9 @@ def sample(
             time.sleep(POLL_INTERVAL_S / 10)
         else:
             raise TimeoutError(f"No ready UI within {timeout_s}s, marks={marks}, submitted={submitted}")
-        return Sample(**marks, timings=parse_timings(stderr_path.read_text(errors="replace")))
+        with stderr_path.open(errors="replace") as stream:
+            stderr = stream.read(MAX_TIMING_BYTES + 1)
+        return Sample(**marks, timings=parse_timings(stderr, extension_labels=extension_labels))
     finally:
         pane.kill()
         shutil.rmtree(scratch, ignore_errors=True)
@@ -269,6 +331,7 @@ def run(
     gap_s: float,
     env: dict[str, str],
     frame_pattern: str = DEFAULT_FRAME_PATTERN,
+    extension_labels: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Sample every variant `runs` times, alternating their order each round.
 
@@ -278,21 +341,27 @@ def run(
         gap_s (float): idle time before each sample; 0 is naturally warm, large is idle-gap.
         env (dict[str, str]): pane environment.
         frame_pattern (str): footer regex.
+        extension_labels (dict[str, str] | None): explicit synthetic extension aliases.
 
     Returns:
         dict[str, Any]: `host`, `runs`, `gap_s`, per-variant `summary` and raw `samples`.
 
     Raises:
-        ValueError: `runs` is not positive.
+        ValueError: `runs` is not positive, or aliases/captured timing records fail validation.
     """
     if runs < 1:
         raise ValueError(f"`runs` must be positive, got '{runs}'")
+    parse_timings("", extension_labels=extension_labels)
     labels = list(variants)
     samples: dict[str, list[Sample]] = {label: [] for label in labels}
     for index in range(runs):
         for label in labels if index % 2 == 0 else reversed(labels):
             time.sleep(gap_s)
-            samples[label].append(sample(variants[label], env=env, frame_pattern=frame_pattern))
+            samples[label].append(
+                sample(
+                    variants[label], env=env, frame_pattern=frame_pattern, extension_labels=extension_labels
+                )
+            )
     summary: dict[str, dict[str, Any]] = {}
     for label, rows in samples.items():
         summary[label] = {metric: summarize([getattr(row, metric) for row in rows]) for metric in MILESTONES}
@@ -371,6 +440,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gap", type=float, default=0.0, help="idle seconds before each sample")
     parser.add_argument("--frame-pattern", default=DEFAULT_FRAME_PATTERN)
     parser.add_argument("--output", type=Path, help="also write the JSON report here")
+    parser.add_argument(
+        "--extension-label",
+        action="append",
+        default=[],
+        metavar="FIXTURE=PATH",
+        help="explicit synthetic fixture alias for an exact extension path; repeatable",
+    )
     parser.add_argument("--record", type=Path, help="write per-variant medians here as the new baseline")
     parser.add_argument("--baseline", type=Path, help="exit 1 when a median regressed past this baseline")
     parser.add_argument(
@@ -392,12 +468,19 @@ def main(argv: list[str] | None = None) -> int:
     for spec in args.variant or ["pi=pi"]:
         label, _, command = spec.partition("=")
         variants[label] = command.split()
+    extension_labels: dict[str, str] = {}
+    for spec in args.extension_label:
+        label, separator, path = spec.partition("=")
+        if not separator or not path or path in extension_labels:
+            parser.error("Startup timing aliases require FIXTURE=PATH with unique nonempty paths")
+        extension_labels[path] = label
     report = run(
         variants,
         runs=args.runs,
         gap_s=args.gap,
         env=scrubbed_env(dict(os.environ)) | dict(item.split("=", 1) for item in args.env),
         frame_pattern=args.frame_pattern,
+        extension_labels=extension_labels,
     )
     text = json.dumps(report, indent=2, sort_keys=True)
     if args.output:

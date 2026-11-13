@@ -170,6 +170,15 @@ const cases = [
 		after: "process.exitCode = undefined;\n\t\tprocess.argv = [argv[0], undefined,",
 		check: "test/rust-coverage-errors.test.mjs",
 		failure: /Expected values to be strictly equal/,
+
+	},
+	{
+		name: "Rust protocol/state Cargo registration (#801)",
+		file: "native/linux/bridge-rs/tests/protocol_state_errors.rs",
+		before: "#[test]\nfn every_error_has_the_stable_wire_code_and_display()",
+		after: "fn every_error_has_the_stable_wire_code_and_display()",
+		check: "test/rust-protocol-state-registration.test.mjs",
+		failure: /missing Cargo contract: every_error_has_the_stable_wire_code_and_display/,
 	},
 	{
 		name: "StateStore evicts past an empty stateId (#703)",
@@ -952,6 +961,14 @@ const cases = [
 		after: "if (false) {",
 		check: "test/setup-helper-inprocess.test.mjs",
 		failure: /a wrong checksum is rejected before extraction/,
+	},
+	{
+		name: "signing certificate stops after command refusal (#803)",
+		file: "scripts/make-signing-cert.mjs",
+		before: "if (status !== 0) return status;",
+		after: "/* command refusal ignored */",
+		check: "test/make-signing-cert.test.mjs",
+		failure: /command refusal at step 2|command refusal at step 3/,
 	},
 	{
 		name: "single root delta mapping (50cbfe2/4d596ca)",
