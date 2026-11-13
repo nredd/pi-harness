@@ -32,5 +32,7 @@ Fixtures cover direct invocation, imports with and without `argv[1]`, a successf
 build/check, nested lazy chunks, missing/stale/extra files, a missing `dist/`, compiler failure,
 package-ownership and symlink refusals, malformed metadata and missing generated output.
 The verifier must diagnose without repairing committed bytes, and remove temporary directories
-after success and failure. No actual core compilation, provider call or desktop interaction is
-part of this gate.
+after success and failure. Fixture roots are canonicalized: esbuild resolves symlinked macOS
+temporary paths such as `/var` to `/private/var` in its metadata. A symlink-parent fixture
+covers this case independently of the host's default temporary directory. No actual core
+compilation, provider call or desktop interaction is part of this gate.

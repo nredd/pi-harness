@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type * as NodeUrl from "node:url";
@@ -29,7 +29,7 @@ const originalExitCode = process.exitCode;
 
 beforeEach(async () => {
   vi.resetModules();
-  fixture.root = await mkdtemp(join(tmpdir(), "subagents-runtime-scripts-"));
+  fixture.root = await realpath(await mkdtemp(join(tmpdir(), "subagents-runtime-scripts-")));
   await mkdir(join(fixture.root, "src"));
   await writeFile(join(fixture.root, "src/index.ts"), 'export const load = () => import("./lazy.js");\n');
   await writeFile(join(fixture.root, "src/lazy.ts"), 'export const value = "fixture";\n');
@@ -81,6 +81,29 @@ test("import without an invoked path exports the real builder without publishing
   assert.deepEqual(await readdir(fixture.root), ["src"]);
   await builder.buildRuntime();
   assert.ok((await snapshot(join(fixture.root, "dist")))["index.ts"]);
+});
+
+test("builds from a canonical fixture root when the temporary parent is a symlink", async () => {
+  const target = join(fixture.root, "target");
+  const alias = join(fixture.root, "alias");
+  await mkdir(target);
+  await symlink(target, alias, "dir");
+  const previousRoot = fixture.root;
+  try {
+    fixture.root = await realpath(await mkdtemp(join(alias, "fixture-")));
+    assert.equal(fixture.root.startsWith(`${target}/`), true);
+    await mkdir(join(fixture.root, "src"));
+    await writeFile(join(fixture.root, "src/index.ts"), 'export const load = () => import("./lazy.js");\n');
+    await writeFile(join(fixture.root, "src/lazy.ts"), 'export const value = "fixture";\n');
+    const builder = await vi.importActual<typeof RuntimeBuilder>("../scripts/build-runtime.mjs");
+    await builder.buildRuntime();
+    await vi.importActual("../scripts/check-runtime.mjs");
+    assert.equal(process.exitCode, undefined);
+    assert.ok((await snapshot(join(fixture.root, "dist")))["index.ts"]);
+    await assertCleanStaging();
+  } finally {
+    fixture.root = previousRoot;
+  }
 });
 
 test("verification diagnoses missing, extra and stale files and does not repair committed output", async () => {
