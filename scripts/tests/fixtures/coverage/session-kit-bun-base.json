@@ -1,0 +1,198 @@
+{
+  "source_repository": "https://github.com/nredd/pi-harness",
+  "source_revision": "57a0c58071bcb85f08c90142991e5e45c3ad8b5b",
+  "description": "Exact session-kit policy and tracked source membership at the original PR823 head. Current source bytes reconstruct trees only; this fixture establishes membership, never coverage floors or runtime behavior.",
+  "tracked_paths": [
+    "packages/session-kit/src/agent-dir.ts",
+    "packages/session-kit/src/child.ts",
+    "packages/session-kit/src/clock.ts",
+    "packages/session-kit/src/config.ts",
+    "packages/session-kit/src/diff/component.ts",
+    "packages/session-kit/src/diff/git.ts",
+    "packages/session-kit/src/diff/index.ts",
+    "packages/session-kit/src/diff/parse.ts",
+    "packages/session-kit/src/diff/view.ts",
+    "packages/session-kit/src/goal/index.ts",
+    "packages/session-kit/src/goal/state.ts",
+    "packages/session-kit/src/goal/subagents.ts",
+    "packages/session-kit/src/index.ts",
+    "packages/session-kit/src/loop/index.ts",
+    "packages/session-kit/src/loop/state.ts",
+    "packages/session-kit/src/mon/component.ts",
+    "packages/session-kit/src/mon/index.ts",
+    "packages/session-kit/src/mon/model.ts",
+    "packages/session-kit/src/mon/poll.ts",
+    "packages/session-kit/src/mon/source.ts",
+    "packages/session-kit/src/monitor/README.md",
+    "packages/session-kit/src/monitor/coalescer.ts",
+    "packages/session-kit/src/monitor/index.ts",
+    "packages/session-kit/src/monitor/manager.ts",
+    "packages/session-kit/src/monitor/matcher.ts",
+    "packages/session-kit/src/monitor/messages.ts",
+    "packages/session-kit/src/monitor/output.ts",
+    "packages/session-kit/src/monitor/pidfiles.ts",
+    "packages/session-kit/src/monitor/process.ts",
+    "packages/session-kit/src/monitor/ring.ts",
+    "packages/session-kit/src/monitor/splitter.ts",
+    "packages/session-kit/src/monitor/types.ts",
+    "packages/session-kit/src/monitor/validate.ts",
+    "packages/session-kit/src/monitor/widget.ts",
+    "packages/session-kit/src/output.ts",
+    "packages/session-kit/src/rules/index.ts",
+    "packages/session-kit/src/rules/logic.ts",
+    "packages/session-kit/src/shared.ts",
+    "packages/session-kit/src/stats/aggregate.ts",
+    "packages/session-kit/src/stats/chart.ts",
+    "packages/session-kit/src/stats/cli.ts",
+    "packages/session-kit/src/stats/component.ts",
+    "packages/session-kit/src/stats/days.ts",
+    "packages/session-kit/src/stats/format.ts",
+    "packages/session-kit/src/stats/freshness.ts",
+    "packages/session-kit/src/stats/heatmap.ts",
+    "packages/session-kit/src/stats/index.ts",
+    "packages/session-kit/src/stats/library.ts",
+    "packages/session-kit/src/stats/load.ts",
+    "packages/session-kit/src/stats/nth.ts",
+    "packages/session-kit/src/stats/palette.ts",
+    "packages/session-kit/src/stats/snapshot.ts",
+    "packages/session-kit/src/stats/ticks.ts",
+    "packages/session-kit/src/titles/aliases.ts",
+    "packages/session-kit/src/titles/index.ts",
+    "packages/session-kit/src/titles/logic.ts"
+  ],
+  "policy": {
+    "version": 2,
+    "target": {
+      "lines": 0,
+      "functions": 0,
+      "branches": 0,
+      "statements": 0
+    },
+    "enforce_target": true,
+    "packages": {
+      "session-kit": {
+        "root": "packages/session-kit",
+        "owned": [
+          "src/**/*.ts"
+        ],
+        "exclusions": [
+          {
+            "path": "src/monitor/types.ts",
+            "kind": "type-only",
+            "reason": "Only TypeScript declarations; emits no executable JavaScript."
+          },
+          {
+            "path": "dist/pi-stats-export.mjs",
+            "kind": "generated",
+            "reason": "Generated esbuild CLI bundle of the owned src/stats/cli.ts implementation; production source remains measured rather than counting the generated duplicate."
+          }
+        ],
+        "status": "measured",
+        "note": "Hosted run 40857829296 establishes zero primary misses on both OSes after a deterministic multi-match formatter test removes the incidental coalescing/teardown comparator hit observed in 40852918834; independent Bun references are stable across both runs.",
+        "signals": {
+          "primary": {
+            "report": "coverage/primary/lcov.info",
+            "max_uncovered": {
+              "darwin": {
+                "lines": 0,
+                "functions": 0,
+                "branches": 0,
+                "statements": 0
+              },
+              "linux": {
+                "lines": 0,
+                "functions": 0,
+                "branches": 0,
+                "statements": 0
+              }
+            },
+            "reporters": [
+              "text",
+              "lcov",
+              "json-summary"
+            ]
+          },
+          "bun": {
+            "report": "coverage/bun/lcov.info",
+            "files": [
+              "src/agent-dir.ts",
+              "src/child.ts",
+              "src/clock.ts",
+              "src/config.ts",
+              "src/diff/component.ts",
+              "src/diff/git.ts",
+              "src/diff/index.ts",
+              "src/diff/parse.ts",
+              "src/diff/view.ts",
+              "src/goal/index.ts",
+              "src/goal/state.ts",
+              "src/goal/subagents.ts",
+              "src/index.ts",
+              "src/loop/index.ts",
+              "src/loop/state.ts",
+              "src/mon/component.ts",
+              "src/mon/index.ts",
+              "src/mon/model.ts",
+              "src/mon/poll.ts",
+              "src/mon/source.ts",
+              "src/monitor/coalescer.ts",
+              "src/monitor/index.ts",
+              "src/monitor/manager.ts",
+              "src/monitor/matcher.ts",
+              "src/monitor/messages.ts",
+              "src/monitor/output.ts",
+              "src/monitor/pidfiles.ts",
+              "src/monitor/process.ts",
+              "src/monitor/ring.ts",
+              "src/monitor/splitter.ts",
+              "src/monitor/validate.ts",
+              "src/monitor/widget.ts",
+              "src/output.ts",
+              "src/rules/index.ts",
+              "src/rules/logic.ts",
+              "src/shared.ts",
+              "src/stats/aggregate.ts",
+              "src/stats/chart.ts",
+              "src/stats/cli.ts",
+              "src/stats/component.ts",
+              "src/stats/days.ts",
+              "src/stats/format.ts",
+              "src/stats/freshness.ts",
+              "src/stats/heatmap.ts",
+              "src/stats/index.ts",
+              "src/stats/load.ts",
+              "src/stats/nth.ts",
+              "src/stats/palette.ts",
+              "src/stats/snapshot.ts",
+              "src/stats/ticks.ts",
+              "src/titles/aliases.ts",
+              "src/titles/index.ts",
+              "src/titles/logic.ts"
+            ],
+            "max_uncovered": {
+              "darwin": {
+                "lines": 0,
+                "functions": 0,
+                "branches": 0,
+                "statements": 0
+              },
+              "linux": {
+                "lines": 0,
+                "functions": 0,
+                "branches": 0,
+                "statements": 0
+              }
+            },
+            "enforcement": "report-only",
+            "reason": "Full Vitest-on-Bun suite, real Istanbul branch/statement records. Zero references are the pending enforcement target, NOT measured zero receipts: four stats default-argument branches remain in the local full-suite report, and src/stats/library.ts remains outside the signal membership until its static export-star facade is classified. Pricing/stats ownership and serial policy integration must settle before promotion: https://github.com/nredd/pi-harness/issues/320.",
+            "reporters": [
+              "text",
+              "lcov",
+              "json-summary"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

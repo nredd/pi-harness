@@ -233,10 +233,15 @@ at 0/0/0 on darwin and linux since #320, measured on darwin only so far (macOS: 
 Bun 4362 passed / 7 skipped, both Istanbul 7731 lines, 1606 functions, 7193 branches fully covered); hosted CI must confirm linux. The other one (session-kit)
 explicitly declares `enforcement: "report-only"`, with a reason linked to #320. It now runs the full
 Vitest suite under Bun, including the CLI source, rather than the native scenario subset. Its zero
-references express the pending target, NOT a measured zero result: four stats default-argument
-branches remain, and the static export-star `stats/library.ts` facade still needs classification.
-Those reserved stats changes and serial policy integration must settle before promotion. The explicit
-Bun membership remains until then; no primary source is removed. An omitted `enforcement` defaults to
+references remain pending hosted admission. Follow-up #824 covers omitted public arguments to
+`freshnessLines`, `machineIdentity` and `loadCombined` with real local-history/cache fixtures under
+disposable agent directories. The fourth missed default was unreachable: private `StatsView.help`
+has one caller, `render`, which always supplies its string-valued `hint`; only the unused default is
+removed, preserving rendered output and pricing behavior. Full local Node/Bun reports now measure
+53 executable files, 3608 lines / 836 functions / 3039 branches / 4317 statements, all covered.
+The static `stats/library.ts` facade is classified below; its three target modules remain measured.
+Bun now follows the complete owned inventory without a subset. Promotion remains blocked on this
+follow-up's own hosted macOS/Linux zero receipts, not a local-only pass. An omitted `enforcement` defaults to
 `enforced` for backwards-compatible primary/base-policy reading; current Bun declarations never
 rely on that default. Native `bun test` subset measurements are NOT the owned-source denominator:
 Bun 1.3.14 native coverage omits never-imported files. Full Vitest-on-Bun producers now use
@@ -251,7 +256,7 @@ Node-only diagnostics channels. Regex matching uses a killable child process sup
 so cleanup never awaits Bun's slow `Worker.terminate()`. IPC disconnect exits the child even while
 the regex spins; `BUN_BE_BUN=1` makes a compiled host act as the interpreter instead of re-entering Pi.
 The existing 100ms/1s matcher deadlines and 500ms cleanup assertion are unchanged. Missing expected
-files fail; the unclassified facade remains mandatory in primary coverage. Imported sibling production source and dedicated test/helper directories are outside
+files fail; only strictly validated non-executable facades are absent from both executable inventories. Imported sibling production source and dedicated test/helper directories are outside
 that package's signal. Unknown production report paths fail. Never merge JSC, V8 and Istanbul
 counters or average platforms. Replacing producers with a single Bun runner later only changes
 the producer wiring and reviewed signal inventory, not the accounting algorithm (issue #160).
@@ -341,6 +346,19 @@ current source bytes only to exercise real tree expansion, not to assert histori
 or establish budgets. CLI accounting still ratchets the entire repository against the actual PR base.
 Real compilation/instrumentation
 and executable-addition rejection are pinned by `scripts/tests/test_coverage_facades.py`.
+
+Session-kit's `src/stats/library.ts` preserves all runtime and type bindings previously exposed by
+its three export-star declarations through explicit named re-exports. The existing grammar is
+unchanged, and real TypeScript/emitted-ESM instrumentation produces zero statement/function/branch
+maps for the facade. `test/stats/library.test.ts` compares every runtime binding to the target modules,
+checks all 23 public type bindings under the real type checker, and imports the same namespace in
+real Node and Bun subprocesses without Vitest transforms. Removing `atomicJson` makes both engines'
+parity tests fail. New target bindings must be named in the facade and reflected in its type contract
+checks; runtime namespace parity rejects stale value lists. The attributed parent policy/source-membership fixture in
+`scripts/tests/fixtures/coverage/session-kit-bun-base.json` proves that only the facade leaves owned
+membership and requires its exact ledger entry. Every executable target remains measured; the old
+Bun subset expands to that complete inventory. No source map is fabricated for the facade, and adding
+a side-effect import makes strict validation fail before report consumption.
 
 Verification-only harnesses outside conventional test directories are classified under
 `verification_helpers`, with an exact repository-relative `path` and a separate `reason` for

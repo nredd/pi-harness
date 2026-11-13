@@ -77,6 +77,7 @@ def test_real_facades_have_zero_istanbul_counters_in_source_and_emitted_esm() ->
     assert node
     paths = [str(ROOT / "packages/plan-mode" / path) for path in FACADES]
     paths.append(str(ROOT / "packages/dev-tools/src/core/index.ts"))
+    paths.append(str(ROOT / "packages/session-kit/src/stats/library.ts"))
     result = json.loads(
         subprocess.check_output(
             [node, "--input-type=module", "-e", INSTRUMENT, *paths],
@@ -89,6 +90,54 @@ def test_real_facades_have_zero_istanbul_counters_in_source_and_emitted_esm() ->
     for value in result.values():
         assert "export" in value["compiled"]
         assert value["maps"] == [{"statements": 0, "functions": 0, "branches": 0}] * 2
+
+
+def test_session_kit_facade_preserves_parent_membership_ratchet(tmp_path: Path) -> None:
+    """Require the exact library facade receipt without hiding its executable targets.
+
+    Parameters:
+        tmp_path (Path): Disposable Git history reconstructed from the parent policy and file list.
+    Returns:
+        None: Only the validated static facade leaves owned membership; the Bun scope is unchanged.
+    Raises:
+        AssertionError: A target disappears, the facade is executable or its ledger entry is unnecessary.
+        OSError: An attributed source file cannot be read.
+    """
+    snapshot = json.loads((ROOT / "scripts/tests/fixtures/coverage/session-kit-bun-base.json").read_text())
+    assert snapshot["source_revision"] == "57a0c58071bcb85f08c90142991e5e45c3ad8b5b"
+    base = Policy.model_validate(snapshot["policy"])
+    for name in snapshot["tracked_paths"]:
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / name, target)
+    commit_base(tmp_path, base)
+    revision = git_read(tmp_path, ["rev-parse", "HEAD"]).strip()
+    current = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
+    current.packages = {"session-kit": current.packages["session-kit"]}
+    current.reclassifications = [
+        entry for entry in current.reclassifications if entry.package == "session-kit"
+    ]
+    shutil.copytree(
+        ROOT / "packages/session-kit/src", tmp_path / "packages/session-kit/src", dirs_exist_ok=True
+    )
+    package = current.packages["session-kit"]
+    owned = inventory(tmp_path, package)
+    assert "src/stats/library.ts" not in owned
+    assert {"src/stats/aggregate.ts", "src/stats/load.ts", "src/stats/snapshot.ts"} <= owned
+    assert package.signals["bun"].files is None
+    assert set(base.packages["session-kit"].signals["bun"].files or []) <= owned
+    assert {(entry.signal, entry.path) for entry in current.reclassifications} == {
+        ("owned", "packages/session-kit/src/stats/library.ts")
+    }
+    check_inventory_ratchet(tmp_path, current, base, revision)
+    without_receipt = current.model_copy(deep=True)
+    without_receipt.reclassifications = []
+    with pytest.raises(ValueError, match="Inventory ratchet requires"):
+        check_inventory_ratchet(tmp_path, without_receipt, base, revision)
+    library = tmp_path / "packages/session-kit/src/stats/library.ts"
+    library.write_text(library.read_text() + '\nimport "./side-effect.ts";\n')
+    with pytest.raises(ValueError, match="contains more than static re-exports"):
+        inventory(tmp_path, package)
 
 
 @pytest.mark.parametrize(
