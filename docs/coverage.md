@@ -244,7 +244,11 @@ Bun 1.3.14 native coverage omits never-imported files. Full Vitest-on-Bun produc
 Istanbul for router, preset, sampler, todo, plan-mode, dev-tools, subagents, session-kit and inprocess through `scripts/run-vitest.ts bun`.
 They inherit the full primary instrumentation inventory (no `files` subset). The launcher's
 `bun` engine appends the provider, the `text`, `lcov` and `json-summary` reporters (Vitest's dotted options) and
-`coverage/bun`, so each `test:bun` passes only package arguments. The sampler retains one
+`coverage/bun`, so each `test:bun` passes only package arguments. The bare `--coverage` goes
+*first*, before the package arguments: Vitest's CLI parser turns a bare `--coverage` into `{ enabled: true }` and
+drops every `--coverage.*` field parsed before it, which erased a caller's extra reporter (e.g. `json`) when it was
+appended last. The mandatory provider, reporters and directory stay last, so a caller can add reporters but not
+weaken the instrument; a caller's own bare `--coverage` is dropped. The sampler retains one
 worker. The launcher also sets `PI_EXPECT_BUN_RUNTIME=1`, which subagents' real-loader test reads to prove it ran on
 the pinned Bun. Session-kit uses the same disposable-home launcher and shared home guard as the other
 suites. Its published sampler's real spawn is observed through an inlined builtin seam rather than
