@@ -1,5 +1,6 @@
 /** Offline valuation of immutable usage records through the host's shared pricing engine. */
-import * as modelApi from "@earendil-works/pi-ai/models";
+// Stock extension loaders bridge root host peers, not every package subpath.
+import * as modelApi from "@earendil-works/pi-ai";
 import { tokensOf } from "./aggregate.ts";
 import { money } from "./format.ts";
 import type { Call } from "./load.ts";

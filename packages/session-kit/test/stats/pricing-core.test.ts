@@ -2,7 +2,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import * as modelApi from "@earendil-works/pi-ai/models";
+import * as modelApi from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { opaqueId } from "../../src/stats/load.ts";
 import { createValuer, type PricingModel, valuation } from "../../src/stats/pricing.ts";

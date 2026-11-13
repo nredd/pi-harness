@@ -152,6 +152,8 @@ Current-rate API-equivalent value:
   unpriced reasons for the current range/filter, below machine freshness.
 - The shared engine requires assessed rates and exact provider/model identities. It does
   not guess private aliases or apply another provider's prices to a similarly named model.
+  It uses the root `pi-ai` host peer, not a subpath that stock extension loaders may not
+  bridge. The packed stock-Pi contract exercises this actual extension-loading boundary.
   Custom overrides must provide their own assessment. Unavailable models, old hosts without
   the new core estimator, unsupported non-token charges and unaudited rates stay unpriced.
 - This depends on the core pricing enhancement in `nredd/pi#46`; the package pins are NOT
