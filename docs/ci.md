@@ -27,6 +27,10 @@ core overrides with the pinned Python and a temporary PEM exported from pinned N
 public Mozilla roots via the verifier's supported `SSL_CERT_FILE` input (Windows Python has no
 compiled-in OpenSSL CA path). It does not depend on Git's installation layout or copy private
 machine roots. Root export errors fail closed; system trust is not modified and TLS checks stay enabled.
+The shared child-process boundary also preserves `SYSTEMROOT`, required by native Windows DNS:
+an isolated real-verifier comparison failed without it and verified the original signer/ref policy
+with only that OS-runtime key restored ([receipt](https://github.com/nredd/pi-harness/actions/runs/43362875064)).
+No token, profile/cache state or tool-injection variables are admitted by that correction.
 It uploads source-bound metadata
 and raw reports as `computer-use-rust-windows-x64`. The Ubuntu fan-in additionally depends on this
 job and refuses any non-success outcome when computer-use is selected. This preserves the twelve
