@@ -75,6 +75,11 @@ their platform or opt-in as skipped; this package remains outside the coverage g
 starts, restarts and stops its own helper instance on the test home's socket, never the shared daemon.
 Owner-only smoke commands and rollback are recorded in `UPSTREAM.md`.
 
+`npm run coverage:swift` runs real-source headless motion and native assertions with one Swift
+compiler worker. The [motion coverage notes](./docs/cursor-motion-coverage.md) describe analytic
+geometry, clock/lifecycle checks, the clamp mutation control and honestly retained numerical guards.
+This does not run the live overlay suite or prove physical pointer behavior.
+
 `npm run coverage:swift` links all shipped Swift sources with the headless assertions.
 `native/macos/ref_look_tests.swift` checks real `AXRefStore` ownership and snapshots plus
 `LookNode.payload()` keys, flags, rectangles and recursive child order. It only constructs
