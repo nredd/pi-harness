@@ -230,18 +230,14 @@ darwin and linux since [#375](https://github.com/nredd/pi-harness/issues/375), w
 darwin 8/4 and linux 47/8 Bun misses with the same fake-host FFI tests as primary. `inprocess` joins them since
 [#376](https://github.com/nredd/pi-harness/issues/376), see below. `subagents` runs its full suite on Bun 1.4.4 and is `enforced`
 at 0/0/0 on darwin and linux since #320, measured on darwin only so far (macOS: Node 4361 passed / 8 skipped,
-Bun 4362 passed / 7 skipped, both Istanbul 7731 lines, 1606 functions, 7193 branches fully covered); hosted CI must confirm linux. The other one (session-kit)
-explicitly declares `enforcement: "report-only"`, with a reason linked to #320. It now runs the full
-Vitest suite under Bun, including the CLI source, rather than the native scenario subset. Its zero
-references remain pending hosted admission. Follow-up #824 covers omitted public arguments to
+Bun 4362 passed / 7 skipped, both Istanbul 7731 lines, 1606 functions, 7193 branches fully covered); hosted CI must confirm linux. `session-kit` enforces zero line, function, branch and statement misses on its full Vitest-on-Bun suite, including the CLI source. Complete Node and Bun reports from hosted run `43395812528` measured all 53 executable sources with zero misses on macOS, Ubuntu and WSL/Linux ([admission](https://github.com/nredd/pi-harness/pull/829#issuecomment-6849824406)). WSL is Linux, not native Windows. Follow-up #824 covers omitted public arguments to
 `freshnessLines`, `machineIdentity` and `loadCombined` with real local-history/cache fixtures under
 disposable agent directories. The fourth missed default was unreachable: private `StatsView.help`
 has one caller, `render`, which always supplies its string-valued `hint`; only the unused default is
 removed, preserving rendered output and pricing behavior. Full local Node/Bun reports now measure
 53 executable files, 3608 lines / 836 functions / 3039 branches / 4317 statements, all covered.
 The static `stats/library.ts` facade is classified below; its three target modules remain measured.
-Bun now follows the complete owned inventory without a subset. Promotion remains blocked on this
-follow-up's own hosted macOS/Linux zero receipts, not a local-only pass. An omitted `enforcement` defaults to
+Bun follows the complete owned inventory without a subset, including future pricing sources. This coverage enforcement does not admit the separate pricing release graph or certify its price inventory. An omitted `enforcement` defaults to
 `enforced` for backwards-compatible primary/base-policy reading; current Bun declarations never
 rely on that default. Native `bun test` subset measurements are NOT the owned-source denominator:
 Bun 1.3.14 native coverage omits never-imported files. Full Vitest-on-Bun producers now use

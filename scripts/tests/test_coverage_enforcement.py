@@ -410,6 +410,7 @@ ENFORCED_BUN_PACKAGES = {
     "preset",
     "providers",
     "resource-sampler",
+    "session-kit",
     "subagents",
     "subscription-router",
     "todo",
@@ -431,7 +432,7 @@ def test_current_bun_policy_is_explicit_and_links_migration() -> None:
     data = json.loads((ROOT / "coverage/policy.json").read_text())
     packages = data["packages"]
     signals = {name: pkg["signals"]["bun"] for name, pkg in packages.items() if "bun" in pkg["signals"]}
-    assert signals.keys() == ENFORCED_BUN_PACKAGES | {"session-kit"}
+    assert signals.keys() == ENFORCED_BUN_PACKAGES
     for name, signal in signals.items():
         if name in ENFORCED_BUN_PACKAGES:
             assert signal["enforcement"] == "enforced", name
@@ -440,7 +441,4 @@ def test_current_bun_policy_is_explicit_and_links_migration() -> None:
             for counts in signal["max_uncovered"].values():
                 # Branch caps (#403) are driven to 0 separately by #404-#425; lines/functions stay 0/0.
                 assert (counts["lines"], counts["functions"], type(counts["branches"])) == (0, 0, int), name
-        else:
-            assert signal["enforcement"] == "report-only", name
-            assert "https://github.com/nredd/pi-harness/issues/320" in signal["reason"]
-            assert "before promotion" in signal["reason"]
+        assert signal["enforcement"] == "enforced", name
