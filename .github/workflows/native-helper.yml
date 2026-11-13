@@ -29,7 +29,7 @@ jobs:
           gh --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           uv run --no-project --python (Get-Content .python-version) python --version
-      - name: Reproduce filtered verifier and isolate portable-cache hypothesis
+      - name: Reproduce filtered native DNS refusal and isolate SYSTEMROOT
         env:
           PYTHONPATH: integration
         run: |

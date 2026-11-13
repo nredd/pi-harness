@@ -1,7 +1,7 @@
 """Diagnose the real Windows verifier with authenticated policy unchanged.
 
 This fixture downloads public release bytes and attestations, never installs or executes them.
-Only diagnostic verbosity and one already-allowed portable cache variable vary between trials.
+Only diagnostic verbosity and the actual Windows SYSTEMROOT runtime variable vary between trials.
 
 References:
     https://github.com/nredd/pi-harness/issues/696
@@ -29,7 +29,9 @@ ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 RUNTIME_KEYS = ("HOME", "USERPROFILE", "LOCALAPPDATA", "SYSTEMROOT", "TMP", "TEMP", "XDG_CACHE_HOME")
 
 
-def verify_trial(asset: Path, tag: str, bundle: Path, output: Path, label: str) -> bool:
+def verify_trial(
+    asset: Path, tag: str, bundle: Path, output: Path, label: str, *, restore_system_root: bool = False
+) -> bool:
     """Run the actual shared verifier with bounded, credential-free diagnostic instrumentation.
 
     Parameters:
@@ -38,6 +40,7 @@ def verify_trial(asset: Path, tag: str, bundle: Path, output: Path, label: str) 
         bundle (Path): Public attestation bundle.
         output (Path): Receipt directory.
         label (str): Trial identity.
+        restore_system_root (bool): Restore only the native OS runtime location after filtering.
 
     Returns:
         bool: Whether the real verifier accepted the unchanged identity policy.
@@ -56,6 +59,11 @@ def verify_trial(asset: Path, tag: str, bundle: Path, output: Path, label: str) 
             str: Actual native output.
         """
         env = kwargs["env"] | {"GH_DEBUG": "1", "GH_FORCE_TTY": "80"}
+        if restore_system_root:
+            system_root = Path(os.environ["SYSTEMROOT"])
+            assert system_root.is_absolute()
+            assert system_root.is_dir()
+            env["SYSTEMROOT"] = str(system_root)
         assert not any(key in env for key in release.GITHUB_TOKEN_VARIABLES)
         ledger.append({"argv": command, "runtimeKeysPresent": {key: key in env for key in RUNTIME_KEYS}})
         kwargs["env"] = env
@@ -85,7 +93,7 @@ def verify_trial(asset: Path, tag: str, bundle: Path, output: Path, label: str) 
 
 
 def main() -> None:
-    """Require a reproduced baseline refusal and test an isolated portable-cache hypothesis."""
+    """Require native DNS refusal under filtering and successful verification with SYSTEMROOT alone."""
     if sys.platform != "win32":
         raise RuntimeError("This diagnostic requires native Windows; no cross-platform acceptance")
     output = Path(os.environ["RUNNER_TEMP"]) / "windows-verifier-fixture"
@@ -101,16 +109,14 @@ def main() -> None:
     (output / "asset-sha256.txt").write_text(f"{actual}\n")
     bundle = release.attestation_bundle(release.CORE_REPO, asset, output / "bundle.jsonl")
     baseline = verify_trial(asset, tag, bundle, output, "baseline-filtered")
-    os.environ["XDG_CACHE_HOME"] = str(output / "portable-cache")
-    Path(os.environ["XDG_CACHE_HOME"]).mkdir()
-    portable = verify_trial(asset, tag, bundle, output, "portable-cache")
+    restored = verify_trial(asset, tag, bundle, output, "systemroot-only", restore_system_root=True)
     (output / "outcomes.json").write_text(
-        json.dumps({"baseline": baseline, "portableCache": portable}, indent=2)
+        json.dumps({"baseline": baseline, "systemRootOnly": restored}, indent=2)
     )
     if baseline:
         raise RuntimeError("Baseline did not reproduce the native refusal; no repository fix established")
-    if not portable:
-        raise RuntimeError("Portable-cache hypothesis refuted; inspect exact verbose native receipts")
+    if not restored:
+        raise RuntimeError("SYSTEMROOT-only hypothesis refuted; inspect exact verbose native receipts")
 
 
 if __name__ == "__main__":
