@@ -77,6 +77,17 @@ describe("unpackTarball", () => {
 		["a symlink", [{ name: "package/link", type: "2" }], /Unsupported tar entry type '2'/],
 		["a pax header", [{ name: "pax", type: "x", body: "" }], /Unsupported tar entry type 'x'/],
 		["a truncated body", [{ name: "package/a", size: "00000077777\0" }], /Truncated tar entry/],
+		["a non-numeric size", [{ name: "package/a", size: "zzzz\0" }], /Invalid tar size/],
+		["a negative size", [{ name: "package/a", size: "-0000001\0" }], /Invalid tar size/],
+		[
+			"a duplicate path",
+			[
+				{ name: "package/a", body: "x" },
+				{ name: "package/a", body: "y" },
+			],
+			/Duplicate tar entry/,
+		],
+		["an empty path", [{ name: "package/", body: "x" }], /Unsafe tar path/],
 		["a traversal path", [{ name: "package/../evil", body: "x" }], /Unsafe tar path/],
 		["a path outside `package/`", [{ name: "other/a", body: "x" }], /Unsafe tar path/],
 	] as [string, Entry[], RegExp][])("fails closed on %s", (_label, entries, message) => {

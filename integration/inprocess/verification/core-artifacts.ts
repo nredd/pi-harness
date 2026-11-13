@@ -12,6 +12,8 @@ const TYPE_OFFSET = 156;
 const PREFIX_START = 345;
 const PREFIX_END = 500;
 const OCTAL = 8;
+const TYPE_REGULAR = "0";
+const TYPE_DIRECTORY = "5";
 const TAR_ROOT = /^package\//;
 
 /** Result of comparing an install to the files its tarball ships. */
@@ -39,16 +41,19 @@ export function unpackTarball(gz: Buffer): Map<string, Buffer> {
 	while (offset + TAR_BLOCK <= tar.length) {
 		const header = tar.subarray(offset, offset + TAR_BLOCK);
 		if (header.every((byte) => byte === 0)) break;
-		const type = String.fromCharCode(header[TYPE_OFFSET] || 0x30);
+		const type = String.fromCharCode(header[TYPE_OFFSET] || TYPE_REGULAR.charCodeAt(0));
 		const prefix = cString(header, PREFIX_START, PREFIX_END);
 		const name = (prefix ? `${prefix}/` : "") + cString(header, 0, NAME_END);
 		const size = Number.parseInt(cString(header, SIZE_START, SIZE_END).trim() || "0", OCTAL);
 		const body = offset + TAR_BLOCK;
-		if (type !== "0" && type !== "5") throw new Error(`Unsupported tar entry type '${type}' for '${name}'`);
+		if (type !== TYPE_REGULAR && type !== TYPE_DIRECTORY)
+			throw new Error(`Unsupported tar entry type '${type}' for '${name}'`);
+		if (!Number.isSafeInteger(size) || size < 0) throw new Error(`Invalid tar size for '${name}'`);
 		if (body + size > tar.length) throw new Error(`Truncated tar entry '${name}'`);
 		const path = name.replace(TAR_ROOT, "");
-		if (type === "0") {
-			if (path === name || path.split("/").includes("..")) throw new Error(`Unsafe tar path '${name}'`);
+		if (type === TYPE_REGULAR) {
+			if (path === name || path === "" || path.split("/").includes("..")) throw new Error(`Unsafe tar path '${name}'`);
+			if (files.has(path)) throw new Error(`Duplicate tar entry '${name}'`);
 			files.set(path, Buffer.from(tar.subarray(body, body + size)));
 		}
 		offset = body + Math.ceil(size / TAR_BLOCK) * TAR_BLOCK;
