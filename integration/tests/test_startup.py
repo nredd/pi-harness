@@ -3,24 +3,42 @@
 from __future__ import annotations
 
 import json
+import os
 import runpy
+import shutil
+import subprocess
 import sys
-from typing import TYPE_CHECKING, Any
+import tempfile
+import textwrap
+import time
+from pathlib import Path
+from typing import Any
 
 import pytest
 
 from harness import startup
 
-if TYPE_CHECKING:
-    from pathlib import Path
-
-# Pi prints `PI_TIMING` before starting its interactive UI; preserve that ordering.
-FAKE_PI = (
-    "import sys,time;time.sleep(0.2);"
-    "sys.stderr.write('--- Startup Timings: main ---\\n  TOTAL: 7ms\\n"
-    "--- Startup Timings: extensions ---\\n  /h/node_modules/@a/b/index.ts module import: 3ms\\n');"
-    "sys.stderr.flush();print('footer ctx 1%',flush=True);sys.stdin.readline()"
-)
+# Pi emits timings before UI; this protocol stub is NOT native-Pi readiness proof.
+# Native dispatch coverage lives in scenarios/test_startup.py.
+FAKE_PI = textwrap.dedent("""\
+import os,sys,time
+from pathlib import Path
+sys.stderr.write('--- Startup Timings: main ---\\n  TOTAL: 7ms\\n'
+    '--- Startup Timings: extensions ---\\n  /h/node_modules/@a/b/index.ts module import: 3ms\\n')
+sys.stderr.flush()
+print('footer ctx 1%',flush=True)
+if os.environ.get('CHILD_PID'):
+    Path(os.environ['CHILD_PID']).write_text(str(os.getpid()))
+time.sleep(0.1)
+nonce = os.environ['PI_STARTUP_NONCE']
+mode = os.environ.get('ACK_MODE', 'valid')
+if mode != 'unregistered':
+    Path(os.environ['PI_STARTUP_REGISTERED']).write_text(nonce)
+line = sys.stdin.readline().replace('\\x1b', '').strip()
+if mode != 'missing' and line == f'/harness-startup-ready-{nonce} {nonce}':
+    Path(os.environ['PI_STARTUP_ACK']).write_text(nonce if mode == 'valid' else 'wrong-nonce')
+time.sleep(30)
+""")
 TIMING_BLOCK = """\
 --- Startup Timings: main ---
   parseArgs: 1ms
@@ -65,7 +83,7 @@ def test_scrubbed_env_drops_inherited_pi_state() -> None:
 
 
 def test_sample_times_first_frame_and_input_ready() -> None:
-    """The footer is seen, the marker echoed after it, and the phases parsed from stderr."""
+    """An early footer cannot finish readiness before registration and command acknowledgement."""
     result = startup.sample(
         [sys.executable, "-c", FAKE_PI], env=startup.scrubbed_env({"PATH": "/usr/bin:/bin"})
     )
@@ -73,10 +91,10 @@ def test_sample_times_first_frame_and_input_ready() -> None:
     assert result.timings == {"main:TOTAL": 7, "extensions:@a/b/index.ts module import": 3}
 
 
-def test_sample_times_out_with_the_last_screen() -> None:
+def test_sample_times_out_without_a_footer() -> None:
     """A pi that never draws the footer fails loudly instead of hanging."""
     with pytest.raises(TimeoutError, match="No ready UI"):
-        startup.sample(["sleep", "5"], env={"PATH": "/usr/bin:/bin"}, timeout_s=0.3)
+        startup.sample([sys.executable, "-c", "import time; time.sleep(5)"], env={}, timeout_s=0.3)
 
 
 def test_run_alternates_variant_order_and_summarizes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -90,6 +108,7 @@ def test_run_alternates_variant_order_and_summarizes(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(startup, "sample", fake_sample)
     report = startup.run({"a": ["a"], "b": ["b"]}, runs=3, gap_s=0.0, env={})
     assert order == ["a", "b", "b", "a", "a", "b"]
+    assert report["readiness_method"] == startup.READINESS_METHOD
     assert report["summary"]["a"]["input_ready_s"]["median"] == 0.3
     assert report["summary"]["b"]["phases_ms"]["main:TOTAL"]["max"] == 5.0
     with pytest.raises(ValueError, match="positive"):
@@ -143,15 +162,31 @@ REPORT: dict[str, Any] = {
 }
 
 
+def baseline(value: float) -> dict[str, Any]:
+    """Build a compatible command-dispatch baseline at a fixed milestone value.
+
+    Parameters:
+        value (float): all milestone medians, in seconds.
+
+    Returns:
+        dict[str, Any]: method-tagged fixture baseline.
+    """
+    return {
+        "readiness_method": startup.READINESS_METHOD,
+        "medians": {"a": dict.fromkeys(startup.MILESTONES, value)},
+    }
+
+
 def test_regressions_flag_slow_missing_and_unbaselined() -> None:
     """Within 20% passes; beyond it, or with nothing to compare, fails."""
     assert startup.medians(REPORT) == {"a": dict.fromkeys(startup.MILESTONES, 1.0)}
-    assert startup.regressions(REPORT, {"a": dict.fromkeys(startup.MILESTONES, 1.0)}) == []
-    assert startup.regressions(REPORT, {"a": dict.fromkeys(startup.MILESTONES, 0.84)}) == []
-    slow = startup.regressions(REPORT, {"a": dict.fromkeys(startup.MILESTONES, 0.8)})
+    assert startup.regressions(REPORT, baseline(1.0)) == []
+    assert startup.regressions(REPORT, baseline(0.84)) == []
+    slow = startup.regressions(REPORT, baseline(0.8))
     assert len(slow) == len(startup.MILESTONES)
     assert "`a` `first_paint_s` regressed: 1.000s > 0.960s" in slow[0]
-    assert startup.regressions(REPORT, {}) == ["No baseline for variant `a`"]
+    assert startup.regressions(REPORT, baseline(1.0) | {"medians": {}}) == ["No baseline for variant `a`"]
+    assert "Incompatible readiness baseline" in startup.regressions(REPORT, {})[0]
 
 
 def test_main_records_and_checks_a_baseline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -159,7 +194,7 @@ def test_main_records_and_checks_a_baseline(tmp_path: Path, monkeypatch: pytest.
     monkeypatch.setattr(startup, "run", lambda *_, **__: REPORT)
     recorded = tmp_path / "base.json"
     assert startup.main(["--record", str(recorded)]) == 0
-    assert json.loads(recorded.read_text()) == {"a": dict.fromkeys(startup.MILESTONES, 1.0)}
+    assert json.loads(recorded.read_text()) == baseline(1.0)
     assert startup.main(["--baseline", str(recorded)]) == 0
     recorded.write_text(json.dumps({"other": dict.fromkeys(startup.MILESTONES, 1.0)}))
     assert startup.main(["--baseline", str(recorded)]) == 1
@@ -168,10 +203,119 @@ def test_main_records_and_checks_a_baseline(tmp_path: Path, monkeypatch: pytest.
 def test_module_entrypoint_exits_with_main_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`python -m harness.startup` runs one real sample against a fake `pi` and exits 0."""
     fake = tmp_path / "fake_pi.py"
-    fake.write_text(FAKE_PI.replace(";", "\n"))
+    fake.write_text(FAKE_PI)
     monkeypatch.setattr(
         sys, "argv", ["harness.startup", "--runs", "1", "--variant", f"x={sys.executable} {fake}"]
     )
     with pytest.raises(SystemExit) as raised:
         runpy.run_module("harness.startup", run_name="__main__")
     assert raised.value.code == 0
+
+
+@pytest.mark.parametrize("mode", ["valid", "unregistered", "missing", "malformed"])
+def test_missing_or_malformed_ack_cleans_process_and_scratch(
+    tmp_path: Path, mode: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Check readiness verdicts and cleanup independently of screen echo.
+
+    Parameters:
+        tmp_path (Path): private PID marker directory.
+        mode (str): stub registration/acknowledgement behavior.
+        monkeypatch (pytest.MonkeyPatch): tracks the sampler's scratch allocation.
+    """
+    pid_file = tmp_path / "pid"
+    created: list[Path] = []
+    original = tempfile.mkdtemp
+
+    def tracked_mkdtemp(**kwargs: Any) -> str:
+        """Record the real short socket directory without extending its path.
+
+        Parameters:
+            **kwargs (Any): original `mkdtemp` arguments.
+
+        Returns:
+            str: allocated socket directory.
+        """
+        directory = original(**kwargs)
+        created.append(Path(directory))
+        return directory
+
+    monkeypatch.setattr(startup.tempfile, "mkdtemp", tracked_mkdtemp)
+    argv = [sys.executable, "-c", FAKE_PI]
+    env = {"ACK_MODE": mode, "CHILD_PID": str(pid_file)}
+    if mode == "valid":
+        startup.sample(argv, env=env)
+    else:
+        with pytest.raises(TimeoutError, match="No ready UI"):
+            startup.sample(argv, env=env, timeout_s=0.5)
+    assert created
+    assert all(not directory.exists() for directory in created)
+    pid = int(pid_file.read_text())
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.01)
+    else:
+        pytest.fail("Sampler left its pane process alive")
+
+
+def test_cooked_echo_is_not_ready() -> None:
+    """A process with no command handler fails even if the tty echoes all typed input."""
+    cooked = "import sys,time; print('footer ctx 1%',flush=True); sys.stdin.readline(); time.sleep(5)"
+    with pytest.raises(TimeoutError, match="submitted=False"):
+        startup.sample([sys.executable, "-c", cooked], env={}, timeout_s=0.3)
+
+
+@pytest.mark.parametrize("timeout", [0.0, -1.0, float("nan"), float("inf")])
+def test_invalid_timeout_is_rejected(timeout: float) -> None:
+    """Reject invalid timeouts before allocating a pane.
+
+    Parameters:
+        timeout (float): invalid deadline interval.
+    """
+    with pytest.raises(ValueError, match="finite and positive"):
+        startup.sample([], env={}, timeout_s=timeout)
+
+
+def test_readiness_handler_rejects_wrong_nonce(tmp_path: Path) -> None:
+    """Exercise the exact shipped JS handler; only a matching argument writes an ack.
+
+    Parameters:
+        tmp_path (Path): private extension and acknowledgement directory.
+    """
+    node = shutil.which("node")
+    assert node is not None
+    extension = tmp_path / "ready.mjs"
+    extension.write_text(startup.READY_EXTENSION)
+    ack = tmp_path / "ack"
+    registered = tmp_path / "registered"
+    script = textwrap.dedent("""\
+import { existsSync, readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+const { default: install } = await import(pathToFileURL(process.argv[1]).href);
+let handler;
+install({registerCommand(name, command) {
+    if (name !== 'harness-startup-ready-token') throw new Error('Wrong command name');
+    handler = command.handler;
+}});
+if (readFileSync(process.env.PI_STARTUP_REGISTERED, 'utf8') !== 'token') throw new Error('No registration');
+try { await handler('malformed'); throw new Error('Accepted bad nonce'); }
+catch (error) { if (error.message !== 'Startup readiness nonce mismatch') throw error; }
+if (existsSync(process.env.PI_STARTUP_ACK)) throw new Error('Bad nonce acknowledged');
+await handler('token');
+if (readFileSync(process.env.PI_STARTUP_ACK, 'utf8') !== 'token') throw new Error('No ack');
+""")
+    subprocess.run(
+        [node, "--input-type=module", "-e", script, str(extension)],
+        env={
+            "PI_STARTUP_NONCE": "token",
+            "PI_STARTUP_ACK": str(ack),
+            "PI_STARTUP_REGISTERED": str(registered),
+        },
+        check=True,
+        capture_output=True,
+        timeout=10,
+    )
