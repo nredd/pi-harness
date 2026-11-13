@@ -152,3 +152,10 @@ def test_default_runner_passes_stdout_through_and_captures_on_request(tmp_path: 
     code = f"import sys, pathlib; pathlib.Path({str(marker)!r}).write_text(sys.stdin.read())"
     assert installer._run([sys.executable, "-c", code], subprocess.run, stdin="hi")[0] == 0
     assert marker.read_text() == "hi"
+
+
+def test_a_missing_tool_exits_127_like_a_shell(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """An unstartable command reports one line and status 127 instead of a traceback."""
+    missing = str(tmp_path / "no-such-tool")
+    assert installer._run([missing], subprocess.run) == (127, "")
+    assert "no-such-tool" in capsys.readouterr().err

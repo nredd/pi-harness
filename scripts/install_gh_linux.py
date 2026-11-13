@@ -49,11 +49,16 @@ def _run(
         capture (bool): Return standard output instead of passing it through.
 
     Returns:
-        tuple[int, str]: Exit status and captured standard output (empty unless `capture`).
+        tuple[int, str]: Exit status (127 when the command cannot be started, like a shell) and captured
+            standard output (empty unless `capture`).
     """
-    completed = run(
-        list(cmd), input=stdin, text=True, check=False, stdout=subprocess.PIPE if capture else None
-    )
+    try:
+        completed = run(
+            list(cmd), input=stdin, text=True, check=False, stdout=subprocess.PIPE if capture else None
+        )
+    except OSError as exc:
+        sys.stderr.write(f"{cmd[0]}: {exc.strerror or exc}\n")
+        return 127, ""
     return completed.returncode, completed.stdout if capture else ""
 
 
