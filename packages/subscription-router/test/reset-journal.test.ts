@@ -76,6 +76,9 @@ describe("private durable append-only reset journal", () => {
 		expect(() => new ResetJournal(root, "../outside")).toThrow("Invalid");
 		expect(() => new ResetJournal(root, "../outside", binding)).toThrow("Invalid");
 		await fs.mkdir(join(root, "state"), { mode: 0o755 });
+		// mkdir's mode is filtered by umask; establish genuinely insecure state even under 0077.
+		await fs.chmod(join(root, "state"), 0o755);
+		expect((await fs.lstat(join(root, "state"))).mode & 0o777).toBe(0o755);
 		await expect(journal().entries()).rejects.toThrow("private");
 		await fs.chmod(join(root, "state"), 0o700);
 		await fs.symlink(root, join(root, "state", binding));
