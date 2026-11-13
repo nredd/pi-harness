@@ -6,8 +6,12 @@ References:
 
 from __future__ import annotations
 
+import contextlib
+import os
+import signal
 import subprocess
 import sys
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -17,6 +21,14 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import install_gh_linux as installer
+
+
+@pytest.fixture(autouse=True)
+def _restore_sigterm() -> Any:
+    """`main` installs a SIGTERM handler; keep it from leaking into other tests."""
+    previous = signal.getsignal(signal.SIGTERM)
+    yield
+    signal.signal(signal.SIGTERM, previous)
 
 
 class Fake:
@@ -159,3 +171,51 @@ def test_a_missing_tool_exits_127_like_a_shell(tmp_path: Path, capsys: pytest.Ca
     missing = str(tmp_path / "no-such-tool")
     assert installer._run([missing], subprocess.run) == (127, "")
     assert "no-such-tool" in capsys.readouterr().err
+
+
+def test_sigterm_handler_exits_143_like_a_shell() -> None:
+    """The handler turns SIGTERM into `SystemExit(143)` so `finally`/`with` cleanup runs."""
+    with pytest.raises(SystemExit) as raised:
+        installer._terminate(signal.SIGTERM, None)
+    assert raised.value.code == 143
+
+
+def test_main_installs_the_sigterm_handler(tmp_path: Path) -> None:
+    """`main` routes SIGTERM to `_terminate` before it does anything else."""
+    installer.main([str(tmp_path / "gh")], Fake())
+    assert signal.getsignal(signal.SIGTERM) is installer._terminate
+
+
+def test_sigterm_during_download_removes_the_scratch_dir(tmp_path: Path) -> None:
+    """SIGTERM mid-download (`bounded`/`timeout`) exits 143 and leaves no scratch dir, like the old trap."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    tmp_root = tmp_path / "tmp"
+    tmp_root.mkdir()
+    started = tmp_path / "curl.started"
+    pidfile = tmp_path / "curl.pid"
+    stubs = {
+        "uname": '#!/bin/sh\n[ "$1" = -s ] && echo Linux || echo x86_64\n',
+        "curl": f"#!/bin/sh\necho $$ > {pidfile}\n: > {started}\nexec sleep 60\n",
+    }
+    for name, body in stubs.items():
+        (bin_dir / name).write_text(body)
+        (bin_dir / name).chmod(0o755)
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "TMPDIR": str(tmp_root)}
+    script = Path(installer.__file__)
+    proc = subprocess.Popen([sys.executable, str(script), str(tmp_path / "gh")], env=env)
+    try:
+        deadline = time.monotonic() + 30
+        while not started.exists():
+            assert time.monotonic() < deadline, "stub curl never started"
+            assert proc.poll() is None
+            time.sleep(0.05)
+        assert list(tmp_root.iterdir()), "scratch dir should exist while downloading"
+        proc.send_signal(signal.SIGTERM)
+        assert proc.wait(timeout=30) == 143
+    finally:
+        proc.kill()
+        proc.wait()
+        with contextlib.suppress(FileNotFoundError, ProcessLookupError):
+            os.kill(int(pidfile.read_text()), signal.SIGKILL)
+    assert list(tmp_root.iterdir()) == []

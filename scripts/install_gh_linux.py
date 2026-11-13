@@ -18,11 +18,13 @@ References:
 
 from __future__ import annotations
 
+import signal
 import subprocess
 import sys
 import tempfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from types import FrameType
 
 GH_VERSION = "2.103.2"
 GH_SHA256_AMD64 = "62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8"
@@ -35,6 +37,19 @@ ASSETS = {
 }
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
+
+
+def _terminate(signum: int, _frame: FrameType | None) -> None:
+    """Turn SIGTERM into `SystemExit(128 + signum)` so `with` cleanup runs, like the old bash `trap ... EXIT`.
+
+    Parameters:
+        signum (int): The delivered signal number.
+        _frame (FrameType | None): Interrupted frame, unused.
+
+    Raises:
+        SystemExit: Always, with the conventional shell status for death by signal (143 for SIGTERM).
+    """
+    raise SystemExit(128 + signum)
 
 
 def _run(
@@ -137,8 +152,9 @@ def main(argv: Sequence[str], run: Runner = subprocess.run) -> int:
 
     Returns:
         int: Process exit status. 2 for usage, 1 for a refused platform, digest or version, else the
-            failing tool's status.
+            failing tool's status. SIGTERM (e.g. from `timeout`) exits 143 after removing the scratch dir.
     """
+    signal.signal(signal.SIGTERM, _terminate)
     if len(argv) != 1 or not argv[0]:
         sys.stderr.write("usage: install_gh_linux.sh <install-dir>\n")
         return 2
