@@ -106,7 +106,9 @@ export class ScenarioSession {
     const release = barrier();
     const delegate = getApiProvider(p.api);
     if (!delegate) throw new Error(`Missing transport ${p.api}`);
+    const seen: { options?: Parameters<typeof delegate.streamSimple>[2] } = {};
     const stream: typeof delegate.streamSimple = (model, context, options) => {
+      seen.options = options;
       const output = new AssistantMessageEventStream();
       output.push({ type: "start", partial: { ...fauxAssistantMessage(""), provider: model.provider, model: model.id, api: model.api } });
       entered.resolve();
@@ -128,7 +130,7 @@ export class ScenarioSession {
     };
     registerApiProvider({ ...delegate, stream, streamSimple: stream }, this.root);
     this.releases.push(() => release.resolve());
-    return { entered: entered.promise, release: () => release.resolve() };
+    return { entered: entered.promise, release: () => release.resolve(), seen };
   }
 
   /** Install a tool held by a promise in both the parent and real disk-discovered child. */

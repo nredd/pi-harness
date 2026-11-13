@@ -322,16 +322,20 @@ interface ThinkingCase {
   name: string;
   /** Levels the virtual model offers; the session clamps the requested level to these. */
   virtualLevels: readonly ModelThinkingLevel[];
-  /** Whether the physical model supports reasoning. The row reports the session level, so this must not change it. */
+  /** Whether the physical model supports reasoning; core clamps the routed level to `off` without it. */
   reasoning: boolean;
   /** Level the Agent call asks for. */
   asked: ModelThinkingLevel;
-  /** Exact `think:` tag, from the config above: the asked level if offered, else the highest offered level at or below it. */
-  tag: string;
+  /** Exact tag at the routing point: the session level, clamped to what the virtual model offers. */
+  routing: string;
+  /** Exact tag once answered: the level the physical request ran at. */
+  answered: string;
+  /** `reasoning` option the physical transport received (`undefined` for off). */
+  ran: ModelThinkingLevel | undefined;
 }
 
 /** Row `think:` tag at the routing point, then once the physical model has answered. */
-async function thinkTags(c: ThinkingCase): Promise<{ routing: string; answered: string }> {
+async function thinkTags(c: ThinkingCase): Promise<{ routing: string; answered: string; ran: unknown }> {
   fixture = new ScenarioSession();
   const hold = fixture.heldTool();
   const physical = fixture.physical("fauxphys", "physical", [calls({ name: "hold", args: {} }), answer("CHILD DONE")], c.reasoning);
@@ -343,14 +347,15 @@ async function thinkTags(c: ThinkingCase): Promise<{ routing: string; answered: 
     id: "default",
     name: "vroute default",
     thinkingLevels: c.virtualLevels,
-    route: async () => ({ model, thinkingLevel: c.asked }),
+    // Like a real router: the session's level passes through unchanged.
+    route: async request => ({ model, thinkingLevel: request.thinkingLevel }),
   });
   h.setResponses([calls(spawn("probe child", { model: "vroute/default", thinking: c.asked })), answer("SPAWNED")]);
   await h.session.prompt("go");
   await stream.entered;
+  const ran = stream.seen.options?.reasoning;
   const host = fixture.host;
-  if (!host) throw new Error("No terminal host");
-  fixture.clock.advance(200);
+  if (!host) throw new Error("fixture host missing");
   await host.settle();
   host.input(TOGGLE);
   await host.settle();
@@ -360,17 +365,18 @@ async function thinkTags(c: ThinkingCase): Promise<{ routing: string; answered: 
   await hold.entered;
   fixture.clock.advance(200);
   await host.settle();
-  return { routing, answered: row() };
+  return { routing, answered: row(), ran };
 }
 
 it.each<ThinkingCase>([
-  { name: "offered level is kept without a note", virtualLevels: ["off", "low", "high"], reasoning: true, asked: "high", tag: "think:high" },
-  { name: "physical reasoning flag does not change the level", virtualLevels: ["off", "low", "high"], reasoning: false, asked: "high", tag: "think:high" },
-  { name: "unoffered level clamps down with the asked form", virtualLevels: ["off", "low"], reasoning: true, asked: "high", tag: "think:low (asked high)" },
-  { name: "off-only virtual model clamps to off", virtualLevels: ["off"], reasoning: true, asked: "high", tag: "think:off (asked high)" },
+  { name: "offered level is kept without a note", virtualLevels: ["off", "low", "high"], reasoning: true, asked: "high", routing: "think:high", answered: "think:high", ran: "high" },
+  { name: "non-reasoning physical model runs at off", virtualLevels: ["off", "low", "high"], reasoning: false, asked: "high", routing: "think:high", answered: "think:off (asked high)", ran: undefined },
+  { name: "unoffered level clamps down with the asked form", virtualLevels: ["off", "low"], reasoning: true, asked: "high", routing: "think:low (asked high)", answered: "think:low (asked high)", ran: "low" },
+  { name: "off-only virtual model clamps to off", virtualLevels: ["off"], reasoning: true, asked: "high", routing: "think:off (asked high)", answered: "think:off (asked high)", ran: undefined },
 ])("virtual child row shows the exact thinking level: $name", async c => {
-  const { routing, answered } = await thinkTags(c);
-  expect(routing).toContain(`vroute default (routing) \u00b7 ${c.tag} \u00b7`);
-  expect(answered).toContain(`physical \u00b7 ${c.tag} \u00b7`);
+  const { routing, answered, ran } = await thinkTags(c);
+  expect(ran).toBe(c.ran);
+  expect(routing).toContain(`vroute default (routing) \u00b7 ${c.routing} \u00b7`);
+  expect(answered).toContain(`physical \u00b7 ${c.answered} \u00b7`);
   expect(answered).not.toContain("(routing)");
 });

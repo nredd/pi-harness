@@ -57,7 +57,9 @@ import { cleanupWorktree, createWorktree, isWorktreeIsolationEnabled, pruneWorkt
  * Relabel a record's model from the response that just finished. A virtual
  * selection (`router/default`) is only a name until a request is routed; the
  * assistant message is the one place that records the physical model, so the
- * label follows it (and follows a router fallback to the next model).
+ * label follows it (and follows a router fallback to the next model). The
+ * thinking level follows too: the message records the level the request ran at,
+ * after core clamped it to what the physical model supports.
  */
 function relabelFromResponse(record: AgentRecord, message: AssistantMessageInfo | undefined): void {
   const registry = (record.session as { modelRegistry?: Parameters<typeof describePhysicalModel>[1] } | undefined)
@@ -66,6 +68,14 @@ function relabelFromResponse(record: AgentRecord, message: AssistantMessageInfo 
   if (!physical) return;
   record.invocation ??= {};
   Object.assign(record.invocation, physical);
+  // The routed request ran at the level core clamped to the physical model, which
+  // can differ from the session level the row showed while routing was pending.
+  const ran = message?.thinkingLevel;
+  if (ran) {
+    const requested = record.invocation.requestedThinking ?? record.invocation.thinking;
+    record.invocation.thinking = ran as ThinkingLevel;
+    record.invocation.requestedThinking = requested && requested !== ran ? requested : undefined;
+  }
   if ((record.modelTier?.kind === "routed" || record.modelTier?.kind === "static") && record.modelTier.answered !== physical.modelId) {
     record.modelTier = { ...record.modelTier, answered: physical.modelId };
     if (record.outputFile) appendModelTierEntry(record.outputFile, record.id, record.modelTier);
