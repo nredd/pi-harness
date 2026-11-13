@@ -560,7 +560,8 @@ The twelve jobs are the configured required checks of ruleset `main required che
 `migration-review/spec` are no longer required. Reviews are our process, not a CI gate:
 
 - Run separate Standards + Spec reviews on the exact final HEAD; any HEAD change invalidates both
-- `scripts/merge-pr.sh` is the tracked source; `scripts/merge_pr_checks.py` owns its read-only CI
+- `scripts/merge-pr.ts` is the measured Node merge/receipt implementation; `scripts/merge-pr.sh`
+  is only its unmeasured compatibility bootstrap. `scripts/merge_pr_checks.py` retains the read-only CI
   predicate. Invoke the helper from an exact reviewed checkout. It validates distinct reviewer IDs,
   exact final-report HEAD and axis, unresolved-revision errors, receipt posting and
   `--match-head-commit`. Each reviewer's **final assistant report** must begin with these literal
@@ -576,7 +577,7 @@ The twelve jobs are the configured required checks of ruleset `main required che
   or malformed Git-result status/content and reader errors fail closed. Renew the review rather than
   editing a transcript. The unmanaged
   `~/code/pi-harness-builds/merge-pr.sh` is a distribution copy, not source. Only after this PR is
-  reviewed and merged may the parent copy **both** scripts together from the merged revision into
+  reviewed and merged may the parent copy **all three** scripts together from the merged revision into
   that directory. Do not activate an unreviewed copy or change managed Pi config
 - The helper gates **all** reported checks, including optional fork jobs, not just required contexts.
   It independently verifies every ruleset context against its bound app and reviewed SHA. Missing,
@@ -597,12 +598,22 @@ The twelve jobs are the configured required checks of ruleset `main required che
   Install the existing locked integration environment (`uv sync --locked` in `integration/`)
   for Pydantic evidence validation. Select trusted absolute executables and the actual transcript
   storage directory explicitly; there is no PATH-based or workstation-specific fallback.
-  The shell uses `/bin/bash` and absolute native `ls`, `wc`, `dirname`, `mktemp` and `cat` paths;
-  embedded readers resolve transcript paths with `Path` and require regular files before reading.
-  The poisoned-PATH regression covers every external utility, including gate-path selection:
+  Select `MERGE_PR_NODE` as a trusted absolute Node executable (the repository Node version supports
+  direct TypeScript execution). The six positional arguments are unchanged. Node uses filesystem APIs
+  for transcript discovery, regular-file checks and private temporary receipt cleanup; child commands
+  use literal argv without a shell. The Python predicate is selected relative to the Node module, not
+  the working directory or PATH. The poisoned-PATH regression retains the actual wrapper/Node/Python
+  chain and synthetic GitHub CLI; no real merge is attempted. `make check-import-audit` produces actual
+  V8 lines/functions/branches/statements for `merge-pr.ts`, enforced at zero gaps by coverage accounting.
+  The tiny shell executable-selection/exec bootstrap is still pending/unmeasured, not a shell coverage
+  claim. Root WSL, PowerShell and workflow-inline measurement remains open under #695; this slice does
+  not close that umbrella or replace its remaining lint requirements.
+
+  Example:
 
   ```sh
   MERGE_PR_TRANSCRIPT_ROOT=<absolute-transcript-store> \
+  MERGE_PR_NODE=<absolute-node-executable> \
   MERGE_PR_GH=/opt/homebrew/bin/gh \
   MERGE_PR_PYTHON=$HOME/code/pi-harness-merge-helper/integration/.venv/bin/python \
   bash ~/code/pi-harness-merge-helper/scripts/merge-pr.sh \
