@@ -8857,7 +8857,8 @@ ${conversation}`;
       if (record?.status !== "running" && record?.status !== "queued") {
         const finished = record ?? manager.getEvictedNote(latest);
         if (!finished) return textResult(agentNotFound(params.agent_id));
-        if (finished.status === "stopped") {
+        const historical = !record && manager.getEvictedNote(latest)?.fromSavedSession;
+        if (finished.status === "stopped" && !historical) {
           return textResult(`Agent "${finished.id}" was stopped (status: stopped). steer_subagent does not resume a stopped agent.`);
         }
         return agentTool.execute(toolCallId, {

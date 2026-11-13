@@ -67,6 +67,7 @@ it("#330: a fresh stopped child retains its output across a fresh parent activat
   reopened.setResponses([
     calls({ name: "stop_subagent", args: { agent_id: id } }),
     calls({ name: "Agent", args: { resume: id, subagent_type: "general-purpose", description: "manual recovery", prompt: "continue", run_in_background: true } }),
+    calls({ name: "steer_subagent", args: { agent_id: id, message: "continue manually" } }),
     answer("CHECKED HISTORICAL CONTROLS"),
   ]);
   await reopened.session.prompt("historical controls");
@@ -78,5 +79,9 @@ it("#330: a fresh stopped child retains its output across a fresh parent activat
   const resume = outcomes(reopened, "Agent")[0]?.text;
   expect(resume).toContain("only historical metadata is available");
   expect(resume).not.toContain("no saved session is left");
+  const steer = outcomes(reopened, "steer_subagent")[0]?.text;
+  expect(steer).toContain("only historical metadata is available");
+  expect(steer).toContain("last recorded status: stopped");
+  expect(steer).not.toContain("does not resume a stopped agent");
   expect(child.state.callCount).toBe(1);
 });

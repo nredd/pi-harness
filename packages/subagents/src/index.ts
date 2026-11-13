@@ -3680,7 +3680,8 @@ Terse command-style prompts produce shallow, generic work.
         // from disk or explains why it cannot.
         const finished = record ?? manager.getEvictedNote(latest);
         if (!finished) return textResult(agentNotFound(params.agent_id));
-        if (finished.status === "stopped") {
+        const historical = !record && manager.getEvictedNote(latest)?.fromSavedSession;
+        if (finished.status === "stopped" && !historical) {
           return textResult(`Agent "${finished.id}" was stopped (status: stopped). steer_subagent does not resume a stopped agent.`);
         }
         // The Agent tool's own resume path, not a copy: same reopen, turn
