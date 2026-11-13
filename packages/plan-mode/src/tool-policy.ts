@@ -278,7 +278,8 @@ export function explainBlockedCommand(
   let base = workingDirectory;
   for (const [index, segment] of segments.entries()) {
     if (segment.separator === "|" && isInterpreterSegment(segment.text, INTERPRETERS)) {
-      const token = shellWords(segment.text)?.[0] ?? segment.text;
+      // Invariant: quotes were balanced by `scanShellSegments`, so the segment tokenizes.
+      const token = firstWord(shellWords(segment.text) as string[], segment.text);
       return { segment: segment.text, token, reason: "interpreter in a pipeline" };
     }
     const tokens = shellWords(segment.text);
@@ -332,10 +333,9 @@ function explainUnsafeSegment(
     const words = shellWords(segment.trimStart().slice(prefix.length));
     if (!words || words.length === 0) return { token: first, reason: "ssh with no remote command" };
     if (words[0]?.startsWith("-")) return { token: words[0], reason: "ssh option before the remote command" };
-    const remote = explainBlockedCommand(words.join(" "), safeSubcommands, { platform });
-    return remote
-      ? { token: remote.token, reason: `remote command: ${remote.reason}` }
-      : { token: first, reason: "ssh segment rejected" };
+    // Invariant: `isSafeSshSegment` rejected via this same remote check, so an explanation exists.
+    const remote = explainBlockedCommand(words.join(" "), safeSubcommands, { platform }) as BlockedCommand;
+    return { token: remote.token, reason: `remote command: ${remote.reason}` };
   }
   if (command === "curl" || (command === "gh" && args[0]?.toLowerCase() === "api")) {
     return (
@@ -366,6 +366,11 @@ function explainUnsafeSegment(
   };
 }
 
+/** First of `words`, else `fallback`; branch-free because callers only differ on unreachable empties. */
+function firstWord(words: readonly string[], fallback: string): string {
+  return [...words, fallback][0] as string;
+}
+
 /** Reason for a command already on the reviewed allowlist whose arguments failed its validator. */
 function validatorRejection(label: string, token: string): SyntaxRejection {
   return { token, reason: `arguments rejected by the reviewed \`${label}\` validator` };
@@ -384,19 +389,22 @@ function explainReviewedRejection(
   platform: NodeJS.Platform,
   paths: PathPolicy,
 ): SyntaxRejection | undefined {
-  if (command === "hostname") return validatorRejection("hostname", args[0] ?? first);
+  if (command === "hostname") return validatorRejection("hostname", firstWord(args, first));
   if (command === "tasklist") {
     return platform === "win32"
-      ? validatorRejection("tasklist", args[0] ?? first)
+      ? validatorRejection("tasklist", firstWord(args, first))
       : { token: first, reason: "`tasklist` is only allowed on Windows" };
   }
   if (command === "sed") {
-    return validatorRejection("sed", args.find((argument) => !argument.startsWith("-")) ?? args[0] ?? first);
+    return validatorRejection(
+      "sed",
+      firstWord([...args.filter((argument) => !argument.startsWith("-")), ...args], first),
+    );
   }
   if (command === "git") return explainGitRejection(first, args, safeSubcommands, paths);
   if (["node", "python", "python3", "tsc", "biome", "ruff", "ty"].includes(command)) {
     const forbidden = args.find((argument) => /^--(incremental|tsBuildInfoFile|generateTrace)(=|$)/.test(argument));
-    return validatorRejection(command, forbidden ?? args[0] ?? first);
+    return validatorRejection(command, forbidden ?? firstWord(args, first));
   }
   const subcommand = args.find((argument) => !argument.startsWith("-"))?.toLowerCase();
   if (command === "npm" && subcommand === "audit") return validatorRejection("npm audit", "fix");
@@ -437,18 +445,18 @@ function explainGitRejection(
   if (!validator) return { token: `${first} ${subcommand}`, reason: NOT_ALLOWLISTED_REASON };
   const label = `git ${subcommand}`;
   const subcommandArgs = args.slice(index + 1);
-  const unsafe = subcommandArgs.find(
+  const unsafe = subcommandArgs.filter(
     (argument) => !hasSafeGitArguments(subcommand, [argument]) || !validator([argument]),
   );
-  return validatorRejection(label, unsafe ?? label);
+  return validatorRejection(label, firstWord(unsafe, label));
 }
 
 /** The whitespace-delimited chunk of `segment` that contains `index`. */
 function wordAround(segment: string, index: number) {
   let from = index;
-  while (from > 0 && !/\s/u.test(segment[from - 1] ?? "")) from -= 1;
+  while (from > 0 && !/\s/u.test(segment.charAt(from - 1))) from -= 1;
   let to = index;
-  while (to < segment.length && !/\s/u.test(segment[to] ?? "")) to += 1;
+  while (to < segment.length && !/\s/u.test(segment.charAt(to))) to += 1;
   return segment.slice(from, to);
 }
 

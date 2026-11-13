@@ -185,3 +185,13 @@ test("accept/reject decisions match main for every table input", () => {
     );
   }
 });
+
+test("explainBlockedCommand falls back to the process defaults", () => {
+  assert.equal(explainBlockedCommand("ls"), undefined);
+});
+
+test("a remote command rejected by a validator is named through the ssh prefix", () => {
+  const blocked = explainBlockedCommand("ssh prod git branch -D x", safeSubcommands, options);
+  assert.equal(blocked?.token, "-D");
+  assert.match(blocked?.reason ?? "", /remote command: arguments rejected/);
+});
