@@ -691,6 +691,20 @@ Flake policy (migration plan section 7):
   process, any other runner, or with other output is a new correctness failure and blocks. The
   allowance lapses when a macOS update removes the `_LSApplicationCheckIn` abort, or when a different
   signature appears, which blocks
+- Runner-supervisor interruption on the `pi-macos` pool (#761): the job's check-run annotation reads
+  `The self-hosted runner lost communication with the server`, a step stays `in_progress` with no
+  conclusion, the `/logs` endpoint returns HTTP 404 and `gh run view --log-failed` reports `log not found`.
+  Runs `43177772438` (two jobs, 07:57:54 UTC) and `43201041536` (one job, 10:55:03 UTC) match: the runner
+  supervisor logged `idle past ttl, killing` for the exact runner while its job was executing, and GitHub
+  marked the job failed only later (08:06:54 and 11:04:10 UTC). Cause: the scheduler inferred "idle" from the
+  runner's absence in the job census. Fixed in `nredd/ci-runners#4` (merged; counted as fixed only once
+  deployed). Why the census omitted those runners is NOT established; the incident run has 24 jobs, so
+  missing pagination is a defect but not a proven explanation. No test assertion exists for such a job, so it
+  is neither a pass nor a repository failure. To triage: read the annotation (`gh api
+  repos/nredd/pi-harness/check-runs/<job id>/annotations`), then the supervisor log on the named runner host
+  (owner only). With both matching, the cell is unverified: rerun the whole job once the supervisor fix is
+  deployed, and keep the first attempt in history. A log-less failure without that annotation is a new
+  signature and blocks. Never read missing logs as a pass
 - Subagents' genuine manager-reload fixture also includes synchronous TypeScript preparation and child
   imports inside its 5 s test deadline. PR #138's macOS failure reported that deadline at 5597 ms
   ([here](https://github.com/nredd/pi-harness/actions/runs/40369078357/job/121734701111)). Controlled
