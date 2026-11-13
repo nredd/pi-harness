@@ -380,7 +380,7 @@ describe("SubagentScheduler — fire path", () => {
     expect(() => scheduler.addJob({ name: "idle", description: "idle", schedule: "+1h", subagent_type: "general-purpose", prompt: "x" })).toThrow(/already exists/);
   });
 
-  it("a deadline beyond the timer range is still enforced by the tick", () => {
+  it("a job stays disabled after a far deadline passes", () => {
     const job = scheduler.addJob({
       name: "far", description: "far", schedule: "1h until +40d",
       subagent_type: "general-purpose", prompt: "x",
@@ -426,6 +426,47 @@ describe("SubagentScheduler — fire path", () => {
     await vi.advanceTimersByTimeAsync(0);
     scheduler.updateJob(job.id, { enabled: false });
     expect(store.get(job.id)?.lastStatus).toBe("success");
+  });
+
+  it("never arms a native timer beyond its range, and re-arms until the deadline", () => {
+    const delays: number[] = [];
+    let now = 0;
+    const timers: Array<{ at: number; cb: () => void; live: boolean }> = [];
+    const clock = {
+      now: () => now,
+      setTimeout: (cb: () => void, ms: number) => {
+        delays.push(ms);
+        const t = { at: now + ms, cb, live: true };
+        timers.push(t);
+        return { cancel: () => { t.live = false; } };
+      },
+      setInterval: () => ({ cancel: () => {} }),
+    };
+    const s = new SubagentScheduler({ clock });
+    const st = new ScheduleStore(join(tmp, "clock.json"));
+    s.start(pi, ctx, manager, st);
+    const job = s.addJob({ name: "huge", description: "huge", schedule: "0 0 0 1 1 * until +60d", subagent_type: "general-purpose", prompt: "x" });
+    // The cron job runs on croner's own timer; every clock timer here is a deadline timer.
+    while (st.get(job.id)?.enabled) {
+      const next = timers.filter(t => t.live).sort((x, y) => x.at - y.at)[0];
+      if (!next) break;
+      next.live = false;
+      now = next.at;
+      next.cb();
+    }
+    expect(Math.max(...delays)).toBeLessThanOrEqual(2_147_483_647);
+    expect(delays.length).toBeGreaterThan(1);
+    expect(st.get(job.id)?.enabled).toBe(false);
+    expect(now).toBe(60 * 86_400_000);
+    s.stop();
+  });
+
+  it("an enabled job past its deadline and left running is errored on restart", () => {
+    const old = scheduler.buildJob({ name: "exp", description: "exp", schedule: "1m until +1h", subagent_type: "general-purpose", prompt: "x" });
+    store.add({ ...old, until: new Date(Date.now() - 1000).toISOString(), lastStatus: "running" });
+    scheduler.start(pi, ctx, manager, store);
+    expect(store.get(old.id)).toMatchObject({ enabled: false, lastStatus: "error" });
+    expect(() => scheduler.addJob({ name: "exp", description: "exp", schedule: "1m", subagent_type: "general-purpose", prompt: "x" })).not.toThrow();
   });
 
   it("a disabled job left running by a previous process frees its name on restart", () => {

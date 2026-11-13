@@ -875,9 +875,8 @@ var SubagentScheduler = class _SubagentScheduler {
     this.manager = manager;
     this.store = store;
     for (const job of store.list()) {
-      if (job.enabled) {
-        this.scheduleJob(job);
-      } else if (job.lastStatus === "running") {
+      if (job.enabled) this.scheduleJob(job);
+      if (store.get(job.id)?.enabled === false && job.lastStatus === "running") {
         store.update(job.id, { lastStatus: "error" });
       }
     }

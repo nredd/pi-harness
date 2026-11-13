@@ -97,11 +97,11 @@ export class SubagentScheduler {
     this.store = store;
 
     for (const job of store.list()) {
-      if (job.enabled) {
-        this.scheduleJob(job);
-      } else if (job.lastStatus === "running") {
-        // A disabled job still "running" was cut off by a previous process; no
-        // agent of this one can finalize it, so it must not hold its name forever.
+      if (job.enabled) this.scheduleJob(job);
+      // A job disabled while "running" (or expired by the scheduling above) was cut
+      // off by a previous process; no agent of this one can finalize it, so it must
+      // not hold its name forever.
+      if (store.get(job.id)?.enabled === false && job.lastStatus === "running") {
         store.update(job.id, { lastStatus: "error" });
       }
     }
