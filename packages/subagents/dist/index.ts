@@ -861,6 +861,8 @@ var SubagentScheduler = class _SubagentScheduler {
   admissions = /* @__PURE__ */ new Map();
   /** Newest pending admission per job that wrote "running", with the status it replaced. */
   pendingRuns = /* @__PURE__ */ new Map();
+  /** Spawned runs not yet finalized, per job id (interval runs can overlap). */
+  inFlight = /* @__PURE__ */ new Map();
   store;
   pi;
   ctx;
@@ -873,7 +875,11 @@ var SubagentScheduler = class _SubagentScheduler {
     this.manager = manager;
     this.store = store;
     for (const job of store.list()) {
-      if (job.enabled) this.scheduleJob(job);
+      if (job.enabled) {
+        this.scheduleJob(job);
+      } else if (job.lastStatus === "running") {
+        store.update(job.id, { lastStatus: "error" });
+      }
     }
   }
   /** Stop all timers; drop refs. Safe to call repeatedly. */
@@ -887,6 +893,7 @@ var SubagentScheduler = class _SubagentScheduler {
     for (const admissions of this.admissions.values()) for (const admission of admissions) admission.abort();
     this.admissions.clear();
     this.pendingRuns.clear();
+    this.inFlight.clear();
     this.scheduled.clear();
     this.store = void 0;
     this.pi = void 0;
@@ -964,7 +971,7 @@ var SubagentScheduler = class _SubagentScheduler {
    * or a repeating job whose `until` deadline passed. Its name is reusable.
    */
   isFinished(job) {
-    if (job.enabled || job.lastStatus === "running") return false;
+    if (job.enabled || job.lastStatus === "running" || (this.inFlight.get(job.id) ?? 0) > 0) return false;
     if (job.scheduleType === "once") return job.lastRun !== void 0 || job.lastStatus === "error";
     return this.pastDeadline(job);
   }
@@ -1019,14 +1026,19 @@ var SubagentScheduler = class _SubagentScheduler {
         const cron = new Cron(job.schedule, () => this.executeJob(job.id));
         this.jobs.set(job.id, cron);
       }
-      const untilMs = job.until === void 0 ? void 0 : new Date(job.until).getTime() - this.clock.now();
-      if (untilMs !== void 0 && untilMs <= MAX_TIMER_MS && this.scheduled.has(job.id)) {
-        this.deadlines.set(job.id, this.clock.setTimeout(() => this.expireJob(job), untilMs));
-      }
+      if (job.until !== void 0 && this.scheduled.has(job.id)) this.armDeadline(job, new Date(job.until).getTime());
     } catch (err) {
       this.scheduled.delete(job.id);
       this.emit({ type: "error", jobId: job.id, error: err instanceof Error ? err.message : String(err) });
     }
+  }
+  /** Arm the deadline timer, re-arming in `MAX_TIMER_MS` steps when it is out of timer range. */
+  armDeadline(job, untilMs) {
+    const remaining = untilMs - this.clock.now();
+    this.deadlines.set(job.id, this.clock.setTimeout(() => {
+      if (this.clock.now() >= untilMs) this.expireJob(job);
+      else this.armDeadline(job, untilMs);
+    }, Math.min(remaining, MAX_TIMER_MS)));
   }
   pastDeadline(job) {
     return job.until !== void 0 && this.clock.now() >= new Date(job.until).getTime();
@@ -1188,7 +1200,13 @@ var SubagentScheduler = class _SubagentScheduler {
       return;
     }
     this.emit({ type: "fired", jobId: id, agentId, name: job.name });
+    this.inFlight.set(id, (this.inFlight.get(id) ?? 0) + 1);
     const finalize = (status) => {
+      if (this.store === store) {
+        const left = (this.inFlight.get(id) ?? 1) - 1;
+        if (left > 0) this.inFlight.set(id, left);
+        else this.inFlight.delete(id);
+      }
       const next = this.getNextRun(id);
       const current = store.get(id);
       store.update(id, {

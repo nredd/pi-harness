@@ -77,6 +77,8 @@ export class SubagentScheduler {
   private admissions = new Map<string, Set<AbortController>>();
   /** Newest pending admission per job that wrote "running", with the status it replaced. */
   private pendingRuns = new Map<string, { token: AbortController; prior: ScheduledSubagent["lastStatus"] }>();
+  /** Spawned runs not yet finalized, per job id (interval runs can overlap). */
+  private inFlight = new Map<string, number>();
   private store: ScheduleStore | undefined;
   private pi: ExtensionAPI | undefined;
   private ctx: ExtensionContext | undefined;
@@ -95,7 +97,13 @@ export class SubagentScheduler {
     this.store = store;
 
     for (const job of store.list()) {
-      if (job.enabled) this.scheduleJob(job);
+      if (job.enabled) {
+        this.scheduleJob(job);
+      } else if (job.lastStatus === "running") {
+        // A disabled job still "running" was cut off by a previous process; no
+        // agent of this one can finalize it, so it must not hold its name forever.
+        store.update(job.id, { lastStatus: "error" });
+      }
     }
   }
 
@@ -110,6 +118,7 @@ export class SubagentScheduler {
     for (const admissions of this.admissions.values()) for (const admission of admissions) admission.abort();
     this.admissions.clear();
     this.pendingRuns.clear();
+    this.inFlight.clear();
     this.scheduled.clear();
     this.store = undefined;
     this.pi = undefined;
@@ -196,7 +205,7 @@ export class SubagentScheduler {
    * or a repeating job whose `until` deadline passed. Its name is reusable.
    */
   private isFinished(job: ScheduledSubagent): boolean {
-    if (job.enabled || job.lastStatus === "running") return false;
+    if (job.enabled || job.lastStatus === "running" || (this.inFlight.get(job.id) ?? 0) > 0) return false;
     if (job.scheduleType === "once") return job.lastRun !== undefined || job.lastStatus === "error";
     return this.pastDeadline(job);
   }
@@ -263,16 +272,21 @@ export class SubagentScheduler {
         this.jobs.set(job.id, cron);
       }
       // Disable at the deadline itself, not at the next (possibly days away) tick.
-      // Beyond the timer range the tick check still enforces it.
-      const untilMs = job.until === undefined ? undefined : new Date(job.until).getTime() - this.clock.now();
-      if (untilMs !== undefined && untilMs <= MAX_TIMER_MS && this.scheduled.has(job.id)) {
-        this.deadlines.set(job.id, this.clock.setTimeout(() => this.expireJob(job), untilMs));
-      }
+      if (job.until !== undefined && this.scheduled.has(job.id)) this.armDeadline(job, new Date(job.until).getTime());
     } catch (err) {
       // Nothing armed, so no token: a stale entry would admit a fire for a job with no timer.
       this.scheduled.delete(job.id);
       this.emit({ type: "error", jobId: job.id, error: err instanceof Error ? err.message : String(err) });
     }
+  }
+
+  /** Arm the deadline timer, re-arming in `MAX_TIMER_MS` steps when it is out of timer range. */
+  private armDeadline(job: ScheduledSubagent, untilMs: number): void {
+    const remaining = untilMs - this.clock.now();
+    this.deadlines.set(job.id, this.clock.setTimeout(() => {
+      if (this.clock.now() >= untilMs) this.expireJob(job);
+      else this.armDeadline(job, untilMs);
+    }, Math.min(remaining, MAX_TIMER_MS)));
   }
 
   private pastDeadline(job: ScheduledSubagent): boolean {
@@ -459,7 +473,13 @@ export class SubagentScheduler {
 
     this.emit({ type: "fired", jobId: id, agentId, name: job.name });
 
+    this.inFlight.set(id, (this.inFlight.get(id) ?? 0) + 1);
     const finalize = (status: "success" | "error") => {
+      if (this.store === store) {
+        const left = (this.inFlight.get(id) ?? 1) - 1;
+        if (left > 0) this.inFlight.set(id, left);
+        else this.inFlight.delete(id);
+      }
       const next = this.getNextRun(id);
       const current = store.get(id);
       store.update(id, {

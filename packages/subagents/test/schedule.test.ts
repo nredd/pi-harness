@@ -393,6 +393,71 @@ describe("SubagentScheduler — fire path", () => {
     expect(manager.spawn).toHaveBeenCalledTimes(fired);
   });
 
+  it("a deadline beyond the timer range fires on time, not at the next tick", () => {
+    // Yearly cron: the next tick is months away, so only the deadline timer can disable it.
+    const job = scheduler.addJob({
+      name: "far-exact", description: "far-exact", schedule: "0 0 0 1 1 * until +40d",
+      subagent_type: "general-purpose", prompt: "x",
+    });
+    vi.advanceTimersByTime(40 * 86_400_000 - 1_000);
+    expect(store.get(job.id)?.enabled).toBe(true);
+    vi.advanceTimersByTime(2_000);
+    expect(store.get(job.id)?.enabled).toBe(false);
+  });
+
+  it("a tick landing exactly on the deadline disables the job without firing", () => {
+    const job = scheduler.addJob({
+      name: "edge", description: "edge", schedule: "1m until +60s",
+      subagent_type: "general-purpose", prompt: "x",
+    });
+    vi.advanceTimersByTime(60_000);
+    expect(manager.spawn).not.toHaveBeenCalled();
+    expect(store.get(job.id)?.enabled).toBe(false);
+  });
+
+  it("a run finishing after a restart on the same store does not corrupt the count", async () => {
+    let resolve!: () => void;
+    manager.getRecord.mockImplementation(() => ({ status: "completed", promise: new Promise<string>(r => { resolve = () => r(""); }) }));
+    const input = { name: "restart", description: "restart", schedule: "1m", subagent_type: "general-purpose" as const, prompt: "x" };
+    const job = scheduler.addJob(input);
+    await vi.advanceTimersByTimeAsync(60_000);
+    scheduler.start(pi, ctx, manager, store);
+    resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    scheduler.updateJob(job.id, { enabled: false });
+    expect(store.get(job.id)?.lastStatus).toBe("success");
+  });
+
+  it("a disabled job left running by a previous process frees its name on restart", () => {
+    const old = scheduler.buildJob({ name: "cut", description: "cut", schedule: "+1h", subagent_type: "general-purpose", prompt: "x" });
+    store.add({ ...old, enabled: false, lastRun: new Date().toISOString(), lastStatus: "running" });
+    scheduler.start(pi, ctx, manager, store);
+    expect(store.get(old.id)?.lastStatus).toBe("error");
+    expect(() => scheduler.addJob({ name: "cut", description: "cut", schedule: "+1h", subagent_type: "general-purpose", prompt: "x" })).not.toThrow();
+  });
+
+  it("overlapping interval runs keep the name until the last one finishes", async () => {
+    const resolvers: Array<() => void> = [];
+    const records = new Map<string, { status: string; promise: Promise<string> }>();
+    manager.spawn.mockImplementation(() => {
+      const id = `agent-${records.size}`;
+      records.set(id, { status: "completed", promise: new Promise<string>(r => resolvers.push(() => r(""))) });
+      return id;
+    });
+    manager.getRecord.mockImplementation((id: string) => records.get(id));
+    const input = { name: "ovl", description: "ovl", schedule: "1m until +150s", subagent_type: "general-purpose" as const, prompt: "x" };
+    scheduler.addJob(input);
+    await vi.advanceTimersByTimeAsync(150_000);
+    expect(manager.spawn).toHaveBeenCalledTimes(2);
+    expect(store.list()[0].enabled).toBe(false);
+    resolvers[0]();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(() => scheduler.addJob(input)).toThrow(/already exists/);
+    resolvers[1]();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(() => scheduler.addJob(input)).not.toThrow();
+  });
+
   it("an expired deadline job found at start is disabled, never armed", () => {
     const job = scheduler.addJob({
       name: "old", description: "old", schedule: "10s until +5s",
