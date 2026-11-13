@@ -160,6 +160,13 @@ const PRODUCERS: Producer[] = [
 const ZERO_UNCOVERED_FILES = [
 	"extensions/computer-use.ts",
 	"scripts/build-native.mjs",
+	"scripts/check-commit-messages.mjs",
+	"scripts/check-docs-platform.mjs",
+	"scripts/check-docs.mjs",
+	"scripts/check-package-assets.mjs",
+	"scripts/check-sync-ledger.mjs",
+	"scripts/check-sync-reverts.mjs",
+	"scripts/check-upstream-sync.mjs",
 	"scripts/docs-generators/generate-source-references.mjs",
 	"scripts/docs-generators/generate-tool-reference.mjs",
 	"scripts/make-signing-cert.mjs",

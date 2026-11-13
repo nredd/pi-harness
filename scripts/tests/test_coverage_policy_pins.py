@@ -416,7 +416,8 @@ def test_unshipped_computer_checks_have_individual_verification_reasons() -> Non
     helpers = {helper.path: helper.reason for helper in cfg.verification_helpers}
     measured = {
         (Path(cfg.packages["computer-use-async"].root) / path).as_posix()
-        for path in inventory(ROOT, cfg.packages["computer-use-async"])
+        for package in ["computer-use-async", "computer-use-vitest"]
+        for path in inventory(ROOT, cfg.packages[package])
     }
     unclassified = [
         relative
@@ -433,7 +434,6 @@ def test_unshipped_computer_checks_have_individual_verification_reasons() -> Non
     [
         "packages/computer-use/scripts/pi-cubench-agent.mjs",
         "packages/computer-use/scripts/check-linux-live.mjs",
-        "packages/computer-use/scripts/check-package-assets.mjs",
     ],
 )
 def test_reviewed_javascript_harnesses_are_explicitly_classified(path: str) -> None:
@@ -449,6 +449,35 @@ def test_reviewed_javascript_harnesses_are_explicitly_classified(path: str) -> N
     cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
     helpers = {helper.path: helper.reason for helper in cfg.verification_helpers}
     assert helpers.get(path, "").strip(), path
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "check-commit-messages",
+        "check-docs-platform",
+        "check-docs",
+        "check-package-assets",
+        "check-sync-ledger",
+        "check-sync-reverts",
+        "check-upstream-sync",
+    ],
+)
+def test_retained_computer_use_gates_are_measured(name: str) -> None:
+    """Keep executable repository gates in both inventories, not helper exemptions.
+
+    Parameters:
+        name (str): Retained gate module measured under computer-use Vitest.
+    Returns:
+        None: Both inventories contain the gate and no helper exemption remains.
+    Raises:
+        AssertionError: A gate silently leaves the measured producer.
+    """
+    cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
+    source = f"scripts/{name}.mjs"
+    for package in ["computer-use", "computer-use-vitest"]:
+        assert source in inventory(ROOT, cfg.packages[package])
+    assert not any(helper.path == f"packages/computer-use/{source}" for helper in cfg.verification_helpers)
 
 
 def test_pytest_conftest_is_a_conventional_test_file_without_an_exclusion() -> None:
