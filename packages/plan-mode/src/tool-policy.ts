@@ -367,10 +367,87 @@ function explainUnsafeSegment(
   const unsafeArgument = args.find((argument) => !hasSafeArguments(command, [argument]));
   if (unsafeArgument !== undefined) return { token: unsafeArgument, reason: `argument not allowed for \`${first}\`` };
   if (!hasSafeArguments(command, args)) return { token: first, reason: `arguments not allowed for \`${first}\`` };
+  const reviewed = explainReviewedRejection(command, first, args, safeSubcommands, platform);
+  if (reviewed) return reviewed;
   const subcommand = SUBCOMMAND_COMMANDS.has(command) ? args.find((argument) => !argument.startsWith("-")) : undefined;
   return {
     token: subcommand === undefined ? first : `${first} ${subcommand}`,
     reason: "not on the read-only allowlist (opt in via `safeSubcommands`)",
+  };
+}
+
+/** Reason for a command already on the reviewed allowlist whose arguments failed its validator. */
+function validatorRejection(label: string, token: string): SyntaxRejection {
+  return { token, reason: `arguments rejected by the reviewed \`${label}\` validator` };
+}
+
+/**
+ * Explains a rejection by a per-command validator in {@link isSafeStructuredCommand} for a command
+ * or subcommand that is *already* allowlisted. Never hints at `safeSubcommands`: a configured prefix
+ * skips every argument check, so following that hint would weaken the policy.
+ */
+function explainReviewedRejection(
+  command: string,
+  first: string,
+  args: string[],
+  safeSubcommands: SafeSubcommands,
+  platform: NodeJS.Platform,
+): SyntaxRejection | undefined {
+  if (command === "hostname") return validatorRejection("hostname", args[0] ?? first);
+  if (command === "tasklist") {
+    return platform === "win32"
+      ? validatorRejection("tasklist", args[0] ?? first)
+      : { token: first, reason: "`tasklist` is only allowed on Windows" };
+  }
+  if (command === "sed") {
+    return validatorRejection("sed", args.find((argument) => !argument.startsWith("-")) ?? args[0] ?? first);
+  }
+  if (command === "git") return explainGitRejection(first, args, safeSubcommands);
+  if (command === "gh") {
+    const path = `${args[0]?.toLowerCase()} ${args[1]?.toLowerCase()}`;
+    if (!(path in GH_VALIDATORS) || !safeSubcommands.gh?.includes(path)) return undefined;
+    return validatorRejection(`gh ${path}`, `${first} ${path}`);
+  }
+  const subcommand = args.find((argument) => !argument.startsWith("-"))?.toLowerCase();
+  if (["node", "python", "python3", "tsc", "biome", "ruff", "ty"].includes(command)) {
+    return validatorRejection(command, args[0] ?? first);
+  }
+  if (command === "npm" && subcommand === "audit") return validatorRejection("npm audit", "fix");
+  if (command === "npm" && subcommand === "run") return validatorRejection("npm run", `${first} run`);
+  if (["cargo", "go"].includes(command) && ["test", "check"].includes(subcommand ?? "")) {
+    return validatorRejection(`${command} ${subcommand}`, `${first} ${subcommand}`);
+  }
+  return undefined;
+}
+
+function explainGitRejection(first: string, args: string[], safeSubcommands: SafeSubcommands) {
+  let index = 0;
+  while (index < args.length && (args[index] === "--no-pager" || args[index] === "-C")) {
+    index += args[index] === "-C" ? 2 : 1;
+  }
+  const subcommand = args[index]?.toLowerCase();
+  if (!subcommand) return undefined;
+  if (subcommand.startsWith("-")) return { token: subcommand, reason: "unsupported git option before the subcommand" };
+  const validator =
+    (BUILTIN_GIT_VALIDATORS as Record<string, ArgumentValidator>)[subcommand] ??
+    (safeSubcommands.git?.includes(subcommand as SafeGitSubcommand)
+      ? (CONFIGURABLE_GIT_VALIDATORS as Record<string, ArgumentValidator>)[subcommand]
+      : undefined);
+  if (!validator) return undefined;
+  const label = `git ${subcommand}`;
+  const subcommandArgs = args.slice(index + 1);
+  const unsafe = subcommandArgs.find(
+    (argument) => !hasSafeGitArguments(subcommand, [argument]) || !validator([argument]),
+  );
+  if (unsafe !== undefined) return validatorRejection(label, unsafe);
+  if (!(hasSafeGitArguments(subcommand, subcommandArgs) && validator(subcommandArgs))) {
+    return validatorRejection(label, label);
+  }
+  // Arguments are fine, so the global `-C <dir>` was rejected.
+  const dirIndex = args.indexOf("-C");
+  return {
+    token: args[dirIndex + 1] ?? first,
+    reason: "`git -C` directory outside the allowed roots (reviewed `git` validator)",
   };
 }
 

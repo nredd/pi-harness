@@ -244,10 +244,65 @@ function explainUnsafeSegment(segment, safeSubcommands, platform) {
   const unsafeArgument = args.find((argument) => !hasSafeArguments(command, [argument]));
   if (unsafeArgument !== void 0) return { token: unsafeArgument, reason: `argument not allowed for \`${first}\`` };
   if (!hasSafeArguments(command, args)) return { token: first, reason: `arguments not allowed for \`${first}\`` };
+  const reviewed = explainReviewedRejection(command, first, args, safeSubcommands, platform);
+  if (reviewed) return reviewed;
   const subcommand = SUBCOMMAND_COMMANDS.has(command) ? args.find((argument) => !argument.startsWith("-")) : void 0;
   return {
     token: subcommand === void 0 ? first : `${first} ${subcommand}`,
     reason: "not on the read-only allowlist (opt in via `safeSubcommands`)"
+  };
+}
+function validatorRejection(label, token) {
+  return { token, reason: `arguments rejected by the reviewed \`${label}\` validator` };
+}
+function explainReviewedRejection(command, first, args, safeSubcommands, platform) {
+  if (command === "hostname") return validatorRejection("hostname", args[0] ?? first);
+  if (command === "tasklist") {
+    return platform === "win32" ? validatorRejection("tasklist", args[0] ?? first) : { token: first, reason: "`tasklist` is only allowed on Windows" };
+  }
+  if (command === "sed") {
+    return validatorRejection("sed", args.find((argument) => !argument.startsWith("-")) ?? args[0] ?? first);
+  }
+  if (command === "git") return explainGitRejection(first, args, safeSubcommands);
+  if (command === "gh") {
+    const path = `${args[0]?.toLowerCase()} ${args[1]?.toLowerCase()}`;
+    if (!(path in GH_VALIDATORS) || !safeSubcommands.gh?.includes(path)) return void 0;
+    return validatorRejection(`gh ${path}`, `${first} ${path}`);
+  }
+  const subcommand = args.find((argument) => !argument.startsWith("-"))?.toLowerCase();
+  if (["node", "python", "python3", "tsc", "biome", "ruff", "ty"].includes(command)) {
+    return validatorRejection(command, args[0] ?? first);
+  }
+  if (command === "npm" && subcommand === "audit") return validatorRejection("npm audit", "fix");
+  if (command === "npm" && subcommand === "run") return validatorRejection("npm run", `${first} run`);
+  if (["cargo", "go"].includes(command) && ["test", "check"].includes(subcommand ?? "")) {
+    return validatorRejection(`${command} ${subcommand}`, `${first} ${subcommand}`);
+  }
+  return void 0;
+}
+function explainGitRejection(first, args, safeSubcommands) {
+  let index = 0;
+  while (index < args.length && (args[index] === "--no-pager" || args[index] === "-C")) {
+    index += args[index] === "-C" ? 2 : 1;
+  }
+  const subcommand = args[index]?.toLowerCase();
+  if (!subcommand) return void 0;
+  if (subcommand.startsWith("-")) return { token: subcommand, reason: "unsupported git option before the subcommand" };
+  const validator = BUILTIN_GIT_VALIDATORS[subcommand] ?? (safeSubcommands.git?.includes(subcommand) ? CONFIGURABLE_GIT_VALIDATORS[subcommand] : void 0);
+  if (!validator) return void 0;
+  const label = `git ${subcommand}`;
+  const subcommandArgs = args.slice(index + 1);
+  const unsafe = subcommandArgs.find(
+    (argument) => !hasSafeGitArguments(subcommand, [argument]) || !validator([argument])
+  );
+  if (unsafe !== void 0) return validatorRejection(label, unsafe);
+  if (!(hasSafeGitArguments(subcommand, subcommandArgs) && validator(subcommandArgs))) {
+    return validatorRejection(label, label);
+  }
+  const dirIndex = args.indexOf("-C");
+  return {
+    token: args[dirIndex + 1] ?? first,
+    reason: "`git -C` directory outside the allowed roots (reviewed `git` validator)"
   };
 }
 function wordAround(segment, index) {
@@ -2674,4 +2729,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-4A7QYHXM.ts.map
+//# sourceMappingURL=chunk-JPY2P7QH.ts.map
