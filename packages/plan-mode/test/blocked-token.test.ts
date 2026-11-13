@@ -5,7 +5,7 @@ import { blockedShellCallReason } from "../src/child-policy.js";
 import { explainBlockedCommand, findBlockedCommandSegment, isSafeCommand } from "../src/tool-policy.js";
 
 // Commands are policy inputs only; nothing in these tables is executed.
-const options = { workingDirectory: "/work/repo", homeDir: "/home/user" };
+const options = { workingDirectory: "/work/repo", homeDir: "/home/user", platform: "linux" as const };
 const safeSubcommands = { ssh: ["prod"] };
 
 const ACCEPTED = [
@@ -30,6 +30,11 @@ const EXTRA_DECISION_INPUTS = [
   "git remote add x y",
   "git log --output=f",
   "npm audit fix",
+  "npm run build",
+  "tsc --noEmit --incremental",
+  "node script.js",
+  "git status --help",
+  "git -C . -C /etc status",
   "git status",
   "git branch",
   "git -C /work/repo status",
@@ -70,6 +75,9 @@ const REJECTED: [string, string, RegExp][] = [
   ["git branch -D x", "-D", /reviewed `git branch` validator/],
   ["git -C /etc status", "/etc", /reviewed `git`/],
   ["sed s/a/b/ f", "s/a/b/", /reviewed `sed` validator/],
+  ["tsc --noEmit --incremental", "--incremental", /reviewed `tsc` validator/],
+  ["npm run build", "build", /reviewed `npm run` validator/],
+  ["git -C . -C /etc status", "/etc", /reviewed `git`/],
   ["hostname foo", "foo", /reviewed `hostname` validator/],
   ["tasklist", "tasklist", /only allowed on Windows/],
   ["frobnicate x", "frobnicate", /allowlist/],
@@ -126,6 +134,11 @@ test("an explanation never offers `safeSubcommands` for a command that is alread
     "git remote add x y",
     "git log --output=f",
     "npm audit fix",
+    "npm run build",
+    "tsc --noEmit --incremental",
+    "node script.js",
+    "git status --help",
+    "git -C . -C /etc status",
   ]) {
     const blocked = explainBlockedCommand(command, {}, { ...options, platform: "linux" });
     assert.ok(blocked, command);
@@ -134,14 +147,15 @@ test("an explanation never offers `safeSubcommands` for a command that is alread
 });
 
 // Segments whose command/subcommand is already reviewed: a `safeSubcommands` hint would be wrong.
-const REVIEWED = /^(git (status|log|diff|show|branch|remote|ls-files|grep)|sed|hostname|tasklist)\b/;
+const REVIEWED =
+  /^(git (?:-C \S+ |--no-pager )*(?:status|log|diff|show|branch|remote|ls-files|grep)|sed|hostname|tasklist)\b/;
 
 test("no rejected table input suggests an opt-in for an already-reviewed command", () => {
   for (const [command] of REJECTED) {
     const blocked = explainBlockedCommand(command, safeSubcommands, { ...options, platform: "linux" });
     assert.ok(blocked, command);
     if (/safeSubcommands/.test(blocked.reason)) {
-      assert.doesNotMatch(blocked.token, REVIEWED, `${command}: ${blocked.reason}`);
+      assert.doesNotMatch(blocked.segment, REVIEWED, `${command}: ${blocked.reason}`);
     }
   }
 });

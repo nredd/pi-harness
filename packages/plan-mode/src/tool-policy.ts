@@ -403,26 +403,29 @@ function explainReviewedRejection(
     return validatorRejection("sed", args.find((argument) => !argument.startsWith("-")) ?? args[0] ?? first);
   }
   if (command === "git") return explainGitRejection(first, args, safeSubcommands);
-  if (command === "gh") {
-    const path = `${args[0]?.toLowerCase()} ${args[1]?.toLowerCase()}`;
-    if (!(path in GH_VALIDATORS) || !safeSubcommands.gh?.includes(path)) return undefined;
-    return validatorRejection(`gh ${path}`, `${first} ${path}`);
+  if (["node", "python", "python3", "tsc", "biome", "ruff", "ty"].includes(command)) {
+    const forbidden = args.find((argument) => /^--(incremental|tsBuildInfoFile|generateTrace)(=|$)/.test(argument));
+    return validatorRejection(command, forbidden ?? args[0] ?? first);
   }
   const subcommand = args.find((argument) => !argument.startsWith("-"))?.toLowerCase();
-  if (["node", "python", "python3", "tsc", "biome", "ruff", "ty"].includes(command)) {
-    return validatorRejection(command, args[0] ?? first);
-  }
   if (command === "npm" && subcommand === "audit") return validatorRejection("npm audit", "fix");
-  if (command === "npm" && subcommand === "run") return validatorRejection("npm run", `${first} run`);
-  if (["cargo", "go"].includes(command) && ["test", "check"].includes(subcommand ?? "")) {
-    return validatorRejection(`${command} ${subcommand}`, `${first} ${subcommand}`);
+  if (command === "npm" && subcommand === "run") {
+    const runIndex = args.findIndex((argument) => argument.toLowerCase() === "run");
+    return validatorRejection("npm run", args[runIndex + 1] ?? "run");
   }
   return undefined;
 }
 
-function explainGitRejection(first: string, args: string[], safeSubcommands: SafeSubcommands) {
+/** Same as {@link explainReviewedRejection} for `git`, where the subcommand follows `--no-pager` / `-C <dir>`. */
+function explainGitRejection(
+  first: string,
+  args: string[],
+  safeSubcommands: SafeSubcommands,
+): SyntaxRejection | undefined {
   let index = 0;
+  let directory: string | undefined;
   while (index < args.length && (args[index] === "--no-pager" || args[index] === "-C")) {
+    if (args[index] === "-C") directory = args[index + 1];
     index += args[index] === "-C" ? 2 : 1;
   }
   const subcommand = args[index]?.toLowerCase();
@@ -444,9 +447,8 @@ function explainGitRejection(first: string, args: string[], safeSubcommands: Saf
     return validatorRejection(label, label);
   }
   // Arguments are fine, so the global `-C <dir>` was rejected.
-  const dirIndex = args.indexOf("-C");
   return {
-    token: args[dirIndex + 1] ?? first,
+    token: directory ?? first,
     reason: "`git -C` directory outside the allowed roots (reviewed `git` validator)",
   };
 }
