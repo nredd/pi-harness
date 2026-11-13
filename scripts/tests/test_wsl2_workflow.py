@@ -389,8 +389,10 @@ def test_wsl2_workflow_bootstraps_gh_and_verifies_overrides_before_npm_ci() -> N
     assert "env -u GH_TOKEN npm ci --ignore-scripts" in makefile
     assert "env -u GH_TOKEN uv sync --locked" in makefile
     assert "cd integration && uv sync --locked --python" in workflow
-    verify = workflow.index("python3 -m harness.release --verify-root-overrides --root .")
-    npm_ci = workflow.index("npm ci --ignore-scripts")
+    # Inspect the stack's guest commands, not an unrelated native Windows npm installation.
+    commands = "\n".join(step.get("run", "") for step in yaml.safe_load(workflow)["jobs"]["stack"]["steps"])
+    verify = commands.index("python3 -m harness.release --verify-root-overrides --root .")
+    npm_ci = commands.index("npm ci --ignore-scripts")
     assert verify < npm_ci
     assert "echo $GH_TOKEN" not in workflow
 

@@ -74,7 +74,13 @@ export function runCoverage(args, spawn = spawnSync) {
 	const manifest = path.join(crateRoot, "Cargo.toml");
 	// Bind the raw profile to every shipped source and locked build input, not only mapped files.
 	const sourceHashes = Object.fromEntries(
-		["Cargo.toml", "Cargo.lock", ...readdirSync(path.join(crateRoot, "src")).map((name) => `src/${name}`)]
+		[
+			"Cargo.toml",
+			"Cargo.lock",
+			...["src", "tests"].flatMap((directory) =>
+				readdirSync(path.join(crateRoot, directory)).map((name) => `${directory}/${name}`),
+			),
+		]
 			.sort()
 			.map((name) => [
 				name,

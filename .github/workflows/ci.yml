@@ -365,10 +365,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: ./.github/actions/setup-ci-tools
         with:
-          node-version-file: .node-version
-          cache: npm
+          guest: windows
+      - name: Verify root core overrides before installing dependencies
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $env:PYTHONPATH = 'integration'
+          uv run --no-project --python (Get-Content .python-version) python -m harness.release --verify-root-overrides --root .
       - name: Install pinned native compiler and LLVM tools
         run: |
           New-Item -ItemType Directory -Force packages/computer-use/coverage/native-windows | Out-Null
@@ -391,6 +396,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:RUSTDOCFLAGS = '-D warnings'
           cargo doc --locked --no-deps --manifest-path $manifest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --doc --manifest-path $manifest
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Native Windows tests and LLVM reports (no desktop interaction)
         run: node packages/computer-use/scripts/rust-coverage.mjs --crate windows --output packages/computer-use/coverage/native-windows
