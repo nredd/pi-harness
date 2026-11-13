@@ -1491,7 +1491,8 @@ def fetch_release(
         RuntimeError: provenance or npm installation failed, or a staged package lacks its fork marker.
         FileNotFoundError: npm is unavailable.
     """
-    urls = list(release_package_urls(tag).values())
+    package_urls = release_package_urls(tag)
+    urls = list(package_urls.values())
     if prefix.exists() and any(prefix.iterdir()):
         raise ValueError(f"Release prefix must be empty: '{prefix}'")
     checksums = dict(release_checksums(tag) if checksums is None else checksums)
@@ -1517,7 +1518,7 @@ def fetch_release(
         "PI_SKIP_VERSION_CHECK": "1",
     }
     assets = {}
-    for package, url in release_package_urls(tag).items():
+    for package, url in package_urls.items():
         if url in urls:
             asset = prefix / url.rsplit("/", 1)[1]
             assets[package] = download_verified_asset(url, tag, checksums, asset, provenance)

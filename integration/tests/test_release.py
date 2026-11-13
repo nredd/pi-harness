@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import errno
+import gzip
 import hashlib
 import io
 import json
@@ -466,7 +467,11 @@ def package_tarball(package: str, marker: str | None) -> bytes:
         bytes: gzip tarball with a `package/` root.
     """
     output = io.BytesIO()
-    with tarfile.open(fileobj=output, mode="w:gz") as archive:
+    # mtime=0 keeps the bytes (and so the recorded sha256) deterministic across calls.
+    with (
+        gzip.GzipFile(fileobj=output, mode="wb", mtime=0) as gz,
+        tarfile.open(fileobj=gz, mode="w") as archive,
+    ):
         files = {"package/package.json": json.dumps({"name": f"@earendil-works/{package}"}).encode()}
         if marker is not None and package in STAGED_PACKAGES:
             files[f"package/{STAGED_PACKAGES[package][0]}"] = marker.encode()
@@ -535,7 +540,13 @@ def run_fetch(
         """
         assert kwargs["stderr"] == subprocess.STDOUT
         assert argv[-1] == str(prefix / "earendil-works-pi-coding-agent-1.3.0.tgz")
+        assert argv[1:6] == ["install", "--global", "--prefix", str(prefix), "--min-release-age=0"]
+        assert {"--build-from-source", "--ignore-scripts", "--loglevel=silly"} <= set(argv)
         assert kwargs["env"]["HOME"] == str(prefix / "fetch-home")
+        assert kwargs["env"]["npm_config_userconfig"] == str(prefix / "npmrc-user")
+        assert kwargs["env"]["npm_config_globalconfig"] == str(prefix / "npmrc-global")
+        assert (prefix / "npmrc-user").read_text() == ""
+        assert (prefix / "npmrc-global").read_text() == ""
         if registry_copy:
             for package in STAGED_PACKAGES:
                 (scope / package).mkdir(parents=True)
@@ -545,12 +556,18 @@ def run_fetch(
     recorded = checksums or {url: hashlib.sha256(body).hexdigest() for url, body in served.items()}
     npm_bin = tmp_path / "npm"
     npm_bin.touch()
+    provenance: list[tuple[str, str]] = []
     monkeypatch.setattr(release, "urlopen", download)
     monkeypatch.setattr(release, "release_checksums", lambda *_: recorded)
-    monkeypatch.setattr(release, "verify_provenance", lambda *_: None)
+    monkeypatch.setattr(
+        release, "verify_provenance", lambda path, release_tag: provenance.append((path.name, release_tag))
+    )
     monkeypatch.setattr(release, "NPM_BIN", str(npm_bin))
     monkeypatch.setattr(subprocess, "check_output", npm)
     fetch_release(tag, prefix)
+    # Legacy tags carry no attestations; their bytes are bound by the frozen checksum map.
+    expected = [] if tag in release.LEGACY_RELEASE_TAGS else [(name, tag) for name in names]
+    assert sorted(provenance) == sorted(expected)
     return prefix, scope, names
 
 
@@ -1219,12 +1236,11 @@ def test_fetch_release_binds_bytes_to_explicit_checksums(
     assert npm_calls == []
 
 
-def test_release_tarballs_names_installed_assets_first() -> None:
+def test_release_tarballs_names_installed_asset_first() -> None:
     """The first name is the coding-agent tarball npm installs; the rest are staged over it."""
-    assert release_tarballs("v1.3.0-nredd.8")[:2] == [
-        "earendil-works-pi-coding-agent-1.3.0.tgz",
-        "earendil-works-pi-tui-1.3.0.tgz",
-    ]
+    names = release_tarballs("v1.3.0-nredd.8")
+    assert names[0] == "earendil-works-pi-coding-agent-1.3.0.tgz"
+    assert {f"earendil-works-{p}-1.3.0.tgz" for p in STAGED_PACKAGES} == set(names[1:])
     with pytest.raises(ValueError, match="Not a core fork release tag"):
         release_tarballs("main")
 
@@ -2518,3 +2534,8 @@ def test_module_entrypoint_rejects_a_fetch_without_prefix(
         runpy.run_module("harness.release", run_name="__main__")
     assert caught.value.code == 2
     assert "`--prefix` is required with `--tag` or `--gitlink`" in capsys.readouterr().err
+
+
+def test_staged_packages_are_release_packages() -> None:
+    """Every staged package is a verified release asset, so the two tables cannot drift."""
+    assert set(STAGED_PACKAGES) <= set(RELEASE_PACKAGES)
