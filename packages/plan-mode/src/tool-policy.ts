@@ -252,33 +252,132 @@ function findBlockedRemoteCommand(command: string, safeSubcommands: SafeSubcomma
 export function findBlockedCommandSegment(
   command: string,
   safeSubcommands: SafeSubcommands = {},
+  options: CommandPolicyOptions = {},
+): string | undefined {
+  return explainBlockedCommand(command, safeSubcommands, options)?.segment;
+}
+
+/**
+ * Like {@link findBlockedCommandSegment}, but also names the token that tripped the policy and why,
+ * so the model can adjust. Same decisions, same order; `undefined` means the command is acceptable.
+ */
+export function explainBlockedCommand(
+  command: string,
+  safeSubcommands: SafeSubcommands = {},
   {
     workingDirectory,
     platform = process.platform,
     trustedDirectories = [],
     homeDir = homedir(),
   }: CommandPolicyOptions = {},
-): string | undefined {
-  const segments = splitShellSegments(command);
-  if (!segments || segments.length === 0) return command.trim() || "(empty command)";
+): BlockedCommand | undefined {
+  const scan = scanShellSegments(command);
+  if ("rejection" in scan) return { segment: command.trim() || "(empty command)", ...scan.rejection };
+  const { segments } = scan;
   const roots = allowedRoots(workingDirectory, trustedDirectories, homeDir);
   let base = workingDirectory;
   for (const [index, segment] of segments.entries()) {
-    if (segment.separator === "|" && isInterpreterSegment(segment.text, INTERPRETERS)) return segment.text;
+    if (segment.separator === "|" && isInterpreterSegment(segment.text, INTERPRETERS)) {
+      const token = shellWords(segment.text)?.[0] ?? segment.text;
+      return { segment: segment.text, token, reason: "interpreter in a pipeline" };
+    }
     const tokens = shellWords(segment.text);
     if (tokens?.[0] === "cd" && matchConfiguredPrefix(segment.text, safeSubcommands) === undefined) {
       const target =
         tokens.length === 2 && !hasShellExpansion(segment.text)
           ? resolveDirectory(tokens[1], base, roots, homeDir)
           : undefined;
-      if (target === undefined || segments[index + 1]?.separator === "|") return segment.text;
+      if (target === undefined || segments[index + 1]?.separator === "|") {
+        const reason = "cd needs one plain directory under the working or trusted directories, not piped";
+        return { segment: segment.text, token: tokens.length === 2 ? tokens[1] : "cd", reason };
+      }
       base = target;
       continue;
     }
     const paths: PathPolicy = { base, roots, homeDir };
-    if (!isSafeSegment(segment.text, safeSubcommands, paths, platform)) return segment.text;
+    if (!isSafeSegment(segment.text, safeSubcommands, paths, platform)) {
+      return { segment: segment.text, ...explainUnsafeSegment(segment.text, safeSubcommands, platform) };
+    }
   }
   return undefined;
+}
+
+/** Commands whose policy turns on a subcommand, so the subcommand is part of the offending token. */
+const SUBCOMMAND_COMMANDS = new Set([
+  "git",
+  "gh",
+  "npm",
+  "cargo",
+  "go",
+  "node",
+  "python",
+  "python3",
+  "tsc",
+  "biome",
+  "ruff",
+  "ty",
+]);
+
+/**
+ * Names the token that made {@link isSafeSegment} reject `segment`. Mirrors that function's order
+ * and is only called after it returned false, so it always yields something to point at.
+ */
+function explainUnsafeSegment(segment: string, safeSubcommands: SafeSubcommands, platform: NodeJS.Platform) {
+  const prefix = matchConfiguredPrefix(segment, safeSubcommands);
+  const tokens = shellWords(segment);
+  const first = tokens?.[0];
+  if (!tokens || !first) return { token: segment, reason: "unparseable segment" };
+  const command = first.toLowerCase();
+  const args = tokens.slice(1);
+  const expansion = findShellExpansion(segment);
+  const expansionBlock = (): SyntaxRejection | undefined =>
+    expansion === undefined ? undefined : { token: wordAround(segment, expansion), reason: "shell expansion or glob" };
+  if (command === "ssh") {
+    if (prefix === undefined) return { token: first, reason: "needs a configured `ssh <host>` prefix" };
+    if (expansionBlock()) return expansionBlock() as SyntaxRejection;
+    const words = shellWords(segment.trimStart().slice(prefix.length));
+    if (!words || words.length === 0) return { token: first, reason: "ssh with no remote command" };
+    if (words[0]?.startsWith("-")) return { token: words[0], reason: "ssh option before the remote command" };
+    const remote = explainBlockedCommand(words.join(" "), safeSubcommands, { platform });
+    return remote
+      ? { token: remote.token, reason: `remote command: ${remote.reason}` }
+      : { token: first, reason: "ssh segment rejected" };
+  }
+  if (command === "curl" || (command === "gh" && args[0]?.toLowerCase() === "api")) {
+    return (
+      expansionBlock() ?? {
+        token: command === "curl" ? first : `${first} api`,
+        reason: "arguments write files, send a body, or are not GET-only",
+      }
+    );
+  }
+  const blocked = expansionBlock();
+  if (blocked) return blocked;
+  const assignment = /(^|\s)[A-Za-z_][A-Za-z0-9_]*=/.exec(segment);
+  if (assignment) {
+    return {
+      token: wordAround(segment, assignment.index + assignment[0].length - 1),
+      reason: "environment assignment",
+    };
+  }
+  if (MUTATING_COMMANDS.has(command)) return { token: first, reason: "mutating command" };
+  const unsafeArgument = args.find((argument) => !hasSafeArguments(command, [argument]));
+  if (unsafeArgument !== undefined) return { token: unsafeArgument, reason: `argument not allowed for \`${first}\`` };
+  if (!hasSafeArguments(command, args)) return { token: first, reason: `arguments not allowed for \`${first}\`` };
+  const subcommand = SUBCOMMAND_COMMANDS.has(command) ? args.find((argument) => !argument.startsWith("-")) : undefined;
+  return {
+    token: subcommand === undefined ? first : `${first} ${subcommand}`,
+    reason: "not on the read-only allowlist",
+  };
+}
+
+/** The whitespace-delimited chunk of `segment` that contains `index`. */
+function wordAround(segment: string, index: number) {
+  let from = index;
+  while (from > 0 && !/\s/u.test(segment[from - 1] ?? "")) from -= 1;
+  let to = index;
+  while (to < segment.length && !/\s/u.test(segment[to] ?? "")) to += 1;
+  return segment.slice(from, to);
 }
 
 export function isSafeCommand(
@@ -546,9 +645,30 @@ function powerShellWords(segment: string): string[] {
   return words;
 }
 
-function splitShellSegments(command: string): ShellSegment[] | undefined {
+/** Why a command was rejected: the offending token and a short reason. */
+export interface BlockedCommand {
+  /** The segment (or whole command, for syntax rejected before splitting) that failed. */
+  segment: string;
+  /** The exact token that tripped the policy, e.g. `>`, `$(`, `rm`, `-delete`. */
+  token: string;
+  /** Short reason the token is rejected. */
+  reason: string;
+}
+
+interface SyntaxRejection {
+  token: string;
+  reason: string;
+}
+
+const REASON_REDIRECTION = "redirection";
+const REASON_SUBSTITUTION = "command or process substitution";
+const REASON_EMPTY_SEGMENT = "operator with no command";
+
+function scanShellSegments(command: string): { segments: ShellSegment[] } | { rejection: SyntaxRejection } {
   const trimmed = command.trim();
-  if (!trimmed || /[\n\r`]/.test(trimmed)) return undefined;
+  if (!trimmed) return { rejection: { token: "(empty command)", reason: "empty command" } };
+  if (trimmed.includes("`")) return { rejection: { token: "`", reason: REASON_SUBSTITUTION } };
+  if (/[\n\r]/.test(trimmed)) return { rejection: { token: "\\n", reason: "newline (multi-line command)" } };
 
   const segments: ShellSegment[] = [];
   let separator: ShellSeparator = "start";
@@ -567,33 +687,48 @@ function splitShellSegments(command: string): ShellSegment[] | undefined {
     }
     if (quote) {
       if (character === quote) quote = undefined;
-      else if (quote === '"' && character === "$" && trimmed[index + 1] === "(") return undefined;
+      else if (quote === '"' && character === "$" && trimmed[index + 1] === "(") {
+        return { rejection: { token: "$(", reason: REASON_SUBSTITUTION } };
+      }
       continue;
     }
     if (character === "'" || character === '"') {
       quote = character;
       continue;
     }
-    if (character === ">" || character === "<" || character === "(" || character === ")") {
-      return undefined;
-    }
     const next = trimmed[index + 1];
-    if (character === "&" && next !== "&") return undefined;
+    if (character === ">" || character === "<") {
+      if (next === "(") return { rejection: { token: `${character}(`, reason: REASON_SUBSTITUTION } };
+      const token = next === character ? `${character}${character}` : character;
+      return { rejection: { token, reason: REASON_REDIRECTION } };
+    }
+    if (character === "(" || character === ")") {
+      const substitution = character === "(" && trimmed[index - 1] === "$";
+      return {
+        rejection: substitution
+          ? { token: "$(", reason: REASON_SUBSTITUTION }
+          : { token: character, reason: "subshell or grouping" },
+      };
+    }
+    if (character === "&" && next !== "&") return { rejection: { token: "&", reason: "background execution" } };
     const separatorLength =
       character === ";" || character === "|" ? (next === character ? 2 : 1) : character === "&" && next === "&" ? 2 : 0;
     if (separatorLength === 0) continue;
     const segment = trimmed.slice(start, index).trim();
-    if (!segment) return undefined;
+    if (!segment) {
+      return { rejection: { token: trimmed.slice(index, index + separatorLength), reason: REASON_EMPTY_SEGMENT } };
+    }
     segments.push({ text: segment, separator });
     separator = trimmed.slice(index, index + separatorLength) as ShellSeparator;
     index += separatorLength - 1;
     start = index + 1;
   }
-  if (quote || escaped) return undefined;
+  if (quote) return { rejection: { token: quote, reason: "unbalanced quote" } };
+  if (escaped) return { rejection: { token: "\\", reason: "trailing escape" } };
   const finalSegment = trimmed.slice(start).trim();
-  if (!finalSegment) return undefined;
+  if (!finalSegment) return { rejection: { token: separator, reason: REASON_EMPTY_SEGMENT } };
   segments.push({ text: finalSegment, separator });
-  return segments;
+  return { segments };
 }
 
 function isSafeSegment(
@@ -741,10 +876,12 @@ function isSafeGhApiArguments(args: string[]) {
   return true;
 }
 
-function hasShellExpansion(segment: string) {
+/** Index of the first unquoted (or double-quoted `$`) expansion character, if any. */
+function findShellExpansion(segment: string): number | undefined {
   let quote: "'" | '"' | undefined;
   let escaped = false;
-  for (const character of segment) {
+  for (let index = 0; index < segment.length; index += 1) {
+    const character = segment[index];
     if (escaped) {
       escaped = false;
       continue;
@@ -755,16 +892,20 @@ function hasShellExpansion(segment: string) {
     }
     if (quote) {
       if (character === quote) quote = undefined;
-      else if (character === "$" && quote === '"') return true;
+      else if (character === "$" && quote === '"') return index;
       continue;
     }
     if (character === "'" || character === '"') {
       quote = character;
       continue;
     }
-    if (["$", "*", "?", "[", "{"].includes(character)) return true;
+    if (["$", "*", "?", "[", "{"].includes(character)) return index;
   }
-  return false;
+  return undefined;
+}
+
+function hasShellExpansion(segment: string) {
+  return findShellExpansion(segment) !== undefined;
 }
 
 function shellWords(segment: string): string[] | undefined {

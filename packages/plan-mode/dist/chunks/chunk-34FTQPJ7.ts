@@ -158,29 +158,105 @@ function findBlockedSshExecCall(input, safeSubcommands = {}, platform = process.
 function findBlockedRemoteCommand(command, safeSubcommands, platform) {
   return findBlockedCommandSegment(command, safeSubcommands, { platform });
 }
-function findBlockedCommandSegment(command, safeSubcommands = {}, {
+function findBlockedCommandSegment(command, safeSubcommands = {}, options = {}) {
+  return explainBlockedCommand(command, safeSubcommands, options)?.segment;
+}
+function explainBlockedCommand(command, safeSubcommands = {}, {
   workingDirectory,
   platform = process.platform,
   trustedDirectories = [],
   homeDir = homedir()
 } = {}) {
-  const segments = splitShellSegments(command);
-  if (!segments || segments.length === 0) return command.trim() || "(empty command)";
+  const scan = scanShellSegments(command);
+  if ("rejection" in scan) return { segment: command.trim() || "(empty command)", ...scan.rejection };
+  const { segments } = scan;
   const roots = allowedRoots(workingDirectory, trustedDirectories, homeDir);
   let base = workingDirectory;
   for (const [index, segment] of segments.entries()) {
-    if (segment.separator === "|" && isInterpreterSegment(segment.text, INTERPRETERS)) return segment.text;
+    if (segment.separator === "|" && isInterpreterSegment(segment.text, INTERPRETERS)) {
+      const token = shellWords(segment.text)?.[0] ?? segment.text;
+      return { segment: segment.text, token, reason: "interpreter in a pipeline" };
+    }
     const tokens = shellWords(segment.text);
     if (tokens?.[0] === "cd" && matchConfiguredPrefix(segment.text, safeSubcommands) === void 0) {
       const target = tokens.length === 2 && !hasShellExpansion(segment.text) ? resolveDirectory(tokens[1], base, roots, homeDir) : void 0;
-      if (target === void 0 || segments[index + 1]?.separator === "|") return segment.text;
+      if (target === void 0 || segments[index + 1]?.separator === "|") {
+        const reason = "cd needs one plain directory under the working or trusted directories, not piped";
+        return { segment: segment.text, token: tokens.length === 2 ? tokens[1] : "cd", reason };
+      }
       base = target;
       continue;
     }
     const paths = { base, roots, homeDir };
-    if (!isSafeSegment(segment.text, safeSubcommands, paths, platform)) return segment.text;
+    if (!isSafeSegment(segment.text, safeSubcommands, paths, platform)) {
+      return { segment: segment.text, ...explainUnsafeSegment(segment.text, safeSubcommands, platform) };
+    }
   }
   return void 0;
+}
+var SUBCOMMAND_COMMANDS = /* @__PURE__ */ new Set([
+  "git",
+  "gh",
+  "npm",
+  "cargo",
+  "go",
+  "node",
+  "python",
+  "python3",
+  "tsc",
+  "biome",
+  "ruff",
+  "ty"
+]);
+function explainUnsafeSegment(segment, safeSubcommands, platform) {
+  const prefix = matchConfiguredPrefix(segment, safeSubcommands);
+  const tokens = shellWords(segment);
+  const first = tokens?.[0];
+  if (!tokens || !first) return { token: segment, reason: "unparseable segment" };
+  const command = first.toLowerCase();
+  const args = tokens.slice(1);
+  const expansion = findShellExpansion(segment);
+  const expansionBlock = () => expansion === void 0 ? void 0 : { token: wordAround(segment, expansion), reason: "shell expansion or glob" };
+  if (command === "ssh") {
+    if (prefix === void 0) return { token: first, reason: "needs a configured `ssh <host>` prefix" };
+    if (expansionBlock()) return expansionBlock();
+    const words = shellWords(segment.trimStart().slice(prefix.length));
+    if (!words || words.length === 0) return { token: first, reason: "ssh with no remote command" };
+    if (words[0]?.startsWith("-")) return { token: words[0], reason: "ssh option before the remote command" };
+    const remote = explainBlockedCommand(words.join(" "), safeSubcommands, { platform });
+    return remote ? { token: remote.token, reason: `remote command: ${remote.reason}` } : { token: first, reason: "ssh segment rejected" };
+  }
+  if (command === "curl" || command === "gh" && args[0]?.toLowerCase() === "api") {
+    return expansionBlock() ?? {
+      token: command === "curl" ? first : `${first} api`,
+      reason: "arguments write files, send a body, or are not GET-only"
+    };
+  }
+  const blocked = expansionBlock();
+  if (blocked) return blocked;
+  const assignment = /(^|\s)[A-Za-z_][A-Za-z0-9_]*=/.exec(segment);
+  if (assignment) {
+    return {
+      token: wordAround(segment, assignment.index + assignment[0].length - 1),
+      reason: "environment assignment"
+    };
+  }
+  if (MUTATING_COMMANDS.has(command)) return { token: first, reason: "mutating command" };
+  const unsafeArgument = args.find((argument) => !hasSafeArguments(command, [argument]));
+  if (unsafeArgument !== void 0) return { token: unsafeArgument, reason: `argument not allowed for \`${first}\`` };
+  if (!hasSafeArguments(command, args)) return { token: first, reason: `arguments not allowed for \`${first}\`` };
+  const subcommand = SUBCOMMAND_COMMANDS.has(command) ? args.find((argument) => !argument.startsWith("-")) : void 0;
+  return {
+    token: subcommand === void 0 ? first : `${first} ${subcommand}`,
+    reason: "not on the read-only allowlist"
+  };
+}
+function wordAround(segment, index) {
+  let from = index;
+  while (from > 0 && !/\s/u.test(segment[from - 1] ?? "")) from -= 1;
+  let to = index;
+  while (to < segment.length && !/\s/u.test(segment[to] ?? "")) to += 1;
+  return segment.slice(from, to);
 }
 function findBlockedPowerShellCommandSegment(command, safeSubcommands = {}, { workingDirectory, trustedDirectories = [], homeDir = homedir() } = {}) {
   const segments = splitPowerShellSegments(command);
@@ -377,9 +453,14 @@ function powerShellWords(segment) {
   words.push(word);
   return words;
 }
-function splitShellSegments(command) {
+var REASON_REDIRECTION = "redirection";
+var REASON_SUBSTITUTION = "command or process substitution";
+var REASON_EMPTY_SEGMENT = "operator with no command";
+function scanShellSegments(command) {
   const trimmed = command.trim();
-  if (!trimmed || /[\n\r`]/.test(trimmed)) return void 0;
+  if (!trimmed) return { rejection: { token: "(empty command)", reason: "empty command" } };
+  if (trimmed.includes("`")) return { rejection: { token: "`", reason: REASON_SUBSTITUTION } };
+  if (/[\n\r]/.test(trimmed)) return { rejection: { token: "\\n", reason: "newline (multi-line command)" } };
   const segments = [];
   let separator = "start";
   let quote;
@@ -397,32 +478,45 @@ function splitShellSegments(command) {
     }
     if (quote) {
       if (character === quote) quote = void 0;
-      else if (quote === '"' && character === "$" && trimmed[index + 1] === "(") return void 0;
+      else if (quote === '"' && character === "$" && trimmed[index + 1] === "(") {
+        return { rejection: { token: "$(", reason: REASON_SUBSTITUTION } };
+      }
       continue;
     }
     if (character === "'" || character === '"') {
       quote = character;
       continue;
     }
-    if (character === ">" || character === "<" || character === "(" || character === ")") {
-      return void 0;
-    }
     const next = trimmed[index + 1];
-    if (character === "&" && next !== "&") return void 0;
+    if (character === ">" || character === "<") {
+      if (next === "(") return { rejection: { token: `${character}(`, reason: REASON_SUBSTITUTION } };
+      const token = next === character ? `${character}${character}` : character;
+      return { rejection: { token, reason: REASON_REDIRECTION } };
+    }
+    if (character === "(" || character === ")") {
+      const substitution = character === "(" && trimmed[index - 1] === "$";
+      return {
+        rejection: substitution ? { token: "$(", reason: REASON_SUBSTITUTION } : { token: character, reason: "subshell or grouping" }
+      };
+    }
+    if (character === "&" && next !== "&") return { rejection: { token: "&", reason: "background execution" } };
     const separatorLength = character === ";" || character === "|" ? next === character ? 2 : 1 : character === "&" && next === "&" ? 2 : 0;
     if (separatorLength === 0) continue;
     const segment = trimmed.slice(start, index).trim();
-    if (!segment) return void 0;
+    if (!segment) {
+      return { rejection: { token: trimmed.slice(index, index + separatorLength), reason: REASON_EMPTY_SEGMENT } };
+    }
     segments.push({ text: segment, separator });
     separator = trimmed.slice(index, index + separatorLength);
     index += separatorLength - 1;
     start = index + 1;
   }
-  if (quote || escaped) return void 0;
+  if (quote) return { rejection: { token: quote, reason: "unbalanced quote" } };
+  if (escaped) return { rejection: { token: "\\", reason: "trailing escape" } };
   const finalSegment = trimmed.slice(start).trim();
-  if (!finalSegment) return void 0;
+  if (!finalSegment) return { rejection: { token: separator, reason: REASON_EMPTY_SEGMENT } };
   segments.push({ text: finalSegment, separator });
-  return segments;
+  return { segments };
 }
 function isSafeSegment(segment, safeSubcommands, paths, platform) {
   const prefix = matchConfiguredPrefix(segment, safeSubcommands);
@@ -543,10 +637,11 @@ function isSafeGhApiArguments(args) {
   }
   return true;
 }
-function hasShellExpansion(segment) {
+function findShellExpansion(segment) {
   let quote;
   let escaped = false;
-  for (const character of segment) {
+  for (let index = 0; index < segment.length; index += 1) {
+    const character = segment[index];
     if (escaped) {
       escaped = false;
       continue;
@@ -557,16 +652,19 @@ function hasShellExpansion(segment) {
     }
     if (quote) {
       if (character === quote) quote = void 0;
-      else if (character === "$" && quote === '"') return true;
+      else if (character === "$" && quote === '"') return index;
       continue;
     }
     if (character === "'" || character === '"') {
       quote = character;
       continue;
     }
-    if (["$", "*", "?", "[", "{"].includes(character)) return true;
+    if (["$", "*", "?", "[", "{"].includes(character)) return index;
   }
-  return false;
+  return void 0;
+}
+function hasShellExpansion(segment) {
+  return findShellExpansion(segment) !== void 0;
 }
 function shellWords(segment) {
   const words = [];
@@ -2511,7 +2609,7 @@ export {
   canSelectToolInPlanMode,
   readCommand,
   findBlockedSshExecCall,
-  findBlockedCommandSegment,
+  explainBlockedCommand,
   findBlockedPowerShellCommandSegment,
   PLAN_MODE_COMPLETE_TOOL_NAME,
   PLAN_MODE_COMPLETE_PARAMS,
@@ -2577,4 +2675,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-A6PCYLX7.ts.map
+//# sourceMappingURL=chunk-34FTQPJ7.ts.map
