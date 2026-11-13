@@ -1,5 +1,6 @@
 /** Fleet lifecycle and in-flight activity through InteractiveMode and its actual terminal renderer. */
 import { join } from "node:path";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { getKeybindings } from "@earendil-works/pi-tui";
 import { afterEach, expect, it } from "vitest";
@@ -317,15 +318,34 @@ it("silent stream repaints at the stall threshold without input", async () => {
   expect(row()).toContain("stalled? · 2m00s");
 });
 
-it("virtual child row repaints physical model after first response", async () => {
+interface ThinkingCase {
+  name: string;
+  /** Levels the virtual model offers; the session clamps the requested level to these. */
+  virtualLevels: readonly ModelThinkingLevel[];
+  /** Whether the physical model supports reasoning. The row reports the session level, so this must not change it. */
+  reasoning: boolean;
+  /** Level the Agent call asks for. */
+  asked: ModelThinkingLevel;
+  /** Exact `think:` tag, from the config above: the asked level if offered, else the highest offered level at or below it. */
+  tag: string;
+}
+
+/** Row `think:` tag at the routing point, then once the physical model has answered. */
+async function thinkTags(c: ThinkingCase): Promise<{ routing: string; answered: string }> {
   fixture = new ScenarioSession();
   const hold = fixture.heldTool();
-  const physical = fixture.physical("fauxphys", "physical", [calls({ name: "hold", args: {} }), answer("CHILD DONE")]);
+  const physical = fixture.physical("fauxphys", "physical", [calls({ name: "hold", args: {} }), answer("CHILD DONE")], c.reasoning);
   const stream = fixture.holdStream(physical);
   const h = await fixture.start({ terminal: true });
   const model = physical.getModel();
-  h.session.modelRuntime.registerVirtualModel({ provider: "vroute", id: "default", name: "vroute default", route: async () => ({ model }) });
-  h.setResponses([calls(spawn("probe child", { model: "vroute/default" })), answer("SPAWNED")]);
+  h.session.modelRuntime.registerVirtualModel({
+    provider: "vroute",
+    id: "default",
+    name: "vroute default",
+    thinkingLevels: c.virtualLevels,
+    route: async () => ({ model, thinkingLevel: c.asked }),
+  });
+  h.setResponses([calls(spawn("probe child", { model: "vroute/default", thinking: c.asked })), answer("SPAWNED")]);
   await h.session.prompt("go");
   await stream.entered;
   const host = fixture.host;
@@ -335,11 +355,22 @@ it("virtual child row repaints physical model after first response", async () =>
   host.input(TOGGLE);
   await host.settle();
   const row = () => host.viewport().find(line => /^\s+[●○] Agent\s+probe child/.test(line)) ?? "";
-  expect(row()).toMatch(/vroute default \(routing\) · think:/);
+  const routing = row();
   stream.release();
   await hold.entered;
   fixture.clock.advance(200);
   await host.settle();
-  expect(row()).toMatch(/physical · think:/);
-  expect(row()).not.toContain("(routing)");
+  return { routing, answered: row() };
+}
+
+it.each<ThinkingCase>([
+  { name: "offered level is kept without a note", virtualLevels: ["off", "low", "high"], reasoning: true, asked: "high", tag: "think:high" },
+  { name: "physical reasoning flag does not change the level", virtualLevels: ["off", "low", "high"], reasoning: false, asked: "high", tag: "think:high" },
+  { name: "unoffered level clamps down with the asked form", virtualLevels: ["off", "low"], reasoning: true, asked: "high", tag: "think:low (asked high)" },
+  { name: "off-only virtual model clamps to off", virtualLevels: ["off"], reasoning: true, asked: "high", tag: "think:off (asked high)" },
+])("virtual child row shows the exact thinking level: $name", async c => {
+  const { routing, answered } = await thinkTags(c);
+  expect(routing).toContain(`vroute default (routing) \u00b7 ${c.tag} \u00b7`);
+  expect(answered).toContain(`physical \u00b7 ${c.tag} \u00b7`);
+  expect(answered).not.toContain("(routing)");
 });

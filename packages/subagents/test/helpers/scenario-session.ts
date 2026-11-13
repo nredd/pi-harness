@@ -89,8 +89,8 @@ export class ScenarioSession {
   }
 
   /** Register an explicit, credential-free physical transport before host construction. */
-  physical(provider = "kid", id = "child", responses: FauxResponseStep[] = []) {
-    const p = registerFauxProvider({ provider, models: [{ id }] });
+  physical(provider = "kid", id = "child", responses: FauxResponseStep[] = [], reasoning = false) {
+    const p = registerFauxProvider({ provider, models: [{ id, reasoning }] });
     p.setResponses(responses);
     this.providers.push(p);
     const transport = getApiProvider(p.api);
