@@ -164,6 +164,14 @@ const cases = [
 		failure: /AssertionError|false == true/,
 	},
 	{
+		name: "Rust coverage numeric exit-code sentinel (#807)",
+		file: "test/rust-coverage-errors.test.mjs",
+		before: "process.exitCode = 0;\n\t\tprocess.argv = [argv[0], undefined,",
+		after: "process.exitCode = undefined;\n\t\tprocess.argv = [argv[0], undefined,",
+		check: "test/rust-coverage-errors.test.mjs",
+		failure: /Expected values to be strictly equal/,
+	},
+	{
 		name: "StateStore evicts past an empty stateId (#703)",
 		file: "src/runtime.ts",
 		before: "this.records.delete(this.records.keys().next().value!);",

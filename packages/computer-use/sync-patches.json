@@ -1053,6 +1053,26 @@
 			}
 		},
 		{
+			"id": "rust-coverage-test-isolation",
+			"purpose": "Use numeric exit-code sentinels and restore saved status in in-process Rust coverage entry tests on Node and Bun (#807); production behavior unchanged",
+			"rows": [
+				"Rust coverage test isolation"
+			],
+			"files": [
+				"docs/rust-coverage.md",
+				"test/rust-coverage-errors.test.mjs"
+			],
+			"check": "test/rust-coverage-errors.test.mjs",
+			"dropControls": [
+				"Rust coverage numeric exit-code sentinel (#807)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "Fix owned producer test isolation (nredd/pi-harness#807); not filed upstream"
+			}
+		},
+		{
 			"id": "scroll-bar-fallback",
 			"purpose": "Scroll SwiftUI/AppKit scroll areas by writing a settable AXScrollBar value between AX scroll actions and the wheel fallback, only for the target's own scroll area (or one an AX hit test against the target's own app resolves to, deviating from upstream's nearest-ancestor walk) and delivering every requested axis (deviating from upstream's first-axis-wins), treating an accepted but unconfirmed write as delivered with an `unknown` outcome rather than adding a wheel scroll",
 			"rows": [
