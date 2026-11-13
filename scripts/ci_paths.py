@@ -409,6 +409,31 @@ def is_documentation_path(path: str) -> bool:
     return len(parts) == 3 and parts[0] == "packages" and parts[2] in {"README.md", "CHANGELOG.md"}
 
 
+def deletes_package_doc(repo: Path, paths: tuple[str, ...], head: str) -> bool:
+    """Return whether a changed `packages/<name>/README.md` or `CHANGELOG.md` no longer exists at `head`.
+
+    A package doc edit is docs-only, but deleting a required one breaks the layout gate
+    (`scripts/package_layout.py`), so that diff must run `check-scripts`.
+
+    Parameters:
+        repo (Path): Existing Git working tree.
+        paths (tuple[str, ...]): Changed paths.
+        head (str): Later Git revision.
+
+    Returns:
+        bool: Whether any changed package doc is absent at `head`.
+
+    Raises:
+        ClassificationError: Git cannot list `head`.
+    """
+    docs = [path for path in paths if path.startswith("packages/") and is_documentation_path(path)]
+    docs = [path for path in docs if len(path.split("/")) == 3]
+    if not docs:
+        return False
+    present = set(run_git(repo, "ls-tree", "--name-only", "-z", head, "--", *docs).split("\0"))
+    return any(path not in present for path in docs)
+
+
 def is_wsl_input(path: str) -> bool:
     """Return whether one changed path reaches the WSL setup, adapter or guest gates.
 
@@ -482,9 +507,18 @@ def classify(repo: Path, base: str, head: str) -> ChangeClassification:
     except ClassificationError as e:
         LOGGER.error(f"Failed to classify changed paths: {e}")
         return ChangeClassification(paths=(), docs_only=False, inputs=dict.fromkeys(INPUT_CLASSES, True))
+    try:
+        docs_only = (
+            bool(paths)
+            and all(map(is_documentation_path, paths))
+            and not deletes_package_doc(repo, paths, head)
+        )
+    except ClassificationError as e:
+        LOGGER.error(f"Failed to classify changed paths: {e}")
+        return ChangeClassification(paths=(), docs_only=False, inputs=dict.fromkeys(INPUT_CLASSES, True))
     return ChangeClassification(
         paths=paths,
-        docs_only=bool(paths) and all(map(is_documentation_path, paths)),
+        docs_only=docs_only,
         inputs={name: not paths or any(map(predicate, paths)) for name, predicate in INPUT_CLASSES.items()},
     )
 

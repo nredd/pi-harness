@@ -1,0 +1,718 @@
+"""Test the package layout gate against disposable trees and the real repository.
+
+References:
+    https://github.com/nredd/pi-harness/issues/860
+    https://github.com/nredd/pi-harness/issues/861
+"""
+
+from __future__ import annotations
+
+import json
+import runpy
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import ci_paths
+import package_layout
+
+GIT = ci_paths.GIT
+REPO_ROOT = ci_paths.REPO_ROOT
+PACKAGE = "packages/x"
+CLEAN = {
+    "package.json": json.dumps({"scripts": {"lint": "x", "test": "x", "test:bun": "x", "check": "x"}}),
+    "README.md": "# x\n",
+    "CHANGELOG.md": "## [Unreleased]\n",
+    "LICENSE": "MIT\n",
+    "tsconfig.json": "{}\n",
+    "vitest.config.ts": "export default {};\n",
+    "src/index.ts": 'import { a } from "./area/a.ts";\nexport { a };\n',
+    "src/area/a.ts": 'import { up } from "../index.ts";\nexport const a = up;\n',
+    "test/area/a.test.ts": "export {};\n",
+    "test/support/helper.ts": "export {};\n",
+    "test/fixtures/data.json": "{}\n",
+}
+
+
+def git(repo: Path, *args: str) -> str:
+    """Run Git in a disposable repository.
+
+    Parameters:
+        repo (Path): Repository to operate in.
+        *args (str): Git arguments after `-C <repo>`.
+
+    Returns:
+        str: Stripped standard output.
+    """
+    completed = subprocess.run([GIT, "-C", str(repo), *args], check=True, capture_output=True, text=True)
+    return completed.stdout.strip()
+
+
+def write_tree(repo: Path, files: dict[str, str]) -> None:
+    """Write files under a repository and stage them.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        files (dict[str, str]): Repository-relative paths and contents.
+
+    Returns:
+        None: Files are written and `git add`ed.
+    """
+    for relative, content in files.items():
+        target = repo / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    git(repo, "add", "--all")
+
+
+def commit(repo: Path, message: str) -> str:
+    """Commit the staged tree.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        message (str): Commit subject.
+
+    Returns:
+        str: Full commit revision.
+    """
+    git(repo, "commit", "-q", "-m", message)
+    return git(repo, "rev-parse", "HEAD")
+
+
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+    """Create a real repository holding one clean package and an empty allowlist.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+
+    Returns:
+        Path: Repository with nothing committed yet.
+    """
+    git(tmp_path, "init", "-q", "-b", "main")
+    git(tmp_path, "config", "user.email", "t@example.invalid")
+    git(tmp_path, "config", "user.name", "t")
+    git(tmp_path, "config", "commit.gpgsign", "false")
+    write_tree(tmp_path, {f"{PACKAGE}/{path}": text for path, text in CLEAN.items()})
+    write_tree(tmp_path, {package_layout.ALLOWLIST: "[]\n"})
+    return tmp_path
+
+
+def lines(repo: Path) -> list[str]:
+    """Return the current violation lines of a repository.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        list[str]: `<package>: <path>: <rule>` lines.
+    """
+    return [violation.line() for violation in package_layout.find_violations(repo)]
+
+
+def test_clean_package_passes_with_no_allowlist_entry(repo: Path) -> None:
+    """Pass a package that follows the standard.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    assert lines(repo) == []
+    out: list[str] = []
+    assert package_layout.run(repo, None, out.append) == 0
+    assert out == []
+
+
+@pytest.mark.parametrize(
+    ("path", "text", "expected"),
+    [
+        ("AGENTS.md", "x\n", "packages/x: AGENTS.md: markdown"),
+        ("SECURITY.md", "x\n", "packages/x: SECURITY.md: markdown"),
+        ("src/NOTES.md", "x\n", "packages/x: src/NOTES.md: markdown"),
+        ("docs/a.md", "x\n", "packages/x: docs: top-level-entry"),
+        ("extensions/a.ts", "x\n", "packages/x: extensions: top-level-entry"),
+        ("extra.json", "{}\n", "packages/x: extra.json: top-level-entry"),
+        (".github/ci.yml", "x\n", "packages/x: .github: dotfile"),
+        (".vitest.config.ts", "x\n", "packages/x: .vitest.config.ts: dotfile"),
+        ("src/.cache/a.ts", "x\n", "packages/x: src/.cache: dotfile"),
+        ("src/shot.PNG", "x\n", "packages/x: src/shot.PNG: media"),
+        ("test/fixtures/demo.mp4", "x\n", "packages/x: test/fixtures/demo.mp4: media"),
+        ("cover.png", "x\n", "packages/x: cover.png: media"),
+        ("dist/index.js", "x\n", "packages/x: dist/index.js: tracked-dist"),
+        ("src/a.test.ts", "x\n", "packages/x: src/a.test.ts: test-location"),
+        ("a.test.ts", "x\n", "packages/x: a.test.ts: top-level-entry"),
+        ("test/a.test.mjs", "x\n", "packages/x: test/a.test.mjs: test-extension"),
+        ("src/a.test.js", "x\n", "packages/x: src/a.test.js: test-extension"),
+        ("test/helper.ts", "x\n", "packages/x: test/helper.ts: test-content"),
+        ("test/area/helper.ts", "x\n", "packages/x: test/area/helper.ts: test-content"),
+        ("test/support/h.test.ts", "x\n", "packages/x: test/support/h.test.ts: test-in-support"),
+        ("test/bench/helper.ts", "x\n", "packages/x: test/bench/helper.ts: test-content"),
+        ("test/bench/deep/a.bench.ts", "x\n", "packages/x: test/bench/deep/a.bench.ts: test-content"),
+        ("biome.json", "{}\n", "packages/x: biome.json: biome-config"),
+        ("src/biome.jsonc", "{}\n", "packages/x: src/biome.jsonc: biome-config"),
+    ],
+)
+def test_violations_name_the_rule(repo: Path, path: str, text: str, expected: str) -> None:
+    """Fail each banned path with `<package>: <path>: <rule>`.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        path (str): Package-relative path to add.
+        text (str): File contents.
+        expected (str): The one violation line the addition produces.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    write_tree(repo, {f"{PACKAGE}/{path}": text})
+    assert lines(repo) == [expected]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "test/fixtures/.pi/agents/minimal.md",
+        "test/fixtures/README.md",
+        "test/fixtures/a.test.mjs",
+        "test/fixtures/helper.ts",
+        "test/__snapshots__/a.snap",
+        "test/area/__snapshots__/a.test.ts.snap",
+        "test/bench/a.bench.ts",
+        "test/scenarios/a.test.ts",
+        "test/support/deep/helper.ts",
+        "skills/ship-issue/SKILL.md",
+        "agents/reviewer.md",
+        "themes/dark.json",
+        "prompts/a.md",
+        "settings/a.json",
+        "NOTICE.md",
+        "licenses/a.txt",
+        "vitest.runtime-build.config.ts",
+        "tsconfig.build.json",
+        "native/macos/src/a.swift",
+        "scripts/build.mjs",
+        "examples/a.json",
+        "schemas/a.json",
+        "prebuilt/a.bin",
+    ],
+)
+def test_allowed_paths_pass(repo: Path, path: str) -> None:
+    """Accept the standard's exceptions: fixtures, Pi resources and the optional closed list.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        path (str): Package-relative path to add.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    write_tree(repo, {f"{PACKAGE}/{path}": "x\n"})
+    assert lines(repo) == []
+
+
+@pytest.mark.parametrize("path", ["README.md", "CHANGELOG.md", "LICENSE", "tsconfig.json", "src/index.ts"])
+def test_missing_required_file_fails(repo: Path, path: str) -> None:
+    """Fail a package that lacks a required file.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        path (str): Required package-relative path to delete.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    git(repo, "rm", "-q", "-f", f"{PACKAGE}/{path}")
+    assert f"{PACKAGE}: {path}: missing-file" in lines(repo)
+
+
+@pytest.mark.parametrize(
+    ("specifier", "leaves"),
+    [
+        ("../../plan-mode/scripts/runtime-builder.mjs", True),
+        ("../../../node_modules/a/b.js", True),
+        ("../..", True),
+        ("../index.ts", False),
+        ("..", False),
+        (".", False),
+        ("./a.ts", False),
+        ("@scope/pkg", False),
+    ],
+)
+@pytest.mark.parametrize(
+    "form",
+    ["import a from '{}';", "const a = import('{}');", 'const a = require("{}");', "import '{}';"],
+)
+def test_relative_imports_leaving_the_package_fail(
+    repo: Path, specifier: str, leaves: bool, form: str
+) -> None:
+    """Flag a relative import that resolves outside the package, however it is spelled.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        specifier (str): Import specifier, resolved from `scripts/`, one level below the package root.
+        leaves (bool): Whether it must be reported.
+        form (str): Import syntax template.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    write_tree(repo, {f"{PACKAGE}/scripts/build-runtime.mjs": form.format(specifier) + "\n"})
+    expected = [f"{PACKAGE}: scripts/build-runtime.mjs: import-escape {specifier}"] if leaves else []
+    assert lines(repo) == expected
+
+
+def test_import_escape_reports_each_specifier_once(repo: Path) -> None:
+    """Report each distinct leaving specifier once per file, in a stable order.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    text = 'import "../../../b/x.ts";\nimport "../../../a/y.ts";\nimport "../../../b/x.ts";\n'
+    write_tree(repo, {f"{PACKAGE}/src/area/leak.ts": text})
+    assert lines(repo) == [
+        f"{PACKAGE}: src/area/leak.ts: import-escape ../../../a/y.ts",
+        f"{PACKAGE}: src/area/leak.ts: import-escape ../../../b/x.ts",
+    ]
+
+
+def test_imports_beneath_a_banned_directory_wait_for_the_move(repo: Path) -> None:
+    """Report a banned directory once, not every file inside it.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    write_tree(
+        repo,
+        {
+            f"{PACKAGE}/lib/a.ts": 'import "../../../y.ts";\n',
+            f"{PACKAGE}/lib/b.png": "x\n",
+            f"{PACKAGE}/lib/c.md": "x\n",
+        },
+    )
+    assert lines(repo) == ["packages/x: lib: top-level-entry"]
+
+
+def test_unreadable_and_deleted_sources_are_skipped(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skip a tracked source that is gone from the work tree, and warn on one that cannot be read.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        monkeypatch (pytest.MonkeyPatch): Makes one read fail.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    write_tree(
+        repo, {f"{PACKAGE}/src/gone.ts": 'import "../../../y.ts";\n', f"{PACKAGE}/src/locked.ts": "x\n"}
+    )
+    (repo / PACKAGE / "src/gone.ts").unlink()
+    real = Path.read_text
+
+    def read_text(self: Path, *args: Any, **kwargs: Any) -> str:
+        """Fail for one file, read the rest.
+
+        Parameters:
+            *args (Any): Positional arguments.
+            **kwargs (Any): Keyword arguments.
+
+        Returns:
+            str: File contents.
+
+        Raises:
+            PermissionError: For `locked.ts`.
+        """
+        if self.name == "locked.ts":
+            raise PermissionError("denied")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    assert lines(repo) == []
+
+
+def test_package_json_script_names(repo: Path) -> None:
+    """Accept the standard script names and `test:<signal>`; flag the rest, plus `pi` media.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    scripts = dict.fromkeys(
+        ("lint", "format", "typecheck", "test", "test:bun", "check", "build", "prepack", "bench"), "x"
+    )
+    scripts |= {"test:dist": "x", "lint:fix": "x", "postinstall": "x"}
+    manifest = {
+        "scripts": scripts,
+        "pi": {"extensions": ["./src/index.ts"], "video": "https://example.invalid/a"},
+    }
+    write_tree(repo, {f"{PACKAGE}/package.json": json.dumps(manifest)})
+    assert lines(repo) == [
+        f"{PACKAGE}: package.json: pi-media",
+        f"{PACKAGE}: package.json: script-name lint:fix",
+        f"{PACKAGE}: package.json: script-name postinstall",
+    ]
+
+
+@pytest.mark.parametrize(
+    "text", ["{not json", "[]", '{"scripts": "x", "pi": []}', '{"pi": {"extensions": []}}']
+)
+def test_package_json_shapes(repo: Path, text: str) -> None:
+    """Report an unreadable manifest and tolerate odd but valid shapes.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        text (str): `package.json` contents.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    write_tree(repo, {f"{PACKAGE}/package.json": text})
+    expected = [f"{PACKAGE}: package.json: unreadable JSONDecodeError"] if text.startswith("{not") else []
+    assert lines(repo) == expected
+
+
+def test_unreadable_manifest_file_is_reported(repo: Path) -> None:
+    """Report a tracked `package.json` that is absent from the work tree.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    (repo / PACKAGE / "package.json").unlink()
+    assert lines(repo) == [f"{PACKAGE}: package.json: unreadable FileNotFoundError"]
+
+
+def test_shared_packages_get_script_and_config_rules_only(repo: Path) -> None:
+    """Apply `package.json` script and Biome rules to `integration/inprocess`, but not the publish rules.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    manifest = {"scripts": {"check": "x", "docs": "x"}, "pi": {"image": "a.png"}}
+    write_tree(
+        repo,
+        {
+            "integration/inprocess/package.json": json.dumps(manifest),
+            "integration/inprocess/biome.json": "{}\n",
+            "integration/inprocess/AGENTS.md": "x\n",
+            "integration/inprocess/.gitignore": "x\n",
+            "integration/inprocess/a.test.mjs": "x\n",
+            "integration/testkit/package.json": json.dumps({"scripts": {"build:x": "x"}}),
+            "integration/other/package.json": json.dumps({"scripts": {"build:x": "x"}}),
+        },
+    )
+    assert lines(repo) == [
+        "integration/inprocess: biome.json: biome-config",
+        "integration/inprocess: package.json: script-name docs",
+        "integration/testkit: package.json: script-name build:x",
+    ]
+
+
+def test_shared_package_without_a_manifest_is_only_checked_for_config(repo: Path) -> None:
+    """Accept a shared directory with no `package.json` yet.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    write_tree(repo, {"integration/testkit/index.ts": "x\n"})
+    assert lines(repo) == []
+
+
+def test_file_directly_under_packages_is_not_a_package(repo: Path) -> None:
+    """Flag a stray file beside the packages.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    write_tree(repo, {"packages/stray.md": "x\n"})
+    assert lines(repo) == ["packages: stray.md: not-a-package"]
+
+
+def entries_for(*violations: str) -> str:
+    """Render allowlist text for violation lines.
+
+    Parameters:
+        *violations (str): Violation lines.
+
+    Returns:
+        str: Canonical allowlist text.
+    """
+    return package_layout.render_allowlist(violations)
+
+
+def test_allowlisted_violation_passes_and_unlisted_fails(repo: Path) -> None:
+    """Fail a new violation until it is listed, and pass it once it is.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the report and exit status.
+    """
+    write_tree(repo, {f"{PACKAGE}/AGENTS.md": "x\n"})
+    out: list[str] = []
+    assert package_layout.run(repo, None, out.append) == 1
+    assert out == ["packages/x: AGENTS.md: markdown: not allowlisted"]
+    write_tree(repo, {package_layout.ALLOWLIST: entries_for("packages/x: AGENTS.md: markdown")})
+    out.clear()
+    assert package_layout.run(repo, None, out.append) == 0
+    assert out == []
+
+
+def test_stale_allowlist_entry_fails(repo: Path) -> None:
+    """Fail an entry whose violation is gone, e.g. a deleted `.test-support` left in the list.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the report and exit status.
+    """
+    write_tree(repo, {package_layout.ALLOWLIST: entries_for("packages/x: .test-support: dotfile")})
+    out: list[str] = []
+    assert package_layout.run(repo, None, out.append) == 1
+    assert out == [f"{package_layout.ALLOWLIST}: packages/x: .test-support: dotfile: stale allowlist entry"]
+
+
+def test_allowlist_must_be_canonical(repo: Path) -> None:
+    """Fail an allowlist that is unsorted, duplicated or oddly formatted.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the report and exit status.
+    """
+    write_tree(repo, {f"{PACKAGE}/AGENTS.md": "x\n", f"{PACKAGE}/SECURITY.md": "x\n"})
+    first, second = "packages/x: AGENTS.md: markdown", "packages/x: SECURITY.md: markdown"
+    for text in (
+        json.dumps([second, first], indent=2) + "\n",
+        json.dumps([first, first, second], indent=2) + "\n",
+        json.dumps([first, second]) + "\n",
+    ):
+        write_tree(repo, {package_layout.ALLOWLIST: text})
+        out: list[str] = []
+        assert package_layout.run(repo, None, out.append) == 1
+        assert out == [f"{package_layout.ALLOWLIST}: allowlist is not sorted, unique and one entry per line"]
+    write_tree(repo, {package_layout.ALLOWLIST: entries_for(first, second)})
+    assert package_layout.run(repo, None, lambda _line: None) == 0
+
+
+@pytest.mark.parametrize("text", [None, "{nope", '{"a": 1}', "[1, 2]"])
+def test_unusable_allowlist_cannot_run_the_gate(repo: Path, text: str | None) -> None:
+    """Exit 2 rather than pass when the allowlist is missing or malformed.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        text (str | None): Allowlist contents, or None to delete it.
+
+    Returns:
+        None: Assertions verify the exit status.
+    """
+    if text is None:
+        git(repo, "rm", "-q", "-f", package_layout.ALLOWLIST)
+    else:
+        write_tree(repo, {package_layout.ALLOWLIST: text})
+    assert package_layout.run(repo, None, lambda _line: None) == 2
+
+
+def test_entries_cannot_be_added_after_the_merge_base(repo: Path) -> None:
+    """Fail an entry the base branch does not carry, even though its violation is real.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the report and exit status.
+    """
+    write_tree(
+        repo,
+        {
+            f"{PACKAGE}/AGENTS.md": "x\n",
+            package_layout.ALLOWLIST: entries_for("packages/x: AGENTS.md: markdown"),
+        },
+    )
+    base = commit(repo, "base")
+    git(repo, "checkout", "-q", "-b", "feature")
+    write_tree(
+        repo,
+        {
+            f"{PACKAGE}/SECURITY.md": "x\n",
+            package_layout.ALLOWLIST: entries_for(
+                "packages/x: AGENTS.md: markdown", "packages/x: SECURITY.md: markdown"
+            ),
+        },
+    )
+    commit(repo, "add a violation and waive it")
+    out: list[str] = []
+    assert package_layout.run(repo, "main", out.append) == 1
+    assert out == [
+        f"{package_layout.ALLOWLIST}: packages/x: SECURITY.md: markdown: "
+        f"allowlist entry not present at merge base {base[:12]}"
+    ]
+    # An unchanged or shrinking list passes, and so does comparing without a ref.
+    git(repo, "rm", "-q", "-f", f"{PACKAGE}/SECURITY.md")
+    write_tree(repo, {package_layout.ALLOWLIST: entries_for("packages/x: AGENTS.md: markdown")})
+    assert package_layout.run(repo, "main", out.append) == 0
+    git(repo, "rm", "-q", "-f", f"{PACKAGE}/AGENTS.md")
+    write_tree(repo, {package_layout.ALLOWLIST: "[]\n"})
+    assert package_layout.run(repo, "main", out.append) == 0
+
+
+def test_comparison_is_skipped_where_the_base_has_no_allowlist(repo: Path) -> None:
+    """Pass the commit that introduces the allowlist; there is nothing to compare against.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the exit status.
+    """
+    git(repo, "rm", "-q", "-f", "--cached", package_layout.ALLOWLIST)
+    commit(repo, "base without allowlist")
+    git(repo, "checkout", "-q", "-b", "feature")
+    write_tree(repo, {package_layout.ALLOWLIST: "[]\n"})
+    commit(repo, "introduce")
+    assert package_layout.run(repo, "main", lambda _line: None) == 0
+
+
+def test_comparison_fails_for_an_unknown_ref_or_malformed_base(repo: Path) -> None:
+    """Exit 2 when the ref is missing or the base allowlist cannot be parsed.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the exit status.
+    """
+    commit(repo, "base")
+    assert package_layout.run(repo, "origin/nope", lambda _line: None) == 2
+    write_tree(repo, {package_layout.ALLOWLIST: "{nope"})
+    commit(repo, "break the list")
+    git(repo, "checkout", "-q", "-b", "feature")
+    write_tree(repo, {package_layout.ALLOWLIST: "[]\n"})
+    commit(repo, "fix")
+    assert package_layout.run(repo, "main", lambda _line: None) == 2
+
+
+def test_main_reports_exit_status(
+    repo: Path, capsys: pytest.CaptureFixture[str], tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Print violation lines on stdout and exit non-zero; exit 2 outside a repository.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        capsys (pytest.CaptureFixture[str]): Captured output.
+        tmp_path_factory (pytest.TempPathFactory): Makes a directory outside any repository.
+
+    Returns:
+        None: Assertions verify output and exit status.
+    """
+    assert package_layout.main(["--repo", str(repo)]) == 0
+    write_tree(repo, {f"{PACKAGE}/AGENTS.md": "x\n"})
+    assert package_layout.main(["--repo", str(repo)]) == 1
+    assert capsys.readouterr().out == "packages/x: AGENTS.md: markdown: not allowlisted\n"
+    assert package_layout.main(["--repo", str(tmp_path_factory.mktemp("outside"))]) == 2
+
+
+def test_script_entry_point_exits_with_the_gate_status(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run the file as the Makefile does.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        monkeypatch (pytest.MonkeyPatch): Argument override.
+
+    Returns:
+        None: Assertions verify the exit status.
+    """
+    monkeypatch.setattr(sys, "argv", ["package_layout.py", "--repo", str(repo)])
+    with pytest.raises(SystemExit) as raised:
+        runpy.run_path(package_layout.__file__, run_name="__main__")
+    assert raised.value.code == 0
+
+
+def test_real_repository_matches_its_allowlist() -> None:
+    """Pass on this checkout: every deviation is listed and nothing listed is gone.
+
+    Returns:
+        None: Assertions verify the report and exit status.
+    """
+    out: list[str] = []
+    assert package_layout.run(REPO_ROOT, None, out.append) == 0, out
+    assert out == []
+
+
+def test_removing_any_real_entry_turns_the_gate_red() -> None:
+    """Fail when a listed deviation loses its waiver, for every entry; fail a made-up one as stale.
+
+    Returns:
+        None: Assertions verify each variant of the list.
+    """
+    violations = package_layout.find_violations(REPO_ROOT)
+    entries = [violation.line() for violation in violations]
+    assert entries, "the allowlist is empty: delete this test, #860 is done"
+    _, listed = package_layout.load_allowlist(REPO_ROOT)
+    assert listed == entries
+    for removed in entries:
+        kept = [entry for entry in entries if entry != removed]
+        problems = package_layout.allowlist_problems(violations, entries_for(*kept), kept, None)
+        assert problems == [f"{removed}: not allowlisted"]
+    invented = [*entries, "packages/todo: .no-such-dir: dotfile"]
+    problems = package_layout.allowlist_problems(violations, entries_for(*invented), invented, None)
+    assert problems == [
+        f"{package_layout.ALLOWLIST}: packages/todo: .no-such-dir: dotfile: stale allowlist entry"
+    ]
+
+
+def test_real_violation_lines_follow_the_documented_shape() -> None:
+    """Keep every entry one `<package>: <path>: <rule>` line the gate can parse back.
+
+    Returns:
+        None: Assertions verify each entry.
+    """
+    _, listed = package_layout.load_allowlist(REPO_ROOT)
+    for entry in listed:
+        package, path, rule = entry.split(": ", 2)
+        assert package.startswith(("packages/", "integration/"))
+        assert path
+        assert rule.split(" ")[0] in {
+            "biome-config",
+            "dotfile",
+            "import-escape",
+            "markdown",
+            "media",
+            "missing-file",
+            "pi-media",
+            "script-name",
+            "test-content",
+            "test-extension",
+            "test-in-support",
+            "test-location",
+            "top-level-entry",
+            "tracked-dist",
+        }

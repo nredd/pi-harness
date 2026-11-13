@@ -47,8 +47,9 @@ check: check-ts check-scripts check-integration check-benchmark  ## Owned-code g
 check-ts:  ## Biome (non-rewriting), tsc, vitest for every npm workspace, or only WORKSPACES (paths, in npm order)
 	PATH="$$PATH:$${HOME}/.pi/agent/bin" npm run check$(foreach workspace,$(WORKSPACES), --workspace=$(workspace))
 
-check-scripts:  ## Format/lint/type/tests for scripts/ (real disposable git repos)
+check-scripts:  ## Format/lint/type/tests for scripts/ (real disposable git repos), then the package layout gate (allowlist may only shrink vs BASE, else origin/main)
 	$(call PY_GATE,scripts,--project ../integration,,.)
+	uv run --locked --project integration python scripts/package_layout.py$(if $(filter undefined,$(origin BASE)), --compare-ref origin/main,$(if $(BASE), --compare-ref "$(BASE)"))
 	$(MAKE) check-import-audit
 
 # Unset BASE: compare against where HEAD diverged from origin/main. Any explicit BASE, even empty, is passed unchanged.
