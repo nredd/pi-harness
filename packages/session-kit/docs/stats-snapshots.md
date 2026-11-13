@@ -164,10 +164,11 @@ Current-rate API-equivalent value:
   Bun. Conditional skips under old hosts are compatibility evidence only, never admission
   of pricing. The fixtures also exercise historical zero/stale values, unknown TTL, free
   versus unknown, exact boundaries, imported dedup, deleted cache and unchanged bytes/IDs.
-  `src/stats/pricing.ts` is owned by primary coverage and explicitly registered in the
-  native Bun subset in `coverage/policy.json`. Ownership alone does not register a file
-  in that separate subset: root accounting rejects both unregistered reported files and
-  missing expected measurements. The primary four-counter zero caps are unchanged.
+  Both primary and native Bun coverage measure the complete owned `src/**/*.ts` inventory,
+  including `src/stats/pricing.ts`; the validated static `src/stats/library.ts` facade
+  remains excluded without excluding its executable targets. Root accounting rejects
+  missing expected measurements. Both signals retain zero line, function, branch and
+  statement caps; Bun remains report-only pending its hosted admission evidence.
 - This is current loaded list-price value, not request-date billing or an account invoice.
   The assessed Bedrock baseline uses published Standard/on-demand, Global Cross-region
   Inference, US East (N. Virginia), USD per million tokens. Regional-profile IDs may be
