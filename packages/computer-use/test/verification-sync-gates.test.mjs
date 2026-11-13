@@ -242,6 +242,19 @@ test("revert gate validates real inventory and executes an actual expected-failu
 	assert.equal(readFileSync(path.join(root, control.file), "utf8"), "original");
 });
 
+function isDocumentationControl(args, cwd) {
+	return args[1] === path.join(cwd, "scripts/check-docs.mjs");
+}
+
+test("documentation subprocess selection survives inserted and reordered controls", () => {
+	const cwd = "/synthetic/sandbox";
+	const documentation = ["/synthetic/tsx", path.join(cwd, "scripts/check-docs.mjs")];
+	const cdp = ["/synthetic/run-vitest.ts", "node", "test/cdp-client.test.mjs"];
+	const inserted = ["/synthetic/run-vitest.ts", "node", "test/build-native.test.mjs"];
+	for (const commands of [[inserted, cdp, documentation], [documentation, cdp, inserted], [cdp, documentation, inserted]])
+		assert.deepEqual(commands.filter((args) => isDocumentationControl(args, cwd)), [documentation]);
+});
+
 test("real documentation drop control rejects the mutant through a symlinked sandbox CLI", () => {
 	let documentationSeen = false;
 	assert.throws(
@@ -253,7 +266,7 @@ test("real documentation drop control rejects the mutant through a symlinked san
 				...quiet,
 				spawn: (command, args, options) => {
 					if (documentationSeen) throw new Error("documentation control completed");
-					if (args[1] === path.join(options.cwd, "scripts/check-docs.mjs")) {
+					if (isDocumentationControl(args, options.cwd)) {
 						documentationSeen = true;
 						const alias = path.join(scratch(), "package-alias");
 						symlinkSync(options.cwd, alias, "dir");
