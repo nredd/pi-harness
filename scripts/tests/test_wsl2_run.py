@@ -56,7 +56,14 @@ class Host:
 
 @pytest.fixture
 def guest(tmp_path: Path) -> tuple[Path, dict[str, str]]:
-    """Build a guest checkout under a HOME containing a space, plus the adapter environment."""
+    """Build a guest checkout under a HOME containing a space, plus the adapter environment.
+
+    Parameters:
+        tmp_path (Path): Disposable root.
+
+    Returns:
+        tuple[Path, dict[str, str]]: The guest checkout and the adapter environment.
+    """
     home = tmp_path / "guest home"
     worktree = home / "pi-harness-ci"
     (worktree / "integration").mkdir(parents=True)
@@ -141,7 +148,7 @@ def test_a_step_killed_by_a_signal_reports_the_shell_status(guest: tuple[Path, d
     assert first_failure(worktree) == "143\n"
 
 
-@pytest.mark.parametrize("directory", ["..", "../escape", "integration/../..", "escape-link"])
+@pytest.mark.parametrize("directory", ["..", "../escape", "integration/../..", "escape-link", "/tmp"])
 def test_refuses_an_escaping_directory(
     guest: tuple[Path, dict[str, str]], directory: str, capfd: pytest.CaptureFixture[str]
 ) -> None:

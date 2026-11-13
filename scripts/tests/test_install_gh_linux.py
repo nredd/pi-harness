@@ -158,7 +158,7 @@ def test_refuses_a_wrong_or_unreadable_installed_version(tmp_path: Path, reporte
 
 
 def test_main_installs_the_sigterm_handler(tmp_path: Path) -> None:
-    """`main` routes SIGTERM to `_terminate` before it does anything else."""
+    """`main` routes SIGTERM to `wsl2_exec.terminate` before it does anything else."""
     installer.main([str(tmp_path / "gh")], Fake())
     assert signal.getsignal(signal.SIGTERM) is terminate
 

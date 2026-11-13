@@ -65,7 +65,8 @@ def _step_directory(worktree: Path, requested: str) -> None:
         GuestError: When the directory is unavailable or `..` or a symlink escapes the checkout.
     """
     try:
-        os.chdir(worktree / requested)
+        # Concatenate, never join: an absolute `requested` must not replace the checkout.
+        os.chdir(f"{worktree}/{requested}")
     except OSError as exc:
         raise GuestError("Step directory escapes guest checkout or is unavailable") from exc
     if not Path.cwd().is_relative_to(worktree):

@@ -78,7 +78,15 @@ class Fake:
 
 @pytest.fixture(autouse=True)
 def checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Run from a fake checkout root whose setup action pins exactly one install-action SHA."""
+    """Run from a fake checkout root whose setup action pins exactly one install-action SHA.
+
+    Parameters:
+        tmp_path (Path): Disposable root.
+        monkeypatch (pytest.MonkeyPatch): Used to change the working directory for the test.
+
+    Returns:
+        Path: The checkout root.
+    """
     root = tmp_path / "checkout"
     action = root / ".github/actions/setup-ci-tools/action.yml"
     action.parent.mkdir(parents=True)
