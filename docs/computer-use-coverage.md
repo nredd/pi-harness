@@ -97,7 +97,14 @@ package gate exposed an existing 90s outer drop-control deadline terminating the
 550s: SDK hook 300s + source test 90s + cache-control test 90s + cursor test 50s + launcher 20s.
 Inner SDK/source deadlines, all assertions and expected-failure matching remain unchanged;
 other controls retain 90s. Both outer-deadline branches are tested. These numbers
-are a scoped measurement, not whole-package or cross-platform evidence. The asset-validation
+are a scoped measurement, not whole-package or cross-platform evidence. CI run 43363268531
+failed because the mutated `check-docs.mjs` returned success. A path-alias repro shows how:
+`process.argv[1]` can retain a symlinked temporary path while `import.meta.url` resolves the real
+path, so the CLI guard silently skips the check. The runner's exact path identity was not captured.
+All six new CLI guards compare real paths. Tests run their real entrypoints via
+symlinks, and the actual documentation drop control runs the mutated sandbox through the same `tsx`
+launcher with a symlinked package path. The pre-fix control reproduced `Dropped patch survived`;
+the corrected guard causes the expected specific documentation refusal. The asset-validation
 mutation must fail the independent missing-asset fixture in `test:sync-reverts`.
 
 Launcher disposition remains explicit: retain `check-linux-live.mjs` as an unmeasured opt-in

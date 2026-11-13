@@ -242,6 +242,32 @@ test("revert gate validates real inventory and executes an actual expected-failu
 	assert.equal(readFileSync(path.join(root, control.file), "utf8"), "original");
 });
 
+test("real documentation drop control rejects the mutant through a symlinked sandbox CLI", () => {
+	let calls = 0;
+	assert.throws(
+		() =>
+			reverts([], {
+				root: packageRoot,
+				cases,
+				platform: process.platform,
+				...quiet,
+				spawn: (command, args, options) => {
+					calls++;
+					if (calls > 3) throw new Error("documentation control completed");
+					if (calls === 3) {
+						const alias = path.join(scratch(), "package-alias");
+						symlinkSync(options.cwd, alias, "dir");
+						args[1] = path.join(alias, "scripts/check-docs.mjs");
+						return spawnSync(command, args, options);
+					}
+					return spawnSync(command, args, options);
+				},
+			}),
+		/documentation control completed/,
+	);
+	assert.equal(calls, 4);
+});
+
 test("revert gate refuses surviving mutations, wrong failures, launch errors and missing anchors, cleaning every sandbox", () => {
 	const { root, control } = revertFixture();
 	for (const result of [
@@ -313,6 +339,24 @@ test("ledger gate rejects duplicate ids, undeclared sources and unowned controls
 	assert.throws(() => validateLedger(ledger, [control, { name: "unowned" }]), /unowned/);
 	assert.throws(() => validateLedger({ ...ledger, absorbed: null }, [control]), /absorbed/);
 	assert.ok(cases.length > 0);
+});
+
+test("sync and commit CLIs dispatch through symlinked paths", () => {
+	for (const [name, args, expected] of [
+		["check-commit-messages", ["HEAD..HEAD"], /Checked 0 commit/],
+		["check-sync-reverts", ["--validate-only"], /Sync ledger and actual revert cases validated/],
+		["check-upstream-sync", ["--fetch-if-enabled"], /NOT RUN upstream sync/],
+	]) {
+		const link = path.join(scratch(), `${name}.mjs`);
+		symlinkSync(path.join(packageRoot, `scripts/${name}.mjs`), link);
+		const result = spawnSync(process.execPath, [link, ...args], {
+			cwd: packageRoot,
+			env: { ...process.env, PI_CU_UPSTREAM_SYNC: "" },
+			encoding: "utf8",
+		});
+		assert.equal(result.status, 0, result.stderr);
+		assert.match(result.stdout, expected);
+	}
 });
 
 test("verification gate CLI dispatch is measured and imports without argv remain inert", async () => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -307,6 +307,29 @@ test("CLI entries dispatch in process and ordinary imports remain inert", async 
 		process.argv = argv;
 		process.exitCode = exitCode;
 	}
+});
+
+test("asset and platform CLIs dispatch through symlinked paths", () => {
+	for (const [name, args, expected] of [
+		["check-package-assets", [archive().tarball], /package assets passed/],
+		["check-docs-platform", [], /host-independent/],
+	]) {
+		const link = path.join(scratch(), `${name}.mjs`);
+		symlinkSync(fileURLToPath(new URL(`../scripts/${name}.mjs`, import.meta.url)), link);
+		const result = spawnSync(process.execPath, [link, ...args], { cwd: os.tmpdir(), encoding: "utf8" });
+		assert.equal(result.status, 0, result.stderr);
+		assert.match(result.stdout, expected);
+	}
+});
+
+test("CLI docs refusal follows a symlinked entrypoint from outside the package", () => {
+	const root = fixture();
+	write(root, "docs/README.md", "cd .\nnpm install --prefix docs");
+	const link = path.join(scratch(), "check-docs.mjs");
+	symlinkSync(fileURLToPath(new URL("../scripts/check-docs.mjs", import.meta.url)), link);
+	const result = spawnSync(process.execPath, [link, root], { cwd: os.tmpdir(), encoding: "utf8" });
+	assert.equal(result.status, 1, result.stdout);
+	assert.match(result.stderr, /website commands must enter packages\/computer-use/);
 });
 
 test("CLI docs refusal preserves nonzero exit and useful diagnostics", () => {
