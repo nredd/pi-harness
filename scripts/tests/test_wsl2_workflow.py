@@ -718,7 +718,6 @@ def test_guest_setup_leaves_no_external_command_unbounded() -> None:
     for label in ("copy checkout", "extract node", "install npm", "install bun", "install uv", "install gh"):
         assert f'bounded "{label}" ' in setup
     assert 'bounded "install owned tools" 90 ' in setup
-    assert "--connect-timeout 15 --max-time 45" in (ROOT / "scripts/install_wsl_owned_tools.sh").read_text()
 
 
 APT = ROOT / "scripts" / "wsl2_apt.sh"

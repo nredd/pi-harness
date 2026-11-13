@@ -21,6 +21,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import install_gh_linux as installer
+from wsl2_exec import terminate
 
 
 @pytest.fixture(autouse=True)
@@ -156,34 +157,10 @@ def test_refuses_a_wrong_or_unreadable_installed_version(tmp_path: Path, reporte
     assert fake.calls[-1][0][1:] == ["--version"]
 
 
-def test_default_runner_passes_stdout_through_and_captures_on_request(tmp_path: Path) -> None:
-    """`_run` drives the real `subprocess.run`, with stdin and capture honoured."""
-    assert installer._run([sys.executable, "-c", "print('x')"], subprocess.run, capture=True) == (0, "x\n")
-    assert installer._run([sys.executable, "-c", "import sys; sys.exit(3)"], subprocess.run) == (3, "")
-    marker = tmp_path / "in"
-    code = f"import sys, pathlib; pathlib.Path({str(marker)!r}).write_text(sys.stdin.read())"
-    assert installer._run([sys.executable, "-c", code], subprocess.run, stdin="hi")[0] == 0
-    assert marker.read_text() == "hi"
-
-
-def test_a_missing_tool_exits_127_like_a_shell(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """An unstartable command reports one line and status 127 instead of a traceback."""
-    missing = str(tmp_path / "no-such-tool")
-    assert installer._run([missing], subprocess.run) == (127, "")
-    assert "no-such-tool" in capsys.readouterr().err
-
-
-def test_sigterm_handler_exits_143_like_a_shell() -> None:
-    """The handler turns SIGTERM into `SystemExit(143)` so `finally`/`with` cleanup runs."""
-    with pytest.raises(SystemExit) as raised:
-        installer._terminate(signal.SIGTERM, None)
-    assert raised.value.code == 143
-
-
 def test_main_installs_the_sigterm_handler(tmp_path: Path) -> None:
     """`main` routes SIGTERM to `_terminate` before it does anything else."""
     installer.main([str(tmp_path / "gh")], Fake())
-    assert signal.getsignal(signal.SIGTERM) is installer._terminate
+    assert signal.getsignal(signal.SIGTERM) is terminate
 
 
 def test_sigterm_during_download_removes_the_scratch_dir(tmp_path: Path) -> None:
