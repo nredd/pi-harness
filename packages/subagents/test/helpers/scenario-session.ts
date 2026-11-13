@@ -106,6 +106,7 @@ export class ScenarioSession {
     const release = barrier();
     const delegate = getApiProvider(p.api);
     if (!delegate) throw new Error(`Missing transport ${p.api}`);
+    /** Options of the latest request; read only after `entered` resolves. */
     const seen: { options?: Parameters<typeof delegate.streamSimple>[2] } = {};
     const stream: typeof delegate.streamSimple = (model, context, options) => {
       seen.options = options;

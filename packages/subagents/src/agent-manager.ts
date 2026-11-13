@@ -70,10 +70,11 @@ function relabelFromResponse(record: AgentRecord, message: AssistantMessageInfo 
   Object.assign(record.invocation, physical);
   // The routed request ran at the level core clamped to the physical model, which
   // can differ from the session level the row showed while routing was pending.
+  // Idempotent per response; a message without a level (legacy) leaves the row as is.
   const ran = message?.thinkingLevel;
   if (ran) {
     const requested = record.invocation.requestedThinking ?? record.invocation.thinking;
-    record.invocation.thinking = ran as ThinkingLevel;
+    record.invocation.thinking = ran;
     record.invocation.requestedThinking = requested && requested !== ran ? requested : undefined;
   }
   if ((record.modelTier?.kind === "routed" || record.modelTier?.kind === "static") && record.modelTier.answered !== physical.modelId) {

@@ -501,7 +501,7 @@ export interface AssistantMessageInfo {
   provider?: string;
   model?: string;
   /** Effective level of that request, after core clamped it to the physical model. Absent on legacy messages. */
-  thinkingLevel?: string;
+  thinkingLevel?: ThinkingLevel;
 }
 
 export interface RunOptions {

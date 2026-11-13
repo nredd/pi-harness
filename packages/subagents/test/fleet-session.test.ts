@@ -331,7 +331,7 @@ interface ThinkingCase {
   /** Exact tag once answered: the level the physical request ran at. */
   answered: string;
   /** `reasoning` option the physical transport received (`undefined` for off). */
-  ran: ModelThinkingLevel | undefined;
+  ran: Exclude<ModelThinkingLevel, "off"> | undefined;
 }
 
 /** Row `think:` tag at the routing point, then once the physical model has answered. */
@@ -355,7 +355,8 @@ async function thinkTags(c: ThinkingCase): Promise<{ routing: string; answered: 
   await stream.entered;
   const ran = stream.seen.options?.reasoning;
   const host = fixture.host;
-  if (!host) throw new Error("fixture host missing");
+  if (!host) throw new Error("No terminal host");
+  fixture.clock.advance(200);
   await host.settle();
   host.input(TOGGLE);
   await host.settle();
