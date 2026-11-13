@@ -65,6 +65,15 @@ records total build/test/report runtime plus `commandSeconds` for each correspon
 entry (test/build and each report rendering separately). A second uninstrumented test build remains in the existing
 packed-source/diagnostics contract, deliberately not replaced by coverage instrumentation.
 
+## Entry-point test isolation
+
+`test/rust-coverage-errors.test.mjs` imports the actual CLI in process to retain instrumentation.
+Its failing entry cases still assert status `1`. Non-entry imports must preserve a numeric `0`
+sentinel, and both entry tests restore `savedExitCode ?? 0` in `finally`: Bun `1.4.4` retains the
+previous numeric status when assigned `undefined`, unlike Node. The focused suite has 18 tests
+and must exit `0` under both runtime launchers; the real CLI with `--crate bogus` must still exit
+`1`. This fixes test isolation only (#807), not production failure reporting or coverage policy.
+
 ## Measured baseline
 
 2026-10-28, Apple Silicon macOS, native sources at harness `0143b72` (coverage tooling added in

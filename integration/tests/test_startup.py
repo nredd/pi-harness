@@ -51,15 +51,76 @@ TIMING_BLOCK = """\
 """
 
 
-def test_parse_timings_keys_by_section_and_strips_package_prefix() -> None:
-    """Extension paths lose the home directory; lines outside a section are ignored."""
-    assert startup.parse_timings("  orphan: 9ms\n" + TIMING_BLOCK) == {
+def test_parse_timings_allows_only_known_phases_and_explicit_fixture_aliases() -> None:
+    """Untrusted stderr cannot put private paths or arbitrary labels in a timing report."""
+    path = "/Users/x/.pi/agent/npm/node_modules/@nredd/pi-subagents/src/index.ts"
+    assert startup.parse_timings(
+        "  orphan: 9ms\n" + TIMING_BLOCK, extension_labels={path: "fixture-subagents"}
+    ) == {
         "main:parseArgs": 1,
         "main:TOTAL": 482,
-        "extensions:@nredd/pi-subagents/src/index.ts module import": 289,
-        "extensions:stray": 5,
+        "extensions:fixture-subagents module import": 289,
     }
+    assert startup.parse_timings(TIMING_BLOCK) == {"main:parseArgs": 1, "main:TOTAL": 482}
     assert startup.parse_timings("no timings here") == {}
+    assert startup.parse_timings("--- Startup Timings: main ---\n  TOTAL: 0ms") == {"main:TOTAL": 0}
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "x" * (64 * 1024 + 1),
+        "\u00e9" * (32 * 1024 + 1),
+        "\n" * 1025,
+        "--- Startup Timings: main ---\n  TOTAL: 86400001ms",
+        "--- Startup Timings: main ---\n  TOTAL: 1ms\n  TOTAL: 2ms",
+        "--- Startup Timings: main ---\n  TOTAL: " + "9" * 20 + "ms",
+    ],
+)
+def test_parse_timings_rejects_unbounded_or_ambiguous_records(stderr: str) -> None:
+    """Bounds and duplicate guards fail closed without quoting the source text.
+
+    Parameters:
+        stderr (str): malformed synthetic timing stream.
+    """
+    with pytest.raises(ValueError, match="Startup timing"):
+        startup.parse_timings(stderr)
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [
+        {"/one": "private-name"},
+        {"/one": "fixture-a", "/two": "fixture-a"},
+        {"/one": "fixture-" + "a" * 65},
+        {str(index): f"fixture-{index}" for index in range(129)},
+    ],
+)
+def test_parse_timings_rejects_invalid_fixture_aliases(labels: dict[str, str]) -> None:
+    """Aliases are bounded, synthetic and unique, never inferred from private paths.
+
+    Parameters:
+        labels (dict[str, str]): invalid explicit alias inventory.
+    """
+    with pytest.raises(ValueError, match="Startup timing"):
+        startup.parse_timings("", extension_labels=labels)
+
+
+def test_parse_timings_closes_sections_and_ignores_unknown_names() -> None:
+    """Unknown sections, private labels and post-section log noise are not timing phases."""
+    text = (
+        "--- Startup Timings: main ---\n  TOTAL: 7ms\n-----------------------------\n"
+        "  parseArgs: 8ms\n--- Startup Timings: private ---\n  TOTAL: 9ms\n"
+        "--- Startup Timings: extensions ---\n  /secret/local.ts factory: 4ms\n"
+        "  TOTAL: 4ms\n  /secret/unmapped.ts module import: 1ms\n"
+        "--- Startup Timings: main ---\n  private label: 3ms\n  resourceLoader.reload: 2ms\n"
+    )
+    assert startup.parse_timings(text, extension_labels={"/secret/local.ts": "fixture-local"}) == {
+        "main:TOTAL": 7,
+        "extensions:fixture-local factory": 4,
+        "extensions:TOTAL": 4,
+        "main:resourceLoader.reload": 2,
+    }
 
 
 def test_percentile_and_summarize() -> None:
@@ -88,7 +149,13 @@ def test_sample_times_first_frame_and_input_ready() -> None:
         [sys.executable, "-c", FAKE_PI], env=startup.scrubbed_env({"PATH": "/usr/bin:/bin"})
     )
     assert 0 < result.first_paint_s <= result.frame_s <= result.input_ready_s
-    assert result.timings == {"main:TOTAL": 7, "extensions:@a/b/index.ts module import": 3}
+    assert result.timings == {"main:TOTAL": 7}
+    result = startup.sample(
+        [sys.executable, "-c", FAKE_PI],
+        env=startup.scrubbed_env({"PATH": "/usr/bin:/bin"}),
+        extension_labels={"/h/node_modules/@a/b/index.ts": "fixture-faux"},
+    )
+    assert result.timings == {"main:TOTAL": 7, "extensions:fixture-faux module import": 3}
 
 
 def test_sample_times_out_without_a_footer() -> None:
@@ -101,12 +168,15 @@ def test_run_alternates_variant_order_and_summarizes(monkeypatch: pytest.MonkeyP
     """Order flips each round so a systematic first-launch penalty hits both variants equally."""
     order: list[str] = []
 
-    def fake_sample(argv: list[str], **_: object) -> startup.Sample:
+    def fake_sample(argv: list[str], **kwargs: object) -> startup.Sample:
         order.append(argv[0])
+        assert kwargs["extension_labels"] == {"/a": "fixture-a"}
         return startup.Sample(0.1, 0.2, 0.3, {"main:TOTAL": 5})
 
     monkeypatch.setattr(startup, "sample", fake_sample)
-    report = startup.run({"a": ["a"], "b": ["b"]}, runs=3, gap_s=0.0, env={})
+    report = startup.run(
+        {"a": ["a"], "b": ["b"]}, runs=3, gap_s=0.0, env={}, extension_labels={"/a": "fixture-a"}
+    )
     assert order == ["a", "b", "b", "a", "a", "b"]
     assert report["readiness_method"] == startup.READINESS_METHOD
     assert report["summary"]["a"]["input_ready_s"]["median"] == 0.3
@@ -155,6 +225,87 @@ def test_main_writes_json_report(
     assert json.loads(capsys.readouterr().out) == {"ok": True}
     assert startup.main([]) == 0
     assert seen["variants"] == {"pi": ["pi"]}
+    assert startup.main(["--extension-label", "fixture-faux=/fixture/faux.ts"]) == 0
+    assert seen["extension_labels"] == {"/fixture/faux.ts": "fixture-faux"}
+
+
+@pytest.mark.parametrize("aliases", [["missing"], ["fixture-a="], ["fixture-a=/a", "fixture-b=/a"]])
+def test_main_rejects_ambiguous_alias_inventory(aliases: list[str]) -> None:
+    """Reject invalid alias syntax and duplicate paths before launching a child.
+
+    Parameters:
+        aliases (list[str]): malformed CLI fixture mappings.
+    """
+    argv = [part for alias in aliases for part in ("--extension-label", alias)]
+    with pytest.raises(SystemExit) as raised:
+        startup.main(argv)
+    assert raised.value.code == 2
+
+
+def test_sample_rejects_oversized_phase_output_and_cleans_scratch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise the bounded file read at the real sample boundary, not just the parser.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): replace only the private pane transport.
+    """
+    scratch: list[Path] = []
+
+    class Pane:
+        """A deterministic pane producing oversized stderr and a real nonce acknowledgement."""
+
+        def __init__(self, *, socket: Path, name: str) -> None:
+            """Record the sampler's real scratch directory.
+
+            Parameters:
+                socket (Path): private sampler socket.
+                name (str): sampler pane name.
+            """
+            scratch.append(socket.parent)
+
+        def start(self, argv: list[str], cwd: Path, env: dict[str, str]) -> None:
+            """Write synthetic output using the actual sampler environment.
+
+            Parameters:
+                argv (list[str]): unused synthetic command.
+                cwd (Path): unused synthetic working directory.
+                env (dict[str, str]): sampler's private paths and nonce.
+            """
+            Path(env["PI_STARTUP_STDERR"]).write_text("x" * (startup.MAX_TIMING_BYTES + 100))
+            Path(env["PI_STARTUP_REGISTERED"]).write_text(env["PI_STARTUP_NONCE"])
+            Path(env["PI_STARTUP_ACK"]).write_text(env["PI_STARTUP_NONCE"])
+
+        def capture(self) -> str:
+            """Make the existing frame gate pass.
+
+            Returns:
+                str: synthetic footer.
+            """
+            return "footer ctx 1%"
+
+        def type_text(self, text: str) -> None:
+            """Accept the sampler's no-provider command without real input.
+
+            Parameters:
+                text (str): submitted probe command.
+            """
+
+        def send_keys(self, *keys: str) -> None:
+            """Keep terminal input entirely synthetic.
+
+            Parameters:
+                *keys (str): synthetic terminal input.
+            """
+
+        def kill(self) -> None:
+            """There is no child process in this file-boundary fixture."""
+
+    monkeypatch.setattr(startup, "TmuxPane", Pane)
+    with pytest.raises(ValueError, match="byte limit"):
+        startup.sample(["offline-fixture"], env={})
+    assert scratch
+    assert all(not path.exists() for path in scratch)
 
 
 REPORT: dict[str, Any] = {
