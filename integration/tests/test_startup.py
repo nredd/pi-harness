@@ -256,24 +256,47 @@ def test_sample_rejects_oversized_phase_output_and_cleans_scratch(
         """A deterministic pane producing oversized stderr and a real nonce acknowledgement."""
 
         def __init__(self, *, socket: Path, name: str) -> None:
-            """Record the sampler's real scratch directory."""
+            """Record the sampler's real scratch directory.
+
+            Parameters:
+                socket (Path): private sampler socket.
+                name (str): sampler pane name.
+            """
             scratch.append(socket.parent)
 
         def start(self, argv: list[str], cwd: Path, env: dict[str, str]) -> None:
-            """Write synthetic output using the actual sampler environment."""
+            """Write synthetic output using the actual sampler environment.
+
+            Parameters:
+                argv (list[str]): unused synthetic command.
+                cwd (Path): unused synthetic working directory.
+                env (dict[str, str]): sampler's private paths and nonce.
+            """
             Path(env["PI_STARTUP_STDERR"]).write_text("x" * (startup.MAX_TIMING_BYTES + 100))
             Path(env["PI_STARTUP_REGISTERED"]).write_text(env["PI_STARTUP_NONCE"])
             Path(env["PI_STARTUP_ACK"]).write_text(env["PI_STARTUP_NONCE"])
 
         def capture(self) -> str:
-            """Make the existing frame gate pass."""
+            """Make the existing frame gate pass.
+
+            Returns:
+                str: synthetic footer.
+            """
             return "footer ctx 1%"
 
         def type_text(self, text: str) -> None:
-            """Accept the sampler's no-provider command without real input."""
+            """Accept the sampler's no-provider command without real input.
+
+            Parameters:
+                text (str): submitted probe command.
+            """
 
         def send_keys(self, *keys: str) -> None:
-            """Keep terminal input entirely synthetic."""
+            """Keep terminal input entirely synthetic.
+
+            Parameters:
+                *keys (str): synthetic terminal input.
+            """
 
         def kill(self) -> None:
             """There is no child process in this file-boundary fixture."""
