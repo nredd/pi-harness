@@ -86,7 +86,9 @@ test("collects tests once with locked manifests and renders all formats from iso
 		const inputs = [
 			"Cargo.lock",
 			"Cargo.toml",
-			...readdirSync(path.join(crateRoot, "src")).map((name) => `src/${name}`),
+			...["src", "tests"].flatMap((directory) =>
+				readdirSync(path.join(crateRoot, directory)).map((name) => `${directory}/${name}`),
+			),
 		].sort();
 		assert.deepEqual(Object.keys(metadata.sourceHashes), inputs);
 		for (const name of inputs)

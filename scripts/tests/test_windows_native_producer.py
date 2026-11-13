@@ -51,6 +51,12 @@ def test_windows_producer_uses_native_x64_and_preserves_reports() -> None:
     for report in ("lcov.info", "coverage.json", "metadata.json", "summary.txt", "*.log"):
         assert report in upload["with"]["path"]
     assert "computer-use-windows" in jobs["owned-ubuntu"]["needs"]
+    assert (
+        "packages/computer-use/native/windows/bridge-rs/** text eol=lf"
+        in (ROOT / ".gitattributes").read_text()
+    )
+    verify = commands.index("python -m harness.release --verify-root-overrides --root .")
+    assert verify < commands.index("npm ci --ignore-scripts")
 
 
 @pytest.mark.parametrize("result", ["success", "failure", "cancelled", "skipped", ""])

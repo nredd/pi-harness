@@ -74,12 +74,14 @@ per-crate subdirectory is created there; existing outputs are never cleaned or r
 temp directory, not the source tree. Each run gets its own `CARGO_TARGET_DIR` and tests once with
 `--locked --no-report`, then renders `lcov.info`, `summary.txt` (per-file lines/functions/regions),
 `coverage.json` (LLVM detail), `run.log`, `commands.log` and `metadata.json` (host, architecture,
-elapsed time and SHA-256 of every crate `src` file plus `Cargo.toml`/`Cargo.lock`). Metadata explicitly
+elapsed time and SHA-256 of every crate `src`/`tests` file plus `Cargo.toml`/`Cargo.lock`). Native
+Windows crate inputs use tracked LF checkout rules so hashes match repository source bytes. Metadata explicitly
 labels branches and statements unmeasured. Source hashes bind the report to source bytes, not
 an unrelated commit's report; inspect the CI head and compiler receipt as well.
 Collect the whole printed directory for review. The logs include test counts and test runtime;
 metadata time includes build, tests and all report formats. Compiler output is retained, not
-replaced with an invented test count. Doc tests run normally but are not separately instrumented.
+replaced with an invented test count. The Windows job runs doctests separately with `cargo test
+--doc`; cargo-llvm-cov's stable unit/integration producer does not instrument doctests.
 The output parent also contains a stable `coverage.json` accounting entry, published only after
 report validation; raw reports/logs remain under the unique run directory. CI uploads these files,
 not instrumented build products. `setup.log` records pinned-tool setup runtime; `metadata.json`

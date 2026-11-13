@@ -2450,16 +2450,6 @@ def test_every_npm_ci_job_restores_the_npm_cache_and_no_other_job_saves_one() ->
         installs = [i for i, step in enumerate(steps) if runs_npm_install(step)]
         if installs:
             installing.add(name)
-            if name == "computer-use-windows":
-                # Native Windows cannot use the guest-oriented setup action; setup-node owns its npm cache.
-                native_setup = next(
-                    i
-                    for i, step in enumerate(steps)
-                    if step.get("uses", "").startswith("actions/setup-node@")
-                )
-                assert native_setup < installs[0]
-                assert steps[native_setup]["with"]["cache"] == "npm"
-                continue
             assert setups, name
             assert setups[0] < installs[0], name
             assert all(steps[i].get("with", {}).get("npm-cache", "true") == "true" for i in setups), name
