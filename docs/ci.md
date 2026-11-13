@@ -23,9 +23,10 @@ scope and remaining limitations are documented [here](../packages/computer-use/d
 cargo-llvm-cov versions above, and two build jobs. It checks a native x64 MSVC compiler, formatting,
 all-target compilation, Clippy, docs, real crate tests and raw LLVM JSON/LCOV, then runs the opt-in
 Windows build/install routing tests with disposable destinations. Before npm installation it verifies
-core overrides with the pinned Python and the runner's existing Git public CA bundle via the
-verifier's supported `SSL_CERT_FILE` input (Windows Python has no compiled-in OpenSSL CA path).
-A missing bundle fails closed; system trust is not modified and TLS checks stay enabled.
+core overrides with the pinned Python and a temporary PEM exported from pinned Node's built-in
+public Mozilla roots via the verifier's supported `SSL_CERT_FILE` input (Windows Python has no
+compiled-in OpenSSL CA path). It does not depend on Git's installation layout or copy private
+machine roots. Root export errors fail closed; system trust is not modified and TLS checks stay enabled.
 It uploads source-bound metadata
 and raw reports as `computer-use-rust-windows-x64`. The Ubuntu fan-in additionally depends on this
 job and refuses any non-success outcome when computer-use is selected. This preserves the twelve

@@ -374,9 +374,11 @@ jobs:
         run: |
           $env:PYTHONPATH = 'integration'
           # The verifier intentionally uses only explicit OpenSSL CA defaults. Windows Python has none.
-          # Select the runner's existing public Git CA bundle; do not change system trust or bypass TLS.
-          $env:SSL_CERT_FILE = Join-Path $env:ProgramFiles 'Git\mingw64\etc\ssl\certs\ca-bundle.crt'
-          if (!(Test-Path -PathType Leaf $env:SSL_CERT_FILE)) { throw 'Missing Git public CA bundle' }
+          # Export pinned Node's built-in public Mozilla roots, not private machine roots or a guessed Git layout.
+          # This is a temporary CA input, not a system trust-store change or TLS bypass.
+          $env:SSL_CERT_FILE = Join-Path $env:RUNNER_TEMP 'cu-public-node-ca.pem'
+          node -e 'require("node:fs").writeFileSync(process.argv[1], require("node:tls").rootCertificates.join("\n") + "\n")' "$env:SSL_CERT_FILE"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           uv run --no-project --python (Get-Content .python-version) python -m harness.release --verify-root-overrides --root .
       - name: Install pinned native compiler and LLVM tools
         run: |

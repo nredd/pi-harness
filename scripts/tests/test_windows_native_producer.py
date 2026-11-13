@@ -7,6 +7,9 @@ References:
 from __future__ import annotations
 
 import os
+import re
+import shutil
+import ssl
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -57,9 +60,34 @@ def test_windows_producer_uses_native_x64_and_preserves_reports() -> None:
     )
     verify = commands.index("python -m harness.release --verify-root-overrides --root .")
     assert verify < commands.index("npm ci --ignore-scripts")
-    assert "$env:SSL_CERT_FILE = Join-Path $env:ProgramFiles" in commands
-    assert r"Git\mingw64\etc\ssl\certs\ca-bundle.crt" in commands
-    assert "Test-Path -PathType Leaf $env:SSL_CERT_FILE" in commands
+    assert "$env:SSL_CERT_FILE = Join-Path $env:RUNNER_TEMP" in commands
+    assert 'require("node:tls").rootCertificates' in commands
+    assert "Git\\mingw64" not in commands
+
+
+def test_windows_verifier_uses_loadable_public_node_roots(tmp_path: Path) -> None:
+    """Execute the workflow's actual CA producer and validate the resulting TLS roots offline.
+
+    Parameters:
+        tmp_path (Path): Disposable public PEM destination.
+    """
+    steps = workflow_jobs()["computer-use-windows"]["steps"]
+    verify = next(
+        step
+        for step in steps
+        if step.get("name") == "Verify root core overrides before installing dependencies"
+    )
+    match = re.search(r"node -e '([^']+)'", verify["run"])
+    assert match is not None
+    node = shutil.which("node")
+    assert node is not None, "The repository's pinned Node toolchain is required"
+    bundle = tmp_path / "public-roots.pem"
+    subprocess.run([node, "-e", match[1], str(bundle)], check=True, capture_output=True, text=True)
+    context = ssl.create_default_context(cafile=str(bundle))
+    assert context.cert_store_stats()["x509_ca"] > 0
+    assert context.check_hostname
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert bundle.read_text().startswith("-----BEGIN CERTIFICATE-----")
 
 
 @pytest.mark.parametrize("result", ["success", "failure", "cancelled", "skipped", ""])
