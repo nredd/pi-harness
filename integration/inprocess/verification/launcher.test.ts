@@ -37,8 +37,9 @@ process.exitCode = ${CHILD_FAILURE_STATUS};\n`,
 		expect(actual.resolved).toBe(actual.home);
 		expect(actual.xdg).toBe(join(actual.home, ".config"));
 		expect(actual.argv[0]).toBe("--bun");
-		// Package arguments come first; scripts/tests/test_coverage_producers.py pins the appended coverage arguments.
-		expect(actual.argv.slice(2, 4)).toEqual(["run", "--maxWorkers=1"]);
+		// Bare `--coverage` goes first (Vitest's parser drops `--coverage.*` fields parsed before it), then the package
+		// arguments; scripts/tests/test_coverage_producers.py pins the provider, reporters and directory that follow.
+		expect(actual.argv.slice(2, 5)).toEqual(["run", "--coverage", "--maxWorkers=1"]);
 		expect(existsSync(actual.home)).toBe(false);
 		expect(result.stdout).toContain(`exit ${CHILD_FAILURE_STATUS}`);
 	} finally {
