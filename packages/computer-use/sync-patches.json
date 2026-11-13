@@ -1170,10 +1170,12 @@
 			],
 			"files": [
 				"native/macos/bridge.swift",
+				"scripts/check-sync-reverts.mjs",
 				"src/actions.ts",
-				"test/invariants.test.mjs"
+				"test/invariants.test.mjs",
+				"test/strict-headless-invariant.test.mjs"
 			],
-			"check": "test/invariants.test.mjs",
+			"check": "test/strict-headless-invariant.test.mjs",
 			"dropControls": [
 				"strict headless TS rejection drift (upstream #112 deviation)",
 				"strict headless native rejection drift (upstream #112 deviation)"
@@ -1492,6 +1494,7 @@
 		"test/session-lifecycle.test.mjs",
 		"test/setup-helper-inprocess.test.mjs",
 		"test/stdio-helper-clients.test.mjs",
+		"test/strict-headless-invariant.test.mjs",
 		"test/support/fake-browser.mjs",
 		"test/support/fake-desktop.mjs",
 		"test/support/fake-helper.mjs",
