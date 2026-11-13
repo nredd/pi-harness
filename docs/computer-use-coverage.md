@@ -77,6 +77,38 @@ These scoped reports do not establish whole-package or native coverage. The inde
 command-refusal mutation must fail before the patch is admitted. PR CI runs the full
 package/accounting gates, including missing-report refusal.
 
+## Retained verification gates (#697)
+
+Seven repository gates now export import-inert `main(argv, deps)` entrypoints (the shared
+`check-sync-ledger.mjs` already exported its validators). `computer-use-vitest` measures
+`check-commit-messages`, `check-docs-platform`, `check-docs`, `check-package-assets`,
+`check-sync-ledger`, `check-sync-reverts` and `check-upstream-sync` with per-file zero
+L/F/B/S thresholds. Both inventories retain every source; none remains a verification-helper
+exemption. Existing LCOV and `json-summary` producers supply actual counters; missing data
+still fails accounting closed, never becomes a zero.
+
+The scoped macOS run of `verification-gates`, `verification-sync-gates` and `sync-ledger`
+passed 27 tests, measuring L/F/B/S **279/46/163/314**, all covered. Actual tar archives,
+disposable Git histories, source-tree comparison, documentation generators and an expected-failure
+mutation child run offline. Injected boundaries cover launch failures, retry exhaustion, wrong
+failures, surviving mutations and cleanup without a network fetch or live helper. The full
+package gate exposed an existing 90s outer drop-control deadline terminating the entire
+`invariants` suite before its 300s SDK hook could finish. Only its two drift controls now allow
+550s: SDK hook 300s + source test 90s + cache-control test 90s + cursor test 50s + launcher 20s.
+Inner SDK/source deadlines, all assertions and expected-failure matching remain unchanged;
+other controls retain 90s. Both outer-deadline branches are tested. These numbers
+are a scoped measurement, not whole-package or cross-platform evidence. The asset-validation
+mutation must fail the independent missing-asset fixture in `test:sync-reverts`.
+
+Launcher disposition remains explicit: retain `check-linux-live.mjs` as an unmeasured opt-in
+D-Bus lifecycle launcher (its assertions live in `test/linux-live.test.mjs`), and retain
+`pi-cubench-agent.mjs` as an unmeasured manual gateway/desktop benchmark driver. Neither is
+published or counted as measured here. The latter contains orchestration and must not be
+called a passive fixture. Measuring these launchers needs a separately admitted offline seam
+and does not authorize real UI or gateway calls. #697 remains open for that owner disposition
+and the separately owned subagents runtime scope (#802/#805); this change does not close the
+umbrella. #759 owns the separate async-helper measurement.
+
 ## Baseline
 
 Measured 2026-11-11 on macOS (Apple Silicon, Node 26.13.0) at `6d913af1` (main after #717, #718, #719,

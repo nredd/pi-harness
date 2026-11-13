@@ -34,17 +34,10 @@
   ],
   "enforcement_changes": [],
   "verification_helpers": [
-    { "path": "packages/computer-use/scripts/check-docs-platform.mjs", "reason": "Non-shipped subprocess fixtures verify host-independent generated documentation." },
-    { "path": "packages/computer-use/scripts/check-docs.mjs", "reason": "Non-shipped documentation link and owned-install instruction assertions." },
-    { "path": "packages/computer-use/scripts/check-sync-ledger.mjs", "reason": "Non-shipped sync provenance/disposition validator consumed by negative-control checks." },
-    { "path": "packages/computer-use/scripts/check-sync-reverts.mjs", "reason": "Non-shipped disposable patch-drop controls prove carried behaviors remain necessary." },
-    { "path": "packages/computer-use/scripts/check-upstream-sync.mjs", "reason": "Non-shipped pinned-upstream source comparison rejects undeclared drift." },
     { "path": "scripts/check-biome-paths.test.mjs", "reason": "Non-shipped regression test exercises real Biome valid/missing-path behavior and preflight rejection; verification only, not a runtime entrypoint." },
     { "path": "scripts/router_contract.test.mjs", "reason": "Non-shipped Vitest suite runs the packed-router contract fixture in process against virtual mocks of its placeholder imports; verification only, not a runtime entrypoint." },
     { "path": "integration/inprocess/verification/home-setup.ts", "reason": "Vitest setup entry that only calls the measured `installHomeGuard` in `home-guard.ts`; Vitest hard-excludes a config's own `setupFiles` from coverage, so no producer can measure it. Never shipped." },
-    { "path": "packages/computer-use/scripts/check-commit-messages.mjs", "reason": "Repository commit-message policy checker, not runtime code or a published package file." },
     { "path": "packages/computer-use/scripts/check-linux-live.mjs", "reason": "Opt-in D-Bus session launcher for the live Linux Vitest scenario in test/linux-live.test.mjs; holds no assertions and is absent from published files." },
-    { "path": "packages/computer-use/scripts/check-package-assets.mjs", "reason": "Packed-asset and package-manifest verification harness, including Linux source checks from #150; not shipped." },
     { "path": "packages/computer-use/scripts/pi-cubench-agent.mjs", "reason": "Manual Cubench benchmark driver using a benchmark gateway; verification infrastructure excluded from npm published files." },
     { "path": "packages/subagents/scripts/build-runtime.mjs", "reason": "Repo-only, unpacked configuration of plan-mode's measured runtime builder (runtime-build-tooling) that regenerates dist/ (#577)." },
     { "path": "packages/subagents/scripts/check-runtime.mjs", "reason": "Repo-only, unpacked staleness gate comparing the committed dist/ with a fresh build (#577)." }
@@ -241,7 +234,7 @@
     },
     "computer-use": {
       "root": "packages/computer-use",
-      "owned": ["src/**/*.ts", "src/**/*.mjs", "src/**/*.mts", "extensions/**/*.ts", "native/macos/*.swift", "native/windows/bridge-rs/src/**/*.rs", "native/linux/bridge-rs/src/**/*.rs", "scripts/build-native.mjs", "scripts/make-signing-cert.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs", "scripts/docs-generators/*.mjs", "scripts/*.sh", "docs/**/*.ts", "docs/**/*.tsx", "docs/**/*.mjs"],
+      "owned": ["src/**/*.ts", "src/**/*.mjs", "src/**/*.mts", "extensions/**/*.ts", "native/macos/*.swift", "native/windows/bridge-rs/src/**/*.rs", "native/linux/bridge-rs/src/**/*.rs", "scripts/build-native.mjs", "scripts/check-docs-platform.mjs", "scripts/check-docs.mjs", "scripts/check-commit-messages.mjs", "scripts/check-sync-ledger.mjs", "scripts/check-sync-reverts.mjs", "scripts/check-upstream-sync.mjs", "scripts/check-package-assets.mjs", "scripts/make-signing-cert.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs", "scripts/docs-generators/*.mjs", "scripts/*.sh", "docs/**/*.ts", "docs/**/*.tsx", "docs/**/*.mjs"],
       "exclusions": [{ "path": "docs/next-env.d.ts", "kind": "generated", "reason": "Next.js-generated declaration references only; no executable source." }, { "path": "src/platform/macos/helper-path.d.mts", "kind": "type-only", "reason": "Only TypeScript declarations for helper-path.mjs; emits no executable JavaScript." }],
       "status": "pending",
       "goal": "excluded",
@@ -311,7 +304,7 @@
     },
     "computer-use-vitest": {
       "root": "packages/computer-use",
-      "owned": ["src/**/*.ts", "src/**/*.mjs", "extensions/**/*.ts", "scripts/build-native.mjs", "scripts/make-signing-cert.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs", "scripts/docs-generators/*.mjs"],
+      "owned": ["src/**/*.ts", "src/**/*.mjs", "extensions/**/*.ts", "scripts/build-native.mjs", "scripts/check-docs-platform.mjs", "scripts/check-docs.mjs", "scripts/check-commit-messages.mjs", "scripts/check-sync-ledger.mjs", "scripts/check-sync-reverts.mjs", "scripts/check-upstream-sync.mjs", "scripts/check-package-assets.mjs", "scripts/make-signing-cert.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs", "scripts/docs-generators/*.mjs"],
       "exclusions": [{ "path": "src/platform/types.ts", "kind": "type-only", "reason": "Only TypeScript declarations; emits no executable JavaScript." }],
       "status": "measured",
       "goal": "excluded",

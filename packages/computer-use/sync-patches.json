@@ -1248,6 +1248,26 @@
 			}
 		},
 		{
+			"id": "verification-gate-coverage",
+			"purpose": "Measure seven retained verification gates in process with offline success and refusal controls (#697)",
+			"rows": ["Verification gate coverage"],
+			"files": [
+				"scripts/check-commit-messages.mjs",
+				"scripts/check-docs-platform.mjs",
+				"scripts/check-docs.mjs",
+				"scripts/check-package-assets.mjs",
+				"scripts/check-sync-ledger.mjs",
+				"scripts/check-sync-reverts.mjs",
+				"scripts/check-upstream-sync.mjs",
+				"test/verification-gates.test.mjs",
+				"test/verification-sync-gates.test.mjs",
+				"vitest.config.ts"
+			],
+			"check": "test/verification-gates.test.mjs",
+			"dropControls": ["Verification gates reject a missing required asset (#697)"],
+			"upstream": {"status": "harness-only", "reference": "UPSTREAM.md"}
+		},
+		{
 			"id": "wheel-horizontal-sign",
 			"purpose": "Post the macOS scroll wheel with positive `scrollX` scrolling right, matching the AX scroll-bar convention and `scrollY` (upstream posts `wheel2: Int32(deltaX)`, which scrolls left)",
 			"rows": [
@@ -1478,6 +1498,8 @@
 		"test/sync-ledger.test.mjs",
 		"test/tool-schemas.test.mjs",
 		"test/unpaired-act.test.mjs",
+		"test/verification-gates.test.mjs",
+		"test/verification-sync-gates.test.mjs",
 		"test/windows-build-scripts.test.mjs",
 		"test/windows-helper-client.test.mjs",
 		"test/wsl-detection.test.mjs",
