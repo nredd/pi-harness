@@ -930,13 +930,12 @@ var SubagentScheduler = class _SubagentScheduler {
   /** Add a job, persist, and arm if enabled. Returns the stored job. */
   addJob(input) {
     const store = this.requireStore();
-    for (const old of store.list()) {
-      if (old.name === input.name && this.isFinished(old)) this.removeJob(old.id);
-    }
-    if (store.hasName(input.name)) {
+    const sameName = store.list().filter((old) => old.name === input.name);
+    if (sameName.some((old) => !this.isFinished(old))) {
       throw new Error(`A scheduled job named "${input.name}" already exists.`);
     }
     const job = this.buildJob(input);
+    for (const old of sameName) this.removeJob(old.id);
     store.add(job);
     this.scheduleJob(job);
     this.emit({ type: "added", job });
@@ -1222,6 +1221,7 @@ var SubagentScheduler = class _SubagentScheduler {
     const bounded = s.trim().match(/^(.*\S)\s+until\s+(\S+)$/i);
     if (bounded) {
       const base = _SubagentScheduler.detectSchedule(bounded[1], now);
+      if (base.until !== void 0) throw new Error(`Invalid schedule "${s}". Only one "until" is allowed.`);
       if (base.type === "once") throw new Error(`Invalid schedule "${s}". "until" only applies to cron or interval schedules.`);
       const deadline = _SubagentScheduler.parseRelativeTime(bounded[2], now) ?? bounded[2];
       const until = new Date(deadline);
@@ -8170,8 +8170,9 @@ Terse command-style prompts produce shallow, generic work.
             isolation
           });
           const next = scheduler.getNextRun(job.id);
+          const untilNote = job.until ? `, until: ${job.until}` : "";
           return textResult(
-            `${fallbackNoteFor(void 0)}Scheduled "${job.name}" (id: ${job.id}, type: ${job.scheduleType}${job.until ? `, until: ${job.until}` : ""}). Next run: ${next ?? "(unknown)"}. Manage via /agents \u2192 Scheduled jobs.`
+            `${fallbackNoteFor(void 0)}Scheduled "${job.name}" (id: ${job.id}, type: ${job.scheduleType}${untilNote}). Next run: ${next ?? "(unknown)"}. Manage via /agents \u2192 Scheduled jobs.`
           );
         } catch (err) {
           return textResult(errorMessage(err));

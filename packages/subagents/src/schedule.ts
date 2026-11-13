@@ -157,14 +157,14 @@ export class SubagentScheduler {
   /** Add a job, persist, and arm if enabled. Returns the stored job. */
   addJob(input: NewJobInput): ScheduledSubagent {
     const store = this.requireStore();
-    // A finished job only holds its name for display; a new job may reuse it.
-    for (const old of store.list()) {
-      if (old.name === input.name && this.isFinished(old)) this.removeJob(old.id);
-    }
-    if (store.hasName(input.name)) {
+    const sameName = store.list().filter(old => old.name === input.name);
+    if (sameName.some(old => !this.isFinished(old))) {
       throw new Error(`A scheduled job named "${input.name}" already exists.`);
     }
+    // Validate before reaping: a rejected add must not delete anything.
     const job = this.buildJob(input);
+    // A finished job only holds its name for display; the new job takes it over.
+    for (const old of sameName) this.removeJob(old.id);
     store.add(job);
     this.scheduleJob(job); // buildJob always creates an enabled job
     this.emit({ type: "added", job });
@@ -509,6 +509,7 @@ export class SubagentScheduler {
     const bounded = s.trim().match(/^(.*\S)\s+until\s+(\S+)$/i);
     if (bounded) {
       const base = SubagentScheduler.detectSchedule(bounded[1], now);
+      if (base.until !== undefined) throw new Error(`Invalid schedule "${s}". Only one "until" is allowed.`);
       if (base.type === "once") throw new Error(`Invalid schedule "${s}". "until" only applies to cron or interval schedules.`);
       const deadline = SubagentScheduler.parseRelativeTime(bounded[2], now) ?? bounded[2];
       const until = new Date(deadline);

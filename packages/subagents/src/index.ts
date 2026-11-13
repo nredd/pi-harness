@@ -2626,8 +2626,9 @@ Terse command-style prompts produce shallow, generic work.
             isolation: isolation,
           });
           const next = scheduler.getNextRun(job.id);
+          const untilNote = job.until ? `, until: ${job.until}` : "";
           return textResult(
-            `${fallbackNoteFor(undefined)}Scheduled "${job.name}" (id: ${job.id}, type: ${job.scheduleType}${job.until ? `, until: ${job.until}` : ""}). ` +
+            `${fallbackNoteFor(undefined)}Scheduled "${job.name}" (id: ${job.id}, type: ${job.scheduleType}${untilNote}). ` +
             `Next run: ${next ?? "(unknown)"}. ` +
             `Manage via /agents → Scheduled jobs.`,
           );

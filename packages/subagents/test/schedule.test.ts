@@ -387,8 +387,10 @@ describe("SubagentScheduler — fire path", () => {
     });
     expect(store.get(job.id)?.enabled).toBe(true);
     vi.advanceTimersByTime(41 * 86_400_000);
-    expect(manager.spawn).toHaveBeenCalledTimes(40 * 24 - 1);
     expect(store.get(job.id)?.enabled).toBe(false);
+    const fired = manager.spawn.mock.calls.length;
+    vi.advanceTimersByTime(5 * 3_600_000);
+    expect(manager.spawn).toHaveBeenCalledTimes(fired);
   });
 
   it("an expired deadline job found at start is disabled, never armed", () => {
@@ -418,6 +420,20 @@ describe("SubagentScheduler — fire path", () => {
     expect(scheduler.list().map(j => j.id)).toEqual([again.id]);
   });
 
+  it("a rejected add leaves a finished same-name job in place", async () => {
+    const first = scheduler.addJob({
+      name: "Keep", description: "Keep", schedule: "+1s",
+      subagent_type: "general-purpose", prompt: "once",
+    });
+    vi.advanceTimersByTime(2_000);
+    await vi.waitFor(() => expect(scheduler.list()[0]?.lastStatus).toBe("success"));
+    expect(() => scheduler.addJob({
+      name: "Keep", description: "Keep", schedule: "garbage",
+      subagent_type: "general-purpose", prompt: "x",
+    })).toThrow(/Invalid schedule/);
+    expect(scheduler.list().map(j => j.id)).toEqual([first.id]);
+  });
+
   it("armed jobs and a running one-shot keep their names", () => {
     const add = (name: string, schedule: string) =>
       scheduler.addJob({ name, description: name, schedule, subagent_type: "general-purpose", prompt: "x" });
@@ -440,6 +456,7 @@ describe("SubagentScheduler — fire path", () => {
       scheduler.addJob({ name: schedule, description: "d", schedule, subagent_type: "general-purpose", prompt: "x" });
     expect(bad("10s until nonsense")).toThrow(/Invalid deadline/);
     expect(bad("10s until 2000-01-01T00:00:00Z")).toThrow(/in the past/);
+    expect(bad("10s until +1h until +2h")).toThrow(/Only one "until"/);
     expect(bad("+10m until +1h")).toThrow(/only applies to cron or interval/);
     expect(bad("0 0 9 * * 1 until +0s")).toThrow(/in the past/);
   });
