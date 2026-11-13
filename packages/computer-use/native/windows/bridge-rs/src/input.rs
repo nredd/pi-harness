@@ -102,6 +102,15 @@ pub fn open_browser_location(url: &str) -> Result<(), ProtocolError> {
 }
 
 pub fn act(args: &Value) -> Result<Value, ProtocolError> {
+    act_with(args, dispatch)
+}
+
+/// Validate raw-input policy before entering the OS delivery boundary.
+/// Tests inject delivery here, never a synthetic-input API or a foreground window.
+fn act_with(
+    args: &Value,
+    deliver: impl FnOnce(&ParsedActRequest, &Value, &str) -> Result<Value, ProtocolError>,
+) -> Result<Value, ProtocolError> {
     let request = parse_act_request(args)?;
     let grounding = args
         .get("resolvedPoint")
@@ -118,8 +127,17 @@ pub fn act(args: &Value) -> Result<Value, ProtocolError> {
         policy_allows_raw_input(&request)?;
     }
 
+    deliver(&request, args, grounding)
+}
+
+fn dispatch(
+    request: &ParsedActRequest,
+    args: &Value,
+    grounding: &str,
+) -> Result<Value, ProtocolError> {
     #[cfg(not(windows))]
     {
+        let _ = (request, args);
         Ok(json!({
             "outcome": "unknown",
             "performed": { "grounding": grounding, "delivery": if grounding == "description" { "ax" } else { "hid" } },
@@ -129,7 +147,7 @@ pub fn act(args: &Value) -> Result<Value, ProtocolError> {
 
     #[cfg(windows)]
     {
-        native::act(&request, args, grounding)
+        native::act(request, args, grounding)
     }
 }
 
@@ -471,6 +489,44 @@ mod tests {
     }
 
     #[test]
+    fn raw_input_refusals_do_not_dispatch() {
+        for policy in ["default", "background", "ax_only", "invalid"] {
+            for action in [
+                "click",
+                "scroll",
+                "setText",
+                "typeText",
+                "keypress",
+                "drag",
+                "moveMouse",
+            ] {
+                let expected = if policy == "ax_only" {
+                    ErrorCode::CoordinateBlocked
+                } else {
+                    ErrorCode::ForegroundRequired
+                };
+                let args = json!({"lookId":"look_1","action":action,"policy":policy,
+                    "target":{"x":1,"y":2},"resolvedPoint":{"x":1,"y":2}});
+                let mut delivered = false;
+                let error = act_with(&args, |_, _, _| {
+                    delivered = true;
+                    Ok(json!({"outcome":"unknown"}))
+                })
+                .unwrap_err();
+                assert!(!delivered, "refused input must not reach delivery");
+                assert_eq!(error.code, expected, "{policy}/{action}");
+            }
+            // Raw keyboard/motion actions must also refuse without resolvedPoint.
+            for action in ["typeText", "keypress", "drag", "moveMouse"] {
+                let args = json!({"lookId":"look_1","action":action,"policy":policy,"target":{"ref":"@e1"}});
+                assert!(
+                    act_with(&args, |_, _, _| panic!("refused input reached delivery")).is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn attaches_delta_source_and_delta() {
         let out = response_with_delta(
             json!({"outcome":"worked","performed":{}}),
@@ -482,7 +538,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_coordinate_actions_do_not_claim_worked() {
+    fn raw_coordinate_actions_reach_delivery_after_preflight() {
         let actions = ["click", "moveMouse", "scroll", "typeText", "keypress"];
         for action in actions {
             let params = match action {
@@ -491,7 +547,11 @@ mod tests {
                 "scroll" => json!({"scrollY":1,"scrollX":0}),
                 _ => json!({}),
             };
-            let result = act(&json!({"lookId":"look_1","action":action,"policy":"foreground","target":{"x":1,"y":1},"params":params,"resolvedPoint":{"x":1,"y":1}})).unwrap();
+            let result = act_with(&json!({"lookId":"look_1","action":action,"policy":"foreground","target":{"x":1,"y":1},"params":params,"resolvedPoint":{"x":1,"y":1}}), |request, _, grounding| {
+                assert_eq!(request.action, action);
+                assert_eq!(grounding, "coordinates");
+                Ok(json!({"outcome":"unknown"}))
+            }).unwrap();
             assert_ne!(
                 result["outcome"], "worked",
                 "{action} must not report worked without verification"

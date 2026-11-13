@@ -1,3 +1,5 @@
+# Native Windows compiler inputs must hash to the same source bytes on every checkout.
+packages/computer-use/native/windows/bridge-rs/** text eol=lf
 # Raw formatter diffs contain space-prefixed empty context lines, including EOF.
 # Preserve those bytes: removing the spaces changes the diff format under test.
 packages/dev-tools/test/fixtures/cargo/fmt-check.txt whitespace=-blank-at-eol,-blank-at-eof

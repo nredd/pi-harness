@@ -200,6 +200,14 @@ export const cases = [
 		failure: /Expected values to be strictly equal/,
 	},
 	{
+		name: "Rust coverage source hashes (#696)",
+		file: "scripts/rust-coverage.mjs",
+		before: "\t\t\t\t\tsourceHashes,",
+		after: "\t\t\t\t\tsourceHashes: {},",
+		check: "test/rust-coverage.test.mjs",
+		failure: /AssertionError|deep-equal/,
+	},
+	{
 		name: "Rust protocol/state Cargo registration (#801)",
 		file: "native/linux/bridge-rs/tests/protocol_state_errors.rs",
 		before: "#[test]\nfn every_error_has_the_stable_wire_code_and_display()",
@@ -325,6 +333,15 @@ export const cases = [
 		check: "test/windows-helper-client.test.mjs",
 		failure: /timed out/,
 	},
+	{
+		name: "Windows raw-input policy refusal (#696)",
+		file: "native/windows/bridge-rs/src/input.rs",
+		before: "policy_allows_raw_input(&request)?;",
+		after: "/* preflight refusal dropped */",
+		check: "test/windows-native-refusals.test.mjs",
+		failure: /raw_input_refusals_do_not_dispatch.*FAILED/s,
+	},
+
 	{
 		name: "accessibility hit test for pointer input (#646)",
 		file: "native/macos/bridge.swift",
@@ -592,6 +609,14 @@ export const cases = [
 		check: "test/bridge-observe-query.test.mjs",
 		// Restoring native routing now breaks the target invariant, not the deleted dead guard.
 		failure: /Cannot read properties of undefined \(reading 'pid'\)/,
+	},
+	{
+		name: "fake helper socket close settles request (#835)",
+		file: "test/fake-helper.test.mjs",
+		before: '\t\tsocket.once("close", () => reject(new Error("Helper socket closed before reply")));\n',
+		after: "",
+		check: "test/fake-helper.test.mjs",
+		failure: /a closed socket must settle the waiting request/,
 	},
 	{
 		name: "fake helper success replies (#724)",

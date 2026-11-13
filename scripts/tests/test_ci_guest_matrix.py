@@ -1459,8 +1459,19 @@ def test_owned_fan_ins_share_one_definition_and_wait_only_for_their_own_shards()
         assert fan_in["strategy"]["matrix"] == {"os": [os_name]}
         # A failed classify or a failed shard must still produce a red required check, never a skipped one.
         assert fan_in["if"] == "${{ !cancelled() }}"
-        assert fan_in["needs"] == ["classify", shards]
-        assert fan_in["env"] == {"SHARDS_RESULT": f"${{{{ needs.{shards}.result }}}}"}
+        expected_needs = ["classify", shards]
+        expected_env = {"SHARDS_RESULT": f"${{{{ needs.{shards}.result }}}}"}
+        if os_name == "ubuntu-24.04":
+            expected_needs.append("computer-use-windows")
+            expected_env |= {
+                "WINDOWS_REQUIRED": (
+                    "${{ contains(toJSON(fromJSON(needs.classify.outputs.plan || '{}')"
+                    "['owned (ubuntu-24.04)'].shards), 'packages/computer-use') }}"
+                ),
+                "WINDOWS_RESULT": "${{ needs.computer-use-windows.result }}",
+            }
+        assert fan_in["needs"] == expected_needs
+        assert fan_in["env"] == expected_env
         assert fan_in["runs-on"] == "ubuntu-24.04"
         assert "defaults" not in fan_in
 
@@ -1760,6 +1771,7 @@ def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> Non
         "classify",
         *OWNED_SHARD_JOBS.values(),
         *OWNED_FAN_IN.values(),
+        "computer-use-windows",
         "contracts",
         "stack",
         "release-core",

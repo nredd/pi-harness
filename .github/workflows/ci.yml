@@ -347,18 +347,100 @@ jobs:
     timeout-minutes: *owned-shard-timeout
     steps: *owned-shard-steps
 
+  # Native Windows is not the Linux guest. Keep x64 hosted even when WSL routes to an ARM64 pool (#736).
+  computer-use-windows:
+    name: computer-use Rust (windows-x64)
+    needs: classify
+    if: ${{ fromJSON(needs.classify.outputs.plan || '{}')['owned (ubuntu-24.04)'].run && contains(toJSON(fromJSON(needs.classify.outputs.plan)['owned (ubuntu-24.04)'].shards), 'packages/computer-use') }}
+    runs-on: windows-2025
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_BUILD_JOBS: '2'
+      RUSTUP_TOOLCHAIN: '1.97.1'
+      PI_CU_WINDOWS_SCRIPTS: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci-tools
+        with:
+          guest: windows
+      - name: Verify root core overrides before installing dependencies
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $env:PYTHONPATH = 'integration'
+          # The verifier intentionally uses only explicit OpenSSL CA defaults. Windows Python has none.
+          # Export pinned Node's built-in public Mozilla roots, not private machine roots or a guessed Git layout.
+          # This is a temporary CA input, not a system trust-store change or TLS bypass.
+          $env:SSL_CERT_FILE = Join-Path $env:RUNNER_TEMP 'cu-public-node-ca.pem'
+          node -e 'require("node:fs").writeFileSync(process.argv[1], require("node:tls").rootCertificates.join("\n") + "\n")' "$env:SSL_CERT_FILE"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv run --no-project --python (Get-Content .python-version) python -m harness.release --verify-root-overrides --root .
+      - name: Install pinned native compiler and LLVM tools
+        run: |
+          New-Item -ItemType Directory -Force packages/computer-use/coverage/native-windows | Out-Null
+          rustup toolchain install 1.97.1 --profile minimal --component llvm-tools-preview,rustfmt,clippy
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +1.97.1 install cargo-llvm-cov --version 0.9.1 --locked --root "$env:RUNNER_TEMP/cu-cov-tools"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "$env:RUNNER_TEMP/cu-cov-tools/bin" >> $env:GITHUB_PATH
+          rustup run 1.97.1 rustc --version --verbose | Tee-Object packages/computer-use/coverage/native-windows/compiler.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Select-String -Quiet 'host: x86_64-pc-windows-msvc' packages/computer-use/coverage/native-windows/compiler.log)) { throw 'Native Windows x64 compiler required' }
+      - name: Format, compile, lint and document the Windows crate
+        run: |
+          $manifest = 'packages/computer-use/native/windows/bridge-rs/Cargo.toml'
+          cargo fmt --manifest-path $manifest -- --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo check --locked --all-targets --manifest-path $manifest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked --all-targets --manifest-path $manifest -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:RUSTDOCFLAGS = '-D warnings'
+          cargo doc --locked --no-deps --manifest-path $manifest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --doc --manifest-path $manifest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Native Windows tests and LLVM reports (no desktop interaction)
+        run: node packages/computer-use/scripts/rust-coverage.mjs --crate windows --output packages/computer-use/coverage/native-windows
+      - name: Install isolated script-test dependencies
+        run: npm ci --ignore-scripts
+      - name: Windows build and install routing into disposable paths
+        working-directory: packages/computer-use
+        run: node ../../scripts/run-vitest.ts node test/windows-build-scripts.test.mjs test/rust-coverage.test.mjs --coverage.enabled=false
+      - name: Preserve Windows source-bound native reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: computer-use-rust-windows-x64
+          path: |
+            packages/computer-use/coverage/native-windows/compiler.log
+            packages/computer-use/coverage/native-windows/coverage.json
+            packages/computer-use/coverage/native-windows/*/lcov.info
+            packages/computer-use/coverage/native-windows/*/coverage.json
+            packages/computer-use/coverage/native-windows/*/summary.txt
+            packages/computer-use/coverage/native-windows/*/metadata.json
+            packages/computer-use/coverage/native-windows/*/*.log
+          if-no-files-found: error
+
   # The fan-in always reports from Ubuntu: it runs no tests, so a NOT RUN, blocked or running cell holds no macOS or
   # Windows slot. Its one-cell matrix keeps the required name, and the `owned (${{ matrix.os }})` placeholder name of
   # a job a cancelled run never started.
   owned-ubuntu:
     if: ${{ !cancelled() }}
     name: &owned-name owned (${{ matrix.os }})
-    needs: [classify, owned-shards-ubuntu]
+    needs: [classify, owned-shards-ubuntu, computer-use-windows]
     strategy:
       matrix:
         os: [ubuntu-24.04]
     env:
       SHARDS_RESULT: ${{ needs.owned-shards-ubuntu.result }}
+      WINDOWS_REQUIRED: ${{ contains(toJSON(fromJSON(needs.classify.outputs.plan || '{}')['owned (ubuntu-24.04)'].shards), 'packages/computer-use') }}
+      WINDOWS_RESULT: ${{ needs.computer-use-windows.result }}
     runs-on: ubuntu-24.04
     timeout-minutes: &owned-timeout 15
     steps: &owned-steps
@@ -386,6 +468,10 @@ jobs:
         run: |
           if [ "$SHARDS_RESULT" != success ]; then
             echo "::error title=$CELL shards $SHARDS_RESULT::The plan runs this cell, but its shard jobs finished '$SHARDS_RESULT'; see the 'owned shard' jobs"
+            exit 1
+          fi
+          if [ "${WINDOWS_REQUIRED:-false}" = true ] && [ "$WINDOWS_RESULT" != success ]; then
+            echo "::error title=Windows native producer $WINDOWS_RESULT::Native Windows x64 compiler, tests, reports and build scripts must succeed"
             exit 1
           fi
           echo "Every planned shard of $CELL succeeded"

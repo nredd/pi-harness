@@ -8,6 +8,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 - Gate actual AppKit cursor overlay lifecycle behind exact `PI_COMPUTER_USE_LIVE=1`; default invariants retain motion, compiler and fake gate-refusal assertions and report the live check as `NOT RUN`. Source mutation controls never execute the unsafe fixture (nredd/pi-harness#819).
 - Deterministic finite-input tests close the five remaining cursor-motion LLVM regions and ten pure-key/selection policy regions in `bridge.swift`. Numerical safeguards stay intact; no live desktop input, capture or TCC runs (nredd/pi-harness#810, #645).
+- Native Windows x64 compiler/test/LLVM CI producer with raw reports, source-hash metadata and deterministic input-policy/null-capture refusal controls. ARM64 and live desktop acceptance remain separate; absent native branch/statement counters remain unmeasured (nredd/pi-harness#696).
 
 - Real-source Swift ref ownership and look payload assertions cover transfer guards, exact lookup, FIFO snapshot eviction, optional fields and recursive child order without AX queries. Window equality, destination ownership, optional flags and child order have executable mutation controls. Distinct handles use an owned non-GUI child PID, reaped before assertions; a source-level guard rejects AX queries/actions. Runtime behavior is unchanged (nredd/pi-harness#769).
 
@@ -27,6 +28,8 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 - `scripts/setup-helper.mjs` exports `main(argv, deps)` (host seams injected, `import.meta` entry guard only at top level) so it is measured in process. CLI behavior is unchanged; two unreachable arms (a non-darwin check in the local signing path, a duplicate bundle-name check in archive search) are gone (nredd/pi-harness#704, #645).
 
 ### Fixed
+
+- Settle the fake-helper socket self-test when a connection closes before reply, so restart polling can retry rather than wait on an unresolved request (nredd/pi-harness#835).
 
 - Windows helper commands now reject promptly with `Operation aborted.` for post-write cancellation, clear the pending request, timer and listener on every completion/write-error path, and ignore late replies. This cancels the local wait, not native work already sent (nredd/pi-harness#750).
 - Browser `act_ui` rejects ref-only `moveMouse` with `invalid_args` instead of sending absent coordinates to CDP; use explicit `x`/`y`. Empty browser `keypress` rejection now carries `invalid_args`. Both fail before any batch delivery or epoch change; desktop behavior is unchanged (nredd/pi-harness#748).

@@ -242,8 +242,21 @@ test("revert gate validates real inventory and executes an actual expected-failu
 	assert.equal(readFileSync(path.join(root, control.file), "utf8"), "original");
 });
 
+function isDocumentationControl(args, cwd) {
+	return args[1] === path.join(cwd, "scripts/check-docs.mjs");
+}
+
+test("documentation subprocess selection survives inserted and reordered controls", () => {
+	const cwd = "/synthetic/sandbox";
+	const documentation = ["/synthetic/tsx", path.join(cwd, "scripts/check-docs.mjs")];
+	const cdp = ["/synthetic/run-vitest.ts", "node", "test/cdp-client.test.mjs"];
+	const inserted = ["/synthetic/run-vitest.ts", "node", "test/build-native.test.mjs"];
+	for (const commands of [[inserted, cdp, documentation], [documentation, cdp, inserted], [cdp, documentation, inserted]])
+		assert.deepEqual(commands.filter((args) => isDocumentationControl(args, cwd)), [documentation]);
+});
+
 test("real documentation drop control rejects the mutant through a symlinked sandbox CLI", () => {
-	let calls = 0;
+	let documentationSeen = false;
 	assert.throws(
 		() =>
 			reverts([], {
@@ -252,20 +265,19 @@ test("real documentation drop control rejects the mutant through a symlinked san
 				platform: process.platform,
 				...quiet,
 				spawn: (command, args, options) => {
-					calls++;
-					if (calls > 3) throw new Error("documentation control completed");
-					if (calls === 3) {
+					if (documentationSeen) throw new Error("documentation control completed");
+					if (isDocumentationControl(args, options.cwd)) {
+						documentationSeen = true;
 						const alias = path.join(scratch(), "package-alias");
 						symlinkSync(options.cwd, alias, "dir");
 						args[1] = path.join(alias, "scripts/check-docs.mjs");
-						return spawnSync(command, args, options);
 					}
 					return spawnSync(command, args, options);
 				},
 			}),
 		/documentation control completed/,
 	);
-	assert.equal(calls, 4);
+	assert.equal(documentationSeen, true);
 });
 
 test("revert gate refuses surviving mutations, wrong failures, launch errors and missing anchors, cleaning every sandbox", () => {

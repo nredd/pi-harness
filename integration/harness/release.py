@@ -166,6 +166,8 @@ MAX_PROXY_REDACTION_VALUE_CHARACTERS = 8192
 CHILD_ENVIRONMENT_KEYS = frozenset(
     {
         "HOME",
+        # Windows Winsock requires this OS-runtime location for native DNS, including gh's TUF fetches.
+        "SYSTEMROOT",
         "PATH",
         "LANG",
         "LC_ALL",
