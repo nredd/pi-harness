@@ -715,6 +715,9 @@ def test_classify_fails_closed_when_head_cannot_be_listed(
     def fail(*_args: object) -> bool:
         """Fail like a broken Git.
 
+        Parameters:
+            *_args (object): Ignored.
+
         Returns:
             bool: Never.
 

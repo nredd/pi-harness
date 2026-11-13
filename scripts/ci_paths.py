@@ -427,7 +427,6 @@ def deletes_package_doc(repo: Path, paths: tuple[str, ...], head: str) -> bool:
         ClassificationError: Git cannot list `head`.
     """
     docs = [path for path in paths if path.startswith("packages/") and is_documentation_path(path)]
-    docs = [path for path in docs if len(path.split("/")) == 3]
     if not docs:
         return False
     present = set(run_git(repo, "ls-tree", "--name-only", "-z", head, "--", *docs).split("\0"))

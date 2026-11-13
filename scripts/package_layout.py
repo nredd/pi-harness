@@ -15,7 +15,13 @@ A package issue deletes its own entries in the same PR that fixes the layout.
 
 A violation under a top-level entry that is itself a violation (a banned directory, or a file outside the
 closed list) is reported once, for that entry; the rules below the entry apply once it moves into place.
-Import scanning is textual (`from`, `import`, `require`), so `new URL("../x", import.meta.url)` is not seen.
+Import scanning is textual (`from`, `import`, `require`), so `new URL("../x", import.meta.url)` and
+`vi.mock("../x")` are not seen.
+
+Not mechanically checkable here, so not gated: runtime data loaded away from its loader, tests that write
+inside the package tree, `test/` mirroring `src/`, and the `package.json` field values (`name`, `files`,
+`pi.extensions`, the `check` composition) and `tsconfig.json` / `CHANGELOG.md` contents. `test:<signal>`
+script names are matched by prefix, not against `coverage/policy.json`.
 
 References:
     https://github.com/nredd/pi-harness/issues/860
@@ -106,6 +112,11 @@ SCRIPT_NAMES = frozenset(
 )
 CODE_SUFFIXES = frozenset({".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"})
 STRAY_TEST_SUFFIXES = (".test.mjs", ".test.js", ".test.mts", ".test.cts", ".test.tsx", ".test.jsx")
+# A test is named for the behavior it pins: not a ticket (`issue-302-repro`) and not a coverage campaign
+# (`index-coverage-agents`). `rust-` and `swift-` name the coverage producers `computer-use` tests.
+TICKET_TEST_NAME = re.compile(r"(?:^|[-_.])(?:issue|pr|gh)[-_]?\d+")
+CAMPAIGN_TEST_NAME = re.compile(r"(?:^|[-_.])coverage(?:[-_.]|$)")
+COVERAGE_TOOL_PREFIXES = ("rust-", "swift-")
 RELATIVE_SPECIFIER = re.compile(r"""\b(?:from|import|require)\s*\(?\s*["'](\.\.?(?:/[^"'\n]*)?)["']""")
 TEST_SUPPORT_DIRS = frozenset({"support", "fixtures"})
 SNAPSHOT_DIR = "__snapshots__"
@@ -176,7 +187,7 @@ def markdown_allowed(path: str) -> bool:
     return path in ROOT_MARKDOWN or path.split("/", maxsplit=1)[0] in PI_RESOURCE_DIRS or is_fixture(path)
 
 
-def test_tree_problem(path: str) -> str | None:
+def tree_rule(path: str) -> str | None:
     """Name the rule a file under `test/` breaks, if any.
 
     Parameters:
@@ -194,6 +205,21 @@ def test_tree_problem(path: str) -> str | None:
     if parts[0] == "bench":
         return None if name.endswith(".bench.ts") and len(parts) == 2 else "test-content"
     return None if name.endswith(".test.ts") else "test-content"
+
+
+def misnamed_test(name: str) -> bool:
+    """Return whether a test file is named after a ticket or a coverage campaign.
+
+    Parameters:
+        name (str): Test file name, e.g. `issue-302-repro.test.ts`.
+
+    Returns:
+        bool: Whether the name carries an issue or PR number, or a `coverage` token that is not a producer's.
+    """
+    stem = name.split(".test.", maxsplit=1)[0]
+    if TICKET_TEST_NAME.search(stem):
+        return True
+    return not stem.startswith(COVERAGE_TOOL_PREFIXES) and CAMPAIGN_TEST_NAME.search(stem) is not None
 
 
 def import_escapes(package: str, path: str, root: Path) -> Iterable[Violation]:
@@ -243,12 +269,14 @@ def file_violations(package: str, path: str, root: Path) -> Iterable[Violation]:
         yield Violation(package, path, "tracked-dist")
     if is_fixture(path):
         return
+    if top == "test" and ".test." in path and misnamed_test(posixpath.basename(path)):
+        yield Violation(package, path, "test-name")
     if path.endswith(STRAY_TEST_SUFFIXES):
         yield Violation(package, path, "test-extension")
     elif path.endswith(".test.ts") and top != "test":
         yield Violation(package, path, "test-location")
     elif top == "test":
-        problem = test_tree_problem(path)
+        problem = tree_rule(path)
         if problem is not None:
             yield Violation(package, path, problem)
     if posixpath.basename(path) in BIOME_CONFIGS:
