@@ -699,10 +699,10 @@ Flake policy (migration plan section 7):
   later: `43177772438` killed 2026-11-12 07:57:54 UTC, failed 08:06:54; `43201041536` killed 10:55:03,
   failed 11:04:10. Why the scheduler saw those runners as idle is NOT established. Mitigation
   `nredd/ci-runners#4` is merged. Deployed means the runner owner commented on #761 naming the deployed
-  `nredd/ci-runners` commit and a UTC time; failures after that time block. If deployment cannot be
-  confirmed from #761, treat it as deployed. The failed job proves nothing about the repository. To
-  triage: read the annotation (`gh api repos/nredd/pi-harness/check-runs/<job id>/annotations`), then the
-  supervisor log for that exact runner (runner owner only). Before deployment, and only with BOTH
+  `nredd/ci-runners` commit and a UTC time; a supervisor kill after that time blocks. No such comment
+  means not deployed (none as of this writing); a comment missing the commit or time counts as deployed.
+  The failed job proves nothing about the repository. To triage: read the annotation
+  (`gh api repos/nredd/pi-harness/check-runs/<job id>/annotations`), then the supervisor log for that exact runner (runner owner only). Before deployment, and only with BOTH
   matching (annotation, plus a supervisor kill of that runner while the job ran), ONE fresh rerun per
   affected whole job is allowed when nothing else failed; it must pass, and both attempts stay in the
   history. Jobs lost to one supervisor event are one incident. Until the rerun passes, the cell is a failed
