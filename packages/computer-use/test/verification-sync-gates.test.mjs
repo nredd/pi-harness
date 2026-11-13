@@ -244,6 +244,8 @@ test("revert gate validates real inventory and executes an actual expected-failu
 
 test("real documentation drop control rejects the mutant through a symlinked sandbox CLI", () => {
 	let calls = 0;
+	const documentationCall = cases.findIndex((control) => control.name === "Documentation site package working directory") + 1;
+	assert.ok(documentationCall > 0, "documentation drop control must exist");
 	assert.throws(
 		() =>
 			reverts([], {
@@ -253,8 +255,8 @@ test("real documentation drop control rejects the mutant through a symlinked san
 				...quiet,
 				spawn: (command, args, options) => {
 					calls++;
-					if (calls > 3) throw new Error("documentation control completed");
-					if (calls === 3) {
+					if (calls > documentationCall) throw new Error("documentation control completed");
+					if (calls === documentationCall) {
 						const alias = path.join(scratch(), "package-alias");
 						symlinkSync(options.cwd, alias, "dir");
 						args[1] = path.join(alias, "scripts/check-docs.mjs");
@@ -265,7 +267,7 @@ test("real documentation drop control rejects the mutant through a symlinked san
 			}),
 		/documentation control completed/,
 	);
-	assert.equal(calls, 4);
+	assert.equal(calls, documentationCall + 1);
 });
 
 test("revert gate refuses surviving mutations, wrong failures, launch errors and missing anchors, cleaning every sandbox", () => {

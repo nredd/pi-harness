@@ -15,8 +15,10 @@ macOS 14+ ships per-architecture helpers. Setup installs at `~/Applications/pi-c
 existing stable keychain identity. Grant Accessibility and Screen Recording to that app. We do not
 switch to upstream's CI self-signed bundle: changing signer would require a TCC re-grant.
 
-Linux ships its locked Rust crate source, not a binary. Run inside the graphical user's AT-SPI2
-session. Source builds are opt-in with `PI_COMPUTER_USE_ALLOW_BUILD=1`, use the user's cache rather
+Linux ships its locked Rust crate source, not a binary. Native desktop observation/input must run
+inside the graphical user's AT-SPI2 session. CDP browser pages (`launch_browser`, `navigate_browser`,
+`evaluate_browser` and state-scoped observation/query/action tools on browser states) do not require
+AT-SPI or a desktop session; without a display, the managed Linux browser runs headless. Source builds are opt-in with `PI_COMPUTER_USE_ALLOW_BUILD=1`, use the user's cache rather
 than the npm install directory, and need Cargo plus a C linker. See the
 [Linux guide](./docs/content/docs/how-to-guides/linux.mdx). Windows source remains in the repository;
 Windows helpers and crate sources are not packed. If the Linux helper's input stream fails, in-flight
@@ -43,6 +45,13 @@ They share a scoped physical-input lock with `act_ui`; background semantic work 
 The normal loop is find a root, observe it, then query or act from the returned immutable `stateId`.
 `observe_ui` now defaults to compact controls; `detail: "outline"` returns the structural view.
 Upstream's opt-in `activity_glow` is retained and defaults to false.
+
+`launch_browser` uses a fresh temporary profile by default. An explicit user-global
+`managed_browser_profile` can reuse a dedicated owner-only, non-default directory outside Git
+checkouts. It holds live credentials: do not commit, sync or share it. Pi never imports personal
+profiles or signs in automatically. See the [configuration reference](./docs/content/docs/reference/configuration.mdx)
+for opt-in, permission checks, locking, crash recovery and platform limits. Launch results report
+the selected executable; observations warn on possible login walls, not proof of authentication.
 
 On CDP browser states, `act_ui` `moveMouse` requires explicit `x`/`y` coordinates; a `ref`
 target fails with `invalid_args` rather than sending absent coordinates. Browser `keypress` requires

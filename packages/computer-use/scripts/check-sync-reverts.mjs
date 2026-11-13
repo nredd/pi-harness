@@ -748,9 +748,9 @@ export const cases = [
 	{
 		name: "managed browser profile dir is owner-only (#519)",
 		file: "src/bridge.ts",
-		before: "const profileDir = await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`));",
+		before: "const profileDir = persistentDir ?? await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`));",
 		after:
-			'const profileDir = await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`));\n\tawait (await import("node:fs/promises")).chmod(profileDir, 0o755);',
+			'const profileDir = persistentDir ?? await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`));\n\tawait (await import("node:fs/promises")).chmod(profileDir, 0o755);',
 		check: "test/managed-browser-profile.test.mjs",
 		failure: /launch uses a private profile dir that ignores a squatted fixed name/,
 	},
@@ -895,6 +895,22 @@ export const cases = [
 		check: "test/macos-native-pure.test.mjs",
 		failure: /another store \(helper process\) never reissues the same ref/,
 		darwinOnly: true,
+	},
+	{
+		name: "persistent browser opt-in (#674)",
+		file: "src/bridge.ts",
+		before: "const persistentDir = configured ? await persistentBrowserProfile(configured) : undefined;",
+		after: "const persistentDir = undefined;",
+		check: "test/persistent-browser-profile.test.mjs",
+		failure: /reuses an explicit profile/,
+	},
+	{
+		name: "persistent browser permissions (#674)",
+		file: "src/bridge.ts",
+		before: "(info.mode & 0o777) !== 0o700",
+		after: "false",
+		check: "test/persistent-browser-profile.test.mjs",
+		failure: /validates permissions/,
 	},
 	{
 		name: "project blocked_apps is additive only (#646)",

@@ -6,6 +6,45 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
+const cleanupTrace = vi.hoisted(() => ({ events: [] }));
+vi.mock("node:child_process", async (importOriginal) => {
+	const actual = await importOriginal();
+	return { ...actual, spawn: (...args) => {
+		const child = actual.spawn(...args);
+		const profileArg = args[1]?.find((arg) => typeof arg === "string" && arg.startsWith("--user-data-dir="));
+		if (profileArg) cleanupTrace.events.push({ operation: "spawn", name: path.basename(profileArg.slice("--user-data-dir=".length)), pid: child.pid });
+		return child;
+	} };
+});
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal();
+	return { ...actual, rmSync: (...args) => {
+		const name = path.basename(String(args[0]));
+		try {
+			const result = actual.rmSync(...args);
+			cleanupTrace.events.push({ operation: "rmSync", name, result: "ok" });
+			return result;
+		} catch (error) {
+			cleanupTrace.events.push({ operation: "rmSync", name, result: error.code });
+			throw error;
+		}
+	} };
+});
+vi.mock("node:fs/promises", async (importOriginal) => {
+	const actual = await importOriginal();
+	return { ...actual, rm: async (...args) => {
+		const name = path.basename(String(args[0]));
+		cleanupTrace.events.push({ operation: "rm-start", name });
+		try {
+			const result = await actual.rm(...args);
+			cleanupTrace.events.push({ operation: "rm-end", name, result: "ok" });
+			return result;
+		} catch (error) {
+			cleanupTrace.events.push({ operation: "rm-end", name, result: error.code });
+			throw error;
+		}
+	} };
+});
 import { shutdownComputerUseSession, testing } from "../src/bridge.ts";
 import { loadComputerUseConfig } from "../src/config.ts";
 
@@ -217,17 +256,26 @@ describe.skipIf(process.platform === "win32")("managed browser launch edge cases
 	});
 
 	test("a profile that stayed behind does not confuse the lookup for a later browser", async () => {
+		cleanupTrace.events.length = 0;
 		await testing.performLaunchBrowser({});
 		const { profile: stuck } = JSON.parse(fs.readFileSync(path.join(scratch, "launch.json"), "utf8"));
 		fs.chmodSync(tmp, 0o555);
 		await shutdownComputerUseSession();
 		assert.ok(fs.existsSync(stuck), "removal unexpectedly succeeded under a read-only parent (root?)");
+		assert.equal(cleanupTrace.events.filter((event) => event.name === path.basename(stuck) && event.operation === "rm-start").length, 1, "close and shutdown must share one in-flight removal");
 		fs.chmodSync(tmp, 0o755);
+		assert.equal(fs.realpathSync(stuck), path.join(fs.realpathSync(tmp), path.basename(stuck)), "the synthetic stuck profile resolves to its canonical parent and basename");
 		await testing.performLaunchBrowser({});
 		const { profile } = JSON.parse(fs.readFileSync(path.join(scratch, "launch.json"), "utf8"));
 		await shutdownComputerUseSession();
 		assert.equal(fs.existsSync(profile), false, "the later browser's profile is found past the stale entry and removed");
 		testing.removeProfileDirsOnExit();
+		if (fs.existsSync(stuck)) {
+			const relevant = cleanupTrace.events.filter((event) => event.name === path.basename(stuck));
+			const parentMode = fs.statSync(tmp).mode & 0o777;
+			assert.fail(`temporary profile survived exit cleanup: ${JSON.stringify({ relativeId: path.basename(stuck), expectedKind: "temporary", parentMode, trace: relevant, actualOwnedMapState: "not exposed by production API", note: "rmSync call shows entry was visited as temporary; no call means absent or marked persistent" })}`);
+		}
 		assert.equal(fs.existsSync(stuck), false);
+		assert.ok(cleanupTrace.events.some((event) => event.operation === "rmSync" && event.name === path.basename(stuck)), "preloaded named rmSync mock must observe the tracked temporary profile");
 	});
 });

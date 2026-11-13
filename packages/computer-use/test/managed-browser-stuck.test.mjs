@@ -18,6 +18,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 const { shutdownComputerUseSession, testing } = await import("../src/bridge.ts");
+const { loadComputerUseConfig } = await import("../src/config.ts");
 const FAKE_BROWSER = fileURLToPath(new URL("./fixtures/fake-browser.mjs", import.meta.url));
 
 describe.skipIf(process.platform === "win32")("managed browser that outlives SIGKILL", () => {
@@ -62,6 +63,36 @@ describe.skipIf(process.platform === "win32")("managed browser that outlives SIG
 			assert.equal(fs.existsSync(profile), false, "the profile is removed even though the browser never exited");
 		} finally {
 			realKill("SIGKILL");
+		}
+	});
+
+	test("a persistent browser that survives SIGKILL keeps its profile locked", async () => {
+		const profile = fs.realpathSync(fs.mkdtempSync(path.join(scratch, "persistent-")));
+		const agent = path.join(scratch, "agent");
+		fs.mkdirSync(path.join(agent, "extensions"), { recursive: true });
+		fs.writeFileSync(path.join(agent, "extensions/pi-computer-use.json"), JSON.stringify({ managed_browser_profile: profile }));
+		vi.stubEnv("PI_CODING_AGENT_DIR", agent);
+		loadComputerUseConfig(scratch);
+		await testing.performLaunchBrowser({});
+		const child = spawned.children.at(-1);
+		const realKill = child.kill.bind(child);
+		child.kill = () => true;
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		const shutdown = assert.rejects(shutdownComputerUseSession(), /did not stop/);
+		try {
+			for (let tick = 0; tick < 120; tick++) {
+				await vi.advanceTimersByTimeAsync(100);
+				await new Promise((resolve) => setImmediate(resolve));
+			}
+			await shutdown;
+			assert(fs.existsSync(path.join(profile, ".pi-computer-use.lock")));
+		} finally {
+			vi.useRealTimers();
+			const closed = new Promise((resolve) => child.once("close", resolve));
+			realKill("SIGKILL");
+			await closed;
+			vi.unstubAllEnvs();
+			loadComputerUseConfig(scratch);
 		}
 	});
 

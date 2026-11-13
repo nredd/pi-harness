@@ -883,6 +883,35 @@
 			}
 		},
 		{
+			"id": "managed-browser-persistent-profile",
+			"purpose": "Explicit user-global credential-bearing non-default profile opt-in, metadata-only owner/mode/default/check-out checks, fail-closed cross-process lease and Chromium lock refusal, persistent cleanup safety, executable provenance and heuristic login-wall warnings; temporary default unchanged",
+			"rows": [
+				"Managed browser persistent profile"
+			],
+			"files": [
+				"README.md",
+				"docs/content/docs/reference/configuration.mdx",
+				"scripts/check-sync-reverts.mjs",
+				"src/bridge.ts",
+				"src/config.ts",
+				"test/config-load.test.mjs",
+				"test/managed-browser-launch.test.mjs",
+				"test/managed-browser-stuck.test.mjs",
+				"test/persistent-browser-profile.test.mjs",
+				"test/verification-sync-gates.test.mjs"
+			],
+			"check": "test/persistent-browser-profile.test.mjs",
+			"dropControls": [
+				"persistent browser opt-in (#674)",
+				"persistent browser permissions (#674)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#674; MIT-derived bridge/config extensions, not filed upstream"
+			}
+		},
+		{
 			"id": "managed-browser-private-profile",
 			"purpose": "`launch_browser` gives each managed browser a private `mkdtemp` profile dir (owner-only, removed on exit or shutdown) instead of the fixed `pi-<browser>-cdp-<port>` name another account could squat, escalates to SIGKILL when a relaunch or failed launch stops a browser, and orders launches before shutdown",
 			"rows": [
@@ -1636,6 +1665,7 @@
 		"test/outline-store.test.mjs",
 		"test/outline.test.mjs",
 		"test/permissions-browser.test.mjs",
+		"test/persistent-browser-profile.test.mjs",
 		"test/platform-backends.test.mjs",
 		"test/platform-linux.test.mjs",
 		"test/platform-windows.test.mjs",
