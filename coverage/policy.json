@@ -6,6 +6,7 @@
     { "path": "forks", "issue": 693, "reason": "Carried core fork patches have no coverage producer; diff coverage vs explicit exclusion is an open owner decision." }
   ],
   "reclassifications": [
+    { "package": "session-kit", "signal": "owned", "path": "packages/session-kit/src/stats/library.ts", "reason": "Relative to 57a0c580: preserve every runtime and type export through explicit static named re-exports. Real TypeScript and emitted-ESM Istanbul maps contain zero statements/functions/branches; real Node/Bun namespace parity and type tests preserve the export-star contract. Existing strict facade validation rejects executable additions; all three target modules remain owned and measured." },
     { "package": "dev-tools", "signal": "owned", "path": "packages/dev-tools/src/core/index.ts", "reason": "Relative to integration base 71b0aea: static named ESM re-export facade has zero Istanbul statements/functions in TypeScript and emitted ESM. Strict shape validation rejects executable additions; all executable target modules remain measured." },
     { "package": "plan-mode", "signal": "owned", "path": "packages/plan-mode/src/index.ts", "reason": "Relative to integration base 71b0aea: pure static ESM re-export of the default binding, with zero statements/functions in actual source/emitted-ESM Istanbul maps. Strict facade validation rejects executable additions; src/plan-mode.ts remains owned and measured." },
     { "package": "plan-mode", "signal": "owned", "path": "packages/plan-mode/src/interactive-ui.ts", "reason": "Relative to integration base 71b0aea: pure static ESM named re-export facade, with zero statements/functions in source/emitted-ESM Istanbul maps. Strict shape validation rejects executable additions; every UI target remains owned and measured." },
@@ -139,10 +140,11 @@
       "owned": ["src/**/*.ts"],
       "exclusions": [
         { "path": "src/monitor/types.ts", "kind": "type-only", "reason": "Only TypeScript declarations; emits no executable JavaScript." },
+        { "path": "src/stats/library.ts", "kind": "non-executable-facade", "reason": "Only explicit static named ESM re-exports, including type bindings; zero source/emitted-ESM Istanbul maps. Real Node/Bun namespace parity preserves every original export-star binding. Strict facade validation rejects executable additions; aggregate.ts, load.ts and snapshot.ts remain fully owned and measured." },
         { "path": "dist/pi-stats-export.mjs", "kind": "generated", "reason": "Generated esbuild CLI bundle of the owned src/stats/cli.ts implementation; production source remains measured rather than counting the generated duplicate." }
       ],
       "status": "measured",
-      "note": "Hosted run 40857829296 establishes zero primary misses on both OSes after a deterministic multi-match formatter test removes the incidental coalescing/teardown comparator hit observed in 40852918834; independent Bun references are stable across both runs.",
+      "note": "Retain the existing zero primary floors. Follow-up #824 covers omitted stats arguments and classifies the validated named library facade without excluding its executable targets. Bun follows the full owned inventory; local zero reports do not authorize promotion without this follow-up's own hosted macOS/Linux zero receipts.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
@@ -151,24 +153,9 @@
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-          "files": [
-            "src/agent-dir.ts", "src/child.ts", "src/clock.ts", "src/config.ts", "src/diff/component.ts", "src/diff/git.ts",
-            "src/diff/index.ts", "src/diff/parse.ts", "src/diff/view.ts", "src/goal/index.ts",
-            "src/goal/state.ts", "src/goal/subagents.ts", "src/index.ts", "src/loop/index.ts",
-            "src/loop/state.ts", "src/mon/component.ts", "src/mon/index.ts", "src/mon/model.ts",
-            "src/mon/poll.ts", "src/mon/source.ts", "src/monitor/coalescer.ts", "src/monitor/index.ts",
-            "src/monitor/manager.ts", "src/monitor/matcher.ts", "src/monitor/messages.ts",
-            "src/monitor/output.ts", "src/monitor/pidfiles.ts", "src/monitor/process.ts",
-            "src/monitor/ring.ts", "src/monitor/splitter.ts", "src/monitor/validate.ts",
-            "src/monitor/widget.ts", "src/output.ts", "src/rules/index.ts", "src/rules/logic.ts",
-            "src/shared.ts", "src/stats/aggregate.ts", "src/stats/chart.ts", "src/stats/cli.ts", "src/stats/component.ts",
-            "src/stats/days.ts", "src/stats/format.ts", "src/stats/freshness.ts", "src/stats/heatmap.ts",
-            "src/stats/index.ts", "src/stats/load.ts", "src/stats/nth.ts", "src/stats/palette.ts", "src/stats/snapshot.ts",
-            "src/stats/ticks.ts", "src/titles/aliases.ts", "src/titles/index.ts", "src/titles/logic.ts"
-          ],
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "enforcement": "report-only",
-          "reason": "Full Vitest-on-Bun suite, real Istanbul branch/statement records. Zero references are the pending enforcement target, NOT measured zero receipts: four stats default-argument branches remain in the local full-suite report, and src/stats/library.ts remains outside the signal membership until its static export-star facade is classified. Pricing/stats ownership and serial policy integration must settle before promotion: https://github.com/nredd/pi-harness/issues/320.",
+          "reason": "Full source-complete Vitest-on-Bun suite with real Istanbul L/F/B/S. Omitted public arguments are covered, the unreachable private help default is removed, and the validated named library facade preserves the full runtime/type export contract. Keep report-only; this follow-up's own hosted macOS/Linux zero receipts are required before promotion: https://github.com/nredd/pi-harness/issues/824 (parent https://github.com/nredd/pi-harness/issues/320).",
           "reporters": ["text", "lcov", "json-summary"]
         }
       }
