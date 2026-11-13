@@ -311,6 +311,10 @@ make install
 npm run check --workspace @nredd/pi-subscription-router  # biome, tsc, vitest, bun scenarios
 ```
 
+Journal permission tests explicitly set and verify insecure fixture modes after creation, so a restrictive
+`0077` umask does not turn the rejection case into valid private state. Production directory checks still
+reject group/other access and symlinks without repairing existing state.
+
 The `lint` and `format` commands check that their configured `src/` and `test/` paths exist before invoking Biome. This avoids Biome's successful mixed valid/missing-path result hiding a stale path.
 
 `test/scenarios/` covers terminal/retry/unconfirmed recovery, partial-stream refusal, cancellation,
