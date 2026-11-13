@@ -150,7 +150,7 @@ import {
   toReportedUsage,
   withLeadingFlag,
   writeInitialEntry
-} from "./chunks/chunk-TMSESUK2.ts";
+} from "./chunks/chunk-7A7BBITP.ts";
 
 // src/index.ts
 import { existsSync as existsSync7, mkdirSync as mkdirSync4, readFileSync as readFileSync7, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "node:fs";
@@ -823,6 +823,24 @@ function fairShares(lengths, cap) {
     remaining--;
   }
   return shares;
+}
+
+// src/saved-agent-record.ts
+function savedAgentNote(data) {
+  if (!data || typeof data !== "object") return void 0;
+  const row = data;
+  if (typeof row.id !== "string" || typeof row.type !== "string" || typeof row.description !== "string") return void 0;
+  if (row.status !== "completed" && row.status !== "steered" && row.status !== "error" && row.status !== "aborted" && row.status !== "stopped") return void 0;
+  const transcript = typeof row.outputFile === "string" ? row.outputFile : typeof row.sessionFile === "string" ? row.sessionFile : void 0;
+  return {
+    id: row.id,
+    type: row.type,
+    description: row.description,
+    status: row.status,
+    evictedAfterMin: 0,
+    fromSavedSession: true,
+    ...transcript ? { transcript } : {}
+  };
 }
 
 // src/schedule.ts
@@ -4095,7 +4113,7 @@ var WorkflowDialog = class {
 
 // src/ui/workflow-menu.ts
 async function showWorkflowDialog(ctx, task, deps) {
-  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-ZTHBHXTU.ts");
+  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-425URFCT.ts");
   let overlay;
   await ctx.ui.custom(
     (tui, theme, _keybindings, done) => new WorkflowDialog(
@@ -6906,6 +6924,8 @@ ${notifications}${trailer}`,
       error: record.error,
       startedAt: record.startedAt,
       completedAt: record.completedAt,
+      ...record.outputFile ? { outputFile: record.outputFile } : {},
+      ...record.sessionFile ? { sessionFile: record.sessionFile } : {},
       ...record.modelFallback ? { modelFallback: record.modelFallback } : {},
       ...record.modelTier ? { modelTier: record.modelTier } : {}
     };
@@ -7169,6 +7189,15 @@ Full transcript available at: ${record.outputFile}` : "";
       unwatchDetached?.();
       unwatchDetached = watchDetached(sessionFile, () => deliverDetached(sessionFile));
       deliverDetached(sessionFile);
+    }
+    const saved = /* @__PURE__ */ new Map();
+    for (const entry of ctx.sessionManager?.getBranch?.() ?? []) {
+      if (entry.type !== "custom" || entry.customType !== "subagents:record") continue;
+      const note = savedAgentNote(entry.data);
+      if (note) saved.set(note.id, note);
+    }
+    for (const note of saved.values()) {
+      if (!resolveAgentRef(note.id) && !manager.getEvictedNote(note.id)) manager.rememberEvicted(note);
     }
     announceSurvivors();
     unwatchAnnounce ??= pi.events.on("subagents:announce_survivors", announceSurvivors);
@@ -8098,7 +8127,7 @@ Terse command-style prompts produce shallow, generic work.
           const entry = manager.listTombstones().find((t) => t.id === latest);
           if (!entry) {
             const note = manager.getEvictedNote(latest);
-            const gone = note?.nameTaken ? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.` : "no saved session is left to reopen.";
+            const gone = note?.fromSavedSession ? "only historical metadata is available; reopen the recorded session manually." : note?.nameTaken ? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.` : "no saved session is left to reopen.";
             const why = note ? `Cannot resume agent "${latest}": ${gone}
 ${describeEvicted(note)}` : agentNotFound(latest);
             return textResult(`${continued}${why}`);
@@ -8827,7 +8856,8 @@ ${conversation}`;
       if (record?.status !== "running" && record?.status !== "queued") {
         const finished = record ?? manager.getEvictedNote(latest);
         if (!finished) return textResult(agentNotFound(params.agent_id));
-        if (finished.status === "stopped") {
+        const historical = !record && manager.getEvictedNote(latest)?.fromSavedSession;
+        if (finished.status === "stopped" && !historical) {
           return textResult(`Agent "${finished.id}" was stopped (status: stopped). steer_subagent does not resume a stopped agent.`);
         }
         return agentTool.execute(toolCallId, {
@@ -8920,7 +8950,13 @@ ${lines.join("\n")}` : "Nothing is running or queued.";
       const found = resolveAgentRef(latest);
       const record = found && isTopLevelAgent(found) ? found : void 0;
       if (record?.status !== "running" && record?.status !== "queued") {
-        const status = record?.status ?? task?.status ?? manager.getEvictedNote(latest)?.status;
+        const note = manager.getEvictedNote(latest);
+        if (!record && !task && note?.fromSavedSession) {
+          return { ...textResult(`${describeEvicted(note)}.
+No live registry handle is available here; this historical entry cannot stop work.
+${describeStoppable()}`), isError: true };
+        }
+        const status = record?.status ?? task?.status ?? note?.status;
         const what = status ? `"${params.agent_id}" is not running (status: ${status})` : `No agent or workflow "${params.agent_id}"`;
         return { ...textResult(`${what}, so there is nothing to stop.
 ${describeStoppable()}`), isError: true };

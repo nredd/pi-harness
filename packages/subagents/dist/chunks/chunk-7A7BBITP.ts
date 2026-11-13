@@ -3969,7 +3969,8 @@ function describeEvicted(note) {
   const disclosure = modelSelectionNote(note);
   const fallback = disclosure ? `
 ${disclosure}` : "";
-  return `Agent "${note.id}" (${note.description}) ${note.status}, evicted after ${note.evictedAfterMin} min${where}${fallback}`;
+  const state2 = note.fromSavedSession ? `last recorded status: ${note.status}, recovered from saved parent session (no live registry record)` : `${note.status}, evicted after ${note.evictedAfterMin} min`;
+  return `Agent "${note.id}" (${note.description}) ${state2}${where}${fallback}`;
 }
 var MAX_TOMBSTONES = 100;
 function assertValidSpawnCwd(cwd) {
@@ -5262,11 +5263,13 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
    * record settled in a manager this one never saw (#330).
    */
   rememberEvicted(note) {
+    const existing = this.evictedNotes.get(note.id);
+    if (note.fromSavedSession && existing && !existing.fromSavedSession) return;
     this.evictedNotes.delete(note.id);
     this.evictedNotes.set(note.id, note);
-    for (const oldest of this.evictedNotes.keys()) {
-      if (this.evictedNotes.size <= MAX_EVICTED_NOTES) break;
-      this.evictedNotes.delete(oldest);
+    if (this.evictedNotes.size > MAX_EVICTED_NOTES) {
+      const historical = [...this.evictedNotes].find(([, entry]) => entry.fromSavedSession)?.[0];
+      this.evictedNotes.delete(historical ?? this.evictedNotes.keys().next().value);
     }
   }
   /** Record that evicted `id` was reopened as `next`; bounded like the eviction notes. */
@@ -6744,4 +6747,4 @@ export {
   RESULT_MAX_CHARS,
   ConversationViewer
 };
-//# sourceMappingURL=chunk-TMSESUK2.ts.map
+//# sourceMappingURL=chunk-7A7BBITP.ts.map

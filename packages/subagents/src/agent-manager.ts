@@ -188,8 +188,10 @@ export interface EvictedNote {
   type: SubagentType;
   description: string;
   status: AgentRecord["status"];
-  /** Whole minutes between completion and eviction. */
+  /** Whole minutes between completion and eviction; not applicable to saved-session recovery. */
   evictedAfterMin: number;
+  /** The diagnostic came from the saved parent, not a retention sweep. */
+  fromSavedSession?: true;
   /** The `.output` transcript when one was written, else the session file. */
   transcript?: string;
   /** The run's model fallback, so even an evicted agent's id still discloses it. */
@@ -204,7 +206,10 @@ export function describeEvicted(note: EvictedNote): string {
   const where = note.transcript ? `; transcript: ${note.transcript}` : "";
   const disclosure = modelSelectionNote(note);
   const fallback = disclosure ? `\n${disclosure}` : "";
-  return `Agent "${note.id}" (${note.description}) ${note.status}, evicted after ${note.evictedAfterMin} min${where}${fallback}`;
+  const state = note.fromSavedSession
+    ? `last recorded status: ${note.status}, recovered from saved parent session (no live registry record)`
+    : `${note.status}, evicted after ${note.evictedAfterMin} min`;
+  return `Agent "${note.id}" (${note.description}) ${state}${where}${fallback}`;
 }
 
 /**
@@ -2202,12 +2207,16 @@ export class AgentManager {
    * record settled in a manager this one never saw (#330).
    */
   rememberEvicted(note: EvictedNote): void {
+    const existing = this.evictedNotes.get(note.id);
+    if (note.fromSavedSession && existing && !existing.fromSavedSession) return;
     this.evictedNotes.delete(note.id);
     this.evictedNotes.set(note.id, note);
-    // Insertion order is age order (the note was just re-inserted above).
-    for (const oldest of this.evictedNotes.keys()) {
-      if (this.evictedNotes.size <= MAX_EVICTED_NOTES) break;
-      this.evictedNotes.delete(oldest);
+    if (this.evictedNotes.size > MAX_EVICTED_NOTES) {
+      // Historical recovery is lower priority than actual eviction/delivery notes.
+      // Evict the oldest historical candidate first, including the new one when
+      // actual notes occupy the entire index. Preserve insertion order within each class.
+      const historical = [...this.evictedNotes].find(([, entry]) => entry.fromSavedSession)?.[0];
+      this.evictedNotes.delete(historical ?? this.evictedNotes.keys().next().value!);
     }
   }
 
