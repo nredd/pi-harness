@@ -165,7 +165,7 @@
             "src/monitor/widget.ts", "src/output.ts", "src/rules/index.ts", "src/rules/logic.ts",
             "src/shared.ts", "src/stats/aggregate.ts", "src/stats/chart.ts", "src/stats/component.ts",
             "src/stats/days.ts", "src/stats/format.ts", "src/stats/freshness.ts", "src/stats/heatmap.ts",
-            "src/stats/index.ts", "src/stats/load.ts", "src/stats/nth.ts", "src/stats/palette.ts", "src/stats/snapshot.ts",
+            "src/stats/index.ts", "src/stats/load.ts", "src/stats/nth.ts", "src/stats/palette.ts", "src/stats/pricing.ts", "src/stats/snapshot.ts",
             "src/stats/ticks.ts", "src/titles/aliases.ts", "src/titles/index.ts", "src/titles/logic.ts"
           ],
           "max_uncovered": { "darwin": { "lines": 947, "functions": 96 }, "linux": { "lines": 947, "functions": 94 } },

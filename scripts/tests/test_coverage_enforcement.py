@@ -138,6 +138,45 @@ def test_report_only_still_fails_closed(tmp_path: Path, failure: str) -> None:
         assert "Expected files missing" in errors[0]
 
 
+@pytest.mark.parametrize("runner_os", ["darwin", "linux"])
+def test_new_owned_source_must_join_bun_subset_when_reported(tmp_path: Path, runner_os: str) -> None:
+    """Reject a reported owned file omitted from the independent compatibility inventory.
+
+    Parameters:
+        tmp_path (Path): Disposable production-source and LCOV report root.
+        runner_os (str): Platform selecting unchanged zero coverage caps.
+    Returns:
+        None: Registration admits valid reports, but either missing measurement still fails.
+    Raises:
+        AssertionError: Owned membership hides a stale Bun subset or missing coverage.
+    """
+    cfg = report_only_policy(tmp_path, "passing.info")
+    package = cfg.packages["example"]
+    package.signals["primary"].files = None
+    directory = tmp_path / package.root
+    (directory / "src/pricing.ts").write_text("export function price() { return 42; }\n")
+    primary = directory / "coverage/lcov.info"
+    bun = directory / "coverage/bun.info"
+    original = primary.read_text()
+    complete = original + original.replace("src/index.ts", "src/pricing.ts")
+    primary.write_text(complete)
+    bun.write_text(complete)
+    rows, errors = account(tmp_path, cfg, runner_os)
+    assert len(rows) == 2
+    assert {row["signal"] for row in rows} == {"primary"}
+    assert errors == ["example/bun: Report file not in policy: 'src/pricing.ts'"]
+    package.signals["bun"].files = ["src/index.ts", "src/pricing.ts"]
+    assert not account(tmp_path, cfg, runner_os)[1]
+    for report, label in ((primary, "primary"), (bun, "bun")):
+        report.write_text(original)
+        _, errors = account(tmp_path, cfg, runner_os)
+        assert len(errors) == 1
+        assert errors[0].startswith(f"example/{label}: Expected files missing:")
+        assert "src/pricing.ts" in errors[0]
+        report.write_text(complete)
+    assert not account(tmp_path, cfg, runner_os)[1]
+
+
 @pytest.mark.parametrize("fixture", ["uncovered.info", "function-only.info", "line-only.info"])
 def test_enforced_signal_still_rejects_excess(tmp_path: Path, fixture: str) -> None:
     """Keep both integer predicates enforced when a signal explicitly opts in.
