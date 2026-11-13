@@ -3,7 +3,8 @@
 [tool.ruff]
 line-length = 110
 target-version = "py313"
-per-file-target-version = { "ci_paths.py" = "py312", "install_gh_linux.py" = "py312" }
+# The guest scripts run on the WSL guest's system python3 (3.12), before any uv environment exists.
+per-file-target-version = { "ci_paths.py" = "py312", "install_gh_linux.py" = "py312", "install_wsl_owned_tools.py" = "py312", "wsl2_exec.py" = "py312", "wsl2_run.py" = "py312" }
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "PL", "PT", "C4", "PTH", "RET"]
