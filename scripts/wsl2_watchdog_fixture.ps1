@@ -37,8 +37,8 @@ function New-Case([string]$Name) {
 param([string]$Label, [int]$Seconds, [string]$StateDirectory)
 $ErrorActionPreference = 'Stop'
 $fixtureRoot = Split-Path $StateDirectory
-$shim = (Get-Command wsl.exe -CommandType Application).Source
-if ($shim -ne (Join-Path $fixtureRoot 'wsl.exe')) { throw 'Fixture WSL shim not selected' }
+$shim = Join-Path $fixtureRoot 'wsl.exe'
+if (-not (Test-Path $shim)) { throw 'Fixture WSL shim missing' }
 $fixtureChildren = @(Get-Content (Join-Path $fixtureRoot 'children.json') | ConvertFrom-Json)
 function Start-Process {
     param([string]$FilePath, [string[]]$ArgumentList, [switch]$NoNewWindow, [switch]$PassThru, [string]$RedirectStandardOutput)
@@ -66,6 +66,11 @@ function Write-Host {
     return $dir
 }
 
+function Assert-WatchdogExited([string]$Directory) {
+    $watchdogId = [int](Get-Content (Join-Path $Directory 'wsl2-diagnostics/watchdog.pid'))
+    Assert-Control (-not (Get-Process -Id $watchdogId -ErrorAction SilentlyContinue)) 'watchdog exited after caller cleanup'
+}
+
 function Invoke-ExpectedReport([string]$Directory, [string]$Message) {
     $caught = $false
     try { & (Join-Path $Directory 'report.ps1') }
@@ -77,8 +82,8 @@ function Invoke-ExpectedReport([string]$Directory, [string]$Message) {
 }
 
 trap {
-    Write-Receipt @{ outcome = 'unexpected_control_failure' }
-    throw
+    Write-Receipt @{ outcome = 'unexpected_control_failure'; category = $_.Exception.GetType().Name }
+    throw $_
 }
 Write-Receipt @{ outcome = 'started' }
 
@@ -130,7 +135,8 @@ elseif ($Phase -eq 'Trip') {
         Assert-Control (-not (Get-Process -Id $children[0] -ErrorAction SilentlyContinue)) 'watchdog killed stalled setup child'
         Assert-Control ($null -ne (Get-Process -Id $children[1] -ErrorAction SilentlyContinue)) 'unrelated sentinel survives'
         Invoke-ExpectedReport $dir 'WSL setup was killed by its watchdog'
-        Write-Receipt @{ tripped = $true; ownedChildKilled = $true; sentinelSurvived = $true; reportRejected = $true }
+        Assert-WatchdogExited $dir
+        Write-Receipt @{ tripped = $true; ownedChildKilled = $true; sentinelSurvived = $true; reportRejected = $true; watchdogExited = $true }
     }
     finally {
         foreach ($childId in $children) { Stop-Process -Id $childId -Force -ErrorAction SilentlyContinue }
@@ -153,7 +159,8 @@ elseif ($Phase -in 'Done', 'Cancelled') {
     $state = Join-Path $dir 'wsl2-diagnostics'
     Assert-Control (Test-Path (Join-Path $state 'watchdog.done')) 'caller cleanup signals done'
     Assert-Control (-not (Test-Path (Join-Path $state 'watchdog.tripped'))) 'done prevents trip'
-    Write-Receipt @{ done = $true; tripped = $false; syntheticCallerCancellation = $cancelled }
+    Assert-WatchdogExited $dir
+    Write-Receipt @{ done = $true; tripped = $false; syntheticCallerCancellation = $cancelled; watchdogExited = $true }
 }
 elseif ($Phase -eq 'Unarmed') {
     $dir = New-Case 'unarmed'
