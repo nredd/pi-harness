@@ -160,6 +160,14 @@ export const cases = [
 		failure: /AssertionError|false == true/,
 	},
 	{
+		name: "Rust protocol/state Cargo registration (#801)",
+		file: "native/linux/bridge-rs/tests/protocol_state_errors.rs",
+		before: "#[test]\nfn every_error_has_the_stable_wire_code_and_display()",
+		after: "fn every_error_has_the_stable_wire_code_and_display()",
+		check: "test/rust-protocol-state-registration.test.mjs",
+		failure: /missing Cargo contract: every_error_has_the_stable_wire_code_and_display/,
+	},
+	{
 		name: "StateStore evicts past an empty stateId (#703)",
 		file: "src/runtime.ts",
 		before: "this.records.delete(this.records.keys().next().value!);",
