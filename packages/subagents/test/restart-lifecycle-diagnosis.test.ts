@@ -64,4 +64,19 @@ it("#330: a fresh stopped child retains its output across a fresh parent activat
   expect(recovered).toContain(`transcript: ${output}`);
   expect(readFileSync(output, "utf8")).toBe(persisted);
   expect(child.state.callCount).toBe(1);
+  reopened.setResponses([
+    calls({ name: "stop_subagent", args: { agent_id: id } }),
+    calls({ name: "Agent", args: { resume: id, subagent_type: "general-purpose", description: "manual recovery", prompt: "continue", run_in_background: true } }),
+    answer("CHECKED HISTORICAL CONTROLS"),
+  ]);
+  await reopened.session.prompt("historical controls");
+  const stop = outcomes(reopened, "stop_subagent")[0];
+  expect(stop?.isError).toBe(true);
+  expect(stop?.text).toContain("last recorded status: stopped");
+  expect(stop?.text).toContain("this historical entry cannot stop work");
+  expect(stop?.text).not.toContain("is not running (status:");
+  const resume = outcomes(reopened, "Agent")[0]?.text;
+  expect(resume).toContain("only historical metadata is available");
+  expect(resume).not.toContain("no saved session is left");
+  expect(child.state.callCount).toBe(1);
 });

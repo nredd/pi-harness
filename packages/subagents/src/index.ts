@@ -2649,9 +2649,11 @@ Terse command-style prompts produce shallow, generic work.
           if (!entry) {
             // Evicted with no session file left to reopen: `rememberAgents` off, or the tombstone was dropped.
             const note = manager.getEvictedNote(latest);
-            const gone = note?.nameTaken
-              ? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.`
-              : "no saved session is left to reopen.";
+            const gone = note?.fromSavedSession
+              ? "only historical metadata is available; reopen the recorded session manually."
+              : note?.nameTaken
+                ? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.`
+                : "no saved session is left to reopen.";
             const why = note ? `Cannot resume agent "${latest}": ${gone}\n${describeEvicted(note)}` : agentNotFound(latest);
             return textResult(`${continued}${why}`);
           }
@@ -3811,7 +3813,11 @@ Terse command-style prompts produce shallow, generic work.
       const found = resolveAgentRef(latest);
       const record = found && isTopLevelAgent(found) ? found : undefined;
       if (record?.status !== "running" && record?.status !== "queued") {
-        const status = record?.status ?? task?.status ?? manager.getEvictedNote(latest)?.status;
+        const note = manager.getEvictedNote(latest);
+        if (!record && !task && note?.fromSavedSession) {
+          return { ...textResult(`${describeEvicted(note)}.\nNo live registry handle is available here; this historical entry cannot stop work.\n${describeStoppable()}`), isError: true };
+        }
+        const status = record?.status ?? task?.status ?? note?.status;
         const what = status ? `"${params.agent_id}" is not running (status: ${status})` : `No agent or workflow "${params.agent_id}"`;
         return { ...textResult(`${what}, so there is nothing to stop.\n${describeStoppable()}`), isError: true };
       }

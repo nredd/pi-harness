@@ -8128,7 +8128,7 @@ Terse command-style prompts produce shallow, generic work.
           const entry = manager.listTombstones().find((t) => t.id === latest);
           if (!entry) {
             const note = manager.getEvictedNote(latest);
-            const gone = note?.nameTaken ? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.` : "no saved session is left to reopen.";
+            const gone = note?.fromSavedSession ? "only historical metadata is available; reopen the recorded session manually." : note?.nameTaken ? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.` : "no saved session is left to reopen.";
             const why = note ? `Cannot resume agent "${latest}": ${gone}
 ${describeEvicted(note)}` : agentNotFound(latest);
             return textResult(`${continued}${why}`);
@@ -8950,7 +8950,13 @@ ${lines.join("\n")}` : "Nothing is running or queued.";
       const found = resolveAgentRef(latest);
       const record = found && isTopLevelAgent(found) ? found : void 0;
       if (record?.status !== "running" && record?.status !== "queued") {
-        const status = record?.status ?? task?.status ?? manager.getEvictedNote(latest)?.status;
+        const note = manager.getEvictedNote(latest);
+        if (!record && !task && note?.fromSavedSession) {
+          return { ...textResult(`${describeEvicted(note)}.
+No live registry handle is available here; this historical entry cannot stop work.
+${describeStoppable()}`), isError: true };
+        }
+        const status = record?.status ?? task?.status ?? note?.status;
         const what = status ? `"${params.agent_id}" is not running (status: ${status})` : `No agent or workflow "${params.agent_id}"`;
         return { ...textResult(`${what}, so there is nothing to stop.
 ${describeStoppable()}`), isError: true };
