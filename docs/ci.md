@@ -698,10 +698,11 @@ Flake policy (migration plan section 7):
   logged `idle past ttl, killing` for the exact runner while its job ran, and GitHub failed the job
   later: `43177772438` killed 2026-11-12 07:57:54 UTC, failed 08:06:54; `43201041536` killed 10:55:03,
   failed 11:04:10. Why the scheduler saw those runners as idle is NOT established. Mitigation
-  `nredd/ci-runners#4` is merged. Deployed means the runner owner commented on #761 naming the deployed
-  `nredd/ci-runners` commit and a UTC time; a supervisor kill after that time blocks. No such comment
-  means not deployed (none as of this writing); a comment missing the commit or time counts as deployed.
-  The failed job proves nothing about the repository. To triage: read the annotation
+  `nredd/ci-runners#4` is merged. Deployment is observed, never assumed: in the supervisor-log step the
+  runner owner records the `nredd/ci-runners` commit the supervisor was running at the kill and confirms
+  it predates the #4 merge commit. If it includes #4 or cannot be determined, treat as deployed and
+  block, whatever #761 says. A deploy comment on #761 without a time uses the comment's own timestamp;
+  a kill after it blocks. The failed job proves nothing about the repository. To triage: read the annotation
   (`gh api repos/nredd/pi-harness/check-runs/<job id>/annotations`), then the supervisor log for that exact runner (runner owner only). Before deployment, and only with BOTH
   matching (annotation, plus a supervisor kill of that runner while the job ran), ONE fresh rerun per
   affected whole job is allowed when nothing else failed; it must pass, and both attempts stay in the
