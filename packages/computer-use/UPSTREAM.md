@@ -125,6 +125,107 @@ Committed `prebuilt/macos` payloads were not rebuilt for the Swift changes; the 
 compiles them from tagged source. `test:upstream-sync` already reports drift on files declared by
 earlier main PRs (`scripts/build-native.mjs`, `test/fixtures/fake-*.mjs`); not changed here.
 
+## Indexed browser action space: decline upstream #79
+
+Disposition for [nredd/pi-harness#682](https://github.com/nredd/pi-harness/issues/682):
+**decline the full port and do not carry a guard-only patch in this evaluation**.
+Reviewed upstream PR [here](https://github.com/injaneity/pi-computer-use/pull/79), pinned
+head `a66bbede03d0d0b652087e8b0de3c3d0c189a25a` against base
+`67e9e2f77643f84605b738a3198048a88e92190e` (commit date 2026-10-16), with head commit
+dated 2026-10-18: 32 files, +4496/-254. The PR was open
+when checked. This is a disposition, not an upstream sync, implementation, release or activation.
+The upstream tree is MIT (Zane Chee); PR author `sternelee`. No upstream source is copied here.
+The carried-patch table and `sync-patches.json` remain unchanged because nothing is carried.
+
+Fit and guard compatibility:
+- `act_ui` already accepts code-owned observed refs, not model-selected DOM selectors. Its
+  CDP snapshot binds refs to browser AX backend node ids in `src/cdp.ts` (`cdpSnapshotOutline`),
+  while `src/bridge.ts` hydrates the owning state and runs the browser transaction on its
+  resource lane. A second numbered namespace is not itself a demonstrated capability gain.
+- Upstream `buildJevSpace` groups multiple operations on one node, including dropdown options;
+  its DOM snapshot caps raw actions at 250, renders 60 elements by default, and only includes
+  controls centered inside the viewport. This is a different observation/execution contract,
+  not a drop-in replacement for the AX outline. See pinned upstream
+  [space](https://github.com/injaneity/pi-computer-use/blob/a66bbede03d0d0b652087e8b0de3c3d0c189a25a/src/jev/space.ts) and
+  [snapshot](https://github.com/injaneity/pi-computer-use/blob/a66bbede03d0d0b652087e8b0de3c3d0c189a25a/src/jev/snapshot.ts).
+- The guards have genuine incremental value: `jevFreshForAction` compares the page key and
+  target guard for click/select, or a full semantic marker for other operations. The executor
+  re-reads geometry, checks connectivity/enabled/visible state and `elementFromPoint` before
+  pointer delivery. Current `CdpTab.clickBackendNode` instead resolves a backend node and calls
+  `scrollIntoView`/`click` in the page; it does not implement that occlusion pre-check. Neither
+  existing state epochs nor a successful synthetic click prove the upstream guards redundant.
+- Copying that guard alone would change DOM-click semantics to pointer/hit-test semantics and
+  remove the current implicit scroll-to-target behavior. It also needs page identity, guard
+  storage, strict evaluation errors and partial-delivery handling, not just a predicate in
+  `act_ui`. Freshness evaluation and pointer dispatch are separate CDP commands, so the check
+  is not an atomic guarantee against a page changing between them. Canonical implementation:
+  [driver](https://github.com/injaneity/pi-computer-use/blob/a66bbede03d0d0b652087e8b0de3c3d0c189a25a/src/jev/driver.ts).
+- Preserve upstream's no-retry-mutation and unverified-`DONE` principles if revisiting this.
+  They belong in the existing transaction/result contract, not an independent agent hidden
+  behind a tool. See the pinned
+  [loop](https://github.com/injaneity/pi-computer-use/blob/a66bbede03d0d0b652087e8b0de3c3d0c189a25a/src/jev/loop.ts).
+
+Security and dependency cost:
+- `chooseJevActionViaTypeSafe` posts goal/questions, page state and recent actions directly;
+  `jevFieldText` posts field context to a separately configured OpenAI-compatible endpoint.
+  `chooseJevActionViaVercel` calls the SDK evaluation backend. These are additional credential,
+  egress, retry and accounting paths outside Pi's selected-model routing. Default-off registration
+  is useful, but does not make an enabled path equivalent to Pi's model policy. Existing page
+  content is untrusted even when a model can only select offered ids.
+- Password values are masked by the snapshot, but password fields remain fillable, and generated
+  text enters execution history. `buildDecisionState` includes recent action text, so masking
+  observed passwords alone is not an end-to-end secret boundary. This evaluation never supplies
+  credentials or real form data. Canonical sources:
+  [policy](https://github.com/injaneity/pi-computer-use/blob/a66bbede03d0d0b652087e8b0de3c3d0c189a25a/src/jev/policy.ts) and
+  [questions](https://github.com/injaneity/pi-computer-use/blob/a66bbede03d0d0b652087e8b0de3c3d0c189a25a/src/jev/questions.ts).
+- Upstream adds optional peers `ai` (`^7.0.105`) and `@ai-sdk/typesafe-ai` (`*`), plus `ai` as a
+  dev dependency. Its lockfile changes +390/-227 lines. Dynamic imports and `require.resolve`
+  probe the optional modules; the SDK path requires Node >=22 while the package engine still
+  allows >=20.6.0. See pinned
+  [manifest](https://github.com/injaneity/pi-computer-use/blob/a66bbede03d0d0b652087e8b0de3c3d0c189a25a/package.json) and
+  [backend](https://github.com/injaneity/pi-computer-use/blob/a66bbede03d0d0b652087e8b0de3c3d0c189a25a/src/jev/vercel.ts).
+  A port would need deliberate root workspace/lock ownership, package-contract dependency and
+  optional-absent/present checks (`scripts/package_contracts.py`), isolated stock-Pi installs and
+  regenerated runtime locks. This disposition changes none of those inputs; it is not a
+  vulnerability audit or a claim that the new dependencies are unsafe.
+
+Offline comparison and verification boundaries:
+- On 2026-11-13, verified all 197 extracted upstream source files byte-for-byte against the
+  pinned Git objects before re-running the controls. The comparison used harness commit
+  `5e2217604f65da789355da68c0e0289be25846cb` (2026-11-12). This historical receipt does not
+  establish equivalence for later harness changes. The diff and dependency-lock counts come from
+  the immutable upstream base/head pair, not the PR's mutable description.
+- Ran pinned upstream `scripts/check-jev.mjs` through `tsx` with a disposable `HOME`, empty
+  inherited environment and no credentials: exit 0, `jev checks passed`. Its model transports
+  are substituted by the test. This is upstream's offline contract evidence, not browser or
+  paid-provider acceptance.
+- Ran five synthetic page-facade comparisons through the actual pinned `executeJevAction`
+  and current `CdpTab.clickBackendNode`, substituting CDP transport and DOM/layout objects only.
+  Unchanged and moved targets each delivered two upstream pointer events; the moved target's
+  center was re-read as `(100, 100)`. Covered, disconnected and disabled targets delivered zero
+  upstream events and raised `JevStalePage`. Current CDP rejected a missing resolved node; its
+  covered-target function still invoked `click`. Disabled native-button semantics were NOT
+  modeled. All five assertions passed. These are deliberately synthetic local controls, not
+  real-page measurements, real layout/hit-testing, or the whole `act_ui` policy/state pipeline.
+- No Chromium executable was available at the checked standard local paths. No browser install,
+  desktop input, real-page login or provider call was performed. Task-success rate, token/cost
+  savings and latency superiority over `act_ui` remain **unmeasured**; no claim of superiority
+  or equivalence follows from these controls. The admitted evaluation uses synthetic controls
+  instead of the original issue's real-page experiment.
+- The port adds nine `src/jev/*.ts` modules plus bridge/config/state/CDP integration. Existing
+  upstream offline contracts do not establish our line/function/branch ratchet, either OS's
+  zero-uncovered target (#645), or live DOM coverage. Its separate `check-jev-live.mjs` describes
+  19 Chrome guard checks; those and `check-jev-gateway.mjs` are NOT RUN here. No coverage budget,
+  inventory, dependency, runtime lock or test exclusion is relaxed by declining the port.
+
+Reconsider only for a demonstrated existing-browser safety case: reproduce the covered/moved/
+replaced-target behavior on credential-free local HTML in isolated headless Chrome, specify whether
+DOM activation or physical hit-testing is intended, and test a bounded guard change inside the
+current resource lane with strict evaluation/partial-outcome handling and both OS coverage receipts.
+Keep decisions in the outer agent and add no provider backend. That is a possible future proposal,
+not an approved or implemented patch. Rollback of this disposition is documentation-only; there is
+no feature switch, new runtime dependency or carried code to revert.
+
 ## Conflict resolutions
 
 - Keep upstream's compact observation rendering, `detail: outline`, find validation, activity glow,
