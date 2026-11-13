@@ -137,7 +137,7 @@
         { "path": "dist/pi-stats-export.mjs", "kind": "generated", "reason": "Generated esbuild CLI bundle of the owned src/stats/cli.ts implementation; production source remains measured rather than counting the generated duplicate." }
       ],
       "status": "measured",
-      "note": "Retain the existing zero primary floors. Follow-up #824 covers omitted stats arguments and classifies the validated named library facade without excluding its executable targets. Bun follows the full owned inventory; local zero reports do not authorize promotion without this follow-up's own hosted macOS/Linux zero receipts.",
+      "note": "Primary and full-source Bun enforce zero L/F/B/S misses. Complete macOS, Ubuntu and WSL/Linux Node/Bun reports from run 43395812528 cover all 53 executable sources with zero misses (#829); WSL is Linux, not native Windows. The strict named facade leaves its executable targets owned.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
@@ -147,8 +147,7 @@
         "bun": {
           "report": "coverage/bun/lcov.info",
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
-          "enforcement": "report-only",
-          "reason": "Full source-complete Vitest-on-Bun suite with real Istanbul L/F/B/S. Omitted public arguments are covered, the unreachable private help default is removed, and the validated named library facade preserves the full runtime/type export contract. Keep report-only; this follow-up's own hosted macOS/Linux zero receipts are required before promotion: https://github.com/nredd/pi-harness/issues/824 (parent https://github.com/nredd/pi-harness/issues/320).",
+          "enforcement": "enforced",
           "reporters": ["text", "lcov", "json-summary"]
         }
       }

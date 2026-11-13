@@ -410,6 +410,7 @@ ENFORCED_BUN_PACKAGES = {
     "preset",
     "providers",
     "resource-sampler",
+    "session-kit",
     "subagents",
     "subscription-router",
     "todo",
@@ -418,29 +419,23 @@ ENFORCED_BUN_PACKAGES = {
 
 
 def test_current_bun_policy_is_explicit_and_links_migration() -> None:
-    """Pin the promoted Bun signals at zero and keep the rest explicitly advisory.
+    """Pin every promoted Bun signal to explicit enforcement and full-source floors.
 
     Parameters:
         None.
     Returns:
-        None: Promoted signals enforce 0/0 lines/functions plus a branch cap on both OSes; the rest carry
-            an explicit mode and #320 rationale.
+        None: Each signal enforces 0/0 lines/functions and a branch cap on both OSes.
     Raises:
-        AssertionError: A signal defaults to enforcement, lacks its reason or loosens a promoted floor.
+        AssertionError: A signal omits enforcement, adds a subset or loosens a promoted floor.
     """
     data = json.loads((ROOT / "coverage/policy.json").read_text())
     packages = data["packages"]
     signals = {name: pkg["signals"]["bun"] for name, pkg in packages.items() if "bun" in pkg["signals"]}
-    assert signals.keys() == ENFORCED_BUN_PACKAGES | {"session-kit"}
+    assert signals.keys() == ENFORCED_BUN_PACKAGES
     for name, signal in signals.items():
-        if name in ENFORCED_BUN_PACKAGES:
-            assert signal["enforcement"] == "enforced", name
-            assert "files" not in signal, name
-            assert signal["max_uncovered"].keys() == {"darwin", "linux"}, name
-            for counts in signal["max_uncovered"].values():
-                # Branch caps (#403) are driven to 0 separately by #404-#425; lines/functions stay 0/0.
-                assert (counts["lines"], counts["functions"], type(counts["branches"])) == (0, 0, int), name
-        else:
-            assert signal["enforcement"] == "report-only", name
-            assert "https://github.com/nredd/pi-harness/issues/320" in signal["reason"]
-            assert "before promotion" in signal["reason"]
+        assert signal["enforcement"] == "enforced", name
+        assert "files" not in signal, name
+        assert signal["max_uncovered"].keys() == {"darwin", "linux"}, name
+        for counts in signal["max_uncovered"].values():
+            # Branch caps (#403) are driven to 0 separately by #404-#425; lines/functions stay 0/0.
+            assert (counts["lines"], counts["functions"], type(counts["branches"])) == (0, 0, int), name
