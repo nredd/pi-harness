@@ -88,7 +88,7 @@ exemption. Existing LCOV and `json-summary` producers supply actual counters; mi
 still fails accounting closed, never becomes a zero.
 
 The scoped macOS run of `verification-gates`, `verification-sync-gates` and `sync-ledger`
-passed 27 tests, measuring L/F/B/S **279/46/163/314**, all covered. Actual tar archives,
+passed 27 tests, measuring L/F/B/S **279/46/165/314**, all covered. Actual tar archives,
 disposable Git histories, source-tree comparison, documentation generators and an expected-failure
 mutation child run offline. Injected boundaries cover launch failures, retry exhaustion, wrong
 failures, surviving mutations and cleanup without a network fetch or live helper. The full
