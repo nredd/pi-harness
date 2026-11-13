@@ -380,7 +380,7 @@ describeMacosOnly("swiftc", () => {
 		await runPreparedSwift(prepared, ["-typecheck", changed], { cwd: root, label: "INV-8 corrected source control", timeoutMs: 25_000 });
 	});
 
-	test("INV-17 macOS agent cursor lifecycle", { timeout: 50_000 }, async () => {
+	test("INV-17 cursor motion and opt-in macOS overlay lifecycle", { timeout: 50_000 }, async () => {
 		const binary = path.join(scratch, "cursor-tests");
 		await runPreparedSwift(prepared, [
 			"-framework", "AppKit",
@@ -390,7 +390,12 @@ describeMacosOnly("swiftc", () => {
 			"native/macos/agent_cursor_tests.swift",
 			"-o", binary,
 		], { cwd: root, label: "INV-17 Swift source compile", timeoutMs: 20_000 });
-		await runCheckCommand(binary, [], { cwd: root, label: "INV-17 cursor lifecycle binary", timeoutMs: 5000 });
+		const result = await runCheckCommand(binary, [], { cwd: root, label: "INV-17 cursor lifecycle binary", timeoutMs: 5000 });
+		assert(result.stdout.includes("cursor deterministic motion and fake live-gate checks passed"), "cursor motion and fake gate assertions must execute");
+		if (process.env.PI_COMPUTER_USE_LIVE !== "1") {
+			assert(result.stdout.includes("NOT RUN: cursor overlay lifecycle"), "headless gate must report live overlay checks as NOT RUN");
+		}
+		process.stdout.write(result.stdout);
 	});
 });
 

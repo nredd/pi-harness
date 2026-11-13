@@ -4,6 +4,43 @@
 `cursor_motion_tests.swift` and `headless_tests.swift`. No source extraction,
 replacement renderer, overlay, pointer movement, capture, activation or TCC is involved.
 
+## Default invariant gate and live opt-in (#819)
+
+`npm run test:invariants` keeps the Swift source typecheck, invalid-source/cache
+controls and deterministic cursor-motion lifecycle enabled. Its cursor binary also
+checks the live-selection gate using fake callbacks: absent, empty, `0`, `true`
+and whitespace-padded values refuse the callback; only exact `1` invokes the fake.
+These fake callbacks never create windows, even when testing opt-in selection.
+
+The real `testOverlayLifecycle` callback constructs and orders AppKit windows.
+It is **NOT RUN** by default; the native binary reports that boundary and the
+invariant runner preserves that output. Run it only in an authorized desktop window:
+
+```sh
+PI_COMPUTER_USE_LIVE=1 npm run test:invariants
+```
+
+This opt-in also applies when invoking the native cursor test binary directly.
+The default `npm test`/`npm run check` must run without that flag in headless CI.
+`test/cursor-headless-gate.test.mjs` rejects the former unconditional call graph
+without executing Swift/AppKit. Revert controls restore the unconditional call or
+remove the exact opt-in guard and must fail those source assertions, never run the
+mutated native executable. The real-source coverage producer and its denominators
+are unchanged; the live fixture is not included in that producer.
+
+The earlier nominally headless invariant suite called `testOverlayLifecycle`
+unconditionally and ran real windows during #645. That execution was not wholly
+desktop-free. No input events, TCC grant, authentication UI, capture or clipboard
+operation was intentionally invoked. This repair does not turn that old execution
+into authorized live acceptance. Current live acceptance remains NOT RUN.
+
+The separate static parity-control isolation belongs to #818/#825. Those controls
+must target the unchanged JavaScript-only predicate rather than prepare the Swift
+SDK. No wrapper, SDK hook, source-validation, cache-control or cursor deadline
+changes here.
+
+## Motion assertions
+
 The motion assertions cover:
 
 - Linear sampling below, within and above its distance range, with heading wrap in both directions.

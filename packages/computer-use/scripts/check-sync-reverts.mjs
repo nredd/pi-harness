@@ -42,6 +42,22 @@ const cases = [
 		failure: /website commands must enter packages\/computer-use/,
 	},
 	{
+		name: "Headless cursor entry refuses unconditional overlay (#819)",
+		file: "native/macos/agent_cursor_tests.swift",
+		before: "CursorLiveGate.run(environment: ProcessInfo.processInfo.environment, overlay: testOverlayLifecycle)",
+		after: "testOverlayLifecycle()",
+		check: "test/cursor-headless-gate.test.mjs",
+		failure: /cursor entry must never call the live overlay directly/,
+	},
+	{
+		name: "Headless cursor gate requires exact opt-in (#819)",
+		file: "native/macos/agent_cursor_tests.swift",
+		before: 'guard environment["PI_COMPUTER_USE_LIVE"] == "1" else',
+		after: "guard true else",
+		check: "test/cursor-headless-gate.test.mjs",
+		failure: /cursor gate refuses every non-opt-in environment/,
+	},
+	{
 		name: "Linux compiler group escalation (harness c59eb11)",
 		file: "scripts/setup-helper.mjs",
 		before: 'if (!signalGroup("SIGKILL")) return;',
