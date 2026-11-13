@@ -1721,7 +1721,8 @@ describe("FleetList overflow window (#857)", () => {
     return lines.slice(main + 1, -1);
   }
 
-  const positions = (count: number) => [["top", 0], ["middle", Math.floor(count / 2)], ["bottom", count - 1]] as const;
+  // A true middle shows both indicators, so it needs selRow >= 4 and one row below it (overflowing rosters only).
+  const positions = (count: number) => [["top", 0], ["middle", count > 5 ? Math.max(4, Math.floor(count / 2)) : 2], ["bottom", count - 1]] as const;
   const cases = [5, 6, 7, 12].flatMap(count => positions(count).map(([name, sel]) => [count, name, sel] as const));
 
   it.each(cases)("%i children, selection at %s (row %i): raw layout", (count, _name, sel) => {
@@ -1771,6 +1772,7 @@ describe("FleetList overflow window (#857)", () => {
         const lines = h.render(120).map(plain);
         expect(block(lines)).toHaveLength(5);
         expect(lines).toHaveLength(9);
+        expect(lines.some(r => r.startsWith("  ● "))).toBe(true); // selection visible at every step
         if (prev) {
           for (const [i, line] of lines.entries()) {
             const m = line.match(/child \d\d/);
