@@ -7,7 +7,26 @@ JSON, report-only and excluded from the global target pending #696. A failed tes
 error, missing/empty/malformed report or missing executable source map fails the selected-host gate.
 macOS and WSL guest cells, including native ARM64 WSL replacements, report this signal NOT RUN.
 Accounting selects the CI guest value `wsl2`, not the Windows/native host class; Ubuntu's `linux`
-guest still requires the report. They do not borrow Ubuntu counters. This is not a Windows-native producer.
+guest still requires the report. They do not borrow Ubuntu counters.
+
+The separate `computer-use Rust (windows-x64)` job runs on hosted `windows-2025`, independent
+of the WSL guest and ARM64 runner routing. It verifies a native `x86_64-pc-windows-msvc` compiler,
+checks rustfmt, compiles all targets, runs Clippy with warnings denied, builds warning-free docs,
+and collects real Windows tests plus LLVM JSON/LCOV using the same pinned versions. It also
+executes the opt-in Windows build/install routing suite against disposable destinations. The
+required `owned (ubuntu-24.04)` fan-in rejects a failed, cancelled or missing Windows result
+whenever its classified shards include computer-use; a docs-only or unrelated run does not
+borrow a prior producer result. Missing/empty/wrong-crate reports fail the producer itself.
+Raw Windows reports are retained as `computer-use-rust-windows-x64`; they are not injected into
+Ubuntu's coverage signal or assigned invented per-file caps. Parent integration of Windows
+policy/accounting remains separate from this raw producer. ARM64 qualification stays in #736.
+
+Windows tests never enumerate the worker's windows or deliver physical input: root serialization
+uses synthetic metadata, raw-input policy tests inject delivery after real preflight, and null
+capture handles refuse before the capture API. This measures deterministic policy and refusal
+code, not live UIA/capture/input acceptance. The crate's inline test code remains in LLVM's
+source denominator; integration test sources remain distinguishable in raw reports. Unexecuted
+Windows adapters are not exemptions or evidence of runtime 100%.
 
 All report commands disable cargo-llvm-cov's default filename exclusions. Accounting structurally
 scopes the complete `native/linux/bridge-rs/src/**/*.rs` inventory, including separately named
@@ -54,7 +73,10 @@ not shell code. Without `--output`, reports go to an OS temp directory. With it,
 per-crate subdirectory is created there; existing outputs are never cleaned or reused. Prefer a
 temp directory, not the source tree. Each run gets its own `CARGO_TARGET_DIR` and tests once with
 `--locked --no-report`, then renders `lcov.info`, `summary.txt` (per-file lines/functions/regions),
-`coverage.json` (LLVM detail), `run.log`, `commands.log` and `metadata.json` (host and elapsed time).
+`coverage.json` (LLVM detail), `run.log`, `commands.log` and `metadata.json` (host, architecture,
+elapsed time and SHA-256 of every crate `src` file plus `Cargo.toml`/`Cargo.lock`). Metadata explicitly
+labels branches and statements unmeasured. Source hashes bind the report to source bytes, not
+an unrelated commit's report; inspect the CI head and compiler receipt as well.
 Collect the whole printed directory for review. The logs include test counts and test runtime;
 metadata time includes build, tests and all report formats. Compiler output is retained, not
 replaced with an invented test count. Doc tests run normally but are not separately instrumented.

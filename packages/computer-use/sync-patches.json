@@ -1044,7 +1044,8 @@
 			"check": "test/rust-coverage.test.mjs",
 			"dropControls": [
 				"Rust coverage actionable missing-tool error",
-				"Rust coverage complete source filenames"
+				"Rust coverage complete source filenames",
+				"Rust coverage source hashes (#696)"
 			],
 			"upstream": {
 				"status": "proposed-after-issue-first",
@@ -1313,6 +1314,30 @@
 			}
 		},
 		{
+			"id": "windows-native-producer",
+			"purpose": "Compile and measure native Windows x64 without desktop calls in tests; inject input delivery and serialize synthetic roots, refuse null capture handles before the OS boundary, and format the native crate (#696)",
+			"rows": [
+				"Windows native coverage"
+			],
+			"files": [
+				"native/windows/bridge-rs/src/capture.rs",
+				"native/windows/bridge-rs/src/input.rs",
+				"native/windows/bridge-rs/src/main.rs",
+				"native/windows/bridge-rs/src/window.rs",
+				"test/windows-build-scripts.test.mjs",
+				"test/windows-native-refusals.test.mjs"
+			],
+			"check": "test/windows-native-refusals.test.mjs",
+			"dropControls": [
+				"Windows raw-input policy refusal (#696)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "MIT-derived from imported injaneity/pi-computer-use; nredd/pi-harness#696, not filed upstream"
+			}
+		},
+		{
 			"id": "wsl2-diagnostics",
 			"purpose": "Say Windows host windows are unreachable from a WSL2 guest when Linux finds no roots or frontmost window, instead of the bare errors",
 			"rows": [
@@ -1370,6 +1395,10 @@
 		"native/macos/helper_entry.swift",
 		"native/macos/ref_look_tests.swift",
 		"native/macos/request_framing_tests.swift",
+		"native/windows/bridge-rs/src/capture.rs",
+		"native/windows/bridge-rs/src/input.rs",
+		"native/windows/bridge-rs/src/main.rs",
+		"native/windows/bridge-rs/src/window.rs",
 		"package-lock.json",
 		"package.json",
 		"prebuilt/macos/arm64/bridge",
@@ -1504,6 +1533,7 @@
 		"test/unpaired-act.test.mjs",
 		"test/windows-build-scripts.test.mjs",
 		"test/windows-helper-client.test.mjs",
+		"test/windows-native-refusals.test.mjs",
 		"test/wsl-detection.test.mjs",
 		"test/wsl2-diagnostics.test.mjs",
 		"tsconfig.signing.json",

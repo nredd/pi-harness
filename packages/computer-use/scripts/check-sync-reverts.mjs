@@ -164,6 +164,14 @@ const cases = [
 		failure: /AssertionError|false == true/,
 	},
 	{
+		name: "Rust coverage source hashes (#696)",
+		file: "scripts/rust-coverage.mjs",
+		before: "\t\t\t\t\tsourceHashes,",
+		after: "\t\t\t\t\tsourceHashes: {},",
+		check: "test/rust-coverage.test.mjs",
+		failure: /AssertionError|deep-equal/,
+	},
+	{
 		name: "Rust protocol/state Cargo registration (#801)",
 		file: "native/linux/bridge-rs/tests/protocol_state_errors.rs",
 		before: "#[test]\nfn every_error_has_the_stable_wire_code_and_display()",
@@ -243,6 +251,15 @@ const cases = [
 		check: "test/windows-helper-client.test.mjs",
 		failure: /timed out/,
 	},
+	{
+		name: "Windows raw-input policy refusal (#696)",
+		file: "native/windows/bridge-rs/src/input.rs",
+		before: "policy_allows_raw_input(&request)?;",
+		after: "/* preflight refusal dropped */",
+		check: "test/windows-native-refusals.test.mjs",
+		failure: /raw_input_refusals_do_not_dispatch.*FAILED/s,
+	},
+
 	{
 		name: "accessibility hit test for pointer input (#646)",
 		file: "native/macos/bridge.swift",

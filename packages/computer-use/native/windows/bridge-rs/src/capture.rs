@@ -129,6 +129,12 @@ fn screenshot_impl(
             ErrorCode::TargetNotFound,
         )
     })?;
+    if native.raw() == 0 {
+        return Err(ProtocolError::new(
+            "Invalid null window handle",
+            ErrorCode::CaptureFailed,
+        ));
+    }
     let hwnd = HWND(native.raw() as *mut _);
 
     let mut warnings: Vec<String> = Vec::new();
@@ -334,7 +340,7 @@ unsafe fn gdi_capture_to_base64(
     }
 
     // Convert BGRA → RGBA (GDI returns B,G,R,A; PNG expects R,G,B,A).
-    for chunk in bits.chunks_exact_mut(4) {
+    for chunk in bits.as_chunks_mut::<4>().0 {
         chunk.swap(0, 2);
     }
 
@@ -511,51 +517,16 @@ mod unit_tests {
         assert_eq!(err.code, ErrorCode::TargetNotFound);
     }
 
-    // -- Windows-only integration tests ------------------------------------
-
+    // A null HWND must refuse before any capture API; never accept a desktop-dependent outcome.
     #[test]
     #[cfg(windows)]
-    fn test_screenshot_capture_fresh_state_id() {
-        // On Windows, verify that each screenshot gets a unique stateId.
-        let mut store = RefStore::new();
-        // Only works if there's at least one visible HWND.
-        // We use a synthetic handle — the test checks the stateId property
-        // not the actual capture quality.
-        let wref = store.insert_window(NativeHandle::new(0)); // HWND 0 is invalid
-
-        match screenshot(&mut store, &wref, false, None) {
-            Ok(val) => {
-                let sid = val["capture"]["stateId"]
-                    .as_str()
-                    .expect("stateId should be a string");
-                assert!(sid.starts_with("s-"), "stateId should start with s-");
-            }
-            Err(e) => {
-                // In CI / headless environments this will fail with
-                // CaptureFailed because HWND 0 is not a valid window.
-                // That's acceptable — the error path is exercised.
-                assert_eq!(
-                    e.code,
-                    ErrorCode::CaptureFailed,
-                    "Expected CaptureFailed for invalid HWND: {e:?}",
-                );
-            }
-        }
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn test_screenshot_fresh_state_ids_differ() {
+    fn null_window_capture_is_a_deterministic_refusal() {
         let mut store = RefStore::new();
         let wref = store.insert_window(NativeHandle::new(0));
-
-        // Same as above; just check that two calls produce different IDs
-        // when they succeed or the same error when they fail.
-        let result_a = screenshot(&mut store, &wref, false);
-        let result_b = screenshot(&mut store, &wref, false);
-
-        let err_a = result_a.as_ref().err().map(|e| e.code);
-        let err_b = result_b.as_ref().err().map(|e| e.code);
-        assert_eq!(err_a, err_b, "both calls should produce the same outcome");
+        for _ in 0..2 {
+            let error = screenshot(&mut store, &wref, false, None).unwrap_err();
+            assert_eq!(error.code, ErrorCode::CaptureFailed);
+            assert_eq!(error.message, "Invalid null window handle");
+        }
     }
 }
