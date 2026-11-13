@@ -112,7 +112,7 @@ describe("owned-work settlement diagnostics", () => {
 		const manager = SessionManager.inMemory(home.root);
 		manager.appendCustomEntry(STATE_ENTRY_TYPE, { persistenceVersion: 1, tasks, nextId: tasks.length + 1 });
 		const decisions: boolean[] = [];
-		const notices: Array<[string, string | undefined]> = [];
+		const notices: [string, string | undefined][] = [];
 		const ownership: ExtensionFactory = (pi) => {
 			pi.on("session_start", (_event, ctx) => {
 				if (agent) {

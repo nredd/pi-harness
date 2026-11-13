@@ -1,39 +1,39 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Private Codex free reset journal records, version 1",
-  "oneOf": [
-    {
-      "type": "object",
-      "properties": {
-        "version": { "const": 1, "type": "number" },
-        "sequence": { "minimum": 1, "type": "integer" },
-        "binding": { "pattern": "^[a-f0-9]{64}$", "type": "string" },
-        "scope": { "pattern": "^[a-f0-9]{64}$", "type": "string" },
-        "key": { "pattern": "^[a-f0-9-]{36}$", "type": "string" },
-        "grant": { "minLength": 1, "maxLength": 1024, "type": "string" },
-        "createdAt": { "minimum": 0, "type": "integer" },
-        "expiry": { "minimum": 0, "type": "integer" }
-      },
-      "required": ["version", "sequence", "binding", "scope", "key", "grant", "createdAt", "expiry"],
-      "additionalProperties": false
-    },
-    {
-      "type": "object",
-      "properties": {
-        "version": { "const": 1, "type": "number" },
-        "key": { "pattern": "^[a-f0-9-]{36}$", "type": "string" },
-        "outcome": {
-          "anyOf": [
-            { "const": "reset", "type": "string" },
-            { "const": "alreadyRedeemed", "type": "string" },
-            { "const": "nothingToReset", "type": "string" },
-            { "const": "noCredit", "type": "string" },
-            { "const": "notDispatched", "type": "string" }
-          ]
-        }
-      },
-      "required": ["version", "key", "outcome"],
-      "additionalProperties": false
-    }
-  ]
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"title": "Private Codex free reset journal records, version 1",
+	"oneOf": [
+		{
+			"type": "object",
+			"properties": {
+				"version": { "const": 1, "type": "number" },
+				"sequence": { "minimum": 1, "type": "integer" },
+				"binding": { "pattern": "^[a-f0-9]{64}$", "type": "string" },
+				"scope": { "pattern": "^[a-f0-9]{64}$", "type": "string" },
+				"key": { "pattern": "^[a-f0-9-]{36}$", "type": "string" },
+				"grant": { "minLength": 1, "maxLength": 1024, "type": "string" },
+				"createdAt": { "minimum": 0, "type": "integer" },
+				"expiry": { "minimum": 0, "type": "integer" }
+			},
+			"required": ["version", "sequence", "binding", "scope", "key", "grant", "createdAt", "expiry"],
+			"additionalProperties": false
+		},
+		{
+			"type": "object",
+			"properties": {
+				"version": { "const": 1, "type": "number" },
+				"key": { "pattern": "^[a-f0-9-]{36}$", "type": "string" },
+				"outcome": {
+					"anyOf": [
+						{ "const": "reset", "type": "string" },
+						{ "const": "alreadyRedeemed", "type": "string" },
+						{ "const": "nothingToReset", "type": "string" },
+						{ "const": "noCredit", "type": "string" },
+						{ "const": "notDispatched", "type": "string" }
+					]
+				}
+			},
+			"required": ["version", "key", "outcome"],
+			"additionalProperties": false
+		}
+	]
 }
