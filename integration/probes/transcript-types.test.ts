@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
-import fs, { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
+import * as fs from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type MockInstance, test, vi } from "vitest";
 import transcriptTypes, { blockTypes, TypeTrace } from "./transcript-types.ts";
+
+// Mock the ESM boundary itself: Bun's syncBuiltinESMExports does not forward default-export spies
+// into named imports. Pass through every real filesystem operation until a failure case injects it.
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs")>();
+	return { ...actual, closeSync: vi.fn(actual.closeSync), writeSync: vi.fn(actual.writeSync) };
+});
 
 const secret = "DO-NOT-LOG-private-text-signature-token";
 
@@ -210,7 +217,6 @@ for (const failure of ["size-limit", "open-error", "close-error"]) {
 						throw new Error(secret);
 					})
 				: undefined;
-		syncBuiltinESMExports();
 		try {
 			if (failure === "open-error") writeFileSync(h.directory, "do not overwrite");
 			h.register();
@@ -218,7 +224,6 @@ for (const failure of ["size-limit", "open-error", "close-error"]) {
 			for (let i = 0; i < (failure === "close-error" ? 1 : 2500); i++) h.emit("message_end", { message: wideMessage });
 			assert.doesNotThrow(() => h.emit("session_shutdown"));
 			closeMock?.mockRestore();
-			syncBuiltinESMExports();
 			assert.equal(h.notices.length, 1);
 			const [notice] = h.notices;
 			assert.ok(notice);
@@ -238,7 +243,6 @@ for (const failure of ["size-limit", "open-error", "close-error"]) {
 			}
 		} finally {
 			closeMock?.mockRestore();
-			syncBuiltinESMExports();
 			h.cleanup();
 		}
 	});
@@ -284,13 +288,11 @@ for (const failure of ["write-error", "restart-close-error"]) {
 							originalClose(fd);
 							throw new Error(secret);
 						});
-			syncBuiltinESMExports();
 			if (failure === "write-error") h.emit("message_end", { message });
 			else h.emit("session_start");
 			// Vitest's `mockRestore` also clears the recorded calls, so count them first.
 			assert.ok(fsMock.mock.calls.length >= 1);
 			fsMock.mockRestore();
-			syncBuiltinESMExports();
 			assert.equal(h.notices.length, 1);
 			const [notice] = h.notices;
 			assert.ok(notice);
@@ -302,7 +304,6 @@ for (const failure of ["write-error", "restart-close-error"]) {
 			assert.equal(readFileSync(file, "utf8"), started);
 		} finally {
 			fsMock?.mockRestore();
-			syncBuiltinESMExports();
 			h.cleanup();
 		}
 	});
@@ -410,17 +411,14 @@ test("a close failure at the size limit still stops capture and says so", () => 
 			originalClose(fd);
 			throw new Error(secret);
 		});
-		syncBuiltinESMExports();
 		for (let i = 0; i < 2500; i++) h.emit("message_end", { message: wideMessage });
 		closeMock.mockRestore();
-		syncBuiltinESMExports();
 		assert.deepEqual(h.notices, ["Transcript type capture stopped after a close failure"]);
 		const content = readFileSync(onlyFile(h.directory), "utf8");
 		assert.equal(content.includes(secret), false);
 		assert.match(content, /\n\{"stage":"capture_limit"\}\n$/);
 	} finally {
 		closeMock?.mockRestore();
-		syncBuiltinESMExports();
 		h.cleanup();
 	}
 });
