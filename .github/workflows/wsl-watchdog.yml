@@ -1,0 +1,57 @@
+# Synthetic Windows-host control tests, not a reproduction of the unknown historical #753 outage.
+name: WSL watchdog controls
+on:
+  pull_request:
+    paths:
+      - '.github/actions/setup-ci-wsl/**'
+      - '.github/workflows/wsl-watchdog.yml'
+      - 'scripts/wsl2_watchdog*'
+      - 'scripts/wsl2_bounded.ps1'
+      - 'scripts/tests/test_wsl2_watchdog_fixture.py'
+  push:
+    branches: [main]
+    paths:
+      - '.github/actions/setup-ci-wsl/**'
+      - '.github/workflows/wsl-watchdog.yml'
+      - 'scripts/wsl2_watchdog*'
+      - 'scripts/wsl2_bounded.ps1'
+      - 'scripts/tests/test_wsl2_watchdog_fixture.py'
+permissions:
+  contents: read
+jobs:
+  controls:
+    runs-on: windows-2025
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Arm detached watchdog with a synthetic stalled child
+        timeout-minutes: 2
+        run: ./scripts/wsl2_watchdog_fixture.ps1 -Phase Arm
+      - name: Assert trip, cancellation ownership and report after step boundary
+        timeout-minutes: 2
+        run: ./scripts/wsl2_watchdog_fixture.ps1 -Phase Trip
+      - name: Assert successful completion stops the watchdog
+        timeout-minutes: 2
+        run: ./scripts/wsl2_watchdog_fixture.ps1 -Phase Done
+      - name: Assert caller cancellation cleanup stops the watchdog
+        timeout-minutes: 2
+        run: ./scripts/wsl2_watchdog_fixture.ps1 -Phase Cancelled
+      - name: Assert a watchdog without a heartbeat fails launch
+        timeout-minutes: 1
+        run: ./scripts/wsl2_watchdog_fixture.ps1 -Phase Unarmed
+      - name: Assert missing watchdog elapsed-time backstop
+        timeout-minutes: 1
+        run: ./scripts/wsl2_watchdog_fixture.ps1 -Phase Posthoc
+      - name: Retain sanitized control receipts even on failure
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wsl-watchdog-control-receipts
+          path: ${{ runner.temp }}/watchdog-control-fixture/receipts/
+          if-no-files-found: error
+          retention-days: 14
