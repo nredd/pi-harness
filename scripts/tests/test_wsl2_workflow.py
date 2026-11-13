@@ -370,6 +370,7 @@ def test_wsl2_workflow_reuses_the_release_and_stack_entrypoints() -> None:
 
 
 INSTALL_GH = CLEANUP.parent / "install_gh_linux.sh"
+INSTALL_GH_PY = INSTALL_GH.with_suffix(".py")
 
 
 def test_wsl2_workflow_bootstraps_gh_and_verifies_overrides_before_npm_ci() -> None:
@@ -490,12 +491,16 @@ def test_install_gh_downloads_the_asset_of_its_architecture(tmp_path: Path, mach
     assert completed.returncode == 1
     assert f"for gh_{GH_VERSION}_{asset}.tar.gz; refusing to install" in completed.stderr
     assert (tmp_path / "sha256sum-ran").is_file()
-    pins = re.findall(r"^GH_SHA256_(AMD64|ARM64)=([0-9a-f]{64})$", INSTALL_GH.read_text(), re.MULTILINE)
+    pins = re.findall(
+        r'^GH_SHA256_(AMD64|ARM64) = "([0-9a-f]{64})"$', INSTALL_GH_PY.read_text(), re.MULTILINE
+    )
     assert sorted(name for name, _ in pins) == ["AMD64", "ARM64"]
     assert len({digest for _, digest in pins}) == 2
 
 
-GH_VERSION = cast("re.Match[str]", re.search(r"^GH_VERSION=(\S+)$", INSTALL_GH.read_text(), re.MULTILINE))[1]
+GH_VERSION = cast(
+    "re.Match[str]", re.search(r'^GH_VERSION = "(\S+)"$', INSTALL_GH_PY.read_text(), re.MULTILINE)
+)[1]
 
 
 def test_install_gh_requires_one_directory_argument() -> None:
@@ -1178,6 +1183,7 @@ def native_guest(tmp_path: Path, versions: dict[str, str]) -> tuple[dict[str, st
     (workspace / ".git").mkdir(parents=True)
     (workspace / "scripts").mkdir()
     shutil.copy(INSTALL_GH, workspace / "scripts" / "install_gh_linux.sh")
+    shutil.copy(INSTALL_GH_PY, workspace / "scripts" / "install_gh_linux.py")
     (workspace / ".node-version").write_text("22.0.0\n", encoding="utf-8")
     (workspace / ".bun-version").write_text("1.4.4\n", encoding="utf-8")
     (workspace / "package.json").write_text("{}", encoding="utf-8")
