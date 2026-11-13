@@ -222,6 +222,56 @@ for (const busy of ["run", "queue"] as const) {
   });
 }
 
+test("aborted settlement invalidates confirmed entry without an aborted assistant message", async () => {
+  const f = await fixture();
+  const tools = f.mock.rawPi.getActiveTools();
+  const before = JSON.stringify(f.mock.entries);
+  await f.enter();
+  await f.emit("agent_end", { messages: [{ role: "assistant", stopReason: "toolUse", content: [] }] });
+  await f.emit("agent_settled", { aborted: true });
+  assert.equal(f.mock.sentUserMessages.length, 0);
+  assert.equal(f.mock.sentMessages.length, 0);
+  assert.equal(JSON.stringify(f.mock.entries), before);
+  assert.deepEqual(f.mock.rawPi.getActiveTools(), tools);
+});
+
+test("a superseding user request drained before settlement invalidates confirmed entry", async () => {
+  const f = await fixture();
+  const tools = f.mock.rawPi.getActiveTools();
+  const before = JSON.stringify(f.mock.entries);
+  await f.enter();
+  await f.emit("input", { text: "Instead, inspect the tests", source: "interactive" });
+  await f.emit("message_start", { message: { role: "user", content: "Instead, inspect the tests" } });
+  await f.emit("agent_settled", { aborted: false });
+  assert.equal(f.mock.sentUserMessages.length, 0);
+  assert.equal(f.mock.sentMessages.length, 0);
+  assert.equal(JSON.stringify(f.mock.entries), before);
+  assert.deepEqual(f.mock.rawPi.getActiveTools(), tools);
+});
+
+test("admitted user messages invalidate entry even when input is extension-owned or text is repeated", async () => {
+  const f = await fixture();
+  await f.enter();
+  await f.emit("input", { text: "Original request", source: "extension" });
+  await f.emit("message_start", { message: { role: "user", content: "Original request" } });
+  await f.emit("agent_settled", { aborted: false });
+  assert.equal(f.mock.sentMessages.length, 0);
+  assert.equal(f.mock.sentUserMessages.length, 0);
+});
+
+test("fresh confirmation after superseding input replays only the newly admitted request", async () => {
+  const f = await fixture();
+  await f.enter();
+  await f.emit("input", { text: "Instead, inspect tests", source: "interactive" });
+  await f.emit("message_start", { message: { role: "user", content: "Instead, inspect tests" } });
+  await f.enter();
+  await f.emit("agent_settled", { aborted: false });
+  assert.deepEqual(
+    f.mock.sentUserMessages.map((message) => message.text),
+    ["Instead, inspect tests"],
+  );
+});
+
 test("settled entry uses helper admission without activating hidden helpers", async () => {
   const f = await fixture();
   await f.enter();

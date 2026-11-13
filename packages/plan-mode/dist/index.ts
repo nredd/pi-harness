@@ -1928,6 +1928,10 @@ function planMode(pi, dependencies = {}) {
     if (blockedShell !== void 0) return { block: true, reason: blockedShell };
   });
   pi.on("message_start", (event) => {
+    if (event.message.role === "user") {
+      pendingModelEntry = void 0;
+      originalRequest = messageTextContent(event.message);
+    }
     if (state.enabled && event.message.role === "user" && messageTextContent(event.message).trim() === FINALIZE_PLAN_PROMPT) {
       finalizationRequest.request(workflowGeneration);
     }
@@ -1945,6 +1949,7 @@ function planMode(pi, dependencies = {}) {
       recoverRuntimeAdmissionInput({ ...event, sessionManager: ctx.sessionManager });
       return { action: "handled" };
     }
+    if (event.source !== "extension") pendingModelEntry = void 0;
     refreshStateForFirstPrompt(ctx);
     if (event.source !== "extension") recordPlanDecline();
     const waitsForRuntimeAdmission = activeImplementationRuntimeApplication?.sessionManager === ctx.sessionManager || pendingRuntimeAdmissionSession === ctx.sessionManager;
@@ -2023,7 +2028,8 @@ function planMode(pi, dependencies = {}) {
     }
     acceptCompletedPlan(parsedPlan.plan, "legacy_proposed_plan", ctx);
   });
-  pi.on("agent_settled", async (_event, ctx) => {
+  pi.on("agent_settled", async (event, ctx) => {
+    if (event.aborted) pendingModelEntry = void 0;
     const entry = pendingModelEntry;
     if (entry) {
       pendingModelEntry = void 0;

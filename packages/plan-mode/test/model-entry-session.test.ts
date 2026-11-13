@@ -103,6 +103,116 @@ for (const mode of ["print", "json"] as const) {
   });
 }
 
+test("a real abort at before-settle prevents confirmed entry after the final assistant", async () => {
+  const fixture = new SessionFixture();
+  try {
+    let abortedAtBoundary = false;
+    const settlements: boolean[] = [];
+    const harness = await fixture.create({
+      extensionFactories: [
+        planFactory,
+        (pi) => {
+          pi.on("agent_before_settle", () => {
+            if (!abortedAtBoundary) {
+              abortedAtBoundary = true;
+              void harness.session.abort();
+            }
+          });
+          pi.on("agent_settled", (event) => {
+            settlements.push(event.aborted);
+          });
+        },
+      ],
+    });
+    await harness.session.bindExtensions({
+      mode: "rpc",
+      uiContext: createTestUiContext({ confirm: async () => true }),
+    });
+    harness.setResponses([
+      tool("plan_mode_enter", { reason: "Scope" }),
+      fauxAssistantMessage("Unauthorized stale planning."),
+    ]);
+    const tools = harness.session.getActiveToolNames();
+    await harness.session.prompt("Original migration request");
+    expect(settlements).toContain(true);
+    expect(
+      harness.session.messages.filter((message) => message.role === "assistant").map((message) => message.stopReason),
+    ).not.toContain("aborted");
+    expect(
+      harness.sessionManager
+        .getBranch()
+        .some((entry) => entry.type === "custom_message" && entry.customType === MODE_CONTRACT_MESSAGE_TYPE),
+    ).toBe(false);
+    expect(harness.session.getActiveToolNames()).toEqual(tools);
+    expect(harness.getPendingResponseCount()).toBe(1);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+for (const queue of ["followUp", "steer"] as const) {
+  test(`real ${queue} drains a superseding request before settlement without a new agent start`, async () => {
+    const fixture = new SessionFixture();
+    try {
+      const trace: string[] = [];
+      const harness = await fixture.create({
+        extensionFactories: [
+          planFactory,
+          (pi) => {
+            pi.on("before_agent_start", () => {
+              trace.push("before_agent_start");
+            });
+            pi.on("tool_result", async (event) => {
+              if (event.toolName === "plan_mode_enter") {
+                trace.push("entry confirmed");
+                await harness.session[queue]("Instead, inspect the tests");
+              }
+            });
+            pi.on("input", (event) => {
+              trace.push(`input:${event.text}`);
+            });
+            pi.on("message_start", (event) => {
+              if (event.message.role === "user") trace.push(`user:${getMessageText(event.message)}`);
+            });
+            pi.on("agent_settled", (_event, ctx) => {
+              trace.push(`settled:pending=${ctx.hasPendingMessages()}`);
+            });
+          },
+        ],
+      });
+      await harness.session.bindExtensions({
+        mode: "rpc",
+        uiContext: createTestUiContext({ confirm: async () => true }),
+      });
+      harness.setResponses([
+        tool("plan_mode_enter", { reason: "Scope" }),
+        fauxAssistantMessage("Inspected the tests."),
+        fauxAssistantMessage("Unauthorized original replay."),
+      ]);
+      await harness.session.prompt("Original migration request");
+      expect(trace).toContain("user:Instead, inspect the tests");
+      expect(trace).toEqual([
+        "input:Original migration request",
+        "before_agent_start",
+        "user:Original migration request",
+        "entry confirmed",
+        "input:Instead, inspect the tests",
+        "user:Instead, inspect the tests",
+        "settled:pending=false",
+      ]);
+      expect(trace.at(-1)).toBe("settled:pending=false");
+      expect(
+        harness.sessionManager
+          .getBranch()
+          .some((entry) => entry.type === "custom_message" && entry.customType === MODE_CONTRACT_MESSAGE_TYPE),
+      ).toBe(false);
+      expect(harness.getPendingResponseCount()).toBe(1);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+}
+
 test("parallel siblings keep Normal policy until the entire run settles", async () => {
   const fixture = new SessionFixture();
   try {

@@ -902,6 +902,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   });
 
   pi.on("message_start", (event) => {
+    if (event.message.role === "user") {
+      pendingModelEntry = undefined;
+      originalRequest = messageTextContent(event.message);
+    }
     if (
       state.enabled &&
       event.message.role === "user" &&
@@ -932,6 +936,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       recoverRuntimeAdmissionInput({ ...event, sessionManager: ctx.sessionManager });
       return { action: "handled" };
     }
+    // Consent belongs to the request that prompted it, not a later queued or steering input.
+    if (event.source !== "extension") pendingModelEntry = undefined;
     refreshStateForFirstPrompt(ctx);
     // A reply typed while a plan awaits action declines it; the extension's own prompts do not.
     if (event.source !== "extension") recordPlanDecline();
@@ -1022,7 +1028,9 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     acceptCompletedPlan(parsedPlan.plan, "legacy_proposed_plan", ctx);
   });
 
-  pi.on("agent_settled", async (_event, ctx) => {
+  pi.on("agent_settled", async (event, ctx) => {
+    // Aborting after the final assistant need not produce an aborted assistant message.
+    if (event.aborted) pendingModelEntry = undefined;
     const entry = pendingModelEntry;
     if (entry) {
       pendingModelEntry = undefined;
