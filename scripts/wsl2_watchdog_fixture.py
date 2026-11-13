@@ -52,13 +52,12 @@ def generate(action: Path, destination: Path) -> None:
     launch = extract_step(source, "Start WSL setup watchdog")
     if launch.count("$seconds = 300") != 1:
         raise ValueError("Expected one production watchdog deadline")
+    report = extract_step(source, "Stop WSL setup watchdog and report")
     destination.mkdir(parents=True, exist_ok=True)
     (destination / "launch.ps1").write_text(
         launch.replace("$seconds = 300", "$seconds = 12"), encoding="utf-8"
     )
-    (destination / "report.ps1").write_text(
-        extract_step(source, "Stop WSL setup watchdog and report"), encoding="utf-8"
-    )
+    (destination / "report.ps1").write_text(report, encoding="utf-8")
 
 
 def main() -> None:

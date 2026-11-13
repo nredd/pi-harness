@@ -54,9 +54,18 @@ function Get-CimInstance {
     CimCmdlets\Get-CimInstance -ClassName $ClassName -Filter "ProcessId = $($fixtureChildren[0]) OR ProcessId = $($fixtureChildren[1])"
 }
 function Write-Host {
-    param([Parameter(ValueFromRemainingArguments = $true)][object[]]$Objects)
-    # Expected timeout annotations must not turn the control test into a reported job error.
-    if (($Objects -join ' ') -like '::error*') { Microsoft.PowerShell.Utility\Write-Host 'EXPECTED_SYNTHETIC_TIMEOUT' }
+    param([Parameter(ValueFromPipeline = $true, ValueFromRemainingArguments = $true)][object[]]$Objects)
+    process {
+        # Match Write-Host's pipeline contract: Write-StallReport pipes its formatted synthetic snapshot here.
+        # Expected timeout annotations must not turn the control test into a reported job error.
+        if (($Objects -join ' ') -like '::error*') { Microsoft.PowerShell.Utility\Write-Host 'EXPECTED_SYNTHETIC_TIMEOUT' }
+    }
+}
+trap {
+    # Classify fixture/control errors without retaining raw snapshots, arguments or exception messages.
+    @{ phase = 'watchdog'; outcome = 'unexpected_control_failure'; category = $_.Exception.GetType().Name; sourceLine = $_.InvocationInfo.ScriptLineNumber } |
+        ConvertTo-Json | Set-Content (Join-Path (Split-Path $fixtureRoot) 'receipts/watchdog-failure.json')
+    throw $_
 }
 . '__WATCHDOG__' -Label $Label -Seconds $Seconds -StateDirectory $StateDirectory
 '@
