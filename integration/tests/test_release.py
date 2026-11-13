@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import errno
+import gzip
 import hashlib
 import io
 import json
@@ -46,6 +47,7 @@ from harness.release import (
     FETCH_RETRY_BACKOFF_SECONDS,
     GITHUB_TOKEN_VARIABLES,
     RELEASE_PACKAGES,
+    STAGED_PACKAGES,
     VERIFIER_INIT_FAILURE,
     AttestationRateLimitedError,
     attestation_bundle,
@@ -53,6 +55,7 @@ from harness.release import (
     gitlink_tag,
     prune_native,
     release_checksums,
+    release_package_urls,
     release_tarballs,
     verify_asset,
     verify_attestation,
@@ -453,28 +456,66 @@ def test_prune_matches_formula_platform_spellings(tmp_path: Path) -> None:
     assert not (tmp_path / "@earendil-works/pi-tui/native/tui/prebuilds/linux-x64").exists()
 
 
-@pytest.mark.parametrize("registry_copy", [True, False])
-def test_fetch_installs_formula_layout_and_replaces_nested_tui(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, registry_copy: bool
-) -> None:
-    """Use fake downloads/npm writes to exercise the entire recipe without a Pi launch.
+def package_tarball(package: str, marker: str | None) -> bytes:
+    """Build a release-shaped tgz, optionally holding the package's fork-only token.
+
+    Parameters:
+        package (str): `STAGED_PACKAGES` key, or any other package name.
+        marker (str | None): text written to the fork marker file; `None` omits the file.
+
+    Returns:
+        bytes: gzip tarball with a `package/` root.
+    """
+    output = io.BytesIO()
+    # mtime=0 keeps the bytes (and so the recorded sha256) deterministic across calls.
+    with (
+        gzip.GzipFile(fileobj=output, mode="wb", mtime=0) as gz,
+        tarfile.open(fileobj=gz, mode="w") as archive,
+    ):
+        files = {"package/package.json": json.dumps({"name": f"@earendil-works/{package}"}).encode()}
+        if marker is not None and package in STAGED_PACKAGES:
+            files[f"package/{STAGED_PACKAGES[package][0]}"] = marker.encode()
+        for name, data in files.items():
+            member = tarfile.TarInfo(name)
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+    return output.getvalue()
+
+
+def run_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    tag: str,
+    *,
+    registry_copy: bool = True,
+    marker_for: Callable[[str], str | None] = lambda package: (
+        STAGED_PACKAGES[package][1] if package in STAGED_PACKAGES else None
+    ),
+    checksums: dict[str, str] | None = None,
+) -> tuple[Path, Path, list[str]]:
+    """Run `fetch_release` against fake per-package downloads and a fake npm.
 
     Parameters:
         monkeypatch (pytest.MonkeyPatch): substitute network downloads, npm discovery and execution.
-        tmp_path (Path): private release prefix and recorded checksum directory.
-        registry_copy (bool): whether npm leaves a registry `pi-tui` copy that must be replaced.
+        tmp_path (Path): private release prefix and fake npm.
+        tag (str): release tag to fetch.
+        registry_copy (bool): whether npm leaves stale registry copies of every staged package.
+        marker_for (Callable[[str], str | None]): per-package marker text served in the tgz.
+        checksums (dict[str, str] | None): override recorded checksums; default matches served bytes.
+
+    Returns:
+        tuple[Path, Path, list[str]]: prefix, nested `@earendil-works` directory, downloaded filenames.
     """
-    output = io.BytesIO()
-    with tarfile.open(fileobj=output, mode="w:gz") as archive:
-        member = tarfile.TarInfo("package/package.json")
-        data = b'{"name":"@earendil-works/pi-tui","version":"1.3.0"}'
-        member.size = len(data)
-        archive.addfile(member, io.BytesIO(data))
-    tarball = output.getvalue()
-    urls: list[str] = []
+    served = {
+        release_package_urls(tag)[package]: package_tarball(package, marker_for(package))
+        for package in RELEASE_PACKAGES
+    }
+    names: list[str] = []
+    prefix = tmp_path / "prefix"
+    scope = prefix / "lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works"
 
     def download(url: str, **kwargs: Any) -> io.BytesIO:
-        """Serve a deterministic tarball instead of contacting GitHub.
+        """Serve the per-package tarball instead of contacting GitHub.
 
         Parameters:
             url (str): canonical release asset URL.
@@ -483,18 +524,12 @@ def test_fetch_installs_formula_layout_and_replaces_nested_tui(
         Returns:
             io.BytesIO: in-memory download stream.
         """
-        urls.append(url)
+        names.append(url.rsplit("/", 1)[1])
         assert kwargs["timeout"] == 120
-        return HTTPBody(tarball)
-
-    prefix = tmp_path / "prefix"
-    destination = (
-        prefix / "lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-tui"
-    )
-    commands = []
+        return HTTPBody(served[url])
 
     def npm(argv: list[str], **kwargs: Any) -> str:
-        """Write the formula's nested dependency layout without executing npm.
+        """Write the formula's nested registry layout without executing npm.
 
         Parameters:
             argv (list[str]): npm install command.
@@ -503,40 +538,144 @@ def test_fetch_installs_formula_layout_and_replaces_nested_tui(
         Returns:
             str: simulated npm output.
         """
-        commands.append(argv)
         assert kwargs["stderr"] == subprocess.STDOUT
+        assert argv[-1] == str(prefix / "earendil-works-pi-coding-agent-1.3.0.tgz")
+        assert argv[1:6] == ["install", "--global", "--prefix", str(prefix), "--min-release-age=0"]
+        assert {"--build-from-source", "--ignore-scripts", "--loglevel=silly"} <= set(argv)
         assert kwargs["env"]["HOME"] == str(prefix / "fetch-home")
         assert kwargs["env"]["npm_config_userconfig"] == str(prefix / "npmrc-user")
         assert kwargs["env"]["npm_config_globalconfig"] == str(prefix / "npmrc-global")
         assert (prefix / "npmrc-user").read_text() == ""
         assert (prefix / "npmrc-global").read_text() == ""
         if registry_copy:
-            destination.mkdir(parents=True)
-            (destination / "stale").write_text("registry copy must go away")
+            for package in STAGED_PACKAGES:
+                (scope / package).mkdir(parents=True)
+                (scope / package / "stale").write_text("registry copy must go away")
         return "installed"
 
-    tag = "v1.3.0-nredd.8"
-    checksums = checksums_for(tag, tarball)
-    provenance: list[tuple[Path, str]] = []
+    recorded = checksums or {url: hashlib.sha256(body).hexdigest() for url, body in served.items()}
     npm_bin = tmp_path / "npm"
     npm_bin.touch()
+    provenance: list[tuple[str, str]] = []
     monkeypatch.setattr(release, "urlopen", download)
-    monkeypatch.setattr(release, "release_checksums", lambda *_: checksums)
+    monkeypatch.setattr(release, "release_checksums", lambda *_: recorded)
     monkeypatch.setattr(
-        release, "verify_provenance", lambda path, release_tag: provenance.append((path, release_tag))
+        release, "verify_provenance", lambda path, release_tag: provenance.append((path.name, release_tag))
     )
     monkeypatch.setattr(release, "NPM_BIN", str(npm_bin))
     monkeypatch.setattr(subprocess, "check_output", npm)
-    binary = fetch_release(tag, prefix)
-    assert binary == prefix / "bin/pi"
-    assert [url.rsplit("/", 1)[1] for url in urls] == [
-        f"earendil-works-{p}-1.3.0.tgz" for p in RELEASE_PACKAGES
-    ]
-    assert provenance == [(prefix / f"earendil-works-{p}-1.3.0.tgz", tag) for p in RELEASE_PACKAGES]
-    assert commands[0][1:6] == ["install", "--global", "--prefix", str(prefix), "--min-release-age=0"]
-    assert {"--build-from-source", "--ignore-scripts", "--loglevel=silly"} <= set(commands[0])
-    assert not (destination / "stale").exists()
-    assert json.loads((destination / "package.json").read_text())["name"] == "@earendil-works/pi-tui"
+    fetch_release(tag, prefix)
+    # Legacy tags carry no attestations; their bytes are bound by the frozen checksum map.
+    expected = [] if tag in release.LEGACY_RELEASE_TAGS else [(name, tag) for name in names]
+    assert sorted(provenance) == sorted(expected)
+    return prefix, scope, names
+
+
+@pytest.mark.parametrize("registry_copy", [True, False])
+def test_fetch_stages_all_fork_packages_over_registry_copies(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, registry_copy: bool
+) -> None:
+    """Stage `pi-agent-core`, `pi-ai` and `pi-tui` from the verified assets, like the formula.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): substitute network downloads, npm discovery and execution.
+        tmp_path (Path): private release prefix and recorded checksum directory.
+        registry_copy (bool): whether npm leaves registry copies that must be replaced.
+    """
+    prefix, scope, names = run_fetch(monkeypatch, tmp_path, "v1.3.0-nredd.8", registry_copy=registry_copy)
+    assert names == [f"earendil-works-{p}-1.3.0.tgz" for p in RELEASE_PACKAGES]
+    for package, (relative, token) in STAGED_PACKAGES.items():
+        assert not (scope / package / "stale").exists()
+        assert json.loads((scope / package / "package.json").read_text())["name"] == (
+            f"@earendil-works/{package}"
+        )
+        assert token in (scope / package / relative).read_text()
+    assert not (prefix / "release-resources" / "pi-ai" / "package").exists()
+
+
+def test_fetch_fails_when_a_stage_is_skipped(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A stage that never replaces the registry copy leaves no fork marker and must fail.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): substitute network downloads, npm discovery and execution.
+        tmp_path (Path): private release prefix.
+    """
+    real = release.stage_package
+
+    def skip_ai(package: str, *args: Any) -> Path:
+        """Skip staging `pi-ai` only.
+
+        Parameters:
+            package (str): package being staged.
+            *args (Any): remaining `stage_package` arguments.
+
+        Returns:
+            Path: staged directory, or the untouched registry copy when skipped.
+        """
+        if package == "pi-ai":
+            return args[1] / "@earendil-works" / package
+        return real(package, *args)
+
+    monkeypatch.setattr(release, "stage_package", skip_ai)
+    with pytest.raises(RuntimeError, match="`pi-ai` lacks fork marker `DEFAULT_REASONING_SUMMARY`"):
+        run_fetch(monkeypatch, tmp_path, "v1.3.0-nredd.8")
+
+
+@pytest.mark.parametrize("package", list(STAGED_PACKAGES))
+def test_fetch_fails_when_a_release_asset_lacks_its_marker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, package: str
+) -> None:
+    """A registry-shaped asset (no fork-only token) for any one package fails the install.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): substitute network downloads, npm discovery and execution.
+        tmp_path (Path): private release prefix.
+        package (str): package whose served asset is missing the token.
+    """
+
+    def marker(name: str) -> str | None:
+        """Serve every token except the chosen package's.
+
+        Parameters:
+            name (str): package name.
+
+        Returns:
+            str | None: token text or registry-like text.
+        """
+        return "registry build" if name == package else STAGED_PACKAGES[name][1]
+
+    with pytest.raises(RuntimeError, match=f"`{package}` lacks fork marker"):
+        run_fetch(
+            monkeypatch,
+            tmp_path,
+            "v1.3.0-nredd.8",
+            marker_for=lambda n: marker(n) if n in STAGED_PACKAGES else None,
+        )
+
+
+@pytest.mark.parametrize("tag", ["v1.3.0-nredd.4", "v1.3.0-nredd.7"])
+def test_fetch_legacy_tags_stage_present_assets_without_markers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tag: str
+) -> None:
+    """Legacy tags stage the assets they published and are not held to the fork markers.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): substitute network downloads, npm discovery and execution.
+        tmp_path (Path): private release prefix.
+        tag (str): legacy tag with a recorded checksum set.
+    """
+    served = {
+        release_package_urls(tag)[package]: package_tarball(package, "registry build")
+        for package in RELEASE_PACKAGES
+    }
+    legacy = {url: hashlib.sha256(served[url]).hexdigest() for url in release_checksums(tag)}
+    _, scope, names = run_fetch(
+        monkeypatch, tmp_path, tag, marker_for=lambda _: "registry build", checksums=legacy
+    )
+    assert sorted(names) == sorted(url.rsplit("/", 1)[1] for url in legacy)
+    for package in STAGED_PACKAGES:
+        staged = (scope / package / "package.json").exists()
+        assert staged == (release_package_urls(tag)[package] in legacy)
 
 
 def test_fetch_refuses_bad_tag_or_reused_prefix_before_network(tmp_path: Path) -> None:
@@ -1097,12 +1236,11 @@ def test_fetch_release_binds_bytes_to_explicit_checksums(
     assert npm_calls == []
 
 
-def test_release_tarballs_names_installed_assets_first() -> None:
-    """The first two names are the coding-agent and tui tarballs `fetch_release` installs."""
-    assert release_tarballs("v1.3.0-nredd.8")[:2] == [
-        "earendil-works-pi-coding-agent-1.3.0.tgz",
-        "earendil-works-pi-tui-1.3.0.tgz",
-    ]
+def test_release_tarballs_names_installed_asset_first() -> None:
+    """The first name is the coding-agent tarball npm installs; the rest are staged over it."""
+    names = release_tarballs("v1.3.0-nredd.8")
+    assert names[0] == "earendil-works-pi-coding-agent-1.3.0.tgz"
+    assert {f"earendil-works-{p}-1.3.0.tgz" for p in STAGED_PACKAGES} == set(names[1:])
     with pytest.raises(ValueError, match="Not a core fork release tag"):
         release_tarballs("main")
 
@@ -2396,3 +2534,8 @@ def test_module_entrypoint_rejects_a_fetch_without_prefix(
         runpy.run_module("harness.release", run_name="__main__")
     assert caught.value.code == 2
     assert "`--prefix` is required with `--tag` or `--gitlink`" in capsys.readouterr().err
+
+
+def test_staged_packages_are_release_packages() -> None:
+    """Every staged package is a verified release asset, so the two tables cannot drift."""
+    assert set(STAGED_PACKAGES) <= set(RELEASE_PACKAGES)
