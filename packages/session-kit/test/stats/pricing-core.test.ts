@@ -4,8 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as modelApi from "@earendil-works/pi-ai/models";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { opaqueId } from "../../src/stats/load.ts";
 import { createValuer, type PricingModel, valuation } from "../../src/stats/pricing.ts";
-import { exportStats, importStats, loadCombined, makeSnapshot } from "../../src/stats/snapshot.ts";
+import { exportStats, importStats, loadCombined, machineIdentity, makeSnapshot } from "../../src/stats/snapshot.ts";
 import { call } from "./fixtures.ts";
 
 const available = typeof Reflect.get(modelApi, "estimateTokenCost") === "function";
@@ -105,10 +106,13 @@ describe.skipIf(!available)("matching-core pricing contract", () => {
 	it("values local/imported/deleted cached events without changing transcripts, snapshot bytes or IDs", async () => {
 		const root = await mkdtemp(join(tmpdir(), "pricing-core-contract-"));
 		roots.push(root);
-		const agent = join(root, "agent"),
-			sessions = join(agent, "sessions"),
+		const producer = join(root, "producer"),
+			viewer = join(root, "viewer"),
 			repo = join(root, "repo");
-		await mkdir(sessions, { recursive: true });
+		const producerSessions = join(producer, "sessions"),
+			viewerSessions = join(viewer, "sessions");
+		await mkdir(producerSessions, { recursive: true });
+		await mkdir(viewerSessions, { recursive: true });
 		const stamp = `${date}T12:00:00Z`;
 		const message = (id: string, input: number, cacheWrite: number, cost: number) => ({
 			type: "message",
@@ -121,34 +125,60 @@ describe.skipIf(!available)("matching-core pricing contract", () => {
 				usage: { input, output: 1000000, cacheRead: 0, cacheWrite, cost: { total: cost } },
 			},
 		});
-		const entries = [
-			{ type: "session", id: "synthetic-original", timestamp: stamp },
-			message("zero-recorded", 1000000, 0, 0),
-			message("unknown-ttl", 1, 10, 3),
-		];
-		const original = `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
-		const file = join(sessions, "original.jsonl");
-		await writeFile(file, original);
-		const published = await exportStats(agent, repo, sessions);
-		await importStats(agent, repo);
-		const loaded = await loadCombined(agent);
-		expect(loaded.calls).toHaveLength(2);
+		const shared = message("copied-entry", 1000000, 0, 0);
+		const producerText = `${[{ type: "session", id: "synthetic-producer", timestamp: stamp }, shared, message("remote-only", 1000000, 0, 3)].map((entry) => JSON.stringify(entry)).join("\n")}\n`;
+		const viewerText = `${[{ type: "session", id: "synthetic-viewer", timestamp: stamp }, shared, message("local-unknown-ttl", 1, 10, 7)].map((entry) => JSON.stringify(entry)).join("\n")}\n`;
+		const producerFile = join(producerSessions, "original.jsonl"),
+			viewerFile = join(viewerSessions, "copy.jsonl");
+		await writeFile(producerFile, producerText);
+		await writeFile(viewerFile, viewerText);
+		const published = await exportStats(producer, repo, producerSessions);
+		const producerSnapshot = makeSnapshot(
+			await loadCombined(producer),
+			await machineIdentity(producer),
+			Date.parse(stamp),
+		);
+		const producerIds = producerSnapshot.shards.flatMap((shard) => shard.events.map((event) => event.id));
+		expect(producerIds).toHaveLength(2);
+		expect((await importStats(viewer, repo)).imported).toBe(1);
+		const loaded = await loadCombined(viewer);
+		const identity = await machineIdentity(viewer);
+		expect(identity.machineId).not.toBe(published.machineId);
+		expect(loaded.coverage.remoteMachines).toBe(1);
+		expect(loaded.calls).toHaveLength(3);
+		expect(loaded.calls.filter((c) => c.entryId === opaqueId("entry:copied-entry"))).toHaveLength(1);
+		expect(loaded.calls.find((c) => c.entryId === opaqueId("entry:remote-only"))).toMatchObject({
+			input: 1000000,
+			output: 1000000,
+			cacheWrite: 0,
+			cost: 3,
+		});
 		const before = structuredClone(loaded.calls);
-		const identity = { machineId: published.machineId, label: "Synthetic machine" };
-		const manifestFile = join(published.snapshotDir, "manifest.json");
-		const manifestBytes = await readFile(manifestFile);
 		const snapshot = makeSnapshot(loaded, identity, Date.parse(stamp));
+		const combinedIds = snapshot.shards.flatMap((shard) => shard.events.map((event) => event.id));
+		for (const id of producerIds) expect(combinedIds).toContain(id);
+		const manifestFile = join(published.snapshotDir, "manifest.json"),
+			manifestBytes = await readFile(manifestFile);
 		const value = createValuer([model]);
-		expect(valuation(loaded.calls, value)).toMatchObject({ cost: 19, pricedEvents: 1, unpricedEvents: 1 });
-		expect(loaded.calls.reduce((sum, c) => sum + c.cost, 0)).toBe(3);
+		expect(valuation(loaded.calls, value)).toMatchObject({
+			cost: 38,
+			pricedEvents: 2,
+			unpricedEvents: 1,
+			pricedTokens: 4000000,
+			unpricedTokens: 1000011,
+		});
+		expect(loaded.calls.reduce((sum, c) => sum + c.cost, 0)).toBe(10);
 		expect(loaded.calls).toEqual(before);
 		expect(makeSnapshot(loaded, identity, Date.parse(stamp))).toEqual(snapshot);
-		expect(await readFile(file, "utf8")).toBe(original);
+		expect(await readFile(producerFile, "utf8")).toBe(producerText);
+		expect(await readFile(viewerFile, "utf8")).toBe(viewerText);
 		expect(await readFile(manifestFile)).toEqual(manifestBytes);
-		await rm(file);
-		const deleted = await loadCombined(agent);
+		await rm(viewerFile);
+		await rm(producerFile);
+		const deleted = await loadCombined(viewer);
 		expect(deleted.calls).toEqual(loaded.calls);
-		expect(valuation(deleted.calls, value).cost).toBe(19);
+		expect(deleted.coverage.remoteMachines).toBe(1);
+		expect(valuation(deleted.calls, value).cost).toBe(38);
 		expect(globalThis.fetch).not.toHaveBeenCalled();
 	});
 });
