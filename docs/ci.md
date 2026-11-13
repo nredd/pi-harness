@@ -693,7 +693,7 @@ Flake policy (migration plan section 7):
   signature appears, which blocks
 - Runner-supervisor kill on self-hosted macOS runners (#761): the job's check-run annotation reads
   `The self-hosted runner lost communication with the server`, a step stays `in_progress` with no
-  conclusion, the job log is missing (`gh run view --log-failed` reports `log not found`, the logs API
+  conclusion, the job log is missing (`gh run view --log-failed` reports `log not found`; the logs API
   returns 404) and no test assertion exists. Attempt 1 of `43177772438` (two jobs) and of `43201041536`
   (one job) match. In each the supervisor logged `idle past ttl, killing` for the exact runner while its job
   was executing, and GitHub marked the job failed later: `43177772438` killed 2026-11-12 07:57:54 UTC, failed
@@ -702,7 +702,7 @@ Flake policy (migration plan section 7):
   deployed. The failed job proves nothing about the repository. To triage: read the annotation (`gh api
   repos/nredd/pi-harness/check-runs/<job id>/annotations`), then the supervisor log for that exact runner
   (runner owner only). Before the fix is deployed, and only with BOTH matching (annotation, plus a supervisor
-  kill of that runner while the job ran), ONE fresh rerun of each affected whole job is allowed when nothing
+  kill of that runner while the job ran), ONE fresh rerun per affected whole job (each job once) is allowed when nothing
   else failed; it must pass, and both attempts stay in the attempt history. Jobs lost to the same supervisor
   event are one incident. Until the rerun passes, the cell is a failed required check. A matching annotation
   with an unavailable supervisor log or no kill of that runner, a log-less failure without the annotation,
