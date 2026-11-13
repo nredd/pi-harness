@@ -2418,6 +2418,8 @@ async function persistentBrowserProfile(configured: string): Promise<string> {
 		path.join(home, "Library/Application Support/Google/Chrome"),
 		path.join(home, "Library/Application Support/Chromium"),
 		path.join(home, "Library/Application Support/Google/Chrome Canary"),
+		path.join(home, "Library/Application Support/Google/Chrome Beta"),
+		path.join(home, "Library/Application Support/Google/Chrome Dev"),
 		path.join(home, "Library/Application Support/net.imput.helium"),
 		path.join(home, ".config/google-chrome"),
 		path.join(home, ".config/chromium"),

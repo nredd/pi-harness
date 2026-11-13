@@ -147,6 +147,16 @@ describe.skipIf(process.platform === "win32")("persistent managed profile", () =
 		assert.equal(await testing.persistentBrowserProfile("~/dedicated-profile"), profile);
 	});
 
+	test.each(["Chrome", "Chrome Canary", "Chrome Beta", "Chrome Dev"])("rejects macOS %s default and descendants", async (channel) => {
+		const directory = path.join(home, "Library/Application Support/Google", channel);
+		const child = path.join(directory, "Default");
+		fs.mkdirSync(child, { recursive: true, mode: 0o700 });
+		for (const candidate of [directory, child]) {
+			fs.chmodSync(candidate, 0o700);
+			await assert.rejects(testing.persistentBrowserProfile(candidate), /default browser/);
+		}
+	});
+
 	test.each(["XDG_CONFIG_HOME", "CHROME_CONFIG_HOME"])("rejects Chrome channel default roots under %s", async (variable) => {
 		const configRoot = path.join(home, variable);
 		process.env[variable] = configRoot;
