@@ -540,6 +540,30 @@
 			}
 		},
 		{
+			"id": "headless-cursor-gate",
+			"purpose": "Keep cursor motion deterministic by default and require exact live opt-in before actual AppKit overlay lifecycle checks",
+			"rows": [
+				"Headless cursor gate"
+			],
+			"files": [
+				"docs/cursor-motion-coverage.md",
+				"native/macos/agent_cursor_tests.swift",
+				"scripts/check-sync-reverts.mjs",
+				"test/cursor-headless-gate.test.mjs",
+				"test/invariants.test.mjs"
+			],
+			"check": "test/cursor-headless-gate.test.mjs",
+			"dropControls": [
+				"Headless cursor entry refuses unconditional overlay (#819)",
+				"Headless cursor gate requires exact opt-in (#819)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#819; verification boundary repair, not filed upstream"
+			}
+		},
+		{
 			"id": "helper-aborted-signal-macos",
 			"purpose": "macOS daemonCommand rejects with Operation aborted before connecting when the AbortSignal is already aborted, instead of sending the request",
 			"files": [
@@ -1364,6 +1388,7 @@
 		"docs/swift-ref-look-coverage.md",
 		"extensions/computer-use.ts",
 		"native/linux/bridge-rs/tests/protocol_state_errors.rs",
+		"native/macos/agent_cursor_tests.swift",
 		"native/macos/bridge.swift",
 		"native/macos/cursor_motion_tests.swift",
 		"native/macos/headless_tests.swift",
@@ -1449,6 +1474,7 @@
 		"test/cleanup.test.mjs",
 		"test/commit-messages.test.mjs",
 		"test/config-load.test.mjs",
+		"test/cursor-headless-gate.test.mjs",
 		"test/desktop-seam.test.mjs",
 		"test/desktop-tools.test.mjs",
 		"test/docs-generators.test.mjs",
