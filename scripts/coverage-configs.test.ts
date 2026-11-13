@@ -99,6 +99,13 @@ const PRODUCERS: Producer[] = [
 		load: () => import("../packages/subagents/vitest.config.ts"),
 	},
 	{
+		config: "packages/subagents/vitest.runtime-build.config.ts",
+		policy: "subagents-runtime-tooling",
+		provider: "istanbul",
+		reportsDirectory: "coverage/runtime-build-tooling",
+		load: () => import("../packages/subagents/vitest.runtime-build.config.ts"),
+	},
+	{
 		config: "packages/subagents/vitest.workflow-examples.config.ts",
 		policy: "workflow-examples",
 		provider: "istanbul",
@@ -276,6 +283,15 @@ for (const producer of PRODUCERS) {
 		await assert.rejects(producer.load(), TypeError);
 	});
 }
+
+test("subagents runtime verification pins both complete scripts at zero L/F/B/S", async () => {
+	const producer = PRODUCERS.find(({ policy }) => policy === "subagents-runtime-tooling");
+	assert.ok(producer);
+	assert.deepEqual((await coverageOf(producer)).thresholds, {
+		"scripts/build-runtime.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 },
+		"scripts/check-runtime.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 },
+	});
+});
 
 test("computer-use async verification pins the whole helper at zero L/F/B/S", async () => {
 	const producer = PRODUCERS.find(({ policy }) => policy === "computer-use-async");

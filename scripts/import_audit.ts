@@ -1,6 +1,6 @@
 /**
  * Module specifier extraction for the package-contract gate, built on the installed TypeScript
- * parser (`typescript/unstable/sync`, the native `tsgo` server). Every specifier must be a literal
+ * parser (`typescript/unstable/async`, the native `tsgo` server). Every specifier must be a literal
  * the gate can classify; computed specifiers are reported as diagnostics instead of being skipped.
  *
  * Covered: static imports and re-exports (`import`, `export ... from`, `import type`), `import x =
@@ -28,7 +28,7 @@ import {
 	isParenthesizedExpression,
 	isStringLiteral,
 } from "typescript/unstable/ast/is";
-import { API } from "typescript/unstable/sync";
+import { API } from "typescript/unstable/async";
 
 export interface FileImports {
 	/** Every literal module specifier, in source order. */
@@ -122,24 +122,26 @@ export function collectImports(file: SourceFile, name: string): FileImports {
  * Syntax errors are reported as diagnostics, because imports in a file that did not parse cannot be
  * trusted to be complete.
  */
-export function auditFiles(root: string, files: readonly string[]): AuditResult {
+export async function auditFiles(root: string, files: readonly string[]): Promise<AuditResult> {
 	const configPath = join(root, TSCONFIG_NAME);
 	writeFileSync(configPath, JSON.stringify({ ...PARSE_ONLY_CONFIG, files }));
 	const api = new API({ cwd: root });
 	try {
-		const project = api.updateSnapshot({ openProject: configPath }).getProject(configPath);
+		// The async transport uses public streams; tsgo's sync channel requires Node-private pipe FDs
+		// (`stdout._handle.fd`) that Bun does not expose. Both engines use the same real parser.
+		const project = (await api.updateSnapshot({ openProject: configPath })).getProject(configPath);
 		if (project === undefined) {
 			throw new Error(`tsgo did not open the project '${configPath}'`);
 		}
 		const result: AuditResult = { files: {} };
 		for (const name of files) {
 			const absolute = join(root, name);
-			const file = project.program.getSourceFile(absolute);
+			const file = await project.program.getSourceFile(absolute);
 			if (file === undefined) {
 				throw new Error(`tsgo did not load '${name}'`);
 			}
 			const found = collectImports(file, name);
-			for (const issue of project.program.getSyntacticDiagnostics(absolute)) {
+			for (const issue of await project.program.getSyntacticDiagnostics(absolute)) {
 				// Requested per file, so every position is in `file` whatever `fileName` says.
 				found.diagnostics.push(`${locate(file, name, issue.pos)}: syntax error: ${issue.text}`);
 			}
@@ -147,7 +149,7 @@ export function auditFiles(root: string, files: readonly string[]): AuditResult 
 		}
 		return result;
 	} finally {
-		api.close();
+		await api.close();
 	}
 }
 
@@ -166,23 +168,23 @@ interface Writer {
  * @returns The exit status: 0, or 2 after printing usage for a missing ROOT or FILE.
  * @throws When `tsgo` cannot open the project or load a file, like `auditFiles`.
  */
-export function main(
+export async function main(
 	args: readonly string[],
 	stdout: Writer = process.stdout,
 	stderr: Writer = process.stderr,
-): number {
+): Promise<number> {
 	const [root, ...files] = args;
 	if (root === undefined || files.length === 0) {
 		stderr.write("usage: node import_audit.ts ROOT FILE...\n");
 		return USAGE_EXIT_STATUS;
 	}
-	stdout.write(`${JSON.stringify(auditFiles(root, files))}\n`);
+	stdout.write(`${JSON.stringify(await auditFiles(root, files))}\n`);
 	return 0;
 }
 
 /** Dispatch only when invoked as the entry module. */
-export function dispatch(isMain: boolean): void {
-	if (isMain) process.exitCode = main(process.argv.slice(2));
+export async function dispatch(isMain: boolean): Promise<void> {
+	if (isMain) process.exitCode = await main(process.argv.slice(2));
 }
 
-dispatch(import.meta.main);
+await dispatch(import.meta.main);

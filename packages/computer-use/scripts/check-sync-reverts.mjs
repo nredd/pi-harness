@@ -42,6 +42,22 @@ const cases = [
 		failure: /website commands must enter packages\/computer-use/,
 	},
 	{
+		name: "Headless cursor entry refuses unconditional overlay (#819)",
+		file: "native/macos/agent_cursor_tests.swift",
+		before: "CursorLiveGate.run(environment: ProcessInfo.processInfo.environment, overlay: testOverlayLifecycle)",
+		after: "testOverlayLifecycle()",
+		check: "test/cursor-headless-gate.test.mjs",
+		failure: /cursor entry must never call the live overlay directly/,
+	},
+	{
+		name: "Headless cursor gate requires exact opt-in (#819)",
+		file: "native/macos/agent_cursor_tests.swift",
+		before: 'guard environment["PI_COMPUTER_USE_LIVE"] == "1" else',
+		after: "guard true else",
+		check: "test/cursor-headless-gate.test.mjs",
+		failure: /cursor gate refuses every non-opt-in environment/,
+	},
+	{
 		name: "Linux compiler group escalation (harness c59eb11)",
 		file: "scripts/setup-helper.mjs",
 		before: 'if (!signalGroup("SIGKILL")) return;',
@@ -162,6 +178,23 @@ const cases = [
 		after: "format,",
 		check: "test/rust-coverage.test.mjs",
 		failure: /AssertionError|false == true/,
+	},
+	{
+		name: "Rust coverage numeric exit-code sentinel (#807)",
+		file: "test/rust-coverage-errors.test.mjs",
+		before: "process.exitCode = 0;\n\t\tprocess.argv = [argv[0], undefined,",
+		after: "process.exitCode = undefined;\n\t\tprocess.argv = [argv[0], undefined,",
+		check: "test/rust-coverage-errors.test.mjs",
+		failure: /Expected values to be strictly equal/,
+
+	},
+	{
+		name: "Rust protocol/state Cargo registration (#801)",
+		file: "native/linux/bridge-rs/tests/protocol_state_errors.rs",
+		before: "#[test]\nfn every_error_has_the_stable_wire_code_and_display()",
+		after: "fn every_error_has_the_stable_wire_code_and_display()",
+		check: "test/rust-protocol-state-registration.test.mjs",
+		failure: /missing Cargo contract: every_error_has_the_stable_wire_code_and_display/,
 	},
 	{
 		name: "StateStore evicts past an empty stateId (#703)",
@@ -680,6 +713,14 @@ const cases = [
 		failure: /is not supported on|did not match|must be of type string/,
 	},
 	{
+		name: "managed browser fixture clock waits for startup (#817)",
+		file: "test/managed-browser-launch.test.mjs",
+		before: 'fs.existsSync(path.join(scratch, "launch.json")) ? (skew += 6_000) : 0',
+		after: "skew += 6_000",
+		check: "test/managed-browser-launch.test.mjs",
+		failure: /timeout fixture clock must not advance before child startup acknowledgement/,
+	},
+	{
 		name: "managed browser profile dir is owner-only (#519)",
 		file: "src/bridge.ts",
 		before: "const profileDir = await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`));",
@@ -1002,7 +1043,7 @@ const cases = [
 		file: "src/actions.ts",
 		before: 'if (action.action !== "typeText" && action.action !== "keypress" && action.action !== "paste") return undefined;',
 		after: 'if (action.action !== "typeText") return undefined;',
-		check: "test/invariants.test.mjs",
+		check: "test/strict-headless-invariant.test.mjs",
 		failure: /drifted from bridge\.swift/,
 	},
 	{
@@ -1018,7 +1059,7 @@ const cases = [
 		file: "native/macos/bridge.swift",
 		before: '} else if action == "keypress" {\n\t\t\ttry rejectInStrictHeadless("Keypress requires synthesized keyboard input, which strict headless mode prohibits")\n',
 		after: '} else if action == "keypress" {\n',
-		check: "test/invariants.test.mjs",
+		check: "test/strict-headless-invariant.test.mjs",
 		failure: /drifted from bridge\.swift/,
 	},
 	{
