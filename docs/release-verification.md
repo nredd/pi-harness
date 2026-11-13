@@ -23,6 +23,17 @@ no work behind them; the verifier never asks for them, and a test binds its stac
 It does not make bench F, live-provider G, linux-arm64 runtime, native desktop or the documented
 standalone auth-interception exclusions into passes.
 
+Current-rate stats pricing has an additional admission gate: run `make check-stats-pricing`
+against the same installed core/package graph selected for the coherent candidate, on Node and
+Bun. Retain its actual result with the frozen evidence. This target fails if the shared core
+estimator is absent; legacy-host skips in the ordinary compatibility suite are NOT positive
+pricing evidence. It exercises actual default-estimator arithmetic, cache lifetimes and context
+boundaries plus unchanged historical costs, transcript/snapshot bytes, identities, imported dedup
+and deleted cached history. Keep `#799` release-gating until the matching core is included and
+this gate passes; an old core's green matrix cannot admit current-rate pricing. This explicit
+owner-run gate supplements the workflow verifier, it is not falsely represented as one of its
+existing required steps. It authorizes no tag, pin change or activation by itself.
+
 After this workflow reaches `main` and GitHub indexes its dispatch trigger:
 
 ```sh

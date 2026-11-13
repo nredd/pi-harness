@@ -156,7 +156,12 @@ Current-rate API-equivalent value:
   the new core estimator, unsupported non-token charges and unaudited rates stay unpriced.
 - This depends on the core pricing enhancement in `nredd/pi#46`; the package pins are NOT
   changed here. A coherent core/package release is required to enable pricing. Older hosts
-  continue to display recorded costs and explicit unknown current-value coverage.
+  continue to display recorded costs and explicit unknown current-value coverage. The
+  release owner must run `make check-stats-pricing` on the matching candidate: it fails
+  without the shared estimator and runs the actual default-engine contracts on Node and
+  Bun. Conditional skips under old hosts are compatibility evidence only, never admission
+  of pricing. The fixtures also exercise historical zero/stale values, unknown TTL, free
+  versus unknown, exact boundaries, imported dedup, deleted cache and unchanged bytes/IDs.
 - This is current loaded list-price value, not request-date billing or an account invoice.
   The assessed Bedrock baseline uses published Standard/on-demand, Global Cross-region
   Inference, US East (N. Virginia), USD per million tokens. Regional-profile IDs may be
