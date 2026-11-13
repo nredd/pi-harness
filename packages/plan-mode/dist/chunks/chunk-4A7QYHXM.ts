@@ -216,10 +216,10 @@ function explainUnsafeSegment(segment, safeSubcommands, platform) {
   const command = first.toLowerCase();
   const args = tokens.slice(1);
   const expansion = findShellExpansion(segment);
-  const expansionBlock = () => expansion === void 0 ? void 0 : { token: wordAround(segment, expansion), reason: "shell expansion or glob" };
+  const expansionBlock = expansion === void 0 ? void 0 : { token: wordAround(segment, expansion), reason: "shell expansion or glob" };
   if (command === "ssh") {
     if (prefix === void 0) return { token: first, reason: "needs a configured `ssh <host>` prefix" };
-    if (expansionBlock()) return expansionBlock();
+    if (expansionBlock) return expansionBlock;
     const words = shellWords(segment.trimStart().slice(prefix.length));
     if (!words || words.length === 0) return { token: first, reason: "ssh with no remote command" };
     if (words[0]?.startsWith("-")) return { token: words[0], reason: "ssh option before the remote command" };
@@ -227,13 +227,12 @@ function explainUnsafeSegment(segment, safeSubcommands, platform) {
     return remote ? { token: remote.token, reason: `remote command: ${remote.reason}` } : { token: first, reason: "ssh segment rejected" };
   }
   if (command === "curl" || command === "gh" && args[0]?.toLowerCase() === "api") {
-    return expansionBlock() ?? {
+    return expansionBlock ?? {
       token: command === "curl" ? first : `${first} api`,
       reason: "arguments write files, send a body, or are not GET-only"
     };
   }
-  const blocked = expansionBlock();
-  if (blocked) return blocked;
+  if (expansionBlock) return expansionBlock;
   const assignment = /(^|\s)[A-Za-z_][A-Za-z0-9_]*=/.exec(segment);
   if (assignment) {
     return {
@@ -248,7 +247,7 @@ function explainUnsafeSegment(segment, safeSubcommands, platform) {
   const subcommand = SUBCOMMAND_COMMANDS.has(command) ? args.find((argument) => !argument.startsWith("-")) : void 0;
   return {
     token: subcommand === void 0 ? first : `${first} ${subcommand}`,
-    reason: "not on the read-only allowlist"
+    reason: "not on the read-only allowlist (opt in via `safeSubcommands`)"
   };
 }
 function wordAround(segment, index) {
@@ -2675,4 +2674,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-34FTQPJ7.ts.map
+//# sourceMappingURL=chunk-4A7QYHXM.ts.map

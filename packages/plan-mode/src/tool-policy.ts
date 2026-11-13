@@ -322,7 +322,11 @@ const SUBCOMMAND_COMMANDS = new Set([
  * Names the token that made {@link isSafeSegment} reject `segment`. Mirrors that function's order
  * and is only called after it returned false, so it always yields something to point at.
  */
-function explainUnsafeSegment(segment: string, safeSubcommands: SafeSubcommands, platform: NodeJS.Platform) {
+function explainUnsafeSegment(
+  segment: string,
+  safeSubcommands: SafeSubcommands,
+  platform: NodeJS.Platform,
+): SyntaxRejection {
   const prefix = matchConfiguredPrefix(segment, safeSubcommands);
   const tokens = shellWords(segment);
   const first = tokens?.[0];
@@ -330,11 +334,11 @@ function explainUnsafeSegment(segment: string, safeSubcommands: SafeSubcommands,
   const command = first.toLowerCase();
   const args = tokens.slice(1);
   const expansion = findShellExpansion(segment);
-  const expansionBlock = (): SyntaxRejection | undefined =>
+  const expansionBlock: SyntaxRejection | undefined =
     expansion === undefined ? undefined : { token: wordAround(segment, expansion), reason: "shell expansion or glob" };
   if (command === "ssh") {
     if (prefix === undefined) return { token: first, reason: "needs a configured `ssh <host>` prefix" };
-    if (expansionBlock()) return expansionBlock() as SyntaxRejection;
+    if (expansionBlock) return expansionBlock;
     const words = shellWords(segment.trimStart().slice(prefix.length));
     if (!words || words.length === 0) return { token: first, reason: "ssh with no remote command" };
     if (words[0]?.startsWith("-")) return { token: words[0], reason: "ssh option before the remote command" };
@@ -345,14 +349,13 @@ function explainUnsafeSegment(segment: string, safeSubcommands: SafeSubcommands,
   }
   if (command === "curl" || (command === "gh" && args[0]?.toLowerCase() === "api")) {
     return (
-      expansionBlock() ?? {
+      expansionBlock ?? {
         token: command === "curl" ? first : `${first} api`,
         reason: "arguments write files, send a body, or are not GET-only",
       }
     );
   }
-  const blocked = expansionBlock();
-  if (blocked) return blocked;
+  if (expansionBlock) return expansionBlock;
   const assignment = /(^|\s)[A-Za-z_][A-Za-z0-9_]*=/.exec(segment);
   if (assignment) {
     return {
@@ -367,7 +370,7 @@ function explainUnsafeSegment(segment: string, safeSubcommands: SafeSubcommands,
   const subcommand = SUBCOMMAND_COMMANDS.has(command) ? args.find((argument) => !argument.startsWith("-")) : undefined;
   return {
     token: subcommand === undefined ? first : `${first} ${subcommand}`,
-    reason: "not on the read-only allowlist",
+    reason: "not on the read-only allowlist (opt in via `safeSubcommands`)",
   };
 }
 
