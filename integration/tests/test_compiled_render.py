@@ -12,11 +12,12 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
+from textwrap import dedent
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-ENTRY = """
+ENTRY = dedent("""
 import probe from __PROBE__;
 const calls = [];
 const original = Bun.gc;
@@ -33,7 +34,7 @@ const tui = {
 };
 await handler('3', { ui: { setWidget: (_, factory) => { if (factory) factory(tui); } } });
 console.log(JSON.stringify({ calls, renders, invalidations }));
-"""
+""")
 
 
 @pytest.fixture(scope="module")
