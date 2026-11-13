@@ -694,7 +694,7 @@ describe("FleetList rendering", () => {
     const h = harness(agents);
     for (const w of [4, 8, 12, 20, 40, 80, 200]) {
       for (const line of h.render(w)) {
-        expect(visibleWidth(line)).toBeLessThanOrEqual(w);
+        expect(visibleWidth(plain(line))).toBeLessThanOrEqual(w); // fake theme tags stand in for zero-width escapes
       }
     }
   });
@@ -1768,7 +1768,7 @@ describe("FleetList overflow window (#857)", () => {
       const h = harness(roster(count));
       h.press(DOWN);
       let prev: string[] | undefined;
-      for (let sel = 0; sel < count; sel++) {
+      for (let sel = 0; sel <= count; sel++) { // main, then every row incl. the bottom edge
         const lines = h.render(120).map(plain);
         expect(block(lines)).toHaveLength(5);
         expect(lines).toHaveLength(9);
@@ -1802,6 +1802,17 @@ describe("FleetList overflow window (#857)", () => {
         expect(visibleWidth(row)).toBeLessThanOrEqual(width);
         expect(row).toMatch(/^ {2}[↑↓] \d+ more/);
       }
+    }
+  });
+
+  it("keeps the truncation ellipsis inside the dim span with no stray reset", () => {
+    const h = harness(roster(12));
+    for (let i = 0; i <= 7; i++) h.press(DOWN);
+    const raw = h.render(20).filter(l => /^ {2}<dim>[↑↓] /.test(l));
+    expect(raw.length).toBeGreaterThan(0);
+    for (const line of raw) {
+      expect(line).toMatch(/\.\.\.<\/dim>$/);
+      expect(line).not.toContain("\u001b[0m");
     }
   });
 

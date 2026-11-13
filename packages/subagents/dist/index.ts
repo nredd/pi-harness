@@ -2714,7 +2714,8 @@ var FleetList = class {
   }
   /** Overflow indicator: dim, left-aligned with its arrow in the bullet column, truncated never wrapped. */
   renderOverflow(text, width, theme) {
-    return truncateToWidth2("  " + theme.fg("dim", text), width);
+    const body = truncateToWidth2(text, Math.max(0, width - 2)).replaceAll("\x1B[0m", "");
+    return "  " + theme.fg("dim", body);
   }
   bullet(rosterIndex, sel, theme) {
     return rosterIndex === sel ? theme.fg("accent", "\u25CF") : theme.fg("dim", "\u25CB");

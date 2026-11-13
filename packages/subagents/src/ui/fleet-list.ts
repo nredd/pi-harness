@@ -902,7 +902,10 @@ export class FleetList {
 
   /** Overflow indicator: dim, left-aligned with its arrow in the bullet column, truncated never wrapped. */
   private renderOverflow(text: string, width: number, theme: Theme): string {
-    return truncateToWidth("  " + theme.fg("dim", text), width);
+    // Truncate the plain text first: pi-tui's truncation writes a reset before the ellipsis, which would
+    // end an enclosing dim span early and leave "..." bright. Strip it so the ellipsis stays inside the dim.
+    const body = truncateToWidth(text, Math.max(0, width - 2)).replaceAll("\u001b[0m", "");
+    return "  " + theme.fg("dim", body);
   }
 
   private bullet(rosterIndex: number, sel: number, theme: Theme): string {
