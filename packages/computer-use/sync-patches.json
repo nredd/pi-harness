@@ -1251,6 +1251,33 @@
 			}
 		},
 		{
+			"id": "swift-motion-numeric-coverage",
+			"purpose": "Cover remaining finite-input motion numeric regions and pure US-key policy without desktop input or removal of numerical safeguards",
+			"rows": [
+				"Swift motion numeric boundaries"
+			],
+			"files": [
+				"docs/cursor-motion-coverage.md",
+				"native/macos/agent_cursor_motion.swift",
+				"native/macos/bridge.swift",
+				"native/macos/cursor_motion_tests.swift",
+				"native/macos/headless_tests.swift",
+				"scripts/check-sync-reverts.mjs"
+			],
+			"check": "test/macos-native-pure.test.mjs",
+			"dropControls": [
+				"Swift motion negative heading wrap (#810)",
+				"Swift motion numerical candidate rejection (#810)",
+				"Swift motion subnormal angle correction (#810)",
+				"Swift policy symbolic key mapping (#645)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#810 and #645; MIT-derived motion, pure policy checks, not filed upstream"
+			}
+		},
+		{
 			"id": "swift-ownership-look-coverage",
 			"purpose": "Assert real AXRefStore ownership and LookNode payload serialization with owned-process handles and synthetic nodes, without AX queries or runtime changes",
 			"rows": [
@@ -1430,6 +1457,7 @@
 		"docs/swift-ref-look-coverage.md",
 		"extensions/computer-use.ts",
 		"native/linux/bridge-rs/tests/protocol_state_errors.rs",
+		"native/macos/agent_cursor_motion.swift",
 		"native/macos/agent_cursor_tests.swift",
 		"native/macos/bridge.swift",
 		"native/macos/cursor_motion_tests.swift",
