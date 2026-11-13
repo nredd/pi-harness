@@ -427,6 +427,7 @@
 			],
 			"check": "test/fake-helper.test.mjs",
 			"dropControls": [
+				"fake helper socket close settles request (#835)",
 				"fake helper success replies (#724)"
 			],
 			"upstream": {

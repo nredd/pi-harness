@@ -595,6 +595,14 @@ export const cases = [
 		failure: /Cannot read properties of undefined \(reading 'pid'\)/,
 	},
 	{
+		name: "fake helper socket close settles request (#835)",
+		file: "test/fake-helper.test.mjs",
+		before: '\t\tsocket.once("close", () => reject(new Error("Helper socket closed before reply")));\n',
+		after: "",
+		check: "test/fake-helper.test.mjs",
+		failure: /a closed socket must settle the waiting request/,
+	},
+	{
 		name: "fake helper success replies (#724)",
 		file: "test/support/fake-helper.mjs",
 		before: "body: { ok: true, result } });",

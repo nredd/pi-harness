@@ -29,6 +29,8 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
+- Settle the fake-helper socket self-test when a connection closes before reply, so restart polling can retry rather than wait on an unresolved request (nredd/pi-harness#835).
+
 - Windows helper commands now reject promptly with `Operation aborted.` for post-write cancellation, clear the pending request, timer and listener on every completion/write-error path, and ignore late replies. This cancels the local wait, not native work already sent (nredd/pi-harness#750).
 - Browser `act_ui` rejects ref-only `moveMouse` with `invalid_args` instead of sending absent coordinates to CDP; use explicit `x`/`y`. Empty browser `keypress` rejection now carries `invalid_args`. Both fail before any batch delivery or epoch change; desktop behavior is unchanged (nredd/pi-harness#748).
 - Linux and Windows helper `command()` and macOS `daemonCommand()` now reject at once with `Operation aborted.` when the `AbortSignal` is already aborted, instead of sending the request to the helper and waiting out the command timeout (an abort event never re-fires for a signal that is already aborted). Linux and Windows also re-check after the install check and helper start, so a signal aborted during startup sends nothing (nredd/pi-harness#735).
