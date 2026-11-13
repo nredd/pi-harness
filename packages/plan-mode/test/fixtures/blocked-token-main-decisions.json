@@ -38,6 +38,7 @@
   "git status --help": false,
   "git status --short | head -5": true,
   "git status": true,
+  "git": false,
   "grep 'a|b' file | wc -l": true,
   "hostname foo": false,
   "hostname": true,

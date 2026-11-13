@@ -278,7 +278,7 @@ function explainGitRejection(first, args, safeSubcommands, paths) {
     }
   }
   const subcommand = args[index]?.toLowerCase();
-  if (!subcommand) return void 0;
+  if (!subcommand) return { token: first, reason: "`git` needs a reviewed subcommand" };
   if (subcommand.startsWith("-")) return { token: subcommand, reason: "unsupported git option before the subcommand" };
   const validator = BUILTIN_GIT_VALIDATORS[subcommand] ?? (safeSubcommands.git?.includes(subcommand) ? CONFIGURABLE_GIT_VALIDATORS[subcommand] : void 0);
   if (!validator) return { token: `${first} ${subcommand}`, reason: NOT_ALLOWLISTED_REASON };
@@ -2713,4 +2713,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-RR2IYO2I.ts.map
+//# sourceMappingURL=chunk-COWWGHWI.ts.map

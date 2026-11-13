@@ -38,6 +38,7 @@ const EXTRA_DECISION_INPUTS = [
   "git -C /etc -C . status",
   "git -C /etc push",
   "git -C . push",
+  "git",
   "git status",
   "git branch",
   "git -C /work/repo status",
@@ -84,6 +85,7 @@ const REJECTED: [string, string, RegExp][] = [
   ["git -C /etc -C . status", "/etc", /`git -C` directory/],
   ["git -C /etc push", "/etc", /`git -C` directory/],
   ["git -C . push", "git push", /allowlist/],
+  ["git", "git", /needs a reviewed subcommand/],
   ["hostname foo", "foo", /reviewed `hostname` validator/],
   ["tasklist", "tasklist", /only allowed on Windows/],
   ["frobnicate x", "frobnicate", /allowlist/],
@@ -147,6 +149,7 @@ test("an explanation never offers `safeSubcommands` for a command that is alread
     "git -C . -C /etc status",
     "git -C /etc -C . status",
     "git -C /etc push",
+    "git",
   ]) {
     const blocked = explainBlockedCommand(command, {}, { ...options, platform: "linux" });
     assert.ok(blocked, command);

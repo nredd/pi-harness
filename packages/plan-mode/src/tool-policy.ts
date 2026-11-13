@@ -427,7 +427,7 @@ function explainGitRejection(
     }
   }
   const subcommand = args[index]?.toLowerCase();
-  if (!subcommand) return undefined;
+  if (!subcommand) return { token: first, reason: "`git` needs a reviewed subcommand" };
   if (subcommand.startsWith("-")) return { token: subcommand, reason: "unsupported git option before the subcommand" };
   const validator =
     (BUILTIN_GIT_VALIDATORS as Record<string, ArgumentValidator>)[subcommand] ??
