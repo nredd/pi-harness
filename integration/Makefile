@@ -2,6 +2,7 @@
 
 PYTEST := uv run --locked pytest
 STACK_ARGS = --stack "$(STACK)"
+RUNTIME ?= node
 STACK_FILES = scenarios/test_*.py scenarios/tui/test_footer_resize.py
 
 help:  ## List targets
@@ -31,9 +32,9 @@ installer:  ## Real one-shot installer in throwaway HOMEs; explicit INSTALLER_SP
 	@test -n "$(INSTALLER_SPEC)" -a -n "$(STACK_SHA)" || (printf 'Set INSTALLER_SPEC=git+https://github.com/nredd/pi-harness@<sha>#subdirectory=integration STACK_SHA=<promoted sha>\n'; exit 2)
 	INSTALLER_SPEC="$(INSTALLER_SPEC)" STACK_SHA="$(STACK_SHA)" $(PYTEST) scenarios/installer -m installer -n 3 --log-cli-level=INFO
 
-bench:  ## Serial quiet-runner F only, explicit PI_BIN and STACK
+bench:  ## Serial quiet-runner F only, explicit PI_BIN and STACK; RUNTIME=node|bun-standalone
 	@test -n "$(STACK)"
-	$(PYTEST) scenarios/bench $(STACK_ARGS) -m bench --log-cli-level=INFO
+	$(PYTEST) scenarios/bench $(STACK_ARGS) --runtime "$(RUNTIME)" -m bench --log-cli-level=INFO
 
 live:  ## Opt-in G only, explicit HARNESS_AUTH_FILE, PI_BIN and STACK; never CI
 	@test -n "$(STACK)"
