@@ -214,6 +214,7 @@ def test_root_script_helpers_are_measured_by_import_audit_at_zero() -> None:
     assert inventory(ROOT, audit) == {
         "scripts/check-biome-paths.mjs",
         "scripts/import_audit.ts",
+        "scripts/merge-pr.ts",
         "scripts/router_contract.mjs",
         "scripts/run-vitest.ts",
         *configs,
