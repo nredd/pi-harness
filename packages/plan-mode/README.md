@@ -348,7 +348,7 @@ An inactive legacy state entry does not inject a Normal contract, so sessions th
 Manual `/tree` navigation restores branch-owned Plan state and chooses the matching contract without navigating or adding a branch summary.
 Pi lists hidden transition messages in `/tree`; Plan mode rejects those internal targets, so select an adjacent conversation entry.
 
-Plan mode registers `plan_mode_question` and `plan_mode_complete` once and keeps their names and definitions stable across Normal, Plan, ready, implementation, and restored workflows.
+Plan mode registers `plan_mode_enter`, `plan_mode_question` and `plan_mode_complete` once and keeps their names and definitions stable across Normal, Plan, ready, implementation, and restored workflows. The entry tool is model-only, so nested orchestrators cannot request this user interaction. Set `modelPlanEntry: false` in `pi-plan-mode.json` to remove only the entry tool from the active set at the next session start or reload. File-watch updates do not change its active status mid-session; restrictive active-tool policies are never widened.
 Visible helpers do not mean `/plan` is active, and their descriptions exclude ordinary planning, the `writing-plans` skill, roadmaps, checklists, and plan-file work.
 Only the latest active Plan contract authorizes the helpers; inactive or stale calls fail without accepting a plan or opening question UI.
 Plan mode does not widen a restrictive active-tool policy; start or restore fails when a required helper is unavailable.
@@ -392,6 +392,7 @@ Guaranteed coexistence with Goal requires `@narumitw/pi-goal` `0.53.0` or newer 
 
 ## 🛠️ Tools
 
+- `plan_mode_enter({ reason })` requests Plan mode for multi-file work, unclear requirements, or an explicit planning request. It is not needed for single-file fixes or questions. TUI and RPC require explicit confirmation within 10 seconds; Escape, cancellation, timeout, or refusal leaves Normal mode unchanged and lets the model continue. Print and JSON refuse before mutation. Accepted entry returns `terminate: true` and runs only at `agent_settled`, through the existing `/plan start` admission, helper availability, mutex and frozen policy. It appends the canonical Plan contract once and resends the original user request. Parallel siblings and any continuation before settlement still run under Normal policy. Reload, branch changes, supersession, run cancellation/error and shutdown invalidate pending entry. Active/ready/saved plans, active implementation state and another pending entry cannot be superseded. Another workflow's mutex refusal remains anonymous, including if it starts while confirmation is open. Confirmation is consent to *planning*, never to implementation or broader permissions.
 - `plan_mode_question` asks up to three structured questions, supports optional answer notes, submits one answer directly, and reviews multiple answers before TUI submission.
 - `plan_mode_complete` records the complete approved Markdown plan and terminates the planning turn when called alone.
 

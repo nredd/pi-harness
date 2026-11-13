@@ -44,7 +44,7 @@ The shortcut is disabled when `toggleShortcut` is omitted.
 
 ### Plan helper tools
 
-Plan helper schemas are stable from extension registration onward, and Plan mode does not call `setActiveTools()`.
+Plan helper schemas are stable from extension registration onward. Plan mode never changes the active status of `plan_mode_question` or `plan_mode_complete`. The separate model-only `plan_mode_enter({ reason })` tool is active by default, but `modelPlanEntry: false` removes it at session start or reload without widening any active-tool policy. The setting accepts only a boolean and is JSON-only; watched edits do not change entry-tool visibility mid-session. Entry requires explicit TUI/RPC confirmation within 10 seconds and is refused in print/JSON. Consent requests planning only; normal Plan admission and implementation approval remain mandatory.
 Tool visibility alone is not Plan activation.
 Only the latest effective active Plan contract authorizes `plan_mode_question` or `plan_mode_complete`; ordinary planning and the `writing-plans` skill use their own workflow instead.
 The retired `toolVisibility` key is ignored and preserved as unknown data when another setting is saved or a legacy settings file is migrated.

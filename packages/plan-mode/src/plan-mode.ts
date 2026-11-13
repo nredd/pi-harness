@@ -9,6 +9,7 @@ import type {
   InputEvent,
   InputSource,
 } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import {
   answerPlanModeStateQueries,
   BLOCKED_MUTATING_TOOLS,
@@ -200,6 +201,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   const explicitPlanModeSettingsPath = dependencies.settingsPath;
   let state: PlanModeState = { enabled: false, awaitingAction: false, declinedPlans: 0 };
   let settings: PlanModeSettings = { thinkingLevel: "inherit" };
+  // Session-scoped opt-out: file watches cannot churn the model's schema mid-session.
+  let modelPlanEntry = true;
+  let originalRequest = "";
+  let pendingModelEntry: { isCurrent(): boolean; signal: AbortSignal; prompt: string } | undefined;
   let startupToggleShortcut: ReturnType<typeof configuredPlanModeToggleShortcut>;
   let shortcutInitialized = false;
   let workflowAllowedToolNames: string[] | undefined;
@@ -380,6 +385,77 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       return planModeCompleted(parsed.plan);
     },
   });
+
+  pi.registerTool({
+    name: "plan_mode_enter",
+    label: "Enter Plan mode",
+    exposure: "model-only",
+    description:
+      "Request Plan mode for a multi-file change, unclear requirements, or a user request to plan. Do not use for single-file fixes or questions. Requires user confirmation; entry happens only after this run settles. Call alone as the final action. Tool visibility does not activate Plan mode or authorize implementation.",
+    parameters: Type.Object({ reason: Type.String({ minLength: 1, maxLength: 1000 }) }),
+    async execute(_toolCallId, { reason }, signal, _onUpdate, ctx) {
+      const refuse = (text: string) => ({ content: [{ type: "text" as const, text }], details: undefined });
+      if (!modelPlanEntry) return refuse("Model Plan entry is disabled for this session.");
+      if (!ctx.hasUI || (ctx.mode !== "tui" && ctx.mode !== "rpc")) {
+        return refuse("plan_mode_enter requires TUI or RPC confirmation; print and JSON modes are unsupported.");
+      }
+      const blocked = modelEntryBlocked();
+      if (blocked) return refuse(blocked);
+      if (!reason.trim()) return refuse("A non-empty reason is required.");
+      // Probe only. The actual transition acquires again through enterPlanMode after settlement.
+      const owner = workflowMutex.acquire();
+      if (!owner) {
+        reportWorkflowBusy(ctx);
+        return refuse("Another workflow is active in this session. End it before starting Plan mode.");
+      }
+      workflowMutex.release(owner);
+      const lifecycle = captureMenuLifecycle();
+      const intent = {
+        isCurrent: lifecycle.isCurrent,
+        signal: lifecycle.signal,
+        prompt: originalRequest,
+      };
+      pendingModelEntry = intent;
+      const notice = `Plan mode requested: ${safeTerminalText(reason)}`;
+      ctx.ui.notify(notice, "info");
+      let confirmed: boolean;
+      try {
+        confirmed = await ctx.ui.confirm("Enter Plan mode?", notice, {
+          signal: signal ? AbortSignal.any([signal, lifecycle.signal]) : lifecycle.signal,
+          timeout: 10_000,
+        });
+      } catch (error: unknown) {
+        if (pendingModelEntry === intent) pendingModelEntry = undefined;
+        throw error;
+      }
+      if (
+        !confirmed ||
+        signal?.aborted ||
+        intent.signal.aborted ||
+        !intent.isCurrent() ||
+        pendingModelEntry !== intent
+      ) {
+        if (pendingModelEntry === intent) pendingModelEntry = undefined;
+        return refuse(
+          "Plan mode entry was declined or cancelled. Stay in Normal mode and continue without re-requesting entry.",
+        );
+      }
+      return {
+        content: [{ type: "text", text: "Entering Plan mode after this turn settles. Do not start implementation." }],
+        details: undefined,
+        terminate: true,
+      };
+    },
+  });
+
+  /** No model request may supersede an existing workflow or a pending confirmation. */
+  function modelEntryBlocked() {
+    if (state.enabled) return state.awaitingAction ? "A plan is ready for review." : "Plan mode is already active.";
+    if (state.savedPlan) return "A saved plan must be implemented or cleared first.";
+    if (state.activeImplementation || state.pendingImplementationRuntime) return "Plan implementation is active.";
+    if (pendingModelEntry) return "Plan mode entry is already pending.";
+    return undefined;
+  }
 
   pi.registerCommand("plan", {
     description: "Enter or manage Codex-like Plan mode",
@@ -576,6 +652,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   pi.on("session_start", async (event, ctx) => {
     const generation = ++menuGeneration;
     finalizationRequest.reset();
+    pendingModelEntry = undefined;
+    originalRequest = "";
     currentSession = ctx.sessionManager;
     currentSessionContext = ctx;
     shuttingDownSession = undefined;
@@ -600,6 +678,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     state = { enabled: false, awaitingAction: false, declinedPlans: 0 };
     await applyPlanModeSettings(generation, ctx, true);
     if (generation !== menuGeneration || menuController.signal.aborted) return;
+    modelPlanEntry = settings.modelPlanEntry !== false;
+    if (!modelPlanEntry) pi.setActiveTools(safeGetActiveTools().filter((name) => name !== "plan_mode_enter"));
     initializePlanModeShortcut();
     startPlanModeSettingsWatch(generation);
     if (!installRestoredState(restoredState, ctx)) return;
@@ -730,6 +810,9 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   });
 
   pi.on("tool_call", async (event, ctx) => {
+    if (event.toolName === "plan_mode_enter" && state.enabled) {
+      return { block: true, reason: modelEntryBlocked() };
+    }
     const requiredHelper =
       event.toolName === PLAN_MODE_QUESTION_TOOL_NAME || event.toolName === PLAN_MODE_COMPLETE_TOOL_NAME;
     if (!state.enabled) {
@@ -894,6 +977,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     // even when an extension starts the first run, without treating that run as user input.
     planApprovals.announceLatest(ctx);
     if (event.messageType === "custom") return;
+    originalRequest = event.prompt;
     if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) return;
     if (state.latestPlan || state.awaitingAction) {
       readyPresentationIntent = undefined;
@@ -910,6 +994,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   });
 
   pi.on("agent_end", async (event, ctx) => {
+    const stopReason = latestAssistantStopReason(event.messages);
+    if (stopReason === "aborted" || stopReason === "error") pendingModelEntry = undefined;
     if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) return;
 
     const text = latestAssistantText(event.messages);
@@ -937,6 +1023,20 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
+    const entry = pendingModelEntry;
+    if (entry) {
+      pendingModelEntry = undefined;
+      if (entry.isCurrent() && !entry.signal.aborted && !modelEntryBlocked()) {
+        if (ctx.isIdle() && !ctx.hasPendingMessages()) {
+          enterPlanModeWithPrompt(entry.prompt, ctx);
+        } else {
+          ctx.ui.notify(
+            "Plan mode entry cancelled because another request is pending. Stay in Normal mode.",
+            "warning",
+          );
+        }
+      }
+    }
     const settledImplementationId = implementationRetention.implementationSettled(state.activeImplementation);
     if (settledImplementationId) clearActiveImplementation(ctx);
 
@@ -1598,6 +1698,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   }
 
   function advanceWorkflowGeneration() {
+    pendingModelEntry = undefined;
     workflowGeneration += 1;
     pendingWorkflowToolPolicy = undefined;
     finalizationRequest.reset();
@@ -1761,7 +1862,12 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 
   function selectableTools() {
     return safeGetAllTools()
-      .filter((tool) => tool.name !== PLAN_MODE_QUESTION_TOOL_NAME && tool.name !== PLAN_MODE_COMPLETE_TOOL_NAME)
+      .filter(
+        (tool) =>
+          tool.name !== PLAN_MODE_QUESTION_TOOL_NAME &&
+          tool.name !== PLAN_MODE_COMPLETE_TOOL_NAME &&
+          tool.name !== "plan_mode_enter",
+      )
       .sort(compareTools);
   }
 

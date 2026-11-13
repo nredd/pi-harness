@@ -64,13 +64,14 @@ import {
   snapshotPlanModeSelectedNames,
   updatePlanModeSettings,
   updatePlanModeUi
-} from "./chunks/chunk-2F7W2JBN.ts";
+} from "./chunks/chunk-A6PCYLX7.ts";
 
 // src/plan-mode.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
 import { watch } from "node:fs";
 import { basename, dirname } from "node:path";
 import { stripVTControlCharacters as stripVTControlCharacters2 } from "node:util";
+import { Type } from "typebox";
 
 // src/child-policy.ts
 var PLAN_MODE_STATE_QUERY = "pi-plan-mode:state-query";
@@ -1303,7 +1304,7 @@ function planMode(pi, dependencies = {}) {
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
     if (!interactiveUiPromise) {
-      interactiveUiPromise = import("./chunks/interactive-ui-5G3K5ENL.ts").catch((error) => {
+      interactiveUiPromise = import("./chunks/interactive-ui-KWTSLJRF.ts").catch((error) => {
         interactiveUiPromise = void 0;
         throw error;
       });
@@ -1313,6 +1314,9 @@ function planMode(pi, dependencies = {}) {
   const explicitPlanModeSettingsPath = dependencies.settingsPath;
   let state = { enabled: false, awaitingAction: false, declinedPlans: 0 };
   let settings = { thinkingLevel: "inherit" };
+  let modelPlanEntry = true;
+  let originalRequest = "";
+  let pendingModelEntry;
   let startupToggleShortcut;
   let shortcutInitialized = false;
   let workflowAllowedToolNames;
@@ -1475,6 +1479,66 @@ function planMode(pi, dependencies = {}) {
       return planModeCompleted(parsed.plan);
     }
   });
+  pi.registerTool({
+    name: "plan_mode_enter",
+    label: "Enter Plan mode",
+    exposure: "model-only",
+    description: "Request Plan mode for a multi-file change, unclear requirements, or a user request to plan. Do not use for single-file fixes or questions. Requires user confirmation; entry happens only after this run settles. Call alone as the final action. Tool visibility does not activate Plan mode or authorize implementation.",
+    parameters: Type.Object({ reason: Type.String({ minLength: 1, maxLength: 1e3 }) }),
+    async execute(_toolCallId, { reason }, signal, _onUpdate, ctx) {
+      const refuse = (text) => ({ content: [{ type: "text", text }], details: void 0 });
+      if (!modelPlanEntry) return refuse("Model Plan entry is disabled for this session.");
+      if (!ctx.hasUI || ctx.mode !== "tui" && ctx.mode !== "rpc") {
+        return refuse("plan_mode_enter requires TUI or RPC confirmation; print and JSON modes are unsupported.");
+      }
+      const blocked = modelEntryBlocked();
+      if (blocked) return refuse(blocked);
+      if (!reason.trim()) return refuse("A non-empty reason is required.");
+      const owner = workflowMutex.acquire();
+      if (!owner) {
+        reportWorkflowBusy(ctx);
+        return refuse("Another workflow is active in this session. End it before starting Plan mode.");
+      }
+      workflowMutex.release(owner);
+      const lifecycle = captureMenuLifecycle();
+      const intent = {
+        isCurrent: lifecycle.isCurrent,
+        signal: lifecycle.signal,
+        prompt: originalRequest
+      };
+      pendingModelEntry = intent;
+      const notice = `Plan mode requested: ${safeTerminalText(reason)}`;
+      ctx.ui.notify(notice, "info");
+      let confirmed;
+      try {
+        confirmed = await ctx.ui.confirm("Enter Plan mode?", notice, {
+          signal: signal ? AbortSignal.any([signal, lifecycle.signal]) : lifecycle.signal,
+          timeout: 1e4
+        });
+      } catch (error) {
+        if (pendingModelEntry === intent) pendingModelEntry = void 0;
+        throw error;
+      }
+      if (!confirmed || signal?.aborted || intent.signal.aborted || !intent.isCurrent() || pendingModelEntry !== intent) {
+        if (pendingModelEntry === intent) pendingModelEntry = void 0;
+        return refuse(
+          "Plan mode entry was declined or cancelled. Stay in Normal mode and continue without re-requesting entry."
+        );
+      }
+      return {
+        content: [{ type: "text", text: "Entering Plan mode after this turn settles. Do not start implementation." }],
+        details: void 0,
+        terminate: true
+      };
+    }
+  });
+  function modelEntryBlocked() {
+    if (state.enabled) return state.awaitingAction ? "A plan is ready for review." : "Plan mode is already active.";
+    if (state.savedPlan) return "A saved plan must be implemented or cleared first.";
+    if (state.activeImplementation || state.pendingImplementationRuntime) return "Plan implementation is active.";
+    if (pendingModelEntry) return "Plan mode entry is already pending.";
+    return void 0;
+  }
   pi.registerCommand("plan", {
     description: "Enter or manage Codex-like Plan mode",
     getArgumentCompletions: completePlanArguments,
@@ -1649,6 +1713,8 @@ function planMode(pi, dependencies = {}) {
   pi.on("session_start", async (event, ctx) => {
     const generation = ++menuGeneration;
     finalizationRequest.reset();
+    pendingModelEntry = void 0;
+    originalRequest = "";
     currentSession = ctx.sessionManager;
     currentSessionContext = ctx;
     shuttingDownSession = void 0;
@@ -1672,6 +1738,8 @@ function planMode(pi, dependencies = {}) {
     state = { enabled: false, awaitingAction: false, declinedPlans: 0 };
     await applyPlanModeSettings(generation, ctx, true);
     if (generation !== menuGeneration || menuController.signal.aborted) return;
+    modelPlanEntry = settings.modelPlanEntry !== false;
+    if (!modelPlanEntry) pi.setActiveTools(safeGetActiveTools().filter((name) => name !== "plan_mode_enter"));
     initializePlanModeShortcut();
     startPlanModeSettingsWatch(generation);
     if (!installRestoredState(restoredState, ctx)) return;
@@ -1787,6 +1855,9 @@ function planMode(pi, dependencies = {}) {
     }
   });
   pi.on("tool_call", async (event, ctx) => {
+    if (event.toolName === "plan_mode_enter" && state.enabled) {
+      return { block: true, reason: modelEntryBlocked() };
+    }
     const requiredHelper = event.toolName === PLAN_MODE_QUESTION_TOOL_NAME || event.toolName === PLAN_MODE_COMPLETE_TOOL_NAME;
     if (!state.enabled) {
       if (!requiredHelper) return;
@@ -1910,6 +1981,7 @@ function planMode(pi, dependencies = {}) {
     refreshStateForFirstPrompt(ctx);
     planApprovals.announceLatest(ctx);
     if (event.messageType === "custom") return;
+    originalRequest = event.prompt;
     if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) return;
     if (state.latestPlan || state.awaitingAction) {
       readyPresentationIntent = void 0;
@@ -1925,6 +1997,8 @@ function planMode(pi, dependencies = {}) {
     }
   });
   pi.on("agent_end", async (event, ctx) => {
+    const stopReason = latestAssistantStopReason(event.messages);
+    if (stopReason === "aborted" || stopReason === "error") pendingModelEntry = void 0;
     if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) return;
     const text = latestAssistantText(event.messages);
     if (finalizationRunOutcome(event.messages) === "cancelled") {
@@ -1950,6 +2024,20 @@ function planMode(pi, dependencies = {}) {
     acceptCompletedPlan(parsedPlan.plan, "legacy_proposed_plan", ctx);
   });
   pi.on("agent_settled", async (_event, ctx) => {
+    const entry = pendingModelEntry;
+    if (entry) {
+      pendingModelEntry = void 0;
+      if (entry.isCurrent() && !entry.signal.aborted && !modelEntryBlocked()) {
+        if (ctx.isIdle() && !ctx.hasPendingMessages()) {
+          enterPlanModeWithPrompt(entry.prompt, ctx);
+        } else {
+          ctx.ui.notify(
+            "Plan mode entry cancelled because another request is pending. Stay in Normal mode.",
+            "warning"
+          );
+        }
+      }
+    }
     const settledImplementationId = implementationRetention.implementationSettled(state.activeImplementation);
     if (settledImplementationId) clearActiveImplementation(ctx);
     if (finalizationRequest.hasPendingRequest() && state.enabled && workflowMutex.isOwner(workflowOwner)) {
@@ -2491,6 +2579,7 @@ function planMode(pi, dependencies = {}) {
     return false;
   }
   function advanceWorkflowGeneration() {
+    pendingModelEntry = void 0;
     workflowGeneration += 1;
     pendingWorkflowToolPolicy = void 0;
     finalizationRequest.reset();
@@ -2610,7 +2699,9 @@ function planMode(pi, dependencies = {}) {
     };
   }
   function selectableTools() {
-    return safeGetAllTools().filter((tool) => tool.name !== PLAN_MODE_QUESTION_TOOL_NAME && tool.name !== PLAN_MODE_COMPLETE_TOOL_NAME).sort(compareTools);
+    return safeGetAllTools().filter(
+      (tool) => tool.name !== PLAN_MODE_QUESTION_TOOL_NAME && tool.name !== PLAN_MODE_COMPLETE_TOOL_NAME && tool.name !== "plan_mode_enter"
+    ).sort(compareTools);
   }
   function availablePlanPolicyTools() {
     const activeNames = new Set(safeGetActiveTools());
