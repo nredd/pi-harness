@@ -633,6 +633,7 @@ def reviewer_template_report(axis: str, sha: str, *, inline_none: bool, no_spec:
     [
         "green",
         "empty-repo",
+        "bare-script",
         "head-drift",
         "unresolved-review",
         "optional-failure",
@@ -776,7 +777,7 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
     result = subprocess.run(
         [
             "/bin/bash",
-            str(isolated),
+            isolated.name if mode == "bare-script" else str(isolated),
             "135",
             sha,
             "standards-id",
@@ -794,6 +795,7 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
             "MERGE_PR_GH": "gh" if mode == "relative-gh" else str(fake),
             "MERGE_PR_PYTHON": "python3" if mode == "relative-python" else sys.executable,
         },
+        cwd=scripts,
         capture_output=True,
         text=True,
         check=False,
@@ -802,6 +804,7 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
     if mode in (
         "green",
         "empty-repo",
+        "bare-script",
         "poisoned-path",
         "git-quoted-source",
         "read-quoted-source",
