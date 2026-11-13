@@ -2525,7 +2525,7 @@ def stage(
                 raise failure from failure.__cause__
             # Cleanup and the marker share the transaction's original staging/core parent.
             # Journal.place retires this subtree's descriptors before its intentional move.
-            for leftover in ("fetch-home", "npm-cache", "tui-resource"):
+            for leftover in ("fetch-home", "npm-cache", "release-resources"):
                 remove(staged_core / leftover, anchors=held)
             write_atomic(
                 staged_core / CORE_MARKER,

@@ -1,7 +1,8 @@
 """Install the released core into a private prefix using the tap formula's npm/resource steps.
 
 No tap is read at runtime. The copied recipe installs the coding-agent tgz globally, replaces
-its nested pi-tui with the release tgz, and prunes foreign native prebuilds.
+its nested `pi-agent-core`, `pi-ai` and `pi-tui` with the release tgzs, and prunes foreign native
+prebuilds.
 
 `--verify-root-overrides` gates the root `package.json` overrides the same way before any
 `npm ci`: this module and `harness.paths` are standard library only, so it runs under a bare
@@ -104,7 +105,17 @@ LEGACY_CHECKSUMS = MappingProxyType(
     }
 )
 LEGACY_RELEASE_TAGS = frozenset(LEGACY_CHECKSUMS)
-# Every asset the harness consumes, coding-agent and tui first: they are the ones npm installs.
+# Fork packages swapped into the nested `node_modules`, each with a (file, token) that exists only in
+# the fork build. A skipped or registry-copy stage fails the token check. Legacy tags predate them.
+STAGED_PACKAGES = MappingProxyType(
+    {
+        "pi-agent-core": ("dist/agent.js", "beforeProviderRequest"),
+        "pi-ai": ("dist/api/openai-responses-shared.js", "DEFAULT_REASONING_SUMMARY"),
+        "pi-tui": ("dist/index.js", "copyGutterEndMarker"),
+    }
+)
+# Every asset the harness consumes, coding-agent first: it is the one npm installs. The other
+# three replace the registry copies npm nests under it (see `STAGED_PACKAGES`).
 RELEASE_PACKAGES = ("pi-coding-agent", "pi-tui", "pi-agent-core", "pi-ai")
 CORE_REPO = "nredd/pi"
 ATTESTATION_WORKFLOW = f"{CORE_REPO}/.github/workflows/fork-release.yml"
@@ -1397,12 +1408,55 @@ def release_tarballs(tag: str) -> list[str]:
         tag (str): core fork release tag.
 
     Returns:
-        list[str]: filenames; the first two are the ones `fetch_release` installs.
+        list[str]: filenames; the first is the one npm installs, the rest are staged over its nested deps.
 
     Raises:
         ValueError: not a core fork release tag.
     """
     return [url.rsplit("/", 1)[1] for url in release_package_urls(tag).values()]
+
+
+def stage_package(package: str, asset: Path, modules: Path, unpack_root: Path, tag: str) -> Path:
+    """Replace the nested registry copy of a fork package with its verified release tgz.
+
+    Parameters:
+        package (str): `STAGED_PACKAGES` key, e.g. `pi-ai`.
+        asset (Path): verified release tarball.
+        modules (Path): nested `node_modules` of the installed coding-agent.
+        unpack_root (Path): scratch directory for the extracted tarball.
+        tag (str): released core tag, for the log line only.
+
+    Returns:
+        Path: the staged package directory.
+    """
+    destination = modules / "@earendil-works" / package
+    if destination.exists():
+        shutil.rmtree(destination)
+    unpack = unpack_root / package
+    with tarfile.open(asset) as archive:
+        archive.extractall(unpack, filter="data")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(unpack / "package"), destination)
+    LOGGER.info(f"Staged '{package}' from '{tag}'")
+    return destination
+
+
+def assert_fork_markers(modules: Path, tag: str) -> None:
+    """Fail unless every nested staged package carries its fork-only token (skipped stage = registry copy).
+
+    Parameters:
+        modules (Path): nested `node_modules` of the installed coding-agent.
+        tag (str): released core tag; legacy tags predate the markers and are not checked.
+
+    Raises:
+        RuntimeError: a `STAGED_PACKAGES` package is missing or lacks its marker.
+    """
+    if tag in LEGACY_RELEASE_TAGS:
+        return
+    for package, (relative, token) in STAGED_PACKAGES.items():
+        marker = modules / "@earendil-works" / package / relative
+        if not marker.is_file() or token not in marker.read_text(encoding="utf-8", errors="replace"):
+            raise RuntimeError(f"Installed `{package}` lacks fork marker `{token}` in '{relative}'")
 
 
 def fetch_release(
@@ -1416,8 +1470,9 @@ def fetch_release(
     """Verify every consumed release asset, then install into a new private prefix, never the live one.
 
     New tags must publish all of `RELEASE_PACKAGES`. Legacy tags are verified for exactly the assets
-    in `LEGACY_CHECKSUMS`. Only coding-agent and tui are installed; `pi-agent-core` and `pi-ai` are
-    verified because pi-harness's root overrides consume them.
+    in `LEGACY_CHECKSUMS`. The coding-agent tgz is installed by npm; the verified `pi-agent-core`,
+    `pi-ai` and `pi-tui` tgzs then replace the registry copies nested under it, like the formula. For
+    non-legacy tags each staged package must contain its fork-only `STAGED_PACKAGES` token.
 
     Parameters:
         tag (str): released core tag.
@@ -1433,7 +1488,7 @@ def fetch_release(
 
     Raises:
         ValueError: invalid tag, nonempty prefix, or missing/mismatched recorded checksums.
-        RuntimeError: provenance or npm installation failed.
+        RuntimeError: provenance or npm installation failed, or a staged package lacks its fork marker.
         FileNotFoundError: npm is unavailable.
     """
     urls = list(release_package_urls(tag).values())
@@ -1461,10 +1516,11 @@ def fetch_release(
         "npm_config_cache": str(prefix / "npm-cache"),
         "PI_SKIP_VERSION_CHECK": "1",
     }
-    assets = []
-    for url in urls:
-        asset = prefix / url.rsplit("/", 1)[1]
-        assets.append(download_verified_asset(url, tag, checksums, asset, provenance))
+    assets = {}
+    for package, url in release_package_urls(tag).items():
+        if url in urls:
+            asset = prefix / url.rsplit("/", 1)[1]
+            assets[package] = download_verified_asset(url, tag, checksums, asset, provenance)
     try:
         subprocess.check_output(
             [
@@ -1477,7 +1533,7 @@ def fetch_release(
                 "--build-from-source",
                 "--ignore-scripts",
                 "--loglevel=silly",
-                str(assets[0]),
+                str(assets["pi-coding-agent"]),
             ],
             cwd=prefix,
             env=child_environment(os.environ, overrides=env),
@@ -1497,14 +1553,10 @@ def fetch_release(
     if failure is not None:
         raise failure from failure.__cause__
     modules = prefix / "lib/node_modules/@earendil-works/pi-coding-agent/node_modules"
-    destination = modules / "@earendil-works/pi-tui"
-    if destination.exists():
-        shutil.rmtree(destination)
-    unpack = prefix / "tui-resource"
-    with tarfile.open(assets[1]) as archive:
-        archive.extractall(unpack, filter="data")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(unpack / "package"), destination)
+    for package in STAGED_PACKAGES:
+        if package in assets:
+            stage_package(package, assets[package], modules, prefix / "release-resources", tag)
+    assert_fork_markers(modules, tag)
     system = "darwin" if platform.system() == "Darwin" else "linux"
     arch = "arm64" if platform.machine() in {"arm64", "aarch64"} else "x64"
     prune_native(modules, system, arch)
