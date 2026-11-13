@@ -60,6 +60,23 @@ script; the earlier 35-file measurement does not establish its coverage. The ove
 `computer-use` inventory remains excluded: this result covers the TypeScript/Vitest slice,
 not all native Swift, Rust or documentation code.
 
+## Signing-certificate Node port (#803)
+
+The original `scripts/make-signing-cert.sh` was inventoried but unmeasured shell, not a
+zero-coverage Node baseline. Its deterministic setup now lives in
+`packages/computer-use/scripts/make-signing-cert.mjs`, measured by the existing Istanbul
+producer with a per-file zero L/F/B/S pin. Both inventory slices include it; no uncovered
+caps or exclusions change. The launcher and embedded Bash silent-password reader remain
+explicitly **unmeasured shell**. #695 stays open for remaining work.
+
+Scoped local Node and Bun suites exercise disposable files and injected command results,
+including EOF, command refusal, missing/nonexecutable tools, interrupts and filesystem
+failures. No real certificate, signing identity, Keychain, trust or credential prompt runs.
+The Node implementation measures L/F/B/S **31/4/23/35**, all covered, on both runtimes.
+These scoped reports do not establish whole-package or native coverage. The independent
+command-refusal mutation must fail before the patch is admitted. PR CI runs the full
+package/accounting gates, including missing-report refusal.
+
 ## Baseline
 
 Measured 2026-11-11 on macOS (Apple Silicon, Node 26.13.0) at `6d913af1` (main after #717, #718, #719,

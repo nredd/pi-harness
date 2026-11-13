@@ -155,6 +155,7 @@ const ZERO_UNCOVERED_FILES = [
 	"scripts/build-native.mjs",
 	"scripts/docs-generators/generate-source-references.mjs",
 	"scripts/docs-generators/generate-tool-reference.mjs",
+	"scripts/make-signing-cert.mjs",
 	"scripts/rust-coverage.mjs",
 	"scripts/setup-helper.mjs",
 	"src/actions.ts",
