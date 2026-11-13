@@ -93,7 +93,7 @@ Statement units differ (Istanbul AST statements, V8 AST remap), so caps compare 
 JSON `signals` map carries the branch delta. The base ratchet treats it like lines: a cap can only go
 down, and dropping a `branches` key the base had is a weakening. `target.branches` is 0, so every
 100-percent primary signal is held to 0 uncovered branches regardless of its own cap. Every enforced primary and
-Bun signal's cap is 0 as well. Session-kit remains report-only against a zero target, not a zero-coverage receipt (see below).
+Bun signal's cap is 0 as well. Session-kit enforces its full-source Bun zero floor after hosted admission (see below).
 
 It fails closed both ways. A signal whose report has branch records (`BRDA`) needs a cap on that OS
 (`Missing branch cap`), and a capped signal whose report has executable lines but no branch records
