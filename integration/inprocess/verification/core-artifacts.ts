@@ -87,6 +87,34 @@ export function readAuthenticatedTarball(integrity: string, sha256: string, cach
 	return bytes;
 }
 
+/** Lockfile shape the pin selection reads. */
+export type CoreLock = { packages: Record<string, { resolved?: string; integrity?: string } | undefined> };
+
+/** Release record shape the pin selection reads. */
+export type CoreRelease = { artifacts?: { url: string; sha256: string }[] };
+
+/**
+ * Pair a lockfile pin with the release record digest for exactly the same URL.
+ *
+ * Raises:
+ *   Error: the lock pins no `resolved`/`integrity`, or no release lists the exact URL, or listings disagree on the digest.
+ */
+export function selectReleaseDigest(
+	lock: CoreLock,
+	releases: CoreRelease[],
+	name: string,
+): { resolved: string; integrity: string; sha256: string } {
+	const { resolved, integrity } = lock.packages[`node_modules/@earendil-works/${name}`] ?? {};
+	if (!resolved || !integrity) throw new Error(`Lockfile pins no resolved/integrity for ${name}`);
+	const digests = releases
+		.flatMap((release) => release.artifacts ?? [])
+		.filter((artifact) => artifact.url === resolved)
+		.map((artifact) => artifact.sha256);
+	const [sha256] = digests;
+	if (!sha256 || new Set(digests).size !== 1) throw new Error(`No unambiguous release digest for ${resolved}`);
+	return { resolved, integrity, sha256 };
+}
+
 function installedFiles(root: string, relative = ""): Map<string, string> {
 	const found = new Map<string, string>();
 	for (const entry of readdirSync(join(root, relative)).sort()) {
@@ -126,9 +154,12 @@ export function diffInstalled(root: string, shipped: Map<string, Buffer>): Conte
  * Prove an installed package equals its authenticated tarball.
  *
  * Raises:
- *   Error: any file differs, with the offending paths named.
+ *   Error: any file differs, with the offending paths named, or a nested `node_modules/@earendil-works` exists.
  */
 export function verifyInstalledPackage(root: string, tarball: Buffer): ContentReceipt {
+	// Node resolves a package's own `node_modules` before the hoisted copy, so a nested core copy would shadow the verified one.
+	const nestedCore = join(root, "node_modules", "@earendil-works");
+	if (existsSync(nestedCore)) throw new Error(`Unverified nested core copy at ${nestedCore}`);
 	const shipped = unpackTarball(tarball);
 	const diff = diffInstalled(root, shipped);
 	if (diff.missing.length + diff.modified.length + diff.extra.length > 0) {

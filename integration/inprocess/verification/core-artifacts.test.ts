@@ -4,7 +4,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
-import { diffInstalled, readAuthenticatedTarball, unpackTarball, verifyInstalledPackage } from "./core-artifacts.ts";
+import {
+	diffInstalled,
+	readAuthenticatedTarball,
+	selectReleaseDigest,
+	unpackTarball,
+	verifyInstalledPackage,
+} from "./core-artifacts.ts";
 import { pinnedCoreTarball } from "./core-pins.ts";
 
 type Entry = { name: string; body?: string; type?: string; prefix?: string; size?: string };
@@ -137,6 +143,14 @@ describe("verifyInstalledPackage", () => {
 		expect(verifyInstalledPackage(install(temp(), sampleFiles), shipped)).toEqual(receipt);
 	});
 
+	it.each([
+		["a nested core package", "node_modules/@earendil-works/pi-agent-core/dist/index.js"],
+		["an empty nested scope", "node_modules/@earendil-works/.keep"],
+	])("rejects %s under a verified package, which Node resolves first", (_label, path) => {
+		const root = install(temp(), { ...sampleFiles, [path]: "stale" });
+		expect(() => verifyInstalledPackage(root, shipped)).toThrow(/nested core copy.*node_modules\/@earendil-works/);
+	});
+
 	it("rejects a same-version install whose nested module is stale while barrels are unchanged", () => {
 		const root = install(temp(), { ...sampleFiles, "dist/core/agent-session.js": "old" });
 		expect(() => verifyInstalledPackage(root, shipped)).toThrow(/"modified":\["dist\/core\/agent-session.js"\]/);
@@ -158,6 +172,45 @@ describe("verifyInstalledPackage", () => {
 			"dist/core/agent-session.js",
 			"dist/index.js",
 		]);
+	});
+});
+
+describe("selectReleaseDigest", () => {
+	const url = "https://registry.example/@earendil-works/pi-tui/-/pi-tui-1.3.0.tgz";
+	const lock = (entry: object | undefined) => ({ packages: { "node_modules/@earendil-works/pi-tui": entry } });
+	const pinned = { resolved: url, integrity: "sha512-abc" };
+	const release = (...artifacts: { url: string; sha256: string }[]) => ({ artifacts });
+
+	it("returns the pin and the digest of the exact URL match", () => {
+		const other = { url: url.replace("1.3.0", "1.2.0"), sha256: "b" };
+		expect(selectReleaseDigest(lock(pinned), [release(other), release({ url, sha256: "a" })], "pi-tui")).toEqual({
+			...pinned,
+			sha256: "a",
+		});
+	});
+
+	it("accepts the same digest listed by several releases", () => {
+		const same = release({ url, sha256: "a" });
+		expect(selectReleaseDigest(lock(pinned), [same, same], "pi-tui").sha256).toBe("a");
+	});
+
+	it.each([
+		["no lock entry", undefined],
+		["no resolved", { integrity: "sha512-abc" }],
+		["no integrity", { resolved: url }],
+	])("rejects %s", (_label, entry) => {
+		expect(() => selectReleaseDigest(lock(entry), [release({ url, sha256: "a" })], "pi-tui")).toThrow(
+			/pins no resolved\/integrity/,
+		);
+	});
+
+	it.each([
+		["no release lists the URL", [release({ url: `${url}.other`, sha256: "a" })]],
+		["a basename-only match", [release({ url: "pi-tui-1.3.0.tgz", sha256: "a" })]],
+		["records without artifacts", [{}]],
+		["conflicting digests", [release({ url, sha256: "a" }), release({ url, sha256: "b" })]],
+	])("rejects %s", (_label, releases) => {
+		expect(() => selectReleaseDigest(lock(pinned), releases, "pi-tui")).toThrow(/No unambiguous release digest/);
 	});
 });
 
