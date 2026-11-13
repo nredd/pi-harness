@@ -66,9 +66,10 @@ check-probes:  ## Probes (anthropic-block-types, latency, process-lifecycle, ren
 	cd integration/probes && node ../../scripts/run-vitest.ts node --coverage
 
 check-providers:  ## Synthetic providers and auth preloads Biome + strict tsc, then Vitest on the config's explicit test files (no glob)
-	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json integration/providers/auth_guard.mjs integration/providers/auth_runtime_fixture.mjs integration/providers/auth_transport.mjs integration/providers/extension_inventory.test.ts integration/providers/extension_inventory.ts integration/providers/faux.test.ts integration/providers/faux.ts integration/providers/preloads.test.ts integration/providers/redirect_anthropic.mjs integration/providers/usage_fixture.test.ts integration/providers/usage_fixture.ts integration/providers/vitest.config.ts
+	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json integration/providers/auth_guard.mjs integration/providers/auth_runtime_fixture.mjs integration/providers/auth_transport.mjs integration/providers/bun_runtime.mjs integration/providers/bun_runtime.test.ts integration/providers/extension_inventory.test.ts integration/providers/extension_inventory.ts integration/providers/faux.test.ts integration/providers/faux.ts integration/providers/preloads.test.ts integration/providers/redirect_anthropic.mjs integration/providers/usage_fixture.test.ts integration/providers/usage_fixture.ts integration/providers/vitest.config.ts
 	node_modules/.bin/tsc -p integration/providers/tsconfig.providers.json
 	cd integration/providers && node ../../scripts/run-vitest.ts node --coverage
+	cd integration/providers && node ../../scripts/run-vitest.ts bun
 
 check-import-audit:  ## Import-audit helper Biome + strict tsc, then Vitest against the real TypeScript parser
 	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json scripts/check-biome-paths.mjs scripts/check-biome-paths.test.mjs scripts/coverage-configs.test.ts scripts/import_audit.ts scripts/import_audit.test.ts scripts/router_contract.mjs scripts/router_contract.test.mjs scripts/run-vitest.ts scripts/run-vitest.test.ts scripts/vitest.config.ts

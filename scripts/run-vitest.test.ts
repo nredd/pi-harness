@@ -110,6 +110,12 @@ test("bun appends the Istanbul coverage arguments after the package arguments", 
 	assert.deepEqual(call.args, ["--bun", VITEST, "run", "--maxWorkers=1", ...BUN_COVERAGE]);
 });
 
+test("separate Bun signals retain an explicit report directory without changing the instrument", () => {
+	const directory = "--coverage.reportsDirectory=coverage/workflow-examples-bun";
+	main(["bun", directory], {});
+	assert.deepEqual(onlyCall().args, ["--bun", VITEST, "run", ...BUN_COVERAGE.slice(0, -1), directory]);
+});
+
 test("only the Bun engine marks its child with the pinned-runtime expectation", () => {
 	main(["bun"], {});
 	assert.equal(onlyCall().env.PI_EXPECT_BUN_RUNTIME, "1");

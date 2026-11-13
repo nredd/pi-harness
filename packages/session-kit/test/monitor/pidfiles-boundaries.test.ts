@@ -91,6 +91,9 @@ function expectRetained(original: string, deps: Partial<SweepDeps>): void {
 }
 
 describe("pidfile naming", () => {
+	it("names the current owner when no pid is supplied", () => {
+		expect(sessionDirName("session")).toBe(`session.${process.pid}`);
+	});
 	it("names an unusable session id generically", () => {
 		expect(sessionDirName("", 42)).toBe("session.42");
 		expect(sessionDirName("a/b", 42)).toBe("a_b.42");

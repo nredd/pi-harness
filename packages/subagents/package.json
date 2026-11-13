@@ -53,7 +53,7 @@
     "lint:fix": "biome check --fix src/ test/",
     "check": "npm run lint && npm run typecheck && npm run check:runtime && npm run test && npm run test:workflow-examples && npm run test:bun",
     "test:bun": "node ../../scripts/run-vitest.ts bun",
-    "test:workflow-examples": "JITI_FS_CACHE=false vitest run --config vitest.workflow-examples.config.ts --coverage",
+    "test:workflow-examples": "node ../../scripts/run-vitest.ts node --config vitest.workflow-examples.config.ts --coverage && node ../../scripts/run-vitest.ts bun --config vitest.workflow-examples.config.ts --coverage.reportsDirectory=coverage/workflow-examples-bun",
     "test:coverage": "node ../../scripts/run-vitest.ts node --coverage",
     "bench": "JITI_FS_CACHE=false vitest bench",
     "bench:ab": "node test/perf/ab.mjs"
