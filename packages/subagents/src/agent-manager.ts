@@ -2207,12 +2207,16 @@ export class AgentManager {
    * record settled in a manager this one never saw (#330).
    */
   rememberEvicted(note: EvictedNote): void {
+    const existing = this.evictedNotes.get(note.id);
+    if (note.fromSavedSession && existing && !existing.fromSavedSession) return;
     this.evictedNotes.delete(note.id);
     this.evictedNotes.set(note.id, note);
-    // Insertion order is age order (the note was just re-inserted above).
-    for (const oldest of this.evictedNotes.keys()) {
-      if (this.evictedNotes.size <= MAX_EVICTED_NOTES) break;
-      this.evictedNotes.delete(oldest);
+    if (this.evictedNotes.size > MAX_EVICTED_NOTES) {
+      // Historical recovery is lower priority than actual eviction/delivery notes.
+      // Evict the oldest historical candidate first, including the new one when
+      // actual notes occupy the entire index. Preserve insertion order within each class.
+      const historical = [...this.evictedNotes].find(([, entry]) => entry.fromSavedSession)?.[0];
+      this.evictedNotes.delete(historical ?? this.evictedNotes.keys().next().value!);
     }
   }
 
