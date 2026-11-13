@@ -95,6 +95,10 @@ mutation. Local measurements and the unequal-window fixture lifecycle are record
 `npm run test:linux` uses disposable protocol children, not a native desktop helper. Its closed-stdin
 fixture initializes stdout before closing fd `0` (lazy pipe initialization aborts Node 26.12 on Darwin),
 acknowledges verified closure while alive, and requires real `EPIPE` rejection plus child cleanup.
+The next request carries a 64 KiB payload so Bun also reaches an OS write failure instead of accepting
+a small write into its buffer. A successful write callback is not proof of delivery; runtime command
+deadlines and error propagation are unchanged. Build-script tests assert the active runtime's executable,
+use numeric exit-code sentinels on Node/Bun, and require actual invalid CLI/symlink entries to exit `1`.
 
 The harness root `publish.yml` owns releases; nested upstream workflows are dormant reference source.
 Local helper builds and local signing remain unchanged. Source preparation is not activation.

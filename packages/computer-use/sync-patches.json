@@ -353,6 +353,46 @@
 			}
 		},
 		{
+			"id": "bun-build-fixtures",
+			"purpose": "Test the active Node/Bun executable exactly, use numeric exit-code sentinels, and verify real invalid CLI and symlink entry exits without running a compiler",
+			"rows": [
+				"Bun build fixtures"
+			],
+			"files": [
+				"scripts/build-native.mjs",
+				"test/build-native.test.mjs"
+			],
+			"check": "test/build-native.test.mjs",
+			"dropControls": [
+				"Build CLI preserves invalid argument exit 1 (#833)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#833; MIT-derived build script from f2239e44 / 7b1f7742; canonical test changes only, runtime unchanged; not filed upstream"
+			}
+		},
+		{
+			"id": "bun-stdin-fixture",
+			"purpose": "Force a real failed OS write after acknowledged child stdin closure, rather than treating a small buffered write callback as delivery proof; preserve real EPIPE and all-pending cleanup assertions",
+			"rows": [
+				"Bun stdin fixture"
+			],
+			"files": [
+				"src/platform/linux/helper.ts",
+				"test/platform-linux.test.mjs"
+			],
+			"check": "test/platform-linux.test.mjs",
+			"dropControls": [
+				"Linux stdin failure rejects every pending command (#833)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#833; MIT-derived Linux helper imported at f2239e44, retained at 7b1f7742; canonical test change only, runtime unchanged; not filed upstream"
+			}
+		},
+		{
 			"id": "canonical-root-deltas",
 			"purpose": "Map helper-native root deltas once to canonical public refs",
 			"rows": [

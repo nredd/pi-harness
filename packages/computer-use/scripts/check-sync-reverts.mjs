@@ -20,6 +20,14 @@ export const cases = [
 		failure: /persistent EPERM exhausts TERM and KILL budgets instead of reporting success/,
 	},
 	{
+		name: "Build CLI preserves invalid argument exit 1 (#833)",
+		file: "scripts/build-native.mjs",
+		before: "process.exitCode = await runCli(process.argv.slice(2));",
+		after: "process.exitCode = 0;",
+		check: "test/build-native.test.mjs",
+		failure: /the actual CLI and symlink refuse invalid architecture with exit 1/,
+	},
+	{
 		name: "CDP snapshot maps wire refs to model refs (#708)",
 		file: "src/cdp.ts",
 		before: "target.ref = modelRefByWire.get(target.ref)!;",
@@ -108,6 +116,14 @@ export const cases = [
 		after: "}, SETUP_KILL_GRACE_MS * 100).unref();",
 		check: "test/stdio-helper-clients.test.mjs",
 		failure: /Expected values to be strictly deep-equal/,
+	},
+	{
+		name: "Linux stdin failure rejects every pending command (#833)",
+		file: "src/platform/linux/helper.ts",
+		before: 'if (this.child === child) this.discardChild(error);',
+		after: '/* stream failure ignored */',
+		check: "test/platform-linux.test.mjs",
+		failure: /closed helper stdin rejects all requests without an uncaught stream error/,
 	},
 	{
 		name: "Linux writable cache target (harness c59eb11)",
