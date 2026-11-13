@@ -209,7 +209,8 @@ Offline comparison and verification boundaries:
   center was re-read as `(100, 100)`. Covered, disconnected and disabled targets delivered zero
   upstream events and raised `JevStalePage`. Current CDP rejected a missing resolved node; its
   covered-target function still invoked `click`. Disabled native-button semantics were NOT
-  modeled. All five assertions passed. These are deliberately synthetic local controls, not
+  modeled. All five assertions passed again after integrating harness commit
+  `29a0200180a08f8ef2576a57b4e774717f07bbc6` (2026-11-12). These are deliberately synthetic local controls, not
   real-page measurements, real layout/hit-testing, or the whole `act_ui` policy/state pipeline.
 - No Chromium executable was available at the checked standard local paths. No browser install,
   desktop input, real-page login or provider call was performed. Task-success rate, token/cost
