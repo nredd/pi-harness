@@ -29,7 +29,6 @@ LAUNCHER_PACKAGE_ARGS = {
     ),
 }
 BUN_COVERAGE_ARGS = [
-    "--coverage",
     "--coverage.provider=istanbul",
     "--coverage.reporter=text",
     "--coverage.reporter=lcov",
@@ -129,7 +128,7 @@ def test_bun_launcher_owns_istanbul_reporters_and_directory(tmp_path: Path) -> N
     """
     argv = launch_bun(tmp_path, "--maxWorkers=1")
     assert argv[0] == "--bun"
-    assert argv[2:] == ["run", "--maxWorkers=1", *BUN_COVERAGE_ARGS]
+    assert argv[2:] == ["run", "--coverage", "--maxWorkers=1", *BUN_COVERAGE_ARGS]
     canary = launch_bun(tmp_path, "test/resource-loader-home.test.ts", "--coverage.enabled=false")
     assert canary[2:] == ["run", "test/resource-loader-home.test.ts", "--coverage.enabled=false"]
 

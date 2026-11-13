@@ -10,6 +10,7 @@ import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, test, vi } from "vitest";
+import { parseCLI } from "vitest/node";
 
 interface SpawnCall {
 	command: string;
@@ -35,7 +36,6 @@ const { dispatch, isolatedHomeEnv, main, toolchainHomeEnv } = await import("./ru
 
 const VITEST = fileURLToPath(new URL("../node_modules/vitest/vitest.mjs", import.meta.url));
 const BUN_COVERAGE = [
-	"--coverage",
 	"--coverage.provider=istanbul",
 	"--coverage.reporter=text",
 	"--coverage.reporter=lcov",
@@ -107,13 +107,32 @@ test("bun appends the Istanbul coverage arguments after the package arguments", 
 	assert.equal(main(["bun", "--maxWorkers=1"], {}), 0);
 	const call = onlyCall();
 	assert.equal(call.command, "bun");
-	assert.deepEqual(call.args, ["--bun", VITEST, "run", "--maxWorkers=1", ...BUN_COVERAGE]);
+	assert.deepEqual(call.args, ["--bun", VITEST, "run", "--coverage", "--maxWorkers=1", ...BUN_COVERAGE]);
+});
+
+test("bun activates coverage first so a caller's reporter survives Vitest's own CLI parser", () => {
+	main(["bun", "--coverage.reporter=json", "--coverage"], {});
+	const args = onlyCall().args.slice(onlyCall().args.indexOf("run") + 1);
+	assert.deepEqual(args.slice(0, 2), ["--coverage", "--coverage.reporter=json"]);
+	assert.equal(args.filter((arg) => arg === "--coverage").length, 1);
+	const { coverage } = parseCLI(["vitest", "run", ...args]).options;
+	assert.deepEqual(coverage, {
+		enabled: true,
+		reporter: ["json", "text", "lcov", "json-summary"],
+		provider: "istanbul",
+		reportsDirectory: "coverage/bun",
+	});
+});
+
+test("the pre-fix order erased a caller's reporter in Vitest's parser", () => {
+	const old = ["--coverage.reporter=json", "--coverage", "--coverage.provider=istanbul"];
+	assert.deepEqual(parseCLI(["vitest", "run", ...old]).options.coverage, { enabled: true, provider: "istanbul" });
 });
 
 test("separate Bun signals retain an explicit report directory without changing the instrument", () => {
 	const directory = "--coverage.reportsDirectory=coverage/workflow-examples-bun";
 	main(["bun", directory], {});
-	assert.deepEqual(onlyCall().args, ["--bun", VITEST, "run", ...BUN_COVERAGE.slice(0, -1), directory]);
+	assert.deepEqual(onlyCall().args, ["--bun", VITEST, "run", "--coverage", ...BUN_COVERAGE.slice(0, -1), directory]);
 });
 
 test("only the Bun engine marks its child with the pinned-runtime expectation", () => {
