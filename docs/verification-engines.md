@@ -20,7 +20,20 @@ The separate approved D7 toolchain upgrade selects Bun 1.4.4; evidence and remai
 | `subagents` | Full Vitest + guard | Full Vitest + guard |
 | `subagents` workflow examples | Dedicated full Vitest + guard through launcher | Dedicated full Vitest + guard through launcher, independent report directory |
 | `computer-use` | Full Vitest + guard, one file at a time, including the platform/opt-in-gated native and live suites (#347); `check-linux-live.mjs` only starts the D-Bus session its Vitest scenario runs in | Not run |
-| `integration/probes`, `scripts/import_audit.test.ts`, `scripts/check-biome-paths.test.mjs`, `scripts/run-vitest.test.ts`, `scripts/router_contract.test.mjs` | Vitest + guard, V8 coverage (#347) | Not run (import audit remains Node-only) |
+| `integration/probes`, `scripts/vitest.config.ts` suites (import audit, Biome paths, producer configs, launcher, router contract) | Vitest + guard, V8 coverage (#347) | Same explicit suites + guard, compatibility only (no coverage overwrite) |
+
+`make check-probes` and `make check-import-audit` run both engines in credential-free `env -i`
+environments with disposable homes and the same explicit config file lists, never live/provider/desktop
+globs. Node retains the enforced primary V8 coverage inventory and floors; Bun runs with
+`--coverage.enabled=false`, so it cannot replace those reports or claim a new measured signal.
+The import audit uses TypeScript's asynchronous `tsgo` transport on both engines: its synchronous
+transport relies on Node-private pipe descriptors absent on Bun. CLI JSON, parser diagnostics and
+failure exits are unchanged. Filesystem-failure probes mock the ESM boundary on both engines rather
+than relying on Node's `syncBuiltinESMExports`; no case is skipped or retried for Bun.
+The computer-use wrappers were already migrated by [#434](https://github.com/nredd/pi-harness/pull/434):
+Linux native cases remain Linux/cargo-gated, macOS live remains `PI_COMPUTER_USE_LIVE=1`/darwin-gated,
+Windows scripts remain `PI_CU_WINDOWS_SCRIPTS=1`-gated, and Linux live remains inside its opt-in D-Bus
+launcher. Those suites and the #320 session-kit matcher are not widened by these Make targets.
 
 Owned Vitest configs cap workers at two (sampler and computer-use: one), including direct Node/Bun
 Vitest runs. These are per-gate defaults, not a host-wide concurrency limit.

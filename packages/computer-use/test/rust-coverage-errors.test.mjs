@@ -147,17 +147,19 @@ test("running the script as the entry point prints the error and sets the exit c
 		assert.deepEqual(error.mock.calls, [["--crate must be linux or windows"]]);
 		vi.resetModules();
 		error.mockClear();
-		process.exitCode = undefined;
+		// Bun retains a prior numeric exit code when assigned undefined; use a portable sentinel.
+		process.exitCode = 0;
 		process.argv = [argv[0], undefined, "--crate", "bogus"];
 		await import("../scripts/rust-coverage.mjs");
 		assert.equal(error.mock.calls.length, 0);
-		assert.equal(process.exitCode, undefined);
+		assert.equal(process.exitCode, 0);
 	} finally {
 		process.argv = argv;
-		process.exitCode = exitCode;
+		process.exitCode = exitCode ?? 0;
 		error.mockRestore();
 		vi.resetModules();
 	}
+	assert.equal(process.exitCode, exitCode ?? 0, "entry test must restore the caller's exit status");
 });
 
 test("a symlinked entry path still runs the script instead of silently exiting 0", async () => {
@@ -168,15 +170,16 @@ test("a symlinked entry path still runs the script instead of silently exiting 0
 		const link = path.join(output, "linked-rust-coverage.mjs");
 		symlinkSync(scriptPath, link);
 		vi.resetModules();
-		process.exitCode = undefined;
+		process.exitCode = 0;
 		process.argv = [argv[0], link, "--crate", "bogus"];
 		await import("../scripts/rust-coverage.mjs");
 		assert.equal(process.exitCode, 1);
 		assert.deepEqual(error.mock.calls, [["--crate must be linux or windows"]]);
 	} finally {
 		process.argv = argv;
-		process.exitCode = exitCode;
+		process.exitCode = exitCode ?? 0;
 		error.mockRestore();
 		vi.resetModules();
 	}
+	assert.equal(process.exitCode, exitCode ?? 0, "symlink test must restore the caller's exit status");
 });

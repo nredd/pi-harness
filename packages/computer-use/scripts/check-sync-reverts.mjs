@@ -164,6 +164,15 @@ const cases = [
 		failure: /AssertionError|false == true/,
 	},
 	{
+		name: "Rust coverage numeric exit-code sentinel (#807)",
+		file: "test/rust-coverage-errors.test.mjs",
+		before: "process.exitCode = 0;\n\t\tprocess.argv = [argv[0], undefined,",
+		after: "process.exitCode = undefined;\n\t\tprocess.argv = [argv[0], undefined,",
+		check: "test/rust-coverage-errors.test.mjs",
+		failure: /Expected values to be strictly equal/,
+
+	},
+	{
 		name: "Rust protocol/state Cargo registration (#801)",
 		file: "native/linux/bridge-rs/tests/protocol_state_errors.rs",
 		before: "#[test]\nfn every_error_has_the_stable_wire_code_and_display()",
