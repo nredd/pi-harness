@@ -332,6 +332,7 @@ def test_write_github_output_keeps_input_flags_independent(
         "scripts/wsl2_setup.sh",
         "scripts/wsl2_shell.ps1",
         "scripts/ci_paths.py",
+        "scripts/install_gh_linux.py",
         "scripts/install_gh_linux.sh",
         "scripts/install_wsl_owned_tools.sh",
         "Makefile",
