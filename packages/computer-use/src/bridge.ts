@@ -2424,7 +2424,7 @@ async function persistentBrowserProfile(configured: string): Promise<string> {
 		path.join(home, ".config/google-chrome-beta"),
 		path.join(home, ".config/google-chrome-unstable"),
 		path.join(home, ".config/helium"),
-		path.join(process.env.XDG_CONFIG_HOME || path.join(home, ".config"), "google-chrome"),
+		...[process.env.XDG_CONFIG_HOME, process.env.CHROME_CONFIG_HOME].filter((root): root is string => Boolean(root)).flatMap((root) => ["google-chrome", "google-chrome-beta", "google-chrome-unstable"].map((name) => path.resolve(root, name))),
 		path.join(process.env.XDG_CONFIG_HOME || path.join(home, ".config"), "chromium"),
 		path.join(process.env.XDG_CONFIG_HOME || path.join(home, ".config"), "helium"),
 	];

@@ -15,7 +15,7 @@ let root;
 let profile;
 let saved;
 let home;
-const keys = ["PI_CODING_AGENT_DIR", "PI_COMPUTER_USE_CHROME_EXECUTABLE", "PI_COMPUTER_USE_CDP_PORT", "FAKE_BROWSER_LOG", "FAKE_BROWSER_NO_CDP", "XDG_CONFIG_HOME"];
+const keys = ["PI_CODING_AGENT_DIR", "PI_COMPUTER_USE_CHROME_EXECUTABLE", "PI_COMPUTER_USE_CDP_PORT", "FAKE_BROWSER_LOG", "FAKE_BROWSER_NO_CDP", "XDG_CONFIG_HOME", "CHROME_CONFIG_HOME"];
 
 /** Write the isolated user-global opt-in, then reload it. */
 function configure(value = profile) {
@@ -145,6 +145,16 @@ describe.skipIf(process.platform === "win32")("persistent managed profile", () =
 			await assert.rejects(testing.persistentBrowserProfile(directory), /default browser/);
 		}
 		assert.equal(await testing.persistentBrowserProfile("~/dedicated-profile"), profile);
+	});
+
+	test.each(["XDG_CONFIG_HOME", "CHROME_CONFIG_HOME"])("rejects Chrome channel default roots under %s", async (variable) => {
+		const configRoot = path.join(home, variable);
+		process.env[variable] = configRoot;
+		for (const channel of ["google-chrome", "google-chrome-beta", "google-chrome-unstable"]) {
+			const directory = path.join(configRoot, channel);
+			fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+			await assert.rejects(testing.persistentBrowserProfile(directory), /default browser/);
+		}
 	});
 
 	test.each([".pi-computer-use.lock", "SingletonLock", "SingletonCookie", "SingletonSocket"])("refuses existing %s without removing it or starting a browser", async (name) => {
