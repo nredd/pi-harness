@@ -49,7 +49,7 @@ def compiled_render(tmp_path_factory: pytest.TempPathFactory) -> Path:
     bun = shutil.which("bun")
     assert bun, "Pinned Bun is required"
     assert (
-        subprocess.check_output([bun, "--version"], text=True).strip()
+        subprocess.check_output([bun, "--version"], text=True, stderr=subprocess.STDOUT).strip()
         == (ROOT / ".bun-version").read_text().strip()
     )
     root = tmp_path_factory.mktemp("compiled-render")
@@ -142,6 +142,7 @@ def test_benchmark_make_runtime_identity() -> None:
                 f"RUNTIME={runtime}",
             ],
             text=True,
+            stderr=subprocess.STDOUT,
         )
         assert f'--runtime "{runtime}"' in result
         assert 'scenarios/bench --stack "stacks/personal.json"' in result
