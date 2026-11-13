@@ -373,6 +373,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $env:PYTHONPATH = 'integration'
+          # The verifier intentionally uses only explicit OpenSSL CA defaults. Windows Python has none.
+          # Select the runner's existing public Git CA bundle; do not change system trust or bypass TLS.
+          $env:SSL_CERT_FILE = Join-Path $env:ProgramFiles 'Git\mingw64\etc\ssl\certs\ca-bundle.crt'
+          if (!(Test-Path -PathType Leaf $env:SSL_CERT_FILE)) { throw 'Missing Git public CA bundle' }
           uv run --no-project --python (Get-Content .python-version) python -m harness.release --verify-root-overrides --root .
       - name: Install pinned native compiler and LLVM tools
         run: |

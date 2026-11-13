@@ -57,6 +57,9 @@ def test_windows_producer_uses_native_x64_and_preserves_reports() -> None:
     )
     verify = commands.index("python -m harness.release --verify-root-overrides --root .")
     assert verify < commands.index("npm ci --ignore-scripts")
+    assert "$env:SSL_CERT_FILE = Join-Path $env:ProgramFiles" in commands
+    assert r"Git\mingw64\etc\ssl\certs\ca-bundle.crt" in commands
+    assert "Test-Path -PathType Leaf $env:SSL_CERT_FILE" in commands
 
 
 @pytest.mark.parametrize("result", ["success", "failure", "cancelled", "skipped", ""])

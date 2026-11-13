@@ -22,7 +22,11 @@ scope and remaining limitations are documented [here](../packages/computer-use/d
 `computer-use Rust (windows-x64)` separately uses hosted `windows-2025`, pinned Rust/LLVM and
 cargo-llvm-cov versions above, and two build jobs. It checks a native x64 MSVC compiler, formatting,
 all-target compilation, Clippy, docs, real crate tests and raw LLVM JSON/LCOV, then runs the opt-in
-Windows build/install routing tests with disposable destinations. It uploads source-bound metadata
+Windows build/install routing tests with disposable destinations. Before npm installation it verifies
+core overrides with the pinned Python and the runner's existing Git public CA bundle via the
+verifier's supported `SSL_CERT_FILE` input (Windows Python has no compiled-in OpenSSL CA path).
+A missing bundle fails closed; system trust is not modified and TLS checks stay enabled.
+It uploads source-bound metadata
 and raw reports as `computer-use-rust-windows-x64`. The Ubuntu fan-in additionally depends on this
 job and refuses any non-success outcome when computer-use is selected. This preserves the twelve
 required check names, without depending on a WSL slot, Linux producer or ARM64 pool activation.
