@@ -87,7 +87,7 @@ function helperAction(request: PlatformActRequest): Record<string, unknown> {
 	return { ...request, target: request.target.focus, params: { ...request.params, preserveFocus: true } };
 }
 
-async function ensureReady(_ctx: unknown, state: PlatformReadyState, signal?: AbortSignal): Promise<PlatformReadyState> {
+async function ensureReadyWithTransport(windowsHelper: WindowsHelperTransport, state: PlatformReadyState, signal?: AbortSignal): Promise<PlatformReadyState> {
 	await windowsHelper.ensureInstalled(signal);
 	const diagnostics = await windowsHelper.command<any>("diagnostics", {}, { signal, timeoutMs: 5_000 });
 	if (diagnostics?.protocolVersion !== WINDOWS_HELPER_PROTOCOL_VERSION) {
@@ -97,10 +97,19 @@ async function ensureReady(_ctx: unknown, state: PlatformReadyState, signal?: Ab
 	return { ...state, lastPermissionCheckAt: Date.now(), helperDiagnostics: diagnostics };
 }
 
-export const windowsBackend: ComputerUsePlatformBackend = {
+/** Stdio transport surface shared by native Windows and the opt-in WSL guest. */
+export interface WindowsHelperTransport {
+	ensureInstalled(signal?: AbortSignal): Promise<void>;
+	command<T>(cmd: string, args?: Record<string, unknown>, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<T>;
+	dispose(): void;
+}
+
+/** Keep Windows command mapping and DPI-aware coordinates identical across transports. */
+export function createWindowsBackend(windowsHelper: WindowsHelperTransport): ComputerUsePlatformBackend {
+	return {
 	name: "windows",
 	shutdown(): void { windowsHelper.dispose(); },
-	ensureReady,
+	ensureReady: (_ctx, state, signal) => ensureReadyWithTransport(windowsHelper, state, signal),
 	async listApps(signal?: AbortSignal): Promise<PlatformApp[]> {
 		return appsFromRoots(parseRoots(await windowsHelper.command("listRoots", {}, { signal })));
 	},
@@ -140,3 +149,6 @@ export const windowsBackend: ComputerUsePlatformBackend = {
 		return true;
 	},
 };
+}
+
+export const windowsBackend = createWindowsBackend(windowsHelper);

@@ -1466,6 +1466,26 @@
 			}
 		},
 		{
+			"id": "wsl-host-transport",
+			"purpose": "Opt into existing Windows helper over bounded WSL stdio with an executable digest and host-volume lease; native desktop acceptance remains outstanding",
+			"rows": ["WSL host transport"],
+			"files": [
+				"docs/content/docs/how-to-guides/linux.mdx",
+				"docs/wsl-host-transport.md",
+				"src/platform/index.ts",
+				"src/platform/linux/wsl-helper.ts",
+				"src/platform/windows/backend.ts",
+				"test/wsl-host-helper.test.mjs"
+			],
+			"check": "test/wsl-host-helper.test.mjs",
+			"dropControls": ["WSL host executable pin (#673)"],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#673; reuse upstream-derived Windows mapping; not filed upstream"
+			}
+		},
+		{
 			"id": "wsl2-diagnostics",
 			"purpose": "Say Windows host windows are unreachable from a WSL2 guest when Linux finds no roots or frontmost window, instead of the bare errors",
 			"rows": [
@@ -1515,6 +1535,7 @@
 		"docs/rust-protocol-state-coverage.md",
 		"docs/src/components/brand.tsx",
 		"docs/swift-ref-look-coverage.md",
+		"docs/wsl-host-transport.md",
 		"extensions/computer-use.ts",
 		"native/linux/bridge-rs/tests/protocol_state_errors.rs",
 		"native/macos/agent_cursor_motion.swift",
@@ -1575,11 +1596,13 @@
 		"src/platform/index.ts",
 		"src/platform/linux/backend.ts",
 		"src/platform/linux/helper.ts",
+		"src/platform/linux/wsl-helper.ts",
 		"src/platform/linux/wsl.ts",
 		"src/platform/macos/backend.ts",
 		"src/platform/macos/helper.ts",
 		"src/platform/macos/permissions.ts",
 		"src/platform/types.ts",
+		"src/platform/windows/backend.ts",
 		"src/platform/windows/helper.ts",
 		"src/runtime.ts",
 		"src/state.ts",
@@ -1664,6 +1687,7 @@
 		"test/windows-build-scripts.test.mjs",
 		"test/windows-helper-client.test.mjs",
 		"test/wsl-detection.test.mjs",
+		"test/wsl-host-helper.test.mjs",
 		"test/wsl2-diagnostics.test.mjs",
 		"tsconfig.signing.json",
 		"vitest.async.config.ts",

@@ -26,6 +26,8 @@ without waiting for the command deadline. Cancellation clears the local pending 
 listener; late replies are ignored. It does not stop native work already sent or kill the helper.
 Deterministic client tests use scripted stdio helpers, not Windows UI or native coverage.
 
+WSL users can explicitly select the existing Windows host helper with a digest pin and shared host-volume lease; see [WSL host transport](./docs/wsl-host-transport.md). Defaults remain Linux/WSLg. No interop or secure-runner policy changes are made; actual Windows desktop acceptance is NOT RUN.
+
 ## Tools
 
 State-consuming desktop tools require an observation; missing or blank `stateId` fails with

@@ -54,6 +54,7 @@
     "UPSTREAM.md",
     "LICENSE",
     "docs/macos-root-targeting.md",
+    "docs/wsl-host-transport.md",
     "docs/content/docs",
     "docs/README.md"
   ],

@@ -502,6 +502,8 @@ COMPUTER_USE_CONTRACT = PackageContract(
         "README.md",
         "UPSTREAM.md",
         "package.json",
+        "docs/wsl-host-transport.md",
+        "src/platform/linux/wsl-helper.ts",
         "extensions/computer-use.ts",
         "scripts/build-native.mjs",
         "scripts/setup-helper.mjs",
@@ -525,14 +527,14 @@ COMPUTER_USE_CONTRACT = PackageContract(
     ),
     # macOS ships prebuilts; Linux ships only the locked Rust source (`Cargo.toml`, `Cargo.lock`, `src/*.rs`,
     # no `target/` or `tests/`) that `setup-helper.mjs` builds on opt-in. No `prebuilt/linux` or
-    # `prebuilt/windows` pattern exists and no Windows crate or doc is packed. The
+    # `prebuilt/windows` pattern exists and no Windows crate or binary is packed. The
     # `src/platform` pattern is source the TypeScript backends reference. `scenario_computer_use`
     # additionally parses each prebuilt's Mach-O header and mode from the tarball.
     allowed=(
         re.compile(r"^(LICENSE|README\.md|package\.json)$"),
         re.compile(r"^assets/reference/img\.jpg$"),
         re.compile(r"^UPSTREAM\.md$"),
-        re.compile(r"^docs/(?:README|macos-root-targeting)\.md$"),
+        re.compile(r"^docs/(?:README|macos-root-targeting|wsl-host-transport)\.md$"),
         re.compile(r"^docs/content/docs/(?:[a-z-]+/)*[a-z-]+\.(?:mdx|json)$"),
         re.compile(r"^extensions/[a-z-]+\.ts$"),
         re.compile(
@@ -605,6 +607,7 @@ COMPUTER_USE_CONTRACT = PackageContract(
         "docs/content/docs/tutorials/index.mdx",
         "docs/content/docs/tutorials/meta.json",
         "docs/macos-root-targeting.md",
+        "docs/wsl-host-transport.md",
         "extensions/computer-use.ts",
         "native/linux/bridge-rs/Cargo.lock",
         "native/linux/bridge-rs/Cargo.toml",
@@ -642,6 +645,7 @@ COMPUTER_USE_CONTRACT = PackageContract(
         "src/platform/index.ts",
         "src/platform/linux/backend.ts",
         "src/platform/linux/helper.ts",
+        "src/platform/linux/wsl-helper.ts",
         "src/platform/linux/wsl.ts",
         "src/platform/macos/backend.ts",
         "src/platform/macos/browser.ts",

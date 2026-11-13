@@ -253,8 +253,8 @@ test("real documentation drop control rejects the mutant through a symlinked san
 				...quiet,
 				spawn: (command, args, options) => {
 					calls++;
-					if (calls > 3) throw new Error("documentation control completed");
-					if (calls === 3) {
+					if (calls > 4) throw new Error("documentation control completed");
+					if (calls === 4) {
 						const alias = path.join(scratch(), "package-alias");
 						symlinkSync(options.cwd, alias, "dir");
 						args[1] = path.join(alias, "scripts/check-docs.mjs");
@@ -265,7 +265,7 @@ test("real documentation drop control rejects the mutant through a symlinked san
 			}),
 		/documentation control completed/,
 	);
-	assert.equal(calls, 4);
+	assert.equal(calls, 5);
 });
 
 test("revert gate refuses surviving mutations, wrong failures, launch errors and missing anchors, cleaning every sandbox", () => {

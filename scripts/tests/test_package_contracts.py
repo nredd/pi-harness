@@ -1455,6 +1455,23 @@ def test_real_workspace_tarballs_pass_audit(
     assert artifact.integrity.startswith("sha512-")
 
 
+@pytest.mark.parametrize("file", ["docs/wsl-host-transport.md", "src/platform/linux/wsl-helper.ts"])
+def test_computer_use_contract_requires_wsl_transport(file: str) -> None:
+    """Require the imported transport and its packed README-linked safety documentation.
+
+    Parameters:
+        file (str): Exact transport payload path removed by the negative control.
+    """
+    contract = pc.COMPUTER_USE_CONTRACT
+    assert file in contract.packed_files
+    assert pc.audit_files(contract, list(contract.packed_files)) == []
+    missing = [path for path in contract.packed_files if path != file]
+    assert pc.audit_files(contract, missing) == [
+        f"missing required file '{file}'",
+        f"packed file '{file}' required by the '{contract.name}' contract is missing",
+    ]
+
+
 def test_router_contract_requires_only_the_reset_schema_not_private_state() -> None:
     """Require the shipped schema without admitting private operational records.
 
@@ -3100,7 +3117,7 @@ def test_shared_runner_script_exits_with_main_status(tmp_path: Path) -> None:
 def test_audit_files_computer_use_exact_payload() -> None:
     """The pinned payload passes; stray, missing and duplicated paths are each reported."""
     packed = list(pc.COMPUTER_USE_CONTRACT.packed_files)
-    assert len(packed) == 93
+    assert len(packed) == 95
     assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed]) == []
     assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed, "src/stray.ts"])
     missing = pc.audit_files(pc.COMPUTER_USE_CONTRACT, [name for name in packed if name != "src/view.ts"])

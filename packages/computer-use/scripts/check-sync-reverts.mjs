@@ -276,6 +276,14 @@ export const cases = [
 		failure: /Missing expected rejection/,
 	},
 	{
+		name: "WSL host executable pin (#673)",
+		file: "src/platform/linux/wsl-helper.ts",
+		before: 'if (hash.digest("hex") !== this.config.sha256)',
+		after: 'if (false)',
+		check: "test/wsl-host-helper.test.mjs",
+		failure: /Missing expected rejection/,
+	},
+	{
 		name: "WSL2 empty-roots hint (#672)",
 		file: "src/platform/linux/backend.ts",
 		before: "emptyRootsHint: () => wslNoWindowsHint(),",
