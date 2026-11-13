@@ -3927,6 +3927,12 @@ function relabelFromResponse(record, message) {
   if (!physical) return;
   record.invocation ??= {};
   Object.assign(record.invocation, physical);
+  const ran = message?.thinkingLevel;
+  if (ran) {
+    const requested = record.invocation.requestedThinking ?? record.invocation.thinking;
+    record.invocation.thinking = ran;
+    record.invocation.requestedThinking = requested && requested !== ran ? requested : void 0;
+  }
   if ((record.modelTier?.kind === "routed" || record.modelTier?.kind === "static") && record.modelTier.answered !== physical.modelId) {
     record.modelTier = { ...record.modelTier, answered: physical.modelId };
     if (record.outputFile) appendModelTierEntry(record.outputFile, record.id, record.modelTier);
@@ -6747,4 +6753,4 @@ export {
   RESULT_MAX_CHARS,
   ConversationViewer
 };
-//# sourceMappingURL=chunk-7A7BBITP.ts.map
+//# sourceMappingURL=chunk-MAQH3MEG.ts.map
