@@ -701,11 +701,14 @@ Flake policy (migration plan section 7):
   `nredd/ci-runners#4` is merged. Deployment is observed, never assumed: in the supervisor-log step the
   runner owner records the `nredd/ci-runners` commit the supervisor was running at the kill and confirms
   it predates the #4 merge commit. If it includes #4 or cannot be determined, treat as deployed and
-  block, whatever #761 says. A deploy comment on #761 without a time uses the comment's own timestamp;
-  a kill after it blocks. The failed job proves nothing about the repository. To triage: read the annotation
-  (`gh api repos/nredd/pi-harness/check-runs/<job id>/annotations`), then the supervisor log for that exact runner (runner owner only). Before deployment, and only with BOTH
-  matching (annotation, plus a supervisor kill of that runner while the job ran), ONE fresh rerun per
-  affected whole job is allowed when nothing else failed; it must pass, and both attempts stay in the
+  block, whatever #761 says. Any deploy comment on #761 sets the deploy time (its stated time, else its
+  own timestamp); a kill at or after it blocks, even if the recorded commit predates #4. Either signal
+  alone blocks. The failed job proves nothing about the repository. To triage: read the annotation
+  (`gh api repos/nredd/pi-harness/check-runs/<job id>/annotations`), then the supervisor log for that
+  exact runner (runner owner only). ONE fresh rerun per affected whole job is allowed only with ALL
+  THREE recorded (the annotation; a supervisor kill of that runner while the job ran; the supervisor
+  commit at the kill, confirmed to predate the #4 merge commit), and when nothing else failed; it must
+  pass, and both attempts stay in the
   history. Jobs lost to one supervisor event are one incident. Until the rerun passes, the cell is a failed
   required check. A matching annotation without a supervisor-log kill of that runner, a log-less failure
   without the annotation, or any other failure is a new signature and blocks. Record each occurrence on
