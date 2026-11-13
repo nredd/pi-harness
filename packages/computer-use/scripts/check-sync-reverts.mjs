@@ -652,6 +652,14 @@ const cases = [
 		failure: /is not supported on|did not match|must be of type string/,
 	},
 	{
+		name: "managed browser fixture clock waits for startup (#817)",
+		file: "test/managed-browser-launch.test.mjs",
+		before: 'fs.existsSync(path.join(scratch, "launch.json")) ? (skew += 6_000) : 0',
+		after: "skew += 6_000",
+		check: "test/managed-browser-launch.test.mjs",
+		failure: /timeout fixture clock must not advance before child startup acknowledgement/,
+	},
+	{
 		name: "managed browser profile dir is owner-only (#519)",
 		file: "src/bridge.ts",
 		before: "const profileDir = await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`));",

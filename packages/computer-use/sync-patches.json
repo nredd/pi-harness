@@ -776,6 +776,26 @@
 			}
 		},
 		{
+			"id": "managed-browser-fixture-clock",
+			"purpose": "Start the timeout fixture's virtual clock only after its real fake-browser child records launch.json, so virtual expiry cannot kill the child before startup acknowledgement",
+			"rows": [
+				"Managed browser fixture clock"
+			],
+			"files": [
+				"scripts/check-sync-reverts.mjs",
+				"test/managed-browser-launch.test.mjs"
+			],
+			"check": "test/managed-browser-launch.test.mjs",
+			"dropControls": [
+				"managed browser fixture clock waits for startup (#817)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#817; deterministic harness fixture ordering, not filed upstream"
+			}
+		},
+		{
 			"id": "managed-browser-headless",
 			"purpose": "Launch the managed Linux browser headless when no DISPLAY or WAYLAND_DISPLAY exists, with an override variable; --no-sandbox only for root (deviates from upstream, which always adds it)",
 			"rows": [
