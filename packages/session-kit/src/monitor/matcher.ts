@@ -1,23 +1,35 @@
 /**
- * Isolate model-provided backtracking regexes from pi's event loop. One worker per matching monitor,
- * one line in flight, 100ms per test (excluding worker startup, which has a 1s deadline). Queued
+ * Isolate model-provided backtracking regexes from pi's event loop. One child per matching monitor,
+ * supervising a worker so IPC disconnect remains responsive even during catastrophic backtracking.
+ * One line in flight, 100ms per test (excluding worker startup, which has a 1s deadline). Queued
  * text plus per-item overhead is capped at 256KiB; final draining is bounded to 1s. On timeout, overflow or worker failure, disable matching for this monitor
  * and conservatively mark pending/future lines matched: output still wakes rather than losing alerts.
- * Normal tests retain JS RegExp semantics and line ordering. close() interrupts work and awaits worker
- * termination; drain() waits for queued callbacks before the monitor's final output is delivered.
+ * Normal tests retain JS RegExp semantics and line ordering. close() kills and reaps the child
+ * (including its worker); drain() waits for queued callbacks before the monitor's final output is delivered.
  * Every deadline runs on the injected `Clock`, the manager's, so a scheduler-controlled clock decides
  * when a worker counts as late rather than how loaded the host happens to be.
  */
-import { Worker } from "node:worker_threads";
+import { type ChildProcess, spawn } from "node:child_process";
 import { type Clock, realClock, type TimerHandle } from "../clock.ts";
 
 export const MATCH_TIMEOUT_MS = 100;
 export const MATCH_QUEUE_BYTES = 256 * 1024;
 const STARTUP_TIMEOUT_MS = 1000;
-const SOURCE = `
+// Keep the child event loop free to observe parent death even while a regex spins. Killing the
+// process interrupts its worker without calling the engine-dependent Worker.terminate() API.
+const REGEX_SOURCE = `
 const { parentPort, workerData } = require('node:worker_threads');
 const regex = new RegExp(workerData);
 parentPort.on('message', text => parentPort.postMessage(regex.test(text)));
+`;
+const SOURCE = `
+const { Worker } = require('node:worker_threads');
+const worker = new Worker(${JSON.stringify(REGEX_SOURCE)}, { eval: true, workerData: JSON.parse(process.argv[1]) });
+worker.once('online', () => process.send('ready'));
+worker.on('message', matched => process.send(matched));
+worker.on('error', () => process.exit(1));
+process.on('message', text => worker.postMessage(text));
+process.on('disconnect', () => process.kill(process.pid, 'SIGKILL'));
 `;
 
 interface Pending {
@@ -27,7 +39,7 @@ interface Pending {
 }
 
 export class BoundedMatcher {
-	private worker: Worker | undefined;
+	private worker: ChildProcess | undefined;
 	private ready = false;
 	private active: Pending | undefined;
 	private readonly queue: Pending[] = [];
@@ -40,15 +52,32 @@ export class BoundedMatcher {
 		source: string,
 		private readonly clock: Clock = realClock,
 	) {
-		this.worker = new Worker(SOURCE, { eval: true, workerData: source });
-		this.timer = this.clock.setTimeout(() => this.disable(), STARTUP_TIMEOUT_MS);
-		this.worker.once("online", () => {
-			if (!this.worker) return;
-			this.timer?.cancel();
-			this.ready = true;
-			this.pump();
+		this.worker = spawn(process.execPath, ["-e", SOURCE, JSON.stringify(source)], {
+			stdio: ["ignore", "ignore", "ignore", "ipc"],
+			// A compiled Bun host must act as an interpreter, not re-enter its bundled Pi entrypoint.
+			// https://bun.com/docs/bundler/executables#act-as-the-bun-cli
+			env: { ...process.env, BUN_BE_BUN: "1" },
 		});
-		this.worker.on("message", (matched: boolean) => {
+		const worker = this.worker;
+		this.termination = new Promise<void>((resolve) => {
+			const finished = () => {
+				this.disable();
+				resolve();
+			};
+			// Reaping is complete at exit; Node may omit close after an explicit IPC disconnect.
+			// Failed spawns have no exit event, so also handle close.
+			worker.once("exit", finished);
+			worker.once("close", finished);
+		});
+		this.timer = this.clock.setTimeout(() => this.disable(), STARTUP_TIMEOUT_MS);
+		this.worker.on("message", (matched: boolean | "ready") => {
+			if (matched === "ready") {
+				if (!this.worker) return;
+				this.timer?.cancel();
+				this.ready = true;
+				this.pump();
+				return;
+			}
 			if (!this.worker || !this.active) return;
 			this.timer?.cancel();
 			const item = this.active;
@@ -58,7 +87,6 @@ export class BoundedMatcher {
 			this.pump();
 		});
 		this.worker.on("error", () => this.disable());
-		this.worker.on("exit", () => this.disable());
 	}
 
 	test(text: string, done: (matched: boolean) => void): void {
@@ -101,14 +129,14 @@ export class BoundedMatcher {
 			return;
 		}
 		this.timer = this.clock.setTimeout(() => this.disable(), MATCH_TIMEOUT_MS);
-		this.worker.postMessage(this.active.text);
+		this.worker.send(this.active.text);
 	}
 
 	private disable(): void {
 		this.timer?.cancel();
 		const worker = this.worker;
 		this.worker = undefined;
-		if (worker) this.termination = worker.terminate();
+		if (worker) worker.kill("SIGKILL");
 		const pending = this.active ? [this.active, ...this.queue] : [...this.queue];
 		this.active = undefined;
 		this.queue.length = 0;

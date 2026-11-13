@@ -14,7 +14,6 @@ const BUN_COVERAGE_ARGS = [
 	"--coverage.reporter=text",
 	"--coverage.reporter=lcov",
 	"--coverage.reporter=json-summary",
-	"--coverage.reportsDirectory=coverage/bun",
 ];
 // Set for every Bun child so a suite can assert it really runs on the pinned Bun, not a Node fallback.
 const BUN_RUNTIME_ENV = { PI_EXPECT_BUN_RUNTIME: "1" } as const;
@@ -70,9 +69,16 @@ export function toolchainHomeEnv(env: NodeJS.ProcessEnv): Record<string, string>
 export function main(argv: readonly string[], env: NodeJS.ProcessEnv): number {
 	const [engine, ...packageArgs] = argv;
 	if (engine !== "bun" && engine !== "node") throw new Error("Expected engine: node or bun");
+	const directory =
+		[...packageArgs].reverse().find((arg) => arg.startsWith("--coverage.reportsDirectory=")) ??
+		"--coverage.reportsDirectory=coverage/bun";
 	const vitestArgs =
 		engine === "bun" && !packageArgs.includes(COVERAGE_DISABLED_ARG)
-			? [...packageArgs, ...BUN_COVERAGE_ARGS]
+			? [
+					...packageArgs.filter((arg) => !arg.startsWith("--coverage.reportsDirectory=")),
+					...BUN_COVERAGE_ARGS,
+					directory,
+				]
 			: packageArgs;
 	const home = mkdtempSync(join(tmpdir(), "pi-bun-vitest-"));
 	const start = performance.now();

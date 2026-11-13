@@ -141,6 +141,8 @@ export interface RunPrintModeOptions {
   signal?: AbortSignal;
   /** Additional extension paths loaded only for this test run. */
   extensionPaths?: string[];
+  /** Additional real extension factories, e.g. the SDK codemode bridge. */
+  extensionFactories?: ExtensionFactory[];
   /**
    * Load this factory instead of the default-path extension, e.g. a
    * `createSubagentsExtension({ homeDir })` bound to an injected home.
@@ -355,7 +357,7 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
     cwd,
     agentDir,
     additionalExtensionPaths: [...(options.subagentsFactory ? [] : [EXTENSION_PATH]), ...(options.extensionPaths ?? [])],
-    ...(options.subagentsFactory ? { extensionFactories: [options.subagentsFactory] } : {}),
+    extensionFactories: [...(options.subagentsFactory ? [options.subagentsFactory] : []), ...(options.extensionFactories ?? [])],
     systemPromptOverride: () => options.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
     appendSystemPromptOverride: () => [],
     noPromptTemplates: true,

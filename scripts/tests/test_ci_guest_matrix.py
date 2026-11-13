@@ -1829,7 +1829,8 @@ def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> Non
     assert not (WORKFLOW.parent / "wsl2.yml").exists()
     for path in WORKFLOW.parent.glob("*.yml"):
         if path != WORKFLOW:
-            assert "setup-ci-wsl" not in path.read_text()
+            # A control-test workflow may name the action in its path filter without invoking guest setup.
+            assert "uses: ./.github/actions/setup-ci-wsl" not in path.read_text()
             assert "wsl2_run.sh" not in path.read_text()
 
 

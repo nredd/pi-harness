@@ -7,7 +7,8 @@ struct AgentCursorTests {
     @MainActor
     static func main() {
         testMotionLifecycle()
-        testOverlayLifecycle()
+        testLiveGateSelection()
+        CursorLiveGate.run(environment: ProcessInfo.processInfo.environment, overlay: testOverlayLifecycle)
     }
 
     @MainActor
@@ -59,6 +60,26 @@ struct AgentCursorTests {
         expect(distance(renderer.position, expectedPosition) < 0.001, "latest target should supersede in-flight motion")
     }
 
+    /// Exercise selection/refusal with fake callbacks, never real windows, even for the opt-in case.
+    @MainActor
+    private static func testLiveGateSelection() {
+        for environment in [[:], ["PI_COMPUTER_USE_LIVE": ""], ["PI_COMPUTER_USE_LIVE": "0"],
+                            ["PI_COMPUTER_USE_LIVE": "true"], ["PI_COMPUTER_USE_LIVE": " 1"],
+                            ["PI_COMPUTER_USE_LIVE": "1 "]] {
+            var calls = 0
+            var messages: [String] = []
+            CursorLiveGate.run(environment: environment, overlay: { calls += 1 }, report: { messages.append($0) })
+            expect(calls == 0, "non-opt-in environment must not reach the overlay callback")
+            expect(messages == [CursorLiveGate.notRun], "refusal must report the live check as NOT RUN")
+        }
+        var calls = 0
+        var messages: [String] = []
+        CursorLiveGate.run(environment: ["PI_COMPUTER_USE_LIVE": "1"],
+                           overlay: { calls += 1 }, report: { messages.append($0) })
+        expect(calls == 1 && messages.isEmpty, "exact live opt-in must invoke the supplied callback once")
+        print("cursor deterministic motion and fake live-gate checks passed")
+    }
+
     @MainActor
     private static func testOverlayLifecycle() {
         let application = NSApplication.shared
@@ -108,6 +129,20 @@ struct AgentCursorTests {
 
     private static func distance(_ lhs: CGPoint, _ rhs: CGPoint) -> CGFloat {
         hypot(lhs.x - rhs.x, lhs.y - rhs.y)
+    }
+}
+
+/// The only dispatcher to real AppKit lifecycle checks. Default execution remains headless.
+@MainActor
+private enum CursorLiveGate {
+    static let notRun = "NOT RUN: cursor overlay lifecycle (requires PI_COMPUTER_USE_LIVE=1; orders real AppKit windows)"
+
+    static func run(environment: [String: String], overlay: () -> Void, report: (String) -> Void = { print($0) }) {
+        guard environment["PI_COMPUTER_USE_LIVE"] == "1" else {
+            report(notRun)
+            return
+        }
+        overlay()
     }
 }
 

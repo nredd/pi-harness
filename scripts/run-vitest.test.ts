@@ -110,6 +110,12 @@ test("bun appends the Istanbul coverage arguments after the package arguments", 
 	assert.deepEqual(call.args, ["--bun", VITEST, "run", "--maxWorkers=1", ...BUN_COVERAGE]);
 });
 
+test("separate Bun signals retain an explicit report directory without changing the instrument", () => {
+	const directory = "--coverage.reportsDirectory=coverage/workflow-examples-bun";
+	main(["bun", directory], {});
+	assert.deepEqual(onlyCall().args, ["--bun", VITEST, "run", ...BUN_COVERAGE.slice(0, -1), directory]);
+});
+
 test("only the Bun engine marks its child with the pinned-runtime expectation", () => {
 	main(["bun"], {});
 	assert.equal(onlyCall().env.PI_EXPECT_BUN_RUNTIME, "1");
@@ -159,4 +165,21 @@ test("an unknown or missing engine is rejected before any home is created", () =
 		assert.throws(() => main(argv, {}), /Expected engine: node or bun/);
 	}
 	assert.equal(spawn.calls.length, 0);
+});
+
+test("offline Make gates run both engines without replacing primary coverage", () => {
+	const makefile = readFileSync(new URL("../Makefile", import.meta.url), "utf8");
+	for (const [target, launcher] of [
+		["check-probes", "../../scripts/run-vitest.ts"],
+		["check-import-audit", "run-vitest.ts"],
+	]) {
+		const recipe = makefile.split(`${target}:`)[1]?.split("\n\n")[0];
+		assert.ok(recipe);
+		assert.ok(recipe.includes(`node ${launcher} node --coverage`));
+		assert.ok(recipe.includes(`node ${launcher} bun --coverage.enabled=false`));
+		assert.equal(recipe.match(/env -i PATH="\$\$PATH" HOME="\$\$sandbox" PI_OFFLINE=1 PI_NO_LOCAL_LLM=1/g)?.length, 2);
+		assert.equal(recipe.match(/trap 'rm -rf "\$\$sandbox"' EXIT/g)?.length, 2);
+		assert.doesNotMatch(recipe, /PI_CU_LIVE|PI_COMPUTER_USE_LIVE|\*\.test/);
+	}
+	if (process.env.PI_EXPECT_BUN_RUNTIME === "1") assert.ok(process.versions.bun, "Bun gate must not fall back to Node");
 });

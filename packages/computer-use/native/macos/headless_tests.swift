@@ -185,6 +185,28 @@ g.dropElements(owner: "look_b")
 check(g.element(for: base) == nil, "transferred refs drop with the successor look")
 check(AXRefStore().storeWindow(el) != w1, "another store (helper process) never reissues the same ref")
 
+// Pure US-key policy, without constructing or posting any key events.
+for character in ["a", "z", "A", "Z", "0", "9"] {
+    let stroke = usLayoutKeyStroke(for: character)
+    let shifted = character == "A" || character == "Z"
+    check(stroke?.key == character.lowercased() && stroke?.shift == shifted,
+          "US alphanumeric mapping preserves the key and shift: \(character)")
+}
+for character in [".", ",", "/", "-", "=", ";", "'", "[", "]", "\\", "`"] {
+    let stroke = usLayoutKeyStroke(for: character)
+    check(stroke?.key == character && stroke?.shift == false,
+          "US punctuation remains unshifted: \(character)")
+}
+for (character, key) in [(" ", "space"), ("_", "-"), ("+", "="), (":", ";"),
+                         ("\"", "'"), ("?", "/"), ("<", ","), (">", ".")] {
+    let stroke = usLayoutKeyStroke(for: character)
+    check(stroke?.key == key && stroke?.shift == (character != " "),
+          "US symbolic mapping preserves the key and shift: \(character)")
+}
+check(usLayoutKeyStroke(for: "").map { _ in true } == nil, "empty text has no physical US key")
+check(selectionOutcome(requested: (2, 3), readBack: (2, 4)) == "didnt",
+      "selection length mismatch fails even when the location agrees")
+
 // Keyboard layout gate for physical key strokes (upstream #113)
 check(usLayoutKeyStroke(for: ":").map { $0.key == ";" && $0.shift } == true, "colon is shifted semicolon on the US layout")
 check(usLayoutKeyStroke(for: "Q").map { $0.key == "q" && $0.shift } == true, "uppercase letter is shifted")

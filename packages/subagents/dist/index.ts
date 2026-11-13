@@ -3080,8 +3080,7 @@ function stats(progress, agentCount = 0) {
   let failed = 0;
   let started = 0;
   let anyLive = false;
-  for (const entry of progress) {
-    if (entry.type !== "workflow_agent") continue;
+  for (const entry of collapse(progress).agents) {
     seen++;
     if (entry.state === "done") {
       done++;
