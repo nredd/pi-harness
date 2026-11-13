@@ -151,6 +151,13 @@ describe("verifyInstalledPackage", () => {
 		expect(() => verifyInstalledPackage(root, shipped)).toThrow(/nested core copy.*node_modules\/@earendil-works/);
 	});
 
+	it("rejects a dangling symlink at the nested core scope", () => {
+		const root = install(temp(), sampleFiles);
+		mkdirSync(join(root, "node_modules"));
+		symlinkSync(join(root, "gone"), join(root, "node_modules/@earendil-works"));
+		expect(() => verifyInstalledPackage(root, shipped)).toThrow(/nested core copy/);
+	});
+
 	it("rejects a same-version install whose nested module is stale while barrels are unchanged", () => {
 		const root = install(temp(), { ...sampleFiles, "dist/core/agent-session.js": "old" });
 		expect(() => verifyInstalledPackage(root, shipped)).toThrow(/"modified":\["dist\/core\/agent-session.js"\]/);

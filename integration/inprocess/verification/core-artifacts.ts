@@ -159,7 +159,7 @@ export function diffInstalled(root: string, shipped: Map<string, Buffer>): Conte
 export function verifyInstalledPackage(root: string, tarball: Buffer): ContentReceipt {
 	// Node resolves a package's own `node_modules` before the hoisted copy, so a nested core copy would shadow the verified one.
 	const nestedCore = join(root, "node_modules", "@earendil-works");
-	if (existsSync(nestedCore)) throw new Error(`Unverified nested core copy at ${nestedCore}`);
+	if (lstatSync(nestedCore, { throwIfNoEntry: false })) throw new Error(`Unverified nested core copy at ${nestedCore}`);
 	const shipped = unpackTarball(tarball);
 	const diff = diffInstalled(root, shipped);
 	if (diff.missing.length + diff.modified.length + diff.extra.length > 0) {
