@@ -255,9 +255,15 @@ def test_node_helper_gates_run_vitest_through_the_launcher() -> None:
         AssertionError: A producer bypasses the launcher or returns to `node --test`/c8.
     """
     makefile = (ROOT / "Makefile").read_text()
-    assert "cd integration/probes && node ../../scripts/run-vitest.ts node --coverage\n" in makefile
+    for target, directory, launcher in [
+        ("check-probes", "integration/probes", "../../scripts/run-vitest.ts"),
+        ("check-import-audit", "scripts", "run-vitest.ts"),
+    ]:
+        recipe = makefile.split(f"{target}:", 1)[1].split("\n\n", 1)[0]
+        assert recipe.count(f"cd {directory} && env -i ") == 2
+        assert f"node {launcher} node --coverage\n" in recipe
+        assert recipe.endswith(f"node {launcher} bun --coverage.enabled=false")
     assert "cd integration/providers && node ../../scripts/run-vitest.ts node --coverage\n" in makefile
-    assert "cd scripts && node run-vitest.ts node --coverage\n" in makefile
     assert "node --test" not in makefile
     assert "/.bin/c8 " not in makefile
     for config in [
