@@ -60,6 +60,61 @@ script; the earlier 35-file measurement does not establish its coverage. The ove
 `computer-use` inventory remains excluded: this result covers the TypeScript/Vitest slice,
 not all native Swift, Rust or documentation code.
 
+## Signing-certificate Node port (#803)
+
+The original `scripts/make-signing-cert.sh` was inventoried but unmeasured shell, not a
+zero-coverage Node baseline. Its deterministic setup now lives in
+`packages/computer-use/scripts/make-signing-cert.mjs`, measured by the existing Istanbul
+producer with a per-file zero L/F/B/S pin. Both inventory slices include it; no uncovered
+caps or exclusions change. The launcher and embedded Bash silent-password reader remain
+explicitly **unmeasured shell**. #695 stays open for remaining work.
+
+Scoped local Node and Bun suites exercise disposable files and injected command results,
+including EOF, command refusal, missing/nonexecutable tools, interrupts and filesystem
+failures. No real certificate, signing identity, Keychain, trust or credential prompt runs.
+The Node implementation measures L/F/B/S **31/4/23/35**, all covered, on both runtimes.
+These scoped reports do not establish whole-package or native coverage. The independent
+command-refusal mutation must fail before the patch is admitted. PR CI runs the full
+package/accounting gates, including missing-report refusal.
+
+## Retained verification gates (#697)
+
+Seven repository gates now export import-inert `main(argv, deps)` entrypoints (the shared
+`check-sync-ledger.mjs` already exported its validators). `computer-use-vitest` measures
+`check-commit-messages`, `check-docs-platform`, `check-docs`, `check-package-assets`,
+`check-sync-ledger`, `check-sync-reverts` and `check-upstream-sync` with per-file zero
+L/F/B/S thresholds. Both inventories retain every source; none remains a verification-helper
+exemption. Existing LCOV and `json-summary` producers supply actual counters; missing data
+still fails accounting closed, never becomes a zero.
+
+The scoped macOS run of `verification-gates`, `verification-sync-gates` and `sync-ledger`
+passed 27 tests, measuring L/F/B/S **279/46/165/314**, all covered. Actual tar archives,
+disposable Git histories, source-tree comparison, documentation generators and an expected-failure
+mutation child run offline. Injected boundaries cover launch failures, retry exhaustion, wrong
+failures, surviving mutations and cleanup without a network fetch or live helper. The full
+package gate previously hit its 90s outer deadline while the two drift controls ran the entire
+`invariants` suite, including SDK setup. #825 moves those controls to the same static parity test
+without native compilation; all controls retain the original 90s limit and expected-failure matching.
+These numbers
+are a scoped measurement, not whole-package or cross-platform evidence. CI run 43363268531
+failed because the mutated `check-docs.mjs` returned success. A path-alias repro shows how:
+`process.argv[1]` can retain a symlinked temporary path while `import.meta.url` resolves the real
+path, so the CLI guard silently skips the check. The runner's exact path identity was not captured.
+All six new CLI guards compare real paths. Tests run their real entrypoints via
+symlinks, and the actual documentation drop control runs the mutated sandbox through the same `tsx`
+launcher with a symlinked package path. The pre-fix control reproduced `Dropped patch survived`;
+the corrected guard causes the expected specific documentation refusal. The asset-validation
+mutation must fail the independent missing-asset fixture in `test:sync-reverts`.
+
+Launcher disposition remains explicit: retain `check-linux-live.mjs` as an unmeasured opt-in
+D-Bus lifecycle launcher (its assertions live in `test/linux-live.test.mjs`), and retain
+`pi-cubench-agent.mjs` as an unmeasured manual gateway/desktop benchmark driver. Neither is
+published or counted as measured here. The latter contains orchestration and must not be
+called a passive fixture. Measuring these launchers needs a separately admitted offline seam
+and does not authorize real UI or gateway calls. #697 remains open for that owner disposition
+and the separately owned subagents runtime scope (#802/#805); this change does not close the
+umbrella. #759 owns the separate async-helper measurement.
+
 ## Baseline
 
 Measured 2026-11-11 on macOS (Apple Silicon, Node 26.13.0) at `6d913af1` (main after #717, #718, #719,

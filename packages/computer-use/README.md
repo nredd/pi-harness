@@ -75,6 +75,11 @@ their platform or opt-in as skipped; this package remains outside the coverage g
 starts, restarts and stops its own helper instance on the test home's socket, never the shared daemon.
 Owner-only smoke commands and rollback are recorded in `UPSTREAM.md`.
 
+`npm run coverage:swift` runs real-source headless motion and native assertions with one Swift
+compiler worker. The [motion coverage notes](./docs/cursor-motion-coverage.md) describe analytic
+geometry, clock/lifecycle checks, the clamp mutation control and honestly retained numerical guards.
+This does not run the live overlay suite or prove physical pointer behavior.
+
 `npm run coverage:swift` links all shipped Swift sources with the headless assertions.
 `native/macos/ref_look_tests.swift` checks real `AXRefStore` ownership and snapshots plus
 `LookNode.payload()` keys, flags, rectangles and recursive child order. It only constructs
@@ -90,6 +95,10 @@ mutation. Local measurements and the unequal-window fixture lifecycle are record
 `npm run test:linux` uses disposable protocol children, not a native desktop helper. Its closed-stdin
 fixture initializes stdout before closing fd `0` (lazy pipe initialization aborts Node 26.12 on Darwin),
 acknowledges verified closure while alive, and requires real `EPIPE` rejection plus child cleanup.
+The next request carries a 64 KiB payload so Bun also reaches an OS write failure instead of accepting
+a small write into its buffer. A successful write callback is not proof of delivery; runtime command
+deadlines and error propagation are unchanged. Build-script tests assert the active runtime's executable,
+use numeric exit-code sentinels on Node/Bun, and require actual invalid CLI/symlink entries to exit `1`.
 
 The harness root `publish.yml` owns releases; nested upstream workflows are dormant reference source.
 Local helper builds and local signing remain unchanged. Source preparation is not activation.
@@ -98,6 +107,22 @@ Linux source-build cleanup gives its detached compiler group a bounded TERM/KILL
 KILL syscall alone is not treated as success: setup fails if the group cannot be confirmed empty, and
 keeps a fresh-probe-guarded exit-time KILL backstop while ownership remains signalable. Only ESRCH
 proves quiescence; permission or unexpected syscall errors surface uncertainty and revoke signalling.
+
+## Signing certificate setup
+
+From this package directory, `./scripts/make-signing-cert.sh [output-dir]` still creates
+`key.pem`, `cert.pem` and `id.p12` (default `./signing`) for the upstream self-signed release
+workflow. Keep those files permanently; this does not guarantee persistent TCC grants.
+The existing Node minimum, Bash and OpenSSL requirements are unchanged. The harness release
+workflow does not invoke this command or import a signing identity.
+
+`scripts/make-signing-cert.mjs` owns directory/config creation, OpenSSL arguments, failure
+propagation and successful cleanup. Tests inject every external command and use disposable
+files, never a real identity, Keychain, trust operation or credential prompt. Istanbul measures
+only that Node code with L/F/B/S zero thresholds. The three-line shell compatibility launcher
+and Bash `read -r -s` password fragment are explicitly **unmeasured shell**, not covered Node
+logic. The latter preserves Bash's terminal editing, whitespace, EOF and interrupt semantics
+without a new password-input dependency. Remaining shell work belongs to #695.
 
 ## License
 

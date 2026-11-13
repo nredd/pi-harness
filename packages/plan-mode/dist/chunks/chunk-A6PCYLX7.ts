@@ -1582,6 +1582,10 @@ function normalizePlanModeSettings(value) {
   const settings = {
     thinkingLevel
   };
+  if (Object.hasOwn(value, "modelPlanEntry")) {
+    if (typeof value.modelPlanEntry !== "boolean") return void 0;
+    settings.modelPlanEntry = value.modelPlanEntry;
+  }
   if (Object.hasOwn(value, "planModel")) {
     const planModel = normalizePlanModelTier(Reflect.get(value, "planModel"));
     if (!planModel) return void 0;
@@ -2573,4 +2577,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-2F7W2JBN.ts.map
+//# sourceMappingURL=chunk-A6PCYLX7.ts.map

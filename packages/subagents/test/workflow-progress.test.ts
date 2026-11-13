@@ -261,6 +261,29 @@ describe("buildPhaseGroups", () => {
 });
 
 describe("stats", () => {
+  it("counts each scheduled agent once across queued, started and resolved updates", () => {
+    const queued = Array.from({ length: 15 }, (_, index) => agentEntry({ index, queuedAt: 1 }));
+    const progress = [...queued];
+    for (const entry of queued.slice(0, 8)) {
+      progress.push(
+        { ...entry, startedAt: 2 },
+        { ...entry, startedAt: 2, recordId: `child-${entry.index}` },
+        { ...entry, startedAt: 2, recordId: `child-${entry.index}`, modelId: "faux/faux-1" },
+      );
+    }
+    expect(progress).toHaveLength(39);
+    expect(stats(progress, 15)).toEqual({
+      done: 0, failedCount: 0, running: true, total: 15, started: 8, complete: false,
+    });
+    for (const entry of queued) progress.push({ ...entry, state: "done" });
+    expect(stats(progress, 15)).toEqual({
+      done: 15, failedCount: 0, running: false, total: 15, started: 15, complete: true,
+    });
+    // A retry replaces a terminal state rather than adding another agent.
+    progress.push({ ...queued[0], state: "error" }, { ...queued[0], startedAt: 3 });
+    expect(stats(progress, 15)).toMatchObject({ done: 14, failedCount: 0, started: 15, total: 15, complete: false });
+  });
+
   it("counts done and failed toward started", () => {
     const result = stats([
       agentEntry({ index: 0, state: "done" }),

@@ -447,10 +447,12 @@ ENFORCED_BUN_PACKAGES = {
     "inprocess",
     "plan-mode",
     "preset",
+    "providers",
     "resource-sampler",
     "subagents",
     "subscription-router",
     "todo",
+    "workflow-examples",
 }
 
 
@@ -461,14 +463,14 @@ def test_current_bun_policy_is_explicit_and_links_migration() -> None:
         None.
     Returns:
         None: Promoted signals enforce 0/0 lines/functions plus a branch cap on both OSes; the rest carry
-            an explicit mode and #160 rationale.
+            an explicit mode and #320 rationale.
     Raises:
         AssertionError: A signal defaults to enforcement, lacks its reason or loosens a promoted floor.
     """
     data = json.loads((ROOT / "coverage/policy.json").read_text())
     packages = data["packages"]
     signals = {name: pkg["signals"]["bun"] for name, pkg in packages.items() if "bun" in pkg["signals"]}
-    assert len(signals) == 9
+    assert signals.keys() == ENFORCED_BUN_PACKAGES | {"session-kit"}
     for name, signal in signals.items():
         if name in ENFORCED_BUN_PACKAGES:
             assert signal["enforcement"] == "enforced", name
@@ -479,5 +481,5 @@ def test_current_bun_policy_is_explicit_and_links_migration() -> None:
                 assert (counts["lines"], counts["functions"], type(counts["branches"])) == (0, 0, int), name
         else:
             assert signal["enforcement"] == "report-only", name
-            assert "https://github.com/nredd/pi-harness/issues/160" in signal["reason"]
-            assert "enforced" in signal["reason"]
+            assert "https://github.com/nredd/pi-harness/issues/320" in signal["reason"]
+            assert "before promotion" in signal["reason"]

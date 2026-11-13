@@ -15,11 +15,25 @@ The separate approved D7 toolchain upgrade selects Bun 1.4.4; evidence and remai
 | `integration/inprocess` | Full Vitest + guard, spawn-time home | Full Vitest + guard, spawn-time home |
 | `plan-mode` | Full Vitest + guard | Full Vitest + guard |
 | `dev-tools` | Full Vitest + guard | Full Vitest + guard |
-| `session-kit` | Existing full Vitest | Existing native Bun subset plus spawn-time-home Vitest home-forwarding canaries |
+| `session-kit` | Full Vitest + guard, spawn-time home, separate home-forwarding canary | Full Vitest + guard, spawn-time home, separate home-forwarding canary |
 | `todo` | Full Vitest + guard | Full Vitest + guard |
 | `subagents` | Full Vitest + guard | Full Vitest + guard |
+| `subagents` workflow examples | Dedicated full Vitest + guard through launcher | Dedicated full Vitest + guard through launcher, independent report directory |
 | `computer-use` | Full Vitest + guard, one file at a time, including the platform/opt-in-gated native and live suites (#347); `check-linux-live.mjs` only starts the D-Bus session its Vitest scenario runs in | Not run |
-| `integration/probes`, `scripts/import_audit.test.ts`, `scripts/check-biome-paths.test.mjs`, `scripts/run-vitest.test.ts`, `scripts/router_contract.test.mjs` | Vitest + guard, V8 coverage (#347) | Not run (import audit remains Node-only) |
+| `integration/probes`, `scripts/vitest.config.ts` suites (import audit, Biome paths, producer configs, launcher, router contract) | Vitest + guard, V8 coverage (#347) | Same explicit suites + guard, compatibility only (no coverage overwrite) |
+
+`make check-probes` and `make check-import-audit` run both engines in credential-free `env -i`
+environments with disposable homes and the same explicit config file lists, never live/provider/desktop
+globs. Node retains the enforced primary V8 coverage inventory and floors; Bun runs with
+`--coverage.enabled=false`, so it cannot replace those reports or claim a new measured signal.
+The import audit uses TypeScript's asynchronous `tsgo` transport on both engines: its synchronous
+transport relies on Node-private pipe descriptors absent on Bun. CLI JSON, parser diagnostics and
+failure exits are unchanged. Filesystem-failure probes mock the ESM boundary on both engines rather
+than relying on Node's `syncBuiltinESMExports`; no case is skipped or retried for Bun.
+The computer-use wrappers were already migrated by [#434](https://github.com/nredd/pi-harness/pull/434):
+Linux native cases remain Linux/cargo-gated, macOS live remains `PI_COMPUTER_USE_LIVE=1`/darwin-gated,
+Windows scripts remain `PI_CU_WINDOWS_SCRIPTS=1`-gated, and Linux live remains inside its opt-in D-Bus
+launcher. Those suites and the #320 session-kit matcher are not widened by these Make targets.
 
 Owned Vitest configs cap workers at two (sampler and computer-use: one), including direct Node/Bun
 Vitest runs. These are per-gate defaults, not a host-wide concurrency limit.
@@ -51,12 +65,14 @@ while keeping the guard active; it does not isolate unrelated absolute paths or 
 explicitly supplied through other environment variables.
 
 The `bun` engine also owns the Bun signal's instrument. After the package's own arguments it
-appends `--coverage`, the Istanbul provider, the `text` and `lcov` reporters and `coverage/bun`.
+appends `--coverage`, the Istanbul provider, and the `text`, `lcov` and `json-summary` reporters.
+Reports default to `coverage/bun`; an explicit `--coverage.reportsDirectory=` selects an independent
+signal directory without duplicating the option.
 Only the exact argument `--coverage.enabled=false` opts out, and then it appends nothing, so a
 canary cannot overwrite another report. The `node` engine never appends coverage arguments.
 `scripts/tests/test_coverage_producers.py` pins that contract by running the real launcher.
 
-Unit tests cover matching, mismatched and missing homes, the eight-workspace wiring contract,
+Unit tests cover matching, mismatched and missing homes, the workspace wiring contract,
 and launcher failure/cleanup/argument forwarding. Two subprocess fixtures pin the beforeEach
 and afterEach boundaries independently, using canonicalized symlinked temporary homes:
 Bun/Vite's bundled config loader otherwise fails through macOS `/var` aliases before reaching
@@ -93,7 +109,11 @@ with `discoverAndLoadExtensions` under a private stand-in `TMPDIR`. It proves th
 root and every workspace `package.json`, splits scripts on `&&`, `||`, `;` and `|`, matches
 `vitest` or `bun test` as the command head (bare or through `npx`, `bunx`, `bun x`, `npm exec`),
 fails on any match without the prefix, and pins the exact set of direct launchers. Adding one is a
-deliberate edit there and here.
+deliberate edit there and here. Session-kit's `test` and `test:bun`, plus subagents'
+`test:workflow-examples`, now delegate to the shared launcher and are no longer direct launches.
+The positive migration regression pins their engine pairs (`node,node`, `bun,bun`, `node,bun`), while
+the exact inventory continues to check every remaining direct launch and refuse unguarded commands.
+Moving behind the launcher changes the inventory, not the requirement to disable jiti's cache.
 
 ## Phase 2 home injection
 
@@ -101,15 +121,16 @@ The todo/subagents guard deferral is resolved by #171. Both Vitest configs insta
 setup on both engines; fixtures inject disposable homes instead of mutating HOME. Todo's
 `test:bun` uses the full-suite launcher with `.vitest.config.ts` (390 tests).
 
-`session-kit` retains its native subset while its
-injected-home canary runs through `scripts/run-vitest.ts bun`: its monitor matcher suite cannot run on
-Bun, where `worker.terminate()` of a worker stuck in a catastrophic regex takes 450-1200 ms against about 5 ms
-on Node ([#320](https://github.com/nredd/pi-harness/issues/320)). Since #320 `plan-mode`, `dev-tools` and
+`session-kit` now runs its full Node and Bun suites through the shared launcher and home guard
+([#320](https://github.com/nredd/pi-harness/issues/320)). Its matcher supervises a regex worker in a
+killable child process rather than awaiting Bun's slow `worker.terminate()`; existing deadlines and
+cleanup assertions stay unchanged. Since #320 `plan-mode`, `dev-tools` and
 `subagents` run their full suites on Bun with the shared guard instead of their native subsets
 and canaries (`tool-policy.test.ts`, `ssh/hosts.test.ts`, `resource-loader-home.test.ts`), every case of which is in the full run. Counts are in the receipt
 [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/bun-enforced.md).
-`session-kit` also runs its home-only factory canary through `scripts/run-vitest.ts node`, and
-leaves it out of its ordinary Node Vitest run and native Bun scenario list. On both engines the
+`session-kit` runs its home-only factory canary separately through the launcher on each engine,
+and leaves it out of both ordinary coverage runs so its disabled-coverage invocation cannot overwrite
+the full-suite report. On both engines the
 launcher installs disposable `HOME`/`USERPROFILE` values before the canary imports the SDK, so
 the mocked `node:fs` SSH probe works and Bun never starts with the real home.
 The launcher sets `PI_EXPECT_BUN_RUNTIME=1` for every Bun child, so `subagents`' real-loader test proves it
@@ -117,7 +138,7 @@ ran on the pinned Bun. The session-kit canary passes `--coverage.enabled=false`,
 coverage arguments to it.
 The guard is active for its full Node suite and any Bun Vitest invocation, including
 the real-loader exact-equality ambient-access canary. No tests are skipped to accommodate the
-guard; native `bun test` scenarios do not consume Vitest setup files.
+guard. There is no remaining declared native `bun test` subset.
 
 ## Coverage handoff
 

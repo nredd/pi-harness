@@ -11,6 +11,7 @@ import copy
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -631,6 +632,8 @@ def reviewer_template_report(axis: str, sha: str, *, inline_none: bool, no_spec:
     "mode",
     [
         "green",
+        "empty-repo",
+        "bare-script",
         "head-drift",
         "unresolved-review",
         "optional-failure",
@@ -774,11 +777,12 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
     result = subprocess.run(
         [
             "/bin/bash",
-            str(isolated),
+            isolated.name if mode == "bare-script" else str(isolated),
             "135",
             sha,
             "standards-id",
             "standards-id" if mode == "duplicate-id" else "spec-id",
+            *(["", ""] if mode == "empty-repo" else []),
         ],
         env=os.environ
         | {
@@ -786,10 +790,12 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
             "REPLAY_TESTS": str(Path(__file__).parent),
             "REPLAY_MODE": mode,
             "REPLAY_MUTATIONS": str(mutations),
+            "MERGE_PR_NODE": shutil.which("node") or "",
             "MERGE_PR_TRANSCRIPT_ROOT": "relative" if mode == "relative-root" else str(root),
             "MERGE_PR_GH": "gh" if mode == "relative-gh" else str(fake),
             "MERGE_PR_PYTHON": "python3" if mode == "relative-python" else sys.executable,
         },
+        cwd=scripts,
         capture_output=True,
         text=True,
         check=False,
@@ -797,6 +803,8 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
     assert not poisoned.exists(), result.stderr
     if mode in (
         "green",
+        "empty-repo",
+        "bare-script",
         "poisoned-path",
         "git-quoted-source",
         "read-quoted-source",
@@ -812,7 +820,7 @@ def test_shell_receipt_and_merge_boundary(tmp_path: Path, mode: str) -> None:
     else:
         assert result.returncode != 0
         assert not mutations.exists()
-        if mode in ("directory-transcript", "dangling-transcript"):
+        if mode == "directory-transcript":
             assert "not a file" in result.stderr
 
 

@@ -81,8 +81,8 @@ reporter and a cap (`Missing statement cap`); a cap without a readable, non-empt
 with no statements, fails (`Statement producer missing`); an LCOV source with no summary entry fails
 (`Statements missing for source`). The CI shard and fan-in artifacts and the WSL capture carry
 `coverage-summary.json` beside `lcov.info`.
-Carve-outs: coverage.py signals (statements are its lines, so no counter), the native `bun test` subset
-(session-kit `/bun`, report-only) and report-only `goal: excluded` signals carry no statement cap.
+Carve-outs: coverage.py signals (statements are its lines, so no counter) and report-only
+`goal: excluded` signals carry no statement cap. Session-kit now emits real Istanbul statements.
 Statement units differ (Istanbul AST statements, V8 AST remap), so caps compare within one signal only.
 
 ### Branch caps
@@ -93,15 +93,14 @@ Statement units differ (Istanbul AST statements, V8 AST remap), so caps compare 
 JSON `signals` map carries the branch delta. The base ratchet treats it like lines: a cap can only go
 down, and dropping a `branches` key the base had is a weakening. `target.branches` is 0, so every
 100-percent primary signal is held to 0 uncovered branches regardless of its own cap. Every enforced primary and
-Bun signal's cap is 0 as well; `session-kit`'s native Bun subset stays report-only and uncapped (see below).
+Bun signal's cap is 0 as well. Session-kit remains report-only against a zero target, not a zero-coverage receipt (see below).
 
 It fails closed both ways. A signal whose report has branch records (`BRDA`) needs a cap on that OS
 (`Missing branch cap`), and a capped signal whose report has executable lines but no branch records
 fails (`Branch producer missing`), so a producer that silently stops emitting `BRDA` can't read as 0.
-Carve-outs: the native `bun test` subset signal (session-kit `/bun`) writes no branch records
-and declares no cap until #320 moves it to Vitest-on-Bun Istanbul (blocked on Bun `worker.terminate()` latency);
-`computer-use-vitest` is owner-excluded (`goal: excluded`); its signal declares a branch cap since #645, so no
-remaining signal carries branch records uncapped.
+Session-kit now emits real Istanbul branch records; missing branch data is never interpreted as zero.
+`computer-use-vitest` is owner-excluded (`goal: excluded`); its signal declares a branch cap since #645,
+so no remaining signal carries branch records uncapped.
 
 Branch units differ by producer: Istanbul and Bun count AST arms (including an implicit `else` and each
 logical operand), coverage.py counts jump arcs, so caps are only comparable within one signal. Both
@@ -206,19 +205,24 @@ including anonymous callbacks (`transcript-types.ts` 103 / 15, `import_audit.ts`
 failure at the size limit and the default agent dir under a set and an unset `HOME`, and the dead
 `?? "unknown"` and empty-window guards are folded into `blockType()` and `percentile()`.
 `providers` is in the goal and enforced at 0/0 since #378: `check-providers` runs `integration/providers/vitest.config.ts`
-(forks, the shared home guard) over all seven sources. `faux.ts` and `usage_fixture.ts` stream every
+(forks, the shared home guard) over all eight sources on Node and Bun. `faux.ts` and `usage_fixture.ts` stream every
 scripted step shape against a recording registry with a fake clock, `extension_inventory.ts` reads a
 fake registry, and `preloads.test.ts` imports the auth preloads in its own forked worker against a
 loopback mock: the redirect, refused egress, recorded `claude`/`security` spawns, readiness failures
-and every `auth_runtime_fixture.mjs` negative flag. A stand-in `globalThis.Bun` covers the Bun spawn
-wrappers; a second install without `HARNESS_BLOCKED_LOG`, with and without Bun, covers the unlogged
-block paths, and the dead `?? ""` after `split()` in `forbiddenName` is deleted (#425). 194 lines / 51 functions,
-163 branches, 0 uncovered on darwin. The `test-helper` exclusion and the five
+and every `auth_runtime_fixture.mjs` negative flag. The `runtimeBun()` seam injects the Bun API without
+replacing Bun's immutable global. In-process named builtin imports use live getters to model
+preload-before-import ordering; an independent real-engine subprocess verifies that order without
+those getters. A second install without `HARNESS_BLOCKED_LOG`, with and without Bun, covers the
+unlogged block paths. Both local engines measure 197 lines / 52 functions / 162 branches /
+244 statements, all covered; hosted cross-platform admission remains required. The `test-helper` exclusion and the five
 `verification_helpers` rows are gone; `fast_timers.mjs` was dead (no scenario passed `fixture_env`
 timers) and is deleted.
 
-Every declared `test:bun` command also emits an independent `bun` LCOV signal. Nine Bun signals
-are measured. `dev-tools`, `plan-mode`, `preset`, `subscription-router` and `todo` are `enforced` at
+Every declared `test:bun` command also emits an independent `bun` LCOV signal. Providers run
+both engines in `check-providers`; workflow examples run both engines in `test:workflow-examples`,
+with their Bun reports in `coverage/workflow-examples-bun` so the subagents Bun report is not overwritten.
+The launcher accepts an explicit `--coverage.reportsDirectory=` for separate signals while retaining
+Istanbul and all three reporters. `dev-tools`, `plan-mode`, `preset`, `subscription-router` and `todo` are `enforced` at
 0/0 on darwin and linux since [#320](https://github.com/nredd/pi-harness/issues/320): full suite, full primary
 inventory, 0/0 in their own PRs' hosted macos-14 and ubuntu-24.04 artifacts (receipts
 [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/bun-enforced.md)). `resource-sampler` is `enforced` at 0/0 on
@@ -227,20 +231,32 @@ darwin 8/4 and linux 47/8 Bun misses with the same fake-host FFI tests as primar
 [#376](https://github.com/nredd/pi-harness/issues/376), see below. `subagents` runs its full suite on Bun 1.4.4 and is `enforced`
 at 0/0/0 on darwin and linux since #320, measured on darwin only so far (macOS: Node 4361 passed / 8 skipped,
 Bun 4362 passed / 7 skipped, both Istanbul 7731 lines, 1606 functions, 7193 branches fully covered); hosted CI must confirm linux. The other one (session-kit)
-explicitly declares `enforcement: "report-only"`, with a
-mandatory nonblank `reason` and a link to [#160](https://github.com/nredd/pi-harness/issues/160).
-Its stored `max_uncovered` values are advisory references, not enforced budgets. An omitted `enforcement` defaults to
+explicitly declares `enforcement: "report-only"`, with a reason linked to #320. It now runs the full
+Vitest suite under Bun, including the CLI source, rather than the native scenario subset. Its zero
+references remain pending hosted admission. Follow-up #824 covers omitted public arguments to
+`freshnessLines`, `machineIdentity` and `loadCombined` with real local-history/cache fixtures under
+disposable agent directories. The fourth missed default was unreachable: private `StatsView.help`
+has one caller, `render`, which always supplies its string-valued `hint`; only the unused default is
+removed, preserving rendered output and pricing behavior. Full local Node/Bun reports now measure
+53 executable files, 3608 lines / 836 functions / 3039 branches / 4317 statements, all covered.
+The static `stats/library.ts` facade is classified below; its three target modules remain measured.
+Bun now follows the complete owned inventory without a subset. Promotion remains blocked on this
+follow-up's own hosted macOS/Linux zero receipts, not a local-only pass. An omitted `enforcement` defaults to
 `enforced` for backwards-compatible primary/base-policy reading; current Bun declarations never
 rely on that default. Native `bun test` subset measurements are NOT the owned-source denominator:
 Bun 1.3.14 native coverage omits never-imported files. Full Vitest-on-Bun producers now use
-Istanbul for router, preset, sampler, todo, plan-mode, dev-tools, subagents and inprocess through `scripts/run-vitest.ts bun`.
+Istanbul for router, preset, sampler, todo, plan-mode, dev-tools, subagents, session-kit and inprocess through `scripts/run-vitest.ts bun`.
 They inherit the full primary instrumentation inventory (no `files` subset). The launcher's
 `bun` engine appends the provider, the `text`, `lcov` and `json-summary` reporters (Vitest's dotted options) and
 `coverage/bun`, so each `test:bun` passes only package arguments. The sampler retains one
 worker. The launcher also sets `PI_EXPECT_BUN_RUNTIME=1`, which subagents' real-loader test reads to prove it ran on
-the pinned Bun. session-kit alone keeps a native subset, and its policy explicitly lists the files currently measured by each signal;
-missing expected files fail. Files outside that Bun subset remain mandatory in primary
-coverage. Imported sibling production source and dedicated test/helper directories are outside
+the pinned Bun. Session-kit uses the same disposable-home launcher and shared home guard as the other
+suites. Its published sampler's real spawn is observed through an inlined builtin seam rather than
+Node-only diagnostics channels. Regex matching uses a killable child process supervising a worker,
+so cleanup never awaits Bun's slow `Worker.terminate()`. IPC disconnect exits the child even while
+the regex spins; `BUN_BE_BUN=1` makes a compiled host act as the interpreter instead of re-entering Pi.
+The existing 100ms/1s matcher deadlines and 500ms cleanup assertion are unchanged. Missing expected
+files fail; only strictly validated non-executable facades are absent from both executable inventories. Imported sibling production source and dedicated test/helper directories are outside
 that package's signal. Unknown production report paths fail. Never merge JSC, V8 and Istanbul
 counters or average platforms. Replacing producers with a single Bun runner later only changes
 the producer wiring and reviewed signal inventory, not the accounting algorithm (issue #160).
@@ -330,6 +346,19 @@ current source bytes only to exercise real tree expansion, not to assert histori
 or establish budgets. CLI accounting still ratchets the entire repository against the actual PR base.
 Real compilation/instrumentation
 and executable-addition rejection are pinned by `scripts/tests/test_coverage_facades.py`.
+
+Session-kit's `src/stats/library.ts` preserves all runtime and type bindings previously exposed by
+its three export-star declarations through explicit named re-exports. The existing grammar is
+unchanged, and real TypeScript/emitted-ESM instrumentation produces zero statement/function/branch
+maps for the facade. `test/stats/library.test.ts` compares every runtime binding to the target modules,
+checks all 23 public type bindings under the real type checker, and imports the same namespace in
+real Node and Bun subprocesses without Vitest transforms. Removing `atomicJson` makes both engines'
+parity tests fail. New target bindings must be named in the facade and reflected in its type contract
+checks; runtime namespace parity rejects stale value lists. The attributed parent policy/source-membership fixture in
+`scripts/tests/fixtures/coverage/session-kit-bun-base.json` proves that only the facade leaves owned
+membership and requires its exact ledger entry. Every executable target remains measured; the old
+Bun subset expands to that complete inventory. No source map is fabricated for the facade, and adding
+a side-effect import makes strict validation fail before report consumption.
 
 Verification-only harnesses outside conventional test directories are classified under
 `verification_helpers`, with an exact repository-relative `path` and a separate `reason` for

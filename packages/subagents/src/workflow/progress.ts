@@ -318,7 +318,8 @@ export function buildPhaseGroups(
 }
 
 /**
- * Aggregate counts for the header line.
+ * Aggregate the latest state of each agent for the header and notification.
+ * The input is the append-only event log, not an already-collapsed snapshot.
  *
  * `agentCount` is the number the runtime has *scheduled*, which can exceed the
  * number that has emitted an entry — a fan-out reports its size before its
@@ -331,8 +332,7 @@ export function stats(progress: readonly WorkflowEntry[], agentCount = 0): Workf
   let started = 0;
   let anyLive = false;
 
-  for (const entry of progress) {
-    if (entry.type !== "workflow_agent") continue;
+  for (const entry of collapse(progress).agents) {
     seen++;
     if (entry.state === "done") {
       done++;

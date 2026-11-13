@@ -235,8 +235,8 @@ export default function harnessFaux(pi: ExtensionAPI): void {
 				name: `${provider} ${id}`,
 				thinkingLevels: ["off", "medium"],
 				route: (request, ctx) => {
-					const [targetProvider = "", targetId = ""] = to.split("/", 2);
-					const model = ctx.modelRegistry.find(targetProvider, targetId);
+					const [targetProvider, targetId = ""] = to.split("/", 2);
+					const model = ctx.modelRegistry.find(targetProvider as string, targetId);
 					if (!model) throw new Error(`faux virtual model ${provider}/${id}: no ${to}`);
 					return { model, thinkingLevel: request.thinkingLevel };
 				},

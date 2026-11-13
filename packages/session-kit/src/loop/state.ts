@@ -41,12 +41,12 @@ const USAGE = "usage: /loop <30s|5m|1h> <prompt> [--max N] | list | stop [id|all
 export function parseLoopArgs(raw: string): LoopCommand {
 	const text = raw.trim();
 	if (text === "" || text === "list") return { kind: "list" };
-	const [head = "", ...rest] = text.split(/\s+/);
+	const [head, ...rest] = text.split(/\s+/);
 	if (head === "stop" || head === "resume") {
 		if (rest.length > 1) return { kind: "error", message: USAGE };
 		return { kind: head, target: rest[0] ?? "all" };
 	}
-	const interval = parseInterval(head);
+	const interval = parseInterval(head as string);
 	if (!interval.ok) return { kind: "error", message: `${interval.error}. ${USAGE}` };
 	const words: string[] = [];
 	let maxRuns = DEFAULT_MAX_RUNS;

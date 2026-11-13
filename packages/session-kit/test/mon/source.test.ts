@@ -1,5 +1,4 @@
-import { ChildProcess, spawnSync } from "node:child_process";
-import { subscribe, unsubscribe } from "node:diagnostics_channel";
+import { type ChildProcess, spawnSync } from "node:child_process";
 import { lstat, readFile } from "node:fs/promises";
 import { platform } from "node:os";
 import { dirname, join } from "node:path";
@@ -15,6 +14,20 @@ import { MonView } from "../../src/mon/component.ts";
 import { MonPoll } from "../../src/mon/poll.ts";
 import { createSamplerSource, toMonSnapshot } from "../../src/mon/source.ts";
 import { resourceFixture } from "./resource-fixture.ts";
+
+/** Observe actual spawn returns without relying on Node-only diagnostics channels. */
+const childObserver = vi.hoisted(() => ({ onChild: undefined as ((child: ChildProcess) => void) | undefined }));
+vi.mock("node:child_process", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:child_process")>();
+	return {
+		...actual,
+		spawn: (...args: Parameters<typeof actual.spawn>) => {
+			const child = actual.spawn(...args);
+			childObserver.onChild?.(child);
+			return child;
+		},
+	};
+});
 
 const theme = { fg: (_color: string, s: string) => s, bg: (_color: string, s: string) => s, bold: (s: string) => s };
 
@@ -39,29 +52,15 @@ function tick(): Promise<void> {
 }
 
 /**
- * Narrow a `child_process` channel message without trusting its untyped payload.
- * @param message Channel payload.
- * @returns Whether it carries a child.
- */
-function isChildMessage(message: unknown): message is { process: ChildProcess } {
-	return message instanceof Object && "process" in message && message.process instanceof ChildProcess;
-}
-
-/**
- * Observe the next child this worker spawns through Node's documented `child_process` channel.
- * The channel publishes from the `ChildProcess` constructor, so the promise settles in the microtask
- * after a synchronous `spawn()` returned: the PID is set and the event loop cannot have reaped it yet.
- * @returns The first child, and the disposer ending the subscription whether or not one spawned.
+ * Observe the real sampler's first spawn synchronously, before the event loop can reap it.
+ * The sampler is inlined by Vitest so its builtin import uses the same engine-neutral test seam.
+ * @returns The first child and a disposer removing the observer.
  */
 function watchNextChild(): { spawned: Promise<ChildProcess>; stop: () => void } {
-	let onChild: (message: unknown) => void = () => {};
 	const spawned = new Promise<ChildProcess>((resolve) => {
-		onChild = (message) => {
-			if (isChildMessage(message)) resolve(message.process);
-		};
+		childObserver.onChild = resolve;
 	});
-	subscribe("child_process", onChild);
-	return { spawned, stop: () => unsubscribe("child_process", onChild) };
+	return { spawned, stop: () => (childObserver.onChild = undefined) };
 }
 
 /** Upper bound on `ps` polls after SIGKILL, so a helper that never exits fails instead of hanging. */

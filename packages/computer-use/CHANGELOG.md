@@ -6,6 +6,9 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Added
 
+- Gate actual AppKit cursor overlay lifecycle behind exact `PI_COMPUTER_USE_LIVE=1`; default invariants retain motion, compiler and fake gate-refusal assertions and report the live check as `NOT RUN`. Source mutation controls never execute the unsafe fixture (nredd/pi-harness#819).
+- Deterministic finite-input tests close the five remaining cursor-motion LLVM regions and ten pure-key/selection policy regions in `bridge.swift`. Numerical safeguards stay intact; no live desktop input, capture or TCC runs (nredd/pi-harness#810, #645).
+
 - Real-source Swift ref ownership and look payload assertions cover transfer guards, exact lookup, FIFO snapshot eviction, optional fields and recursive child order without AX queries. Window equality, destination ownership, optional flags and child order have executable mutation controls. Distinct handles use an owned non-GUI child PID, reaped before assertions; a source-level guard rejects AX queries/actions. Runtime behavior is unchanged (nredd/pi-harness#769).
 
 - `test:async` measures the complete verification-only `scripts/check-async.mjs` at zero uncovered lines/functions/branches/statements with deterministic safety-path tests and retained real child-process checks, independently of runtime caps. Missing selected-host reports fail accounting; the other verification scripts remain unmeasured (nredd/pi-harness#759).
@@ -16,6 +19,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Changed
 
+- Port deterministic `make-signing-cert.sh` setup to measured `scripts/make-signing-cert.mjs` with injected commands and disposable-file tests. Preserve the documented shell command and existing Bash/OpenSSL dependencies; the launcher and silent-password shell fragment remain unmeasured (nredd/pi-harness#803).
 - Delete the unreachable `currentTargetOrThrow` missing-window guard after tracing all public callers; absent observations still fail at the capture boundary and browser states stay on CDP. Ratchet TypeScript aggregate and per-file `bridge.ts` L/F/B/S thresholds to zero (nredd/pi-harness#755).
 - `StateStore`, `ResourceScheduler`, the output store and `stabilizeRefs` drop dead arms (the empty-key eviction guard, never-rejecting `tail` catches, a fresh-ref collision loop); an empty restored `stateId` no longer disables `StateStore` eviction (it used to stop the loop and let the store grow unbounded); otherwise behavior is unchanged. `extensions/computer-use.ts`, `desktop.ts` and the pure modules are covered on every OS through the `process.platform` seam (nredd/pi-harness#703, #645).
 - `sync-patches.json` patches, `files`, `UPSTREAM.md` rows and `check-sync-reverts.mjs` cases are sorted (enforced by `test/sync-ledger.test.mjs`), each patch names its `UPSTREAM.md` `rows`, and `npm run check` runs `check-upstream-sync.mjs` against the pinned upstream commit when `PI_CU_UPSTREAM_SYNC=1` (CI on Linux); 14 previously undeclared drifted paths are now declared (nredd/pi-harness#720).

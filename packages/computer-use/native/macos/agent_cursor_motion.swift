@@ -102,7 +102,8 @@ final class AgentCursorRenderer {
         }
     }
 
-    private func rotateToward(current: Double, desired: Double, maxStep: Double) -> Double {
+    /// Pure shortest-turn seam, also used by deterministic boundary checks.
+    func rotateToward(current: Double, desired: Double, maxStep: Double) -> Double {
         var difference = desired - current
         while difference > .pi { difference -= 2 * .pi }
         while difference < -.pi { difference += 2 * .pi }
@@ -163,7 +164,8 @@ struct DubinsPlannedPath {
 
 private typealias PlannedPath = DubinsPlannedPath
 
-private func mod2pi(_ x: Double) -> Double {
+/// Normalize angles, retaining the negative-subnormal rounding correction.
+func mod2pi(_ x: Double) -> Double {
     let tau = 2 * Double.pi; let r = x - tau * floor(x / tau); return r < 0 ? r + tau : r
 }
 
@@ -226,10 +228,11 @@ private func planPath(x0: Double, y0: Double, th0: Double,
                        seg1: 0, seg2: 0, seg3: 0, types: [], x1: x1, y1: y1, th1: th1)
 }
 
-private func planDubins(x0: Double, y0: Double, th0: Double,
+/// Pure planner seam; numerical rejection falls back to linear motion in `planPath`.
+func planDubins(x0: Double, y0: Double, th0: Double,
                         x1: Double, y1: Double, th1: Double,
                         R: Double, endVisualHeading: Double,
-                        targetPoint: CGPoint) -> PlannedPath? {
+                        targetPoint: CGPoint) -> DubinsPlannedPath? {
     let dx = x1 - x0, dy = y1 - y0, D = hypot(dx, dy)
     guard D > 0.5 else { return nil }
     let d = D / R, theta = mod2pi(atan2(dy, dx))

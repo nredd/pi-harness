@@ -428,7 +428,13 @@ Apt failures also collect failure-time guest DNS evidence ([#781](https://github
 
 The setup action forwards `WSL_APT_DIAGNOSTICS` to the already-created host `wsl2-diagnostics/apt-dns.txt`. The helper emits the same safe lines to the job log and that file before the ordinary guest checkout exists; the existing early artifact upload retains the file even when later guest capture cannot run. Failed or blocked artifact writes and absent/hung tools cannot mask the apt status or exceed the outer diagnostic bound. Local subprocess fixtures cover both-mirror DNS failures, no install, exit 1, retained/allowlisted output, unavailable tools, real sleeping lookups and a blocked artifact FIFO. Shell execution is covered by fixtures, not measured shell coverage; hosted WSL receipt remains CI-owned. The historical resolver cause in #737 remains unknown and open.
 
-The PowerShell helpers are pinned by text tests only (no `pwsh` in the script gate); the hosted `contracts (wsl2)` and `owned (wsl2)` cells are their real check. A host kill at 300s can leave the guest's own `bash`/`timeout` children running inside the distro; the step has already failed, and the guest snapshot names them. Add the hang's signature to the flake list only once a bounded failure names it; reruns are not a policy.
+`WSL watchdog controls` (`.github/workflows/wsl-watchdog.yml`) executes the real detached watchdog on credential-free `windows-2025` hosts. `scripts/wsl2_watchdog_fixture.py` extracts the production action's launch/report blocks verbatim, shortening only the fixture deadline from 300s to 12s. Parser-equivalence tests reject extraction or deadline drift. Separate Actions steps prove initial arm, advancing heartbeat, survival across the step boundary, a deadline trip killing the synthetic stalled `setup-wsl` Node child, survival of an unrelated sentinel, and the real report step rejecting that trip. Additional cases assert normal completion, caller-owned synthetic cancellation with `finally` cleanup, launch rejection without a heartbeat, and the elapsed-time backstop with an injected stale clock. Expected failures are caught and checked, not accepted as failed jobs. This tests caller cleanup, NOT actual GitHub job cancellation delivery or an unresponsive Windows kernel.
+
+The fixture runs the actual watchdog and bounded subprocess implementation, but restricts process discovery to its own two synthetic children and redirects every WSL executable launch to a local executable shim. It never enumerates unrelated host commands, touches an actual WSL distribution, activates a private runner or changes production deadlines. The always-run artifact step retains only allowlisted per-case JSON booleans/status and the synthetic deadline under `wsl-watchdog-control-receipts`, including a failure-category receipt if an assertion fails and a source-line/category receipt if the detached control fails. Raw process snapshots, environment, command lines and watchdog logs are not uploaded. Normal exact-HEAD `owned (wsl2)` and `contracts (wsl2)` CI remain the real guest-setup evidence; local Python wiring tests are not Windows execution receipts.
+
+Historical [#753](https://github.com/nredd/pi-harness/issues/753) remains unresolved. Job `130986266276` in run `43159224700` spanned 55 minutes, but its check annotation explicitly reports `The job has exceeded the maximum execution time of 45m0s`, matching the run's configured 45-minute WSL timeout. The extra ten-minute interval is unexplained by those records. The job log endpoint returns 404; both recovered run/attempt archives omit this job, and the 22 retained artifacts include no target-shard diagnostics. These controls cannot recover its stuck composite substep or prove that its watchdog armed, failed or tripped. Do not equate a successful synthetic control test with a reproduction or diagnosis of that outage.
+
+The other PowerShell helpers remain pinned by text tests locally (no `pwsh` in the script gate); hosted `contracts (wsl2)` and `owned (wsl2)` cells remain their real check. A host kill at 300s can leave the guest's own `bash`/`timeout` children running inside the distro; the step has already failed, and the guest snapshot names them. Add the hang's signature to the flake list only once a bounded failure names it; reruns are not a policy.
 
 A real WSL cell retains no docs-only or main-push bypass. Unavailable WSL, wrong distribution version/filesystem, bootstrap or gate failure fails the cell. Before ordinary artifact uploads, `capture-ci-wsl` exports only explicit synthetic artifact directories and contract JSON reports to the host. `scripts/wsl2_capture.sh` still handles the former stack artifact directories; no CI job feeds them now. Native standalone artifacts are `standalone-<platform>-<stack>`, one per running stack cell, each holding only its own stack's reports. Native Node reports have the preceding `stack-*` upload. The startup diagnostic upload stays `standalone-startup-linux-x64`, personal cell only. The promotion consumer still reads `stack-ubuntu-24.04-personal` (`harness.promotion.PERSONAL_STACK_ARTIFACT`), unchanged; it does not consume standalone uploads. Final cleanup preserves the first guest-step failure status and bounded diagnostics. After a failed guest step, or when the caller's `job.status` (input `job-status`, forwarded as `WSL_JOB_STATUS`) is not `success`, final cleanup also writes `wsl2-diagnostics/guest-state.txt` for whole-guest stalls ([#445](https://github.com/nredd/pi-harness/issues/445)): `/proc` uptime, load, `meminfo`, swaps, PSI pressure, selected `/proc/vmstat` swap/reclaim/OOM counters, and the last 400 lines of unprivileged `dmesg`, else an explicit UNAVAILABLE line. No sudo: `pi-ci` gets no extra privilege for this, so `kernel.dmesg_restrict`, recorded in the report, decides whether the kernel log is readable. `python -m harness.credentials` scans the report first; a refusal or a scanner that cannot run exports only a withheld notice. Collection never changes the capture status, and green runs collect nothing. The job status covers a job timeout or cancel, which kills the guest step before `wsl2_run.sh` records `first-failure`. The `always()` capture steps do run after a cancel (e.g. run 41891045788, `owned shard (wsl2, ts)`: gate `cancelled`, both captures `success`). A `timeout-minutes` expiry is the same cancellation; the two #626 jobs ended at the 45 minute limit with their logs unavailable, so the cause is unconfirmed, and a guest that is still stalled can stall the capture too. Early host diagnostics survive setup failures. No arbitrary worktree files, command logs, environment or HOME are uploaded.
 
@@ -560,7 +566,8 @@ The twelve jobs are the configured required checks of ruleset `main required che
 `migration-review/spec` are no longer required. Reviews are our process, not a CI gate:
 
 - Run separate Standards + Spec reviews on the exact final HEAD; any HEAD change invalidates both
-- `scripts/merge-pr.sh` is the tracked source; `scripts/merge_pr_checks.py` owns its read-only CI
+- `scripts/merge-pr.ts` is the measured Node merge/receipt implementation; `scripts/merge-pr.sh`
+  is only its unmeasured compatibility bootstrap. `scripts/merge_pr_checks.py` retains the read-only CI
   predicate. Invoke the helper from an exact reviewed checkout. It validates distinct reviewer IDs,
   exact final-report HEAD and axis, unresolved-revision errors, receipt posting and
   `--match-head-commit`. Each reviewer's **final assistant report** must begin with these literal
@@ -576,7 +583,7 @@ The twelve jobs are the configured required checks of ruleset `main required che
   or malformed Git-result status/content and reader errors fail closed. Renew the review rather than
   editing a transcript. The unmanaged
   `~/code/pi-harness-builds/merge-pr.sh` is a distribution copy, not source. Only after this PR is
-  reviewed and merged may the parent copy **both** scripts together from the merged revision into
+  reviewed and merged may the parent copy **all three** scripts together from the merged revision into
   that directory. Do not activate an unreviewed copy or change managed Pi config
 - The helper gates **all** reported checks, including optional fork jobs, not just required contexts.
   It independently verifies every ruleset context against its bound app and reviewed SHA. Missing,
@@ -597,12 +604,22 @@ The twelve jobs are the configured required checks of ruleset `main required che
   Install the existing locked integration environment (`uv sync --locked` in `integration/`)
   for Pydantic evidence validation. Select trusted absolute executables and the actual transcript
   storage directory explicitly; there is no PATH-based or workstation-specific fallback.
-  The shell uses `/bin/bash` and absolute native `ls`, `wc`, `dirname`, `mktemp` and `cat` paths;
-  embedded readers resolve transcript paths with `Path` and require regular files before reading.
-  The poisoned-PATH regression covers every external utility, including gate-path selection:
+  Select `MERGE_PR_NODE` as a trusted absolute Node executable (the repository Node version supports
+  direct TypeScript execution). The six positional arguments are unchanged. Node uses filesystem APIs
+  for transcript discovery, regular-file checks and private temporary receipt cleanup; child commands
+  use literal argv without a shell. The Python predicate is selected relative to the Node module, not
+  the working directory or PATH. The poisoned-PATH regression retains the actual wrapper/Node/Python
+  chain and synthetic GitHub CLI; no real merge is attempted. `make check-import-audit` produces actual
+  V8 lines/functions/branches/statements for `merge-pr.ts`, enforced at zero gaps by coverage accounting.
+  The tiny shell executable-selection/exec bootstrap is still pending/unmeasured, not a shell coverage
+  claim. Root WSL, PowerShell and workflow-inline measurement remains open under #695; this slice does
+  not close that umbrella or replace its remaining lint requirements.
+
+  Example:
 
   ```sh
   MERGE_PR_TRANSCRIPT_ROOT=<absolute-transcript-store> \
+  MERGE_PR_NODE=<absolute-node-executable> \
   MERGE_PR_GH=/opt/homebrew/bin/gh \
   MERGE_PR_PYTHON=$HOME/code/pi-harness-merge-helper/integration/.venv/bin/python \
   bash ~/code/pi-harness-merge-helper/scripts/merge-pr.sh \
