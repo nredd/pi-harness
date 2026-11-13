@@ -88,7 +88,16 @@ def checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def run_main(tool_dir: Path, fake: Fake, environ: Mapping[str, str] | None = None) -> int:
-    """Run `main` against `tool_dir` with a deterministic environment."""
+    """Run `main` against `tool_dir` with a deterministic environment.
+
+    Parameters:
+        tool_dir (Path): Directory handed to the installer.
+        fake (Fake): Scripted runner.
+        environ (Mapping[str, str] | None): Environment override; `None` uses a token-bearing default.
+
+    Returns:
+        int: `main`'s exit status.
+    """
     env = {
         "PATH": "/usr/bin",
         "GH_TOKEN": "t1",

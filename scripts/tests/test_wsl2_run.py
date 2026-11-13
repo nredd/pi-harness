@@ -75,7 +75,14 @@ def guest(tmp_path: Path) -> tuple[Path, dict[str, str]]:
 
 
 def first_failure(worktree: Path) -> str | None:
-    """Return the recorded first-failure status text, or `None` when none was written."""
+    """Return the recorded first-failure status text.
+
+    Parameters:
+        worktree (Path): Guest checkout containing `.ci-temp`.
+
+    Returns:
+        str | None: The text, or `None` when none was written.
+    """
     path = worktree / ".ci-temp/first-failure"
     return path.read_text() if path.exists() else None
 
@@ -203,7 +210,7 @@ def test_a_missing_input_is_a_failure_not_a_default(
     worktree, env = guest
     del env[name]
     assert adapter.main(Host(), env) == 1
-    assert f"{name} is not set" in capfd.readouterr().err
+    assert f"`{name}` is not set" in capfd.readouterr().err
     assert first_failure(worktree) == (None if name == "HOME" else "1\n")
 
 

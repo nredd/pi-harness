@@ -50,8 +50,8 @@ def _require(env: Mapping[str, str], name: str) -> str:
     """
     try:
         return env[name]
-    except KeyError:
-        raise GuestError(f"wsl2-run: {name} is not set") from None
+    except KeyError as exc:
+        raise GuestError(f"wsl2-run: `{name}` is not set") from exc
 
 
 def _step_directory(worktree: Path, requested: str) -> None:
@@ -65,20 +65,41 @@ def _step_directory(worktree: Path, requested: str) -> None:
         GuestError: When the directory is unavailable or `..` or a symlink escapes the checkout.
     """
     try:
-        os.chdir(f"{worktree}/{requested}")
-    except OSError:
-        raise GuestError("Step directory escapes guest checkout or is unavailable") from None
-    if not f"{Path.cwd()}/".startswith(f"{worktree}/"):
+        os.chdir(worktree / requested)
+    except OSError as exc:
+        raise GuestError("Step directory escapes guest checkout or is unavailable") from exc
+    if not Path.cwd().is_relative_to(worktree):
         raise GuestError("Step directory escapes guest checkout")
 
 
-def _execute(env: dict[str, str], run: Runner, scratch: list[Path]) -> int:
+def _run_step(generated: bytes, env: dict[str, str], run: Runner) -> int:
+    """Run the step from a private copy under Bash, removing the copy on every exit including SIGTERM.
+
+    Parameters:
+        generated (bytes): The step with CR stripped.
+        env (dict[str, str]): The step's complete environment.
+        run (Runner): `subprocess.run`-compatible callable.
+
+    Returns:
+        int: The step's status (128 plus the signal number when it died by a signal).
+    """
+    descriptor, name = tempfile.mkstemp(prefix="step.", dir=env["RUNNER_TEMP"])
+    step = Path(name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(generated)
+        return run_command(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", name], run, env=env)[0]
+    finally:
+        with contextlib.suppress(OSError):
+            step.unlink(missing_ok=True)
+
+
+def _execute(env: dict[str, str], run: Runner) -> int:
     """Check the preconditions, then run the step under Bash exactly as GitHub's native shell would.
 
     Parameters:
         env (dict[str, str]): The adapter environment; becomes the step's environment.
         run (Runner): `subprocess.run`-compatible callable.
-        scratch (list[Path]): Receives the copied step so the caller can remove it on any exit.
 
     Returns:
         int: The step's status (128 plus the signal number when it died by a signal).
@@ -91,39 +112,31 @@ def _execute(env: dict[str, str], run: Runner, scratch: list[Path]) -> int:
         raise GuestError("WSL gates require an unprivileged Linux user")
     receipt = Path(runner_temp, "tool-path")
     if not receipt.is_file() or not receipt.stat().st_size:
-        raise GuestError(f"wsl2-run: {receipt} is missing or empty")
+        raise GuestError(f"wsl2-run: `tool-path` receipt '{receipt}' is missing or empty")
     env["PATH"] = receipt.read_text(encoding="utf-8", errors="surrogateescape").rstrip("\n")
-    checkout = f"{env['HOME']}/pi-harness-ci"
-    env["GITHUB_WORKSPACE"] = checkout
+    checkout = Path(env["HOME"], "pi-harness-ci")
+    env["GITHUB_WORKSPACE"] = str(checkout)
     # Resolve physical paths so '..', nested traversal and symlinks cannot escape.
-    _step_directory(Path(checkout).resolve(), _require(env, "WSL_STEP_DIRECTORY"))
+    _step_directory(checkout.resolve(), _require(env, "WSL_STEP_DIRECTORY"))
     # Do not modify the host-generated step; CRLF is possible even with an LF checkout.
     generated = Path(_require(env, "WSL_STEP_SCRIPT")).read_bytes().replace(b"\r", b"")
-    descriptor, name = tempfile.mkstemp(prefix="step.", dir=runner_temp)
-    scratch.append(Path(name))
-    with os.fdopen(descriptor, "wb") as step:
-        step.write(generated)
-    status = run_command(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", name], run, env=env)[0]
+    status = _run_step(generated, env, run)
     if status:
         sys.stderr.write(f"wsl2-run: guest-step failed with status {status}\n")
     return status
 
 
-def _retain(status: int, runner_temp: str, scratch: list[Path]) -> None:
-    """Keep the first failure status and drop the copied step; neither may mask the real status.
+def _retain(status: int, runner_temp: str) -> None:
+    """Keep the first failure status; recording it is best effort and never masks the real status.
 
     Parameters:
         status (int): The adapter's exit status.
         runner_temp (str): Guest `RUNNER_TEMP`.
-        scratch (list[Path]): Copied step files to remove.
     """
     first = Path(runner_temp, "first-failure")
     with contextlib.suppress(OSError):
         if status and not first.is_file():
             first.write_text(f"{status}\n", encoding="utf-8")
-    for step in scratch:
-        with contextlib.suppress(OSError):
-            step.unlink(missing_ok=True)
 
 
 def main(run: Runner = subprocess.run, environ: Mapping[str, str] | None = None) -> int:
@@ -136,6 +149,9 @@ def main(run: Runner = subprocess.run, environ: Mapping[str, str] | None = None)
     Returns:
         int: 0 when the step passed, else its status (1 for a refusal or preflight failure). SIGTERM exits 143
             after the first-failure record and step cleanup, like the old Bash `trap ... EXIT`.
+
+    Raises:
+        SystemExit: On SIGTERM, with status 143, after cleanup.
     """
     signal.signal(signal.SIGTERM, terminate)
     env = dict(os.environ if environ is None else environ)
@@ -144,10 +160,9 @@ def main(run: Runner = subprocess.run, environ: Mapping[str, str] | None = None)
     except GuestError as exc:
         sys.stderr.write(f"{exc}\n")
         return 1
-    scratch: list[Path] = []
     status = 1
     try:
-        status = _execute(env, run, scratch)
+        status = _execute(env, run)
     except GuestError as exc:
         sys.stderr.write(f"{exc}\n")
     except OSError as exc:
@@ -156,7 +171,7 @@ def main(run: Runner = subprocess.run, environ: Mapping[str, str] | None = None)
         status = int(exc.code or 0)
         raise
     finally:
-        _retain(status, env["RUNNER_TEMP"], scratch)
+        _retain(status, env["RUNNER_TEMP"])
     return status
 
 
