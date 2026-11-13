@@ -45,6 +45,7 @@ import { DAY_LABEL_WIDTH, heatmap, MAX_WEEKS, MONTH_OVERFLOW, weeksFor, YEAR_WEE
 import type { Call, Session } from "./load.ts";
 import { nth } from "./nth.ts";
 import { seriesPalette } from "./palette.ts";
+import { type ValueCall, valuation, valuationLines } from "./pricing.ts";
 import { timeAxis } from "./ticks.ts";
 
 type ThemeLike = Pick<Theme, "fg" | "bg" | "bold" | "style" | "colors">;
@@ -87,6 +88,8 @@ export interface StatsViewOptions {
 	coverage?: string;
 	/** Offline per-source provenance, rendered as a scrollable Machines tab. */
 	freshness?: readonly string[];
+	/** Synchronous host estimator over an already-loaded catalog; never network or auth. */
+	valueCall?: ValueCall;
 	tab?: Tab;
 }
 
@@ -168,9 +171,10 @@ export class StatsView implements Component {
 		if (this.tab === "Overview") body = this.scrolled(this.overviewBody(w, room), room);
 		else if (this.tab === "Machines")
 			body = this.scrolled(
-				(this.o.freshness ?? ["Per-machine freshness unknown (no source metadata)."]).flatMap((line) =>
-					wrapTextWithAnsi(this.paint("muted", line), contentWidth(w)),
-				),
+				[
+					...(this.o.freshness ?? ["Per-machine freshness unknown (no source metadata)."]),
+					...(this.o.valueCall ? valuationLines(this.scoped().ranged, this.o.valueCall) : []),
+				].flatMap((line) => wrapTextWithAnsi(this.paint("muted", line), contentWidth(w))),
 				room,
 			);
 		else {
@@ -303,7 +307,7 @@ export class StatsView implements Component {
 				label: "Cache tokens",
 				value: `${v(formatTokens(ov.cacheRead))} read · ${v(formatTokens(ov.cacheWrite))} write`,
 			},
-			{ label: "Notional cost", value: v(money(ov.cost)) },
+			{ label: "Recorded cost", value: v(money(ov.cost)) },
 		];
 	}
 
@@ -372,6 +376,14 @@ export class StatsView implements Component {
 			out.push("", this.paint("muted", "No usage in this range."));
 			return out;
 		}
+		if (this.o.valueCall)
+			out.push(
+				"",
+				...valuationLines(ranged, this.o.valueCall)
+					.slice(0, 2)
+					.concat("Pricing details: Machines tab.")
+					.flatMap((line) => wrapTextWithAnsi(this.paint("muted", line), inner)),
+			);
 		// Grow the chart into whatever the pane has left, in whole tick steps.
 		const smallest = this.chart(ranged, width, TICKS).lines;
 		const height = chartHeight(room - out.length - 1 - smallest.length + TICKS);
@@ -522,7 +534,17 @@ export class StatsView implements Component {
 		const list = this.listRows(totals, contentWidth(width), colors);
 		const listLines = list.reduce((n, row) => n + row.lines.length, 0);
 		const chart = this.chart(ranged, width, chartHeight(Math.max(Math.floor(room / 2), room - listLines) - 7));
-		const head = [...chart.lines, ""];
+		const head = [
+			...chart.lines,
+			"",
+			...(this.o.valueCall
+				? valuationLines(ranged, this.o.valueCall)
+						.slice(0, 2)
+						.concat("Pricing details: Machines tab.")
+						.flatMap((line) => wrapTextWithAnsi(this.paint("muted", line), contentWidth(width)))
+				: []),
+			"",
+		];
 		return {
 			lines: [...head, ...list.flatMap((row) => row.lines)],
 			owners: [...head.map(() => []), ...list.flatMap((row) => row.lines.map(() => row.models))],
@@ -564,7 +586,7 @@ export class StatsView implements Component {
 			formatTokens(m.cacheWrite),
 			money(m.cost),
 		];
-		const heads = ["Tokens", "Share", "In", "Out", "Cache read", "Cache write", "Cost (notional)"];
+		const heads = ["Tokens", "Share", "In", "Out", "Cache read", "Cache write", "Recorded cost"];
 		const nameWidth = Math.max(
 			...totals.map((m) => visibleWidth(sanitize(m.model)) + 4),
 			...providers.map((p) => visibleWidth(sanitize(p.provider)) + 2),
@@ -603,7 +625,7 @@ export class StatsView implements Component {
 			this.paint("muted", `  In: ${formatTokens(m.input)} · Out: ${formatTokens(m.output)}`),
 			this.paint(
 				"muted",
-				`  Cache: ${formatTokens(m.cacheRead)} read · ${formatTokens(m.cacheWrite)} write · ${money(m.cost)} notional`,
+				`  Cache: ${formatTokens(m.cacheRead)} read · ${formatTokens(m.cacheWrite)} write · ${money(m.cost)} recorded`,
 			),
 		];
 		for (const { provider, models, sum } of providers) {
@@ -640,11 +662,21 @@ function spread(left: string, right: string, width: number): string | undefined 
 }
 
 /** Plain-text per-model table for print/json/rpc modes, all time. */
-export function summary(calls: readonly Call[]): string {
+export function summary(calls: readonly Call[], valueCall?: ValueCall): string {
 	const totals = modelTotals(calls);
 	if (totals.length === 0) return "/stats: no usage recorded yet";
 	const grand = totals.reduce((n, m) => n + tokensOf(m), 0);
-	const head = ["provider", "model", "in", "out", "cache read", "cache write", "cost", "%"];
+	const head = [
+		"provider",
+		"model",
+		"in",
+		"out",
+		"cache read",
+		"cache write",
+		"recorded cost",
+		"%",
+		...(valueCall ? ["current estimate"] : []),
+	];
 	const body = totals.map((m) => [
 		sanitize(m.provider),
 		sanitize(m.model),
@@ -654,6 +686,17 @@ export function summary(calls: readonly Call[]): string {
 		formatTokens(m.cacheWrite),
 		money(m.cost),
 		percent(tokensOf(m), grand),
+		...(valueCall
+			? [
+					(() => {
+						const price = valuation(
+							calls.filter((c) => modelName(c) === m.name),
+							valueCall,
+						);
+						return price.cost === null ? "unknown" : `${money(price.cost)}${price.unpricedEvents ? " subset" : ""}`;
+					})(),
+				]
+			: []),
 	]);
 	const widths = head.map((h, c) => Math.max(h.length, ...body.map((r) => nth(r, c).length)));
 	const fmt = (r: string[]) =>
@@ -661,5 +704,10 @@ export function summary(calls: readonly Call[]): string {
 			.map((cell, c) => (c < 2 ? cell.padEnd(nth(widths, c)) : cell.padStart(nth(widths, c))))
 			.join("  ")
 			.trimEnd();
-	return [`/stats: ${formatTokens(grand)} tokens ${TOKENS_NOTE}, all time`, fmt(head), ...body.map(fmt)].join("\n");
+	return [
+		`/stats: ${formatTokens(grand)} tokens ${TOKENS_NOTE}, all time`,
+		fmt(head),
+		...body.map(fmt),
+		...(valueCall ? valuationLines(calls, valueCall).map(sanitize) : []),
+	].join("\n");
 }

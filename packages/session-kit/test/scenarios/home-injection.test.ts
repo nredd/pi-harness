@@ -160,7 +160,9 @@ it("factory isolates stats sessions and cache writes under its injected home", a
 	);
 	const current = probe();
 	createSessionKit({ homeDir: home })(current.pi as never);
-	await current.commands.get("stats")?.handler("", { mode: "json", ui: { notify: vi.fn(), setStatus: vi.fn() } });
+	await current.commands
+		.get("stats")
+		?.handler("", { mode: "json", modelRegistry: { getAll: () => [] }, ui: { notify: vi.fn(), setStatus: vi.fn() } });
 	expect(current.messages).toEqual([
 		expect.objectContaining({
 			content: expect.stringContaining("isolated  stats  987.7M"),

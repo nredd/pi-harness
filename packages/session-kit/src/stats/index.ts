@@ -11,6 +11,7 @@ import { say } from "../output.ts";
 import { StatsView, summary } from "./component.ts";
 import { freshnessLines } from "./freshness.ts";
 import type { Loaded } from "./load.ts";
+import { createValuer } from "./pricing.ts";
 import { type Combined, coverageLabel, loadCombined } from "./snapshot.ts";
 
 const STATUS_KEY = "session-kit:stats";
@@ -52,6 +53,7 @@ export function register(
 				if (tui) ctx.ui.setStatus(STATUS_KEY, undefined);
 			}
 
+			const valueCall = createValuer(ctx.modelRegistry.getAll());
 			const damage = [...problems(loaded), ...loaded.coverage.problems.map((p) => `/stats: ${p}`)];
 			const coverage = coverageLabel(loaded.coverage);
 			const freshness = freshnessLines(loaded.coverage, clock.now());
@@ -60,7 +62,15 @@ export function register(
 					pi,
 					ctx,
 					MESSAGE_TYPE,
-					[summary(loaded.calls.filter((c) => c.ms <= clock.now())), coverage, ...freshness, ...damage].join("\n"),
+					[
+						summary(
+							loaded.calls.filter((c) => c.ms <= clock.now()),
+							valueCall,
+						),
+						coverage,
+						...freshness,
+						...damage,
+					].join("\n"),
 					"info",
 				);
 				return;
@@ -79,6 +89,7 @@ export function register(
 						badLines,
 						coverage,
 						freshness,
+						valueCall,
 						now: clock.now(),
 						theme,
 						rows: () => tuiHost.terminal.rows,

@@ -142,14 +142,19 @@ not producer freshness; without imports it says `viewer never imported`. Tab/Shi
 instant plus age at opening. Old exports stay old after a fresh import; future clocks are flagged.
 Unknown/rejected sources and retained last-good snapshots are explicit. This lists known sources,
 not undiscovered machines. Invalid or missing snapshots show `incomplete coverage`.
-Print/JSON output includes the same provenance. Details: [here](docs/stats-snapshots.md).
+Print/JSON output includes the same provenance. Recorded costs stay unchanged. A separate
+current-rate API-equivalent estimate uses only the already-loaded catalogue and core's shared
+estimator, with priced/unpriced event and token coverage. Partial value is a priced subset,
+not a full total. Machines shows price sources, dates, conditions and unknown reasons.
+Older hosts without the estimator report unknown current value; a coherent core/package
+release is required. No pins or live configuration change here. Details: [here](docs/stats-snapshots.md).
 
 Pinned header: tabs and the coverage note, then the date ranges and the model filter, then a rule.
 Overview: an activity heatmap (one column per week) with the headline numbers (favorite model,
-total tokens, sessions, longest session, active days, streaks, cache tokens, notional cost) beside
+total tokens, sessions, longest session, active days, streaks, cache tokens, recorded cost) beside
 it from about 105 columns and under it below that, then the token chart. Models: the chart, then every
 model grouped under its provider. From about 100 columns that is a table (tokens, share, in, out, cache
-read, cache write, notional cost; a subtotal line per provider), else three-line cards. Tab switches
+read, cache write, recorded cost; a subtotal line per provider), else three-line cards. Tab switches
 tabs, `r` cycles All / 7d / 30d / 5h / 24h (default All), `m`/`M` cycle the filter (All, each provider,
 each `provider/model`), `j/k` or arrows scroll, `q` or Escape closes.
 

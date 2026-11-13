@@ -78,7 +78,12 @@ function setup(mode: string) {
 		);
 		rendered.push(view.render(100));
 	});
-	const ctx = { mode, cwd: dir, ui: { notify: vi.fn(), setStatus: vi.fn(), custom } };
+	const ctx = {
+		mode,
+		cwd: dir,
+		modelRegistry: { getAll: vi.fn(() => []) },
+		ui: { notify: vi.fn(), setStatus: vi.fn(), custom },
+	};
 	return { run: (args: string) => handler(args, ctx), ctx, custom, sendMessage, rendered };
 }
 
@@ -127,6 +132,10 @@ describe("/stats command", () => {
 		expect(text).toMatch(/^\/stats: 30k tokens \(in \+ out \+ cache\), all time\n/);
 		expect(text).toMatch(/anthropic +claude-opus-5-5 +5 +500 +0 +20k +\$0\.30 +68\.8%/);
 		expect(text).toMatch(/openai-codex +gpt-6\.1-sol +9k +300/);
+		expect(ctx.modelRegistry.getAll).toHaveBeenCalledTimes(1);
+		expect(text).toContain("recorded cost");
+		expect(text).toContain("Current-rate API-equivalent estimate: unknown");
+		expect(text).toContain("0 priced / 2 unpriced events");
 	});
 
 	it("json mode adds one display message", async () => {
