@@ -1555,6 +1555,60 @@ def test_pack_builds_before_packing(tmp_path: Path, sandbox: pc.Sandbox) -> None
     assert "dist/index.ts" in artifact.files
 
 
+def _write_dist(source: Path, offset: float) -> None:
+    """Write `dist/index.ts` with an mtime `offset` seconds after the newest source file.
+
+    Parameters:
+        source (Path): Package directory.
+        offset (float): Seconds relative to the newest `src/` or `package.json` mtime.
+    """
+    newest = max(
+        p.stat().st_mtime for p in [*(source / "src").rglob("*"), source / "package.json"] if p.is_file()
+    )
+    (source / "dist").mkdir()
+    dist = source / "dist" / "index.ts"
+    dist.write_text("x")
+    os.utime(dist, (newest + offset, newest + offset))
+
+
+def test_pack_skips_the_build_when_dist_is_fresh(tmp_path: Path, sandbox: pc.Sandbox) -> None:
+    """A fresh `dist/` is not rewritten, so parallel packs never race on in-place output.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        sandbox (pc.Sandbox): Scrubbed environment.
+    """
+    source = _build_fixture(tmp_path, 'node -e "process.exit(3)"')
+    _write_dist(source, 5)
+    artifact = pc.pack(DEV_TOOLS, tmp_path / "out", sandbox, source)
+    assert "dist/index.ts" in artifact.files
+
+
+def test_pack_rebuilds_a_stale_dist(tmp_path: Path, sandbox: pc.Sandbox) -> None:
+    """A `dist/` older than `src/` is rebuilt, never packed on old bytes.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        sandbox (pc.Sandbox): Scrubbed environment.
+    """
+    source = _build_fixture(tmp_path, 'node -e "process.exit(3)"')
+    _write_dist(source, -5)
+    with pytest.raises(pc.ContractError):
+        pc.pack(DEV_TOOLS, tmp_path / "out", sandbox, source)
+
+
+def test_dist_is_stale_without_a_build_or_src(tmp_path: Path) -> None:
+    """No `dist/` is stale; a package with no `src/` has nothing to compare and is fresh once built.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+    """
+    assert pc.dist_is_stale(tmp_path)
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "a.js").write_text("x")
+    assert not pc.dist_is_stale(tmp_path)
+
+
 def test_pack_fails_when_the_build_fails(tmp_path: Path, sandbox: pc.Sandbox) -> None:
     """A failed build must stop the pack rather than ship a package without its entry.
 

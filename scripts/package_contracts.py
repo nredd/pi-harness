@@ -1655,6 +1655,25 @@ def verify_stock_pi(prefix: Path, pi_bin: Path, sandbox: Sandbox) -> None:
 # --- tarball audit --------------------------------------------------------------------------------
 
 
+def dist_is_stale(package_dir: Path) -> bool:
+    """Report whether `dist/` is missing or older than the newest `src/` or `package.json` file.
+
+    Parameters:
+        package_dir (Path): Package directory.
+
+    Returns:
+        bool: True when a build is needed before packing.
+    """
+    outputs = [p.stat().st_mtime for p in (package_dir / "dist").rglob("*") if p.is_file()]
+    if not outputs:
+        return True
+    inputs = [p.stat().st_mtime for p in (package_dir / "src").rglob("*") if p.is_file()]
+    manifest = package_dir / "package.json"
+    if manifest.is_file():
+        inputs.append(manifest.stat().st_mtime)
+    return max(inputs, default=0.0) > min(outputs)
+
+
 def pack(
     contract: PackageContract, dest: Path, sandbox: Sandbox, package_dir: Path | None = None
 ) -> PackedArtifact:
@@ -1673,14 +1692,17 @@ def pack(
         ContractError: If npm output is malformed or disagrees with the tarball.
     """
     package_dir = package_dir or REPO_ROOT / "packages" / contract.directory
-    # `--ignore-scripts` skips `prepack` and `dist/` is gitignored, so build explicitly. A package without a
-    # `build` script is untouched; a failed build raises; a missing entry fails the `required` audit.
-    run(
-        [sandbox.tools.npm, "run", "build", "--if-present"],
-        env=sandbox.env(),
-        cwd=package_dir,
-        timeout=NPM_TIMEOUT_S,
-    )
+    # `--ignore-scripts` skips `prepack` and `dist/` is gitignored, so build explicitly, but only when `dist/`
+    # is missing or older than `src/`: an in-place rebuild races with parallel packs and readers of the same
+    # checkout. A package without a `build` script is untouched; a failed build raises; a missing entry fails
+    # the `required` audit.
+    if dist_is_stale(package_dir):
+        run(
+            [sandbox.tools.npm, "run", "build", "--if-present"],
+            env=sandbox.env(),
+            cwd=package_dir,
+            timeout=NPM_TIMEOUT_S,
+        )
     done = run(
         [sandbox.tools.npm, "pack", "--json", "--ignore-scripts", "--pack-destination", dest],
         env=sandbox.env(),

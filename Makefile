@@ -24,7 +24,7 @@ install-owned: verify-root-overrides  ## Verify root core overrides, install own
 	$(MAKE) build
 	cd integration && env -u GH_TOKEN uv sync --locked
 
-build:  ## Build every generated `dist/` (gitignored; `pi.extensions`, the `local` stack and inprocess tests load it). Needs `npm ci` first
+build:  ## Build every generated `dist/` (gitignored; `pi.extensions`, the `local` stack and inprocess tests load it). Needs `npm ci` first. `check-scripts`, `check-core-compaction`, `integration/inprocess` tests and the `local` stack run it first so a stale `dist/` is never loaded
 	env -u GH_TOKEN npm run build
 
 install-benchmark:  ## Install benchmarks/comparison, only `check-benchmark` reads it
@@ -32,7 +32,7 @@ install-benchmark:  ## Install benchmarks/comparison, only `check-benchmark` rea
 
 .PHONY: check-core-compaction
 check-core-compaction:  ## Assembled child compaction on built candidate forks/pi, isolated from real auth
-	npm run build --workspace packages/subagents
+	$(MAKE) build
 	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json integration/core-source
 	node_modules/.bin/tsc -p integration/core-source/tsconfig.json
 	@sandbox=$$(mktemp -d); trap 'rm -rf "$$sandbox"' EXIT; \
@@ -52,6 +52,7 @@ check-ts:  ## Biome (non-rewriting), tsc, vitest for every npm workspace, or onl
 	PATH="$$PATH:$${HOME}/.pi/agent/bin" npm run check$(foreach workspace,$(WORKSPACES), --workspace=$(workspace))
 
 check-scripts:  ## Format/lint/type/tests for scripts/ (real disposable git repos)
+	$(MAKE) build
 	$(call PY_GATE,scripts,--project ../integration,,.)
 	$(MAKE) check-import-audit
 
