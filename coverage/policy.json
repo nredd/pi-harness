@@ -31,12 +31,14 @@
     { "package": "coverage-configurations", "signal": "owned", "path": "integration/probes/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
     { "package": "coverage-configurations", "signal": "owned", "path": "integration/providers/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
     { "package": "coverage-configurations", "signal": "owned", "path": "scripts/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
-    { "package": "plan-mode", "signal": "bun", "path": "packages/plan-mode/src/interactive-ui.ts", "reason": "Relative to integration base 71b0aea: remove the same validated zero-statement facade from the native Bun subset membership, not executable target logic. Native wrapper/linkage counters are not executable source counters; UI implementations remain inventoried and the subset stays report-only." }
+    { "package": "plan-mode", "signal": "bun", "path": "packages/plan-mode/src/interactive-ui.ts", "reason": "Relative to integration base 71b0aea: remove the same validated zero-statement facade from the native Bun subset membership, not executable target logic. Native wrapper/linkage counters are not executable source counters; UI implementations remain inventoried and the subset stays report-only." },
+    { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_cleanup.sh", "reason": "Relative to origin/main 06ceb029: deleted. Its cleanup is folded into `scripts/wsl2_capture.py` (`cleanup`), measured under python-scripts (#695 slice 3); the `shell-scripts` inventory cannot name a `.py` replacement. `wsl2_capture.sh` stays as an exec bootstrap and remains owned." }
   ],
   "enforcement_changes": [],
   "verification_helpers": [
     { "path": "scripts/check-biome-paths.test.mjs", "reason": "Non-shipped regression test exercises real Biome valid/missing-path behavior and preflight rejection; verification only, not a runtime entrypoint." },
     { "path": "scripts/router_contract.test.mjs", "reason": "Non-shipped Vitest suite runs the packed-router contract fixture in process against virtual mocks of its placeholder imports; verification only, not a runtime entrypoint." },
+    { "path": "integration/inprocess/verification/core-pins.ts", "reason": "Resolves the lockfile pin and release record to a cached tarball for `settlement-identity.test.ts` and `core-artifacts.test.ts`; it only reads the lockfile, `releases/` and the account home directory (`userInfo`) from disk; pin selection (`selectReleaseDigest`), cache search order (`npmCacheDirs`) and the digest checks are measured, with negative tests, in `core-artifacts.ts`. Never shipped." },
     { "path": "integration/inprocess/verification/home-setup.ts", "reason": "Vitest setup entry that only calls the measured `installHomeGuard` in `home-guard.ts`; Vitest hard-excludes a config's own `setupFiles` from coverage, so no producer can measure it. Never shipped." },
     { "path": "packages/computer-use/scripts/check-linux-live.mjs", "reason": "Opt-in D-Bus session launcher for the live Linux Vitest scenario in test/linux-live.test.mjs; holds no assertions and is absent from published files." },
     { "path": "packages/computer-use/scripts/pi-cubench-agent.mjs", "reason": "Manual Cubench benchmark driver using a benchmark gateway; verification infrastructure excluded from npm published files." }
@@ -309,7 +311,7 @@
       "status": "pending",
       "goal": "excluded",
       "goal_reason": "Owner has not chosen how to measure shell and PowerShell (port to Python vs kcov/Pester): https://github.com/nredd/pi-harness/issues/695. Inventory stays visible, with no coverage claim.",
-      "note": "Not measured, tracked in #695: merge-pr.sh is only the explicit-Node compatibility bootstrap; its merge policy is measured under import-audit. install_gh_linux.sh is likewise only an `exec python3` bootstrap; its logic in `scripts/install_gh_linux.py` is measured under python-scripts. No producer or shellcheck for the remaining install_*.sh, wsl2_*.sh and wsl2_*.ps1. `packages/computer-use/scripts/make-signing-cert.sh` is inventoried under `computer-use`.",
+      "note": "Not measured, tracked in #695: merge-pr.sh is only the explicit-Node compatibility bootstrap; its merge policy is measured under import-audit. install_gh_linux.sh is likewise only an `exec python3` bootstrap; its logic in `scripts/install_gh_linux.py` is measured under python-scripts. install_wsl_owned_tools.sh, wsl2_run.sh and wsl2_capture.sh are the same bootstrap; their logic in `scripts/install_wsl_owned_tools.py`, `scripts/wsl2_run.py` and `scripts/wsl2_capture.py` (shared plumbing in `scripts/wsl2_exec.py`; the former `wsl2_cleanup.sh` is folded into the capture) is measured under python-scripts. No producer or shellcheck for the remaining wsl2_*.sh and wsl2_*.ps1. `packages/computer-use/scripts/make-signing-cert.sh` is inventoried under `computer-use`.",
       "signals": {}
     },
     "runtime-build-tooling": {
@@ -471,7 +473,7 @@
     },
     "inprocess": {
       "root": "integration/inprocess",
-      "owned": ["agents-support.ts", "goal-support.ts", "native-timers.ts", "support.ts", "todo-support.ts", "verification/home-guard.ts"],
+      "owned": ["agents-support.ts", "goal-support.ts", "native-timers.ts", "support.ts", "todo-support.ts", "verification/core-artifacts.ts", "verification/home-guard.ts"],
       "exclusions": [],
       "status": "measured",
       "note": "In-process stack fixtures, measured with every fixture module the suites run. `verification/home-setup.ts` stays a verification helper: Vitest hard-excludes its own `setupFiles` from coverage.",

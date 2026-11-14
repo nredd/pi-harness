@@ -22,9 +22,10 @@ import signal
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
-from types import FrameType
+
+from wsl2_exec import Runner, run_command, terminate
 
 GH_VERSION = "2.103.2"
 GH_SHA256_AMD64 = "62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8"
@@ -35,46 +36,6 @@ ASSETS = {
     "aarch64": ("arm64", GH_SHA256_ARM64),
     "arm64": ("arm64", GH_SHA256_ARM64),
 }
-
-Runner = Callable[..., subprocess.CompletedProcess[str]]
-
-
-def _terminate(signum: int, _frame: FrameType | None) -> None:
-    """Turn SIGTERM into `SystemExit(128 + signum)` so `with` cleanup runs, like the old bash `trap ... EXIT`.
-
-    Parameters:
-        signum (int): The delivered signal number.
-        _frame (FrameType | None): Interrupted frame, unused.
-
-    Raises:
-        SystemExit: Always, with the conventional shell status for death by signal (143 for SIGTERM).
-    """
-    raise SystemExit(128 + signum)
-
-
-def _run(
-    cmd: Sequence[str], run: Runner, *, stdin: str | None = None, capture: bool = False
-) -> tuple[int, str]:
-    """Run one command without raising on a non-zero exit.
-
-    Parameters:
-        cmd (Sequence[str]): Argument vector, resolved through `PATH`.
-        run (Runner): `subprocess.run`-compatible callable.
-        stdin (str | None): Text fed to the command's standard input.
-        capture (bool): Return standard output instead of passing it through.
-
-    Returns:
-        tuple[int, str]: Exit status (127 when the command cannot be started, like a shell) and captured
-            standard output (empty unless `capture`).
-    """
-    try:
-        completed = run(
-            list(cmd), input=stdin, text=True, check=False, stdout=subprocess.PIPE if capture else None
-        )
-    except OSError as exc:
-        sys.stderr.write(f"{cmd[0]}: {exc.strerror or exc}\n")
-        return 127, ""
-    return completed.returncode, completed.stdout if capture else ""
 
 
 def _uname(flag: str, run: Runner) -> str:
@@ -87,7 +48,7 @@ def _uname(flag: str, run: Runner) -> str:
     Returns:
         str: The field without its trailing newline.
     """
-    return _run(["uname", flag], run, capture=True)[1].rstrip("\n")
+    return run_command(["uname", flag], run, capture=True)[1].rstrip("\n")
 
 
 def _unsupported(run: Runner) -> int:
@@ -124,20 +85,23 @@ def _install(install_dir: str, asset: tuple[str, str], run: Runner) -> int:
         tarball = Path(scratch) / archive
         url = f"https://github.com/cli/cli/releases/download/v{GH_VERSION}/{archive}"
         curl = ["curl", "--fail", "--location", "--silent", "--show-error", "--retry", "3"]
-        status = _run([*curl, "--output", str(tarball), url], run)[0]
-        if not status and _run(["sha256sum", "--check", "--status"], run, stdin=f"{sha256}  {tarball}\n")[0]:
+        status = run_command([*curl, "--output", str(tarball), url], run)[0]
+        if (
+            not status
+            and run_command(["sha256sum", "--check", "--status"], run, stdin=f"{sha256}  {tarball}\n")[0]
+        ):
             sys.stderr.write(f"gh {GH_VERSION} sha256 mismatch for {archive}; refusing to install\n")
             return 1
         if not status:
             extract = ["tar", "--extract", "--gzip", "--file", str(tarball), "--directory", install_dir]
-            status = _run([*extract, "--strip-components=1"], run)[0]
+            status = run_command([*extract, "--strip-components=1"], run)[0]
     if status:
         return status
     gh = f"{install_dir}/bin/gh"
-    reported = _run([gh, "--version"], run, capture=True)[1].split("\n", 1)[0].split(" ")
+    reported = run_command([gh, "--version"], run, capture=True)[1].split("\n", 1)[0].split(" ")
     if reported[2:3] != [GH_VERSION]:
         return 1
-    status = _run([gh, "attestation", "verify", "--help"], run, capture=True)[0]
+    status = run_command([gh, "attestation", "verify", "--help"], run, capture=True)[0]
     if not status:
         sys.stdout.write(f"Installed gh {GH_VERSION} at {gh}\n")
     return status
@@ -154,7 +118,7 @@ def main(argv: Sequence[str], run: Runner = subprocess.run) -> int:
         int: Process exit status. 2 for usage, 1 for a refused platform, digest or version, else the
             failing tool's status. SIGTERM (e.g. from `timeout`) exits 143 after removing the scratch dir.
     """
-    signal.signal(signal.SIGTERM, _terminate)
+    signal.signal(signal.SIGTERM, terminate)
     if len(argv) != 1 or not argv[0]:
         sys.stderr.write("usage: install_gh_linux.sh <install-dir>\n")
         return 2
