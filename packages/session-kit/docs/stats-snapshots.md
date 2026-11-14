@@ -96,10 +96,14 @@ Installation state, never synced:
   exclusively and atomically, and a corrupt file fails rather than being replaced. The set is
   written only after the manifest is published.
 - `DIR/pi-session-kit/export.lock`: held for the whole of an export (read the previous snapshot,
-  check the set, publish, record state). Created atomically with the owner's pid; a lock whose
-  process is dead (or whose contents are not a pid) is reclaimed under a second lock,
-  `export.lock.reclaim`, so two reclaimers cannot delete each other's fresh lock; a live owner fails
-  the second export with `export already running`. Safe to delete when no export is running.
+  check the set, publish, record state), created atomically with the owner's pid. It only ever
+  changes under a second lock, `export.lock.reclaim`, held for the few calls it takes to inspect and
+  take it; a process that cannot get the guard, or finds a live owner, fails with
+  `export already running` instead of waiting. A lock whose owner is dead (or whose contents are not
+  a pid) is cleared by the next export. Two exports never run at once, and the failure modes are
+  safe: a pid reused by an unrelated live process, or a process killed in the few calls it holds the
+  guard, leave exports failing `export already running` until the file is deleted. Delete
+  `export.lock` and `export.lock.reclaim` only when no export is running.
 - `DIR/pi-session-kit/stats-global.json`: one atomically replaced document containing validated
   last-good machine snapshots, last successful import time and coverage problems. Imports do not
   mutate local usage or installation identity. A wholly failed import does not advance the sync

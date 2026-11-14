@@ -23,50 +23,43 @@ async function owner(path: string): Promise<number | null> {
 	}
 }
 
-/** Publish `path` atomically with this process's pid in it (hard link); `false` if it already exists. */
-async function tryAcquire(path: string): Promise<boolean> {
+/** Publish `path` atomically with this process's pid in it (hard link); EEXIST if it already exists. */
+async function create(path: string): Promise<void> {
 	const tmp = `${path}.${randomUUID()}.tmp`;
 	await writeFile(tmp, String(process.pid), { flag: "wx", mode: 0o600 });
 	try {
 		await link(tmp, path);
-		return true;
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
-		throw error;
 	} finally {
 		await unlink(tmp);
 	}
 }
 
-/** Take attempts before giving up: each one either gets the lock or sees another process make progress. */
-const ATTEMPTS = 3;
-
 /**
- * Run `fn` holding the lock at `path`; a live owner fails with `busy`. A lock whose owner is dead (or whose
- * contents are no pid) is reclaimed under a second lock, `<path>.reclaim`: reclaimers take turns, and each
- * re-reads the lock once it holds that guard, so one that lost the race sees its predecessor's live lock and
- * leaves it alone instead of deleting it. A guard left by a dead reclaimer is cleared the same way.
+ * Run `fn` holding the lock at `path`. A live owner fails with `busy`; a lock whose owner is dead (or whose
+ * contents are no pid) is cleared.
+ *
+ * The lock only ever changes under a second lock, `<path>.reclaim`, created exclusively and held for the
+ * few filesystem calls it takes to inspect and take `path`; a contender that cannot get it fails with
+ * `busy` rather than waiting. So nobody can delete a lock between another process's check and its own
+ * create, and the lock is never removed by anyone but its owner or a process that has just seen it dead.
+ * Nothing recovers a guard left by a process that died inside that window: the export fails `busy` until
+ * the file is deleted, never running two at once. A reused pid also reads as live; both are documented.
  */
 export async function withLock<T>(path: string, busy: string, fn: () => Promise<T>): Promise<T> {
 	await mkdir(dirname(path), { recursive: true });
 	const guard = `${path}.reclaim`;
-	let held = false;
-	for (let attempt = 0; !held; attempt++) {
-		held = await tryAcquire(path);
-		if (held) break;
+	try {
+		await create(guard);
+	} catch (error) {
+		throw (error as NodeJS.ErrnoException).code === "EEXIST" ? new Error(busy) : error;
+	}
+	try {
 		const pid = await owner(path);
-		if (attempt === ATTEMPTS - 1 || (pid !== null && alive(pid))) throw new Error(busy);
-		if (await tryAcquire(guard)) {
-			try {
-				const now = await owner(path);
-				if (now === null || !alive(now)) await rm(path, { recursive: true, force: true });
-			} finally {
-				await rm(guard, { force: true });
-			}
-		} else {
-			const reclaimer = await owner(guard);
-			if (reclaimer === null || !alive(reclaimer)) await rm(guard, { recursive: true, force: true });
-		}
+		if (pid !== null && alive(pid)) throw new Error(busy);
+		await rm(path, { recursive: true, force: true });
+		await create(path);
+	} finally {
+		await rm(guard, { force: true });
 	}
 	try {
 		return await fn();

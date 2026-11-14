@@ -931,40 +931,30 @@ async function owner(path) {
     return null;
   }
 }
-async function tryAcquire(path) {
+async function create(path) {
   const tmp = `${path}.${randomUUID3()}.tmp`;
   await writeFile3(tmp, String(process.pid), { flag: "wx", mode: 384 });
   try {
     await link(tmp, path);
-    return true;
-  } catch (error) {
-    if (error.code === "EEXIST") return false;
-    throw error;
   } finally {
     await unlink(tmp);
   }
 }
-var ATTEMPTS = 3;
 async function withLock(path, busy, fn) {
   await mkdir3(dirname3(path), { recursive: true });
   const guard = `${path}.reclaim`;
-  let held = false;
-  for (let attempt = 0; !held; attempt++) {
-    held = await tryAcquire(path);
-    if (held) break;
+  try {
+    await create(guard);
+  } catch (error) {
+    throw error.code === "EEXIST" ? new Error(busy) : error;
+  }
+  try {
     const pid = await owner(path);
-    if (attempt === ATTEMPTS - 1 || pid !== null && alive(pid)) throw new Error(busy);
-    if (await tryAcquire(guard)) {
-      try {
-        const now = await owner(path);
-        if (now === null || !alive(now)) await rm(path, { recursive: true, force: true });
-      } finally {
-        await rm(guard, { force: true });
-      }
-    } else {
-      const reclaimer = await owner(guard);
-      if (reclaimer === null || !alive(reclaimer)) await rm(guard, { recursive: true, force: true });
-    }
+    if (pid !== null && alive(pid)) throw new Error(busy);
+    await rm(path, { recursive: true, force: true });
+    await create(path);
+  } finally {
+    await rm(guard, { force: true });
   }
   try {
     return await fn();

@@ -92,62 +92,49 @@ describe("withLock", () => {
 		expect(readFileSync(lock, "utf8")).toBe("1");
 	});
 
-	it("lets exactly one of many contenders reclaim a dead lock, never two at once", async () => {
+	it("lets one of many simultaneous contenders run, never two at once", async () => {
 		mkdirSync(join(dir, "sub"));
-		for (let round = 0; round < 25; round++) {
-			writeFileSync(lock, String(DEAD));
-			let inside = 0;
-			let peak = 0;
-			const contender = () =>
-				withLock(lock, BUSY, async () => {
-					inside++;
-					peak = Math.max(peak, inside);
-					await new Promise((r) => setTimeout(r, 2));
-					inside--;
-				});
-			const results = await Promise.allSettled([contender(), contender(), contender(), contender()]);
-			expect(peak).toBe(1);
-			expect(results.some((r) => r.status === "fulfilled")).toBe(true);
-			for (const r of results) if (r.status === "rejected") expect(String(r.reason)).toContain(BUSY);
+		for (const start of [undefined, String(DEAD)]) {
+			for (let round = 0; round < 25; round++) {
+				if (start) writeFileSync(lock, start);
+				let inside = 0;
+				let peak = 0;
+				const contender = () =>
+					withLock(lock, BUSY, async () => {
+						inside++;
+						peak = Math.max(peak, inside);
+						await new Promise((r) => setTimeout(r, 2));
+						inside--;
+					});
+				const results = await Promise.allSettled([contender(), contender(), contender(), contender()]);
+				expect(peak).toBe(1);
+				expect(results.some((r) => r.status === "fulfilled")).toBe(true);
+				for (const r of results) if (r.status === "rejected") expect(String(r.reason)).toContain(BUSY);
+			}
 		}
 		expect(existsSync(lock)).toBe(false);
 		expect(existsSync(`${lock}.reclaim`)).toBe(false);
 	});
 
-	it("does not delete a lock a faster reclaimer already replaced", async () => {
+	it("cannot slip in while another process is inspecting the lock, and leaves its state alone", async () => {
 		mkdirSync(join(dir, "sub"));
 		writeFileSync(lock, String(DEAD));
-		// This contender saw the dead owner, then lost the guard race to one that took the lock for itself.
-		const real = process.kill.bind(process);
-		const kill = vi.spyOn(process, "kill");
-		let replaced = false;
-		kill.mockImplementation((pid, signal) => {
-			if (pid !== DEAD) return real(pid, signal);
-			if (!replaced) {
-				replaced = true;
-				writeFileSync(lock, String(process.ppid)); // a live process now owns it
-			}
-			throw Object.assign(new Error("no such process"), { code: "ESRCH" });
-		});
-		try {
+		// another process holds the guard mid-reclaim (or died inside that window): nothing is touched
+		for (const guard of [String(process.pid), String(DEAD), ""]) {
+			writeFileSync(`${lock}.reclaim`, guard);
 			await expect(withLock(lock, BUSY, async () => 1)).rejects.toThrow(BUSY);
-		} finally {
-			kill.mockRestore();
+			expect(readFileSync(`${lock}.reclaim`, "utf8")).toBe(guard);
+			expect(readFileSync(lock, "utf8")).toBe(String(DEAD));
 		}
-		expect(readFileSync(lock, "utf8")).toBe(String(process.ppid));
 	});
 
-	it("clears a guard left by a dead reclaimer, and waits out a live one", async () => {
-		mkdirSync(join(dir, "sub"));
-		writeFileSync(lock, String(DEAD));
-		writeFileSync(`${lock}.reclaim`, String(DEAD));
-		await expect(withLock(lock, BUSY, async () => "ok")).resolves.toBe("ok");
+	it("releases its guard on every path out", async () => {
+		await withLock(lock, BUSY, async () => {
+			expect(existsSync(`${lock}.reclaim`)).toBe(false);
+			await expect(withLock(lock, BUSY, async () => 1)).rejects.toThrow(BUSY);
+			expect(existsSync(`${lock}.reclaim`)).toBe(false);
+		});
 		expect(existsSync(`${lock}.reclaim`)).toBe(false);
-
-		writeFileSync(lock, String(DEAD));
-		writeFileSync(`${lock}.reclaim`, String(process.pid));
-		await expect(withLock(lock, BUSY, async () => "no")).rejects.toThrow(BUSY);
-		expect(readFileSync(`${lock}.reclaim`, "utf8")).toBe(String(process.pid));
 	});
 
 	it("passes through a failure to publish the lock, leaving no temporary file behind", async () => {
