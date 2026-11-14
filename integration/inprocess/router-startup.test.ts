@@ -23,7 +23,6 @@ import {
 	createTestUiContext,
 	type FauxProviderRegistration,
 	fauxAssistantMessage,
-	getAssistantTexts,
 } from "@earendil-works/pi-coding-agent/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigResult, Profile } from "../../packages/subscription-router/src/config.ts";
@@ -77,7 +76,11 @@ describe("router/default startup, quota dispatch and resume", () => {
 			.getBranch()
 			.flatMap((entry) => (entry.type === "model_change" ? [`${entry.provider}/${entry.modelId}`] : []));
 	const answer = (text: string) => fauxAssistantMessage(text);
-	const respondOn = (index: number, text: string) => physical[index]?.setResponses([answer(text)]);
+	const respondOn = (index: number, text: string) => {
+		const target = physical[index];
+		if (!target) throw new Error(`No physical provider at index ${index}`);
+		target.setResponses([answer(text)]);
+	};
 	const calls = () => physical.map((p) => p.state.callCount);
 
 	beforeEach(async () => {
@@ -105,13 +108,23 @@ describe("router/default startup, quota dispatch and resume", () => {
 		});
 	});
 
-	afterEach(async () => {
-		vi.unstubAllGlobals();
-		for (const s of started.splice(0).reverse()) {
+	/** Shut down and dispose one started session, even if its shutdown handlers throw. */
+	async function close(s: Started): Promise<void> {
+		started.splice(started.indexOf(s), 1);
+		try {
 			await s.session.extensionRunner?.emit({ type: "session_shutdown", reason: "quit" });
+		} finally {
 			s.session.dispose();
 		}
-		await stack.cleanup();
+	}
+
+	afterEach(async () => {
+		vi.unstubAllGlobals();
+		try {
+			for (const s of [...started].reverse()) await close(s);
+		} finally {
+			await stack.cleanup();
+		}
 	});
 
 	/** Start like the CLI: services, `--model` resolution, session from services, then bind. */
@@ -162,6 +175,12 @@ describe("router/default startup, quota dispatch and resume", () => {
 		return result;
 	}
 
+	/** Assistant text per turn, oldest first. */
+	const texts = (s: Started) =>
+		s.session.messages.flatMap((m) =>
+			m.role === "assistant" ? [m.content.flatMap((c) => (c.type === "text" ? [c.text] : [])).join("")] : [],
+		);
+
 	/** The physical model that answered each assistant turn, oldest first. */
 	const answered = (s: Started) =>
 		s.session.messages.flatMap((m) => (m.role === "assistant" ? [`${m.provider}/${m.model}`] : []));
@@ -182,7 +201,7 @@ describe("router/default startup, quota dispatch and resume", () => {
 			await s.session.prompt("three");
 
 			expect(answered(s)).toEqual(["spike-a/sonnet-a", "spike-b/terra-b", "spike-a/sonnet-a"]);
-			expect(getAssistantTexts({ session: s.session } as never)).toEqual(["on a", "on b", "on a again"]);
+			expect(texts(s)).toEqual(["on a", "on b", "on a again"]);
 			expect(calls()).toEqual([2, 1]);
 			expect(fetched).toEqual([]);
 		});
@@ -204,7 +223,12 @@ describe("router/default startup, quota dispatch and resume", () => {
 			const s = await launch();
 			stack.usage.set("spike-a", 100);
 			stack.usage.set("spike-b", 100);
-			await s.session.prompt("blocked").catch(() => undefined);
+			await s.session.prompt("blocked");
+			const failed = s.session.messages.filter((m) => m.role === "assistant").at(-1);
+			expect(failed).toMatchObject({ stopReason: "error" });
+			expect(failed?.role === "assistant" ? failed.errorMessage : "").toMatch(
+				/router\/default: every model is unavailable/,
+			);
 
 			expect(calls()).toEqual([0, 0]);
 			expect(s.selected()).toBe(VIRTUAL);
@@ -300,9 +324,7 @@ describe("router/default startup, quota dispatch and resume", () => {
 			respondOn(0, "on a");
 			await first.session.prompt("one");
 			const file = first.session.sessionManager.getSessionFile() as string;
-			await first.session.extensionRunner?.emit({ type: "session_shutdown", reason: "quit" });
-			first.session.dispose();
-			started.pop();
+			await close(first);
 
 			const resumed = await launch({ router: "missing", sessionManager: SessionManager.open(file, sessionDir) });
 			// Core drops an unregistered virtual selection and keeps the physical model that answered last.
@@ -325,17 +347,16 @@ describe("router/default startup, quota dispatch and resume", () => {
 			respondOn(index, "turn");
 			await s.session.prompt("one");
 			const file = s.session.sessionManager.getSessionFile() as string;
-			await s.session.extensionRunner?.emit({ type: "session_shutdown", reason: "quit" });
-			s.session.dispose();
-			started.pop();
+			await close(s);
 			return file;
 		}
 
 		it("resumes an explicit physical model over the saved router/default", async () => {
 			const file = await persisted("spike-b/terra-b");
+			// An explicit physical model is not rerouted, even once its provider reads exhausted.
+			stack.usage.set("spike-b", 100);
 			const resumed = await launch({ sessionManager: SessionManager.open(file, sessionDir) });
 			expect(resumed.selected()).toBe("spike-b/terra-b");
-			// An explicit physical model is not routed: quota on it is not consulted at selection.
 			respondOn(1, "still b");
 			await resumed.session.prompt("two");
 			expect(answered(resumed).at(-1)).toBe("spike-b/terra-b");
