@@ -9,7 +9,11 @@
  * (`--expose-gc`, set through `NODE_OPTIONS` or, for a compiled Bun standalone that ignores it,
  * `BUN_OPTIONS`; else the `Bun.gc(true)` fallback) it reads `heapUsed`. One JSON line is appended to
  * `HARNESS_PROBE_OUT`:
- *   { "frames_ms": [..], "steady_frames_ms": [..], "heap_used": bytes, "gc": bool, "width": n, "height": n }
+ *   { "frames_ms": [..], "steady_frames_ms": [..], "heap_used": bytes, "gc": bool,
+ *     "gc_method": "global.gc" | "Bun.gc(true)" | "none", "runtime": { engine, version, platform, arch },
+ *     "width": n, "height": n }
+ * Runtime identity describes the executing engine, not proof of a compiled Pi artifact. Retain
+ * the invocation and executable digest separately. GC errors propagate before any record is written.
  */
 
 import { appendFileSync } from "node:fs";
@@ -30,10 +34,10 @@ interface GcHost {
  * Pick the runtime's synchronous collector: Node's `--expose-gc` hook, else `Bun.gc(true)`.
  * Returns `undefined` when neither exists so the reading is flagged `gc: false`, never faked.
  */
-export function collector(host: GcHost): (() => void) | undefined {
-	if (host.gc) return host.gc;
+export function collector(host: GcHost): { method: "global.gc" | "Bun.gc(true)"; run: () => void } | undefined {
+	if (host.gc) return { method: "global.gc", run: host.gc };
 	const bun = host.Bun;
-	return bun ? () => bun.gc(true) : undefined;
+	return bun ? { method: "Bun.gc(true)", run: () => bun.gc(true) } : undefined;
 }
 
 function captureTui(setWidget: (key: string, content: unknown) => void): TUI | undefined {
@@ -73,12 +77,19 @@ export default function harnessProbe(pi: ExtensionAPI): void {
 			for (let i = 0; i < WARMUP_FRAMES; i++) timeSteadyFrame(tui);
 			const steadyFramesMs = Array.from({ length: frames }, () => timeSteadyFrame(tui));
 			const gc = collector(globalThis as GcHost);
-			gc?.();
+			gc?.run();
 			const record = {
 				frames_ms: framesMs,
 				steady_frames_ms: steadyFramesMs,
 				heap_used: process.memoryUsage().heapUsed,
 				gc: gc !== undefined,
+				gc_method: gc?.method ?? "none",
+				runtime: {
+					engine: process.versions.bun ? "bun" : "node",
+					version: process.versions.bun ?? process.versions.node,
+					platform: process.platform,
+					arch: process.arch,
+				},
 				width: tui.terminal.columns,
 				height: tui.terminal.rows,
 			};

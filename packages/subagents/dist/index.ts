@@ -64,6 +64,7 @@ import {
   getLifetimeCost,
   getLifetimeTotal,
   getMaxSubagentDepth,
+  getModelResolution,
   getOutputTranscriptDefault,
   getPackageAgentsGate,
   getPackageWorkflowsGate,
@@ -74,6 +75,7 @@ import {
   handleBase,
   hasAgentBadge,
   hasFallback,
+  hasModelConfigurationError,
   inChildSessionContext,
   invalidatePackageCache,
   isDefaultsDisabled,
@@ -85,14 +87,16 @@ import {
   isTierDisclosure,
   isTopLevelAgent,
   isUnsafeName,
+  isVirtualModel,
   isWorktreeIsolationEnabled,
   isolationParam,
   loadCustomAgents,
   markConsumed,
   mayPark,
   modelIdentityNote,
+  modelInputBinding,
+  modelInputs,
   modelRef,
-  modelRequest,
   modelSelectionNote,
   normalizeMaxTurns,
   packageNameForPath,
@@ -146,7 +150,7 @@ import {
   toReportedUsage,
   withLeadingFlag,
   writeInitialEntry
-} from "./chunks/chunk-MSGGFB5Q.ts";
+} from "./chunks/chunk-TJQBFL4S.ts";
 
 // src/index.ts
 import { existsSync as existsSync7, mkdirSync as mkdirSync4, readFileSync as readFileSync7, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "node:fs";
@@ -732,6 +736,46 @@ ${agentMentionReminder(type)}`);
   return spawned ? { spawned: true } : { spawned: false, error: "the conversation clone did not start it" };
 }
 
+// src/model-explanation.ts
+function safeRef(value) {
+  return value && /^@?[a-zA-Z0-9][a-zA-Z0-9._/@-]*$/.test(value) && !value.includes("//") ? value : value === void 0 ? "session default" : "[redacted]";
+}
+function explainModel(request) {
+  const inputs = modelInputs(request.agentType, request.definitionModel, request.paramModel);
+  const winner = inputs[0];
+  const selection = selectModel(request);
+  const outcome = typeof selection === "string" ? "error" : selection.outcome;
+  const model = typeof selection === "string" ? void 0 : selection.model;
+  const selected = model ? safeRef(`${model.provider}/${model.id}`) : void 0;
+  const virtual = isVirtualModel(model);
+  const binding = modelInputBinding(winner, request.agentType);
+  const policy = getModelResolution();
+  const requested = safeRef(winner.requested);
+  const summary = `${winner.source}: ${requested}${selected && selected !== requested ? ` -> ${selected}` : ""} (${outcome === "error" ? "error; no dispatch" : outcome === "fallback" ? "unavailable, fallback: inherit" : outcome})`;
+  const lines = [
+    summary,
+    "Precedence: explicit dispatch > agentModels[type] > agentModels[*] > definition > parent.",
+    ...inputs.slice(1).map((input) => `Shadowed ${input.source}: ${safeRef(input.source === "parent" && request.parentModel ? `${request.parentModel.provider}/${request.parentModel.id}` : input.requested)}`),
+    `Failure policy: unmapped=${policy.onUnmapped ?? "inherit"}; unavailable=${policy.onUnavailable ?? "inherit"}; unresolved explicit literal=error.`
+  ];
+  if (binding) lines.push(binding.kind === "routed" ? `Exact binding: routed ${safeRef(binding.profile)}` : `Exact binding: static ${binding.members.map(safeRef).join(" -> ")}`);
+  else if (winner.requested?.trim().startsWith("@")) lines.push("Exact binding: unmapped.");
+  lines.push(
+    `Selected: ${selected ?? "unknown"}${virtual ? " (virtual)" : ""}.`,
+    "Admitted physical model: unknown (no admission requested).",
+    "Answering model: unknown (only an assistant response establishes this).",
+    "Configuration preview only, not a reservation. No quota forecast or provider request is made; dispatch reselects and admits at start."
+  );
+  if (typeof selection !== "string" && selection.scopeWarning) lines.push("Scope warning: selected model is outside enabled scope; trusted configuration remains authoritative.");
+  return { source: winner.source, outcome, selected, virtual, summary, text: lines.join("\n") };
+}
+function modelConfigurationWarnings(requests) {
+  return requests.flatMap((request) => {
+    const winner = modelInputs(request.agentType, request.definitionModel)[0];
+    return hasModelConfigurationError(request) ? [`Model configuration for ${safeRef(request.agentType)}: ${winner.source}: ${safeRef(winner.requested)} (error; no dispatch). Registration-only check; credentials and quota were not checked.`] : [];
+  });
+}
+
 // src/xml.ts
 function escapeXml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -779,6 +823,24 @@ function fairShares(lengths, cap) {
     remaining--;
   }
   return shares;
+}
+
+// src/saved-agent-record.ts
+function savedAgentNote(data) {
+  if (!data || typeof data !== "object") return void 0;
+  const row = data;
+  if (typeof row.id !== "string" || typeof row.type !== "string" || typeof row.description !== "string") return void 0;
+  if (row.status !== "completed" && row.status !== "steered" && row.status !== "error" && row.status !== "aborted" && row.status !== "stopped") return void 0;
+  const transcript = typeof row.outputFile === "string" ? row.outputFile : typeof row.sessionFile === "string" ? row.sessionFile : void 0;
+  return {
+    id: row.id,
+    type: row.type,
+    description: row.description,
+    status: row.status,
+    evictedAfterMin: 0,
+    fromSavedSession: true,
+    ...transcript ? { transcript } : {}
+  };
 }
 
 // src/schedule.ts
@@ -1993,7 +2055,8 @@ function isOutstandingFailure(record) {
 }
 var FLEET_KEY = "fleet";
 var MAX_AGENT_ROWS = 5;
-var OVERFLOW_AGENT_ROWS = Math.max(1, MAX_AGENT_ROWS - 2);
+var MIDDLE_AGENT_ROWS = Math.max(1, MAX_AGENT_ROWS - 2);
+var EDGE_AGENT_ROWS = MAX_AGENT_ROWS - 1;
 var TICK_MS = 200;
 var FINISHED_LINGER_MS = 4e3;
 function formatFleetElapsed(ms) {
@@ -2607,9 +2670,20 @@ var FleetList = class {
     lines.push("");
     lines.push(truncateToWidth2(`  ${this.bullet(0, sel, theme)} main`, width));
     const overflow = rows.length > MAX_AGENT_ROWS;
-    const visible = Math.min(overflow ? OVERFLOW_AGENT_ROWS : MAX_AGENT_ROWS, rows.length);
     const selRow = Math.max(0, sel - 1);
-    const start = selRow < visible ? 0 : selRow - visible + 1;
+    let start = 0;
+    let visible = rows.length;
+    if (overflow) {
+      if (selRow < EDGE_AGENT_ROWS) {
+        visible = EDGE_AGENT_ROWS;
+      } else if (selRow === rows.length - 1) {
+        visible = EDGE_AGENT_ROWS;
+        start = rows.length - EDGE_AGENT_ROWS;
+      } else {
+        visible = MIDDLE_AGENT_ROWS;
+        start = selRow - MIDDLE_AGENT_ROWS + 1;
+      }
+    }
     const hiddenBelow = rows.length - (start + visible);
     const cells = /* @__PURE__ */ new Map();
     for (const r of rows) {
@@ -2624,7 +2698,7 @@ var FleetList = class {
       width - flagWidth
     );
     if (start > 0) {
-      lines.push(rightAlign("", theme.fg("dim", `\u2191 ${start} more: ${summarizeHidden(rows.slice(0, start))}`), width));
+      lines.push(this.renderOverflow(`\u2191 ${start} more: ${summarizeHidden(rows.slice(0, start))}`, width, theme));
     }
     for (let a = start; a < start + visible; a++) {
       const row = rows[a];
@@ -2633,11 +2707,15 @@ var FleetList = class {
       );
     }
     if (hiddenBelow > 0) {
-      lines.push(rightAlign("", theme.fg("dim", `\u2193 ${hiddenBelow} more: ${summarizeHidden(rows.slice(start + visible))}`), width));
-    } else if (overflow) lines.push("");
-    if (start === 0 && overflow) lines.push("");
+      lines.push(this.renderOverflow(`\u2193 ${hiddenBelow} more: ${summarizeHidden(rows.slice(start + visible))}`, width, theme));
+    }
     lines.push("");
     return lines;
+  }
+  /** Overflow indicator: dim, left-aligned with its arrow in the bullet column, truncated never wrapped. */
+  renderOverflow(text, width, theme) {
+    const body = truncateToWidth2(text, Math.max(0, width - 2)).replaceAll("\x1B[0m", "");
+    return "  " + theme.fg("dim", body);
   }
   bullet(rosterIndex, sel, theme) {
     return rosterIndex === sel ? theme.fg("accent", "\u25CF") : theme.fg("dim", "\u25CB");
@@ -3018,8 +3096,7 @@ function stats(progress, agentCount = 0) {
   let failed = 0;
   let started = 0;
   let anyLive = false;
-  for (const entry of progress) {
-    if (entry.type !== "workflow_agent") continue;
+  for (const entry of collapse(progress).agents) {
     seen++;
     if (entry.state === "done") {
       done++;
@@ -4052,7 +4129,7 @@ var WorkflowDialog = class {
 
 // src/ui/workflow-menu.ts
 async function showWorkflowDialog(ctx, task, deps) {
-  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-A7AMRDVY.ts");
+  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-G5SGTFWH.ts");
   let overlay;
   await ctx.ui.custom(
     (tui, theme, _keybindings, done) => new WorkflowDialog(
@@ -6863,6 +6940,8 @@ ${notifications}${trailer}`,
       error: record.error,
       startedAt: record.startedAt,
       completedAt: record.completedAt,
+      ...record.outputFile ? { outputFile: record.outputFile } : {},
+      ...record.sessionFile ? { sessionFile: record.sessionFile } : {},
       ...record.modelFallback ? { modelFallback: record.modelFallback } : {},
       ...record.modelTier ? { modelTier: record.modelTier } : {}
     };
@@ -7109,6 +7188,10 @@ Full transcript available at: ${record.outputFile}` : "";
       throw err;
     }
     canonicalAgentsLoaded = true;
+    for (const warning of modelConfigurationWarnings(getAllTypes().flatMap((agentType) => {
+      const cfg = getAgentConfig(agentType);
+      return cfg?.enabled === false ? [] : [{ homeDir: options.homeDir, agentType, definitionModel: cfg?.model, parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd }];
+    }))) ctx.ui.notify(warning, "warning");
     refreshAgentTool();
     if (ctx.hasUI) {
       widget.setUICtx(ctx.ui);
@@ -7122,6 +7205,15 @@ Full transcript available at: ${record.outputFile}` : "";
       unwatchDetached?.();
       unwatchDetached = watchDetached(sessionFile, () => deliverDetached(sessionFile));
       deliverDetached(sessionFile);
+    }
+    const saved = /* @__PURE__ */ new Map();
+    for (const entry of ctx.sessionManager?.getBranch?.() ?? []) {
+      if (entry.type !== "custom" || entry.customType !== "subagents:record") continue;
+      const note = savedAgentNote(entry.data);
+      if (note) saved.set(note.id, note);
+    }
+    for (const note of saved.values()) {
+      if (!resolveAgentRef(note.id) && !manager.getEvictedNote(note.id)) manager.rememberEvicted(note);
     }
     announceSurvivors();
     unwatchAnnounce ??= pi.events.on("subagents:announce_survivors", announceSurvivors);
@@ -8051,7 +8143,7 @@ Terse command-style prompts produce shallow, generic work.
           const entry = manager.listTombstones().find((t) => t.id === latest);
           if (!entry) {
             const note = manager.getEvictedNote(latest);
-            const gone = note?.nameTaken ? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.` : "no saved session is left to reopen.";
+            const gone = note?.fromSavedSession ? "only historical metadata is available; reopen the recorded session manually." : note?.nameTaken ? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.` : "no saved session is left to reopen.";
             const why = note ? `Cannot resume agent "${latest}": ${gone}
 ${describeEvicted(note)}` : agentNotFound(latest);
             return textResult(`${continued}${why}`);
@@ -8780,7 +8872,8 @@ ${conversation}`;
       if (record?.status !== "running" && record?.status !== "queued") {
         const finished = record ?? manager.getEvictedNote(latest);
         if (!finished) return textResult(agentNotFound(params.agent_id));
-        if (finished.status === "stopped") {
+        const historical = !record && manager.getEvictedNote(latest)?.fromSavedSession;
+        if (finished.status === "stopped" && !historical) {
           return textResult(`Agent "${finished.id}" was stopped (status: stopped). steer_subagent does not resume a stopped agent.`);
         }
         return agentTool.execute(toolCallId, {
@@ -8873,7 +8966,13 @@ ${lines.join("\n")}` : "Nothing is running or queued.";
       const found = resolveAgentRef(latest);
       const record = found && isTopLevelAgent(found) ? found : void 0;
       if (record?.status !== "running" && record?.status !== "queued") {
-        const status = record?.status ?? task?.status ?? manager.getEvictedNote(latest)?.status;
+        const note = manager.getEvictedNote(latest);
+        if (!record && !task && note?.fromSavedSession) {
+          return { ...textResult(`${describeEvicted(note)}.
+No live registry handle is available here; this historical entry cannot stop work.
+${describeStoppable()}`), isError: true };
+        }
+        const status = record?.status ?? task?.status ?? note?.status;
         const what = status ? `"${params.agent_id}" is not running (status: ${status})` : `No agent or workflow "${params.agent_id}"`;
         return { ...textResult(`${what}, so there is nothing to stop.
 ${describeStoppable()}`), isError: true };
@@ -8892,21 +8991,6 @@ Description: ${record.description}
       );
     }
   }));
-  function getModelLabel(type, registry, cwd) {
-    const cfg = getAgentConfig(type);
-    const input = modelRequest(type, cfg?.model).requested;
-    if (!input) return "inherit";
-    const label = getModelLabelFromConfig(input);
-    const selection = selectModel({ homeDir: options.homeDir, agentType: type, definitionModel: cfg?.model, parentModel: void 0, registry, cwd });
-    if (typeof selection === "string" || selection.outcome === "fallback" || !selection.model) {
-      return `${label} (unavailable, fallback: inherit)`;
-    }
-    const resolved = selection.model;
-    const resolvedFull = `${resolved.provider}/${resolved.id}`;
-    const norm = (s) => s.toLowerCase().replace(/\./g, "-").replace(/-\d{8}$/, "");
-    if (norm(input) === norm(resolvedFull)) return label;
-    return `${label} (\u2192 ${resolvedFull.replace(/-\d{8}$/, "")})`;
-  }
   async function showAgentsMenu(ctx) {
     reloadCustomAgents();
     const allNames = getAllTypes();
@@ -8975,7 +9059,7 @@ Description: ${record.description}
     const configs = allNames.map((name) => getAgentConfig(name));
     const items = allNames.map((name, i) => {
       const cfg2 = configs[i];
-      const model = getModelLabel(name, ctx.modelRegistry, ctx.cwd);
+      const model = explainModel({ homeDir: options.homeDir, agentType: name, definitionModel: cfg2?.model, parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd }).summary;
       return {
         id: name,
         label: `${sourceIndicator(cfg2)}${name}`,
@@ -9085,10 +9169,13 @@ Description: ${record.description}
     } else {
       menuOptions = ["Edit", "Disable", "Delete", "Back"];
     }
+    menuOptions.splice(menuOptions.length - 1, 0, "Explain model");
     const pkgName = packageNameOf(cfg);
     const choice = await ctx.ui.select(pkgName ? `${name} \u2014 ${pkgName}` : name, menuOptions);
     if (!choice || choice === "Back") return;
-    if (choice === "Edit" && file) {
+    if (choice === "Explain model") {
+      ctx.ui.notify(explainModel({ homeDir: options.homeDir, agentType: name, definitionModel: cfg.model, parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd }).text, "info");
+    } else if (choice === "Edit" && file) {
       const content = readFileSync7(file.path, "utf-8");
       const edited = await ctx.ui.editor(`Edit ${name}`, content);
       if (edited !== void 0 && edited !== content) {

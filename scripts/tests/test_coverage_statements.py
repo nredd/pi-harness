@@ -393,7 +393,7 @@ def test_shipped_policy_locks_every_enforced_vitest_signal() -> None:
         for signal_name, signal in package.signals.items():
             label = f"{name}/{signal_name}"
             counted = signal.producer == "lcov" and (
-                signal.enforcement == "enforced" or name == "computer-use-async"
+                signal.enforcement == "enforced" or name in {"computer-use-async", "session-kit"}
             )
             assert ("json-summary" in signal.reporters) == counted, label
             for runner_os, cap in signal.max_uncovered.items():

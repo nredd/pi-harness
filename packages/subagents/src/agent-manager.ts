@@ -57,7 +57,9 @@ import { cleanupWorktree, createWorktree, isWorktreeIsolationEnabled, pruneWorkt
  * Relabel a record's model from the response that just finished. A virtual
  * selection (`router/default`) is only a name until a request is routed; the
  * assistant message is the one place that records the physical model, so the
- * label follows it (and follows a router fallback to the next model).
+ * label follows it (and follows a router fallback to the next model). The
+ * thinking level follows too: the message records the level the request ran at,
+ * after core clamped it to what the physical model supports.
  */
 function relabelFromResponse(record: AgentRecord, message: AssistantMessageInfo | undefined): void {
   const registry = (record.session as { modelRegistry?: Parameters<typeof describePhysicalModel>[1] } | undefined)
@@ -66,6 +68,15 @@ function relabelFromResponse(record: AgentRecord, message: AssistantMessageInfo 
   if (!physical) return;
   record.invocation ??= {};
   Object.assign(record.invocation, physical);
+  // The routed request ran at the level core clamped to the physical model, which
+  // can differ from the session level the row showed while routing was pending.
+  // Idempotent per response; a message without a level (legacy) leaves the row as is.
+  const ran = message?.thinkingLevel;
+  if (ran) {
+    const requested = record.askedThinking;
+    record.invocation.thinking = ran;
+    record.invocation.requestedThinking = requested && requested !== ran ? requested : undefined;
+  }
   if ((record.modelTier?.kind === "routed" || record.modelTier?.kind === "static") && record.modelTier.answered !== physical.modelId) {
     record.modelTier = { ...record.modelTier, answered: physical.modelId };
     if (record.outputFile) appendModelTierEntry(record.outputFile, record.id, record.modelTier);
@@ -188,8 +199,10 @@ export interface EvictedNote {
   type: SubagentType;
   description: string;
   status: AgentRecord["status"];
-  /** Whole minutes between completion and eviction. */
+  /** Whole minutes between completion and eviction; not applicable to saved-session recovery. */
   evictedAfterMin: number;
+  /** The diagnostic came from the saved parent, not a retention sweep. */
+  fromSavedSession?: true;
   /** The `.output` transcript when one was written, else the session file. */
   transcript?: string;
   /** The run's model fallback, so even an evicted agent's id still discloses it. */
@@ -204,7 +217,10 @@ export function describeEvicted(note: EvictedNote): string {
   const where = note.transcript ? `; transcript: ${note.transcript}` : "";
   const disclosure = modelSelectionNote(note);
   const fallback = disclosure ? `\n${disclosure}` : "";
-  return `Agent "${note.id}" (${note.description}) ${note.status}, evicted after ${note.evictedAfterMin} min${where}${fallback}`;
+  const state = note.fromSavedSession
+    ? `last recorded status: ${note.status}, recovered from saved parent session (no live registry record)`
+    : `${note.status}, evicted after ${note.evictedAfterMin} min`;
+  return `Agent "${note.id}" (${note.description}) ${state}${where}${fallback}`;
 }
 
 /**
@@ -1256,7 +1272,6 @@ export class AgentManager {
     record.ranThisRun = record.status === "running";
     const promise = runAgent(ctx, type, prompt, {
       pi,
-      clock: this.clock,
       homeDir: options.homeDir ?? this.homeDir,
       agentId: id,
       model: options.modelSelection?.model,
@@ -1327,6 +1342,9 @@ export class AgentManager {
           // Read the kept request first: a caller's level survives being clamped
           // AND, one line later, being replaced by the effective one.
           const requested = record.invocation.requestedThinking ?? record.invocation.thinking;
+          // Snapshot before the writeback below: once the session level lands in
+          // `thinking`, "no ask" is indistinguishable from "asked for the default".
+          record.askedThinking = requested;
           Object.assign(
             record.invocation,
             record.modelTier?.kind === "routed" && record.modelTier.admitted
@@ -1771,7 +1789,6 @@ export class AgentManager {
       // Positive evidence for the reap notice: only a live signal means the prompt runs.
       record.ranThisRun = record.status === "running";
       this.settleOutcome(record, await resumeAgent(record.session, prompt, {
-        clock: this.clock,
         type: record.type,
         maxTurns: options?.maxTurns ?? record.invocation?.maxTurns,
         onTurnEnd: options?.onTurnEnd,
@@ -1907,7 +1924,6 @@ export class AgentManager {
 
     record.ranThisRun = true;
     const promise = resumeAgent(record.session, prompt, {
-      clock: this.clock,
       type: record.type,
       maxTurns: options.maxTurns ?? record.invocation?.maxTurns,
       onTurnEnd: options.onTurnEnd,
@@ -2205,12 +2221,16 @@ export class AgentManager {
    * record settled in a manager this one never saw (#330).
    */
   rememberEvicted(note: EvictedNote): void {
+    const existing = this.evictedNotes.get(note.id);
+    if (note.fromSavedSession && existing && !existing.fromSavedSession) return;
     this.evictedNotes.delete(note.id);
     this.evictedNotes.set(note.id, note);
-    // Insertion order is age order (the note was just re-inserted above).
-    for (const oldest of this.evictedNotes.keys()) {
-      if (this.evictedNotes.size <= MAX_EVICTED_NOTES) break;
-      this.evictedNotes.delete(oldest);
+    if (this.evictedNotes.size > MAX_EVICTED_NOTES) {
+      // Historical recovery is lower priority than actual eviction/delivery notes.
+      // Evict the oldest historical candidate first, including the new one when
+      // actual notes occupy the entire index. Preserve insertion order within each class.
+      const historical = [...this.evictedNotes].find(([, entry]) => entry.fromSavedSession)?.[0];
+      this.evictedNotes.delete(historical ?? this.evictedNotes.keys().next().value!);
     }
   }
 

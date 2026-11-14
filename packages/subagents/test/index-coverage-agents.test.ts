@@ -6,6 +6,7 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getAgentConfig, getAllTypes } from "../src/agent-types.js";
 import { createSubagentsExtension } from "../src/index.js";
+import { setModelTiers } from "../src/model-tiers.js";
 import { invalidatePackageCache } from "../src/package-resources.js";
 import { type BootedPi, ctx, type Hermetic, hermeticDir, makePi, startSession } from "./helpers/boot-extension.js";
 import { FakeClock } from "./helpers/fake-clock.js";
@@ -89,7 +90,7 @@ afterEach(async () => {
 describe("agent file operations from /agents", () => {
   it("keeps an author-disabled package read-only and names its provider", async () => {
     await detail("off-package", "Back");
-    expect(menuRows[1]).toEqual(["Eject (export as .md)", "Back"]);
+    expect(menuRows[1]).toEqual(["Eject (export as .md)", "Explain model", "Back"]);
     expect(context.ui.select).toHaveBeenCalledWith("off-package — index-fixture", menuRows[1]);
     expect(readFileSync(join(env.dir, "fixture-package", "agents", "off-package.md"), "utf8")).toContain("enabled: false");
   });
@@ -113,7 +114,7 @@ describe("agent file operations from /agents", () => {
   it.each([undefined, "Back"])("cancels detail with %s without changing its file", async action => {
     await detail("auditor", action);
     expect(readFileSync(path(), "utf8")).toBe(original);
-    expect(menuRows[1]).toEqual(["Edit", "Disable", "Delete", "Back"]);
+    expect(menuRows[1]).toEqual(["Edit", "Disable", "Delete", "Explain model", "Back"]);
     expect(notify).not.toHaveBeenCalled();
   });
   it.each([undefined, original])("does not rewrite a cancelled or unchanged editor", async edited => {
@@ -144,7 +145,7 @@ describe("agent file operations from /agents", () => {
     expect(readFileSync(path(), "utf8")).toBe(original.replace("---\n", "---\nenabled: false\n"));
     expect(getAgentConfig("auditor")?.enabled).toBe(false);
     await detail("auditor", "Enable");
-    expect(menuRows).toContainEqual(["Enable", "Edit", "Delete", "Back"]);
+    expect(menuRows).toContainEqual(["Enable", "Edit", "Delete", "Explain model", "Back"]);
     expect(readFileSync(path(), "utf8")).toBe(original);
     expect(getAgentConfig("auditor")?.enabled).not.toBe(false);
     expect(notify).toHaveBeenLastCalledWith(`Enabled auditor (${path()})`, "info");
@@ -208,7 +209,7 @@ describe("agent file operations from /agents", () => {
     confirmations.push(confirmed);
     notify.mockClear();
     await detail("Plan", "Reset to default");
-    expect(menuRows).toContainEqual(["Edit", "Disable", "Reset to default", "Delete", "Back"]);
+    expect(menuRows).toContainEqual(["Edit", "Disable", "Reset to default", "Delete", "Explain model", "Back"]);
     expect(existsSync(path("Plan"))).toBe(!confirmed);
     if (confirmed) {
       expect(getAgentConfig("Plan")?.sourcePath).toBeUndefined();
@@ -221,6 +222,27 @@ describe("agent file operations from /agents", () => {
 });
 
 describe("menu edges", () => {
+  it("checks structural policy only after canonical project trust, and never fails startup", async () => {
+    writeFileSync(path(), original.replace("tools: read", "tools: read\nmodel: '@absent'"));
+    setModelTiers({}, { onUnmapped: "error", onUnavailable: "error" });
+    await startSession(boot.lifecycle, false, { ...context, isProjectTrusted: () => false });
+    expect(notify).not.toHaveBeenCalledWith(expect.stringContaining("Model configuration for auditor"), "warning");
+    notify.mockClear();
+    await startSession(boot.lifecycle, true, context);
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Model configuration for auditor: definition: @absent (error; no dispatch)"), "warning");
+    expect(getAgentConfig("auditor")?.model).toBe("@absent");
+    await detail("auditor", "Explain model");
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("error; no dispatch"), "info");
+    expect(notify).not.toHaveBeenCalledWith(expect.stringContaining("fallback: inherit"), "info");
+  });
+  it("explains the effective model from the existing detail menu without editing or spawning", async () => {
+    await detail("auditor", "Explain model");
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("parent: session default (inherited)"), "info");
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Answering model: unknown"), "info");
+    expect(readFileSync(path(), "utf8")).toBe(original);
+    expect(context.ui.editor).not.toHaveBeenCalled();
+    expect(boot.pi.events.emit).not.toHaveBeenCalledWith("router:rpc:admit", expect.anything());
+  });
   it("ignores a choice the menu did not offer", async () => {
     selections.push("Not an option");
     await command();

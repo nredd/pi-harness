@@ -18,20 +18,17 @@ from typing import Any
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-NATIVE_BUN_TEST = re.compile(r"(?:\w+=\S+ )*bun test ")
-# Packages still on a native `bun test` subset. #320 retires one per slice; none may come back.
-# session-kit stays: Bun's worker.terminate() of a spinning regex outlasts its matcher test's bound (#320).
-NATIVE_BUN_PACKAGES = {"session-kit"}
-
-
 LAUNCHER = "node ../../scripts/run-vitest.ts bun"
 # Package-specific Vitest options only; the launcher owns every coverage flag.
 LAUNCHER_PACKAGE_ARGS = {
     "resource-sampler": " --maxWorkers=1",
     "todo": " --config .vitest.config.ts",
+    "session-kit": (
+        " --exclude test/scenarios/home-injection.test.ts && "
+        f"{LAUNCHER} test/scenarios/home-injection.test.ts --coverage.enabled=false"
+    ),
 }
 BUN_COVERAGE_ARGS = [
-    "--coverage",
     "--coverage.provider=istanbul",
     "--coverage.reporter=text",
     "--coverage.reporter=lcov",
@@ -131,7 +128,7 @@ def test_bun_launcher_owns_istanbul_reporters_and_directory(tmp_path: Path) -> N
     """
     argv = launch_bun(tmp_path, "--maxWorkers=1")
     assert argv[0] == "--bun"
-    assert argv[2:] == ["run", "--maxWorkers=1", *BUN_COVERAGE_ARGS]
+    assert argv[2:] == ["run", "--coverage", "--maxWorkers=1", *BUN_COVERAGE_ARGS]
     canary = launch_bun(tmp_path, "test/resource-loader-home.test.ts", "--coverage.enabled=false")
     assert canary[2:] == ["run", "test/resource-loader-home.test.ts", "--coverage.enabled=false"]
 
@@ -202,32 +199,23 @@ def test_benchmark_signal_matches_its_check_benchmark_producer() -> None:
 
 
 def test_declared_bun_commands_delegate_coverage_to_the_launcher() -> None:
-    """Keep every Vitest-on-Bun producer on the launcher, and native subsets on both reporters.
+    """Keep every declared Bun producer on Vitest/Istanbul through the isolated launcher.
 
     Parameters:
         None.
     Returns:
-        None: Vitest-on-Bun manifests pass only package arguments; native subsets keep both reporters.
+        None: Manifests pass only package arguments and the separate home-injection canary.
     Raises:
         AssertionError: A manifest bypasses the launcher, restates coverage flags, drops a reporter
             or a retired native subset returns.
     """
     manifests = [*ROOT.glob("packages/*/package.json"), ROOT / "integration/inprocess/package.json"]
-    native = set()
     for manifest in manifests:
         command = json.loads(manifest.read_text())["scripts"].get("test:bun")
         if not command:
             continue
-        # Native Bun commands may carry an env prefix such as `JITI_FS_CACHE=false` (#352).
-        if NATIVE_BUN_TEST.match(command):
-            native.add(manifest.parent.name)
-            assert "--coverage-reporter=text" in command, manifest
-            assert "--coverage-reporter=lcov" in command, manifest
-            assert "--coverage-dir=coverage/bun" in command, manifest
-        else:
-            expected = LAUNCHER + LAUNCHER_PACKAGE_ARGS.get(manifest.parent.name, "")
-            assert command == expected, manifest
-    assert native == NATIVE_BUN_PACKAGES
+        expected = LAUNCHER + LAUNCHER_PACKAGE_ARGS.get(manifest.parent.name, "")
+        assert command == expected, manifest
 
 
 def test_generated_coverage_is_ignored_by_whole_workspace_linters() -> None:
@@ -255,9 +243,22 @@ def test_node_helper_gates_run_vitest_through_the_launcher() -> None:
         AssertionError: A producer bypasses the launcher or returns to `node --test`/c8.
     """
     makefile = (ROOT / "Makefile").read_text()
-    assert "cd integration/probes && node ../../scripts/run-vitest.ts node --coverage\n" in makefile
+    for target, directory, launcher in [
+        ("check-probes", "integration/probes", "../../scripts/run-vitest.ts"),
+        ("check-import-audit", "scripts", "run-vitest.ts"),
+    ]:
+        recipe = makefile.split(f"{target}:", 1)[1].split("\n\n", 1)[0]
+        assert recipe.count(f"cd {directory} && env -i ") == 2
+        assert f"node {launcher} node --coverage\n" in recipe
+        assert recipe.endswith(f"node {launcher} bun --coverage.enabled=false")
     assert "cd integration/providers && node ../../scripts/run-vitest.ts node --coverage\n" in makefile
-    assert "cd scripts && node run-vitest.ts node --coverage\n" in makefile
+    assert "cd integration/providers && node ../../scripts/run-vitest.ts bun\n" in makefile
+    manifest = json.loads((ROOT / "packages/subagents/package.json").read_text())
+    assert manifest["scripts"]["test:workflow-examples"] == (
+        "node ../../scripts/run-vitest.ts node --config vitest.workflow-examples.config.ts --coverage && "
+        "node ../../scripts/run-vitest.ts bun --config vitest.workflow-examples.config.ts "
+        "--coverage.reportsDirectory=coverage/workflow-examples-bun"
+    )
     assert "node --test" not in makefile
     assert "/.bin/c8 " not in makefile
     for config in [
@@ -331,6 +332,40 @@ def test_accounting_and_artifacts_follow_tests_even_on_failure() -> None:
     assert "coverage/summary.json" in artifacts["with"]["path"]
     assert "lcov.info" in artifacts["with"]["path"]
     assert artifacts["with"]["name"] == "coverage-${{ matrix.os }}"
+
+
+def test_native_ubuntu_rust_producer_is_pinned_and_preserved() -> None:
+    """Require a maintained native producer, raw artifacts and explicit unsupported hosts.
+
+    Parameters:
+        None.
+    Returns:
+        None: Ubuntu collection and selected-host accounting remain wired together.
+    Raises:
+        AssertionError: Pins, resource limits, artifacts or source-complete ownership drift.
+    """
+    shard, fan_in = owned_jobs()
+    setup = step_named(shard, "Install pinned native Ubuntu coverage tools")
+    collect = step_named(shard, "Collect native Ubuntu Rust coverage")
+    assert setup["if"] == collect["if"]
+    assert "matrix.os == 'ubuntu-24.04'" in collect["if"]
+    assert "contains(matrix.workspaces, 'packages/computer-use')" in collect["if"]
+    assert shard.index(setup) < shard.index(collect)
+    assert setup["env"] == collect["env"] == {"CARGO_BUILD_JOBS": "2", "RUSTUP_TOOLCHAIN": "1.97.1"}
+    assert "--component llvm-tools-preview" in setup["run"]
+    assert "cargo-llvm-cov --version 0.9.1 --locked" in setup["run"]
+    assert "--crate linux --output coverage/native-linux" in collect["run"]
+    for steps, prefix in ((shard, "Preserve this shard"), (fan_in, "Preserve independent")):
+        artifacts = step_named(steps, prefix)["with"]["path"]
+        for filename in ("coverage.json", "setup.log", "*/metadata.json", "*/summary.txt", "*/*.log"):
+            assert f"packages/computer-use/coverage/native-linux/{filename}" in artifacts
+    cfg = json.loads((ROOT / "coverage/policy.json").read_text())["packages"]["computer-use-linux-native"]
+    assert cfg["owned"] == ["native/linux/bridge-rs/src/**/*.rs"]
+    signal = cfg["signals"]["primary"]
+    assert signal["producer"] == "llvm-cov"
+    assert signal["skip_os"] == ["darwin"]
+    assert signal["skip_hosts"] == ["wsl2"]
+    assert signal["enforcement"] == "report-only"
 
 
 def test_reviewer_dependencies_are_provisioned_before_owned_tests() -> None:

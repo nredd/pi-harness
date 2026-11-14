@@ -2,10 +2,7 @@ import { readFileSync } from "node:fs";
 import { defineConfig } from "vitest/config";
 
 // `computer-use-vitest`: the JS/TS runtime slice these suites measure; `computer-use` also inventories native and docs source.
-const {
-	owned,
-	exclusions,
-}: { owned: string[]; exclusions: { path: string }[] } = JSON.parse(
+const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] } = JSON.parse(
 	readFileSync(new URL("../../coverage/policy.json", import.meta.url), "utf8"),
 ).packages["computer-use-vitest"];
 
@@ -16,8 +13,16 @@ const {
 const ZERO_UNCOVERED_FILES = [
 	"extensions/computer-use.ts",
 	"scripts/build-native.mjs",
+	"scripts/check-commit-messages.mjs",
+	"scripts/check-sync-ledger.mjs",
+	"scripts/check-sync-reverts.mjs",
+	"scripts/check-upstream-sync.mjs",
+	"scripts/check-docs-platform.mjs",
+	"scripts/check-docs.mjs",
+	"scripts/check-package-assets.mjs",
 	"scripts/docs-generators/generate-source-references.mjs",
 	"scripts/docs-generators/generate-tool-reference.mjs",
+	"scripts/make-signing-cert.mjs",
 	"scripts/rust-coverage.mjs",
 	"scripts/setup-helper.mjs",
 	"src/actions.ts",

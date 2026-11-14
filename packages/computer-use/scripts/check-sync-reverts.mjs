@@ -3,20 +3,14 @@
 // Source-wiring assertions are not live native verification; UPSTREAM.md records that boundary.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateLedger, validateLedgerOrder, validateUpstreamRows } from "./check-sync-ledger.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const repository = path.resolve(root, "../..");
-// The sandbox mirrors the monorepo layout so the copied `vitest.config.ts` resolves its shared home guard
-// and its coverage inventory, `coverage/policy.json`.
-const sandboxRoot = mkdtempSync(path.join(os.tmpdir(), "cu-sync-reverts-"));
-const sandbox = path.join(sandboxRoot, "packages", "computer-use");
-const nodeModules = path.join(repository, "node_modules");
-const cases = [
+export const cases = [
 	{
 		name: "Async helper refuses EPERM as group quiescence (#759)",
 		file: "scripts/check-async.mjs",
@@ -24,6 +18,14 @@ const cases = [
 		after: 'if (error.code === "ESRCH" || error.code === "EPERM") return;',
 		check: "test/async-safety.test.mjs",
 		failure: /persistent EPERM exhausts TERM and KILL budgets instead of reporting success/,
+	},
+	{
+		name: "Build CLI preserves invalid argument exit 1 (#833)",
+		file: "scripts/build-native.mjs",
+		before: "process.exitCode = await runCli(process.argv.slice(2));",
+		after: "process.exitCode = 0;",
+		check: "test/build-native.test.mjs",
+		failure: /the actual CLI and symlink refuse invalid architecture with exit 1/,
 	},
 	{
 		name: "CDP snapshot maps wire refs to model refs (#708)",
@@ -42,6 +44,22 @@ const cases = [
 		failure: /website commands must enter packages\/computer-use/,
 	},
 	{
+		name: "Headless cursor entry refuses unconditional overlay (#819)",
+		file: "native/macos/agent_cursor_tests.swift",
+		before: "CursorLiveGate.run(environment: ProcessInfo.processInfo.environment, overlay: testOverlayLifecycle)",
+		after: "testOverlayLifecycle()",
+		check: "test/cursor-headless-gate.test.mjs",
+		failure: /cursor entry must never call the live overlay directly/,
+	},
+	{
+		name: "Headless cursor gate requires exact opt-in (#819)",
+		file: "native/macos/agent_cursor_tests.swift",
+		before: 'guard environment["PI_COMPUTER_USE_LIVE"] == "1" else',
+		after: "guard true else",
+		check: "test/cursor-headless-gate.test.mjs",
+		failure: /cursor gate refuses every non-opt-in environment/,
+	},
+	{
 		name: "Linux compiler group escalation (harness c59eb11)",
 		file: "scripts/setup-helper.mjs",
 		before: 'if (!signalGroup("SIGKILL")) return;',
@@ -52,7 +70,8 @@ const cases = [
 	{
 		name: "Linux helper refuses a signal aborted during startup (#735)",
 		file: "src/platform/linux/helper.ts",
-		before: '\t\t// ...and so does one aborted while the install check or helper start was in flight.\n\t\tthrowIfAborted(signal);\n',
+		before:
+			"\t\t// ...and so does one aborted while the install check or helper start was in flight.\n\t\tthrowIfAborted(signal);\n",
 		after: "",
 		check: "test/stdio-helper-clients.test.mjs",
 		failure: /Missing expected rejection/,
@@ -60,7 +79,7 @@ const cases = [
 	{
 		name: "Linux helper refuses an already aborted signal (#735)",
 		file: "src/platform/linux/helper.ts",
-		before: '\t\tthrowIfAborted(signal);\n\t\tconst child = await this.process(signal);\n',
+		before: "\t\tthrowIfAborted(signal);\n\t\tconst child = await this.process(signal);\n",
 		after: "\t\tconst child = await this.process(signal);\n",
 		check: "test/stdio-helper-clients.test.mjs",
 		failure: /Expected values to be strictly equal/,
@@ -77,7 +96,8 @@ const cases = [
 		name: "Linux per-child line buffer (#725)",
 		file: "src/platform/linux/helper.ts",
 		before: 'child.stdout.on("data", (chunk: string) => { buffer = this.onStdout(buffer, chunk); });',
-		after: 'child.stdout.on("data", (chunk: string) => { const g = globalThis as { tail?: string }; g.tail = this.onStdout(g.tail ?? "", chunk); });',
+		after:
+			'child.stdout.on("data", (chunk: string) => { const g = globalThis as { tail?: string }; g.tail = this.onStdout(g.tail ?? "", chunk); });',
 		check: "test/linux-helper-client.test.mjs",
 		failure: /timed out/,
 	},
@@ -96,6 +116,14 @@ const cases = [
 		after: "}, SETUP_KILL_GRACE_MS * 100).unref();",
 		check: "test/stdio-helper-clients.test.mjs",
 		failure: /Expected values to be strictly deep-equal/,
+	},
+	{
+		name: "Linux stdin failure rejects every pending command (#833)",
+		file: "src/platform/linux/helper.ts",
+		before: 'if (this.child === child) this.discardChild(error);',
+		after: '/* stream failure ignored */',
+		check: "test/platform-linux.test.mjs",
+		failure: /closed helper stdin rejects all requests without an uncaught stream error/,
 	},
 	{
 		name: "Linux writable cache target (harness c59eb11)",
@@ -156,6 +184,38 @@ const cases = [
 		failure: /Missing cargo-llvm-cov/,
 	},
 	{
+		name: "Rust coverage complete source filenames",
+		file: "scripts/rust-coverage.mjs",
+		before: '"--disable-default-ignore-filename-regex",\n\t\t\t\tformat,',
+		after: "format,",
+		check: "test/rust-coverage.test.mjs",
+		failure: /AssertionError|false == true/,
+	},
+	{
+		name: "Rust coverage numeric exit-code sentinel (#807)",
+		file: "test/rust-coverage-errors.test.mjs",
+		before: "process.exitCode = 0;\n\t\tprocess.argv = [argv[0], undefined,",
+		after: "process.exitCode = undefined;\n\t\tprocess.argv = [argv[0], undefined,",
+		check: "test/rust-coverage-errors.test.mjs",
+		failure: /Expected values to be strictly equal/,
+	},
+	{
+		name: "Rust coverage source hashes (#696)",
+		file: "scripts/rust-coverage.mjs",
+		before: "\t\t\t\t\tsourceHashes,",
+		after: "\t\t\t\t\tsourceHashes: {},",
+		check: "test/rust-coverage.test.mjs",
+		failure: /AssertionError|deep-equal/,
+	},
+	{
+		name: "Rust protocol/state Cargo registration (#801)",
+		file: "native/linux/bridge-rs/tests/protocol_state_errors.rs",
+		before: "#[test]\nfn every_error_has_the_stable_wire_code_and_display()",
+		after: "fn every_error_has_the_stable_wire_code_and_display()",
+		check: "test/rust-protocol-state-registration.test.mjs",
+		failure: /missing Cargo contract: every_error_has_the_stable_wire_code_and_display/,
+	},
+	{
 		name: "StateStore evicts past an empty stateId (#703)",
 		file: "src/runtime.ts",
 		before: "this.records.delete(this.records.keys().next().value!);",
@@ -172,12 +232,56 @@ const cases = [
 		failure: /Missing expected exception/,
 	},
 	{
+		name: "Swift motion negative heading wrap (#810)",
+		file: "native/macos/agent_cursor_motion.swift",
+		before: "while difference < -.pi { difference += 2 * .pi }",
+		after: "",
+		check: "test/macos-native-pure.test.mjs",
+		failure: /negative wrapped turn takes the short positive correction/,
+		darwinOnly: true,
+	},
+	{
+		name: "Swift motion numerical candidate rejection (#810)",
+		file: "native/macos/agent_cursor_motion.swift",
+		before: "if let sol = s(d, a, b), sol.length.isFinite, sol.length >= 0, sol.length < bestLen {",
+		after: "if let sol = s(d, a, b), false, sol.length.isFinite, sol.length >= 0, sol.length < bestLen {",
+		check: "test/macos-native-pure.test.mjs",
+		failure: /near-coincident circle centers retain a feasible candidate/,
+		darwinOnly: true,
+	},
+	{
+		name: "Swift motion subnormal angle correction (#810)",
+		file: "native/macos/agent_cursor_motion.swift",
+		before: "return r < 0 ? r + tau : r",
+		after: "return r",
+		check: "test/macos-native-pure.test.mjs",
+		failure: /negative subnormal remainder receives the floating point correction/,
+		darwinOnly: true,
+	},
+	{
+		name: "Swift policy symbolic key mapping (#645)",
+		file: "native/macos/bridge.swift",
+		before: 'case "?": return ("/", true)',
+		after: 'case "?": return ("/", false)',
+		check: "test/macos-native-pure.test.mjs",
+		failure: /US symbolic mapping preserves the key and shift: \?/,
+		darwinOnly: true,
+	},
+	{
 		name: "Swift producer rejects wrong-binary profiles (#757)",
 		file: "scripts/swift-coverage.mjs",
 		before: 'throw new Error("Wrong-binary or empty Swift profile");',
-		after: 'return; /* profile identity check dropped */',
+		after: "return; /* profile identity check dropped */",
 		check: "test/swift-coverage.test.mjs",
 		failure: /Missing expected exception/,
+	},
+	{
+		name: "Verification gates reject a missing required asset (#697)",
+		file: "scripts/check-package-assets.mjs",
+		before: "for (const file of expected) assert.ok(files.has(file),",
+		after: "for (const file of []) assert.ok(files.has(file),",
+		check: "test/verification-gates.test.mjs",
+		failure: /Missing expected rejection/,
 	},
 	{
 		name: "WSL2 empty-roots hint (#672)",
@@ -196,9 +300,18 @@ const cases = [
 		failure: /timed out/,
 	},
 	{
+		name: "Windows helper post-write abort (#750)",
+		file: "src/platform/windows/helper.ts",
+		before: '\t\t\tsignal?.addEventListener("abort", onAbort, { once: true });',
+		after: "/* post-write abort listener dropped */",
+		check: "test/windows-helper-client.test.mjs",
+		failure: /post-write abort must remove the pending request immediately/,
+	},
+	{
 		name: "Windows helper refuses a signal aborted during startup (#735)",
 		file: "src/platform/windows/helper.ts",
-		before: '\t\t// ...and so does one aborted while the install check or helper start was in flight.\n\t\tthrowIfAborted(signal);\n',
+		before:
+			"\t\t// ...and so does one aborted while the install check or helper start was in flight.\n\t\tthrowIfAborted(signal);\n",
 		after: "",
 		check: "test/stdio-helper-clients.test.mjs",
 		failure: /Missing expected rejection/,
@@ -206,7 +319,7 @@ const cases = [
 	{
 		name: "Windows helper refuses an already aborted signal (#735)",
 		file: "src/platform/windows/helper.ts",
-		before: '\t\tthrowIfAborted(signal);\n\t\tconst child = await this.process(signal);\n',
+		before: "\t\tthrowIfAborted(signal);\n\t\tconst child = await this.process(signal);\n",
 		after: "\t\tconst child = await this.process(signal);\n",
 		check: "test/stdio-helper-clients.test.mjs",
 		failure: /no replacement helper was spawned/,
@@ -215,10 +328,20 @@ const cases = [
 		name: "Windows per-child line buffer (#725)",
 		file: "src/platform/windows/helper.ts",
 		before: 'child.stdout.on("data", (chunk: string) => { buffer = this.onStdout(buffer, chunk); });',
-		after: 'child.stdout.on("data", (chunk: string) => { const g = globalThis as { tail?: string }; g.tail = this.onStdout(g.tail ?? "", chunk); });',
+		after:
+			'child.stdout.on("data", (chunk: string) => { const g = globalThis as { tail?: string }; g.tail = this.onStdout(g.tail ?? "", chunk); });',
 		check: "test/windows-helper-client.test.mjs",
 		failure: /timed out/,
 	},
+	{
+		name: "Windows raw-input policy refusal (#696)",
+		file: "native/windows/bridge-rs/src/input.rs",
+		before: "policy_allows_raw_input(&request)?;",
+		after: "/* preflight refusal dropped */",
+		check: "test/windows-native-refusals.test.mjs",
+		failure: /raw_input_refusals_do_not_dispatch.*FAILED/s,
+	},
+
 	{
 		name: "accessibility hit test for pointer input (#646)",
 		file: "native/macos/bridge.swift",
@@ -272,7 +395,8 @@ const cases = [
 		name: "act pointer refusal runs after focus and preflight (#646)",
 		file: "native/macos/bridge.swift",
 		before: 'focusTargetForPhysicalInput()\n\t\t\tif delivery == "hid" { try preflight(point) }',
-		after: 'try refuseBlockedBeforePost([point])\n\t\t\tfocusTargetForPhysicalInput()\n\t\t\tif delivery == "hid" { try preflight(point) }',
+		after:
+			'try refuseBlockedBeforePost([point])\n\t\t\tfocusTargetForPhysicalInput()\n\t\t\tif delivery == "hid" { try preflight(point) }',
 		check: "test/app-policy.test.mjs",
 		failure: /must not refuse before focus and preflight/,
 	},
@@ -295,8 +419,8 @@ const cases = [
 	{
 		name: "blank blocklist env is unset (#646)",
 		file: "src/config.ts",
-		before: '.map((item) => item.trim()).filter(Boolean))];\n}',
-		after: '.map((item) => item.trim()))];\n}',
+		before: ".map((item) => item.trim()).filter(Boolean))];\n}",
+		after: ".map((item) => item.trim()))];\n}",
 		check: "test/app-policy.test.mjs",
 		failure: /default list applies|keeps defaults|cannot opt out|blank env|deep-equal/,
 	},
@@ -329,9 +453,27 @@ const cases = [
 		name: "bridge missing-target dead guard (#755)",
 		file: "src/bridge.ts",
 		before: "const current = operationState().currentTarget!;",
-		after: 'const current = operationState().currentTarget; if (!current) throw new Error("No current controlled window. Call observe_ui first to choose a target window.");',
+		after:
+			'const current = operationState().currentTarget; if (!current) throw new Error("No current controlled window. Call observe_ui first to choose a target window.");',
 		check: "test/bridge-observe-query.test.mjs",
 		failure: /the unreachable missing-target guard must not return/,
+	},
+	{
+		name: "browser empty keypress reports invalid_args (#748)",
+		file: "src/bridge.ts",
+		before: 'throw new ComputerUseError("invalid_args", "keypress.keys must contain at least one key.");',
+		after: 'throw new Error("keypress.keys must contain at least one key.");',
+		check: "test/bridge-browser-act.test.mjs",
+		failure: /an empty browser keypress is rejected before the write epoch advances/,
+	},
+	{
+		name: "browser moveMouse refuses ref targets before delivery (#748)",
+		file: "src/bridge.ts",
+		before:
+			'if (action.action === "moveMouse" && action.ref) throw new ComputerUseError("invalid_args", "Browser moveMouse requires x/y coordinates; ref targets are not supported.");',
+		after: "/* ref-only moveMouse forwards absent x/y to CDP */",
+		check: "test/bridge-browser-act.test.mjs",
+		failure: /browser moveMouse refs reject with invalid_args before any delivery or epoch change/,
 	},
 	{
 		name: "browser refs resolve from the hydrated state (#712)",
@@ -345,7 +487,7 @@ const cases = [
 		name: "browser state refuses the new actions with a code (#647)",
 		file: "src/bridge.ts",
 		before: 'throw new ComputerUseError("unsupported_command", `Browser transactions do not support',
-		after: 'throw new Error(`Browser transactions do not support',
+		after: "throw new Error(`Browser transactions do not support",
 		check: "test/act-outcomes.test.mjs",
 		failure: /coded unsupported_command/,
 	},
@@ -419,7 +561,7 @@ const cases = [
 	{
 		name: "desktop_input blocklist wire (#646)",
 		file: "src/desktop.ts",
-		before: '{ ...wire, blockedBundleIds }',
+		before: "{ ...wire, blockedBundleIds }",
 		after: "{ ...wire }",
 		check: "test/app-policy.test.mjs",
 		failure: /deep-equal|blockedBundleIds|undefined/,
@@ -469,10 +611,18 @@ const cases = [
 		failure: /Cannot read properties of undefined \(reading 'pid'\)/,
 	},
 	{
+		name: "fake helper socket close settles request (#835)",
+		file: "test/fake-helper.test.mjs",
+		before: '\t\tsocket.once("close", () => reject(new Error("Helper socket closed before reply")));\n',
+		after: "",
+		check: "test/fake-helper.test.mjs",
+		failure: /a closed socket must settle the waiting request/,
+	},
+	{
 		name: "fake helper success replies (#724)",
 		file: "test/support/fake-helper.mjs",
-		before: 'body: { ok: true, result } });',
-		after: 'body: { ok: false, result } });',
+		before: "body: { ok: true, result } });",
+		after: "body: { ok: false, result } });",
 		check: "test/fake-helper.test.mjs",
 		failure: /serves requests, scripted errors with codes, and unknown commands/,
 	},
@@ -598,7 +748,8 @@ const cases = [
 	{
 		name: "macOS helper refuses an already aborted signal (#735)",
 		file: "src/platform/macos/helper.ts",
-		before: '\t\t// An already-aborted signal never fires again, so the request would be sent and wait out its timeout.\n\t\tthrowIfAborted(signal);\n',
+		before:
+			"\t\t// An already-aborted signal never fires again, so the request would be sent and wait out its timeout.\n\t\tthrowIfAborted(signal);\n",
 		after: "",
 		check: "test/macos-helper-client.test.mjs",
 		failure: /Missing expected rejection/,
@@ -612,10 +763,19 @@ const cases = [
 		failure: /is not supported on|did not match|must be of type string/,
 	},
 	{
+		name: "managed browser fixture clock waits for startup (#817)",
+		file: "test/managed-browser-launch.test.mjs",
+		before: 'fs.existsSync(path.join(scratch, "launch.json")) ? (skew += 6_000) : 0',
+		after: "skew += 6_000",
+		check: "test/managed-browser-launch.test.mjs",
+		failure: /timeout fixture clock must not advance before child startup acknowledgement/,
+	},
+	{
 		name: "managed browser profile dir is owner-only (#519)",
 		file: "src/bridge.ts",
 		before: "const profileDir = await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`));",
-		after: "const profileDir = await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`));\n\tawait (await import(\"node:fs/promises\")).chmod(profileDir, 0o755);",
+		after:
+			'const profileDir = await mkdtemp(path.join(os.tmpdir(), `pi-${browser}-cdp-`));\n\tawait (await import("node:fs/promises")).chmod(profileDir, 0o755);',
 		check: "test/managed-browser-profile.test.mjs",
 		failure: /launch uses a private profile dir that ignores a squatted fixed name/,
 	},
@@ -630,8 +790,8 @@ const cases = [
 	{
 		name: "openPermissionPane forwards the signal (#707)",
 		file: "src/platform/macos/permissions.ts",
-		before: '{ kind }, { signal: permissionSignal }',
-		after: '{ kind }, {}',
+		before: "{ kind }, { signal: permissionSignal }",
+		after: "{ kind }, {}",
 		check: "test/permissions-browser.test.mjs",
 		failure: /openPermissionPane forwards the signal/,
 	},
@@ -681,7 +841,8 @@ const cases = [
 	{
 		name: "paste item is transient for clipboard managers (#647)",
 		file: "native/macos/bridge.swift",
-		before: 'let pasteTransientTypeIdentifiers = ["org.nspasteboard.TransientType", "org.nspasteboard.AutoGeneratedType", "org.nspasteboard.ConcealedType"]',
+		before:
+			'let pasteTransientTypeIdentifiers = ["org.nspasteboard.TransientType", "org.nspasteboard.AutoGeneratedType", "org.nspasteboard.ConcealedType"]',
 		after: "let pasteTransientTypeIdentifiers: [String] = []",
 		check: "test/macos-native-pure.test.mjs",
 		failure: /transient, auto-generated and concealed/,
@@ -690,7 +851,8 @@ const cases = [
 	{
 		name: "paste presses the command-map key for v (#647)",
 		file: "native/macos/bridge.swift",
-		before: "(0..<UInt16(128)).first { keyboardLayoutCharacter(layoutData: layoutData, keyCode: $0, modifierState: commandModifierState) == character }",
+		before:
+			"(0..<UInt16(128)).first { keyboardLayoutCharacter(layoutData: layoutData, keyCode: $0, modifierState: commandModifierState) == character }",
 		after: "nil",
 		check: "test/macos-native-pure.test.mjs",
 		failure: /plain Dvorak cmd\+v follows the layout/,
@@ -726,7 +888,8 @@ const cases = [
 	{
 		name: "paste stays off Universal Clipboard (#647)",
 		file: "native/macos/bridge.swift",
-		before: "it must not sync to the user's other devices.\n\t\t\tpasteboard.prepareForNewContents(with: .currentHostOnly)",
+		before:
+			"it must not sync to the user's other devices.\n\t\t\tpasteboard.prepareForNewContents(with: .currentHostOnly)",
 		after: "it must not sync to the user's other devices.\n\t\t\tpasteboard.clearContents()",
 		check: "test/app-policy.test.mjs",
 		failure: /Universal Clipboard/,
@@ -914,6 +1077,14 @@ const cases = [
 		failure: /a wrong checksum is rejected before extraction/,
 	},
 	{
+		name: "signing certificate stops after command refusal (#803)",
+		file: "scripts/make-signing-cert.mjs",
+		before: "if (status !== 0) return status;",
+		after: "/* command refusal ignored */",
+		check: "test/make-signing-cert.test.mjs",
+		failure: /command refusal at step 2|command refusal at step 3/,
+	},
+	{
 		name: "single root delta mapping (50cbfe2/4d596ca)",
 		file: "src/bridge.ts",
 		before: "if (!execution.rootDelta?.length) return;",
@@ -924,15 +1095,17 @@ const cases = [
 	{
 		name: "strict headless TS rejection drift (upstream #112 deviation)",
 		file: "src/actions.ts",
-		before: 'if (action.action !== "typeText" && action.action !== "keypress" && action.action !== "paste") return undefined;',
+		before:
+			'if (action.action !== "typeText" && action.action !== "keypress" && action.action !== "paste") return undefined;',
 		after: 'if (action.action !== "typeText") return undefined;',
-		check: "test/invariants.test.mjs",
+		check: "test/strict-headless-invariant.test.mjs",
 		failure: /drifted from bridge\.swift/,
 	},
 	{
 		name: "strict headless keyboard preflight (upstream #112 deviation)",
 		file: "src/actions.ts",
-		before: 'if (action.action !== "typeText" && action.action !== "keypress" && action.action !== "paste") return undefined;',
+		before:
+			'if (action.action !== "typeText" && action.action !== "keypress" && action.action !== "paste") return undefined;',
 		after: "return undefined;",
 		check: "test/unpaired-act.test.mjs",
 		failure: /Missing expected rejection/,
@@ -940,9 +1113,10 @@ const cases = [
 	{
 		name: "strict headless native rejection drift (upstream #112 deviation)",
 		file: "native/macos/bridge.swift",
-		before: '} else if action == "keypress" {\n\t\t\ttry rejectInStrictHeadless("Keypress requires synthesized keyboard input, which strict headless mode prohibits")\n',
+		before:
+			'} else if action == "keypress" {\n\t\t\ttry rejectInStrictHeadless("Keypress requires synthesized keyboard input, which strict headless mode prohibits")\n',
 		after: '} else if action == "keypress" {\n',
-		check: "test/invariants.test.mjs",
+		check: "test/strict-headless-invariant.test.mjs",
 		failure: /drifted from bridge\.swift/,
 	},
 	{
@@ -999,7 +1173,8 @@ const cases = [
 	{
 		name: "web setText keyboard focus refusal (#646)",
 		file: "native/macos/bridge.swift",
-		before: 'if delivery == "hid" { try refuseBlockedKeyboardAfterFocus(preserveFocus: false) } else { focusTargetForPhysicalInput() }',
+		before:
+			'if delivery == "hid" { try refuseBlockedKeyboardAfterFocus(preserveFocus: false) } else { focusTargetForPhysicalInput() }',
 		after: "focusTargetForPhysicalInput()",
 		check: "test/app-policy.test.mjs",
 		failure: /web setText must wait for focus/,
@@ -1023,82 +1198,98 @@ const cases = [
 	},
 ];
 
-try {
-	const ledger = JSON.parse(readFileSync(path.join(root, "sync-patches.json"), "utf8"));
-	const upstreamMarkdown = readFileSync(path.join(root, "UPSTREAM.md"), "utf8");
-	validateLedger(ledger, cases);
-	validateUpstreamRows(ledger, upstreamMarkdown);
-	validateLedgerOrder(ledger, upstreamMarkdown, readFileSync(fileURLToPath(import.meta.url), "utf8"));
-	if (process.argv.includes("--validate-only")) {
-		console.log("Sync ledger and actual revert cases validated");
-		rmSync(sandboxRoot, { recursive: true, force: true });
-		process.exit(0);
-	}
-	// Test sources/fixtures are intentionally NOT the npm payload: package.json `files` excludes
-	// them. Keep this self-contained package-root fixture list aligned with the checks selected above.
-	for (const entry of [
-		"src",
-		"test",
-		"vitest.config.ts",
-		"extensions",
-		"native",
-		"scripts",
-		"docs",
-		"prebuilt",
-		"assets",
-		"package.json",
-		"README.md",
-		"CONTRIBUTING.md",
-		"UPSTREAM.md",
-		"sync-patches.json",
-		"LICENSE",
-	]) {
-		cpSync(path.join(root, entry), path.join(sandbox, entry), {
-			recursive: true,
-			filter: (source) => !source.split(path.sep).includes("target"),
-		});
-	}
-	symlinkSync(nodeModules, path.join(sandboxRoot, "node_modules"), "dir");
-	symlinkSync(path.join(repository, "integration"), path.join(sandboxRoot, "integration"), "dir");
-	symlinkSync(path.join(repository, "coverage"), path.join(sandboxRoot, "coverage"), "dir");
-	// NO_COLOR keeps Vitest's CI-colored output matchable; each Vitest control gets its own isolated home.
-	const env = {
-		...process.env,
-		PI_CU_LIVE: "",
-		PI_COMPUTER_USE_LIVE: "",
-		HOME: sandbox,
-		NO_COLOR: "1",
-		GITHUB_STEP_SUMMARY: "",
-	};
-	for (const test of cases) {
-		if (test.darwinOnly && process.platform !== "darwin") {
-			console.log(`NOT RUN revert proof: ${test.name} (requires macOS)`);
-			continue;
+/** Validate ownership, then run drop controls in a disposable package copy; imports never create a sandbox. */
+export function main(
+	argv = process.argv.slice(2),
+	deps = { root, cases, platform: process.platform, spawn: spawnSync, log: console.log },
+) {
+	const root = deps.root;
+	const cases = deps.cases;
+	const repository = path.resolve(root, "../..");
+	// Mirror the monorepo layout so the copied config resolves its shared home guard and coverage inventory.
+	const sandboxRoot = mkdtempSync(path.join(os.tmpdir(), "cu-sync-reverts-"));
+	const sandbox = path.join(sandboxRoot, "packages", "computer-use");
+	const nodeModules = path.join(repository, "node_modules");
+	try {
+		const ledger = JSON.parse(readFileSync(path.join(root, "sync-patches.json"), "utf8"));
+		const upstreamMarkdown = readFileSync(path.join(root, "UPSTREAM.md"), "utf8");
+		validateLedger(ledger, cases);
+		validateUpstreamRows(ledger, upstreamMarkdown);
+		validateLedgerOrder(ledger, upstreamMarkdown, readFileSync(fileURLToPath(import.meta.url), "utf8"));
+		if (argv.includes("--validate-only")) {
+			deps.log("Sync ledger and actual revert cases validated");
+			return 0;
 		}
-		const file = path.join(sandbox, test.file);
-		const source = readFileSync(file, "utf8");
-		assert.ok(source.includes(test.before), `Revert anchor missing for ${test.name}`);
-		writeFileSync(file, source.replace(test.before, test.after));
-		try {
-			// Vitest suites run through the repository launcher; repository gates stay plain CLIs under tsx.
-			const args = test.check.endsWith(".test.mjs")
-				? [path.join(repository, "scripts/run-vitest.ts"), "node", test.check, "--coverage.enabled=false"]
-				: [path.join(nodeModules, "tsx/dist/cli.mjs"), path.join(sandbox, test.check)];
-			const result = spawnSync(process.execPath, args, {
-				cwd: sandbox,
-				env,
-				encoding: "utf8",
-				timeout: 90_000,
-				maxBuffer: 8 * 1024 * 1024,
+		// Test sources/fixtures are intentionally NOT the npm payload: package.json `files` excludes
+		// them. Keep this self-contained package-root fixture list aligned with the checks selected above.
+		for (const entry of [
+			"src",
+			"test",
+			"vitest.config.ts",
+			"extensions",
+			"native",
+			"scripts",
+			"docs",
+			"prebuilt",
+			"assets",
+			"package.json",
+			"README.md",
+			"CONTRIBUTING.md",
+			"UPSTREAM.md",
+			"sync-patches.json",
+			"LICENSE",
+		]) {
+			cpSync(path.join(root, entry), path.join(sandbox, entry), {
+				recursive: true,
+				filter: (source) => !source.split(path.sep).includes("target"),
 			});
-			assert.ifError(result.error);
-			assert.notEqual(result.status, 0, `Dropped patch survived: ${test.name}`);
-			assert.match(`${result.stdout}\n${result.stderr}`, test.failure, `Wrong failure for ${test.name}`);
-			console.log(`REVERT PROVEN: ${test.name} -> ${test.check}`);
-		} finally {
-			writeFileSync(file, source);
 		}
+		symlinkSync(nodeModules, path.join(sandboxRoot, "node_modules"), "dir");
+		symlinkSync(path.join(repository, "integration"), path.join(sandboxRoot, "integration"), "dir");
+		symlinkSync(path.join(repository, "coverage"), path.join(sandboxRoot, "coverage"), "dir");
+		// NO_COLOR keeps Vitest's CI-colored output matchable; each Vitest control gets its own isolated home.
+		const env = {
+			...process.env,
+			PI_CU_LIVE: "",
+			PI_COMPUTER_USE_LIVE: "",
+			HOME: sandbox,
+			NO_COLOR: "1",
+			GITHUB_STEP_SUMMARY: "",
+		};
+		for (const test of cases) {
+			if (test.darwinOnly && deps.platform !== "darwin") {
+				deps.log(`NOT RUN revert proof: ${test.name} (requires macOS)`);
+				continue;
+			}
+			const file = path.join(sandbox, test.file);
+			const source = readFileSync(file, "utf8");
+			assert.ok(source.includes(test.before), `Revert anchor missing for ${test.name}`);
+			writeFileSync(file, source.replace(test.before, test.after));
+			try {
+				// Vitest suites run through the repository launcher; repository gates stay plain CLIs under tsx.
+				const args = test.check.endsWith(".test.mjs")
+					? [path.join(repository, "scripts/run-vitest.ts"), "node", test.check, "--coverage.enabled=false"]
+					: [path.join(nodeModules, "tsx/dist/cli.mjs"), path.join(sandbox, test.check)];
+				const result = deps.spawn(process.execPath, args, {
+					cwd: sandbox,
+					env,
+					encoding: "utf8",
+					timeout: 90_000,
+					maxBuffer: 8 * 1024 * 1024,
+				});
+				assert.ifError(result.error);
+				assert.notEqual(result.status, 0, `Dropped patch survived: ${test.name}`);
+				assert.match(`${result.stdout}\n${result.stderr}`, test.failure, `Wrong failure for ${test.name}`);
+				deps.log(`REVERT PROVEN: ${test.name} -> ${test.check}`);
+			} finally {
+				writeFileSync(file, source);
+			}
+		}
+	} finally {
+		rmSync(sandboxRoot, { recursive: true, force: true });
 	}
-} finally {
-	rmSync(sandboxRoot, { recursive: true, force: true });
+	return 0;
 }
+
+if (process.argv[1] && realpathSync(path.resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url)))
+	main();

@@ -72,10 +72,10 @@ export function formatResets(
 	lines.push(
 		"Schedule inspection: supported by usage collectors; freshness/availability shown above.",
 		"Codex banked FREE resets:",
-		"  Offer discovery: unavailable in Pi (not integrated).",
-		"  Free redemption: unavailable in Pi (not integrated).",
+		"  Offer discovery: /router resets codex (explicit account-bound read, verified client required).",
+		"  Free redemption: supported only after grant selection and explicit human confirmation there.",
 		"  Balance, eligibility, expiry and history: unknown, not verified zero.",
-		"  Codex has a documented app-server contract; Pi has no account/session adapter for it.",
+		"  Capability/version/auth failures are reported explicitly; no separate CLI account or private HTTP fallback is used.",
 		"  Official handoff: in Codex CLI use /usage -> Redeem reset; if absent, use desktop Settings > Usage & billing or web Usage settings.",
 		"  Check the account/workspace, covered allowances and expiry there before confirming a FREE banked reset. Do not select Buy an instant reset.",
 		`  ${CODEX_RESET_HELP}`,

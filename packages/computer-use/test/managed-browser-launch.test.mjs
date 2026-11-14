@@ -153,10 +153,13 @@ describe.skipIf(process.platform === "win32")("launch_browser with the managed b
 	test("a browser that never serves CDP fails the launch, stops the browser and restores the port", async () => {
 		vi.stubEnv("PI_COMPUTER_USE_CHROME_EXECUTABLE", FAKE_BROWSER);
 		vi.stubEnv("FAKE_BROWSER_NO_CDP", "1");
-		// Each clock read advances 6 s, so the 15 s readiness budget runs out after a couple of probes.
+		// Start virtual deadline acceleration only after the real child records its launch.
+		// Otherwise a loaded host can time out and kill it before launch.json ever exists.
 		let skew = 0;
 		const realNow = Date.now.bind(Date);
-		vi.spyOn(Date, "now").mockImplementation(() => realNow() + (skew += 6_000));
+		vi.spyOn(Date, "now").mockImplementation(() => realNow() + (fs.existsSync(path.join(scratch, "launch.json")) ? (skew += 6_000) : 0));
+		Date.now();
+		assert.equal(skew, 0, "timeout fixture clock must not advance before child startup acknowledgement");
 		await assert.rejects(testing.performLaunchBrowser({}), /^Error: Managed browser did not expose CDP on port \d+ within 15000ms\.$/);
 		assert.equal(process.env.PI_COMPUTER_USE_CDP_PORT, "", "the managed port is not left configured");
 		const { profile } = JSON.parse(fs.readFileSync(path.join(scratch, "launch.json"), "utf8"));

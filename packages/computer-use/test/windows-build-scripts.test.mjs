@@ -224,10 +224,14 @@ describe.skipIf(process.env.PI_CU_WINDOWS_SCRIPTS !== "1")("Windows build/instal
 		async () => {
 			const result = await runScript("setup-helper.mjs", []);
 			if (isWin32()) {
-				// On Windows, no-args should auto-detect win32 and attempt Windows helper setup.
-				// It may succeed or hit EPERM if the destination is locked.
-				const isAcceptable = result.code === 0 || result.stderr.includes("EPERM");
-				assert.equal(isAcceptable, true, "no-args handles win32 auto-detection");
+				// Default setup never silently opts into a build. A source checkout has no Windows prebuilt.
+				const prebuiltExists = fs.existsSync(path.join(ROOT, "prebuilt", "windows", "windows-bridge.exe"));
+				if (prebuiltExists) {
+					assert.equal(result.code === 0 || result.stderr.includes("EPERM"), true, "no-args handles win32 prebuilt setup");
+				} else {
+					assert.equal(result.code, 1, "no-args refuses an absent Windows prebuilt without build opt-in");
+					assert.match(result.stderr, /No Windows prebuilt helper found/);
+				}
 			} else if (isDarwin()) {
 				assert.equal(result.code === 0 || result.stderr.includes("EPERM"), true, "no-args installs only into the isolated test app on macOS");
 				const combined = result.stderr + result.stdout;

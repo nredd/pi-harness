@@ -136,7 +136,7 @@ describe("router usage RPC", () => {
 			ui: { notify, custom },
 		} as unknown as ExtensionCommandContext;
 		await h.status(ctx, "resets invalid");
-		expect(notify).toHaveBeenLastCalledWith("subscription-router: expected resets [refresh]", "error");
+		expect(notify).toHaveBeenLastCalledWith("subscription-router: expected resets [refresh|codex]", "error");
 		await h.status(ctx, "resets");
 		expect(h.fetch).not.toHaveBeenCalled();
 		expect(custom).toHaveBeenCalledTimes(1);

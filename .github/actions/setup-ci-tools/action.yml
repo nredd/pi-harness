@@ -2,7 +2,7 @@ name: Set up CI tools
 description: Install pinned tools in the selected execution environment
 inputs:
   guest:
-    description: Execution environment, linux, macos or wsl2
+    description: Execution environment, linux, macos, windows or wsl2
     required: true
   host:
     description: >-

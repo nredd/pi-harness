@@ -3,10 +3,34 @@ name: Forks
 
 on:
   pull_request:
-    paths: [forks/**, .gitmodules, .github/workflows/forks.yml]
+    paths:
+      - forks/**
+      - .gitmodules
+      - .github/workflows/forks.yml
+      - Makefile
+      - integration/core-source/**
+      - integration/inprocess/support.ts
+      - packages/subagents/**
+      - packages/dev-tools/biome.json
+      - package.json
+      - package-lock.json
+      - .npmrc
+      - .node-version
   push:
     branches: [main]
-    paths: [forks/**, .gitmodules, .github/workflows/forks.yml]
+    paths:
+      - forks/**
+      - .gitmodules
+      - .github/workflows/forks.yml
+      - Makefile
+      - integration/core-source/**
+      - integration/inprocess/support.ts
+      - packages/subagents/**
+      - packages/dev-tools/biome.json
+      - package.json
+      - package-lock.json
+      - .npmrc
+      - .node-version
   workflow_dispatch:
   workflow_call:
 
@@ -86,3 +110,14 @@ jobs:
         run: npm run build:daemon --workspace packages/env
       - name: Test (isolated HOME, no credentials)
         run: ./test.sh
+      - name: Verify root core overrides before child install
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: make verify-root-overrides
+      - name: Install owned packages for candidate-core child verification
+        working-directory: .
+        run: npm ci --ignore-scripts
+      - name: Verify assembled direct and routed child compaction on candidate core
+        working-directory: .
+        run: make check-core-compaction

@@ -18,6 +18,8 @@ from textwrap import dedent
 import pytest
 
 from harness.runtime_hooks import runtime_hooks
+from harness.startup import Sample
+from scenarios import test_startup as readiness_scenario
 
 ROOT = Path(__file__).resolve().parents[2]
 ENGINES = ["node", "bun", "compiled-bun"]
@@ -30,6 +32,7 @@ ENTRYPOINT = dedent("""\
 def test_no_hook_requested_sets_no_environment() -> None:
     """An empty request must not export blank `NODE_OPTIONS` or `BUN_OPTIONS`."""
     assert runtime_hooks() == {}
+    assert runtime_hooks(env={"NODE_OPTIONS": "--trace-warnings"}) == {}
 
 
 def test_hooks_are_spelled_for_each_runtime_in_order(tmp_path: Path) -> None:
@@ -40,6 +43,11 @@ def test_hooks_are_spelled_for_each_runtime_in_order(tmp_path: Path) -> None:
         "BUN_OPTIONS": f"--preload {first} --preload {second} --expose-gc",
     }
     assert runtime_hooks(expose_gc=True) == {"NODE_OPTIONS": "--expose-gc", "BUN_OPTIONS": "--expose-gc"}
+    existing = {"NODE_OPTIONS": '--import "/fixture with space/old.mjs"', "BUN_OPTIONS": "--smol"}
+    assert runtime_hooks([first], env=existing) == {
+        "NODE_OPTIONS": f"{existing['NODE_OPTIONS']} --import {first}",
+        "BUN_OPTIONS": f"--smol --preload {first}",
+    }
 
 
 @pytest.mark.parametrize("name", ["with space.mjs", 'with"quote.mjs', "with'quote.mjs"])
@@ -118,7 +126,8 @@ def test_preload_and_gc_load_on_every_runtime(engine: str, compiled_entrypoint: 
     preload.write_text(PRELOAD)
     env = {"HOME": str(tmp_path)}
     assert report(engine, compiled_entrypoint, tmp_path, env) == {"preload": None, "gc": "undefined"}
-    hooked = env | runtime_hooks([preload], expose_gc=True)
+    env |= {"NODE_OPTIONS": "--expose-gc", "BUN_OPTIONS": "--expose-gc"}
+    hooked = env | runtime_hooks([preload], env=env)
     assert report(engine, compiled_entrypoint, tmp_path, hooked) == {"preload": "loaded", "gc": "function"}
 
 
@@ -151,3 +160,95 @@ def test_bun_drops_a_quoted_preload_silently(compiled_entrypoint: Path, tmp_path
     preload.write_text(PRELOAD)
     env = {"HOME": str(tmp_path), "BUN_OPTIONS": f'--preload "{preload}"'}
     assert report("compiled-bun", compiled_entrypoint, tmp_path, env) == {"preload": None, "gc": "undefined"}
+
+
+@pytest.mark.parametrize("engine", ["node", "compiled-bun"])
+def test_readiness_guard_acknowledges_on_each_runtime(
+    engine: str, compiled_entrypoint: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Run the exact readiness guard on Node and an actual compiled Bun fixture.
+
+    Parameters:
+        engine (str): native runtime receiving the guard.
+        compiled_entrypoint (Path): small compiled report fixture.
+        tmp_path (Path): synthetic readiness HOME.
+        monkeypatch (pytest.MonkeyPatch): substitutes only the sampler's CLI process.
+    """
+    entry = tmp_path / "entry.mjs"
+    entry.write_text(ENTRYPOINT)
+    node = shutil.which("node")
+    assert node is not None
+    command = [node, str(entry)] if engine == "node" else [str(compiled_entrypoint)]
+
+    def run_guard(argv: list[str], *, env: dict[str, str], frame_pattern: str) -> Sample:
+        """Execute the real preload before the small report entrypoint.
+
+        Parameters:
+            argv (list[str]): unused native Pi command, replaced only in this unit seam.
+            env (dict[str, str]): scenario-generated environment, including both hooks.
+            frame_pattern (str): sampler's footer pattern.
+
+        Returns:
+            Sample: synthetic timing values, never a latency measurement.
+        """
+        subprocess.run(command, env=env, check=True, capture_output=True, timeout=10)
+        return Sample(0.1, 0.2, 0.3, {})
+
+    monkeypatch.setattr(readiness_scenario, "pi_command", lambda: ["fixture"])
+    monkeypatch.setattr(readiness_scenario, "sample", run_guard)
+    readiness_scenario.test_startup_readiness_native_dispatch_without_network(tmp_path)
+
+
+@pytest.mark.parametrize("ack", [None, "wrong-nonce"])
+def test_readiness_guard_cannot_pass_without_loaded_ack(
+    ack: str | None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Absent/wrong guard admission fails even when no network log exists.
+
+    Parameters:
+        ack (str | None): absent or malformed guard acknowledgement.
+        tmp_path (Path): synthetic HOME and marker directory.
+        monkeypatch (pytest.MonkeyPatch): replaces dispatch without running a preload.
+    """
+
+    def unguarded_sample(argv: list[str], *, env: dict[str, str], frame_pattern: str) -> Sample:
+        """Simulate successful readiness with an unadmitted network guard.
+
+        Parameters:
+            argv (list[str]): unused process command.
+            env (dict[str, str]): scenario marker paths.
+            frame_pattern (str): unused footer regex.
+
+        Returns:
+            Sample: synthetic successful dispatch.
+        """
+        if ack is not None:
+            Path(env["GUARD_LOADED"]).write_text(ack)
+        return Sample(0.1, 0.2, 0.3, {})
+
+    monkeypatch.setattr(readiness_scenario, "pi_command", lambda: ["fixture"])
+    monkeypatch.setattr(readiness_scenario, "sample", unguarded_sample)
+    with pytest.raises(AssertionError, match="Network guard preload"):
+        readiness_scenario.test_startup_readiness_native_dispatch_without_network(tmp_path)
+
+
+@pytest.mark.parametrize("engine", ["node", "compiled-bun"])
+def test_failed_preload_exits_nonzero(engine: str, compiled_entrypoint: Path, tmp_path: Path) -> None:
+    """A failed hook is a process failure, never evidence of no network calls.
+
+    Parameters:
+        engine (str): runtime receiving the invalid preload.
+        compiled_entrypoint (Path): small compiled fixture.
+        tmp_path (Path): private entrypoint and failed guard.
+    """
+    (tmp_path / "entry.mjs").write_text(ENTRYPOINT)
+    guard = tmp_path / "failed.mjs"
+    guard.write_text('throw new Error("guard installation failed");\n')
+    node = shutil.which("node")
+    assert node is not None
+    command = [node, str(tmp_path / "entry.mjs")] if engine == "node" else [str(compiled_entrypoint)]
+    result = subprocess.run(
+        command, env=runtime_hooks([guard]), capture_output=True, text=True, timeout=10, check=False
+    )
+    assert result.returncode != 0
+    assert "guard installation failed" in result.stderr

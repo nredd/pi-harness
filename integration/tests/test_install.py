@@ -1856,6 +1856,38 @@ def test_verify_release_requires_integrity_for_installed_core_assets(
         install.verify_release(snapshot.model_copy(update={"stack": stack}), "node", tmp_path)
 
 
+def test_verify_release_installed_assets_ignore_release_package_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reordering `RELEASE_PACKAGES` must not change which assets need snapshot integrity."""
+    snapshot = real_snapshot()
+    core = snapshot.stack.core
+    monkeypatch.setattr(install, "release_checksums", lambda tag: {})
+    monkeypatch.setattr(install, "validate_release_identity", lambda stack, tag, checksums: None)
+    monkeypatch.setattr(install, "verify_core_assets", lambda stack, path, attest, checksums: None)
+
+    def missing_error(integrity: dict[str, str]) -> str:
+        """Return the rejection message for a snapshot recording only `integrity`.
+
+        Parameters:
+            integrity (dict[str, str]): asset name -> digest the snapshot records.
+
+        Returns:
+            str: the `VerificationError` message.
+        """
+        stack = snapshot.stack.model_copy(update={"core": core.model_copy(update={"integrity": integrity})})
+        with pytest.raises(VerificationError) as caught:
+            install.verify_release(snapshot.model_copy(update={"stack": stack}), "node", tmp_path)
+        return str(caught.value)
+
+    only_ai = {name: digest for name, digest in core.integrity.items() if "pi-ai" in name}
+    baseline = missing_error(only_ai)
+    assert "pi-coding-agent" in baseline
+    assert "pi-tui" in baseline
+    monkeypatch.setattr(release, "RELEASE_PACKAGES", tuple(reversed(release.RELEASE_PACKAGES)))
+    assert missing_error(only_ai) == baseline
+
+
 def test_verify_release_rejects_wrong_legacy_core_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

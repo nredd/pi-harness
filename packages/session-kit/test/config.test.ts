@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -51,6 +51,15 @@ describe("parseConfig", () => {
 		expect(parseConfig({ titles: { model: "nope" } }).titleModel).toBe("nope");
 		expect(parseConfig({ titles: { model: "" } }).titleModel).toBe("");
 		expect(parseConfig({ titles: { model: 5 } }).titleModel).toBeUndefined();
+	});
+	it("loads the default path only under the explicitly disposable agent directory", () => {
+		const dir = mkdtempSync(join(tmpdir(), "kit-default-config-"));
+		vi.stubEnv("PI_CODING_AGENT_DIR", dir);
+		try {
+			expect(loadConfig()).toEqual(defaultConfig());
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 	it("returns defaults for non-objects and a missing file", () => {
 		expect(parseConfig(null)).toEqual(defaultConfig());

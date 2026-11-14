@@ -137,12 +137,20 @@ test("guarded suites keep the shared setup and launcher in their gates", async (
 		"packages/plan-mode",
 		"packages/dev-tools",
 		"packages/subagents",
+		"packages/session-kit",
 	]) {
 		const manifest = JSON.parse(readFileSync(join(root, directory, "package.json"), "utf8"));
 		// The launcher owns the coverage arguments; launcher.test.ts pins them.
-		expect(manifest.scripts["test:bun"]).toMatch(
-			/^node \.\.\/\.\.\/scripts\/run-vitest\.ts bun(?: --maxWorkers=1| --config \.vitest\.config\.ts)?$/,
-		);
+		if (directory === "packages/session-kit") {
+			expect(manifest.scripts["test:bun"]).toBe(
+				"node ../../scripts/run-vitest.ts bun --exclude test/scenarios/home-injection.test.ts && " +
+					"node ../../scripts/run-vitest.ts bun test/scenarios/home-injection.test.ts --coverage.enabled=false",
+			);
+		} else {
+			expect(manifest.scripts["test:bun"]).toMatch(
+				/^node \.\.\/\.\.\/scripts\/run-vitest\.ts bun(?: --maxWorkers=1| --config \.vitest\.config\.ts)?$/,
+			);
+		}
 		expect(manifest.scripts.check).toContain("npm run test:bun");
 		const config = await import(
 			join(root, directory, directory === "packages/todo" ? ".vitest.config.ts" : "vitest.config.ts")

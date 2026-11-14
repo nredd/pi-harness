@@ -13,6 +13,20 @@ if [ "$(id -u)" -ne 0 ]; then
   echo 'wsl2-apt: must run as root' >&2
   exit 1
 fi
+# Apt runs before the ordinary guest checkout/capture exists. On failure, retain
+# only allowlisted DNS outcomes directly in the host's existing diagnostic directory.
+# The saved status and outer bound also cover absent tools and blocked artifact IO.
+capture_apt_failure() {
+  local status=$?
+  trap - EXIT
+  set +e
+  if [ "$status" -ne 0 ]; then
+    timeout --kill-after=1 12 bash "${BASH_SOURCE[0]%/*}/wsl2_dns_diagnostics.sh" \
+      "${WSL_APT_DIAGNOSTICS:-}" || printf 'wsl2-apt: DNS diagnostics unavailable or incomplete\n' >&2
+  fi
+  exit "$status"
+}
+trap capture_apt_failure EXIT
 sources=${WSL_APT_SOURCES:-/etc/apt/sources.list.d/ubuntu.sources}
 conf=${WSL_APT_CONF:-/etc/apt/apt.conf.d/99-pi-ci}
 archives=${WSL_APT_ARCHIVES:-/var/cache/apt/archives}

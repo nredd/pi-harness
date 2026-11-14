@@ -304,6 +304,32 @@
 			}
 		},
 		{
+			"id": "browser-input-preflight",
+			"purpose": "Reject browser moveMouse refs and code empty keypress as invalid_args before batch delivery or epoch changes; retain explicit CDP coordinates and desktop behavior",
+			"rows": [
+				"Browser input preflight"
+			],
+			"files": [
+				"CHANGELOG.md",
+				"README.md",
+				"UPSTREAM.md",
+				"scripts/check-sync-reverts.mjs",
+				"src/bridge.ts",
+				"sync-patches.json",
+				"test/bridge-browser-act.test.mjs"
+			],
+			"check": "test/bridge-browser-act.test.mjs",
+			"dropControls": [
+				"browser empty keypress reports invalid_args (#748)",
+				"browser moveMouse refuses ref targets before delivery (#748)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#748; not filed upstream"
+			}
+		},
+		{
 			"id": "browser-query-no-desktop-escalation",
 			"purpose": "search_ui and expand_ui on a browser state skip desktop OCR escalation and scoped looks (no controlled window to re-capture), and desktop wait_for with a blank stateId fails with the coded no-observation error instead of a TypeError",
 			"rows": [
@@ -324,6 +350,46 @@
 				"status": "harness-only",
 				"reference": "UPSTREAM.md",
 				"detail": "Bug fix found while covering bridge.ts (nredd/pi-harness#722); not filed"
+			}
+		},
+		{
+			"id": "bun-build-fixtures",
+			"purpose": "Test the active Node/Bun executable exactly, use numeric exit-code sentinels, and verify real invalid CLI and symlink entry exits without running a compiler",
+			"rows": [
+				"Bun build fixtures"
+			],
+			"files": [
+				"scripts/build-native.mjs",
+				"test/build-native.test.mjs"
+			],
+			"check": "test/build-native.test.mjs",
+			"dropControls": [
+				"Build CLI preserves invalid argument exit 1 (#833)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#833; MIT-derived build script from f2239e44 / 7b1f7742; canonical test changes only, runtime unchanged; not filed upstream"
+			}
+		},
+		{
+			"id": "bun-stdin-fixture",
+			"purpose": "Force a real failed OS write after acknowledged child stdin closure, rather than treating a small buffered write callback as delivery proof; preserve real EPIPE and all-pending cleanup assertions",
+			"rows": [
+				"Bun stdin fixture"
+			],
+			"files": [
+				"src/platform/linux/helper.ts",
+				"test/platform-linux.test.mjs"
+			],
+			"check": "test/platform-linux.test.mjs",
+			"dropControls": [
+				"Linux stdin failure rejects every pending command (#833)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#833; MIT-derived Linux helper imported at f2239e44, retained at 7b1f7742; canonical test change only, runtime unchanged; not filed upstream"
 			}
 		},
 		{
@@ -401,6 +467,7 @@
 			],
 			"check": "test/fake-helper.test.mjs",
 			"dropControls": [
+				"fake helper socket close settles request (#835)",
 				"fake helper success replies (#724)"
 			],
 			"upstream": {
@@ -514,6 +581,30 @@
 			}
 		},
 		{
+			"id": "headless-cursor-gate",
+			"purpose": "Keep cursor motion deterministic by default and require exact live opt-in before actual AppKit overlay lifecycle checks",
+			"rows": [
+				"Headless cursor gate"
+			],
+			"files": [
+				"docs/cursor-motion-coverage.md",
+				"native/macos/agent_cursor_tests.swift",
+				"scripts/check-sync-reverts.mjs",
+				"test/cursor-headless-gate.test.mjs",
+				"test/invariants.test.mjs"
+			],
+			"check": "test/cursor-headless-gate.test.mjs",
+			"dropControls": [
+				"Headless cursor entry refuses unconditional overlay (#819)",
+				"Headless cursor gate requires exact opt-in (#819)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#819; verification boundary repair, not filed upstream"
+			}
+		},
+		{
 			"id": "helper-aborted-signal-macos",
 			"purpose": "macOS daemonCommand rejects with Operation aborted before connecting when the AbortSignal is already aborted, instead of sending the request",
 			"files": [
@@ -617,6 +708,29 @@
 				"status": "harness-only",
 				"reference": "UPSTREAM.md",
 				"detail": "nredd/pi-harness#725; not filed upstream"
+			}
+		},
+		{
+			"id": "helper-post-write-abort-windows",
+			"purpose": "Reject post-write Windows helper cancellation promptly and clean pending requests, timers and listeners on every completion and write-error path; ignore late replies without cancelling native work",
+			"rows": [
+				"Helper post-write cancellation"
+			],
+			"files": [
+				"CHANGELOG.md",
+				"README.md",
+				"scripts/check-sync-reverts.mjs",
+				"src/platform/windows/helper.ts",
+				"test/windows-helper-client.test.mjs"
+			],
+			"check": "test/windows-helper-client.test.mjs",
+			"dropControls": [
+				"Windows helper post-write abort (#750)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#750; not filed upstream"
 			}
 		},
 		{
@@ -724,6 +838,26 @@
 				"status": "harness-only",
 				"reference": "UPSTREAM.md",
 				"detail": "nredd/pi-harness#646; not filed upstream"
+			}
+		},
+		{
+			"id": "managed-browser-fixture-clock",
+			"purpose": "Start the timeout fixture's virtual clock only after its real fake-browser child records launch.json, so virtual expiry cannot kill the child before startup acknowledgement",
+			"rows": [
+				"Managed browser fixture clock"
+			],
+			"files": [
+				"scripts/check-sync-reverts.mjs",
+				"test/managed-browser-launch.test.mjs"
+			],
+			"check": "test/managed-browser-launch.test.mjs",
+			"dropControls": [
+				"managed browser fixture clock waits for startup (#817)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#817; deterministic harness fixture ordering, not filed upstream"
 			}
 		},
 		{
@@ -982,23 +1116,67 @@
 		},
 		{
 			"id": "rust-coverage",
-			"purpose": "Report native Rust LCOV and per-file line/function/region summaries without thresholds",
+			"purpose": "Report native Rust LCOV and per-file line/function/region summaries without thresholds; disable default filename exclusions and publish validated accounting output (#758)",
 			"rows": [
 				"Rust coverage"
 			],
 			"files": [
 				"docs/rust-coverage.md",
 				"scripts/rust-coverage.mjs",
+				"test/rust-coverage-errors.test.mjs",
 				"test/rust-coverage.test.mjs"
 			],
 			"check": "test/rust-coverage.test.mjs",
 			"dropControls": [
-				"Rust coverage actionable missing-tool error"
+				"Rust coverage actionable missing-tool error",
+				"Rust coverage complete source filenames",
+				"Rust coverage source hashes (#696)"
 			],
 			"upstream": {
 				"status": "proposed-after-issue-first",
 				"reference": "~/code/review-notes/upstream-issues-drafts.md",
 				"detail": "Owner draft (c) wording, currently labeled draft D in the drafts file; not filed"
+			}
+		},
+		{
+			"id": "rust-coverage-test-isolation",
+			"purpose": "Use numeric exit-code sentinels and restore saved status in in-process Rust coverage entry tests on Node and Bun (#807); production behavior unchanged",
+			"rows": [
+				"Rust coverage test isolation"
+			],
+			"files": [
+				"docs/rust-coverage.md",
+				"test/rust-coverage-errors.test.mjs"
+			],
+			"check": "test/rust-coverage-errors.test.mjs",
+			"dropControls": [
+				"Rust coverage numeric exit-code sentinel (#807)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "Fix owned producer test isolation (nredd/pi-harness#807); not filed upstream"
+			}
+		},
+		{
+			"id": "rust-protocol-state-tests",
+			"purpose": "Exercise the real Linux protocol, state and error implementations without a desktop; preserve defensive guards and register the dedicated Cargo suite (#801)",
+			"rows": [
+				"Rust protocol/state tests"
+			],
+			"files": [
+				"docs/rust-protocol-state-coverage.md",
+				"native/linux/bridge-rs/tests/protocol_state_errors.rs",
+				"test/rust-protocol-state-registration.test.mjs"
+			],
+			"check": "test/rust-protocol-state-registration.test.mjs",
+			"dropControls": [
+				"Rust protocol/state Cargo registration (#801)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "Headless deterministic coverage tests (nredd/pi-harness#801); upstream production source unchanged, not filed"
 			}
 		},
 		{
@@ -1048,6 +1226,29 @@
 			}
 		},
 		{
+			"id": "signing-cert-node",
+			"purpose": "Port deterministic certificate setup to measured Node host seams while retaining the documented shell command and a tiny unmeasured Bash silent-password reader",
+			"rows": [
+				"Signing certificate Node port"
+			],
+			"files": [
+				"package.json",
+				"scripts/make-signing-cert.mjs",
+				"scripts/make-signing-cert.sh",
+				"test/make-signing-cert.test.mjs",
+				"tsconfig.signing.json"
+			],
+			"check": "test/make-signing-cert.test.mjs",
+			"dropControls": [
+				"signing certificate stops after command refusal (#803)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#803; MIT-derived from the imported upstream shell script, not filed upstream"
+			}
+		},
+		{
 			"id": "site-working-directory",
 			"purpose": "Run imported website commands from the package rather than the harness root",
 			"rows": [
@@ -1075,10 +1276,12 @@
 			],
 			"files": [
 				"native/macos/bridge.swift",
+				"scripts/check-sync-reverts.mjs",
 				"src/actions.ts",
-				"test/invariants.test.mjs"
+				"test/invariants.test.mjs",
+				"test/strict-headless-invariant.test.mjs"
 			],
-			"check": "test/invariants.test.mjs",
+			"check": "test/strict-headless-invariant.test.mjs",
 			"dropControls": [
 				"strict headless TS rejection drift (upstream #112 deviation)",
 				"strict headless native rejection drift (upstream #112 deviation)"
@@ -1087,6 +1290,33 @@
 				"status": "candidate",
 				"reference": "UPSTREAM.md",
 				"detail": "Guards the act-preflight deviation carried from open upstream PR injaneity/pi-computer-use#112; not filed by us"
+			}
+		},
+		{
+			"id": "swift-motion-numeric-coverage",
+			"purpose": "Cover remaining finite-input motion numeric regions and pure US-key policy without desktop input or removal of numerical safeguards",
+			"rows": [
+				"Swift motion numeric boundaries"
+			],
+			"files": [
+				"docs/cursor-motion-coverage.md",
+				"native/macos/agent_cursor_motion.swift",
+				"native/macos/bridge.swift",
+				"native/macos/cursor_motion_tests.swift",
+				"native/macos/headless_tests.swift",
+				"scripts/check-sync-reverts.mjs"
+			],
+			"check": "test/macos-native-pure.test.mjs",
+			"dropControls": [
+				"Swift motion negative heading wrap (#810)",
+				"Swift motion numerical candidate rejection (#810)",
+				"Swift motion subnormal angle correction (#810)",
+				"Swift policy symbolic key mapping (#645)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "nredd/pi-harness#810 and #645; MIT-derived motion, pure policy checks, not filed upstream"
 			}
 		},
 		{
@@ -1126,7 +1356,9 @@
 			],
 			"files": [
 				"docs/content/docs/reference/platforms/macos/root-targeting.mdx",
+				"docs/cursor-motion-coverage.md",
 				"native/macos/bridge.swift",
+				"native/macos/cursor_motion_tests.swift",
 				"native/macos/headless_tests.swift",
 				"native/macos/helper_entry.swift",
 				"package.json",
@@ -1170,6 +1402,26 @@
 				"reference": "UPSTREAM.md",
 				"detail": "Sync ledger metadata enforcement; not filed"
 			}
+		},
+		{
+			"id": "verification-gate-coverage",
+			"purpose": "Measure seven retained verification gates in process with offline success and refusal controls (#697)",
+			"rows": ["Verification gate coverage"],
+			"files": [
+				"scripts/check-commit-messages.mjs",
+				"scripts/check-docs-platform.mjs",
+				"scripts/check-docs.mjs",
+				"scripts/check-package-assets.mjs",
+				"scripts/check-sync-ledger.mjs",
+				"scripts/check-sync-reverts.mjs",
+				"scripts/check-upstream-sync.mjs",
+				"test/verification-gates.test.mjs",
+				"test/verification-sync-gates.test.mjs",
+				"vitest.config.ts"
+			],
+			"check": "test/verification-gates.test.mjs",
+			"dropControls": ["Verification gates reject a missing required asset (#697)"],
+			"upstream": {"status": "harness-only", "reference": "UPSTREAM.md"}
 		},
 		{
 			"id": "wheel-horizontal-sign",
@@ -1216,6 +1468,30 @@
 			}
 		},
 		{
+			"id": "windows-native-producer",
+			"purpose": "Compile and measure native Windows x64 without desktop calls in tests; inject input delivery and serialize synthetic roots, refuse null capture handles before the OS boundary, and format the native crate (#696)",
+			"rows": [
+				"Windows native coverage"
+			],
+			"files": [
+				"native/windows/bridge-rs/src/capture.rs",
+				"native/windows/bridge-rs/src/input.rs",
+				"native/windows/bridge-rs/src/main.rs",
+				"native/windows/bridge-rs/src/window.rs",
+				"test/windows-build-scripts.test.mjs",
+				"test/windows-native-refusals.test.mjs"
+			],
+			"check": "test/windows-native-refusals.test.mjs",
+			"dropControls": [
+				"Windows raw-input policy refusal (#696)"
+			],
+			"upstream": {
+				"status": "harness-only",
+				"reference": "UPSTREAM.md",
+				"detail": "MIT-derived from imported injaneity/pi-computer-use; nredd/pi-harness#696, not filed upstream"
+			}
+		},
+		{
 			"id": "wsl2-diagnostics",
 			"purpose": "Say Windows host windows are unreachable from a WSL2 guest when Linux finds no roots or frontmost window, instead of the bare errors",
 			"rows": [
@@ -1258,17 +1534,27 @@
 		"docs/content/docs/reference/platforms/macos/actions.mdx",
 		"docs/content/docs/reference/platforms/macos/root-targeting.mdx",
 		"docs/content/docs/tutorials/getting-started.mdx",
+		"docs/cursor-motion-coverage.md",
 		"docs/macos-root-targeting.md",
 		"docs/native-request-framing.md",
 		"docs/rust-coverage.md",
+		"docs/rust-protocol-state-coverage.md",
 		"docs/src/components/brand.tsx",
 		"docs/swift-ref-look-coverage.md",
 		"extensions/computer-use.ts",
+		"native/linux/bridge-rs/tests/protocol_state_errors.rs",
+		"native/macos/agent_cursor_motion.swift",
+		"native/macos/agent_cursor_tests.swift",
 		"native/macos/bridge.swift",
+		"native/macos/cursor_motion_tests.swift",
 		"native/macos/headless_tests.swift",
 		"native/macos/helper_entry.swift",
 		"native/macos/ref_look_tests.swift",
 		"native/macos/request_framing_tests.swift",
+		"native/windows/bridge-rs/src/capture.rs",
+		"native/windows/bridge-rs/src/input.rs",
+		"native/windows/bridge-rs/src/main.rs",
+		"native/windows/bridge-rs/src/window.rs",
 		"package-lock.json",
 		"package.json",
 		"prebuilt/macos/arm64/bridge",
@@ -1302,6 +1588,8 @@
 		"scripts/docs-generators/generate-tool-reference.mjs",
 		"scripts/fixtures/alert-app.swift",
 		"scripts/fixtures/event-probe.swift",
+		"scripts/make-signing-cert.mjs",
+		"scripts/make-signing-cert.sh",
 		"scripts/rust-coverage.mjs",
 		"scripts/setup-helper.mjs",
 		"scripts/swift-coverage.mjs",
@@ -1346,6 +1634,7 @@
 		"test/cleanup.test.mjs",
 		"test/commit-messages.test.mjs",
 		"test/config-load.test.mjs",
+		"test/cursor-headless-gate.test.mjs",
 		"test/desktop-seam.test.mjs",
 		"test/desktop-tools.test.mjs",
 		"test/docs-generators.test.mjs",
@@ -1366,6 +1655,7 @@
 		"test/macos-helper-path.test.mjs",
 		"test/macos-native-pure.test.mjs",
 		"test/macos-observe-target.test.mjs",
+		"test/make-signing-cert.test.mjs",
 		"test/managed-browser-headless.test.mjs",
 		"test/managed-browser-launch.test.mjs",
 		"test/managed-browser-observe.test.mjs",
@@ -1384,9 +1674,11 @@
 		"test/runtime-state-output.test.mjs",
 		"test/rust-coverage-errors.test.mjs",
 		"test/rust-coverage.test.mjs",
+		"test/rust-protocol-state-registration.test.mjs",
 		"test/session-lifecycle.test.mjs",
 		"test/setup-helper-inprocess.test.mjs",
 		"test/stdio-helper-clients.test.mjs",
+		"test/strict-headless-invariant.test.mjs",
 		"test/support/fake-browser.mjs",
 		"test/support/fake-desktop.mjs",
 		"test/support/fake-helper.mjs",
@@ -1397,10 +1689,14 @@
 		"test/sync-ledger.test.mjs",
 		"test/tool-schemas.test.mjs",
 		"test/unpaired-act.test.mjs",
+		"test/verification-gates.test.mjs",
+		"test/verification-sync-gates.test.mjs",
 		"test/windows-build-scripts.test.mjs",
 		"test/windows-helper-client.test.mjs",
+		"test/windows-native-refusals.test.mjs",
 		"test/wsl-detection.test.mjs",
 		"test/wsl2-diagnostics.test.mjs",
+		"tsconfig.signing.json",
 		"vitest.async.config.ts",
 		"vitest.config.ts"
 	]

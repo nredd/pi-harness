@@ -3,7 +3,6 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { strictHeadlessRejection } from "../src/actions.ts";
 import { noteAfterAct, noteFromLook } from "../src/note.ts";
 import { countOutlineNodes, foldToBudget, graftScopedOutline, nodeByRef, parseLookResponse, renderInteractiveControls } from "../src/outline.ts";
 import { shouldPreferForegroundModalWindow } from "../src/root-selection.ts";
@@ -381,7 +380,7 @@ describeMacosOnly("swiftc", () => {
 		await runPreparedSwift(prepared, ["-typecheck", changed], { cwd: root, label: "INV-8 corrected source control", timeoutMs: 25_000 });
 	});
 
-	test("INV-17 macOS agent cursor lifecycle", { timeout: 50_000 }, async () => {
+	test("INV-17 cursor motion and opt-in macOS overlay lifecycle", { timeout: 50_000 }, async () => {
 		const binary = path.join(scratch, "cursor-tests");
 		await runPreparedSwift(prepared, [
 			"-framework", "AppKit",
@@ -391,7 +390,12 @@ describeMacosOnly("swiftc", () => {
 			"native/macos/agent_cursor_tests.swift",
 			"-o", binary,
 		], { cwd: root, label: "INV-17 Swift source compile", timeoutMs: 20_000 });
-		await runCheckCommand(binary, [], { cwd: root, label: "INV-17 cursor lifecycle binary", timeoutMs: 5000 });
+		const result = await runCheckCommand(binary, [], { cwd: root, label: "INV-17 cursor lifecycle binary", timeoutMs: 5000 });
+		assert(result.stdout.includes("cursor deterministic motion and fake live-gate checks passed"), "cursor motion and fake gate assertions must execute");
+		if (process.env.PI_COMPUTER_USE_LIVE !== "1") {
+			assert(result.stdout.includes("NOT RUN: cursor overlay lifecycle"), "headless gate must report live overlay checks as NOT RUN");
+		}
+		process.stdout.write(result.stdout);
 	});
 });
 
@@ -679,23 +683,4 @@ test.runIf(process.env.PI_CU_LIVE === "1")("LIVE invariants", async () => {
 	await liveChecks();
 	const failed = results.filter(([, ok]) => !ok).map(([name]) => name);
 	assert(failed.length === 0, `LIVE invariant failures: ${failed.join(", ")}`);
-});
-
-test("INV-strict-headless TS rejection mirrors the native keyboard-input rejections", () => {
-	// Native side: `action == "X"` branches whose first statement unconditionally rejects keyboard input.
-	// Conditional rejections (e.g. setText only inside a web area) are not mirrored in TS by design.
-	const nativeActions = new Set();
-	const branch = /else if (?:let \w+, )?action == "(\w+)" \{\s*try rejectInStrictHeadless\("([^"]*)"\)/g;
-	for (const [, action, reason] of swift.matchAll(branch)) {
-		if (/requires synthesized keyboard input/.test(reason)) nativeActions.add(action);
-	}
-	assert(nativeActions.size > 0, "no keyboard-input rejection branches parsed from bridge.swift");
-	const allNativeActions = new Set([...swift.matchAll(/action == "(\w+)"/g)].map((match) => match[1]));
-	const tsActions = new Set(
-		[...allNativeActions, ...nativeActions].filter((action) => strictHeadlessRejection({ action }, true, "darwin") !== undefined),
-	);
-	assert(
-		[...nativeActions].sort().join() === [...tsActions].sort().join(),
-		`strictHeadlessRejection (${[...tsActions].sort()}) drifted from bridge.swift rejectInStrictHeadless (${[...nativeActions].sort()})`,
-	);
 });

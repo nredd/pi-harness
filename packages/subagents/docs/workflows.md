@@ -448,8 +448,12 @@ The message names the directory it tried and the cause: not a git repo, no commi
 **`No saved workflow named "x". Looked in: …`**
 The file is not in any of the three directories, or it is there but carries no `export const meta =` declaration, so it is not recognized as a workflow. The message lists the directories it searched and any workflows it did find.
 
-**The run seems stuck with agents queued.**
+**The run seems stuck with agents queued, or reports zero completed agents.**
 Concurrency is capped at `max(1, min(16, cpus - 2))`. Queued agents start as slots free. A pause (`p`) also holds new starts while letting running agents finish.
+
+The summary counts successful completions, not starts. Children deliberately do not appear as separate ordinary fleet agents: open `/agents → Workflows`, then `c` on a started child to inspect its conversation. The launch envelope proves acceptance, not child execution. Workflow token/tool totals are collected when a child settles; zero totals while children run, or immediately after stopping them, do not prove inactivity. Journal entries are also appended only when calls settle, so no journal yet does not mean no child started. Check actual child tool results before diagnosing a dispatch failure or starting replacement writers.
+
+Counts use each agent index's latest progress entry. Queued, started and model-resolution events for one child are not additional agents. This applies to the transcript card and completion/stop notification alike. See [verification boundaries](../../../docs/workflow-verification.md) for what the automated gates actually exercise.
 
 ## What workflows can't do
 

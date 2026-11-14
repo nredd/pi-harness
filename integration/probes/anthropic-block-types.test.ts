@@ -16,13 +16,15 @@ let root = "";
 
 beforeEach(() => {
 	exitCode = process.exitCode;
+	process.exitCode = 0;
 	root = mkdtempSync(join(tmpdir(), "anthropic-block-types-"));
 	vi.resetModules();
 });
 
 afterEach(() => {
 	process.argv = argv;
-	process.exitCode = exitCode;
+	// Bun does not clear a sticky failure when assigned undefined.
+	process.exitCode = exitCode ?? 0;
 	vi.restoreAllMocks();
 	rmSync(root, { recursive: true, force: true });
 });
@@ -50,7 +52,7 @@ test("with no package root it prints usage and exits 2", async () => {
 test("the installed pi-ai keeps wire text and wire thinking blocks as they were sent", async () => {
 	const { outcome, logged, errors } = await run(PI_AI);
 	assert.equal(outcome, undefined);
-	assert.notEqual(process.exitCode, 2);
+	assert.equal(process.exitCode, 0);
 	assert.deepEqual(errors, []);
 	assert.deepEqual(logged, [
 		`${PI_AI}: wire text -> normalized text: PASS`,
