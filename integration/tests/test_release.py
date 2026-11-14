@@ -63,6 +63,7 @@ from harness.release import (
     verify_public_attestation,
     verify_root_overrides,
 )
+from tests.runtime_fixtures import model_supported_platform
 
 
 class HTTPBody(io.BytesIO):
@@ -1564,7 +1565,7 @@ def test_root_override_gate_runs_before_install_and_blocks_it(tmp_path: Path) ->
 
 
 def test_make_install_hides_token_from_installers_but_not_preflight(tmp_path: Path) -> None:
-    """Only the preflight sees `GH_TOKEN`; `npm ci` and `uv sync` run without it."""
+    """Only the preflight sees `GH_TOKEN`; `npm ci`, `npm run build` and `uv sync` run without it."""
     root = tmp_path / "root"
     root.mkdir()
     shutil.copy(Path(__file__).resolve().parents[2] / "Makefile", root / "Makefile")
@@ -1584,6 +1585,7 @@ def test_make_install_hides_token_from_installers_but_not_preflight(tmp_path: Pa
     assert completed.returncode == 0, completed.stderr
     assert log.read_text().splitlines() == [
         "python3=fixture-token",
+        "npm=unset",
         "npm=unset",
         "uv=unset",
         "uv=unset",
@@ -2224,6 +2226,7 @@ def test_nonlegacy_core_truncation_is_exit_three(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """The real non-legacy checksum/asset verification path normalizes a broken chunked transfer."""
+    model_supported_platform(monkeypatch)
     snapshot = promotion.load_promoted_snapshot(
         (Path(__file__).parent / "fixtures" / "stack-snapshot-24889f7.json").read_bytes(),
         "24889f7896be7157bf9077a41465a3b29620879f",

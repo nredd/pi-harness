@@ -36,6 +36,7 @@ export {
 	dedupCalls,
 	type FileStats,
 	flatten,
+	type Harness,
 	isFileStats,
 	type Loaded,
 	type LoadOptions,

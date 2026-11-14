@@ -10,10 +10,11 @@ import {
 	type ResourceSnapshot,
 	type SamplerOptions,
 } from "@nredd/pi-resource-sampler";
+import { deferred } from "@nredd/pi-test-lib/deferred";
 import { afterEach, expect, it } from "vitest";
 import { registerMon } from "../../src/mon/index.ts";
 import { createSamplerSource } from "../../src/mon/source.ts";
-import { configFor, deferred, TerminalFixture } from "./support.ts";
+import { configFor, TerminalFixture } from "../fixtures/session.ts";
 
 const SIZES = [
 	[40, 12],

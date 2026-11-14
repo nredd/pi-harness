@@ -20,7 +20,7 @@ import { Type } from "typebox";
 import { abortable } from "./abortable.js";
 import { hasAgentBadge, renderAgentName } from "./agent-color.js";
 import { buildNewAgentFile, disableInContent, enableInContent, isEmptyStub, locateAgentFile as locateAgentFileAtHome, personalAgentsDir as personalAgentsDirAtHome, projectAgentsDir, serializeAgentFile } from "./agent-file-toggle.js";
-import { AgentManager, describeEvicted, isTopLevelAgent, markConsumed, type OwnedPending } from "./agent-manager.js";
+import { AgentManager, describeEvicted, describeEvictedResult, isTopLevelAgent, markConsumed, type OwnedPending } from "./agent-manager.js";
 import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, getRememberAgents, normalizeMaxTurns, resolveEffectiveMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, setRememberAgents, steerAgent } from "./agent-runner.js";
 import { rowDescription, sourceIndicator, sourceLegend } from "./agent-source-badge.js";
 import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, getConfig, getFallbackSubagent, isDefaultsDisabled, NO_FALLBACK, registerAgents, resolveSpawnType, resolveType, setDefaultsDisabled, setFallbackSubagent } from "./agent-types.js";
@@ -995,7 +995,9 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     // its next turn, instead of leaving `Agent not found` to be discovered by a later lookup (#330).
     pi.sendMessage({
       customType: "subagent-reaped",
-      content: `${describeEvicted(note)}. Its result was never read and its record is gone; reopen it with steer_subagent or Agent resume if its session is still saved.`,
+      content: describeEvictedResult(note) === undefined
+        ? `${describeEvicted(note)}. Its result was never read and its record is gone; it left no result text. Reopen it with steer_subagent or Agent resume if its session is still saved.`
+        : `${describeEvicted(note)}. Its result was never read and its record is gone, but get_subagent_result still returns its result (capped); reopening it with steer_subagent or Agent resume is optional and needs its session to be saved.`,
       display: true,
     }, { deliverAs: "nextTurn" });
   });
@@ -2645,15 +2647,17 @@ Terse command-style prompts produce shallow, generic work.
         if (!existing) {
           // Evicted by the retention sweep, but a persisted conversation is
           // still on disk: reopen it, as `@handle` does.
-          const entry = manager.listTombstones().find(t => t.id === latest);
+          const entry = manager.tombstoneById(latest);
           if (!entry) {
             // Evicted with no session file left to reopen: `rememberAgents` off, or the tombstone was dropped.
             const note = manager.getEvictedNote(latest);
             const gone = note?.fromSavedSession
               ? "only historical metadata is available; reopen the recorded session manually."
-              : note?.nameTaken
-                ? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.`
-                : "no saved session is left to reopen.";
+              : note?.tombstoneBoundSession
+                ? `dropped by the per-session tombstone bound; reopen ${note.tombstoneBoundSession} manually.`
+                : note?.nameTaken
+                  ? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.`
+                  : "no saved session is left to reopen.";
             const why = note ? `Cannot resume agent "${latest}": ${gone}\n${describeEvicted(note)}` : agentNotFound(latest);
             return textResult(`${continued}${why}`);
           }
@@ -3558,9 +3562,10 @@ Terse command-style prompts produce shallow, generic work.
   }
 
   /** "Not found", or what became of the agent when its record was evicted. */
-  function agentNotFound(ref: string): string {
+  function agentNotFound(ref: string, withResult = false): string {
     const note = manager.getEvictedNote(ref);
-    return note ? describeEvicted(note) : `Agent not found: "${ref}". It may have been cleaned up.`;
+    const result = withResult && note ? describeEvictedResult(note) : undefined;
+    return note ? describeEvicted(note) + (result ? `\n\n${result}` : "") : `Agent not found: "${ref}". It may have been cleaned up.`;
   }
 
   // ---- get_subagent_result tool ----
@@ -3588,7 +3593,7 @@ Terse command-style prompts produce shallow, generic work.
     }),
     execute: async (_toolCallId, params, signal, _onUpdate, _ctx) => {
       const record = resolveAgentRef(params.agent_id);
-      if (!record || !isTopLevelAgent(record)) return textResult(agentNotFound(params.agent_id));
+      if (!record || !isTopLevelAgent(record)) return textResult(agentNotFound(params.agent_id, !record));
 
       // Wait for completion if requested. Cancellation stops only this tool
       // call; the background agent keeps running and remains unconsumed so its
