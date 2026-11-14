@@ -6,6 +6,8 @@
     { "path": "forks", "issue": 693, "reason": "Carried core fork patches have no coverage producer; diff coverage vs explicit exclusion is an open owner decision." }
   ],
   "reclassifications": [
+    { "package": "runtime-build-tooling", "signal": "owned", "path": "packages/plan-mode/scripts/runtime-builder.mjs", "replacement": "scripts/runtime-builder.mjs", "reason": "Relative to 1b1ae909: the shared esbuild runtime builder moves to the root `scripts/` (#866) because subagents imported it across package boundaries. Same producer, same 0/0 floor: `test:dist` now roots Vitest at the repository so the moved file stays measured by the plan-mode `build-runtime.test.ts` that already exercised it." },
+    { "package": "subagents-runtime-tooling", "signal": "owned", "path": "packages/subagents/scripts/check-runtime.mjs", "reason": "Relative to 1b1ae909: deleted (#866). It compared a committed `dist/` with a fresh build, and `dist/` is no longer committed, so there is nothing to compare. Its guarantee survives as the `runtime-scripts.test.ts` case that two builds of one tree are byte-identical; `build-runtime.mjs` stays pinned at 100%." },
     { "package": "session-kit", "signal": "owned", "path": "packages/session-kit/src/stats/library.ts", "reason": "Relative to 57a0c580: preserve every runtime and type export through explicit static named re-exports. Real TypeScript and emitted-ESM Istanbul maps contain zero statements/functions/branches; real Node/Bun namespace parity and type tests preserve the export-star contract. Existing strict facade validation rejects executable additions; all three target modules remain owned and measured." },
     { "package": "dev-tools", "signal": "owned", "path": "packages/dev-tools/src/core/index.ts", "reason": "Relative to integration base 71b0aea: static named ESM re-export facade has zero Istanbul statements/functions in TypeScript and emitted ESM. Strict shape validation rejects executable additions; all executable target modules remain measured." },
     { "package": "plan-mode", "signal": "owned", "path": "packages/plan-mode/src/index.ts", "reason": "Relative to integration base 71b0aea: pure static ESM re-export of the default binding, with zero statements/functions in actual source/emitted-ESM Istanbul maps. Strict facade validation rejects executable additions; src/plan-mode.ts remains owned and measured." },
@@ -66,7 +68,6 @@
       "root": "packages/plan-mode",
       "owned": ["src/**/*.ts"],
       "exclusions": [
-        { "path": "dist/**/*.ts", "kind": "generated", "reason": "Runtime builder output, including hashed chunks, duplicates src/; assembled Bun hosts load these generated files." },
         { "path": "src/index.ts", "kind": "non-executable-facade", "reason": "Only a static ESM re-export of plan-mode's default binding. Istanbul source/emitted-ESM maps contain zero statements/functions; all implementation remains owned in src/plan-mode.ts. Strict source-shape validation rejects executable additions." },
         { "path": "src/interactive-ui.ts", "kind": "non-executable-facade", "reason": "Only static ESM re-exports of UI menu bindings; Istanbul source/emitted-ESM maps contain zero statements/functions. Target implementations remain owned. Strict source-shape validation rejects executable additions." }
       ],
@@ -133,8 +134,7 @@
       "owned": ["src/**/*.ts"],
       "exclusions": [
         { "path": "src/monitor/types.ts", "kind": "type-only", "reason": "Only TypeScript declarations; emits no executable JavaScript." },
-        { "path": "src/stats/library.ts", "kind": "non-executable-facade", "reason": "Only explicit static named ESM re-exports, including type bindings; zero source/emitted-ESM Istanbul maps. Real Node/Bun namespace parity preserves every original export-star binding. Strict facade validation rejects executable additions; aggregate.ts, load.ts and snapshot.ts remain fully owned and measured." },
-        { "path": "dist/pi-stats-export.mjs", "kind": "generated", "reason": "Generated esbuild CLI bundle of the owned src/stats/cli.ts implementation; production source remains measured rather than counting the generated duplicate." }
+        { "path": "src/stats/library.ts", "kind": "non-executable-facade", "reason": "Only explicit static named ESM re-exports, including type bindings; zero source/emitted-ESM Istanbul maps. Real Node/Bun namespace parity preserves every original export-star binding. Strict facade validation rejects executable additions; aggregate.ts, load.ts and snapshot.ts remain fully owned and measured." }
       ],
       "status": "measured",
       "note": "Primary and full-source Bun enforce zero L/F/B/S misses. Complete macOS, Ubuntu and WSL/Linux Node/Bun reports from run 43395812528 cover all 53 executable sources with zero misses (#829); WSL is Linux, not native Windows. The strict named facade leaves its executable targets owned.",
@@ -155,9 +155,7 @@
     "subagents": {
       "root": "packages/subagents",
       "owned": ["src/**/*.ts"],
-      "exclusions": [
-        { "path": "dist/**/*.ts", "kind": "generated", "reason": "Runtime builder output, including hashed chunks, duplicates src/; Pi's Jiti loads this generated entry (#577)." }
-      ],
+      "exclusions": [],
       "status": "measured",
       "note": "",
       "signals": {
@@ -313,14 +311,14 @@
       "signals": {}
     },
     "runtime-build-tooling": {
-      "root": "packages/plan-mode",
-      "owned": ["scripts/*.mjs"],
+      "root": ".",
+      "owned": ["packages/plan-mode/scripts/build-runtime.mjs", "scripts/runtime-builder.mjs"],
       "exclusions": [],
       "status": "measured",
-      "note": "`test:dist` emits a complete primary report for both runtime builder scripts; required CI enforces it at 0/0 on macOS and Linux.",
+      "note": "`test:dist` (Vitest root is the repository) emits a complete primary report for plan-mode's thin `build-runtime.mjs` and the shared root `scripts/runtime-builder.mjs` (moved from `packages/plan-mode/scripts/`, #866); required CI enforces it at 0/0 on macOS and Linux.",
       "signals": {
         "primary": {
-          "report": "coverage/runtime-build-tooling/lcov.info",
+          "report": "packages/plan-mode/coverage/runtime-build-tooling/lcov.info",
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "reporters": ["text", "lcov", "json-summary"]
         }
@@ -328,10 +326,10 @@
     },
     "subagents-runtime-tooling": {
       "root": "packages/subagents",
-      "owned": ["scripts/build-runtime.mjs", "scripts/check-runtime.mjs"],
+      "owned": ["scripts/build-runtime.mjs"],
       "exclusions": [],
       "status": "measured",
-      "note": "The actual production scripts run against disposable source/output trees with the real shared builder and esbuild. No copied or extracted script logic is measured.",
+      "note": "The actual production script runs against disposable source/output trees with the real shared builder and esbuild. No copied or extracted script logic is measured.",
       "signals": {
         "primary": {
           "report": "coverage/runtime-build-tooling/lcov.info",

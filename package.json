@@ -10,6 +10,7 @@
     "integration/inprocess"
   ],
   "scripts": {
+    "build": "npm run build --workspaces --if-present",
     "lint": "npm run lint --workspaces",
     "typecheck": "npm run typecheck --workspaces",
     "test": "npm run test --workspaces",

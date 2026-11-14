@@ -1,6 +1,6 @@
 # Offline stats and portable snapshots
 
-Build the committed `dist/pi-stats-export.mjs` with `npm ci && npm run build:stats-export`.
+Build `dist/pi-stats-export.mjs` (gitignored, not committed) with `npm ci && npm run build`.
 The exact esbuild version and dependencies are locked; tests assert byte-identical rebuilds.
 Copy only that file. Runtime is Node 22+ with builtins only, no Pi install, extension, private
 repository, package install, auth or network access. Importing the artifact is silent, even when

@@ -1564,7 +1564,7 @@ def test_root_override_gate_runs_before_install_and_blocks_it(tmp_path: Path) ->
 
 
 def test_make_install_hides_token_from_installers_but_not_preflight(tmp_path: Path) -> None:
-    """Only the preflight sees `GH_TOKEN`; `npm ci` and `uv sync` run without it."""
+    """Only the preflight sees `GH_TOKEN`; `npm ci`, `npm run build` and `uv sync` run without it."""
     root = tmp_path / "root"
     root.mkdir()
     shutil.copy(Path(__file__).resolve().parents[2] / "Makefile", root / "Makefile")
@@ -1584,6 +1584,7 @@ def test_make_install_hides_token_from_installers_but_not_preflight(tmp_path: Pa
     assert completed.returncode == 0, completed.stderr
     assert log.read_text().splitlines() == [
         "python3=fixture-token",
+        "npm=unset",
         "npm=unset",
         "uv=unset",
         "uv=unset",
