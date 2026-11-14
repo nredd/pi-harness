@@ -166,7 +166,7 @@ describe("AgentManager names", () => {
     expect(manager.resolveMention("scout-2")).toMatchObject({ kind: "live", record: { id: second.id } });
   });
 
-  it("drops the oldest tombstone by completion time, not by eviction order", async () => {
+  it("keeps every tombstone past the old 100 cap, whatever the eviction order (#372)", async () => {
     const clock = new FakeClock();
     manager = clocked(clock, 200);
     const finishers: (() => void)[] = [];
@@ -176,7 +176,7 @@ describe("AgentManager names", () => {
       await new Promise<void>(resolve => finishers.push(resolve));
       return { responseText: prompt, session, aborted: false, steered: false };
     });
-    // 101 tombstones (one over the cap), evicted in spawn order but finished in reverse,
+    // 101 tombstones (past the old cap), evicted in spawn order but finished in reverse,
     // so the record evicted first is the newest and the last one evicted is the oldest.
     const ids = Array.from({ length: 101 }, (_, i) => manager!.spawn(pi, ctx, "general-purpose", `p${i}`, { description: `d${i}`, isBackground: true }));
     await vi.waitFor(() => expect(finishers).toHaveLength(101));
@@ -189,8 +189,8 @@ describe("AgentManager names", () => {
     await manager.waitForAll();
     clock.advance(PAST_RETENTION_MS);
     expect(ids.every(id => manager!.getRecord(id) === undefined)).toBe(true);
-    // The cap dropped the earliest-completed (last-spawned) agent; the first-spawned survives.
-    expect(manager.resolveMention(ids[100])).toBeUndefined();
+    // No cap: the session's lifetime is the bound, so even the earliest-completed survives.
+    expect(manager.resolveMention(ids[100])).toMatchObject({ kind: "tombstone", entry: { id: ids[100] } });
     expect(manager.resolveMention(ids[99])).toMatchObject({ kind: "tombstone", entry: { id: ids[99] } });
     expect(manager.resolveMention(ids[0])).toMatchObject({ kind: "tombstone", entry: { id: ids[0] } });
   });

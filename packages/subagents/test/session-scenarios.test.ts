@@ -366,6 +366,35 @@ it("tells the parent when an unread agent is reaped, not only on a later lookup 
   }
 });
 
+it("does not promise a readable result when the reaped agent kept only blank text (#372)", async () => {
+  const before = process.env.PI_SUBAGENTS_UNREAD_TTL_MIN;
+  process.env.PI_SUBAGENTS_UNREAD_TTL_MIN = "1";
+  try {
+    fixture = new ScenarioSession({ notificationResultChars: 0 });
+    fixture.physical("kid", "child", [answer("   ")]);
+    const h = await fixture.start();
+    h.setResponses([calls(spawn("blank")), answer("SPAWNED"), answer("NOTICE SEEN")]);
+    const completed = fixture.completion();
+    await h.session.prompt("go");
+    const id = agentId(h);
+    await completed;
+    const noticeTurn = nextEvent(h, e => e.type === "agent_end");
+    fixture.clock.advance(200);
+    await noticeTurn;
+    while (h.session.isStreaming) await new Promise(resolve => setTimeout(resolve, 1));
+    fixture.clock.advance(60_000);
+    expect(() => fixture.record(id)).toThrow(`No record ${id}`);
+    h.setResponses([answer("NOTED")]);
+    await h.session.prompt("next");
+    const reaped = h.session.messages.filter(m => m.role === "custom" && m.customType === "subagent-reaped").map(text);
+    expect(reaped).toHaveLength(1);
+    expect(reaped[0]).toContain("left no result text");
+    expect(reaped[0]).not.toContain("still returns its result");
+  } finally {
+    if (before === undefined) delete process.env.PI_SUBAGENTS_UNREAD_TTL_MIN; else process.env.PI_SUBAGENTS_UNREAD_TTL_MIN = before;
+  }
+});
+
 it("does not call a failure the parent was already told about never read (#330)", async () => {
   const before = process.env.PI_SUBAGENTS_UNREAD_TTL_MIN;
   process.env.PI_SUBAGENTS_UNREAD_TTL_MIN = "1";
