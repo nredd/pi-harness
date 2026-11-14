@@ -355,13 +355,34 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
       if (id === undefined) {
         return { ok: false, error: `Cannot resume "${agentId}" — it never started.` };
       }
-      // The provenance is already on the record, so the running row shows it
-      // now rather than only once the resume has finished.
+      type Info = NonNullable<ReturnType<typeof resolvedInfo>>;
+      // The last report, so a per-message or settle re-report that says nothing
+      // new is not emitted again (same dedupe as the spawn path).
+      let lastReported: string | undefined;
+      const report = (info: Info) => {
+        const key = JSON.stringify(info);
+        if (key === lastReported) return;
+        lastReported = key;
+        onResolved?.(info);
+      };
+      // The record already carries the child's effective configuration, so the
+      // running row shows it now rather than only once the resume has finished.
       const existing = manager.getRecord(id);
-      if (modelSelectionNote(existing)) {
+      const before = resolvedInfo(existing);
+      if (before !== undefined) {
+        onResolved?.({ recordId: id });
+        report(before);
+      } else if (modelSelectionNote(existing)) {
         onResolved?.({ recordId: id, modelNote: modelSelectionNote(existing), modelTier: existing?.modelTier });
       }
-      const record = await manager.resume(id, prompt, deps.signal);
+      const record = await manager.resume(id, prompt, deps.signal, {
+        // The manager relabels the record from each answered message before this
+        // fires, so the card follows routing as it happens, not only at settle.
+        onAssistantUsage: () => {
+          const info = resolvedInfo(manager.getRecord(id));
+          if (info !== undefined) report(info);
+        },
+      });
       if (record === undefined) {
         return {
           ok: false,
@@ -369,13 +390,11 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
         };
       }
       // The resumed row is built from scratch, so it has to be told the same
-      // thing the first one was — the child's session already exists, so this is
-      // simply read back rather than waited for. The id goes first for the same
-      // reason it does on the spawn path: it is knowable even when the rest is
-      // not.
+      // thing the first one was. The id goes first for the same reason it does
+      // on the spawn path: it is knowable even when the rest is not.
       onResolved?.({ recordId: id });
       const info = resolvedInfo(record);
-      if (info !== undefined) onResolved?.(info);
+      if (info !== undefined) report(info);
       return toSpawnResult(record, { resumed: true });
     },
 

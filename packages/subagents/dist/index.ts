@@ -6312,11 +6312,29 @@ function createWorkflowHost(deps) {
       if (id === void 0) {
         return { ok: false, error: `Cannot resume "${agentId}" \u2014 it never started.` };
       }
+      let lastReported;
+      const report = (info2) => {
+        const key = JSON.stringify(info2);
+        if (key === lastReported) return;
+        lastReported = key;
+        onResolved?.(info2);
+      };
       const existing = manager.getRecord(id);
-      if (modelSelectionNote(existing)) {
+      const before = resolvedInfo(existing);
+      if (before !== void 0) {
+        onResolved?.({ recordId: id });
+        report(before);
+      } else if (modelSelectionNote(existing)) {
         onResolved?.({ recordId: id, modelNote: modelSelectionNote(existing), modelTier: existing?.modelTier });
       }
-      const record = await manager.resume(id, prompt, deps.signal);
+      const record = await manager.resume(id, prompt, deps.signal, {
+        // The manager relabels the record from each answered message before this
+        // fires, so the card follows routing as it happens, not only at settle.
+        onAssistantUsage: () => {
+          const info2 = resolvedInfo(manager.getRecord(id));
+          if (info2 !== void 0) report(info2);
+        }
+      });
       if (record === void 0) {
         return {
           ok: false,
@@ -6325,7 +6343,7 @@ function createWorkflowHost(deps) {
       }
       onResolved?.({ recordId: id });
       const info = resolvedInfo(record);
-      if (info !== void 0) onResolved?.(info);
+      if (info !== void 0) report(info);
       return toSpawnResult(record, { resumed: true });
     },
     /**
