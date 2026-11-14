@@ -2159,6 +2159,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
         description:
           'Opt-in only — fire later instead of now. Omit to run immediately (the default, almost always correct). ' +
           'Formats: 6-field cron ("0 0 9 * * 1" = 9am Mon), interval ("5m"/"1h"), one-shot ("+10m" or ISO). ' +
+          'Append " until <ISO or +2h>" to a cron or interval to stop firing at a deadline (e.g. "30m until +6h"), instead of re-arming by hand. ' +
           'Forces run_in_background; incompatible with inherit_context and resume. Returns job ID.',
       }),
     ),
@@ -2638,8 +2639,9 @@ Terse command-style prompts produce shallow, generic work.
             isolation: isolation,
           });
           const next = scheduler.getNextRun(job.id);
+          const untilNote = job.until ? `, until: ${job.until}` : "";
           return textResult(
-            `${fallbackNoteFor(undefined)}Scheduled "${job.name}" (id: ${job.id}, type: ${job.scheduleType}). ` +
+            `${fallbackNoteFor(undefined)}Scheduled "${job.name}" (id: ${job.id}, type: ${job.scheduleType}${untilNote}). ` +
             `Next run: ${next ?? "(unknown)"}. ` +
             `Manage via /agents → Scheduled jobs.`,
           );

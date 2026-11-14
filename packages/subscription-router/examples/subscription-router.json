@@ -1,23 +1,17 @@
 {
-  "$schema": "../schemas/subscription-router.schema.json",
-  "profiles": {
-    "cheap": {
-      "name": "Router cheap",
-      "strategy": "ordered",
-      "chain": [
-        { "model": "anthropic/claude-haiku-5-5" },
-        { "model": "openai-codex/gpt-6-luna" }
-      ],
-      "exhaustionPolicy": "wait"
-    },
-    "frontier": {
-      "name": "Router frontier",
-      "strategy": "balanced",
-      "chain": [
-        { "model": "anthropic/claude-fable-5-1" },
-        { "model": "openai-codex/gpt-6-astra" }
-      ],
-      "exhaustionPolicy": "wait"
-    }
-  }
+	"$schema": "../schemas/subscription-router.schema.json",
+	"profiles": {
+		"cheap": {
+			"name": "Router cheap",
+			"strategy": "ordered",
+			"chain": [{ "model": "anthropic/claude-haiku-5-5" }, { "model": "openai-codex/gpt-6-luna" }],
+			"exhaustionPolicy": "wait"
+		},
+		"frontier": {
+			"name": "Router frontier",
+			"strategy": "balanced",
+			"chain": [{ "model": "anthropic/claude-fable-5-1" }, { "model": "openai-codex/gpt-6-astra" }],
+			"exhaustionPolicy": "wait"
+		}
+	}
 }

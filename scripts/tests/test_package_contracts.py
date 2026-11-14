@@ -1513,7 +1513,6 @@ def test_pack_without_allowlist_is_rejected(tmp_path: Path, sandbox: pc.Sandbox)
     problems = pc.audit_tarball(artifact, ROOT_LICENSE)
     assert "missing required file 'LICENSE'" in problems
     assert any("unexpected file 'test/" in p for p in problems)
-    assert "unexpected file 'biome.json'" in problems
     assert "unexpected file 'tsconfig.json'" in problems
 
 

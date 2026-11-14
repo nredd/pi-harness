@@ -17,7 +17,7 @@ describe("todo settle with a linked session-kit monitor", () => {
 	let home: Awaited<ReturnType<typeof isolateStackHome>>;
 	let h: Harness | undefined;
 	let processes: ControlledProcesses;
-	let notices: Array<[string, string | undefined]>;
+	let notices: [string, string | undefined][];
 
 	beforeEach(async () => {
 		home = await isolateStackHome();

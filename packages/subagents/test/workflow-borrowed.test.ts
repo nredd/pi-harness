@@ -5,7 +5,8 @@
  * way as much as to check the features.
  */
 
-import { describe, expect, it } from "vitest";
+import { Worker } from "node:worker_threads";
+import { describe, expect, it, vi } from "vitest";
 import type { WorkflowAgentEntry, WorkflowEntry } from "../src/workflow/progress.js";
 import {
   type RunWorkflowOptions,
@@ -565,5 +566,44 @@ describe("unawaited launches", () => {
     expect(result.status).toBe("killed");
     expect(result.error).toBe("Workflow aborted.");
     expect(result.error).not.toContain("unawaited");
+  });
+
+  it("ignores a worker message delivered after the run settled", async () => {
+    // A real abort racing the worker leaves a late message to scheduler timing: terminate() can win before
+    // the worker posts it, and the zero-branch coverage budget then flaps. So the late delivery is made
+    // explicit: the first call is handled, the abort lands inside its synchronous queued report, and the
+    // same message is then delivered to the host listener once more, now to an already-settled run.
+    const controller = new AbortController();
+    let replayed = false;
+    const realOn = Worker.prototype.on;
+    const on = vi.spyOn(Worker.prototype, "on").mockImplementation(function (this: Worker, event, listener) {
+      if (event !== "message") return realOn.call(this, event, listener);
+      const handle = listener as (message: unknown) => void;
+      return realOn.call(this, event, (message: unknown) => {
+        handle(message);
+        if ((message as { type?: string }).type === "call" && controller.signal.aborted && !replayed) {
+          replayed = true;
+          handle(message);
+        }
+      });
+    });
+    const { host, calls } = stubHost({ reply: () => new Promise<WorkflowSpawnResult>(() => {}) });
+
+    try {
+      const result = await run('agent("first"); return null;', {
+        host,
+        signal: controller.signal,
+        onProgress() {
+          controller.abort();
+        },
+      });
+
+      expect(result.status).toBe("killed");
+      expect(result.error).toBe("Workflow aborted.");
+      expect(replayed).toBe(true);
+      expect(calls).toHaveLength(0);
+    } finally {
+      on.mockRestore();
+    }
   });
 });

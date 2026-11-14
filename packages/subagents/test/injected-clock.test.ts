@@ -94,7 +94,7 @@ describe("injected scheduler clock", () => {
     expect(spawn).toHaveBeenCalledTimes(1);
   });
 
-  it("fires intervals repeatedly and cancels them on removal or stop", () => {
+  it("fires intervals repeatedly and cancels them on removal or stop", async () => {
     const schedule = "1s";
     const { scheduler, clock, spawn } = schedulerFixture();
     const job = scheduler.addJob({ ...input, schedule });
@@ -104,6 +104,8 @@ describe("injected scheduler clock", () => {
     clock.advance(2_001);
     expect(spawn).toHaveBeenCalledTimes(3);
     scheduler.removeJob(job.id);
+    // The fired runs keep renewing their lease until they settle.
+    await new Promise(resolve => setImmediate(resolve));
     expect(clock.pending).toBe(0);
     clock.advance(1_000);
     expect(spawn).toHaveBeenCalledTimes(3);

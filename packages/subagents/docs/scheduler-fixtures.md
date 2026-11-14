@@ -10,6 +10,10 @@ The scheduler still calls the real model selector before passing its resolved
 selection to the runner stand-in; this does not replace real-runner coverage in
 `config-model-fallback-real-runner.test.ts`.
 
+A fired job keeps a lease-renewal interval on the injected clock until its run
+settles, so `clock.pending` counts it: drain the run's promise chain (e.g.
+`setImmediate`) before asserting `pending === 0`.
+
 The fixture injects the clock, so its 50ms deadline advances solely under test
 control and reaches the public model-not-found path regardless of host load.
 
