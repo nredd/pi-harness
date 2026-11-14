@@ -81,6 +81,20 @@ def _ignore(_signum: int, _frame: FrameType | None) -> None:
     """
 
 
+class CaptureError(Exception):
+    """A refusal or failed export step; `status` is the exit status the Bash `set -e` script produced."""
+
+    def __init__(self, message: str, status: int = 1) -> None:
+        """Record the diagnostic and the exit status.
+
+        Parameters:
+            message (str): The whole diagnostic.
+            status (int): Exit status of the failed step.
+        """
+        super().__init__(message)
+        self.status = status
+
+
 @contextlib.contextmanager
 def _warn_on_error(warning: str) -> Iterator[None]:
     """Turn a failed best-effort step into one `WARNING:` line.
@@ -95,20 +109,6 @@ def _warn_on_error(warning: str) -> Iterator[None]:
         yield
     except (OSError, CaptureError):
         sys.stderr.write(f"WARNING: could not {warning}\n")
-
-
-class CaptureError(Exception):
-    """A refusal or failed export step; `status` is the exit status the Bash `set -e` script produced."""
-
-    def __init__(self, message: str, status: int = 1) -> None:
-        """Record the diagnostic and the exit status.
-
-        Parameters:
-            message (str): The whole diagnostic.
-            status (int): Exit status of the failed step.
-        """
-        super().__init__(message)
-        self.status = status
 
 
 @dataclass(frozen=True)

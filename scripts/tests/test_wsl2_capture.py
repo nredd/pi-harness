@@ -654,3 +654,28 @@ def test_cleanup_children_keep_the_default_sigterm_disposition(tree: Tree) -> No
     state = (tree.host_temp / "wsl2-diagnostics/guest-state.txt").read_text()
     assert "survived" not in state
     assert "UNAVAILABLE: unprivileged dmesg failed" in state
+
+
+@pytest.mark.parametrize("failing", ["copy", "record", "remove"])
+def test_one_failing_cleanup_step_leaves_the_others_running(
+    tree: Tree, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], failing: str
+) -> None:
+    """Preserving artifacts, recording the status and removing the checkout are independent."""
+    write(tree.worktree / "integration/artifacts/x.xml", "<testsuite/>\n")
+    diagnostics = tree.host_temp / "wsl2-diagnostics"
+    warning = {
+        "copy": "preserve WSL failure artifacts",
+        "record": "record WSL capture status",
+        "remove": "remove disposable WSL worktree",
+    }[failing]
+    if failing == "copy":
+        stub(tree, "cp", "exit 92")
+    elif failing == "record":
+        (diagnostics / "capture-status.txt").mkdir()
+    else:
+        monkeypatch.setattr(capture.shutil, "rmtree", refuse_removal)
+    capture._cleanup(context(tree), 47)
+    assert capsys.readouterr().err == f"WARNING: could not {warning}\n"
+    assert (diagnostics / "artifacts/x.xml").is_file() is (failing != "copy")
+    assert (diagnostics / "capture-status.txt").is_file() is (failing != "record")
+    assert tree.worktree.is_dir() is (failing == "remove")
