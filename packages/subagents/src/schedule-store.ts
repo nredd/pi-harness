@@ -17,7 +17,8 @@ import type { ScheduledSubagent, ScheduleStoreData } from "./types.js";
 const LOCK_RETRY_MS = 50;
 const LOCK_MAX_RETRIES = 100;
 
-function isProcessRunning(pid: number): boolean {
+/** Is `pid` a live process? (signal 0 probe) */
+export function isProcessRunning(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 

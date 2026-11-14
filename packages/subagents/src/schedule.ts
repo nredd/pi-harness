@@ -24,7 +24,7 @@ import { getAgentConfig, resolveSpawnType } from "./agent-types.js";
 import { type Clock, realClock, type TimerHandle } from "./clock.js";
 import { admitModelSelection, type ModelSelection, selectModel } from "./model-selection.js";
 import { checkAdmission, describeBlock, mayPark, modelRef, PARKED_RESUME_DELAY_MS, QUOTA_RESTART_GRACE_MS } from "./quota-admission.js";
-import type { ScheduleStore } from "./schedule-store.js";
+import { isProcessRunning, type ScheduleStore } from "./schedule-store.js";
 import type { IsolationMode, ScheduledSubagent, SubagentType, ThinkingLevel } from "./types.js";
 
 /** Event emitted on `pi.events` for cross-extension consumers. */
@@ -119,8 +119,13 @@ export class SubagentScheduler {
       // A job disabled while "running" (or expired by the scheduling above) with no
       // live run in this process was cut off by a previous one; nothing can finalize
       // it, so it must not hold its name forever. A run this process still owns (a
-      // /resume, /new or /reload re-bind) is in the registry and settles itself.
-      if (store.get(job.id)?.enabled === false && job.lastStatus === "running" && !this.hasLiveRun(store, job.id)) {
+      // /resume, /new or /reload re-bind) is in the registry and settles itself. A run
+      // owned by another LIVE process on the same session (`pi --resume` twice) is not
+      // ours to error: its recorded pid keeps the name.
+      if (
+        store.get(job.id)?.enabled === false && job.lastStatus === "running" && !this.hasLiveRun(store, job.id)
+        && !(job.runPid !== undefined && job.runPid !== process.pid && isProcessRunning(job.runPid))
+      ) {
         store.update(job.id, { lastStatus: "error" });
       }
     }
@@ -503,6 +508,7 @@ export class SubagentScheduler {
     const runs = liveRuns().get(key) ?? new Set<string>();
     runs.add(agentId);
     liveRuns().set(key, runs);
+    store.update(id, { runPid: process.pid });
     const finalize = (status: "success" | "error") => {
       runs.delete(agentId);
       // An overlapping run is still live: count this one, leave the status "running".
@@ -516,7 +522,7 @@ export class SubagentScheduler {
         lastRun: new Date(this.clock.now()).toISOString(),
         runCount: (current?.runCount ?? 0) + 1,
         nextRun: next,
-        ...(othersLive ? {} : { lastStatus: status }),
+        ...(othersLive ? {} : { lastStatus: status, runPid: undefined }),
       });
     };
 

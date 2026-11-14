@@ -640,6 +640,40 @@ describe("SubagentScheduler — fire path", () => {
       expect(() => next.addJob(input)).not.toThrow();
     });
 
+    describe("a second process on the same session", () => {
+      /** Simulate another process: fresh registry, same store file, owner pid as persisted. */
+      const secondProcess = (runPid: number) => {
+        manager.getRecord.mockImplementation(() => ({ status: "running", promise: new Promise(() => {}) }));
+        const job = fireOneShot();
+        expect(new ScheduleStore(path()).get(job.id)?.runPid).toBe(process.pid);
+        store.update(job.id, { runPid });
+        delete (globalThis as any)[Symbol.for("pi-subagents:scheduled-runs")];
+        return { job, next: activate() };
+      };
+
+      it("keeps the name of a run whose owner pid is alive", () => {
+        const { job, next } = secondProcess(process.ppid);
+        expect(next.list().find(j => j.id === job.id)?.lastStatus).toBe("running");
+        expect(() => next.addJob(input)).toThrow(/already exists/);
+      });
+
+      it("frees the name of a run whose owner pid is dead", () => {
+        const { job, next } = secondProcess(2 ** 31 - 2);
+        expect(next.list().find(j => j.id === job.id)?.lastStatus).toBe("error");
+        expect(() => next.addJob(input)).not.toThrow();
+      });
+
+      it("clears the owner pid when the run finalizes", async () => {
+        let finish: () => void = () => {};
+        const settled = new Promise<void>(r => { finish = r; });
+        manager.getRecord.mockImplementation(() => ({ status: "completed", promise: settled }));
+        const job = fireOneShot();
+        finish();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(new ScheduleStore(path()).get(job.id)?.runPid).toBeUndefined();
+      });
+    });
+
     it("a previous-process run left running is errored on start", () => {
       const old = scheduler.buildJob({ ...input, name: "Cut" });
       store.add({ ...old, enabled: false, lastRun: new Date().toISOString(), lastStatus: "running" });

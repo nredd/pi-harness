@@ -846,6 +846,150 @@ function savedAgentNote(data) {
 // src/schedule.ts
 import { Cron } from "croner";
 import { nanoid } from "nanoid";
+
+// src/schedule-store.ts
+import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync2, unlinkSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname, join as join3 } from "node:path";
+var LOCK_RETRY_MS = 50;
+var LOCK_MAX_RETRIES = 100;
+function isProcessRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function acquireLock(lockPath) {
+  for (let i = 0; i < LOCK_MAX_RETRIES; i++) {
+    try {
+      writeFileSync2(lockPath, `${process.pid}`, { flag: "wx" });
+      return;
+    } catch (e) {
+      if (e.code === "EEXIST") {
+        try {
+          const pid = parseInt(readFileSync2(lockPath, "utf-8"), 10);
+          if (pid && !isProcessRunning(pid)) {
+            unlinkSync(lockPath);
+            continue;
+          }
+        } catch {
+        }
+        const start = Date.now();
+        while (Date.now() - start < LOCK_RETRY_MS) {
+        }
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw new Error(`Failed to acquire schedule lock: ${lockPath}`);
+}
+function releaseLock(lockPath) {
+  try {
+    unlinkSync(lockPath);
+  } catch {
+  }
+}
+function resolveStorePath(cwd, sessionId) {
+  return join3(cwd, ".pi", "subagent-schedules", `${sessionId}.json`);
+}
+var ScheduleStore = class {
+  filePath;
+  lockPath;
+  jobs = /* @__PURE__ */ new Map();
+  constructor(filePath) {
+    this.filePath = filePath;
+    this.lockPath = filePath + ".lock";
+    this.load();
+  }
+  /** Backing file path (identifies the store across rebuilt instances). */
+  get path() {
+    return this.filePath;
+  }
+  /** Re-read the backing file, picking up writes made through another instance. */
+  reload() {
+    this.load();
+  }
+  /** Create the backing directory lazily — only when we're about to persist. */
+  ensureDir() {
+    mkdirSync2(dirname(this.filePath), { recursive: true });
+  }
+  /** Load from disk into the in-memory cache. Silent on parse errors. */
+  load() {
+    if (!existsSync2(this.filePath)) return;
+    try {
+      const data = JSON.parse(readFileSync2(this.filePath, "utf-8"));
+      this.jobs.clear();
+      for (const j of data.jobs ?? []) this.jobs.set(j.id, j);
+    } catch {
+    }
+  }
+  /** Atomic write via temp file + rename (POSIX-atomic). */
+  save() {
+    const data = { version: 1, jobs: [...this.jobs.values()] };
+    const tmp = this.filePath + ".tmp";
+    writeFileSync2(tmp, JSON.stringify(data, null, 2));
+    renameSync2(tmp, this.filePath);
+  }
+  /** Acquire lock → reload → mutate → save → release. */
+  withLock(fn) {
+    this.ensureDir();
+    acquireLock(this.lockPath);
+    try {
+      this.load();
+      const result = fn();
+      this.save();
+      return result;
+    } finally {
+      releaseLock(this.lockPath);
+    }
+  }
+  /** Read-only — returns a snapshot of the in-memory cache. */
+  list() {
+    return [...this.jobs.values()];
+  }
+  /** Read-only check — uses the cache. */
+  hasName(name, exceptId) {
+    for (const j of this.jobs.values()) {
+      if (j.id !== exceptId && j.name === name) return true;
+    }
+    return false;
+  }
+  get(id) {
+    return this.jobs.get(id);
+  }
+  add(job) {
+    this.withLock(() => {
+      this.jobs.set(job.id, job);
+    });
+  }
+  update(id, patch) {
+    if (!this.jobs.has(id)) return void 0;
+    return this.withLock(() => {
+      const existing = this.jobs.get(id);
+      if (!existing) return void 0;
+      const updated = { ...existing, ...patch };
+      this.jobs.set(id, updated);
+      return updated;
+    });
+  }
+  remove(id) {
+    if (!this.jobs.has(id)) return false;
+    return this.withLock(() => this.jobs.delete(id));
+  }
+  /** Delete the backing file (used when no jobs remain, optional cleanup). */
+  deleteFileIfEmpty() {
+    if (this.jobs.size === 0 && existsSync2(this.filePath)) {
+      try {
+        unlinkSync(this.filePath);
+      } catch {
+      }
+    }
+  }
+};
+
+// src/schedule.ts
 var MAX_TIMER_MS = 2147483647;
 var LIVE_RUNS = /* @__PURE__ */ Symbol.for("pi-subagents:scheduled-runs");
 function liveRuns() {
@@ -886,7 +1030,7 @@ var SubagentScheduler = class _SubagentScheduler {
     this.store = store;
     for (const job of store.list()) {
       if (job.enabled) this.scheduleJob(job);
-      if (store.get(job.id)?.enabled === false && job.lastStatus === "running" && !this.hasLiveRun(store, job.id)) {
+      if (store.get(job.id)?.enabled === false && job.lastStatus === "running" && !this.hasLiveRun(store, job.id) && !(job.runPid !== void 0 && job.runPid !== process.pid && isProcessRunning(job.runPid))) {
         store.update(job.id, { lastStatus: "error" });
       }
     }
@@ -1218,6 +1362,7 @@ var SubagentScheduler = class _SubagentScheduler {
     const runs = liveRuns().get(key) ?? /* @__PURE__ */ new Set();
     runs.add(agentId);
     liveRuns().set(key, runs);
+    store.update(id, { runPid: process.pid });
     const finalize = (status) => {
       runs.delete(agentId);
       const othersLive = runs.size > 0;
@@ -1229,7 +1374,7 @@ var SubagentScheduler = class _SubagentScheduler {
         lastRun: new Date(this.clock.now()).toISOString(),
         runCount: (current?.runCount ?? 0) + 1,
         nextRun: next,
-        ...othersLive ? {} : { lastStatus: status }
+        ...othersLive ? {} : { lastStatus: status, runPid: void 0 }
       });
     };
     Promise.resolve(manager.getRecord(agentId)?.startGate).then(() => manager.awaitStartup(agentId)).then(() => manager.getRecord(agentId)?.promise).then(() => {
@@ -1314,148 +1459,6 @@ var SubagentScheduler = class _SubagentScheduler {
     const m = s.match(/^(\d+)(s|m|h|d)$/);
     if (!m) return null;
     return parseInt(m[1], 10) * { s: 1e3, m: 6e4, h: 36e5, d: 864e5 }[m[2]];
-  }
-};
-
-// src/schedule-store.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync2, unlinkSync, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname, join as join3 } from "node:path";
-var LOCK_RETRY_MS = 50;
-var LOCK_MAX_RETRIES = 100;
-function isProcessRunning(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-function acquireLock(lockPath) {
-  for (let i = 0; i < LOCK_MAX_RETRIES; i++) {
-    try {
-      writeFileSync2(lockPath, `${process.pid}`, { flag: "wx" });
-      return;
-    } catch (e) {
-      if (e.code === "EEXIST") {
-        try {
-          const pid = parseInt(readFileSync2(lockPath, "utf-8"), 10);
-          if (pid && !isProcessRunning(pid)) {
-            unlinkSync(lockPath);
-            continue;
-          }
-        } catch {
-        }
-        const start = Date.now();
-        while (Date.now() - start < LOCK_RETRY_MS) {
-        }
-        continue;
-      }
-      throw e;
-    }
-  }
-  throw new Error(`Failed to acquire schedule lock: ${lockPath}`);
-}
-function releaseLock(lockPath) {
-  try {
-    unlinkSync(lockPath);
-  } catch {
-  }
-}
-function resolveStorePath(cwd, sessionId) {
-  return join3(cwd, ".pi", "subagent-schedules", `${sessionId}.json`);
-}
-var ScheduleStore = class {
-  filePath;
-  lockPath;
-  jobs = /* @__PURE__ */ new Map();
-  constructor(filePath) {
-    this.filePath = filePath;
-    this.lockPath = filePath + ".lock";
-    this.load();
-  }
-  /** Backing file path (identifies the store across rebuilt instances). */
-  get path() {
-    return this.filePath;
-  }
-  /** Re-read the backing file, picking up writes made through another instance. */
-  reload() {
-    this.load();
-  }
-  /** Create the backing directory lazily — only when we're about to persist. */
-  ensureDir() {
-    mkdirSync2(dirname(this.filePath), { recursive: true });
-  }
-  /** Load from disk into the in-memory cache. Silent on parse errors. */
-  load() {
-    if (!existsSync2(this.filePath)) return;
-    try {
-      const data = JSON.parse(readFileSync2(this.filePath, "utf-8"));
-      this.jobs.clear();
-      for (const j of data.jobs ?? []) this.jobs.set(j.id, j);
-    } catch {
-    }
-  }
-  /** Atomic write via temp file + rename (POSIX-atomic). */
-  save() {
-    const data = { version: 1, jobs: [...this.jobs.values()] };
-    const tmp = this.filePath + ".tmp";
-    writeFileSync2(tmp, JSON.stringify(data, null, 2));
-    renameSync2(tmp, this.filePath);
-  }
-  /** Acquire lock → reload → mutate → save → release. */
-  withLock(fn) {
-    this.ensureDir();
-    acquireLock(this.lockPath);
-    try {
-      this.load();
-      const result = fn();
-      this.save();
-      return result;
-    } finally {
-      releaseLock(this.lockPath);
-    }
-  }
-  /** Read-only — returns a snapshot of the in-memory cache. */
-  list() {
-    return [...this.jobs.values()];
-  }
-  /** Read-only check — uses the cache. */
-  hasName(name, exceptId) {
-    for (const j of this.jobs.values()) {
-      if (j.id !== exceptId && j.name === name) return true;
-    }
-    return false;
-  }
-  get(id) {
-    return this.jobs.get(id);
-  }
-  add(job) {
-    this.withLock(() => {
-      this.jobs.set(job.id, job);
-    });
-  }
-  update(id, patch) {
-    if (!this.jobs.has(id)) return void 0;
-    return this.withLock(() => {
-      const existing = this.jobs.get(id);
-      if (!existing) return void 0;
-      const updated = { ...existing, ...patch };
-      this.jobs.set(id, updated);
-      return updated;
-    });
-  }
-  remove(id) {
-    if (!this.jobs.has(id)) return false;
-    return this.withLock(() => this.jobs.delete(id));
-  }
-  /** Delete the backing file (used when no jobs remain, optional cleanup). */
-  deleteFileIfEmpty() {
-    if (this.jobs.size === 0 && existsSync2(this.filePath)) {
-      try {
-        unlinkSync(this.filePath);
-      } catch {
-      }
-    }
   }
 };
 

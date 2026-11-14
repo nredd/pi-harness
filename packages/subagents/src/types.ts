@@ -472,6 +472,8 @@ export interface ScheduledSubagent {
   createdAt: string;
   lastRun?: string;
   lastStatus?: "success" | "error" | "running";
+  /** Pid of the process owning the live run(s); cleared when the last one finalizes. */
+  runPid?: number;
   /**
    * Parked by quota admission: re-check admission at fire time and re-park at
    * the new reset while the model is still blocked. See `quota-admission.ts`.
