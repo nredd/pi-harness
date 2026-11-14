@@ -25,7 +25,7 @@ function fakePi(sessionName?: string) {
 	const commands = new Map<string, Any>();
 	const shortcuts = new Map<string, Any>();
 	const sendMessage = vi.fn();
-	const emitted: Array<[string, Any]> = [];
+	const emitted: [string, Any][] = [];
 	let active = ["read", ...TOOL_NAMES];
 	const entries: Any[] = [];
 	const pi = {

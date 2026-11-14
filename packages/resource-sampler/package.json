@@ -31,18 +31,11 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "prepack": "npm run build",
-    "lint": "biome check src test",
+    "lint": "biome check .",
+    "format": "biome check --write .",
     "typecheck": "tsc --noEmit",
     "test": "JITI_FS_CACHE=false vitest run --coverage --maxWorkers=1",
     "test:bun": "node ../../scripts/run-vitest.ts bun --maxWorkers=1",
     "check": "npm run lint && npm run typecheck && npm run build && npm test && npm run test:bun"
-  },
-  "devDependencies": {
-    "@biomejs/biome": "2.5.15",
-    "@types/node": "26.6.5",
-    "@vitest/coverage-istanbul": "5.0.3",
-    "@vitest/coverage-v8": "5.0.3",
-    "typescript": "7.0.2",
-    "vitest": "5.0.3"
   }
 }

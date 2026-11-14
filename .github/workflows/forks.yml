@@ -11,7 +11,7 @@ on:
       - integration/core-source/**
       - integration/inprocess/support.ts
       - packages/subagents/**
-      - packages/dev-tools/biome.json
+      - biome.json
       - package.json
       - package-lock.json
       - .npmrc
@@ -26,7 +26,7 @@ on:
       - integration/core-source/**
       - integration/inprocess/support.ts
       - packages/subagents/**
-      - packages/dev-tools/biome.json
+      - biome.json
       - package.json
       - package-lock.json
       - .npmrc

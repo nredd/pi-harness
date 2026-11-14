@@ -1,8 +1,10 @@
 {
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2022", "module": "NodeNext", "moduleResolution": "NodeNext",
-    "strict": true, "noUncheckedIndexedAccess": true, "skipLibCheck": true,
-    "types": ["node"]
+    // nredd/pi-harness#878: tsc-emitted library resolved as Node ESM, with constructor parameter properties
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "erasableSyntaxOnly": false
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": ["src", "test", "*.ts"]
 }

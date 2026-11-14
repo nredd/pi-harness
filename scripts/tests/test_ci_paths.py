@@ -353,8 +353,6 @@ def test_write_github_output_keeps_input_flags_independent(
         "integration/uv.lock",
         "integration/probes/stack-resources.ts",
         "integration/providers/faux.ts",
-        "scripts/check-biome-paths.mjs",
-        "scripts/check-biome-paths.test.mjs",
         "scripts/coverage-configs.test.ts",
         "scripts/import_audit.test.ts",
         "scripts/import_audit.ts",

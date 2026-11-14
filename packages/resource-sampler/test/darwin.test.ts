@@ -73,9 +73,9 @@ const ROLLBACK_AFTER_TICKS = 0n;
  */
 function buffers() {
 	// SDK byte sizes: rusage_info_v0 = 96, proc_bsdinfo = 136 (independent of production constants).
-	const before = Buffer.alloc(96),
-		after = Buffer.alloc(96),
-		bsd = Buffer.alloc(136);
+	const before = Buffer.alloc(96);
+	const after = Buffer.alloc(96);
+	const bsd = Buffer.alloc(136);
 	// proc_bsdinfo byte offsets: PID 12, PPID 16, p_comm 48, start seconds 120, start usec 128.
 	bsd.writeUInt32LE(captured.pid, 12);
 	bsd.writeUInt32LE(captured.parentPid, 16);
