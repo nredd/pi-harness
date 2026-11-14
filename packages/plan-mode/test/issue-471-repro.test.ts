@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
+import { deferred } from "@nredd/pi-test-lib/deferred";
 import { test } from "vitest";
 import { PLAN_MODE_MAX_CHARS } from "../src/completion-tool.js";
 import planModeExtension from "../src/plan-mode.js";
 import { type ActiveImplementationPlan, restorePlanModeState } from "../src/state.js";
 import { createCustomSelectorHarness, createMockContext, createMockPi } from "./support.js";
-import { deferred } from "@nredd/pi-test-lib/deferred";
 
 const PLAN = `# Compaction-safe implementation
 
