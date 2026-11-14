@@ -82,7 +82,7 @@ The runtime is state-scoped and outline-first:
 Run invariants after architecture changes:
 
 ```bash
-npm run test:invariants
+npm test -- test/invariants.test.mjs --coverage.enabled=false
 ```
 
 Set `PI_CU_LIVE=1` only when you want live helper checks in addition to static checks.
@@ -116,7 +116,7 @@ Local setup chooses a Developer ID identity when one is available, otherwise its
 
 On Windows, development uses the Windows platform backend/helper and the active desktop session rather than the macOS app bundle.
 
-On Linux, install Rust/Cargo and run `npm run build:linux`, `npm run test:linux`, and `npm run test:linux-scripts`. Live checks must run inside the target user's graphical D-Bus session. The helper installs to `~/.pi/agent/helpers/pi-computer-use/linux-bridge`.
+On Linux, install Rust/Cargo and run `npm run build:linux`, `npm test -- test/platform-linux.test.mjs --coverage.enabled=false`, and `npm test -- test/async.test.mjs test/cleanup.test.mjs test/linux-build-scripts.test.mjs --coverage.enabled=false`. Live checks must run inside the target user's graphical D-Bus session. The helper installs to `~/.pi/agent/helpers/pi-computer-use/linux-bridge`.
 
 For an isolated X11 acceptance run, install Xvfb, xfwm4, the AT-SPI2 runtime, xfce4-appfinder, and xfce4-terminal, then build and install the helper before running the explicitly gated live suite:
 

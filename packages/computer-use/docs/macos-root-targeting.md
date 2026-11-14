@@ -101,9 +101,9 @@ Non-pointer actions on the same tool:
 
 ## Tests
 
-`npm run test:macos-target`, `test:macos-native` (compiles the `PURE` region of `bridge.swift`),
-`test:act-outcomes`, `test:desktop`, `test:unpaired` (stubbed backend: unpaired successor, delta refs, lock
-scope). `PI_COMPUTER_USE_LIVE=1 npm run test:macos-live` drives the real helper against an `NSAlert` fixture
+`npm test -- test/macos-observe-target.test.mjs --coverage.enabled=false`, `test/macos-native-pure.test.mjs` (compiles the `PURE` region of `bridge.swift`),
+`test/act-outcomes.test.mjs`, `test/desktop-tools.test.mjs`, `test/unpaired-act.test.mjs` (stubbed backend: unpaired successor, delta refs, lock
+scope). `PI_COMPUTER_USE_LIVE=1 npm test -- test/macos-helper-live.test.mjs --coverage.enabled=false` drives the real helper against an `NSAlert` fixture
 (`windowElement`, `look`, `act`, `axWaitFor`, `desktopInput` parsing, `activateApp`, clipboard round trip with
 restore, ref epoch across a restart, look-scoped ref eviction). It restarts only its own helper instance, launched
 from the installed bundle on the isolated test home's socket.
@@ -157,7 +157,7 @@ Bugs found by the live run and fixed:
   coordinates sent, including negative y.
 - Multi-waypoint drag selects text in TextEdit; a rejected drag leaves no button held.
 - Real modal `NSAlert` (`scripts/fixtures/alert-app.swift`): ref-only observe works, visual gives `root_not_capturable`,
-  `act` press by ref dismisses it; the `act_ui` dismissal reports `target_closed`. Opt-in script: `PI_COMPUTER_USE_LIVE=1 npm run test:macos-live`.
+  `act` press by ref dismisses it; the `act_ui` dismissal reports `target_closed`. Opt-in script: `PI_COMPUTER_USE_LIVE=1 npm test -- test/macos-helper-live.test.mjs --coverage.enabled=false`.
   It fails when `windowElement` is mutated to always fall back to the first window (checked).
 - Fusion with the sidebar up: Py radio via SPACE, then click console field + `print(1)` + RETURN in one batch; the console shows `1`.
 - Bambu Cmd+I: `act_ui` reports `New root: dialog "Open" (modal)` and a `Note:` that a foreground modal is in front. Background-delivered Escape

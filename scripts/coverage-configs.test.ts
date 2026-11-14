@@ -211,7 +211,11 @@ const ZERO_UNCOVERED_FILES = [
 	"src/view.ts",
 ];
 
-/** The resolved non-coverage options of every producer, fixed before the factory (#863). Paths are repo-relative. */
+/**
+ * The resolved non-coverage options of every producer, pinned before the shared factory (#863). Paths are
+ * repo-relative. One change is deliberate: the factory puts the home guard FIRST in `setupFiles` (plan-mode,
+ * subagents, todo had it last), so those entries list it first.
+ */
 const RESOLVED: Record<string, unknown> = {
 	"integration/inprocess/vitest.config.ts": {
 		test: { pool: "forks", maxWorkers: 2, testTimeout: 20000, setupFiles: ["tests/lib/src/home-setup.ts"] },
@@ -481,7 +485,7 @@ for (const producer of PRODUCERS) {
 }
 
 for (const producer of PRODUCERS) {
-	test(`${producer.config} resolves the same non-coverage options as before the shared factory`, async () => {
+	test(`${producer.config} resolves the pinned non-coverage options (home guard first in setupFiles on purpose)`, async () => {
 		const config = (await producer.load()).default as { root?: string; test?: Record<string, unknown> };
 		assert.deepEqual(resolvedShape(producer, config), RESOLVED[producer.config]);
 	});

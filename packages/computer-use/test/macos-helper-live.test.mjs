@@ -1,6 +1,6 @@
 // Opt-in live check of the Swift helper glue against a real modal NSAlert. It also activates Finder and
 // the fixture, and round-trips the clipboard (restoring the original text).
-// Run: PI_COMPUTER_USE_LIVE=1 npm test -- test/macos-helper-live.test.mjs   (needs Accessibility; sends no input events). The
+// Run: PI_COMPUTER_USE_LIVE=1 npm test -- test/macos-helper-live.test.mjs --coverage.enabled=false   (needs Accessibility; sends no input events). The
 // launcher's isolated HOME puts the helper socket in the test home, so this starts, restarts and shuts down
 // its OWN instance of the installed helper app, never the shared daemon other pi sessions use.
 import assert from "node:assert/strict";

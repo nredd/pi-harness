@@ -78,7 +78,7 @@ for f in config.ts index.ts plan-hooks.ts todo-overlay.ts todo.ts \
   view/format.ts; do
   set -- "$@" --coverage.include="$f"
 done
-../../node_modules/.bin/vitest run --config .vitest.config.ts --maxWorkers=1 \
+../../node_modules/.bin/vitest run --maxWorkers=1 \
   --coverage --coverage.provider=istanbul --coverage.reporter=lcov \
   --coverage.reporter=text --coverage.reporter=json \
   --coverage.reportsDirectory=/tmp/cov-todo-after "$@"
@@ -112,7 +112,7 @@ to this delegate. OS process metadata was not treated as agent attribution.
 ## Mutation receipts
 
 Each temporary one-line production mutation below was run against the named
-new tests with `vitest run --config .vitest.config.ts --maxWorkers=1 FILE -t PATTERN`.
+new tests with `vitest run --maxWorkers=1 FILE -t PATTERN`.
 Every run exited 1 from the expected assertion/import failure, then the original
 source was restored in `finally`. The full green suites and coverage followed
 restoration. Patterns below identify the committed tests, not copied scratch

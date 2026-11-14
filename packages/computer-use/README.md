@@ -92,7 +92,7 @@ against the ledger without running mutations; the normal command still runs ever
 mutation. Local measurements and the unequal-window fixture lifecycle are recorded
 [here](./docs/swift-ref-look-coverage.md).
 
-`npm test -- test/platform-linux.test.mjs` uses disposable protocol children, not a native desktop helper. Its closed-stdin
+`npm test -- test/platform-linux.test.mjs --coverage.enabled=false` uses disposable protocol children, not a native desktop helper. Its closed-stdin
 fixture initializes stdout before closing fd `0` (lazy pipe initialization aborts Node 26.12 on Darwin),
 acknowledges verified closure while alive, and requires real `EPIPE` rejection plus child cleanup.
 The next request carries a 64 KiB payload so Bun also reaches an OS write failure instead of accepting

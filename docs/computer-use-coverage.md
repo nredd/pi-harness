@@ -104,7 +104,7 @@ All six new CLI guards compare real paths. Tests run their real entrypoints via
 symlinks, and the actual documentation drop control runs the mutated sandbox through the same `tsx`
 launcher with a symlinked package path. The pre-fix control reproduced `Dropped patch survived`;
 the corrected guard causes the expected specific documentation refusal. The asset-validation
-mutation must fail the independent missing-asset fixture in `test:sync-reverts`.
+mutation must fail the independent missing-asset fixture in `scripts/check-sync-reverts.mjs`.
 
 Launcher disposition remains explicit: retain `check-linux-live.mjs` as an unmeasured opt-in
 D-Bus lifecycle launcher (its assertions live in `test/linux-live.test.mjs`), and retain
@@ -301,7 +301,7 @@ land it before the next upstream sync or carry it as a recorded patch in `sync-p
 ## Swift measurement
 
 Run `npm run coverage:swift --workspace @nredd/pi-computer-use` on macOS; other hosts print
-`NOT RUN` without writing a fake empty report. The macOS `test:macos-native` suite runs the same
+`NOT RUN` without writing a fake empty report. The macOS `test/macos-native-pure.test.mjs` suite runs the same
 producer once as part of the hosted package gate. It replaces two sliced-source compiles with
 one complete-source compile. `headless_tests.swift` retains pure/ref/keyboard assertions and
 cursor-motion assertions and constructs injected `Bridge` instances for request-framing tests without

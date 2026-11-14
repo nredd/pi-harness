@@ -360,6 +360,7 @@ def test_write_github_output_keeps_input_flags_independent(
         "scripts/router_contract.test.mjs",
         "scripts/run-vitest.test.ts",
         "scripts/run-vitest.ts",
+        "scripts/vitest-package.ts",
         "scripts/vitest.config.ts",
     ],
 )
