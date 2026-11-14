@@ -4275,7 +4275,7 @@ import { isAbsolute, join as join6 } from "node:path";
 import { createContext, Script } from "node:vm";
 var WorkflowMetaError = class extends Error {
 };
-var META_EVAL_TIMEOUT_MS = 100;
+var META_EVAL_TIMEOUT_MS = 1e3;
 var PURE_LITERAL_HINT = "The `meta` object must be a PURE LITERAL \u2014 no variables, function calls, spreads, or template interpolation.";
 var META_DECLARATION = /(^|[\r\n])[ \t]*export[ \t\r\n]+const[ \t\r\n]+meta[ \t\r\n]*=/;
 function hasMetaDeclaration(source) {
@@ -4416,7 +4416,8 @@ function assertPhases(value) {
     return { title, ...detail !== void 0 ? { detail } : {}, ...model !== void 0 ? { model } : {} };
   });
 }
-function extractMeta(source) {
+function extractMeta(source, options = {}) {
+  const timeoutMs = options.evalTimeoutMs ?? META_EVAL_TIMEOUT_MS;
   const declaration = META_DECLARATION.exec(source);
   if (!declaration) {
     fail(
@@ -4433,12 +4434,12 @@ function extractMeta(source) {
   const fragment = source.slice(open, close);
   let value;
   try {
-    value = new Script(`(${fragment})`, { filename: "workflow-meta.js" }).runInContext(createContext({}), { timeout: META_EVAL_TIMEOUT_MS });
+    value = new Script(`(${fragment})`, { filename: "workflow-meta.js" }).runInContext(createContext({}), { timeout: timeoutMs });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     if (/timed out|Script execution/i.test(detail)) {
       fail(
-        `\`meta\` did not finish evaluating within ${META_EVAL_TIMEOUT_MS}ms \u2014 it must be a literal, not a computation.
+        `\`meta\` did not finish evaluating within ${timeoutMs}ms \u2014 it must be a literal, not a computation.
 ` + PURE_LITERAL_HINT
       );
     }

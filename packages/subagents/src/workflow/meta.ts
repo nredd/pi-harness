@@ -50,11 +50,22 @@ export interface MetaExtraction {
 
 export class WorkflowMetaError extends Error {}
 
+export interface ExtractMetaOptions {
+  /**
+   * Wall-clock bound on evaluating the `meta` fragment. Tests inject a small
+   * value to prove the runaway guard; production uses {@link META_EVAL_TIMEOUT_MS}.
+   */
+  evalTimeoutMs?: number;
+}
+
 /**
- * Wall-clock bound on evaluating the `meta` fragment. Generous for a literal —
- * this exists only to stop a pathological one from hanging the host thread.
+ * Wall-clock bound on evaluating the `meta` fragment. This exists only to stop a
+ * pathological literal from hanging the host thread, so it is deliberately
+ * generous: the bound is wall-clock, and a loaded host can preempt the vm thread
+ * for well over 100ms while a real literal finishes in microseconds. A tight bound
+ * turned that scheduler jitter into spurious "did not finish evaluating" failures.
  */
-const META_EVAL_TIMEOUT_MS = 100;
+const META_EVAL_TIMEOUT_MS = 1000;
 
 const PURE_LITERAL_HINT =
   "The `meta` object must be a PURE LITERAL — no variables, function calls, spreads, or template interpolation.";
@@ -216,7 +227,8 @@ function assertPhases(value: unknown): WorkflowPhaseMeta[] | undefined {
  * Throws {@link WorkflowMetaError} with author-facing guidance for every
  * rejection — these messages are shown verbatim to whoever wrote the script.
  */
-export function extractMeta(source: string): MetaExtraction {
+export function extractMeta(source: string, options: ExtractMetaOptions = {}): MetaExtraction {
+  const timeoutMs = options.evalTimeoutMs ?? META_EVAL_TIMEOUT_MS;
   const declaration = META_DECLARATION.exec(source);
   if (!declaration) {
     fail(
@@ -251,12 +263,12 @@ export function extractMeta(source: string): MetaExtraction {
     // would wedge pi itself. `timeout` only governs synchronous execution, which
     // is all a literal can contain.
     value = new Script(`(${fragment})`, { filename: "workflow-meta.js" })
-      .runInContext(createContext({}), { timeout: META_EVAL_TIMEOUT_MS });
+      .runInContext(createContext({}), { timeout: timeoutMs });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     if (/timed out|Script execution/i.test(detail)) {
       fail(
-        `\`meta\` did not finish evaluating within ${META_EVAL_TIMEOUT_MS}ms — it must be a literal, not a computation.\n` +
+        `\`meta\` did not finish evaluating within ${timeoutMs}ms — it must be a literal, not a computation.\n` +
         PURE_LITERAL_HINT,
       );
     }
