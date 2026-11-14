@@ -26,6 +26,21 @@ install-owned: verify-root-overrides  ## Verify root core overrides, then instal
 install-benchmark:  ## Install benchmarks/comparison, only `check-benchmark` reads it
 	cd benchmarks/comparison && env -u GH_TOKEN uv sync --locked --all-extras
 
+.PHONY: check-core-compaction
+check-core-compaction:  ## Assembled child compaction on built candidate forks/pi, isolated from real auth
+	npm run build --workspace packages/subagents
+	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json integration/core-source
+	node_modules/.bin/tsc -p integration/core-source/tsconfig.json
+	@sandbox=$$(mktemp -d); trap 'rm -rf "$$sandbox"' EXIT; \
+	mkdir -p "$$sandbox/home" "$$sandbox/tmp"; \
+	env -i PATH="$$PATH" HOME="$$sandbox/home" USERPROFILE="$$sandbox/home" \
+	  XDG_CONFIG_HOME="$$sandbox/home/.config" XDG_CACHE_HOME="$$sandbox/home/.cache" \
+	  TMPDIR="$$sandbox/tmp" TMP="$$sandbox/tmp" TEMP="$$sandbox/tmp" \
+	  PI_OFFLINE=1 PI_NO_LOCAL_LLM=1 JITI_FS_CACHE=false AWS_EC2_METADATA_DISABLED=true \
+	  GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 \
+	  node --import ./forks/pi/packages/coding-agent/src/experimental/source-resolver.ts \
+	  --test --test-concurrency=1 --test-timeout=120000 integration/core-source/compaction-children.test.ts
+
 check: check-ts check-scripts check-integration check-benchmark  ## Owned-code gates only (NOT forks, NOT the full stack)
 	$(MAKE) check-coverage
 
@@ -45,21 +60,32 @@ check-integration:  ## integration units; requires initialized `forks/pi` Gitlin
 	$(MAKE) check-probes
 	$(MAKE) check-providers
 
-check-probes:  ## Probes (anthropic-block-types, latency, process-lifecycle, render, session-kit-child-scope, stack-resources, transcript-types) Biome + strict tsc against real sources, then Vitest on the config's explicit test files (no glob)
+check-probes:  ## Offline probes: Biome + strict tsc, then Node coverage and Bun compatibility on the config's explicit test files (no glob)
 	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json integration/probes/anthropic-block-types.mjs integration/probes/anthropic-block-types.test.ts integration/probes/latency.ts integration/probes/latency.test.ts integration/probes/process-lifecycle.test.ts integration/probes/render.ts integration/probes/render.test.ts integration/probes/session-kit-child-scope.ts integration/probes/session-kit-child-scope.test.ts integration/probes/stack-resources.ts integration/probes/stack-resources.test.ts integration/probes/transcript-types.ts integration/probes/transcript-types.test.ts integration/probes/vitest.config.ts
 	node_modules/.bin/tsc -p integration/probes/tsconfig.probes.json
-	cd integration/probes && node ../../scripts/run-vitest.ts node --coverage
+	@sandbox=$$(mktemp -d); trap 'rm -rf "$$sandbox"' EXIT; \
+	cd integration/probes && env -i PATH="$$PATH" HOME="$$sandbox" PI_OFFLINE=1 PI_NO_LOCAL_LLM=1 \
+	  node ../../scripts/run-vitest.ts node --coverage
+	@sandbox=$$(mktemp -d); trap 'rm -rf "$$sandbox"' EXIT; \
+	cd integration/probes && env -i PATH="$$PATH" HOME="$$sandbox" PI_OFFLINE=1 PI_NO_LOCAL_LLM=1 \
+	  node ../../scripts/run-vitest.ts bun --coverage.enabled=false
 
 check-providers:  ## Synthetic providers and auth preloads Biome + strict tsc, then Vitest on the config's explicit test files (no glob)
-	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json integration/providers/auth_guard.mjs integration/providers/auth_runtime_fixture.mjs integration/providers/auth_transport.mjs integration/providers/extension_inventory.test.ts integration/providers/extension_inventory.ts integration/providers/faux.test.ts integration/providers/faux.ts integration/providers/preloads.test.ts integration/providers/redirect_anthropic.mjs integration/providers/usage_fixture.test.ts integration/providers/usage_fixture.ts integration/providers/vitest.config.ts
+	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json integration/providers/auth_guard.mjs integration/providers/auth_runtime_fixture.mjs integration/providers/auth_transport.mjs integration/providers/bun_runtime.mjs integration/providers/bun_runtime.test.ts integration/providers/extension_inventory.test.ts integration/providers/extension_inventory.ts integration/providers/faux.test.ts integration/providers/faux.ts integration/providers/preloads.test.ts integration/providers/redirect_anthropic.mjs integration/providers/usage_fixture.test.ts integration/providers/usage_fixture.ts integration/providers/vitest.config.ts
 	node_modules/.bin/tsc -p integration/providers/tsconfig.providers.json
 	cd integration/providers && node ../../scripts/run-vitest.ts node --coverage
+	cd integration/providers && node ../../scripts/run-vitest.ts bun
 
-check-import-audit:  ## Import-audit helper Biome + strict tsc, then Vitest against the real TypeScript parser
-	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json scripts/check-biome-paths.mjs scripts/check-biome-paths.test.mjs scripts/coverage-configs.test.ts scripts/import_audit.ts scripts/import_audit.test.ts scripts/router_contract.mjs scripts/router_contract.test.mjs scripts/run-vitest.ts scripts/run-vitest.test.ts scripts/vitest.config.ts
+check-import-audit:  ## Offline import audit: Biome + strict tsc, then Node coverage and Bun compatibility against the real TypeScript parser
+	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json scripts/check-biome-paths.mjs scripts/check-biome-paths.test.mjs scripts/coverage-configs.test.ts scripts/import_audit.ts scripts/import_audit.test.ts scripts/merge-pr.ts scripts/merge-pr.test.ts scripts/router_contract.mjs scripts/router_contract.test.mjs scripts/run-vitest.ts scripts/run-vitest.test.ts scripts/vitest.config.ts
 	node --check scripts/router_contract.mjs
 	node_modules/.bin/tsc -p scripts/tsconfig.import-audit.json
-	cd scripts && node run-vitest.ts node --coverage
+	@sandbox=$$(mktemp -d); trap 'rm -rf "$$sandbox"' EXIT; \
+	cd scripts && env -i PATH="$$PATH" HOME="$$sandbox" PI_OFFLINE=1 PI_NO_LOCAL_LLM=1 \
+	  node run-vitest.ts node --coverage
+	@sandbox=$$(mktemp -d); trap 'rm -rf "$$sandbox"' EXIT; \
+	cd scripts && env -i PATH="$$PATH" HOME="$$sandbox" PI_OFFLINE=1 PI_NO_LOCAL_LLM=1 \
+	  node run-vitest.ts bun --coverage.enabled=false
 
 check-benchmark:  ## benchmarks/comparison unit gate, 100% statement+branch coverage, LCOV under coverage/python/
 	cd benchmarks/comparison && $(PY_CHECK)

@@ -2015,7 +2015,9 @@ async function performBrowserTransaction(params: ActParams, actions: UiAction[],
 	const prepared = actions.map((action) => {
 		assertBrowserTransactionAction(action);
 		// Same rule and message as the desktop `keys()` preparation; an empty chord would "work" without sending anything.
-		if (action.action === "keypress" && (!Array.isArray(action.keys) || action.keys.length === 0)) throw new Error("keypress.keys must contain at least one key.");
+		if (action.action === "keypress" && (!Array.isArray(action.keys) || action.keys.length === 0)) throw new ComputerUseError("invalid_args", "keypress.keys must contain at least one key.");
+		// Browser snapshots carry node identities, not desktop-style target points. Never send absent coordinates to CDP.
+		if (action.action === "moveMouse" && action.ref) throw new ComputerUseError("invalid_args", "Browser moveMouse requires x/y coordinates; ref targets are not supported.");
 		if (action.action === "click" && action.ref && action.button && action.button !== "left") throw new Error("Browser ref clicks support only the left button; use coordinate clicks for right or middle buttons.");
 		const ref = trimOrUndefined(action.ref);
 		const target = ref ? baseSnapshot.targets.find((candidate) => candidate.ref === ref) : undefined;

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "stack_sha256": "ceef5a5baa54294aedd74b7bc7e7ec11fe8c9757afc5cfbf5349e0fd27093b48",
+  "stack_sha256": "73c8eebed3031f5265de7601054714a18709c7a55ee0288999031662385a68b5",
   "platforms": {
     "darwin-arm64": {
       "core": {
@@ -9,12 +9,12 @@
           "version": "1.0.0",
           "private": true,
           "dependencies": {
-            "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-coding-agent-1.3.0.tgz"
+            "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-coding-agent-1.3.0.tgz"
           },
           "overrides": {
-            "@earendil-works/pi-tui": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-tui-1.3.0.tgz",
-            "@earendil-works/pi-agent-core": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-agent-core-1.3.0.tgz",
-            "@earendil-works/pi-ai": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-ai-1.3.0.tgz"
+            "@earendil-works/pi-tui": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-tui-1.3.0.tgz",
+            "@earendil-works/pi-agent-core": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-agent-core-1.3.0.tgz",
+            "@earendil-works/pi-ai": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-ai-1.3.0.tgz"
           }
         },
         "lock": {
@@ -27,7 +27,7 @@
               "name": "pi-stack-core-runtime",
               "version": "1.0.0",
               "dependencies": {
-                "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-coding-agent-1.3.0.tgz"
+                "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-coding-agent-1.3.0.tgz"
               }
             },
             "node_modules/@anthropic-ai/sdk": {
@@ -142,15 +142,15 @@
               }
             },
             "node_modules/@aws-sdk/credential-provider-ini": {
-              "version": "3.973.29",
-              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-ini/-/credential-provider-ini-3.973.29.tgz",
-              "integrity": "sha512-/idO4bVjw34b1OiNxDqFNr3BsPg9dRm1iS6XM/rTqA33RfUgTuwBCFFCz/TwxNHkrQ45tp+RpKE8P609Ino8XQ==",
+              "version": "3.973.30",
+              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-ini/-/credential-provider-ini-3.973.30.tgz",
+              "integrity": "sha512-r6r6499GWoGN943NA5YEhBEQ6TEOGTf7tTOBhHd/zw0UbNvSzd1/zPCNcDkPmRarA+e24X7KgxutqxjoWcskBg==",
               "license": "Apache-2.0",
               "dependencies": {
                 "@aws-sdk/core": "^3.981.0",
                 "@aws-sdk/credential-provider-env": "^3.972.84",
                 "@aws-sdk/credential-provider-http": "^3.972.86",
-                "@aws-sdk/credential-provider-login": "^3.972.91",
+                "@aws-sdk/credential-provider-login": "^3.972.92",
                 "@aws-sdk/credential-provider-process": "^3.972.84",
                 "@aws-sdk/credential-provider-sso": "^3.973.28",
                 "@aws-sdk/credential-provider-web-identity": "^3.972.90",
@@ -166,9 +166,9 @@
               }
             },
             "node_modules/@aws-sdk/credential-provider-login": {
-              "version": "3.972.91",
-              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-login/-/credential-provider-login-3.972.91.tgz",
-              "integrity": "sha512-MujcVZc7mnodrsp85NX0QpnQrt7kY6zbVUl+TcvzJEZzgEQkRj4iopj0kNs3uXJUArpkA64Rxa0ga86qdx0gag==",
+              "version": "3.972.92",
+              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-login/-/credential-provider-login-3.972.92.tgz",
+              "integrity": "sha512-96bcp9Pe/Xd60OEwncZ+kAQTQSu+fJnpUGz1qE6ghF5jnETmrk8XMU86mIP3lolvnCgR61XbZ+Ht6hdBjiQOmQ==",
               "license": "Apache-2.0",
               "dependencies": {
                 "@aws-sdk/core": "^3.981.0",
@@ -183,14 +183,14 @@
               }
             },
             "node_modules/@aws-sdk/credential-provider-node": {
-              "version": "3.972.96",
-              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-node/-/credential-provider-node-3.972.96.tgz",
-              "integrity": "sha512-tBunyyRnxMvKsCn/pu1QrIxUYZ4Z25LkV8zGkFGpSE/YmI2W4m8SLQzloG/hZlelGP2vLRGtIQc5w1+DoXCK1A==",
+              "version": "3.972.97",
+              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-node/-/credential-provider-node-3.972.97.tgz",
+              "integrity": "sha512-E4a0IXXJVsIdo/K9roX4JAEfI0JJr7KTPymkbKgETRDqEcLygE4ZlLTe24+7Qkh8Dl5YpnPd+Tt0DOPJDFXIwA==",
               "license": "Apache-2.0",
               "dependencies": {
                 "@aws-sdk/credential-provider-env": "^3.972.84",
                 "@aws-sdk/credential-provider-http": "^3.972.86",
-                "@aws-sdk/credential-provider-ini": "^3.973.29",
+                "@aws-sdk/credential-provider-ini": "^3.973.30",
                 "@aws-sdk/credential-provider-process": "^3.972.84",
                 "@aws-sdk/credential-provider-sso": "^3.973.28",
                 "@aws-sdk/credential-provider-web-identity": "^3.972.90",
@@ -421,9 +421,9 @@
               }
             },
             "node_modules/@babel/runtime": {
-              "version": "7.29.13",
-              "resolved": "https://registry.npmjs.org/@babel/runtime/-/runtime-7.29.13.tgz",
-              "integrity": "sha512-v+oN26xP4YIlQsbQ/CbTH1WG5m/l/DjKKZNy/Kp3f/AFvbgt7Em/D0FeMM3O2hX0YzeN2M16W8lOpyhIkfCBcQ==",
+              "version": "7.29.14",
+              "resolved": "https://registry.npmjs.org/@babel/runtime/-/runtime-7.29.14.tgz",
+              "integrity": "sha512-Y5tqevQaUAZhhj82BpYMNC1ssvLQTVAfwKdm8iy8qwmhvC2/CpcAu8OC+QEtjM7pMk7knx83u1Qj8gzkicyelw==",
               "license": "MIT",
               "engines": {
                 "node": ">=6.9.0"
@@ -431,8 +431,8 @@
             },
             "node_modules/@earendil-works/pi-agent-core": {
               "version": "1.3.0",
-              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-agent-core-1.3.0.tgz",
-              "integrity": "sha512-B2KL7vSdA8hjNTSRPZOaSdgtvpfK3lRGOMGdJe8D6EYSYd5Y0RMVWmZJXuIE83ITfDaMjxtc1PU28lhCZKReEw==",
+              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-agent-core-1.3.0.tgz",
+              "integrity": "sha512-0smBZpBKCq9vVP2NQ9U5eVocPatE8USwl59fAnSPt8eM9rpVNZeMHPr9cxaYwiobbGvLMSWiY2VDB/U+WKU0OA==",
               "license": "MIT",
               "dependencies": {
                 "@earendil-works/pi-ai": "1.3.0",
@@ -444,8 +444,8 @@
             },
             "node_modules/@earendil-works/pi-ai": {
               "version": "1.3.0",
-              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-ai-1.3.0.tgz",
-              "integrity": "sha512-I1acQ6HXxPAHy2VqVO2qh5C7sTmuvIOiwlfqLens5vUT3gimLT0rU1cG8MUiEH8bstUFcI8/xYv82A5Um0xgiQ==",
+              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-ai-1.3.0.tgz",
+              "integrity": "sha512-esbQpv0iUImqY5iE67wcjfVua8qCrfA7kq1vE+2fMgdb/YefCwVi5V1N5cvPXQ1QLqGtA/CgeYvFmDcsJ7OJRg==",
               "license": "MIT",
               "dependencies": {
                 "@anthropic-ai/sdk": "0.129.0",
@@ -480,8 +480,8 @@
             },
             "node_modules/@earendil-works/pi-coding-agent": {
               "version": "1.3.0",
-              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-coding-agent-1.3.0.tgz",
-              "integrity": "sha512-s4VpM/nfJNptaTJ19XzUrDg+eq4uJuBjTZnJykFuuSfb4NgZQRzQE9oYliKwNHrjuD0EjSslp6NzNsvETn4+hw==",
+              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-coding-agent-1.3.0.tgz",
+              "integrity": "sha512-YVHXNGuLqt3kMQdAHvOlFJwfALJTa80Z8Fzbh3gd1PtXVFD34aiiStswxrMjH6CMvtnKNBjwIfGA0bZ58Ky+6A==",
               "license": "MIT",
               "dependencies": {
                 "@earendil-works/pi-agent-core": "1.3.0",
@@ -537,8 +537,8 @@
             },
             "node_modules/@earendil-works/pi-tui": {
               "version": "1.3.0",
-              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-tui-1.3.0.tgz",
-              "integrity": "sha512-m/hckLlwUbueyM7wwxmCWZc6qA5GBtUIo8Ji19RyJtWm/XopE5W+LrL8pZjlyXXtSdQY2rLNm60gst2KWdylHA==",
+              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-tui-1.3.0.tgz",
+              "integrity": "sha512-gP2Z41TxlGFca2enbzmDtx1mT7aSx7z4NSl7qHhfRY+eLwxenKbyTj9js4A2HwhHzaWP3JnQdjMQGS95fHJYbA==",
               "license": "MIT",
               "dependencies": {
                 "get-east-asian-width": "1.6.0",
@@ -1028,10 +1028,10 @@
               }
             },
             "node_modules/graceful-fs": {
-              "version": "4.2.11",
-              "resolved": "https://registry.npmjs.org/graceful-fs/-/graceful-fs-4.2.11.tgz",
-              "integrity": "sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==",
-              "license": "ISC"
+              "version": "4.2.12",
+              "resolved": "https://registry.npmjs.org/graceful-fs/-/graceful-fs-4.2.12.tgz",
+              "integrity": "sha512-iuyGF2E4oafQfPsRrG2wtY2ILupMhvtdrhzrxB+0VcjsPpSPttpfYdjnGFGsTi5MaJFjI1jOKHPQ6UTbTj9TAw==",
+              "license": "BlueOak-1.0.0"
             },
             "node_modules/grok-mermaid": {
               "version": "0.2.3",
@@ -1571,10 +1571,10 @@
             "@nredd/pi-session-kit": "0.11.0"
           },
           "overrides": {
-            "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-coding-agent-1.3.0.tgz",
-            "@earendil-works/pi-tui": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-tui-1.3.0.tgz",
-            "@earendil-works/pi-agent-core": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-agent-core-1.3.0.tgz",
-            "@earendil-works/pi-ai": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-ai-1.3.0.tgz"
+            "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-coding-agent-1.3.0.tgz",
+            "@earendil-works/pi-tui": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-tui-1.3.0.tgz",
+            "@earendil-works/pi-agent-core": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-agent-core-1.3.0.tgz",
+            "@earendil-works/pi-ai": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-ai-1.3.0.tgz"
           }
         },
         "lock": {
@@ -1720,16 +1720,16 @@
               }
             },
             "node_modules/@aws-sdk/credential-provider-ini": {
-              "version": "3.973.29",
-              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-ini/-/credential-provider-ini-3.973.29.tgz",
-              "integrity": "sha512-/idO4bVjw34b1OiNxDqFNr3BsPg9dRm1iS6XM/rTqA33RfUgTuwBCFFCz/TwxNHkrQ45tp+RpKE8P609Ino8XQ==",
+              "version": "3.973.30",
+              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-ini/-/credential-provider-ini-3.973.30.tgz",
+              "integrity": "sha512-r6r6499GWoGN943NA5YEhBEQ6TEOGTf7tTOBhHd/zw0UbNvSzd1/zPCNcDkPmRarA+e24X7KgxutqxjoWcskBg==",
               "license": "Apache-2.0",
               "peer": true,
               "dependencies": {
                 "@aws-sdk/core": "^3.981.0",
                 "@aws-sdk/credential-provider-env": "^3.972.84",
                 "@aws-sdk/credential-provider-http": "^3.972.86",
-                "@aws-sdk/credential-provider-login": "^3.972.91",
+                "@aws-sdk/credential-provider-login": "^3.972.92",
                 "@aws-sdk/credential-provider-process": "^3.972.84",
                 "@aws-sdk/credential-provider-sso": "^3.973.28",
                 "@aws-sdk/credential-provider-web-identity": "^3.972.90",
@@ -1745,9 +1745,9 @@
               }
             },
             "node_modules/@aws-sdk/credential-provider-login": {
-              "version": "3.972.91",
-              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-login/-/credential-provider-login-3.972.91.tgz",
-              "integrity": "sha512-MujcVZc7mnodrsp85NX0QpnQrt7kY6zbVUl+TcvzJEZzgEQkRj4iopj0kNs3uXJUArpkA64Rxa0ga86qdx0gag==",
+              "version": "3.972.92",
+              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-login/-/credential-provider-login-3.972.92.tgz",
+              "integrity": "sha512-96bcp9Pe/Xd60OEwncZ+kAQTQSu+fJnpUGz1qE6ghF5jnETmrk8XMU86mIP3lolvnCgR61XbZ+Ht6hdBjiQOmQ==",
               "license": "Apache-2.0",
               "peer": true,
               "dependencies": {
@@ -1763,15 +1763,15 @@
               }
             },
             "node_modules/@aws-sdk/credential-provider-node": {
-              "version": "3.972.96",
-              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-node/-/credential-provider-node-3.972.96.tgz",
-              "integrity": "sha512-tBunyyRnxMvKsCn/pu1QrIxUYZ4Z25LkV8zGkFGpSE/YmI2W4m8SLQzloG/hZlelGP2vLRGtIQc5w1+DoXCK1A==",
+              "version": "3.972.97",
+              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-node/-/credential-provider-node-3.972.97.tgz",
+              "integrity": "sha512-E4a0IXXJVsIdo/K9roX4JAEfI0JJr7KTPymkbKgETRDqEcLygE4ZlLTe24+7Qkh8Dl5YpnPd+Tt0DOPJDFXIwA==",
               "license": "Apache-2.0",
               "peer": true,
               "dependencies": {
                 "@aws-sdk/credential-provider-env": "^3.972.84",
                 "@aws-sdk/credential-provider-http": "^3.972.86",
-                "@aws-sdk/credential-provider-ini": "^3.973.29",
+                "@aws-sdk/credential-provider-ini": "^3.973.30",
                 "@aws-sdk/credential-provider-process": "^3.972.84",
                 "@aws-sdk/credential-provider-sso": "^3.973.28",
                 "@aws-sdk/credential-provider-web-identity": "^3.972.90",
@@ -2016,9 +2016,9 @@
               }
             },
             "node_modules/@babel/runtime": {
-              "version": "7.29.13",
-              "resolved": "https://registry.npmjs.org/@babel/runtime/-/runtime-7.29.13.tgz",
-              "integrity": "sha512-v+oN26xP4YIlQsbQ/CbTH1WG5m/l/DjKKZNy/Kp3f/AFvbgt7Em/D0FeMM3O2hX0YzeN2M16W8lOpyhIkfCBcQ==",
+              "version": "7.29.14",
+              "resolved": "https://registry.npmjs.org/@babel/runtime/-/runtime-7.29.14.tgz",
+              "integrity": "sha512-Y5tqevQaUAZhhj82BpYMNC1ssvLQTVAfwKdm8iy8qwmhvC2/CpcAu8OC+QEtjM7pMk7knx83u1Qj8gzkicyelw==",
               "license": "MIT",
               "peer": true,
               "engines": {
@@ -2027,8 +2027,8 @@
             },
             "node_modules/@earendil-works/pi-agent-core": {
               "version": "1.3.0",
-              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-agent-core-1.3.0.tgz",
-              "integrity": "sha512-B2KL7vSdA8hjNTSRPZOaSdgtvpfK3lRGOMGdJe8D6EYSYd5Y0RMVWmZJXuIE83ITfDaMjxtc1PU28lhCZKReEw==",
+              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-agent-core-1.3.0.tgz",
+              "integrity": "sha512-0smBZpBKCq9vVP2NQ9U5eVocPatE8USwl59fAnSPt8eM9rpVNZeMHPr9cxaYwiobbGvLMSWiY2VDB/U+WKU0OA==",
               "license": "MIT",
               "peer": true,
               "dependencies": {
@@ -2048,8 +2048,8 @@
             },
             "node_modules/@earendil-works/pi-ai": {
               "version": "1.3.0",
-              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-ai-1.3.0.tgz",
-              "integrity": "sha512-I1acQ6HXxPAHy2VqVO2qh5C7sTmuvIOiwlfqLens5vUT3gimLT0rU1cG8MUiEH8bstUFcI8/xYv82A5Um0xgiQ==",
+              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-ai-1.3.0.tgz",
+              "integrity": "sha512-esbQpv0iUImqY5iE67wcjfVua8qCrfA7kq1vE+2fMgdb/YefCwVi5V1N5cvPXQ1QLqGtA/CgeYvFmDcsJ7OJRg==",
               "license": "MIT",
               "peer": true,
               "dependencies": {
@@ -2093,8 +2093,8 @@
             },
             "node_modules/@earendil-works/pi-coding-agent": {
               "version": "1.3.0",
-              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-coding-agent-1.3.0.tgz",
-              "integrity": "sha512-s4VpM/nfJNptaTJ19XzUrDg+eq4uJuBjTZnJykFuuSfb4NgZQRzQE9oYliKwNHrjuD0EjSslp6NzNsvETn4+hw==",
+              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-coding-agent-1.3.0.tgz",
+              "integrity": "sha512-YVHXNGuLqt3kMQdAHvOlFJwfALJTa80Z8Fzbh3gd1PtXVFD34aiiStswxrMjH6CMvtnKNBjwIfGA0bZ58Ky+6A==",
               "license": "MIT",
               "peer": true,
               "dependencies": {
@@ -2160,8 +2160,8 @@
             },
             "node_modules/@earendil-works/pi-tui": {
               "version": "1.3.0",
-              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-tui-1.3.0.tgz",
-              "integrity": "sha512-m/hckLlwUbueyM7wwxmCWZc6qA5GBtUIo8Ji19RyJtWm/XopE5W+LrL8pZjlyXXtSdQY2rLNm60gst2KWdylHA==",
+              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-tui-1.3.0.tgz",
+              "integrity": "sha512-gP2Z41TxlGFca2enbzmDtx1mT7aSx7z4NSl7qHhfRY+eLwxenKbyTj9js4A2HwhHzaWP3JnQdjMQGS95fHJYbA==",
               "license": "MIT",
               "peer": true,
               "dependencies": {
@@ -2219,9 +2219,9 @@
               }
             },
             "node_modules/@hono/node-server": {
-              "version": "2.1.7",
-              "resolved": "https://registry.npmjs.org/@hono/node-server/-/node-server-2.1.7.tgz",
-              "integrity": "sha512-Wr0E6S+v2Bw9FkpGNP5BQ5QbJvclUa06UVehd65WFZe6XeJwbrKQQ5wPDevc0IC+QyzbO7v3Llh5uo45IZcSnA==",
+              "version": "2.1.8",
+              "resolved": "https://registry.npmjs.org/@hono/node-server/-/node-server-2.1.8.tgz",
+              "integrity": "sha512-jdf7FHh6A1lzjpHHQUgxsg2GeER2vMetnAOfeActzcoli6jamlK+NAwL6Dsr5Fl3BS3tYUQzCdtZjU8Qxv7bEA==",
               "license": "MIT",
               "engines": {
                 "node": ">=20"
@@ -3600,9 +3600,9 @@
               "license": "MIT"
             },
             "node_modules/encodeurl": {
-              "version": "2.0.1",
-              "resolved": "https://registry.npmjs.org/encodeurl/-/encodeurl-2.0.1.tgz",
-              "integrity": "sha512-Ev/hIyePLZtpL98x562lvPtenrUfGr0lfaf44HFZ+hDEwso7ccV9QAZrEVLg0hxNAzygaAFxy2dYaAKKM0G06A==",
+              "version": "2.0.2",
+              "resolved": "https://registry.npmjs.org/encodeurl/-/encodeurl-2.0.2.tgz",
+              "integrity": "sha512-ddmxiyS6ETq/v5/+mdA4fykK7JgEmqcShrGmQFTaKf5o43tL8XLuMzNLLsspuIC3/qGupS7Ci2TF+feJRkYY0w==",
               "license": "MIT",
               "engines": {
                 "node": ">= 0.8"
@@ -4241,10 +4241,10 @@
               }
             },
             "node_modules/graceful-fs": {
-              "version": "4.2.11",
-              "resolved": "https://registry.npmjs.org/graceful-fs/-/graceful-fs-4.2.11.tgz",
-              "integrity": "sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==",
-              "license": "ISC",
+              "version": "4.2.12",
+              "resolved": "https://registry.npmjs.org/graceful-fs/-/graceful-fs-4.2.12.tgz",
+              "integrity": "sha512-iuyGF2E4oafQfPsRrG2wtY2ILupMhvtdrhzrxB+0VcjsPpSPttpfYdjnGFGsTi5MaJFjI1jOKHPQ6UTbTj9TAw==",
+              "license": "BlueOak-1.0.0",
               "peer": true
             },
             "node_modules/grok-mermaid": {
@@ -6146,9 +6146,9 @@
               }
             },
             "node_modules/typebox": {
-              "version": "1.4.6",
-              "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.4.6.tgz",
-              "integrity": "sha512-Yh8Mi4hzD7gqcuv9ZIk6HK1KVJKubTlfxaNxkrYK35HCvxoCjCuWVr8cBjQ/ChfA7yliPteJEBWHGFVGWDuF5Q==",
+              "version": "1.4.7",
+              "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.4.7.tgz",
+              "integrity": "sha512-KonYdBj3gOgG/rH96TlUs/f+eaEDqiKRW7KU4/LE/tEjEnRCcfpYLofBfHfNMBAiBosmY55e4YeCPuE+NXmJtg==",
               "license": "MIT",
               "peer": true
             },
@@ -6495,12 +6495,12 @@
           "version": "1.0.0",
           "private": true,
           "dependencies": {
-            "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-coding-agent-1.3.0.tgz"
+            "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-coding-agent-1.3.0.tgz"
           },
           "overrides": {
-            "@earendil-works/pi-tui": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-tui-1.3.0.tgz",
-            "@earendil-works/pi-agent-core": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-agent-core-1.3.0.tgz",
-            "@earendil-works/pi-ai": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-ai-1.3.0.tgz"
+            "@earendil-works/pi-tui": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-tui-1.3.0.tgz",
+            "@earendil-works/pi-agent-core": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-agent-core-1.3.0.tgz",
+            "@earendil-works/pi-ai": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-ai-1.3.0.tgz"
           }
         },
         "lock": {
@@ -6513,7 +6513,7 @@
               "name": "pi-stack-core-runtime",
               "version": "1.0.0",
               "dependencies": {
-                "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-coding-agent-1.3.0.tgz"
+                "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-coding-agent-1.3.0.tgz"
               }
             },
             "node_modules/@anthropic-ai/sdk": {
@@ -6628,15 +6628,15 @@
               }
             },
             "node_modules/@aws-sdk/credential-provider-ini": {
-              "version": "3.973.29",
-              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-ini/-/credential-provider-ini-3.973.29.tgz",
-              "integrity": "sha512-/idO4bVjw34b1OiNxDqFNr3BsPg9dRm1iS6XM/rTqA33RfUgTuwBCFFCz/TwxNHkrQ45tp+RpKE8P609Ino8XQ==",
+              "version": "3.973.30",
+              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-ini/-/credential-provider-ini-3.973.30.tgz",
+              "integrity": "sha512-r6r6499GWoGN943NA5YEhBEQ6TEOGTf7tTOBhHd/zw0UbNvSzd1/zPCNcDkPmRarA+e24X7KgxutqxjoWcskBg==",
               "license": "Apache-2.0",
               "dependencies": {
                 "@aws-sdk/core": "^3.981.0",
                 "@aws-sdk/credential-provider-env": "^3.972.84",
                 "@aws-sdk/credential-provider-http": "^3.972.86",
-                "@aws-sdk/credential-provider-login": "^3.972.91",
+                "@aws-sdk/credential-provider-login": "^3.972.92",
                 "@aws-sdk/credential-provider-process": "^3.972.84",
                 "@aws-sdk/credential-provider-sso": "^3.973.28",
                 "@aws-sdk/credential-provider-web-identity": "^3.972.90",
@@ -6652,9 +6652,9 @@
               }
             },
             "node_modules/@aws-sdk/credential-provider-login": {
-              "version": "3.972.91",
-              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-login/-/credential-provider-login-3.972.91.tgz",
-              "integrity": "sha512-MujcVZc7mnodrsp85NX0QpnQrt7kY6zbVUl+TcvzJEZzgEQkRj4iopj0kNs3uXJUArpkA64Rxa0ga86qdx0gag==",
+              "version": "3.972.92",
+              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-login/-/credential-provider-login-3.972.92.tgz",
+              "integrity": "sha512-96bcp9Pe/Xd60OEwncZ+kAQTQSu+fJnpUGz1qE6ghF5jnETmrk8XMU86mIP3lolvnCgR61XbZ+Ht6hdBjiQOmQ==",
               "license": "Apache-2.0",
               "dependencies": {
                 "@aws-sdk/core": "^3.981.0",
@@ -6669,14 +6669,14 @@
               }
             },
             "node_modules/@aws-sdk/credential-provider-node": {
-              "version": "3.972.96",
-              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-node/-/credential-provider-node-3.972.96.tgz",
-              "integrity": "sha512-tBunyyRnxMvKsCn/pu1QrIxUYZ4Z25LkV8zGkFGpSE/YmI2W4m8SLQzloG/hZlelGP2vLRGtIQc5w1+DoXCK1A==",
+              "version": "3.972.97",
+              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-node/-/credential-provider-node-3.972.97.tgz",
+              "integrity": "sha512-E4a0IXXJVsIdo/K9roX4JAEfI0JJr7KTPymkbKgETRDqEcLygE4ZlLTe24+7Qkh8Dl5YpnPd+Tt0DOPJDFXIwA==",
               "license": "Apache-2.0",
               "dependencies": {
                 "@aws-sdk/credential-provider-env": "^3.972.84",
                 "@aws-sdk/credential-provider-http": "^3.972.86",
-                "@aws-sdk/credential-provider-ini": "^3.973.29",
+                "@aws-sdk/credential-provider-ini": "^3.973.30",
                 "@aws-sdk/credential-provider-process": "^3.972.84",
                 "@aws-sdk/credential-provider-sso": "^3.973.28",
                 "@aws-sdk/credential-provider-web-identity": "^3.972.90",
@@ -6907,9 +6907,9 @@
               }
             },
             "node_modules/@babel/runtime": {
-              "version": "7.29.13",
-              "resolved": "https://registry.npmjs.org/@babel/runtime/-/runtime-7.29.13.tgz",
-              "integrity": "sha512-v+oN26xP4YIlQsbQ/CbTH1WG5m/l/DjKKZNy/Kp3f/AFvbgt7Em/D0FeMM3O2hX0YzeN2M16W8lOpyhIkfCBcQ==",
+              "version": "7.29.14",
+              "resolved": "https://registry.npmjs.org/@babel/runtime/-/runtime-7.29.14.tgz",
+              "integrity": "sha512-Y5tqevQaUAZhhj82BpYMNC1ssvLQTVAfwKdm8iy8qwmhvC2/CpcAu8OC+QEtjM7pMk7knx83u1Qj8gzkicyelw==",
               "license": "MIT",
               "engines": {
                 "node": ">=6.9.0"
@@ -6917,8 +6917,8 @@
             },
             "node_modules/@earendil-works/pi-agent-core": {
               "version": "1.3.0",
-              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-agent-core-1.3.0.tgz",
-              "integrity": "sha512-B2KL7vSdA8hjNTSRPZOaSdgtvpfK3lRGOMGdJe8D6EYSYd5Y0RMVWmZJXuIE83ITfDaMjxtc1PU28lhCZKReEw==",
+              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-agent-core-1.3.0.tgz",
+              "integrity": "sha512-0smBZpBKCq9vVP2NQ9U5eVocPatE8USwl59fAnSPt8eM9rpVNZeMHPr9cxaYwiobbGvLMSWiY2VDB/U+WKU0OA==",
               "license": "MIT",
               "dependencies": {
                 "@earendil-works/pi-ai": "1.3.0",
@@ -6930,8 +6930,8 @@
             },
             "node_modules/@earendil-works/pi-ai": {
               "version": "1.3.0",
-              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-ai-1.3.0.tgz",
-              "integrity": "sha512-I1acQ6HXxPAHy2VqVO2qh5C7sTmuvIOiwlfqLens5vUT3gimLT0rU1cG8MUiEH8bstUFcI8/xYv82A5Um0xgiQ==",
+              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-ai-1.3.0.tgz",
+              "integrity": "sha512-esbQpv0iUImqY5iE67wcjfVua8qCrfA7kq1vE+2fMgdb/YefCwVi5V1N5cvPXQ1QLqGtA/CgeYvFmDcsJ7OJRg==",
               "license": "MIT",
               "dependencies": {
                 "@anthropic-ai/sdk": "0.129.0",
@@ -6966,8 +6966,8 @@
             },
             "node_modules/@earendil-works/pi-coding-agent": {
               "version": "1.3.0",
-              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-coding-agent-1.3.0.tgz",
-              "integrity": "sha512-s4VpM/nfJNptaTJ19XzUrDg+eq4uJuBjTZnJykFuuSfb4NgZQRzQE9oYliKwNHrjuD0EjSslp6NzNsvETn4+hw==",
+              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-coding-agent-1.3.0.tgz",
+              "integrity": "sha512-YVHXNGuLqt3kMQdAHvOlFJwfALJTa80Z8Fzbh3gd1PtXVFD34aiiStswxrMjH6CMvtnKNBjwIfGA0bZ58Ky+6A==",
               "license": "MIT",
               "dependencies": {
                 "@earendil-works/pi-agent-core": "1.3.0",
@@ -7023,8 +7023,8 @@
             },
             "node_modules/@earendil-works/pi-tui": {
               "version": "1.3.0",
-              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-tui-1.3.0.tgz",
-              "integrity": "sha512-m/hckLlwUbueyM7wwxmCWZc6qA5GBtUIo8Ji19RyJtWm/XopE5W+LrL8pZjlyXXtSdQY2rLNm60gst2KWdylHA==",
+              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-tui-1.3.0.tgz",
+              "integrity": "sha512-gP2Z41TxlGFca2enbzmDtx1mT7aSx7z4NSl7qHhfRY+eLwxenKbyTj9js4A2HwhHzaWP3JnQdjMQGS95fHJYbA==",
               "license": "MIT",
               "dependencies": {
                 "get-east-asian-width": "1.6.0",
@@ -7514,10 +7514,10 @@
               }
             },
             "node_modules/graceful-fs": {
-              "version": "4.2.11",
-              "resolved": "https://registry.npmjs.org/graceful-fs/-/graceful-fs-4.2.11.tgz",
-              "integrity": "sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==",
-              "license": "ISC"
+              "version": "4.2.12",
+              "resolved": "https://registry.npmjs.org/graceful-fs/-/graceful-fs-4.2.12.tgz",
+              "integrity": "sha512-iuyGF2E4oafQfPsRrG2wtY2ILupMhvtdrhzrxB+0VcjsPpSPttpfYdjnGFGsTi5MaJFjI1jOKHPQ6UTbTj9TAw==",
+              "license": "BlueOak-1.0.0"
             },
             "node_modules/grok-mermaid": {
               "version": "0.2.3",
@@ -8057,10 +8057,10 @@
             "@nredd/pi-session-kit": "0.11.0"
           },
           "overrides": {
-            "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-coding-agent-1.3.0.tgz",
-            "@earendil-works/pi-tui": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-tui-1.3.0.tgz",
-            "@earendil-works/pi-agent-core": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-agent-core-1.3.0.tgz",
-            "@earendil-works/pi-ai": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-ai-1.3.0.tgz"
+            "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-coding-agent-1.3.0.tgz",
+            "@earendil-works/pi-tui": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-tui-1.3.0.tgz",
+            "@earendil-works/pi-agent-core": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-agent-core-1.3.0.tgz",
+            "@earendil-works/pi-ai": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-ai-1.3.0.tgz"
           }
         },
         "lock": {
@@ -8206,16 +8206,16 @@
               }
             },
             "node_modules/@aws-sdk/credential-provider-ini": {
-              "version": "3.973.29",
-              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-ini/-/credential-provider-ini-3.973.29.tgz",
-              "integrity": "sha512-/idO4bVjw34b1OiNxDqFNr3BsPg9dRm1iS6XM/rTqA33RfUgTuwBCFFCz/TwxNHkrQ45tp+RpKE8P609Ino8XQ==",
+              "version": "3.973.30",
+              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-ini/-/credential-provider-ini-3.973.30.tgz",
+              "integrity": "sha512-r6r6499GWoGN943NA5YEhBEQ6TEOGTf7tTOBhHd/zw0UbNvSzd1/zPCNcDkPmRarA+e24X7KgxutqxjoWcskBg==",
               "license": "Apache-2.0",
               "peer": true,
               "dependencies": {
                 "@aws-sdk/core": "^3.981.0",
                 "@aws-sdk/credential-provider-env": "^3.972.84",
                 "@aws-sdk/credential-provider-http": "^3.972.86",
-                "@aws-sdk/credential-provider-login": "^3.972.91",
+                "@aws-sdk/credential-provider-login": "^3.972.92",
                 "@aws-sdk/credential-provider-process": "^3.972.84",
                 "@aws-sdk/credential-provider-sso": "^3.973.28",
                 "@aws-sdk/credential-provider-web-identity": "^3.972.90",
@@ -8231,9 +8231,9 @@
               }
             },
             "node_modules/@aws-sdk/credential-provider-login": {
-              "version": "3.972.91",
-              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-login/-/credential-provider-login-3.972.91.tgz",
-              "integrity": "sha512-MujcVZc7mnodrsp85NX0QpnQrt7kY6zbVUl+TcvzJEZzgEQkRj4iopj0kNs3uXJUArpkA64Rxa0ga86qdx0gag==",
+              "version": "3.972.92",
+              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-login/-/credential-provider-login-3.972.92.tgz",
+              "integrity": "sha512-96bcp9Pe/Xd60OEwncZ+kAQTQSu+fJnpUGz1qE6ghF5jnETmrk8XMU86mIP3lolvnCgR61XbZ+Ht6hdBjiQOmQ==",
               "license": "Apache-2.0",
               "peer": true,
               "dependencies": {
@@ -8249,15 +8249,15 @@
               }
             },
             "node_modules/@aws-sdk/credential-provider-node": {
-              "version": "3.972.96",
-              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-node/-/credential-provider-node-3.972.96.tgz",
-              "integrity": "sha512-tBunyyRnxMvKsCn/pu1QrIxUYZ4Z25LkV8zGkFGpSE/YmI2W4m8SLQzloG/hZlelGP2vLRGtIQc5w1+DoXCK1A==",
+              "version": "3.972.97",
+              "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-node/-/credential-provider-node-3.972.97.tgz",
+              "integrity": "sha512-E4a0IXXJVsIdo/K9roX4JAEfI0JJr7KTPymkbKgETRDqEcLygE4ZlLTe24+7Qkh8Dl5YpnPd+Tt0DOPJDFXIwA==",
               "license": "Apache-2.0",
               "peer": true,
               "dependencies": {
                 "@aws-sdk/credential-provider-env": "^3.972.84",
                 "@aws-sdk/credential-provider-http": "^3.972.86",
-                "@aws-sdk/credential-provider-ini": "^3.973.29",
+                "@aws-sdk/credential-provider-ini": "^3.973.30",
                 "@aws-sdk/credential-provider-process": "^3.972.84",
                 "@aws-sdk/credential-provider-sso": "^3.973.28",
                 "@aws-sdk/credential-provider-web-identity": "^3.972.90",
@@ -8502,9 +8502,9 @@
               }
             },
             "node_modules/@babel/runtime": {
-              "version": "7.29.13",
-              "resolved": "https://registry.npmjs.org/@babel/runtime/-/runtime-7.29.13.tgz",
-              "integrity": "sha512-v+oN26xP4YIlQsbQ/CbTH1WG5m/l/DjKKZNy/Kp3f/AFvbgt7Em/D0FeMM3O2hX0YzeN2M16W8lOpyhIkfCBcQ==",
+              "version": "7.29.14",
+              "resolved": "https://registry.npmjs.org/@babel/runtime/-/runtime-7.29.14.tgz",
+              "integrity": "sha512-Y5tqevQaUAZhhj82BpYMNC1ssvLQTVAfwKdm8iy8qwmhvC2/CpcAu8OC+QEtjM7pMk7knx83u1Qj8gzkicyelw==",
               "license": "MIT",
               "peer": true,
               "engines": {
@@ -8513,8 +8513,8 @@
             },
             "node_modules/@earendil-works/pi-agent-core": {
               "version": "1.3.0",
-              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-agent-core-1.3.0.tgz",
-              "integrity": "sha512-B2KL7vSdA8hjNTSRPZOaSdgtvpfK3lRGOMGdJe8D6EYSYd5Y0RMVWmZJXuIE83ITfDaMjxtc1PU28lhCZKReEw==",
+              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-agent-core-1.3.0.tgz",
+              "integrity": "sha512-0smBZpBKCq9vVP2NQ9U5eVocPatE8USwl59fAnSPt8eM9rpVNZeMHPr9cxaYwiobbGvLMSWiY2VDB/U+WKU0OA==",
               "license": "MIT",
               "peer": true,
               "dependencies": {
@@ -8534,8 +8534,8 @@
             },
             "node_modules/@earendil-works/pi-ai": {
               "version": "1.3.0",
-              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-ai-1.3.0.tgz",
-              "integrity": "sha512-I1acQ6HXxPAHy2VqVO2qh5C7sTmuvIOiwlfqLens5vUT3gimLT0rU1cG8MUiEH8bstUFcI8/xYv82A5Um0xgiQ==",
+              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-ai-1.3.0.tgz",
+              "integrity": "sha512-esbQpv0iUImqY5iE67wcjfVua8qCrfA7kq1vE+2fMgdb/YefCwVi5V1N5cvPXQ1QLqGtA/CgeYvFmDcsJ7OJRg==",
               "license": "MIT",
               "peer": true,
               "dependencies": {
@@ -8579,8 +8579,8 @@
             },
             "node_modules/@earendil-works/pi-coding-agent": {
               "version": "1.3.0",
-              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-coding-agent-1.3.0.tgz",
-              "integrity": "sha512-s4VpM/nfJNptaTJ19XzUrDg+eq4uJuBjTZnJykFuuSfb4NgZQRzQE9oYliKwNHrjuD0EjSslp6NzNsvETn4+hw==",
+              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-coding-agent-1.3.0.tgz",
+              "integrity": "sha512-YVHXNGuLqt3kMQdAHvOlFJwfALJTa80Z8Fzbh3gd1PtXVFD34aiiStswxrMjH6CMvtnKNBjwIfGA0bZ58Ky+6A==",
               "license": "MIT",
               "peer": true,
               "dependencies": {
@@ -8646,8 +8646,8 @@
             },
             "node_modules/@earendil-works/pi-tui": {
               "version": "1.3.0",
-              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-tui-1.3.0.tgz",
-              "integrity": "sha512-m/hckLlwUbueyM7wwxmCWZc6qA5GBtUIo8Ji19RyJtWm/XopE5W+LrL8pZjlyXXtSdQY2rLNm60gst2KWdylHA==",
+              "resolved": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-tui-1.3.0.tgz",
+              "integrity": "sha512-gP2Z41TxlGFca2enbzmDtx1mT7aSx7z4NSl7qHhfRY+eLwxenKbyTj9js4A2HwhHzaWP3JnQdjMQGS95fHJYbA==",
               "license": "MIT",
               "peer": true,
               "dependencies": {
@@ -8705,9 +8705,9 @@
               }
             },
             "node_modules/@hono/node-server": {
-              "version": "2.1.7",
-              "resolved": "https://registry.npmjs.org/@hono/node-server/-/node-server-2.1.7.tgz",
-              "integrity": "sha512-Wr0E6S+v2Bw9FkpGNP5BQ5QbJvclUa06UVehd65WFZe6XeJwbrKQQ5wPDevc0IC+QyzbO7v3Llh5uo45IZcSnA==",
+              "version": "2.1.8",
+              "resolved": "https://registry.npmjs.org/@hono/node-server/-/node-server-2.1.8.tgz",
+              "integrity": "sha512-jdf7FHh6A1lzjpHHQUgxsg2GeER2vMetnAOfeActzcoli6jamlK+NAwL6Dsr5Fl3BS3tYUQzCdtZjU8Qxv7bEA==",
               "license": "MIT",
               "engines": {
                 "node": ">=20"
@@ -10086,9 +10086,9 @@
               "license": "MIT"
             },
             "node_modules/encodeurl": {
-              "version": "2.0.1",
-              "resolved": "https://registry.npmjs.org/encodeurl/-/encodeurl-2.0.1.tgz",
-              "integrity": "sha512-Ev/hIyePLZtpL98x562lvPtenrUfGr0lfaf44HFZ+hDEwso7ccV9QAZrEVLg0hxNAzygaAFxy2dYaAKKM0G06A==",
+              "version": "2.0.2",
+              "resolved": "https://registry.npmjs.org/encodeurl/-/encodeurl-2.0.2.tgz",
+              "integrity": "sha512-ddmxiyS6ETq/v5/+mdA4fykK7JgEmqcShrGmQFTaKf5o43tL8XLuMzNLLsspuIC3/qGupS7Ci2TF+feJRkYY0w==",
               "license": "MIT",
               "engines": {
                 "node": ">= 0.8"
@@ -10727,10 +10727,10 @@
               }
             },
             "node_modules/graceful-fs": {
-              "version": "4.2.11",
-              "resolved": "https://registry.npmjs.org/graceful-fs/-/graceful-fs-4.2.11.tgz",
-              "integrity": "sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==",
-              "license": "ISC",
+              "version": "4.2.12",
+              "resolved": "https://registry.npmjs.org/graceful-fs/-/graceful-fs-4.2.12.tgz",
+              "integrity": "sha512-iuyGF2E4oafQfPsRrG2wtY2ILupMhvtdrhzrxB+0VcjsPpSPttpfYdjnGFGsTi5MaJFjI1jOKHPQ6UTbTj9TAw==",
+              "license": "BlueOak-1.0.0",
               "peer": true
             },
             "node_modules/grok-mermaid": {
@@ -12632,9 +12632,9 @@
               }
             },
             "node_modules/typebox": {
-              "version": "1.4.6",
-              "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.4.6.tgz",
-              "integrity": "sha512-Yh8Mi4hzD7gqcuv9ZIk6HK1KVJKubTlfxaNxkrYK35HCvxoCjCuWVr8cBjQ/ChfA7yliPteJEBWHGFVGWDuF5Q==",
+              "version": "1.4.7",
+              "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.4.7.tgz",
+              "integrity": "sha512-KonYdBj3gOgG/rH96TlUs/f+eaEDqiKRW7KU4/LE/tEjEnRCcfpYLofBfHfNMBAiBosmY55e4YeCPuE+NXmJtg==",
               "license": "MIT",
               "peer": true
             },

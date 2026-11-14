@@ -105,8 +105,11 @@ runs:
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         $scripts = $scripts.Trim()
         # apt runs here, not inside setup-wsl, so it is bounded and mirror-aware (#626).
-        # Two attempts of 100s update plus 360s download, an offline 180s install and kill grace fit inside 1200s.
-        $env:WSLENV = 'WSL_APT_CACHE/p'
+        # Two attempts of 100s update plus 360s download, an offline 180s install, kill grace and
+        # the failure-only 12s DNS capture fit inside 1200s. Write directly into early host diagnostics:
+        # the ordinary guest checkout/capture does not exist yet if apt fails.
+        $env:WSL_APT_DIAGNOSTICS = Join-Path $env:RUNNER_TEMP 'wsl2-diagnostics/apt-dns.txt'
+        $env:WSLENV = 'WSL_APT_CACHE/p:WSL_APT_DIAGNOSTICS/p'
         Invoke-Bounded 'apt prerequisites (scripts/wsl2_apt.sh)' 1200 wsl -d Ubuntu-24.04 --user root --exec bash -euo pipefail "$scripts/wsl2_apt.sh"
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         # Run every gate as an ordinary user.

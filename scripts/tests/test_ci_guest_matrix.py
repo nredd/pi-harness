@@ -1459,8 +1459,19 @@ def test_owned_fan_ins_share_one_definition_and_wait_only_for_their_own_shards()
         assert fan_in["strategy"]["matrix"] == {"os": [os_name]}
         # A failed classify or a failed shard must still produce a red required check, never a skipped one.
         assert fan_in["if"] == "${{ !cancelled() }}"
-        assert fan_in["needs"] == ["classify", shards]
-        assert fan_in["env"] == {"SHARDS_RESULT": f"${{{{ needs.{shards}.result }}}}"}
+        expected_needs = ["classify", shards]
+        expected_env = {"SHARDS_RESULT": f"${{{{ needs.{shards}.result }}}}"}
+        if os_name == "ubuntu-24.04":
+            expected_needs.append("computer-use-windows")
+            expected_env |= {
+                "WINDOWS_REQUIRED": (
+                    "${{ contains(toJSON(fromJSON(needs.classify.outputs.plan || '{}')"
+                    "['owned (ubuntu-24.04)'].shards), 'packages/computer-use') }}"
+                ),
+                "WINDOWS_RESULT": "${{ needs.computer-use-windows.result }}",
+            }
+        assert fan_in["needs"] == expected_needs
+        assert fan_in["env"] == expected_env
         assert fan_in["runs-on"] == "ubuntu-24.04"
         assert "defaults" not in fan_in
 
@@ -1760,6 +1771,7 @@ def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> Non
         "classify",
         *OWNED_SHARD_JOBS.values(),
         *OWNED_FAN_IN.values(),
+        "computer-use-windows",
         "contracts",
         "stack",
         "release-core",
@@ -1829,7 +1841,8 @@ def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> Non
     assert not (WORKFLOW.parent / "wsl2.yml").exists()
     for path in WORKFLOW.parent.glob("*.yml"):
         if path != WORKFLOW:
-            assert "setup-ci-wsl" not in path.read_text()
+            # A control-test workflow may name the action in its path filter without invoking guest setup.
+            assert "uses: ./.github/actions/setup-ci-wsl" not in path.read_text()
             assert "wsl2_run.sh" not in path.read_text()
 
 
@@ -1969,9 +1982,6 @@ def test_capture_retains_first_failure_and_only_explicit_reports(
         artifacts = worktree / "integration" / name
         artifacts.mkdir()
         (artifacts / "wsl2-personal.xml").write_text("<testsuite/>\n")
-    scripts = worktree / "scripts"
-    scripts.mkdir()
-    shutil.copyfile(ROOT / "scripts/wsl2_cleanup.sh", scripts / "wsl2_cleanup.sh")
     host = tmp_path / "host"
     host_temp = host / "temp"
     (host_temp / "wsl2-diagnostics").mkdir(parents=True)
@@ -2033,8 +2043,6 @@ def test_failed_capture_exports_scanned_guest_state(tmp_path: Path, case: str, h
     worktree, env = guest_fixture(tmp_path)
     ti = worktree / ".ci-temp"
     (ti / "first-failure").write_text("47\n")
-    (worktree / "scripts").mkdir()
-    shutil.copyfile(ROOT / "scripts/wsl2_cleanup.sh", worktree / "scripts/wsl2_cleanup.sh")
     if case != "no-scanner":
         shutil.copytree(
             ROOT / "integration/harness",
@@ -2094,8 +2102,6 @@ def test_job_status_alone_triggers_guest_state(tmp_path: Path, job_status: str, 
         collected (bool): Guest state is expected.
     """
     worktree, env = guest_fixture(tmp_path)
-    (worktree / "scripts").mkdir()
-    shutil.copyfile(ROOT / "scripts/wsl2_cleanup.sh", worktree / "scripts/wsl2_cleanup.sh")
     shutil.copytree(
         ROOT / "integration/harness",
         worktree / "integration/harness",

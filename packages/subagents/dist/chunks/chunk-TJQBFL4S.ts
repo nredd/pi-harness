@@ -1611,27 +1611,31 @@ var PARKED_RESUME_DELAY_MS = 1e4;
 var LEGACY_MODEL_PINS = /* @__PURE__ */ new Map([
   ["claude-haiku-4-5", "anthropic/claude-haiku-4-5"]
 ]);
-function modelRequest(type, definitionModel, paramModel) {
-  if (paramModel != null && (typeof paramModel !== "string" || paramModel.trim() !== "")) {
-    return { requested: typeof paramModel === "string" ? paramModel : `${paramModel.provider}/${paramModel.id}`, source: "param" };
-  }
+function modelInputs(type, definitionModel, paramModel) {
   const overrides = getAgentModels();
-  const typed = overrides.get(type.toLowerCase());
-  if (typed?.trim()) return { requested: typed, source: "agentModels:type" };
-  const wildcard = overrides.get("*");
-  if (wildcard?.trim()) return { requested: wildcard, source: "agentModels:*" };
-  if (definitionModel?.trim()) return { requested: definitionModel, source: "definition" };
-  return { source: "parent" };
+  const inputs = [
+    { source: "param", requested: paramModel == null ? void 0 : typeof paramModel === "string" ? paramModel : `${paramModel.provider}/${paramModel.id}` },
+    { source: "agentModels:type", requested: overrides.get(type.toLowerCase()) },
+    { source: "agentModels:*", requested: overrides.get("*") },
+    { source: "definition", requested: definitionModel }
+  ];
+  return [...inputs.filter((input) => input.requested?.trim()), { source: "parent" }];
 }
-function selectModel(request) {
-  const input = modelRequest(request.agentType, request.definitionModel, request.paramModel);
+function modelInputBinding(input, agentType) {
+  const requested = input.requested?.trim();
+  if (!requested) return void 0;
+  const legacy = getModelAliases().get(requested.toLowerCase());
+  const legacyBinding = legacy ? parseTierBinding("legacy", legacy) : void 0;
+  const cheapCompatibility = requested === "@cheap" && agentType === "Explore" && input.source === "definition" ? parseTierBinding("cheap", getModelAliases().get("claude-haiku-4-5")) : void 0;
+  return requested.startsWith("@") ? tierBinding(requested.slice(1)) ?? cheapCompatibility : legacyBinding ? { ...legacyBinding, tier: requested } : void 0;
+}
+function prepareModelSelection(request) {
+  const input = modelInputs(request.agentType, request.definitionModel, request.paramModel)[0];
   let selection = { ...input, model: request.parentModel, outcome: "inherited" };
   if (input.requested) {
     const requested = input.requested.trim();
     const legacy = getModelAliases().get(requested.toLowerCase());
-    const legacyBinding = legacy ? parseTierBinding("legacy", legacy) : void 0;
-    const cheapCompatibility = requested === "@cheap" && request.agentType === "Explore" && input.source === "definition" ? parseTierBinding("cheap", getModelAliases().get("claude-haiku-4-5")) : void 0;
-    const binding = requested.startsWith("@") ? tierBinding(requested.slice(1)) ?? cheapCompatibility : legacyBinding ? { ...legacyBinding, tier: requested } : void 0;
+    const binding = modelInputBinding(input, request.agentType);
     if (requested.startsWith("@") || legacy) {
       const tier = requested.startsWith("@") ? requested.slice(1) : requested;
       const refs = binding?.kind === "routed" ? [binding.profile] : binding?.members ?? [];
@@ -1658,18 +1662,29 @@ function selectModel(request) {
       }
     }
   }
+  return selection;
+}
+function selectModel(request) {
+  const selection = prepareModelSelection(request);
+  if (typeof selection === "string") return selection;
   const scope = checkModelScope({
     model: selection.model,
     cwd: request.cwd,
     modelRegistry: request.registry,
-    callerSupplied: input.source === "param" && !selection.tierBinding && !selection.tier,
+    callerSupplied: selection.source === "param" && !selection.tierBinding && !selection.tier,
     agentLabel: request.agentLabel ?? request.agentType,
-    modelInput: input.requested,
+    modelInput: selection.requested,
     homeDir: request.homeDir
   });
   if (scope.kind === "error") return scope.message;
   if (scope.kind === "warn") selection.scopeWarning = scope.message;
   return selection;
+}
+function hasModelConfigurationError(request) {
+  const registered = request.registry.getAll?.() ?? [];
+  const getRegistered = () => registered;
+  const registry = { find: (provider, id) => registered.find((model) => model.provider === provider && model.id === id), getAll: getRegistered, getAvailable: getRegistered };
+  return typeof prepareModelSelection({ ...request, paramModel: void 0, registry }) === "string";
 }
 function describeSelection(selection, registry) {
   const admitted = selection?.tier?.kind === "routed" ? selection.tier.admitted : void 0;
@@ -3200,28 +3215,6 @@ function finalTurnError(session, startIndex) {
   }
   return void 0;
 }
-var STALE_CTX_RETRY_DELAYS_MS = [1e3, 3e3, 9e3];
-var STALE_CTX_RETRY_PROMPT = "Your previous step was interrupted by a session reload before it produced output. Continue the task from where you left off.";
-function sleep(ms, signal, clock) {
-  return new Promise((resolve6) => {
-    if (signal?.aborted) return resolve6();
-    const done = () => {
-      timer.cancel();
-      signal?.removeEventListener("abort", done);
-      resolve6();
-    };
-    const timer = clock.setTimeout(done, ms);
-    signal?.addEventListener("abort", done, { once: true });
-  });
-}
-async function retryStaleCtx(session, startIndex, signal, delays = STALE_CTX_RETRY_DELAYS_MS, clock = realClock) {
-  for (const delay of delays) {
-    if (!isStaleCtxError(finalTurnError(session, startIndex))) return;
-    await sleep(delay, signal, clock);
-    if (signal?.aborted) return;
-    await session.prompt(STALE_CTX_RETRY_PROMPT);
-  }
-}
 function mayFollowUp(session, startIndex, signal) {
   return !signal?.aborted && staleCtxOutcome(session, startIndex) === void 0;
 }
@@ -3256,7 +3249,7 @@ function staleCtxOutcome(session, startIndex) {
   const error = finalTurnError(session, startIndex);
   if (!isStaleCtxError(error)) return void 0;
   return {
-    failure: `interrupted by a session reload or replacement; the agent's model runtime went stale and retries did not recover it: ${error}`,
+    failure: `The agent's extension context became stale; the invalidation trigger is unknown. No successor context is available, so the run was not retried. Existing history is retained: ${error}`,
     partial: partialProgress(session, startIndex)
   };
 }
@@ -3634,7 +3627,6 @@ async function runAgent(ctx, type, prompt, options) {
   let structuredRetried = false;
   try {
     if (options.signal?.aborted !== true) await session.prompt(effectivePrompt);
-    await retryStaleCtx(session, startLen, options.signal, options.staleRetryDelaysMs, options.clock);
     if (run.steered && mayFollowUp(session, startLen, options.signal) && !endedWithReport(session, startLen)) {
       run.finalizing = true;
       const reported = await forceFinalReport(session, startLen, options.signal);
@@ -3671,7 +3663,6 @@ async function resumeAgent(session, prompt, options) {
   const run = observeRun(session, { ...options, maxTurns: resolveEffectiveMaxTurns(options.type, options.maxTurns) });
   try {
     if (options.signal?.aborted !== true) await session.prompt(prompt);
-    await retryStaleCtx(session, startLen, options.signal, options.staleRetryDelaysMs, options.clock);
     if (run.steered && mayFollowUp(session, startLen, options.signal) && !endedWithReport(session, startLen)) {
       run.finalizing = true;
       if (await forceFinalReport(session, startLen, options.signal)) run.aborted = false;
@@ -3936,6 +3927,12 @@ function relabelFromResponse(record, message) {
   if (!physical) return;
   record.invocation ??= {};
   Object.assign(record.invocation, physical);
+  const ran = message?.thinkingLevel;
+  if (ran) {
+    const requested = record.askedThinking;
+    record.invocation.thinking = ran;
+    record.invocation.requestedThinking = requested && requested !== ran ? requested : void 0;
+  }
   if ((record.modelTier?.kind === "routed" || record.modelTier?.kind === "static") && record.modelTier.answered !== physical.modelId) {
     record.modelTier = { ...record.modelTier, answered: physical.modelId };
     if (record.outputFile) appendModelTierEntry(record.outputFile, record.id, record.modelTier);
@@ -3978,7 +3975,8 @@ function describeEvicted(note) {
   const disclosure = modelSelectionNote(note);
   const fallback = disclosure ? `
 ${disclosure}` : "";
-  return `Agent "${note.id}" (${note.description}) ${note.status}, evicted after ${note.evictedAfterMin} min${where}${fallback}`;
+  const state2 = note.fromSavedSession ? `last recorded status: ${note.status}, recovered from saved parent session (no live registry record)` : `${note.status}, evicted after ${note.evictedAfterMin} min`;
+  return `Agent "${note.id}" (${note.description}) ${state2}${where}${fallback}`;
 }
 var MAX_TOMBSTONES = 100;
 function assertValidSpawnCwd(cwd) {
@@ -4558,7 +4556,6 @@ ${record.error}`);
     record.ranThisRun = record.status === "running";
     const promise = runAgent(ctx, type, prompt, {
       pi,
-      clock: this.clock,
       homeDir: options.homeDir ?? this.homeDir,
       agentId: id,
       model: options.modelSelection?.model,
@@ -4614,6 +4611,7 @@ ${record.error}`);
         if (session.model) {
           record.invocation ??= {};
           const requested = record.invocation.requestedThinking ?? record.invocation.thinking;
+          record.askedThinking = requested;
           Object.assign(
             record.invocation,
             record.modelTier?.kind === "routed" && record.modelTier.admitted ? describeSelection(options.modelSelection, ctx.modelRegistry) : isVirtualModel(session.model) ? describeVirtualModel(session.model) : describeModel(session.model)
@@ -4917,7 +4915,6 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
     try {
       record.ranThisRun = record.status === "running";
       this.settleOutcome(record, await resumeAgent(record.session, prompt, {
-        clock: this.clock,
         type: record.type,
         maxTurns: options?.maxTurns ?? record.invocation?.maxTurns,
         onTurnEnd: options?.onTurnEnd,
@@ -5030,7 +5027,6 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
     };
     record.ranThisRun = true;
     const promise = resumeAgent(record.session, prompt, {
-      clock: this.clock,
       type: record.type,
       maxTurns: options.maxTurns ?? record.invocation?.maxTurns,
       onTurnEnd: options.onTurnEnd,
@@ -5274,11 +5270,13 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
    * record settled in a manager this one never saw (#330).
    */
   rememberEvicted(note) {
+    const existing = this.evictedNotes.get(note.id);
+    if (note.fromSavedSession && existing && !existing.fromSavedSession) return;
     this.evictedNotes.delete(note.id);
     this.evictedNotes.set(note.id, note);
-    for (const oldest of this.evictedNotes.keys()) {
-      if (this.evictedNotes.size <= MAX_EVICTED_NOTES) break;
-      this.evictedNotes.delete(oldest);
+    if (this.evictedNotes.size > MAX_EVICTED_NOTES) {
+      const historical = [...this.evictedNotes].find(([, entry]) => entry.fromSavedSession)?.[0];
+      this.evictedNotes.delete(historical ?? this.evictedNotes.keys().next().value);
     }
   }
   /** Record that evicted `id` was reopened as `next`; bounded like the eviction notes. */
@@ -6638,7 +6636,6 @@ export {
   inChildSessionContext,
   runInChildSessionContext,
   bindChildResourceLoader,
-  realClock,
   isUnsafeName,
   isSymlink,
   safeReadFile,
@@ -6646,14 +6643,17 @@ export {
   cwdParam,
   resolveCwdParam,
   resolveAgentInvocationConfig,
+  realClock,
   tierDisclosure,
   parseTierBinding,
   setModelTiers,
   configuredTierNames,
+  getModelResolution,
   isTierDisclosure,
   setModelAliases,
   setAgentModels,
   setModelScopeProvider,
+  isVirtualModel,
   readEnabledModels,
   resolveEnabledModels,
   isScopeModelsEnabled,
@@ -6664,8 +6664,10 @@ export {
   describeBlock,
   QUOTA_RESTART_GRACE_MS,
   PARKED_RESUME_DELAY_MS,
-  modelRequest,
+  modelInputs,
+  modelInputBinding,
   selectModel,
+  hasModelConfigurationError,
   describeSelection,
   modelIdentityNote,
   modelSelectionNote,
@@ -6752,4 +6754,4 @@ export {
   RESULT_MAX_CHARS,
   ConversationViewer
 };
-//# sourceMappingURL=chunk-MSGGFB5Q.ts.map
+//# sourceMappingURL=chunk-TJQBFL4S.ts.map

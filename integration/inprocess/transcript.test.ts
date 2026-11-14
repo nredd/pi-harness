@@ -8,7 +8,7 @@ import {
 	createLsTool,
 	type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage, type Harness } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage, fauxToolCall, type Harness } from "@earendil-works/pi-coding-agent/testing";
 import { createInteractiveHarness, type InteractiveHarness } from "@earendil-works/pi-coding-agent/testing/interactive";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, expect, it } from "vitest";
@@ -242,4 +242,138 @@ it("all real stack entries settle into one expandable row", async () => {
 			`${entry.key}\n${collapsed.rows.join("\n")}`,
 		).toBe(false);
 	}
+});
+
+/** Native settings UI, deliberately failing until the selected released core contains nredd/pi#32. */
+async function timestamps(enabled: boolean): Promise<void> {
+	host.input("/settings");
+	host.input("\r");
+	await host.settle();
+	host.input("Show timestamps");
+	await host.settle();
+	const row = host.viewport().find((line) => /Show timestamps\s+(true|false)/.test(line));
+	expect(
+		row,
+		"Requires a released core containing nredd/pi#32 (issue #30); do not bypass the core identity gate",
+	).toBeDefined();
+	if (!row?.includes(String(enabled))) {
+		host.input("\r");
+		await host.settle();
+	}
+	host.input("\x1b");
+	await host.settle();
+}
+
+/** Independent local-time oracle, using ICU rather than the core formatter under test. */
+function expectedTimestamp(iso: string): string {
+	const date = new Date(iso);
+	const local = new Intl.DateTimeFormat("sv-SE", {
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit",
+		second: "2-digit",
+		hourCycle: "h23",
+	}).format(date);
+	const zone = new Intl.DateTimeFormat("en-US", { timeZoneName: "longOffset" })
+		.formatToParts(date)
+		.find((part) => part.type === "timeZoneName")?.value;
+	if (!zone) throw new Error("Missing viewer-local UTC offset");
+	return `${local} ${zone === "GMT" ? "+00:00" : zone.replace(/^GMT/, "")}`;
+}
+
+/** Assert the complete instant in the owning entry's leading rule, skipping only renderer padding. */
+function timestampBefore(pattern: RegExp, iso: string): void {
+	const rows = host.viewport();
+	const row = rows.findIndex((line) => pattern.test(line));
+	expect(row, rows.join("\n")).toBeGreaterThan(0);
+	let separator = row - 1;
+	while (separator >= 0 && !rows[separator]?.trim()) separator--;
+	const prefix = `┄ ${expectedTimestamp(iso)}`;
+	expect(rows[separator]?.slice(0, prefix.length)).toBe(prefix);
+	expect(rows[separator]?.slice(prefix.length)).toMatch(/^┄+$/);
+}
+
+// nredd/pi#30, implemented by PR #32: real extension rows share the native timestamp seam.
+it.each([
+	[80, 24],
+	[120, 40],
+])("recorded timestamps preserve real extension rows at %ix%i", async (columns, rows) => {
+	stack = await GoalStack.create();
+	const [child] = stack.registerPhysical([{ provider: "kid", id: "child" }]);
+	if (!child) throw new Error("Missing child provider");
+	const h = await start(columns, rows, [
+		await stack.subagents(),
+		stack.router([{ provider: "kid", id: "child" }]),
+		await loadFork("rpiv-todo"),
+	]);
+	const model = child.getModel();
+	h.session.modelRuntime.registerProvider(model.provider, {
+		baseUrl: model.baseUrl,
+		apiKey: "faux",
+		api: child.api,
+		models: child.models,
+	});
+	child.setResponses([fauxAssistantMessage("CHILD TIMESTAMP PROOF")]);
+	await timestamps(true);
+	h.setResponses([
+		fauxAssistantMessage([fauxToolCall("todo", { action: "create", subject: "Timestamped task" })], {
+			timestamp: Date.parse("2000-06-01T12:00:00Z"),
+			stopReason: "toolUse",
+		}),
+		fauxAssistantMessage(
+			[
+				fauxToolCall("Agent", {
+					subagent_type: "general-purpose",
+					description: "timestamp child",
+					prompt: "work",
+					model: "kid/child",
+					run_in_background: false,
+				}),
+			],
+			{ timestamp: Date.parse("2001-06-01T12:00:00Z"), stopReason: "toolUse" },
+		),
+		fauxAssistantMessage(FINAL, { timestamp: Date.parse("2002-06-01T12:00:00Z") }),
+	]);
+	await run(h);
+	const labelRows = () =>
+		host.viewport().filter((line) => /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{2}:\d{2}/.test(line));
+	const assertCallContexts = () => {
+		timestampBefore(/^(?:▸ |▾ | {2}).*todo\b/i, "2000-06-01T12:00:00Z");
+		timestampBefore(/^(?:▸ |▾ ).*Agent\b/, "2001-06-01T12:00:00Z");
+		timestampBefore(/^│ ALL ROWS DONE$/, "2002-06-01T12:00:00Z");
+	};
+	assertCallContexts();
+	expect(labelRows(), host.viewport().join("\n")).toHaveLength(4);
+	const agentRow = () => host.viewport().findIndex((line) => /^▸ .*timestamp child/.test(line));
+	expect(agentRow(), host.viewport().join("\n")).toBeGreaterThan(0);
+	await click(agentRow());
+	expect(host.viewport().some((line) => /^▾ .*timestamp child/.test(line))).toBe(true);
+	await timestamps(false);
+	expect(labelRows()).toHaveLength(0);
+	expect(host.viewport().some((line) => /^▾ .*timestamp child/.test(line))).toBe(true);
+	await timestamps(true);
+	expect(host.viewport().some((line) => /^▾ .*timestamp child/.test(line))).toBe(true);
+	// Count every timestamp, including current-time nested labels, with the expanded transcript visible.
+	host.resize(columns, 90);
+	await host.settle();
+	assertCallContexts();
+	expect(labelRows(), host.viewport().join("\n")).toHaveLength(4);
+	host.input("\x0f");
+	await host.settle();
+	host.input("\x0f");
+	await host.settle();
+	host.input("/reload");
+	host.input("\r");
+	await host.settle();
+	host.resize(columns, rows);
+	await host.settle();
+	assertCallContexts();
+	expect(labelRows(), host.viewport().join("\n")).toHaveLength(4);
+	expect(h.session.getLastAssistantText()).toBe(FINAL);
+	host.resize(40, rows);
+	await host.settle();
+	assertCallContexts();
+	expect(labelRows()).toHaveLength(4);
 });

@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import os
 import re
+import runpy
 import shlex
 import shutil
 import subprocess
+import sys
 import textwrap
+from enum import StrEnum
 from pathlib import Path
 from typing import cast
 
@@ -21,7 +24,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
-CLEANUP = ROOT / "scripts" / "wsl2_cleanup.sh"
+SCRIPTS = ROOT / "scripts"
 
 
 def workflow_text() -> str:
@@ -66,123 +69,11 @@ def test_wsl2_workflow_fails_closed_on_platform_or_mount_mismatch() -> None:
     assert "drvfs|''" in setup
 
 
-def run_cleanup(
-    tmp_path: Path,
-    status: int,
-    command_dir: Path | None = None,
-) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
-    """Run the workflow's real cleanup trap against a disposable harness worktree.
-
-    Parameters:
-        tmp_path: Root for the disposable worktree and diagnostics directory.
-        status: Harness exit status to preserve through the cleanup trap.
-        command_dir: Optional directory of failing command fixtures prepended to `PATH`.
-
-    Returns:
-        tuple[CompletedProcess[str], Path, Path]: Shell outcome, worktree, and diagnostics paths.
-    """
-    worktree = tmp_path / "worktree"
-    artifacts = worktree / "integration" / "artifacts"
-    artifacts.mkdir(parents=True)
-    (artifacts / "wsl2-personal.xml").write_text("<testsuite/>\n", encoding="utf-8")
-    diagnostics = tmp_path / "wsl2-diagnostics"
-    diagnostics.mkdir()
-    script = "\n".join(
-        [
-            "set -euo pipefail",
-            f"source {shlex.quote(str(CLEANUP))}",
-            f"worktree={shlex.quote(str(worktree))}",
-            f"diagnostics_dir={shlex.quote(str(diagnostics))}",
-            "trap cleanup_wsl2_worktree EXIT",
-            f"exit {status}",
-        ]
-    )
-    env = dict(os.environ)
-    if command_dir is not None:
-        env["PATH"] = f"{command_dir}{os.pathsep}{env['PATH']}"
-    completed = subprocess.run(
-        ["/bin/bash", "-c", script], capture_output=True, check=False, env=env, text=True
-    )
-    return completed, worktree, diagnostics
-
-
-def write_failing_command(directory: Path, name: str) -> None:
-    """Create a `PATH` fixture that causes one cleanup command to fail.
-
-    Parameters:
-        directory: Fixture command directory.
-        name: Command name intercepted by the fixture.
-
-    Returns:
-        None: The executable fixture is created.
-    """
-    command = directory / name
-    command.write_text("#!/bin/sh\nexit 92\n", encoding="utf-8")
-    command.chmod(0o755)
-
-
-def test_wsl2_cleanup_preserves_failure_artifacts_before_deleting_worktree(tmp_path: Path) -> None:
-    """Copy bounded artifacts before removing a failed harness worktree."""
-    completed, worktree, diagnostics = run_cleanup(tmp_path, 47)
-    assert completed.returncode == 47
-    assert not worktree.exists()
-    assert (diagnostics / "artifacts" / "wsl2-personal.xml").read_text(encoding="utf-8") == "<testsuite/>\n"
-    assert (diagnostics / "capture-status.txt").read_text(
-        encoding="utf-8"
-    ) == "WSL harness exited with status 47.\n"
-
-
-def test_wsl2_cleanup_preserves_success_status_and_artifacts(tmp_path: Path) -> None:
-    """Keep normal cleanup successful after retaining the bounded diagnostics."""
-    completed, worktree, diagnostics = run_cleanup(tmp_path, 0)
-    assert completed.returncode == 0
-    assert not worktree.exists()
-    assert (diagnostics / "artifacts" / "wsl2-personal.xml").is_file()
-    assert (diagnostics / "capture-status.txt").read_text(
-        encoding="utf-8"
-    ) == "WSL harness exited with status 0.\n"
-
-
-def test_wsl2_cleanup_retains_harness_failure_when_copying_artifacts_fails(tmp_path: Path) -> None:
-    """Do not replace the harness failure when diagnostic preservation fails."""
-    commands = tmp_path / "commands"
-    commands.mkdir()
-    write_failing_command(commands, "cp")
-    completed, worktree, diagnostics = run_cleanup(tmp_path, 47, commands)
-    assert completed.returncode == 47
-    assert "WARNING: could not preserve WSL failure artifacts" in completed.stderr
-    assert not worktree.exists()
-    assert not (diagnostics / "artifacts" / "wsl2-personal.xml").exists()
-    assert (diagnostics / "capture-status.txt").read_text(
-        encoding="utf-8"
-    ) == "WSL harness exited with status 47.\n"
-
-
-def test_wsl2_cleanup_retains_harness_failure_when_worktree_removal_fails(tmp_path: Path) -> None:
-    """Do not replace the harness failure when disposable-worktree removal fails."""
-    commands = tmp_path / "commands"
-    commands.mkdir()
-    write_failing_command(commands, "rm")
-    completed, worktree, diagnostics = run_cleanup(tmp_path, 47, commands)
-    assert completed.returncode == 47
-    assert "WARNING: could not remove disposable WSL worktree" in completed.stderr
-    assert worktree.is_dir()
-    assert (diagnostics / "artifacts" / "wsl2-personal.xml").is_file()
-    assert (diagnostics / "capture-status.txt").read_text(
-        encoding="utf-8"
-    ) == "WSL harness exited with status 47.\n"
-    shutil.rmtree(worktree)
-
-
 def test_wsl2_workflow_preserves_and_uploads_bounded_diagnostics() -> None:
     """Keep the executable cleanup and bounded upload attached to the native job."""
     workflow = workflow_text()
-    capture = (ROOT / "scripts/wsl2_capture.sh").read_text()
     assert "wsl2-diagnostics" in workflow
-    assert 'source "$worktree/scripts/wsl2_cleanup.sh"' in capture
-    assert "trap finish_capture EXIT" in capture
-    assert capture.index("trap finish_capture EXIT") < capture.index("for name in")
-    assert "cleanup_wsl2_worktree" in capture
+    assert not (SCRIPTS / "wsl2_cleanup.sh").exists()
     assert workflow.count("cleanup: cleanup") == 2
     # Both cleanup captures see timeouts and cancels, which leave no guest first-failure record.
     assert workflow.count("cleanup: cleanup\n          job-status: ${{ job.status }}\n") == 2
@@ -366,7 +257,8 @@ def test_wsl2_workflow_reuses_the_release_and_stack_entrypoints() -> None:
     assert "--stack stacks/local.json --runtime bun-standalone" in workflow
 
 
-INSTALL_GH = CLEANUP.parent / "install_gh_linux.sh"
+INSTALL_GH = SCRIPTS / "install_gh_linux.sh"
+INSTALL_GH_PY = INSTALL_GH.with_suffix(".py")
 
 
 def test_wsl2_workflow_bootstraps_gh_and_verifies_overrides_before_npm_ci() -> None:
@@ -376,7 +268,7 @@ def test_wsl2_workflow_bootstraps_gh_and_verifies_overrides_before_npm_ci() -> N
     wrapper = (ROOT / "scripts/wsl2_shell.ps1").read_text()
     assert "GH_TOKEN: ${{ github.token }}" in workflow
     assert "GH_TOKEN/u" in wrapper
-    assert "Core Gitlink:" in (ROOT / "scripts/wsl2_capture.sh").read_text()
+    assert "Core Gitlink:" in (ROOT / "scripts/wsl2_capture.py").read_text(encoding="utf-8")
     action = (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
     assert "additional-packages" not in action
     assert "python3" in (ROOT / "scripts/wsl2_apt.sh").read_text().split("packages=(")[1].splitlines()[0]
@@ -386,8 +278,10 @@ def test_wsl2_workflow_bootstraps_gh_and_verifies_overrides_before_npm_ci() -> N
     assert "env -u GH_TOKEN npm ci --ignore-scripts" in makefile
     assert "env -u GH_TOKEN uv sync --locked" in makefile
     assert "cd integration && uv sync --locked --python" in workflow
-    verify = workflow.index("python3 -m harness.release --verify-root-overrides --root .")
-    npm_ci = workflow.index("npm ci --ignore-scripts")
+    # Inspect the stack's guest commands, not an unrelated native Windows npm installation.
+    commands = "\n".join(step.get("run", "") for step in yaml.safe_load(workflow)["jobs"]["stack"]["steps"])
+    verify = commands.index("python3 -m harness.release --verify-root-overrides --root .")
+    npm_ci = commands.index("npm ci --ignore-scripts")
     assert verify < npm_ci
     assert "echo $GH_TOKEN" not in workflow
 
@@ -485,12 +379,16 @@ def test_install_gh_downloads_the_asset_of_its_architecture(tmp_path: Path, mach
     assert completed.returncode == 1
     assert f"for gh_{GH_VERSION}_{asset}.tar.gz; refusing to install" in completed.stderr
     assert (tmp_path / "sha256sum-ran").is_file()
-    pins = re.findall(r"^GH_SHA256_(AMD64|ARM64)=([0-9a-f]{64})$", INSTALL_GH.read_text(), re.MULTILINE)
+    pins = re.findall(
+        r'^GH_SHA256_(AMD64|ARM64) = "([0-9a-f]{64})"$', INSTALL_GH_PY.read_text(), re.MULTILINE
+    )
     assert sorted(name for name, _ in pins) == ["AMD64", "ARM64"]
     assert len({digest for _, digest in pins}) == 2
 
 
-GH_VERSION = cast("re.Match[str]", re.search(r"^GH_VERSION=(\S+)$", INSTALL_GH.read_text(), re.MULTILINE))[1]
+GH_VERSION = cast(
+    "re.Match[str]", re.search(r'^GH_VERSION = "(\S+)"$', INSTALL_GH_PY.read_text(), re.MULTILINE)
+)[1]
 
 
 def test_install_gh_requires_one_directory_argument() -> None:
@@ -708,7 +606,8 @@ def test_guest_setup_leaves_no_external_command_unbounded() -> None:
     for label in ("copy checkout", "extract node", "install npm", "install bun", "install uv", "install gh"):
         assert f'bounded "{label}" ' in setup
     assert 'bounded "install owned tools" 90 ' in setup
-    assert "--connect-timeout 15 --max-time 45" in (ROOT / "scripts/install_wsl_owned_tools.sh").read_text()
+    owned_tools = (ROOT / "scripts/install_wsl_owned_tools.py").read_text(encoding="utf-8")
+    assert 'CURL_BOUNDS = ["--connect-timeout", "15", "--max-time", "45"]' in owned_tools
 
 
 APT = ROOT / "scripts" / "wsl2_apt.sh"
@@ -724,6 +623,92 @@ PACKAGES = (
 APT_FLAGS = "install --yes --no-install-recommends"
 
 
+class DnsToolMode(StrEnum):
+    """Diagnostic outcomes available to the isolated apt failure fixtures."""
+
+    FAILED = "failed"
+    TIMEOUT = "timeout"
+    MISSING = "missing"
+    RESOLVED = "resolved"
+    INVALID_CLASSIFICATION = "invalid-classification"
+    SYSTEM_CLASSIFICATION = "system-classification"
+
+
+def test_dns_timeout_fixture_is_import_safe() -> None:
+    """Import the timeout fixture without starting a subprocess.
+
+    Returns:
+        None: The fixture exposes its main function without executing it.
+    """
+    namespace = runpy.run_path(str(ROOT / "scripts/tests/fixtures/wsl_timeout.py"))
+    assert callable(namespace["main"])
+
+
+def dns_failure_stubs(commands: Path, tools: DnsToolMode, log: Path) -> dict[str, str]:
+    """Build isolated DNS failure tools with real timeout and shell processes.
+
+    Parameters:
+        commands (Path): Executable directory, without inherited host resolver tools.
+        tools (DnsToolMode): Diagnostic fixture outcome mode.
+        log (Path): Apt invocation log, proving no install occurs.
+    Returns:
+        dict[str, str]: Fixture bodies; supporting real tools are symlinked separately.
+    """
+    timeout_fixture = ROOT / "scripts/tests/fixtures/wsl_timeout.py"
+    stubs: dict[str, str] = {}
+    stubs[DnsToolMode.TIMEOUT] = textwrap.dedent(
+        f"""\
+        #!/bin/sh
+        exec {shlex.quote(sys.executable)} {shlex.quote(str(timeout_fixture))} "$@"
+        """
+    )
+    stubs["apt-get"] = textwrap.dedent(
+        f"""\
+        #!/bin/sh
+        printf "%s\\n" "$*" >> {shlex.quote(str(log))}
+        echo "Could not resolve fixture mirror" >&2
+        exit 100
+        """
+    )
+    for name in ("bash", "mkdir", "sed", "grep"):
+        binary = shutil.which(name)
+        assert binary is not None
+        (commands / name).symlink_to(binary)
+    if tools != DnsToolMode.MISSING:
+        body = {
+            DnsToolMode.FAILED: 'echo "192.0.2.19 private.invalid SECRET=fixture"; '
+            'echo "192.0.2.19 private.invalid SECRET=fixture" >&2; exit 2',
+            DnsToolMode.TIMEOUT: "exec /bin/sleep 30",
+            DnsToolMode.RESOLVED: 'echo "192.0.2.19 private.invalid SECRET=fixture"; exit 0',
+            DnsToolMode.INVALID_CLASSIFICATION: "exit 2",
+            DnsToolMode.SYSTEM_CLASSIFICATION: "exit 2",
+        }[tools]
+        for name in ("getent", "resolvectl"):
+            stubs[name] = textwrap.dedent(
+                f"""\
+                #!/bin/sh
+                {body}
+                """
+            )
+        classification = (
+            "private.invalid 192.0.2.19 SECRET=fixture"
+            if tools == DnsToolMode.INVALID_CLASSIFICATION
+            else "loopback-only"
+        )
+        if tools == DnsToolMode.SYSTEM_CLASSIFICATION:
+            awk = shutil.which("awk")
+            assert awk is not None
+            (commands / "awk").symlink_to(awk)
+        else:
+            stubs["awk"] = textwrap.dedent(
+                f"""\
+                #!/bin/sh
+                printf '%s\\n' {shlex.quote(classification)}
+                """
+            )
+    return stubs
+
+
 def run_apt(
     tmp_path: Path,
     fail_mirror: str | None = None,
@@ -735,6 +720,9 @@ def run_apt(
     extra_debs: tuple[str, ...] = (),
     tmpdir: Path | None = None,
     broken_cache_copy: bool = False,
+    install_status: int = 0,
+    dns_failure: bool = False,
+    dns_tools: DnsToolMode = DnsToolMode.FAILED,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     """Run the real apt script with stub `id`, `timeout`, `apt-get` and `ps`.
 
@@ -748,6 +736,10 @@ def run_apt(
         tmpdir (Path | None): `TMPDIR` for the script's scratch directory.
         stale (bool): Seed the host cache with a .deb of a superseded version.
         broken_cache_copy (bool): Model a host cache write failing (`cp` into `cache/` exits 1).
+        install_status (int): Offline installation exit status, after successful fetches.
+        dns_failure (bool): Fail both mirrors with captured DNS errors; use real diagnostic bounds.
+        dns_tools (DnsToolMode): Diagnostic fixture mode: failed, timeout, missing, resolved,
+            system-classification or invalid-classification.
 
     Returns:
         tuple[subprocess.CompletedProcess[str], Path, Path]: Outcome, the sources file and the stub call log.
@@ -794,9 +786,21 @@ def run_apt(
         + f"uris=$(grep -m1 URIs {quoted})\n"
         + f'case "$1" in update) echo "$uris" > {quoted_lists}; exit 0 ;; esac\n'
         + f'case "$*" in *--download-only*) touch "$WSL_APT_ARCHIVES/{fetched}"; exit 0 ;; esac\n'
-        + f'case "$1" in install) [ "$uris" = "$(cat {quoted_lists})" ] || {no_candidate} ;; esac\n'
+        + f'case "$1" in install) [ "$uris" = "$(cat {quoted_lists})" ] || {no_candidate}; '
+        + f"exit {install_status} ;; esac\n"
         + "exit 0\n",
     }
+    if dns_failure:
+        stubs |= dns_failure_stubs(commands, dns_tools, log)
+    else:
+        # Other apt fixtures must never reach the host resolver either.
+        unavailable = textwrap.dedent(
+            """\
+            #!/bin/sh
+            exit 2
+            """
+        )
+        stubs |= dict.fromkeys(("getent", "resolvectl"), unavailable)
     if broken_cache_copy:
         # Only writes into the host cache fail; seeding the archives from it still works.
         last = 'for a in "$@"; do t=$a; done\n'
@@ -811,10 +815,17 @@ def run_apt(
         "WSL_APT_CONF": str(tmp_path / "99-pi-ci"),
         "WSL_APT_ARCHIVES": str(tmp_path / "archives"),
         "WSL_APT_CACHE": str(cache),
+        "WSL_APT_DIAGNOSTICS": "",
     }
     if tmpdir is not None:
         env["TMPDIR"] = str(tmpdir)
-    result = subprocess.run(["/bin/bash", str(APT)], env=env, capture_output=True, check=False, text=True)
+    if dns_failure:
+        env["PATH"] = str(commands)
+        env["WSL_APT_CACHE"] = ""
+        env["WSL_APT_DIAGNOSTICS"] = str(tmp_path / "apt-dns.txt")
+    result = subprocess.run(
+        ["/bin/bash", str(APT)], env=env, capture_output=True, check=False, text=True, timeout=30
+    )
     return result, sources, log
 
 
@@ -859,7 +870,8 @@ def test_apt_debs_are_cached_by_the_host_and_keyed_by_script_and_week() -> None:
     prepare = next(step for step in steps if step.get("name") == "Assert WSL2 and prepare guest")
     prepare_env = cast("dict[str, str]", prepare["env"])
     assert prepare_env["WSL_APT_CACHE"] == "${{ steps.apt-cache.outputs.dir }}"
-    assert "$env:WSLENV = 'WSL_APT_CACHE/p'" in prepare["run"]
+    assert "$env:WSLENV = 'WSL_APT_CACHE/p:WSL_APT_DIAGNOSTICS/p'" in prepare["run"]
+    assert "wsl2-diagnostics/apt-dns.txt" in prepare["run"]
 
 
 def test_apt_prerequisites_restore_and_refill_the_host_cache(tmp_path: Path) -> None:
@@ -931,6 +943,117 @@ def test_apt_prerequisites_name_a_hang_on_both_mirrors(tmp_path: Path) -> None:
     assert not log.exists()
 
 
+@pytest.mark.parametrize("tools", list(DnsToolMode))
+def test_apt_dns_failure_retains_only_bounded_allowlisted_evidence(
+    tmp_path: Path, tools: DnsToolMode
+) -> None:
+    """Replay both-mirror failure through the real trap, without DNS or root installation.
+
+    Parameters:
+        tmp_path (Path): Disposable apt filesystem and host-visible artifact destination.
+        tools (DnsToolMode): Optional tool behavior, including actual sleeping processes.
+    Returns:
+        None: Original failure survives; only safe diagnostic labels reach logs/artifacts.
+    """
+    result, _, log = run_apt(tmp_path, dns_failure=True, dns_tools=tools)
+    assert result.returncode == 1, result.stderr
+    assert log.read_text().splitlines() == ["update", "update"]
+    assert result.stderr.count("Could not resolve fixture mirror") == 2
+    assert "every mirror failed" in result.stderr
+    report = (tmp_path / "apt-dns.txt").read_text()
+    assert report in result.stdout
+    assert "failure-time guest resolver evidence" in report
+    assert "capture complete" in report
+    assert not any(
+        value in result.stdout + result.stderr + report
+        for value in ("192.0.2.19", "private.invalid", "SECRET")
+    )
+    classification = (
+        "unavailable"
+        if tools in (DnsToolMode.MISSING, DnsToolMode.INVALID_CLASSIFICATION)
+        else "loopback-only"
+    )
+    if tools == DnsToolMode.SYSTEM_CLASSIFICATION:
+        assert re.search(
+            r"configured-resolver=(?:loopback-only|nonloopback-present|none|unavailable)\n", report
+        )
+    else:
+        assert f"configured-resolver={classification}" in report
+    if tools == DnsToolMode.MISSING:
+        assert "getent=unavailable" in report
+        assert "resolvectl=unavailable" in report
+    else:
+        outcome = (
+            DnsToolMode.FAILED
+            if tools in (DnsToolMode.INVALID_CLASSIFICATION, DnsToolMode.SYSTEM_CLASSIFICATION)
+            else tools
+        )
+        for tool in ("getent", "resolvectl"):
+            for name in ("azure.archive.ubuntu.com", "archive.ubuntu.com"):
+                assert f"{tool} {name}={outcome}" in report
+
+
+def test_apt_dns_capture_preserves_an_offline_install_failure_status(tmp_path: Path) -> None:
+    """Keep a non-1 apt status and original error, without retrying a failed offline install.
+
+    Parameters:
+        tmp_path (Path): Disposable apt filesystem.
+    Returns:
+        None: The original status and error survive diagnostic capture.
+    """
+    result, _, log = run_apt(tmp_path, install_status=47)
+    assert result.returncode == 47
+    assert "FAILED: apt-get install (status 47)" in result.stderr
+    assert len(log.read_text().splitlines()) == 3
+    assert "capture complete" in result.stdout
+
+
+def test_apt_success_does_not_collect_dns_evidence(tmp_path: Path) -> None:
+    """Successful setup adds no resolver probes or diagnostic artifacts.
+
+    Parameters:
+        tmp_path (Path): Disposable apt filesystem.
+    Returns:
+        None: Successful setup emits no DNS diagnostics.
+    """
+    result, _, _ = run_apt(tmp_path)
+    assert result.returncode == 0
+    assert "wsl2-dns:" not in result.stdout + result.stderr
+    assert not (tmp_path / "apt-dns.txt").exists()
+
+
+def test_apt_dns_artifact_write_failure_cannot_mask_original_failure(tmp_path: Path) -> None:
+    """An unwritable artifact destination preserves log diagnostics and the apt failure.
+
+    Parameters:
+        tmp_path (Path): Disposable filesystem containing a directory instead of an artifact file.
+    Returns:
+        None: Log diagnostics and the original failure remain available.
+    """
+    (tmp_path / "apt-dns.txt").mkdir()
+    result, _, log = run_apt(tmp_path, dns_failure=True)
+    assert result.returncode == 1
+    assert log.read_text().splitlines() == ["update", "update"]
+    assert "artifact unavailable" in result.stderr
+    assert "capture complete" in result.stdout
+
+
+def test_apt_dns_blocked_artifact_write_is_bounded_without_masking_failure(tmp_path: Path) -> None:
+    """Even opening a FIFO with no reader cannot hang the apt failure trap.
+
+    Parameters:
+        tmp_path (Path): Disposable filesystem containing a FIFO instead of an artifact file.
+    Returns:
+        None: The outer capture deadline stops blocked IO and preserves the apt failure.
+    """
+    os.mkfifo(tmp_path / "apt-dns.txt")
+    result, _, log = run_apt(tmp_path, dns_failure=True)
+    assert result.returncode == 1
+    assert log.read_text().splitlines() == ["update", "update"]
+    assert "every mirror failed" in result.stderr
+    assert "DNS diagnostics unavailable or incomplete" in result.stderr
+
+
 SMOKE = ROOT / "scripts" / "wsl2_smoke.sh"
 
 
@@ -949,6 +1072,8 @@ def native_guest(tmp_path: Path, versions: dict[str, str]) -> tuple[dict[str, st
     (workspace / ".git").mkdir(parents=True)
     (workspace / "scripts").mkdir()
     shutil.copy(INSTALL_GH, workspace / "scripts" / "install_gh_linux.sh")
+    shutil.copy(INSTALL_GH_PY, workspace / "scripts" / "install_gh_linux.py")
+    shutil.copy(INSTALL_GH_PY.with_name("wsl2_exec.py"), workspace / "scripts" / "wsl2_exec.py")
     (workspace / ".node-version").write_text("22.0.0\n", encoding="utf-8")
     (workspace / ".bun-version").write_text("1.4.4\n", encoding="utf-8")
     (workspace / "package.json").write_text("{}", encoding="utf-8")

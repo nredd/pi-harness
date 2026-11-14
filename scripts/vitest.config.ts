@@ -15,6 +15,7 @@ export default defineConfig({
 			"scripts/check-biome-paths.test.mjs",
 			"scripts/coverage-configs.test.ts",
 			"scripts/import_audit.test.ts",
+			"scripts/merge-pr.test.ts",
 			"scripts/router_contract.test.mjs",
 			"scripts/run-vitest.test.ts",
 		],

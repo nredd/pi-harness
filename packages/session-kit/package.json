@@ -39,14 +39,14 @@
     "format": "biome check --write src/ test/",
     "typecheck": "tsc --noEmit",
     "build:stats-export": "esbuild src/stats/cli.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/pi-stats-export.mjs",
-    "test": "npm run build:stats-export && JITI_FS_CACHE=false vitest run --coverage --exclude test/scenarios/home-injection.test.ts && node ../../scripts/run-vitest.ts node test/scenarios/home-injection.test.ts --coverage.enabled=false",
-    "test:bun": "JITI_FS_CACHE=false bun test test/scenarios --path-ignore-patterns=**/home-injection.test.ts --coverage --coverage-reporter=text --coverage-reporter=lcov --coverage-dir=coverage/bun && node ../../scripts/run-vitest.ts bun test/scenarios/home-injection.test.ts --coverage.enabled=false",
+    "test": "npm run build:stats-export && node ../../scripts/run-vitest.ts node --coverage --exclude test/scenarios/home-injection.test.ts && node ../../scripts/run-vitest.ts node test/scenarios/home-injection.test.ts --coverage.enabled=false",
+    "test:bun": "node ../../scripts/run-vitest.ts bun --exclude test/scenarios/home-injection.test.ts && node ../../scripts/run-vitest.ts bun test/scenarios/home-injection.test.ts --coverage.enabled=false",
     "check": "npm run lint && npm run typecheck && npm run test && npm run test:bun"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
-    "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-coding-agent-1.3.0.tgz",
-    "@earendil-works/pi-tui": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.10/earendil-works-pi-tui-1.3.0.tgz",
+    "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-coding-agent-1.3.0.tgz",
+    "@earendil-works/pi-tui": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-tui-1.3.0.tgz",
     "@types/node": "26.6.5",
     "@vitest/coverage-v8": "5.0.3",
     "@xterm/headless": "5.5.0",

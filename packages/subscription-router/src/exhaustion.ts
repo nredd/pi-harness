@@ -8,7 +8,7 @@
  * same scope was re-confirmed.
  */
 
-import { modelMatchesFamily, type UsageDecision } from "./usage.js";
+import { modelMatchesFamily, type UsageDecision, type UsageSnapshot } from "./usage.js";
 
 const BACKOFF_BASE_MS = 5 * 60_000;
 const BACKOFF_CAP_MS = 60 * 60_000;
@@ -73,6 +73,25 @@ export class ExhaustionTracker {
 	active(): ExhaustionMark[] {
 		const now = this.now();
 		return [...this.marks.values()].filter((mark) => mark.until > now);
+	}
+
+	/** Reconcile only an exactly matching window/scope from fresh authoritative non-exhausted evidence. */
+	reconcile(snapshot: UsageSnapshot): void {
+		if (snapshot.status !== "available" || snapshot.expiresAt <= this.now()) return;
+		for (const [key, mark] of this.marks) {
+			if (mark.provider !== snapshot.provider) continue;
+			if (
+				snapshot.windows.some(
+					(window) =>
+						window.name === mark.window &&
+						window.usedPercent < 100 &&
+						window.scope === (mark.families?.length ? "model" : "provider") &&
+						scopeKey(snapshot.provider, window.scope === "model" ? window.families : undefined) ===
+							scopeKey(mark.provider, mark.families),
+				)
+			)
+				this.marks.delete(key);
+		}
 	}
 
 	/** Forget every mark, e.g. from `/router reset`. */

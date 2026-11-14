@@ -22,9 +22,12 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxText, fauxToolCall, getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
+import { createCodemodeExtension } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { encodeCwd } from "../../src/output-file.js";
 import { readJournal } from "../../src/workflow/journal.js";
+import { workflowConcurrency } from "../../src/workflow/runtime.js";
+import { hermeticDir } from "../helpers/boot-extension.js";
 import { runPrintMode, toolCallsNamed, toolResultsNamed } from "../helpers/print-mode-runner.js";
 
 /**
@@ -86,6 +89,97 @@ async function waitFor(predicate: () => boolean, timeoutMs = 20_000): Promise<bo
 }
 
 describe("Workflow end to end", () => {
+  it.each([
+    { nested: false, stop: false },
+    { nested: true, stop: false },
+    { nested: false, stop: true },
+    { nested: true, stop: true },
+  ])("retains background ownership after parent return (codemode=$nested, stop=$stop)", async ({ nested, stop }) => {
+    const project = hermeticDir({ settings: { workflowsEnabled: true } });
+    const cwd = project.dir;
+    const input = join(cwd, "input.txt");
+    writeFileSync(input, "WORKFLOW-READ-RESULT");
+    // Seventeen items always exceed the runtime's maximum sixteen permits.
+    const items = Array.from({ length: stop ? 17 : 15 }, (_, index) => ({ marker: `ITEM-${index}` }));
+    const script = [
+      'export const meta = { name: "background-owner", description: "synthetic fanout" };',
+      'return await pipeline(args.items, async item => agent(item.marker + " read " + args.input, { label: item.marker, model: "faux/faux-1" }));',
+    ].join("\n");
+    const params = { script, args: { items, input } };
+    const readResults: string[] = [];
+    let release!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    let stopId: string | undefined;
+    let stopSent = false;
+    let run: Awaited<ReturnType<typeof runPrintMode>> | undefined;
+    try {
+      run = await runPrintMode({
+        prompt: "launch synthetic fanout",
+        cwd,
+        live: false,
+        hold: false,
+        maxModelCalls: 128,
+        extensionFactories: [createCodemodeExtension({ mode: "on" })],
+        onParentSession: session => session.setActiveToolsByName([...session.getActiveToolNames(), "codemode"]),
+        respond: async context => {
+          const text = asText(context);
+          if (!isParentContext(context)) {
+            if (!text.includes("WORKFLOW-READ-RESULT")) return fauxToolCall("read", { path: input });
+            readResults.push(text);
+            await barrier;
+            return fauxText("CHILD-FINISHED");
+          }
+          if (stopId !== undefined && !stopSent) {
+            stopSent = true;
+            return fauxToolCall("stop_subagent", { agent_id: stopId });
+          }
+          if (text.includes("Task ID")) return fauxText("PARENT-RETURNED");
+          return nested
+            ? fauxToolCall("codemode", { code: `text(await tools.SubagentWorkflow(${JSON.stringify(params)}));` })
+            : fauxToolCall("SubagentWorkflow", params);
+        },
+      });
+      const session = run.parentSession;
+      expect(run.responseText).toBe("PARENT-RETURNED");
+      const launch = toolResultsNamed(run.parentSession, nested ? "codemode" : "SubagentWorkflow").join("\n");
+      const id = launch.match(/Task ID: (wf_[a-z0-9]+)/)?.[1];
+      expect(id, launch).toBeDefined();
+      const active = Math.min(items.length, workflowConcurrency());
+      expect(await waitFor(() => readResults.length === active)).toBe(true);
+      // Real child read results, after the nested call AND parent turn ended.
+      expect(readResults.every(text => text.includes("WORKFLOW-READ-RESULT"))).toBe(true);
+      expect(journalsFor(cwd)).toHaveLength(0);
+      if (stop) {
+        stopId = id;
+        await run.parentSession.prompt("stop the workflow");
+      }
+      release();
+      const notifications = () => session.messages.filter(message =>
+        message.role === "custom" && typeof message.content === "string" && message.content.includes(`<task-id>${id}</task-id>`),
+      );
+      expect(await waitFor(() => notifications().length > 0)).toBe(true);
+      expect(notifications()).toHaveLength(1);
+      const notice = notifications()[0].content;
+      expect(notice).toContain(`${stop ? 0 : items.length}/${items.length} agents`);
+      if (stop) {
+        await run.manager?.waitForAll();
+        expect(readResults).toHaveLength(active);
+        expect(notice).toContain("Stopped by the parent with stop_subagent");
+      } else {
+        const journal = journalsFor(cwd).flatMap(path => readJournal(path));
+        expect(journal).toHaveLength(items.length);
+        expect(journal.every(entry => entry.ok && entry.text === "CHILD-FINISHED")).toBe(true);
+        expect(new Set(journal.map(entry => entry.index)).size).toBe(items.length);
+        expect(readResults).toHaveLength(items.length);
+        for (const item of items) expect(readResults.some(text => text.includes(`${item.marker} read `))).toBe(true);
+      }
+    } finally {
+      release();
+      await run?.dispose();
+      project.restore();
+    }
+  }, 90_000);
+
   it("runs a real script whose agents reach real sessions with the script's prompts", async () => {
     const script = [
       'export const meta = { name: "e2e-fanout", description: "spawn two agents", phases: [{ title: "Work" }] };',

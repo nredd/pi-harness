@@ -691,7 +691,9 @@ setInterval(() => {}, 1000);
 		// Attach every assertion immediately, including while the acknowledgement is pending.
 		await Promise.all([
 			assert.rejects(pending, { code: "EPIPE" }),
-			ready.then(() => assert.rejects(client.send(child, "test", {}, 5000), { code: "EPIPE" })),
+			// Bun can acknowledge a small write into its own buffer after the peer closes stdin.
+			// Exceed that buffer so the OS write actually fails; a write callback is not delivery proof.
+			ready.then(() => assert.rejects(client.send(child, "test", { payload: "x".repeat(64 * 1024) }, 5000), { code: "EPIPE" })),
 			exit,
 		]);
 		assert.equal(client.pending.size, 0);

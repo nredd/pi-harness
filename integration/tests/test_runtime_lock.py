@@ -892,7 +892,8 @@ def test_replay_source_audits_both_roots_then_smokes_core(
     assert set(digests) == set(urls.values())
     assert acquired == [("core", digests), ("agent", digests)]
     assert installed == ["core:/fixture/npm", "agent:/fixture/npm"]
-    assert "byte audits passed: fixture 0 1" in caplog.text
+    assert "byte audits passed" in caplog.text
+    assert "fixture 0 1" not in caplog.text
 
 
 def test_core_checksums_prefer_recorded_digests_and_require_every_asset(

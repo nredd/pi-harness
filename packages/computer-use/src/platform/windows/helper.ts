@@ -149,14 +149,24 @@ export class WindowsHelperClient {
 		const id = randomUUID();
 		const timeoutMs = options?.timeoutMs ?? COMMAND_TIMEOUT_MS;
 		return await new Promise<T>((resolve, reject) => {
-			const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`Helper command '${cmd}' timed out after ${timeoutMs}ms.`)); }, timeoutMs);
-			this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timer, child });
-			child.stdin.write(`${JSON.stringify({ protocolVersion: WINDOWS_HELPER_PROTOCOL_VERSION, id, cmd, args })}\n`, (error) => {
-				if (!error) return;
+			// Every completion path owns the same cleanup, including abort and failed writes.
+			const cleanup = () => {
 				this.pending.delete(id);
 				clearTimeout(timer);
-				reject(error);
-			});
+				signal?.removeEventListener("abort", onAbort);
+			};
+			const fail = (error: Error) => { cleanup(); reject(error); };
+			const onAbort = () => fail(new Error("Operation aborted."));
+			const timer = setTimeout(() => fail(new Error(`Helper command '${cmd}' timed out after ${timeoutMs}ms.`)), timeoutMs);
+			this.pending.set(id, { resolve: (value) => { cleanup(); resolve(value as T); }, reject: fail, timer, child });
+			signal?.addEventListener("abort", onAbort, { once: true });
+			try {
+				child.stdin.write(`${JSON.stringify({ protocolVersion: WINDOWS_HELPER_PROTOCOL_VERSION, id, cmd, args })}\n`, (error) => {
+					if (error) fail(error);
+				});
+			} catch (error) {
+				fail(error instanceof Error ? error : new Error(String(error)));
+			}
 		});
 	}
 }

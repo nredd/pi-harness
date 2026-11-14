@@ -7,14 +7,16 @@ import { fileURLToPath } from "node:url";
 const FAILURE_EXIT_STATUS = 1;
 const MILLISECONDS_PER_SECOND = 1000;
 const TIMING_DECIMAL_PLACES = 2;
-// The Bun signal's one instrument: Istanbul, both reporters, independent of the primary report.
+// Activation goes FIRST: Vitest's CLI parser turns a bare `--coverage` into `{ enabled: true }` and drops any
+// `--coverage.*` field parsed before it, so a caller's own reporter would be erased if it came after.
+const BUN_COVERAGE_ACTIVATION = "--coverage";
+// The Bun signal's one instrument, placed after the caller's arguments so they cannot weaken it: Istanbul,
+// both reporters, independent of the primary report. A caller's extra reporters merge with these.
 const BUN_COVERAGE_ARGS = [
-	"--coverage",
 	"--coverage.provider=istanbul",
 	"--coverage.reporter=text",
 	"--coverage.reporter=lcov",
 	"--coverage.reporter=json-summary",
-	"--coverage.reportsDirectory=coverage/bun",
 ];
 // Set for every Bun child so a suite can assert it really runs on the pinned Bun, not a Node fallback.
 const BUN_RUNTIME_ENV = { PI_EXPECT_BUN_RUNTIME: "1" } as const;
@@ -70,9 +72,19 @@ export function toolchainHomeEnv(env: NodeJS.ProcessEnv): Record<string, string>
 export function main(argv: readonly string[], env: NodeJS.ProcessEnv): number {
 	const [engine, ...packageArgs] = argv;
 	if (engine !== "bun" && engine !== "node") throw new Error("Expected engine: node or bun");
+	const directory =
+		[...packageArgs].reverse().find((arg) => arg.startsWith("--coverage.reportsDirectory=")) ??
+		"--coverage.reportsDirectory=coverage/bun";
 	const vitestArgs =
 		engine === "bun" && !packageArgs.includes(COVERAGE_DISABLED_ARG)
-			? [...packageArgs, ...BUN_COVERAGE_ARGS]
+			? [
+					BUN_COVERAGE_ACTIVATION,
+					...packageArgs.filter(
+						(arg) => arg !== BUN_COVERAGE_ACTIVATION && !arg.startsWith("--coverage.reportsDirectory="),
+					),
+					...BUN_COVERAGE_ARGS,
+					directory,
+				]
 			: packageArgs;
 	const home = mkdtempSync(join(tmpdir(), "pi-bun-vitest-"));
 	const start = performance.now();

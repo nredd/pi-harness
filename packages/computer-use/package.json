@@ -70,7 +70,7 @@
     "docs:dev": "npm --prefix docs run dev",
     "docs:build": "npm --prefix docs run build",
     "docs:site:check": "npm --prefix docs run typecheck && npm --prefix docs run build",
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.signing.json",
     "test:schema": "node ../../scripts/run-vitest.ts node test/tool-schemas.test.mjs --coverage.enabled=false",
     "test:find-params": "node ../../scripts/run-vitest.ts node test/find-params.test.mjs --coverage.enabled=false",
     "test:invariants": "node ../../scripts/run-vitest.ts node test/invariants.test.mjs --coverage.enabled=false",

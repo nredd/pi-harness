@@ -12,6 +12,7 @@ import {
 	createFakeChild,
 	createFakeSpawn,
 	createHelperEngine,
+	drop,
 	fail,
 	ok,
 	shortSocketPath,
@@ -36,6 +37,20 @@ afterEach(() => {
 	vi.resetModules();
 	rmSync(tmp, { recursive: true, force: true });
 });
+
+function askSocket(socketPath, cmd) {
+	return new Promise((resolve, reject) => {
+		const socket = net.createConnection(socketPath);
+		socket.setEncoding("utf8");
+		socket.once("error", reject);
+		socket.once("close", () => reject(new Error("Helper socket closed before reply")));
+		socket.once("data", (data) => {
+			socket.destroy();
+			resolve(JSON.parse(data));
+		});
+		socket.write(`${JSON.stringify({ id: "1", cmd })}\n`);
+	});
+}
 
 async function windowsClient(engine) {
 	vi.resetModules();
@@ -165,21 +180,27 @@ describe("wire fidelity", () => {
 		await vi.waitFor(() => assert.ok(exitedAt - started >= 190));
 	});
 
+	test("socket request rejects if the helper closes before replying", async () => {
+		const { socketPath, dispose } = shortSocketPath();
+		const fake = await startFakeHelper({ socketPath });
+		try {
+			fake.script("diagnostics", drop());
+			const result = await Promise.race([
+				askSocket(socketPath, "diagnostics").then(() => "reply", () => "closed"),
+				new Promise((resolve) => setTimeout(() => resolve("hung"), 500)),
+			]);
+			assert.equal(result, "closed", "a closed socket must settle the waiting request");
+		} finally {
+			await fake.stop();
+			dispose();
+		}
+	});
+
 	test("a shut-down socket helper stops listening and can be relaunched explicitly", async () => {
 		const { socketPath, dispose } = shortSocketPath();
 		const fake = await startFakeHelper({ socketPath });
 		try {
-			const ask = (cmd) =>
-				new Promise((resolve, reject) => {
-					const socket = net.createConnection(socketPath);
-					socket.setEncoding("utf8");
-					socket.once("error", reject);
-					socket.once("data", (data) => {
-						socket.destroy();
-						resolve(JSON.parse(data));
-					});
-					socket.write(`${JSON.stringify({ id: "1", cmd })}\n`);
-				});
+			const ask = (cmd) => askSocket(socketPath, cmd);
 			assert.deepEqual((await ask("shutdown")).result, { shuttingDown: true });
 			await new Promise((resolve) => setTimeout(resolve, 400));
 			await assert.rejects(ask("diagnostics"), /ECONNREFUSED|ENOENT/);
