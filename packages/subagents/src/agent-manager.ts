@@ -247,7 +247,7 @@ export function capRetained(text: string, transcript: string | undefined): strin
 export function describeEvictedResult(note: EvictedNote): string | undefined {
   const text = note.status === "error" ? undefined : note.result?.trim();
   if (text) return text;
-  return note.error === undefined ? undefined : `Error: ${note.error}`;
+  return note.error?.trim() ? `Error: ${note.error}` : undefined;
 }
 
 /** The text a tool returns for an id whose record was evicted. */
@@ -2285,6 +2285,8 @@ export class AgentManager {
   rememberEvicted(note: EvictedNote): void {
     const existing = this.evictedNotes.get(note.id);
     if (note.fromSavedSession && existing && !existing.fromSavedSession) return;
+    // A replacement must not forget that the tombstone bound already dropped this conversation.
+    if (existing?.tombstoneBoundSession && !note.tombstoneBoundSession) note.tombstoneBoundSession = existing.tombstoneBoundSession;
     this.evictedNotes.delete(note.id);
     this.evictedNotes.set(note.id, note);
   }

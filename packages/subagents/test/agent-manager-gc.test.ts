@@ -831,6 +831,9 @@ describe("AgentManager — tombstones outliving the GC", () => {
     expect(manager.resolveMention("h3")?.kind).toBe("tombstone");
     expect(manager.getEvictedNote("id0")?.tombstoneBoundSession).toBe("/s");
     expect(manager.getEvictedNote("id5")?.tombstoneBoundSession).toBeUndefined();
+    // A later delivery of the same note keeps the marker.
+    manager.rememberEvicted({ id: "id0", type: "Explore", description: "d", status: "completed", evictedAfterMin: 3 });
+    expect(manager.getEvictedNote("id0")?.tombstoneBoundSession).toBe("/s");
     expect(manager.resolveMention(`a${MAX_TOMBSTONES + 2}`)?.kind).toBe("tombstone");
   });
 

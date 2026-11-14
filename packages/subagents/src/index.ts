@@ -2655,9 +2655,9 @@ Terse command-style prompts produce shallow, generic work.
               ? "only historical metadata is available; reopen the recorded session manually."
               : note?.tombstoneBoundSession
                 ? `dropped by the per-session tombstone bound; reopen ${note.tombstoneBoundSession} manually.`
-              : note?.nameTaken
-                ? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.`
-                : "no saved session is left to reopen.";
+                : note?.nameTaken
+                  ? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.`
+                  : "no saved session is left to reopen.";
             const why = note ? `Cannot resume agent "${latest}": ${gone}\n${describeEvicted(note)}` : agentNotFound(latest);
             return textResult(`${continued}${why}`);
           }

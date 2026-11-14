@@ -44,6 +44,7 @@ describe("saved terminal lookup notes", () => {
     // A stopped or aborted run that only kept an error still has readable text.
     expect(describeEvictedResult(savedAgentNote({ ...base, status: "stopped", error: "runner died" })!)).toBe("Error: runner died");
     expect(describeEvictedResult(savedAgentNote({ ...base, status: "aborted", result: " ", error: "e" })!)).toBe("Error: e");
+    expect(describeEvictedResult(savedAgentNote({ ...base, status: "stopped", error: "  " })!)).toBeUndefined();
     expect(savedAgentNote({ ...base, result: 5, error: {} })).not.toHaveProperty("result");
   });
 });

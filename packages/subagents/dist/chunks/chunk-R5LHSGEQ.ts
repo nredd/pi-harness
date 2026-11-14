@@ -3985,7 +3985,7 @@ function capRetained(text, transcript) {
 function describeEvictedResult(note) {
   const text = note.status === "error" ? void 0 : note.result?.trim();
   if (text) return text;
-  return note.error === void 0 ? void 0 : `Error: ${note.error}`;
+  return note.error?.trim() ? `Error: ${note.error}` : void 0;
 }
 function describeEvicted(note) {
   const where = note.transcript ? `; transcript: ${note.transcript}` : "";
@@ -5316,6 +5316,7 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
   rememberEvicted(note) {
     const existing = this.evictedNotes.get(note.id);
     if (note.fromSavedSession && existing && !existing.fromSavedSession) return;
+    if (existing?.tombstoneBoundSession && !note.tombstoneBoundSession) note.tombstoneBoundSession = existing.tombstoneBoundSession;
     this.evictedNotes.delete(note.id);
     this.evictedNotes.set(note.id, note);
   }
@@ -6797,4 +6798,4 @@ export {
   RESULT_MAX_CHARS,
   ConversationViewer
 };
-//# sourceMappingURL=chunk-YM2ACXNT.ts.map
+//# sourceMappingURL=chunk-R5LHSGEQ.ts.map
