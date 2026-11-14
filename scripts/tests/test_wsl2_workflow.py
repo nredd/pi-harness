@@ -1178,6 +1178,7 @@ def run_smoke(
     control: bool = True,
     policy: str | None = DISABLED_WSL_POLICY,
     policy_stat: str = "0 644",
+    binfmt: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run the real smoke script against stub network tools.
 
@@ -1190,6 +1191,8 @@ def run_smoke(
         control (bool): Whether the public positive-control connection (port 443) opens.
         policy (str | None): Fixture configuration, or None for a missing file.
         policy_stat (str): Stub owner and octal permissions reported by stat.
+        binfmt (dict[str, str] | None): Contents of `binfmt_misc` interop registrations by file name;
+            None models a retained, disabled `WSLInterop`.
 
     Returns:
         subprocess.CompletedProcess[str]: The smoke run; `aarch64` and a non-root, no-sudo user are stubbed.
@@ -1226,7 +1229,8 @@ def run_smoke(
         (root / "etc/wsl.conf").write_text(policy, encoding="utf-8")
     # WSL can retain these paths even when an actual Windows executable is rejected.
     (root / "proc/sys/fs/binfmt_misc").mkdir(parents=True)
-    (root / "proc/sys/fs/binfmt_misc/WSLInterop").touch()
+    for name, contents in (binfmt if binfmt is not None else {"WSLInterop": "disabled\n"}).items():
+        (root / "proc/sys/fs/binfmt_misc" / name).write_text(contents, encoding="utf-8")
     (root / "run/WSL").mkdir(parents=True)
     (root / "run/WSL/17_interop").touch()
     (root / "proc/sys/net/ipv6/conf/all").mkdir(parents=True)
@@ -1285,6 +1289,36 @@ def test_smoke_rejects_missing_ambiguous_or_enabled_policy(tmp_path: Path, polic
     result = run_smoke(tmp_path, blocked=True, policy=policy)
     assert result.returncode == 1
     assert "::error::wsl.conf does not explicitly disable interop and automount" in result.stdout
+
+
+@pytest.mark.parametrize("name", ["WSLInterop", "WSLInterop-late"])
+@pytest.mark.parametrize(
+    "contents",
+    ["enabled\ninterpreter /init\n", "enabled\n", "", "garbage\n", "disabled \n", "\ndisabled\n"],
+)
+def test_smoke_fails_on_a_live_or_unreadable_interop_registration(
+    tmp_path: Path, name: str, contents: str
+) -> None:
+    """A registration is only residue when its first line is exactly `disabled`."""
+    result = run_smoke(tmp_path, blocked=True, binfmt={name: contents})
+    assert result.returncode == 1
+    assert f"::error::{name} interop registration is not disabled" in result.stdout
+
+
+@pytest.mark.parametrize("names", [["WSLInterop"], ["WSLInterop-late"], ["WSLInterop", "WSLInterop-late"]])
+def test_smoke_notes_only_disabled_interop_registrations(tmp_path: Path, names: list[str]) -> None:
+    """Disabled registrations stay diagnostics; trailing lines after `disabled` are ignored."""
+    result = run_smoke(tmp_path, blocked=True, binfmt=dict.fromkeys(names, "disabled\ninterpreter /init\n"))
+    assert result.returncode == 0, result.stdout
+    assert "::error::" not in result.stdout
+    assert "note: WSLInterop registration present" in result.stdout
+
+
+def test_smoke_passes_without_any_interop_registration(tmp_path: Path) -> None:
+    """Absent registrations need no note and no failure."""
+    result = run_smoke(tmp_path, blocked=True, binfmt={})
+    assert result.returncode == 0, result.stdout
+    assert "WSLInterop registration" not in result.stdout
 
 
 @pytest.mark.parametrize("policy_stat", ["1001 644", "0 664", "0 646", "0 invalid"])

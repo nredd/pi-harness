@@ -106,8 +106,18 @@ then
 else
   bad 'wsl.conf does not explicitly disable interop and automount'
 fi
-if [ -e "$root/proc/sys/fs/binfmt_misc/WSLInterop" ] || [ -e "$root/proc/sys/fs/binfmt_misc/WSLInterop-late" ]; then
-  echo 'note: WSLInterop registration present; presence alone does not prove execution capability'
+# A binfmt registration is residue only while the kernel reports it `disabled` (first line, exact);
+# `enabled`, empty or unreadable means Windows executables can run, so fail.
+interop_residue=0
+for name in WSLInterop WSLInterop-late; do
+  entry="$root/proc/sys/fs/binfmt_misc/$name"
+  [ -e "$entry" ] || continue
+  state=''
+  IFS= read -r state < "$entry" 2>/dev/null || true
+  if [ "$state" = disabled ]; then interop_residue=1; else bad "$name interop registration is not disabled"; fi
+done
+if [ "$interop_residue" = 1 ]; then
+  echo 'note: WSLInterop registration present but disabled; presence alone does not prove execution capability'
 fi
 if compgen -G "$root/run/WSL/*interop*" >/dev/null; then
   echo 'note: WSL broker paths present; presence alone does not prove execution capability'
