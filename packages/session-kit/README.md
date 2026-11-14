@@ -169,8 +169,8 @@ harness lacks the model), `j/k` or arrows scroll, `q` or Escape closes.
   filter applies), and are never fetched. Claude Code persists none locally, so its row says
   `no local reading`.
 
-- The chart is an asciichart-style line plot (`╭╮╰╯`), one line per provider under All, else the top
-  three models. Where lines overlap they merge into junctions (`┴┬├┤┼`) so every line stays
+- The chart is an asciichart-style line plot (`╭╮╰╯`), one line per provider under All (one per
+  harness when several have data and none is picked), else the top three models. Where lines overlap they merge into junctions (`┴┬├┤┼`) so every line stays
   connected; the larger series keeps the colour. Line colours start at the theme's `accent` hue,
   saturated, with hues spread evenly over the lines drawn (two providers get opposite hues), so
   muted themes still separate them. The title row carries the legend on its right (it wraps under the

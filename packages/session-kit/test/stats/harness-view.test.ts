@@ -166,8 +166,8 @@ describe("StatsView harness filter", () => {
 		view.handleInput("h");
 		expect(view.state.harness).toBe("pi");
 		expect(text(view)).toMatch(/harness: pi/);
-		// pi only has opus: the totals shrink to its calls
-		expect(text(view)).toMatch(/Total tokens +1\.0?k?|Total tokens +\d+/);
+		// only pi's two calls count: (100 + 10) + (50 + 5) = 165, not the 770 of every harness
+		expect(text(view)).toMatch(/Total tokens +165 /);
 		view.handleInput("h");
 		view.handleInput("h");
 		expect(view.state.harness).toBe("codex");
@@ -224,7 +224,7 @@ describe("StatsView per-harness display", () => {
 		const view = make(calls);
 		let shown = text(view);
 		expect(shown).toContain("by harness");
-		expect(shown).toMatch(/● claude · ● codex · ● pi|● pi/);
+		for (const harness of ["pi", "claude", "codex"]) expect(shown).toMatch(new RegExp(`● ${harness}\\b`));
 		view.handleInput("h");
 		expect(text(view)).toContain("by provider");
 		view.handleInput("h");
@@ -363,6 +363,13 @@ describe("summary", () => {
 				NOW,
 			),
 		).toContain("  anthropic (Claude Code): no local reading");
+	});
+
+	it("prints quota readings even with no usage, and the plain empty notice without them", () => {
+		expect(summary([], [quota()], NOW)).toMatch(
+			/^\/stats: no usage recorded yet\nquota:\n {2}openai-codex\/codex 7d: 47\.3% used/,
+		);
+		expect(summary([], [], NOW)).toBe("/stats: no usage recorded yet");
 	});
 
 	it("stays as before for one harness and no quota", () => {

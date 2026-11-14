@@ -760,10 +760,31 @@ function spread(left: string, right: string, width: number): string | undefined 
 	return gap >= 3 ? `${left}${" ".repeat(gap)}${right}` : undefined;
 }
 
-/** Plain-text per-model table for print/json/rpc modes, all time, then the harness split and quota readings. */
+/** `quota:` section for print output: one line per window, then Claude's missing reading; empty when neither. */
+function quotaLines(calls: readonly Call[], quota: readonly QuotaObservation[], now: number): string[] {
+	const rows = quotaRows(quota, now);
+	const noClaude = claudeHasNoReading(
+		quota,
+		calls.some((c) => c.harness === "claude"),
+	);
+	if (rows.length === 0 && !noClaude) return [];
+	return [
+		"quota:",
+		...rows.map(
+			(r) => `  ${r.label}: ${r.expired ? "" : `${usedLabel(r.usedPercent)} used, `}${r.reset}, ${r.observed}`,
+		),
+		...(noClaude ? [`  ${ANTHROPIC}: ${NO_LOCAL_READING}`] : []),
+	];
+}
+
+/**
+ * Plain-text per-model table for print/json/rpc modes, all time, then the harness split and quota readings.
+ * Quota stands on its own: readings with no usage still print.
+ */
 export function summary(calls: readonly Call[], quota: readonly QuotaObservation[] = [], now = Date.now()): string {
 	const totals = modelTotals(calls);
-	if (totals.length === 0) return "/stats: no usage recorded yet";
+	const quotas = quotaLines(calls, quota, now);
+	if (totals.length === 0) return ["/stats: no usage recorded yet", ...quotas].join("\n");
 	const grand = totals.reduce((n, m) => n + tokensOf(m), 0);
 	const harnesses = harnessesOf(calls);
 	const split = harnesses.length > 1;
@@ -807,16 +828,6 @@ export function summary(calls: readonly Call[], quota: readonly QuotaObservation
 			lines.push(`  ${h}: ${formatTokens(sum)} (${percent(sum, grand)}), ${costLabel(cost, unpriced, mine.length)}`);
 		}
 	}
-	const rows = quotaRows(quota, now);
-	const noClaude = claudeHasNoReading(
-		quota,
-		calls.some((c) => c.harness === "claude"),
-	);
-	if (rows.length > 0 || noClaude) {
-		lines.push("quota:");
-		for (const r of rows)
-			lines.push(`  ${r.label}: ${r.expired ? "" : `${usedLabel(r.usedPercent)} used, `}${r.reset}, ${r.observed}`);
-		if (noClaude) lines.push(`  ${ANTHROPIC}: ${NO_LOCAL_READING}`);
-	}
+	lines.push(...quotas);
 	return lines.join("\n");
 }

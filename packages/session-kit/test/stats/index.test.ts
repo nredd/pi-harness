@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig } from "../../src/config.ts";
 import { register } from "../../src/stats/index.ts";
 import { assistantLine, at, sessionFile } from "./fixtures.ts";
-import { seedHarnessHome } from "./harness/home.ts";
+import { codexMeta, codexTokenCount, limits, writeLines } from "./harness/fixtures.ts";
+import { CODEX_RESET_S, seedHarnessHome } from "./harness/home.ts";
 
 // biome-ignore lint/suspicious/noExplicitAny: fake pi/ctx surface
 type Any = any;
@@ -223,5 +224,21 @@ describe("/stats command", () => {
 		writeFileSync(join(dir, "pi-session-kit", "export-state.json"), "{ nope");
 		await setup("print").run("");
 		expect(String(out.mock.calls[0]?.[0])).toContain("/stats: other harnesses not read: export state unreadable");
+	});
+
+	it("still shows quota readings when there is no usage to total", async () => {
+		// a Codex rollout with a rate-limit reading but no per-turn usage records
+		writeLines(join(dir, "home", ".codex", "sessions", "2026", "10", "02", "rollout-a.jsonl"), [
+			codexMeta(),
+			codexTokenCount(limits({ used_percent: 12.5, window_minutes: 10080, resets_at: CODEX_RESET_S })),
+		]);
+		const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		await setup("print").run("");
+		expect(String(out.mock.calls[0]?.[0])).toMatch(
+			/^\/stats: no usage recorded yet\nquota:\n {2}openai-codex\/codex 7d: /,
+		);
+		const { run, custom } = setup("tui");
+		await run("");
+		expect(custom).toHaveBeenCalledOnce();
 	});
 });

@@ -86,7 +86,7 @@ export function register(pi: ExtensionAPI, _config: KitConfig, options: AgentDir
 				return;
 			}
 			for (const line of damage) ctx.ui.notify(line, "warning");
-			if (loaded.calls.length === 0) {
+			if (loaded.calls.length === 0 && loaded.quota.length === 0) {
 				ctx.ui.notify(`/stats: no usage recorded yet\n${coverage}\n${freshness.join("\n")}`, "info");
 				return;
 			}
