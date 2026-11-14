@@ -298,6 +298,7 @@ describe("router/default startup, quota dispatch and resume", () => {
 			// A collected provider, so warm-up *would* read if the cache were cold (see the cold test).
 			const collected: Profile["chain"] = [{ provider: "anthropic", id: "faux-warm" }];
 			physical.push(...stack.registerPhysical(collected, 0));
+			expect(stack.usage.snapshots.get("anthropic")?.status).toBe("available");
 			const s = await launch({ router: collected });
 			respondOn(2, "warm ok");
 			await s.session.prompt("go");
@@ -361,7 +362,8 @@ describe("router/default startup, quota dispatch and resume", () => {
 
 		it("loads the real router package through the packages setting", async () => {
 			const s = await launch({ router: "package" });
-			// Loaded extension, not the selection: see the note in the disabled case below.
+			// Asserts the loaded extension, not the selection: selecting `router/default` through the real
+			// package path flaked ~1 in 4 full-file runs (#911).
 			expect(s.extensionPaths.map((path) => path.replaceAll("\\", "/"))).toEqual([
 				expect.stringMatching(/packages\/subscription-router\/src\/index\.ts$/),
 			]);
