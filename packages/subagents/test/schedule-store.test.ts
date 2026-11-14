@@ -201,8 +201,8 @@ describe("run claims", () => {
       const store = new ScheduleStore(join(dir, "s.json"));
       store.add({ ...base, until: "2020-01-01T00:01:00.000Z" });
       const until = Date.parse("2020-01-01T00:01:00.000Z");
-      expect(store.claim("j", owner, until)).toBeUndefined();
-      expect(store.claim("j", owner, until - 1)?.job.lastStatus).toBe("running");
+      expect(store.claim("j", owner, until, { at: until, schedule: "1m" })).toBeUndefined();
+      expect(store.claim("j", owner, until - 1, { at: until, schedule: "1m" })?.job.lastStatus).toBe("running");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

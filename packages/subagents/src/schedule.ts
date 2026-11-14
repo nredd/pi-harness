@@ -24,7 +24,7 @@ import { getAgentConfig, resolveSpawnType } from "./agent-types.js";
 import { type Clock, realClock, type TimerHandle } from "./clock.js";
 import { admitModelSelection, type ModelSelection, selectModel } from "./model-selection.js";
 import { checkAdmission, describeBlock, mayPark, modelRef, PARKED_RESUME_DELAY_MS, QUOTA_RESTART_GRACE_MS } from "./quota-admission.js";
-import { foreignOwnerLive, LEASE_MS, LEASE_RENEW_MS, type ScheduleStore } from "./schedule-store.js";
+import { type FireSlot, foreignOwnerLive, LEASE_MS, LEASE_RENEW_MS, type ScheduleStore } from "./schedule-store.js";
 import type { IsolationMode, ScheduledSubagent, SubagentType, ThinkingLevel } from "./types.js";
 
 /** Event emitted on `pi.events` for cross-extension consumers. */
@@ -277,7 +277,8 @@ export class SubagentScheduler {
   /** Toggle / mutate a job. Re-arms based on the new `enabled` state. */
   updateJob(id: string, patch: Partial<ScheduledSubagent>): ScheduledSubagent | undefined {
     const store = this.requireStore();
-    const updated = store.update(id, patch);
+    // A new schedule restarts slot numbering; the old one's last slot would block it.
+    const updated = store.update(id, job => patch.schedule !== undefined && patch.schedule !== job.schedule ? { ...patch, lastSlot: undefined } : patch);
     if (!updated) return undefined;
     this.unscheduleJob(id);
     if (updated.enabled) this.scheduleJob(updated);
@@ -333,8 +334,7 @@ export class SubagentScheduler {
     this.scheduled.set(job.id, {});
     try {
       if (job.scheduleType === "interval" && job.intervalMs) {
-        const t = this.clock.setInterval(() => this.executeJob(job.id), job.intervalMs);
-        this.intervals.set(job.id, t);
+        this.intervals.set(job.id, this.armInterval(job, job.intervalMs));
       } else if (job.scheduleType === "once") {
         const target = new Date(job.schedule).getTime();
         let delay = target - this.clock.now();
@@ -343,9 +343,10 @@ export class SubagentScheduler {
         if (delay <= 0 && job.quotaParked) delay = PARKED_RESUME_DELAY_MS;
         if (delay > 0) {
           const t = this.clock.setTimeout(() => {
-            this.executeJob(job.id);
+            this.executeJob(job.id, { at: target, schedule: job.schedule });
             // Auto-disable one-shots after they fire (mirrors pi-cron-schedule)
-            store.update(job.id, { enabled: false });
+            // Unless another process re-parked or edited the job meanwhile: this timer is stale.
+            store.update(job.id, fresh => (fresh.schedule === job.schedule ? { enabled: false } : {}));
             const updated = store.get(job.id);
             if (updated) this.emit({ type: "updated", job: updated });
           }, delay);
@@ -357,7 +358,11 @@ export class SubagentScheduler {
           this.emit({ type: "error", jobId: job.id, error: `Scheduled time ${job.schedule} is in the past` });
         }
       } else {
-        const cron = new Cron(job.schedule, () => this.executeJob(job.id));
+        const cron = new Cron(job.schedule, self => this.executeJob(job.id, {
+          // The tick's own time, which every process computes alike.
+          at: self.currentRun()?.getTime() ?? Math.floor(this.clock.now() / 1000) * 1000,
+          schedule: job.schedule,
+        }));
         this.jobs.set(job.id, cron);
       }
       // Disable at the deadline itself, not at the next (possibly days away) tick.
@@ -367,6 +372,26 @@ export class SubagentScheduler {
       this.scheduled.delete(job.id);
       this.emit({ type: "error", jobId: job.id, error: err instanceof Error ? err.message : String(err) });
     }
+  }
+
+  /**
+   * Fire on slots `createdAt + k * intervalMs`, which every process on the session
+   * shares, whatever time it armed at. Chained timeouts re-aim at the next slot each
+   * tick, so a resumed or late-joining process stays on the shared grid and the
+   * slot of a tick is the nearest one (tolerating early or late timers).
+   */
+  private armInterval(job: ScheduledSubagent, intervalMs: number): TimerHandle {
+    const anchor = new Date(job.createdAt).getTime();
+    let current: TimerHandle | undefined;
+    const arm = (k: number): void => {
+      current = this.clock.setTimeout(() => {
+        const slot = Math.max(k, Math.round((this.clock.now() - anchor) / intervalMs));
+        arm(slot + 1);
+        this.executeJob(job.id, { at: anchor + slot * intervalMs, schedule: job.schedule });
+      }, Math.max(0, anchor + k * intervalMs - this.clock.now()));
+    };
+    arm(Math.floor((this.clock.now() - anchor) / intervalMs) + 1);
+    return { cancel: () => current?.cancel() };
   }
 
   /** Arm the deadline timer, re-arming in `MAX_TIMER_MS` steps when it is out of timer range. */
@@ -413,7 +438,7 @@ export class SubagentScheduler {
    * queue), persist completion. Fire-and-forget: the timer tick returns
    * immediately so other jobs keep firing.
    */
-  private executeJob(id: string): void {
+  private executeJob(id: string, slot: FireSlot): void {
     const store = this.store;
     const pi = this.pi;
     const ctx = this.ctx;
@@ -428,10 +453,10 @@ export class SubagentScheduler {
     }
 
     // Claim the fire under the store lock: another process on this session may have
-    // fired, disabled or removed the job since our cache loaded. The claim writes
+    // fired this slot, or disabled, edited or removed the job since our cache loaded. The claim writes
     // "running" and the owner in one write; a lost claim skips the fire.
     const now = this.clock.now();
-    const claim = store.claim(id, { pid: process.pid, leaseUntil: now + LEASE_MS }, now);
+    const claim = store.claim(id, { pid: process.pid, leaseUntil: now + LEASE_MS }, now, slot);
     if (!claim) return;
     const token = holdFire(store, this.clock, id);
 
