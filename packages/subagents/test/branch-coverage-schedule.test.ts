@@ -283,7 +283,7 @@ describe("scheduler branches", () => {
     const job = f.scheduler.addJob({ ...input, model, quotaParked: true });
     f.clock.advance(1000);
     expect(f.handlers.size).toBe(1);
-    expect(f.clock.pending).toBe(2);
+    expect(f.clock.pending).toBe(3); // interval, admission timeout, lease renewal
     f.scheduler.updateJob(job.id, { enabled: false });
     expect(f.handlers.size).toBe(0);
     expect(f.clock.pending).toBe(0);
@@ -308,6 +308,59 @@ describe("scheduler branches", () => {
     expect(f.spawn).toHaveBeenCalledTimes(1);
   });
 
+  describe("claimed fires", () => {
+    /** A job whose first fire spawned a never-settling run, with a second fire's admission left pending. */
+    const liveRunPlusPending = async () => {
+      const f = setup();
+      vi.spyOn(f.manager, "getRecord").mockReturnValue({ status: "running", promise: new Promise<string>(() => {}) } as never);
+      const job = f.scheduler.addJob({ ...input, model: "fixture/model", quotaParked: true });
+      f.clock.advance(1000);
+      f.reply({ success: true, data: { ok: true } });
+      await flush();
+      expect(f.spawn).toHaveBeenCalledTimes(1);
+      f.clock.advance(1000);
+      expect(f.admits).toHaveLength(1);
+      return { f, job };
+    };
+
+    it("keeps the owner when a pending admission is cancelled beside a live run", async () => {
+      const { f, job } = await liveRunPlusPending();
+      f.scheduler.updateJob(job.id, { enabled: false });
+      expect(f.store.get(job.id)?.runOwner?.pid).toBe(process.pid);
+    });
+
+    it("keeps the owner when a refused admission ends beside a live run", async () => {
+      const { f, job } = await liveRunPlusPending();
+      f.reply({ success: true, data: { ok: false } });
+      await flush();
+      expect(f.store.get(job.id)).toMatchObject({ lastStatus: "error", runOwner: { pid: process.pid } });
+    });
+
+    it("skips a spawn whose job another process removed after the claim", async () => {
+      const f = setup();
+      const job = f.scheduler.addJob({ ...input, model: "fixture/model", quotaParked: true });
+      f.clock.advance(1000);
+      new ScheduleStore(f.path).remove(job.id);
+      f.clock.advance(1000); // the next claim reloads the cache and finds the job gone
+      f.reply({ success: true, data: { ok: true } });
+      await flush();
+      expect(f.spawn).not.toHaveBeenCalled();
+      expect(f.store.get(job.id)).toBeUndefined();
+    });
+
+    it("settling a fire whose registry entry is gone is harmless", async () => {
+      const f = setup();
+      let finish!: () => void;
+      vi.spyOn(f.manager, "getRecord").mockReturnValue({ status: "completed", promise: new Promise<void>(r => { finish = r; }) } as never);
+      const job = f.scheduler.addJob({ ...input, schedule: "+1s" });
+      f.clock.advance(1000);
+      delete (globalThis as Record<symbol, unknown>)[Symbol.for("pi-subagents:scheduled-runs")];
+      finish();
+      await flush();
+      expect(f.store.get(job.id)?.lastStatus).toBe("success");
+    });
+  });
+
   it("cancels overlapping admissions while an already spawned run finishes after stop", async () => {
     const f = setup();
     let finish!: (value: string) => void;
@@ -319,12 +372,13 @@ describe("scheduler branches", () => {
     f.clock.advance(1000);
     expect(f.spawn).toHaveBeenCalledTimes(1);
     expect(f.handlers.size).toBe(2);
-    expect(f.clock.pending).toBe(5);
+    expect(f.clock.pending).toBe(8); // adds the lease renewal of each of the three claimed fires
     f.scheduler.stop();
     expect(f.handlers.size).toBe(0);
-    expect(f.clock.pending).toBe(0);
+    expect(f.clock.pending).toBe(1); // only the spawned run keeps renewing its lease
     finish("done");
     await flush();
+    expect(f.clock.pending).toBe(0);
     expect(f.store.get(running.id)?.lastStatus).toBe("success");
     expect(f.spawn).toHaveBeenCalledTimes(1);
   });

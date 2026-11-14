@@ -852,13 +852,18 @@ import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as rea
 import { dirname, join as join3 } from "node:path";
 var LOCK_RETRY_MS = 50;
 var LOCK_MAX_RETRIES = 100;
-function isProcessRunning(pid) {
+var LEASE_MS = 12e4;
+var LEASE_RENEW_MS = 3e4;
+function isProcessRunning(pid, kill = (p, sig) => process.kill(p, sig)) {
   try {
-    process.kill(pid, 0);
+    kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (e) {
+    return e?.code === "EPERM";
   }
+}
+function foreignOwnerLive(owner, now) {
+  return owner !== void 0 && owner.pid !== process.pid && owner.leaseUntil > now && isProcessRunning(owner.pid);
 }
 function acquireLock(lockPath) {
   for (let i = 0; i < LOCK_MAX_RETRIES; i++) {
@@ -974,6 +979,30 @@ var ScheduleStore = class {
       return updated;
     });
   }
+  /**
+   * Claim a fire under the store lock: reload, verify the job is still enabled,
+   * before its deadline and not held by another live process, then write
+   * `lastStatus: "running"` and the owner in the same write. Returns the job
+   * (with the status it replaced as `prior`), or undefined when the fire is lost.
+   */
+  claim(id, owner, now) {
+    return this.withLock(() => {
+      const job = this.jobs.get(id);
+      if (!job?.enabled) return void 0;
+      if (job.until !== void 0 && now >= new Date(job.until).getTime()) return void 0;
+      if (job.lastStatus === "running" && foreignOwnerLive(job.runOwner, now)) return void 0;
+      const claimed = { ...job, lastStatus: "running", runOwner: owner };
+      this.jobs.set(id, claimed);
+      return { job: claimed, prior: job.lastStatus };
+    });
+  }
+  /** Extend this process's claim; a claim lost to another owner or removed is left alone. */
+  renewLease(id, owner) {
+    this.withLock(() => {
+      const job = this.jobs.get(id);
+      if (job?.runOwner?.pid === owner.pid) this.jobs.set(id, { ...job, runOwner: owner });
+    });
+  }
   remove(id) {
     if (!this.jobs.has(id)) return false;
     return this.withLock(() => this.jobs.delete(id));
@@ -1003,6 +1032,38 @@ function liveRuns() {
 function runKey(store, jobId) {
   return `${store.path}\0${jobId}`;
 }
+var fireSeq = 0;
+function holdFire(store, clock, jobId) {
+  const token = `fire-${++fireSeq}`;
+  const key = runKey(store, jobId);
+  const entry = liveRuns().get(key) ?? { fires: /* @__PURE__ */ new Set(), spawned: /* @__PURE__ */ new Set() };
+  entry.fires.add(token);
+  liveRuns().set(key, entry);
+  if (!entry.lease) {
+    entry.lease = clock.setInterval(() => {
+      try {
+        store.renewLease(jobId, { pid: process.pid, leaseUntil: clock.now() + LEASE_MS });
+      } catch {
+      }
+    }, LEASE_RENEW_MS);
+    entry.lease.unref?.();
+  }
+  return token;
+}
+function markSpawned(store, jobId, token) {
+  liveRuns().get(runKey(store, jobId))?.spawned.add(token);
+}
+function releaseFire(store, jobId, token) {
+  const key = runKey(store, jobId);
+  const entry = liveRuns().get(key);
+  if (!entry) return { fires: 0, spawned: 0 };
+  entry.fires.delete(token);
+  entry.spawned.delete(token);
+  if (entry.fires.size > 0) return { fires: entry.fires.size, spawned: entry.spawned.size };
+  entry.lease?.cancel();
+  liveRuns().delete(key);
+  return { fires: 0, spawned: 0 };
+}
 var SubagentScheduler = class _SubagentScheduler {
   constructor(options = {}) {
     this.options = options;
@@ -1030,14 +1091,26 @@ var SubagentScheduler = class _SubagentScheduler {
     this.store = store;
     for (const job of store.list()) {
       if (job.enabled) this.scheduleJob(job);
-      if (store.get(job.id)?.enabled === false && job.lastStatus === "running" && !this.hasLiveRun(store, job.id) && !(job.runPid !== void 0 && job.runPid !== process.pid && isProcessRunning(job.runPid))) {
-        store.update(job.id, { lastStatus: "error" });
-      }
+      this.reapOrphan(store, { ...job, ...store.get(job.id) });
     }
   }
-  /** Is any run of this job, in this process, spawned and not yet finalized? */
+  /**
+   * A disabled job left "running" with no live run in this process and no live
+   * foreign owner (dead pid or lapsed lease) was cut off; nothing can finalize it,
+   * so it must not hold its name forever. A run this process still owns (a /resume,
+   * /new or /reload re-bind) is in the registry and settles itself. A run owned by
+   * another LIVE process on the same session is not ours to error. Returns the
+   * job as it stands afterwards.
+   */
+  reapOrphan(store, job) {
+    if (job.enabled || job.lastStatus !== "running") return job;
+    if (this.hasLiveRun(store, job.id) || foreignOwnerLive(job.runOwner, this.clock.now())) return job;
+    store.update(job.id, { lastStatus: "error", runOwner: void 0 });
+    return { ...job, lastStatus: "error", runOwner: void 0 };
+  }
+  /** Is any fire of this job, in this process, claimed and not yet settled? */
   hasLiveRun(store, jobId) {
-    return (liveRuns().get(runKey(store, jobId))?.size ?? 0) > 0;
+    return (liveRuns().get(runKey(store, jobId))?.fires.size ?? 0) > 0;
   }
   /** Stop all timers; drop refs. Safe to call repeatedly. */
   stop() {
@@ -1127,9 +1200,11 @@ var SubagentScheduler = class _SubagentScheduler {
    * True once a job can never fire again and is not mid-run: a fired one-shot,
    * or a repeating job whose `until` deadline passed. Its name is reusable.
    */
-  isFinished(job) {
-    if (job.enabled || job.lastStatus === "running") return false;
-    if (this.hasLiveRun(this.requireStore(), job.id)) return false;
+  isFinished(old) {
+    if (old.enabled) return false;
+    if (this.hasLiveRun(this.requireStore(), old.id)) return false;
+    const job = this.reapOrphan(this.requireStore(), old);
+    if (job.lastStatus === "running") return false;
     if (job.scheduleType === "once") return job.lastRun !== void 0 || job.lastStatus === "error";
     return this.pastDeadline(job);
   }
@@ -1243,10 +1318,13 @@ var SubagentScheduler = class _SubagentScheduler {
       this.expireJob(job);
       return;
     }
+    const now = this.clock.now();
+    const claim = store.claim(id, { pid: process.pid, leaseUntil: now + LEASE_MS }, now);
+    if (!claim) return;
+    const token = holdFire(store, this.clock, id);
     const previous = this.pendingRuns.get(id);
-    const prior = previous ? previous.prior : job.lastStatus;
+    const prior = previous ? previous.prior : claim.prior;
     this.pendingRuns.delete(id);
-    store.update(id, { lastStatus: "running" });
     const dispatch = resolveSpawnType(job.subagent_type);
     const config = dispatch.ok ? getAgentConfig(dispatch.type) : void 0;
     const selection = dispatch.ok ? selectModel({
@@ -1260,7 +1338,7 @@ var SubagentScheduler = class _SubagentScheduler {
       cwd: ctx.cwd
     }) : dispatch.message;
     if (typeof selection === "string") {
-      store.update(id, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
+      this.endFire(store, id, token, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
       this.emit({ type: "error", jobId: id, error: selection });
       return;
     }
@@ -1273,9 +1351,12 @@ var SubagentScheduler = class _SubagentScheduler {
       this.admissions.set(id, admissions);
       this.pendingRuns.set(id, { token: controller, prior });
       controller.signal.addEventListener("abort", () => {
+        const { fires } = releaseFire(store, id, token);
         if (this.pendingRuns.get(id)?.token !== controller) return;
         this.pendingRuns.delete(id);
-        if (store.get(id)?.lastStatus === "running") store.update(id, { lastStatus: prior });
+        if (store.get(id)?.lastStatus === "running") {
+          store.update(id, { lastStatus: prior, ...fires === 0 ? { runOwner: void 0 } : {} });
+        }
       }, { once: true });
       const admission = selection.tierBinding ? admitModelSelection(selection, ctx.modelRegistry, pi.events, this.clock, controller.signal) : checkAdmission(pi.events, modelRef(admissionModel), void 0, this.clock, controller.signal);
       const settle = () => {
@@ -1285,17 +1366,17 @@ var SubagentScheduler = class _SubagentScheduler {
         if (this.store !== store || this.ctx !== ctx || this.scheduled.get(id) !== scheduled) return;
         settle();
         if (!block) {
-          this.spawnJob({ store, pi, ctx, manager }, id, selection);
+          this.spawnJob({ store, pi, ctx, manager }, id, selection, token);
         } else if (mayPark(block) && block.resetAt > this.clock.now()) {
           this.repark(id, block.resetAt);
         } else {
-          this.store?.update(id, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
+          this.endFire(store, id, token, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
           this.emit({ type: "error", jobId: id, error: `${describeBlock(block)} The agent was not started.` });
         }
       }).catch((error) => {
         if (this.store !== store || this.scheduled.get(id) !== scheduled) return;
         settle();
-        store.update(id, { lastStatus: "error" });
+        this.endFire(store, id, token, { lastStatus: "error" });
         this.emit({ type: "error", jobId: id, error: error instanceof Error ? error.message : String(error) });
       }).finally(() => {
         admissions.delete(controller);
@@ -1303,7 +1384,7 @@ var SubagentScheduler = class _SubagentScheduler {
       });
       return;
     }
-    this.spawnJob({ store, pi, ctx, manager }, id, selection);
+    this.spawnJob({ store, pi, ctx, manager }, id, selection, token);
   }
   /**
    * Re-arm a quota-parked one-shot at a later reset instead of starting it.
@@ -1319,9 +1400,12 @@ var SubagentScheduler = class _SubagentScheduler {
     });
   }
   /** Spawn a fired job (bypassing the concurrency queue) and persist its outcome. */
-  spawnJob({ store, pi, ctx, manager }, id, selection) {
+  spawnJob({ store, pi, ctx, manager }, id, selection, token) {
     const job = store.get(id);
-    if (!job) return;
+    if (!job) {
+      releaseFire(store, id, token);
+      return;
+    }
     let agentId;
     try {
       const dispatch = resolveSpawnType(job.subagent_type);
@@ -1353,20 +1437,15 @@ var SubagentScheduler = class _SubagentScheduler {
       });
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
-      store.update(id, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
+      this.endFire(store, id, token, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
       this.emit({ type: "error", jobId: id, error });
       return;
     }
+    markSpawned(store, id, token);
     this.emit({ type: "fired", jobId: id, agentId, name: job.name });
-    const key = runKey(store, id);
-    const runs = liveRuns().get(key) ?? /* @__PURE__ */ new Set();
-    runs.add(agentId);
-    liveRuns().set(key, runs);
-    store.update(id, { runPid: process.pid });
     const finalize = (status) => {
-      runs.delete(agentId);
-      const othersLive = runs.size > 0;
-      if (!othersLive && liveRuns().get(key) === runs) liveRuns().delete(key);
+      const left = releaseFire(store, id, token);
+      const othersLive = left.spawned > 0;
       store.reload();
       const next = this.getNextRun(id);
       const current = store.get(id);
@@ -1374,7 +1453,8 @@ var SubagentScheduler = class _SubagentScheduler {
         lastRun: new Date(this.clock.now()).toISOString(),
         runCount: (current?.runCount ?? 0) + 1,
         nextRun: next,
-        ...othersLive ? {} : { lastStatus: status, runPid: void 0 }
+        ...othersLive ? {} : { lastStatus: status },
+        ...left.fires === 0 ? { runOwner: void 0 } : {}
       });
     };
     Promise.resolve(manager.getRecord(agentId)?.startGate).then(() => manager.awaitStartup(agentId)).then(() => manager.getRecord(agentId)?.promise).then(() => {
@@ -1382,6 +1462,11 @@ var SubagentScheduler = class _SubagentScheduler {
       const failed = r?.status === "error" || r?.status === "aborted" || r?.status === "stopped";
       finalize(failed ? "error" : "success");
     }).catch(() => finalize("error"));
+  }
+  /** Settle a claimed fire that never produced a run: persist `patch`, and free the claim if it was the last. */
+  endFire(store, id, token, patch) {
+    const { fires } = releaseFire(store, id, token);
+    store.update(id, fires > 0 ? patch : { ...patch, runOwner: void 0 });
   }
   emit(event) {
     if (this.pi) this.pi.events.emit("subagents:scheduled", event);

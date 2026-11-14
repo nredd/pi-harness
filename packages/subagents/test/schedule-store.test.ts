@@ -177,3 +177,51 @@ describe("ScheduleStore", () => {
     expect(existsSync(file)).toBe(false);
   });
 });
+
+describe("isProcessRunning", () => {
+  it("treats EPERM as alive and ESRCH as dead", async () => {
+    const { isProcessRunning } = await import("../src/schedule-store.js");
+    const failing = (code: string) => () => { throw Object.assign(new Error(code), { code }); };
+    expect(isProcessRunning(1, failing("EPERM"))).toBe(true);
+    expect(isProcessRunning(1, failing("ESRCH"))).toBe(false);
+    expect(isProcessRunning(1, () => true)).toBe(true);
+    expect(isProcessRunning(1, () => { throw new Error("no code"); })).toBe(false);
+  });
+});
+
+describe("run claims", () => {
+  const owner = { pid: process.pid, leaseUntil: 1 };
+  const base = {
+    id: "j", name: "n", description: "d", schedule: "1m", scheduleType: "interval", subagent_type: "general-purpose",
+    prompt: "p", enabled: true, createdAt: "2020-01-01T00:00:00.000Z", runCount: 0,
+  } as const;
+
+  it("refuses a fire at or after the job's deadline", () => {
+    const dir = mkdtempSync(join(tmpdir(), "claim-"));
+    try {
+      const store = new ScheduleStore(join(dir, "s.json"));
+      store.add({ ...base, until: "2020-01-01T00:01:00.000Z" });
+      const until = Date.parse("2020-01-01T00:01:00.000Z");
+      expect(store.claim("j", owner, until)).toBeUndefined();
+      expect(store.claim("j", owner, until - 1)?.job.lastStatus).toBe("running");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("renews only the caller's own lease", () => {
+    const dir = mkdtempSync(join(tmpdir(), "claim-"));
+    try {
+      const store = new ScheduleStore(join(dir, "s.json"));
+      store.add({ ...base, runOwner: { pid: process.pid + 1, leaseUntil: 5 } });
+      store.renewLease("j", { pid: process.pid, leaseUntil: 99 });
+      expect(store.get("j")?.runOwner?.leaseUntil).toBe(5);
+      store.renewLease("missing", owner);
+      store.add({ ...base, id: "k", runOwner: { pid: process.pid, leaseUntil: 5 } });
+      store.renewLease("k", { pid: process.pid, leaseUntil: 99 });
+      expect(store.get("k")?.runOwner?.leaseUntil).toBe(99);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

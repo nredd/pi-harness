@@ -82,7 +82,7 @@ it("cancels a pending scheduled admission through the registered session switch"
   const before = clock.pending;
   await b.lifecycle.get("session_before_switch")?.({ type: "session_shutdown", reason: "quit" }, b.parent);
   expect([...handlers.keys()].filter(key => key.startsWith("router:rpc:admit:reply:"))).toHaveLength(0);
-  expect(clock.pending).toBe(before - 2);
+  expect(clock.pending).toBe(before - 3); // admission timeout, timer and lease renewal
   await Promise.resolve();
   expect(b.pi.events.emit.mock.calls.filter(([channel]: [string]) => channel === "subagents:scheduled")
     .some(([, event]: [string, { type: string }]) => event.type === "fired")).toBe(false);

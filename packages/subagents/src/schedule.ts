@@ -24,7 +24,7 @@ import { getAgentConfig, resolveSpawnType } from "./agent-types.js";
 import { type Clock, realClock, type TimerHandle } from "./clock.js";
 import { admitModelSelection, type ModelSelection, selectModel } from "./model-selection.js";
 import { checkAdmission, describeBlock, mayPark, modelRef, PARKED_RESUME_DELAY_MS, QUOTA_RESTART_GRACE_MS } from "./quota-admission.js";
-import { isProcessRunning, type ScheduleStore } from "./schedule-store.js";
+import { foreignOwnerLive, LEASE_MS, LEASE_RENEW_MS, type ScheduleStore } from "./schedule-store.js";
 import type { IsolationMode, ScheduledSubagent, SubagentType, ThinkingLevel } from "./types.js";
 
 /** Event emitted on `pi.events` for cross-extension consumers. */
@@ -55,23 +55,69 @@ export interface NewJobInput {
 const MAX_TIMER_MS = 2_147_483_647;
 
 /**
- * Process-global registry of spawned, unfinalized scheduled runs, keyed by store
+ * Process-global registry of claimed, unsettled scheduled fires, keyed by store
  * path + job id. Schedulers, stores and managers are rebuilt on every activation
- * (/resume, /new, /reload) while runs outlive them, so liveness lives here.
+ * (/resume, /new, /reload) while runs outlive them, so liveness lives here. While
+ * a job has any fire, one timer renews this process's lease on it.
  */
 const LIVE_RUNS = Symbol.for("pi-subagents:scheduled-runs");
 
-function liveRuns(): Map<string, Set<string>> {
-  const g = globalThis as { [LIVE_RUNS]?: Map<string, Set<string>> };
+interface LiveFires {
+  fires: Set<string>;
+  /** The subset of `fires` whose agent was spawned (the rest are pending admissions). */
+  spawned: Set<string>;
+  lease?: TimerHandle;
+}
+
+function liveRuns(): Map<string, LiveFires> {
+  const g = globalThis as { [LIVE_RUNS]?: Map<string, LiveFires> };
   const existing = g[LIVE_RUNS];
   if (existing) return existing;
-  const created = new Map<string, Set<string>>();
+  const created = new Map<string, LiveFires>();
   g[LIVE_RUNS] = created;
   return created;
 }
 
 function runKey(store: ScheduleStore, jobId: string): string {
   return `${store.path}\0${jobId}`;
+}
+
+let fireSeq = 0;
+
+/** Register a claimed fire; the first one for a job starts its lease renewal. */
+function holdFire(store: ScheduleStore, clock: Clock, jobId: string): string {
+  const token = `fire-${++fireSeq}`;
+  const key = runKey(store, jobId);
+  const entry = liveRuns().get(key) ?? { fires: new Set<string>(), spawned: new Set<string>() };
+  entry.fires.add(token);
+  liveRuns().set(key, entry);
+  if (!entry.lease) {
+    entry.lease = clock.setInterval(() => {
+      try {
+        store.renewLease(jobId, { pid: process.pid, leaseUntil: clock.now() + LEASE_MS });
+      } catch { /* a failed renewal is retried next tick; the lease only lapses after LEASE_MS */ }
+    }, LEASE_RENEW_MS);
+    entry.lease.unref?.();
+  }
+  return token;
+}
+
+/** The claimed fire spawned its agent. */
+function markSpawned(store: ScheduleStore, jobId: string, token: string): void {
+  liveRuns().get(runKey(store, jobId))?.spawned.add(token);
+}
+
+/** Drop a fire. Returns how many fires remain, and how many of those spawned. The last one stops the lease renewal. */
+function releaseFire(store: ScheduleStore, jobId: string, token: string): { fires: number; spawned: number } {
+  const key = runKey(store, jobId);
+  const entry = liveRuns().get(key);
+  if (!entry) return { fires: 0, spawned: 0 };
+  entry.fires.delete(token);
+  entry.spawned.delete(token);
+  if (entry.fires.size > 0) return { fires: entry.fires.size, spawned: entry.spawned.size };
+  entry.lease?.cancel();
+  liveRuns().delete(key);
+  return { fires: 0, spawned: 0 };
 }
 
 /** What `start()` binds, captured by a fire so a later session switch cannot leak into it. */
@@ -116,24 +162,28 @@ export class SubagentScheduler {
 
     for (const job of store.list()) {
       if (job.enabled) this.scheduleJob(job);
-      // A job disabled while "running" (or expired by the scheduling above) with no
-      // live run in this process was cut off by a previous one; nothing can finalize
-      // it, so it must not hold its name forever. A run this process still owns (a
-      // /resume, /new or /reload re-bind) is in the registry and settles itself. A run
-      // owned by another LIVE process on the same session (`pi --resume` twice) is not
-      // ours to error: its recorded pid keeps the name.
-      if (
-        store.get(job.id)?.enabled === false && job.lastStatus === "running" && !this.hasLiveRun(store, job.id)
-        && !(job.runPid !== undefined && job.runPid !== process.pid && isProcessRunning(job.runPid))
-      ) {
-        store.update(job.id, { lastStatus: "error" });
-      }
+      this.reapOrphan(store, { ...job, ...store.get(job.id) });
     }
   }
 
-  /** Is any run of this job, in this process, spawned and not yet finalized? */
+  /**
+   * A disabled job left "running" with no live run in this process and no live
+   * foreign owner (dead pid or lapsed lease) was cut off; nothing can finalize it,
+   * so it must not hold its name forever. A run this process still owns (a /resume,
+   * /new or /reload re-bind) is in the registry and settles itself. A run owned by
+   * another LIVE process on the same session is not ours to error. Returns the
+   * job as it stands afterwards.
+   */
+  private reapOrphan(store: ScheduleStore, job: ScheduledSubagent): ScheduledSubagent {
+    if (job.enabled || job.lastStatus !== "running") return job;
+    if (this.hasLiveRun(store, job.id) || foreignOwnerLive(job.runOwner, this.clock.now())) return job;
+    store.update(job.id, { lastStatus: "error", runOwner: undefined });
+    return { ...job, lastStatus: "error", runOwner: undefined };
+  }
+
+  /** Is any fire of this job, in this process, claimed and not yet settled? */
   private hasLiveRun(store: ScheduleStore, jobId: string): boolean {
-    return (liveRuns().get(runKey(store, jobId))?.size ?? 0) > 0;
+    return (liveRuns().get(runKey(store, jobId))?.fires.size ?? 0) > 0;
   }
 
   /** Stop all timers; drop refs. Safe to call repeatedly. */
@@ -234,9 +284,12 @@ export class SubagentScheduler {
    * True once a job can never fire again and is not mid-run: a fired one-shot,
    * or a repeating job whose `until` deadline passed. Its name is reusable.
    */
-  private isFinished(job: ScheduledSubagent): boolean {
-    if (job.enabled || job.lastStatus === "running") return false;
-    if (this.hasLiveRun(this.requireStore(), job.id)) return false;
+  private isFinished(old: ScheduledSubagent): boolean {
+    if (old.enabled) return false;
+    if (this.hasLiveRun(this.requireStore(), old.id)) return false;
+    // A run whose owner died or lapsed since we last looked frees the name now.
+    const job = this.reapOrphan(this.requireStore(), old);
+    if (job.lastStatus === "running") return false;
     if (job.scheduleType === "once") return job.lastRun !== undefined || job.lastStatus === "error";
     return this.pastDeadline(job);
   }
@@ -369,11 +422,18 @@ export class SubagentScheduler {
       return;
     }
 
+    // Claim the fire under the store lock: another process on this session may have
+    // fired, disabled or removed the job since our cache loaded. The claim writes
+    // "running" and the owner in one write; a lost claim skips the fire.
+    const now = this.clock.now();
+    const claim = store.claim(id, { pid: process.pid, leaseUntil: now + LEASE_MS }, now);
+    if (!claim) return;
+    const token = holdFire(store, this.clock, id);
+
     // A fire that overlaps a pending admission inherits its prior status.
     const previous = this.pendingRuns.get(id);
-    const prior = previous ? previous.prior : job.lastStatus;
+    const prior = previous ? previous.prior : claim.prior;
     this.pendingRuns.delete(id);
-    store.update(id, { lastStatus: "running" });
 
     // Resolve the original request at fire time, using the same type and model
     // policy as a manual dispatch. Never drop a failed explicit override.
@@ -385,7 +445,7 @@ export class SubagentScheduler {
       paramModel: job.model, parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd,
     }) : dispatch.message;
     if (typeof selection === "string") {
-      store.update(id, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
+      this.endFire(store, id, token, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
       this.emit({ type: "error", jobId: id, error: selection });
       return;
     }
@@ -403,9 +463,12 @@ export class SubagentScheduler {
       this.pendingRuns.set(id, { token: controller, prior });
       // Cancelled before spawn: undo this admission's "running", never a newer one's.
       controller.signal.addEventListener("abort", () => {
+        const { fires } = releaseFire(store, id, token);
         if (this.pendingRuns.get(id)?.token !== controller) return;
         this.pendingRuns.delete(id);
-        if (store.get(id)?.lastStatus === "running") store.update(id, { lastStatus: prior });
+        if (store.get(id)?.lastStatus === "running") {
+          store.update(id, { lastStatus: prior, ...(fires === 0 ? { runOwner: undefined } : {}) });
+        }
       }, { once: true });
       const admission = selection.tierBinding
         ? admitModelSelection(selection, ctx.modelRegistry, pi.events, this.clock, controller.signal)
@@ -417,20 +480,20 @@ export class SubagentScheduler {
         if (this.store !== store || this.ctx !== ctx || this.scheduled.get(id) !== scheduled) return;
         settle();
         if (!block) {
-          this.spawnJob({ store, pi, ctx, manager }, id, selection);
+          this.spawnJob({ store, pi, ctx, manager }, id, selection, token);
         } else if (mayPark(block) && block.resetAt > this.clock.now()) {
           this.repark(id, block.resetAt);
         } else {
           // Refused and it cannot wait (`wait: false`, no reset, or a reset
           // already past): only an explicit admission may spawn, so persist the
           // failure instead of starting on an exhausted provider.
-          this.store?.update(id, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
+          this.endFire(store, id, token, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
           this.emit({ type: "error", jobId: id, error: `${describeBlock(block)} The agent was not started.` });
         }
       }).catch(error => {
         if (this.store !== store || this.scheduled.get(id) !== scheduled) return;
         settle();
-        store.update(id, { lastStatus: "error" });
+        this.endFire(store, id, token, { lastStatus: "error" });
         this.emit({ type: "error", jobId: id, error: error instanceof Error ? error.message : String(error) });
       }).finally(() => {
         admissions.delete(controller);
@@ -438,7 +501,7 @@ export class SubagentScheduler {
       });
       return;
     }
-    this.spawnJob({ store, pi, ctx, manager }, id, selection);
+    this.spawnJob({ store, pi, ctx, manager }, id, selection, token);
   }
 
   /**
@@ -456,9 +519,12 @@ export class SubagentScheduler {
   }
 
   /** Spawn a fired job (bypassing the concurrency queue) and persist its outcome. */
-  private spawnJob({ store, pi, ctx, manager }: BoundSession, id: string, selection: ModelSelection): void {
+  private spawnJob({ store, pi, ctx, manager }: BoundSession, id: string, selection: ModelSelection, token: string): void {
     const job = store.get(id);
-    if (!job) return;
+    if (!job) {
+      releaseFire(store, id, token);
+      return;
+    }
 
     let agentId: string;
     try {
@@ -497,23 +563,18 @@ export class SubagentScheduler {
       });
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
-      store.update(id, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
+      this.endFire(store, id, token, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
       this.emit({ type: "error", jobId: id, error });
       return;
     }
 
+    markSpawned(store, id, token);
     this.emit({ type: "fired", jobId: id, agentId, name: job.name });
 
-    const key = runKey(store, id);
-    const runs = liveRuns().get(key) ?? new Set<string>();
-    runs.add(agentId);
-    liveRuns().set(key, runs);
-    store.update(id, { runPid: process.pid });
     const finalize = (status: "success" | "error") => {
-      runs.delete(agentId);
       // An overlapping run is still live: count this one, leave the status "running".
-      const othersLive = runs.size > 0;
-      if (!othersLive && liveRuns().get(key) === runs) liveRuns().delete(key);
+      const left = releaseFire(store, id, token);
+      const othersLive = left.spawned > 0;
       // The finishing run may belong to a pre-re-bind scheduler whose store cache is stale.
       store.reload();
       const next = this.getNextRun(id);
@@ -522,7 +583,8 @@ export class SubagentScheduler {
         lastRun: new Date(this.clock.now()).toISOString(),
         runCount: (current?.runCount ?? 0) + 1,
         nextRun: next,
-        ...(othersLive ? {} : { lastStatus: status, runPid: undefined }),
+        ...(othersLive ? {} : { lastStatus: status }),
+        ...(left.fires === 0 ? { runOwner: undefined } : {}),
       });
     };
 
@@ -543,6 +605,12 @@ export class SubagentScheduler {
         finalize(failed ? "error" : "success");
       })
       .catch(() => finalize("error"));
+  }
+
+  /** Settle a claimed fire that never produced a run: persist `patch`, and free the claim if it was the last. */
+  private endFire(store: ScheduleStore, id: string, token: string, patch: Partial<ScheduledSubagent>): void {
+    const { fires } = releaseFire(store, id, token);
+    store.update(id, fires > 0 ? patch : { ...patch, runOwner: undefined });
   }
 
   private emit(event: ScheduleChangeEvent): void {

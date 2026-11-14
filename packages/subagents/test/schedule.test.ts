@@ -380,16 +380,17 @@ describe("SubagentScheduler — fire path", () => {
     expect(() => scheduler.addJob({ name: "idle", description: "idle", schedule: "+1h", subagent_type: "general-purpose", prompt: "x" })).toThrow(/already exists/);
   });
 
-  it("a job stays disabled after a far deadline passes", () => {
+  it("a job stays disabled after a far deadline passes", async () => {
     const job = scheduler.addJob({
       name: "far", description: "far", schedule: "1h until +40d",
       subagent_type: "general-purpose", prompt: "x",
     });
     expect(store.get(job.id)?.enabled).toBe(true);
-    vi.advanceTimersByTime(41 * 86_400_000);
+    // Async so each fired run settles; a never-settling run would renew its lease every 30s.
+    await vi.advanceTimersByTimeAsync(41 * 86_400_000);
     expect(store.get(job.id)?.enabled).toBe(false);
     const fired = manager.spawn.mock.calls.length;
-    vi.advanceTimersByTime(5 * 3_600_000);
+    await vi.advanceTimersByTimeAsync(5 * 3_600_000);
     expect(manager.spawn).toHaveBeenCalledTimes(fired);
   });
 
@@ -641,36 +642,158 @@ describe("SubagentScheduler — fire path", () => {
     });
 
     describe("a second process on the same session", () => {
-      /** Simulate another process: fresh registry, same store file, owner pid as persisted. */
-      const secondProcess = (runPid: number) => {
+      const lease = () => Date.now() + 120_000;
+      /** Simulate another process: fresh registry, same store file, owner as persisted. */
+      const secondProcess = (ownerFor: () => { pid: number; leaseUntil: number }) => {
         manager.getRecord.mockImplementation(() => ({ status: "running", promise: new Promise(() => {}) }));
         const job = fireOneShot();
-        expect(new ScheduleStore(path()).get(job.id)?.runPid).toBe(process.pid);
-        store.update(job.id, { runPid });
+        expect(new ScheduleStore(path()).get(job.id)?.runOwner).toMatchObject({ pid: process.pid });
+        store.update(job.id, { runOwner: ownerFor() });
         delete (globalThis as any)[Symbol.for("pi-subagents:scheduled-runs")];
         return { job, next: activate() };
       };
 
-      it("keeps the name of a run whose owner pid is alive", () => {
-        const { job, next } = secondProcess(process.ppid);
+      it("keeps the name of a run whose owner is alive with a valid lease", () => {
+        const { job, next } = secondProcess(() => ({ pid: process.ppid, leaseUntil: lease() }));
         expect(next.list().find(j => j.id === job.id)?.lastStatus).toBe("running");
         expect(() => next.addJob(input)).toThrow(/already exists/);
       });
 
       it("frees the name of a run whose owner pid is dead", () => {
-        const { job, next } = secondProcess(2 ** 31 - 2);
+        const { job, next } = secondProcess(() => ({ pid: 2 ** 31 - 2, leaseUntil: lease() }));
         expect(next.list().find(j => j.id === job.id)?.lastStatus).toBe("error");
         expect(() => next.addJob(input)).not.toThrow();
       });
 
-      it("clears the owner pid when the run finalizes", async () => {
+      it("frees the name of a run whose lease lapsed even though the pid is alive (pid reuse)", () => {
+        const { job, next } = secondProcess(() => ({ pid: process.ppid, leaseUntil: Date.now() - 1 }));
+        expect(next.list().find(j => j.id === job.id)?.lastStatus).toBe("error");
+        expect(() => next.addJob(input)).not.toThrow();
+      });
+
+      it("addJob errors a kept run once its owner dies or its lease lapses", () => {
+        const { job, next } = secondProcess(() => ({ pid: process.ppid, leaseUntil: lease() }));
+        expect(() => next.addJob(input)).toThrow(/already exists/);
+        store.update(job.id, { runOwner: { pid: 2 ** 31 - 2, leaseUntil: lease() } });
+        expect(() => next.addJob(input)).not.toThrow();
+        expect(new ScheduleStore(path()).get(job.id)).toBeUndefined();
+      });
+
+      it("a lease lapsing after start frees the name without another start()", () => {
+        const { job, next } = secondProcess(() => ({ pid: process.ppid, leaseUntil: Date.now() + 1_000 }));
+        expect(() => next.addJob(input)).toThrow(/already exists/);
+        vi.advanceTimersByTime(2_000);
+        expect(() => next.addJob(input)).not.toThrow();
+        expect(new ScheduleStore(path()).get(job.id)).toBeUndefined();
+      });
+
+      it("clears the owner when the run finalizes", async () => {
         let finish: () => void = () => {};
         const settled = new Promise<void>(r => { finish = r; });
         manager.getRecord.mockImplementation(() => ({ status: "completed", promise: settled }));
         const job = fireOneShot();
         finish();
         await vi.advanceTimersByTimeAsync(0);
-        expect(new ScheduleStore(path()).get(job.id)?.runPid).toBeUndefined();
+        expect(new ScheduleStore(path()).get(job.id)?.runOwner).toBeUndefined();
+      });
+
+      it("renews its lease while a run is live and stops when it settles", async () => {
+        let finish: () => void = () => {};
+        const settled = new Promise<void>(r => { finish = r; });
+        manager.getRecord.mockImplementation(() => ({ status: "completed", promise: settled }));
+        const job = fireOneShot();
+        const first = new ScheduleStore(path()).get(job.id)!.runOwner!.leaseUntil;
+        await vi.advanceTimersByTimeAsync(30_000);
+        const renewed = new ScheduleStore(path()).get(job.id)!.runOwner!.leaseUntil;
+        expect(renewed).toBeGreaterThan(first);
+        finish();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(vi.getTimerCount()).toBe(0);
+      });
+    });
+
+    describe("two processes firing the same job", () => {
+      const spec = { name: "Dup", description: "Dup", schedule: "1m", subagent_type: "general-purpose" as const, prompt: "x" };
+      /** A second scheduler on the same store file; `asPid` makes its claims look foreign. */
+      const otherProcess = () => {
+        const otherManager = makeMockManager();
+        otherManager.getRecord.mockImplementation(() => ({ status: "running", promise: new Promise(() => {}) }));
+        const other = new SubagentScheduler();
+        other.start(pi, ctx, otherManager, new ScheduleStore(path()));
+        return { other, otherManager };
+      };
+
+      it("exactly one fires: the loser sees the winner's claim under the lock", async () => {
+        manager.getRecord.mockImplementation(() => ({ status: "running", promise: new Promise(() => {}) }));
+        const job = scheduler.addJob(spec);
+        // The other process never saw the add as enabled-and-claimed: it has a stale cache.
+        const { other, otherManager } = otherProcess();
+        // Another live pid wins the claim first, under the lock, with a valid lease.
+        expect(new ScheduleStore(path()).claim(job.id, { pid: process.ppid, leaseUntil: Date.now() + 120_000 }, Date.now())).toBeDefined();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(manager.spawn).not.toHaveBeenCalled();
+        expect(otherManager.spawn).not.toHaveBeenCalled();
+        other.stop();
+      });
+
+      it("a claim is refused while a live foreign owner holds it, granted once it lapses", () => {
+        const job = scheduler.addJob(spec);
+        const a = new ScheduleStore(path());
+        const b = new ScheduleStore(path());
+        const now = Date.now();
+        expect(a.claim(job.id, { pid: process.ppid, leaseUntil: now + 120_000 }, now)).toBeDefined();
+        expect(b.claim(job.id, { pid: process.pid, leaseUntil: now + 120_000 }, now)).toBeUndefined();
+        expect(b.claim(job.id, { pid: process.pid, leaseUntil: now + 240_000 }, now + 121_000)?.job.runOwner?.pid).toBe(process.pid);
+      });
+
+      it("a claim is refused for a job disabled or removed by another process", () => {
+        const job = scheduler.addJob(spec);
+        const stale = new ScheduleStore(path());
+        new ScheduleStore(path()).update(job.id, { enabled: false });
+        expect(stale.claim(job.id, { pid: process.pid, leaseUntil: 1 }, 0)).toBeUndefined();
+        new ScheduleStore(path()).remove(job.id);
+        expect(stale.claim(job.id, { pid: process.pid, leaseUntil: 1 }, 0)).toBeUndefined();
+      });
+
+      it("a stale-cache fire of a job another process disabled is skipped", async () => {
+        const job = scheduler.addJob(spec);
+        new ScheduleStore(path()).update(job.id, { enabled: false });
+        expect(store.get(job.id)?.enabled).toBe(true);
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(manager.spawn).not.toHaveBeenCalled();
+      });
+
+      it("the claim and owner are written together before the spawn", () => {
+        const job = scheduler.addJob({ ...spec, schedule: "+1s" });
+        manager.spawn.mockImplementation(() => {
+          expect(new ScheduleStore(path()).get(job.id)).toMatchObject({ lastStatus: "running", runOwner: { pid: process.pid } });
+          return "agent-x";
+        });
+        manager.getRecord.mockImplementation(() => ({ status: "running", promise: new Promise(() => {}) }));
+        vi.advanceTimersByTime(2_000);
+        expect(manager.spawn).toHaveBeenCalledTimes(1);
+      });
+
+      it("the name frees only after the claimant's run settles, and addJob refuses while live", async () => {
+        let finish: () => void = () => {};
+        const settled = new Promise<void>(r => { finish = r; });
+        manager.getRecord.mockImplementation(() => ({ status: "completed", promise: settled }));
+        scheduler.addJob({ ...spec, schedule: "+1s" });
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(() => scheduler.addJob(spec)).toThrow(/already exists/);
+        finish();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(() => scheduler.addJob(spec)).not.toThrow();
+      });
+
+      it("an error path before spawn releases the claim", async () => {
+        const job = scheduler.addJob({ ...spec, schedule: "+1s" });
+        manager.spawn.mockImplementation(() => { throw new Error("boom"); });
+        await vi.advanceTimersByTimeAsync(2_000);
+        const after = new ScheduleStore(path()).get(job.id);
+        expect(after?.lastStatus).toBe("error");
+        expect(after?.runOwner).toBeUndefined();
+        expect(vi.getTimerCount()).toBe(0);
       });
     });
 

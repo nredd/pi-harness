@@ -453,6 +453,13 @@ export interface EnvInfo {
  * Stored at `<cwd>/.pi/subagent-schedules/<sessionId>.json`. Session-scoped:
  * survives `/resume` but resets on `/new`, mirroring pi-chonky-tasks.
  */
+/** Cross-process claim on a scheduled job's live run(s). */
+export interface RunOwner {
+  pid: number;
+  /** Epoch ms; the owner renews it while running, so a crashed owner's claim lapses. */
+  leaseUntil: number;
+}
+
 export interface ScheduledSubagent {
   id: string;
   /** Unique within store. Defaults to `description`. */
@@ -481,8 +488,12 @@ export interface ScheduledSubagent {
   createdAt: string;
   lastRun?: string;
   lastStatus?: "success" | "error" | "running";
-  /** Pid of the process owning the live run(s); cleared when the last one finalizes. */
-  runPid?: number;
+  /**
+   * The process owning the live run(s), claimed under the store lock when a fire
+   * starts and cleared when the last one settles. Live while `pid` is alive and
+   * `leaseUntil` (epoch ms, renewed by the owner) is in the future.
+   */
+  runOwner?: RunOwner;
   /**
    * Parked by quota admission: re-check admission at fire time and re-park at
    * the new reset while the model is still blocked. See `quota-admission.ts`.
