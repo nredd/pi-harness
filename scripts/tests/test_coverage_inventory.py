@@ -878,8 +878,8 @@ def test_shared_test_library_is_owned_code_not_a_test_tree() -> None:
         AssertionError: The shared library is classified as test scope or its tests are not.
     """
     assert not is_test_path(Path("tests/lib/src/clock.ts"))
-    assert is_test_path(Path("tests/lib/test/clock.test.ts"))
-    assert is_test_path(Path("tests/lib/test/fixtures/data.ts"))
+    assert is_test_path(Path("tests/lib/tests/clock.test.ts"))
+    assert is_test_path(Path("tests/lib/tests/fixtures/data.ts"))
     assert is_test_path(Path("tests/fixtures/data.ts"))
     assert is_test_path(Path("tests/other/src/x.ts"))
 

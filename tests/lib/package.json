@@ -9,8 +9,8 @@
 		"./*": "./src/*.ts"
 	},
 	"scripts": {
-		"lint": "biome check src test",
-		"format": "biome check --write src test",
+		"lint": "biome check src tests",
+		"format": "biome check --write src tests",
 		"typecheck": "tsc --noEmit",
 		"test": "node ../../scripts/run-vitest.ts node --coverage",
 		"test:bun": "node ../../scripts/run-vitest.ts bun",
