@@ -16,7 +16,7 @@ import { createSubagentsExtension } from "../src/index.js";
 import { resolveModel } from "../src/model-resolver.js";
 import { resetBudgetForTests, setBudgetPolicy } from "../src/process-budget.js";
 import type { AgentRecord } from "../src/types.js";
-import { ctx, type Hermetic, hermeticDir, makePi } from "./helpers/boot-extension.js";
+import { bootPi, ctx, type Hermetic, hermeticDir } from "./helpers/boot-extension.js";
 
 const managerKey = Symbol.for("pi-subagents:manager");
 type Registry = { getRecord(id: string): AgentRecord | undefined };
@@ -31,7 +31,7 @@ function bootWithBus(settings: Record<string, unknown> = {}) {
   env = hermeticDir({ settings: { outputTranscript: false, fallbackSubagent: "none", ...settings } });
   sessionFile = join(env.dir, "parent.jsonl");
   writeFileSync(sessionFile, "");
-  const b = makePi();
+  const b = bootPi();
   const handlers = new Map<string, ((data: unknown) => void)[]>();
   b.pi.events.emit = vi.fn((event: string, data: unknown) => { for (const h of [...(handlers.get(event) ?? [])]) h(data); });
   b.pi.events.on = vi.fn((event: string, handler: (data: unknown) => void) => {

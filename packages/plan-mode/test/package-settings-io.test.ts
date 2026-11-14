@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, test, vi } from "vitest";
 import { exportPlanToFile, exportStoredPlan, resolvePlanExportPath } from "../src/plan-export.js";
 import { readPlanModeSettings, updatePlanModeSettings } from "../src/settings.js";
-import { createMockContext } from "./harness/support.js";
+import { createPlanContext } from "./harness/support.js";
 
 vi.mock("node:fs/promises", { spy: true });
 const actualFs = await vi.importActual<typeof fs>("node:fs/promises");
@@ -202,7 +202,7 @@ test("an export path that is only an at-sign prefix is rejected as empty", () =>
 
 test("export failures of any thrown value reach the user as one sanitized line", async () => {
   const directory = await fs.mkdtemp(join(tmpdir(), "pm-export-string-failure-"));
-  const context = createMockContext({ hasUI: true, cwd: directory });
+  const context = createPlanContext({ hasUI: true, cwd: directory });
   try {
     vi.spyOn(fs, "writeFile").mockRejectedValue("disk\u0001gone\u0085now");
     assert.equal(await exportStoredPlan(SAVED_PLAN_STATE, "plan.md", context.ctx), false);
@@ -215,7 +215,7 @@ test("export failures of any thrown value reach the user as one sanitized line",
 
 test("an export that finishes after its menu went stale reports nothing", async () => {
   const directory = await fs.mkdtemp(join(tmpdir(), "pm-export-stale-"));
-  const context = createMockContext({ hasUI: true, cwd: directory });
+  const context = createPlanContext({ hasUI: true, cwd: directory });
   const write = actualFs.writeFile;
   let current = true;
   try {

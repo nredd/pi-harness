@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { readKnownHosts, sshConfigPath } from "../../src/ssh/hosts.ts";
 import { registerSshTools } from "../../src/ssh/index.ts";
-import { createMockPi } from "../support.ts";
+import { createToolHost } from "../support.ts";
 import { wrapperFixture } from "../wrapper-fixture.ts";
 
 const home = vi.hoisted(() => ({ path: "/unused-fixture-home" }));
@@ -19,7 +19,7 @@ it("reads default host config and tilde includes against an injected home, never
 		expect(sshConfigPath()).toBe(join(fixture.root, ".ssh", "config"));
 		expect([...readKnownHosts()]).toEqual(["fixture"]);
 		fixture.script('console.log("known-host-boundary\\n__PI_RC=0");');
-		const mock = createMockPi();
+		const mock = createToolHost();
 		registerSshTools(mock.pi, { sshBin: fixture.bin });
 		const result = await mock.call("ssh_exec", { host: "fixture", command: "printf fixture" }, fixture.root);
 		expect(result.isError).toBe(false);

@@ -3,18 +3,18 @@ import { test } from "vitest";
 import { FINALIZE_PLAN_PROMPT } from "../src/finalization-request.js";
 import { createHeadlessTurns } from "../src/headless-turn.js";
 import planMode from "../src/plan-mode.js";
-import { createMockContext, createMockPi } from "./support.js";
+import { createPlanContext, createPlanPi } from "./support.js";
 
 /**
  * A pi whose `sendUserMessage` starts a run a little later, like core: the run's
  * `agent_start` fires after several awaits, and the session stays busy until `finish()`.
  */
 function setup(mode: string | undefined, options: { startsRun?: boolean } = {}) {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   let busy = false;
   let finish: () => void = () => undefined;
   const idle = { waits: 0 };
-  const context = createMockContext({
+  const context = createPlanContext({
     mode,
     isIdle: () => !busy,
     waitForIdle: async () => {
@@ -28,13 +28,13 @@ function setup(mode: string | undefined, options: { startsRun?: boolean } = {}) 
       });
     },
   });
-  const send = mock.rawPi.sendUserMessage.bind(mock.rawPi);
-  mock.rawPi.sendUserMessage = (text, messageOptions) => {
+  const send = mock.pi.sendUserMessage.bind(mock.pi);
+  mock.pi.sendUserMessage = (text, messageOptions) => {
     send(text, messageOptions);
     if (options.startsRun === false) return;
     setTimeout(() => {
       busy = true;
-      for (const handler of mock.events.get("agent_start") ?? []) void handler({}, context.ctx);
+      for (const handler of mock.handlers.get("agent_start") ?? []) void handler({}, context.ctx);
     }, 5);
   };
   planMode(mock.pi, { headlessTurnStartTimeoutMs: 50 });
@@ -59,7 +59,7 @@ for (const mode of ["print", "json"]) {
     const finalize = plan("finalize");
 
     assert.equal(await settlesWithin(finalize, 30), false, "returned while the finalize turn was still running");
-    assert.equal(mock.sentUserMessages.at(-1)?.text, FINALIZE_PLAN_PROMPT);
+    assert.equal(mock.sentUserMessages.at(-1)?.content, FINALIZE_PLAN_PROMPT);
     assert.equal(idle.waits, 1);
 
     finish();

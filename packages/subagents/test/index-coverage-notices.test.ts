@@ -10,7 +10,7 @@ vi.mock("../src/agent-runner.js", async () => {
 import { runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
 import type { AgentRecord } from "../src/types.js";
-import { ctx, type Hermetic, hermeticDir, makePi } from "./helpers/boot-extension.js";
+import { bootPi, ctx, type Hermetic, hermeticDir } from "./helpers/boot-extension.js";
 
 const managerKey = Symbol.for("pi-subagents:manager");
 const registry = () => (globalThis as any)[managerKey] as { getRecord(id: string): AgentRecord | undefined };
@@ -18,13 +18,13 @@ const registry = () => (globalThis as any)[managerKey] as { getRecord(id: string
 function booted() {
   env = hermeticDir({ settings: { outputTranscript: false, fallbackSubagent: "none" } });
   Reflect.deleteProperty(globalThis, managerKey);
-  const b = makePi();
+  const b = bootPi();
   subagentsExtension(b.pi);
   lifecycle = b.lifecycle;
   return b;
 }
 
-async function spawnBackground(b: ReturnType<typeof makePi>, description: string): Promise<void> {
+async function spawnBackground(b: ReturnType<typeof bootPi>, description: string): Promise<void> {
   await b.tools.get("Agent").execute("call", {
     prompt: "go", description, subagent_type: "general-purpose", run_in_background: true,
   }, undefined, undefined, ctx());

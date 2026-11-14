@@ -17,7 +17,7 @@ import { loadCustomAgents } from "../src/custom-agents.js";
 import { modelFallbackNote, setAgentModels } from "../src/model-resolver.js";
 import { SubagentScheduler } from "../src/schedule.js";
 import { ScheduleStore } from "../src/schedule-store.js";
-import { flush, makePi, startSession, textOf } from "./helpers/boot-extension.js";
+import { bootPi, flush, startSession, textOf } from "./helpers/boot-extension.js";
 import subagentsExtension from "./helpers/home-extension.js";
 import { registerFauxProvider } from "./helpers/pi-ai.js";
 
@@ -91,7 +91,7 @@ async function bootWithBus() {
     },
     emit: (event: string, data: unknown) => { for (const h of handlers.get(event) ?? []) h(data); },
   };
-  const booted = makePi();
+  const booted = bootPi();
   booted.pi.events = bus;
   subagentsExtension(booted.pi);
   const c = ctxFor(faux.getModel());

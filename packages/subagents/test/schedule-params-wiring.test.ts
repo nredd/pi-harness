@@ -24,7 +24,7 @@ import { getDefaultMaxTurns, normalizeMaxTurns } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
 import { resolveStorePath, ScheduleStore } from "../src/schedule-store.js";
 import type { ScheduledSubagent } from "../src/types.js";
-import { ctx, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
+import { bootPi, ctx, hermeticDir, textOf } from "./helpers/boot-extension.js";
 
 const SESSION_ID = "sched-wiring-session";
 
@@ -42,7 +42,7 @@ async function scheduleAndReadBack(
   params: Record<string, unknown>,
 ): Promise<{ job: ScheduledSubagent; reply: string; restore: () => void }> {
   const hermetic = hermeticDir();
-  const { pi, tools, lifecycle } = makePi();
+  const { pi, tools, lifecycle } = bootPi();
   subagentsExtension(pi);
 
   const c = bootedCtx();
@@ -136,7 +136,7 @@ describe("Agent tool → schedule restrictions", () => {
     settings?: Record<string, unknown>,
   ): Promise<{ reply: string; jobCount: number; restore: () => void }> {
     const hermetic = hermeticDir(settings ? { settings } : {});
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
 
     const c = bootedCtx();

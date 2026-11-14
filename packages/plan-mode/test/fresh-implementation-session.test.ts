@@ -9,7 +9,7 @@ import {
 } from "../src/fresh-implementation.js";
 import { PLAN_APPROVAL_ENTRY_TYPE } from "../src/plan-approval.js";
 import planMode from "../src/plan-mode.js";
-import { createCustomSelectorHarness, createMockContext, createMockPi, showReadyPlanMenu } from "./support.js";
+import { createCustomSelectorHarness, createPlanContext, createPlanPi, showReadyPlanMenu } from "./support.js";
 
 const PLAN = `# Fresh implementation plan
 
@@ -26,8 +26,8 @@ function stateEntry(data: Record<string, unknown>) {
   return { type: "custom" as const, customType: STATE_ENTRY_TYPE, data };
 }
 
-async function completePlan(mock: ReturnType<typeof createMockPi>, ctx: unknown) {
-  const complete = mock.tools.find((candidate) => candidate.name === "plan_mode_complete")?.execute as
+async function completePlan(mock: ReturnType<typeof createPlanPi>, ctx: unknown) {
+  const complete = [...mock.tools.values()].find((candidate) => candidate.name === "plan_mode_complete")?.execute as
     | ((...args: unknown[]) => Promise<unknown>)
     | undefined;
   assert.ok(complete);
@@ -48,10 +48,10 @@ function assertImplementationChoiceCopy(title: string, options: string[]) {
 }
 
 test("user-opened ready menu presents both implementation contexts in one flat group", async () => {
-  const mock = createMockPi({ activeTools: ["read", "edit"] });
+  const mock = createPlanPi({ activeTools: ["read", "edit"] });
   planMode(mock.pi, MISSING_SETTINGS);
   let observedMenu: { title: string; options: string[] } | undefined;
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "tui",
     hasUI: true,
     select: async (title: string, options: string[]) => {
@@ -59,10 +59,10 @@ test("user-opened ready menu presents both implementation contexts in one flat g
       return "Stay in Plan mode";
     },
   });
-  await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
   await completePlan(mock, context.ctx);
-  await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
+  await mock.handlers.get("agent_settled")?.[0]?.({}, context.ctx);
   assert.ok(observedMenu, "completion opens the compact ready-plan chooser");
   assert.match(observedMenu.title, /Proposed plan ready/u);
 
@@ -80,7 +80,7 @@ test("Escape stays in Plan mode, Ctrl-C closes with no action, and only the menu
   ] as const) {
     const owner = new AbortController();
     const actions: string[] = [];
-    const context = createMockContext({
+    const context = createPlanContext({
       mode: "tui",
       hasUI: true,
       custom: async (factory: unknown) => {
@@ -131,10 +131,10 @@ test("Escape stays in Plan mode, Ctrl-C closes with no action, and only the menu
 });
 
 test("completion opens the ready menu once and does not send a follow-up", async () => {
-  const mock = createMockPi({ activeTools: ["read", "edit"] });
+  const mock = createPlanPi({ activeTools: ["read", "edit"] });
   planMode(mock.pi, MISSING_SETTINGS);
   let menuCount = 0;
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     select: async () => {
@@ -142,20 +142,20 @@ test("completion opens the ready menu once and does not send a follow-up", async
       return "Stay in Plan mode";
     },
   });
-  await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
   await completePlan(mock, context.ctx);
-  await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
+  await mock.handlers.get("agent_settled")?.[0]?.({}, context.ctx);
 
   assert.deepEqual(mock.sentUserMessages, []);
   assert.equal(menuCount, 1);
-  await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
+  await mock.handlers.get("agent_settled")?.[0]?.({}, context.ctx);
   assert.equal(menuCount, 1);
   assert.equal(mock.sentUserMessages.length, 0);
 });
 
 test("fresh selection fails closed when automatic readiness has no command context", async () => {
-  const context = createMockContext({ mode: "rpc", hasUI: true });
+  const context = createPlanContext({ mode: "rpc", hasUI: true });
   const state = {
     enabled: true as const,
     awaitingAction: true,
@@ -176,7 +176,7 @@ test("fresh selection fails closed when automatic readiness has no command conte
 });
 
 test("fresh implementation creates a linked destination and hands off only through replacement context", async () => {
-  const mock = createMockPi({ activeTools: ["read", "edit"] });
+  const mock = createPlanPi({ activeTools: ["read", "edit"] });
   planMode(mock.pi, {
     readSettings: async () => ({
       kind: "loaded" as const,
@@ -191,7 +191,7 @@ test("fresh implementation creates a linked destination and hands off only throu
   const replacementMessages: string[] = [];
   let newSessionCalls = 0;
   let parentSession: string | undefined;
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: { provider: "test-provider", id: "test-model" },
@@ -232,7 +232,7 @@ test("fresh implementation creates a linked destination and hands off only throu
     },
   });
 
-  await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
   await completePlan(mock, context.ctx);
   const sourceEntriesBefore = mock.entries.length;
@@ -270,7 +270,7 @@ test("saved plans can start fresh without consuming the source session state", a
     awaitingAction: false,
     savedPlan: { plan: PLAN, source: "plan_mode_complete" },
   });
-  const source = createMockPi({ activeTools: ["read", "edit"] });
+  const source = createPlanPi({ activeTools: ["read", "edit"] });
   planMode(source.pi, {
     readSettings: async () => ({
       kind: "loaded" as const,
@@ -284,14 +284,14 @@ test("saved plans can start fresh without consuming the source session state", a
       },
     }),
   });
-  const destination = createMockPi({ thinkingLevel: "low" });
+  const destination = createPlanPi({ thinkingLevel: "low" });
   planMode(destination.pi, MISSING_SETTINGS);
   const destinationSetupEntries: unknown[] = [];
   const destinationBranch = () => [
     ...destinationSetupEntries,
     ...destination.entries.map((entry) => ({ type: "custom" as const, ...entry })),
   ];
-  const destinationContext = createMockContext({
+  const destinationContext = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: { provider: "destination-provider", id: "destination-model" },
@@ -308,7 +308,7 @@ test("saved plans can start fresh without consuming the source session state", a
   let destinationState: unknown;
   let replacementMessage = "";
   let newSessionCalls = 0;
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: target,
@@ -327,7 +327,7 @@ test("saved plans can start fresh without consuming the source session state", a
       withSession?: (ctx: unknown) => Promise<void>;
     }) => {
       newSessionCalls += 1;
-      await destination.events.get("session_start")?.[0]?.({ reason: "new" }, destinationContext.ctx);
+      await destination.handlers.get("session_start")?.[0]?.({ reason: "new" }, destinationContext.ctx);
       await options.setup?.({
         appendCustomEntry(customType, data) {
           destinationState = data;
@@ -349,13 +349,16 @@ test("saved plans can start fresh without consuming the source session state", a
         ...(destinationContext.ctx as object),
         sendUserMessage: async (message: string) => {
           replacementMessage = message;
-          await destination.events.get("input")?.[0]?.({ text: message, source: "extension" }, destinationContext.ctx);
+          await destination.handlers.get("input")?.[0]?.(
+            { text: message, source: "extension" },
+            destinationContext.ctx,
+          );
         },
       });
       return { cancelled: false };
     },
   });
-  await source.events.get("session_start")?.[0]?.({}, context.ctx);
+  await source.handlers.get("session_start")?.[0]?.({}, context.ctx);
   await source.commands.get("plan")?.handler("", context.ctx);
 
   assert.equal(newSessionCalls, 1);
@@ -392,9 +395,9 @@ test("fresh menu work stops after source session shutdown while waiting for idle
     releaseIdle = resolve;
   });
   let newSessionCalls = 0;
-  const mock = createMockPi({ activeTools: ["read", "edit"] });
+  const mock = createPlanPi({ activeTools: ["read", "edit"] });
   planMode(mock.pi, MISSING_SETTINGS);
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: { provider: "test-provider", id: "test-model" },
@@ -413,12 +416,12 @@ test("fresh menu work stops after source session shutdown while waiting for idle
       return { cancelled: false };
     },
   });
-  await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
   await completePlan(mock, context.ctx);
   const pendingMenu = mock.commands.get("plan")?.handler("", context.ctx);
   await waiting;
-  await mock.events.get("session_shutdown")?.[0]?.({ reason: "new" }, context.ctx);
+  await mock.handlers.get("session_shutdown")?.[0]?.({ reason: "new" }, context.ctx);
   releaseIdle();
   await pendingMenu;
 
@@ -430,16 +433,16 @@ test("fresh menu work stops after source session shutdown while waiting for idle
 test("fresh destination adopts setup state before kickoff for guaranteed-plan policies", async () => {
   for (const retention of ["keep", "clear-after-first-run"] as const) {
     const entries: Array<{ type: "custom"; customType: string; data: unknown }> = [];
-    const mock = createMockPi({ activeTools: ["read", "edit"] });
+    const mock = createPlanPi({ activeTools: ["read", "edit"] });
     planMode(mock.pi, MISSING_SETTINGS);
-    const context = createMockContext({
+    const context = createPlanContext({
       sessionManager: {
         getSessionFile: () => "/sessions/implementation.jsonl",
         getBranch: () => entries,
         getEntries: () => entries,
       },
     });
-    await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+    await mock.handlers.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
     assert.equal(context.statuses.get("plan-mode"), undefined);
 
     entries.push(
@@ -456,25 +459,25 @@ test("fresh destination adopts setup state before kickoff for guaranteed-plan po
       }),
     );
     const handoff = `Plan mode is now disabled. Full tool access is restored. Implement this proposed plan now:\n\n${PLAN}`;
-    await mock.events.get("before_agent_start")?.[0]?.({ prompt: handoff, systemPrompt: "system" }, context.ctx);
+    await mock.handlers.get("before_agent_start")?.[0]?.({ prompt: handoff, systemPrompt: "system" }, context.ctx);
     assert.equal(context.statuses.get("plan-mode"), "plan implementing");
-    assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "edit", "plan_mode_question", "plan_mode_complete"]);
+    assert.deepEqual(mock.pi.getActiveTools(), ["read", "edit", "plan_mode_question", "plan_mode_complete"]);
 
-    const firstContext = (await mock.events.get("context")?.[0]?.(
+    const firstContext = (await mock.handlers.get("context")?.[0]?.(
       { messages: [{ role: "user", content: handoff }] },
       context.ctx,
     )) as { messages: unknown[] };
     assert.match(JSON.stringify(firstContext.messages), /Fresh implementation plan/);
     assert.equal(context.statuses.get("plan-mode"), "plan implementing");
-    await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
+    await mock.handlers.get("agent_settled")?.[0]?.({}, context.ctx);
     assert.equal(context.statuses.get("plan-mode"), retention === "keep" ? "plan implementing" : undefined);
   }
 });
 
 test("conversation-history fresh kickoff skips active state and recovers in the editor", async () => {
   let setupCalls = 0;
-  const replacement = createMockContext({ mode: "rpc", hasUI: true });
-  const source = createMockContext({
+  const replacement = createPlanContext({ mode: "rpc", hasUI: true });
+  const source = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: { provider: "test-provider", id: "test-model" },
@@ -518,7 +521,7 @@ test("conversation-history fresh kickoff skips active state and recovers in the 
 
 test("fresh handoff treats a handled runtime kickoff as partial and restores the prompt", async () => {
   const destinationBranch: ReturnType<typeof stateEntry>[] = [];
-  const replacement = createMockContext({
+  const replacement = createPlanContext({
     mode: "rpc",
     hasUI: true,
     sessionManager: {
@@ -526,7 +529,7 @@ test("fresh handoff treats a handled runtime kickoff as partial and restores the
       getEntries: () => destinationBranch,
     },
   });
-  const source = createMockContext({
+  const source = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: { provider: "test-provider", id: "test-model" },
@@ -573,7 +576,7 @@ test("fresh handoff treats a handled runtime kickoff as partial and restores the
 });
 
 test("fresh handoff fails closed when runtime consumption cannot be inspected", async () => {
-  const replacement = createMockContext({
+  const replacement = createPlanContext({
     mode: "rpc",
     hasUI: true,
     sessionManager: {
@@ -583,7 +586,7 @@ test("fresh handoff fails closed when runtime consumption cannot be inspected", 
       getEntries: () => [],
     },
   });
-  const source = createMockContext({
+  const source = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: { provider: "test-provider", id: "test-model" },
@@ -625,7 +628,7 @@ test("fresh handoff fails closed when runtime consumption cannot be inspected", 
 
 test("fresh success notification failures do not downgrade or duplicate kickoff", async () => {
   let kickoffCalls = 0;
-  const replacement = createMockContext({ mode: "tui", hasUI: true });
+  const replacement = createPlanContext({ mode: "tui", hasUI: true });
   const replacementUi = (
     replacement.ctx as unknown as {
       ui: { notify(message: string, level?: string): void };
@@ -634,7 +637,7 @@ test("fresh success notification failures do not downgrade or duplicate kickoff"
   replacementUi.notify = () => {
     throw new Error("replacement notification is stale");
   };
-  const source = createMockContext({
+  const source = createPlanContext({
     mode: "tui",
     hasUI: true,
     model: { provider: "test-provider", id: "test-model" },
@@ -672,7 +675,7 @@ test("fresh success notification failures do not downgrade or duplicate kickoff"
 });
 
 test("fresh recovery reports when a stale editor cannot accept the request", async () => {
-  const replacement = createMockContext({ mode: "tui", hasUI: true });
+  const replacement = createPlanContext({ mode: "tui", hasUI: true });
   const replacementUi = (
     replacement.ctx as unknown as {
       ui: { setEditorText(value: string): void };
@@ -681,7 +684,7 @@ test("fresh recovery reports when a stale editor cannot accept the request", asy
   replacementUi.setEditorText = () => {
     throw new Error("replacement editor is stale");
   };
-  const source = createMockContext({
+  const source = createPlanContext({
     mode: "tui",
     hasUI: true,
     model: { provider: "test-provider", id: "test-model" },
@@ -721,8 +724,8 @@ test("fresh replacement reports recoverable setup and kickoff failures as partia
   for (const failure of ["setup", "kickoff"] as const) {
     let appendedState: unknown;
     let replacementMessage = "";
-    const replacement = createMockContext({ mode: "rpc", hasUI: true });
-    const source = createMockContext({
+    const replacement = createPlanContext({ mode: "rpc", hasUI: true });
+    const source = createPlanContext({
       mode: "rpc",
       hasUI: true,
       model: { provider: "test-provider", id: "test-model" },
@@ -783,7 +786,7 @@ test("fresh replacement reports recoverable setup and kickoff failures as partia
 test("fresh preflight and replacement cancellation preserve the source boundary", async () => {
   let newSessionCalls = 0;
   let current = true;
-  const authFailure = createMockContext({
+  const authFailure = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: { provider: "test-provider", id: "test-model" },
@@ -804,7 +807,7 @@ test("fresh preflight and replacement cancellation preserve the source boundary"
   assert.equal((await startFreshImplementationSession(authFailure.ctx, request)).kind, "rejected");
   assert.equal(newSessionCalls, 0);
 
-  const stale = createMockContext({
+  const stale = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: { provider: "test-provider", id: "test-model" },
@@ -820,7 +823,7 @@ test("fresh preflight and replacement cancellation preserve the source boundary"
   assert.equal((await startFreshImplementationSession(stale.ctx, request)).kind, "stale");
   assert.equal(newSessionCalls, 0);
 
-  const cancelled = createMockContext({
+  const cancelled = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: { provider: "test-provider", id: "test-model" },
@@ -843,10 +846,10 @@ test("saved-plan RPC menu keeps both implementation choices understandable witho
     awaitingAction: false,
     savedPlan: { plan: PLAN, source: "plan_mode_complete" },
   });
-  const mock = createMockPi({ activeTools: ["read", "edit"] });
+  const mock = createPlanPi({ activeTools: ["read", "edit"] });
   planMode(mock.pi, MISSING_SETTINGS);
   let observedMenu: { title: string; options: string[] } | undefined;
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     sessionManager: {
@@ -859,7 +862,7 @@ test("saved-plan RPC menu keeps both implementation choices understandable witho
       return undefined;
     },
   });
-  await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
   await mock.commands.get("plan")?.handler("", context.ctx);
   assert.ok(observedMenu);
   assertImplementationChoiceCopy(observedMenu.title, observedMenu.options);

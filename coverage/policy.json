@@ -493,10 +493,10 @@
     },
     "test-lib": {
       "root": "tests/lib",
-      "owned": ["src/clock.ts", "src/deferred.ts", "src/faux.ts", "src/git.ts", "src/harness.ts", "src/home-guard.ts", "src/resources.ts", "src/sandbox.ts", "src/terminal.ts"],
+      "owned": ["src/clock.ts", "src/deferred.ts", "src/faux.ts", "src/git.ts", "src/harness.ts", "src/home-guard.ts", "src/pi.ts", "src/resources.ts", "src/sandbox.ts", "src/terminal.ts"],
       "exclusions": [],
       "status": "measured",
-      "note": "Shared test helpers (#864): fake clock, promise gates, faux turns, terminal constants, git and temp/agent/config-home sandboxes, home guard, and the in-process session harness (#916: public SDK only; the interactive harness stays on the fork export). Carried by their own tests; package suites do not count. `src/home-setup.ts` stays a verification helper: Vitest hard-excludes its own `setupFiles` from coverage, and it only calls the measured `installHomeGuard`.",
+      "note": "Shared test helpers (#864): fake clock, promise gates, faux turns, the recording ExtensionAPI and context doubles (#865), terminal constants, git and temp/agent/config-home sandboxes, home guard, and the in-process session harness (#916: public SDK only; the interactive harness stays on the fork export). Carried by their own tests; package suites do not count. `src/home-setup.ts` stays a verification helper: Vitest hard-excludes its own `setupFiles` from coverage, and it only calls the measured `installHomeGuard`.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",

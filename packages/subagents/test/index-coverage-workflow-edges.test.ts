@@ -10,7 +10,7 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { runAgent } from "../src/agent-runner.js";
 import subagentsExtension, { WORKFLOW_FILE_FLAG } from "../src/index.js";
-import { ctx, flush, type Hermetic, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
+import { bootPi, ctx, flush, type Hermetic, hermeticDir, textOf } from "./helpers/boot-extension.js";
 
 const managerKey = Symbol.for("pi-subagents:manager");
 const HEAD = 'export const meta = { name: "edge", description: "an edge probe" };\n';
@@ -33,7 +33,7 @@ afterEach(async () => {
 
 function boot(settings: Record<string, unknown> = { workflowsEnabled: true }, flags: Record<string, boolean | string> = {}) {
   hermetic = hermeticDir({ settings: { schedulingEnabled: false, outputTranscript: false, ...settings } });
-  const b = makePi(flags);
+  const b = bootPi(flags);
   subagentsExtension(b.pi);
   lifecycle = b.lifecycle;
   return b;

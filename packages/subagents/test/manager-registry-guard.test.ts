@@ -20,29 +20,10 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
+import { bootPi } from "./helpers/boot-extension.js";
 
 const MANAGER_KEY = Symbol.for("pi-subagents:manager");
 
-function makePi() {
-  const tools = new Map<string, any>();
-  const lifecycle = new Map<string, any>();
-  const pi = {
-    registerMessageRenderer: vi.fn(),
-    registerTool: vi.fn((t: any) => tools.set(t.name, t)),
-    registerCommand: vi.fn(),
-    registerEntryRenderer: vi.fn(),
-    registerFlag: vi.fn(),
-    getFlag: vi.fn(),
-    on: vi.fn((event: string, handler: any) => lifecycle.set(event, handler)),
-    events: {
-      emit: vi.fn(),
-      on: vi.fn(() => vi.fn()),
-    },
-    appendEntry: vi.fn(),
-    sendMessage: vi.fn(),
-  } as any;
-  return { pi, tools, lifecycle };
-}
 
 function ctx() {
   return {
@@ -83,7 +64,7 @@ describe("Symbol.for manager registry across activations", () => {
     delete (globalThis as any)[MANAGER_KEY];
 
     // Root session activates first and owns the registry.
-    const root = makePi();
+    const root = bootPi();
     subagentsExtension(root.pi);
     const rootEntry = (globalThis as any)[MANAGER_KEY];
     expect(rootEntry).toBeDefined();
@@ -93,7 +74,7 @@ describe("Symbol.for manager registry across activations", () => {
     expect(rootEntry.getRecord(id)).toBeDefined();
 
     // A child agent session re-activates the extension in-process.
-    const child = makePi();
+    const child = bootPi();
     subagentsExtension(child.pi);
 
     // Registry still points at the root's entry (child did not clobber it) …
@@ -118,7 +99,7 @@ describe("the registry spawn strips internal capabilities", () => {
   /** Boot a fresh owner and spawn through the registry with forged options. */
   function forge(options: Record<string, unknown>) {
     delete (globalThis as any)[MANAGER_KEY];
-    const root = makePi();
+    const root = bootPi();
     subagentsExtension(root.pi);
     vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}) as any);
     const entry = (globalThis as any)[MANAGER_KEY];

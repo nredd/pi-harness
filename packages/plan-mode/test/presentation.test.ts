@@ -14,7 +14,7 @@ import {
   updatePlanModeUi,
 } from "../src/presentation.js";
 import type { DisabledPlanModeState, PlanModeState, PlanModeWorkflowToolPolicy } from "../src/state.js";
-import { createMockContext, createMockPi } from "./support.js";
+import { createPlanContext, createPlanPi } from "./support.js";
 
 const BASE_STATE: DisabledPlanModeState = {
   enabled: false,
@@ -58,7 +58,7 @@ test("sanitizes terminal and bidi controls before truncating Plan mode content",
 
 test("plain planning state has no above-editor widget, only a colored footer chip", () => {
   const { calls, theme } = fgTrackingTheme();
-  const context = createMockContext({ hasUI: true, theme });
+  const context = createPlanContext({ hasUI: true, theme });
   const state: PlanModeState = { ...BASE_STATE, enabled: true, workflowToolPolicy: PLAN_POLICY };
 
   updatePlanModeUi(context.ctx, state, () => "unused");
@@ -70,7 +70,7 @@ test("plain planning state has no above-editor widget, only a colored footer chi
 
 test("a ready plan keeps its one-line widget and switches the footer chip to ready", () => {
   const { theme } = fgTrackingTheme();
-  const context = createMockContext({ hasUI: true, theme });
+  const context = createPlanContext({ hasUI: true, theme });
   const state: PlanModeState = {
     ...BASE_STATE,
     enabled: true,
@@ -88,7 +88,7 @@ test("a ready plan keeps its one-line widget and switches the footer chip to rea
 
 test("implementing a plan has no above-editor widget, only a colored footer chip", () => {
   const { theme } = fgTrackingTheme();
-  const context = createMockContext({ hasUI: true, theme });
+  const context = createPlanContext({ hasUI: true, theme });
   const state: PlanModeState = {
     ...BASE_STATE,
     activeImplementation: { id: "plan-1", plan: "# Plan", source: "plan_mode_complete", startedAt: 0 },
@@ -102,7 +102,7 @@ test("implementing a plan has no above-editor widget, only a colored footer chip
 
 test("a saved plan keeps its one-line widget and switches the footer chip to saved", () => {
   const { theme } = fgTrackingTheme();
-  const context = createMockContext({ hasUI: true, theme });
+  const context = createPlanContext({ hasUI: true, theme });
   const state: PlanModeState = { ...BASE_STATE, savedPlan: { plan: "# Plan", source: "plan_mode_complete" } };
 
   updatePlanModeUi(context.ctx, state, () => "unused");
@@ -114,7 +114,7 @@ test("a saved plan keeps its one-line widget and switches the footer chip to sav
 
 test("clears the footer chip and widget once Plan mode is fully off", () => {
   const { theme } = fgTrackingTheme();
-  const context = createMockContext({ hasUI: true, theme });
+  const context = createPlanContext({ hasUI: true, theme });
 
   updatePlanModeUi(context.ctx, BASE_STATE, () => "unused");
 
@@ -138,8 +138,8 @@ function planMessage(overrides: Partial<PlanMessage> = {}): PlanMessage {
 }
 
 test("showPlanModePlan sends a proposed-plan message with structured details", () => {
-  const mock = createMockPi();
-  const context = createMockContext({ hasUI: true });
+  const mock = createPlanPi();
+  const context = createPlanContext({ hasUI: true });
 
   showPlanModePlan(mock.pi, context.ctx, "Saved Plan", PLAN);
 
@@ -202,7 +202,7 @@ test("the proposed-plan renderer collapses to `Title · heading` and expands to 
 });
 
 test("plan mode registers the proposed-plan message renderer", () => {
-  const mock = createMockPi();
+  const mock = createPlanPi();
   planMode(mock.pi);
   assert.equal(mock.messageRenderers.get(PLAN_MESSAGE_TYPE), renderPlanMessage);
 });
@@ -212,11 +212,11 @@ test("a failed plan message reports the detail of any thrown value", () => {
     [new Error("renderer broke"), "renderer broke"],
     ["plain text failure", "plain text failure"],
   ] as const) {
-    const mock = createMockPi();
-    mock.rawPi.sendMessage = () => {
+    const mock = createPlanPi();
+    mock.pi.sendMessage = () => {
       throw thrown;
     };
-    const context = createMockContext({ hasUI: true });
+    const context = createPlanContext({ hasUI: true });
 
     showPlanModePlan(mock.pi, context.ctx, "Plan", "# Plan");
 

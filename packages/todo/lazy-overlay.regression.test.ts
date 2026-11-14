@@ -1,6 +1,7 @@
-import { buildSessionEntries, createMockCtx, createMockPi, makeTodoToolResult } from "@juicesharp/rpiv-test-utils";
+import { buildSessionEntries, makeTodoToolResult } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { TEST_HOME } from "./.test-support/setup.ts";
+import { createTodoCtx, createTodoPi } from "./tests/fixtures/todo-host.ts";
 import { SUBAGENT_STARTED_EVENT } from "./tool/types.ts";
 
 const overlayMock = vi.hoisted(() => ({
@@ -27,11 +28,11 @@ function resumedBranch(subject: string) {
 
 async function setup(importOverlay?: () => Promise<typeof import("./todo-overlay.ts")>) {
 	const { default: registerTodo } = await import("./index.ts");
-	const { pi, captured } = createMockPi();
+	const { pi, captured } = createTodoPi();
 	registerTodo(pi, importOverlay, { homeDir: TEST_HOME });
-	const start = captured.events.get("session_start")?.[0];
-	const shutdown = captured.events.get("session_shutdown")?.[0];
-	const toolEnd = captured.events.get("tool_execution_end")?.[0];
+	const start = captured.handlers.get("session_start")?.[0];
+	const shutdown = captured.handlers.get("session_shutdown")?.[0];
+	const toolEnd = captured.handlers.get("tool_execution_end")?.[0];
 	const tool = captured.tools.get("todo");
 	if (!start || !shutdown || !toolEnd || !tool) throw new Error("todo lifecycle was not registered");
 	return { shutdown, start, tool, toolEnd };
@@ -55,7 +56,7 @@ it("keeps overlay construction task-gated and ignores stale imports", async () =
 		releaseImport = resolve;
 	});
 	const staleLifecycle = await setup();
-	const staleCtx = createMockCtx({ hasUI: true, sessionId: "stale" });
+	const staleCtx = createTodoCtx({ hasUI: true, sessionId: "stale" });
 
 	// Registration and session start stay off the overlay graph's startup path
 	// and do not touch the widget API.
@@ -77,7 +78,7 @@ it("keeps overlay construction task-gated and ignores stale imports", async () =
 	await vi.waitFor(() => expect(overlayMock.moduleLoads).toBe(1));
 	await staleLifecycle.shutdown({} as never, staleCtx as never);
 
-	const replacementCtx = createMockCtx({
+	const replacementCtx = createTodoCtx({
 		branch: resumedBranch("replacement task"),
 		hasUI: true,
 		sessionId: "replacement",
@@ -94,7 +95,7 @@ it("keeps overlay construction task-gated and ignores stale imports", async () =
 	await staleLifecycle.shutdown({} as never, replacementCtx as never);
 	overlayMock.importGate = undefined;
 	const currentLifecycle = await setup();
-	const currentCtx = createMockCtx({ hasUI: true, sessionId: "current" });
+	const currentCtx = createTodoCtx({ hasUI: true, sessionId: "current" });
 	await currentLifecycle.start({} as never, currentCtx as never);
 	expect(currentCtx.ui.setWidget as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
 	await currentLifecycle.tool.execute?.(
@@ -152,7 +153,7 @@ it("schedules the overlay pre-warm after startup", async () => {
 	await vi.advanceTimersByTimeAsync(1);
 	expect(importer).toHaveBeenCalledTimes(1);
 
-	const ctx = createMockCtx({ hasUI: true, sessionId: "empty" });
+	const ctx = createTodoCtx({ hasUI: true, sessionId: "empty" });
 	await lifecycle.start({} as never, ctx as never);
 	expect(ctx.ui.setWidget as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
 });
@@ -182,7 +183,7 @@ it("swallows a failed pre-warm, then retries on the first real update", async ()
 	await vi.advanceTimersByTimeAsync(PREWARM_DELAY_MS);
 	expect(importer).toHaveBeenCalledTimes(1);
 
-	const ctx = createMockCtx({ hasUI: true, sessionId: "retry" });
+	const ctx = createTodoCtx({ hasUI: true, sessionId: "retry" });
 	await lifecycle.start({} as never, ctx as never);
 	await lifecycle.tool.execute?.(
 		"tc",
@@ -241,7 +242,7 @@ it("tool_execution_end swallows a transient load failure and heals on the next e
 		return healthyModule;
 	});
 	const lifecycle = await setup(importer);
-	const ctx = createMockCtx({ hasUI: true, sessionId: "fail-soft" });
+	const ctx = createTodoCtx({ hasUI: true, sessionId: "fail-soft" });
 	await lifecycle.start({} as never, ctx as never);
 	await lifecycle.tool.execute?.(
 		"tc",
@@ -270,7 +271,7 @@ it("tool_execution_end swallows a transient load failure and heals on the next e
 it("tool_execution_end still propagates the latched stale-namespace restart error", async () => {
 	const staleModule = { TodoOverlay: undefined } as unknown as typeof import("./todo-overlay.ts");
 	const lifecycle = await setup(async () => staleModule);
-	const ctx = createMockCtx({ hasUI: true, sessionId: "stale-latch" });
+	const ctx = createTodoCtx({ hasUI: true, sessionId: "stale-latch" });
 	await lifecycle.start({} as never, ctx as never);
 	await lifecycle.tool.execute?.(
 		"tc",
@@ -290,7 +291,7 @@ it("a subagent lifecycle event logs the latched stale-namespace error instead of
 	// would escape as an unhandled rejection rather than reach the user.
 	const listeners = new Map<string, (data: unknown) => unknown>();
 	const { default: registerTodo } = await import("./index.ts");
-	const { pi, captured } = createMockPi({
+	const { pi, captured } = createTodoPi({
 		events: {
 			emit: vi.fn(),
 			on: vi.fn((channel: string, handler: (data: unknown) => unknown) => {
@@ -301,11 +302,11 @@ it("a subagent lifecycle event logs the latched stale-namespace error instead of
 	} as never);
 	const staleModule = { TodoOverlay: undefined } as unknown as typeof import("./todo-overlay.ts");
 	registerTodo(pi, async () => staleModule, { homeDir: TEST_HOME });
-	const start = captured.events.get("session_start")?.[0];
+	const start = captured.handlers.get("session_start")?.[0];
 	const tool = captured.tools.get("todo");
 	const started = listeners.get(SUBAGENT_STARTED_EVENT);
 	if (!start || !tool || !started) throw new Error("todo lifecycle was not registered");
-	const ctx = createMockCtx({ hasUI: true, sessionId: "stale-agent" });
+	const ctx = createTodoCtx({ hasUI: true, sessionId: "stale-agent" });
 	await start({} as never, ctx as never);
 	await tool.execute?.(
 		"tc",

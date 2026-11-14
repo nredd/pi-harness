@@ -10,7 +10,7 @@ vi.mock("../src/mention-clone.js", () => ({ runMentionClone: vi.fn() }));
 
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
-import { ctx, flush, type Hermetic, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
+import { bootPi, ctx, flush, type Hermetic, hermeticDir, textOf } from "./helpers/boot-extension.js";
 
 const managerKey = Symbol.for("pi-subagents:manager");
 const registry = () => (globalThis as any)[managerKey];
@@ -32,7 +32,7 @@ afterEach(async () => {
 
 function boot(settings: Record<string, unknown> = {}) {
   hermetic = hermeticDir({ settings: { outputTranscript: false, agentMentions: "direct", ...settings } });
-  const b = makePi();
+  const b = bootPi();
   subagentsExtension(b.pi);
   lifecycle = b.lifecycle;
   return b;

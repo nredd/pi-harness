@@ -22,32 +22,9 @@ vi.mock("../src/output-file.js", async () => {
 
 import { runAgent } from "../src/agent-runner.js";
 import { createOutputFilePath, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "../src/output-file.js";
+import { bootPi } from "./helpers/boot-extension.js";
 import subagentsExtension from "./helpers/home-extension.js";
 
-function makePi() {
-  const tools = new Map<string, any>();
-  const lifecycle = new Map<string, any>();
-  const events = new Map<string, any>();
-  const pi = {
-    registerMessageRenderer: vi.fn(),
-    registerTool: vi.fn((tool: any) => tools.set(tool.name, tool)),
-    registerCommand: vi.fn(),
-    registerEntryRenderer: vi.fn(),
-    registerFlag: vi.fn(),
-    getFlag: vi.fn(),
-    on: vi.fn((event: string, handler: any) => lifecycle.set(event, handler)),
-    events: {
-      emit: vi.fn(),
-      on: vi.fn((event: string, handler: any) => {
-        events.set(event, handler);
-        return vi.fn();
-      }),
-    },
-    appendEntry: vi.fn(),
-    sendMessage: vi.fn(),
-  } as any;
-  return { pi, tools, lifecycle };
-}
 
 function makeCtx(cwd: string) {
   return {
@@ -97,7 +74,7 @@ describe("output_transcript agent wiring", () => {
 
   it("creates no transcript when a custom agent sets output_transcript false", async () => {
     writeFileSync(join(agentDir, "agents", "sensitive.md"), `---\ndescription: Sensitive in-memory agent\noutput_transcript: false\n---\n\nKeep data in memory.`);
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
 
     await tools.get("Agent").execute(
@@ -116,7 +93,7 @@ describe("output_transcript agent wiring", () => {
 
   it("also suppresses the background transcript", async () => {
     writeFileSync(join(agentDir, "agents", "sensitive.md"), `---\ndescription: Sensitive in-memory agent\noutput_transcript: false\nrun_in_background: true\n---\n\nKeep data in memory.`);
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
 
     await tools.get("Agent").execute(
@@ -134,7 +111,7 @@ describe("output_transcript agent wiring", () => {
   });
 
   it.each([true, false])("refuses transcript setup errors before starting a child (background=%s)", async (background) => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     for (const failing of [createOutputFilePath, writeInitialEntry]) {
       vi.mocked(failing).mockImplementationOnce(() => { throw new Error("EPERM spool"); });
@@ -151,7 +128,7 @@ describe("output_transcript agent wiring", () => {
   });
 
   it("keeps transcript creation as the default", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
 
     await tools.get("Agent").execute(
@@ -171,7 +148,7 @@ describe("output_transcript agent wiring", () => {
   it("suppresses the transcript project-wide when subagents.json sets outputTranscript false", async () => {
     // A plain default agent (no frontmatter) inherits the project default.
     writeFileSync(join(cwd, ".pi", "subagents.json"), JSON.stringify({ schedulingEnabled: false, outputTranscript: false }));
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
 
     await tools.get("Agent").execute(
@@ -191,7 +168,7 @@ describe("output_transcript agent wiring", () => {
   it("lets agent frontmatter output_transcript true override a project outputTranscript false", async () => {
     writeFileSync(join(cwd, ".pi", "subagents.json"), JSON.stringify({ schedulingEnabled: false, outputTranscript: false }));
     writeFileSync(join(agentDir, "agents", "audited.md"), `---\ndescription: Always keeps a transcript\noutput_transcript: true\n---\n\nWrite a transcript regardless of the project default.`);
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
 
     await tools.get("Agent").execute(

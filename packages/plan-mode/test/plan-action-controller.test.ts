@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { createPlanActionController } from "../src/plan-action-controller.js";
-import { createMockContext } from "./harness/support.js";
+import { createPlanContext } from "./harness/support.js";
 
 test("stale Plan actions do not load interactive UI", async () => {
   let interactiveLoads = 0;
@@ -36,7 +36,7 @@ test("stale Plan actions do not load interactive UI", async () => {
     exitReady: () => undefined,
     clearSaved: () => undefined,
   });
-  const context = createMockContext({ hasUI: true });
+  const context = createPlanContext({ hasUI: true });
 
   await controller.showSaved(context.ctx);
   await controller.showCurrent(context.ctx);
@@ -99,7 +99,7 @@ test("user-opened fresh actions stop after menu disposal", async () => {
     exitReady: () => undefined,
     clearSaved: () => undefined,
   });
-  const context = createMockContext({
+  const context = createPlanContext({
     hasUI: true,
     model: { provider: "planning-provider", id: "planning-model" },
     modelRegistry: { getAvailable: () => [] },
@@ -175,7 +175,7 @@ test("saved-plan fresh actions use persistent defaults and fall back from missin
       exitReady: () => undefined,
       clearSaved: () => undefined,
     });
-    const context = createMockContext({
+    const context = createPlanContext({
       hasUI: true,
       model: { provider: "planning-provider", id: "planning-model" },
       ...(scenario.scopedModels ? { scopedModels: scenario.scopedModels } : {}),
@@ -251,7 +251,7 @@ test("fresh actions invoked on an already closed menu never start", async () => 
     }),
   );
 
-  await controller.showSaved(createMockContext({ hasUI: true }).ctx);
+  await controller.showSaved(createPlanContext({ hasUI: true }).ctx);
 
   assert.equal(started, 0);
 });
@@ -273,7 +273,7 @@ test("fresh defaults omit the model and thinking level when none is known", asyn
     }),
   );
 
-  await controller.showSaved(createMockContext({ hasUI: true, model: undefined }).ctx);
+  await controller.showSaved(createPlanContext({ hasUI: true, model: undefined }).ctx);
 
   assert.deepEqual(selectedRuntime, {});
 });
@@ -304,7 +304,7 @@ test("menus stop when their lifecycle ends before or while the interactive UI lo
       );
       if (end === "aborted before load") lifecycle.abort(new DOMException("Menu closed", "AbortError"));
       if (end === "stale before load") current = false;
-      const ctx = createMockContext({ hasUI: true }).ctx;
+      const ctx = createPlanContext({ hasUI: true }).ctx;
 
       if (show === "showReady") await controller.showReady(ctx, () => true);
       else await controller[show](ctx);
@@ -325,6 +325,6 @@ test("a ready menu stops when the ready plan is no longer current", async () => 
       },
     }),
   );
-  await controller.showReady(createMockContext({ hasUI: true }).ctx, () => false);
+  await controller.showReady(createPlanContext({ hasUI: true }).ctx, () => false);
   assert.equal(loads, 0);
 });

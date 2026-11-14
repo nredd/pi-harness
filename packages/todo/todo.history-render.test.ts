@@ -1,7 +1,8 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { createMockCtx, createMockPi, makeTheme } from "@juicesharp/rpiv-test-utils";
+import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetState, registerTodoTool, setActiveRenderSession, TOOL_NAME } from "./.test-support/home-fixtures.ts";
+import { createTodoCtx, createTodoPi } from "./tests/fixtures/todo-host.ts";
 
 const theme = makeTheme() as unknown as Theme;
 const SESSION_ID = "foreground";
@@ -13,7 +14,7 @@ function text(node: unknown): string {
 function setup() {
 	__resetState();
 	setActiveRenderSession(SESSION_ID);
-	const { pi, captured } = createMockPi();
+	const { pi, captured } = createTodoPi();
 	registerTodoTool(pi);
 	const tool = captured.tools.get(TOOL_NAME);
 	if (!tool) throw new Error("todo tool was not registered");
@@ -26,7 +27,7 @@ async function call(tool: ReturnType<typeof setup>, params: Record<string, unkno
 		params as never,
 		undefined as never,
 		undefined as never,
-		createMockCtx({ sessionId: SESSION_ID }) as never,
+		createTodoCtx({ sessionId: SESSION_ID }) as never,
 	);
 }
 

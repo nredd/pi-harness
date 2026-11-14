@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import * as kit from "@narumitw/pi-tui-kit";
 import { test, vi } from "vitest";
 import { askPlanModeQuestions } from "../src/question-tool.js";
-import { createMockContext } from "./harness/support.js";
+import { createPlanContext } from "./harness/support.js";
 
 vi.mock("@narumitw/pi-tui-kit", { spy: true });
 
@@ -15,7 +15,7 @@ const question = {
 
 /** Treat Kit as an external adapter: malformed output must not become a domain answer. */
 test("question adapter rejects incomplete, unknown, and inconsistent Kit answers", async () => {
-  const context = createMockContext({ hasUI: true });
+  const context = createPlanContext({ hasUI: true });
   const selected = { questionId: "0", answer: "Small", wasCustom: false, optionIndex: 1 };
   const cases = [
     { answers: [], error: /incomplete answer set/ },
@@ -36,7 +36,7 @@ test("question adapter rejects incomplete, unknown, and inconsistent Kit answers
 });
 
 test("question adapter rejects two answers for the same question", async () => {
-  const context = createMockContext({ hasUI: true });
+  const context = createPlanContext({ hasUI: true });
   const selected = { questionId: "0", answer: "Small", wasCustom: false, optionIndex: 1 };
   try {
     vi.spyOn(kit, "runQuestionnaire").mockResolvedValue({ kind: "submitted", answers: [selected, selected] });
@@ -50,7 +50,7 @@ test("question adapter rejects two answers for the same question", async () => {
 });
 
 test("question adapter never opens the questionnaire for an already stale request", async () => {
-  const context = createMockContext({ hasUI: true });
+  const context = createPlanContext({ hasUI: true });
   const runner = vi.spyOn(kit, "runQuestionnaire");
   try {
     assert.equal(await askPlanModeQuestions([question], context.ctx, () => false), undefined);

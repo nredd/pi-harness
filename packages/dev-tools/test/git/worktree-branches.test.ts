@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerGitTools } from "../../src/git/index.ts";
 import { formatWorktrees, parseWorktrees } from "../../src/git/worktree.ts";
-import { createMockPi } from "../support.ts";
+import { createToolHost } from "../support.ts";
 
 const GIT_ENV = {
 	...process.env,
@@ -25,7 +25,7 @@ function sh(cwd: string, ...args: string[]): string {
 	return execFileSync("git", [...config, ...args], { cwd, env: GIT_ENV, encoding: "utf8" });
 }
 
-const mock = createMockPi();
+const mock = createToolHost();
 registerGitTools(mock.pi);
 
 let root: string;

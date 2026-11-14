@@ -4,11 +4,11 @@ import { CHILD_ENTRY } from "../../src/child.ts";
 import { register, turnTokens, WAKE_MS } from "../../src/goal/index.ts";
 import { GOAL_ENTRY, GOAL_NUDGE_TYPE, GOAL_TOOL } from "../../src/goal/state.ts";
 import { coordination, isPlanModeActive } from "../../src/shared.ts";
-import { CONFIG, type Fake, fakePi, setPlanMode } from "./fake-pi.ts";
+import { CONFIG, createGoalHost, type Fake, setPlanMode } from "../../tests/fixtures/goal-host.ts";
 
 /** Fresh runtime with the goal feature registered and a session started. */
-async function boot(options: Parameters<typeof fakePi>[0] = {}): Promise<Fake> {
-	const fake = fakePi(options);
+async function boot(options: Parameters<typeof createGoalHost>[0] = {}): Promise<Fake> {
+	const fake = createGoalHost(options);
 	register(fake.pi, CONFIG);
 	await fake.emit("session_start", { reason: "startup" });
 	return fake;
@@ -21,23 +21,23 @@ describe("registration", () => {
 	it("registers the command and a never-default-active, non-readonly tool", async () => {
 		const fake = await boot();
 		expect(fake.commands.has("goal")).toBe(true);
-		const tool = fake.tools.get(GOAL_TOOL);
+		const tool = fake.tool(GOAL_TOOL);
 		expect(tool.defaultActive).toBe(false);
 		expect(tool.annotations?.readOnlyHint).toBeUndefined();
 	});
 	it("keeps the tool out of the active set until a goal runs", async () => {
 		const fake = await boot();
-		expect(fake.state.activeTools).not.toContain(GOAL_TOOL);
+		expect(fake.activeTools).not.toContain(GOAL_TOOL);
 		await goalCmd(fake, "ship it");
-		expect(fake.state.activeTools).toEqual(["read", "bash", GOAL_TOOL]);
+		expect(fake.activeTools).toEqual(["read", "bash", GOAL_TOOL]);
 		await goalCmd(fake, "pause");
-		expect(fake.state.activeTools).toEqual(["read", "bash"]);
+		expect(fake.activeTools).toEqual(["read", "bash"]);
 	});
 	it("touches no other tool in the allowlist", async () => {
 		const fake = await boot({ activeTools: ["a", "b", "c"] });
 		await goalCmd(fake, "x");
 		await goalCmd(fake, "clear");
-		expect(fake.state.activeTools).toEqual(["a", "b", "c"]);
+		expect(fake.activeTools).toEqual(["a", "b", "c"]);
 	});
 });
 
@@ -178,7 +178,7 @@ describe("settle nudge", () => {
 		setPlanMode(fake, true);
 		expect(await fake.settle()).toBeUndefined();
 		expect(lastGoal(fake)).toMatchObject({ status: "paused", reason: "plan mode" });
-		expect(fake.state.activeTools).not.toContain(GOAL_TOOL);
+		expect(fake.activeTools).not.toContain(GOAL_TOOL);
 	});
 	it("pauses at before_agent_start when Plan mode was entered between runs", async () => {
 		const fake = await boot();
@@ -227,7 +227,7 @@ describe("budgets", () => {
 		expect(lastGoal(fake)).toMatchObject({ status: "budget", turns: 2 });
 		expect(await fake.settle()).toBeUndefined();
 		expect(fake.notices.at(-1)).toMatchObject({ type: "warning" });
-		expect(fake.state.activeTools).not.toContain(GOAL_TOOL);
+		expect(fake.activeTools).not.toContain(GOAL_TOOL);
 	});
 	it("counts tokens from turn_end usage", async () => {
 		const fake = await boot();
@@ -254,7 +254,7 @@ describe("budgets", () => {
 
 describe("goal_update", () => {
 	const run = (fake: Fake, args: { status: string; evidence: string }) =>
-		fake.tools.get(GOAL_TOOL).execute("id", args, undefined, undefined, fake.ctx);
+		fake.tool(GOAL_TOOL).execute("id", args, undefined, undefined, fake.ctx);
 
 	it("refuses complete without evidence and leaves the goal active", async () => {
 		const fake = await boot();
@@ -267,7 +267,7 @@ describe("goal_update", () => {
 		await goalCmd(fake, "ship it");
 		await run(fake, { status: "complete", evidence: "make test: ok" });
 		expect(lastGoal(fake)).toMatchObject({ status: "complete", evidence: "make test: ok" });
-		expect(fake.state.activeTools).not.toContain(GOAL_TOOL);
+		expect(fake.activeTools).not.toContain(GOAL_TOOL);
 		expect(await fake.settle()).toBeUndefined();
 		expect(coordination(fake.pi).goalActive).toBe(false);
 	});
@@ -332,10 +332,10 @@ describe("persistence and branches", () => {
 		const fake = await boot();
 		await goalCmd(fake, "ship it");
 		await fake.turnEnd();
-		fake.state.activeTools = ["read", GOAL_TOOL];
+		fake.setActive(["read", GOAL_TOOL]);
 		await fake.emit("session_start", { reason: "resume" });
 		expect(fake.status.get("session-kit-goal")).toBe("goal 1/30 120 tok paused");
-		expect(fake.state.activeTools).toEqual(["read"]);
+		expect(fake.activeTools).toEqual(["read"]);
 		expect(coordination(fake.pi).goalActive).toBe(false);
 		expect(await fake.settle()).toBeUndefined();
 		await goalCmd(fake, "resume");
@@ -369,10 +369,10 @@ describe("persistence and branches", () => {
 
 describe("child sessions", () => {
 	it("hide the tool and act on nothing", async () => {
-		const fake = fakePi({ sessionName: "general-purpose#1a2b3c4d", activeTools: ["read", GOAL_TOOL] });
+		const fake = createGoalHost({ sessionName: "general-purpose#1a2b3c4d", activeTools: ["read", GOAL_TOOL] });
 		register(fake.pi, CONFIG);
 		await fake.emit("session_start", { reason: "startup" });
-		expect(fake.state.activeTools).toEqual(["read"]);
+		expect(fake.activeTools).toEqual(["read"]);
 		expect(fake.commands.has("goal")).toBe(false);
 		expect(fake.entries.map((entry) => entry.customType)).toEqual([CHILD_ENTRY]);
 		expect(await fake.settle()).toBeUndefined();
@@ -383,7 +383,7 @@ describe("child sessions", () => {
 	it("never inherit the parent's goal from the bus or entries of another runtime", async () => {
 		const parent = await boot();
 		await goalCmd(parent, "parent goal");
-		const child = fakePi({ sessionName: "Explore#deadbeef" });
+		const child = createGoalHost({ sessionName: "Explore#deadbeef" });
 		register(child.pi, CONFIG);
 		await child.emit("session_start", { reason: "startup" });
 		await child.turnEnd();

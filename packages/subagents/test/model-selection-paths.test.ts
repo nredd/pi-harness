@@ -17,7 +17,7 @@ import { createNestedSubagentTools } from "../src/nested-tools.js";
 import { SubagentScheduler } from "../src/schedule.js";
 import { resolveStorePath, ScheduleStore } from "../src/schedule-store.js";
 import { createWorkflowHost } from "../src/workflow/host.js";
-import { flush, type Hermetic, hermeticDir, ctx as makeCtx, makePi, startSession } from "./helpers/boot-extension.js";
+import { bootPi, flush, type Hermetic, hermeticDir, ctx as makeCtx, startSession } from "./helpers/boot-extension.js";
 
 vi.mock("../src/agent-runner.js", async importOriginal => ({
   ...await importOriginal<typeof runner>(), runAgent: vi.fn(), resumeAgent: vi.fn(),
@@ -29,7 +29,7 @@ type Path = typeof paths[number];
 let sandbox: Hermetic;
 let registry: ModelRegistry;
 let parent: ReturnType<ModelRegistry["find"]>;
-let boot: ReturnType<typeof makePi>;
+let boot: ReturnType<typeof bootPi>;
 let context: ReturnType<typeof makeCtx>;
 let manager: AgentManager;
 let scheduler: SubagentScheduler;
@@ -72,7 +72,7 @@ beforeEach(async () => {
   admissionModels = [];
   refuseStaleParent = false;
   admittedModel = undefined;
-  boot = makePi();
+  boot = bootPi();
   boot.pi.events = bus();
   // Answer admission synchronously, without any real router or network calls.
   boot.pi.events.on("router:rpc:admit", ({ requestId, model }: { requestId: string; model: string }) => {

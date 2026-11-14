@@ -4,7 +4,7 @@ import { afterEach, test, vi } from "vitest";
 import { createChildToolPolicy } from "../src/child-policy.js";
 import planMode from "../src/plan-mode.js";
 import * as toolPolicy from "../src/tool-policy.js";
-import { builtinTool, createMockContext, createMockPi } from "./support.js";
+import { builtinTool, createPlanContext, createPlanPi } from "./support.js";
 
 // Every decision still comes from the real `decideBlockedCommand`; only the lazy explainer is
 // replaced by one that throws, to prove the message path can never turn a block into a throw or an allow.
@@ -50,15 +50,15 @@ test("a throwing explainer still blocks through the child policy, with the gener
 
 test("a throwing explainer still blocks in the main session's tool_call gate", async () => {
   explainerFailure.armed = true;
-  const mock = createMockPi({
+  const mock = createPlanPi({
     activeTools: ["read", "bash"],
     allTools: [builtinTool("read"), builtinTool("bash")],
   });
   planMode(mock.pi);
-  const context = createMockContext();
-  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  const context = createPlanContext();
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
-  const hook = mock.events.get("tool_call")?.[0];
+  const hook = mock.handlers.get("tool_call")?.[0];
   for (const command of BLOCKED) {
     const result = (await hook?.({ toolName: "bash", input: { command } }, context.ctx)) as
       | { block?: boolean; reason?: string }

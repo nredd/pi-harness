@@ -32,7 +32,7 @@ import { extensionCanonicalName } from "../src/agent-runner.js";
 import { registerAgents } from "../src/agent-types.js";
 import { DEFAULT_AGENTS } from "../src/default-agents.js";
 import type { AgentConfig } from "../src/types.js";
-import { hermeticDir } from "./helpers/boot-extension.js";
+import { bootPi, hermeticDir } from "./helpers/boot-extension.js";
 import { registerFauxProvider } from "./helpers/pi-ai.js";
 import { runAgent } from "./helpers/run-selected-agent.js";
 
@@ -52,9 +52,6 @@ const PROJECT_MUTATION_TOOL = "project_git_mutation";
 const BUILTINS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 
 /** Minimal `pi` stub — `detectEnv` only needs `exec` (returns non-git). */
-function makePi() {
-  return { exec: async () => ({ code: 1, stdout: "", stderr: "" }) } as any;
-}
 
 describe("agent-runner end-to-end (real pi-mono session + real extension)", () => {
   let cwd: string;
@@ -122,7 +119,7 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
     try {
       await runAgent(ctx, "e2e", "go", {
         ...runOpts,
-        pi: makePi(),
+        pi: bootPi({}, { execResult: { code: 1, stdout: "", stderr: "", killed: false } }).pi,
         model,
         onSessionCreated: (s) => {
           active = s.getActiveToolNames();
@@ -507,7 +504,7 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
       const reported: unknown[] = [];
       try {
         await runAgent(ctx, "e2e", "go", {
-          pi: makePi(),
+          pi: bootPi({}, { execResult: { code: 1, stdout: "", stderr: "", killed: false } }).pi,
           ...(explicit ? { model: parent } : {}),
           onModelFallback: (fallback) => reported.push(fallback),
         });

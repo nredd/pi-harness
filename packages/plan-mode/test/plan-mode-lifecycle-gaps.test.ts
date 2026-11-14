@@ -2,23 +2,23 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { DECLINE_GATE_ERROR } from "../src/decline-contract.js";
 import planMode from "../src/plan-mode.js";
-import { createMockContext, createMockPi } from "./support.js";
+import { createPlanContext, createPlanPi } from "./support.js";
 
 test("failed Normal contract publication keeps the active Plan state and ownership", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
   const sessionManager = restored({ enabled: false, awaitingAction: false });
-  const context = createMockContext({ sessionManager, hasUI: true });
-  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  const context = createPlanContext({ sessionManager, hasUI: true });
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
-  mock.rawPi.sendMessage = () => {
+  mock.pi.sendMessage = () => {
     throw new Error("contract persistence unavailable");
   };
   await mock.commands.get("plan")?.handler("off", context.ctx);
   assert.equal(context.statuses.get("plan-mode"), "plan active");
   assert.match(context.notifications.at(-1)?.message ?? "", /contract persistence unavailable/u);
   const contender = { session: sessionManager, group: "agent-workflow", busy: false };
-  mock.eventBus.emit("workflow:mutex:v1", contender);
+  mock.bus.emit("workflow:mutex:v1", contender);
   assert.equal(contender.busy, true);
 });
 
@@ -28,9 +28,9 @@ function restored(data: Record<string, unknown>) {
 }
 
 test("legacy completion cannot bypass a declined plan and renewed replies revoke confirmation", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-  const context = createMockContext({
+  const context = createPlanContext({
     sessionManager: restored({
       enabled: true,
       awaitingAction: true,
@@ -40,9 +40,9 @@ test("legacy completion cannot bypass a declined plan and renewed replies revoke
       reproposalReview: "confirmed",
     }),
   });
-  await mock.events.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
-  await mock.events.get("input")?.[0]?.({ text: "No, revise again", source: "user" }, context.ctx);
-  await mock.events.get("agent_end")?.[0]?.(
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
+  await mock.handlers.get("input")?.[0]?.({ text: "No, revise again", source: "user" }, context.ctx);
+  await mock.handlers.get("agent_end")?.[0]?.(
     {
       messages: [
         { role: "assistant", content: "<proposed_plan>\n# Unauthorized\n</proposed_plan>", stopReason: "stop" },
@@ -58,26 +58,26 @@ test("legacy completion cannot bypass a declined plan and renewed replies revoke
 });
 
 test("restoring a manual thinking override reapplies it without adopting the settings default", async () => {
-  const mock = createMockPi({ activeTools: ["read"], thinkingLevel: "low" });
+  const mock = createPlanPi({ activeTools: ["read"], thinkingLevel: "low" });
   planMode(mock.pi, {
     readSettings: async () => ({ kind: "loaded" as const, settings: { thinkingLevel: "high" as const } }),
   });
-  const context = createMockContext({
+  const context = createPlanContext({
     sessionManager: restored({ enabled: true, awaitingAction: false, manualThinkingLevel: "medium" }),
   });
-  await mock.events.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
   assert.equal(mock.thinkingLevel, "medium");
   await mock.commands.get("plan")?.handler("off", context.ctx);
   assert.equal(mock.thinkingLevel, "medium", "manual choice must survive leaving Plan mode");
 });
 
 test("a throwing active-tool registry fails activation closed", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
-  mock.rawPi.getActiveTools = () => {
+  const mock = createPlanPi({ activeTools: ["read"] });
+  mock.pi.getActiveTools = () => {
     throw new Error("active registry unavailable");
   };
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-  const context = createMockContext({ hasUI: true });
+  const context = createPlanContext({ hasUI: true });
   await mock.commands.get("plan")?.handler("start", context.ctx);
   assert.match(
     context.notifications.at(-1)?.message ?? "",
@@ -87,28 +87,28 @@ test("a throwing active-tool registry fails activation closed", async () => {
 });
 
 test("failed new activation restores inactive state and frees workflow ownership", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, {
     readSettings: async () => ({ kind: "loaded" as const, settings: { thinkingLevel: "high" as const } }),
   });
   const sessionManager = restored({ enabled: false, awaitingAction: false });
-  const context = createMockContext({ sessionManager });
-  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  const context = createPlanContext({ sessionManager });
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
   const failure = new Error("thinking unavailable");
-  mock.rawPi.setThinkingLevel = () => {
+  mock.pi.setThinkingLevel = () => {
     throw failure;
   };
   await assert.rejects(
     async () => mock.commands.get("plan")?.handler("start", context.ctx),
     (error: unknown) => error === failure,
   );
-  const gate = (await mock.events.get("tool_call")?.[0]?.(
+  const gate = (await mock.handlers.get("tool_call")?.[0]?.(
     { toolName: "plan_mode_question", input: {} },
     context.ctx,
   )) as { reason?: string };
   assert.match(gate.reason ?? "", /only available while Plan mode is active/u);
   const contender = { session: sessionManager, group: "agent-workflow", busy: false };
-  mock.eventBus.emit("workflow:mutex:v1", contender);
+  mock.bus.emit("workflow:mutex:v1", contender);
   assert.equal(contender.busy, false);
 });
 
@@ -116,7 +116,7 @@ for (const stale of [true, false]) {
   test(`${stale ? "a stale ready-menu context is contained" : "a non-stale ready-menu error escapes"} when presentation settles`, async () => {
     let presentations = 0;
     const failure = new Error(stale ? "Extension context is no longer active" : "menu backend failed");
-    const mock = createMockPi({ activeTools: ["read"] });
+    const mock = createPlanPi({ activeTools: ["read"] });
     planMode(mock.pi, {
       readSettings: async () => ({ kind: "missing" as const }),
       loadInteractiveUi: async () => ({
@@ -127,9 +127,9 @@ for (const stale of [true, false]) {
         },
       }),
     });
-    const context = createMockContext({ hasUI: true, mode: "tui" });
+    const context = createPlanContext({ hasUI: true, mode: "tui" });
     await mock.commands.get("plan")?.handler("start", context.ctx);
-    const complete = mock.tools.find((tool) => tool.name === "plan_mode_complete")?.execute;
+    const complete = [...mock.tools.values()].find((tool) => tool.name === "plan_mode_complete")?.execute;
     assert.equal(typeof complete, "function");
     await (complete as (...args: unknown[]) => Promise<unknown>)(
       "ready",
@@ -138,7 +138,7 @@ for (const stale of [true, false]) {
       undefined,
       context.ctx,
     );
-    const settle = mock.events.get("agent_settled")?.[0];
+    const settle = mock.handlers.get("agent_settled")?.[0];
     assert.ok(settle);
     if (stale) await assert.doesNotReject(async () => settle({}, context.ctx), "stale presentation must be contained");
     else

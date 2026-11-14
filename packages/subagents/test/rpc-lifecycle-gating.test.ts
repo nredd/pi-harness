@@ -26,34 +26,11 @@ vi.mock("../src/agent-runner.js", async () => {
 });
 
 import { runAgent } from "../src/agent-runner.js";
+import { bootPi } from "./helpers/boot-extension.js";
 import subagentsExtension from "./helpers/home-extension.js";
 
 const RPC_CHANNELS = ["subagents:rpc:ping", "subagents:rpc:spawn", "subagents:rpc:stop", "subagents:rpc:consume", "subagents:rpc:steer"] as const;
 
-function makePi() {
-  const tools = new Map<string, any>();
-  const lifecycle = new Map<string, any>(); // pi.on(...) — session_start, session_shutdown, …
-  const busHandlers = new Map<string, (raw: any) => unknown>(); // pi.events.on(...) — rpc channels
-  const pi = {
-    registerMessageRenderer: vi.fn(),
-    registerTool: vi.fn((t: any) => tools.set(t.name, t)),
-    registerCommand: vi.fn(),
-    registerEntryRenderer: vi.fn(),
-    registerFlag: vi.fn(),
-    getFlag: vi.fn(),
-    on: vi.fn((event: string, handler: any) => lifecycle.set(event, handler)),
-    events: {
-      emit: vi.fn(),
-      on: vi.fn((event: string, handler: any) => {
-        busHandlers.set(event, handler);
-        return vi.fn();
-      }),
-    },
-    appendEntry: vi.fn(),
-    sendMessage: vi.fn(),
-  } as any;
-  return { pi, tools, lifecycle, busHandlers };
-}
 
 function ctx(hasUI = false, setWidget = vi.fn()) {
   return {
@@ -108,7 +85,7 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
   });
 
   it("does NOT advertise or register RPC at factory time (the filtered-out case)", () => {
-    const { pi, busHandlers } = makePi();
+    const { pi, busHandlers } = bootPi();
 
     // A filtered-out activation only ever gets the factory run — its
     // session_start never fires. So after the factory alone, nothing should
@@ -122,7 +99,7 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
   });
 
   it("advertises and registers RPC on session_start, and spawn works once bound", async () => {
-    const { pi, lifecycle, busHandlers } = makePi();
+    const { pi, lifecycle, busHandlers } = bootPi();
     subagentsExtension(pi);
 
     await lifecycle.get("session_start")({}, ctx());
@@ -155,7 +132,7 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
   // onSteered callback wired in src/index.ts. This pins that the bus path
   // reaches it, so observers do not miss bus-originated steers.
   it("subagents:rpc:steer emits subagents:steered for an RPC-spawned agent", async () => {
-    const { pi, lifecycle, busHandlers } = makePi();
+    const { pi, lifecycle, busHandlers } = bootPi();
     subagentsExtension(pi);
 
     await lifecycle.get("session_start")({}, ctx());
@@ -188,7 +165,7 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
   it("delivers queued RPC and tool steers once each without duplicate events on admission", async () => {
     vi.mocked(runAgent).mockReset();
     writeFileSync(join(agentDir, "subagents.json"), JSON.stringify({ maxConcurrent: 1, schedulingEnabled: false }));
-    const { pi, tools, lifecycle, busHandlers } = makePi();
+    const { pi, tools, lifecycle, busHandlers } = bootPi();
     subagentsExtension(pi);
     await lifecycle.get("session_start")({}, ctx());
     const sessionSteer = vi.fn(async () => {});
@@ -222,7 +199,7 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
   });
 
   it("renders an RPC-spawned agent in the native widget while it is running", async () => {
-    const { pi, lifecycle, busHandlers } = makePi();
+    const { pi, lifecycle, busHandlers } = bootPi();
     const activeCtx = ctx(true);
     subagentsExtension(pi);
 
@@ -251,7 +228,7 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
   });
 
   it("shows live tool activity for an RPC-spawned background agent", async () => {
-    const { pi, lifecycle, busHandlers } = makePi();
+    const { pi, lifecycle, busHandlers } = bootPi();
     let widgetFactory: any;
     const setWidget = vi.fn((key: string, content: any) => {
       if (key === "agents" && content) widgetFactory = content;
@@ -288,7 +265,7 @@ describe("issue #142: RPC handlers + subagents:ready are gated on session_start"
   });
 
   it("is idempotent — a second session_start does not re-advertise or double-register", async () => {
-    const { pi, lifecycle } = makePi();
+    const { pi, lifecycle } = bootPi();
     subagentsExtension(pi);
 
     await lifecycle.get("session_start")({}, ctx());
@@ -335,14 +312,14 @@ describe("issue #526: RPC spawn signal aborts while queued", () => {
 
   /** Boot the extension and saturate its single slot, so the next spawn queues. */
   async function saturated() {
-    const booted = makePi();
+    const booted = bootPi();
     subagentsExtension(booted.pi);
     await booted.lifecycle.get("session_start")({}, ctx());
     await spawnOver(booted, "blocker", undefined);
     return booted;
   }
 
-  async function spawnOver({ pi, busHandlers }: ReturnType<typeof makePi>, requestId: string, signal: AbortSignal | undefined): Promise<string> {
+  async function spawnOver({ pi, busHandlers }: ReturnType<typeof bootPi>, requestId: string, signal: AbortSignal | undefined): Promise<string> {
     await busHandlers.get("subagents:rpc:spawn")!({
       requestId,
       type: "general-purpose",

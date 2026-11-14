@@ -14,7 +14,7 @@ import {
 import { createRpcHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { packagePath } from "./package-path.js";
-import { createMockContext } from "./support.js";
+import { createPlanContext } from "./support.js";
 
 const fixtures = [
   { label: "additive defaults", existing: undefined, additive: true, inMemory: false },
@@ -86,7 +86,7 @@ for (const fixture of fixtures) {
           { kind: "select", response: undefined },
         ]);
         const errors: unknown[] = [];
-        const context = createMockContext({ cwd: root, mode: "rpc", hasUI: true, ...rpc.ui });
+        const context = createPlanContext({ cwd: root, mode: "rpc", hasUI: true, ...rpc.ui });
         await session.bindExtensions({
           mode: "rpc",
           uiContext: (context.ctx as ExtensionContext).ui,

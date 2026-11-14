@@ -10,39 +10,11 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatToolsSuffix } from "../src/index.js";
 import { setWorktreeIsolationEnabled } from "../src/worktree.js";
-import { type SessionStartHandler, startSession } from "./helpers/boot-extension.js";
+import { bootPi, type SessionStartHandler, startSession } from "./helpers/boot-extension.js";
 import subagentsExtension from "./helpers/home-extension.js";
 
 const EXAMPLE_TEMPLATE = fileURLToPath(new URL("../examples/agent-tool-description.md", import.meta.url));
 
-function makePi() {
-  const tools = new Map<string, any>();
-  const handlers = new Map<string, SessionStartHandler>();
-
-  return {
-    pi: {
-      registerMessageRenderer: vi.fn(),
-      registerTool: vi.fn((tool: any) => {
-        tools.set(tool.name, tool);
-      }),
-      registerCommand: vi.fn(),
-      registerEntryRenderer: vi.fn(),
-      registerFlag: vi.fn(),
-      getFlag: vi.fn(),
-      on: vi.fn((event: string, handler: SessionStartHandler) => {
-        handlers.set(event, handler);
-      }),
-      events: {
-        emit: vi.fn(),
-        on: vi.fn(() => vi.fn()),
-      },
-      appendEntry: vi.fn(),
-      sendMessage: vi.fn(),
-    } as any,
-    tools,
-    handlers,
-  };
-}
 
 describe("toolDescriptionMode", () => {
   let tmpDir: string;
@@ -71,7 +43,7 @@ describe("toolDescriptionMode", () => {
     beforeInstantiate?.();
     process.chdir(tmpDir);
 
-    const made = makePi();
+    const made = bootPi();
     const { pi, tools } = made;
     handlers = made.handlers;
     subagentsExtension(pi);
@@ -293,7 +265,7 @@ describe("toolDescriptionMode", () => {
 
     // Second instance in the same hermetic cwd, flipped to full mode.
     writeFileSync(join(tmpDir, ".pi", "subagents.json"), JSON.stringify({ toolDescriptionMode: "full" }));
-    const second = makePi();
+    const second = bootPi();
     subagentsExtension(second.pi);
     try {
       expect(customDesc).toBe(second.tools.get("Agent").description);

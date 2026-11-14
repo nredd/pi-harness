@@ -1,102 +1,139 @@
 /**
- * boot-extension.ts — the mock `pi` / `ctx` pair the wiring tests use to boot the
- * REAL extension (src/index.ts) and drive its registered tools directly.
- *
- * The 14 pre-existing wiring tests each inline their own near-identical copy of
- * this. They are deliberately NOT migrated: `test/` is outside the tsconfig
- * `include`, so that churn would be unchecked by `tsc`, and those copies have
- * small divergences that would have to be reconciled blind. New files use this.
+ * boot-extension.ts: the recording `pi` / `ctx` pair the wiring tests use to boot the REAL
+ * extension (src/index.ts) and drive its registered tools directly. Both come from the shared
+ * doubles in `@nredd/pi-test-lib/pi`; this file only adds the views these tests read.
  */
 
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionContext, SessionShutdownEvent, SessionStartEvent } from "@earendil-works/pi-coding-agent";
-import { vi } from "vitest";
+import type { ExtensionAPI, ExtensionContext, SessionShutdownEvent, SessionStartEvent } from "@earendil-works/pi-coding-agent";
+import {
+  createRecordingContext,
+  createRecordingPi,
+  expectNoSubscriberErrors,
+  type RecordingPi,
+  type RecordingPiOptions,
+} from "@nredd/pi-test-lib/pi";
+import { afterEach, vi } from "vitest";
 
 /** A `pi.on` lifecycle handler as the extension registers them; the map is keyed by event name. */
 export type SessionStartHandler = (event: SessionStartEvent | SessionShutdownEvent, ctx: ExtensionContext) => Promise<void> | void;
 
+const created: RecordingPi[] = [];
+afterEach(() => {
+  expectNoSubscriberErrors(created.splice(0));
+});
+
 export interface BootedPi {
+  /** The recording `ExtensionAPI`; every method is a `vi.fn`. */
   pi: any;
+  recording: RecordingPi;
   tools: Map<string, any>;
+  /** `pi.on` handlers: the LAST one registered per event, which is all these tests drive. */
   lifecycle: Map<string, SessionStartHandler>;
+  /** Same map as `lifecycle`, for tests that name it `handlers`. */
+  handlers: Map<string, SessionStartHandler>;
   /** Custom entry renderers, by `customType`. */
   entryRenderers: Map<string, any>;
   /** Flags the extension registered, by name. */
   registeredFlags: Map<string, any>;
   /** Slash commands the extension registered, by name. */
   commands: Map<string, any>;
+  /** `pi.events.on` subscribers: the LAST one per channel, for tests that feed the bus by hand. */
+  busHandlers: Map<string, (raw: any) => unknown>;
+  /** Same map as `busHandlers`, for tests that name it `events` or `eventHandlers`. */
+  events: Map<string, (raw: any) => unknown>;
+  eventHandlers: Map<string, (raw: any) => unknown>;
+  /** Every `pi.events.emit`, in order. */
+  emitted: { event: string; payload: any }[];
+  /** The bus itself, for `bus.emit` / `bus.on` calls and spies. */
+  bus: RecordingPi["bus"];
+}
+
+export interface BootOptions {
+  /** Deliver `pi.events.emit` to `pi.events.on` subscribers. Default false: tests feed the bus by hand. */
+  deliverEvents?: boolean;
+  /** Replace any `ExtensionAPI` method. */
+  overrides?: Partial<ExtensionAPI>;
+  /** What `pi.exec` resolves with. */
+  execResult?: RecordingPiOptions["execResult"];
 }
 
 /**
- * A mock ExtensionAPI that records every tool and lifecycle handler registered.
+ * A recording ExtensionAPI (`@nredd/pi-test-lib/pi`) that also tracks the last `pi.on` handler
+ * and `pi.events.on` subscriber per name.
  *
- * `flags` seeds what `pi.getFlag` returns. It is deliberately separate from the
+ * `flags` seeds what `pi.getFlag` returns, registered or not. It is deliberately separate from the
  * values passed to `registerFlag`: the host applies CLI values only AFTER every
  * extension has activated, so a test that seeds them here and reads them from
  * `session_start` reproduces the real ordering.
  */
-export function makePi(flags: Record<string, boolean | string> = {}): BootedPi {
-  const tools = new Map<string, any>();
+export function bootPi(flags: Record<string, boolean | string> = {}, options: BootOptions = {}): BootedPi {
+  const recording = createRecordingPi({
+    deliverEvents: options.deliverEvents ?? false,
+    execResult: options.execResult,
+    overrides: { getFlag: vi.fn((name: string) => flags[name]), ...options.overrides },
+  });
+  created.push(recording);
   const lifecycle = new Map<string, SessionStartHandler>();
-  const entryRenderers = new Map<string, any>();
-  const registeredFlags = new Map<string, any>();
-  const commands = new Map<string, any>();
-  const activeTools: string[] = [];
-  const pi = {
-    registerMessageRenderer: vi.fn(),
-    registerEntryRenderer: vi.fn((customType: string, renderer: any) => entryRenderers.set(customType, renderer)),
-    registerTool: vi.fn((t: any) => {
-      tools.set(t.name, t);
-      if (!activeTools.includes(t.name)) activeTools.push(t.name);
-    }),
-    registerCommand: vi.fn((name: string, command: any) => commands.set(name, command)),
-    registerFlag: vi.fn((name: string, options: any) => registeredFlags.set(name, options)),
-    getFlag: vi.fn((name: string) => flags[name]),
-    on: vi.fn((event: string, handler: SessionStartHandler) => lifecycle.set(event, handler)),
-    events: {
-      emit: vi.fn(),
-      on: vi.fn(() => vi.fn()),
-    },
-    // Only bound after the session exists in real pi — the extension calls these
-    // from `session_start` for exactly that reason. Default to "nothing else is
-    // registered"; a test that cares overrides them.
-    getAllTools: vi.fn(() => [] as any[]),
-    getCommands: vi.fn(() => [] as any[]),
-    // The active set starts as whatever was registered, which is what pi does
-    // for a freshly loaded extension tool. `setActiveTools` writes it back so a
-    // test can assert on a withdrawal.
-    getActiveTools: vi.fn(() => [...activeTools]),
-    setActiveTools: vi.fn((names: string[]) => {
-      activeTools.length = 0;
-      activeTools.push(...names);
-    }),
-    // The main session's settings; empty means every setting at pi's default.
-    getSettings: vi.fn(() => ({})),
-    appendEntry: vi.fn(),
-    sendMessage: vi.fn(),
-    exec: vi.fn(async () => ({ stdout: "", stderr: "", code: 0, killed: false })),
-  } as any;
-  return { pi, tools, lifecycle, entryRenderers, registeredFlags, commands };
+  const busHandlers = new Map<string, (raw: any) => unknown>();
+  const emitted: { event: string; payload: any }[] = [];
+  const { pi, bus } = recording;
+  const on = pi.on as (event: string, handler: SessionStartHandler) => () => void;
+  (pi as any).on = vi.fn((event: string, handler: SessionStartHandler) => {
+    lifecycle.set(event, handler);
+    return on(event, handler);
+  });
+  const busOn = vi.mocked(bus.on).getMockImplementation() as typeof bus.on;
+  const busEmit = vi.mocked(bus.emit).getMockImplementation() as typeof bus.emit;
+  vi.mocked(bus.on).mockImplementation((channel, handler) => {
+    busHandlers.set(channel, handler);
+    const off = busOn(channel, handler);
+    return () => {
+      if (busHandlers.get(channel) === handler) busHandlers.delete(channel);
+      off();
+    };
+  });
+  vi.mocked(bus.emit).mockImplementation((channel, payload) => {
+    emitted.push({ event: channel, payload });
+    busEmit(channel, payload);
+  });
+  return {
+    pi: pi as any,
+    recording,
+    tools: recording.tools,
+    lifecycle,
+    handlers: lifecycle,
+    entryRenderers: recording.entryRenderers,
+    registeredFlags: recording.flags,
+    commands: recording.commands,
+    busHandlers,
+    events: busHandlers,
+    eventHandlers: busHandlers,
+    emitted,
+    bus,
+  };
 }
 
 /** A mock ExtensionContext — the second half of what a tool's `execute` receives. */
 export function ctx(overrides: Record<string, unknown> = {}) {
-  return {
+  return createRecordingContext({
     // The interactive mode extensions normally run in. Set explicitly because
     // the `@handle` input hook is TUI-only, so an absent mode would make every
     // mention test exercise the headless fall-through instead.
     mode: "tui",
     hasUI: false,
-    ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn(), addAutocompleteProvider: vi.fn() },
     cwd: process.cwd(),
-    model: undefined,
-    modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
-    sessionManager: { getSessionId: vi.fn(() => "s1"), getBranch: vi.fn(() => []) },
-    getSystemPrompt: vi.fn(() => "parent"),
-    ...overrides,
-  } as any;
+    overrides: {
+      // Replaced wholesale, never merged: the extension feature-detects members, so a fuller
+      // default changes which paths it takes.
+      ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn(), addAutocompleteProvider: vi.fn() },
+      modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
+      sessionManager: { getSessionId: vi.fn(() => "s1"), getBranch: vi.fn(() => []) },
+      ...overrides,
+    } as never,
+  }).ctx as any;
 }
 
 /** Text of a tool result. */

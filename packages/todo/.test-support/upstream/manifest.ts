@@ -14,7 +14,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const SKIP_DIRS = new Set(["node_modules", "docs"]);
+// `tests` holds the recording-pi presets (`tests/fixtures`), not shipped code.
+const SKIP_DIRS = new Set(["node_modules", "docs", "tests"]);
 const SKIP_FILES = new Set(["test-fixtures.ts"]);
 
 export interface ShipManifestResult {

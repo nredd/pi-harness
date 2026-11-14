@@ -1,10 +1,11 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createRecordingContext } from "@nredd/pi-test-lib/pi";
 import { afterEach, describe, expect, it } from "vitest";
 import { withLock } from "../../src/core/index.ts";
 import { findProjectRoot, registerPyTools } from "../../src/py/index.ts";
-import { createMockPi } from "../support.ts";
+import { createToolHost } from "../support.ts";
 import { wrapperFixture } from "../wrapper-fixture.ts";
 
 const fixtures: ReturnType<typeof wrapperFixture>[] = [];
@@ -14,7 +15,7 @@ afterEach(() => {
 function setup() {
 	const fixture = wrapperFixture("pyproject.toml");
 	fixtures.push(fixture);
-	const mock = createMockPi();
+	const mock = createToolHost();
 	registerPyTools(mock.pi, { uvBin: fixture.bin });
 	return { ...fixture, ...mock };
 }
@@ -119,7 +120,7 @@ describe("uv executable boundary", () => {
 					// Cancel only once the contended lock has actually published waiting feedback.
 					controller.abort();
 				}) as never,
-				{ cwd },
+				createRecordingContext({ cwd }).ctx,
 			);
 			expect(await pending).toMatchObject({ isError: true });
 		});

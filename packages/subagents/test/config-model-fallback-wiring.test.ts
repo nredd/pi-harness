@@ -29,7 +29,7 @@ import { registerAgents } from "../src/agent-types.js";
 import { loadCustomAgents } from "../src/custom-agents.js";
 import { setAgentModels } from "../src/model-resolver.js";
 import { createNestedSubagentTools } from "../src/nested-tools.js";
-import { flush, makePi, startSession, textOf } from "./helpers/boot-extension.js";
+import { bootPi, flush, startSession, textOf } from "./helpers/boot-extension.js";
 import subagentsExtension from "./helpers/home-extension.js";
 import { runnerResolution } from "./helpers/runner-resolution.js";
 
@@ -93,7 +93,7 @@ describe("config model that does not resolve", () => {
   });
 
   async function boot() {
-    const booted = makePi();
+    const booted = bootPi();
     ({ tools, pi, lifecycle } = booted);
     subagentsExtension(pi);
     await startSession(lifecycle, true);
@@ -237,7 +237,7 @@ describe("config model that does not resolve", () => {
       },
       emit: (event: string, data: unknown) => { for (const h of handlers.get(event) ?? []) h(data); },
     };
-    const booted = makePi();
+    const booted = bootPi();
     ({ tools, pi, lifecycle } = booted);
     pi.events = bus;
     subagentsExtension(pi);

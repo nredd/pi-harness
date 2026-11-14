@@ -25,43 +25,11 @@ vi.mock("../src/agent-runner.js", async () => {
 });
 
 import { runAgent } from "../src/agent-runner.js";
+import { bootPi } from "./helpers/boot-extension.js";
 import subagentsExtension from "./helpers/home-extension.js";
 
 /** pi-subagents holds a completion notification for NUDGE_HOLD_MS (200ms). */
 const PAST_THE_HOLD_MS = 400;
-
-/**
- * Like `boot-extension.ts`'s `makePi`, but with a bus that actually dispatches:
- * these tests are about what a second extension sees and sends on it.
- */
-function makePi() {
-  const lifecycle = new Map<string, any>();
-  const handlers = new Map<string, ((data: unknown) => void)[]>();
-  const bus = {
-    emit: vi.fn((event: string, data: unknown) => {
-      for (const h of [...(handlers.get(event) ?? [])]) h(data);
-    }),
-    on: vi.fn((event: string, handler: (data: unknown) => void) => {
-      handlers.set(event, [...(handlers.get(event) ?? []), handler]);
-      return () => handlers.set(event, (handlers.get(event) ?? []).filter(h => h !== handler));
-    }),
-  };
-  const pi = {
-    registerMessageRenderer: vi.fn(),
-    registerEntryRenderer: vi.fn(),
-    registerTool: vi.fn(),
-    registerCommand: vi.fn(),
-    registerFlag: vi.fn(),
-    getFlag: vi.fn(),
-    getAllTools: vi.fn(() => [] as any[]),
-    setActiveTools: vi.fn(),
-    on: vi.fn((event: string, handler: any) => lifecycle.set(event, handler)),
-    events: bus,
-    appendEntry: vi.fn(),
-    sendMessage: vi.fn(),
-  } as any;
-  return { pi, lifecycle, bus };
-}
 
 function ctx() {
   return {
@@ -113,7 +81,7 @@ describe("subagents:rpc:consume", () => {
 
   /** Boot the real extension with its RPC handlers bound, as session_start does. */
   async function boot() {
-    const booted = makePi();
+    const booted = bootPi({}, { deliverEvents: true });
     subagentsExtension(booted.pi);
     await booted.lifecycle.get("session_start")({}, ctx());
     shutdown = () => booted.lifecycle.get("session_shutdown")();
@@ -121,7 +89,7 @@ describe("subagents:rpc:consume", () => {
   }
 
   /** Spawn a background agent over the bus, the way pi-tasks' TaskExecute does. */
-  async function spawnOverRpc(bus: ReturnType<typeof makePi>["bus"], requestId: string): Promise<string> {
+  async function spawnOverRpc(bus: ReturnType<typeof bootPi>["bus"], requestId: string): Promise<string> {
     let id = "";
     bus.on(`subagents:rpc:spawn:reply:${requestId}`, (reply: any) => { id = reply.data.id; });
     bus.emit("subagents:rpc:spawn", {

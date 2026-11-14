@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { test, vi } from "vitest";
 import planMode from "../src/plan-mode.js";
-import { createMockContext, createMockPi } from "./support.js";
+import { createPlanContext, createPlanPi } from "./support.js";
 
 /** Read the public tool gate instead of reaching into Plan mode's private state. */
-async function questionGate(mock: ReturnType<typeof createMockPi>, context: ReturnType<typeof createMockContext>) {
-  const handler = mock.events.get("tool_call")?.[0];
+async function questionGate(mock: ReturnType<typeof createPlanPi>, context: ReturnType<typeof createPlanContext>) {
+  const handler = mock.handlers.get("tool_call")?.[0];
   assert.ok(handler);
   return handler({ toolName: "plan_mode_question", input: {} }, context.ctx) as Promise<
     { reason?: string } | undefined
@@ -13,7 +13,7 @@ async function questionGate(mock: ReturnType<typeof createMockPi>, context: Retu
 }
 
 test("restored thinking failure rolls back state and releases the newly acquired workflow", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, {
     readSettings: async () => ({ kind: "loaded" as const, settings: { thinkingLevel: "high" as const } }),
   });
@@ -23,13 +23,13 @@ test("restored thinking failure rolls back state and releases the newly acquired
     data: { enabled: true, awaitingAction: false, appliedThinkingLevel: "high", previousThinkingLevel: "low" },
   };
   const sessionManager = { getBranch: () => [state], getEntries: () => [state] };
-  const context = createMockContext({ hasUI: false, sessionManager });
-  const start = mock.events.get("session_start")?.[0];
+  const context = createPlanContext({ hasUI: false, sessionManager });
+  const start = mock.handlers.get("session_start")?.[0];
   assert.ok(start);
-  const setThinkingLevel = mock.rawPi.setThinkingLevel;
+  const setThinkingLevel = mock.pi.setThinkingLevel;
   const failure = new Error("restored thinking level rejected");
   let thinkingAttempts = 0;
-  mock.rawPi.setThinkingLevel = (level) => {
+  mock.pi.setThinkingLevel = (level) => {
     setThinkingLevel(level);
     thinkingAttempts += 1;
     if (thinkingAttempts === 1) throw failure;
@@ -40,33 +40,33 @@ test("restored thinking failure rolls back state and releases the newly acquired
     (error: unknown) => error === failure,
   );
 
-  assert.equal(mock.rawPi.getThinkingLevel(), "low", "outer rollback must restore the prior thinking level");
+  assert.equal(mock.pi.getThinkingLevel(), "low", "outer rollback must restore the prior thinking level");
   assert.match((await questionGate(mock, context))?.reason ?? "", /only available while Plan mode is active/u);
   const contender = { session: sessionManager, group: "agent-workflow", busy: false };
-  mock.eventBus.emit("workflow:mutex:v1", contender);
+  mock.bus.emit("workflow:mutex:v1", contender);
   assert.equal(contender.busy, false);
-  mock.rawPi.setThinkingLevel = setThinkingLevel;
+  mock.pi.setThinkingLevel = setThinkingLevel;
   await mock.commands.get("plan")?.handler("start", context.ctx);
   assert.equal(context.statuses.get("plan-mode"), "plan active");
-  assert.equal(mock.rawPi.getThinkingLevel(), "high");
+  assert.equal(mock.pi.getThinkingLevel(), "high");
   assert.equal(await questionGate(mock, context), undefined);
 });
 
 test("failed tree restoration retains the prior Plan state, policy, and workflow owner", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
   const entries: Array<{ type: string; customType: string; data: Record<string, unknown> }> = [];
   const sessionManager = { getBranch: () => entries, getEntries: () => entries };
-  const context = createMockContext({ sessionManager });
-  const start = mock.events.get("session_start")?.[0];
-  const tree = mock.events.get("session_tree")?.[0];
+  const context = createPlanContext({ sessionManager });
+  const start = mock.handlers.get("session_start")?.[0];
+  const tree = mock.handlers.get("session_tree")?.[0];
   assert.ok(start);
   assert.ok(tree);
   await start({ reason: "startup" }, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
-  const appendEntry = mock.rawPi.appendEntry;
+  const appendEntry = mock.pi.appendEntry;
   const failure = new Error("restored policy persistence rejected");
-  mock.rawPi.appendEntry = () => {
+  mock.pi.appendEntry = () => {
     throw failure;
   };
   entries.push({
@@ -82,17 +82,17 @@ test("failed tree restoration retains the prior Plan state, policy, and workflow
 
   assert.equal(await questionGate(mock, context), undefined);
   const contender = { session: sessionManager, group: "agent-workflow", busy: false };
-  mock.eventBus.emit("workflow:mutex:v1", contender);
+  mock.bus.emit("workflow:mutex:v1", contender);
   assert.equal(contender.busy, true);
-  mock.rawPi.appendEntry = appendEntry;
-  const call = mock.events.get("tool_call")?.[0];
+  mock.pi.appendEntry = appendEntry;
+  const call = mock.handlers.get("tool_call")?.[0];
   assert.ok(call);
   assert.equal(await call({ toolName: "read", input: { path: "README.md" } }, context.ctx), undefined);
-  const transformContext = mock.events.get("context")?.[0];
+  const transformContext = mock.handlers.get("context")?.[0];
   assert.ok(transformContext);
   await transformContext({ messages: [] }, context.ctx);
   assert.equal(await call({ toolName: "read", input: { path: "README.md" } }, context.ctx), undefined);
-  const before = mock.events.get("before_agent_start")?.[0];
+  const before = mock.handlers.get("before_agent_start")?.[0];
   assert.ok(before);
   await before({ prompt: "keep planning" }, context.ctx);
   assert.equal(await questionGate(mock, context), undefined);
@@ -106,9 +106,9 @@ test("a failed lazy UI import can be retried by the same extension instance", as
     throw failure;
   });
   try {
-    const mock = createMockPi({ activeTools: ["read"] });
+    const mock = createPlanPi({ activeTools: ["read"] });
     planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-    const context = createMockContext({ hasUI: true, mode: "tui" });
+    const context = createPlanContext({ hasUI: true, mode: "tui" });
     const command = mock.commands.get("plan");
     assert.ok(command);
     await assert.rejects(
@@ -132,7 +132,7 @@ test("a failed lazy UI import can be retried by the same extension instance", as
 });
 
 test("exiting a ready plan through its review menu clears it and permits a new workflow", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, {
     readSettings: async () => ({ kind: "missing" as const }),
     loadInteractiveUi: async () => ({
@@ -142,9 +142,9 @@ test("exiting a ready plan through its review menu clears it and permits a new w
       },
     }),
   });
-  const context = createMockContext({ hasUI: true, mode: "tui" });
+  const context = createPlanContext({ hasUI: true, mode: "tui" });
   await mock.commands.get("plan")?.handler("start", context.ctx);
-  const complete = mock.tools.find((tool) => tool.name === "plan_mode_complete")?.execute;
+  const complete = [...mock.tools.values()].find((tool) => tool.name === "plan_mode_complete")?.execute;
   assert.equal(typeof complete, "function");
   await (complete as (...args: unknown[]) => Promise<unknown>)(
     "ready",
@@ -153,7 +153,7 @@ test("exiting a ready plan through its review menu clears it and permits a new w
     undefined,
     context.ctx,
   );
-  await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
+  await mock.handlers.get("agent_settled")?.[0]?.({}, context.ctx);
   assert.equal(context.notifications.at(-1)?.message, "Plan mode disabled. Proposed plan discarded.");
   const persisted = mock.entries.at(-1)?.data as { enabled: boolean; latestPlan?: unknown } | undefined;
   assert.ok(persisted);

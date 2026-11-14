@@ -25,7 +25,7 @@ vi.mock("../src/worktree.js", async () => {
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
 import { createWorktree } from "../src/worktree.js";
-import { type BootedPi, ctx, type Hermetic, hermeticDir, makePi } from "./helpers/boot-extension.js";
+import { type BootedPi, bootPi, ctx, type Hermetic, hermeticDir } from "./helpers/boot-extension.js";
 
 const MANAGER_KEY = Symbol.for("pi-subagents:manager");
 
@@ -47,7 +47,7 @@ afterEach(async () => {
 /** Boot the extension with a parent whose run state the test controls. */
 async function boot(settings: Record<string, unknown> = {}, events?: unknown) {
   hermetic = hermeticDir({ settings: { outputTranscript: false, schedulingEnabled: false, ...settings } });
-  booted = makePi();
+  booted = bootPi();
   if (events) booted.pi.events = events;
   subagentsExtension(booted.pi);
   const parent = { running: true };

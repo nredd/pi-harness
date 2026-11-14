@@ -1,12 +1,13 @@
 import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createRecordingContext } from "@nredd/pi-test-lib/pi";
 import { beforeAll, describe, expect, it } from "vitest";
 import { registerSshTools } from "../../src/ssh/index.ts";
-import { createMockPi } from "../support.ts";
+import { createToolHost } from "../support.ts";
 
 const FIXTURES = join(import.meta.dirname, "..", "fixtures", "ssh");
-const mock = createMockPi();
+const mock = createToolHost();
 let work: string;
 
 beforeAll(() => {
@@ -121,9 +122,13 @@ describe("ssh_exec", () => {
 	it("reports an abort", async () => {
 		const ac = new AbortController();
 		const tool = mock.tools.get("ssh_exec");
-		const p = tool?.execute("id", { host: "home", command: "sleep 30" }, ac.signal, undefined, {
-			cwd: work,
-		}) as Promise<{ structuredContent: unknown }>;
+		const p = tool?.execute(
+			"id",
+			{ host: "home", command: "sleep 30" },
+			ac.signal,
+			undefined,
+			createRecordingContext({ cwd: work }).ctx,
+		) as Promise<{ structuredContent: unknown }>;
 		setTimeout(() => ac.abort(), 100);
 		expect((await p).structuredContent).toMatchObject({ state: "aborted" });
 	});

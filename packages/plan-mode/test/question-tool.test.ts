@@ -17,7 +17,7 @@ import {
   REPROPOSAL_CONFIRMATION_QUESTION,
   renderPlanModeQuestion,
 } from "../src/question-tool.js";
-import { createMockContext, createMockPi } from "./support.js";
+import { createPlanContext, createPlanPi } from "./support.js";
 
 const questions: PlanModeQuestion[] = [
   {
@@ -45,13 +45,13 @@ function paste(tui: ReturnType<typeof createTuiHarness>, text: string) {
 }
 
 test("plan_mode_question reports non-interactive cancellation", async () => {
-  const mock = createMockPi();
+  const mock = createPlanPi();
   planMode(mock.pi);
-  const execute = mock.tools[0]?.execute as
+  const execute = [...mock.tools.values()][0]?.execute as
     | ((...args: unknown[]) => Promise<{ details?: { reason?: string } }>)
     | undefined;
   assert.ok(execute);
-  const context = createMockContext({ hasUI: false });
+  const context = createPlanContext({ hasUI: false });
   await mock.commands.get("plan")?.handler("start", context.ctx);
   const result = await execute("call-1", { questions: [questions[0]] }, undefined, undefined, context.ctx);
   assert.equal(result.details?.reason, "ui_unavailable");
@@ -129,10 +129,10 @@ test("plan_mode_question renderCall skips arguments that are not question object
 test("plan_mode_question renderCall lists the headers", () => {
   assert.equal(planModeQuestionCallSummary({ questions }), "plan question \u00b7 Scope, Tests");
   assert.equal(planModeQuestionCallSummary({}), "plan question");
-  const tool = createMockPi();
+  const tool = createPlanPi();
   planMode(tool.pi);
-  const registered = tool.tools.find((candidate) => candidate.name === "plan_mode_question");
-  const renderCall = registered?.renderCall as (args: unknown) => { render(width: number): string[] };
+  const registered = [...tool.tools.values()].find((candidate) => candidate.name === "plan_mode_question");
+  const renderCall = registered?.renderCall as unknown as (args: unknown) => { render(width: number): string[] };
   assert.deepEqual(renderCall({ questions }).render(80), ["plan question \u00b7 Scope, Tests"]);
 });
 
@@ -176,7 +176,7 @@ test("re-proposal confirmation mode supplies canonical UI choices", () => {
 test("the Kit runner preserves domain fields, notes, raw answers, and duplicate domain ids", async () => {
   const duplicateIds = questions.map((question) => ({ ...question, id: "decision" }));
   const tui = createTuiHarness({ width: 60, rows: 30 });
-  const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+  const context = createPlanContext({ mode: "tui", hasUI: true, custom: tui.custom });
   const running = askPlanModeQuestions(duplicateIds, context.ctx);
   await tui.waitForOpen();
   tui.setFocused(true);
@@ -216,7 +216,7 @@ test("the Kit runner preserves domain fields, notes, raw answers, and duplicate 
 test("the Kit RPC runner preserves limits, ordering, and answer metadata", async () => {
   const selections = ["1. Small — Only the bug.", "3. Other (free-form)"];
   const editorAnswers = ["x".repeat(MAX_PLAN_MODE_RESPONSE_LENGTH + 1), "rpc custom"];
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     select: async () => selections.shift(),
@@ -260,7 +260,7 @@ test("the adapter sanitizes mixed display text without mutating raw domain answe
   ];
   let offeredTitle = "";
   let offeredChoices: string[] = [];
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     select: async (title: string, choices: string[]) => {
@@ -278,11 +278,11 @@ test("the adapter sanitizes mixed display text without mutating raw domain answe
 });
 
 test("the adapter maps closed, stale, unsupported, error, and blank RPC results to cancellation", async () => {
-  const closed = createMockContext({ mode: "rpc", hasUI: true, select: async () => undefined });
+  const closed = createPlanContext({ mode: "rpc", hasUI: true, select: async () => undefined });
   assert.equal(await askPlanModeQuestions([questions[0]], closed.ctx), undefined);
 
   let current = true;
-  const stale = createMockContext({
+  const stale = createPlanContext({
     mode: "rpc",
     hasUI: true,
     select: async () => {
@@ -292,14 +292,14 @@ test("the adapter maps closed, stale, unsupported, error, and blank RPC results 
   });
   assert.equal(await askPlanModeQuestions([questions[0]], stale.ctx, () => current), undefined);
 
-  const unsupported = createMockContext({ mode: "print", hasUI: false });
+  const unsupported = createPlanContext({ mode: "print", hasUI: false });
   assert.equal(await askPlanModeQuestions([questions[0]], unsupported.ctx), undefined);
 
-  const invalid = createMockContext({ mode: "rpc", hasUI: true });
+  const invalid = createPlanContext({ mode: "rpc", hasUI: true });
   assert.equal(await askPlanModeQuestions([], invalid.ctx), undefined);
   assert.match(invalid.notifications[0]?.message ?? "", /at least one question/u);
 
-  const blank = createMockContext({
+  const blank = createPlanContext({
     mode: "rpc",
     hasUI: true,
     select: async () => "3. Other (free-form)",
@@ -310,7 +310,7 @@ test("the adapter maps closed, stale, unsupported, error, and blank RPC results 
 
 test("answerPlanModeQuestions revalidates session and Plan mode after the runner", async () => {
   let current = true;
-  const replaced = createMockContext({
+  const replaced = createPlanContext({
     mode: "rpc",
     hasUI: true,
     select: async () => {
@@ -327,7 +327,7 @@ test("answerPlanModeQuestions revalidates session and Plan mode after the runner
   assert.match(staleResult.content[0]?.text ?? "", /session changed/u);
 
   let enabled = true;
-  const deactivated = createMockContext({
+  const deactivated = createPlanContext({
     mode: "rpc",
     hasUI: true,
     select: async () => {
@@ -347,7 +347,7 @@ test("answerPlanModeQuestions revalidates session and Plan mode after the runner
 test("owner abort closes the Kit interaction without publishing answers", async () => {
   const controller = new AbortController();
   const tui = createTuiHarness({ width: 60, rows: 30 });
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "tui",
     hasUI: true,
     custom: tui.custom,

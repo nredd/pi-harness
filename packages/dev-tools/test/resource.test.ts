@@ -13,11 +13,12 @@ import {
 	type ResourceSnapshot,
 	type SamplerOptions,
 } from "@nredd/pi-resource-sampler";
+import { createRecordingContext } from "@nredd/pi-test-lib/pi";
 import { describe, expect, it } from "vitest";
 import type { RunOptions, RunResult } from "../src/core/index.ts";
 import { type ResourceSnapshotOptions, registerResourceTools, resourceSnapshot } from "../src/resource/index.ts";
 import { describeProcessLoss, firstBadProcessField, type HostProbes, probeHost } from "./process-diagnostics.ts";
-import { createMockPi } from "./support.ts";
+import { createToolHost } from "./support.ts";
 
 it("attempts the default Linux memory read and keeps optional failures null off Linux", async () => {
 	const fake = fakeSampler(fixture("linux", []));
@@ -404,7 +405,7 @@ describe("resource_snapshot on the real host through the published sampler", () 
 
 	it("reports a real registry producer's exhausted scan budget through the tool schema", async () => {
 		const samples: ResourceSnapshot[] = [];
-		const mock = createMockPi();
+		const mock = createToolHost();
 		registerResourceTools(mock.pi, {
 			createSampler() {
 				const sampler = createResourceSampler({ maxDurationMs: 10 });
@@ -448,7 +449,7 @@ describe("resource_snapshot on the real host through the published sampler", () 
 					coverage: { complete: false, enumerated: 0, sampled: 0, skipped: 0, bytesRead: 0, reasons: [reason] },
 				}),
 			);
-			const mock = createMockPi();
+			const mock = createToolHost();
 			registerResourceTools(mock.pi, { createSampler: fake.createSampler });
 			const result = await mock.call("resource_snapshot", { process_limit: 50, interval_ms: INTERVAL_MS }, "/tmp");
 			const snapshot = result.structuredContent as Awaited<ReturnType<typeof resourceSnapshot>>;
@@ -536,7 +537,7 @@ describe("resource_snapshot on the real host through the published sampler", () 
 	});
 
 	it("smokes the real host through tool execution and output schema validation", async () => {
-		const mock = createMockPi();
+		const mock = createToolHost();
 		const real = realSampler();
 		registerResourceTools(mock.pi, { createSampler: real.createSampler });
 		const result = await mock.call("resource_snapshot", { process_limit: 50, interval_ms: INTERVAL_MS }, "/tmp");
@@ -636,7 +637,7 @@ console.log("ready"); setInterval(() => {}, 1 << 30);`,
 						: execFileSync("/bin/ps", ["-c", "-o", "comm=", "-p", String(pid)], { encoding: "utf8" }).includes(secret);
 				expect(legacy).toBe(true);
 				const real = realSampler();
-				const mock = createMockPi();
+				const mock = createToolHost();
 				registerResourceTools(mock.pi, { createSampler: real.createSampler });
 				const result = await mock.call("resource_snapshot", { process_limit: 50, interval_ms: INTERVAL_MS }, "/tmp");
 				expect(result.isError).toBe(false);
@@ -738,12 +739,14 @@ console.log("ready"); setInterval(() => {}, 1 << 30);`,
 	});
 
 	it("propagates tool cancellation as an error rather than a partial snapshot", async () => {
-		const mock = createMockPi();
+		const mock = createToolHost();
 		registerResourceTools(mock.pi);
 		const controller = new AbortController();
 		controller.abort();
 		await expect(
-			mock.tools.get("resource_snapshot")?.execute("cancelled", {}, controller.signal, undefined, { cwd: "/tmp" }),
+			mock.tools
+				.get("resource_snapshot")
+				?.execute("cancelled", {}, controller.signal, undefined, createRecordingContext({ cwd: "/tmp" }).ctx),
 		).rejects.toThrow();
 	});
 });
@@ -787,7 +790,7 @@ describe("resource_snapshot mapping", () => {
 	});
 
 	it('keeps an unknown executable as "" and never fills it in', async () => {
-		const mock = createMockPi();
+		const mock = createToolHost();
 		const { resolved } = options(fixture("linux", [proc(7, 200, measured(3), ""), proc(8, 100, measured(1), "bash")]));
 		registerResourceTools(mock.pi, resolved);
 		const result = await mock.call("resource_snapshot", { process_limit: 2, interval_ms: INTERVAL_MS }, "/tmp");
@@ -805,7 +808,7 @@ describe("resource_snapshot mapping", () => {
 	it("prints a process CPU that is not measured by its state, never a number", async () => {
 		// The real-host smoke only reaches this when some host process happens to be warming or unreadable between
 		// its two samples, so its coverage depended on the host; these fixtures always hit it.
-		const mock = createMockPi();
+		const mock = createToolHost();
 		const { resolved } = options(fixture("darwin", [proc(7, 200, warming, "node"), proc(8, 100, darwinCpu, "bash")]));
 		registerResourceTools(mock.pi, resolved);
 		const result = await mock.call("resource_snapshot", { process_limit: 2, interval_ms: INTERVAL_MS }, "/tmp");
@@ -884,7 +887,7 @@ describe("resource_snapshot mapping", () => {
 	});
 
 	it("prints unavailable load, CPU, pressure and process metadata as words, never numbers", async () => {
-		const mock = createMockPi();
+		const mock = createToolHost();
 		const coverage = {
 			complete: false,
 			enumerated: 0,
@@ -905,7 +908,7 @@ describe("resource_snapshot mapping", () => {
 	});
 
 	it("prints Linux PSI and an empty process sample as unavailable", async () => {
-		const mock = createMockPi();
+		const mock = createToolHost();
 		const { resolved } = options(fixture("linux", []));
 		registerResourceTools(mock.pi, resolved);
 		const text = mock.text(
@@ -918,7 +921,7 @@ describe("resource_snapshot mapping", () => {
 	});
 
 	it("prints Darwin memory_pressure as percent free", async () => {
-		const mock = createMockPi();
+		const mock = createToolHost();
 		const { resolved } = options(fixture("darwin", [proc(6, 500, darwinCpu)]));
 		registerResourceTools(mock.pi, resolved);
 		const text = mock.text(
@@ -1097,7 +1100,7 @@ describe("resource_snapshot mapping", () => {
 	});
 
 	it("registers a read-only tool with bounded input and privacy guidance", async () => {
-		const mock = createMockPi();
+		const mock = createToolHost();
 		const { resolved } = options(fixture("linux", [proc(7, 102_400, measured(12.5), "tester")]));
 		registerResourceTools(mock.pi, resolved);
 		const tool = mock.tools.get("resource_snapshot");
@@ -1119,27 +1122,33 @@ describe("resource_snapshot mapping", () => {
 	});
 
 	it("adds structured awareness guidance only for observable or discoverable tool loadouts", () => {
-		const mock = createMockPi();
+		const mock = createToolHost();
 		registerResourceTools(mock.pi);
-		const [hook] = mock.hooks.get("before_agent_start") ?? [];
+		const [hook] = mock.handlers.get("before_agent_start") ?? [];
 		const sections: Record<string, string> = {};
-		hook?.({ systemPrompt: "base", systemPromptOptions: { selectedTools: ["search_tools"], sections } }, {});
+		hook?.(
+			{ systemPrompt: "base", systemPromptOptions: { selectedTools: ["search_tools"], sections } },
+			createRecordingContext().ctx,
+		);
 		expect(sections.resource_awareness).toContain("Before knowingly starting a large test or compile");
 		expect(sections.resource_awareness).toContain("not a lock, serialization rule, or fixed threshold");
 
 		const unavailable: Record<string, string> = {};
-		hook?.({ systemPrompt: "base", systemPromptOptions: { selectedTools: ["read"], sections: unavailable } }, {});
+		hook?.(
+			{ systemPrompt: "base", systemPromptOptions: { selectedTools: ["read"], sections: unavailable } },
+			createRecordingContext().ctx,
+		);
 		expect(unavailable).not.toHaveProperty("resource_awareness");
 	});
 
 	it("does not duplicate awareness guidance inherited by an append-mode child", () => {
-		const mock = createMockPi();
+		const mock = createToolHost();
 		registerResourceTools(mock.pi);
-		const [hook] = mock.hooks.get("before_agent_start") ?? [];
+		const [hook] = mock.handlers.get("before_agent_start") ?? [];
 		const parentSections: Record<string, string> = {};
 		hook?.(
 			{ systemPrompt: "base", systemPromptOptions: { selectedTools: ["resource_snapshot"], sections: parentSections } },
-			{},
+			createRecordingContext().ctx,
 		);
 		const sections: Record<string, string> = {};
 		hook?.(
@@ -1147,7 +1156,7 @@ describe("resource_snapshot mapping", () => {
 				systemPrompt: parentSections.resource_awareness ?? "",
 				systemPromptOptions: { selectedTools: ["resource_snapshot"], sections },
 			},
-			{},
+			createRecordingContext().ctx,
 		);
 		expect(sections).not.toHaveProperty("resource_awareness");
 	});
@@ -1249,7 +1258,7 @@ describe("process metadata loss diagnostics", () => {
 
 	it("keeps the unavailable reason when a real sampler loses its listing", async () => {
 		const real = realSampler(new Set([0, 1, 2, 3]));
-		const mock = createMockPi();
+		const mock = createToolHost();
 		registerResourceTools(mock.pi, { createSampler: real.createSampler });
 		const result = await mock.call("resource_snapshot", { interval_ms: INTERVAL_MS }, "/tmp");
 		const snapshot = result.structuredContent as Awaited<ReturnType<typeof resourceSnapshot>>;

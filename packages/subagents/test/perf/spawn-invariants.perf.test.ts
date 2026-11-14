@@ -34,7 +34,7 @@ vi.mock("../../src/custom-agents.js", async () => {
 import { runAgent } from "../../src/agent-runner.js";
 import { registerAgents } from "../../src/agent-types.js";
 import subagentsExtension from "../../src/index.js";
-import { ctx, flush, type Hermetic, hermeticDir, makePi, startSession } from "../helpers/boot-extension.js";
+import { bootPi, ctx, flush, type Hermetic, hermeticDir, startSession } from "../helpers/boot-extension.js";
 
 let hermetic: Hermetic;
 
@@ -63,7 +63,7 @@ async function bootAgentTool() {
       beta: '---\ndescription: "Second fixture agent."\n---\n\nBeta.\n',
     },
   });
-  const { pi, tools, lifecycle } = makePi();
+  const { pi, tools, lifecycle } = bootPi();
   subagentsExtension(pi);
   // Project agents load at the first `session_start`, once trust is known, which
   // also re-registers `Agent`. Fetch the tool only afterwards.

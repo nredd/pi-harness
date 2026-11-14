@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { registerSshTools } from "../../src/ssh/index.ts";
-import { createMockPi } from "../support.ts";
+import { createToolHost } from "../support.ts";
 import { wrapperFixture } from "../wrapper-fixture.ts";
 
 const fixtures: ReturnType<typeof wrapperFixture>[] = [];
@@ -16,7 +16,7 @@ function tools(body: string) {
 	const fixture = wrapperFixture("pyproject.toml");
 	fixtures.push(fixture);
 	fixture.script(body, "/bin/sh");
-	const mock = createMockPi();
+	const mock = createToolHost();
 	registerSshTools(mock.pi, { knownHosts: () => new Set(["home"]), sshBin: fixture.bin, scpBin: fixture.bin });
 	return { mock, root: fixture.root };
 }

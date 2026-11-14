@@ -6,7 +6,7 @@ import { afterEach, expect, it } from "vitest";
 import { spoolDetached } from "../src/detached-results.js";
 import subagentsExtension, { createSubagentsExtension } from "../src/index.js";
 import { resolveStorePath, ScheduleStore } from "../src/schedule-store.js";
-import { type BootedPi, ctx, type Hermetic, hermeticDir, makePi } from "./helpers/boot-extension.js";
+import { type BootedPi, bootPi, ctx, type Hermetic, hermeticDir } from "./helpers/boot-extension.js";
 
 let booted: BootedPi | undefined;
 let hermetic: Hermetic | undefined;
@@ -19,7 +19,7 @@ afterEach(async () => {
 
 async function boot(factory: ExtensionFactory) {
   hermetic = hermeticDir({ settings: { outputTranscript: false, fallbackSubagent: "none" } });
-  const b = makePi();
+  const b = bootPi();
   booted = b;
   await factory(b.pi);
   const sessionFile = join(hermetic.dir, "parent.jsonl");

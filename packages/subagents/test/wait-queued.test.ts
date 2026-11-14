@@ -19,27 +19,8 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
+import { bootPi } from "./helpers/boot-extension.js";
 
-function makePi() {
-  const tools = new Map<string, any>();
-  const lifecycle = new Map<string, any>();
-  const pi = {
-    registerMessageRenderer: vi.fn(),
-    registerTool: vi.fn((t: any) => tools.set(t.name, t)),
-    registerCommand: vi.fn(),
-    registerEntryRenderer: vi.fn(),
-    registerFlag: vi.fn(),
-    getFlag: vi.fn(),
-    on: vi.fn((event: string, handler: any) => lifecycle.set(event, handler)),
-    events: {
-      emit: vi.fn(),
-      on: vi.fn(() => vi.fn()),
-    },
-    appendEntry: vi.fn(),
-    sendMessage: vi.fn(),
-  } as any;
-  return { pi, tools, lifecycle };
-}
 
 function ctx() {
   return {
@@ -92,7 +73,7 @@ async function spawnBackground(tools: Map<string, any>): Promise<{ id: string; q
 
 describe("get_subagent_result wait:true on a queued agent", () => {
   it("waits through queue start and returns the result (no 'still running')", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
 
     const resolvers = deferredRuns();
@@ -130,7 +111,7 @@ describe("get_subagent_result wait:true on a queued agent", () => {
   }, 20_000);
 
   it("aborts a running result wait without aborting or consuming the child", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
 
     let resolveRun: (() => void) | undefined;
@@ -185,7 +166,7 @@ describe("get_subagent_result wait:true on a queued agent", () => {
   });
 
   it("aborts a queued result wait before the agent starts", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
 
     const resolvers = deferredRuns();

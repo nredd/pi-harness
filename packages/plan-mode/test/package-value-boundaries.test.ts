@@ -22,7 +22,7 @@ import {
 } from "../src/question-tool.js";
 import { normalizeKeyId, updatePlanModeSettings } from "../src/settings.js";
 import { restorePlanModeState } from "../src/state.js";
-import { createMockContext } from "./harness/support.js";
+import { createPlanContext } from "./harness/support.js";
 
 const question = {
   id: "scope",
@@ -152,7 +152,7 @@ test("message and widget components remain renderable after invalidation", () =>
   const before = component.render(80);
   component.invalidate();
   assert.deepEqual(component.render(80), before);
-  const context = createMockContext({ hasUI: true, mode: "tui", theme });
+  const context = createPlanContext({ hasUI: true, mode: "tui", theme });
   updatePlanModeUi(
     context.ctx,
     {
@@ -194,12 +194,12 @@ test("settings reject duplicate shortcut modifiers and invalid legacy settings w
 test("export failures are visible headlessly and never overwrite or create invalid targets", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pm-export-boundaries-"));
   try {
-    const context = createMockContext({ cwd: directory, hasUI: false });
+    const context = createPlanContext({ cwd: directory, hasUI: false });
     await assert.rejects(
       exportStoredPlan({ enabled: false, awaitingAction: false, declinedPlans: 0 }, undefined, context.ctx),
       /No completed plan/,
     );
-    const interactive = createMockContext({ cwd: directory, hasUI: true });
+    const interactive = createPlanContext({ cwd: directory, hasUI: true });
     assert.equal(
       await exportStoredPlan({ enabled: false, awaitingAction: false, declinedPlans: 0 }, undefined, interactive.ctx),
       false,

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { FileLockFailedError, LockAbortedError, withFileLock } from "../../src/core/index.ts";
 import { registerGitTools } from "../../src/git/index.ts";
 import { git } from "../../src/git/run.ts";
-import { createMockPi } from "../support.ts";
+import { createToolHost } from "../support.ts";
 import { wrapperFixture } from "../wrapper-fixture.ts";
 
 vi.mock("../../src/git/run.ts", async (original) => {
@@ -96,7 +96,7 @@ it.each(["routing", "config-count", "config-parameters"])(
 			execFileSync("git", ["-C", target, "config", "user.name", "fixture"]);
 			execFileSync("git", ["-C", target, "config", "user.email", "fixture@example.invalid"]);
 			writeFileSync(join(target, "a"), "target\n");
-			const mock = createMockPi();
+			const mock = createToolHost();
 			registerGitTools(mock.pi);
 			const result = await mock.call(
 				"git_commit",
@@ -123,7 +123,7 @@ it("returns body-validation and unreadable-HEAD errors without claiming a push",
 	const f = wrapperFixture("Cargo.toml");
 	try {
 		execFileSync("git", ["init", "-q", "-b", "main", f.root]);
-		const mock = createMockPi();
+		const mock = createToolHost();
 		registerGitTools(mock.pi);
 		const invalid = await mock.call(
 			"git_commit",
@@ -166,7 +166,7 @@ it("maps lock failures and queued cancellation, and rethrows unexpected lock def
 	const f = wrapperFixture("Cargo.toml");
 	try {
 		execFileSync("git", ["init", "-q", "-b", "main", f.root]);
-		const mock = createMockPi();
+		const mock = createToolHost();
 		registerGitTools(mock.pi);
 		for (const failure of [new LockAbortedError("fixture"), new FileLockFailedError("fixture", "disk full")]) {
 			vi.mocked(withFileLock).mockRejectedValueOnce(failure);

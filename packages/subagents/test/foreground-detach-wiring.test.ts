@@ -58,7 +58,7 @@ import { runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
 import type { AgentRecord } from "../src/types.js";
 import type { ViewerBackgroundAction } from "../src/ui/conversation-viewer.js";
-import { ctx, flush, type Hermetic, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
+import { bootPi, ctx, flush, type Hermetic, hermeticDir, textOf } from "./helpers/boot-extension.js";
 
 let hermetic: Hermetic | undefined;
 let booted: Map<string, any> | undefined;
@@ -86,7 +86,7 @@ function boot(settings: Record<string, unknown> = {}) {
   hermetic = hermeticDir({
     settings: { outputTranscript: false, schedulingEnabled: false, defaultJoinMode: "async", ...settings },
   });
-  const b = makePi();
+  const b = bootPi();
   subagentsExtension(b.pi);
   booted = b.lifecycle;
   return b;

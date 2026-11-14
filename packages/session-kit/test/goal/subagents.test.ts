@@ -1,10 +1,10 @@
+import { createRecordingPi } from "@nredd/pi-test-lib/pi";
 import { describe, expect, it, vi } from "vitest";
 import { SubagentTracker } from "../../src/goal/subagents.ts";
-import { FakeBus } from "./fake-pi.ts";
 
 describe("SubagentTracker", () => {
 	it("counts an agent from created/started until completed", () => {
-		const bus = new FakeBus();
+		const bus = createRecordingPi().bus;
 		const tracker = new SubagentTracker();
 		tracker.attach(bus);
 		bus.emit("subagents:started", { id: "a" });
@@ -13,7 +13,7 @@ describe("SubagentTracker", () => {
 		expect(tracker.busy()).toBe(0);
 	});
 	it("holds a finished background agent as unannounced until its notice", () => {
-		const bus = new FakeBus();
+		const bus = createRecordingPi().bus;
 		const tracker = new SubagentTracker();
 		tracker.attach(bus);
 		bus.emit("subagents:created", { id: "a", isBackground: true });
@@ -25,7 +25,7 @@ describe("SubagentTracker", () => {
 		expect(tracker.busy()).toBe(0);
 	});
 	it("does not wait for a queued background agent stopped before it starts", () => {
-		const bus = new FakeBus();
+		const bus = createRecordingPi().bus;
 		const tracker = new SubagentTracker();
 		tracker.attach(bus);
 		bus.emit("subagents:created", { id: "queued", isBackground: true });
@@ -34,7 +34,7 @@ describe("SubagentTracker", () => {
 		expect(tracker.busy()).toBe(0);
 	});
 	it("still waits for a started background agent stopped after handoff", () => {
-		const bus = new FakeBus();
+		const bus = createRecordingPi().bus;
 		const tracker = new SubagentTracker();
 		tracker.attach(bus);
 		bus.emit("subagents:started", { id: "a" });
@@ -45,7 +45,7 @@ describe("SubagentTracker", () => {
 		expect(tracker.busy()).toBe(0);
 	});
 	it("clears started state before the same id is queued and stopped again", () => {
-		const bus = new FakeBus();
+		const bus = createRecordingPi().bus;
 		const tracker = new SubagentTracker();
 		tracker.attach(bus);
 		bus.emit("subagents:created", { id: "a", isBackground: true });
@@ -57,7 +57,7 @@ describe("SubagentTracker", () => {
 		expect(tracker.busy()).toBe(0);
 	});
 	it("retains a background failure without a stopped status for notice delivery", () => {
-		const bus = new FakeBus();
+		const bus = createRecordingPi().bus;
 		const tracker = new SubagentTracker();
 		tracker.attach(bus);
 		bus.emit("subagents:created", { id: "a", isBackground: true });
@@ -65,7 +65,7 @@ describe("SubagentTracker", () => {
 		expect(tracker.busy()).toBe(1);
 	});
 	it("never waits for a foreground agent's notice (it has none)", () => {
-		const bus = new FakeBus();
+		const bus = createRecordingPi().bus;
 		const tracker = new SubagentTracker();
 		tracker.attach(bus);
 		bus.emit("subagents:created", { id: "fg", isBackground: false });
@@ -74,7 +74,7 @@ describe("SubagentTracker", () => {
 		expect(tracker.busy()).toBe(0);
 	});
 	it("fires onIdle only when the last agent finishes", () => {
-		const bus = new FakeBus();
+		const bus = createRecordingPi().bus;
 		const idle = vi.fn();
 		const tracker = new SubagentTracker(idle);
 		tracker.attach(bus);
@@ -86,7 +86,7 @@ describe("SubagentTracker", () => {
 		expect(idle).toHaveBeenCalledOnce();
 	});
 	it("ignores payloads without an id and unsubscribes on dispose", () => {
-		const bus = new FakeBus();
+		const bus = createRecordingPi().bus;
 		const tracker = new SubagentTracker();
 		tracker.attach(bus);
 		bus.emit("subagents:started", {});

@@ -6,7 +6,7 @@ import { test } from "vitest";
 import planMode from "../src/plan-mode.js";
 import { normalizePlanModeSettings } from "../src/settings.js";
 import { findBlockedCommandSegment, isSafeCommand, isSafePowerShellCommand } from "../src/tool-policy.js";
-import { builtinTool, createMockContext, createMockPi } from "./support.js";
+import { builtinTool, createPlanContext, createPlanPi } from "./support.js";
 
 const CWD = join(homedir(), "code", "pi-plan-mode");
 const TRUSTED = ["~/code", "~/.local/share/chezmoi"];
@@ -240,12 +240,12 @@ test("trustedDirectories are validated and applied from the global settings in t
       join(agentDir, "pi-plan-mode.json"),
       JSON.stringify({ trustedDirectories: ["~/code"], safeSubcommands: { ssh: ["home"] } }),
     );
-    const mock = createMockPi({ activeTools: ["bash"], allTools: [builtinTool("read"), builtinTool("bash")] });
+    const mock = createPlanPi({ activeTools: ["bash"], allTools: [builtinTool("read"), builtinTool("bash")] });
     planMode(mock.pi);
-    const context = createMockContext({ cwd: CWD });
-    const hook = mock.events.get("tool_call")?.[0];
+    const context = createPlanContext({ cwd: CWD });
+    const hook = mock.handlers.get("tool_call")?.[0];
     assert.ok(hook);
-    await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+    await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
     const run = (command: string) => hook({ toolName: "bash", input: { command } }, context.ctx);
     assert.equal(await run("cd ~/code/pi && git status"), undefined);
