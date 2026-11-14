@@ -19,7 +19,7 @@ vi.mock("../src/agent-runner.js", async () => {
 import { runAgent } from "../src/agent-runner.js";
 import { registerAgents } from "../src/agent-types.js";
 import subagentsExtension from "../src/index.js";
-import { ctx, flush, type Hermetic, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
+import { bootPi, ctx, flush, type Hermetic, hermeticDir, textOf } from "./helpers/boot-extension.js";
 
 const COST = 0.0123;
 
@@ -43,7 +43,7 @@ describe("cost display", () => {
 
   function boot(settings: Record<string, unknown>) {
     hermetic = hermeticDir({ settings });
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     return { pi, tools, lifecycle };
   }

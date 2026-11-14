@@ -23,32 +23,9 @@ vi.mock("../src/agent-runner.js", async () => {
 });
 
 import { runAgent } from "../src/agent-runner.js";
+import { bootPi } from "./helpers/boot-extension.js";
 import subagentsExtension from "./helpers/home-extension.js";
 
-function makePi() {
-  const tools = new Map<string, any>();
-  const lifecycle = new Map<string, any>(); // pi.on(...) — session_start, session_before_switch, session_shutdown
-  const events = new Map<string, any>(); // pi.events.on(...) — subagents:rpc:*, etc.
-  const pi = {
-    registerMessageRenderer: vi.fn(),
-    registerTool: vi.fn((t: any) => tools.set(t.name, t)),
-    registerCommand: vi.fn(),
-    registerEntryRenderer: vi.fn(),
-    registerFlag: vi.fn(),
-    getFlag: vi.fn(),
-    on: vi.fn((event: string, handler: any) => lifecycle.set(event, handler)),
-    events: {
-      emit: vi.fn(),
-      on: vi.fn((event: string, handler: any) => {
-        events.set(event, handler);
-        return vi.fn();
-      }),
-    },
-    appendEntry: vi.fn(),
-    sendMessage: vi.fn(),
-  } as any;
-  return { pi, tools, lifecycle, events };
-}
 
 function ctx() {
   return {
@@ -120,7 +97,7 @@ describe("issue #108: unread completed background agents survive session events"
   });
 
   it("session_before_switch (user switches sessions) does NOT wipe the unread result", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     const id = await spawnCompletedBackgroundAgent(tools);
 
@@ -136,7 +113,7 @@ describe("issue #108: unread completed background agents survive session events"
   });
 
   it("session_start (/resume) does NOT wipe the unread result", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     const id = await spawnCompletedBackgroundAgent(tools);
 
@@ -151,7 +128,7 @@ describe("issue #108: unread completed background agents survive session events"
   });
 
   it("once read, a session switch DOES evict it — the fix stays surgical, no leak", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     const id = await spawnCompletedBackgroundAgent(tools);
 

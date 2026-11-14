@@ -9,7 +9,7 @@ import { getAgentConfig, getAllTypes } from "../src/agent-types.js";
 import { createSubagentsExtension } from "../src/index.js";
 import { setModelTiers } from "../src/model-tiers.js";
 import { invalidatePackageCache } from "../src/package-resources.js";
-import { type BootedPi, ctx, type Hermetic, hermeticDir, makePi, startSession } from "./helpers/boot-extension.js";
+import { type BootedPi, bootPi, ctx, type Hermetic, hermeticDir, startSession } from "./helpers/boot-extension.js";
 
 type Dialog = { render(width: number): string[]; invalidate(): void; handleInput(data: string): void };
 type Factory = (tui: unknown, theme: unknown, keys: unknown, done: (value: string | undefined) => void) => Dialog;
@@ -48,7 +48,7 @@ beforeEach(async () => {
   writeFileSync(join(packageRoot, "agents", "packaged.md"), original.replace("name: auditor", "name: packaged"));
   writeFileSync(join(packageRoot, "agents", "off-package.md"), "---\nname: off-package\ndescription: Disabled by author\nenabled: false\n---\nPrivate package body.\n");
   writeFileSync(join(process.env.PI_CODING_AGENT_DIR!, "settings.json"), JSON.stringify({ packages: [packageRoot] }));
-  boot = makePi();
+  boot = bootPi();
   createSubagentsExtension({ clock: new FakeClock() })(boot.pi);
   const ui = {
     ...ctx().ui, notify,

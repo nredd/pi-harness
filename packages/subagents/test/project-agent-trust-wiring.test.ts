@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getAgentConfig, getAllTypes } from "../src/agent-types.js";
 import subagentsExtension from "../src/index.js";
 import { resetPackageState } from "../src/package-resources.js";
-import { type BootedPi, ctx, type Hermetic, hermeticDir, makePi, startSession } from "./helpers/boot-extension.js";
+import { type BootedPi, bootPi, ctx, type Hermetic, hermeticDir, startSession } from "./helpers/boot-extension.js";
 
 const GLOBAL = "---\ndescription: global reviewer\ntools: read\n---\nGlobal.\n";
 const PROJECT = "---\ndescription: project reviewer\ntools: read\n---\nProject.\n";
@@ -42,7 +42,7 @@ describe("project agent trust, wired through the extension", () => {
   }
 
   function activate(): void {
-    booted = makePi();
+    booted = bootPi();
     subagentsExtension(booted.pi);
   }
 

@@ -28,29 +28,9 @@ vi.mock("../src/output-file.js", async () => {
 
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import { ensureOutputFile, streamToOutputFile, writeInitialEntry } from "../src/output-file.js";
+import { bootPi } from "./helpers/boot-extension.js";
 import subagentsExtension from "./helpers/home-extension.js";
 
-function makePi() {
-  const tools = new Map<string, any>();
-  const lifecycle = new Map<string, any>();
-  const emitted: { event: string; payload: any }[] = [];
-  const pi = {
-    registerMessageRenderer: vi.fn(),
-    registerTool: vi.fn((tool: any) => tools.set(tool.name, tool)),
-    registerCommand: vi.fn(),
-    registerEntryRenderer: vi.fn(),
-    registerFlag: vi.fn(),
-    getFlag: vi.fn(),
-    on: vi.fn((event: string, handler: any) => lifecycle.set(event, handler)),
-    events: {
-      emit: vi.fn((event: string, payload: any) => { emitted.push({ event, payload }); }),
-      on: vi.fn(() => vi.fn()),
-    },
-    appendEntry: vi.fn(),
-    sendMessage: vi.fn(),
-  } as any;
-  return { pi, tools, lifecycle, emitted };
-}
 
 function makeCtx(cwd: string) {
   return {
@@ -144,7 +124,7 @@ describe("Agent tool — background resume wiring", () => {
   // forwarded it would die on Esc while background spawns from the same turn
   // kept running.
   it("does not tie the detached run to the tool-call signal", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     const ctx = makeCtx(cwd);
     const id = await spawnSettled(tools, ctx);
@@ -178,7 +158,7 @@ describe("Agent tool — background resume wiring", () => {
   // The transcript path is deterministic per agent+session, so the resume lands
   // on the file the previous run wrote. writeInitialEntry truncates it.
   it("appends to the agent's existing transcript instead of truncating it", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     const ctx = makeCtx(cwd);
     const id = await spawnSettled(tools, ctx);
@@ -211,7 +191,7 @@ describe("Agent tool — background resume wiring", () => {
   // agent under the wrong one in cross-extension mirrors keyed by id.
   it("reports the record's own type, not the caller's ignored subagent_type", async () => {
     writeFileSync(join(agentDir, "agents", "explorer.md"), `---\ndescription: Explorer agent\n---\n\nExplore.`);
-    const { pi, tools, lifecycle, emitted } = makePi();
+    const { pi, tools, lifecycle, emitted } = bootPi();
     subagentsExtension(pi);
     const ctx = makeCtx(cwd);
     const id = await spawnSettled(tools, ctx, "general-purpose");
@@ -239,7 +219,7 @@ describe("Agent tool — background resume wiring", () => {
   // be refused with a message it can act on — not started, and not reported as
   // a generic failure.
   it("refuses a second background resume while the first run is in flight", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     const ctx = makeCtx(cwd);
     const id = await spawnSettled(tools, ctx);
@@ -262,7 +242,7 @@ describe("Agent tool — background resume wiring", () => {
   // Parallel tool calls can resume one agent twice in a turn; the refusal
   // covers a foreground resume of an in-flight run too.
   it("refuses a foreground resume while a run is in flight", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     const ctx = makeCtx(cwd);
     const id = await spawnSettled(tools, ctx);
@@ -283,7 +263,7 @@ describe("Agent tool — background resume wiring", () => {
   // Resume follows the same default as a fresh spawn — background — so
   // foreground is now the explicit case rather than the implicit one.
   it("still resumes in the foreground when run_in_background is false", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     const ctx = makeCtx(cwd);
     const id = await spawnSettled(tools, ctx);
@@ -308,7 +288,7 @@ describe("Agent tool — background resume wiring", () => {
   // resume branch handed the effective max_turns or a turn counter to the
   // runner, so a resumed agent ran unbounded and its widget stayed at turn 1.
   it("passes the effective turn limit and a turn counter to a background resume (#368)", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     const ctx = makeCtx(cwd);
     const id = await spawnSettled(tools, ctx);
@@ -332,7 +312,7 @@ describe("Agent tool — background resume wiring", () => {
   });
 
   it.each([false, true])("keeps an explicit unlimited resume from inheriting the spawn cap (background=%s)", async (runInBackground) => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     const ctx = makeCtx(cwd);
     const spawned = await tools.get("Agent").execute("spawn", {
@@ -353,7 +333,7 @@ describe("Agent tool — background resume wiring", () => {
   });
 
   it.each([false, true])("tracks resumed text/model activity and final physical spend (background=%s)", async (runInBackground) => {
-    const { pi, tools, lifecycle, emitted } = makePi();
+    const { pi, tools, lifecycle, emitted } = bootPi();
     subagentsExtension(pi);
     const ctx = makeCtx(cwd);
     const id = await spawnSettled(tools, ctx);
@@ -389,7 +369,7 @@ describe("Agent tool — background resume wiring", () => {
   });
 
   it("passes the effective turn limit to a foreground resume (#368)", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     const ctx = makeCtx(cwd);
     const id = await spawnSettled(tools, ctx);

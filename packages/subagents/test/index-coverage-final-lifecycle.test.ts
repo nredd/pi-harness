@@ -22,7 +22,7 @@ import { resolveStorePath, ScheduleStore } from "../src/schedule-store.js";
 import type { AgentRecord } from "../src/types.js";
 import { WorkflowDialog } from "../src/ui/workflow-dialog.js";
 import * as usage from "../src/usage.js";
-import { type BootedPi, ctx, flush, type Hermetic, hermeticDir, makePi, startSession } from "./helpers/boot-extension.js";
+import { type BootedPi, bootPi, ctx, flush, type Hermetic, hermeticDir, startSession } from "./helpers/boot-extension.js";
 import { answer } from "./helpers/scenario-session.js";
 
 interface Registry { waitForAll(): Promise<void>; getRecord(id: string): AgentRecord | undefined }
@@ -61,7 +61,7 @@ afterEach(async () => {
 });
 
 async function bind(ui: Record<string, unknown> = {}, flags: Record<string, boolean | string> = {}, competingWorkflow = false, sessionStart?: { reason: string; previousSessionFile?: string }): Promise<Bound> {
-  const boot = makePi(flags); const bus = new EventEmitter();
+  const boot = bootPi(flags); const bus = new EventEmitter();
   boot.pi.getAllTools = vi.fn(() => [...boot.tools.values()]);
   if (competingWorkflow) boot.pi.registerTool({ name: "Workflow", description: "Fixture competing orchestrator" });
   boot.pi.events = {

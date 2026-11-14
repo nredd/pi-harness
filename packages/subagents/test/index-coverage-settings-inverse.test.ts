@@ -8,7 +8,7 @@ import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { deferred } from "@nredd/pi-test-lib/deferred";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSubagentsExtension } from "../src/index.js";
-import { type BootedPi, ctx, type Hermetic, hermeticDir, makePi, startSession } from "./helpers/boot-extension.js";
+import { type BootedPi, bootPi, ctx, type Hermetic, hermeticDir, startSession } from "./helpers/boot-extension.js";
 
 type Component = { render(width: number): string[]; handleInput(data: string): void };
 type Factory = (tui: unknown, theme: unknown, keys: unknown, done: (value: string | undefined) => void) => Component;
@@ -26,7 +26,7 @@ beforeEach(async () => {
     rememberAgents: false,
   } });
   notify.mockReset();
-  boot = makePi();
+  boot = bootPi();
   createSubagentsExtension({ clock: new FakeClock() })(boot.pi);
   context = ctx({ cwd: env.dir, isProjectTrusted: () => true, ui: { ...ctx().ui, notify } });
   await startSession(boot.lifecycle, true, context);

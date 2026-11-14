@@ -13,31 +13,8 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
+import { bootPi } from "./helpers/boot-extension.js";
 
-function makePi() {
-  const tools = new Map<string, any>();
-  const eventHandlers = new Map<string, any>();
-  const lifecycle = new Map<string, any>();
-  const pi = {
-    registerMessageRenderer: vi.fn(),
-    registerTool: vi.fn((t: any) => tools.set(t.name, t)),
-    registerCommand: vi.fn(),
-    registerEntryRenderer: vi.fn(),
-    registerFlag: vi.fn(),
-    getFlag: vi.fn(),
-    on: vi.fn((event: string, handler: any) => lifecycle.set(event, handler)),
-    events: {
-      emit: vi.fn(),
-      on: vi.fn((event: string, handler: any) => {
-        eventHandlers.set(event, handler);
-        return vi.fn();
-      }),
-    },
-    appendEntry: vi.fn(),
-    sendMessage: vi.fn(),
-  } as any;
-  return { pi, tools, eventHandlers, lifecycle };
-}
 
 // The RPC channels are registered on the first bound session_start (#142), so a
 // test that drives them must fire it first — as a real session always does. A
@@ -75,7 +52,7 @@ describe("status note reaches the parent through the real handlers", () => {
       aborted: true, // hard turn-limit abort
       steered: false,
     });
-    const { pi, tools } = makePi();
+    const { pi, tools } = bootPi();
     subagentsExtension(pi);
 
     const res = await tools.get("Agent").execute(
@@ -111,7 +88,7 @@ describe("status note reaches the parent through the real handlers", () => {
     let finish: (v: any) => void = () => {};
     vi.mocked(runAgent).mockReturnValue(new Promise((r) => { finish = r; }) as any);
 
-    const { pi, tools } = makePi();
+    const { pi, tools } = bootPi();
     subagentsExtension(pi);
 
     const parent = new AbortController();
@@ -150,7 +127,7 @@ describe("status note reaches the parent through the real handlers", () => {
       aborted: false,
       steered: false,
     });
-    const { pi, tools } = makePi();
+    const { pi, tools } = bootPi();
     subagentsExtension(pi);
     const registry = (globalThis as any)[Symbol.for("pi-subagents:manager")];
 
@@ -202,7 +179,7 @@ describe("status note reaches the parent through the real handlers", () => {
   it("background user-stop → get_subagent_result flags STOPPED BY THE USER (not completed)", async () => {
     // A background agent that never settles on its own — only a stop ends it.
     vi.mocked(runAgent).mockReturnValue(new Promise(() => {}) as any);
-    const { pi, tools, eventHandlers, lifecycle } = makePi();
+    const { pi, tools, eventHandlers, lifecycle } = bootPi();
     subagentsExtension(pi);
     await bind(lifecycle); // register RPC channels via session_start (#142)
 
@@ -250,7 +227,7 @@ describe("subagents:compacted", () => {
 
   it("emits the documented payload when a top-level agent's session compacts", async () => {
     runWithCompaction({ reason: "threshold", tokensBefore: 12345 });
-    const { pi, tools } = makePi();
+    const { pi, tools } = bootPi();
     subagentsExtension(pi);
 
     await tools.get("Agent").execute(
@@ -275,7 +252,7 @@ describe("subagents:compacted", () => {
       opts.onCompaction?.({ reason: "overflow", tokensBefore: 2 });
       return { responseText: "done", session: { dispose: vi.fn() } as any, aborted: false, steered: false };
     });
-    const { pi, tools } = makePi();
+    const { pi, tools } = bootPi();
     subagentsExtension(pi);
 
     await tools.get("Agent").execute(
@@ -294,7 +271,7 @@ describe("subagents:compacted", () => {
     // Nested records are internal to their parent; leaking their compactions
     // would spam the parent session's bus with ids no consumer can resolve.
     runWithCompaction({ reason: "threshold", tokensBefore: 999 });
-    const { pi, tools } = makePi();
+    const { pi, tools } = bootPi();
     subagentsExtension(pi);
 
     await tools.get("Agent").execute(

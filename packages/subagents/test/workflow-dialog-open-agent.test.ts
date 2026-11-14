@@ -21,7 +21,7 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
-import { ctx, type Hermetic, hermeticDir, makePi } from "./helpers/boot-extension.js";
+import { bootPi, ctx, type Hermetic, hermeticDir } from "./helpers/boot-extension.js";
 
 /** The child's conversation; a test that needs it to overflow the viewer fills it. */
 let sessionMessages: unknown[] = [];
@@ -101,7 +101,7 @@ describe("the inspector opens a workflow agent's conversation", () => {
 
   /** Boot the extension and start a one-agent run in the background. */
   async function bootWithChild() {
-    const booted = makePi();
+    const booted = bootPi();
     subagentsExtension(booted.pi);
     const command = booted.commands.get("agents");
     if (!command) throw new Error("the extension did not register /agents");

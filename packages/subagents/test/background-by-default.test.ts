@@ -24,26 +24,8 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
+import { bootPi } from "./helpers/boot-extension.js";
 
-function makePi() {
-  const tools = new Map<string, any>();
-  const lifecycle = new Map<string, any>();
-  const pi = {
-    registerMessageRenderer: vi.fn(),
-    registerEntryRenderer: vi.fn(),
-    registerTool: vi.fn((t: any) => tools.set(t.name, t)),
-    registerCommand: vi.fn(),
-    registerFlag: vi.fn(),
-    getFlag: vi.fn(),
-    getAllTools: vi.fn(() => [] as any[]),
-    setActiveTools: vi.fn(),
-    on: vi.fn((event: string, handler: any) => lifecycle.set(event, handler)),
-    events: { emit: vi.fn(), on: vi.fn(() => vi.fn()) },
-    appendEntry: vi.fn(),
-    sendMessage: vi.fn(),
-  } as any;
-  return { pi, tools, lifecycle };
-}
 
 function ctx() {
   return {
@@ -79,7 +61,7 @@ function spawn(tools: Map<string, any>, params: Record<string, unknown> = {}) {
 
 describe("backgroundByDefault", () => {
   it("returns an agent ID, not the result, when the call doesn't specify", async () => {
-    const { pi, tools } = makePi();
+    const { pi, tools } = bootPi();
     subagentsExtension(pi);
     settled("THE-PAYLOAD");
 
@@ -92,7 +74,7 @@ describe("backgroundByDefault", () => {
   });
 
   it("still blocks and returns the output inline when run_in_background is false", async () => {
-    const { pi, tools } = makePi();
+    const { pi, tools } = bootPi();
     subagentsExtension(pi);
     settled("THE-PAYLOAD");
 
@@ -105,7 +87,7 @@ describe("backgroundByDefault", () => {
   it("starts a six-way fan-out concurrently instead of queueing the tail", async () => {
     // Six is the shape the Agent tool description tells the model to send.
     // With maxConcurrent at its old 4 this queued two of them.
-    const { pi, tools } = makePi();
+    const { pi, tools } = bootPi();
     subagentsExtension(pi);
     // Never settles — every agent stays occupying its slot for the whole test.
     vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}) as any);

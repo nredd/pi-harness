@@ -13,6 +13,7 @@ import { type ScheduleChangeEvent, SubagentScheduler } from "../src/schedule.js"
 import { ScheduleStore } from "../src/schedule-store.js";
 import type { ScheduledSubagent } from "../src/types.js";
 import { showSchedulesMenu } from "../src/ui/schedule-menu.js";
+import { bootPi } from "./helpers/boot-extension.js";
 
 let dir: string;
 let registry: ModelRegistry;
@@ -37,35 +38,30 @@ afterEach(() => {
 });
 
 /** `pi.events` that records schedule events and lets a test answer router admission by hand. */
-function makePi() {
+function bootSchedulePi() {
   const events: ScheduleChangeEvent[] = [];
   const admits: string[] = [];
-  const handlers = new Map<string, (data: unknown) => void>();
-  const pi = {
-    events: {
-      emit: (channel: string, data: unknown) => {
-        if (channel === "subagents:scheduled") events.push(data as ScheduleChangeEvent);
-        if (channel === ADMIT_CHANNEL) admits.push((data as { requestId: string }).requestId);
-      },
-      on: (channel: string, handler: (data: unknown) => void) => {
-        handlers.set(channel, handler);
-        return () => handlers.delete(channel);
-      },
-    },
-  } as unknown as ExtensionAPI;
+  const booted = bootPi();
+  const emit = vi.mocked(booted.bus.emit).getMockImplementation();
+  vi.mocked(booted.bus.emit).mockImplementation((channel, data) => {
+    if (channel === "subagents:scheduled") events.push(data as ScheduleChangeEvent);
+    if (channel === ADMIT_CHANNEL) admits.push((data as { requestId: string }).requestId);
+    emit?.(channel, data);
+  });
+  const handlers = booted.busHandlers;
   const reply = (data: unknown) => {
     const requestId = admits.shift();
     if (requestId === undefined) throw new Error("no admission request pending");
     handlers.get(`${ADMIT_CHANNEL}:reply:${requestId}`)?.(data);
   };
-  return { pi, events, admits, reply, handlers };
+  return { pi: booted.pi as ExtensionAPI, events, admits, reply, handlers };
 }
 
 function setup(opts: { clock?: FakeClock; spawn?: () => string; path?: string } = {}) {
   const clock = opts.clock ?? new FakeClock();
   const spawn = vi.fn(opts.spawn ?? (() => "spawned"));
   const manager = { spawn, awaitStartup: async () => {}, getRecord: () => ({ status: "completed", promise: Promise.resolve("done") }) } as unknown as AgentManager;
-  const { pi, events, admits, reply, handlers } = makePi();
+  const { pi, events, admits, reply, handlers } = bootSchedulePi();
   const ctx = { cwd: dir, modelRegistry: registry, ui: { notify: vi.fn() } } as unknown as ExtensionContext;
   const path = opts.path ?? join(dir, "jobs.json");
   const store = new ScheduleStore(path);
@@ -192,7 +188,7 @@ describe("scheduler branches", () => {
     expect(f.admits).toHaveLength(1);
     // /resume: same scheduler, a fresh store on the same file, a new context.
     f.scheduler.stop();
-    const next = { ...makePi(), ctx: { cwd: dir, modelRegistry: registry, ui: { notify: vi.fn() } } as unknown as ExtensionContext };
+    const next = { ...bootSchedulePi(), ctx: { cwd: dir, modelRegistry: registry, ui: { notify: vi.fn() } } as unknown as ExtensionContext };
     f.scheduler.start(next.pi, next.ctx, f.manager, new ScheduleStore(f.path));
     f.reply({ success: true, data: { ok: true } });
     await flush();
@@ -218,7 +214,7 @@ describe("scheduler branches", () => {
     const job = f.scheduler.addJob({ ...input, model: "@cheap" });
     f.clock.advance(1000);
     f.scheduler.stop();
-    const next = makePi();
+    const next = bootSchedulePi();
     f.scheduler.start(next.pi, f.ctx, f.manager, new ScheduleStore(f.path));
     await failure;
     await flush();
@@ -238,8 +234,8 @@ describe("scheduler branches", () => {
     });
     let reported!: () => void;
     const report = new Promise<void>(resolve => { reported = resolve; });
-    const emit = f.pi.events.emit.bind(f.pi.events);
-    vi.spyOn(f.pi.events, "emit").mockImplementation((channel, event) => {
+    const emit = vi.mocked(f.pi.events.emit).getMockImplementation() as (channel: string, event: unknown) => void;
+    vi.mocked(f.pi.events.emit).mockImplementation((channel, event) => {
       emit(channel, event);
       if ((event as ScheduleChangeEvent).type === "error") reported();
     });

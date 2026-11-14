@@ -9,42 +9,9 @@ vi.mock("../src/agent-runner.js", async () => {
 });
 
 import { runAgent } from "../src/agent-runner.js";
+import { bootPi } from "./helpers/boot-extension.js";
 import subagentsExtension from "./helpers/home-extension.js";
 
-function makePi() {
-  const tools = new Map<string, any>();
-  const handlers = new Map<string, any>();
-  const eventHandlers = new Map<string, any>();
-
-  return {
-    pi: {
-      registerMessageRenderer: vi.fn(),
-      registerTool: vi.fn((tool: any) => {
-        tools.set(tool.name, tool);
-      }),
-      registerCommand: vi.fn(),
-      registerEntryRenderer: vi.fn(),
-      registerFlag: vi.fn(),
-      getFlag: vi.fn(),
-      on: vi.fn((event: string, handler: any) => {
-        handlers.set(event, handler);
-      }),
-      events: {
-        emit: vi.fn(),
-        on: vi.fn((event: string, handler: any) => {
-          eventHandlers.set(event, handler);
-          return vi.fn();
-        }),
-      },
-      appendEntry: vi.fn(),
-      sendMessage: vi.fn(() => {
-        throw new Error("stale extension context");
-      }),
-    } as any,
-    tools,
-    handlers,
-  };
-}
 
 function makeHeadlessCtx() {
   return {
@@ -81,7 +48,13 @@ describe("print mode background notifications", () => {
       steered: false,
     });
 
-    const { pi, tools, handlers } = makePi();
+    const { pi, tools, handlers } = bootPi({}, {
+      overrides: {
+        sendMessage: vi.fn(() => {
+          throw new Error("stale extension context");
+        }),
+      },
+    });
     subagentsExtension(pi);
     vi.useFakeTimers();
 

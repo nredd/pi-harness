@@ -11,7 +11,7 @@ import * as hostSdk from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAgents } from "../src/agent-types.js";
 import { hostStartupErrorClass } from "../src/startup-error.js";
-import { makePi, startSession } from "./helpers/boot-extension.js";
+import { bootPi, startSession } from "./helpers/boot-extension.js";
 import subagentsExtension from "./helpers/home-extension.js";
 
 // The suite now runs on the fork host; remove only the optional export to keep
@@ -54,7 +54,7 @@ describe("strictAgentFiles on a host without ExtensionStartupError", () => {
     writeFileSync(join(cwd, ".pi", "subagents.json"), JSON.stringify({ strictAgentFiles: true }));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const { pi } = makePi();
+      const { pi } = bootPi();
       expect(() => subagentsExtension(pi)).toThrow(/strictAgentFiles requires a pi host that exports ExtensionStartupError/);
       expect(pi.registerTool).not.toHaveBeenCalled();
       expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("Skipping agent file"));
@@ -66,7 +66,7 @@ describe("strictAgentFiles on a host without ExtensionStartupError", () => {
   it("keeps non-strict startup working: the bad file warns and is skipped", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const { pi, lifecycle } = makePi();
+      const { pi, lifecycle } = bootPi();
       expect(() => subagentsExtension(pi)).not.toThrow();
       await expect(startSession(lifecycle, true)).resolves.toBeUndefined();
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("Skipping agent file"));
