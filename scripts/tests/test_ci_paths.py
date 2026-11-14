@@ -123,7 +123,10 @@ def test_classify_accepts_documentation_paths(repo: Path, path: str) -> None:
     "path",
     [
         "README.md",
+        "packages/plan-mode/README.md",
         "packages/preset/README.md",
+        "packages/session-kit/README.md",
+        "packages/todo/README.md",
         ".github/workflows/ci.yml",
         "package-lock.json",
         "forks/pi",

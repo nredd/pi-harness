@@ -33,7 +33,15 @@ LOGGER = logging.getLogger(__name__)
 
 GIT = "/usr/bin/git"
 REPO_ROOT = Path(__file__).resolve().parents[1]
-TESTED_DOCUMENTATION = frozenset({"README.md", "packages/preset/README.md"})
+TESTED_DOCUMENTATION = frozenset(
+    {
+        "README.md",
+        "packages/plan-mode/README.md",
+        "packages/preset/README.md",
+        "packages/session-kit/README.md",
+        "packages/todo/README.md",
+    }
+)
 # Tool pins and root manifests read by both the WSL bootstrap and the stack job.
 TOOLCHAIN_INPUTS = frozenset(
     {"Makefile", "package.json", ".npmrc", ".gitmodules", ".node-version", ".bun-version", ".python-version"}

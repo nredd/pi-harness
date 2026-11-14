@@ -6,8 +6,8 @@ the exact-stack release tooling.
 Documentation lives in this file, each package's `README.md` and git history. `docs/` holds only
 the long references a test or release procedure reads: [CI](docs/ci.md), [coverage](docs/coverage.md),
 [install](docs/install.md) and [releases](docs/releases.md), plus `docs/agents/issue-tracker.md` for
-the `code-review` skill. Anything under about 100 lines belongs in a README; CI policy belongs in
-comments next to the workflow it describes. Do not add plans, coverage write-ups or
+the `code-review` skill. New documentation under about 100 lines goes in a README and CI policy goes in comments next
+to the workflow it describes; #893 moves `docs/ci.md` there. Do not add plans, coverage write-ups or
 investigation notes; put the why in the commit.
 
 ## Layout
@@ -38,7 +38,7 @@ make check-package-contracts # packed tarballs through exact stock Pi; not part 
 make help                    # every target
 ```
 
-- `make check` never rewrites files and never touches `forks/`. `check-ts` takes `WORKSPACES=<paths>`
+- `make check` never rewrites files and never modifies `forks/`; `check-integration` needs the `forks/pi` Gitlink initialized. `check-ts` takes `WORKSPACES=<paths>`
 - `check-benchmark` needs `@openai/codex@0.154.0` first on `PATH` on macOS; it fails, never skips
 - Packages build and test against the core fork's release tarballs pinned in root `overrides`.
   Stock Pi compatibility is `make check-package-contracts`' job
@@ -108,7 +108,7 @@ no work behind them; the verifier never asks for them, and a test binds its stac
 It does not make bench F, live-provider G, linux-arm64 runtime, native desktop or the documented
 standalone auth-interception exclusions into passes.
 
-After this workflow reaches `main` and GitHub indexes its dispatch trigger:
+Dispatch it on the frozen candidate:
 
 ```sh
 gh workflow run ci.yml --repo nredd/pi-harness --ref main
@@ -154,7 +154,7 @@ not fallbacks. Artifacts use normal Actions retention; expired evidence needs a 
 a replacement receipt. The verifier paginates run, job and artifact collections. Ubuntu publication/promotion jobs use
 trusted `/usr/bin/gh`, not PATH lookup; the `publish.yml` `verify` job runs computer-use releases on
 macOS and sets `RELEASE_GATE_GH=/opt/homebrew/bin/gh` there. Read-only local diagnostics on another platform must set
-`RELEASE_GATE_GH` to its trusted absolute executable, e.g. `/opt/homebrew/bin/gh` on this Mac;
+`RELEASE_GATE_GH` to its trusted absolute executable, e.g. `/opt/homebrew/bin/gh`;
 relative, missing or nonexecutable paths refuse.
 
 Publication and promotion are distinct candidates and evidence:
@@ -174,12 +174,9 @@ Publication and promotion are distinct candidates and evidence:
   `stack_run_ids`. Existing required-check, registry-byte, core and snapshot checks still apply.
   Owner environment approval remains mandatory before attestation/publication. Dotfiles adoption,
   deployment and activation consume that exact attested snapshot, never old PR or another package
-  set's checks. This change performs no release, promotion, protection edit or activation.
+  set's checks.
 
-Migration is fail-closed: older push/main-only evidence is insufficient for new publications and
-promotions. This PR cannot have a hosted full-dispatch receipt before its workflow has merged and
-been indexed. Its PR CI validates the change; the first actual release verification is a separate
-post-merge dispatch. Existing published releases and snapshots remain historical artifacts and
+Older push/main-only evidence is insufficient for new publications and promotions. Existing published releases and snapshots remain historical artifacts and
 are not retroactively relabelled as fully verified by this lane.
 
 ## Stack promotion
@@ -228,7 +225,7 @@ Workflow: `.github/workflows/promote-stack.yml` (`workflow_dispatch`, `main` onl
 Core SSH signing keys are checked by the core release workflow, not by the promotion
 consumer's attestation verifier. The core allowlist uses principal `nredd` and namespace `git`:
 MacBook `SHA256:YHzjQXY3SPl20zOMMOoNz8o4dk+eOZEi8FA+vS6nwFY` (retained for historical tags)
-and Mac mini (`nick-mac`) `SHA256:+16+g7/7VKDJ2svgiuGIbfPnPF9pKKSU/h51+K9iHdk`.
+and Mac mini `SHA256:+16+g7/7VKDJ2svgiuGIbfPnPF9pKKSU/h51+K9iHdk`.
 The latter is owner-approved for `.8` and future releases. No wildcard principal, skipped
 verification, new legacy exception, Gitlink move, or stack/pin change is implied.
 Core, harness, dotfiles and tap keep separate trust boundaries.
@@ -265,7 +262,6 @@ Created 2026-10-20 via `gh api`; the workflow does not create or change any of t
 - Ruleset `25524267` `main required checks`: twelve contexts (`integration_id` 15368, non-strict).
 - Environment `stack-promotion`: required reviewer the owner, deployment branches `main` only. The only job in it is `attest-and-publish`.
 - Ruleset `25524298` `stack snapshot tags` on `refs/tags/stack/**`: blocks tag update and deletion; bypass is admin. It does not protect release assets, but consumers verify the attestation, so a tampered asset is rejected. Creation stays open: an unattested tag is unconsumable because consumers verify attestation, and `GITHUB_TOKEN` creates the tag through the release.
-- One-time cleanup after this PR merges (the owner/orchestrator does it, the workflow does not): delete ruleset `25524297` and deploy key `167140535`, and remove the `STACK_CHANNEL_DEPLOY_KEY` env secret from `stack-promotion`. All three belonged to the retired `stack-channel` pointer.
 
 ### Consumer requirements
 
@@ -280,9 +276,9 @@ gh attestation verify stack-snapshot.json --repo nredd/pi-harness \
 
 Then validate it with `StackSnapshot` (`integration/harness/promotion.py`) and require its `source_sha` to equal the pin. `load_promoted_snapshot` does both. `gh attestation verify` needs a GitHub login unless it is given the bundle: the public attestations API serves it anonymously, which is what the installer does (`--bundle`, see [install](docs/install.md)). An unattested file, or one attested from another workflow or ref, must be rejected, keeping the last good stack. To roll back, pin an older retained `stack/<sha>`.
 
-### First promotion
+### Promoting
 
-After this PR merges, run `verify-only` on a `main` SHA whose CI ran the stack job, then `promote` with the same SHA and approve the `stack-promotion` environment. This PR dispatches nothing and creates no tag, release, ruleset or environment.
+Run `verify-only` on a `main` SHA whose CI ran the stack job, then `promote` with the same SHA and approve the `stack-promotion` environment.
 
 ### Historical waived record
 
@@ -298,8 +294,8 @@ Infra code and runbook live in the private `nredd/ci-runners` repo. This page is
 
 | Label | Host | Isolation |
 | --- | --- | --- |
-| `pi-linux` | NAS (Proxmox) | One linked-clone VM per job from template `9001`, destroyed after the job. Per-VM PVE firewall drops every private net, so no LAN, no tailnet. 8 vCPU, 10 GiB, 50 min cap |
-| `pi-macos` | MacBook Air (arm64) | One job at a time as the unprivileged hidden `ci` user. All `ci` processes killed and its home and `/tmp` files wiped before and after every job, runner restored from a root-owned golden copy. pf rules block `ci` from every private net. 50 min cap |
+| `pi-linux` | Linux VM host | One linked-clone VM per job, destroyed after the job. Per-VM PVE firewall drops every private net, so no LAN, no tailnet. 8 vCPU, 10 GiB, 50 min cap |
+| `pi-macos` | macOS arm64 host | One job at a time as the unprivileged hidden `ci` user. All `ci` processes killed and its home and `/tmp` files wiped before and after every job, runner restored from a root-owned golden copy. pf rules block `ci` from every private net. 50 min cap |
 | `pi-wsl2` | ARM64 Windows host | One job at a time inside a fresh WSL2 distro (linux-arm64), imported from a read-only golden image under a dedicated non-admin Windows user `ci`, so it gets its own utility VM apart from the owner's dev distros. Unregistered and the VM shut down after every job. NAT networking; a guest nftables deny set (private ranges, tailnet/CGNAT, link-local, the gateway, plus every non-default route prefix of the host at job start) is the enforced layer, and a calibrated Hyper-V firewall rule is best effort. `wsl.conf`: automount, interop and `appendWindowsPath` off, no sudo, IPv6 off. Runs only on AC with enough free disk. 50 min cap |
 
 `pi-wsl2` status: planned, not live. The isolation controls in its row and in the threat model below are the design; the native path has only run against stubs, and nothing is claimed as verified until the acceptance smoke and three real jobs have run (see Remaining).

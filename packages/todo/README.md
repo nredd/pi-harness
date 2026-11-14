@@ -772,8 +772,7 @@ Task state is partitioned by session id, so parallel sessions cannot read or
 overwrite each other's lists. Nothing is written to disk: on session start,
 compaction, and session-tree changes, the list is rebuilt by walking the branch
 and taking the last saved snapshot, which replaces the whole list
-(last-write-wins). See [Persistence](#persistence) for where
-snapshots are saved.
+(last-write-wins).
 
 ### Anatomy of a row
 

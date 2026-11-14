@@ -113,11 +113,7 @@ proves quiescence; permission or unexpected syscall errors surface uncertainty a
 
 ## Upstream
 
-- Fork of `injaneity/pi-computer-use`. The pinned base commit is `upstream` in `sync-patches.json`
-- `sync-patches.json` is the whole ledger: every carried patch has a purpose, files, a check, executable drop controls and an upstream disposition. `files` is the exact set that differs from the base
-- `npm run test:sync-reverts` reverts each patch in a scratch copy and requires its check to fail. `PI_CU_UPSTREAM_SYNC=1 npm run test:upstream-sync -- --fetch` (CI, Linux) fails on undeclared drift from the base
-- We do not track upstream continuously. To re-sync, apply `git diff <old-base> <new-base>` (minus `package-lock.json` and `prebuilt/`) with `git apply --3way --directory=packages/computer-use`, resolve against the ledger, update `upstream` and `files`, then run `npm run docs:generate`, `npm run check` and `make check-computer-use-package-contract`
-- Keep the local bundle path and signing identity across a sync: changing either forces TCC re-grants
+Fork of [`injaneity/pi-computer-use`](https://github.com/injaneity/pi-computer-use) (MIT). It is not kept in sync with upstream.
 
 ## Signing certificate setup
 
@@ -137,7 +133,7 @@ without a new password-input dependency. Remaining shell work belongs to #695.
 
 ## macOS root targeting
 
-Carried behavior notes for `@nredd/pi-computer-use`. Root targeting is now based on upstream PR #95; `sync-patches.json` records the current base and remaining patches.
+Carried behavior notes for `@nredd/pi-computer-use`. Root targeting is now based on upstream PR #95.
 
 ### Target contract
 

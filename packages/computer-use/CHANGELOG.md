@@ -6,7 +6,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Removed
 
-- `UPSTREAM.md` is no longer shipped or maintained. `sync-patches.json` is the whole carried-patch ledger (its per-patch `rows` are gone) and the README's Upstream section holds the re-sync notes.
+- `UPSTREAM.md` is no longer shipped or maintained. `docs/macos-root-targeting.md` moved into the README.
 
 ### Added
 
