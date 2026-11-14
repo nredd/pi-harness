@@ -49,7 +49,8 @@ def run_command(
         cmd (Sequence[str]): Argument vector, resolved through `PATH` (the child's `env` when given).
         run (Runner): `subprocess.run`-compatible callable.
         stdin (str | None): Text fed to the command's standard input.
-        capture (bool): Return standard output instead of passing it through.
+        capture (bool): Return standard output instead of passing it through. Undecodable bytes are kept
+            as `surrogateescape` surrogates rather than raising.
         env (Mapping[str, str] | None): Complete child environment; `None` inherits the current one.
         cwd (Path | None): Working directory for the child; `None` keeps the current one.
         quiet (bool): Discard the child's standard error and any start-up failure message, like `2>/dev/null`.

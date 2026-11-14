@@ -69,3 +69,9 @@ def test_quiet_discards_stderr_and_start_failures_and_cwd_moves_the_child(
     pwd = "import os; print(os.getcwd())"
     status, out = run_command([sys.executable, "-c", pwd], subprocess.run, capture=True, cwd=tmp_path)
     assert (status, Path(out.strip()).resolve()) == (0, tmp_path.resolve())
+
+
+def test_undecodable_output_is_kept_not_raised() -> None:
+    """Kernel logs and `/proc` text can hold arbitrary bytes; they survive as surrogates."""
+    code = "import sys; sys.stdout.buffer.write(b'a\\xffb')"
+    assert run_command([sys.executable, "-c", code], subprocess.run, capture=True) == (0, "a\udcffb")

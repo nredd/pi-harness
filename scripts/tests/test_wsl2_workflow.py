@@ -72,12 +72,8 @@ def test_wsl2_workflow_fails_closed_on_platform_or_mount_mismatch() -> None:
 def test_wsl2_workflow_preserves_and_uploads_bounded_diagnostics() -> None:
     """Keep the executable cleanup and bounded upload attached to the native job."""
     workflow = workflow_text()
-    capture = (ROOT / "scripts/wsl2_capture.py").read_text(encoding="utf-8")
     assert "wsl2-diagnostics" in workflow
     assert not (SCRIPTS / "wsl2_cleanup.sh").exists()
-    # Cleanup runs after the export on every path, and removing the checkout is its last step.
-    assert capture.index("_export(ctx)") < capture.index("_finish(ctx, status)")
-    assert capture.index("_guest_state(ctx, status)") < capture.index("_cleanup(ctx, status % 256)")
     assert workflow.count("cleanup: cleanup") == 2
     # Both cleanup captures see timeouts and cancels, which leave no guest first-failure record.
     assert workflow.count("cleanup: cleanup\n          job-status: ${{ job.status }}\n") == 2

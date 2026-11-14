@@ -118,7 +118,10 @@ class Capture:
         cwd: Path | None = None,
         env: Mapping[str, str] | None = None,
     ) -> tuple[int, str]:
-        """Run one command from the guest `PATH` (the fixtures stub it) without raising.
+        """Run one command without raising, resolved through the `tool-path` receipt's `PATH`.
+
+        Bare names are deliberate: the receipt is the guest's trusted tool path, and the CI fixtures stub
+        commands through it.
 
         Parameters:
             cmd (Sequence[str]): Argument vector.
@@ -150,22 +153,29 @@ def _copy(ctx: Capture, args: Sequence[str]) -> None:
         raise CaptureError(f"wsl2-capture: `cp` failed with status {status}", status)
 
 
-def _remove(path: Path) -> None:
-    """Remove a file, link or tree like `rm -rf`; a missing path is fine.
+def _remove(path: Path, *, tree: bool = True) -> None:
+    """Remove a file, link or (by default) tree like `rm -rf`, or `rm -f` without `tree`; missing is fine.
+
+    A tree is removed as far as possible before the first failure is raised, like `rm -rf`.
 
     Parameters:
         path (Path): Path to remove.
+        tree (bool): Remove a directory recursively; otherwise a directory is an error like `rm -f`.
 
     Raises:
         CaptureError: When it cannot be removed.
     """
+    errors: list[BaseException] = []
     try:
-        if path.is_dir() and not path.is_symlink():
-            shutil.rmtree(path)
+        if tree and path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path, onexc=lambda _function, _path, error: errors.append(error))
         else:
             path.unlink(missing_ok=True)
     except OSError as exc:
-        raise CaptureError(f"wsl2-capture: cannot remove '{path}': {exc.strerror or exc}") from exc
+        errors.append(exc)
+    if errors:
+        reason = getattr(errors[0], "strerror", None) or errors[0]
+        raise CaptureError(f"wsl2-capture: cannot remove '{path}': {reason}") from errors[0]
 
 
 def _glob(base: Path, pattern: str) -> list[str]:
@@ -178,6 +188,10 @@ def _glob(base: Path, pattern: str) -> list[str]:
     Returns:
         list[str]: Existing relative POSIX paths, sorted.
     """
+    if "*" not in pattern:
+        # A literal path matches while it exists, dangling links included, like a shell.
+        literal = base / pattern
+        return [pattern] if literal.exists() or literal.is_symlink() else []
     found = (match.relative_to(base) for match in base.glob(pattern))
     return sorted(path.as_posix() for path in found if not any(part.startswith(".") for part in path.parts))
 
@@ -221,10 +235,7 @@ def _mirror_coverage(ctx: Capture) -> None:
         ctx (Capture): Locations and runner.
     """
     for relative in _matches(ctx.host_workspace):
-        try:
-            (ctx.host_workspace / relative).unlink()
-        except OSError as exc:
-            raise CaptureError(f"wsl2-capture: cannot remove '{relative}': {exc.strerror or exc}") from exc
+        _remove(ctx.host_workspace / relative, tree=False)
     for relative in _matches(ctx.worktree):
         report = ctx.worktree / relative
         if not report.is_file():
@@ -372,6 +383,23 @@ def _kernel_section(ctx: Capture) -> str:
     return f"\n== dmesg unprivileged (last {DMESG_LINES} lines) ==\n{_tail(log, DMESG_LINES)}"
 
 
+def _guest_report(ctx: Capture, status: int) -> str:
+    """Build the synthetic guest-state report.
+
+    Parameters:
+        ctx (Capture): Locations and runner.
+        status (int): The guest status, recorded in the header.
+
+    Returns:
+        str: The unscanned report text.
+    """
+    stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    job = ctx.env.get("WSL_JOB_STATUS") or "unknown"
+    text = f"WSL guest state at {stamp} (UTC): guest status {status}, job status {job}\n"
+    text += "".join(_proc_section(name) for name in GUEST_STATE_FILES)
+    return text + _vmstat_section() + _kernel_section(ctx)
+
+
 def _guest_state(ctx: Capture, status: int) -> None:
     """Export a scanned report of guest memory, swap, pressure and kernel state for a failed job.
 
@@ -383,13 +411,8 @@ def _guest_state(ctx: Capture, status: int) -> None:
         status (int): The guest status, recorded in the report header.
     """
     report = ctx.runner_temp / "guest-state.txt"
-    stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    job = ctx.env.get("WSL_JOB_STATUS") or "unknown"
-    text = f"WSL guest state at {stamp} (UTC): guest status {status}, job status {job}\n"
-    text += "".join(_proc_section(name) for name in GUEST_STATE_FILES)
-    text += _vmstat_section() + _kernel_section(ctx)
     with contextlib.suppress(OSError):
-        report.write_text(text, encoding="utf-8", errors="surrogateescape")
+        report.write_text(_guest_report(ctx, status), encoding="utf-8", errors="surrogateescape")
     scanned = ctx.command(
         ["timeout", "60", "python3", "-m", "harness.credentials", str(report)],
         cwd=ctx.worktree / "integration",
@@ -451,6 +474,8 @@ def _finish(ctx: Capture, status: int) -> int:
     Returns:
         int: The exit status: first-failure (1 when unparseable), else `status`, modulo 256 like a shell.
     """
+    # Cleanup is bounded work and must complete, as a Bash EXIT trap does; the caller's `timeout` escalates.
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
     first = ctx.runner_temp / "first-failure"
     if first.is_file():
         try:

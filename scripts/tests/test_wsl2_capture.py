@@ -8,7 +8,7 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -92,6 +92,16 @@ def tree(tmp_path: Path) -> Tree:
     return made
 
 
+def refuse_removal(path: Path, *, onexc: Callable[[Any, str, BaseException], object]) -> None:
+    """Stand in for `shutil.rmtree`: report one failure through `onexc` instead of removing anything.
+
+    Parameters:
+        path (Path): Tree that cannot be removed.
+        onexc (Callable[[Any, str, BaseException], object]): The caller's error handler.
+    """
+    onexc(os.unlink, str(path), PermissionError(13, "Permission denied", str(path)))
+
+
 def context(tree: Tree) -> capture.Capture:
     """Resolve the capture context the way `main` does.
 
@@ -171,7 +181,7 @@ def test_a_stale_host_report_that_cannot_be_removed_fails_the_capture(
     """`rm -f` of a directory fails, and `set -e` made that the script's status."""
     (tree.host / "coverage/summary.json").mkdir(parents=True)
     assert capture.main(environ=tree.env, argv=[]) == 1
-    assert "cannot remove 'coverage/summary.json'" in capsys.readouterr().err
+    assert "cannot remove" in capsys.readouterr().err
 
 
 def test_a_failing_copy_keeps_its_own_status(tree: Tree, capsys: pytest.CaptureFixture[str]) -> None:
@@ -188,10 +198,7 @@ def test_an_unremovable_artifact_target_fails_with_status_1(
     """A tree the guest cannot delete is reported by name, not as a traceback."""
     write(tree.host / "integration/artifacts/node.xml")
 
-    def refuse(path: Path) -> None:
-        raise PermissionError(13, "Permission denied", str(path))
-
-    monkeypatch.setattr(capture.shutil, "rmtree", refuse)
+    monkeypatch.setattr(capture.shutil, "rmtree", refuse_removal)
     assert capture.main(environ=tree.env, argv=[]) == 1
     assert "Permission denied" in capsys.readouterr().err
 
@@ -326,8 +333,11 @@ def test_running_the_file_exits_with_the_status_of_main(tree: Tree, monkeypatch:
 def test_cleanup_exits_with_the_first_failure_record(tree: Tree, recorded: str, expected: int) -> None:
     """The guest's first failure wins, an unparseable one is 1, and the status is taken modulo 256."""
     write(tree.worktree / ".ci-temp/first-failure", recorded)
+    write(tree.worktree / "integration/artifacts/wsl2-personal.xml", "<testsuite/>\n")
     assert capture.main(environ=tree.env, argv=["cleanup"]) == expected
     assert not tree.worktree.exists()
+    # Artifacts are preserved whatever the status, success included.
+    assert (tree.host_temp / "wsl2-diagnostics/artifacts/wsl2-personal.xml").is_file()
     assert (tree.host_temp / "wsl2-diagnostics/capture-status.txt").read_text() == (
         f"WSL harness exited with status {expected}.\n"
     )
@@ -412,10 +422,7 @@ def test_cleanup_keeps_the_harness_status_when_every_housekeeping_step_fails(
     # `mkdir` and the status write both fail beneath a file.
     ctx = replace(context(tree), host_temp=blocked)
 
-    def refuse(path: Path) -> None:
-        raise PermissionError(13, "Permission denied", str(path))
-
-    monkeypatch.setattr(capture.shutil, "rmtree", refuse)
+    monkeypatch.setattr(capture.shutil, "rmtree", refuse_removal)
     capture._cleanup(ctx, 47)
     err = capsys.readouterr().err
     for warning in (
@@ -586,3 +593,40 @@ def test_the_kernel_log_is_cut_to_its_last_400_lines(tree: Tree) -> None:
     section = capture._kernel_section(context(tree))
     assert section.startswith("\n== dmesg unprivileged (last 400 lines) ==\n601\n")
     assert section.endswith("\n1000\n")
+
+
+def test_a_sigterm_during_cleanup_does_not_interrupt_it(tree: Tree, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Housekeeping finishes, removing the checkout, even when the job is terminated again."""
+
+    def terminated_again(_ctx: capture.Capture, _status: int) -> None:
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    stub(tree, "python3", "exit 0")
+    write(tree.worktree / ".ci-temp/first-failure", "47\n")
+    monkeypatch.setattr(capture, "_guest_state", terminated_again)
+    assert capture.main(environ=tree.env, argv=["cleanup"]) == 47
+    assert not tree.worktree.exists()
+
+
+def test_a_dangling_host_link_at_a_report_path_is_cleared(tree: Tree) -> None:
+    """A shell glob matches a literal path while its link exists, so the stale link is removed."""
+    (tree.host / "coverage").mkdir()
+    (tree.host / "coverage/summary.json").symlink_to(tree.host / "nowhere")
+    assert capture.main(environ=tree.env, argv=[]) == 0
+    assert not (tree.host / "coverage/summary.json").is_symlink()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+def test_a_tree_is_removed_as_far_as_possible_before_the_failure_is_reported(tree: Tree) -> None:
+    """Like `rm -rf`, one unremovable entry does not stop the rest of the tree going."""
+    victim = tree.worktree / "integration/artifacts"
+    write(victim / "keep/inner.txt")
+    write(victim / "gone.txt")
+    locked = victim / "keep"
+    locked.chmod(0o500)
+    try:
+        with pytest.raises(capture.CaptureError):
+            capture._remove(victim)
+        assert not (victim / "gone.txt").exists()
+    finally:
+        locked.chmod(0o700)
