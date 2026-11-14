@@ -34,8 +34,9 @@ last published snapshot: every harness with an event, a quota reading or a `last
 (a pi-era snapshot counts as `pi`; one that cannot be read is assumed to be `pi`), and nothing if
 nothing was published.
 
-One export runs per agent dir at a time (see `export.lock` below); a second fails with
-`export already running`.
+Callers must not run two exports into the same outbox at once: nothing in the artifact locks. The
+only scheduled caller, `pi-usage-sync`, already serializes its runs under its own lock, so a manual
+export should go through it (or not overlap one).
 
 `--agent-dir` defaults to `PI_CODING_AGENT_DIR`, then `~/.pi/agent`. The session root defaults to
 `PI_CODING_AGENT_SESSION_DIR`, then `DIR/sessions`; `--sessions-dir` takes precedence. History
@@ -63,15 +64,23 @@ CLI results:
   `failed: "lost"` (diagnostic `<harness>: last published contents unreadable`): it is missing
   from this snapshot, and stderr says so. Pi itself still fails closed.
   `consecutiveFailures` counts failed exports of a harness in a row (kept in `export-state.json`,
-  reset by a clean one); at 3 the CLI exits nonzero (after printing and publishing as usual) and
-  says `<harness>: failed 3 exports in a row`, so a stuck harness cannot be carried forever unseen.
+  reset by a clean one). It never changes the exit code (see below): a caller that wants to warn
+  about a harness stuck on carried data reads `failed`, `consecutiveFailures` and, on import,
+  `stale`.
   A transcript that vanishes between listing and reading (Claude and Codex prune old ones) is not a
   failure; its cached record stays.
 - Import: `{ "imported": N, "retained": N, "problems": [], "importedAt": MS, "stale": [..] }` on
   stdout. `stale` lists `{machineId, harness, lastGoodAt}` for every cached machine harness whose
   `lastGoodAt` is more than 2 days behind its manifest `exportedAt` (data carried through failures);
   each is also a stderr line, and none changes the exit code.
-- Exactly one JSON object is emitted. Diagnostics go to stderr. Invalid commands, malformed local
+- Exactly one JSON object is emitted. Diagnostics go to stderr.
+  Exit contract: an export that published a snapshot exits 0, however many harnesses `failed`
+  (kept or lost) and however many times in a row: those are fields of the JSON result, plus a
+  stderr line each, for the caller to record as warnings. A nonzero exit means nothing was
+  published (invalid commands, an incomplete pi scan, an unwritable cache or output, a refused
+  narrower harness set).
+  An import that finds stale harnesses also exits 0 and lists them in `stale`.
+  Malformed local
   scans, unwritable caches and publication failures exit nonzero. Partial/corrupt imports emit
   a JSON result and exit nonzero, retaining every failed machine's last-good snapshot.
 - A failed export never replaces the previous manifest. Its validated immutable shards may remain
@@ -95,16 +104,6 @@ Installation state, never synced:
   account discriminators below and never appears in a snapshot; like `machine.json`, it is created
   exclusively and atomically, and a corrupt file fails rather than being replaced. The set is
   written only after the manifest is published.
-- `DIR/pi-session-kit/export.lock`: held for the whole of an export (read the previous snapshot,
-  check the set, publish, record state), created atomically with the owner's pid. It only ever
-  changes under a second lock, `export.lock.reclaim`, held for the few calls it takes to inspect and
-  take it; a process that cannot get the guard, or finds a live owner, fails with
-  `export already running` instead of waiting. A lock whose owner is dead (or whose contents are not
-  a pid) is cleared by the next export; a lock that cannot be read (an I/O error) fails the export
-  rather than being taken for dead. Two exports never run at once, and the failure modes are
-  safe: a pid reused by an unrelated live process, or a process killed in the few calls it holds the
-  guard, leave exports failing `export already running` until the file is deleted. Delete
-  `export.lock` and `export.lock.reclaim` only when no export is running.
 - `DIR/pi-session-kit/stats-global.json`: one atomically replaced document containing validated
   last-good machine snapshots, last successful import time and coverage problems. Imports do not
   mutate local usage or installation identity. A wholly failed import does not advance the sync
@@ -129,7 +128,8 @@ Manifest exact keys:
 - `lastGoodAt` (v2 only): per harness in the snapshot (`pi`, `claude`, ...), when it was last read
   cleanly: positive, at most `exportedAt`. Equal to `exportedAt` unless the harness failed and its
   previous contents were carried, when it stays at the previous mark (or the previous `exportedAt`
-  for a snapshot with none); absent when that is unknown.
+  for a snapshot with none), never later than `exportedAt` even if the previous snapshot's clock ran
+  ahead; absent when that is unknown.
 - `shards`: unique month references, each exactly `{month, file, sha256, bytes}`. `file` MUST
   equal `<month>-<sha256>.json`. No absolute paths, traversal or arbitrary filenames.
 
@@ -236,7 +236,9 @@ reads only. A missing root is silent ("not installed"). Parsed files are cached 
 `DIR/pi-session-kit/stats-harness-cache.json` by size and mtime, history for deleted files kept.
 That local, never-synced file is keyed by absolute transcript path (so Claude's cwd-encoded project
 directory names live there as keys); its values and every reader result carry no paths. It also
-records a hash of the installation salt (never the salt) and is discarded when that changes.
+records a hash of the installation salt (never the salt). When that changes, usage records are kept
+(a pruned transcript's history exists nowhere else) but quota is dropped and every record is marked
+for re-parse, so quota for files that still exist is re-derived under the new salt on the next scan.
 
 Purging a harness: history for transcripts a tool has since pruned lives only in this cache and in
 the published snapshots. To drop a harness on purpose, export without it using
@@ -264,7 +266,7 @@ the published snapshots. To drop a harness on purpose, export without it using
   titles, directory names, account IDs or credentials. `history.jsonl`, `auth.json`, credential
   files and Codex SQLite databases are never opened. Diagnostics are counts only.
 - Cost is `null` for Claude and Codex (snapshot v2); OpenCode's recorded cost is kept, `null` when
-  absent. The harness cache is version 4: older caches (cost 0, quota without `account`, no salt mark) and caches made under another salt are dropped and
+  absent. The harness cache is version 4: older caches (cost 0, quota without `account`) are dropped and
   re-parsed.
 
 Harness API:

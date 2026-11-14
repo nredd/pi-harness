@@ -59,7 +59,6 @@ export {
 	type ExportOptions,
 	eventId,
 	exportStats,
-	FAILURE_LIMIT,
 	type GlobalCache,
 	type HarnessReport,
 	type Identity,

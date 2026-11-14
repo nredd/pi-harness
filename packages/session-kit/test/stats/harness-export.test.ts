@@ -16,7 +16,6 @@ import { type Harness, opaqueId } from "../../src/stats/load.ts";
 import {
 	eventId,
 	exportStats,
-	FAILURE_LIMIT,
 	importStats,
 	loadCombined,
 	type Manifest,
@@ -909,6 +908,27 @@ describe("exportStats with harnesses", () => {
 			expect(manifestOf(v1.snapshotDir).lastGoodAt?.opencode).toBe(OCT);
 		});
 
+		it("never records a carried mark after its own export, even if the previous snapshot's clock ran ahead", async () => {
+			seedPi();
+			const roots = seedHarnessHome(home);
+			const base = publish((await machineIdentity(agent)).machineId, 2, []);
+			const ahead = Date.now() + 10 * STALE_AFTER_MS;
+			writeFileSync(
+				join(repo, "machines", base.machineId, "manifest.json"),
+				JSON.stringify({ ...base, exportedAt: ahead, lastGoodAt: { opencode: ahead } }),
+			);
+			const result = await exportStats(agent, repo, undefined, {
+				harnesses: ["pi", "opencode"],
+				roots,
+				home,
+				loadSqlite: busyDb,
+			});
+			const m = manifestOf(result.snapshotDir);
+			expect(m.exportedAt).toBeLessThan(ahead);
+			expect(m.lastGoodAt?.opencode).toBe(m.exportedAt);
+			expect(() => validateManifest(m)).not.toThrow();
+		});
+
 		it("flags a harness more than two days behind its snapshot as stale on import", async () => {
 			const exportedAt = OCT + 10 * STALE_AFTER_MS;
 			const manifest = (lastGoodAt: Manifest["lastGoodAt"]): Manifest => ({
@@ -959,7 +979,7 @@ describe("exportStats with harnesses", () => {
 			const harnesses: Harness[] = ["pi", "opencode"];
 			await exportStats(agent, repo, undefined, { harnesses, roots, home });
 			const counts: (number | undefined)[] = [];
-			for (let i = 0; i < FAILURE_LIMIT; i++) {
+			for (let i = 0; i < 3; i++) {
 				const r = await exportStats(agent, repo, undefined, { harnesses, roots, home, loadSqlite: busyDb });
 				counts.push(r.harnesses?.opencode?.consecutiveFailures);
 			}
@@ -1011,33 +1031,6 @@ describe("exportStats with harnesses", () => {
 				writeFileSync(statePath(), JSON.stringify({ ...state, failures }));
 				await expect(exportStats(agent, repo, undefined, { home })).rejects.toThrow("Invalid export state");
 			}
-		});
-	});
-
-	describe("concurrent exports", () => {
-		const lockPath = () => join(agent, "pi-session-kit", "export.lock");
-
-		it("lets one export run at a time and says so", async () => {
-			seedPi();
-			const results = await Promise.allSettled([
-				exportStats(agent, repo, undefined, { home }),
-				exportStats(agent, repo, undefined, { home }),
-			]);
-			expect(results.map((r) => r.status).sort()).toEqual(["fulfilled", "rejected"]);
-			const failure = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
-			expect(String(failure.reason)).toContain("export already running");
-			// released afterwards, including after a failed export
-			await exportStats(agent, repo, undefined, { home });
-			writeFileSync(join(agent, "sessions", "p", "bad.jsonl"), "{broken\n");
-			await expect(exportStats(agent, repo, undefined, { home })).rejects.toThrow("Incomplete local scan");
-			expect(() => statSync(lockPath())).toThrow();
-		});
-
-		it("reclaims the lock of a dead process", async () => {
-			seedPi();
-			mkdirSync(join(agent, "pi-session-kit"), { recursive: true });
-			writeFileSync(lockPath(), String(2 ** 30));
-			await expect(exportStats(agent, repo, undefined, { home })).resolves.toHaveProperty("machineId");
 		});
 	});
 });

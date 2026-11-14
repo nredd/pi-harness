@@ -355,9 +355,9 @@ function flatten(files) {
 }
 
 // src/stats/snapshot.ts
-import { randomBytes, randomUUID as randomUUID4 } from "node:crypto";
-import { link as link2, lstat, mkdir as mkdir4, readdir as readdir2, readFile as readFile4, rename as rename3, unlink as unlink2, writeFile as writeFile4 } from "node:fs/promises";
-import { dirname as dirname4, join as join7 } from "node:path";
+import { randomBytes, randomUUID as randomUUID3 } from "node:crypto";
+import { link, lstat, mkdir as mkdir3, readdir as readdir2, readFile as readFile3, rename as rename3, unlink, writeFile as writeFile3 } from "node:fs/promises";
+import { dirname as dirname3, join as join7 } from "node:path";
 
 // src/stats/harness/common.ts
 import { stat as stat2 } from "node:fs/promises";
@@ -877,10 +877,11 @@ async function readHarnessCache(path, salt) {
   }
   const cache = {};
   const record2 = asRecordOf(doc);
-  if (record2.version !== CACHE_VERSION2 || record2.salt !== saltMark(salt)) return cache;
+  if (record2.version !== CACHE_VERSION2) return cache;
+  const sameSalt = record2.salt === saltMark(salt);
   for (const [harness, files] of Object.entries(asRecordOf(record2.harnesses)))
     cache[harness] = Object.fromEntries(
-      Object.entries(asRecordOf(files)).filter((entry) => isParsedFile(entry[1]))
+      Object.entries(asRecordOf(files)).filter((entry) => isParsedFile(entry[1])).map(([path2, file]) => [path2, sameSalt ? file : { ...file, size: -1, quota: [] }])
     );
   return cache;
 }
@@ -911,61 +912,6 @@ async function loadHarnesses(options) {
   return scans;
 }
 
-// src/stats/lock.ts
-import { randomUUID as randomUUID3 } from "node:crypto";
-import { link, mkdir as mkdir3, readFile as readFile3, rm, unlink, writeFile as writeFile3 } from "node:fs/promises";
-import { dirname as dirname3 } from "node:path";
-function alive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error.code === "EPERM";
-  }
-}
-async function owner(path) {
-  let text;
-  try {
-    text = await readFile3(path, "utf8");
-  } catch (error) {
-    if (["ENOENT", "EISDIR"].includes(String(error.code))) return null;
-    throw error;
-  }
-  const pid = Number(text.trim());
-  return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
-}
-async function create(path) {
-  const tmp = `${path}.${randomUUID3()}.tmp`;
-  await writeFile3(tmp, String(process.pid), { flag: "wx", mode: 384 });
-  try {
-    await link(tmp, path);
-  } finally {
-    await unlink(tmp);
-  }
-}
-async function withLock(path, busy, fn) {
-  await mkdir3(dirname3(path), { recursive: true });
-  const guard = `${path}.reclaim`;
-  try {
-    await create(guard);
-  } catch (error) {
-    throw error.code === "EEXIST" ? new Error(busy) : error;
-  }
-  try {
-    const pid = await owner(path);
-    if (pid !== null && alive(pid)) throw new Error(busy);
-    await rm(path, { recursive: true, force: true });
-    await create(path);
-  } finally {
-    await rm(guard, { force: true });
-  }
-  try {
-    return await fn();
-  } finally {
-    if (await owner(path) === process.pid) await rm(path, { force: true });
-  }
-}
-
 // src/stats/snapshot.ts
 var SNAPSHOT_VERSION = 2;
 var VERSIONS = [1, 2];
@@ -974,13 +920,13 @@ var HASH = /^[a-f0-9]{64}$/;
 var MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 var MAX_BYTES = 128 * 1024 * 1024;
 async function atomicJson(path, value) {
-  await mkdir4(dirname4(path), { recursive: true });
-  const tmp = `${path}.${randomUUID4()}.tmp`;
+  await mkdir3(dirname3(path), { recursive: true });
+  const tmp = `${path}.${randomUUID3()}.tmp`;
   try {
-    await writeFile4(tmp, JSON.stringify(value), { mode: 384 });
+    await writeFile3(tmp, JSON.stringify(value), { mode: 384 });
     await rename3(tmp, path);
   } catch (error) {
-    await unlink2(tmp).catch(() => {
+    await unlink(tmp).catch(() => {
     });
     throw error;
   }
@@ -1007,22 +953,22 @@ async function installationFile(path, fresh, validate) {
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
-  await mkdir4(dirname4(path), { recursive: true });
-  const tmp = `${path}.${randomUUID4()}.tmp`;
-  await writeFile4(tmp, JSON.stringify(fresh()), { flag: "wx", mode: 384 });
+  await mkdir3(dirname3(path), { recursive: true });
+  const tmp = `${path}.${randomUUID3()}.tmp`;
+  await writeFile3(tmp, JSON.stringify(fresh()), { flag: "wx", mode: 384 });
   try {
-    await link2(tmp, path);
+    await link(tmp, path);
   } catch (error) {
     if (error.code !== "EEXIST") throw error;
   } finally {
-    await unlink2(tmp);
+    await unlink(tmp);
   }
   return validate(await jsonFile(path));
 }
 async function machineIdentity(dir = agentDir()) {
   return installationFile(
     join7(dir, "pi-session-kit", "machine.json"),
-    () => ({ machineId: randomUUID4(), label: "Pi machine" }),
+    () => ({ machineId: randomUUID3(), label: "Pi machine" }),
     validateIdentity
   );
 }
@@ -1220,7 +1166,7 @@ async function loadPrevious(snapshotDir) {
   try {
     const shards = [];
     for (const ref of manifest.shards) {
-      const text = await readFile4(join7(snapshotDir, ref.file), "utf8");
+      const text = await readFile3(join7(snapshotDir, ref.file), "utf8");
       if (opaqueId(text) !== ref.sha256) throw new Error("Shard digest mismatch");
       shards.push(validateShard(JSON.parse(text), manifest, ref.month));
     }
@@ -1272,15 +1218,7 @@ function carried(previous, harness) {
     if (sessionIds.has(s.id)) out.sessions.push({ path: s.id, startMs: s.startMs, endMs: s.endMs, child: s.child });
   return out;
 }
-var FAILURE_LIMIT = 3;
 async function exportStats(dir, output, root = sessionsDir(dir), options = {}) {
-  return withLock(
-    join7(dir, "pi-session-kit", "export.lock"),
-    "export already running",
-    () => exportLocked(dir, output, root, options)
-  );
-}
-async function exportLocked(dir, output, root, options) {
   const wanted = new Set(options.harnesses ?? ["pi"]);
   const identity = await machineIdentity(dir);
   const state = await exportState(dir);
@@ -1325,7 +1263,7 @@ async function exportLocked(dir, output, root, options) {
     if (failed) failures[h] = (state.failures[h] ?? 0) + 1;
     const was = previous !== null && previous !== "unreadable" ? previous.manifest : void 0;
     const lastGood = failed ? was?.lastGoodAt?.[h] ?? was?.exportedAt : exportedAt;
-    if (lastGood !== void 0) lastGoodAt[h] = lastGood;
+    if (lastGood !== void 0) lastGoodAt[h] = Math.min(lastGood, exportedAt);
     report[h] = {
       found: scan.found,
       problems,
@@ -1337,7 +1275,7 @@ async function exportLocked(dir, output, root, options) {
   }
   const snapshot = makeSnapshot({ ...loaded, calls, sessionMetadata }, identity, exportedAt, quota, lastGoodAt);
   validateSnapshot(snapshot);
-  await mkdir4(snapshotDir, { recursive: true });
+  await mkdir3(snapshotDir, { recursive: true });
   for (const s of snapshot.shards) {
     const text = JSON.stringify(s);
     const sha256 = opaqueId(text);
@@ -1355,7 +1293,7 @@ var globalPath = (dir) => join7(dir, "pi-session-kit", "stats-global.json");
 async function jsonFile(path) {
   const info = await lstat(path);
   if (!info.isFile() || info.size > MAX_BYTES) throw new Error("Not a bounded regular snapshot file");
-  return JSON.parse(await readFile4(path, "utf8"));
+  return JSON.parse(await readFile3(path, "utf8"));
 }
 async function readGlobal(dir) {
   const empty = { version: SNAPSHOT_VERSION, importedAt: 0, machines: {}, problems: [] };
@@ -1410,7 +1348,7 @@ async function importStats(dir, input) {
           const info = await lstat(path);
           if (!info.isFile() || info.size !== ref.bytes || info.size > MAX_BYTES)
             throw new Error("Invalid shard size/type");
-          const text = await readFile4(path, "utf8");
+          const text = await readFile3(path, "utf8");
           if (opaqueId(text) !== ref.sha256) throw new Error("Shard digest mismatch");
           const s = validateShard(JSON.parse(text), manifest, ref.month);
           if (JSON.stringify(s) !== text) throw new Error("Noncanonical shard JSON");
@@ -1488,13 +1426,9 @@ async function main() {
     });
     console.log(JSON.stringify(result));
     for (const [name2, status] of Object.entries(result.harnesses ?? {})) {
-      if ((status.consecutiveFailures ?? 0) >= FAILURE_LIMIT) {
-        console.error(`${name2}: failed ${status.consecutiveFailures} exports in a row`);
-        process.exitCode = 1;
-      }
       if (status.failed)
         console.error(
-          `${name2}: scan incomplete, ${status.failed === "kept" ? "kept what was last published" : "last published contents unreadable, dropped"}`
+          `${name2}: scan incomplete (${status.consecutiveFailures} in a row), ${status.failed === "kept" ? "kept what was last published" : "last published contents unreadable, dropped"}`
         );
     }
   } else if (command === "import" && input !== void 0 && output === void 0 && !EXPORT_ONLY.some((f) => options.has(f))) {

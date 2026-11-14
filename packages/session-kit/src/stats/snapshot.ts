@@ -25,7 +25,6 @@ import {
 	type Session,
 	sessionsDir,
 } from "./load.ts";
-import { withLock } from "./lock.ts";
 import { nth } from "./nth.ts";
 
 /** v2 adds `harness` on events, a null `cost` and quota observations. v1 is still imported (as pi). */
@@ -574,26 +573,15 @@ function carried(previous: Previous, harness: Harness): Contribution | null {
 	return out;
 }
 
-/** Consecutive failed (carried) exports of one harness after which the CLI exits nonzero. */
-export const FAILURE_LIMIT = 3;
-
-/** Write only this machine's immutable shards, publishing its manifest last. One export per agent dir at a time. */
+/**
+ * Write only this machine's immutable shards, publishing its manifest last. Callers must not run two exports
+ * into one outbox at once (`pi-usage-sync` serializes its runs); nothing here locks.
+ */
 export async function exportStats(
 	dir: string,
 	output: string,
 	root = sessionsDir(dir),
 	options: ExportOptions = {},
-): Promise<{ machineId: string; snapshotDir: string; harnesses?: HarnessReport }> {
-	return withLock(join(dir, "pi-session-kit", "export.lock"), "export already running", () =>
-		exportLocked(dir, output, root, options),
-	);
-}
-
-async function exportLocked(
-	dir: string,
-	output: string,
-	root: string,
-	options: ExportOptions,
 ): Promise<{ machineId: string; snapshotDir: string; harnesses?: HarnessReport }> {
 	const wanted = new Set<Harness>(options.harnesses ?? ["pi"]);
 	const identity = await machineIdentity(dir);
@@ -646,7 +634,8 @@ async function exportLocked(
 		// Carried data is as fresh as it was: the previous snapshot's own mark, else when it was published.
 		const was = previous !== null && previous !== "unreadable" ? previous.manifest : undefined;
 		const lastGood = failed ? (was?.lastGoodAt?.[h] ?? was?.exportedAt) : exportedAt;
-		if (lastGood !== undefined) lastGoodAt[h] = lastGood;
+		// Never after the export itself: a carried mark from a snapshot written under a faster clock must stay valid.
+		if (lastGood !== undefined) lastGoodAt[h] = Math.min(lastGood, exportedAt);
 		report[h] = {
 			found: scan.found,
 			problems,

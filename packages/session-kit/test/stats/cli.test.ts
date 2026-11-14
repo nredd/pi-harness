@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { main, run } from "../../src/stats/cli.ts";
-import { FAILURE_LIMIT } from "../../src/stats/snapshot.ts";
 import { assistantLine, at, sessionFile } from "./fixtures.ts";
 import { seedHarnessHome } from "./harness/home.ts";
 
@@ -125,12 +124,14 @@ describe("stats CLI", () => {
 		];
 		await main();
 		expect(JSON.parse(log.mock.calls[2]?.[0] as string).harnesses.opencode.failed).toBe("kept");
-		expect(error).toHaveBeenCalledWith("opencode: scan incomplete, kept what was last published");
+		expect(error).toHaveBeenCalledWith("opencode: scan incomplete (1 in a row), kept what was last published");
 		// and says so when the previous snapshot cannot be read either
 		writeFileSync(join(JSON.parse(log.mock.calls[2]?.[0] as string).snapshotDir, "manifest.json"), "{");
 		await main();
 		expect(JSON.parse(log.mock.calls[3]?.[0] as string).harnesses.opencode.failed).toBe("lost");
-		expect(error).toHaveBeenCalledWith("opencode: scan incomplete, last published contents unreadable, dropped");
+		expect(error).toHaveBeenCalledWith(
+			"opencode: scan incomplete (2 in a row), last published contents unreadable, dropped",
+		);
 		expect(process.exitCode ?? 0).toBe(exitCode ?? 0);
 		for (const argv of [
 			["--replace-harnesses", "--replace-harnesses"],
@@ -141,7 +142,7 @@ describe("stats CLI", () => {
 		}
 	});
 
-	it("keeps Codex data when --codex-dir points nowhere, and exits nonzero after repeated failures", async () => {
+	it("keeps Codex data when --codex-dir points nowhere, and still exits 0 however often in a row", async () => {
 		const roots = seedHarnessHome(join(dir, "home"));
 		const log = vi.spyOn(console, "log").mockImplementation(() => {});
 		const error = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -158,15 +159,15 @@ describe("stats CLI", () => {
 		];
 		process.argv = [...base, "--codex-dir", roots.codex];
 		await main();
-		for (let run = 1; run <= FAILURE_LIMIT; run++) {
+		for (let run = 1; run <= 4; run++) {
 			process.argv = [...base, "--codex-dir", join(dir, "nonexistent")];
 			await main();
 			const status = JSON.parse(log.mock.calls[run]?.[0] as string).harnesses.codex;
 			expect(status).toMatchObject({ failed: "kept", consecutiveFailures: run });
-			expect(process.exitCode ?? 0).toBe(run >= FAILURE_LIMIT ? 1 : 0);
+			// published, so success however many times in a row: the failure is data, not an exit code
+			expect(process.exitCode ?? 0).toBe(0);
 		}
-		expect(error).toHaveBeenCalledWith(`codex: failed ${FAILURE_LIMIT} exports in a row`);
-		process.exitCode = 0; // Bun cannot restore an unset exit code, so leave a clean one
+		expect(error).toHaveBeenCalledWith("codex: scan incomplete (4 in a row), kept what was last published");
 		// the data survived all of it
 		const manifestDir = JSON.parse(log.mock.calls[1]?.[0] as string).snapshotDir;
 		expect(readdirSync(manifestDir).length).toBeGreaterThan(1);

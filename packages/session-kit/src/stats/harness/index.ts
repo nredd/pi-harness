@@ -48,13 +48,15 @@ export function harnessRoots(
 	};
 }
 
-/**
- * What a cache records of the salt its account hashes were made with: a hash, never the salt. A cache
- * written under another salt would carry discriminators that no longer match, so it is discarded.
- */
+/** What a cache records of the salt its account hashes were made with: a hash, never the salt. */
 export const saltMark = (salt: string): string => opaqueId(`harness-cache-salt:${salt}`);
 
-/** Cached records, dropping any that do not have exactly the expected shape (they are re-parsed). */
+/**
+ * Cached records, dropping any that do not have exactly the expected shape (they are re-parsed). A cache made
+ * under another salt holds quota `account` hashes that no longer match: its usage records are kept (they hold
+ * no account, and a pruned transcript's history exists nowhere else) but its quota is dropped, and each
+ * record is marked stale (`size: -1`) so a file that still exists is re-parsed and its quota re-derived.
+ */
 export async function readHarnessCache(path: string, salt: string): Promise<HarnessCache> {
 	let doc: unknown;
 	try {
@@ -64,10 +66,13 @@ export async function readHarnessCache(path: string, salt: string): Promise<Harn
 	}
 	const cache: HarnessCache = {};
 	const record = asRecordOf(doc);
-	if (record.version !== CACHE_VERSION || record.salt !== saltMark(salt)) return cache;
+	if (record.version !== CACHE_VERSION) return cache;
+	const sameSalt = record.salt === saltMark(salt);
 	for (const [harness, files] of Object.entries(asRecordOf(record.harnesses)))
 		cache[harness] = Object.fromEntries(
-			Object.entries(asRecordOf(files)).filter((entry): entry is [string, ParsedFile] => isParsedFile(entry[1])),
+			Object.entries(asRecordOf(files))
+				.filter((entry): entry is [string, ParsedFile] => isParsedFile(entry[1]))
+				.map(([path, file]) => [path, sameSalt ? file : { ...file, size: -1, quota: [] }]),
 		);
 	return cache;
 }

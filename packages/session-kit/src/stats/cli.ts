@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { agentDir } from "../agent-dir.ts";
 import { HARNESSES, type Harness } from "./load.ts";
-import { exportStats, FAILURE_LIMIT, importStats } from "./snapshot.ts";
+import { exportStats, importStats } from "./snapshot.ts";
 
 const USAGE =
 	"usage: export --agent-dir DIR --output OUT [--sessions-dir DIR] [--harness pi,claude,codex,opencode] " +
@@ -63,13 +63,9 @@ export async function main(): Promise<void> {
 		});
 		console.log(JSON.stringify(result));
 		for (const [name, status] of Object.entries(result.harnesses ?? {})) {
-			if ((status.consecutiveFailures ?? 0) >= FAILURE_LIMIT) {
-				console.error(`${name}: failed ${status.consecutiveFailures} exports in a row`);
-				process.exitCode = 1;
-			}
 			if (status.failed)
 				console.error(
-					`${name}: scan incomplete, ${status.failed === "kept" ? "kept what was last published" : "last published contents unreadable, dropped"}`,
+					`${name}: scan incomplete (${status.consecutiveFailures} in a row), ${status.failed === "kept" ? "kept what was last published" : "last published contents unreadable, dropped"}`,
 				);
 		}
 	} else if (
