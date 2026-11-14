@@ -72,3 +72,19 @@ export function seedHarnessHome(home: string): { claude: string; codex: string; 
 	}
 	return { claude, codex, opencode };
 }
+
+let bumps = 0;
+/** Change the OpenCode database without changing what it reports: a non-assistant row, so the cache stamp moves. */
+export function bumpOpenCode(dbPath: string): void {
+	const db = new DatabaseSync(dbPath);
+	try {
+		db.prepare("INSERT INTO message VALUES (?, ?, ?, ?)").run(
+			`bump_${bumps++}`,
+			"ses_1",
+			OPENCODE_MS,
+			'{"role":"user"}',
+		);
+	} finally {
+		db.close();
+	}
+}

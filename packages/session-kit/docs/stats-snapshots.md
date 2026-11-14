@@ -209,9 +209,16 @@ Producer updates are invisible until the producer exports AND the viewer imports
 known machines, not undiscovered installations; it is not proof that every machine has synced.
 
 `/stats` freshly scans local sessions and combines them with this cache without network access.
-Until the harness display lands (#367, PR 3) `loadCombined` returns only pi events from imported
-machines, so `/stats` never mixes unlabelled Claude, Codex or OpenCode usage into pi totals or
-shows a null cost as $0. Their events stay in the imported snapshot, with their quota.
+`loadCombined` keeps every imported event's `harness` label (v1 shards are `pi`). Passing
+`{ harnesses: [...] }` also scans this machine's Claude, Codex and OpenCode data (the `/stats`
+command does; the library default reads none, and an explicit `agentDir` without `homeDir` is an
+isolated root that reads none either). Local scans are deduplicated against imported events by the
+same fingerprint, their quota merges with imported quota (`Combined.quota`, freshest per window and
+account), and their count-only diagnostics land in `Combined.harnessProblems`. A null cost stays
+`null`: `/stats` shows `unpriced`, and a total over mixed calls reads `$X + N unpriced`.
+`Coverage.sources[].harnesses` holds per-harness status: locally `found` (false is "not
+installed"), `lastEventMs` and `problems`; for imported machines `lastGoodAt`, `lastEventMs` and
+`stale` (see `STALE_AFTER_MS`).
 Its header labels cached coverage, **viewer last import**, local-only/never-imported state and
 incomplete coverage. Tab/Shift-Tab cycles Overview, Models and **Machines**. Machines lists each
 known installation's label plus full opaque UUID (default labels may repeat), fresh local scan
@@ -233,7 +240,7 @@ collection. Keep custom labels non-sensitive: they are exported. No schema or sy
 Future calls are ignored in display totals, not removed from durable history. Statistics
 are not subscription quota measurements or router inputs.
 
-Harness readers (#367; exported by the CLI above, not yet shown in `/stats`):
+Harness readers (#367; exported by the CLI above and shown in `/stats`):
 
 `src/stats/harness/` reads Claude Code, Codex CLI and OpenCode usage into the same `Call` model as
 pi (`Call.harness`: `pi | claude | codex | opencode`). Roots: `CLAUDE_CONFIG_DIR` or `~/.claude`;
@@ -261,10 +268,13 @@ the published snapshots. To drop a harness on purpose, export without it using
   `rate_limits` from `token_count` rows become quota observations (provider `openai-codex`),
   freshest per `(limitId, window, account, resetAt)` per rollout, so a newer already-reset reading
   never hides an older live one. No account dimension on usage; quota carries the salted `account`.
-- OpenCode: one read-only `node:sqlite` query (`immutable=1` only when the WAL is checkpointed and
-  absent, so a read never creates `-shm`/`-wal` and pending WAL rows are always visible; 2s busy
-  timeout, then a generic "database busy" diagnostic) that
-  projects only counters, IDs, timestamps and model names. `reasoning` tokens count as output. The
+- OpenCode: a read-only `node:sqlite` read in keyset pages of 2000 rows, yielding to the event loop
+  between pages, cached per session in the harness cache under a stamp of the database plus its
+  `-wal` (summed size, newest mtime): an unchanged database is never reopened, a changed one is
+  re-read in full (`/stats` shows `reading opencode, N rows` in its loading status). The
+  open is `immutable=1` only when the WAL is checkpointed and absent (so a read never creates
+  `-shm`/`-wal` and pending WAL rows are always visible); 2s busy timeout, then a generic "database
+  busy" diagnostic. The query projects only counters, IDs, timestamps and model names. `reasoning` tokens count as output. The
   schema follows third-party readers; a mismatch or missing `node:sqlite` is a diagnostic.
 - Entry IDs hash `<harness>:<native id>`, session IDs `<harness>-session:<native id>`. Only counts,
   timestamps, raw provider/model names, Codex quota labels (`limit_id`, `plan_type`, percentages,
