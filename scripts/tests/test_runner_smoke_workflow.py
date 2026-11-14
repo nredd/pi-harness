@@ -42,3 +42,18 @@ def test_owner_home_probe_comes_from_a_repo_variable() -> None:
     assert "SMOKE_OWNER_HOME: ${{ vars.SMOKE_OWNER_HOME }}" in block
     assert re.search(r'ls "\$SMOKE_OWNER_HOME"', block)
     assert re.search(r'-z "\$\{?SMOKE_OWNER_HOME\}?"', block)
+
+
+def test_malformed_extra_target_fails_loudly() -> None:
+    """Each target is validated as `host:port` and a bad entry fails the job instead of reading as blocked."""
+    for job in ("pi-linux", "pi-macos"):
+        step = private_step(job)
+        assert re.search(r'\[\[ "\$target" =~ \^\[[^\]]+\]\+:\[0-9\]\+\$ \]\]', step), job
+        assert "::error::malformed target" in step, job
+
+
+def test_missing_owner_home_fails_loudly() -> None:
+    """A set but nonexistent `SMOKE_OWNER_HOME` is an error, not a pass."""
+    block = job_block("pi-macos")
+    assert re.search(r'\[ ! -d "\$SMOKE_OWNER_HOME" \]', block)
+    assert "::error::SMOKE_OWNER_HOME is not a directory" in block

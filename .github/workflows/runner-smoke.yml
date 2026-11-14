@@ -37,6 +37,9 @@ jobs:
           set -f
           [ -z "$SMOKE_EXTRA_TARGETS" ] && echo "note: SMOKE_EXTRA_TARGETS is empty, only the neutral targets are probed"
           for target in 10.0.0.1:80 172.16.0.1:80 192.168.0.1:80 192.168.255.254:22 100.64.0.1:22 100.100.100.100:22 169.254.169.254:80 $SMOKE_EXTRA_TARGETS; do
+            if ! [[ "$target" =~ ^[A-Za-z0-9._-]+:[0-9]+$ ]]; then
+              echo "::error::malformed target (want host:port): $target"; fail=1; continue
+            fi
             if timeout 5 bash -c "exec 3<>/dev/tcp/${target%:*}/${target#*:}" 2>/dev/null; then
               echo "::error::reachable: $target"; fail=1
             else
@@ -66,6 +69,9 @@ jobs:
           set -f
           [ -z "$SMOKE_EXTRA_TARGETS" ] && echo "note: SMOKE_EXTRA_TARGETS is empty, only the neutral targets are probed"
           for target in 10.0.0.1:80 172.16.0.1:80 192.168.0.1:80 192.168.255.254:22 100.64.0.1:22 100.100.100.100:22 169.254.169.254:80 $SMOKE_EXTRA_TARGETS; do
+            if ! [[ "$target" =~ ^[A-Za-z0-9._-]+:[0-9]+$ ]]; then
+              echo "::error::malformed target (want host:port): $target"; fail=1; continue
+            fi
             if /usr/bin/nc -z -G 3 "${target%:*}" "${target#*:}" 2>/dev/null; then
               echo "::error::reachable: $target"; fail=1
             else
@@ -78,6 +84,7 @@ jobs:
           SMOKE_OWNER_HOME: ${{ vars.SMOKE_OWNER_HOME }}
         run: |
           if [ -z "$SMOKE_OWNER_HOME" ]; then echo "note: SMOKE_OWNER_HOME is empty, skipping the home probe"; exit 0; fi
+          if [ ! -d "$SMOKE_OWNER_HOME" ]; then echo "::error::SMOKE_OWNER_HOME is not a directory on this runner"; exit 1; fi
           if ls "$SMOKE_OWNER_HOME" >/dev/null 2>&1; then echo "::error::can read the owner home"; exit 1; fi
           echo "blocked: owner home"
 

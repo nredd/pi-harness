@@ -242,7 +242,7 @@ receipts belong on the PR, not in this source-attribution record.
 
 Scans of the imported tracked tree, after sanitization:
 
-- Absolute-path scan (`/Users/`, `/Volumes`, `/home/`, `redd`): none outside synthetic fixtures
+- Absolute-path scan (`/Users/`, `/Volumes`, `/home/`, `<user>`): none outside synthetic fixtures
 - E-mail scan: only `example.invalid`/`example.com` test values, the `noreply@anthropic.com`
   commit trailer, and `git@github.com` remote syntax
 - Secret-shape scan (`sk-`, `ghp_`, `AKIA`, private-key headers, JWT-like strings): synthetic

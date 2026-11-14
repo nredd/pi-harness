@@ -70,7 +70,6 @@ FIXTURE_VALUES: dict[str, frozenset[str]] = {
     "packages/dev-tools/test/fixtures/cargo/check.jsonl": frozenset({"user"}),
     "packages/dev-tools/test/fixtures/cargo/clippy-good.jsonl": frozenset({"user"}),
     "packages/plan-mode/test/child-policy.test.ts": frozenset({"u"}),
-    "packages/subagents/dist/chunks/chunk-TJQBFL4S.ts.map": frozenset({"user"}),
     "packages/subagents/src/output-file.ts": frozenset({"user"}),
     "packages/subagents/test/manager-registry-guard.test.ts": frozenset({"victim"}),
     "packages/subagents/test/output-file-path.test.ts": frozenset({"user"}),
@@ -82,6 +81,8 @@ FIXTURE_VALUES: dict[str, frozenset[str]] = {
 }
 # Machine-generated dependency locks are not authored text.
 LOCKFILE = re.compile(r"(?:^|/)(?:package-lock\.json|[^/]*\.lock)$")
+# Generated build output (hash-named, rebuilt, and not authored text): `dist/` trees and source maps.
+GENERATED = re.compile(r"(?:^|/)dist/|\.map$")
 # Vendored forks are scanned by their own repositories.
 EXCLUDED_PREFIXES = ("forks/",)
 
@@ -123,7 +124,7 @@ def read(name: str) -> str:
 
 
 def scanned_paths() -> list[str]:
-    """Return tracked regular files in scope, excluding only forks and lockfiles."""
+    """Return tracked regular files in scope, excluding forks, lockfiles and generated build output."""
     out = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT).decode().split("\0")
     return [
         name
@@ -131,6 +132,7 @@ def scanned_paths() -> list[str]:
         if name
         and not name.startswith(EXCLUDED_PREFIXES)
         and not LOCKFILE.search(name)
+        and not GENERATED.search(name)
         and (ROOT / name).is_file()
     ]
 
@@ -221,7 +223,7 @@ def test_findings_report_kind_not_value() -> None:
     assert labels == ["ipv4", "home-path"]
 
 
-def test_scope_covers_whole_tree_but_not_forks_or_locks() -> None:
+def test_scope_covers_whole_tree_but_not_forks_locks_or_generated() -> None:
     """The scan reaches every authored tracked file, fixtures and this file included."""
     paths = scanned_paths()
     for expected in (
@@ -234,7 +236,7 @@ def test_scope_covers_whole_tree_but_not_forks_or_locks() -> None:
         assert expected in paths
     assert any(p.startswith("packages/") for p in paths)
     assert any(p.startswith("integration/") for p in paths)
-    assert not any(p.startswith("forks/") or LOCKFILE.search(p) for p in paths)
+    assert not any(p.startswith("forks/") or LOCKFILE.search(p) or GENERATED.search(p) for p in paths)
 
 
 def test_tracked_tree_has_no_private_details() -> None:
