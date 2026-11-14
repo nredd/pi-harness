@@ -5,8 +5,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage, getMessageText, type Harness } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage, getMessageText } from "@earendil-works/pi-coding-agent/testing";
 import { toolCall } from "@nredd/pi-test-lib/faux";
+import type { Harness } from "@nredd/pi-test-lib/harness";
 import { expect } from "vitest";
 import { loadFork, startStack } from "./support.ts";
 

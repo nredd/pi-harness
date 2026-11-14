@@ -1,8 +1,8 @@
 /** Nested calls meet both the independently owned workflow tool and subagents' scoped gate. */
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Harness } from "@earendil-works/pi-coding-agent/testing";
 import { toolCall } from "@nredd/pi-test-lib/faux";
+import type { Harness } from "@nredd/pi-test-lib/harness";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { agentStack, ask, closeAgentStack, jsonFile, report } from "./agents-support.ts";
 import { isolateStackHome, loadThirdParty } from "./support.ts";

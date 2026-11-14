@@ -187,7 +187,7 @@ export function complete(evidence = EVIDENCE) {
 }
 
 /** Persisted goal snapshots in branch order, including explicit clears. */
-export function goalStates(harness: Harness) {
+export function goalStates(harness: Pick<Harness, "sessionManager">) {
 	return harness.sessionManager
 		.getBranch()
 		.flatMap((entry) =>
@@ -196,14 +196,14 @@ export function goalStates(harness: Harness) {
 }
 
 /** Hidden goal messages as committed by the host settle path, not synthetic extension events. */
-export function nudges(harness: Harness) {
+export function nudges(harness: Pick<Harness, "sessionManager">) {
 	return harness.sessionManager
 		.getBranch()
 		.filter((entry) => entry.type === "custom_message" && entry.customType === GOAL_NUDGE_TYPE);
 }
 
 /** Newly emitted assistant prose, excluding restored history and tool-call-only responses. */
-export function spoken(harness: Harness): string[] {
+export function spoken(harness: Pick<Harness, "eventsOfType">): string[] {
 	return harness
 		.eventsOfType("message_end")
 		.filter((event) => event.message.role === "assistant")
@@ -212,7 +212,7 @@ export function spoken(harness: Harness): string[] {
 }
 
 /** Require a session file rather than silently testing an in-memory restore. */
-export function sessionFile(harness: Harness): string {
+export function sessionFile(harness: Pick<Harness, "sessionManager">): string {
 	const file = harness.sessionManager.getSessionFile();
 	if (!file) throw new Error("Expected a file-backed session");
 	return file;
@@ -231,7 +231,7 @@ export function heldResponse(text: string) {
 }
 
 /** Advance a timer expected to start a turn, then wait for the real host to settle that turn. */
-export async function tick(harness: Harness, clock: FakeClock, ms = 30_000): Promise<void> {
+export async function tick(harness: Pick<Harness, "session">, clock: FakeClock, ms = 30_000): Promise<void> {
 	const settled = nextEvent(harness, "agent_settled");
 	clock.advance(ms);
 	await settled;
@@ -239,7 +239,7 @@ export async function tick(harness: Harness, clock: FakeClock, ms = 30_000): Pro
 }
 
 /** Advance a timer that must not wake the host, including asynchronously scheduled turns. */
-export async function advanceQuietly(harness: Harness, clock: FakeClock, ms: number): Promise<void> {
+export async function advanceQuietly(harness: Pick<Harness, "session">, clock: FakeClock, ms: number): Promise<void> {
 	let started = false;
 	const off = harness.session.subscribe((event) => {
 		if (event.type === "agent_start") started = true;

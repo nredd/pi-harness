@@ -8,9 +8,9 @@ import {
 	fauxAssistantMessage,
 	type fauxToolCall,
 	getMessageText,
-	type Harness,
 } from "@earendil-works/pi-coding-agent/testing";
 import { toolCall } from "@nredd/pi-test-lib/faux";
+import type { Harness } from "@nredd/pi-test-lib/harness";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { isolateStackHome, loadFork, startStack } from "./support.ts";
 

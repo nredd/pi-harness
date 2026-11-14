@@ -4,8 +4,9 @@
  */
 import { join } from "node:path";
 import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
-import { fauxAssistantMessage, type Harness } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
 import { toolCall } from "@nredd/pi-test-lib/faux";
+import type { Harness } from "@nredd/pi-test-lib/harness";
 import { Type } from "typebox";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { createDevTools } from "../../packages/dev-tools/src/index.ts";
