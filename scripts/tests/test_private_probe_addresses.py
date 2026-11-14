@@ -69,11 +69,17 @@ FIXTURE_VALUES: dict[str, frozenset[str]] = {
     "packages/computer-use/test/macos-helper-client.test.mjs": frozenset({"u"}),
     "packages/dev-tools/test/fixtures/cargo/check.jsonl": frozenset({"user"}),
     "packages/dev-tools/test/fixtures/cargo/clippy-good.jsonl": frozenset({"user"}),
+    "packages/plan-mode/test/blocked-token-explainer-failure.test.ts": frozenset({"user"}),
+    "packages/plan-mode/test/blocked-token.test.ts": frozenset({"user"}),
     "packages/plan-mode/test/child-policy.test.ts": frozenset({"u"}),
+    "packages/session-kit/test/stats/harness/fixtures.ts": frozenset({"${CANARY}"}),
+    "packages/session-kit/test/stats/harness/opencode.test.ts": frozenset({"${CANARY}"}),
+    "packages/subagents/docs/workflows.md": frozenset({"me"}),
     "packages/subagents/src/output-file.ts": frozenset({"user"}),
     "packages/subagents/test/manager-registry-guard.test.ts": frozenset({"victim"}),
     "packages/subagents/test/output-file-path.test.ts": frozenset({"user"}),
     "packages/subagents/test/output-file.test.ts": frozenset({"foo", "user"}),
+    "packages/subagents/test/transcript-root-hardening.test.ts": frozenset({"u"}),
     # Synthetic private addresses the WSL2 smoke harness feeds through the script under test.
     "scripts/tests/test_wsl2_workflow.py": frozenset(
         {ip(172, 20, 0, 1), ip(172, 20, 0, 2), ip(172, 20, 0, 9)}
