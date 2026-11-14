@@ -969,12 +969,13 @@ var ScheduleStore = class {
       this.jobs.set(job.id, job);
     });
   }
+  /** `patch` may be a function of the freshly reloaded job, evaluated under the lock. */
   update(id, patch) {
     if (!this.jobs.has(id)) return void 0;
     return this.withLock(() => {
       const existing = this.jobs.get(id);
       if (!existing) return void 0;
-      const updated = { ...existing, ...patch };
+      const updated = { ...existing, ...typeof patch === "function" ? patch(existing) : patch };
       this.jobs.set(id, updated);
       return updated;
     });
@@ -998,6 +999,7 @@ var ScheduleStore = class {
   }
   /** Extend this process's claim; a claim lost to another owner or removed is left alone. */
   renewLease(id, owner) {
+    if (!this.jobs.has(id)) return;
     this.withLock(() => {
       const job = this.jobs.get(id);
       if (job?.runOwner?.pid === owner.pid) this.jobs.set(id, { ...job, runOwner: owner });
@@ -1033,6 +1035,9 @@ function runKey(store, jobId) {
   return `${store.path}\0${jobId}`;
 }
 var fireSeq = 0;
+function lostClaim(job) {
+  return job.runOwner !== void 0 && job.runOwner.pid !== process.pid;
+}
 function holdFire(store, clock, jobId) {
   const token = `fire-${++fireSeq}`;
   const key = runKey(store, jobId);
@@ -1049,9 +1054,6 @@ function holdFire(store, clock, jobId) {
     entry.lease.unref?.();
   }
   return token;
-}
-function markSpawned(store, jobId, token) {
-  liveRuns().get(runKey(store, jobId))?.spawned.add(token);
 }
 function releaseFire(store, jobId, token) {
   const key = runKey(store, jobId);
@@ -1355,7 +1357,7 @@ var SubagentScheduler = class _SubagentScheduler {
         if (this.pendingRuns.get(id)?.token !== controller) return;
         this.pendingRuns.delete(id);
         if (store.get(id)?.lastStatus === "running") {
-          store.update(id, { lastStatus: prior, ...fires === 0 ? { runOwner: void 0 } : {} });
+          store.update(id, (job2) => lostClaim(job2) ? {} : { lastStatus: prior, ...fires === 0 ? { runOwner: void 0 } : {} });
         }
       }, { once: true });
       const admission = selection.tierBinding ? admitModelSelection(selection, ctx.modelRegistry, pi.events, this.clock, controller.signal) : checkAdmission(pi.events, modelRef(admissionModel), void 0, this.clock, controller.signal);
@@ -1376,7 +1378,7 @@ var SubagentScheduler = class _SubagentScheduler {
       }).catch((error) => {
         if (this.store !== store || this.scheduled.get(id) !== scheduled) return;
         settle();
-        this.endFire(store, id, token, { lastStatus: "error" });
+        this.endFire(store, id, token, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
         this.emit({ type: "error", jobId: id, error: error instanceof Error ? error.message : String(error) });
       }).finally(() => {
         admissions.delete(controller);
@@ -1441,21 +1443,20 @@ var SubagentScheduler = class _SubagentScheduler {
       this.emit({ type: "error", jobId: id, error });
       return;
     }
-    markSpawned(store, id, token);
+    liveRuns().get(runKey(store, id))?.spawned.add(token);
     this.emit({ type: "fired", jobId: id, agentId, name: job.name });
     const finalize = (status) => {
       const left = releaseFire(store, id, token);
       const othersLive = left.spawned > 0;
       store.reload();
       const next = this.getNextRun(id);
-      const current = store.get(id);
-      store.update(id, {
+      store.update(id, (job2) => ({
         lastRun: new Date(this.clock.now()).toISOString(),
-        runCount: (current?.runCount ?? 0) + 1,
+        runCount: job2.runCount + 1,
         nextRun: next,
-        ...othersLive ? {} : { lastStatus: status },
-        ...left.fires === 0 ? { runOwner: void 0 } : {}
-      });
+        ...lostClaim(job2) || othersLive ? {} : { lastStatus: status },
+        ...lostClaim(job2) || left.fires > 0 ? {} : { runOwner: void 0 }
+      }));
     };
     Promise.resolve(manager.getRecord(agentId)?.startGate).then(() => manager.awaitStartup(agentId)).then(() => manager.getRecord(agentId)?.promise).then(() => {
       const r = manager.getRecord(agentId);
@@ -1466,7 +1467,10 @@ var SubagentScheduler = class _SubagentScheduler {
   /** Settle a claimed fire that never produced a run: persist `patch`, and free the claim if it was the last. */
   endFire(store, id, token, patch) {
     const { fires } = releaseFire(store, id, token);
-    store.update(id, fires > 0 ? patch : { ...patch, runOwner: void 0 });
+    store.update(id, (job) => {
+      if (lostClaim(job)) return { lastRun: patch.lastRun };
+      return fires > 0 ? patch : { ...patch, runOwner: void 0 };
+    });
   }
   emit(event) {
     if (this.pi) this.pi.events.emit("subagents:scheduled", event);

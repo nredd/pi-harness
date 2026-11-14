@@ -27,7 +27,7 @@ export const LEASE_RENEW_MS = 30_000;
  * to another user, so it is alive. `kill` is injectable for tests.
  */
 export function isProcessRunning(pid: number, kill: (pid: number, signal: 0) => unknown = (p, sig) => process.kill(p, sig)): boolean {
-  try { kill(pid, 0); return true; } catch (e: any) { return e?.code === "EPERM"; }
+  try { kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException | undefined)?.code === "EPERM"; }
 }
 
 /** Does another live process hold a valid lease? A claim by this pid never counts: its runs are tracked in-process. */
@@ -149,14 +149,15 @@ export class ScheduleStore {
     });
   }
 
-  update(id: string, patch: Partial<ScheduledSubagent>): ScheduledSubagent | undefined {
+  /** `patch` may be a function of the freshly reloaded job, evaluated under the lock. */
+  update(id: string, patch: Partial<ScheduledSubagent> | ((job: ScheduledSubagent) => Partial<ScheduledSubagent>)): ScheduledSubagent | undefined {
     // No-op fast path — an unknown id changes nothing, so don't lock or touch
     // disk (which would otherwise lazily create the backing directory).
     if (!this.jobs.has(id)) return undefined;
     return this.withLock(() => {
       const existing = this.jobs.get(id);
       if (!existing) return undefined;
-      const updated = { ...existing, ...patch };
+      const updated = { ...existing, ...(typeof patch === "function" ? patch(existing) : patch) };
       this.jobs.set(id, updated);
       return updated;
     });
@@ -182,6 +183,7 @@ export class ScheduleStore {
 
   /** Extend this process's claim; a claim lost to another owner or removed is left alone. */
   renewLease(id: string, owner: RunOwner): void {
+    if (!this.jobs.has(id)) return;
     this.withLock(() => {
       const job = this.jobs.get(id);
       if (job?.runOwner?.pid === owner.pid) this.jobs.set(id, { ...job, runOwner: owner });

@@ -649,7 +649,7 @@ describe("SubagentScheduler — fire path", () => {
         const job = fireOneShot();
         expect(new ScheduleStore(path()).get(job.id)?.runOwner).toMatchObject({ pid: process.pid });
         store.update(job.id, { runOwner: ownerFor() });
-        delete (globalThis as any)[Symbol.for("pi-subagents:scheduled-runs")];
+        delete (globalThis as Record<symbol, unknown>)[Symbol.for("pi-subagents:scheduled-runs")];
         return { job, next: activate() };
       };
 

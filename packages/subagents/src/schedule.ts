@@ -84,6 +84,11 @@ function runKey(store: ScheduleStore, jobId: string): string {
 
 let fireSeq = 0;
 
+/** Another process holds the claim: this process's settling must not touch the owner or status. */
+function lostClaim(job: ScheduledSubagent): boolean {
+  return job.runOwner !== undefined && job.runOwner.pid !== process.pid;
+}
+
 /** Register a claimed fire; the first one for a job starts its lease renewal. */
 function holdFire(store: ScheduleStore, clock: Clock, jobId: string): string {
   const token = `fire-${++fireSeq}`;
@@ -100,11 +105,6 @@ function holdFire(store: ScheduleStore, clock: Clock, jobId: string): string {
     entry.lease.unref?.();
   }
   return token;
-}
-
-/** The claimed fire spawned its agent. */
-function markSpawned(store: ScheduleStore, jobId: string, token: string): void {
-  liveRuns().get(runKey(store, jobId))?.spawned.add(token);
 }
 
 /** Drop a fire. Returns how many fires remain, and how many of those spawned. The last one stops the lease renewal. */
@@ -467,7 +467,9 @@ export class SubagentScheduler {
         if (this.pendingRuns.get(id)?.token !== controller) return;
         this.pendingRuns.delete(id);
         if (store.get(id)?.lastStatus === "running") {
-          store.update(id, { lastStatus: prior, ...(fires === 0 ? { runOwner: undefined } : {}) });
+          store.update(id, job => lostClaim(job)
+            ? {}
+            : { lastStatus: prior, ...(fires === 0 ? { runOwner: undefined } : {}) });
         }
       }, { once: true });
       const admission = selection.tierBinding
@@ -493,7 +495,7 @@ export class SubagentScheduler {
       }).catch(error => {
         if (this.store !== store || this.scheduled.get(id) !== scheduled) return;
         settle();
-        this.endFire(store, id, token, { lastStatus: "error" });
+        this.endFire(store, id, token, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
         this.emit({ type: "error", jobId: id, error: error instanceof Error ? error.message : String(error) });
       }).finally(() => {
         admissions.delete(controller);
@@ -568,7 +570,7 @@ export class SubagentScheduler {
       return;
     }
 
-    markSpawned(store, id, token);
+    liveRuns().get(runKey(store, id))?.spawned.add(token);
     this.emit({ type: "fired", jobId: id, agentId, name: job.name });
 
     const finalize = (status: "success" | "error") => {
@@ -578,14 +580,14 @@ export class SubagentScheduler {
       // The finishing run may belong to a pre-re-bind scheduler whose store cache is stale.
       store.reload();
       const next = this.getNextRun(id);
-      const current = store.get(id);
-      store.update(id, {
+      // Never overwrite a claim another process took after our lease lapsed.
+      store.update(id, job => ({
         lastRun: new Date(this.clock.now()).toISOString(),
-        runCount: (current?.runCount ?? 0) + 1,
+        runCount: job.runCount + 1,
         nextRun: next,
-        ...(othersLive ? {} : { lastStatus: status }),
-        ...(left.fires === 0 ? { runOwner: undefined } : {}),
-      });
+        ...(lostClaim(job) || othersLive ? {} : { lastStatus: status }),
+        ...(lostClaim(job) || left.fires > 0 ? {} : { runOwner: undefined }),
+      }));
     };
 
     // AgentManager's promise resolves either way (its .catch returns ""), so we
@@ -608,9 +610,13 @@ export class SubagentScheduler {
   }
 
   /** Settle a claimed fire that never produced a run: persist `patch`, and free the claim if it was the last. */
-  private endFire(store: ScheduleStore, id: string, token: string, patch: Partial<ScheduledSubagent>): void {
+  private endFire(store: ScheduleStore, id: string, token: string, patch: Partial<ScheduledSubagent> & { lastRun: string }): void {
     const { fires } = releaseFire(store, id, token);
-    store.update(id, fires > 0 ? patch : { ...patch, runOwner: undefined });
+    store.update(id, job => {
+      // A claim another process took after our lease lapsed keeps its status and owner.
+      if (lostClaim(job)) return { lastRun: patch.lastRun };
+      return fires > 0 ? patch : { ...patch, runOwner: undefined };
+    });
   }
 
   private emit(event: ScheduleChangeEvent): void {

@@ -348,6 +348,41 @@ describe("scheduler branches", () => {
       expect(f.store.get(job.id)).toBeUndefined();
     });
 
+    const foreign = () => ({ pid: process.ppid, leaseUntil: Date.parse("2020-01-01T00:00:00Z") + 600_000 });
+
+    it("a run settling after another process took the claim leaves its status and owner", async () => {
+      const f = setup();
+      let finish!: () => void;
+      vi.spyOn(f.manager, "getRecord").mockReturnValue({ status: "completed", promise: new Promise<void>(r => { finish = r; }) } as never);
+      const job = f.scheduler.addJob({ ...input, schedule: "+1s" });
+      f.clock.advance(1000);
+      f.store.update(job.id, { runOwner: foreign() });
+      finish();
+      await flush();
+      expect(f.store.get(job.id)).toMatchObject({ lastStatus: "running", runOwner: foreign(), runCount: 1 });
+    });
+
+    it("a failed spawn after another process took the claim keeps its status and owner", () => {
+      const f = setup({ spawn: () => { throw new Error("boom"); } });
+      const job = f.scheduler.addJob({ ...input, schedule: "+1s" });
+      f.spawn.mockImplementation(() => {
+        f.store.update(job.id, { runOwner: foreign() });
+        throw new Error("boom");
+      });
+      f.clock.advance(1000);
+      expect(f.store.get(job.id)).toMatchObject({ lastStatus: "running", runOwner: foreign() });
+      expect(f.store.get(job.id)?.lastRun).toBeDefined();
+    });
+
+    it("a cancelled admission after another process took the claim leaves its status and owner", () => {
+      const f = setup();
+      const job = f.scheduler.addJob({ ...input, model: "fixture/model", quotaParked: true });
+      f.clock.advance(1000);
+      f.store.update(job.id, { runOwner: foreign() });
+      f.scheduler.updateJob(job.id, { enabled: false });
+      expect(f.store.get(job.id)).toMatchObject({ lastStatus: "running", runOwner: foreign() });
+    });
+
     it("settling a fire whose registry entry is gone is harmless", async () => {
       const f = setup();
       let finish!: () => void;

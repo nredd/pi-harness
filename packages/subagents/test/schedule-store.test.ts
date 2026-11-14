@@ -9,7 +9,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resolveStorePath, ScheduleStore } from "../src/schedule-store.js";
+import { isProcessRunning, resolveStorePath, ScheduleStore } from "../src/schedule-store.js";
 import type { ScheduledSubagent } from "../src/types.js";
 
 function makeJob(overrides: Partial<ScheduledSubagent> = {}): ScheduledSubagent {
@@ -179,8 +179,7 @@ describe("ScheduleStore", () => {
 });
 
 describe("isProcessRunning", () => {
-  it("treats EPERM as alive and ESRCH as dead", async () => {
-    const { isProcessRunning } = await import("../src/schedule-store.js");
+  it("treats EPERM as alive and ESRCH as dead", () => {
     const failing = (code: string) => () => { throw Object.assign(new Error(code), { code }); };
     expect(isProcessRunning(1, failing("EPERM"))).toBe(true);
     expect(isProcessRunning(1, failing("ESRCH"))).toBe(false);
