@@ -2,9 +2,9 @@ import { type ChildProcess, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { expect, it, vi } from "vitest";
 import { BoundedMatcher } from "../../src/monitor/matcher.ts";
-import { FakeClock } from "../scenarios/support.ts";
 
 const children = vi.hoisted(() => [] as ChildProcess[]);
 vi.mock("node:child_process", async (importOriginal) => {

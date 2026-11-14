@@ -8,7 +8,6 @@ import {
 	createTestUiContext,
 	type FauxResponseFactory,
 	fauxAssistantMessage,
-	fauxToolCall,
 	getMessageText,
 	type Harness,
 	type HarnessOptions,
@@ -19,14 +18,17 @@ import {
 	type InteractiveHarnessOptions,
 } from "@earendil-works/pi-coding-agent/testing/interactive";
 import { StdinBuffer } from "@earendil-works/pi-tui";
-import type { Clock, TimerHandle } from "../../src/clock.ts";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { deferred } from "@nredd/pi-test-lib/deferred";
+import { nextEvent, toolCall } from "@nredd/pi-test-lib/faux";
+import { STATUS } from "@nredd/pi-test-lib/terminal";
+import type { Clock } from "../../src/clock.ts";
 import { defaultConfig, type Feature, type KitConfig } from "../../src/config.ts";
 import { GOAL_ENTRY, GOAL_NUDGE_TYPE, type GoalSnapshot } from "../../src/goal/state.ts";
 import { createSessionKit, type SessionKitOptions } from "../../src/index.ts";
 import type { ExitInfo, MonitorProcess, SpawnOptions } from "../../src/monitor/process.ts";
 
 export const EVIDENCE = "uv run pytest tests: 12 passed";
-export const WIDTHS = [60, 80, 120, 160, 200, 240, 320];
 export const RESIZES = [
 	[60, 24],
 	[320, 60],
@@ -34,7 +36,6 @@ export const RESIZES = [
 	[240, 50],
 	[60, 40],
 ] as const;
-export const STATUS = "STATUS-LINE-OK";
 
 /** Enable only the features under test, without reading the user's agent directory. */
 export function configFor(...features: Feature[]): KitConfig {
@@ -180,18 +181,13 @@ export class TerminalFixture extends ScenarioFixture {
 	}
 }
 
-/** One scripted model tool request, executed by the real host. */
-export function tool(name: string, args: Parameters<typeof fauxToolCall>[1]) {
-	return fauxAssistantMessage([fauxToolCall(name, args)], { stopReason: "toolUse" });
-}
-
 /** Completion with evidence, shared by the goal continuation scenarios. */
 export function complete(evidence = EVIDENCE) {
-	return tool("goal_update", { status: "complete", evidence });
+	return toolCall("goal_update", { status: "complete", evidence });
 }
 
 /** Persisted goal snapshots in branch order, including explicit clears. */
-export function goalStates(harness: Harness) {
+export function goalStates(harness: Pick<Harness, "sessionManager">) {
 	return harness.sessionManager
 		.getBranch()
 		.flatMap((entry) =>
@@ -200,14 +196,14 @@ export function goalStates(harness: Harness) {
 }
 
 /** Hidden goal messages as committed by the host settle path, not synthetic extension events. */
-export function nudges(harness: Harness) {
+export function nudges(harness: Pick<Harness, "sessionManager">) {
 	return harness.sessionManager
 		.getBranch()
 		.filter((entry) => entry.type === "custom_message" && entry.customType === GOAL_NUDGE_TYPE);
 }
 
 /** Newly emitted assistant prose, excluding restored history and tool-call-only responses. */
-export function spoken(harness: Harness): string[] {
+export function spoken(harness: Pick<Harness, "eventsOfType">): string[] {
 	return harness
 		.eventsOfType("message_end")
 		.filter((event) => event.message.role === "assistant")
@@ -215,78 +211,11 @@ export function spoken(harness: Harness): string[] {
 		.filter(Boolean);
 }
 
-/** Tool results as persisted after extension tool_result hooks (including injected rules). */
-export function outcomes(harness: Harness, name: string) {
-	return harness.session.messages.flatMap((message) =>
-		message.role === "toolResult" && message.toolName === name
-			? [{ isError: message.isError, text: getMessageText(message) }]
-			: [],
-	);
-}
-
 /** Require a session file rather than silently testing an in-memory restore. */
-export function sessionFile(harness: Harness): string {
+export function sessionFile(harness: Pick<Harness, "sessionManager">): string {
 	const file = harness.sessionManager.getSessionFile();
 	if (!file) throw new Error("Expected a file-backed session");
 	return file;
-}
-
-/** Deterministic timer queue: advance executes production callbacks, including cancellation/rearming. */
-export class FakeClock implements Clock {
-	constructor(private time = 1_700_000_000_000) {}
-	private nextId = 0;
-	private timers = new Map<number, { at: number; interval?: number; callback: () => void }>();
-
-	now(): number {
-		return this.time;
-	}
-
-	setTimeout(callback: () => void, ms: number): TimerHandle {
-		return this.schedule(callback, ms);
-	}
-
-	setInterval(callback: () => void, ms: number): TimerHandle {
-		return this.schedule(callback, ms, ms);
-	}
-
-	/** Number of live timers, useful for proving stop/shutdown canceled scheduling. */
-	get pending(): number {
-		return this.timers.size;
-	}
-
-	/** Run all callbacks due in the next `ms`, in deadline/insertion order, without sleeping. */
-	advance(ms: number): void {
-		const end = this.time + ms;
-		for (;;) {
-			const due = [...this.timers].filter(([, timer]) => timer.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
-			if (!due) break;
-			const [id, timer] = due;
-			this.time = timer.at;
-			if (timer.interval === undefined) this.timers.delete(id);
-			else timer.at += timer.interval;
-			timer.callback();
-		}
-		this.time = end;
-	}
-
-	private schedule(callback: () => void, ms: number, interval?: number): TimerHandle {
-		const id = ++this.nextId;
-		this.timers.set(id, { at: this.time + ms, interval, callback });
-		return {
-			cancel: () => {
-				this.timers.delete(id);
-			},
-		};
-	}
-}
-
-/** Promise gate for holding a real faux provider request or observing a host lifecycle event. */
-export function deferred<T>() {
-	let resolve: (value: T) => void = () => {};
-	const promise = new Promise<T>((done) => {
-		resolve = done;
-	});
-	return { promise, resolve: (value: T) => resolve(value) };
 }
 
 /** Hold a real provider request until explicitly released, without any elapsed time. */
@@ -301,19 +230,8 @@ export function heldResponse(text: string) {
 	return { response, entered: entered.promise, release: () => released.resolve() };
 }
 
-/** One actual host event, subscribed before an action (never a poll or elapsed-clock wait). */
-export function nextEvent(harness: Harness, type: "agent_settled" | "agent_start"): Promise<void> {
-	return new Promise((resolve) => {
-		const off = harness.session.subscribe((event) => {
-			if (event.type !== type) return;
-			off();
-			resolve();
-		});
-	});
-}
-
 /** Advance a timer expected to start a turn, then wait for the real host to settle that turn. */
-export async function tick(harness: Harness, clock: FakeClock, ms = 30_000): Promise<void> {
+export async function tick(harness: Pick<Harness, "session">, clock: FakeClock, ms = 30_000): Promise<void> {
 	const settled = nextEvent(harness, "agent_settled");
 	clock.advance(ms);
 	await settled;
@@ -321,7 +239,7 @@ export async function tick(harness: Harness, clock: FakeClock, ms = 30_000): Pro
 }
 
 /** Advance a timer that must not wake the host, including asynchronously scheduled turns. */
-export async function advanceQuietly(harness: Harness, clock: FakeClock, ms: number): Promise<void> {
+export async function advanceQuietly(harness: Pick<Harness, "session">, clock: FakeClock, ms: number): Promise<void> {
 	let started = false;
 	const off = harness.session.subscribe((event) => {
 		if (event.type === "agent_start") started = true;

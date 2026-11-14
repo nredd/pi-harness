@@ -1246,6 +1246,7 @@ export function main(
 		}
 		symlinkSync(nodeModules, path.join(sandboxRoot, "node_modules"), "dir");
 		symlinkSync(path.join(repository, "integration"), path.join(sandboxRoot, "integration"), "dir");
+		symlinkSync(path.join(repository, "tests"), path.join(sandboxRoot, "tests"), "dir");
 		symlinkSync(path.join(repository, "coverage"), path.join(sandboxRoot, "coverage"), "dir");
 		// NO_COLOR keeps Vitest's CI-colored output matchable; each Vitest control gets its own isolated home.
 		const env = {

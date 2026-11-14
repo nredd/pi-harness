@@ -32,6 +32,8 @@
     { "package": "coverage-configurations", "signal": "owned", "path": "integration/providers/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
     { "package": "coverage-configurations", "signal": "owned", "path": "scripts/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
     { "package": "plan-mode", "signal": "bun", "path": "packages/plan-mode/src/interactive-ui.ts", "reason": "Relative to integration base 71b0aea: remove the same validated zero-statement facade from the native Bun subset membership, not executable target logic. Native wrapper/linkage counters are not executable source counters; UI implementations remain inventoried and the subset stays report-only." },
+    { "package": "inprocess", "signal": "owned", "path": "integration/inprocess/verification/home-guard.ts", "replacement": "tests/lib/src/home-guard.ts", "reason": "Shared test helper moved into the `tests/lib` workspace (#864); the guard stays measured at `tests/lib/src/home-guard.ts` with its own unit tests." },
+    { "package": "inprocess", "signal": "bun", "path": "integration/inprocess/verification/home-guard.ts", "replacement": "tests/lib/src/home-guard.ts", "reason": "Shared test helper moved into the `tests/lib` workspace (#864); the guard stays measured at `tests/lib/src/home-guard.ts` with its own unit tests." },
     { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_cleanup.sh", "reason": "Relative to origin/main 06ceb029: deleted. Its cleanup is folded into `scripts/wsl2_capture.py` (`cleanup`), measured under python-scripts (#695 slice 3); the `shell-scripts` inventory cannot name a `.py` replacement. `wsl2_capture.sh` stays as an exec bootstrap and remains owned." }
   ],
   "enforcement_changes": [],
@@ -39,7 +41,7 @@
     { "path": "scripts/check-biome-paths.test.mjs", "reason": "Non-shipped regression test exercises real Biome valid/missing-path behavior and preflight rejection; verification only, not a runtime entrypoint." },
     { "path": "scripts/router_contract.test.mjs", "reason": "Non-shipped Vitest suite runs the packed-router contract fixture in process against virtual mocks of its placeholder imports; verification only, not a runtime entrypoint." },
     { "path": "integration/inprocess/verification/core-pins.ts", "reason": "Resolves the lockfile pin and release record to a cached tarball for `settlement-identity.test.ts` and `core-artifacts.test.ts`; it only reads the lockfile, `releases/` and the account home directory (`userInfo`) from disk; pin selection (`selectReleaseDigest`), cache search order (`npmCacheDirs`) and the digest checks are measured, with negative tests, in `core-artifacts.ts`. Never shipped." },
-    { "path": "integration/inprocess/verification/home-setup.ts", "reason": "Vitest setup entry that only calls the measured `installHomeGuard` in `home-guard.ts`; Vitest hard-excludes a config's own `setupFiles` from coverage, so no producer can measure it. Never shipped." },
+    { "path": "tests/lib/src/home-setup.ts", "reason": "Vitest setup entry that only calls the measured `installHomeGuard` in `home-guard.ts`; Vitest hard-excludes a config's own `setupFiles` from coverage, so no producer can measure it. Never shipped." },
     { "path": "packages/computer-use/scripts/check-linux-live.mjs", "reason": "Opt-in D-Bus session launcher for the live Linux Vitest scenario in test/linux-live.test.mjs; holds no assertions and is absent from published files." },
     { "path": "packages/computer-use/scripts/pi-cubench-agent.mjs", "reason": "Manual Cubench benchmark driver using a benchmark gateway; verification infrastructure excluded from npm published files." }
   ],
@@ -444,7 +446,8 @@
         "packages/todo/.vitest.config.ts",
         "integration/inprocess/vitest.config.ts",
         "integration/probes/vitest.config.ts",
-        "integration/providers/vitest.config.ts"
+        "integration/providers/vitest.config.ts",
+        "tests/lib/vitest.config.ts"
       ],
       "exclusions": [],
       "status": "measured",
@@ -473,10 +476,30 @@
     },
     "inprocess": {
       "root": "integration/inprocess",
-      "owned": ["agents-support.ts", "goal-support.ts", "native-timers.ts", "support.ts", "todo-support.ts", "verification/core-artifacts.ts", "verification/home-guard.ts"],
+      "owned": ["agents-support.ts", "goal-support.ts", "native-timers.ts", "support.ts", "todo-support.ts", "verification/core-artifacts.ts"],
       "exclusions": [],
       "status": "measured",
-      "note": "In-process stack fixtures, measured with every fixture module the suites run. `verification/home-setup.ts` stays a verification helper: Vitest hard-excludes its own `setupFiles` from coverage.",
+      "note": "In-process stack fixtures, measured with every fixture module the suites run. Shared fixtures that moved to `tests/lib` are measured there.",
+      "signals": {
+        "primary": {
+          "report": "coverage/primary/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
+        },
+        "bun": {
+          "report": "coverage/bun/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "enforcement": "enforced",
+          "reporters": ["text", "lcov", "json-summary"]
+        }
+      }
+    },
+    "test-lib": {
+      "root": "tests/lib",
+      "owned": ["src/clock.ts", "src/deferred.ts", "src/faux.ts", "src/git.ts", "src/harness.ts", "src/home-guard.ts", "src/resources.ts", "src/sandbox.ts", "src/terminal.ts"],
+      "exclusions": [],
+      "status": "measured",
+      "note": "Shared test helpers (#864): fake clock, promise gates, faux turns, terminal constants, git and temp/agent/config-home sandboxes, home guard, and the in-process session harness (#916: public SDK only; the interactive harness stays on the fork export). Carried by their own tests; package suites do not count. `src/home-setup.ts` stays a verification helper: Vitest hard-excludes its own `setupFiles` from coverage, and it only calls the measured `installHomeGuard`.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",

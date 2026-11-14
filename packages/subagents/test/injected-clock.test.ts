@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.js";
 import { realClock } from "../src/clock.js";
@@ -11,7 +12,6 @@ import { CompletionOutbox } from "../src/completion-outbox.js";
 import { ADMIT_CHANNEL, type AdmissionEvents } from "../src/quota-admission.js";
 import { SubagentScheduler } from "../src/schedule.js";
 import { ScheduleStore } from "../src/schedule-store.js";
-import { FakeClock } from "./helpers/fake-clock.js";
 
 const cleanup: (() => void)[] = [];
 afterEach(async () => {

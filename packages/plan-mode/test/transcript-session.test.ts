@@ -1,8 +1,10 @@
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { createInteractiveHarness, type InteractiveHarness } from "@earendil-works/pi-coding-agent/testing/interactive";
 import { VirtualTerminal } from "@earendil-works/pi-tui/testing";
+import { deferred } from "@nredd/pi-test-lib/deferred";
+import { toolCall } from "@nredd/pi-test-lib/faux";
 import { expect, test } from "vitest";
-import { complete, deferred, planFactory, QUESTION, SessionFixture, state, tool } from "./session-support.js";
+import { complete, planFactory, QUESTION, SessionFixture, state } from "./session-support.js";
 
 /** Transcript after the real user prompt, ending before the next user turn/editor rule. */
 function transcript(rows: string[]): string[] {
@@ -67,7 +69,7 @@ test("real host collapses Plan tools and proposed plan", async () => {
   });
   try {
     await host.harness.session.prompt("/plan start");
-    host.harness.setResponses([tool("plan_mode_question", { questions: [QUESTION] }), complete("Tiny plan")]);
+    host.harness.setResponses([toolCall("plan_mode_question", { questions: [QUESTION] }), complete("Tiny plan")]);
     const run = host.harness.session.prompt("go");
     await questionMounted.promise;
     await host.settle();

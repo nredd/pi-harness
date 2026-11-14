@@ -2,10 +2,12 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { deferred } from "@nredd/pi-test-lib/deferred";
+import { nextEvent, outcomes, text, toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, describe, expect, it } from "vitest";
 import { NOTIFICATION_HOLD_MS } from "../src/completion-outbox.js";
 import { setWorktreeIsolationEnabled } from "../src/worktree.js";
-import { answer, barrier, calls, nextEvent, notices, outcomes, ScenarioSession, spawn, text } from "./helpers/scenario-session.js";
+import { answer, notices, ScenarioSession, spawn } from "./helpers/scenario-session.js";
 
 const MARKER_FILE = "agent-work.txt";
 const CHILD_MARKER = "CHILD-EDITED-ITS-TREE";
@@ -36,9 +38,9 @@ function repo(): string {
 
 /** The only writer is the child's real built-in write tool. */
 async function run(extra: Record<string, unknown> = {}, cwd = fixture.cwd) {
-  fixture.physical("kid", "child", [calls({ name: "write", args: { path: MARKER_FILE, content: "isolated\n" } }), answer(CHILD_MARKER)]);
+  fixture.physical("kid", "child", [toolCalls({ name: "write", args: { path: MARKER_FILE, content: "isolated\n" } }), answer(CHILD_MARKER)]);
   const h = await fixture.start({ harness: { cwd } });
-  h.setResponses([calls(spawn("worktree work", { prompt: "Create the marker file.", run_in_background: false, isolation: "worktree", ...extra })), context => answer(`parent saw: ${context.messages.filter(m => m.role === "toolResult").map(text).join("\n")}`)]);
+  h.setResponses([toolCalls(spawn("worktree work", { prompt: "Create the marker file.", run_in_background: false, isolation: "worktree", ...extra })), context => answer(`parent saw: ${context.messages.filter(m => m.role === "toolResult").map(text).join("\n")}`)]);
   await h.session.prompt("Delegate the work.");
   expect(outcomes(h, "Agent")).toHaveLength(1);
   const result = outcomes(h, "Agent")[0];
@@ -118,24 +120,24 @@ describe("worktree isolation e2e (real git, real pi-mono, faux model)", () => {
     fixture = new ScenarioSession({ agentModels: { "*": "kid/child" } });
     const target = repo();
     process.chdir(target);
-    const atBoundary = barrier();
-    const proceed = barrier();
+    const atBoundary = deferred();
+    const proceed = deferred();
     fixture.physical("kid", "child", [
-      calls({ name: "write", args: { path: MARKER_FILE, content: "isolated\n" } }),
+      toolCalls({ name: "write", args: { path: MARKER_FILE, content: "isolated\n" } }),
       async () => {
         atBoundary.resolve();
         await proceed.promise;
-        return calls({ name: "write", args: { path: "after-stop.txt", content: "kept going\n" } });
+        return toolCalls({ name: "write", args: { path: "after-stop.txt", content: "kept going\n" } });
       },
       answer("NEVER"),
     ]);
     const h = await fixture.start({ harness: { cwd: target } });
-    h.setResponses([calls(spawn("worktree work", { isolation: "worktree" })), answer("SPAWNED")]);
+    h.setResponses([toolCalls(spawn("worktree work", { isolation: "worktree" })), answer("SPAWNED")]);
     await h.session.prompt("Delegate the work.");
     const id = outcomes(h, "Agent")[0]?.text.match(/Agent ID: (\S+)/)?.[1] ?? "";
     await atBoundary.promise;
 
-    h.setResponses([calls({ name: "stop_subagent", args: { agent_id: id } }), answer("STOPPED")]);
+    h.setResponses([toolCalls({ name: "stop_subagent", args: { agent_id: id } }), answer("STOPPED")]);
     await h.session.prompt("Stop it.");
     expect(outcomes(h, "stop_subagent")[0]?.text).toContain(`Agent ${id} stopped.`);
     // The notice wakes the parent; its turn must settle before reading the transcript.

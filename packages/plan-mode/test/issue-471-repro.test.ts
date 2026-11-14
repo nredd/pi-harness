@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { deferred } from "@nredd/pi-test-lib/deferred";
 import { test } from "vitest";
 import { PLAN_MODE_MAX_CHARS } from "../src/completion-tool.js";
 import planModeExtension from "../src/plan-mode.js";
@@ -38,14 +39,6 @@ function latestState(entries: readonly { data: unknown }[]) {
         activeImplementation?: ActiveImplementationPlan;
       }
     | undefined;
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((settle) => {
-    resolve = settle;
-  });
-  return { promise, resolve };
 }
 
 test("active implementation state restores independently from Plan mode", () => {
