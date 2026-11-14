@@ -332,15 +332,31 @@ interface ThinkingCase {
   answered: string;
   /** `reasoning` option the physical transport received (`undefined` for off). */
   ran: Exclude<ModelThinkingLevel, "off"> | undefined;
+  /** Level on each `subagents:usage` payload; `requestedThinking` is set only when the ask was not honoured. */
+  usage: { thinking: ModelThinkingLevel; requestedThinking?: ModelThinkingLevel };
+}
+
+/** The child-facing fields of a `subagents:usage` payload this suite asserts on. */
+interface UsagePayload {
+  thinking?: string;
+  requestedThinking?: string;
+}
+
+/** Extension factory recording every `subagents:usage` payload, the only place `requestedThinking` is observable per message. */
+function collectUsage(into: UsagePayload[]) {
+  return (pi: { events: { on(event: string, handler: (data: unknown) => void): unknown } }): void => {
+    pi.events.on("subagents:usage", data => { into.push(data as UsagePayload); });
+  };
 }
 
 /** Row `think:` tag at the routing point, then once the physical model has answered. */
-async function thinkTags(c: ThinkingCase): Promise<{ routing: string; answered: string; ran: unknown }> {
+async function thinkTags(c: ThinkingCase): Promise<{ routing: string; answered: string; ran: unknown; usage: UsagePayload[] }> {
   fixture = new ScenarioSession();
+  const usage: UsagePayload[] = [];
   const hold = fixture.heldTool();
   const physical = fixture.physical("fauxphys", "physical", [calls({ name: "hold", args: {} }), answer("CHILD DONE")], c.reasoning);
   const stream = fixture.holdStream(physical);
-  const h = await fixture.start({ terminal: true });
+  const h = await fixture.start({ terminal: true, factories: [collectUsage(usage)] });
   const model = physical.getModel();
   h.session.modelRuntime.registerVirtualModel({
     provider: "vroute",
@@ -366,30 +382,34 @@ async function thinkTags(c: ThinkingCase): Promise<{ routing: string; answered: 
   await hold.entered;
   fixture.clock.advance(200);
   await host.settle();
-  return { routing, answered: row(), ran };
+  return { routing, answered: row(), ran, usage };
 }
 
 it.each<ThinkingCase>([
-  { name: "offered level is kept without a note", virtualLevels: ["off", "low", "high"], reasoning: true, asked: "high", routing: "think:high", answered: "think:high", ran: "high" },
-  { name: "non-reasoning physical model runs at off", virtualLevels: ["off", "low", "high"], reasoning: false, asked: "high", routing: "think:high", answered: "think:off (asked high)", ran: undefined },
-  { name: "unoffered level clamps down with the asked form", virtualLevels: ["off", "low"], reasoning: true, asked: "high", routing: "think:low (asked high)", answered: "think:low (asked high)", ran: "low" },
-  { name: "off-only virtual model clamps to off", virtualLevels: ["off"], reasoning: true, asked: "high", routing: "think:off (asked high)", answered: "think:off (asked high)", ran: undefined },
-  { name: "no ask shows the plain effective level", virtualLevels: ["off", "low", "high"], reasoning: false, asked: undefined, routing: "think:high", answered: "think:off", ran: undefined },
+  { name: "offered level is kept without a note", virtualLevels: ["off", "low", "high"], reasoning: true, asked: "high", routing: "think:high", answered: "think:high", ran: "high", usage: { thinking: "high" } },
+  { name: "non-reasoning physical model runs at off", virtualLevels: ["off", "low", "high"], reasoning: false, asked: "high", routing: "think:high", answered: "think:off (asked high)", ran: undefined, usage: { thinking: "off", requestedThinking: "high" } },
+  { name: "unoffered level clamps down with the asked form", virtualLevels: ["off", "low"], reasoning: true, asked: "high", routing: "think:low (asked high)", answered: "think:low (asked high)", ran: "low", usage: { thinking: "low", requestedThinking: "high" } },
+  { name: "off-only virtual model clamps to off", virtualLevels: ["off"], reasoning: true, asked: "high", routing: "think:off (asked high)", answered: "think:off (asked high)", ran: undefined, usage: { thinking: "off", requestedThinking: "high" } },
+  { name: "no ask shows the plain effective level", virtualLevels: ["off", "low", "high"], reasoning: false, asked: undefined, routing: "think:high", answered: "think:off", ran: undefined, usage: { thinking: "off" } },
 ])("virtual child row shows the exact thinking level: $name", async c => {
-  const { routing, answered, ran } = await thinkTags(c);
+  const { routing, answered, ran, usage } = await thinkTags(c);
   expect(ran).toBe(c.ran);
+  expect(usage.length).toBeGreaterThan(0);
+  for (const payload of usage) expect(payload).toMatchObject(c.usage);
+  for (const payload of usage) expect("requestedThinking" in payload).toBe(c.usage.requestedThinking !== undefined);
   expect(routing).toContain(`vroute default (routing) \u00b7 ${c.routing} \u00b7`);
   expect(answered).toContain(`physical \u00b7 ${c.answered} \u00b7`);
   expect(answered).not.toContain("(routing)");
 });
 
 /** Two turns through one virtual model: the router picks a different physical model per turn. */
-async function twoTurnTags(turns: readonly [boolean, boolean]): Promise<{ first: string; second: string }> {
+async function twoTurnTags(turns: readonly [boolean, boolean]): Promise<{ first: string; second: string; usage: UsagePayload[] }> {
   fixture = new ScenarioSession();
+  const usage: UsagePayload[] = [];
   const hold = fixture.heldTool();
   const one = fixture.physical("fauxone", "one", [calls({ name: "hold", args: {} })], turns[0]);
   const two = fixture.physical("fauxtwo", "two", [answer("CHILD DONE")], turns[1]);
-  const h = await fixture.start({ terminal: true });
+  const h = await fixture.start({ terminal: true, factories: [collectUsage(usage)] });
   const models = [one.getModel(), two.getModel()];
   let routed = 0;
   h.session.modelRuntime.registerVirtualModel({
@@ -414,7 +434,7 @@ async function twoTurnTags(turns: readonly [boolean, boolean]): Promise<{ first:
   await h.session.agent.waitForIdle();
   fixture.clock.advance(200);
   await host.settle();
-  return { first, second: row() };
+  return { first, second: row(), usage };
 }
 
 it("virtual child row follows the latest response across turns", async () => {
@@ -422,7 +442,12 @@ it("virtual child row follows the latest response across turns", async () => {
   expect(flipped.first).toContain("one \u00b7 think:off (asked high) \u00b7");
   expect(flipped.second).toContain("two \u00b7 think:high \u00b7");
   expect(flipped.second).not.toContain("asked");
+  // One payload per child message: the clamped first, then the honoured second with the ask cleared (key absent, not undefined).
+  expect(flipped.usage.map(p => [p.thinking, p.requestedThinking])).toEqual([["off", "high"], ["high", undefined]]);
+  expect(flipped.usage.map(p => "requestedThinking" in p)).toEqual([true, false]);
   const back = await twoTurnTags([true, false]);
   expect(back.first).toContain("one \u00b7 think:high \u00b7");
   expect(back.second).toContain("two \u00b7 think:off (asked high) \u00b7");
+  expect(back.usage.map(p => [p.thinking, p.requestedThinking])).toEqual([["high", undefined], ["off", "high"]]);
+  expect(back.usage.map(p => "requestedThinking" in p)).toEqual([false, true]);
 });
