@@ -5,8 +5,7 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "noUncheckedIndexedAccess": false,
-    "erasableSyntaxOnly": false,
-    "rootDir": "."
+    "erasableSyntaxOnly": false
   },
   "include": ["src", "test", "*.ts"]
 }

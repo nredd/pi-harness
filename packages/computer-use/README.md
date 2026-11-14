@@ -71,7 +71,7 @@ source-bound references, and `npm run docs:check` validates them without buildin
 
 `npm run check` runs the owned deterministic package checks. Vitest reports native and live suites off
 their platform or opt-in as skipped; this package remains outside the coverage gate. Never run
-`test:macos-live` on an occupied desktop: it manipulates fixture windows, apps, and the clipboard. It
+`test/macos-helper-live.test.mjs` on an occupied desktop: it manipulates fixture windows, apps, and the clipboard. It
 starts, restarts and stops its own helper instance on the test home's socket, never the shared daemon.
 Owner-only smoke commands and rollback are recorded in `UPSTREAM.md`.
 
@@ -92,7 +92,7 @@ against the ledger without running mutations; the normal command still runs ever
 mutation. Local measurements and the unequal-window fixture lifecycle are recorded
 [here](./docs/swift-ref-look-coverage.md).
 
-`npm run test:linux` uses disposable protocol children, not a native desktop helper. Its closed-stdin
+`npm test -- test/platform-linux.test.mjs --coverage.enabled=false` uses disposable protocol children, not a native desktop helper. Its closed-stdin
 fixture initializes stdout before closing fd `0` (lazy pipe initialization aborts Node 26.12 on Darwin),
 acknowledges verified closure while alive, and requires real `EPIPE` rejection plus child cleanup.
 The next request carries a 64 KiB payload so Bun also reaches an OS write failure instead of accepting

@@ -12,7 +12,7 @@ this slice does not count that builder twice or change any generated runtime byt
 Run from `packages/subagents`:
 
 ```sh
-npm run test:runtime-scripts
+npm run test:runtime-build
 node ../../scripts/run-vitest.ts bun --config vitest.runtime-build.config.ts --coverage.enabled=false
 ```
 

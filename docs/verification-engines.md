@@ -119,7 +119,7 @@ Moving behind the launcher changes the inventory, not the requirement to disable
 
 The todo/subagents guard deferral is resolved by #171. Both Vitest configs install the shared
 setup on both engines; fixtures inject disposable homes instead of mutating HOME. Todo's
-`test:bun` uses the full-suite launcher with `.vitest.config.ts` (390 tests).
+`test:bun` uses the full-suite launcher (390 tests).
 
 `session-kit` now runs its full Node and Bun suites through the shared launcher and home guard
 ([#320](https://github.com/nredd/pi-harness/issues/320)). Its matcher supervises a regex worker in a
@@ -146,13 +146,11 @@ Merge #175 first. Then update [#162](https://github.com/nredd/pi-harness/pull/16
 (`coverage-phase0`) against the merged source; phase 1 deliberately adds no coverage flags.
 The four phase 1 full Bun producers must keep the entry point `node ../../scripts/run-vitest.ts bun`
 and pass Vitest options through it, not restore native `bun test`. Phase 2 adds todo through
-the same entry point with `--config .vitest.config.ts`. Since #320 the launcher appends the
+the same entry point. Since #320 the launcher appends the
 coverage arguments itself, so each `test:bun` carries only its package arguments:
 
 ```sh
-node ../../scripts/run-vitest.ts bun                              # router, preset, plan-mode, dev-tools, subagents, inprocess
-node ../../scripts/run-vitest.ts bun --maxWorkers=1               # resource-sampler
-node ../../scripts/run-vitest.ts bun --config .vitest.config.ts   # todo
+node ../../scripts/run-vitest.ts bun   # every package; its vitest.config.ts comes from scripts/vitest-package.ts (#863)
 ```
 
 Keep the sampler's `--maxWorkers=1`. Install the Istanbul provider version compatible with the

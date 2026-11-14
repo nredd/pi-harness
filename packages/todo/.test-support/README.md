@@ -3,12 +3,13 @@
 Source: `juicesharp/rpiv-mono` release `54df50eea935fc9753edc300d5f23c5e28d906d7`
 (`@juicesharp/rpiv-todo@2.13.9`, subtree split `7903c76b`).
 
-`upstream/{pi,session,theme,manifest}.ts` are unchanged copies from
-`packages/test-utils/`, with the upstream MIT license. The local barrel exports
+`upstream/{pi,session,theme}.ts` are unchanged copies from
+`packages/test-utils/`, with the upstream MIT license; `upstream/manifest.ts` is a copy that also skips
+`vitest.config.ts` in its ship-manifest walk (the config is not shipped). The local barrel exports
 only those helpers used by this package. `rpiv-workflow` is a dev-only dependency
 for their type imports; no workflow code is loaded by the helpers.
 
-`.vitest.config.ts` aliases the unpublished `@juicesharp/rpiv-test-utils` to this
+`vitest.config.ts` (built by `scripts/vitest-package.ts`) aliases the unpublished `@juicesharp/rpiv-test-utils` to this
 barrel. `setup.ts` preserves upstream's dynamic state/i18n reset and config
 cleanup. `TEST_HOME` and `home-fixtures.ts` explicitly inject a disposable home into
 config, tool, extension and overlay callers. `XDG_CONFIG_HOME` alone is NOT enough:

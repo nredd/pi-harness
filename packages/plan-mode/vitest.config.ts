@@ -1,21 +1,9 @@
-import { readFileSync } from "node:fs";
-import { defineConfig } from "vitest/config";
+import { definePackageConfig } from "../../scripts/vitest-package.ts";
 
-const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] } = JSON.parse(
-  readFileSync(new URL("../../coverage/policy.json", import.meta.url), "utf8"),
-).packages["plan-mode"];
-
-export default defineConfig({
+export default definePackageConfig("plan-mode", {
+  provider: "istanbul",
   test: {
     maxWorkers: 2,
-    coverage: {
-      provider: "istanbul",
-      reporter: ["text", "lcov", "json-summary"],
-      reportsDirectory: "coverage/primary",
-      reportOnFailure: true,
-      include: owned,
-      exclude: exclusions.map(({ path }) => path),
-    },
     environment: "node",
     env: {
       GIT_CONFIG_COUNT: "1",
@@ -27,7 +15,7 @@ export default defineConfig({
     globalSetup: ["./test/harness/vitest.global-setup.ts"],
     pool: "forks",
     runner: "./test/harness/vitest.runner.ts",
-    setupFiles: ["./test/harness/vitest.setup.ts", "../../tests/lib/src/home-setup.ts"],
+    setupFiles: ["./test/harness/vitest.setup.ts"],
     teardownTimeout: 10_000,
     testTimeout: 5_000,
   },

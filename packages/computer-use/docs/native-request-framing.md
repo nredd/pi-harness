@@ -21,6 +21,6 @@ The complete production inventory remains in LLVM coverage, including unexecuted
 Swift reports lines/functions/regions, not Istanbul branches/statements. The unreachable string
 UTF-8 conversion failure and redundant numeric-cast fallbacks remain unclaimed guards, not exclusions.
 
-Run `npm run test:macos-native`. The producer compiles with `-j 1`, warnings as errors and source
-coverage enabled. `test:sync-reverts` independently breaks completion eviction and the short-write
+Run `npm test -- test/macos-native-pure.test.mjs --coverage.enabled=false`. The producer compiles with `-j 1`, warnings as errors and source
+coverage enabled. `scripts/check-sync-reverts.mjs` independently breaks completion eviction and the short-write
 pointer offset and requires these assertions to fail. Non-macOS runs explicitly skip native tests.

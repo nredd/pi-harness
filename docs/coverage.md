@@ -42,7 +42,7 @@ current policy rejects the key, and only the base-policy read drops it so a ratc
 older commit still parses.
 `enforce_target` is enabled now that eligible runtime tooling/examples are measured with complete
 primary reports. Their source-complete
-producers now emit `packages/plan-mode/coverage/runtime-build-tooling/lcov.info` from `test:dist`
+producers now emit `packages/plan-mode/coverage/runtime-build-tooling/lcov.info` from `test:runtime-build`
 and `packages/subagents/coverage/workflow-examples/lcov.info` from `test:workflow-examples`.
 Workflow examples are instrumented only after metadata validation, including their literal metadata
 initializers, then executed by the real worker/VM with nested scripts sharing counters. Collection is
@@ -169,8 +169,9 @@ mocks. Vite's module runner pins `import.meta.main` false, so the dispatches of 
 calls covers the non-import call, and the syntax-error location no longer branches on the diagnostic's
 optional `fileName`, since diagnostics are requested per file. The import-audit signal enforces zero uncovered lines, functions, and branches on darwin
 and linux. Since #380 it also owns all 15 Vitest producer configurations (`packages/*/vitest*.config.ts`,
-`packages/todo/.vitest.config.ts`, `integration/{inprocess,probes,providers}/vitest.config.ts` and
-`scripts/vitest.config.ts`), and the pending `coverage-configurations` package is deleted (reclassified
+`integration/{inprocess,probes,providers}/vitest.config.ts` and `scripts/vitest.config.ts`; since #863 each is one
+`definePackageConfig` call from `scripts/vitest-package.ts`, which is owned in this signal at 0/0/0/0, and todo's
+config lost its dot prefix), and the pending `coverage-configurations` package is deleted (reclassified
 file by file). Vitest loads a config outside its own instrumentation, so `scripts/coverage-configs.test.ts`
 imports each one as a module and asserts the resolved `test.coverage`: provider, the `text`, `lcov` + `json-summary`
 reporters, `reportsDirectory`, `reportOnFailure`, and `include`/`exclude` equal to the config's own policy

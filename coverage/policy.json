@@ -7,6 +7,7 @@
   ],
   "reclassifications": [
     { "package": "import-audit", "signal": "owned", "path": "scripts/check-biome-paths.mjs", "reason": "Deleted for nredd/pi-harness#862: the preflight only existed to hand `biome check` an explicit path list so a missing path could not pass silently. The five migrated packages lint under the shared root `biome.json` (the three deferred packages keep nested configs marked `root: false`), and the integration/probes, integration/providers and scripts gates lint a directory or glob instead of hand-written file lists, so a renamed or deleted file cannot silently drop out and there is no path list to validate. Its test and verification helper entry go with it; no other owned file lost coverage and import-audit stays at 0/0/0/0." },
+    { "package": "import-audit", "signal": "owned", "path": "packages/todo/.vitest.config.ts", "replacement": "packages/todo/vitest.config.ts", "reason": "Relative to cba32fea: the config loses its dot prefix (#863, #860) so every package config is `vitest.config.ts` and no script passes `--config`. Same options, now built by `scripts/vitest-package.ts`, which is owned and measured at 0/0/0/0 in this signal." },
     { "package": "runtime-build-tooling", "signal": "owned", "path": "packages/plan-mode/scripts/runtime-builder.mjs", "replacement": "scripts/runtime-builder.mjs", "reason": "Relative to 1b1ae909: the shared esbuild runtime builder moves to the root `scripts/` (#866) because subagents imported it across package boundaries. Same producer, same 0/0 floor: `test:dist` now roots Vitest at the repository so the moved file stays measured by the plan-mode `build-runtime.test.ts` that already exercised it." },
     { "package": "subagents-runtime-tooling", "signal": "owned", "path": "packages/subagents/scripts/check-runtime.mjs", "reason": "Relative to 1b1ae909: deleted (#866). It compared a committed `dist/` with a fresh build, and `dist/` is no longer committed, so there is nothing to compare. Its guarantee survives as the `runtime-scripts.test.ts` case that two builds of one tree are byte-identical; `build-runtime.mjs` stays pinned at 100%." },
     { "package": "session-kit", "signal": "owned", "path": "packages/session-kit/src/stats/library.ts", "reason": "Relative to 57a0c580: preserve every runtime and type export through explicit static named re-exports. Real TypeScript and emitted-ESM Istanbul maps contain zero statements/functions/branches; real Node/Bun namespace parity and type tests preserve the export-star contract. Existing strict facade validation rejects executable additions; all three target modules remain owned and measured." },
@@ -319,7 +320,7 @@
       "owned": ["packages/plan-mode/scripts/build-runtime.mjs", "scripts/runtime-builder.mjs"],
       "exclusions": [],
       "status": "measured",
-      "note": "`test:dist` (Vitest root is the repository) emits a complete primary report for plan-mode's thin `build-runtime.mjs` and the shared root `scripts/runtime-builder.mjs` (moved from `packages/plan-mode/scripts/`, #866); required CI enforces it at 0/0 on macOS and Linux.",
+      "note": "`test:runtime-build` (Vitest root is the repository) emits a complete primary report for plan-mode's thin `build-runtime.mjs` and the shared root `scripts/runtime-builder.mjs` (moved from `packages/plan-mode/scripts/`, #866); required CI enforces it at 0/0 on macOS and Linux.",
       "signals": {
         "primary": {
           "report": "packages/plan-mode/coverage/runtime-build-tooling/lcov.info",
@@ -439,8 +440,8 @@
         "scripts/router_contract.mjs",
         "scripts/run-vitest.ts",
         "scripts/vitest.config.ts",
+        "scripts/vitest-package.ts",
         "packages/*/vitest*.config.ts",
-        "packages/todo/.vitest.config.ts",
         "integration/inprocess/vitest.config.ts",
         "integration/probes/vitest.config.ts",
         "integration/providers/vitest.config.ts",

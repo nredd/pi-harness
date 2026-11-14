@@ -15,7 +15,7 @@ test("Bun runs the injected todo setup with the guard active", () => {
 		writeFileSync(
 			config,
 			`import { mergeConfig } from ${JSON.stringify(join(root, "node_modules/vitest/dist/config.js"))};
-import config from ${JSON.stringify(join(root, "packages/todo/.vitest.config.ts"))};
+import config from ${JSON.stringify(join(root, "packages/todo/vitest.config.ts"))};
 export default mergeConfig(config, { test: {
   setupFiles: [${JSON.stringify(join(root, "tests/lib/src/home-setup.ts"))}],
   sequence: { setupFiles: "list" }
@@ -100,16 +100,11 @@ test("guarded suites keep the shared setup and launcher in their gates", async (
 					"node ../../scripts/run-vitest.ts bun test/scenarios/home-injection.test.ts --coverage.enabled=false",
 			);
 		} else {
-			expect(manifest.scripts["test:bun"]).toMatch(
-				/^node \.\.\/\.\.\/scripts\/run-vitest\.ts bun(?: --maxWorkers=1| --config \.vitest\.config\.ts)?$/,
-			);
+			expect(manifest.scripts["test:bun"]).toBe("node ../../scripts/run-vitest.ts bun");
 		}
 		expect(manifest.scripts.check).toContain("npm run test:bun");
-		const config = await import(
-			join(root, directory, directory === "packages/todo" ? ".vitest.config.ts" : "vitest.config.ts")
-		);
-		expect(config.default.test.setupFiles).toContain(
-			directory === "tests/lib" ? "./src/home-setup.ts" : "../../tests/lib/src/home-setup.ts",
-		);
+		const config = await import(join(root, directory, "vitest.config.ts"));
+		// The shared factory puts the guard first, whatever else the package sets up.
+		expect(config.default.test.setupFiles[0]).toBe(join(root, "tests/lib/src/home-setup.ts"));
 	}
 });
