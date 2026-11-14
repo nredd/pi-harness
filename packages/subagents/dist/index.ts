@@ -1326,18 +1326,26 @@ var SubagentScheduler = class _SubagentScheduler {
     const claim = store.claim(id, { pid: process.pid, leaseUntil: now + LEASE_MS }, now);
     if (!claim) return;
     const token = holdFire(store, this.clock, id);
+    const previous = this.pendingRuns.get(id);
+    const prior = previous ? previous.prior : claim.prior;
+    this.pendingRuns.delete(id);
+    let selection;
     try {
-      this.fireClaimed({ store, pi, ctx, manager }, id, job, scheduled, token, claim.prior);
+      selection = this.selectForFire(store, ctx, job, token);
     } catch (err) {
       this.endFire(store, id, token, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
       this.emit({ type: "error", jobId: id, error: err instanceof Error ? err.message : String(err) });
+      return;
     }
+    if (!selection) return;
+    this.dispatchFire({ store, pi, ctx, manager }, id, job, scheduled, token, prior, selection);
   }
-  /** Everything between a won claim and the hand-off to spawn or admission. */
-  fireClaimed({ store, pi, ctx, manager }, id, job, scheduled, token, claimedPrior) {
-    const previous = this.pendingRuns.get(id);
-    const prior = previous ? previous.prior : claimedPrior;
-    this.pendingRuns.delete(id);
+  /**
+   * Resolve the original request at fire time, using the same type and model
+   * policy as a manual dispatch. Never drop a failed explicit override. Returns
+   * undefined (after persisting the error) when it cannot be resolved.
+   */
+  selectForFire(store, ctx, job, token) {
     const dispatch = resolveSpawnType(job.subagent_type);
     const config = dispatch.ok ? getAgentConfig(dispatch.type) : void 0;
     const selection = dispatch.ok ? selectModel({
@@ -1351,11 +1359,15 @@ var SubagentScheduler = class _SubagentScheduler {
       cwd: ctx.cwd
     }) : dispatch.message;
     if (typeof selection === "string") {
-      this.endFire(store, id, token, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
-      this.emit({ type: "error", jobId: id, error: selection });
-      return;
+      this.endFire(store, job.id, token, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
+      this.emit({ type: "error", jobId: job.id, error: selection });
+      return void 0;
     }
     if (selection.scopeWarning) ctx.ui.notify(selection.scopeWarning, "warning");
+    return selection;
+  }
+  /** Hand a resolved fire to admission or straight to spawn. */
+  dispatchFire({ store, pi, ctx, manager }, id, job, scheduled, token, prior, selection) {
     const admissionModel = selection.model;
     if ((job.quotaParked || selection.tierBinding) && admissionModel) {
       const controller = new AbortController();

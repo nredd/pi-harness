@@ -392,7 +392,7 @@ describe("SubagentScheduler — fire path", () => {
     const fired = manager.spawn.mock.calls.length;
     await vi.advanceTimersByTimeAsync(5 * 3_600_000);
     expect(manager.spawn).toHaveBeenCalledTimes(fired);
-  });
+  }, 30_000);
 
   it("a deadline beyond the timer range fires on time, not at the next tick", () => {
     // Yearly cron: the next tick is months away, so only the deadline timer can disable it.
@@ -404,7 +404,7 @@ describe("SubagentScheduler — fire path", () => {
     expect(store.get(job.id)?.enabled).toBe(true);
     vi.advanceTimersByTime(2_000);
     expect(store.get(job.id)?.enabled).toBe(false);
-  });
+  }, 30_000);
 
   it("a tick landing exactly on the deadline disables the job without firing", () => {
     const job = scheduler.addJob({

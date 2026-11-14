@@ -435,28 +435,32 @@ export class SubagentScheduler {
     if (!claim) return;
     const token = holdFire(store, this.clock, id);
 
-    // Anything that throws before the handoff to spawn/admission must free the claim,
-    // or the job stays "running" with a lease renewed forever.
+    // A fire that overlaps a pending admission inherits its prior status.
+    const previous = this.pendingRuns.get(id);
+    const prior = previous ? previous.prior : claim.prior;
+    this.pendingRuns.delete(id);
+
+    // Anything that throws while resolving the request must free the claim, or the
+    // job stays "running" with a lease renewed forever. Only this pre-handoff part is
+    // covered: once admission or a spawn is under way they settle the claim themselves.
+    let selection: ModelSelection | undefined;
     try {
-      this.fireClaimed({ store, pi, ctx, manager }, id, job, scheduled, token, claim.prior);
+      selection = this.selectForFire(store, ctx, job, token);
     } catch (err) {
       this.endFire(store, id, token, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
       this.emit({ type: "error", jobId: id, error: err instanceof Error ? err.message : String(err) });
+      return;
     }
+    if (!selection) return;
+    this.dispatchFire({ store, pi, ctx, manager }, id, job, scheduled, token, prior, selection);
   }
 
-  /** Everything between a won claim and the hand-off to spawn or admission. */
-  private fireClaimed(
-    { store, pi, ctx, manager }: BoundSession, id: string, job: ScheduledSubagent, scheduled: object,
-    token: string, claimedPrior: ScheduledSubagent["lastStatus"],
-  ): void {
-    // A fire that overlaps a pending admission inherits its prior status.
-    const previous = this.pendingRuns.get(id);
-    const prior = previous ? previous.prior : claimedPrior;
-    this.pendingRuns.delete(id);
-
-    // Resolve the original request at fire time, using the same type and model
-    // policy as a manual dispatch. Never drop a failed explicit override.
+  /**
+   * Resolve the original request at fire time, using the same type and model
+   * policy as a manual dispatch. Never drop a failed explicit override. Returns
+   * undefined (after persisting the error) when it cannot be resolved.
+   */
+  private selectForFire(store: ScheduleStore, ctx: ExtensionContext, job: ScheduledSubagent, token: string): ModelSelection | undefined {
     const dispatch = resolveSpawnType(job.subagent_type);
     const config = dispatch.ok ? getAgentConfig(dispatch.type) : undefined;
     const selection = dispatch.ok ? selectModel({
@@ -465,13 +469,19 @@ export class SubagentScheduler {
       paramModel: job.model, parentModel: ctx.model, registry: ctx.modelRegistry, cwd: ctx.cwd,
     }) : dispatch.message;
     if (typeof selection === "string") {
-      this.endFire(store, id, token, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
-      this.emit({ type: "error", jobId: id, error: selection });
-      return;
+      this.endFire(store, job.id, token, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
+      this.emit({ type: "error", jobId: job.id, error: selection });
+      return undefined;
     }
-
     if (selection.scopeWarning) ctx.ui.notify(selection.scopeWarning, "warning");
+    return selection;
+  }
 
+  /** Hand a resolved fire to admission or straight to spawn. */
+  private dispatchFire(
+    { store, pi, ctx, manager }: BoundSession, id: string, job: ScheduledSubagent, scheduled: object,
+    token: string, prior: ScheduledSubagent["lastStatus"], selection: ModelSelection,
+  ): void {
     // A quota-parked job re-asks the router before starting: the window it
     // waited for may have refilled while another is still exhausted.
     const admissionModel = selection.model;
