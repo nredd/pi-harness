@@ -109,6 +109,7 @@ import {
   planSteerBlocked,
   planSteerRefusal,
   planningNow,
+  pruneStaleTranscripts,
   readEnabledModels,
   realClock,
   registerAgents,
@@ -150,7 +151,7 @@ import {
   toReportedUsage,
   withLeadingFlag,
   writeInitialEntry
-} from "./chunks/chunk-TJQBFL4S.ts";
+} from "./chunks/chunk-OCF4X4JR.ts";
 
 // src/index.ts
 import { existsSync as existsSync7, mkdirSync as mkdirSync4, readFileSync as readFileSync7, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "node:fs";
@@ -4129,7 +4130,7 @@ var WorkflowDialog = class {
 
 // src/ui/workflow-menu.ts
 async function showWorkflowDialog(ctx, task, deps) {
-  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-G5SGTFWH.ts");
+  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-SG7CWC2G.ts");
   let overlay;
   await ctx.ui.custom(
     (tui, theme, _keybindings, done) => new WorkflowDialog(
@@ -7176,6 +7177,7 @@ Full transcript available at: ${record.outputFile}` : "";
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
     restoreFleetDisclosure(ctx);
+    pruneStaleTranscripts(ctx.sessionManager.getSessionId());
     setProjectTrusted(ctx.isProjectTrusted?.() === true);
     invalidatePackageCache();
     const strictLoad = strictAgentFiles && !canonicalAgentsLoaded;

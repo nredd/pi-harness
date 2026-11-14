@@ -38,6 +38,7 @@ describe("nested lifecycle boundaries", () => {
     const blocked = join(dir, "not-a-directory");
     writeFileSync(blocked, "");
     vi.stubEnv("TMPDIR", blocked);
+    vi.stubEnv("XDG_STATE_HOME", join(blocked, "state"));
     const manager = {
       getRecord: (id: string) => id === f.parent.id ? f.parent : real.getRecord(id),
       spawnAndWait: real.spawnAndWait.bind(real),
@@ -47,7 +48,7 @@ describe("nested lifecycle boundaries", () => {
       const agent = tools.find(tool => tool.name === "Agent")!;
       const result = await agent.execute("call", { prompt: "p", description: "d", subagent_type: "general-purpose" }, undefined, undefined, f.ctx);
       expect(result.isError).toBe(true);
-      expect(result.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("ENOTDIR") });
+      expect(result.content[0]).toMatchObject({ type: "text", text: expect.stringMatching(/ENOTDIR|EEXIST/) });
       expect(runAgent).not.toHaveBeenCalled();
       expect(real.listAgents()).toEqual([]);
     } finally { await real.dispose(); }

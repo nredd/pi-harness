@@ -22,6 +22,7 @@ it("writes session task dirs under the sandbox and leaves the real root untouche
   const leaked = join(real, `pi-subagents-${uid}`, cwd.replace(/[/\\]/g, "-").replace(/^-+/, ""));
   expect(existsSync(dir)).toBe(true);
   expect(existsSync(leaked)).toBe(false);
+  expect(dir.startsWith(process.env.XDG_STATE_HOME!)).toBe(true);
 });
 
 it("removes the sandbox with its session output and restores the environment on teardown", () => {
