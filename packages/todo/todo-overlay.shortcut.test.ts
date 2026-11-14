@@ -3,8 +3,8 @@ import { dirname, join } from "node:path";
 import { buildSessionEntries, makeTheme, makeTodoToolResult } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_HOME } from "./.test-support/setup.ts";
-import { createTodoCtx, createTodoPi } from "./.test-support/todo-host.ts";
 import registerTodo from "./index.ts";
+import { createTodoCtx, createTodoPi } from "./tests/fixtures/todo-host.ts";
 import { __resetState } from "./todo.ts";
 
 const CONFIG_PATH = join(TEST_HOME, ".config", "rpiv-todo", "config.json");

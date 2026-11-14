@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { register as registerGoal } from "../../src/goal/index.ts";
 import { GOAL_ENTRY } from "../../src/goal/state.ts";
 import { register } from "../../src/loop/index.ts";
-import { CONFIG, createGoalHost, type Fake, setPlanMode } from "../support/goal-host.ts";
+import { CONFIG, createGoalHost, type Fake, setPlanMode } from "../../tests/fixtures/goal-host.ts";
 
 async function boot(options: Parameters<typeof createGoalHost>[0] = {}, withGoal = false): Promise<Fake> {
 	const fake = createGoalHost(options);

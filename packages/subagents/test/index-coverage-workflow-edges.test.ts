@@ -71,6 +71,7 @@ describe("a workflow whose script cannot be persisted", () => {
     const blocked = join(hermetic.dir, "not-a-directory");
     writeFileSync(blocked, "");
     vi.stubEnv("TMPDIR", blocked);
+    vi.stubEnv("XDG_STATE_HOME", join(blocked, "state"));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const result = await b.tools.get("SubagentWorkflow").execute("tc-1", { script: oneAgent }, undefined, undefined, workflowCtx());

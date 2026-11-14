@@ -9,7 +9,7 @@ import {
 	type TaskDetails,
 	TOOL_NAME,
 } from "./.test-support/home-fixtures.ts";
-import { createTodoCtx, createTodoPi } from "./.test-support/todo-host.ts";
+import { createTodoCtx, createTodoPi } from "./tests/fixtures/todo-host.ts";
 import { STATE_ENTRY_TYPE } from "./tool/types.ts";
 
 const theme = makeTheme() as unknown as Theme;

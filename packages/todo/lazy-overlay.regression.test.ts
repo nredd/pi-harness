@@ -1,7 +1,7 @@
 import { buildSessionEntries, makeTodoToolResult } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { TEST_HOME } from "./.test-support/setup.ts";
-import { createTodoCtx, createTodoPi } from "./.test-support/todo-host.ts";
+import { createTodoCtx, createTodoPi } from "./tests/fixtures/todo-host.ts";
 import { SUBAGENT_STARTED_EVENT } from "./tool/types.ts";
 
 const overlayMock = vi.hoisted(() => ({

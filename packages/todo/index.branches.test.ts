@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import registerTodo from "./.test-support/home-fixtures.ts";
-import { createTodoCtx, createTodoPi } from "./.test-support/todo-host.ts";
+import { createTodoCtx, createTodoPi } from "./tests/fixtures/todo-host.ts";
 import { __resetState } from "./todo.ts";
 import { PLAN_APPROVED_EVENT } from "./tool/types.ts";
 

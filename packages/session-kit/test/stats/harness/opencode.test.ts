@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { entryHash, sessionHash } from "../../../src/stats/harness/common.ts";
-import { loadNodeSqlite, readOpenCode } from "../../../src/stats/harness/opencode.ts";
+import { type LoadSqlite, loadNodeSqlite, readOpenCode } from "../../../src/stats/harness/opencode.ts";
+import type { HarnessCache, ParsedFile } from "../../../src/stats/harness/scan.ts";
 import { CANARY } from "./fixtures.ts";
 
 let dir: string;
@@ -178,5 +179,91 @@ describe("readOpenCode", () => {
 
 	it("loads the real node:sqlite", async () => {
 		expect(typeof (await loadNodeSqlite()).DatabaseSync).toBe("function");
+	});
+});
+
+describe("readOpenCode cache and paging", () => {
+	it("serves a repeat read from the cache while the database is unchanged, and re-reads once it changes", async () => {
+		session("ses_1");
+		message("m1", "ses_1", assistant());
+		const cache: HarnessCache = {};
+		const first = await readOpenCode(dbPath, loadNodeSqlite, { cache });
+		const mustNotOpen: LoadSqlite = () => Promise.reject(new Error("opened"));
+		expect(await readOpenCode(dbPath, mustNotOpen, { cache })).toEqual(first);
+		message("m2", "ses_1", assistant({ cost: 1 }));
+		const third = await readOpenCode(dbPath, loadNodeSqlite, { cache });
+		expect(third.calls.map((c) => c.cost)).toEqual([0.25, 1]);
+		// cached per session, keyed under the database, and free of content
+		expect(Object.keys(cache.opencode ?? {}).every((key) => key.startsWith(`${dbPath}#`))).toBe(true);
+		expect(JSON.stringify(cache)).not.toContain(CANARY);
+	});
+
+	it("forgets sessions deleted from the database when it is re-read", async () => {
+		session("ses_1");
+		session("ses_2");
+		message("m1", "ses_1", assistant());
+		message("m2", "ses_2", assistant());
+		const cache: HarnessCache = {};
+		expect((await readOpenCode(dbPath, loadNodeSqlite, { cache })).sessions).toHaveLength(2);
+		const other = cache.opencode?.[`${dbPath}#stamp`] as ParsedFile;
+		(cache.opencode as Record<string, ParsedFile>)["/elsewhere/opencode.db#stamp"] = other;
+		writer.prepare("DELETE FROM message WHERE session_id = ?").run("ses_2");
+		expect((await readOpenCode(dbPath, loadNodeSqlite, { cache })).sessions).toHaveLength(1);
+		// another database's entries are not this one's to forget
+		expect(cache.opencode?.["/elsewhere/opencode.db#stamp"]).toBe(other);
+	});
+
+	it("counts unreadable rows from the cache too", async () => {
+		session("ses_1");
+		message("m1", "ses_1", assistant({ tokens: { input: -1 } }));
+		const cache: HarnessCache = {};
+		const first = await readOpenCode(dbPath, loadNodeSqlite, { cache });
+		expect(first.problems).toEqual(["opencode: ! 1 unreadable lines"]);
+		expect((await readOpenCode(dbPath, () => Promise.reject(new Error("opened")), { cache })).problems).toEqual(
+			first.problems,
+		);
+	});
+
+	it("reads in pages and yields to the event loop between them, reporting progress", async () => {
+		session("ses_1");
+		for (let i = 0; i < 6; i++) message(`m${i}`, "ses_1", assistant());
+		let ticks = 0;
+		let running = true;
+		const tick = (): void => {
+			if (!running) return;
+			ticks++;
+			setImmediate(tick);
+		};
+		setImmediate(tick);
+		const seen: number[] = [];
+		const scan = await readOpenCode(dbPath, loadNodeSqlite, { pageRows: 2, onRows: (n) => seen.push(n) });
+		running = false;
+		expect(scan.calls).toHaveLength(6);
+		expect(seen).toEqual([2, 4, 6]);
+		expect(ticks).toBeGreaterThanOrEqual(3);
+		// the same answer as one big page
+		expect(scan).toEqual(await readOpenCode(dbPath));
+	});
+
+	it("stops paging when the last ID cannot advance the cursor", async () => {
+		const stubbed =
+			(rows: Record<string, unknown>[]): LoadSqlite =>
+			async () => ({
+				DatabaseSync: class {
+					exec(): void {}
+					prepare() {
+						return { all: () => rows };
+					}
+					close(): void {}
+				},
+			});
+		const numeric = [{ id: 5 }, { id: 6 }];
+		expect((await readOpenCode(dbPath, stubbed(numeric), { pageRows: 2 })).problems).toEqual([
+			"opencode: ! 2 unreadable lines",
+		]);
+		const stuck = [{ id: "a" }, { id: "a" }];
+		expect((await readOpenCode(dbPath, stubbed(stuck), { pageRows: 2 })).problems).toEqual([
+			"opencode: ! 4 unreadable lines",
+		]);
 	});
 });

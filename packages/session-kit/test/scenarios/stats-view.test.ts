@@ -1,5 +1,8 @@
+import { join } from "node:path";
 import { WIDTHS } from "@nredd/pi-test-lib/terminal";
 import { expect, it } from "vitest";
+import type { QuotaObservation } from "../../src/stats/harness/common.ts";
+import { importStats } from "../../src/stats/snapshot.ts";
 import { RESIZES, TerminalFixture } from "../fixtures/session.ts";
 import {
 	AXIS_COLUMN,
@@ -10,6 +13,7 @@ import {
 	hourly,
 	layout,
 	MODELS,
+	publishMachine,
 	seed,
 	selectFilter,
 	selectTotal,
@@ -219,6 +223,92 @@ it(
 		expect(bullets[0]?.foregroundMode).not.toBe(0);
 		expect(bullets[1]?.foregroundMode).not.toBe(0);
 		expect(bullets[0]?.foreground).not.toBe(bullets[1]?.foreground);
+		await fixture.close();
+		footer(fixture);
+	}),
+);
+
+const REMOTE = "44444444-4444-4444-8444-444444444444";
+
+/** pi history plus a second machine that exports Claude, Codex and OpenCode usage and quota. */
+async function seedHarnesses(fixture: TerminalFixture): Promise<void> {
+	seed(fixture);
+	const now = fixture.clock.now();
+	const reading = (extra: Partial<QuotaObservation>): QuotaObservation => ({
+		harness: "codex",
+		provider: "openai-codex",
+		limitId: "codex",
+		window: "7d",
+		usedPercent: 47.3,
+		resetAt: now + 3 * 3_600_000,
+		durationMs: 604_800_000,
+		observedAt: now - 12 * 60_000,
+		planType: "pro",
+		account: "",
+		...extra,
+	});
+	publishMachine(
+		join(fixture.root, "repo"),
+		REMOTE,
+		now,
+		[
+			{ harness: "claude", provider: "anthropic", model: "claude-opus-5-5", days: 1, tokens: 400_000 },
+			{ harness: "claude", provider: "anthropic", model: "claude-opus-5-5", days: 2, tokens: 300_000 },
+			{ harness: "codex", provider: "openai-codex", model: "gpt-6.1-sol", days: 1, tokens: 200_000 },
+			{ harness: "opencode", provider: "anthropic", model: "claude-sonnet-5-5", days: 3, tokens: 100_000, cost: 1.5 },
+		],
+		[reading({}), reading({ window: "5h", durationMs: 18_000_000, resetAt: now - 5 * 60_000, usedPercent: 99 })],
+		{ claude: now, codex: now, opencode: now - 4 * 24 * 3_600_000 },
+	);
+	await importStats(fixture.agentDir, join(fixture.root, "repo"));
+}
+
+it.each(WIDTHS)(
+	"stats harness filter, quota block and Machines status at %i columns",
+	statsTest(async (fixture, width: number) => {
+		await seedHarnesses(fixture);
+		await start(fixture, width);
+		await fixture.open("/stats");
+		let shown = layout(fixture);
+		expect(shown).toMatch(/harness: All/);
+		expect(shown).toContain("h harness");
+		expect(shown).toContain("by harness");
+		// 8 tokens in the numbers are unpriced Claude/Codex: the total says so instead of showing $0
+		expect(shown).toMatch(/Notional cost +\$[\d.k]+ \+ \d+ unpriced/);
+		// quota: live window with reading age, expired window as reset, Claude has no local reading
+		expect(shown).toContain("Quota");
+		expect(shown).toMatch(/openai-codex\/codex 7d/);
+		expect(shown).toContain("47.3%");
+		expect(shown).toContain("observed 12m ago via codex");
+		expect(shown).toContain("no newer reading");
+		expect(shown).not.toContain("99%");
+		expect(shown).toContain("no local reading");
+		// h walks pi, claude, codex, opencode, All; each shows only its own usage
+		for (const [harness, expected] of [
+			["pi", /by provider/],
+			["claude", /Favorite model +anthropic\/claude-opus-5-5/],
+			["codex", /Favorite model +openai-codex\/gpt-6\.1-sol/],
+			["opencode", /Favorite model +anthropic\/claude-sonnet-5-5/],
+			["All", /by harness/],
+		] as const) {
+			await fixture.key("h");
+			shown = layout(fixture);
+			expect(shown, harness).toMatch(new RegExp(`harness: ${harness}`));
+			expect(shown, harness).toMatch(expected);
+			// the quota block is account-wide: every harness view still shows it
+			expect(shown, harness).toContain("openai-codex/codex 7d");
+		}
+		await fixture.key("H");
+		expect(layout(fixture)).toMatch(/harness: opencode/);
+		await fixture.key("h");
+		await fixture.key("\t");
+		shown = layout(fixture);
+		expect(shown.includes("Harness") || shown.includes("· pi,claude")).toBe(true);
+		await fixture.key("\t");
+		shown = layout(fixture);
+		expect(shown).toMatch(/claude: last read cleanly/);
+		expect(shown).toMatch(/opencode: STALE, not read cleanly since/);
+		expect(shown).toMatch(/codex: last read cleanly/);
 		await fixture.close();
 		footer(fixture);
 	}),

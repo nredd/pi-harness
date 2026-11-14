@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { __resetState, registerTodoTool, type TaskDetails, TOOL_NAME } from "./.test-support/home-fixtures.ts";
-import { createTodoCtx, createTodoPi } from "./.test-support/todo-host.ts";
 import { applyPlanApproval } from "./state/plan.ts";
 import { replayFromBranch } from "./state/replay.ts";
 import { commitState, getState } from "./state/store.ts";
+import { createTodoCtx, createTodoPi } from "./tests/fixtures/todo-host.ts";
 import { STATE_ENTRY_TYPE } from "./tool/types.ts";
 
 beforeEach(__resetState);

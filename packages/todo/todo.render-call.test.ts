@@ -1,7 +1,7 @@
 import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { describe, expect, it, vi } from "vitest";
 import { registerTodoTool } from "./.test-support/home-fixtures.ts";
-import { createTodoPi } from "./.test-support/todo-host.ts";
+import { createTodoPi } from "./tests/fixtures/todo-host.ts";
 
 type RenderState = { taskSnapshot?: unknown; onRenderStateChange?: () => void };
 

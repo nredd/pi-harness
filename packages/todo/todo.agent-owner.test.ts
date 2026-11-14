@@ -8,9 +8,9 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { describe, expect, it, vi } from "vitest";
 import registerTodo from "./.test-support/home-fixtures.ts";
-import { createTodoCtx, createTodoPi } from "./.test-support/todo-host.ts";
 import { agentLookup } from "./state/agents.ts";
 import { getState } from "./state/store.ts";
+import { createTodoCtx, createTodoPi } from "./tests/fixtures/todo-host.ts";
 import {
 	SUBAGENT_ANNOUNCE_SURVIVORS_EVENT,
 	SUBAGENT_COMPLETED_EVENT,

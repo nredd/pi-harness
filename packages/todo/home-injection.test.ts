@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { TEST_HOME } from "./.test-support/setup.ts";
-import { createTodoPi } from "./.test-support/todo-host.ts";
+import { createTodoPi } from "./tests/fixtures/todo-host.ts";
 
 vi.mock("node:fs", async (importOriginal) => {
 	const actual = await importOriginal<typeof fs>();

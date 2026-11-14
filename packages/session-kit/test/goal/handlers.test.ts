@@ -4,7 +4,7 @@ import { CHILD_ENTRY } from "../../src/child.ts";
 import { register, turnTokens, WAKE_MS } from "../../src/goal/index.ts";
 import { GOAL_ENTRY, GOAL_NUDGE_TYPE, GOAL_TOOL } from "../../src/goal/state.ts";
 import { coordination, isPlanModeActive } from "../../src/shared.ts";
-import { CONFIG, createGoalHost, type Fake, setPlanMode } from "../support/goal-host.ts";
+import { CONFIG, createGoalHost, type Fake, setPlanMode } from "../../tests/fixtures/goal-host.ts";
 
 /** Fresh runtime with the goal feature registered and a session started. */
 async function boot(options: Parameters<typeof createGoalHost>[0] = {}): Promise<Fake> {

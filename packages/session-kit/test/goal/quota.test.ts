@@ -4,7 +4,7 @@ import { register as registerGoal, WAKE_MS } from "../../src/goal/index.ts";
 import { GOAL_ENTRY, GOAL_TOOL } from "../../src/goal/state.ts";
 import { register as registerLoop } from "../../src/loop/index.ts";
 import { coordination } from "../../src/shared.ts";
-import { CONFIG, createGoalHost, type Fake } from "../support/goal-host.ts";
+import { CONFIG, createGoalHost, type Fake } from "../../tests/fixtures/goal-host.ts";
 
 async function boot(goalFirst = true, child = false): Promise<Fake> {
 	const fake = createGoalHost(child ? { sessionName: "general-purpose#1a2b3c4d" } : {});

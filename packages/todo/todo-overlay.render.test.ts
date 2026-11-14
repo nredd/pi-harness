@@ -7,7 +7,7 @@ import {
 	type TaskAction,
 } from "./.test-support/home-fixtures.ts";
 import { TEST_HOME } from "./.test-support/setup.ts";
-import { createTodoCtx, createTodoPi, createTodoUI } from "./.test-support/todo-host.ts";
+import { createTodoCtx, createTodoPi, createTodoUI } from "./tests/fixtures/todo-host.ts";
 import { TodoOverlay } from "./todo-overlay.ts";
 
 const identityTheme = {

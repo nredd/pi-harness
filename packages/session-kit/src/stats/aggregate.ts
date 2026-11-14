@@ -7,7 +7,7 @@
  */
 
 import { addDays, dayKey, dayRange, daysBetween } from "./days.ts";
-import type { Call, Session } from "./load.ts";
+import { type Call, HARNESSES, type Harness, type Session } from "./load.ts";
 
 export type Range = "all" | "7d" | "30d" | "5h" | "24h";
 export const RANGES: readonly Range[] = ["all", "7d", "30d", "5h", "24h"];
@@ -28,8 +28,13 @@ export interface ModelTotals {
 	output: number;
 	cacheRead: number;
 	cacheWrite: number;
+	/** Sum of the recorded costs; calls with no recorded cost are in `unpriced`, not here. */
 	cost: number;
+	/** Calls whose harness recorded no cost. */
+	unpriced: number;
 	calls: number;
+	/** Harnesses that contributed, in `HARNESSES` order. */
+	harnesses: Harness[];
 }
 
 export interface DayPoint {
@@ -51,6 +56,8 @@ export interface Overview {
 	cacheRead: number;
 	cacheWrite: number;
 	cost: number;
+	unpriced: number;
+	calls: number;
 	favorite?: string;
 	sessions: number;
 	longestSessionMs: number;
@@ -71,6 +78,12 @@ export function matches(filter: Filter, c: Pick<Call, "provider" | "model">): bo
 	if (filter.kind === "all") return true;
 	if (filter.kind === "provider") return c.provider === filter.provider;
 	return modelName(c) === filter.name;
+}
+
+/** Harnesses with at least one call, in `HARNESSES` order. */
+export function harnessesOf(calls: readonly Pick<Call, "harness">[]): Harness[] {
+	const seen = new Set(calls.map((c) => c.harness));
+	return HARNESSES.filter((h) => seen.has(h));
 }
 
 export function filterLabel(filter: Filter): string {
@@ -126,7 +139,9 @@ export function modelTotals(calls: readonly Call[]): ModelTotals[] {
 				cacheRead: 0,
 				cacheWrite: 0,
 				cost: 0,
+				unpriced: 0,
 				calls: 0,
+				harnesses: [],
 			};
 			map.set(name, t);
 		}
@@ -134,8 +149,11 @@ export function modelTotals(calls: readonly Call[]): ModelTotals[] {
 		t.output += c.output;
 		t.cacheRead += c.cacheRead;
 		t.cacheWrite += c.cacheWrite;
-		t.cost += c.cost ?? 0;
+		if (c.cost === null) t.unpriced++;
+		else t.cost += c.cost;
 		t.calls++;
+		if (!t.harnesses.includes(c.harness))
+			t.harnesses = HARNESSES.filter((h) => h === c.harness || t.harnesses.includes(h));
 	}
 	return [...map.values()].sort((a, b) => tokensOf(b) - tokensOf(a) || a.name.localeCompare(b.name));
 }
@@ -146,17 +164,23 @@ export interface SeriesKey {
 	tokens: number;
 }
 
+export type SeriesBy = "provider" | "model" | "harness";
+/** The key a call plots under. */
+export const seriesKey = (by: SeriesBy): ((c: Call) => string) =>
+	by === "provider" ? (c) => c.provider : by === "harness" ? (c) => c.harness : modelName;
+
 /**
- * What the chart splits by: providers under the "all" filter, models otherwise. Largest first,
- * at most `limit`.
+ * What the chart splits by: providers under the "all" filter (harnesses, when `byHarness`), models
+ * otherwise. Largest first, at most `limit`.
  */
 export function chartSeries(
 	filter: Filter,
 	calls: readonly Call[],
 	limit: number,
-): { by: "provider" | "model"; keys: SeriesKey[] } {
-	const by = filter.kind === "all" ? "provider" : "model";
-	const keyOf = by === "provider" ? (c: Call) => c.provider : modelName;
+	byHarness = false,
+): { by: SeriesBy; keys: SeriesKey[] } {
+	const by: SeriesBy = filter.kind !== "all" ? "model" : byHarness ? "harness" : "provider";
+	const keyOf = seriesKey(by);
 	const sums = new Map<string, number>();
 	for (const c of calls) sums.set(keyOf(c), (sums.get(keyOf(c)) ?? 0) + tokensOf(c));
 	const keys = [...sums]
@@ -291,6 +315,8 @@ export function overview(
 		cacheRead: totals.reduce((n, t) => n + t.cacheRead, 0),
 		cacheWrite: totals.reduce((n, t) => n + t.cacheWrite, 0),
 		cost: totals.reduce((n, t) => n + t.cost, 0),
+		unpriced: totals.reduce((n, t) => n + t.unpriced, 0),
+		calls: calls.length,
 		favorite: totals[0]?.name,
 		sessions: inScope.length,
 		longestSessionMs: inScope.reduce((n, s) => Math.max(n, s.endMs - s.startMs), 0),

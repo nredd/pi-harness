@@ -16,7 +16,7 @@ import {
 	resolveCollapseKey,
 } from "../src/config.ts";
 import { createSessionKit } from "../src/index.ts";
-import { createGoalHost } from "./support/goal-host.ts";
+import { createGoalHost } from "../tests/fixtures/goal-host.ts";
 
 vi.mock("node:os", async (importOriginal) => {
 	const os = await importOriginal<typeof import("node:os")>();

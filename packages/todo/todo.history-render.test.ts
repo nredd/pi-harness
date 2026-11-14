@@ -2,7 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetState, registerTodoTool, setActiveRenderSession, TOOL_NAME } from "./.test-support/home-fixtures.ts";
-import { createTodoCtx, createTodoPi } from "./.test-support/todo-host.ts";
+import { createTodoCtx, createTodoPi } from "./tests/fixtures/todo-host.ts";
 
 const theme = makeTheme() as unknown as Theme;
 const SESSION_ID = "foreground";

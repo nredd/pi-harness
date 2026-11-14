@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, type vi } from "vitest";
 import registerTodo from "./.test-support/home-fixtures.ts";
-import { createTodoCtx, createTodoPi } from "./.test-support/todo-host.ts";
 import { EMPTY_STATE } from "./state/state.ts";
 import { getActiveRenderSession, getRenderState, getState } from "./state/store.ts";
+import { createTodoCtx, createTodoPi } from "./tests/fixtures/todo-host.ts";
 import { __resetState } from "./todo.ts";
 
 // Capture the extension's registered handlers + tool + command. Each registerTodo()

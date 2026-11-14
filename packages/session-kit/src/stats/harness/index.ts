@@ -96,6 +96,8 @@ export interface HarnessLoadOptions {
 	loadSqlite?: LoadSqlite;
 	/** The installation's secret salt for account discriminators. Never exported. */
 	salt: string;
+	/** Called as each harness starts and as OpenCode pages in, with a short status such as `reading claude`. */
+	onProgress?: (status: string) => void;
 }
 
 /** One scan per requested harness. A failing harness never hides the others. */
@@ -105,19 +107,31 @@ export async function loadHarnesses(options: HarnessLoadOptions): Promise<Record
 	const cachePath = options.cache ?? harnessCachePath();
 	const cache = await readHarnessCache(cachePath, options.salt);
 	const before = JSON.stringify(cache);
+	const progress = options.onProgress ?? (() => {});
+	const reading = <T>(harness: ExternalHarness, read: () => Promise<T>, none: T): Promise<T> => {
+		if (!wanted.has(harness)) return Promise.resolve(none);
+		progress(`reading ${harness}`);
+		return read();
+	};
 	const scans = {
-		claude: wanted.has("claude") ? await readClaude(roots.claude, cache) : emptyScan(false),
-		codex: wanted.has("codex") ? await readCodex(roots.codex, cache, options.salt) : emptyScan(false),
-		opencode: wanted.has("opencode")
-			? await readOpenCode(roots.opencode, options.loadSqlite ?? loadNodeSqlite)
-			: emptyScan(false),
+		claude: await reading("claude", () => readClaude(roots.claude, cache), emptyScan(false)),
+		codex: await reading("codex", () => readCodex(roots.codex, cache, options.salt), emptyScan(false)),
+		opencode: await reading(
+			"opencode",
+			() =>
+				readOpenCode(roots.opencode, options.loadSqlite ?? loadNodeSqlite, {
+					cache,
+					onRows: (rows) => progress(`reading opencode, ${rows} rows`),
+				}),
+			emptyScan(false),
+		),
 	};
 	if (JSON.stringify(cache) !== before) {
 		try {
 			await writeHarnessCache(cachePath, cache, options.salt);
 		} catch {
 			// The view still renders, but a producer must not claim durable history.
-			for (const h of wanted) if (h !== "opencode") scans[h].problems.push(`${h}: cache not written`);
+			for (const h of wanted) scans[h].problems.push(`${h}: cache not written`);
 		}
 	}
 	return scans;

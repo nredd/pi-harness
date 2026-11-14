@@ -6,7 +6,7 @@ import {
 	makeUserMessage,
 } from "@juicesharp/rpiv-test-utils";
 import { describe, expect, it } from "vitest";
-import { createTodoCtx } from "../.test-support/todo-host.ts";
+import { createTodoCtx } from "../tests/fixtures/todo-host.ts";
 import { STATE_ENTRY_TYPE, type Task, type TaskDetails } from "../tool/types.ts";
 import { isTaskDetails, replayFromBranch } from "./replay.ts";
 

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { registerTodoTool } from "./.test-support/home-fixtures.ts";
-import { createTodoPi } from "./.test-support/todo-host.ts";
+import { createTodoPi } from "./tests/fixtures/todo-host.ts";
 
 /** Pin the instructions actually registered for agents, not a separate policy copy. */
 describe("todo default guidance", () => {

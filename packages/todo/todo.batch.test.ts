@@ -6,9 +6,9 @@ import {
 	type TaskDetails,
 	TOOL_NAME,
 } from "./.test-support/home-fixtures.ts";
-import { createTodoCtx, createTodoPi } from "./.test-support/todo-host.ts";
 import { applyPlanApproval } from "./state/plan.ts";
 import { commitState, getState } from "./state/store.ts";
+import { createTodoCtx, createTodoPi } from "./tests/fixtures/todo-host.ts";
 
 type Params = Record<string, unknown>;
 

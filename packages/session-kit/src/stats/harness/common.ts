@@ -72,11 +72,23 @@ export const accountHash = (salt: string, harness: Harness, native: string): str
  * reached is never mistaken for an uninstalled one.
  */
 export async function probe(path: string, kind: "file" | "directory"): Promise<"found" | "absent" | "unreadable"> {
+	return (await probeStat(path, kind)).state;
+}
+
+/** `probe`, plus the size and mtime of what was found (for cache stamps). */
+export async function probeStat(
+	path: string,
+	kind: "file" | "directory",
+): Promise<{ state: "found" | "absent" | "unreadable"; size: number; mtimeMs: number }> {
 	try {
 		const info = await stat(path);
-		return (kind === "file" ? info.isFile() : info.isDirectory()) ? "found" : "absent";
+		const state = (kind === "file" ? info.isFile() : info.isDirectory()) ? "found" : "absent";
+		return { state, size: info.size, mtimeMs: info.mtimeMs };
 	} catch (error) {
-		return ["ENOENT", "ENOTDIR"].includes(String((error as NodeJS.ErrnoException).code)) ? "absent" : "unreadable";
+		const state = ["ENOENT", "ENOTDIR"].includes(String((error as NodeJS.ErrnoException).code))
+			? "absent"
+			: "unreadable";
+		return { state, size: 0, mtimeMs: 0 };
 	}
 }
 

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { CHILD_ENTRY, isChildSession } from "../src/child.ts";
 import { register as registerGoal } from "../src/goal/index.ts";
 import { register as registerMonitor, TOOL_NAMES } from "../src/monitor/index.ts";
-import { CONFIG, createGoalHost } from "./support/goal-host.ts";
+import { CONFIG, createGoalHost } from "../tests/fixtures/goal-host.ts";
 
 const NAMES = ["goal_update", ...TOOL_NAMES];
 

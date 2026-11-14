@@ -8,7 +8,7 @@ import {
 	TOOL_NAME,
 } from "./.test-support/home-fixtures.ts";
 import { TEST_HOME } from "./.test-support/setup.ts";
-import { createTodoPi } from "./.test-support/todo-host.ts";
+import { createTodoPi } from "./tests/fixtures/todo-host.ts";
 
 const CONFIG_PATH = join(TEST_HOME, ".config", "rpiv-todo", "config.json");
 const DEFAULT_GUIDELINES_LENGTH = DEFAULT_PROMPT_GUIDELINES.length;

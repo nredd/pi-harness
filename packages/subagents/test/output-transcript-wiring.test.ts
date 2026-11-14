@@ -15,7 +15,7 @@ vi.mock("../src/output-file.js", async () => {
   return {
     ...actual,
     createOutputFilePath: vi.fn(() => "/tmp/fake-subagent.output"),
-    writeInitialEntry: vi.fn(),
+    writeInitialEntry: vi.fn((path: string) => path),
     streamToOutputFile: vi.fn(() => vi.fn()),
   };
 });

@@ -5,7 +5,6 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import registerTodo from "./.test-support/home-fixtures.ts";
-import { createTodoCtx, createTodoPi } from "./.test-support/todo-host.ts";
 import {
 	formatHeldReminder,
 	formatInProgressNotice,
@@ -18,6 +17,7 @@ import {
 import { type AgentRunState, applyAgentEvent } from "./state/agents.ts";
 import { replayFromBranch } from "./state/replay.ts";
 import { getState } from "./state/store.ts";
+import { createTodoCtx, createTodoPi } from "./tests/fixtures/todo-host.ts";
 import { __resetState } from "./todo.ts";
 import {
 	HELD_REMINDER_MESSAGE_TYPE,
