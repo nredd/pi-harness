@@ -3,7 +3,8 @@
  * `<root>` is `CODEX_HOME` or `~/.codex`.
  *
  * Reads four row types and ignores everything else:
- * - `session_meta`: thread ID, provider, and whether the thread is a spawned child (`parent_thread_id`
+ * - `session_meta`: thread ID, provider, the account ID (only as a salted hash, see `accountHash`, and
+ *   only to keep two accounts' quota apart; no account dimension on usage) and whether the thread is a spawned child (`parent_thread_id`
  *   or `agent_path`); only the first one in a file counts
  * - `turn_context`: the model of a turn
  * - `token_usage_record`: per-response usage, joined to its model by `turn_id`
@@ -18,6 +19,7 @@
 
 import { join } from "node:path";
 import {
+	accountHash,
 	anyPresent,
 	asRecord,
 	asRecordOf,
@@ -43,7 +45,14 @@ interface Pending {
 }
 
 class CodexParser extends RowParser {
+	constructor(size: number, mtimeMs: number, salt: string) {
+		super(size, mtimeMs);
+		this.salt = salt;
+	}
+
 	private provider = "";
+	private account = "";
+	private readonly salt: string;
 	private readonly turnModels = new Map<string, string>();
 	private readonly pending: Pending[] = [];
 	private readonly quota = new Map<string, QuotaObservation>();
@@ -64,6 +73,8 @@ class CodexParser extends RowParser {
 				this.out.session = sessionHash("codex", id);
 				this.out.child = str(payload.parent_thread_id) !== "" || str(payload.agent_path) !== "";
 				this.provider = str(payload.model_provider);
+				const account = str(payload.creator_account_id);
+				this.account = account ? accountHash(this.salt, "codex", account) : "";
 			}
 		} else if (row.type === "turn_context") {
 			this.currentTurn = str(payload.turn_id);
@@ -109,7 +120,9 @@ class CodexParser extends RowParser {
 			const [used, minutes, resets] = [w?.used_percent, w?.window_minutes, w?.resets_at];
 			if (![used, minutes, resets].every((n) => typeof n === "number" && Number.isFinite(n)) || ts <= 0) continue;
 			const window = windowName((minutes as number) * 60);
-			const key = JSON.stringify([limitId, window]);
+			// Per reset time, not per window: whether a reading is still live depends on a clock the cache does
+			// not have, so a newer already-reset reading must not discard an older live one.
+			const key = JSON.stringify([limitId, window, this.account, resets]);
 			const prev = this.quota.get(key);
 			if (prev && prev.observedAt > ts) continue;
 			this.quota.set(key, {
@@ -122,6 +135,7 @@ class CodexParser extends RowParser {
 				durationMs: (minutes as number) * 60_000,
 				observedAt: ts,
 				planType: str(limits?.plan_type) || null,
+				account: this.account,
 			});
 		}
 	}
@@ -140,19 +154,22 @@ class CodexParser extends RowParser {
 				this.out.badLines++;
 				continue;
 			}
-			this.addCall(this.provider || FALLBACK_PROVIDER, model, p.ms, p.counts, 0, entryHash("codex", p.responseId));
+			this.addCall(this.provider || FALLBACK_PROVIDER, model, p.ms, p.counts, null, entryHash("codex", p.responseId));
 		}
 		return this.out;
 	}
 }
 
-/** Read every Codex rollout under `root` (`CODEX_HOME`). A missing root is "not installed". */
-export async function readCodex(root: string, cache: HarnessCache): Promise<HarnessScan> {
+/**
+ * Read every Codex rollout under `root` (`CODEX_HOME`). A missing root is "not installed". `salt` is the
+ * installation's secret: it keys the account discriminator on quota readings.
+ */
+export async function readCodex(root: string, cache: HarnessCache, salt: string): Promise<HarnessScan> {
 	return scanJsonl({
 		harness: "codex",
 		root,
 		dirs: [join(root, "sessions"), join(root, "archived_sessions")],
 		cache,
-		parser: (_path, size, mtimeMs) => new CodexParser(size, mtimeMs),
+		parser: (_path, size, mtimeMs) => new CodexParser(size, mtimeMs, salt),
 	});
 }

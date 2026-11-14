@@ -72,8 +72,6 @@ FIXTURE_VALUES: dict[str, frozenset[str]] = {
     "packages/plan-mode/test/blocked-token-explainer-failure.test.ts": frozenset({"user"}),
     "packages/plan-mode/test/blocked-token.test.ts": frozenset({"user"}),
     "packages/plan-mode/test/child-policy.test.ts": frozenset({"u"}),
-    "packages/session-kit/test/stats/harness/fixtures.ts": frozenset({"${CANARY}"}),
-    "packages/session-kit/test/stats/harness/opencode.test.ts": frozenset({"${CANARY}"}),
     "packages/subagents/src/output-file.ts": frozenset({"user"}),
     "packages/subagents/test/manager-registry-guard.test.ts": frozenset({"victim"}),
     "packages/subagents/test/output-file-path.test.ts": frozenset({"user"}),

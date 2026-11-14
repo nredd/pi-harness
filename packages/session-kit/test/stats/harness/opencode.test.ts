@@ -29,7 +29,7 @@ const T0 = Date.parse("2026-10-03T09:00:00Z");
 function session(id: string, parent: string | null = null): void {
 	writer
 		.prepare("INSERT INTO session VALUES (?, ?, ?, ?, ?, ?)")
-		.run(id, parent, `${CANARY} title`, `/Users/${CANARY}`, T0, T0);
+		.run(id, parent, `${CANARY} title`, `/Users/<user>/${CANARY}`, T0, T0);
 }
 function message(id: string, sid: string, data: Record<string, unknown>, created: number | null = T0): void {
 	writer.prepare("INSERT INTO message VALUES (?, ?, ?, ?)").run(id, sid, created, JSON.stringify(data));
@@ -40,7 +40,7 @@ const assistant = (extra: Record<string, unknown> = {}) => ({
 	modelID: "claude-opus-5-5",
 	cost: 0.25,
 	tokens: { input: 10, output: 20, reasoning: 5, cache: { read: 30, write: 40 } },
-	path: { cwd: `/Users/${CANARY}` },
+	path: { cwd: `/Users/<user>/${CANARY}` },
 	summary: `${CANARY} text`,
 	...extra,
 });
@@ -74,7 +74,7 @@ describe("readOpenCode", () => {
 			cacheWrite: 40,
 			cost: 0.25,
 		});
-		expect(scan.calls[1]).toMatchObject({ input: 3, output: 0, cost: 0 });
+		expect(scan.calls[1]).toMatchObject({ input: 3, output: 0, cost: null });
 		expect(scan.calls[2]).toMatchObject({ ms: T0 + 120_000, session: sessionHash("opencode", "ses_2") });
 		expect(scan.sessionMetadata).toHaveLength(2);
 		expect(scan.sessions).toEqual([

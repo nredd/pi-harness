@@ -9,9 +9,21 @@
 import { stat } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { feedFile, isNum, listJsonl, looksLikeObject, NUL_PADDING, timeOf } from "../jsonl.ts";
-import { type Call, type CallTuple, type Harness, mergeSessionMetadata, type Session } from "../load.ts";
+import { type Call, type Harness, mergeSessionMetadata, type Session } from "../load.ts";
 import { nth } from "../nth.ts";
-import { asRecord, asRecordOf, emptyScan, type HarnessScan, type QuotaObservation, unreadable } from "./common.ts";
+import {
+	asRecord,
+	asRecordOf,
+	emptyScan,
+	type HarnessScan,
+	mergeQuota,
+	probe,
+	type QuotaObservation,
+	unreadable,
+} from "./common.ts";
+
+/** `[ms, model index, in, out, cacheRead, cacheWrite, cost]`; `cost` is `null` when the harness records none. */
+export type HarnessCallTuple = [number, number, number, number, number, number, number | null];
 
 /** One parsed transcript file, compact and free of content. */
 export interface ParsedFile {
@@ -24,12 +36,12 @@ export interface ParsedFile {
 	session: string;
 	/** A subagent or spawned thread: counts toward tokens, not Sessions. */
 	child: boolean;
-	/** Raw `[provider, model]` pairs, indexed by `CallTuple[1]`. */
+	/** Raw `[provider, model]` pairs, indexed by `HarnessCallTuple[1]`. */
 	models: [string, string][];
-	calls: CallTuple[];
+	calls: HarnessCallTuple[];
 	/** Opaque entry IDs, parallel to `calls`. */
 	entryIds: string[];
-	/** Freshest reading per `(limitId, window)` in this file. */
+	/** Freshest reading per `(limitId, window, account, resetAt)` in this file. */
 	quota: QuotaObservation[];
 	/** Lines that were not a JSON object, or rows with unusable counters. */
 	badLines: number;
@@ -103,7 +115,7 @@ export abstract class RowParser {
 		model: string,
 		ms: number,
 		counts: readonly number[],
-		cost: number,
+		cost: number | null,
 		entryId: string,
 	): void {
 		const name = JSON.stringify([provider, model]);
@@ -125,7 +137,8 @@ const isQuota = (q: unknown): boolean => {
 		typeof r.harness === "string" &&
 		[r.provider, r.limitId, r.window].every((v) => typeof v === "string") &&
 		[r.usedPercent, r.resetAt, r.durationMs, r.observedAt].every(isNum) &&
-		(r.planType === null || typeof r.planType === "string")
+		(r.planType === null || typeof r.planType === "string") &&
+		(r.account === "" || isHash(r.account))
 	);
 };
 
@@ -144,7 +157,8 @@ export function isParsedFile(value: unknown): value is ParsedFile {
 			(c) =>
 				Array.isArray(c) &&
 				c.length === 7 &&
-				c.every(isNum) &&
+				c.slice(0, 6).every(isNum) &&
+				(c[6] === null || isNum(c[6])) &&
 				Number.isInteger(c[1]) &&
 				nth(c, 1) >= 0 &&
 				nth(c, 1) < models.length,
@@ -155,14 +169,6 @@ export function isParsedFile(value: unknown): value is ParsedFile {
 		Array.isArray(quota) &&
 		quota.every(isQuota)
 	);
-}
-
-async function isDirectory(path: string): Promise<boolean> {
-	try {
-		return (await stat(path)).isDirectory();
-	} catch {
-		return false;
-	}
 }
 
 export interface ScanOptions {
@@ -180,7 +186,9 @@ export interface ScanOptions {
 export async function scanJsonl(options: ScanOptions): Promise<HarnessScan> {
 	const { harness, cache } = options;
 	const root = resolve(options.root);
-	if (!(await isDirectory(root))) return emptyScan(false);
+	const rootState = await probe(root, "directory");
+	if (rootState !== "found")
+		return emptyScan(rootState === "unreadable", rootState === "unreadable" ? [`${harness}: root unreadable`] : []);
 	const files = cache[harness] ?? {};
 	cache[harness] = files;
 	let errors = 0;
@@ -195,8 +203,10 @@ export async function scanJsonl(options: ScanOptions): Promise<HarnessScan> {
 				const parser = options.parser(path, s.size, s.mtimeMs);
 				await feedFile(path, parser);
 				files[path] = parser.finish();
-			} catch {
-				// A failed stat or parse keeps the last-good record, but the history may be incomplete.
+			} catch (error) {
+				// A file pruned between listing and reading is gone, not damaged: its cached record stays.
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+				// Any other failed stat or parse keeps the last-good record, but the history may be incomplete.
 				errors++;
 			}
 		}
@@ -231,7 +241,7 @@ export function flattenHarness(harness: Harness, files: [string, ParsedFile][]) 
 	const ordered = [...files].sort(([pa, a], [pb, b]) => a.startMs - b.startMs || pa.localeCompare(pb));
 	const best = new Map<string, Call>();
 	const sessions: Session[] = [];
-	const quota = new Map<string, QuotaObservation>();
+	const quota: QuotaObservation[] = [];
 	let badLines = 0;
 	let unsupportedTurns = 0;
 	for (const [, file] of ordered) {
@@ -259,11 +269,7 @@ export function flattenHarness(harness: Harness, files: [string, ParsedFile][]) 
 		}
 		if (file.calls.length > 0)
 			sessions.push({ path: file.session, startMs: file.startMs, endMs: file.endMs, child: file.child });
-		for (const q of file.quota) {
-			const key = JSON.stringify([q.provider, q.limitId, q.window]);
-			const prev = quota.get(key);
-			if (!prev || q.observedAt >= prev.observedAt) quota.set(key, q);
-		}
+		quota.push(...file.quota);
 	}
 	const calls = [...best.values()].sort((a, b) => a.ms - b.ms);
 	const owners = new Set(calls.map((c) => c.session));
@@ -272,7 +278,7 @@ export function flattenHarness(harness: Harness, files: [string, ParsedFile][]) 
 		calls,
 		sessionMetadata: [...metadata.values()],
 		sessions: [...metadata.values()].filter((s) => !s.child && owners.has(s.path)),
-		quota: [...quota.values()],
+		quota: mergeQuota(quota, Date.now()),
 		badLines,
 		unsupportedTurns,
 	};
