@@ -119,7 +119,10 @@ it(
 			expect(plot.length, rows.join("\n")).toBeGreaterThanOrEqual(6);
 			expect(danglingPorts(plot.map((row) => row.slice(AXIS_COLUMN + 1))), tab).toEqual([]);
 			if (tab === "Overview") {
-				expect(plot).toHaveLength(16);
+				// Pricing/coverage and its detail-navigation hint consume five rows; fill the remaining tick steps.
+				expect(rows.join("\n")).toContain("Current-rate API-equivalent estimate");
+				expect(rows.join("\n")).toContain("Pricing coverage:");
+				expect(plot).toHaveLength(11);
 				const caption = rows.findIndex((row) => row.includes("total: peak"));
 				expect(caption).toBeGreaterThan(-1);
 				expect(rows.slice(caption + 1, -1).filter((row) => !row.trim()).length).toBeLessThan(5);

@@ -135,6 +135,59 @@ collection. Keep custom labels non-sensitive: they are exported. No schema or sy
 Future calls are ignored in display totals, not removed from durable history. Statistics
 are not subscription quota measurements or router inputs.
 
+Current-rate API-equivalent value:
+
+- `Recorded cost` remains the saved numeric observation. It is never overwritten, used as
+  a current-rate fallback, or treated as subscription cash spend. Price changes do not alter
+  transcripts, snapshot bytes, event fingerprints, fork dedup or deleted-file history.
+- The interactive and print `/stats` viewer separately estimates each retained physical
+  event through core's synchronous `estimateTokenCost` over the **already-loaded** model
+  registry. It does not refresh the catalogue, resolve authentication or make requests.
+  Context tiers apply per event before summing, not to an aggregated model token total.
+- Overview and Models show the selected range/filter's current estimate and exact
+  priced/unpriced event and token coverage. The existing model filter scopes the estimate
+  to an individual model. Print mode adds a per-model estimate column. A partial sum is
+  labelled `priced subset only`; no priced events means `unknown`, not $0. Verified free
+  events are priced zero. Machines includes source, checked date, units, conditions and
+  unpriced reasons for the current range/filter, below machine freshness.
+- The shared engine requires assessed rates and exact provider/model identities. It does
+  not guess private aliases or apply another provider's prices to a similarly named model.
+  It uses the root `pi-ai` host peer, not a subpath that stock extension loaders may not
+  bridge. The packed stock-Pi contract exercises this actual extension-loading boundary.
+  Custom overrides must provide their own assessment. Unavailable models, old hosts without
+  the new core estimator, unsupported non-token charges and unaudited rates stay unpriced.
+- This depends on the core pricing enhancement in `nredd/pi#46`; the package pins are NOT
+  changed here. A coherent core/package release is required to enable pricing. Older hosts
+  continue to display recorded costs and explicit unknown current-value coverage. The
+  release owner must run `make check-stats-pricing` on the matching candidate: it fails
+  without the shared estimator and runs the actual default-engine contracts on Node and
+  Bun. Conditional skips under old hosts are compatibility evidence only, never admission
+  of pricing. The fixtures also exercise historical zero/stale values, unknown TTL, free
+  versus unknown, exact boundaries, imported dedup, deleted cache and unchanged bytes/IDs.
+  Both primary and native Bun coverage measure the complete owned `src/**/*.ts` inventory,
+  including `src/stats/pricing.ts`; the validated static `src/stats/library.ts` facade
+  remains excluded without excluding its executable targets. Root accounting rejects
+  missing expected measurements. Both signals retain zero line, function, branch and
+  statement caps; Bun remains report-only pending its hosted admission evidence.
+- This is current loaded list-price value, not request-date billing or an account invoice.
+  The assessed Bedrock baseline uses published Standard/on-demand, Global Cross-region
+  Inference, US East (N. Virginia), USD per million tokens. Regional-profile IDs may be
+  normalized to that documented baseline; it is not an assertion of actual routing or
+  account-specific rates. Loaded metadata supplies the applicable source and assumptions.
+- Version 1 snapshots and the parser cache do not retain cache-write lifetime, service mode,
+  region/profile or historical provenance. A consumed write with unknown TTL remains
+  unpriced rather than inventing a short or one-hour duration. Known cached reads still
+  use their own rate, not uncached input; output already includes reasoning. Unsupported
+  image/time/storage charges are not converted to token charges. The existing parser counts
+  physical assistant calls only; classifier/image calls reported inside tool results are not
+  included in this event coverage or repriced as chat. Core's catalogue inventory includes
+  those operations separately, but this is not complete accounting for every operation.
+  Missing other-harness
+  costs and schema expansion remain separate work in `#367`.
+- The portable exporter/importer still carries only recorded values. It does not import
+  core or price history. Existing v1 snapshots need no migration or re-export; local,
+  imported and deleted cached events all reach the same viewer valuation path after dedup.
+
 Harness API:
 
 - `src/stats/library.ts` is a Pi-independent barrel for parser, aggregation and snapshot APIs.

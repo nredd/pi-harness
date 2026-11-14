@@ -38,6 +38,30 @@ from coverage_accounting import (
 )
 
 
+def test_session_pricing_is_registered_in_both_source_signals() -> None:
+    """Keep pricing in both complete source signals without relaxing their zero caps.
+
+    Parameters:
+        None.
+    Returns:
+        None: Pricing is present in both signals and all enforced counters remain zero.
+    Raises:
+        AssertionError: A new runtime path is omitted, inventories drift or caps loosen.
+    """
+    cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
+    package = cfg.packages["session-kit"]
+    owned = inventory(ROOT, package)
+    path = "src/stats/pricing.ts"
+    assert path in owned
+    assert not any(Path(path).full_match(item.path) for item in package.exclusions)
+    for name in ("primary", "bun"):
+        signal = package.signals[name]
+        assert path in (set(signal.files) if signal.files is not None else owned)
+        assert signal.files is None
+        for cap in signal.max_uncovered.values():
+            assert cap.lines == cap.functions == cap.branches == cap.statements == 0
+
+
 def test_serialized_policy_fields_have_descriptions() -> None:
     """Check every serialized field, including inherited and newly added declarations.
 
