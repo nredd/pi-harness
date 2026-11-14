@@ -1,12 +1,12 @@
 /** Exercise the factory through registered tools, session events and detached delivery. */
 import { join } from "node:path";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { afterEach, expect, it } from "vitest";
 import { spoolDetached } from "../src/detached-results.js";
 import subagentsExtension, { createSubagentsExtension } from "../src/index.js";
 import { resolveStorePath, ScheduleStore } from "../src/schedule-store.js";
 import { type BootedPi, ctx, type Hermetic, hermeticDir, makePi } from "./helpers/boot-extension.js";
-import { FakeClock } from "./helpers/fake-clock.js";
 
 let booted: BootedPi | undefined;
 let hermetic: Hermetic | undefined;

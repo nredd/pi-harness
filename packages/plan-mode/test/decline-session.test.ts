@@ -1,6 +1,8 @@
 import { fauxAssistantMessage, getMessageText } from "@earendil-works/pi-coding-agent/testing";
+import { deferred } from "@nredd/pi-test-lib/deferred";
+import { settled, toolCall } from "@nredd/pi-test-lib/faux";
 import { expect, test } from "vitest";
-import { complete, deferred, GATE_ERROR, outcomes, QUESTION, SessionFixture, state, tool } from "./session-support.js";
+import { complete, GATE_ERROR, QUESTION, SessionFixture, state } from "./session-support.js";
 
 test("ready-plan reply blocks completion with actionable headless guidance", async () => {
   const fixture = new SessionFixture();
@@ -12,7 +14,7 @@ test("ready-plan reply blocks completion with actionable headless guidance", asy
       complete("First"),
       complete("First"),
       fauxAssistantMessage("Restating the open threads."),
-      tool("plan_mode_question", { questions: [QUESTION] }),
+      toolCall("plan_mode_question", { questions: [QUESTION] }),
       complete("Second"),
       fauxAssistantMessage("OK"),
     ]);
@@ -20,7 +22,7 @@ test("ready-plan reply blocks completion with actionable headless guidance", asy
     await harness.session.prompt("plan it");
     await harness.session.prompt("no, change the scope");
     await harness.session.prompt("ask me first");
-    const completions = outcomes(harness, "plan_mode_complete");
+    const completions = settled(harness, "plan_mode_complete");
     expect(completions.map((outcome) => outcome.isError)).toEqual([false, true, true]);
     expect(getMessageText(completions[0]?.result)).toContain("**Proposed Plan**");
     const blocked = getMessageText(completions[1]?.result);
@@ -34,7 +36,7 @@ test("ready-plan reply blocks completion with actionable headless guidance", asy
     ]) {
       expect(blocked).toContain(needle);
     }
-    const questions = outcomes(harness, "plan_mode_question");
+    const questions = settled(harness, "plan_mode_question");
     expect(questions).toHaveLength(1);
     expect(getMessageText(questions[0]?.result)).toContain('"reason": "ui_unavailable"');
     expect(getMessageText(completions[2]?.result)).toContain(GATE_ERROR);
@@ -67,7 +69,7 @@ test("finalize awaits its headless completion turn", async () => {
     await harness.session.prompt("/plan start");
     await harness.session.prompt("plan it");
     await harness.session.prompt("no, change the scope");
-    expect(getMessageText(outcomes(harness, "plan_mode_complete")[1]?.result)).toContain(GATE_ERROR);
+    expect(getMessageText(settled(harness, "plan_mode_complete")[1]?.result)).toContain(GATE_ERROR);
     const entered = deferred<void>();
     harness.setResponses([
       async () => {
@@ -84,7 +86,7 @@ test("finalize awaits its headless completion turn", async () => {
     expect(returned).toBe(false);
     release.resolve();
     await finalize;
-    const completions = outcomes(harness, "plan_mode_complete");
+    const completions = settled(harness, "plan_mode_complete");
     expect(completions).toHaveLength(3);
     expect(completions[2]?.isError).toBe(false);
     expect(getMessageText(completions[2]?.result)).toContain("# Final");

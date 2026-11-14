@@ -47,8 +47,8 @@ below; broader Istanbul consolidation remains phase 3.
 
 ## Home boundaries
 
-`integration/inprocess/verification/home-guard.ts` exports the reusable assertion and
-`installHomeGuard`; `home-setup.ts` calls it to check at worker setup, before each test and after
+`tests/lib/src/home-guard.ts` exports the reusable assertion and
+`installHomeGuard`; `tests/lib/src/home-setup.ts` calls it to check at worker setup, before each test and after
 each test on **both** engines. A mismatch fails with the offending test file and an explicit injection fix. A missing
 `HOME` also fails. This is a boundary guard, not a filesystem sandbox: a test can temporarily
 mutate and restore HOME between boundaries without detection. Do not use it to justify runtime
@@ -185,7 +185,7 @@ cannot be added here: `coverage/policy.json` is not on main yet and belongs to #
 
 1. Run its unchanged full Vitest suite on the pinned Bun, on macOS and Linux. Fix engine
    differences instead of weakening assertions or inflating timeouts.
-2. Add `home-setup.ts` to its Vitest `setupFiles`, retaining existing setup/config behavior.
+2. Add `tests/lib/src/home-setup.ts` (via `../../tests/lib/src/home-setup.ts`) to its Vitest `setupFiles`, retaining existing setup/config behavior.
    Eliminate runtime HOME mutation that crosses guard boundaries; inject fixture paths.
 3. Set `test:bun` to `node ../../scripts/run-vitest.ts bun` plus package arguments only (retain the
    sampler's worker limit). The launcher owns the coverage arguments; do not restate them.

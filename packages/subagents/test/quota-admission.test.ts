@@ -17,12 +17,12 @@ vi.mock("../src/agent-runner.js", async () => {
   return { ...actual, runAgent: vi.fn(() => new Promise(() => {})) };
 });
 
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import subagentsExtension from "../src/index.js";
 import { ADMIT_CHANNEL, admissionOutcome, checkAdmission, PARKED_RESUME_DELAY_MS, QUOTA_RESTART_GRACE_MS } from "../src/quota-admission.js";
 import { SubagentScheduler } from "../src/schedule.js";
 import { resolveStorePath, ScheduleStore } from "../src/schedule-store.js";
 import { ctx, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
-import { FakeClock } from "./helpers/fake-clock.js";
 
 type Verdict = { ok: boolean; resetAt?: number; wait?: boolean } | "error" | "silent" | "garbage";
 

@@ -16,8 +16,8 @@ the source repositories is recorded here.
 | `integration` | `pi-harness-e2e` | `e4a0123f14d0233452d4873f5579bbd21228c6b5` | `4d15e8d33e761a13236fb3bfc67202d7910fa2ca` | none | 108 |
 | `benchmarks/comparison` | `pi-harness-benchmark` | `c926ea2133967f798e006f04a30efc2da03d82a1` | `b8d76ecb6229faea445df1f0bc162588b7f8b5ef` | none | 70 |
 
-`packages/session-kit/dist/pi-stats-export.mjs` is tracked in the source and imported as is;
-`npm run test` rebuilds it byte-identically (verified against the source commit).
+`packages/session-kit/dist/pi-stats-export.mjs` was imported as is and verified byte-identical against the source
+commit; since #866 it is gitignored build output (`npm run build`), and `npm run test` proves two builds match.
 
 ## Computer-use upstream sync
 
@@ -156,8 +156,8 @@ Deliberate modifications:
 
 - `agents/architect.md`: the `~/.agents/skills/codebase-design/...` path to its reference files became
   "live next to its `SKILL.md`" (no personal path; the skill is an external dependency)
-- `skills/ship-issue/SKILL.md`: branch prefix `redd/issue-<N>` -> `<prefix>/issue-<N>` (repo
-  convention, else the operator's GitHub login); the `/Users/redd/code/PLUGIN/...` example path -> a
+- `skills/ship-issue/SKILL.md`: branch prefix `<user>/issue-<N>` -> `<prefix>/issue-<N>` (repo
+  convention, else the operator's GitHub login); the `/Users/<user>/code/PLUGIN/...` example path -> a
   neutral `/work/plugins/...`; "their global `AGENTS.md`" -> "their configured writing style". Later
   policy changes removed forced critic models and split the evolving parent/worker review and merge
   procedure; consult the shipped skill rather than this historical import note
@@ -242,7 +242,7 @@ receipts belong on the PR, not in this source-attribution record.
 
 Scans of the imported tracked tree, after sanitization:
 
-- Absolute-path scan (`/Users/`, `/Volumes`, `/home/`, `redd`): none outside synthetic fixtures
+- Absolute-path scan (`/Users/`, `/Volumes`, `/home/`, `<user>`): none outside synthetic fixtures
 - E-mail scan: only `example.invalid`/`example.com` test values, the `noreply@anthropic.com`
   commit trailer, and `git@github.com` remote syntax
 - Secret-shape scan (`sk-`, `ghp_`, `AKIA`, private-key headers, JWT-like strings): synthetic

@@ -1,13 +1,13 @@
 /** A real package agent's scope, not a stub parser's interpretation of its frontmatter. */
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { Harness } from "@earendil-works/pi-coding-agent/testing";
+import { toolCall } from "@nredd/pi-test-lib/faux";
+import { makeGitFixture } from "@nredd/pi-test-lib/git";
+import type { Harness } from "@nredd/pi-test-lib/harness";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { makeGitFixture } from "../../packages/dev-tools/test/scenarios/support.ts";
 import {
 	agentStack,
 	ask,
-	call,
 	closeAgentStack,
 	GIT_READS,
 	listTools,
@@ -50,7 +50,7 @@ it("reviewer exposes exactly seven reads plus the refusal helper", async () => {
 it("reviewer executes each permitted read", async () => {
 	// Shared TS equivalent of integration/harness/git_fixture.py, with a real bare remote.
 	const { repo } = fixture;
-	const calls: { name: string; args: Parameters<typeof call>[1]; expected: string }[] = [
+	const calls: { name: string; args: Parameters<typeof toolCall>[1]; expected: string }[] = [
 		{ name: "git_diff", args: { cwd: repo }, expected: "+two" },
 		{ name: "git_show", args: { cwd: repo, rev: "HEAD" }, expected: "Initial" },
 		{ name: "git_log", args: { cwd: repo }, expected: "Initial" },
@@ -60,7 +60,7 @@ it("reviewer executes each permitted read", async () => {
 		{ name: "find", args: { pattern: "a.txt", path: repo }, expected: "a.txt" },
 	];
 	for (const entry of calls) {
-		const answer = await ask(h, "code-reviewer", [call(entry.name, entry.args), report]);
+		const answer = await ask(h, "code-reviewer", [toolCall(entry.name, entry.args), report]);
 		expect(answer.startsWith("REPORT\n"), answer).toBe(true);
 		expect(answer, entry.name).toContain(entry.expected);
 		expect(answer).not.toMatch(unavailable());
@@ -71,7 +71,7 @@ it("reviewer rejects every explicit mutation", async () => {
 	const path = join(home.root, "protected.txt");
 	const original = "REVIEWER MUST NOT CHANGE THIS\n";
 	writeFileSync(path, original);
-	const calls: { name: string; args: Parameters<typeof call>[1] }[] = [
+	const calls: { name: string; args: Parameters<typeof toolCall>[1] }[] = [
 		{ name: "edit", args: { path, oldText: original, newText: "CORRUPTED" } },
 		{ name: "write", args: { path, content: "CORRUPTED\n" } },
 		{ name: "bash", args: { command: `printf CORRUPTED > ${path}` } },
@@ -81,7 +81,7 @@ it("reviewer rejects every explicit mutation", async () => {
 		{ name: "git_worktree_prune", args: { dry_run: false } },
 	];
 	for (const { name, args } of calls) {
-		const answer = await ask(h, "code-reviewer", [call(name, args), report]);
+		const answer = await ask(h, "code-reviewer", [toolCall(name, args), report]);
 		expect(answer).toMatch(unavailable(name));
 		expect(readFileSync(path, "utf8"), name).toBe(original);
 	}

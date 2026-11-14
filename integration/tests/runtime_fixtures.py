@@ -9,15 +9,39 @@ import base64
 import hashlib
 import io
 import json
+import platform
 import shutil
 import tarfile
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from harness import install
 from harness.runtime_lock import NpmGraph
+
+if TYPE_CHECKING:
+    import pytest
 
 TOP = "issue169-top"
 LEAF = "issue169-leaf"
+
+
+def model_supported_platform(
+    monkeypatch: pytest.MonkeyPatch, system: str = "Linux", machine: str = "x86_64"
+) -> None:
+    """Select a logical platform for synthetic transaction/graph fixtures, not native acceptance.
+
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): test-scoped overrides of `platform.system`,
+            `platform.machine` and `install.is_wsl`, global for the test's duration.
+        system (str): modeled `platform.system()`; defaults to Linux.
+        machine (str): modeled `platform.machine()`; defaults to x86_64.
+
+    Returns:
+        None: the modeled platform is active until the patch scope ends.
+    """
+    monkeypatch.setattr(platform, "system", lambda: system)
+    monkeypatch.setattr(platform, "machine", lambda: machine)
+    monkeypatch.setattr(install, "is_wsl", lambda: False)
 
 
 def package_bytes(name: str, payload: str = "original") -> bytes:

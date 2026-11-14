@@ -3,10 +3,11 @@ import { join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { getKeybindings } from "@earendil-works/pi-tui";
+import { toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it, vi } from "vitest";
 import { FLEET_COLLAPSE_KEY, FLEET_DISCLOSURE_SETTLE_MS } from "../src/ui/fleet-list.js";
 import { FLEET_STATE_ENTRY } from "../src/ui/fleet-state.js";
-import { answer, calls, ScenarioSession, spawn } from "./helpers/scenario-session.js";
+import { answer, ScenarioSession, spawn } from "./helpers/scenario-session.js";
 
 const TOGGLE = "\x1b[97;6u"; // Kitty ctrl+shift+a press, distinct from ctrl+a
 
@@ -19,7 +20,7 @@ async function start(description: string) {
   const p = fixture.physical("fauxchild", "child", [answer("CHILD DONE")]);
   const stream = fixture.holdStream(p);
   const h = await fixture.start({ terminal: true, harness: { sessionManager: SessionManager.create(fixture.cwd, join(fixture.root, "sessions")) } });
-  h.setResponses([calls(spawn(description, { model: "fauxchild/child" })), answer("SPAWNED")]);
+  h.setResponses([toolCalls(spawn(description, { model: "fauxchild/child" })), answer("SPAWNED")]);
   await h.session.prompt("go");
   await stream.entered;
   const host = fixture.host;
@@ -46,7 +47,7 @@ it("renders an overflowing expanded fleet without a blank row after main (#552)"
   ));
   const h = await fixture.start({ terminal: true });
   h.setResponses([
-    calls(...streams.map((_, i) => spawn(`gap child ${i}`, { model: `gapchild${i}/child` }))),
+    toolCalls(...streams.map((_, i) => spawn(`gap child ${i}`, { model: `gapchild${i}/child` }))),
     answer("SPAWNED"),
   ]);
   await h.session.prompt("go");
@@ -76,7 +77,7 @@ it("renders 12 held children with left-aligned indicators and no blank rows (#85
   ));
   const h = await fixture.start({ terminal: true });
   h.setResponses([
-    calls(...streams.map((_, i) => spawn(`ov child ${i}`, { model: `ovchild${i}/child` }))),
+    toolCalls(...streams.map((_, i) => spawn(`ov child ${i}`, { model: `ovchild${i}/child` }))),
     answer("SPAWNED"),
   ]);
   await h.session.prompt("go");
@@ -145,7 +146,7 @@ it.each([false, true])("restores explicit collapsed=%s from disk when a fresh ho
 
   const resumed = await fixture.start({ terminal: true, harness: { sessionManager: SessionManager.open(path) } });
   const resumedStream = fixture.holdStream(fixture.providers[0]);
-  resumed.setResponses([calls(spawn("after resume", { model: "fauxchild/child" })), answer("RESUMED")]);
+  resumed.setResponses([toolCalls(spawn("after resume", { model: "fauxchild/child" })), answer("RESUMED")]);
   await resumed.session.prompt("continue");
   await resumedStream.entered;
   const terminal = fixture.host;
@@ -194,7 +195,7 @@ it("quota parking refreshes the one-line fleet without creating a child session"
       pi.events.emit(`router:rpc:admit:reply:${requestId}`, { success: true, data: { ok: false, resetAt: fixture.clock.now() + 60_000, wait: true } });
     });
   }] });
-  h.setResponses([calls(spawn("parked child", { model: "fauxchild/child" })), answer("PARKED")]);
+  h.setResponses([toolCalls(spawn("parked child", { model: "fauxchild/child" })), answer("PARKED")]);
   await h.session.prompt("go");
   const host = fixture.host;
   if (!host) throw new Error("No terminal host");
@@ -212,7 +213,7 @@ it("keeps a failed child flagged after linger and clears it only when its result
   const h = await fixture.start({ terminal: true, factories: [pi => {
     pi.events.on("subagents:failed", () => failed());
   }] });
-  h.setResponses([calls(spawn("broken child", { model: "fauxchild/child" })), answer("SPAWNED")]);
+  h.setResponses([toolCalls(spawn("broken child", { model: "fauxchild/child" })), answer("SPAWNED")]);
   await h.session.prompt("go");
   await failure;
   const result = h.session.messages.find(message => message.role === "toolResult" && message.toolName === "Agent");
@@ -227,7 +228,7 @@ it("keeps a failed child flagged after linger and clears it only when its result
   await host.settle();
   expect(host.viewport().filter(line => line.trimStart().startsWith("[1 failed] agents:"))).toHaveLength(1);
   expect(fixture.record(id).resultConsumed).not.toBe(true);
-  h.setResponses([calls({ name: "get_subagent_result", args: { agent_id: id } }), answer("ACKNOWLEDGED")]);
+  h.setResponses([toolCalls({ name: "get_subagent_result", args: { agent_id: id } }), answer("ACKNOWLEDGED")]);
   await h.session.prompt("read the failure");
   fixture.clock.advance(200);
   await host.settle();
@@ -304,7 +305,7 @@ it("journals terminal failure before its public lifecycle event and result consu
     signalFailure();
   }); }],
     harness: { sessionManager: SessionManager.create(fixture.cwd, join(fixture.root, "sessions")) } });
-  h.setResponses([calls(spawn("headless failure", { model: "fauxchild/child" })), answer("SPAWNED")]);
+  h.setResponses([toolCalls(spawn("headless failure", { model: "fauxchild/child" })), answer("SPAWNED")]);
   await h.session.prompt("go");
   await failure;
   const tool = h.session.messages.find(message => message.role === "toolResult" && message.toolName === "Agent");
@@ -313,7 +314,7 @@ it("journals terminal failure before its public lifecycle event and result consu
   const states = () => h.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === FLEET_STATE_ENTRY);
   expect(atTerminalEvent).toMatchObject({ data: { transition: { alert: { id, state: "error" }, acknowledged: false } } });
   expect(states().at(-1)).toMatchObject({ data: { transition: { alert: { id, state: "error" }, acknowledged: false } } });
-  h.setResponses([calls({ name: "get_subagent_result", args: { agent_id: id } }), answer("READ")]);
+  h.setResponses([toolCalls({ name: "get_subagent_result", args: { agent_id: id } }), answer("READ")]);
   await h.session.prompt("read");
   expect(states().at(-1)).toMatchObject({ data: { transition: { alert: { id }, acknowledged: true } } });
   expect(h.session.messages.some(message => JSON.stringify(message).includes(FLEET_STATE_ENTRY))).toBe(false);
@@ -326,7 +327,7 @@ it("never journals an inline-consumed failure, even before polling or after disk
   const h = await fixture.start({ factories: [pi => { pi.events.on("subagents:failed", () => {
     atTerminalEvent = h.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === FLEET_STATE_ENTRY);
   }); }], harness: { sessionManager: SessionManager.create(fixture.cwd, join(fixture.root, "sessions")) } });
-  h.setResponses([calls(spawn("inline failure", { model: "fauxchild/child", run_in_background: false })), answer("READ INLINE")]);
+  h.setResponses([toolCalls(spawn("inline failure", { model: "fauxchild/child", run_in_background: false })), answer("READ INLINE")]);
   await h.session.prompt("go");
   expect(atTerminalEvent).toEqual([]); // settleRun consumes foreground results BEFORE its terminal callback
   expect(h.session.messages.some(message => message.role === "toolResult" && message.toolName === "Agent" && JSON.stringify(message).includes("INLINE FAILURE"))).toBe(true);
@@ -396,7 +397,7 @@ async function thinkTags(c: ThinkingCase): Promise<{ routing: string; answered: 
   fixture = new ScenarioSession();
   const usage: UsagePayload[] = [];
   const hold = fixture.heldTool();
-  const physical = fixture.physical("fauxphys", "physical", [calls({ name: "hold", args: {} }), answer("CHILD DONE")], c.reasoning);
+  const physical = fixture.physical("fauxphys", "physical", [toolCalls({ name: "hold", args: {} }), answer("CHILD DONE")], c.reasoning);
   const stream = fixture.holdStream(physical);
   const h = await fixture.start({ terminal: true, factories: [collectUsage(usage)] });
   const model = physical.getModel();
@@ -408,7 +409,7 @@ async function thinkTags(c: ThinkingCase): Promise<{ routing: string; answered: 
     // Like a real router: the session's level passes through unchanged.
     route: async request => ({ model, thinkingLevel: request.thinkingLevel }),
   });
-  h.setResponses([calls(spawn("probe child", { model: "vroute/default", ...(c.asked ? { thinking: c.asked } : {}) })), answer("SPAWNED")]);
+  h.setResponses([toolCalls(spawn("probe child", { model: "vroute/default", ...(c.asked ? { thinking: c.asked } : {}) })), answer("SPAWNED")]);
   await h.session.prompt("go");
   await stream.entered;
   const ran = stream.seen.options?.reasoning;
@@ -449,7 +450,7 @@ async function twoTurnTags(turns: readonly [boolean, boolean]): Promise<{ first:
   fixture = new ScenarioSession();
   const usage: UsagePayload[] = [];
   const hold = fixture.heldTool();
-  const one = fixture.physical("fauxone", "one", [calls({ name: "hold", args: {} })], turns[0]);
+  const one = fixture.physical("fauxone", "one", [toolCalls({ name: "hold", args: {} })], turns[0]);
   const two = fixture.physical("fauxtwo", "two", [answer("CHILD DONE")], turns[1]);
   const h = await fixture.start({ terminal: true, factories: [collectUsage(usage)] });
   const models = [one.getModel(), two.getModel()];
@@ -461,7 +462,7 @@ async function twoTurnTags(turns: readonly [boolean, boolean]): Promise<{ first:
     thinkingLevels: ["off", "low", "high"],
     route: async request => ({ model: models[Math.min(routed++, 1)], thinkingLevel: request.thinkingLevel }),
   });
-  h.setResponses([calls(spawn("probe child", { model: "vroute/default", thinking: "high" })), answer("SPAWNED")]);
+  h.setResponses([toolCalls(spawn("probe child", { model: "vroute/default", thinking: "high" })), answer("SPAWNED")]);
   await h.session.prompt("go");
   await hold.entered;
   const host = fixture.host;

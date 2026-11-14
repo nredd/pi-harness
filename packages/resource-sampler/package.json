@@ -30,6 +30,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
     "lint": "biome check src test",
     "typecheck": "tsc --noEmit",
     "test": "JITI_FS_CACHE=false vitest run --coverage --maxWorkers=1",

@@ -1,9 +1,9 @@
 import type { AgentSession, AgentSessionEventListener } from "@earendil-works/pi-coding-agent";
 import { Input, ScrollView, type ScrollViewScrollbar, type Terminal, Text, type TUI, TuiAltScreen, type TuiMode, type TuiMouseEvent, VStack, visibleWidth } from "@earendil-works/pi-tui";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentRecord } from "../src/types.js";
 import { ConversationViewer, getConversationOverlayOptions } from "../src/ui/conversation-viewer.js";
-import { FakeClock } from "./helpers/fake-clock.js";
 
 function setup(rows = 20, columns = 100, host?: TUI, scrollbar: ScrollViewScrollbar = "always", mode: TuiMode = "fullscreen", clock = new FakeClock()) {
   const terminal = { rows, columns };

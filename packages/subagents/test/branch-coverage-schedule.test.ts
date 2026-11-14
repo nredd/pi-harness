@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.js";
 import { getAgentConfig, NO_FALLBACK, registerAgents, setFallbackSubagent } from "../src/agent-types.js";
@@ -12,7 +13,6 @@ import { type ScheduleChangeEvent, SubagentScheduler } from "../src/schedule.js"
 import { ScheduleStore } from "../src/schedule-store.js";
 import type { ScheduledSubagent } from "../src/types.js";
 import { showSchedulesMenu } from "../src/ui/schedule-menu.js";
-import { FakeClock } from "./helpers/fake-clock.js";
 
 let dir: string;
 let registry: ModelRegistry;
