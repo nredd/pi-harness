@@ -152,7 +152,7 @@ import {
   toReportedUsage,
   withLeadingFlag,
   writeInitialEntry
-} from "./chunks/chunk-OE5LJ6BZ.ts";
+} from "./chunks/chunk-SEJWW2J7.ts";
 
 // src/index.ts
 import { existsSync as existsSync7, mkdirSync as mkdirSync4, readFileSync as readFileSync7, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "node:fs";
@@ -4131,7 +4131,7 @@ var WorkflowDialog = class {
 
 // src/ui/workflow-menu.ts
 async function showWorkflowDialog(ctx, task, deps) {
-  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-5QDVOMOS.ts");
+  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-IK4BPUAR.ts");
   let overlay;
   await ctx.ui.custom(
     (tui, theme, _keybindings, done) => new WorkflowDialog(
@@ -7653,7 +7653,9 @@ Full transcript available at: ${record.outputFile}` : "";
     existing.toolCallId = opts.toolCallId;
     existing.joinMode = joinMode;
     if (opts.outputTranscript) {
-      existing.outputFile = createOutputFilePath(ctx.cwd, id, ctx.sessionManager.getSessionId());
+      if (!existing.outputFile || !existsSync7(existing.outputFile)) {
+        existing.outputFile = createOutputFilePath(ctx.cwd, id, ctx.sessionManager.getSessionId());
+      }
       ensureOutputFile(existing.outputFile);
       if (existing.modelFallback) appendModelFallbackEntry(existing.outputFile, id, existing.modelFallback);
       if (existing.modelTier) appendModelTierEntry(existing.outputFile, id, existing.modelTier);

@@ -1960,7 +1960,11 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     // path is deterministic per agent+session, so writing an initial entry
     // would truncate the previous run's turns (see ensureOutputFile).
     if (opts.outputTranscript) {
-      existing.outputFile = createOutputFilePath(ctx.cwd, id, ctx.sessionManager.getSessionId());
+      // Keep a transcript that still exists where it is: an ENOSPC/EROFS retry (#900) may have
+      // relocated it under the temp root, and a recomputed path would start an empty file elsewhere.
+      if (!existing.outputFile || !existsSync(existing.outputFile)) {
+        existing.outputFile = createOutputFilePath(ctx.cwd, id, ctx.sessionManager.getSessionId());
+      }
       ensureOutputFile(existing.outputFile);
       // A fresh transcript for a later resume must still say what the agent ran on.
       if (existing.modelFallback) appendModelFallbackEntry(existing.outputFile, id, existing.modelFallback);

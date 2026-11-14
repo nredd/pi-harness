@@ -207,9 +207,10 @@ export interface PruneOptions {
  * activity for `maxAgeMs`, so the state root does not grow forever. Never touches
  * `keepSessionIds`, the `detached` spool, or anything through a symlink.
  *
- * Bounded: enumeration itself stops after {@link PRUNE_SCAN_LIMIT} session dirs, in
- * sorted order from a cursor persisted in the root, so successive calls sweep the
- * whole root and one call never walks more than that. The collected dirs are
+
+ * Bounded: at most {@link PRUNE_SCAN_LIMIT} session dirs are stat'ed and examined per
+ * call, in sorted order from a cursor persisted in the root, so successive calls
+ * sweep the whole root (listing a cwd dir's names is still whole, but names only). The collected dirs are
  * examined oldest first. Holds no directory handle open (`readdirSync` closes
  * before recursing). Best effort: any filesystem error skips that entry. Returns
  * the dirs removed.
