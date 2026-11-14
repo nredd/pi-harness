@@ -34,7 +34,9 @@ interface Resolved {
 function resolve(input: TestExtensionInput, index: number): Resolved {
 	if (typeof input === "function") return { name: String(index + 1), factory: input };
 	if ("name" in input) return { name: input.name, factory: input.factory };
-	return { name: String(index + 1), factory: input.factory, path: input.path || undefined };
+	// A path input is renamed afterwards; its temporary name must not collide with another input's.
+	const path = input.path || undefined;
+	return { name: path === undefined ? String(index + 1) : `${index + 1}\0path`, factory: input.factory, path };
 }
 
 /**

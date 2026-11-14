@@ -398,6 +398,26 @@ test("a path input reports its provenance on everything its factory registered",
 	expect(other?.path).toBe("<inline:bystander>");
 });
 
+test("a path input's temporary identity never captures another input's registrations", async () => {
+	const provider =
+		(name: string): ExtensionFactory =>
+		(pi) => {
+			pi.registerProvider(name, { baseUrl: "http://127.0.0.1:1", apiKey: "k", api: "openai-completions", models: [] });
+		};
+	// The second input is literally named like the first input's positional name.
+	const result = await createTestExtensionsResult(
+		[
+			{ factory: provider("from-path"), path: "/pkg/a.ts" },
+			{ name: "1", factory: provider("from-named") },
+		],
+		"/",
+	);
+	expect(result.runtime.pendingProviderRegistrations.map(({ name, extensionPath }) => [name, extensionPath])).toEqual([
+		["from-path", "/pkg/a.ts"],
+		["from-named", "<inline:1>"],
+	]);
+});
+
 test("the default cwd is the process cwd, and a throwing factory rejects with its own error", async () => {
 	const boom = new Error("factory exploded");
 	await expect(
