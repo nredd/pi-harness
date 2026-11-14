@@ -19,7 +19,6 @@ export default defineConfig({
       exclude: exclusions.map(({ path }) => path),
       thresholds: {
         "scripts/build-runtime.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 },
-        "scripts/check-runtime.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 },
       },
     },
   },

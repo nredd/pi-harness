@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionFactory, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { createHarness, type Harness, type HarnessOptions } from "@earendil-works/pi-coding-agent/testing";
+import { createHarness, type Harness, type HarnessOptions } from "@nredd/pi-test-lib/harness";
 
 const ROOT = new URL("../../", import.meta.url);
 /** Imported fork -> `packages/<dir>` workspace and its declared `pi.extensions` entry. */

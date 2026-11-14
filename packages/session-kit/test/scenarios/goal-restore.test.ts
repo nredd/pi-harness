@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
 import { afterEach, expect, it } from "vitest";
-import { complete, configFor, goalStates, nudges, ScenarioFixture, sessionFile, spoken } from "./support.ts";
+import { complete, configFor, goalStates, nudges, ScenarioFixture, sessionFile, spoken } from "../fixtures/session.ts";
 
 let fixture: ScenarioFixture | undefined;
 afterEach(() => fixture?.cleanup());

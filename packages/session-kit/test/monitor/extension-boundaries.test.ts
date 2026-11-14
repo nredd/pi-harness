@@ -3,19 +3,13 @@ import { join } from "node:path";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
 import { type Component, visibleWidth } from "@earendil-works/pi-tui";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { outcomes, toolCall } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it, vi } from "vitest";
 import { register } from "../../src/monitor/index.ts";
 import { sweepOrphans } from "../../src/monitor/pidfiles.ts";
 import { WIDGET_KEY } from "../../src/monitor/widget.ts";
-import {
-	ControlledProcesses,
-	configFor,
-	FakeClock,
-	outcomes,
-	ScenarioFixture,
-	TerminalFixture,
-	tool,
-} from "../scenarios/support.ts";
+import { ControlledProcesses, configFor, ScenarioFixture, TerminalFixture } from "../fixtures/session.ts";
 
 vi.mock("../../src/monitor/pidfiles.ts", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../../src/monitor/pidfiles.ts")>();
@@ -49,7 +43,7 @@ it("unwritable monitor startup warns and leaves public commands/tools unavailabl
 	await harness.session.prompt("/monitor list");
 	expect(notify).toHaveBeenLastCalledWith("/monitor: monitors are not available in this session", "warning");
 	harness.setResponses([
-		tool("monitor_start", { argv: ["fixture"], name: "blocked" }),
+		toolCall("monitor_start", { argv: ["fixture"], name: "blocked" }),
 		fauxAssistantMessage("unavailable"),
 	]);
 	await harness.session.prompt("start watcher");
@@ -86,7 +80,7 @@ it.each(["uncertain", "rejected"])(
 		await harness.session.prompt("/monitor list");
 		expect(notify).toHaveBeenLastCalledWith("no monitors", "info");
 		harness.setResponses([
-			tool("monitor_start", { argv: ["fixture"], name: "still-usable" }),
+			toolCall("monitor_start", { argv: ["fixture"], name: "still-usable" }),
 			fauxAssistantMessage("started"),
 		]);
 		await harness.session.prompt("start after sweep");
@@ -142,7 +136,7 @@ it("surfaces an unexpected widget adapter error, retains owned children for clea
 	};
 	const host = await terminal.startTerminal(configFor(), { extensionFactories: [monitor, observe] });
 	host.harness.setResponses([
-		tool("monitor_start", { argv: ["fixture"], name: "first" }),
+		toolCall("monitor_start", { argv: ["fixture"], name: "first" }),
 		fauxAssistantMessage("error surfaced"),
 	]);
 	await host.harness.session.prompt("first watcher");
@@ -152,7 +146,7 @@ it("surfaces an unexpected widget adapter error, retains owned children for clea
 	});
 	expect(children.last.alive).toBe(true);
 	host.harness.setResponses([
-		tool("monitor_start", { argv: ["fixture"], name: "second" }),
+		toolCall("monitor_start", { argv: ["fixture"], name: "second" }),
 		fauxAssistantMessage("recovered"),
 	]);
 	await host.harness.session.prompt("second watcher");

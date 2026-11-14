@@ -208,6 +208,7 @@ def test_root_script_helpers_are_measured_by_import_audit_at_zero() -> None:
             "packages/todo/.vitest.config.ts",
             "integration/*/vitest.config.ts",
             "scripts/vitest.config.ts",
+            "tests/lib/vitest.config.ts",
         ]
         for path in ROOT.glob(pattern)
     }
@@ -219,7 +220,7 @@ def test_root_script_helpers_are_measured_by_import_audit_at_zero() -> None:
         "scripts/run-vitest.ts",
         *configs,
     }
-    assert len(configs) == 17, configs
+    assert len(configs) == 18, configs
     assert "coverage-configurations" not in cfg.packages
     assert audit.goal == "100-percent"
     primary = audit.signals["primary"]
@@ -340,7 +341,7 @@ def test_async_helper_missing_host_report_fails(tmp_path: Path, runner_os: str, 
 
 
 def test_subagents_runtime_scripts_are_measured_at_zero() -> None:
-    """Keep both complete runtime scripts measured by a mandatory zero-floor producer.
+    """Keep the complete runtime script measured by a mandatory zero-floor producer.
 
     Parameters:
         None.
@@ -354,7 +355,7 @@ def test_subagents_runtime_scripts_are_measured_at_zero() -> None:
     assert package.status == "measured"
     assert package.goal == "100-percent"
     assert package.root == "packages/subagents"
-    assert package.owned == ["scripts/build-runtime.mjs", "scripts/check-runtime.mjs"]
+    assert package.owned == ["scripts/build-runtime.mjs"]
     assert not package.exclusions
     assert not any(
         helper.path.startswith("packages/subagents/scripts/") for helper in cfg.verification_helpers

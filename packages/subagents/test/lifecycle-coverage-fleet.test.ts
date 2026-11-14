@@ -1,12 +1,12 @@
 /** Fleet keys must act on the visible owner and recover after failed overlays. */
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.js";
 import type { AgentRecord } from "../src/types.js";
 import type { Theme } from "../src/ui/agent-widget.js";
 import type { ConversationViewer } from "../src/ui/conversation-viewer.js";
 import { FleetList, type FleetUICtx } from "../src/ui/fleet-list.js";
-import { FakeClock } from "./helpers/fake-clock.js";
 
 const theme: Theme = { fg: (_color, text) => text, bold: text => text };
 

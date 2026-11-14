@@ -5,12 +5,12 @@ import type { ExtensionContext, ExtensionFactory, ModelRuntime } from "@earendil
 import {
 	createTestUiContext,
 	type FauxProviderRegistration,
-	type Harness,
-	type HarnessOptions,
 	registerFauxProvider,
 } from "@earendil-works/pi-coding-agent/testing";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import type { Harness, HarnessOptions } from "@nredd/pi-test-lib/harness";
 import { createSessionKit } from "../../packages/session-kit/src/index.ts";
-import { configFor, FakeClock } from "../../packages/session-kit/test/scenarios/support.ts";
+import { configFor } from "../../packages/session-kit/test/fixtures/session.ts";
 import type { Profile } from "../../packages/subscription-router/src/config.ts";
 import { ExhaustionTracker } from "../../packages/subscription-router/src/exhaustion.ts";
 import { createSubscriptionRouter } from "../../packages/subscription-router/src/index.ts";
@@ -23,17 +23,15 @@ import {
 import { freezeNativeTimers } from "./native-timers.ts";
 import { assertHostIdentity, isolateStackHome, startStack } from "./support.ts";
 
+export { deferred } from "@nredd/pi-test-lib/deferred";
+export { nextEvent, outcomes, toolCall as tool } from "@nredd/pi-test-lib/faux";
 export {
 	complete,
-	deferred,
 	goalStates,
-	nextEvent,
 	nudges,
-	outcomes,
 	spoken,
 	tick,
-	tool,
-} from "../../packages/session-kit/test/scenarios/support.ts";
+} from "../../packages/session-kit/test/fixtures/session.ts";
 
 /** The usage transport's side effects, refused: stack scenarios read neither credentials nor the network. */
 export const OFFLINE: Pick<UsageTransport, "fetch" | "getAccessToken"> = {

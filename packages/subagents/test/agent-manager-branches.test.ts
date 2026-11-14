@@ -1,8 +1,9 @@
 /** AgentManager arms the main suite never takes: owned-record resumes, stops racing a rejection, name bookkeeping. */
+
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentManager } from "../src/agent-manager.js";
 import { resetBudgetForTests, setBudgetPolicy } from "../src/process-budget.js";
-import { FakeClock } from "./helpers/fake-clock.js";
 
 vi.mock("../src/agent-runner.js", () => ({ runAgent: vi.fn(), resumeAgent: vi.fn() }));
 vi.mock("../src/worktree.js", () => ({

@@ -2,9 +2,9 @@
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SANDBOX_PREFIX, sandboxTmpdir } from "@nredd/pi-test-lib/sandbox";
 import { expect, it } from "vitest";
 import { sessionTaskDir } from "../src/output-file.js";
-import { SANDBOX_PREFIX, sandboxTmpdir } from "./helpers/tmp-root-setup.js";
 
 it("sandboxes tmpdir() away from the real temp root", () => {
   const real = process.env.PI_TEST_REAL_TMPDIR;

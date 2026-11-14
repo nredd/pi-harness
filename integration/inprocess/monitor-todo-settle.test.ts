@@ -1,15 +1,13 @@
 /** A todo held while a real session-kit monitor is armed for it is waiting, not held by the parent. */
 import { join } from "node:path";
-import { createTestUiContext, fauxAssistantMessage, type Harness } from "@earendil-works/pi-coding-agent/testing";
+import { createTestUiContext, fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { nextEvent } from "@nredd/pi-test-lib/faux";
+import type { Harness } from "@nredd/pi-test-lib/harness";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runTools } from "../../packages/dev-tools/test/scenarios/support.ts";
+import { runTools } from "../../packages/dev-tools/test/fixtures/session.ts";
 import { createSessionKit } from "../../packages/session-kit/src/index.ts";
-import {
-	ControlledProcesses,
-	configFor,
-	FakeClock,
-	nextEvent,
-} from "../../packages/session-kit/test/scenarios/support.ts";
+import { ControlledProcesses, configFor } from "../../packages/session-kit/test/fixtures/session.ts";
 import { isolateStackHome, loadFork, startStack } from "./support.ts";
 
 const WAITING = "waiting on a monitor, which wakes the parent: #1 CI green (monitor ci)";

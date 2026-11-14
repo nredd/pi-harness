@@ -22,7 +22,7 @@ export default defineConfig({
 			exclude: exclusions.map(({ path }) => path),
 		},
 		include: ["*.test.ts", "state/**/*.test.ts", "tool/**/*.test.ts", "view/**/*.test.ts"],
-		setupFiles: ["./.test-support/setup.ts", "../../integration/inprocess/verification/home-setup.ts"],
+		setupFiles: ["./.test-support/setup.ts", "../../tests/lib/src/home-setup.ts"],
 		pool: "forks",
 		maxWorkers: 2,
 		hookTimeout: 30_000,
