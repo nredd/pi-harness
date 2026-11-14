@@ -74,12 +74,54 @@ if [ "$(cat "$root"/proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null)" = 1 ];
 
 # No Windows reach: no automount, no interop, no Windows PATH.
 if [ -e "$root/mnt/c" ] || [ -e "$root/mnt/d" ]; then bad '/mnt/c or /mnt/d exists'; else ok 'no /mnt/c'; fi
-if [ -e "$root/proc/sys/fs/binfmt_misc/WSLInterop" ] || [ -e "$root/proc/sys/fs/binfmt_misc/WSLInterop-late" ]; then
-  bad 'WSLInterop binfmt present'
+# WSL can retain binfmt registrations and broker sockets with interop disabled. Their presence
+# is not executable capability: require a protected disabled policy instead of failing on plumbing.
+policy="$root/etc/wsl.conf"
+read -r owner mode <<< "$(stat -c '%u %a' "$policy" 2>/dev/null)"
+if [[ "$owner" = 0 && "$mode" =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 0022) == 0 )); then
+  ok 'wsl.conf is root-owned and not group/world writable'
 else
-  ok 'no WSLInterop'
+  bad 'wsl.conf is missing or not protected'
 fi
-if compgen -G "$root/run/WSL/*interop*" >/dev/null; then bad '/run/WSL interop sockets present'; else ok 'no interop sockets'; fi
+if python3 - "$policy" <<'PY'
+import configparser
+import sys
+
+cfg = configparser.ConfigParser(interpolation=None, inline_comment_prefixes=("#", ";"))
+try:
+    with open(sys.argv[1], encoding="utf-8") as source:
+        cfg.read_file(source)
+    required = {"interop": ("enabled", "appendWindowsPath"), "automount": ("enabled", "mountFsTab")}
+    allowed = not cfg.defaults() and all(
+        cfg.get(section, key, fallback="").strip().lower() == "false"
+        for section, keys in required.items()
+        for key in keys
+    )
+except (OSError, UnicodeError, configparser.Error):
+    allowed = False
+sys.exit(0 if allowed else 1)
+PY
+then
+  ok 'interop and automount are explicitly disabled'
+else
+  bad 'wsl.conf does not explicitly disable interop and automount'
+fi
+# A binfmt registration is residue only while the kernel reports it `disabled` (first line, exact);
+# `enabled`, empty or unreadable means Windows executables can run, so fail.
+interop_residue=0
+for name in WSLInterop WSLInterop-late; do
+  entry="$root/proc/sys/fs/binfmt_misc/$name"
+  [ -e "$entry" ] || continue
+  state=''
+  IFS= read -r state < "$entry" 2>/dev/null || true
+  if [ "$state" = disabled ]; then interop_residue=1; else bad "$name interop registration is not disabled"; fi
+done
+if [ "$interop_residue" = 1 ]; then
+  echo 'note: WSLInterop registration present but disabled; presence alone does not prove execution capability'
+fi
+if compgen -G "$root/run/WSL/*interop*" >/dev/null; then
+  echo 'note: WSL broker paths present; presence alone does not prove execution capability'
+fi
 case ":$PATH:" in *:/mnt/*) bad 'Windows path on PATH' ;; *) ok 'no Windows PATH' ;; esac
 for exe in cmd.exe powershell.exe wsl.exe explorer.exe; do
   if command -v "$exe" >/dev/null 2>&1; then bad "can find $exe"; else ok "no $exe"; fi
