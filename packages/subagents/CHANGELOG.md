@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-> **⚠️ Breaking: subagent transcripts, saved workflow scripts and journals leave the per-user temp dir, on macOS too** ([#900](https://github.com/nredd/pi-harness/issues/900)). They now live under `$XDG_STATE_HOME/pi-subagents` (default `~/.local/state/pi-subagents`). Set `PI_SUBAGENTS_TRANSCRIPT_DIR` to pick another root; anything reading `<tmpdir>/pi-subagents-<uid>` must read the new one, and old files are not migrated.
+> **⚠️ Breaking: subagent transcripts, saved workflow scripts and journals leave the per-user temp dir, on macOS too** ([#900](https://github.com/nredd/pi-harness/issues/900)). They now live under `$XDG_STATE_HOME/pi-subagents` (default `~/.local/state/pi-subagents`). Set `PI_SUBAGENTS_TRANSCRIPT_DIR` to pick another root (an existing dir is used as is and never pruned until you create a `.pi-subagents-root` file in it; pruning removes 30-day-idle pi-shaped session dirs only). Anything reading `<tmpdir>/pi-subagents-<uid>` must read the new one, and old files are not migrated.
 
 ### Added
 - **Explain effective agent model policy ([#777](https://github.com/nredd/pi-harness/issues/777)).** `/agents` detail menus show the winning and shadowed sources, exact binding and failure policy through the dispatch selector, without admission, credential commands or provider requests. Error policies no longer claim parent inheritance; startup diagnostics check registrations only after trusted discovery.

@@ -1729,7 +1729,8 @@ async function admitModelSelection(selection, registry, events, clock = realCloc
 }
 
 // src/output-file.ts
-import { accessSync, appendFileSync, chmodSync, constants, existsSync as existsSync5, lstatSync as lstatSync2, mkdirSync as mkdirSync2, mkdtempSync, readdirSync as readdirSync2, readFileSync as readFileSync5, rmdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { accessSync, appendFileSync, chmodSync, constants, existsSync as existsSync5, lstatSync as lstatSync2, mkdirSync as mkdirSync2, mkdtempSync, readdirSync as readdirSync2, readFileSync as readFileSync5, realpathSync as realpathSync2, rmdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir as homedir4, tmpdir } from "node:os";
 import { basename as basename3, dirname as dirname2, isAbsolute as isAbsolute2, join as join6, relative as relative2, sep as sep2 } from "node:path";
 var outputTranscriptDefault = true;
@@ -1745,12 +1746,23 @@ function encodeCwd(cwd) {
 var TRANSCRIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1e3;
 var PRUNE_SCAN_LIMIT = 1e3;
 var PRUNE_CURSOR_FILE = ".prune-cursor";
-function prepareRoot(root) {
-  mkdirSync2(root, { recursive: true, mode: 448 });
+var ROOT_MARKER = ".pi-subagents-root";
+function prepareRoot(root, adopt) {
+  let created = false;
   try {
-    chmodSync(root, 448);
+    mkdirSync2(root, { mode: 448 });
+    created = true;
   } catch (err) {
-    if (process.platform !== "win32") throw err;
+    if (err.code !== "EEXIST") throw err;
+  }
+  const marker = join6(root, ROOT_MARKER);
+  if (created || adopt || existsSync5(marker)) {
+    try {
+      chmodSync(root, 448);
+    } catch (err) {
+      if (process.platform !== "win32") throw err;
+    }
+    if (!existsSync5(marker)) writeFileSync(marker, "", "utf-8");
   }
   accessSync(root, constants.R_OK | constants.W_OK | constants.X_OK);
 }
@@ -1759,9 +1771,9 @@ function defaultTranscriptRoot() {
   const base = xdg && isAbsolute2(xdg) ? xdg : join6(homedir4(), ".local", "state");
   return join6(base, "pi-subagents");
 }
-function configuredTranscriptRoot() {
+function transcriptDirOverride() {
   const override = process.env.PI_SUBAGENTS_TRANSCRIPT_DIR;
-  return override && isAbsolute2(override) ? override : defaultTranscriptRoot();
+  return override && isAbsolute2(override) ? override : void 0;
 }
 function inspectRoot(path) {
   let st;
@@ -1776,26 +1788,32 @@ function inspectRoot(path) {
 var freshTempRoot;
 function tempFallbackRoot() {
   const base = tmpdir();
-  const root = join6(base, `pi-subagents-${process.getuid?.() ?? 0}`);
-  let state2 = inspectRoot(root);
-  if (state2 === "absent") {
-    prepareRoot(root);
-    state2 = inspectRoot(root);
-  }
-  if (state2 === true) {
-    prepareRoot(root);
-    return root;
+  const uid = process.getuid?.() ?? 0;
+  const hash = createHash("sha256").update(`${uid}:${realpathSync2(base)}`).digest("hex").slice(0, 8);
+  const plain = join6(base, `pi-subagents-${uid}`);
+  for (const root of [plain, `${plain}-${hash}`]) {
+    let state2 = inspectRoot(root);
+    if (state2 === "absent") {
+      prepareRoot(root, true);
+      state2 = inspectRoot(root);
+    }
+    if (state2 === true) {
+      prepareRoot(root, true);
+      return root;
+    }
   }
   if (freshTempRoot?.base !== base || inspectRoot(freshTempRoot.path) !== true) {
-    freshTempRoot = { base, path: mkdtempSync(`${root}-`) };
+    freshTempRoot = { base, path: mkdtempSync(`${plain}-`) };
   }
+  prepareRoot(freshTempRoot.path, true);
   return freshTempRoot.path;
 }
 function transcriptRoot() {
   try {
-    const root = configuredTranscriptRoot();
+    const override = transcriptDirOverride();
+    const root = override ?? defaultTranscriptRoot();
     mkdirSync2(dirname2(root), { recursive: true });
-    prepareRoot(root);
+    prepareRoot(root, override === void 0);
     return root;
   } catch {
   }
@@ -1806,16 +1824,19 @@ function sessionTaskDir(cwd, sessionId) {
   mkdirSync2(dir, { recursive: true });
   return dir;
 }
+var PI_TASK_FILE = /\.(output|workflow\.js|workflow\.jsonl)$/;
 function newestActivity(sessionDir, cutoff) {
   let newest = lstatSync2(sessionDir).mtimeMs;
+  const entries = readdirSync2(sessionDir, { withFileTypes: true });
+  if (entries.some((e) => !e.isDirectory() || e.name !== "tasks")) return void 0;
+  if (entries.length === 0) return newest;
   const tasks = join6(sessionDir, "tasks");
-  try {
-    newest = Math.max(newest, lstatSync2(tasks).mtimeMs);
-    for (const name of readdirSync2(tasks)) {
-      if (newest > cutoff) break;
-      newest = Math.max(newest, lstatSync2(join6(tasks, name)).mtimeMs);
-    }
-  } catch {
+  newest = Math.max(newest, lstatSync2(tasks).mtimeMs);
+  if (newest > cutoff) return newest;
+  for (const file of readdirSync2(tasks, { withFileTypes: true })) {
+    if (!file.isFile() || !PI_TASK_FILE.test(file.name)) return void 0;
+    newest = Math.max(newest, lstatSync2(join6(tasks, file.name)).mtimeMs);
+    if (newest > cutoff) return newest;
   }
   return newest;
 }
@@ -1860,6 +1881,7 @@ function pruneStaleTranscripts(options = {}) {
   } catch {
     return 0;
   }
+  if (!existsSync5(join6(root, ROOT_MARKER))) return 0;
   const cwdNames = subdirs(root).filter((name) => name !== "detached");
   const cursor = readCursor(root);
   const start = cursor ? Math.max(0, cwdNames.findIndex((name) => name >= cursor[0])) : 0;
@@ -1890,7 +1912,8 @@ function pruneStaleTranscripts(options = {}) {
   const touched = /* @__PURE__ */ new Set();
   for (const { cwdName, sessionDir } of candidates) {
     try {
-      if (newestActivity(sessionDir, cutoff) > cutoff) continue;
+      const activity = newestActivity(sessionDir, cutoff);
+      if (activity === void 0 || activity > cutoff) continue;
       rmSync(sessionDir, { recursive: true, force: true });
       removed++;
       touched.add(cwdName);
@@ -1919,7 +1942,8 @@ function sessionIdFromSessionFile(file) {
 }
 function retainReferencedTranscripts(transcripts, parentSessionFile) {
   const ids = /* @__PURE__ */ new Set();
-  if (parentSessionFile) ids.add(sessionIdFromSessionFile(parentSessionFile));
+  const parentId = parentSessionFile ? sessionIdFromSessionFile(parentSessionFile) : void 0;
+  if (parentId) ids.add(parentId);
   let root;
   try {
     root = transcriptRoot();
@@ -1927,18 +1951,21 @@ function retainReferencedTranscripts(transcripts, parentSessionFile) {
     return [...ids];
   }
   const now = /* @__PURE__ */ new Date();
-  for (const transcript of transcripts) {
-    const rel = relative2(root, transcript);
-    const parts = rel.split(sep2);
-    if (rel.startsWith("..") || isAbsolute2(rel) || parts.length !== 4 || parts[2] !== "tasks") continue;
-    ids.add(parts[1]);
-    const sessionDir = join6(root, parts[0], parts[1]);
+  const touch = (sessionDir) => {
     for (const dir of [join6(sessionDir, "tasks"), sessionDir]) {
       try {
         utimesSync(dir, now, now);
       } catch {
       }
     }
+  };
+  if (parentId) for (const cwdName of subdirs(root)) touch(join6(root, cwdName, parentId));
+  for (const transcript of transcripts) {
+    const rel = relative2(root, transcript);
+    const parts = rel.split(sep2);
+    if (rel.startsWith("..") || isAbsolute2(rel) || parts.length !== 4 || parts[2] !== "tasks") continue;
+    ids.add(parts[1]);
+    touch(join6(root, parts[0], parts[1]));
   }
   return [...ids];
 }
@@ -2081,7 +2108,7 @@ ${partial}` : "";
 
 // src/worktree.ts
 import { randomUUID } from "node:crypto";
-import { existsSync as existsSync6, lstatSync as lstatSync3, readdirSync as readdirSync3, readFileSync as readFileSync6, realpathSync as realpathSync2, statSync as statSync4 } from "node:fs";
+import { existsSync as existsSync6, lstatSync as lstatSync3, readdirSync as readdirSync3, readFileSync as readFileSync6, realpathSync as realpathSync3, statSync as statSync4 } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
 import { join as join7, relative as relative3, resolve as resolve3 } from "node:path";
 
@@ -2170,7 +2197,7 @@ async function createWorktree(pi, cwd, agentId) {
     (detail) => `${cwd} is not inside a git repository (${detail})`
   );
   if (inside !== "true") throw new WorktreeError(`${cwd} is inside a git directory but not a work tree`);
-  const repoRoot = realpathSync2(await step(
+  const repoRoot = realpathSync3(await step(
     git(pi, cwd, ["rev-parse", "--show-toplevel"], 5e3),
     (detail) => `${cwd} has no git work tree toplevel (${detail})`
   ));
@@ -2178,7 +2205,7 @@ async function createWorktree(pi, cwd, agentId) {
     git(pi, cwd, ["rev-parse", "--verify", "HEAD"], 5e3),
     () => `${repoRoot} has no commits yet; commit at least once`
   );
-  const subdir = relative3(repoRoot, realpathSync2(cwd));
+  const subdir = relative3(repoRoot, realpathSync3(cwd));
   const branch = `pi-agent-${agentId}`;
   const suffix = randomUUID().slice(0, 8);
   const worktreePath = join7(tmpdir2(), `pi-agent-${agentId}-${suffix}`);
@@ -2316,7 +2343,7 @@ function gitDirOf(dir) {
   return resolve3(dir, target.trim());
 }
 async function inspectRepo(pi, dir, label, recorded, trusted, seen, problems) {
-  seen.add(realpathSync2(gitDirOf(dir)));
+  seen.add(realpathSync3(gitDirOf(dir)));
   const dirty = await dirtyState(pi, dir);
   const lost = await unpublished(pi, [], dir, recorded ? [recorded] : []);
   const detail = [dirty, lost].filter(Boolean).join("\n");
@@ -2328,7 +2355,7 @@ ${detail}`);
 }
 async function inspectIgnoredRepos(pi, repo, root, trusted, seen, problems) {
   for (const dir of await ignoredRepoDirs(pi, repo)) {
-    if (!seen.has(realpathSync2(gitDirOf(dir)))) {
+    if (!seen.has(realpathSync3(gitDirOf(dir)))) {
       await inspectRepo(pi, dir, relative3(root, dir), void 0, trusted, seen, problems);
     }
   }
@@ -2365,7 +2392,7 @@ async function assertSubmodulesDisposable(pi, worktreePath, baseSha) {
   await inspectIgnoredRepos(pi, worktreePath, worktreePath, trusted, seen, problems);
   const modules = modulesDir(worktreePath);
   for (const gitDir of modules ? moduleGitDirs(modules) : []) {
-    if (seen.has(realpathSync2(gitDir))) continue;
+    if (seen.has(realpathSync3(gitDir))) continue;
     const lost = await unpublished(pi, ["--git-dir", gitDir], worktreePath, trusted);
     if (lost) problems.push(`${gitDir}:
 ${lost}`);
@@ -2863,7 +2890,7 @@ function createHomeResourceLoader(options, homeDir) {
 }
 
 // src/skill-loader.ts
-import { existsSync as existsSync7, mkdirSync as mkdirSync3, mkdtempSync as mkdtempSync2, readdirSync as readdirSync4, readFileSync as readFileSync7, realpathSync as realpathSync3, rmSync as rmSync2, statSync as statSync5, symlinkSync } from "node:fs";
+import { existsSync as existsSync7, mkdirSync as mkdirSync3, mkdtempSync as mkdtempSync2, readdirSync as readdirSync4, readFileSync as readFileSync7, realpathSync as realpathSync4, rmSync as rmSync2, statSync as statSync5, symlinkSync } from "node:fs";
 import { homedir as homedir5, tmpdir as tmpdir3 } from "node:os";
 import { dirname as dirname3, isAbsolute as isAbsolute3, join as join8, relative as relative4, resolve as resolve4, sep as sep3 } from "node:path";
 import { loadSkills, SettingsManager as SettingsManager3 } from "@earendil-works/pi-coding-agent";
@@ -3017,7 +3044,7 @@ function isDirectoryTarget(path) {
 }
 function canonicalPath(path) {
   try {
-    return realpathSync3(path);
+    return realpathSync4(path);
   } catch {
     return void 0;
   }
@@ -6964,4 +6991,4 @@ export {
   RESULT_MAX_CHARS,
   ConversationViewer
 };
-//# sourceMappingURL=chunk-SEJWW2J7.ts.map
+//# sourceMappingURL=chunk-4BK7XNA3.ts.map
