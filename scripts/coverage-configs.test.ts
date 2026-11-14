@@ -5,6 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { globSync, readFileSync } from "node:fs";
+import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, test, vi } from "vitest";
 
@@ -210,6 +211,187 @@ const ZERO_UNCOVERED_FILES = [
 	"src/view.ts",
 ];
 
+/** The resolved non-coverage options of every producer, fixed before the factory (#863). Paths are repo-relative. */
+const RESOLVED: Record<string, unknown> = {
+	"integration/inprocess/vitest.config.ts": {
+		test: { pool: "forks", maxWorkers: 2, testTimeout: 20000, setupFiles: ["tests/lib/src/home-setup.ts"] },
+	},
+	"integration/probes/vitest.config.ts": {
+		test: {
+			include: [
+				"anthropic-block-types.test.ts",
+				"latency.test.ts",
+				"process-lifecycle.test.ts",
+				"render.test.ts",
+				"session-kit-child-scope.test.ts",
+				"stack-resources.test.ts",
+				"transcript-types.test.ts",
+			],
+			pool: "forks",
+			maxWorkers: 2,
+			testTimeout: 20000,
+			setupFiles: ["tests/lib/src/home-setup.ts"],
+		},
+	},
+	"integration/providers/vitest.config.ts": {
+		test: {
+			include: [
+				"bun_runtime.test.ts",
+				"extension_inventory.test.ts",
+				"faux.test.ts",
+				"preloads.test.ts",
+				"usage_fixture.test.ts",
+			],
+			pool: "forks",
+			maxWorkers: 2,
+			testTimeout: 20000,
+			setupFiles: ["tests/lib/src/home-setup.ts"],
+		},
+	},
+	"packages/computer-use/vitest.async.config.ts": {
+		test: {
+			include: ["test/async.test.mjs", "test/async-observer.test.mjs", "test/async-safety.test.mjs"],
+			pool: "forks",
+			maxWorkers: 1,
+			testTimeout: 20000,
+			setupFiles: ["tests/lib/src/home-setup.ts"],
+		},
+	},
+	"packages/computer-use/vitest.config.ts": {
+		test: {
+			dir: "test",
+			pool: "forks",
+			maxWorkers: 1,
+			testTimeout: 20000,
+			setupFiles: ["tests/lib/src/home-setup.ts"],
+		},
+	},
+	"packages/dev-tools/vitest.config.ts": {
+		test: { pool: "forks", maxWorkers: 2, setupFiles: ["tests/lib/src/home-setup.ts"], testTimeout: 20000 },
+	},
+	"packages/plan-mode/vitest.config.ts": {
+		test: {
+			maxWorkers: 2,
+			environment: "node",
+			env: { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "commit.gpgsign", GIT_CONFIG_VALUE_0: "false" },
+			hookTimeout: 30000,
+			include: ["test/**/*.test.ts"],
+			globalSetup: ["packages/plan-mode/test/harness/vitest.global-setup.ts"],
+			pool: "forks",
+			runner: "packages/plan-mode/test/harness/vitest.runner.ts",
+			setupFiles: ["packages/plan-mode/test/harness/vitest.setup.ts", "tests/lib/src/home-setup.ts"],
+			teardownTimeout: 10000,
+			testTimeout: 5000,
+		},
+	},
+	"packages/plan-mode/vitest.runtime-build.config.ts": {
+		test: {
+			environment: "node",
+			env: { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "commit.gpgsign", GIT_CONFIG_VALUE_0: "false" },
+			hookTimeout: 30000,
+			include: ["packages/plan-mode/test/build-runtime.test.ts"],
+			globalSetup: ["packages/plan-mode/test/harness/vitest.global-setup.ts"],
+			pool: "forks",
+			runner: "packages/plan-mode/test/harness/vitest.runner.ts",
+			setupFiles: ["packages/plan-mode/test/harness/vitest.setup.ts"],
+			teardownTimeout: 10000,
+			testTimeout: 5000,
+		},
+		root: ".",
+	},
+	"packages/preset/vitest.config.ts": {
+		test: { pool: "forks", maxWorkers: 2, testTimeout: 20000, setupFiles: ["tests/lib/src/home-setup.ts"] },
+	},
+	"packages/resource-sampler/vitest.config.ts": {
+		test: { maxWorkers: 1, setupFiles: ["tests/lib/src/home-setup.ts"] },
+	},
+	"packages/session-kit/vitest.config.ts": {
+		test: {
+			server: { deps: { inline: ["@nredd/pi-resource-sampler"] } },
+			setupFiles: ["tests/lib/src/home-setup.ts"],
+			pool: "forks",
+			maxWorkers: 2,
+			testTimeout: 20000,
+		},
+	},
+	"packages/subagents/vitest.config.ts": {
+		test: {
+			maxWorkers: 2,
+			setupFiles: ["packages/subagents/test/helpers/tmp-root-setup.ts", "tests/lib/src/home-setup.ts"],
+			server: { deps: { inline: ["RE:/@earendil-works\\/pi-/"] } },
+		},
+		resolve: { dedupe: ["@earendil-works/pi-ai"] },
+	},
+	"packages/subagents/vitest.runtime-build.config.ts": {
+		test: { maxWorkers: 1, include: ["test/runtime-scripts.test.ts"], testTimeout: 15000 },
+	},
+	"packages/subagents/vitest.workflow-examples.config.ts": {
+		test: {
+			env: { PI_WORKFLOW_EXAMPLE_COVERAGE: "1" },
+			setupFiles: ["packages/subagents/test/helpers/tmp-root-setup.ts", "tests/lib/src/home-setup.ts"],
+			server: { deps: { inline: ["RE:/@earendil-works\\/pi-/"] } },
+			include: ["test/workflow-examples.test.ts"],
+		},
+		resolve: { dedupe: ["@earendil-works/pi-ai"] },
+	},
+	"packages/subscription-router/vitest.config.ts": {
+		test: { maxWorkers: 2, setupFiles: ["tests/lib/src/home-setup.ts"] },
+	},
+	"packages/todo/.vitest.config.ts": {
+		test: {
+			include: ["*.test.ts", "state/**/*.test.ts", "tool/**/*.test.ts", "view/**/*.test.ts"],
+			setupFiles: ["packages/todo/.test-support/setup.ts", "tests/lib/src/home-setup.ts"],
+			pool: "forks",
+			maxWorkers: 2,
+			hookTimeout: 30000,
+			testTimeout: 15000,
+			unstubGlobals: true,
+			clearMocks: true,
+			restoreMocks: true,
+		},
+		resolve: { alias: { "@juicesharp/rpiv-test-utils": "packages/todo/.test-support/upstream/index.ts" } },
+	},
+	"scripts/vitest.config.ts": {
+		test: {
+			include: [
+				"scripts/coverage-configs.test.ts",
+				"scripts/import_audit.test.ts",
+				"scripts/merge-pr.test.ts",
+				"scripts/router_contract.test.mjs",
+				"scripts/run-vitest.test.ts",
+			],
+			pool: "forks",
+			maxWorkers: 2,
+			testTimeout: 20000,
+			setupFiles: ["tests/lib/src/home-setup.ts"],
+		},
+		root: ".",
+	},
+	"tests/lib/vitest.config.ts": { test: { pool: "forks", maxWorkers: 2, setupFiles: ["tests/lib/src/home-setup.ts"] } },
+};
+
+const REPO = fileURLToPath(new URL("..", import.meta.url));
+const PATH_OPTIONS = new Set(["setupFiles", "globalSetup", "runner"]);
+
+/** The config minus its coverage block, as JSON with regexes spelled out and every path made repo-relative. */
+function resolvedShape(producer: Producer, config: { root?: string; test?: Record<string, unknown> }): unknown {
+	const base = config.root ?? resolve(REPO, dirname(producer.config));
+	const repoRelative = (path: string) => relative(REPO, resolve(base, path));
+	const { coverage: _coverage, ...test } = config.test ?? {};
+	const paths = (value: unknown) =>
+		Array.isArray(value) ? value.map((path: string) => repoRelative(path)) : repoRelative(value as string);
+	const shape = {
+		...config,
+		...(config.root === undefined ? {} : { root: "." }),
+		test: Object.fromEntries(
+			Object.entries(test).map(([key, value]) => [key, PATH_OPTIONS.has(key) ? paths(value) : value]),
+		),
+	};
+	return JSON.parse(
+		JSON.stringify(shape, (_key, value) => (value instanceof RegExp ? `RE:${value}` : value)).replaceAll(`${REPO}`, ""),
+	);
+}
+
 const POLICY_URL = new URL("../coverage/policy.json", import.meta.url);
 
 /** Policy entries the faked `readFileSync` serves; null serves the real file. */
@@ -295,6 +477,13 @@ for (const producer of PRODUCERS) {
 			]),
 		);
 		await assert.rejects(producer.load(), TypeError);
+	});
+}
+
+for (const producer of PRODUCERS) {
+	test(`${producer.config} resolves the same non-coverage options as before the shared factory`, async () => {
+		const config = (await producer.load()).default as { root?: string; test?: Record<string, unknown> };
+		assert.deepEqual(resolvedShape(producer, config), RESOLVED[producer.config]);
 	});
 }
 
