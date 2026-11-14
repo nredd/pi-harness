@@ -298,8 +298,8 @@ including a stubbed `ps` that exits 143 (loop keeps running) or 1 (loop ends).
 The diff tests' SIGTERM-resistant shim prints a readiness marker after its trap and fork; only then
 does the test admit fake timeout clocks, so a SIGTERM cannot land before the trap.
 Extension fixtures always emit shutdown in `afterEach`, including after assertion failures. A nested
-Vitest regression bypasses `scripts/run-vitest.ts`, so it reuses the launcher's exported
-`isolatedHomeEnv` and checks the child saw that `HOME`. It covers both a SIGKILLed worker and a
+Vitest regression bypasses `scripts/run-vitest.ts`, so it reuses the launcher's
+`isolatedHomeEnv` (from `@nredd/pi-test-lib/isolated-home`) and checks the child saw that `HOME`. It covers both a SIGKILLed worker and a
 failed assertion (via the fixture's own `afterEach` dispose) and observes both the detached
 `STAY_GROUP` leader and an in-group descendant disappearing. Liveness there is read from process
 state, so an unreaped zombie (non-reaping PID 1) counts as dead.

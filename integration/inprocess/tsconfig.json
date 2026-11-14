@@ -2,7 +2,9 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     // nredd/pi-harness#867: imports package sources that still use parameter properties (#878, #879, #880)
-    "erasableSyntaxOnly": false
+    "erasableSyntaxOnly": false,
+    // nredd/pi-harness#867: the cross-package tests import `plan-mode` and `subagents` sources, typed under their own looser configs
+    "noUncheckedIndexedAccess": false
   },
   "include": ["**/*.ts"]
 }

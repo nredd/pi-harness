@@ -1,7 +1,7 @@
 /** Manual real-terminal fixture. Run with bun; never shipped/registered as a production command. */
 import { ProcessTerminal, TuiAltScreen } from "@earendil-works/pi-tui";
-import { getThemeByName } from "../../../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import { MonView } from "../../src/mon/component.ts";
+import { getThemeByName } from "../../tests/fixtures/themes.ts";
 import { snapshot } from "./fixtures.ts";
 
 const theme = getThemeByName(process.argv[2] ?? "dark");

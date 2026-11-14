@@ -247,7 +247,7 @@ export function evaluatePolicy(
 	});
 	const eligible = rows.filter((row) => row.eligible);
 	const incumbent = eligible.find((row) => row.model === context.previous);
-	let selected = eligible[0];
+	let selected: (typeof rows)[number] | undefined = eligible[0];
 	let override = "none";
 	if (policy.legacy) {
 		selected =

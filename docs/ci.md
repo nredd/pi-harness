@@ -540,8 +540,8 @@ runtime) and Bun the standalone target. Full Vitest runs on both engines for
 `subscription-router`, `preset`, `resource-sampler`, `todo`, `plan-mode`, `dev-tools`, `subagents` and
 `integration/inprocess`.
 `test:bun` launches `bun --bun vitest run` through `scripts/run-vitest.ts` in a disposable
-spawn-time home (the keys come from its exported `isolatedHomeEnv`, which nested runners such as
-session-kit's worker-death test reuse); `make check-ts` and the native `owned` cells' TypeScript shards run it.
+spawn-time home (the keys come from `isolatedHomeEnv` in `tests/lib/src/isolated-home.ts`, which nested runners such as
+session-kit's worker-death test reuse as `@nredd/pi-test-lib/isolated-home`); `make check-ts` and the native `owned` cells' TypeScript shards run it.
 The launcher also sets `JITI_FS_CACHE=false`, and pins `CARGO_HOME`/`RUSTUP_HOME` to the account's
 (`toolchainHomeEnv`, explicit values win): rustup's proxies otherwise look under the disposable home,
 so dev-tools' real cargo suite silently skipped on Bun on the hosted runners. The `test:bun` script that starts with native
