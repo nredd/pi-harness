@@ -21,8 +21,6 @@ ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = "node ../../scripts/run-vitest.ts bun"
 # Package-specific Vitest options only; the launcher owns every coverage flag.
 LAUNCHER_PACKAGE_ARGS = {
-    "resource-sampler": " --maxWorkers=1",
-    "todo": " --config .vitest.config.ts",
     "session-kit": (
         " --exclude test/scenarios/home-injection.test.ts && "
         f"{LAUNCHER} test/scenarios/home-injection.test.ts --coverage.enabled=false"
@@ -261,12 +259,13 @@ def test_node_helper_gates_run_vitest_through_the_launcher() -> None:
     )
     assert "node --test" not in makefile
     assert "/.bin/c8 " not in makefile
+    assert "tests/lib/src/home-setup.ts" in (ROOT / "scripts/vitest-package.ts").read_text()
     for config in [
         ROOT / "integration/probes/vitest.config.ts",
         ROOT / "integration/providers/vitest.config.ts",
         ROOT / "scripts/vitest.config.ts",
     ]:
-        assert "tests/lib/src/home-setup.ts" in config.read_text(), config
+        assert "definePackageConfig(" in config.read_text(), config
 
 
 def owned_jobs() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -434,3 +433,32 @@ def test_pinned_bun_enforces_threshold_with_either_reporter(tmp_path: Path) -> N
     assert bypass.returncode != 0, bypass.stderr.decode()
     assert enforced.returncode != 0, enforced.stderr.decode()
     assert b"50.00" in enforced.stderr
+
+
+def test_test_scripts_go_through_the_launcher_and_read_policy_only_in_the_factory() -> None:
+    """Hold #863: one Vitest factory, `test` and `test:bun` through the launcher, no one-file aliases.
+
+    Parameters:
+        None.
+    Returns:
+        None: Every package config is one `definePackageConfig` call and no config reads the policy itself.
+    Raises:
+        AssertionError: A config rebuilds the coverage block, a package passes `--config` for its
+            primary suite, or a `test*` script is neither `test`, `test:bun` nor a policy signal producer.
+    """
+    for config in [*ROOT.glob("packages/*/vitest*.config.ts"), *ROOT.glob("packages/*/.vitest*.config.ts")]:
+        text = config.read_text()
+        assert "definePackageConfig(" in text, config
+        assert "readFileSync" not in text, config
+    node = f"{LAUNCHER.replace(' bun', ' node')} --coverage"
+    for manifest in ROOT.glob("packages/*/package.json"):
+        scripts = json.loads(manifest.read_text())["scripts"]
+        if manifest.parent.name != "session-kit":
+            assert scripts["test"] == node, manifest
+        for name, command in scripts.items():
+            if name.startswith("test:") and name != "test:bun":
+                # One name per extra producer: its config, a non-Vitest check or the live run.
+                assert "--config vitest." in command or "vitest" not in command or name == "test:e2e", (
+                    manifest,
+                    name,
+                )

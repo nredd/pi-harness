@@ -59,7 +59,7 @@ Simplify the public tool surface
 Check a range locally with:
 
 ```bash
-npm run test:commits -- <base>..<head>
+node scripts/check-commit-messages.mjs <base>..<head>
 ```
 
 ## Pull requests

@@ -1,24 +1,15 @@
-import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vitest/config";
+import { definePackageConfig } from "../../scripts/vitest-package.ts";
 
 // `runtime-build-tooling`: plan-mode's `scripts/build-runtime.mjs` plus the shared root `scripts/runtime-builder.mjs`
-// that `test:dist` measures, not `src/`. The root is the repository so both files sit inside it (as `import-audit`).
-const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] } = JSON.parse(
-  readFileSync(new URL("../../coverage/policy.json", import.meta.url), "utf8"),
-).packages["runtime-build-tooling"];
-
-export default defineConfig({
+// that `test:runtime-build` measures, not `src/`. The root is the repository so both files sit inside it (as `import-audit`).
+// No home guard: this producer never read one.
+export default definePackageConfig("runtime-build-tooling", {
+  provider: "istanbul",
+  reportsDirectory: "packages/plan-mode/coverage/runtime-build-tooling",
+  homeGuard: false,
   root: fileURLToPath(new URL("../..", import.meta.url)),
   test: {
-    coverage: {
-      provider: "istanbul",
-      reporter: ["text", "lcov", "json-summary"],
-      reportsDirectory: "packages/plan-mode/coverage/runtime-build-tooling",
-      reportOnFailure: true,
-      include: owned,
-      exclude: exclusions.map(({ path }) => path),
-    },
     environment: "node",
     env: {
       GIT_CONFIG_COUNT: "1",

@@ -121,11 +121,11 @@ const PRODUCERS: Producer[] = [
 		load: () => import("../packages/subscription-router/vitest.config.ts"),
 	},
 	{
-		config: "packages/todo/.vitest.config.ts",
+		config: "packages/todo/vitest.config.ts",
 		policy: "todo",
 		provider: "istanbul",
 		reportsDirectory: "coverage/primary",
-		load: () => import("../packages/todo/.vitest.config.ts"),
+		load: () => import("../packages/todo/vitest.config.ts"),
 	},
 	{
 		config: "integration/inprocess/vitest.config.ts",
@@ -279,7 +279,7 @@ const RESOLVED: Record<string, unknown> = {
 			globalSetup: ["packages/plan-mode/test/harness/vitest.global-setup.ts"],
 			pool: "forks",
 			runner: "packages/plan-mode/test/harness/vitest.runner.ts",
-			setupFiles: ["packages/plan-mode/test/harness/vitest.setup.ts", "tests/lib/src/home-setup.ts"],
+			setupFiles: ["tests/lib/src/home-setup.ts", "packages/plan-mode/test/harness/vitest.setup.ts"],
 			teardownTimeout: 10000,
 			testTimeout: 5000,
 		},
@@ -317,7 +317,7 @@ const RESOLVED: Record<string, unknown> = {
 	"packages/subagents/vitest.config.ts": {
 		test: {
 			maxWorkers: 2,
-			setupFiles: ["packages/subagents/test/helpers/tmp-root-setup.ts", "tests/lib/src/home-setup.ts"],
+			setupFiles: ["tests/lib/src/home-setup.ts", "packages/subagents/test/helpers/tmp-root-setup.ts"],
 			server: { deps: { inline: ["RE:/@earendil-works\\/pi-/"] } },
 		},
 		resolve: { dedupe: ["@earendil-works/pi-ai"] },
@@ -328,7 +328,7 @@ const RESOLVED: Record<string, unknown> = {
 	"packages/subagents/vitest.workflow-examples.config.ts": {
 		test: {
 			env: { PI_WORKFLOW_EXAMPLE_COVERAGE: "1" },
-			setupFiles: ["packages/subagents/test/helpers/tmp-root-setup.ts", "tests/lib/src/home-setup.ts"],
+			setupFiles: ["tests/lib/src/home-setup.ts", "packages/subagents/test/helpers/tmp-root-setup.ts"],
 			server: { deps: { inline: ["RE:/@earendil-works\\/pi-/"] } },
 			include: ["test/workflow-examples.test.ts"],
 		},
@@ -337,10 +337,10 @@ const RESOLVED: Record<string, unknown> = {
 	"packages/subscription-router/vitest.config.ts": {
 		test: { maxWorkers: 2, setupFiles: ["tests/lib/src/home-setup.ts"] },
 	},
-	"packages/todo/.vitest.config.ts": {
+	"packages/todo/vitest.config.ts": {
 		test: {
 			include: ["*.test.ts", "state/**/*.test.ts", "tool/**/*.test.ts", "view/**/*.test.ts"],
-			setupFiles: ["packages/todo/.test-support/setup.ts", "tests/lib/src/home-setup.ts"],
+			setupFiles: ["tests/lib/src/home-setup.ts", "packages/todo/.test-support/setup.ts"],
 			pool: "forks",
 			maxWorkers: 2,
 			hookTimeout: 30000,

@@ -8,7 +8,7 @@ Source: `juicesharp/rpiv-mono` release `54df50eea935fc9753edc300d5f23c5e28d906d7
 only those helpers used by this package. `rpiv-workflow` is a dev-only dependency
 for their type imports; no workflow code is loaded by the helpers.
 
-`.vitest.config.ts` aliases the unpublished `@juicesharp/rpiv-test-utils` to this
+`vitest.config.ts` aliases the unpublished `@juicesharp/rpiv-test-utils` to this
 barrel. `setup.ts` preserves upstream's dynamic state/i18n reset and config
 cleanup. `TEST_HOME` and `home-fixtures.ts` explicitly inject a disposable home into
 config, tool, extension and overlay callers. `XDG_CONFIG_HOME` alone is NOT enough:
