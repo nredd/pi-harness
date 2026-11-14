@@ -1950,11 +1950,12 @@ function retainReferencedTranscripts(transcripts, parentSessionFile) {
   } catch {
     return [...ids];
   }
+  if (!existsSync5(join6(root, ROOT_MARKER))) return [...ids];
   const now = /* @__PURE__ */ new Date();
   const touch = (sessionDir) => {
     for (const dir of [join6(sessionDir, "tasks"), sessionDir]) {
       try {
-        utimesSync(dir, now, now);
+        if (lstatSync2(dir).isDirectory()) utimesSync(dir, now, now);
       } catch {
       }
     }
@@ -6991,4 +6992,4 @@ export {
   RESULT_MAX_CHARS,
   ConversationViewer
 };
-//# sourceMappingURL=chunk-4BK7XNA3.ts.map
+//# sourceMappingURL=chunk-2CLVI5OF.ts.map

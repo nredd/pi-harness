@@ -252,13 +252,12 @@ export interface PruneOptions {
  * activity for `maxAgeMs`, so the state root does not grow forever. Never touches
  * `keepSessionIds`, the `detached` spool, or anything through a symlink.
  *
-
  * Bounded: at most {@link PRUNE_SCAN_LIMIT} session dirs are stat'ed and examined per
  * call, in sorted order from a cursor persisted in the root, so successive calls
- * sweep the whole root (listing a cwd dir's names is still whole, but names only). The collected dirs are
- * examined oldest first. Holds no directory handle open (`readdirSync` closes
- * before recursing). Best effort: any filesystem error skips that entry. Returns
- * the dirs removed.
+ * sweep the whole root. (Listing a cwd dir's names is not capped, but names only.)
+ * The collected dirs are examined oldest first. Holds no directory handle open
+ * (`readdirSync` closes before recursing). Best effort: any filesystem error skips
+ * that entry. Returns the dirs removed.
  */
 export function pruneStaleTranscripts(options: PruneOptions = {}): number {
   const { now = Date.now(), maxAgeMs = TRANSCRIPT_RETENTION_MS } = options;
@@ -351,10 +350,13 @@ export function retainReferencedTranscripts(transcripts: Iterable<string>, paren
   } catch {
     return [...ids];
   }
+  // Only a root pi owns (marked) is touched; an unmarked override dir is used as is.
+  if (!existsSync(join(root, ROOT_MARKER))) return [...ids];
   const now = new Date();
   const touch = (sessionDir: string): void => {
     for (const dir of [join(sessionDir, "tasks"), sessionDir]) {
-      try { utimesSync(dir, now, now); } catch { /* gone: nothing to keep */ }
+      // lstat: utimes follows symlinks, and only real dirs inside the root are ours to touch.
+      try { if (lstatSync(dir).isDirectory()) utimesSync(dir, now, now); } catch { /* gone: nothing to keep */ }
     }
   };
   // The fork source has no record naming its dirs, so find it in every cwd dir.

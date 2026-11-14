@@ -465,6 +465,23 @@ describe("referenced transcripts", () => {
     expect(Date.now() - statSync(other).mtimeMs).toBeGreaterThan(DAY);
   });
 
+  it.skipIf(process.platform === "win32")("never touches through a symlink or in a root without the marker", () => {
+    const outside = join(fakeTmp.dir, "outside-src");
+    mkdirSync(join(outside, "tasks"), { recursive: true });
+    const when = new Date(Date.now() - STALE);
+    utimesSync(outside, when, when);
+    mkdirSync(join(root, "c1"), { recursive: true });
+    symlinkSync(outside, join(root, "c1", "src-id"));
+    retainReferencedTranscripts([], "/s/2026_src-id.jsonl");
+    expect(Date.now() - statSync(outside).mtimeMs).toBeGreaterThan(DAY);
+
+    const dir = session("c2", "src-id", STALE);
+    rmSync(join(root, ".pi-subagents-root"));
+    process.env.PI_SUBAGENTS_TRANSCRIPT_DIR = root;
+    retainReferencedTranscripts([join(dir, "tasks", "a1.output")], "/s/2026_src-id.jsonl");
+    expect(Date.now() - statSync(dir).mtimeMs).toBeGreaterThan(DAY);
+  });
+
   it("also keeps the fork source session id taken from the parent session file name", () => {
     expect(retainReferencedTranscripts([], "/home/u/.pi/agent/sessions/--proj--/2026-11-14T00-00-00-000Z_abc-123.jsonl")).toEqual(["abc-123"]);
     expect(retainReferencedTranscripts([], undefined)).toEqual([]);
