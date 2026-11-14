@@ -161,6 +161,34 @@ describe("slot claims", () => {
     expect(new ScheduleStore(path).get(job.id)?.lastSlot).toBe(created + 40_000);
   });
 
+  it("a process whose clock runs behind never fires slot 0", () => {
+    const seed = new FakeClock();
+    const a = process_(seed);
+    const job = a.scheduler.addJob(input);
+    a.scheduler.stop();
+    const behind = new FakeClock(seed.now() - 5000);
+    const b = process_(behind);
+    behind.advance(5000); // slot 0 would be due now
+    expect(b.spawn).not.toHaveBeenCalled();
+    behind.advance(10_000);
+    expect(b.spawn).toHaveBeenCalledTimes(1);
+    expect(new ScheduleStore(path).get(job.id)?.lastSlot).toBe(Date.parse(job.createdAt) + 10_000);
+  });
+
+  it("reports the next interval run on the createdAt grid, before and after a late fire", async () => {
+    const clock = new LateClock(6000);
+    const a = process_(clock);
+    const job = a.scheduler.addJob(input);
+    const created = Date.parse(job.createdAt);
+    clock.advance(3000);
+    expect(a.scheduler.getNextRun(job.id)).toBe(new Date(created + 10_000).toISOString());
+    clock.advance(13_000); // the first slot ran 6s late, at 16s
+    expect(a.spawn).toHaveBeenCalledTimes(1);
+    await new Promise<void>(resolve => setImmediate(resolve)); // let the run settle and persist
+    expect(a.scheduler.getNextRun(job.id)).toBe(new Date(created + 20_000).toISOString());
+    expect(new ScheduleStore(path).get(job.id)?.nextRun).toBe(new Date(created + 20_000).toISOString());
+  });
+
   it("waits out an interval beyond the timer range in steps", () => {
     const clock = new NativeRangeClock();
     const a = process_(clock);

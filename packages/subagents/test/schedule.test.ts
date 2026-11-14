@@ -173,16 +173,15 @@ describe("SubagentScheduler — lifecycle", () => {
     expect(t - before).toBeLessThanOrEqual(3_600_000 + 1_000);
   });
 
-  // Once a fire happens and `lastRun` is set, getNextRun should pivot to it.
-  it("getNextRun uses lastRun when present for interval jobs", () => {
+  // `lastRun` does not move the next run: it stays on the createdAt grid armInterval aims at.
+  it("getNextRun ignores lastRun for interval jobs and stays on the createdAt grid", () => {
     const job = scheduler.addJob({
       name: "ran-once", description: "x", schedule: "1h",
       subagent_type: "general-purpose", prompt: "p",
     });
     const lastRun = new Date(Date.now() - 30 * 60_000).toISOString(); // 30m ago
     scheduler.updateJob(job.id, { lastRun });
-    const next = scheduler.getNextRun(job.id);
-    expect(next).toBe(new Date(new Date(lastRun).getTime() + 3_600_000).toISOString());
+    expect(scheduler.getNextRun(job.id)).toBe(new Date(Date.parse(job.createdAt) + 3_600_000).toISOString());
   });
 
   it("rejects past one-shot timestamps upfront — no record created", () => {

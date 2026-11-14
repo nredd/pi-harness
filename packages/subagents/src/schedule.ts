@@ -51,6 +51,11 @@ export interface NewJobInput {
   quotaParked?: boolean;
 }
 
+/** The first interval slot after `now` on the `anchor + k * intervalMs` grid; never slot 0, whatever the clock. */
+function nextIntervalSlot(anchor: number, intervalMs: number, now: number): number {
+  return Math.max(1, Math.floor((now - anchor) / intervalMs) + 1);
+}
+
 /** Longest delay a native timer honors (2^31 - 1 ms). */
 const MAX_TIMER_MS = 2_147_483_647;
 
@@ -314,11 +319,9 @@ export class SubagentScheduler {
     if (!job?.enabled) return undefined;
     if (job.scheduleType === "once") return job.schedule;
     if (job.scheduleType === "interval" && job.intervalMs) {
-      // Before the first fire there's no `lastRun`, so fall back to "now" —
-      // accurate at create time (setInterval was just armed) and within
-      // intervalMs of correct in any pre-first-fire view.
-      const base = job.lastRun ? new Date(job.lastRun).getTime() : this.clock.now();
-      return new Date(base + job.intervalMs).toISOString();
+      // The next slot on the same createdAt grid armInterval aims at, so the display matches the fire.
+      const anchor = new Date(job.createdAt).getTime();
+      return new Date(anchor + nextIntervalSlot(anchor, job.intervalMs, this.clock.now()) * job.intervalMs).toISOString();
     }
     return undefined;
   }
@@ -381,7 +384,7 @@ export class SubagentScheduler {
    */
   private armInterval(job: ScheduledSubagent, intervalMs: number): TimerHandle {
     const anchor = new Date(job.createdAt).getTime();
-    const nextSlot = (): number => Math.floor((this.clock.now() - anchor) / intervalMs) + 1;
+    const nextSlot = (): number => nextIntervalSlot(anchor, intervalMs, this.clock.now());
     let current: TimerHandle | undefined;
     const arm = (k: number): void => {
       const due = anchor + k * intervalMs;
