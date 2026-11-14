@@ -156,8 +156,8 @@ Deliberate modifications:
 
 - `agents/architect.md`: the `~/.agents/skills/codebase-design/...` path to its reference files became
   "live next to its `SKILL.md`" (no personal path; the skill is an external dependency)
-- `skills/ship-issue/SKILL.md`: branch prefix `redd/issue-<N>` -> `<prefix>/issue-<N>` (repo
-  convention, else the operator's GitHub login); the `/Users/redd/code/PLUGIN/...` example path -> a
+- `skills/ship-issue/SKILL.md`: branch prefix `<user>/issue-<N>` -> `<prefix>/issue-<N>` (repo
+  convention, else the operator's GitHub login); the `/Users/<user>/code/PLUGIN/...` example path -> a
   neutral `/work/plugins/...`; "their global `AGENTS.md`" -> "their configured writing style". Later
   policy changes removed forced critic models and split the evolving parent/worker review and merge
   procedure; consult the shipped skill rather than this historical import note
@@ -242,7 +242,7 @@ receipts belong on the PR, not in this source-attribution record.
 
 Scans of the imported tracked tree, after sanitization:
 
-- Absolute-path scan (`/Users/`, `/Volumes`, `/home/`, `redd`): none outside synthetic fixtures
+- Absolute-path scan (`/Users/`, `/Volumes`, `/home/`, `<user>`): none outside synthetic fixtures
 - E-mail scan: only `example.invalid`/`example.com` test values, the `noreply@anthropic.com`
   commit trailer, and `git@github.com` remote syntax
 - Secret-shape scan (`sk-`, `ghp_`, `AKIA`, private-key headers, JWT-like strings): synthetic

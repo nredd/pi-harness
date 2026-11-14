@@ -13,34 +13,21 @@ function agentDir(homeDir = homedir()) {
 // src/stats/snapshot.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 import { link, lstat, mkdir as mkdir2, readdir as readdir2, readFile as readFile2, rename as rename2, unlink, writeFile as writeFile2 } from "node:fs/promises";
-import { dirname as dirname2, join as join3 } from "node:path";
+import { dirname as dirname2, join as join4 } from "node:path";
 
 // src/stats/load.ts
 import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { dirname, join as join3, resolve, sep } from "node:path";
+
+// src/stats/jsonl.ts
 import { createReadStream } from "node:fs";
-import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
-import { dirname, join as join2, resolve, sep } from "node:path";
+import { readdir } from "node:fs/promises";
+import { join as join2 } from "node:path";
 import { createInterface } from "node:readline";
 import { setImmediate as tick } from "node:timers/promises";
-
-// src/stats/nth.ts
-function nth(items, index) {
-  return items[index];
-}
-
-// src/stats/load.ts
-var CACHE_VERSION = 3;
-var opaqueId = (value) => createHash("sha256").update(value).digest("hex");
-var EXCLUDED_PROVIDERS = /* @__PURE__ */ new Set(["faux", "faux-provider", "fake-provider", "router"]);
-var CHILD_NAME = /#[0-9a-f]{8}$/;
-var LEADING_TIMESTAMP = /^.{0,200}?"timestamp"\s*:\s*"([^"]+)"/;
 var YIELD_EVERY_LINES = 2e3;
-function sessionsDir(dir = agentDir()) {
-  return process.env.PI_CODING_AGENT_SESSION_DIR ?? join2(dir, "sessions");
-}
-function cachePath(dir = agentDir()) {
-  return join2(dir, "pi-session-kit", "stats-cache.json");
-}
+var isNum = (v) => typeof v === "number" && Number.isFinite(v);
 function num(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
@@ -56,6 +43,55 @@ function looksLikeObject(line) {
   return text.startsWith("{") && text.endsWith("}");
 }
 var NUL_PADDING = /^\0+$/;
+async function feedFile(path, parser) {
+  const rl = createInterface({
+    input: createReadStream(path, { encoding: "utf8" }),
+    crlfDelay: Number.POSITIVE_INFINITY
+  });
+  let n = 0;
+  for await (const line of rl) {
+    parser.accept(line);
+    if (++n % YIELD_EVERY_LINES === 0) await tick();
+  }
+}
+async function listJsonl(root) {
+  const out = [];
+  let errors = 0;
+  const walk = async (dir) => {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch (error) {
+      if (!(dir === root && error.code === "ENOENT")) errors++;
+      return;
+    }
+    for (const entry of entries) {
+      const path = join2(dir, entry.name);
+      if (entry.isDirectory()) await walk(path);
+      else if (entry.isFile() && entry.name.endsWith(".jsonl")) out.push(path);
+    }
+  };
+  await walk(root);
+  return { paths: out.sort(), errors };
+}
+
+// src/stats/nth.ts
+function nth(items, index) {
+  return items[index];
+}
+
+// src/stats/load.ts
+var CACHE_VERSION = 3;
+var opaqueId = (value) => createHash("sha256").update(value).digest("hex");
+var EXCLUDED_PROVIDERS = /* @__PURE__ */ new Set(["faux", "faux-provider", "fake-provider", "router"]);
+var CHILD_NAME = /#[0-9a-f]{8}$/;
+var LEADING_TIMESTAMP = /^.{0,200}?"timestamp"\s*:\s*"([^"]+)"/;
+function sessionsDir(dir = agentDir()) {
+  return process.env.PI_CODING_AGENT_SESSION_DIR ?? join3(dir, "sessions");
+}
+function cachePath(dir = agentDir()) {
+  return join3(dir, "pi-session-kit", "stats-cache.json");
+}
 var SessionParser = class {
   out;
   modelIndex = /* @__PURE__ */ new Map();
@@ -169,38 +205,9 @@ var SessionParser = class {
 };
 async function parseFile(path, size, mtimeMs) {
   const parser = new SessionParser(size, mtimeMs);
-  const rl = createInterface({
-    input: createReadStream(path, { encoding: "utf8" }),
-    crlfDelay: Number.POSITIVE_INFINITY
-  });
-  let n = 0;
-  for await (const line of rl) {
-    parser.accept(line);
-    if (++n % YIELD_EVERY_LINES === 0) await tick();
-  }
+  await feedFile(path, parser);
   return parser.finish();
 }
-async function listJsonl(root) {
-  const out = [];
-  let errors = 0;
-  const walk = async (dir) => {
-    let entries;
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch (error) {
-      if (!(dir === root && error.code === "ENOENT")) errors++;
-      return;
-    }
-    for (const entry of entries) {
-      const path = join2(dir, entry.name);
-      if (entry.isDirectory()) await walk(path);
-      else if (entry.isFile() && entry.name.endsWith(".jsonl")) out.push(path);
-    }
-  };
-  await walk(root);
-  return { paths: out.sort(), errors };
-}
-var isNum = (v) => typeof v === "number" && Number.isFinite(v);
 function isFileStats(value) {
   if (typeof value !== "object" || value === null) return false;
   const f = value;
@@ -324,6 +331,7 @@ function flatten(files) {
       const raw = nth(file.models, index);
       const slash = raw.indexOf("/");
       candidates.push({
+        harness: "pi",
         session,
         entryId: file.entryIds?.[i] ?? void 0,
         ms,
@@ -385,7 +393,7 @@ function validateIdentity(value) {
   return value;
 }
 async function machineIdentity(dir = agentDir()) {
-  const path = join3(dir, "pi-session-kit", "machine.json");
+  const path = join4(dir, "pi-session-kit", "machine.json");
   try {
     return validateIdentity(await jsonFile(path));
   } catch (error) {
@@ -543,20 +551,20 @@ async function exportStats(dir, output, root = sessionsDir(dir)) {
     throw new Error(`Incomplete local scan: ${loaded.errors} errors, ${loaded.badLines} bad lines`);
   const snapshot = makeSnapshot(loaded, identity);
   validateSnapshot(snapshot);
-  const snapshotDir = join3(output, "machines", identity.machineId);
+  const snapshotDir = join4(output, "machines", identity.machineId);
   await mkdir2(snapshotDir, { recursive: true });
   for (const s of snapshot.shards) {
     const text = JSON.stringify(s);
     const sha256 = opaqueId(text);
     const file = `${s.month}-${sha256}.json`;
     validateShard(s, snapshot.manifest, s.month);
-    await atomicJson(join3(snapshotDir, file), s);
+    await atomicJson(join4(snapshotDir, file), s);
     snapshot.manifest.shards.push({ month: s.month, file, sha256, bytes: Buffer.byteLength(text) });
   }
-  await atomicJson(join3(snapshotDir, "manifest.json"), validateManifest(snapshot.manifest));
+  await atomicJson(join4(snapshotDir, "manifest.json"), validateManifest(snapshot.manifest));
   return { machineId: identity.machineId, snapshotDir };
 }
-var globalPath = (dir) => join3(dir, "pi-session-kit", "stats-global.json");
+var globalPath = (dir) => join4(dir, "pi-session-kit", "stats-global.json");
 async function jsonFile(path) {
   const info = await lstat(path);
   if (!info.isFile() || info.size > MAX_BYTES) throw new Error("Not a bounded regular snapshot file");
@@ -594,7 +602,7 @@ async function importStats(dir, input) {
   let imported = 0;
   const present = /* @__PURE__ */ new Set();
   try {
-    for (const entry of await readdir2(join3(input, "machines"), { withFileTypes: true })) {
+    for (const entry of await readdir2(join4(input, "machines"), { withFileTypes: true })) {
       if (!entry.isDirectory() || !UUID.test(entry.name)) {
         problems.push("Invalid machine directory");
         continue;
@@ -602,12 +610,12 @@ async function importStats(dir, input) {
       const id = entry.name;
       present.add(id);
       try {
-        const base = join3(input, "machines", id);
-        const manifest = validateManifest(await jsonFile(join3(base, "manifest.json")));
+        const base = join4(input, "machines", id);
+        const manifest = validateManifest(await jsonFile(join4(base, "manifest.json")));
         if (manifest.machineId !== id) throw new Error("Machine identity mismatch");
         const shards = [];
         for (const ref of manifest.shards) {
-          const path = join3(base, ref.file);
+          const path = join4(base, ref.file);
           const info = await lstat(path);
           if (!info.isFile() || info.size !== ref.bytes || info.size > MAX_BYTES)
             throw new Error("Invalid shard size/type");
