@@ -995,7 +995,9 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     // its next turn, instead of leaving `Agent not found` to be discovered by a later lookup (#330).
     pi.sendMessage({
       customType: "subagent-reaped",
-      content: `${describeEvicted(note)}. Its result was never read and its record is gone, but get_subagent_result still returns its result (capped); reopening it with steer_subagent or Agent resume is optional and needs its session to be saved.`,
+      content: describeEvictedResult(note) === undefined
+        ? `${describeEvicted(note)}. Its result was never read and its record is gone; it left no result text. Reopen it with steer_subagent or Agent resume if its session is still saved.`
+        : `${describeEvicted(note)}. Its result was never read and its record is gone, but get_subagent_result still returns its result (capped); reopening it with steer_subagent or Agent resume is optional and needs its session to be saved.`,
       display: true,
     }, { deliverAs: "nextTurn" });
   });
@@ -2651,6 +2653,8 @@ Terse command-style prompts produce shallow, generic work.
             const note = manager.getEvictedNote(latest);
             const gone = note?.fromSavedSession
               ? "only historical metadata is available; reopen the recorded session manually."
+              : note?.tombstoneBoundSession
+                ? `dropped by the per-session tombstone bound; reopen ${note.tombstoneBoundSession} manually.`
               : note?.nameTaken
                 ? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.`
                 : "no saved session is left to reopen.";

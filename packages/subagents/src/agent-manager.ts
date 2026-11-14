@@ -216,6 +216,8 @@ export interface EvictedNote {
   error?: string;
   /** Set when a saved session exists but its name now belongs to another agent, so it was not kept reopenable. */
   nameTaken?: string;
+  /** The session file of a reopenable conversation whose tombstone the per-session bound dropped. */
+  tombstoneBoundSession?: string;
 }
 
 /**
@@ -243,7 +245,9 @@ export function capRetained(text: string, transcript: string | undefined): strin
 
 /** The result or error an evicted agent left, or undefined when none was kept. */
 export function describeEvictedResult(note: EvictedNote): string | undefined {
-  return note.status === "error" ? (note.error === undefined ? undefined : `Error: ${note.error}`) : note.result?.trim() || undefined;
+  const text = note.status === "error" ? undefined : note.result?.trim();
+  if (text) return text;
+  return note.error === undefined ? undefined : `Error: ${note.error}`;
 }
 
 /** The text a tool returns for an id whose record was evicted. */
@@ -2236,6 +2240,8 @@ export class AgentManager {
       for (const [handle, oldest] of this.tombstones) {
         this.unindexTombstone(oldest);
         this.tombstones.delete(handle);
+        const note = this.evictedNotes.get(oldest.id);
+        if (note) note.tombstoneBoundSession = oldest.sessionFile;
         break;
       }
     }

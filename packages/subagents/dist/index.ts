@@ -152,7 +152,7 @@ import {
   toReportedUsage,
   withLeadingFlag,
   writeInitialEntry
-} from "./chunks/chunk-BSQIGY72.ts";
+} from "./chunks/chunk-YM2ACXNT.ts";
 
 // src/index.ts
 import { existsSync as existsSync7, mkdirSync as mkdirSync4, readFileSync as readFileSync7, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "node:fs";
@@ -4133,7 +4133,7 @@ var WorkflowDialog = class {
 
 // src/ui/workflow-menu.ts
 async function showWorkflowDialog(ctx, task, deps) {
-  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-C2KH53LN.ts");
+  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-VZUAASTI.ts");
   let overlay;
   await ctx.ui.custom(
     (tui, theme, _keybindings, done) => new WorkflowDialog(
@@ -7104,7 +7104,7 @@ Full transcript available at: ${record.outputFile}` : "";
   }, (note) => {
     pi.sendMessage({
       customType: "subagent-reaped",
-      content: `${describeEvicted(note)}. Its result was never read and its record is gone, but get_subagent_result still returns its result (capped); reopening it with steer_subagent or Agent resume is optional and needs its session to be saved.`,
+      content: describeEvictedResult(note) === void 0 ? `${describeEvicted(note)}. Its result was never read and its record is gone; it left no result text. Reopen it with steer_subagent or Agent resume if its session is still saved.` : `${describeEvicted(note)}. Its result was never read and its record is gone, but get_subagent_result still returns its result (capped); reopening it with steer_subagent or Agent resume is optional and needs its session to be saved.`,
       display: true
     }, { deliverAs: "nextTurn" });
   });
@@ -8147,7 +8147,7 @@ Terse command-style prompts produce shallow, generic work.
           const entry = manager.tombstoneById(latest);
           if (!entry) {
             const note = manager.getEvictedNote(latest);
-            const gone = note?.fromSavedSession ? "only historical metadata is available; reopen the recorded session manually." : note?.nameTaken ? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.` : "no saved session is left to reopen.";
+            const gone = note?.fromSavedSession ? "only historical metadata is available; reopen the recorded session manually." : note?.tombstoneBoundSession ? `dropped by the per-session tombstone bound; reopen ${note.tombstoneBoundSession} manually.` : note?.nameTaken ? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.` : "no saved session is left to reopen.";
             const why = note ? `Cannot resume agent "${latest}": ${gone}
 ${describeEvicted(note)}` : agentNotFound(latest);
             return textResult(`${continued}${why}`);

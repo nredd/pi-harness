@@ -1,4 +1,4 @@
-/** Manager callbacks, resumed-turn ownership and bounded eviction through public APIs. */
+/** Manager callbacks, resumed-turn ownership and eviction through public APIs. */
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -304,7 +304,7 @@ describe("workflow host lifecycle", () => {
   });
 });
 
-describe("bounded eviction records", () => {
+describe("eviction records", () => {
   it("retains every evicted id for the session, past the old 500 cap", async () => {
     const f = managerWithClock();
     const ids: string[] = [];

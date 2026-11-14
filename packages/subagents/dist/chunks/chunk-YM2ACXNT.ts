@@ -3983,7 +3983,9 @@ function capRetained(text, transcript) {
 [truncated ${text.length - cut} chars${where}]`);
 }
 function describeEvictedResult(note) {
-  return note.status === "error" ? note.error === void 0 ? void 0 : `Error: ${note.error}` : note.result?.trim() || void 0;
+  const text = note.status === "error" ? void 0 : note.result?.trim();
+  if (text) return text;
+  return note.error === void 0 ? void 0 : `Error: ${note.error}`;
 }
 function describeEvicted(note) {
   const where = note.transcript ? `; transcript: ${note.transcript}` : "";
@@ -5275,6 +5277,8 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
       for (const [handle, oldest] of this.tombstones) {
         this.unindexTombstone(oldest);
         this.tombstones.delete(handle);
+        const note = this.evictedNotes.get(oldest.id);
+        if (note) note.tombstoneBoundSession = oldest.sessionFile;
         break;
       }
     }
@@ -6793,4 +6797,4 @@ export {
   RESULT_MAX_CHARS,
   ConversationViewer
 };
-//# sourceMappingURL=chunk-BSQIGY72.ts.map
+//# sourceMappingURL=chunk-YM2ACXNT.ts.map

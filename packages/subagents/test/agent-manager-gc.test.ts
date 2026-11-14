@@ -823,11 +823,14 @@ describe("AgentManager — tombstones outliving the GC", () => {
   it("bounds tombstones per session, evicting the oldest and its index entries", async () => {
     manager = new AgentManager();
     const mk = (i: number) => ({ id: `id${i}`, handle: `h${i}`, alias: `a${i}`, type: "Explore", description: "d", sessionFile: "/s", completedAt: i }) as any;
+    for (const id of ["id0", "id5"]) manager.rememberEvicted({ id, type: "Explore", description: "d", status: "completed", evictedAfterMin: 0 });
     for (let i = 0; i < MAX_TOMBSTONES + 3; i++) manager.rememberTombstone(mk(i));
     expect(manager.listTombstones()).toHaveLength(MAX_TOMBSTONES);
     expect(manager.tombstoneById("id0")).toBeUndefined();
     expect(manager.resolveMention("a2")).toBeUndefined();
     expect(manager.resolveMention("h3")?.kind).toBe("tombstone");
+    expect(manager.getEvictedNote("id0")?.tombstoneBoundSession).toBe("/s");
+    expect(manager.getEvictedNote("id5")?.tombstoneBoundSession).toBeUndefined();
     expect(manager.resolveMention(`a${MAX_TOMBSTONES + 2}`)?.kind).toBe("tombstone");
   });
 
