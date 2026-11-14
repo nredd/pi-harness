@@ -66,7 +66,7 @@ it("#330: a fresh stopped child retains its output across a fresh parent activat
   expect(recovered).toContain("last recorded status: stopped, recovered from saved parent session");
   expect(recovered).toContain(`transcript: ${output}`);
   expect(recovered).toContain("SYNTHETIC PROGRESS 330"); // the saved result text comes back with the branch (#372)
-  reopened.setResponses([calls({ name: "get_subagent_result", args: { agent_id: "synthetic-empty" } }), answer("LOOKED UP EMPTY")]);
+  reopened.setResponses([toolCalls({ name: "get_subagent_result", args: { agent_id: "synthetic-empty" } }), answer("LOOKED UP EMPTY")]);
   await reopened.session.prompt("lookup empty");
   expect(outcomes(reopened, "get_subagent_result").at(-1)?.text).toMatch(/^Agent "synthetic-empty" \(no result\) last recorded status: completed, recovered from saved parent session[^\n]*$/);
   expect(readFileSync(output, "utf8")).toBe(persisted);

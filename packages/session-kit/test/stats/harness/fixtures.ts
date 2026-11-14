@@ -40,7 +40,7 @@ export function claudeRow({
 		sessionId,
 		requestId,
 		timestamp: ts,
-		cwd: `/Users/${CANARY}/work`,
+		cwd: `/Users/<user>/${CANARY}/work`,
 		gitBranch: `${CANARY}-branch`,
 		isSidechain,
 		message: {
@@ -75,7 +75,7 @@ export const codexMeta = (id = "thread-1", extra: Record<string, unknown> = {}):
 	type: "session_meta",
 	payload: {
 		id,
-		cwd: `/Users/${CANARY}/repo`,
+		cwd: `/Users/<user>/${CANARY}/repo`,
 		model_provider: "openai",
 		creator_account_id: `${CANARY}-account`,
 		base_instructions: { text: CANARY },
@@ -86,7 +86,7 @@ export const codexMeta = (id = "thread-1", extra: Record<string, unknown> = {}):
 export const codexContext = (turn = "turn-1", model = "gpt-6.1-sol"): Record<string, unknown> => ({
 	timestamp: "2026-10-02T10:00:01.000Z",
 	type: "turn_context",
-	payload: { turn_id: turn, cwd: `/Users/${CANARY}/repo`, model },
+	payload: { turn_id: turn, cwd: `/Users/<user>/${CANARY}/repo`, model },
 });
 
 export const codexRecord = ({

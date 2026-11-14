@@ -538,10 +538,13 @@ describe("actual portable bundled CLI", () => {
 		expect(run(artifact, ["unknown"]).status).toBe(1);
 	});
 	it("build is byte reproducible and contains only Node builtin imports", () => {
-		const before = readFileSync(resolve("dist/pi-stats-export.mjs"), "utf8");
-		const result = spawnSync("npm", ["run", "build:stats-export"], { cwd: resolve("."), encoding: "utf8" });
-		expect(result.status, result.stderr).toBe(0);
-		expect(readFileSync(resolve("dist/pi-stats-export.mjs"), "utf8")).toBe(before);
+		const build = () => {
+			const result = spawnSync("npm", ["run", "build"], { cwd: resolve("."), encoding: "utf8" });
+			expect(result.status, result.stderr).toBe(0);
+			return readFileSync(resolve("dist/pi-stats-export.mjs"), "utf8");
+		};
+		const before = build();
+		expect(build()).toBe(before);
 		expect(before).not.toContain("@earendil");
 		expect(before).not.toContain("node_modules");
 	});

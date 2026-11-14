@@ -373,7 +373,7 @@ it("does not promise a readable result when the reaped agent kept only blank tex
     fixture = new ScenarioSession({ notificationResultChars: 0 });
     fixture.physical("kid", "child", [answer("   ")]);
     const h = await fixture.start();
-    h.setResponses([calls(spawn("blank")), answer("SPAWNED"), answer("NOTICE SEEN")]);
+    h.setResponses([toolCalls(spawn("blank")), answer("SPAWNED"), answer("NOTICE SEEN")]);
     const completed = fixture.completion();
     await h.session.prompt("go");
     const id = agentId(h);

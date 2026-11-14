@@ -5,11 +5,10 @@ import type { ExtensionContext, ExtensionFactory, ModelRuntime } from "@earendil
 import {
 	createTestUiContext,
 	type FauxProviderRegistration,
-	type Harness,
-	type HarnessOptions,
 	registerFauxProvider,
 } from "@earendil-works/pi-coding-agent/testing";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
+import type { Harness, HarnessOptions } from "@nredd/pi-test-lib/harness";
 import { createSessionKit } from "../../packages/session-kit/src/index.ts";
 import { configFor } from "../../packages/session-kit/test/fixtures/session.ts";
 import type { Profile } from "../../packages/subscription-router/src/config.ts";

@@ -6,8 +6,9 @@
 import { join } from "node:path";
 import type { Model, TranscriptContext } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/compat";
-import { fauxAssistantMessage, type Harness } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
 import { toolCall } from "@nredd/pi-test-lib/faux";
+import type { Harness } from "@nredd/pi-test-lib/harness";
 import { afterEach, expect, it, vi } from "vitest";
 import { jsonFile } from "./agents-support.ts";
 import { isolateResearchPackages, isolateStackHome, loadThirdParty, startStack } from "./support.ts";

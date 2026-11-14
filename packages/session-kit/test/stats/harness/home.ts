@@ -50,7 +50,7 @@ export function seedHarnessHome(home: string): { claude: string; codex: string; 
 			"ses_1",
 			null,
 			`${CANARY} title`,
-			`/Users/${CANARY}`,
+			`/Users/<user>/${CANARY}`,
 			OPENCODE_MS,
 			OPENCODE_MS,
 		);
