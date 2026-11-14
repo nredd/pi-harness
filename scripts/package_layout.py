@@ -67,7 +67,7 @@ LOGGER = logging.getLogger(__name__)
 ALLOWLIST = "scripts/package_layout.json"
 PUBLISH_ROOT = "packages"
 # Same `package.json` script and config rules as a package, none of the publish rules.
-SHARED_PACKAGES = ("integration/inprocess",)
+SHARED_PACKAGES = ("integration/inprocess", "tests/lib")
 
 REQUIRED_FILES = (
     "package.json",
@@ -132,6 +132,9 @@ BINARY_MAGICS = (
     b"\xce\xfa\xed\xfe",
     b"\xcf\xfa\xed\xfe",
     b"\xca\xfe\xba\xbe",
+    b"\xca\xfe\xba\xbf",
+    b"\xbe\xba\xfe\xca",
+    b"\xbf\xba\xfe\xca",
 )
 SHELL_INTERPRETERS = frozenset({"sh", "bash", "zsh", "fish", "dash", "ksh", "pwsh", "powershell"})
 ENV_OPTIONS_WITH_ARGUMENT = frozenset({"-u", "--unset", "-C", "--chdir"})
@@ -234,10 +237,10 @@ def tree_rule(path: str) -> str | None:
         str | None: A rule name, or None when the file belongs in `tests/`.
     """
     parts = path.split("/")[1:]
-    if SNAPSHOT_DIR in parts[:-1]:
-        return None
     if len(parts) > 1 and parts[0] in TEST_SUPPORT_DIRS:
         return "test-support-dir"
+    if SNAPSHOT_DIR in parts[:-1]:
+        return None
     name = parts[-1]
     if name.endswith(".bench.ts"):
         return None if len(parts) == 1 else "test-content"

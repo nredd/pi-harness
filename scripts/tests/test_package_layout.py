@@ -101,7 +101,14 @@ def repo(tmp_path: Path) -> Path:
     git(tmp_path, "config", "user.name", "t")
     git(tmp_path, "config", "commit.gpgsign", "false")
     write_tree(tmp_path, {f"{PACKAGE}/{path}": text for path, text in CLEAN.items()})
-    write_tree(tmp_path, {package_layout.ALLOWLIST: "[]\n", f"{SHARED}/index.ts": "export {};\n"})
+    write_tree(
+        tmp_path,
+        {
+            package_layout.ALLOWLIST: "[]\n",
+            f"{SHARED}/index.ts": "export {};\n",
+            "tests/lib/index.ts": "export {};\n",
+        },
+    )
     return tmp_path
 
 
@@ -406,6 +413,9 @@ def write_bytes(repo: Path, path: str, content: bytes) -> None:
         b"\xcf\xfa\xed\xfe",
         b"\xca\xfe\xba\xbe",
         b"\xfe\xed\xfa\xcf",
+        b"\xca\xfe\xba\xbf",
+        b"\xbe\xba\xfe\xca",
+        b"\xbf\xba\xfe\xca",
         b"MZ" + b"\x00" * 58 + b"\x40\x00\x00\x00" + b"PE\x00\x00",
     ],
 )
@@ -782,12 +792,12 @@ def test_configured_shared_path_without_tracked_files_is_a_hard_error(
         None: Assertions verify the exit status.
     """
     assert package_layout.run(repo, None, lambda _line: None) == 0
-    monkeypatch.setattr(package_layout, "SHARED_PACKAGES", (SHARED, "tests/lib"))
-    with pytest.raises(ValueError, match="tests/lib"):
+    monkeypatch.setattr(package_layout, "SHARED_PACKAGES", (SHARED, "tests/lib", "tests/other"))
+    with pytest.raises(ValueError, match="tests/other"):
         package_layout.find_violations(repo)
     assert package_layout.run(repo, None, lambda _line: None) == 2
-    write_tree(repo, {"tests/lib/index.ts": "export {};\n", "tests/lib/biome.json": "{}\n"})
-    assert lines(repo) == ["tests/lib: biome.json: biome-config"]
+    write_tree(repo, {"tests/other/index.ts": "export {};\n", "tests/other/biome.json": "{}\n"})
+    assert lines(repo) == ["tests/other: biome.json: biome-config"]
     git(repo, "rm", "-q", "-r", "-f", SHARED)
     assert package_layout.run(repo, None, lambda _line: None) == 2
 
@@ -1242,3 +1252,30 @@ def test_real_violation_lines_follow_the_documented_shape() -> None:
             "tracked-binary",
             "tracked-dist",
         }
+
+
+def test_tests_lib_is_a_shared_package_checked_for_script_names(repo: Path) -> None:
+    """Check `tests/lib` with the shared rules, since it exists on main.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    assert "tests/lib" in package_layout.SHARED_PACKAGES
+    write_tree(repo, {"tests/lib/package.json": json.dumps({"scripts": {"postinstall": "x"}})})
+    assert lines(repo) == ["tests/lib: package.json: script-name postinstall"]
+
+
+def test_snapshot_dir_does_not_exempt_a_banned_support_dir(repo: Path) -> None:
+    """Keep the `__snapshots__` exemption from bypassing the `support/` ban.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    write_tree(repo, {f"{PACKAGE}/tests/support/__snapshots__/h.ts": "x\n"})
+    assert lines(repo) == [f"{PACKAGE}: tests/support/__snapshots__/h.ts: test-support-dir"]
