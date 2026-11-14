@@ -411,6 +411,9 @@ test("a path input's temporary identity never captures another input's registrat
 			{ name: "1", factory: provider("from-named") },
 			{ name: "1\0path", factory: provider("from-nul") },
 			{ factory: provider("from-second-path"), path: "/pkg/b.ts" },
+			// A final path equal to another input's temporary name must not merge their registrations.
+			{ factory: provider("from-lookalike"), path: "<inline:6\0path>" },
+			{ factory: provider("from-seventh"), path: "/pkg/c.ts" },
 		],
 		"/",
 	);
@@ -419,6 +422,8 @@ test("a path input's temporary identity never captures another input's registrat
 		["from-named", "<inline:1>"],
 		["from-nul", "<inline:1\0path>"],
 		["from-second-path", "/pkg/b.ts"],
+		["from-lookalike", "<inline:6\0path>"],
+		["from-seventh", "/pkg/c.ts"],
 	]);
 });
 

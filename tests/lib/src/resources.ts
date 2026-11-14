@@ -8,7 +8,6 @@ import {
 	DefaultResourceLoader,
 	type Extension,
 	type ExtensionFactory,
-	type ExtensionRuntime,
 	type InlineExtension,
 	type LoadExtensionsResult,
 	type ResourceLoader,
@@ -39,13 +38,15 @@ function resolve(input: TestExtensionInput, index: number): Resolved {
 	return { name: path === undefined ? String(index + 1) : `${index + 1}\0path`, factory: input.factory, path };
 }
 
+/** A registration queued during loading, owned by the extension whose path it names. */
+type Pending = { extensionPath: string };
+
 /**
  * Report `extension` as loaded from `path`, as the fork's loader did, including everything its
  * factory already registered under the inline name. MCP server ownership is the one thing not
  * repointed: the registry is not editable through the public types.
  */
-function repoint(extension: Extension, runtime: ExtensionRuntime, path: string): void {
-	const previous = extension.path;
+function repoint(extension: Extension, pending: Pending[], path: string): void {
 	const sourceInfo = createSyntheticSourceInfo(path, { source: "local", baseDir: dirname(path) });
 	extension.path = path;
 	extension.resolvedPath = path;
@@ -53,13 +54,7 @@ function repoint(extension: Extension, runtime: ExtensionRuntime, path: string):
 	for (const tool of extension.tools.values()) tool.sourceInfo = sourceInfo;
 	for (const command of extension.commands.values()) command.sourceInfo = sourceInfo;
 	for (const owned of [...extension.flags.values(), ...extension.shortcuts.values()]) owned.extensionPath = path;
-	for (const pending of [
-		...runtime.pendingProviderRegistrations,
-		...runtime.pendingNativeProviderRegistrations,
-		...runtime.pendingVirtualModelRegistrations,
-	]) {
-		if (pending.extensionPath === previous) pending.extensionPath = path;
-	}
+	for (const registration of pending) registration.extensionPath = path;
 }
 
 /**
@@ -113,9 +108,19 @@ export async function createTestExtensionsResult(
 		await loader.reload();
 		if (thrown.length > 0) throw thrown[0];
 		const result = loader.getExtensions();
-		for (const [index, extension] of result.extensions.entries()) {
+		// Snapshot ownership first: a final path may equal another input's temporary name.
+		const queued: Pending[] = [
+			...result.runtime.pendingProviderRegistrations,
+			...result.runtime.pendingNativeProviderRegistrations,
+			...result.runtime.pendingVirtualModelRegistrations,
+		];
+		const owned = result.extensions.map((extension) => ({
+			extension,
+			pending: queued.filter((entry) => entry.extensionPath === extension.path),
+		}));
+		for (const [index, { extension, pending }] of owned.entries()) {
 			const path = resolved[index]?.path;
-			if (path !== undefined) repoint(extension, result.runtime, path);
+			if (path !== undefined) repoint(extension, pending, path);
 		}
 		return result;
 	} finally {
