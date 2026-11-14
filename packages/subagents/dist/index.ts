@@ -5839,7 +5839,7 @@ async function runWorkflow(options) {
             if (info.modelName !== void 0) base.model = info.modelName;
             if (info.modelId !== void 0) base.modelId = info.modelId;
             if (info.thinking !== void 0) base.thinking = info.thinking;
-            if (info.requestedThinking !== void 0) base.requestedThinking = info.requestedThinking;
+            if ("requestedThinking" in info) base.requestedThinking = info.requestedThinking;
             if (info.modelNote !== void 0) base.modelNote = info.modelNote;
             if (info.modelTier !== void 0) base.modelTier = info.modelTier;
             if (!inflight.has(agentId)) return;
@@ -6228,10 +6228,17 @@ function createWorkflowHost(deps) {
       let gate;
       let spawnedId;
       let sessionReady = false;
+      let lastReported;
+      const report = (info) => {
+        const key = JSON.stringify(info);
+        if (key === lastReported) return;
+        lastReported = key;
+        request.onResolved?.(info);
+      };
       const reportResolved = () => {
         if (!sessionReady || spawnedId === void 0) return;
         const info = resolvedInfo(manager.getRecord(spawnedId));
-        if (info !== void 0) request.onResolved?.(info);
+        if (info !== void 0) report(info);
       };
       const command = request.gate;
       const onBeforeWorktreeCleanup = command === void 0 ? void 0 : async (worktreePath) => {
@@ -6281,6 +6288,10 @@ function createWorkflowHost(deps) {
               sessionReady = true;
               reportResolved();
             },
+            // The manager relabels the record from each answered message (the
+            // physical model and the level it really ran at) before this fires,
+            // so the card follows routing as it happens, not only at settle.
+            onAssistantUsage: reportResolved,
             ...request.schema !== void 0 ? { structuredOutput: request.schema } : {},
             ...request.isolation !== void 0 ? { isolation: request.isolation } : {},
             ...deps.signal !== void 0 ? { signal: deps.signal } : {},
@@ -6294,10 +6305,8 @@ function createWorkflowHost(deps) {
             reportResolved();
           }
         );
-        if (record.modelTier) {
-          const finalInfo = resolvedInfo(record);
-          if (finalInfo) request.onResolved?.(finalInfo);
-        }
+        const finalInfo = resolvedInfo(record);
+        if (finalInfo) report(finalInfo);
         return { ...toSpawnResult(record), ...gate !== void 0 ? { gate } : {} };
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
