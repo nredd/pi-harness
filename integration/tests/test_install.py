@@ -283,12 +283,18 @@ def owned_integrity(snapshot: StackSnapshot) -> dict[str, str]:
 class Harness:
     """One isolated HOME plus a fake core whose `pi` records every install."""
 
-    def __init__(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        platform_model: tuple[str, str] = ("Linux", "x86_64"),
+    ) -> None:
         """Prepare the HOME and logical platform, then patch the network seams.
 
         Parameters:
             tmp_path (Path): private directory.
             monkeypatch (pytest.MonkeyPatch): module patcher.
+            platform_model (tuple[str, str]): logical `(system, machine)` for the fixture.
 
         Returns:
             None: isolated HOME and network seams are ready.
@@ -296,7 +302,7 @@ class Harness:
         # Transaction fixtures use synthetic release/runtime graphs, not the pytest host's
         # binaries. Model one supported platform explicitly; platform-contract tests override
         # these seams separately and still exercise the production admission guard.
-        model_supported_platform(monkeypatch)
+        model_supported_platform(monkeypatch, *platform_model)
         self.home = (tmp_path / "home").resolve()
         self.home.mkdir()
         self.log = tmp_path / "pi-calls.jsonl"
@@ -524,6 +530,16 @@ def test_transaction_harness_models_supported_platform_on_arm_host(
     assert install.platform.system() == "Linux"
     assert install.platform.machine() == "x86_64"
     assert install.is_wsl() is False
+    assert harness.run() == ExitCode.OK
+
+
+@pytest.mark.parametrize(("system", "machine"), [("Darwin", "arm64"), ("Linux", "x86_64")])
+def test_transaction_harness_models_each_supported_platform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, system: str, machine: str
+) -> None:
+    """The transaction fixture keeps darwin-arm64 and linux-x64 covered, not only one model."""
+    harness = Harness(tmp_path, monkeypatch, (system, machine))
+    assert (install.platform.system(), install.platform.machine()) == (system, machine)
     assert harness.run() == ExitCode.OK
 
 
