@@ -20,14 +20,14 @@ vi.mock("../src/output-file.js", async () => {
   return {
     ...actual,
     createOutputFilePath: vi.fn(() => "/tmp/fake-subagent.output"),
-    writeInitialEntry: vi.fn(),
+    writeInitialEntry: vi.fn((path: string) => path),
     ensureOutputFile: vi.fn(),
     streamToOutputFile: vi.fn(() => vi.fn()),
   };
 });
 
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
-import { ensureOutputFile, streamToOutputFile, writeInitialEntry } from "../src/output-file.js";
+import { createOutputFilePath, ensureOutputFile, streamToOutputFile, writeInitialEntry } from "../src/output-file.js";
 import subagentsExtension from "./helpers/home-extension.js";
 
 function makePi() {
@@ -203,6 +203,32 @@ describe("Agent tool — background resume wiring", () => {
     expect(streamToOutputFile).toHaveBeenCalledTimes(1);
     expect(vi.mocked(streamToOutputFile).mock.calls[0][4]).toBe(3);
 
+    await lifecycle.get("session_shutdown")?.({}, ctx);
+  });
+
+  // A transcript relocated by an ENOSPC/EROFS retry lives outside the current root; resume must
+  // keep appending there rather than start an empty file elsewhere (#900).
+  it("resumes onto the record's existing transcript even when it lives outside the current root", async () => {
+    const { pi, tools, lifecycle } = makePi();
+    subagentsExtension(pi);
+    const ctx = makeCtx(cwd);
+    const relocated = join(cwd, "relocated.output");
+    writeFileSync(relocated, "earlier turns\n");
+    vi.mocked(createOutputFilePath).mockReturnValueOnce(relocated);
+    const id = await spawnSettled(tools, ctx);
+    vi.mocked(createOutputFilePath).mockClear();
+    vi.mocked(ensureOutputFile).mockClear();
+
+    await tools.get("Agent").execute(
+      "resume-call",
+      { prompt: "keep going", description: "Keep going", subagent_type: "general-purpose", resume: id, run_in_background: true },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    expect(createOutputFilePath).not.toHaveBeenCalled();
+    expect(ensureOutputFile).toHaveBeenCalledWith(relocated);
     await lifecycle.get("session_shutdown")?.({}, ctx);
   });
 

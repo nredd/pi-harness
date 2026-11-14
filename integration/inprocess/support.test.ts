@@ -53,7 +53,8 @@ it("keeps spawn-time HOME while isolating each Pi and XDG fixture", async () => 
 		expect(process.env.HOME).toBe(launchHome);
 		expect(process.env.PI_CODING_AGENT_DIR).toBe(join(fixture.root, "agent"));
 		expect(process.env.XDG_CONFIG_HOME).toBe(join(fixture.root, ".config"));
-		// Subagent task dirs follow os.tmpdir(), so they land in the fixture and go with it (#678).
+		// Subagent task dirs follow XDG_STATE_HOME (os.tmpdir() as fallback), so they land in the fixture and go with it (#678, #900).
+		expect(process.env.XDG_STATE_HOME).toBe(join(fixture.root, "state"));
 		expect(tmpdir()).toBe(join(fixture.root, "tmp"));
 		expect(existsSync(tmpdir())).toBe(true);
 		expect(fixture.root).not.toBe(home.root);

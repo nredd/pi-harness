@@ -54,7 +54,7 @@ import { admitModelSelection, describeSelection, modelIdentityNote, modelSelecti
 import { configuredTierNames, tierDisclosure } from "./model-tiers.js";
 import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.js";
 import { clipNotice, DEFAULT_NOTIFICATION_RESULT_CHARS, fairShares, GROUP_PREVIEW_RESULT_CHARS, NOTIFICATION_RESULT_CHARS_CEILING, type NoticeFrame, type NoticeParts, PREVIEW_RESULT_CHARS, previewResult, renderNotice } from "./notification-result.js";
-import { appendModelFallbackEntry, appendModelTierEntry, createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
+import { appendModelFallbackEntry, appendModelTierEntry, createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, retainReferencedTranscripts, schedulePrune, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
 import { getPackageAgentsGate, getPackageWorkflowsGate, invalidatePackageCache, isProjectTrusted, packageNameForPath, setPackageAgentsGate, setPackageWorkflowsGate, setProjectTrusted } from "./package-resources.js";
 import { answerPlanGateQueries, PLAN_PARK_REFUSAL, PLAN_SCHEDULE_REFUSAL, planningNow, planSteerBlocked, planSteerRefusal } from "./plan-mode-children.js";
 import { getBudgetPolicy, setBudgetPolicy } from "./process-budget.js";
@@ -1220,6 +1220,13 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     for (const note of saved.values()) {
       if (!resolveAgentRef(note.id) && !manager.getEvictedNote(note.id)) manager.rememberEvicted(note);
     }
+    // Retention (#900), off the startup path: whatever this session's records and
+    // eviction notes (or its fork source) still point at is touched and exempted.
+    const referenced = [...[...saved.values()].map((n) => n.transcript), ...manager.listAgents().map((r) => r.outputFile)]
+      .filter((path): path is string => path !== undefined);
+    schedulePrune({
+      keepSessionIds: [ctx.sessionManager.getSessionId(), ...retainReferencedTranscripts(referenced, ctx.sessionManager?.getHeader?.()?.parentSession)],
+    });
     announceSurvivors();
     unwatchAnnounce ??= pi.events.on("subagents:announce_survivors", announceSurvivors);
     // Orphans from the previous instance are already registered; show them now.
@@ -1955,7 +1962,11 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     // path is deterministic per agent+session, so writing an initial entry
     // would truncate the previous run's turns (see ensureOutputFile).
     if (opts.outputTranscript) {
-      existing.outputFile = createOutputFilePath(ctx.cwd, id, ctx.sessionManager.getSessionId());
+      // Keep a transcript that still exists where it is: an ENOSPC/EROFS retry (#900) may have
+      // relocated it under the temp root, and a recomputed path would start an empty file elsewhere.
+      if (!existing.outputFile || !existsSync(existing.outputFile)) {
+        existing.outputFile = createOutputFilePath(ctx.cwd, id, ctx.sessionManager.getSessionId());
+      }
       ensureOutputFile(existing.outputFile);
       // A fresh transcript for a later resume must still say what the agent ran on.
       if (existing.modelFallback) appendModelFallbackEntry(existing.outputFile, id, existing.modelFallback);
@@ -2500,7 +2511,7 @@ Terse command-style prompts produce shallow, generic work.
       const attachTranscript = (rec: AgentRecord | undefined, agentId: string): void => {
         if (!rec || !outputTranscript) return;
         rec.outputFile = createOutputFilePath(ctx.cwd, agentId, ctx.sessionManager.getSessionId());
-        writeInitialEntry(rec.outputFile, agentId, params.prompt, ctx.cwd);
+        rec.outputFile = writeInitialEntry(rec.outputFile, agentId, params.prompt, ctx.cwd);
       };
 
       // Unconditional, not "only when it differs from the parent": a thinking
