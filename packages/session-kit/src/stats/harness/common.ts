@@ -3,7 +3,8 @@
  *
  * Readers only ever project counts, timestamps, model/provider names and hashed IDs. Anything else
  * a transcript carries (text, tool arguments, cwd, titles, directory names) is never copied out of
- * the parsed row, so it cannot reach a cache, a snapshot or a diagnostic.
+ * the parsed row, so it cannot reach a cache, a snapshot or a diagnostic. The projection is counts,
+ * timestamps, raw provider/model names, Codex quota labels and percentages, and hashed IDs.
  */
 
 import { type Call, type Harness, opaqueId, type Session } from "../load.ts";
@@ -75,6 +76,9 @@ export function counters(values: readonly unknown[]): number[] | null {
 	}
 	return out;
 }
+
+/** Whether any counter field exists at all; none means the row's schema drifted, not that usage was zero. */
+export const anyPresent = (values: readonly unknown[]): boolean => values.some((v) => v !== undefined && v !== null);
 
 /** Router-style window name for a span in seconds. */
 export const windowName = (seconds: number): string =>

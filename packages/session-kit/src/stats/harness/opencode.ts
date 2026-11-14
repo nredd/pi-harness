@@ -8,8 +8,11 @@
  * IDs, timestamps and model names, so message and part bodies, titles and directories never leave
  * SQLite. `auth.json` is never opened. OpenCode keeps no quota.
  *
- * A message whose `data` is not valid JSON is skipped. Every assistant row is read on each load (one row of counters each, no cache: the main file's mtime
- * does not track WAL writes). Very large databases cost proportionally.
+ * A message whose `data` is not valid JSON is skipped.
+ *
+ * Unlike the JSONL readers this takes the database file (not a root) and keeps no cache: the main
+ * file's mtime does not track WAL writes, so every assistant row (one row of counters each) is read
+ * on each load. Very large databases cost proportionally.
  *
  * `tokens.reasoning` is reported separately from `tokens.output`, so it is billed output here.
  */

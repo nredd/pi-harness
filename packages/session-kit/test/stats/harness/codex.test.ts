@@ -130,10 +130,13 @@ describe("readCodex", () => {
 			"truncated {",
 			{ type: "token_usage_record", payload: { response_id: "r5", turn_id: "turn-1" } },
 			{ type: "turn_context" },
+			// zero usage is silent; a record with no usage counters at all is drift
+			codexRecord({ turn: "turn-1", response: "zero", usage: { input_tokens: 0, output_tokens: 0 } }),
+			codexRecord({ turn: "turn-1", response: "drift", usage: { total: 5 } }),
 		]);
 		const scan = await readCodex(root, {});
 		expect(scan.calls.map((c) => c.input)).toEqual([5]);
-		expect(scan.problems).toEqual(["codex: ! 7 unreadable lines"]);
+		expect(scan.problems).toEqual(["codex: ! 8 unreadable lines"]);
 	});
 
 	it("drops usage that has no session_meta", async () => {

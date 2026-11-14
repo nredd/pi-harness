@@ -17,7 +17,9 @@
 
 import { join } from "node:path";
 import {
+	anyPresent,
 	asRecord,
+	asRecordOf,
 	counters,
 	entryHash,
 	type HarnessScan,
@@ -52,7 +54,7 @@ class CodexParser extends RowParser {
 	}
 
 	protected row(row: Record<string, unknown>, ts: number): void {
-		const payload = asRecord(row.payload) ?? {};
+		const payload = asRecordOf(row.payload);
 		if (row.type === "session_meta") {
 			// The first meta names the thread; a replayed parent meta later in a fork must not rewrite it.
 			const id = str(payload.id);
@@ -74,18 +76,20 @@ class CodexParser extends RowParser {
 	private usage(payload: Record<string, unknown>, ts: number): void {
 		this.records++;
 		const usage = asRecord(payload.usage);
-		const counts = counters([
+		const raw = [
 			usage?.input_tokens,
 			usage?.cached_input_tokens,
 			usage?.cache_write_input_tokens,
 			usage?.output_tokens,
-		]);
+		];
+		const counts = counters(raw);
 		const [responseId, turnId] = [str(payload.response_id), str(payload.turn_id)];
-		if (!counts || !responseId || !turnId || ts <= 0) {
+		if (!counts || !anyPresent(raw) || !responseId || !turnId || ts <= 0) {
 			this.out.badLines++;
 			return;
 		}
 		const [input, cached, written, output] = counts as [number, number, number, number];
+		if (input + output === 0) return;
 		this.seen(ts);
 		this.pending.push({
 			ms: ts,

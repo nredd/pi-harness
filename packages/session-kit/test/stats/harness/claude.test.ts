@@ -108,6 +108,8 @@ describe("readClaude", () => {
 			claudeRow({ id: "b3", requestId: "", usage: { input_tokens: 1 } }),
 			claudeRow({ id: "b4", requestId: "b4", sessionId: "" }),
 			claudeRow({ id: "b5", requestId: "b5", ts: "garbage" }),
+			// renamed counter fields: schema drift, not zero usage
+			claudeRow({ id: "b6", requestId: "b6", usage: { inputTokens: 5 } }),
 			'{"type":"assistant", broken',
 			'["assistant"]',
 			"truncated {",
@@ -117,7 +119,7 @@ describe("readClaude", () => {
 		const scan = await readClaude(root, {});
 		expect(scan.calls.map((c) => c.output)).toEqual([7]);
 		expect(scan.calls[0]).toMatchObject({ input: 0, cacheRead: 0, cacheWrite: 0 });
-		expect(scan.problems).toEqual(["claude: ! 8 unreadable lines"]);
+		expect(scan.problems).toEqual(["claude: ! 9 unreadable lines"]);
 	});
 
 	it("never lets project directory names, content, cwd, branch or native IDs reach the scan or its cache", async () => {

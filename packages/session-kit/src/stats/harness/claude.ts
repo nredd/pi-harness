@@ -11,7 +11,7 @@
  */
 
 import { basename, join, sep } from "node:path";
-import { asRecord, counters, entryHash, type HarnessScan, sessionHash, str } from "./common.ts";
+import { anyPresent, asRecord, counters, entryHash, type HarnessScan, sessionHash, str } from "./common.ts";
 import { type HarnessCache, RowParser, scanJsonl } from "./scan.ts";
 
 /** Responses made by the CLI itself, not a model. */
@@ -36,13 +36,14 @@ class ClaudeParser extends RowParser {
 		const usage = asRecord(message?.usage);
 		const model = str(message?.model);
 		if (!usage || !model || model === SYNTHETIC_MODEL) return;
-		const counts = counters([
+		const raw = [
 			usage.input_tokens,
 			usage.output_tokens,
 			usage.cache_read_input_tokens,
 			usage.cache_creation_input_tokens,
-		]);
-		if (!counts) {
+		];
+		const counts = counters(raw);
+		if (!counts || !anyPresent(raw)) {
 			this.out.badLines++;
 			return;
 		}

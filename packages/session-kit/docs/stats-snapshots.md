@@ -157,7 +157,8 @@ directory names live there as keys); its values and every reader result carry no
   projects only counters, IDs, timestamps and model names. `reasoning` tokens count as output. The
   schema follows third-party readers; a mismatch or missing `node:sqlite` is a diagnostic.
 - Entry IDs hash `<harness>:<native id>`, session IDs `<harness>-session:<native id>`. Only counts,
-  timestamps, raw provider/model names and hashes are projected: no text, tool arguments, cwd,
+  timestamps, raw provider/model names, Codex quota labels (`limit_id`, `plan_type`, percentages,
+  reset times) and hashes are projected: no text, tool arguments, cwd,
   titles, directory names, account IDs or credentials. `history.jsonl`, `auth.json`, credential
   files and Codex SQLite databases are never opened. Diagnostics are counts only.
 - Cost is recorded as 0 for Claude and Codex until snapshot v2 can carry `null`.
