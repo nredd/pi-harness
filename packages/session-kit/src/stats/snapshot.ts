@@ -453,11 +453,14 @@ export type HarnessReport = Partial<
 
 /**
  * Diagnostics that mean the history may be incomplete, so publishing the scan would replace a good snapshot
- * with a worse one: a cache that did not persist, transcript files that could not be read, or an OpenCode
- * database that was busy or unreadable (it has no cache to fall back on).
+ * with a worse one: a cache that did not persist, transcript files or a data root that could not be read,
+ * or an OpenCode database that was busy or unreadable (it has no cache to fall back on).
  */
 const fatalProblem = (p: string): boolean =>
-	p.endsWith(": cache not written") || p.includes(" unreadable files") || p.startsWith("opencode: database ");
+	p.endsWith(": cache not written") ||
+	p.includes(" unreadable files") ||
+	p.endsWith(": root unreadable") ||
+	p.startsWith("opencode: database ");
 
 const exists = (path: string): Promise<boolean> =>
 	lstat(path).then(

@@ -25,7 +25,7 @@ import { pathToFileURL } from "node:url";
 import { timeOf } from "../jsonl.ts";
 import { type Call, mergeSessionMetadata, type Session } from "../load.ts";
 import { nth } from "../nth.ts";
-import { counters, emptyScan, entryHash, type HarnessScan, sessionHash, str, unreadable } from "./common.ts";
+import { counters, emptyScan, entryHash, type HarnessScan, probe, sessionHash, str, unreadable } from "./common.ts";
 
 /** The subset of `node:sqlite` this reader uses, so tests can inject a stand-in. */
 export interface SqliteModule {
@@ -89,7 +89,12 @@ async function isCheckpointedWal(path: string): Promise<boolean> {
 
 /** Read every assistant message from the OpenCode database at `dbPath`. Missing file is "not installed". */
 export async function readOpenCode(dbPath: string, load: LoadSqlite = loadNodeSqlite): Promise<HarnessScan> {
-	if (!(await isFile(dbPath))) return emptyScan(false);
+	const dbState = await probe(dbPath, "file");
+	if (dbState !== "found")
+		return emptyScan(
+			dbState === "unreadable",
+			dbState === "unreadable" ? ["opencode: database inaccessible, skipped"] : [],
+		);
 	let rows: Record<string, unknown>[];
 	try {
 		const { DatabaseSync } = await load();

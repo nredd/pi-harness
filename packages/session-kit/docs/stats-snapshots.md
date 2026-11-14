@@ -46,7 +46,8 @@ CLI results:
   A missing harness is `found: false`, not an error. `problems` are counts only (e.g.
   `claude: ! 2 unreadable lines`, Codex turns skipped for lack of per-turn records).
   A harness whose scan is incomplete (unreadable transcript files, a harness cache that cannot be
-  written, an OpenCode database that is busy or unreadable) is `failed: "kept"`: what this machine
+  written, a data root or OpenCode database that exists but cannot be reached, an OpenCode database
+  that is busy or unreadable) is `failed: "kept"`: what this machine
   last published for that harness (events, sessions, quota) is carried into the new snapshot
   unchanged, a diagnostic goes to stderr, and the export still succeeds, so one flaky harness
   cannot stop the pi export or replace good history with a partial scan. With nothing published

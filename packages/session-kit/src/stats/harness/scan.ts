@@ -17,6 +17,7 @@ import {
 	emptyScan,
 	type HarnessScan,
 	mergeQuota,
+	probe,
 	type QuotaObservation,
 	unreadable,
 } from "./common.ts";
@@ -170,14 +171,6 @@ export function isParsedFile(value: unknown): value is ParsedFile {
 	);
 }
 
-async function isDirectory(path: string): Promise<boolean> {
-	try {
-		return (await stat(path)).isDirectory();
-	} catch {
-		return false;
-	}
-}
-
 export interface ScanOptions {
 	harness: Harness;
 	/** Data root: its absence means "not installed". Cached files under it are reported. */
@@ -193,7 +186,9 @@ export interface ScanOptions {
 export async function scanJsonl(options: ScanOptions): Promise<HarnessScan> {
 	const { harness, cache } = options;
 	const root = resolve(options.root);
-	if (!(await isDirectory(root))) return emptyScan(false);
+	const rootState = await probe(root, "directory");
+	if (rootState !== "found")
+		return emptyScan(rootState === "unreadable", rootState === "unreadable" ? [`${harness}: root unreadable`] : []);
 	const files = cache[harness] ?? {};
 	cache[harness] = files;
 	let errors = 0;

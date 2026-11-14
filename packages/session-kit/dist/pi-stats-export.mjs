@@ -360,6 +360,7 @@ import { link, lstat, mkdir as mkdir3, readdir as readdir2, readFile as readFile
 import { dirname as dirname3, join as join7 } from "node:path";
 
 // src/stats/harness/common.ts
+import { stat as stat2 } from "node:fs/promises";
 var isExpired = (q, now) => q.resetAt <= now;
 function mergeQuota(readings, now) {
   const best = /* @__PURE__ */ new Map();
@@ -372,6 +373,14 @@ function mergeQuota(readings, now) {
   return [...best.values()];
 }
 var accountHash = (salt, harness, native) => opaqueId(`${salt}\0${harness}-account\0${native}`);
+async function probe(path, kind) {
+  try {
+    const info = await stat2(path);
+    return (kind === "file" ? info.isFile() : info.isDirectory()) ? "found" : "absent";
+  } catch (error) {
+    return ["ENOENT", "ENOTDIR"].includes(String(error.code)) ? "absent" : "unreadable";
+  }
+}
 var emptyScan = (found, problems = []) => ({
   found,
   calls: [],
@@ -408,7 +417,7 @@ import { dirname as dirname2, join as join6 } from "node:path";
 import { basename, join as join4, sep as sep3 } from "node:path";
 
 // src/stats/harness/scan.ts
-import { stat as stat2 } from "node:fs/promises";
+import { stat as stat3 } from "node:fs/promises";
 import { resolve as resolve2, sep as sep2 } from "node:path";
 var RowParser = class {
   out;
@@ -481,17 +490,12 @@ function isParsedFile(value) {
     (c) => Array.isArray(c) && c.length === 7 && c.slice(0, 6).every(isNum) && (c[6] === null || isNum(c[6])) && Number.isInteger(c[1]) && nth(c, 1) >= 0 && nth(c, 1) < models.length
   ) && Array.isArray(entryIds) && entryIds.length === calls.length && entryIds.every(isHash) && Array.isArray(quota) && quota.every(isQuota);
 }
-async function isDirectory(path) {
-  try {
-    return (await stat2(path)).isDirectory();
-  } catch {
-    return false;
-  }
-}
 async function scanJsonl(options) {
   const { harness, cache } = options;
   const root = resolve2(options.root);
-  if (!await isDirectory(root)) return emptyScan(false);
+  const rootState = await probe(root, "directory");
+  if (rootState !== "found")
+    return emptyScan(rootState === "unreadable", rootState === "unreadable" ? [`${harness}: root unreadable`] : []);
   const files = cache[harness] ?? {};
   cache[harness] = files;
   let errors = 0;
@@ -500,7 +504,7 @@ async function scanJsonl(options) {
     errors += listed.errors;
     for (const path of listed.paths) {
       try {
-        const s = await stat2(path);
+        const s = await stat3(path);
         const hit = files[path];
         if (hit && hit.size === s.size && hit.mtimeMs === s.mtimeMs) continue;
         const parser = options.parser(path, s.size, s.mtimeMs);
@@ -747,7 +751,7 @@ async function readCodex(root, cache, salt) {
 }
 
 // src/stats/harness/opencode.ts
-import { open, stat as stat3 } from "node:fs/promises";
+import { open, stat as stat4 } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 var loadNodeSqlite = () => import("node:sqlite");
 var QUERY = `
@@ -762,7 +766,7 @@ FROM message m LEFT JOIN session s ON s.id = m.session_id
 WHERE CASE WHEN json_valid(m.data) THEN json_extract(m.data, '$.role') = 'assistant' ELSE 0 END`;
 async function isFile(path) {
   try {
-    return (await stat3(path)).isFile();
+    return (await stat4(path)).isFile();
   } catch {
     return false;
   }
@@ -785,7 +789,12 @@ async function isCheckpointedWal(path) {
   }
 }
 async function readOpenCode(dbPath, load = loadNodeSqlite) {
-  if (!await isFile(dbPath)) return emptyScan(false);
+  const dbState = await probe(dbPath, "file");
+  if (dbState !== "found")
+    return emptyScan(
+      dbState === "unreadable",
+      dbState === "unreadable" ? ["opencode: database inaccessible, skipped"] : []
+    );
   let rows;
   try {
     const { DatabaseSync } = await load();
@@ -1129,7 +1138,7 @@ function validateSnapshot(snapshot) {
   for (const s of snapshot.shards)
     for (const e of s.events) if (!metadata.has(e.sessionId)) throw new Error("Missing session metadata");
 }
-var fatalProblem = (p) => p.endsWith(": cache not written") || p.includes(" unreadable files") || p.startsWith("opencode: database ");
+var fatalProblem = (p) => p.endsWith(": cache not written") || p.includes(" unreadable files") || p.endsWith(": root unreadable") || p.startsWith("opencode: database ");
 var exists = (path) => lstat(path).then(
   () => true,
   () => false

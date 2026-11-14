@@ -673,6 +673,30 @@ describe("exportStats with harnesses", () => {
 			expect(published(result.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness))).toEqual(["pi"]);
 		});
 
+		it.skipIf(process.getuid?.() === 0)(
+			"keeps what was published when a harness root becomes unreachable, not mistaken for uninstalled",
+			async () => {
+				seedPi();
+				const lockedHome = join(dir, "locked-home");
+				const roots = seedHarnessHome(lockedHome);
+				const { chmodSync } = await import("node:fs");
+				const first = await exportStats(agent, repo, undefined, { harnesses: ["pi", "claude"], roots, home });
+				expect(published(first.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness))).toContain("claude");
+				chmodSync(lockedHome, 0o000);
+				try {
+					const second = await exportStats(agent, repo, undefined, { harnesses: ["pi", "claude"], roots, home });
+					expect(second.harnesses?.claude).toEqual({
+						found: true,
+						problems: ["claude: root unreadable"],
+						failed: "kept",
+					});
+					expect(published(second.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness))).toContain("claude");
+				} finally {
+					chmodSync(lockedHome, 0o700);
+				}
+			},
+		);
+
 		it("reads a pi-era (v1) previous snapshot as holding no other harness", async () => {
 			seedPi();
 			const roots = seedHarnessHome(home);

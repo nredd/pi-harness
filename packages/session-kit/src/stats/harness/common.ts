@@ -7,6 +7,7 @@
  * timestamps, raw provider/model names, Codex quota labels and percentages, and hashed IDs.
  */
 
+import { stat } from "node:fs/promises";
 import { type Call, type Harness, opaqueId, type Session } from "../load.ts";
 
 /** One subscription quota reading, as persisted by the harness that observed it. */
@@ -64,6 +65,20 @@ export function mergeQuota(readings: Iterable<QuotaObservation>, now: number): Q
 /** Account discriminator: salted, so the ID cannot be recovered or matched across machines. */
 export const accountHash = (salt: string, harness: Harness, native: string): string =>
 	opaqueId(`${salt}\0${harness}-account\0${native}`);
+
+/**
+ * Whether a harness's data root is there. Only "does not exist" is `absent` (not installed, silent): any
+ * other failure (permissions on a parent, I/O) is `unreadable`, so an installed harness that cannot be
+ * reached is never mistaken for an uninstalled one.
+ */
+export async function probe(path: string, kind: "file" | "directory"): Promise<"found" | "absent" | "unreadable"> {
+	try {
+		const info = await stat(path);
+		return (kind === "file" ? info.isFile() : info.isDirectory()) ? "found" : "absent";
+	} catch (error) {
+		return ["ENOENT", "ENOTDIR"].includes(String((error as NodeJS.ErrnoException).code)) ? "absent" : "unreadable";
+	}
+}
 
 /** What one reader found. Diagnostics are counts only: no paths, names or row content. */
 export interface HarnessScan {
