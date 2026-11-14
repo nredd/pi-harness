@@ -110,6 +110,8 @@
   "packages/dev-tools: .gitignore: dotfile",
   "packages/dev-tools: CHANGELOG.md: missing-file",
   "packages/dev-tools: biome.json: biome-config",
+  "packages/dev-tools: test/fixtures/ssh/fake-scp: shell-script",
+  "packages/dev-tools: test/fixtures/ssh/fake-ssh: shell-script",
   "packages/dev-tools: test: top-level-entry",
   "packages/plan-mode: .gitignore: dotfile",
   "packages/plan-mode: AGENTS.md: markdown",

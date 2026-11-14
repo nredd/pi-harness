@@ -31,7 +31,10 @@ a file there cannot add a new one; their lines stay in the allowlist as debt.
 
 No committed binaries: anything tracked under `prebuilt/` and any tracked file with an ELF, Mach-O or PE
 magic number is `tracked-binary`. No standalone `.sh`, `.ps1`, `.bash` or `.cmd` outside `tests/fixtures/`
-(`shell-script`); use a Makefile target. `test:upstream-sync` and `test:sync-reverts` are denied names.
+(`shell-script`), nor an extensionless file whose `#!` line names sh, bash, zsh, fish, dash, ksh, pwsh or
+powershell (directly or via `env`); use a Makefile target.
+A PE is found by seeking to `e_lfanew` (at most 64 KiB).
+`test:upstream-sync` and `test:sync-reverts` are denied names.
 Import scanning is textual (`from`, `import`, `require`), so `new URL("../x", import.meta.url)` and
 `vi.mock("../x")` are not seen.
 
@@ -130,6 +133,8 @@ BINARY_MAGICS = (
     b"\xcf\xfa\xed\xfe",
     b"\xca\xfe\xba\xbe",
 )
+SHELL_INTERPRETERS = frozenset({"sh", "bash", "zsh", "fish", "dash", "ksh", "pwsh", "powershell"})
+PE_MAX_OFFSET = 64 * 1024
 BIOME_CONFIGS = frozenset({"biome.json", "biome.jsonc"})
 # `test:<signal>` is one name per extra `coverage/policy.json` signal, so any `test:` suffix is accepted.
 DENIED_SCRIPT_NAMES = frozenset({"test:upstream-sync", "test:sync-reverts"})
@@ -328,22 +333,60 @@ def read_magic(package: str, path: str, root: Path) -> bytes:
         return b""
 
 
-def is_binary(head: bytes) -> bool:
-    """Return whether leading bytes are an ELF, Mach-O (thin or fat) or PE image.
+def has_pe_signature(head: bytes, source: Path) -> bool:
+    """Return whether `PE\\0\\0` sits at the `e_lfanew` offset of an `MZ` header.
 
     Parameters:
-        head (bytes): Up to 256 leading bytes of a file.
+        head (bytes): Leading bytes of the file.
+        source (Path): The file, reopened to seek to `e_lfanew`.
+
+    Returns:
+        bool: False for a short header, an offset beyond `PE_MAX_OFFSET`, an unreadable file, or no signature.
+    """
+    if not head.startswith(b"MZ") or len(head) < 64:
+        return False
+    offset = int.from_bytes(head[60:64], "little")
+    if offset > PE_MAX_OFFSET:
+        return False
+    try:
+        with source.open("rb") as handle:
+            handle.seek(offset)
+            return handle.read(4) == b"PE\x00\x00"
+    except OSError as e:
+        LOGGER.debug(f"Cannot read '{source}' at e_lfanew for the binary check: {e}")
+        return False
+
+
+def is_binary(head: bytes, source: Path) -> bool:
+    """Return whether a file is an ELF, Mach-O (thin or fat) or PE image.
+
+    Parameters:
+        head (bytes): Up to 256 leading bytes of the file.
+        source (Path): The file, for the PE signature at `e_lfanew`.
 
     Returns:
         bool: Whether a native-executable magic number matches; a PE needs `PE\\0\\0` at `e_lfanew`, so a text
             file that merely starts with `MZ` does not count. Java `.class` files share the fat Mach-O magic.
     """
-    if head.startswith(BINARY_MAGICS):
-        return True
-    if head.startswith(b"MZ") and len(head) >= 64:
-        offset = int.from_bytes(head[60:64], "little")
-        return head[offset : offset + 4] == b"PE\x00\x00"
-    return False
+    return head.startswith(BINARY_MAGICS) or has_pe_signature(head, source)
+
+
+def is_shell_shebang(head: bytes) -> bool:
+    """Return whether a file starts with a shebang naming a shell, directly or via `env`.
+
+    Parameters:
+        head (bytes): Up to 256 leading bytes of the file.
+
+    Returns:
+        bool: Whether the first line is `#!` followed by an `sh`, `bash`, `zsh`, `fish`, `dash`, `ksh`,
+            `pwsh` or `powershell` interpreter, optionally after `env` and its flags.
+    """
+    if not head.startswith(b"#!"):
+        return False
+    words = head[2:].split(b"\n", maxsplit=1)[0].decode("utf-8", errors="replace").split()
+    if words and posixpath.basename(words[0]) == "env":
+        words = [word for word in words[1:] if not word.startswith("-")]
+    return bool(words) and posixpath.basename(words[0]) in SHELL_INTERPRETERS
 
 
 def content_violations(package: str, path: str, root: Path) -> Iterable[Violation]:
@@ -362,11 +405,12 @@ def content_violations(package: str, path: str, root: Path) -> Iterable[Violatio
     """
     top = path.split("/", maxsplit=1)[0]
     suffix = posixpath.splitext(path)[1].lower()
-    if top == "prebuilt" or is_binary(read_magic(package, path, root)):
+    head = read_magic(package, path, root)
+    if top == "prebuilt" or is_binary(head, root / package / path):
         yield Violation(package, path, "tracked-binary")
     if is_fixture(path):
         return
-    if suffix in SHELL_SUFFIXES:
+    if suffix in SHELL_SUFFIXES or is_shell_shebang(head):
         yield Violation(package, path, "shell-script")
     if ".test." in path and misnamed_test(posixpath.basename(path)):
         yield Violation(package, path, "test-name")

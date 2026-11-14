@@ -418,12 +418,95 @@ def test_tracked_binaries_are_found_by_content(repo: Path, magic: bytes) -> None
     """
     write_bytes(repo, f"{PACKAGE}/src/area/tool", magic + b"\x00" * 8)
     write_bytes(repo, f"{PACKAGE}/lib/tool", magic + b"\x00" * 8)
-    write_bytes(repo, f"{PACKAGE}/src/area/text", b"#!/bin/sh\n")
+    write_bytes(repo, f"{PACKAGE}/src/area/text", b"#!/usr/bin/env node\n")
     assert lines(repo) == [
         "packages/x: lib/tool: tracked-binary",
         "packages/x: lib: top-level-entry",
         "packages/x: src/area/tool: tracked-binary",
     ]
+
+
+def pe_image(e_lfanew: int, signature: bytes = b"PE\x00\x00") -> bytes:
+    """Build a minimal PE image with its signature at `e_lfanew`.
+
+    Parameters:
+        e_lfanew (int): Offset stored at 0x3c and used for the signature.
+        signature (bytes): Four bytes written at that offset.
+
+    Returns:
+        bytes: The image bytes.
+    """
+    head = bytearray(b"MZ" + b"\x00" * 62)
+    head[60:64] = e_lfanew.to_bytes(4, "little")
+    return bytes(head).ljust(e_lfanew, b"\x00") + signature + b"\x00" * 8
+
+
+@pytest.mark.parametrize("e_lfanew", [0x40, 0x100, 0x118, 0xFFF0])
+def test_pe_images_are_found_wherever_e_lfanew_points(repo: Path, e_lfanew: int) -> None:
+    """Seek to `e_lfanew` instead of relying on the first 256 bytes.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        e_lfanew (int): Signature offset.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    write_bytes(repo, f"{PACKAGE}/src/area/tool", pe_image(e_lfanew))
+    assert lines(repo) == ["packages/x: src/area/tool: tracked-binary"]
+
+
+@pytest.mark.parametrize("e_lfanew", [0x10000, 0x7FFFFFFF, 0xFFFFFFFF, 0x200])
+def test_out_of_bounds_e_lfanew_is_not_a_binary(repo: Path, e_lfanew: int) -> None:
+    """Ignore an `e_lfanew` beyond the bound or past the end of the file without crashing.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        e_lfanew (int): Offset with no signature at it.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    head = bytearray(b"MZ" + b"\x00" * 62)
+    head[60:64] = e_lfanew.to_bytes(4, "little")
+    write_bytes(repo, f"{PACKAGE}/src/area/notes", bytes(head))
+    assert lines(repo) == []
+
+
+@pytest.mark.parametrize(
+    ("first", "flagged"),
+    [
+        (b"#!/bin/sh\n", True),
+        (b"#!/bin/bash -e\n", True),
+        (b"#!/usr/bin/env zsh\n", True),
+        (b"#!/usr/bin/env -S fish -l\n", True),
+        (b"#! /bin/dash\n", True),
+        (b"#!/usr/bin/ksh\n", True),
+        (b"#!/usr/bin/env pwsh\n", True),
+        (b"#!/usr/local/bin/powershell\n", True),
+        (b"#!/usr/bin/env node\n", False),
+        (b"#!/usr/bin/env python3\n", False),
+        (b"#!/bin/shell-like\n", False),
+        (b"#!\n", False),
+        (b"#!/usr/bin/env\n", False),
+        (b"echo hi\n#!/bin/sh\n", False),
+    ],
+)
+def test_extensionless_shebang_shell_scripts_fail(repo: Path, first: bytes, flagged: bool) -> None:
+    """Flag a shell shebang by content, not by extension.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        first (bytes): File contents.
+        flagged (bool): Whether `shell-script` is expected.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    write_bytes(repo, f"{PACKAGE}/src/area/tool", first)
+    write_bytes(repo, f"{PACKAGE}/tests/fixtures/tool", first)
+    expected = ["packages/x: src/area/tool: shell-script"] if flagged else []
+    assert lines(repo) == expected
 
 
 @pytest.mark.parametrize(
@@ -539,6 +622,20 @@ def test_unreadable_and_deleted_sources_are_skipped(repo: Path, monkeypatch: pyt
 
     monkeypatch.setattr(Path, "read_text", read_text)
     assert lines(repo) == []
+
+
+def test_pe_reopen_failure_is_not_a_binary(tmp_path: Path) -> None:
+    """Treat a file that vanishes between the head read and the `e_lfanew` seek as not a PE.
+
+    Parameters:
+        tmp_path (Path): Scratch directory.
+
+    Returns:
+        None: Assertions verify the result.
+    """
+    head = pe_image(0x100)[:256]
+    assert package_layout.has_pe_signature(head, tmp_path / "gone") is False
+    assert package_layout.is_binary(head, tmp_path / "gone") is False
 
 
 def test_package_json_script_names(repo: Path) -> None:
