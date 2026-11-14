@@ -55,7 +55,8 @@ export interface FileStats {
 }
 
 /** Which tool wrote the usage. Part of the event identity, so pi and Codex rows can never collide. */
-export type Harness = "pi" | "claude" | "codex" | "opencode";
+export const HARNESSES = ["pi", "claude", "codex", "opencode"] as const;
+export type Harness = (typeof HARNESSES)[number];
 
 export interface Call {
 	harness: Harness;
@@ -70,7 +71,8 @@ export interface Call {
 	output: number;
 	cacheRead: number;
 	cacheWrite: number;
-	cost: number;
+	/** Recorded notional cost; `null` when the harness records none (Claude, Codex), which is not 0. */
+	cost: number | null;
 }
 
 export interface Session {
@@ -326,9 +328,9 @@ async function writeCache(path: string, files: Record<string, FileStats>): Promi
 	await rename(tmp, path);
 }
 
-/** Old caches deduplicated this tuple, without cost or entry identity. */
+/** Old caches deduplicated this tuple, without cost or entry identity; `harness` keeps tools apart. */
 export function legacyKey(c: Call): string {
-	return JSON.stringify([c.provider, c.model, c.ms, c.input, c.output, c.cacheRead, c.cacheWrite]);
+	return JSON.stringify([c.harness, c.provider, c.model, c.ms, c.input, c.output, c.cacheRead, c.cacheWrite]);
 }
 
 /** Prefer identified records over their legacy copies, but retain distinct preserved IDs. */
