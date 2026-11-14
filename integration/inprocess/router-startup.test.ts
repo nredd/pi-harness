@@ -14,6 +14,7 @@
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
 	createAgentSessionFromServices,
 	createAgentSessionServices,
@@ -48,6 +49,8 @@ interface Started {
 	session: Awaited<ReturnType<typeof createAgentSessionFromServices>>["session"];
 	modelFallbackMessage: string | undefined;
 	runtime: ModelRuntime;
+	/** Paths of the extensions core actually loaded (inline factories have none). */
+	extensionPaths: string[];
 	selected(): Selection;
 }
 
@@ -55,8 +58,10 @@ interface LaunchOptions {
 	/**
 	 * `"missing"` loads no router package; `"disabled"` writes an invalid config file; a chain
 	 * overrides the default profile's chain. All are written to `subscription-router.json`.
+	 * `"package"` loads the real package through the global `packages` setting (production
+	 * path, default export); `"package-disabled"` adds the real `-src/index.ts` extension filter.
 	 */
-	router?: Profile["chain"] | "missing" | "disabled";
+	router?: Profile["chain"] | "missing" | "disabled" | "package" | "package-disabled";
 	/** Whether project settings are trusted; default `true`. */
 	projectTrusted?: boolean;
 	/** Global `settings.json` keys, merged over the fixture defaults. */
@@ -151,8 +156,14 @@ describe("router/default startup, quota dispatch and resume", () => {
 				JSON.stringify({ profiles: { default: { name: "Router default", strategy: "ordered", chain: entries } } }),
 			);
 		}
+		const viaPackage = options.router === "package" || options.router === "package-disabled";
+		if (viaPackage) {
+			const source = fileURLToPath(new URL("../../packages/subscription-router", import.meta.url));
+			const entry = options.router === "package-disabled" ? { source, extensions: ["-src/index.ts"] } : { source };
+			writeFileSync(settingsPath(), JSON.stringify({ ...savedSettings(), packages: [entry] }));
+		}
 		const factories: ExtensionFactory[] =
-			options.router === "missing"
+			options.router === "missing" || viaPackage
 				? []
 				: [
 						createSubscriptionRouter({
@@ -187,6 +198,7 @@ describe("router/default startup, quota dispatch and resume", () => {
 			session,
 			modelFallbackMessage,
 			runtime,
+			extensionPaths: services.resourceLoader.getExtensions().extensions.map((e) => e.path),
 			selected: () => `${session.model?.provider}/${session.model?.id}`,
 		};
 		started.push(result);
@@ -283,10 +295,14 @@ describe("router/default startup, quota dispatch and resume", () => {
 		});
 
 		it("does not refresh for a warm cache during startup or routing", async () => {
-			const s = await launch();
-			respondOn(0, "warm ok");
+			// A collected provider, so warm-up *would* read if the cache were cold (see the cold test).
+			const collected: Profile["chain"] = [{ provider: "anthropic", id: "faux-warm" }];
+			physical.push(...stack.registerPhysical(collected, 0));
+			const s = await launch({ router: collected });
+			respondOn(2, "warm ok");
 			await s.session.prompt("go");
 			expect(stack.usage.reads).toEqual([]);
+			expect(answered(s)).toEqual(["anthropic/faux-warm"]);
 			expect(s.selected()).toBe(VIRTUAL);
 		});
 
@@ -324,12 +340,14 @@ describe("router/default startup, quota dispatch and resume", () => {
 	});
 
 	describe("router unavailable", () => {
-		for (const mode of ["missing", "disabled"] as const) {
+		for (const mode of ["missing", "disabled", "package-disabled"] as const) {
 			it(`falls back to a physical model and keeps the saved default when the router is ${mode}`, async () => {
 				const s = await launch({ router: mode });
 				expect(s.selected()).not.toBe(VIRTUAL);
 				expect(s.session.model?.provider).toMatch(/^spike-/);
 				expect(s.session.model?.api).not.toBe("pi-virtual");
+				// The `-src/index.ts` filter must remove the extension core would otherwise load.
+				if (mode === "package-disabled") expect(s.extensionPaths).toEqual([]);
 				if (mode === "disabled")
 					expect(stack.notifications.join("\n")).toContain("subscription-router: ignoring config");
 				// The fallback is never written back over the user's `router/default`.
@@ -341,16 +359,26 @@ describe("router/default startup, quota dispatch and resume", () => {
 			});
 		}
 
+		it("loads the real router package through the packages setting", async () => {
+			const s = await launch({ router: "package" });
+			// Loaded extension, not the selection: see the note in the disabled case below.
+			expect(s.extensionPaths.map((path) => path.replaceAll("\\", "/"))).toEqual([
+				expect.stringMatching(/packages\/subscription-router\/src\/index\.ts$/),
+			]);
+		});
+
 		it("restores the physical model a router/default session last used when the router is gone", async () => {
+			// Routed to the second model, so first-available (spike-a) differs from restore-from-session.
+			stack.usage.set("spike-a", 100);
 			const first = await launch();
-			respondOn(0, "on a");
+			respondOn(1, "on b");
 			await first.session.prompt("one");
 			const file = first.session.sessionManager.getSessionFile() as string;
 			await close(first);
 
 			const resumed = await launch({ router: "missing", sessionManager: SessionManager.open(file, sessionDir) });
 			// Core drops an unregistered virtual selection and keeps the physical model that answered last.
-			expect(resumed.selected()).toBe("spike-a/sonnet-a");
+			expect(resumed.selected()).toBe("spike-b/terra-b");
 			expect(savedSettings()).toMatchObject({ defaultProvider: "router", defaultModel: "default" });
 		});
 	});
@@ -389,6 +417,12 @@ describe("router/default startup, quota dispatch and resume", () => {
 			await persisted("spike-b/terra-b");
 			const resumed = await launch({ sessionManager: SessionManager.continueRecent(cwd, sessionDir) });
 			expect(resumed.selected()).toBe("spike-b/terra-b");
+		});
+
+		it("continues the most recent session on router/default when that was the last selection", async () => {
+			await persisted();
+			const resumed = await launch({ sessionManager: SessionManager.continueRecent(cwd, sessionDir) });
+			expect(resumed.selected()).toBe(VIRTUAL);
 		});
 
 		it("restores router/default when it was the last selection, then keeps routing", async () => {
