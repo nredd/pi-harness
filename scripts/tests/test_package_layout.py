@@ -669,7 +669,8 @@ def test_package_json_script_names(repo: Path) -> None:
         None: Assertions verify the report.
     """
     scripts = dict.fromkeys(
-        ("lint", "format", "typecheck", "test", "test:bun", "check", "build", "prepack", "pretest", "bench"), "x"
+        ("lint", "format", "typecheck", "test", "test:bun", "check", "build", "prepack", "pretest", "bench"),
+        "x",
     )
     scripts |= {"test:dist": "x", "lint:fix": "x", "postinstall": "x"}
     manifest = {

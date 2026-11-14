@@ -143,7 +143,7 @@ DENIED_SCRIPT_NAMES = frozenset({"test:upstream-sync", "test:sync-reverts"})
 SCRIPT_NAMES = frozenset(
     {"lint", "format", "typecheck", "test", "test:bun", "check", "build", "prepack", "pretest", "bench"}
 )
-# Root home of the shared toolchain (`runtime-builder.mjs`, `run-vitest.ts`, #889/#890): importing it is not an escape.
+# Root home of the shared toolchain (`runtime-builder.mjs`, `run-vitest.ts`): importing it is no escape.
 SHARED_TOOLCHAIN = "scripts"
 CODE_SUFFIXES = frozenset({".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"})
 STRAY_TEST_SUFFIXES = (".test.mjs", ".test.js", ".test.mts", ".test.cts", ".test.tsx", ".test.jsx")
