@@ -53,8 +53,7 @@ class Pool:
 # Hosted macOS jobs wait a median 215 s but p90 ~1 h under load (156 jobs, 2026-11-13), while `pi-macos` jobs
 # started in a median 30 s (p90 141 s). A busy `pi-macos` therefore queues up to four cells beyond its slots
 # (about two cell-lengths of wait, ~15 min, still far under hosted's tail), and one run takes at most three,
-# so the other heavy
-# cells still use the hosted runners. Hosted Linux queues for seconds, so Linux stays strict.
+# so the other heavy cells still use the hosted runners. Hosted Linux queues for seconds, so Linux stays strict.
 POOLS = {
     "pi-linux": Pool("pi-linux", "PI_LINUX_HEARTBEAT", 2),
     "pi-macos": Pool("pi-macos", "PI_MACOS_HEARTBEAT", 2, queue_depth=4, run_cap=3),
@@ -76,7 +75,7 @@ CellKey = tuple[str, str, str]
 # to a pool: a self-hosted job pays ~25 s to clone and boot a VM, so short jobs lose, and an unlisted cell
 # is not known to pass on the pool images.
 CELL_SECONDS: dict[CellKey, int] = {
-    # Every macOS cell that does real work. Hosted macOS is the longest pole (median queue ~10 min), and
+    # Every macOS cell that does real work. Hosted macOS is the longest pole (p90 queue ~1 h), and
     # `pi-macos` has two slots plus a queue (`POOLS`), and one PR takes at most `run_cap` of them.
     ("owned", "macos-14", "subagents"): 680,
     ("owned", "macos-14", "computer-use"): 360,

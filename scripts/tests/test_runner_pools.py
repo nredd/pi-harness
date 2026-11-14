@@ -127,11 +127,10 @@ def test_a_busy_macos_pool_queues_a_bounded_run_share(beat: str, capacity: int |
 def test_a_run_splits_macos_cells_across_both_pools(beat: str) -> None:
     """Idle or busy, a run puts `run_cap` cells on `pi-macos` and keeps the rest hosted."""
     capacity = runner_pools.pool_capacity({"pi-macos": beat}, NOW, trusted=True)
-    shards = {
-        k: v for k, v in plan_runners(full_plan(capacity=capacity)).items() if k[:2] == ("owned", "macos-14")
-    }
-    contracts = plan_runners(full_plan(capacity=capacity))[("contracts", "macos-14", "")]
-    runners = [*shards.values(), contracts or "xcode-27"]
+    planned = plan_runners(full_plan(capacity=capacity))
+    shards = [v for k, v in planned.items() if k[:2] == ("owned", "macos-14")]
+    # A hosted `contracts` cell carries no runner of its own; its matrix supplies `xcode-27`.
+    runners = [*shards, planned[("contracts", "macos-14", "")] or "xcode-27"]
     assert runners.count("pi-macos") == MACOS.run_cap
     assert runners.count("xcode-27") == len(runners) - MACOS.run_cap >= 1
 
