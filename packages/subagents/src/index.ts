@@ -995,7 +995,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     // its next turn, instead of leaving `Agent not found` to be discovered by a later lookup (#330).
     pi.sendMessage({
       customType: "subagent-reaped",
-      content: `${describeEvicted(note)}. Its result was never read and its record is gone; reopen it with steer_subagent or Agent resume if its session is still saved.`,
+      content: `${describeEvicted(note)}. Its result was never read and its record is gone, but get_subagent_result still returns its result (capped); reopening it with steer_subagent or Agent resume is optional and needs its session to be saved.`,
       display: true,
     }, { deliverAs: "nextTurn" });
   });
@@ -2645,7 +2645,7 @@ Terse command-style prompts produce shallow, generic work.
         if (!existing) {
           // Evicted by the retention sweep, but a persisted conversation is
           // still on disk: reopen it, as `@handle` does.
-          const entry = manager.listTombstones().find(t => t.id === latest);
+          const entry = manager.tombstoneById(latest);
           if (!entry) {
             // Evicted with no session file left to reopen: `rememberAgents` off, or the tombstone was dropped.
             const note = manager.getEvictedNote(latest);

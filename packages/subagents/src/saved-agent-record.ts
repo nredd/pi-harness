@@ -1,5 +1,5 @@
 /** Read terminal history as lookup diagnostics, never as live agents or executable resume state. */
-import type { EvictedNote } from "./agent-manager.js";
+import { capRetained, type EvictedNote } from "./agent-manager.js";
 
 /** Validate saved custom-entry data before handing it to the bounded eviction-note index. */
 export function savedAgentNote(data: unknown): EvictedNote | undefined {
@@ -16,5 +16,7 @@ export function savedAgentNote(data: unknown): EvictedNote | undefined {
     evictedAfterMin: 0,
     fromSavedSession: true,
     ...(transcript ? { transcript } : {}),
+    ...(typeof row.result === "string" ? { result: capRetained(row.result, transcript) } : {}),
+    ...(typeof row.error === "string" ? { error: capRetained(row.error, transcript) } : {}),
   };
 }

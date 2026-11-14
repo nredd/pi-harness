@@ -25,6 +25,7 @@ import {
   bindChildResourceLoader,
   boundedWrappedRows,
   buildInvocationTags,
+  capRetained,
   checkAdmission,
   compactThinkingTag,
   configuredTierNames,
@@ -151,7 +152,7 @@ import {
   toReportedUsage,
   withLeadingFlag,
   writeInitialEntry
-} from "./chunks/chunk-6DDXJ4VG.ts";
+} from "./chunks/chunk-BSQIGY72.ts";
 
 // src/index.ts
 import { existsSync as existsSync7, mkdirSync as mkdirSync4, readFileSync as readFileSync7, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "node:fs";
@@ -840,7 +841,9 @@ function savedAgentNote(data) {
     status: row.status,
     evictedAfterMin: 0,
     fromSavedSession: true,
-    ...transcript ? { transcript } : {}
+    ...transcript ? { transcript } : {},
+    ...typeof row.result === "string" ? { result: capRetained(row.result, transcript) } : {},
+    ...typeof row.error === "string" ? { error: capRetained(row.error, transcript) } : {}
   };
 }
 
@@ -4130,7 +4133,7 @@ var WorkflowDialog = class {
 
 // src/ui/workflow-menu.ts
 async function showWorkflowDialog(ctx, task, deps) {
-  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-C7MFRBIO.ts");
+  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-C2KH53LN.ts");
   let overlay;
   await ctx.ui.custom(
     (tui, theme, _keybindings, done) => new WorkflowDialog(
@@ -7101,7 +7104,7 @@ Full transcript available at: ${record.outputFile}` : "";
   }, (note) => {
     pi.sendMessage({
       customType: "subagent-reaped",
-      content: `${describeEvicted(note)}. Its result was never read and its record is gone; reopen it with steer_subagent or Agent resume if its session is still saved.`,
+      content: `${describeEvicted(note)}. Its result was never read and its record is gone, but get_subagent_result still returns its result (capped); reopening it with steer_subagent or Agent resume is optional and needs its session to be saved.`,
       display: true
     }, { deliverAs: "nextTurn" });
   });
@@ -8141,7 +8144,7 @@ Terse command-style prompts produce shallow, generic work.
 `;
         const existing = manager.getRecord(latest);
         if (!existing) {
-          const entry = manager.listTombstones().find((t) => t.id === latest);
+          const entry = manager.tombstoneById(latest);
           if (!entry) {
             const note = manager.getEvictedNote(latest);
             const gone = note?.fromSavedSession ? "only historical metadata is available; reopen the recorded session manually." : note?.nameTaken ? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.` : "no saved session is left to reopen.";

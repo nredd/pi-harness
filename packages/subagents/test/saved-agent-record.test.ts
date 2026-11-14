@@ -1,7 +1,7 @@
 /** Saved history is diagnostic data, not a live record or a request to run a child. */
 
 import { describe, expect, it } from "vitest";
-import { describeEvicted } from "../src/agent-manager.js";
+import { describeEvicted, describeEvictedResult } from "../src/agent-manager.js";
 import { savedAgentNote } from "../src/saved-agent-record.js";
 
 const base = { id: "synthetic-child", type: "general-purpose", description: "synthetic job", status: "completed" };
@@ -28,5 +28,19 @@ describe("saved terminal lookup notes", () => {
     expect(savedAgentNote({ ...base, outputFile: false, sessionFile: "/synthetic/child.jsonl" })?.transcript).toBe("/synthetic/child.jsonl");
     expect(savedAgentNote({ ...base, sessionFile: 42 })?.transcript).toBeUndefined();
     expect(savedAgentNote({ ...base, outputFile: "" })?.transcript).toBeUndefined();
+  });
+
+  it("keeps the saved result and error, capped, so /resume or a restart still reads them (#372)", () => {
+    const done = savedAgentNote({ ...base, result: "the saved answer", outputFile: "/synthetic/child.output" });
+    expect(done?.result).toBe("the saved answer");
+    expect(describeEvictedResult(done!)).toBe("the saved answer");
+    const failed = savedAgentNote({ ...base, status: "error", error: "boom" });
+    expect(describeEvictedResult(failed!)).toBe("Error: boom");
+    const huge = savedAgentNote({ ...base, result: "x".repeat(500_000), outputFile: "/synthetic/child.output" });
+    expect(huge!.result!.length).toBeLessThan(40_000);
+    expect(huge!.result).toContain("full text in /synthetic/child.output");
+    expect(describeEvictedResult(savedAgentNote({ ...base, status: "error" })!)).toBeUndefined();
+    expect(describeEvictedResult(savedAgentNote({ ...base, result: "  " })!)).toBeUndefined();
+    expect(savedAgentNote({ ...base, result: 5, error: {} })).not.toHaveProperty("result");
   });
 });

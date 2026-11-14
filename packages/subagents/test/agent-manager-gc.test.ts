@@ -8,8 +8,10 @@
 // BEFORE `new AgentManager()` (the constructor starts the interval), and fake
 // timers are hostile to the promise-settling style of the main suite.
 
+import v8 from "node:v8";
+import vm from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AgentManager, describeEvicted, markConsumed } from "../src/agent-manager.js";
+import { AgentManager, capRetained, describeEvicted, MAX_TOMBSTONES, markConsumed } from "../src/agent-manager.js";
 
 vi.mock("../src/agent-runner.js", () => ({
   runAgent: vi.fn(),
@@ -782,6 +784,53 @@ describe("AgentManager — tombstones outliving the GC", () => {
     expect(resolved).toMatchObject({ record: { id } });
   });
 
+  it("looks names and ids up in an index, and drops a dropped tombstone's names from it", async () => {
+    manager = new AgentManager();
+    const { id } = await evictable("Explore", "indexed", "/sessions/indexed.jsonl");
+    await vi.advanceTimersByTimeAsync(TICK);
+    const entry = manager.tombstoneById(id)!;
+    expect(entry.handle).toBe("explore");
+    expect(manager.resolveMention("EXPLORE")).toMatchObject({ kind: "tombstone", entry });
+    expect(manager.resolveMention(id)).toMatchObject({ kind: "tombstone", entry });
+    manager.dropTombstone("explore");
+    expect(manager.tombstoneById(id)).toBeUndefined();
+    expect(manager.resolveMention("explore")).toBeUndefined();
+    expect(manager.resolveMention(id)).toBeUndefined();
+  });
+
+  it("holds a tombstone's alias against a second holder, but not against the same agent", async () => {
+    manager = new AgentManager();
+    const mk = (id: string, handle: string, alias?: string) => ({ id, handle, alias, type: "Explore", description: id, sessionFile: `/s/${id}.jsonl`, completedAt: 1 }) as any;
+    manager.rememberTombstone(mk("a1", "explore", "Auth-Audit"));
+    manager.rememberTombstone(mk("a2", "other", "auth-audit")); // alias taken (case-insensitive)
+    expect(manager.tombstoneById("a2")).toBeUndefined();
+    manager.rememberTombstone(mk("a1", "explore", "auth-audit")); // same agent: allowed
+    expect(manager.tombstoneById("a1")?.alias).toBe("auth-audit");
+    expect(manager.resolveMention("Auth-Audit")?.kind).toBe("tombstone");
+  });
+
+  it("keeps an id's newer tombstone indexed when its older one under another handle goes", () => {
+    manager = new AgentManager();
+    const mk = (handle: string) => ({ id: "same", handle, type: "Explore", description: "d", sessionFile: "/s", completedAt: 1 }) as any;
+    manager.rememberTombstone(mk("first"));
+    manager.rememberTombstone(mk("second"));
+    manager.dropTombstone("first");
+    manager.dropTombstone("never-existed");
+    expect(manager.tombstoneById("same")?.handle).toBe("second");
+    expect(manager.resolveMention("second")?.kind).toBe("tombstone");
+  });
+
+  it("bounds tombstones per session, evicting the oldest and its index entries", async () => {
+    manager = new AgentManager();
+    const mk = (i: number) => ({ id: `id${i}`, handle: `h${i}`, alias: `a${i}`, type: "Explore", description: "d", sessionFile: "/s", completedAt: i }) as any;
+    for (let i = 0; i < MAX_TOMBSTONES + 3; i++) manager.rememberTombstone(mk(i));
+    expect(manager.listTombstones()).toHaveLength(MAX_TOMBSTONES);
+    expect(manager.tombstoneById("id0")).toBeUndefined();
+    expect(manager.resolveMention("a2")).toBeUndefined();
+    expect(manager.resolveMention("h3")?.kind).toBe("tombstone");
+    expect(manager.resolveMention(`a${MAX_TOMBSTONES + 2}`)?.kind).toBe("tombstone");
+  });
+
   it("keeps every tombstone for the session lifetime, however many agents it spawns (#372)", async () => {
     manager = new AgentManager();
     for (let i = 0; i < 300; i++) {
@@ -1044,6 +1093,40 @@ describe("AgentManager - retained result text (#372)", () => {
     }
     // 400 agents of 200k chars each are 80M chars in; far less is retained.
     expect(bytes).toBeLessThan(400 * 40_000);
+  });
+
+  it("does not split a surrogate pair at the cut", () => {
+    const text = `${"a".repeat(31_999)}\u{1F600}${"b".repeat(100)}`;
+    const capped = capRetained(text, undefined);
+    expect(capped.startsWith("a".repeat(31_999))).toBe(true);
+    expect(capped).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/);
+    expect(capped.endsWith("\n[truncated 102 chars]")).toBe(true);
+    // A pair wholly inside the cap survives intact, and a lone surrogate is not rewritten.
+    expect(capRetained(`${"a".repeat(31_998)}\u{1F600}${"b".repeat(100)}`, undefined)).toContain("\u{1F600}");
+    expect(capRetained("x\ud800y", undefined)).toBe("x\ud800y");
+  });
+
+  it("does not keep the parent of a clipped result alive", () => {
+    const bun = (globalThis as { Bun?: { gc(sync: boolean): void } }).Bun;
+    let gc: () => void;
+    if (bun) gc = () => bun.gc(true);
+    else {
+      v8.setFlagsFromString("--expose-gc");
+      gc = vm.runInNewContext("gc") as () => void;
+    }
+    gc();
+    const before = process.memoryUsage().heapUsed;
+    const kept: string[] = [];
+    for (let i = 0; i < 40; i++) {
+      // ~5MB two-byte parents, distinct, built so V8 cannot share storage.
+      const parent = `${i}`.padEnd(5_000_000, "\u4e2d");
+      kept.push(capRetained(parent, "/t.output"));
+    }
+    gc();
+    const grown = process.memoryUsage().heapUsed - before;
+    expect(kept[39]!.length).toBeLessThan(40_000);
+    // Retaining the parents would cost 40 x 10MB; the clipped copies are ~2MB in all.
+    expect(grown).toBeLessThan(40 * 1024 * 1024);
   });
 
   it("does not keep a result past the session boundary", async () => {

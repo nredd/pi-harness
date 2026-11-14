@@ -3927,6 +3927,12 @@ function relabelFromResponse(record, message) {
   if (!physical) return;
   record.invocation ??= {};
   Object.assign(record.invocation, physical);
+  const ran = message?.thinkingLevel;
+  if (ran) {
+    const requested = record.askedThinking;
+    record.invocation.thinking = ran;
+    record.invocation.requestedThinking = requested && requested !== ran ? requested : void 0;
+  }
   if ((record.modelTier?.kind === "routed" || record.modelTier?.kind === "static") && record.modelTier.answered !== physical.modelId) {
     record.modelTier = { ...record.modelTier, answered: physical.modelId };
     if (record.outputFile) appendModelTierEntry(record.outputFile, record.id, record.modelTier);
@@ -3960,15 +3966,21 @@ function retentionMs(name, fallbackMs) {
 var MAX_SWEEP_INTERVAL_MS = 6e4;
 var MIN_SWEEP_INTERVAL_MS = 1e3;
 var MAX_RETAINED_RESULT_CHARS = 32e3;
+var MAX_TOMBSTONES = 5e3;
 function markConsumed(record, now = Date.now()) {
   record.resultConsumed = true;
   record.consumedAt = now;
 }
+function flatCopy(text) {
+  return Buffer.from(text, "utf16le").toString("utf16le");
+}
 function capRetained(text, transcript) {
-  if (text.length <= MAX_RETAINED_RESULT_CHARS) return text;
+  if (text.length <= MAX_RETAINED_RESULT_CHARS) return flatCopy(text);
+  const last = text.charCodeAt(MAX_RETAINED_RESULT_CHARS - 1);
+  const cut = last >= 55296 && last <= 56319 ? MAX_RETAINED_RESULT_CHARS - 1 : MAX_RETAINED_RESULT_CHARS;
   const where = transcript ? `; full text in ${transcript}` : "";
-  return `${text.slice(0, MAX_RETAINED_RESULT_CHARS)}
-[truncated ${text.length - MAX_RETAINED_RESULT_CHARS} chars${where}]`;
+  return flatCopy(`${text.slice(0, cut)}
+[truncated ${text.length - cut} chars${where}]`);
 }
 function describeEvictedResult(note) {
   return note.status === "error" ? note.error === void 0 ? void 0 : `Error: ${note.error}` : note.result?.trim() || void 0;
@@ -4117,6 +4129,10 @@ var AgentManager = class {
    * completed records on session start/switch.
    */
   tombstones = /* @__PURE__ */ new Map();
+  /** Lowercase handle or alias -> its tombstone, so name checks are lookups, not scans of `tombstones`. */
+  tombstonesByName = /* @__PURE__ */ new Map();
+  /** Id -> tombstone. */
+  tombstonesById = /* @__PURE__ */ new Map();
   /** Evicted records by id, oldest first (insertion order). */
   evictedNotes = /* @__PURE__ */ new Map();
   /** Evicted id -> the id its reopened conversation runs under, so the old id keeps resolving (#330). */
@@ -4613,6 +4629,7 @@ ${record.error}`);
         if (session.model) {
           record.invocation ??= {};
           const requested = record.invocation.requestedThinking ?? record.invocation.thinking;
+          record.askedThinking = requested;
           Object.assign(
             record.invocation,
             record.modelTier?.kind === "routed" && record.modelTier.admitted ? describeSelection(options.modelSelection, ctx.modelRegistry) : isVirtualModel(session.model) ? describeVirtualModel(session.model) : describeModel(session.model)
@@ -5100,10 +5117,7 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
       if (record.handle) taken.add(record.handle);
       if (record.alias) taken.add(record.alias);
     }
-    for (const entry of this.tombstones.values()) {
-      taken.add(entry.handle);
-      if (entry.alias) taken.add(entry.alias);
-    }
+    for (const name of this.tombstonesByName.keys()) taken.add(name);
     return taken;
   }
   /**
@@ -5119,12 +5133,8 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
     }
     const byId = this.agents.get(name);
     if (byId?.parentAgentId === void 0 && byId !== void 0) return { kind: "live", record: byId };
-    for (const entry of this.tombstones.values()) {
-      if (entry.handle.toLowerCase() === wanted || entry.alias?.toLowerCase() === wanted || entry.id === name) {
-        return { kind: "tombstone", entry };
-      }
-    }
-    return void 0;
+    const entry = this.tombstonesByName.get(wanted) ?? this.tombstonesById.get(name);
+    return entry ? { kind: "tombstone", entry } : void 0;
   }
   /**
    * Forget an evicted agent, by handle. For the case where its session file has
@@ -5136,7 +5146,13 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
    * when it is itself evicted.
    */
   dropTombstone(handle) {
+    const entry = this.tombstones.get(handle);
+    if (entry) this.unindexTombstone(entry);
     this.tombstones.delete(handle);
+  }
+  /** The tombstone of evicted agent `id`, if it can still be reopened. */
+  tombstoneById(id) {
+    return this.tombstonesById.get(id);
   }
   /** Evicted agents whose conversation can still be reopened, newest first. */
   listTombstones() {
@@ -5227,7 +5243,7 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
     const reserved = new Set(this.reservedHandles());
     const owns = (own, name) => own.id !== entry.id && (name === own.handle || name === own.alias);
     const taken = names.find(
-      (name) => reserved.has(name) || [...this.agents.values()].some((own) => owns(own, name)) || [...this.tombstones.values()].some((own) => owns(own, name))
+      (name) => reserved.has(name) || [...this.agents.values()].some((own) => owns(own, name)) || this.tombstoneHolds(name, entry.id)
     );
     if (taken !== void 0) {
       const note = this.evictedNotes.get(entry.id);
@@ -5236,8 +5252,32 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
     }
     this.storeTombstone(entry);
   }
+  /** Whether a tombstone other than `exceptId`'s holds `name`. */
+  tombstoneHolds(name, exceptId) {
+    const own = this.tombstonesByName.get(name.toLowerCase());
+    return own !== void 0 && own.id !== exceptId;
+  }
+  unindexTombstone(entry) {
+    for (const name of [entry.handle, entry.alias]) {
+      if (name !== void 0 && this.tombstonesByName.get(name.toLowerCase()) === entry) this.tombstonesByName.delete(name.toLowerCase());
+    }
+    if (this.tombstonesById.get(entry.id) === entry) this.tombstonesById.delete(entry.id);
+  }
   storeTombstone(entry) {
+    const replaced = this.tombstones.get(entry.handle);
+    if (replaced) this.unindexTombstone(replaced);
+    this.tombstones.delete(entry.handle);
     this.tombstones.set(entry.handle, entry);
+    this.tombstonesByName.set(entry.handle.toLowerCase(), entry);
+    if (entry.alias) this.tombstonesByName.set(entry.alias.toLowerCase(), entry);
+    this.tombstonesById.set(entry.id, entry);
+    while (this.tombstones.size > MAX_TOMBSTONES) {
+      for (const [handle, oldest] of this.tombstones) {
+        this.unindexTombstone(oldest);
+        this.tombstones.delete(handle);
+        break;
+      }
+    }
   }
   /** Remember that `record` existed, so its id still answers with something better than "not found". */
   noteEviction(record) {
@@ -5326,6 +5366,8 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
       this.removeRecord(id, record);
     }
     this.tombstones.clear();
+    this.tombstonesByName.clear();
+    this.tombstonesById.clear();
     this.evictedNotes.clear();
     this.successors.clear();
   }
@@ -6719,6 +6761,7 @@ export {
   getBudgetPolicy,
   setBudgetPolicy,
   markConsumed,
+  capRetained,
   describeEvictedResult,
   describeEvicted,
   isTopLevelAgent,
@@ -6750,4 +6793,4 @@ export {
   RESULT_MAX_CHARS,
   ConversationViewer
 };
-//# sourceMappingURL=chunk-6DDXJ4VG.ts.map
+//# sourceMappingURL=chunk-BSQIGY72.ts.map

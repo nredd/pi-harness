@@ -57,7 +57,9 @@ import { cleanupWorktree, createWorktree, isWorktreeIsolationEnabled, pruneWorkt
  * Relabel a record's model from the response that just finished. A virtual
  * selection (`router/default`) is only a name until a request is routed; the
  * assistant message is the one place that records the physical model, so the
- * label follows it (and follows a router fallback to the next model).
+ * label follows it (and follows a router fallback to the next model). The
+ * thinking level follows too: the message records the level the request ran at,
+ * after core clamped it to what the physical model supports.
  */
 function relabelFromResponse(record: AgentRecord, message: AssistantMessageInfo | undefined): void {
   const registry = (record.session as { modelRegistry?: Parameters<typeof describePhysicalModel>[1] } | undefined)
@@ -66,6 +68,15 @@ function relabelFromResponse(record: AgentRecord, message: AssistantMessageInfo 
   if (!physical) return;
   record.invocation ??= {};
   Object.assign(record.invocation, physical);
+  // The routed request ran at the level core clamped to the physical model, which
+  // can differ from the session level the row showed while routing was pending.
+  // Idempotent per response; a message without a level (legacy) leaves the row as is.
+  const ran = message?.thinkingLevel;
+  if (ran) {
+    const requested = record.askedThinking;
+    record.invocation.thinking = ran;
+    record.invocation.requestedThinking = requested && requested !== ran ? requested : undefined;
+  }
   if ((record.modelTier?.kind === "routed" || record.modelTier?.kind === "static") && record.modelTier.answered !== physical.modelId) {
     record.modelTier = { ...record.modelTier, answered: physical.modelId };
     if (record.outputFile) appendModelTierEntry(record.outputFile, record.id, record.modelTier);
@@ -172,6 +183,8 @@ const MIN_SWEEP_INTERVAL_MS = 1_000;
 
 /** Characters of one agent's result kept past its eviction; the transcript holds the rest. */
 const MAX_RETAINED_RESULT_CHARS = 32_000;
+/** Per-session safety bound on reopenable tombstones; the lifetime is the session, this only stops a runaway one. */
+export const MAX_TOMBSTONES = 5000;
 
 /** Mark a record's result as read, which shortens its retention and suppresses its notice. */
 export function markConsumed(record: Pick<AgentRecord, "resultConsumed" | "consumedAt">, now = Date.now()): void {
@@ -205,11 +218,27 @@ export interface EvictedNote {
   nameTaken?: string;
 }
 
-/** `text` clipped to `MAX_RETAINED_RESULT_CHARS`, with a marker naming where the whole of it lives. */
-function capRetained(text: string, transcript: string | undefined): string {
-  if (text.length <= MAX_RETAINED_RESULT_CHARS) return text;
+/**
+ * A fresh, flat copy of `text`. V8 makes `slice` a view onto its parent and a template literal a
+ * rope over its parts, so a clipped string can keep the whole multi-megabyte parent alive. A
+ * UTF-16 round trip through a Buffer allocates new storage and, unlike UTF-8, keeps a lone
+ * surrogate exactly as it was.
+ */
+function flatCopy(text: string): string {
+  return Buffer.from(text, "utf16le").toString("utf16le");
+}
+
+/**
+ * `text` clipped to `MAX_RETAINED_RESULT_CHARS`, with a marker naming where the whole of it lives.
+ * Never keeps a reference to `text` itself, and never cuts a surrogate pair in half.
+ */
+export function capRetained(text: string, transcript: string | undefined): string {
+  if (text.length <= MAX_RETAINED_RESULT_CHARS) return flatCopy(text);
+  const last = text.charCodeAt(MAX_RETAINED_RESULT_CHARS - 1);
+  // A high surrogate in the last kept slot means its low half is the first dropped char.
+  const cut = last >= 0xd800 && last <= 0xdbff ? MAX_RETAINED_RESULT_CHARS - 1 : MAX_RETAINED_RESULT_CHARS;
   const where = transcript ? `; full text in ${transcript}` : "";
-  return `${text.slice(0, MAX_RETAINED_RESULT_CHARS)}\n[truncated ${text.length - MAX_RETAINED_RESULT_CHARS} chars${where}]`;
+  return flatCopy(`${text.slice(0, cut)}\n[truncated ${text.length - cut} chars${where}]`);
 }
 
 /** The result or error an evicted agent left, or undefined when none was kept. */
@@ -668,6 +697,10 @@ export class AgentManager {
    * completed records on session start/switch.
    */
   private tombstones = new Map<string, AgentTombstone>();
+  /** Lowercase handle or alias -> its tombstone, so name checks are lookups, not scans of `tombstones`. */
+  private tombstonesByName = new Map<string, AgentTombstone>();
+  /** Id -> tombstone. */
+  private tombstonesById = new Map<string, AgentTombstone>();
 
   /** Evicted records by id, oldest first (insertion order). */
   private evictedNotes = new Map<string, EvictedNote>();
@@ -1340,6 +1373,9 @@ export class AgentManager {
           // Read the kept request first: a caller's level survives being clamped
           // AND, one line later, being replaced by the effective one.
           const requested = record.invocation.requestedThinking ?? record.invocation.thinking;
+          // Snapshot before the writeback below: once the session level lands in
+          // `thinking`, "no ask" is indistinguishable from "asked for the default".
+          record.askedThinking = requested;
           Object.assign(
             record.invocation,
             record.modelTier?.kind === "routed" && record.modelTier.admitted
@@ -2000,10 +2036,7 @@ export class AgentManager {
     // Tombstones hold their names too: an evicted `@explore` is still
     // resurrectable, so a later Explore must become `explore-2` rather than
     // shadowing a conversation the user can still reach.
-    for (const entry of this.tombstones.values()) {
-      taken.add(entry.handle);
-      if (entry.alias) taken.add(entry.alias);
-    }
+    for (const name of this.tombstonesByName.keys()) taken.add(name);
     return taken;
   }
 
@@ -2025,12 +2058,8 @@ export class AgentManager {
     if (byId?.parentAgentId === undefined && byId !== undefined) return { kind: "live", record: byId };
     // Only once nothing live answers: a tombstone is a conversation to reopen,
     // and reopening one while its record still exists would fork the session.
-    for (const entry of this.tombstones.values()) {
-      if (entry.handle.toLowerCase() === wanted || entry.alias?.toLowerCase() === wanted || entry.id === name) {
-        return { kind: "tombstone", entry };
-      }
-    }
-    return undefined;
+    const entry = this.tombstonesByName.get(wanted) ?? this.tombstonesById.get(name);
+    return entry ? { kind: "tombstone", entry } : undefined;
   }
 
   /**
@@ -2043,7 +2072,14 @@ export class AgentManager {
    * when it is itself evicted.
    */
   dropTombstone(handle: string): void {
+    const entry = this.tombstones.get(handle);
+    if (entry) this.unindexTombstone(entry);
     this.tombstones.delete(handle);
+  }
+
+  /** The tombstone of evicted agent `id`, if it can still be reopened. */
+  tombstoneById(id: string): AgentTombstone | undefined {
+    return this.tombstonesById.get(id);
   }
 
   /** Evicted agents whose conversation can still be reopened, newest first. */
@@ -2163,7 +2199,7 @@ export class AgentManager {
       name =>
         reserved.has(name) ||
         [...this.agents.values()].some(own => owns(own, name)) ||
-        [...this.tombstones.values()].some(own => owns(own, name)),
+        this.tombstoneHolds(name, entry.id),
     );
     if (taken !== undefined) {
       const note = this.evictedNotes.get(entry.id);
@@ -2173,9 +2209,36 @@ export class AgentManager {
     this.storeTombstone(entry);
   }
 
+  /** Whether a tombstone other than `exceptId`'s holds `name`. */
+  private tombstoneHolds(name: string, exceptId: string): boolean {
+    const own = this.tombstonesByName.get(name.toLowerCase());
+    return own !== undefined && own.id !== exceptId;
+  }
+
+  private unindexTombstone(entry: AgentTombstone): void {
+    for (const name of [entry.handle, entry.alias]) {
+      if (name !== undefined && this.tombstonesByName.get(name.toLowerCase()) === entry) this.tombstonesByName.delete(name.toLowerCase());
+    }
+    if (this.tombstonesById.get(entry.id) === entry) this.tombstonesById.delete(entry.id);
+  }
+
   private storeTombstone(entry: AgentTombstone): void {
-    // Unbounded within a session (a few strings per agent); `clearCompleted` ends the lifetime (#372).
+    // Per-session lifetime (#372): `clearCompleted` ends it. The bound is a safety net against a runaway
+    // session, far above any real fleet; the oldest entry (insertion order) goes first.
+    const replaced = this.tombstones.get(entry.handle);
+    if (replaced) this.unindexTombstone(replaced);
+    this.tombstones.delete(entry.handle);
     this.tombstones.set(entry.handle, entry);
+    this.tombstonesByName.set(entry.handle.toLowerCase(), entry);
+    if (entry.alias) this.tombstonesByName.set(entry.alias.toLowerCase(), entry);
+    this.tombstonesById.set(entry.id, entry);
+    while (this.tombstones.size > MAX_TOMBSTONES) {
+      for (const [handle, oldest] of this.tombstones) {
+        this.unindexTombstone(oldest);
+        this.tombstones.delete(handle);
+        break;
+      }
+    }
   }
 
   /** Remember that `record` existed, so its id still answers with something better than "not found". */
@@ -2290,6 +2353,8 @@ export class AgentManager {
     // `@explore` would silently reach an agent the user never started. Claude
     // Code resets its registry on `/clear` for the same reason.
     this.tombstones.clear();
+    this.tombstonesByName.clear();
+    this.tombstonesById.clear();
     // Ids are only meaningful within the session that issued them.
     this.evictedNotes.clear();
     this.successors.clear();
