@@ -53,7 +53,7 @@ class Pool:
 # Hosted macOS jobs wait a median 215 s but p90 ~1 h under load (156 jobs, 2026-11-13), while `pi-macos` jobs
 # started in a median 30 s (p90 141 s). A busy `pi-macos` therefore queues up to four cells beyond its slots
 # (about two cell-lengths of wait, ~15 min, still far under hosted's tail), and one run takes at most three,
-# so the other heavy cells still use the hosted runners. Hosted Linux queues for seconds, so Linux stays strict.
+# so the other heavy cells still use the hosted runners. Hosted Linux queues for seconds: strict.
 POOLS = {
     "pi-linux": Pool("pi-linux", "PI_LINUX_HEARTBEAT", 2),
     "pi-macos": Pool("pi-macos", "PI_MACOS_HEARTBEAT", 2, queue_depth=4, run_cap=3),
