@@ -358,12 +358,16 @@ export class SubagentScheduler {
           this.emit({ type: "error", jobId: job.id, error: `Scheduled time ${job.schedule} is in the past` });
         }
       } else {
-        const cron = new Cron(job.schedule, self => this.executeJob(job.id, {
-          // The scheduled tick, not the callback's start time (`currentRun()` carries that, with
-          // its ms, and differs per process): the latest tick at or before the callback.
-          at: self.previousRuns(1, new Date((self.currentRun()?.getTime() ?? this.clock.now()) + 1000))[0].getTime(),
-          schedule: job.schedule,
-        }));
+        // The tick each callback was armed for, which every process computes alike. Callback
+        // start time cannot stand in: it differs per process, and a late one would name a later tick.
+        let armed: Date;
+        const cron = new Cron(job.schedule, self => {
+          const tick = armed;
+          // croner's own next tick: it schedules after this callback's start
+          armed = self.nextRun(self.currentRun() ?? undefined) as Date;
+          this.executeJob(job.id, { at: tick.getTime(), schedule: job.schedule });
+        });
+        armed = cron.nextRun() as Date; // a 6-field pattern without `maxRuns` always has a next tick
         this.jobs.set(job.id, cron);
       }
       // Disable at the deadline itself, not at the next (possibly days away) tick.

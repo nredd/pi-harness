@@ -138,15 +138,14 @@ describe("slot claims", () => {
     expect(a.spawn).toHaveBeenCalledTimes(2);
   });
 
-  it("falls back to the clock's time when croner reports no current run", () => {
+  it("still names the armed tick when croner reports no current run", () => {
     vi.useFakeTimers({ now: Date.UTC(2030, 0, 1) });
     vi.spyOn(Cron.prototype, "currentRun").mockReturnValue(null);
-    const clock = new FakeClock();
-    const a = process_(clock);
+    const a = process_(new FakeClock());
     const job = a.scheduler.addJob({ ...input, schedule: "*/10 * * * * *" });
     vi.advanceTimersByTime(10_000);
     expect(a.spawn).toHaveBeenCalledTimes(1);
-    expect(new ScheduleStore(path).get(job.id)?.lastSlot).toBe(Math.floor(clock.now() / 10_000) * 10_000);
+    expect(new ScheduleStore(path).get(job.id)?.lastSlot).toBe(Date.UTC(2030, 0, 1, 0, 0, 10));
   });
 
   it("two cron processes whose callbacks start at different milliseconds share the tick", () => {
@@ -164,6 +163,22 @@ describe("slot claims", () => {
     vi.advanceTimersByTime(50_000);
     expect(a.spawn.mock.calls.length + b.spawn.mock.calls.length).toBe(5);
     expect(new ScheduleStore(path).get(job.id)?.lastSlot).toBe(Date.UTC(2030, 0, 1, 0, 0, 50));
+  });
+
+  it("a late cron callback claims its armed tick, not the one it woke up in", () => {
+    vi.useFakeTimers({ now: Date.UTC(2030, 0, 1) });
+    const a = process_(new FakeClock());
+    const job = a.scheduler.addJob({ ...input, schedule: "*/10 * * * * *" });
+    const store = new ScheduleStore(path);
+    const t0 = Date.UTC(2030, 0, 1);
+    // Another process fired the 10s tick; this one wakes at 25s (a sleep) for that same tick.
+    expect(store.claim(job.id, { pid: process.ppid, leaseUntil: 0 }, t0 + 10_000, { at: t0 + 10_000, schedule: job.schedule })).toBeDefined();
+    vi.setSystemTime(t0 + 15_000); // fake timers shift with it: the 10s tick's callback now runs at 25s
+    vi.advanceTimersToNextTimer();
+    expect(a.spawn).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(5000);
+    expect(a.spawn).toHaveBeenCalledTimes(1);
+    expect(new ScheduleStore(path).get(job.id)?.lastSlot).toBe(t0 + 30_000);
   });
 
   it("a late interval callback claims its own slot, not the next one", () => {
