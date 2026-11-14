@@ -24,7 +24,7 @@ import { getAgentConfig, resolveSpawnType } from "./agent-types.js";
 import { type Clock, realClock, type TimerHandle } from "./clock.js";
 import { admitModelSelection, type ModelSelection, selectModel } from "./model-selection.js";
 import { checkAdmission, describeBlock, mayPark, modelRef, PARKED_RESUME_DELAY_MS, QUOTA_RESTART_GRACE_MS } from "./quota-admission.js";
-import { foreignOwnerLive, LEASE_MS, LEASE_RENEW_MS, type ScheduleStore } from "./schedule-store.js";
+import { type FireSlot, foreignOwnerLive, LEASE_MS, LEASE_RENEW_MS, type ScheduleStore } from "./schedule-store.js";
 import type { IsolationMode, ScheduledSubagent, SubagentType, ThinkingLevel } from "./types.js";
 
 /** Event emitted on `pi.events` for cross-extension consumers. */
@@ -49,6 +49,11 @@ export interface NewJobInput {
   isolation?: IsolationMode;
   /** Set by quota admission; see `ScheduledSubagent.quotaParked`. */
   quotaParked?: boolean;
+}
+
+/** The first interval slot after `now` on the `anchor + k * intervalMs` grid; never slot 0, whatever the clock. */
+function nextIntervalSlot(anchor: number, intervalMs: number, now: number): number {
+  return Math.max(1, Math.floor((now - anchor) / intervalMs) + 1);
 }
 
 /** Longest delay a native timer honors (2^31 - 1 ms). */
@@ -277,7 +282,8 @@ export class SubagentScheduler {
   /** Toggle / mutate a job. Re-arms based on the new `enabled` state. */
   updateJob(id: string, patch: Partial<ScheduledSubagent>): ScheduledSubagent | undefined {
     const store = this.requireStore();
-    const updated = store.update(id, patch);
+    // A new schedule restarts slot numbering; the old one's last slot would block it.
+    const updated = store.update(id, job => patch.schedule !== undefined && patch.schedule !== job.schedule ? { ...patch, lastSlot: undefined } : patch);
     if (!updated) return undefined;
     this.unscheduleJob(id);
     if (updated.enabled) this.scheduleJob(updated);
@@ -308,16 +314,14 @@ export class SubagentScheduler {
 
   private nextRunUnbounded(jobId: string): string | undefined {
     const cron = this.jobs.get(jobId);
-    if (cron) return cron.nextRun()?.toISOString();
+    if (cron) return cron.nextRun(new Date(this.clock.now()))?.toISOString();
     const job = this.store?.get(jobId);
     if (!job?.enabled) return undefined;
     if (job.scheduleType === "once") return job.schedule;
     if (job.scheduleType === "interval" && job.intervalMs) {
-      // Before the first fire there's no `lastRun`, so fall back to "now" —
-      // accurate at create time (setInterval was just armed) and within
-      // intervalMs of correct in any pre-first-fire view.
-      const base = job.lastRun ? new Date(job.lastRun).getTime() : this.clock.now();
-      return new Date(base + job.intervalMs).toISOString();
+      // The next slot on the same createdAt grid armInterval aims at, so the display matches the fire.
+      const anchor = new Date(job.createdAt).getTime();
+      return new Date(anchor + nextIntervalSlot(anchor, job.intervalMs, this.clock.now()) * job.intervalMs).toISOString();
     }
     return undefined;
   }
@@ -333,8 +337,7 @@ export class SubagentScheduler {
     this.scheduled.set(job.id, {});
     try {
       if (job.scheduleType === "interval" && job.intervalMs) {
-        const t = this.clock.setInterval(() => this.executeJob(job.id), job.intervalMs);
-        this.intervals.set(job.id, t);
+        this.intervals.set(job.id, this.armInterval(job, job.intervalMs));
       } else if (job.scheduleType === "once") {
         const target = new Date(job.schedule).getTime();
         let delay = target - this.clock.now();
@@ -343,9 +346,10 @@ export class SubagentScheduler {
         if (delay <= 0 && job.quotaParked) delay = PARKED_RESUME_DELAY_MS;
         if (delay > 0) {
           const t = this.clock.setTimeout(() => {
-            this.executeJob(job.id);
+            this.executeJob(job.id, { at: target, schedule: job.schedule });
             // Auto-disable one-shots after they fire (mirrors pi-cron-schedule)
-            store.update(job.id, { enabled: false });
+            // Unless another process re-parked or edited the job meanwhile: this timer is stale.
+            store.update(job.id, fresh => (fresh.schedule === job.schedule ? { enabled: false } : {}));
             const updated = store.get(job.id);
             if (updated) this.emit({ type: "updated", job: updated });
           }, delay);
@@ -357,7 +361,9 @@ export class SubagentScheduler {
           this.emit({ type: "error", jobId: job.id, error: `Scheduled time ${job.schedule} is in the past` });
         }
       } else {
-        const cron = new Cron(job.schedule, () => this.executeJob(job.id));
+        // Pattern only: no croner timer, so the tick a callback fires for is the one we armed.
+        const cron = new Cron(job.schedule);
+        this.intervals.set(job.id, this.armCron(job, cron));
         this.jobs.set(job.id, cron);
       }
       // Disable at the deadline itself, not at the next (possibly days away) tick.
@@ -367,6 +373,56 @@ export class SubagentScheduler {
       this.scheduled.delete(job.id);
       this.emit({ type: "error", jobId: job.id, error: err instanceof Error ? err.message : String(err) });
     }
+  }
+
+  /**
+   * Fire on slots `createdAt + k * intervalMs`, which every process on the session
+   * shares, whatever time it armed at. A timer claims the slot it was armed for, never
+   * a later one, so a late callback cannot take an interval that is not yet due, and a timer beyond `MAX_TIMER_MS` re-arms in steps. Chained
+   * timeouts re-aim at the next slot after the current time, which keeps a resumed or
+   * late-joining process on the grid and skips slots missed while asleep.
+   */
+  private armInterval(job: ScheduledSubagent, intervalMs: number): TimerHandle {
+    const anchor = new Date(job.createdAt).getTime();
+    const nextSlot = (): number => nextIntervalSlot(anchor, intervalMs, this.clock.now());
+    let current: TimerHandle | undefined;
+    const arm = (k: number): void => {
+      const due = anchor + k * intervalMs;
+      current = this.clock.setTimeout(() => {
+        if (this.clock.now() < due) {
+          arm(k); // a capped timer woke before its slot
+          return;
+        }
+        arm(Math.max(k + 1, nextSlot()));
+        this.executeJob(job.id, { at: due, schedule: job.schedule });
+      }, Math.min(Math.max(0, due - this.clock.now()), MAX_TIMER_MS));
+    };
+    arm(nextSlot());
+    return { cancel: () => current?.cancel() };
+  }
+
+  /**
+   * Fire on the pattern's ticks, which every process computes alike. A timer claims the tick
+   * it was armed for, never a later one, so a late callback cannot take a tick that is not yet
+   * due; re-arming after the current time skips ticks missed while asleep. Timers beyond
+   * `MAX_TIMER_MS` re-arm in steps.
+   */
+  private armCron(job: ScheduledSubagent, cron: Cron): TimerHandle {
+    // A 6-field pattern without `maxRuns` or `stopAt` always has a next tick.
+    const after = (): number => (cron.nextRun(new Date(this.clock.now())) as Date).getTime();
+    let current: TimerHandle | undefined;
+    const arm = (tick: number): void => {
+      current = this.clock.setTimeout(() => {
+        if (this.clock.now() < tick) {
+          arm(tick);
+          return;
+        }
+        arm(after());
+        this.executeJob(job.id, { at: tick, schedule: job.schedule });
+      }, Math.min(Math.max(0, tick - this.clock.now()), MAX_TIMER_MS));
+    };
+    arm(after());
+    return { cancel: () => current?.cancel() };
   }
 
   /** Arm the deadline timer, re-arming in `MAX_TIMER_MS` steps when it is out of timer range. */
@@ -413,7 +469,7 @@ export class SubagentScheduler {
    * queue), persist completion. Fire-and-forget: the timer tick returns
    * immediately so other jobs keep firing.
    */
-  private executeJob(id: string): void {
+  private executeJob(id: string, slot: FireSlot): void {
     const store = this.store;
     const pi = this.pi;
     const ctx = this.ctx;
@@ -428,10 +484,10 @@ export class SubagentScheduler {
     }
 
     // Claim the fire under the store lock: another process on this session may have
-    // fired, disabled or removed the job since our cache loaded. The claim writes
+    // fired this slot, or disabled, edited or removed the job since our cache loaded. The claim writes
     // "running" and the owner in one write; a lost claim skips the fire.
     const now = this.clock.now();
-    const claim = store.claim(id, { pid: process.pid, leaseUntil: now + LEASE_MS }, now);
+    const claim = store.claim(id, { pid: process.pid, leaseUntil: now + LEASE_MS }, now, slot);
     if (!claim) return;
     const token = holdFire(store, this.clock, id);
 
@@ -716,8 +772,8 @@ export class SubagentScheduler {
       };
     }
     try {
-      // Croner validates by construction.
-      new Cron(expr, () => {});
+      // Croner validates by construction; with no callback it arms no timer.
+      new Cron(expr);
       return { valid: true };
     } catch (e) {
       // Croner only throws Error subclasses (TypeError, RangeError).

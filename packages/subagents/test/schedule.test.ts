@@ -173,16 +173,15 @@ describe("SubagentScheduler — lifecycle", () => {
     expect(t - before).toBeLessThanOrEqual(3_600_000 + 1_000);
   });
 
-  // Once a fire happens and `lastRun` is set, getNextRun should pivot to it.
-  it("getNextRun uses lastRun when present for interval jobs", () => {
+  // `lastRun` does not move the next run: it stays on the createdAt grid armInterval aims at.
+  it("getNextRun ignores lastRun for interval jobs and stays on the createdAt grid", () => {
     const job = scheduler.addJob({
       name: "ran-once", description: "x", schedule: "1h",
       subagent_type: "general-purpose", prompt: "p",
     });
     const lastRun = new Date(Date.now() - 30 * 60_000).toISOString(); // 30m ago
     scheduler.updateJob(job.id, { lastRun });
-    const next = scheduler.getNextRun(job.id);
-    expect(next).toBe(new Date(new Date(lastRun).getTime() + 3_600_000).toISOString());
+    expect(scheduler.getNextRun(job.id)).toBe(new Date(Date.parse(job.createdAt) + 3_600_000).toISOString());
   });
 
   it("rejects past one-shot timestamps upfront — no record created", () => {
@@ -734,7 +733,7 @@ describe("SubagentScheduler — fire path", () => {
         // The other process never saw the add as enabled-and-claimed: it has a stale cache.
         const { other, otherManager } = otherProcess();
         // Another live pid wins the claim first, under the lock, with a valid lease.
-        expect(new ScheduleStore(path()).claim(job.id, { pid: process.ppid, leaseUntil: Date.now() + 120_000 }, Date.now())).toBeDefined();
+        expect(new ScheduleStore(path()).claim(job.id, { pid: process.ppid, leaseUntil: Date.now() + 120_000 }, Date.now(), { at: 1, schedule: job.schedule })).toBeDefined();
         await vi.advanceTimersByTimeAsync(60_000);
         expect(manager.spawn).not.toHaveBeenCalled();
         expect(otherManager.spawn).not.toHaveBeenCalled();
@@ -746,18 +745,20 @@ describe("SubagentScheduler — fire path", () => {
         const a = new ScheduleStore(path());
         const b = new ScheduleStore(path());
         const now = Date.now();
-        expect(a.claim(job.id, { pid: process.ppid, leaseUntil: now + 120_000 }, now)).toBeDefined();
-        expect(b.claim(job.id, { pid: process.pid, leaseUntil: now + 120_000 }, now)).toBeUndefined();
-        expect(b.claim(job.id, { pid: process.pid, leaseUntil: now + 600_000 }, now + 120_000 + 360_000 + 1)?.job.runOwner?.pid).toBe(process.pid);
+        const slot = (at: number) => ({ at, schedule: job.schedule });
+        expect(a.claim(job.id, { pid: process.ppid, leaseUntil: now + 120_000 }, now, slot(1))).toBeDefined();
+        expect(b.claim(job.id, { pid: process.pid, leaseUntil: now + 120_000 }, now, slot(1))).toBeUndefined();
+        expect(b.claim(job.id, { pid: process.pid, leaseUntil: now + 600_000 }, now + 120_000 + 360_000 + 1, slot(2))?.job.runOwner?.pid).toBe(process.pid);
       });
 
       it("a claim is refused for a job disabled or removed by another process", () => {
         const job = scheduler.addJob(spec);
         const stale = new ScheduleStore(path());
+        const slot = (at: number) => ({ at, schedule: job.schedule });
         new ScheduleStore(path()).update(job.id, { enabled: false });
-        expect(stale.claim(job.id, { pid: process.pid, leaseUntil: 1 }, 0)).toBeUndefined();
+        expect(stale.claim(job.id, { pid: process.pid, leaseUntil: 1 }, 0, slot(3))).toBeUndefined();
         new ScheduleStore(path()).remove(job.id);
-        expect(stale.claim(job.id, { pid: process.pid, leaseUntil: 1 }, 0)).toBeUndefined();
+        expect(stale.claim(job.id, { pid: process.pid, leaseUntil: 1 }, 0, slot(3))).toBeUndefined();
       });
 
       it("a stale-cache fire of a job another process disabled is skipped", async () => {

@@ -495,6 +495,12 @@ export interface ScheduledSubagent {
    */
   runOwner?: RunOwner;
   /**
+   * Epoch ms of the last claimed fire slot: `createdAt + k * intervalMs` for an
+   * interval, the cron tick, or the one-shot target. A claim must be for a later slot,
+   * so processes sharing the session fire each slot once. Cleared when `schedule` changes.
+   */
+  lastSlot?: number;
+  /**
    * Parked by quota admission: re-check admission at fire time and re-park at
    * the new reset while the model is still blocked. See `quota-admission.ts`.
    */
