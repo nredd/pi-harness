@@ -868,6 +868,30 @@ describe("exportStats with harnesses", () => {
 		expect(statSync(state).isDirectory()).toBe(true);
 	});
 
+	it("still refuses to narrow after a widening whose state write failed", async () => {
+		seedPi();
+		const roots = seedHarnessHome(home);
+		const state = join(agent, "pi-session-kit", "export-state.json");
+		await exportStats(agent, repo, undefined, { harnesses: ["pi"], roots, home });
+		const recorded = readFileSync(state, "utf8");
+		const sabotage = async () => {
+			rmSync(state);
+			mkdirSync(state);
+			throw Object.assign(new Error("locked"), { errcode: 5 });
+		};
+		const widened = await exportStats(agent, repo, undefined, {
+			harnesses: ["pi", "claude", "opencode"],
+			roots,
+			home,
+			loadSqlite: sabotage,
+		});
+		expect(widened.warnings).toEqual(["export state not recorded"]);
+		// the recorded set still says pi only
+		rmSync(state, { recursive: true });
+		writeFileSync(state, recorded);
+		await expect(exportStats(agent, repo, undefined, { roots, home })).rejects.toThrow(/missing: claude/);
+	});
+
 	describe("harness freshness and repeated failures", () => {
 		const busyDb = () => Promise.reject(Object.assign(new Error("locked"), { errcode: 5 }));
 		const statePath = () => join(agent, "pi-session-kit", "export-state.json");

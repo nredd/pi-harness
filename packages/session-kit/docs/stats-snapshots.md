@@ -29,10 +29,11 @@ The set an export published is recorded (see `export-state.json` below). A later
 *narrower* set than the last published one is refused before anything is read or written, because
 its snapshot would silently drop the missing harnesses' history (e.g. a scheduled `--harness pi`
 run after a manual `--harness pi,claude`). Widen the set, or pass `--replace-harnesses` to drop
-the history on purpose. If the recorded set is missing (state file lost), it is derived from the
-last published snapshot: every harness with an event, a quota reading or a `lastGoodAt` mark in it
+the history on purpose. The check is against the recorded set *and* what the last published
+snapshot holds, so a lost state file, or one that failed to update after a widening, cannot hide a
+narrowing. What a snapshot holds is every harness with an event, a quota reading or a `lastGoodAt` mark in it
 (a pi-era snapshot counts as `pi`; one that cannot be read is assumed to be `pi`), and nothing if
-nothing was published.
+nothing was published. After a narrowing the state and snapshot agree again.
 
 Callers must not run two exports into the same outbox at once: nothing in the artifact locks. The
 only scheduled caller, `pi-usage-sync`, already serializes its runs under its own lock, so a manual
@@ -78,7 +79,7 @@ CLI results:
   (kept or lost) and however many times in a row: those are fields of the JSON result, plus a
   stderr line each, for the caller to record as warnings. So is `warnings: ["export state not
   recorded"]`, when the snapshot is out but `export-state.json` could not be written (the next
-  export then checks against the old set). A nonzero exit means nothing was published: an invalid
+  export still derives the set from the snapshot). A nonzero exit means nothing was published: an invalid
   command, an incomplete pi scan or unwritable pi cache, an unwritable output, corrupt installation
   state, or a refused narrower harness set. (A harness cache that cannot be written is a failed
   harness, carried, not a nonzero exit.) A partial or corrupt import emits a JSON result and exits

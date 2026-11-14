@@ -1224,7 +1224,8 @@ async function exportStats(dir, output, root = sessionsDir(dir), options = {}) {
   const state = await exportState(dir);
   const snapshotDir = join7(output, "machines", identity.machineId);
   const previous = await loadPrevious(snapshotDir);
-  const dropped = (state.harnesses ?? publishedSet(previous)).filter((h) => !wanted.has(h));
+  const last = /* @__PURE__ */ new Set([...state.harnesses ?? [], ...publishedSet(previous)]);
+  const dropped = HARNESSES.filter((h) => last.has(h) && !wanted.has(h));
   if (dropped.length > 0 && !options.replaceHarnesses)
     throw new Error(
       `Refusing to publish a narrower harness set than last published (missing: ${dropped.join(", ")}); add them to --harness, or pass --replace-harnesses to drop their history`

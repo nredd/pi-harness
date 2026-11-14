@@ -596,8 +596,10 @@ export async function exportStats(
 	const state = await exportState(dir);
 	const snapshotDir = join(output, "machines", identity.machineId);
 	const previous = await loadPrevious(snapshotDir);
-	// No recorded set: derive it from what was published, so a lost state file cannot hide a narrowing.
-	const dropped = (state.harnesses ?? publishedSet(previous)).filter((h) => !wanted.has(h));
+	// The recorded set can lag the snapshot (state not written after a publish) or be missing: check against
+	// both, so neither a lost nor a stale state file can hide a narrowing.
+	const last = new Set([...(state.harnesses ?? []), ...publishedSet(previous)]);
+	const dropped = HARNESSES.filter((h) => last.has(h) && !wanted.has(h));
 	if (dropped.length > 0 && !options.replaceHarnesses)
 		throw new Error(
 			`Refusing to publish a narrower harness set than last published (missing: ${dropped.join(", ")}); ` +
@@ -668,7 +670,7 @@ export async function exportStats(
 	// Recorded only once published: a failed export leaves the previous set, so the next run is still checked.
 	const published = HARNESSES.filter((h) => wanted.has(h));
 	// The snapshot is out by now: failing to record it is a warning, not a failed export. The next run
-	// still checks against the old set (stricter, never looser).
+	// derives the set from the snapshot itself, so a widening is still protected.
 	const warnings = await atomicJson(stateFile(dir), {
 		version: 1,
 		salt: state.salt,
