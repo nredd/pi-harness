@@ -142,6 +142,8 @@ pi (`Call.harness`: `pi | claude | codex | opencode`). Roots: `CLAUDE_CONFIG_DIR
 `CODEX_HOME` or `~/.codex`; `OPENCODE_DB`, else `$XDG_DATA_HOME/opencode/opencode.db`. Local file
 reads only. A missing root is silent ("not installed"). Parsed files are cached in
 `DIR/pi-session-kit/stats-harness-cache.json` by size and mtime, history for deleted files kept.
+That local, never-synced file is keyed by absolute transcript path (so Claude's cwd-encoded project
+directory names live there as keys); its values and every reader result carry no paths.
 
 - Claude: `projects/**/*.jsonl` including `subagents/`. One response is written once per content
   block, so rows collapse by `(message.id, requestId)`, keeping the largest output count.

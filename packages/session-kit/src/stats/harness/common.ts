@@ -8,9 +8,6 @@
 
 import { type Call, type Harness, opaqueId, type Session } from "../load.ts";
 
-/** Every tool whose usage `/stats` can show, in display order. */
-export const HARNESSES: readonly Harness[] = ["pi", "claude", "codex", "opencode"];
-
 /** One subscription quota reading, as persisted by the harness that observed it. */
 export interface QuotaObservation {
 	/** Who observed it, for display. */
@@ -59,6 +56,9 @@ export const sessionHash = (harness: Harness, native: string): string => opaqueI
 
 export const asRecord = (value: unknown): Record<string, unknown> | undefined =>
 	typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+
+/** `value` as a record, or an empty one. */
+export const asRecordOf = (value: unknown): Record<string, unknown> => asRecord(value) ?? {};
 
 export const str = (value: unknown): string => (typeof value === "string" ? value : "");
 

@@ -68,6 +68,7 @@ class CodexParser extends RowParser {
 	}
 
 	private usage(payload: Record<string, unknown>, ts: number): void {
+		this.records++;
 		const usage = asRecord(payload.usage);
 		const counts = counters([
 			usage?.input_tokens,
@@ -81,7 +82,6 @@ class CodexParser extends RowParser {
 			return;
 		}
 		const [input, cached, written, output] = counts as [number, number, number, number];
-		this.records++;
 		this.seen(ts);
 		this.pending.push({
 			ms: ts,

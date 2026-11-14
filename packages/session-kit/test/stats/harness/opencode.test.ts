@@ -88,11 +88,14 @@ describe("readOpenCode", () => {
 		// The writer is still open and never checkpointed: the rows live only in the -wal file.
 		expect(statSync(`${dbPath}-wal`).size).toBeGreaterThan(0);
 		expect(statSync(dbPath).size).toBeLessThan(statSync(`${dbPath}-wal`).size);
-		const before = { bytes: readFileSync(dbPath), mtimeMs: statSync(dbPath).mtimeMs };
+		const files = [dbPath, `${dbPath}-wal`];
+		const before = files.map((f) => ({ bytes: readFileSync(f), mtimeMs: statSync(f).mtimeMs }));
 		const scan = await readOpenCode(dbPath);
 		expect(scan.calls).toHaveLength(1);
-		expect(readFileSync(dbPath).equals(before.bytes)).toBe(true);
-		expect(statSync(dbPath).mtimeMs).toBe(before.mtimeMs);
+		files.forEach((f, i) => {
+			expect(readFileSync(f).equals(before[i]?.bytes as Buffer)).toBe(true);
+			expect(statSync(f).mtimeMs).toBe(before[i]?.mtimeMs);
+		});
 	});
 
 	it("never projects titles, directories, message bodies or native IDs", async () => {

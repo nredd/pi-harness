@@ -5,7 +5,8 @@
  * Only `type: "assistant"` rows are read, and only their model, usage counters, timestamp and the
  * IDs that identify the response. One API response is written once per content block with the same
  * usage, so rows collapse by `(message.id, requestId)` (see `flatten`). Project directory names
- * encode the cwd: they are used to list files and nowhere else. Cost is not recorded per message.
+ * encode the cwd: they appear only in the local cache's path keys (never in a result, cached
+ * value, diagnostic or snapshot). Cost is not recorded per message.
  * `stats-cache.json`, `.credentials.json` and everything else under the root is never opened.
  */
 

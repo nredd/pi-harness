@@ -89,11 +89,11 @@ describe("loadHarnesses", () => {
 	it("reuses the persisted cache and rewrites nothing when nothing changed", async () => {
 		const { cache, env } = fakeHome();
 		await loadHarnesses({ home, env, cache });
-		const written = statSync(cache).mtimeMs;
-		await new Promise((r) => setTimeout(r, 20));
+		// An atomic rewrite would replace the inode.
+		const written = statSync(cache).ino;
 		const again = await loadHarnesses({ home, env, cache });
 		expect(again.claude.calls).toHaveLength(1);
-		expect(statSync(cache).mtimeMs).toBe(written);
+		expect(statSync(cache).ino).toBe(written);
 	});
 
 	it("defaults the cache to the agent dir", async () => {
@@ -134,11 +134,12 @@ describe("loadHarnesses", () => {
 			home,
 			env,
 			cache: join(blocker, "sub", "cache.json"),
-			harnesses: ["claude", "codex"],
+			harnesses: ["claude", "codex", "opencode"],
 		});
 		expect(scans.claude.calls).toHaveLength(1);
 		expect(scans.claude.problems).toEqual(["claude: cache not written"]);
 		expect(scans.codex.problems).toEqual(["codex: cache not written"]);
+		expect(scans.opencode.problems).toEqual([]);
 	});
 });
 

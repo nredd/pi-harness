@@ -8,6 +8,9 @@
  * IDs, timestamps and model names, so message and part bodies, titles and directories never leave
  * SQLite. `auth.json` is never opened. OpenCode keeps no quota.
  *
+ * Every assistant row is read on each load (one row of counters each, no cache: the main file's mtime
+ * does not track WAL writes). Very large databases cost proportionally.
+ *
  * `tokens.reasoning` is reported separately from `tokens.output`, so it is billed output here.
  */
 
@@ -15,7 +18,7 @@ import { stat } from "node:fs/promises";
 import { timeOf } from "../jsonl.ts";
 import { type Call, mergeSessionMetadata, type Session } from "../load.ts";
 import { nth } from "../nth.ts";
-import { counters, emptyScan, entryHash, type HarnessScan, sessionHash, str } from "./common.ts";
+import { counters, emptyScan, entryHash, type HarnessScan, sessionHash, str, unreadable } from "./common.ts";
 
 /** The subset of `node:sqlite` this reader uses, so tests can inject a stand-in. */
 export interface SqliteModule {
@@ -106,7 +109,7 @@ export async function readOpenCode(dbPath: string, load: LoadSqlite = loadNodeSq
 	}
 	const sessionMetadata = [...mergeSessionMetadata([...spans.values()]).values()];
 	return {
-		...emptyScan(true, bad > 0 ? [`opencode: ! ${bad} unreadable lines`] : []),
+		...emptyScan(true, unreadable("opencode", bad)),
 		calls: calls.sort((a, b) => a.ms - b.ms),
 		sessionMetadata,
 		sessions: sessionMetadata.filter((s) => !s.child),

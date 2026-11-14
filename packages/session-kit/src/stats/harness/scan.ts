@@ -11,7 +11,7 @@ import { resolve, sep } from "node:path";
 import { feedFile, listJsonl, looksLikeObject, NUL_PADDING, timeOf } from "../jsonl.ts";
 import { type Call, type CallTuple, type Harness, mergeSessionMetadata, type Session } from "../load.ts";
 import { nth } from "../nth.ts";
-import { asRecord, emptyScan, type HarnessScan, type QuotaObservation, unreadable } from "./common.ts";
+import { asRecord, asRecordOf, emptyScan, type HarnessScan, type QuotaObservation, unreadable } from "./common.ts";
 
 /** One parsed transcript file, compact and free of content. */
 export interface ParsedFile {
@@ -123,7 +123,7 @@ const isHash = (v: unknown): boolean => typeof v === "string" && /^[a-f0-9]{64}$
 const isQuota = (q: unknown): boolean => {
 	const r = asRecordOf(q);
 	return (
-		["claude", "codex", "opencode", "pi"].includes(r.harness as string) &&
+		typeof r.harness === "string" &&
 		[r.provider, r.limitId, r.window].every((v) => typeof v === "string") &&
 		[r.usedPercent, r.resetAt, r.durationMs, r.observedAt].every(isNum) &&
 		(r.planType === null || typeof r.planType === "string")
@@ -158,9 +158,6 @@ export function isParsedFile(value: unknown): value is ParsedFile {
 		quota.every(isQuota)
 	);
 }
-
-/** `value` as a record, or an empty one. */
-export const asRecordOf = (value: unknown): Record<string, unknown> => asRecord(value) ?? {};
 
 async function isDirectory(path: string): Promise<boolean> {
 	try {
@@ -208,7 +205,7 @@ export async function scanJsonl(options: ScanOptions): Promise<HarnessScan> {
 	}
 	const prefix = `${root}${sep}`;
 	const scoped = Object.entries(files).filter(([path]) => path.startsWith(prefix));
-	const out = flatten(harness, scoped);
+	const out = flattenHarness(harness, scoped);
 	const problems = [
 		...(errors > 0 ? [`${harness}: ${errors} unreadable files`] : []),
 		...unreadable(harness, out.badLines),
@@ -230,8 +227,8 @@ export async function scanJsonl(options: ScanOptions): Promise<HarnessScan> {
  * entry ID collapse to one, keeping the largest output count (streaming rows grow) and, on a tie,
  * the oldest file's copy.
  */
-export function flatten(harness: Harness, files: [string, ParsedFile][]) {
-	const ordered = files.sort(([pa, a], [pb, b]) => a.startMs - b.startMs || pa.localeCompare(pb));
+export function flattenHarness(harness: Harness, files: [string, ParsedFile][]) {
+	const ordered = [...files].sort(([pa, a], [pb, b]) => a.startMs - b.startMs || pa.localeCompare(pb));
 	const best = new Map<string, Call>();
 	const sessions: Session[] = [];
 	const quota = new Map<string, QuotaObservation>();

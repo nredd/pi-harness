@@ -12,9 +12,9 @@ import { dirname, join } from "node:path";
 import { agentDir } from "../../agent-dir.ts";
 import { readClaude } from "./claude.ts";
 import { readCodex } from "./codex.ts";
-import { emptyScan, type HarnessScan } from "./common.ts";
+import { asRecordOf, emptyScan, type HarnessScan } from "./common.ts";
 import { type LoadSqlite, loadNodeSqlite, readOpenCode } from "./opencode.ts";
-import { asRecordOf, type HarnessCache, isParsedFile, type ParsedFile } from "./scan.ts";
+import { type HarnessCache, isParsedFile, type ParsedFile } from "./scan.ts";
 
 export type ExternalHarness = "claude" | "codex" | "opencode";
 export const EXTERNAL_HARNESSES: readonly ExternalHarness[] = ["claude", "codex", "opencode"];
@@ -102,7 +102,7 @@ export async function loadHarnesses(options: HarnessLoadOptions): Promise<Record
 			await writeHarnessCache(cachePath, cache);
 		} catch {
 			// The view still renders, but a producer must not claim durable history.
-			for (const h of wanted) scans[h].problems.push(`${h}: cache not written`);
+			for (const h of wanted) if (h !== "opencode") scans[h].problems.push(`${h}: cache not written`);
 		}
 	}
 	return scans;
