@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- `homeDir` forwarded to Pi's package manager and resource loader is typed locally, so the package compiles on cores that do not declare it (upstream 1.5 ignores it at runtime) ([#918](https://github.com/nredd/pi-harness/issues/918))
+- **Compile on cores without `homeDir`.** `homeDir` forwarded to the package manager and resource loader is typed locally, so the package compiles on cores that do not declare it (upstream 1.5 ignores it at runtime) ([#918](https://github.com/nredd/pi-harness/issues/918))
 
 ### Added
 - **Explain effective agent model policy ([#777](https://github.com/nredd/pi-harness/issues/777)).** `/agents` detail menus show the winning and shadowed sources, exact binding and failure policy through the dispatch selector, without admission, credential commands or provider requests. Error policies no longer claim parent inheritance; startup diagnostics check registrations only after trusted discovery.
