@@ -2646,12 +2646,20 @@ function normalizeHomeResourceSettings(settingsManager, homeDir) {
 }
 function createHomePackageManager(options, homeDir) {
   if (homeDir === void 0) return new DefaultPackageManager2(options);
-  return new DefaultPackageManager2({ ...options, homeDir, settingsManager: normalizeHomeResourceSettings(options.settingsManager, homeDir) });
+  return new DefaultPackageManager2({
+    ...options,
+    homeDir,
+    settingsManager: normalizeHomeResourceSettings(options.settingsManager, homeDir)
+  });
 }
 function createHomeResourceLoader(options, homeDir) {
   if (homeDir === void 0) return new DefaultResourceLoader(options);
   const settingsManager = options.settingsManager ?? SettingsManager2.create(options.cwd, options.agentDir);
-  return new DefaultResourceLoader({ ...options, homeDir, settingsManager: normalizeHomeResourceSettings(settingsManager, homeDir) });
+  return new DefaultResourceLoader({
+    ...options,
+    homeDir,
+    settingsManager: normalizeHomeResourceSettings(settingsManager, homeDir)
+  });
 }
 
 // src/skill-loader.ts
@@ -6754,4 +6762,4 @@ export {
   RESULT_MAX_CHARS,
   ConversationViewer
 };
-//# sourceMappingURL=chunk-TJQBFL4S.ts.map
+//# sourceMappingURL=chunk-3FHL5QKL.ts.map

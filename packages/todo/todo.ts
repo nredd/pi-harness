@@ -126,7 +126,9 @@ export function registerTodoTool(pi: ExtensionAPI, options: { homeDir?: string }
 			// Legacy/error rows without a result snapshot still read the live store.
 			// A repaint alone cannot refresh Pi's settled-row cache. Subscribe weakly
 			// instead of polling forever; valid historical snapshots remain immutable.
-			if (state && !state.taskSnapshot && !context?.probe && context?.invalidate) {
+			// `probe` is a fork-core field; upstream 1.5 omits it, so read it structurally (absent = real render).
+			const probe = (context as { probe?: boolean } | undefined)?.probe;
+			if (state && !state.taskSnapshot && !probe && context?.invalidate) {
 				state.onRenderStateChange = () => {
 					if (!state.taskSnapshot) context.invalidate();
 				};
