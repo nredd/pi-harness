@@ -409,12 +409,16 @@ test("a path input's temporary identity never captures another input's registrat
 		[
 			{ factory: provider("from-path"), path: "/pkg/a.ts" },
 			{ name: "1", factory: provider("from-named") },
+			{ name: "1\0path", factory: provider("from-nul") },
+			{ factory: provider("from-second-path"), path: "/pkg/b.ts" },
 		],
 		"/",
 	);
 	expect(result.runtime.pendingProviderRegistrations.map(({ name, extensionPath }) => [name, extensionPath])).toEqual([
 		["from-path", "/pkg/a.ts"],
 		["from-named", "<inline:1>"],
+		["from-nul", "<inline:1\0path>"],
+		["from-second-path", "/pkg/b.ts"],
 	]);
 });
 

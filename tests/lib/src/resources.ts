@@ -78,6 +78,12 @@ export async function createTestExtensionsResult(
 	cwd = process.cwd(),
 ): Promise<LoadExtensionsResult> {
 	const resolved = inputs.map(resolve);
+	// Path inputs load under a temporary name that no other input may share.
+	const taken = new Set(resolved.filter(({ path }) => path === undefined).map(({ name }) => name));
+	for (const input of resolved.filter(({ path }) => path !== undefined)) {
+		while (taken.has(input.name)) input.name += "\0";
+		taken.add(input.name);
+	}
 	const thrown: unknown[] = [];
 	const agentDir = mkdtempSync(join(tmpdir(), "pi-test-resources-"));
 	try {
