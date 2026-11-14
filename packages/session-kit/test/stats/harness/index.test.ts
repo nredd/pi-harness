@@ -7,6 +7,7 @@ import {
 	harnessRoots,
 	loadHarnesses,
 	readHarnessCache,
+	saltMark,
 	writeHarnessCache,
 } from "../../../src/stats/harness/index.ts";
 import type { ParsedFile } from "../../../src/stats/harness/scan.ts";
@@ -164,8 +165,10 @@ describe("harness cache", () => {
 			badLines: 0,
 			unsupportedTurns: 0,
 		};
-		await writeHarnessCache(path, { claude: { "/x": good } });
-		expect(await readHarnessCache(path)).toEqual({ claude: { "/x": good } });
+		await writeHarnessCache(path, { claude: { "/x": good } }, SALT);
+		expect(await readHarnessCache(path, SALT)).toEqual({ claude: { "/x": good } });
+		// only a mark of the salt is stored, never the salt
+		expect(readFileSync(path, "utf8")).not.toContain(SALT);
 
 		const quotaOk = {
 			harness: "codex",
@@ -196,7 +199,8 @@ describe("harness cache", () => {
 		writeFileSync(
 			path,
 			JSON.stringify({
-				version: 3,
+				version: 4,
+				salt: saltMark(SALT),
 				harnesses: {
 					codex: {
 						...Object.fromEntries(bad.map((b, i) => [`/${i}`, b])),
@@ -206,20 +210,26 @@ describe("harness cache", () => {
 				},
 			}),
 		);
-		const cache = await readHarnessCache(path);
+		const cache = await readHarnessCache(path, SALT);
 		expect(Object.keys(cache.codex ?? {})).toEqual(["/ok"]);
 		expect(cache.odd).toEqual({});
 
 		// v1 caches recorded cost 0 and v2 quota had no account: dropped and re-parsed, never trusted.
-		for (const version of [1, 2, 99]) {
+		for (const version of [1, 2, 3, 99]) {
 			writeFileSync(path, JSON.stringify({ version, harnesses: { codex: { "/ok": good } } }));
-			expect(await readHarnessCache(path)).toEqual({});
+			expect(await readHarnessCache(path, SALT)).toEqual({});
 		}
+		// a cache made under another salt holds account hashes that no longer match: discarded, never trusted
+		const marked = { version: 4, harnesses: { codex: { "/ok": good } } };
+		writeFileSync(path, JSON.stringify({ ...marked, salt: saltMark("another-salt") }));
+		expect(await readHarnessCache(path, SALT)).toEqual({});
+		writeFileSync(path, JSON.stringify(marked));
+		expect(await readHarnessCache(path, SALT)).toEqual({});
 		writeFileSync(path, JSON.stringify({ version: 99, harnesses: {} }));
-		expect(await readHarnessCache(path)).toEqual({});
+		expect(await readHarnessCache(path, SALT)).toEqual({});
 		writeFileSync(path, "{not json");
-		expect(await readHarnessCache(path)).toEqual({});
+		expect(await readHarnessCache(path, SALT)).toEqual({});
 		mkdirSync(join(home, "d"));
-		expect(await readHarnessCache(join(home, "d", "missing.json"))).toEqual({});
+		expect(await readHarnessCache(join(home, "d", "missing.json"), SALT)).toEqual({});
 	});
 });

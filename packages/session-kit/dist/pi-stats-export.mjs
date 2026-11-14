@@ -355,9 +355,9 @@ function flatten(files) {
 }
 
 // src/stats/snapshot.ts
-import { randomBytes, randomUUID as randomUUID3 } from "node:crypto";
-import { link, lstat, mkdir as mkdir3, readdir as readdir2, readFile as readFile3, rename as rename3, unlink, writeFile as writeFile3 } from "node:fs/promises";
-import { dirname as dirname3, join as join7 } from "node:path";
+import { randomBytes, randomUUID as randomUUID4 } from "node:crypto";
+import { link as link2, lstat, mkdir as mkdir4, readdir as readdir2, readFile as readFile4, rename as rename4, unlink as unlink2, writeFile as writeFile4 } from "node:fs/promises";
+import { dirname as dirname4, join as join7 } from "node:path";
 
 // src/stats/harness/common.ts
 import { stat as stat2 } from "node:fs/promises";
@@ -857,7 +857,7 @@ async function readOpenCode(dbPath, load = loadNodeSqlite) {
 
 // src/stats/harness/index.ts
 var EXTERNAL_HARNESSES = ["claude", "codex", "opencode"];
-var CACHE_VERSION2 = 3;
+var CACHE_VERSION2 = 4;
 var harnessCachePath = (dir = agentDir()) => join6(dir, "pi-session-kit", "stats-harness-cache.json");
 function harnessRoots(env = process.env, home = homedir2(), overrides = {}) {
   const data = env.XDG_DATA_HOME || join6(home, ".local", "share");
@@ -867,7 +867,8 @@ function harnessRoots(env = process.env, home = homedir2(), overrides = {}) {
     opencode: overrides.opencode ?? (env.OPENCODE_DB || join6(data, "opencode", "opencode.db"))
   };
 }
-async function readHarnessCache(path) {
+var saltMark = (salt) => opaqueId(`harness-cache-salt:${salt}`);
+async function readHarnessCache(path, salt) {
   let doc;
   try {
     doc = JSON.parse(await readFile2(path, "utf8"));
@@ -876,24 +877,24 @@ async function readHarnessCache(path) {
   }
   const cache = {};
   const record2 = asRecordOf(doc);
-  if (record2.version !== CACHE_VERSION2) return cache;
+  if (record2.version !== CACHE_VERSION2 || record2.salt !== saltMark(salt)) return cache;
   for (const [harness, files] of Object.entries(asRecordOf(record2.harnesses)))
     cache[harness] = Object.fromEntries(
       Object.entries(asRecordOf(files)).filter((entry) => isParsedFile(entry[1]))
     );
   return cache;
 }
-async function writeHarnessCache(path, cache) {
+async function writeHarnessCache(path, cache, salt) {
   await mkdir2(dirname2(path), { recursive: true });
   const tmp = `${path}.${randomUUID2()}.tmp`;
-  await writeFile2(tmp, JSON.stringify({ version: CACHE_VERSION2, harnesses: cache }));
+  await writeFile2(tmp, JSON.stringify({ version: CACHE_VERSION2, salt: saltMark(salt), harnesses: cache }));
   await rename2(tmp, path);
 }
 async function loadHarnesses(options) {
   const wanted = new Set(options.harnesses ?? EXTERNAL_HARNESSES);
   const roots = harnessRoots(options.env, options.home, options.roots);
   const cachePath2 = options.cache ?? harnessCachePath();
-  const cache = await readHarnessCache(cachePath2);
+  const cache = await readHarnessCache(cachePath2, options.salt);
   const before = JSON.stringify(cache);
   const scans = {
     claude: wanted.has("claude") ? await readClaude(roots.claude, cache) : emptyScan(false),
@@ -902,12 +903,65 @@ async function loadHarnesses(options) {
   };
   if (JSON.stringify(cache) !== before) {
     try {
-      await writeHarnessCache(cachePath2, cache);
+      await writeHarnessCache(cachePath2, cache, options.salt);
     } catch {
       for (const h of wanted) if (h !== "opencode") scans[h].problems.push(`${h}: cache not written`);
     }
   }
   return scans;
+}
+
+// src/stats/lock.ts
+import { randomUUID as randomUUID3 } from "node:crypto";
+import { link, mkdir as mkdir3, readFile as readFile3, rename as rename3, rm, unlink, writeFile as writeFile3 } from "node:fs/promises";
+import { dirname as dirname3 } from "node:path";
+function alive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+async function owner(path) {
+  try {
+    const pid = Number((await readFile3(path, "utf8")).trim());
+    return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+async function acquire(path) {
+  const tmp = `${path}.${randomUUID3()}.tmp`;
+  await writeFile3(tmp, String(process.pid), { flag: "wx", mode: 384 });
+  try {
+    await link(tmp, path);
+  } finally {
+    await unlink(tmp);
+  }
+}
+async function withLock(path, busy, fn) {
+  await mkdir3(dirname3(path), { recursive: true });
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await acquire(path);
+      break;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      const pid = await owner(path);
+      if (attempt > 0 || pid !== null && alive(pid)) throw new Error(busy);
+      const stale = `${path}.stale-${randomUUID3()}`;
+      await rename3(path, stale).catch(() => {
+        throw new Error(busy);
+      });
+      await rm(stale, { recursive: true, force: true });
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    if (await owner(path) === process.pid) await rm(path, { force: true });
+  }
 }
 
 // src/stats/snapshot.ts
@@ -918,13 +972,13 @@ var HASH = /^[a-f0-9]{64}$/;
 var MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 var MAX_BYTES = 128 * 1024 * 1024;
 async function atomicJson(path, value) {
-  await mkdir3(dirname3(path), { recursive: true });
-  const tmp = `${path}.${randomUUID3()}.tmp`;
+  await mkdir4(dirname4(path), { recursive: true });
+  const tmp = `${path}.${randomUUID4()}.tmp`;
   try {
-    await writeFile3(tmp, JSON.stringify(value), { mode: 384 });
-    await rename3(tmp, path);
+    await writeFile4(tmp, JSON.stringify(value), { mode: 384 });
+    await rename4(tmp, path);
   } catch (error) {
-    await unlink(tmp).catch(() => {
+    await unlink2(tmp).catch(() => {
     });
     throw error;
   }
@@ -951,37 +1005,42 @@ async function installationFile(path, fresh, validate) {
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
-  await mkdir3(dirname3(path), { recursive: true });
-  const tmp = `${path}.${randomUUID3()}.tmp`;
-  await writeFile3(tmp, JSON.stringify(fresh()), { flag: "wx", mode: 384 });
+  await mkdir4(dirname4(path), { recursive: true });
+  const tmp = `${path}.${randomUUID4()}.tmp`;
+  await writeFile4(tmp, JSON.stringify(fresh()), { flag: "wx", mode: 384 });
   try {
-    await link(tmp, path);
+    await link2(tmp, path);
   } catch (error) {
     if (error.code !== "EEXIST") throw error;
   } finally {
-    await unlink(tmp);
+    await unlink2(tmp);
   }
   return validate(await jsonFile(path));
 }
 async function machineIdentity(dir = agentDir()) {
   return installationFile(
     join7(dir, "pi-session-kit", "machine.json"),
-    () => ({ machineId: randomUUID3(), label: "Pi machine" }),
+    () => ({ machineId: randomUUID4(), label: "Pi machine" }),
     validateIdentity
   );
 }
 var stateFile = (dir) => join7(dir, "pi-session-kit", "export-state.json");
 function validateState(value) {
-  exact(value, ["version", "salt", "harnesses"]);
+  exact(value, ["version", "salt", "harnesses", "failures"]);
   const harnesses = value.harnesses;
-  if (value.version !== 1 || typeof value.salt !== "string" || !/^[a-f0-9]{32}$/.test(value.salt) || !(harnesses === null || Array.isArray(harnesses) && harnesses.every((h) => HARNESSES.includes(h)) && new Set(harnesses).size === harnesses.length))
+  const failures = value.failures;
+  if (value.version !== 1 || typeof value.salt !== "string" || !/^[a-f0-9]{32}$/.test(value.salt) || !(harnesses === null || Array.isArray(harnesses) && harnesses.every((h) => HARNESSES.includes(h)) && new Set(harnesses).size === harnesses.length) || !record(failures) || !Object.entries(failures).every(([h, n]) => HARNESSES.includes(h) && count(n) && n > 0))
     throw new Error("Invalid export state");
-  return { salt: value.salt, harnesses };
+  return {
+    salt: value.salt,
+    harnesses,
+    failures
+  };
 }
 async function exportState(dir) {
   return installationFile(
     stateFile(dir),
-    () => ({ version: 1, salt: randomBytes(16).toString("hex"), harnesses: null }),
+    () => ({ version: 1, salt: randomBytes(16).toString("hex"), harnesses: null, failures: {} }),
     validateState
   );
 }
@@ -993,7 +1052,7 @@ function eventId(event, version = SNAPSHOT_VERSION) {
   return opaqueId(JSON.stringify([...lead, event.entryId, event.ms, event.provider, event.model, ...counters2]));
 }
 var sessionsOf = (loaded) => loaded.sessionMetadata ?? loaded.sessions;
-function makeSnapshot(loaded, identity, exportedAt = Date.now(), quota = []) {
+function makeSnapshot(loaded, identity, exportedAt = Date.now(), quota = [], lastGoodAt = {}) {
   const shards = /* @__PURE__ */ new Map();
   const shard = (month) => {
     let s = shards.get(month);
@@ -1046,15 +1105,24 @@ function makeSnapshot(loaded, identity, exportedAt = Date.now(), quota = []) {
       machineId: identity.machineId,
       label: identity.label,
       exportedAt,
+      lastGoodAt,
       shards: []
     },
     shards: [...shards.values()].sort((a, b) => a.month.localeCompare(b.month))
   };
 }
 function validateManifest(value) {
-  exact(value, ["version", "machineId", "label", "exportedAt", "shards"]);
+  const v2 = !(record(value) && value.version === 1);
+  exact(value, ["version", "machineId", "label", "exportedAt", ...v2 ? ["lastGoodAt"] : [], "shards"]);
   if (!VERSIONS.includes(value.version) || typeof value.machineId !== "string" || !UUID.test(value.machineId) || !name(value.label) || !positive(value.exportedAt) || !Array.isArray(value.shards))
     throw new Error("Invalid or unsupported manifest");
+  if (v2) {
+    const good = value.lastGoodAt;
+    if (!record(good) || !Object.entries(good).every(
+      ([h, at]) => HARNESSES.includes(h) && positive(at) && at <= value.exportedAt
+    ))
+      throw new Error("Invalid harness freshness");
+  }
   const months = /* @__PURE__ */ new Set();
   for (const ref of value.shards) {
     exact(ref, ["month", "file", "sha256", "bytes"]);
@@ -1139,60 +1207,83 @@ function validateSnapshot(snapshot) {
     for (const e of s.events) if (!metadata.has(e.sessionId)) throw new Error("Missing session metadata");
 }
 var fatalProblem = (p) => p.endsWith(": cache not written") || p.includes(" unreadable files") || p.endsWith(": root unreadable") || p.startsWith("opencode: database ");
-var exists = (path) => lstat(path).then(
-  () => true,
-  () => false
-);
-var emptyCarry = { calls: [], sessions: [], quota: [] };
-async function lastPublished(snapshotDir, harness) {
-  const out = { calls: [], sessions: [], quota: [] };
+var emptyContribution = () => ({ calls: [], sessions: [], quota: [] });
+async function loadPrevious(snapshotDir) {
   let manifest;
   try {
     manifest = validateManifest(await jsonFile(join7(snapshotDir, "manifest.json")));
   } catch (error) {
-    return error.code === "ENOENT" ? out : null;
+    return error.code === "ENOENT" ? null : "unreadable";
   }
   try {
-    const sessionIds = /* @__PURE__ */ new Set();
-    const sessions = [];
+    const shards = [];
     for (const ref of manifest.shards) {
-      const text = await readFile3(join7(snapshotDir, ref.file), "utf8");
+      const text = await readFile4(join7(snapshotDir, ref.file), "utf8");
       if (opaqueId(text) !== ref.sha256) throw new Error("Shard digest mismatch");
-      const shard = validateShard(JSON.parse(text), manifest, ref.month);
-      for (const e of shard.events) {
-        if ((e.harness ?? "pi") !== harness) continue;
-        sessionIds.add(e.sessionId);
-        out.calls.push({
-          harness,
-          session: e.sessionId,
-          entryId: e.entryId ?? void 0,
-          ms: e.ms,
-          provider: e.provider,
-          model: e.model,
-          input: e.input,
-          output: e.output,
-          cacheRead: e.cacheRead,
-          cacheWrite: e.cacheWrite,
-          cost: e.cost
-        });
-      }
-      out.quota.push(...(shard.quota ?? []).filter((q) => q.harness === harness));
-      sessions.push(...shard.sessions);
+      shards.push(validateShard(JSON.parse(text), manifest, ref.month));
     }
-    for (const s of sessions)
-      if (sessionIds.has(s.id)) out.sessions.push({ path: s.id, startMs: s.startMs, endMs: s.endMs, child: s.child });
+    return { manifest, shards };
   } catch {
-    return null;
+    return "unreadable";
   }
+}
+function publishedSet(previous) {
+  if (previous === null) return [];
+  if (previous === "unreadable") return ["pi"];
+  const seen = new Set(Object.keys(previous.manifest.lastGoodAt ?? {}));
+  if (previous.manifest.version === 1) seen.add("pi");
+  for (const shard of previous.shards) {
+    for (const e of shard.events) seen.add(e.harness ?? "pi");
+    for (const q of shard.quota ?? []) seen.add(q.harness);
+  }
+  return HARNESSES.filter((h) => seen.has(h));
+}
+function carried(previous, harness) {
+  if (previous === null) return emptyContribution();
+  if (previous === "unreadable") return null;
+  const out = emptyContribution();
+  const sessionIds = /* @__PURE__ */ new Set();
+  const sessions = [];
+  for (const shard of previous.shards) {
+    for (const e of shard.events) {
+      if ((e.harness ?? "pi") !== harness) continue;
+      sessionIds.add(e.sessionId);
+      out.calls.push({
+        harness,
+        session: e.sessionId,
+        entryId: e.entryId ?? void 0,
+        ms: e.ms,
+        provider: e.provider,
+        model: e.model,
+        input: e.input,
+        output: e.output,
+        cacheRead: e.cacheRead,
+        cacheWrite: e.cacheWrite,
+        cost: e.cost
+      });
+    }
+    out.quota.push(...(shard.quota ?? []).filter((q) => q.harness === harness));
+    sessions.push(...shard.sessions);
+  }
+  for (const s of sessions)
+    if (sessionIds.has(s.id)) out.sessions.push({ path: s.id, startMs: s.startMs, endMs: s.endMs, child: s.child });
   return out;
 }
+var FAILURE_LIMIT = 3;
 async function exportStats(dir, output, root = sessionsDir(dir), options = {}) {
+  return withLock(
+    join7(dir, "pi-session-kit", "export.lock"),
+    "export already running",
+    () => exportLocked(dir, output, root, options)
+  );
+}
+async function exportLocked(dir, output, root, options) {
   const wanted = new Set(options.harnesses ?? ["pi"]);
   const identity = await machineIdentity(dir);
   const state = await exportState(dir);
   const snapshotDir = join7(output, "machines", identity.machineId);
-  const previous = state.harnesses ?? (await exists(join7(snapshotDir, "manifest.json")) ? ["pi"] : []);
-  const dropped = previous.filter((h) => !wanted.has(h));
+  const previous = await loadPrevious(snapshotDir);
+  const dropped = (state.harnesses ?? publishedSet(previous)).filter((h) => !wanted.has(h));
   if (dropped.length > 0 && !options.replaceHarnesses)
     throw new Error(
       `Refusing to publish a narrower harness set than last published (missing: ${dropped.join(", ")}); add them to --harness, or pass --replace-harnesses to drop their history`
@@ -1210,27 +1301,40 @@ async function exportStats(dir, output, root = sessionsDir(dir), options = {}) {
     loadSqlite: options.loadSqlite,
     salt: state.salt
   });
+  const exportedAt = Date.now();
   const report = {};
   const calls = [...loaded.calls];
   const sessionMetadata = [...sessionsOf(loaded)];
   const quota = [];
+  const lastGoodAt = wanted.has("pi") ? { pi: exportedAt } : {};
+  const failures = {};
   for (const h of external) {
     const scan = scans[h];
-    const failed = scan.problems.some(fatalProblem);
-    const carried = failed ? await lastPublished(snapshotDir, h) : null;
-    const use = failed ? carried ?? emptyCarry : { ...scan, sessions: scan.sessionMetadata };
+    const old = carried(previous, h);
+    const gone = !scan.found && !options.replaceHarnesses && old !== null && old.calls.length + old.quota.length > 0;
+    const failed = scan.problems.some(fatalProblem) || gone;
+    const use = failed ? old ?? emptyContribution() : { ...scan, sessions: scan.sessionMetadata };
+    const problems = [
+      ...scan.problems,
+      ...gone ? [`${h}: not found, but data was published before`] : [],
+      ...failed && old === null ? [`${h}: last published contents unreadable`] : []
+    ];
+    if (failed) failures[h] = (state.failures[h] ?? 0) + 1;
+    const was = previous !== null && previous !== "unreadable" ? previous.manifest : void 0;
+    const lastGood = failed ? was?.lastGoodAt?.[h] ?? was?.exportedAt : exportedAt;
+    if (lastGood !== void 0 && old !== null) lastGoodAt[h] = lastGood;
     report[h] = {
       found: scan.found,
-      problems: failed && !carried ? [...scan.problems, `${h}: last published contents unreadable`] : scan.problems,
-      ...failed ? { failed: carried ? "kept" : "lost" } : {}
+      problems,
+      ...failed ? { failed: old ? "kept" : "lost", consecutiveFailures: failures[h] } : {}
     };
     calls.push(...use.calls);
     sessionMetadata.push(...use.sessions);
     quota.push(...use.quota);
   }
-  const snapshot = makeSnapshot({ ...loaded, calls, sessionMetadata }, identity, Date.now(), quota);
+  const snapshot = makeSnapshot({ ...loaded, calls, sessionMetadata }, identity, exportedAt, quota, lastGoodAt);
   validateSnapshot(snapshot);
-  await mkdir3(snapshotDir, { recursive: true });
+  await mkdir4(snapshotDir, { recursive: true });
   for (const s of snapshot.shards) {
     const text = JSON.stringify(s);
     const sha256 = opaqueId(text);
@@ -1241,14 +1345,14 @@ async function exportStats(dir, output, root = sessionsDir(dir), options = {}) {
   }
   await atomicJson(join7(snapshotDir, "manifest.json"), validateManifest(snapshot.manifest));
   const published = HARNESSES.filter((h) => wanted.has(h));
-  await atomicJson(stateFile(dir), { version: 1, salt: state.salt, harnesses: published });
+  await atomicJson(stateFile(dir), { version: 1, salt: state.salt, harnesses: published, failures });
   return { machineId: identity.machineId, snapshotDir, ...external.length ? { harnesses: report } : {} };
 }
 var globalPath = (dir) => join7(dir, "pi-session-kit", "stats-global.json");
 async function jsonFile(path) {
   const info = await lstat(path);
   if (!info.isFile() || info.size > MAX_BYTES) throw new Error("Not a bounded regular snapshot file");
-  return JSON.parse(await readFile3(path, "utf8"));
+  return JSON.parse(await readFile4(path, "utf8"));
 }
 async function readGlobal(dir) {
   const empty = { version: SNAPSHOT_VERSION, importedAt: 0, machines: {}, problems: [] };
@@ -1275,6 +1379,10 @@ async function readGlobal(dir) {
     return { ...empty, problems: ["Unreadable global cache"] };
   }
 }
+var STALE_AFTER_MS = 2 * 24 * 60 * 60 * 1e3;
+function staleHarnesses(manifest) {
+  return Object.entries(manifest.lastGoodAt ?? {}).filter(([, at]) => manifest.exportedAt - at > STALE_AFTER_MS).map(([harness, lastGoodAt]) => ({ machineId: manifest.machineId, harness, lastGoodAt }));
+}
 async function importStats(dir, input) {
   const previous = await readGlobal(dir);
   const machines = { ...previous.machines };
@@ -1299,7 +1407,7 @@ async function importStats(dir, input) {
           const info = await lstat(path);
           if (!info.isFile() || info.size !== ref.bytes || info.size > MAX_BYTES)
             throw new Error("Invalid shard size/type");
-          const text = await readFile3(path, "utf8");
+          const text = await readFile4(path, "utf8");
           if (opaqueId(text) !== ref.sha256) throw new Error("Shard digest mismatch");
           const s = validateShard(JSON.parse(text), manifest, ref.month);
           if (JSON.stringify(s) !== text) throw new Error("Noncanonical shard JSON");
@@ -1323,7 +1431,8 @@ async function importStats(dir, input) {
   if (Buffer.byteLength(JSON.stringify(next)) > MAX_BYTES)
     throw new Error("Global cache exceeds 128 MiB; last-good cache retained");
   await atomicJson(globalPath(dir), next);
-  return { imported, retained: Object.keys(machines).length - imported, problems, importedAt };
+  const stale = Object.values(machines).flatMap((m) => staleHarnesses(m.manifest));
+  return { imported, retained: Object.keys(machines).length - imported, problems, importedAt, stale };
 }
 
 // src/stats/cli.ts
@@ -1375,14 +1484,21 @@ async function main() {
       roots: { claude: path("--claude-dir"), codex: path("--codex-dir"), opencode: path("--opencode-db") }
     });
     console.log(JSON.stringify(result));
-    for (const [name2, status] of Object.entries(result.harnesses ?? {}))
+    for (const [name2, status] of Object.entries(result.harnesses ?? {})) {
+      if ((status.consecutiveFailures ?? 0) >= FAILURE_LIMIT) {
+        console.error(`${name2}: failed ${status.consecutiveFailures} exports in a row`);
+        process.exitCode = 1;
+      }
       if (status.failed)
         console.error(
           `${name2}: scan incomplete, ${status.failed === "kept" ? "kept what was last published" : "last published contents unreadable, dropped"}`
         );
+    }
   } else if (command === "import" && input !== void 0 && output === void 0 && !EXPORT_ONLY.some((f) => options.has(f))) {
     const result = await importStats(dir, resolve3(input));
     console.log(JSON.stringify(result));
+    for (const s of result.stale)
+      console.error(`${s.machineId}: ${s.harness} not read cleanly since ${new Date(s.lastGoodAt).toISOString()}`);
     if (result.problems.length) {
       console.error(result.problems.join("\n"));
       process.exitCode = 1;

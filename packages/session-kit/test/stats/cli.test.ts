@@ -1,9 +1,10 @@
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { main, run } from "../../src/stats/cli.ts";
+import { FAILURE_LIMIT } from "../../src/stats/snapshot.ts";
 import { assistantLine, at, sessionFile } from "./fixtures.ts";
 import { seedHarnessHome } from "./harness/home.ts";
 
@@ -44,7 +45,7 @@ describe("stats CLI", () => {
 		await expect(import("../../src/stats/cli.ts")).resolves.toHaveProperty("main");
 		expect(log).not.toHaveBeenCalled();
 		expect(error).not.toHaveBeenCalled();
-		expect(process.exitCode).toBe(exitCode);
+		expect(process.exitCode ?? 0).toBe(exitCode ?? 0);
 	});
 
 	it("exports and imports explicit fixture directories from real argv", async () => {
@@ -130,7 +131,7 @@ describe("stats CLI", () => {
 		await main();
 		expect(JSON.parse(log.mock.calls[3]?.[0] as string).harnesses.opencode.failed).toBe("lost");
 		expect(error).toHaveBeenCalledWith("opencode: scan incomplete, last published contents unreadable, dropped");
-		expect(process.exitCode).toBe(exitCode);
+		expect(process.exitCode ?? 0).toBe(exitCode ?? 0);
 		for (const argv of [
 			["--replace-harnesses", "--replace-harnesses"],
 			["--replace-harnesses", "x"],
@@ -138,6 +139,67 @@ describe("stats CLI", () => {
 			process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output, ...argv];
 			await expect(main()).rejects.toThrow("usage: export");
 		}
+	});
+
+	it("keeps Codex data when --codex-dir points nowhere, and exits nonzero after repeated failures", async () => {
+		const roots = seedHarnessHome(join(dir, "home"));
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		const base = [
+			"node",
+			"pi-stats-export",
+			"export",
+			"--agent-dir",
+			source,
+			"--output",
+			output,
+			"--harness",
+			"pi,codex",
+		];
+		process.argv = [...base, "--codex-dir", roots.codex];
+		await main();
+		for (let run = 1; run <= FAILURE_LIMIT; run++) {
+			process.argv = [...base, "--codex-dir", join(dir, "nonexistent")];
+			await main();
+			const status = JSON.parse(log.mock.calls[run]?.[0] as string).harnesses.codex;
+			expect(status).toMatchObject({ failed: "kept", consecutiveFailures: run });
+			expect(process.exitCode ?? 0).toBe(run >= FAILURE_LIMIT ? 1 : 0);
+		}
+		expect(error).toHaveBeenCalledWith(`codex: failed ${FAILURE_LIMIT} exports in a row`);
+		process.exitCode = 0; // Bun cannot restore an unset exit code, so leave a clean one
+		// the data survived all of it
+		const manifestDir = JSON.parse(log.mock.calls[1]?.[0] as string).snapshotDir;
+		expect(readdirSync(manifestDir).length).toBeGreaterThan(1);
+	});
+
+	it("reports a stale harness on import", async () => {
+		const roots = seedHarnessHome(join(dir, "home"));
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		process.argv = [
+			"node",
+			"pi-stats-export",
+			"export",
+			"--agent-dir",
+			source,
+			"--output",
+			output,
+			"--harness",
+			"pi,codex",
+			"--codex-dir",
+			roots.codex,
+		];
+		await main();
+		const { snapshotDir } = JSON.parse(log.mock.calls[0]?.[0] as string);
+		const path = join(snapshotDir, "manifest.json");
+		const manifest = JSON.parse(readFileSync(path, "utf8"));
+		manifest.lastGoodAt.codex = manifest.exportedAt - 3 * 24 * 60 * 60 * 1000;
+		writeFileSync(path, JSON.stringify(manifest));
+		process.argv = ["node", "pi-stats-export", "import", "--agent-dir", viewer, "--input", output];
+		await main();
+		expect(JSON.parse(log.mock.calls[1]?.[0] as string).stale).toHaveLength(1);
+		expect(error).toHaveBeenCalledWith(expect.stringMatching(/: codex not read cleanly since \d{4}-/));
+		expect(process.exitCode ?? 0).toBe(exitCode ?? 0);
 	});
 
 	it("rejects unknown or repeated harnesses and export-only flags on import", async () => {

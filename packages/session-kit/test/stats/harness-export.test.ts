@@ -1,4 +1,13 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -7,6 +16,7 @@ import { type Harness, opaqueId } from "../../src/stats/load.ts";
 import {
 	eventId,
 	exportStats,
+	FAILURE_LIMIT,
 	importStats,
 	loadCombined,
 	type Manifest,
@@ -15,6 +25,8 @@ import {
 	readGlobal,
 	type Shard,
 	type SnapshotEvent,
+	STALE_AFTER_MS,
+	staleHarnesses,
 	validateManifest,
 	validateShard,
 	validateSnapshot,
@@ -90,6 +102,7 @@ function publish(machineId: string, version: 1 | 2, events: SnapshotEvent[], q: 
 		machineId,
 		label: "fixture",
 		exportedAt: OCT,
+		...(version === 2 ? { lastGoodAt: {} } : {}),
 		shards: [{ month: "2026-10", file, sha256, bytes: Buffer.byteLength(text) }],
 	};
 	writeFileSync(join(base, "manifest.json"), JSON.stringify(manifest));
@@ -117,8 +130,16 @@ describe("event fingerprint", () => {
 });
 
 describe("snapshot v2 schema", () => {
-	const manifest2: Manifest = { version: 2, machineId: NEW_MACHINE, label: "m", exportedAt: OCT, shards: [] };
-	const manifest1: Manifest = { ...manifest2, version: 1 };
+	const manifest2: Manifest = {
+		version: 2,
+		machineId: NEW_MACHINE,
+		label: "m",
+		exportedAt: OCT,
+		lastGoodAt: {},
+		shards: [],
+	};
+	const { lastGoodAt: _none, ...rest } = manifest2;
+	const manifest1: Manifest = { ...rest, version: 1 };
 	const shard = (events: SnapshotEvent[], q: QuotaObservation[] = []): Shard => ({
 		version: 2,
 		machineId: NEW_MACHINE,
@@ -463,7 +484,7 @@ describe("exportStats with harnesses", () => {
 		const roots = seedHarnessHome(home);
 		const loadSqlite = () => Promise.reject(new Error("no sqlite"));
 		const result = await exportStats(agent, repo, undefined, { harnesses: ["opencode"], roots, home, loadSqlite });
-		expect(result.harnesses?.opencode).toMatchObject({ found: true, failed: "kept" });
+		expect(result.harnesses?.opencode).toMatchObject({ found: true, failed: "kept", consecutiveFailures: 1 });
 		expect(result.harnesses?.opencode?.problems[0]).toContain("opencode: database unreadable");
 		expect(published(result.snapshotDir)).toEqual([]);
 	});
@@ -481,6 +502,7 @@ describe("exportStats with harnesses", () => {
 					found: true,
 					problems: ["claude: 1 unreadable files"],
 					failed: "kept",
+					consecutiveFailures: 1,
 				});
 			expect(published(result.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness))).toContain("codex");
 		} finally {
@@ -497,7 +519,12 @@ describe("exportStats with harnesses", () => {
 			const roots = seedHarnessHome(home);
 			await exportStats(agent, repo, undefined, { harnesses: ["pi", "codex"], roots, home });
 			const state = JSON.parse(readFileSync(statePath(), "utf8"));
-			expect(state).toEqual({ version: 1, salt: expect.stringMatching(/^[a-f0-9]{32}$/), harnesses: ["pi", "codex"] });
+			expect(state).toEqual({
+				version: 1,
+				salt: expect.stringMatching(/^[a-f0-9]{32}$/),
+				harnesses: ["pi", "codex"],
+				failures: {},
+			});
 			// the salt never reaches the published snapshot
 			const out = Object.values(files(repo))
 				.map(([bytes]) => bytes)
@@ -552,9 +579,9 @@ describe("exportStats with harnesses", () => {
 			expect(JSON.parse(readFileSync(statePath(), "utf8")).harnesses).toEqual(["codex"]);
 			// state without a recorded set (as created before any export finished) and a pi-era manifest
 			const salt = JSON.parse(readFileSync(statePath(), "utf8")).salt;
-			writeFileSync(statePath(), JSON.stringify({ version: 1, salt, harnesses: null }));
+			writeFileSync(statePath(), JSON.stringify({ version: 1, salt, harnesses: null, failures: {} }));
 			await exportStats(agent, repo, undefined, { harnesses: ["pi"], roots, home });
-			writeFileSync(statePath(), JSON.stringify({ version: 1, salt, harnesses: null }));
+			writeFileSync(statePath(), JSON.stringify({ version: 1, salt, harnesses: null, failures: {} }));
 			await expect(exportStats(agent, repo, undefined, { harnesses: ["claude"], roots, home })).rejects.toThrow(
 				/missing: pi/,
 			);
@@ -566,12 +593,12 @@ describe("exportStats with harnesses", () => {
 			const salt = "a".repeat(32);
 			for (const bad of [
 				"{",
-				JSON.stringify({ version: 1, salt: "x", harnesses: ["pi"] }),
-				JSON.stringify({ version: 2, salt, harnesses: ["pi"] }),
-				JSON.stringify({ version: 1, salt, harnesses: "pi" }),
-				JSON.stringify({ version: 1, salt, harnesses: ["pi", "pi"] }),
-				JSON.stringify({ version: 1, salt, harnesses: ["vim"] }),
-				JSON.stringify({ version: 1, salt, harnesses: ["pi"], extra: 1 }),
+				JSON.stringify({ version: 1, salt: "x", harnesses: ["pi"], failures: {} }),
+				JSON.stringify({ version: 2, salt, harnesses: ["pi"], failures: {} }),
+				JSON.stringify({ version: 1, salt, harnesses: "pi", failures: {} }),
+				JSON.stringify({ version: 1, salt, harnesses: ["pi", "pi"], failures: {} }),
+				JSON.stringify({ version: 1, salt, harnesses: ["vim"], failures: {} }),
+				JSON.stringify({ version: 1, salt, harnesses: ["pi"], failures: {}, extra: 1 }),
 			]) {
 				writeFileSync(statePath(), bad);
 				await expect(exportStats(agent, repo, undefined, { home })).rejects.toThrow();
@@ -617,6 +644,7 @@ describe("exportStats with harnesses", () => {
 				found: true,
 				problems: ["opencode: database busy, skipped"],
 				failed: "kept",
+				consecutiveFailures: 1,
 			});
 			expect(second.harnesses?.claude).toEqual({ found: true, problems: [] });
 			const after = kinds(second.snapshotDir);
@@ -689,6 +717,7 @@ describe("exportStats with harnesses", () => {
 						found: true,
 						problems: ["claude: root unreadable"],
 						failed: "kept",
+						consecutiveFailures: 1,
 					});
 					expect(published(second.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness))).toContain("claude");
 				} finally {
@@ -742,6 +771,243 @@ describe("exportStats with harnesses", () => {
 			expect(second.harnesses?.opencode).toMatchObject({ failed: "lost" });
 			expect(second.harnesses?.opencode?.problems).toContain("opencode: last published contents unreadable");
 			expect(published(second.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness))).toEqual(["pi"]);
+		});
+	});
+
+	describe("a harness that vanished", () => {
+		const gone = (): string => join(dir, "nonexistent");
+
+		it("keeps what was published, reports it failed, and never publishes an empty replacement", async () => {
+			seedPi();
+			const roots = seedHarnessHome(home);
+			const harnesses: Harness[] = ["pi", "claude", "codex"];
+			const first = await exportStats(agent, repo, undefined, { harnesses, roots, home });
+			const before = published(first.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness));
+			expect(before).toContain("codex");
+
+			const second = await exportStats(agent, repo, undefined, { harnesses, roots: { ...roots, codex: gone() }, home });
+			expect(second.harnesses?.codex).toEqual({
+				found: false,
+				problems: ["codex: not found, but data was published before"],
+				failed: "kept",
+				consecutiveFailures: 1,
+			});
+			expect(second.harnesses?.claude).toEqual({ found: true, problems: [] });
+			const after = published(second.snapshotDir);
+			expect(after.flatMap((sh) => sh.events.map((e) => e.harness)).sort()).toEqual([...before].sort());
+			expect(after.flatMap((sh) => sh.quota ?? []).map((q) => q.harness)).toEqual(["codex"]);
+		});
+
+		it("publishes the empty replacement only when replacing is explicit", async () => {
+			seedPi();
+			const roots = seedHarnessHome(home);
+			const harnesses: Harness[] = ["pi", "codex"];
+			await exportStats(agent, repo, undefined, { harnesses, roots, home });
+			const replaced = await exportStats(agent, repo, undefined, {
+				harnesses,
+				replaceHarnesses: true,
+				roots: { ...roots, codex: gone() },
+				home,
+			});
+			expect(replaced.harnesses?.codex).toEqual({ found: false, problems: [] });
+			expect(published(replaced.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness))).toEqual(["pi"]);
+		});
+
+		it("is silent for a harness that was never published", async () => {
+			seedPi();
+			const roots = seedHarnessHome(home);
+			await exportStats(agent, repo, undefined, { harnesses: ["pi"], roots, home });
+			const result = await exportStats(agent, repo, undefined, {
+				harnesses: ["pi", "codex"],
+				roots: { ...roots, codex: gone() },
+				home,
+			});
+			expect(result.harnesses?.codex).toEqual({ found: false, problems: [] });
+		});
+	});
+
+	describe("harness freshness and repeated failures", () => {
+		const busyDb = () => Promise.reject(Object.assign(new Error("locked"), { errcode: 5 }));
+		const statePath = () => join(agent, "pi-session-kit", "export-state.json");
+		const manifestOf = (snapshotDir: string) =>
+			JSON.parse(readFileSync(join(snapshotDir, "manifest.json"), "utf8")) as Manifest;
+
+		it("records when each harness was last read cleanly, and keeps the old mark for a carried one", async () => {
+			seedPi();
+			const roots = seedHarnessHome(home);
+			const harnesses: Harness[] = ["pi", "claude", "opencode"];
+			const first = await exportStats(agent, repo, undefined, { harnesses, roots, home });
+			const m1 = manifestOf(first.snapshotDir);
+			expect(m1.lastGoodAt).toEqual({ pi: m1.exportedAt, claude: m1.exportedAt, opencode: m1.exportedAt });
+
+			await new Promise((r) => setTimeout(r, 5));
+			const second = await exportStats(agent, repo, undefined, { harnesses, roots, home, loadSqlite: busyDb });
+			const m2 = manifestOf(second.snapshotDir);
+			expect(m2.exportedAt).toBeGreaterThan(m1.exportedAt);
+			expect(m2.lastGoodAt).toEqual({ pi: m2.exportedAt, claude: m2.exportedAt, opencode: m1.exportedAt });
+
+			// no mark at all for a harness whose previous snapshot could not be read
+			const manifest = manifestOf(second.snapshotDir);
+			for (const ref of manifest.shards) writeFileSync(join(second.snapshotDir, ref.file), "tampered");
+			const third = await exportStats(agent, repo, undefined, { harnesses, roots, home, loadSqlite: busyDb });
+			expect(manifestOf(third.snapshotDir).lastGoodAt).not.toHaveProperty("opencode");
+		});
+
+		it("falls back to the previous export time when the previous manifest carries no mark for it", async () => {
+			seedPi();
+			const roots = seedHarnessHome(home);
+			const id = (await machineIdentity(agent)).machineId;
+			publish(id, 2, [event("opencode", "carried", { cost: 1 })]);
+			const result = await exportStats(agent, repo, undefined, {
+				harnesses: ["pi", "opencode"],
+				roots,
+				home,
+				loadSqlite: busyDb,
+			});
+			expect(result.harnesses?.opencode?.failed).toBe("kept");
+			expect(manifestOf(result.snapshotDir).lastGoodAt?.opencode).toBe(OCT);
+			// a pi-era (v1) snapshot has no marks at all: carried data is as old as its export
+			publish(id, 1, [v1Event("legacy")]);
+			unlinkSync(statePath());
+			const v1 = await exportStats(agent, repo, undefined, {
+				harnesses: ["pi", "opencode"],
+				roots,
+				home,
+				loadSqlite: busyDb,
+			});
+			expect(v1.harnesses?.opencode?.failed).toBe("kept");
+			expect(manifestOf(v1.snapshotDir).lastGoodAt?.opencode).toBe(OCT);
+		});
+
+		it("flags a harness more than two days behind its snapshot as stale on import", async () => {
+			const exportedAt = OCT + 10 * STALE_AFTER_MS;
+			const manifest = (lastGoodAt: Manifest["lastGoodAt"]): Manifest => ({
+				version: 2,
+				machineId: OLD_MACHINE,
+				label: "m",
+				exportedAt,
+				lastGoodAt,
+				shards: [],
+			});
+			expect(staleHarnesses(manifest({ pi: exportedAt, codex: exportedAt - STALE_AFTER_MS }))).toEqual([]);
+			expect(staleHarnesses(manifest({ codex: exportedAt - STALE_AFTER_MS - 1 }))).toEqual([
+				{ machineId: OLD_MACHINE, harness: "codex", lastGoodAt: exportedAt - STALE_AFTER_MS - 1 },
+			]);
+			expect(staleHarnesses({ ...manifest({}), version: 1, lastGoodAt: undefined })).toEqual([]);
+
+			const base = publish(OLD_MACHINE, 2, [], []);
+			const stale = exportedAt - 3 * STALE_AFTER_MS;
+			writeFileSync(
+				join(repo, "machines", OLD_MACHINE, "manifest.json"),
+				JSON.stringify({ ...base, exportedAt, lastGoodAt: { pi: exportedAt, claude: stale } }),
+			);
+			const result = await importStats(viewer, repo);
+			expect(result.stale).toEqual([{ machineId: OLD_MACHINE, harness: "claude", lastGoodAt: stale }]);
+		});
+
+		it("rejects a manifest with malformed freshness", () => {
+			const good: Manifest = {
+				version: 2,
+				machineId: OLD_MACHINE,
+				label: "m",
+				exportedAt: OCT,
+				lastGoodAt: {},
+				shards: [],
+			};
+			expect(validateManifest({ ...good, lastGoodAt: { pi: OCT } })).toBeTruthy();
+			for (const lastGoodAt of [undefined, null, [], { vim: OCT }, { pi: 0 }, { pi: OCT + 1 }, { pi: "x" }])
+				expect(() => validateManifest({ ...good, lastGoodAt })).toThrow();
+			const { lastGoodAt: _x, ...v1 } = good;
+			expect(validateManifest({ ...v1, version: 1 })).toBeTruthy();
+			expect(() => validateManifest({ ...v1, version: 1, lastGoodAt: {} })).toThrow();
+			expect(() => validateManifest(null)).toThrow();
+		});
+
+		it("counts consecutive failed exports per harness and resets on a clean one", async () => {
+			seedPi();
+			const roots = seedHarnessHome(home);
+			const harnesses: Harness[] = ["pi", "opencode"];
+			await exportStats(agent, repo, undefined, { harnesses, roots, home });
+			const counts: (number | undefined)[] = [];
+			for (let i = 0; i < FAILURE_LIMIT; i++) {
+				const r = await exportStats(agent, repo, undefined, { harnesses, roots, home, loadSqlite: busyDb });
+				counts.push(r.harnesses?.opencode?.consecutiveFailures);
+			}
+			expect(counts).toEqual([1, 2, 3]);
+			expect(JSON.parse(readFileSync(statePath(), "utf8")).failures).toEqual({ opencode: 3 });
+			const clean = await exportStats(agent, repo, undefined, { harnesses, roots, home });
+			expect(clean.harnesses?.opencode).toEqual({ found: true, problems: [] });
+			expect(JSON.parse(readFileSync(statePath(), "utf8")).failures).toEqual({});
+		});
+
+		it("derives the published set from the snapshot when the state file is gone", async () => {
+			seedPi();
+			const roots = seedHarnessHome(home);
+			const absent = { ...roots, opencode: join(dir, "nonexistent.db") };
+			await exportStats(agent, repo, undefined, { harnesses: ["pi", "claude", "opencode"], roots: absent, home });
+			// claude has events; opencode has none but was published (it carries a mark): both count
+			unlinkSync(statePath());
+			await expect(exportStats(agent, repo, undefined, { harnesses: ["pi"], roots, home })).rejects.toThrow(
+				/missing: claude, opencode/,
+			);
+			unlinkSync(statePath());
+			await expect(exportStats(agent, repo, undefined, { harnesses: ["pi", "claude"], roots, home })).rejects.toThrow(
+				/missing: opencode/,
+			);
+			unlinkSync(statePath());
+			await exportStats(agent, repo, undefined, { harnesses: ["pi", "claude", "opencode"], roots: absent, home });
+		});
+
+		it("derives quota-only and pi-era sets too, and assumes pi when the snapshot cannot be read", async () => {
+			seedPi();
+			const roots = seedHarnessHome(home);
+			const id = (await machineIdentity(agent)).machineId;
+			const run = (harnesses: Harness[]) => exportStats(agent, repo, undefined, { harnesses, roots, home });
+			publish(id, 2, [], [quota({ harness: "codex" })]);
+			await expect(run(["pi"])).rejects.toThrow(/missing: codex/);
+			unlinkSync(statePath());
+			publish(id, 1, []);
+			await expect(run(["codex"])).rejects.toThrow(/missing: pi/);
+			unlinkSync(statePath());
+			writeFileSync(join(repo, "machines", id, "manifest.json"), "{");
+			await expect(run(["codex"])).rejects.toThrow(/missing: pi/);
+		});
+
+		it("rejects malformed failure counts in state", async () => {
+			seedPi();
+			await exportStats(agent, repo, undefined, { harnesses: ["pi"], home });
+			const state = JSON.parse(readFileSync(statePath(), "utf8"));
+			for (const failures of [null, [], { vim: 1 }, { codex: 0 }, { codex: "1" }, { codex: -1 }]) {
+				writeFileSync(statePath(), JSON.stringify({ ...state, failures }));
+				await expect(exportStats(agent, repo, undefined, { home })).rejects.toThrow("Invalid export state");
+			}
+		});
+	});
+
+	describe("concurrent exports", () => {
+		const lockPath = () => join(agent, "pi-session-kit", "export.lock");
+
+		it("lets one export run at a time and says so", async () => {
+			seedPi();
+			const results = await Promise.allSettled([
+				exportStats(agent, repo, undefined, { home }),
+				exportStats(agent, repo, undefined, { home }),
+			]);
+			expect(results.map((r) => r.status).sort()).toEqual(["fulfilled", "rejected"]);
+			const failure = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
+			expect(String(failure.reason)).toContain("export already running");
+			// released afterwards, including after a failed export
+			await exportStats(agent, repo, undefined, { home });
+			writeFileSync(join(agent, "sessions", "p", "bad.jsonl"), "{broken\n");
+			await expect(exportStats(agent, repo, undefined, { home })).rejects.toThrow("Incomplete local scan");
+			expect(() => statSync(lockPath())).toThrow();
+		});
+
+		it("reclaims the lock of a dead process", async () => {
+			seedPi();
+			mkdirSync(join(agent, "pi-session-kit"), { recursive: true });
+			writeFileSync(lockPath(), String(2 ** 30));
+			await expect(exportStats(agent, repo, undefined, { home })).resolves.toHaveProperty("machineId");
 		});
 	});
 });

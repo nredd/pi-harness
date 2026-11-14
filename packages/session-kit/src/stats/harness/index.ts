@@ -10,6 +10,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { agentDir } from "../../agent-dir.ts";
+import { opaqueId } from "../load.ts";
 import { readClaude } from "./claude.ts";
 import { readCodex } from "./codex.ts";
 import { asRecordOf, emptyScan, type HarnessScan } from "./common.ts";
@@ -19,8 +20,8 @@ import { type HarnessCache, isParsedFile, type ParsedFile } from "./scan.ts";
 export type ExternalHarness = "claude" | "codex" | "opencode";
 export const EXTERNAL_HARNESSES: readonly ExternalHarness[] = ["claude", "codex", "opencode"];
 
-/** v2: Claude and Codex calls carry a `null` cost instead of 0. v3: quota readings carry an `account`. */
-const CACHE_VERSION = 3;
+/** v2: Claude and Codex calls carry a `null` cost instead of 0. v3: quota readings carry an `account`. v4: the cache records a mark of its salt. */
+const CACHE_VERSION = 4;
 
 export const harnessCachePath = (dir = agentDir()): string => join(dir, "pi-session-kit", "stats-harness-cache.json");
 
@@ -47,8 +48,14 @@ export function harnessRoots(
 	};
 }
 
+/**
+ * What a cache records of the salt its account hashes were made with: a hash, never the salt. A cache
+ * written under another salt would carry discriminators that no longer match, so it is discarded.
+ */
+export const saltMark = (salt: string): string => opaqueId(`harness-cache-salt:${salt}`);
+
 /** Cached records, dropping any that do not have exactly the expected shape (they are re-parsed). */
-export async function readHarnessCache(path: string): Promise<HarnessCache> {
+export async function readHarnessCache(path: string, salt: string): Promise<HarnessCache> {
 	let doc: unknown;
 	try {
 		doc = JSON.parse(await readFile(path, "utf8"));
@@ -57,7 +64,7 @@ export async function readHarnessCache(path: string): Promise<HarnessCache> {
 	}
 	const cache: HarnessCache = {};
 	const record = asRecordOf(doc);
-	if (record.version !== CACHE_VERSION) return cache;
+	if (record.version !== CACHE_VERSION || record.salt !== saltMark(salt)) return cache;
 	for (const [harness, files] of Object.entries(asRecordOf(record.harnesses)))
 		cache[harness] = Object.fromEntries(
 			Object.entries(asRecordOf(files)).filter((entry): entry is [string, ParsedFile] => isParsedFile(entry[1])),
@@ -66,10 +73,10 @@ export async function readHarnessCache(path: string): Promise<HarnessCache> {
 }
 
 /** Atomic write: a crash mid-write never leaves a truncated cache behind. */
-export async function writeHarnessCache(path: string, cache: HarnessCache): Promise<void> {
+export async function writeHarnessCache(path: string, cache: HarnessCache, salt: string): Promise<void> {
 	await mkdir(dirname(path), { recursive: true });
 	const tmp = `${path}.${randomUUID()}.tmp`;
-	await writeFile(tmp, JSON.stringify({ version: CACHE_VERSION, harnesses: cache }));
+	await writeFile(tmp, JSON.stringify({ version: CACHE_VERSION, salt: saltMark(salt), harnesses: cache }));
 	await rename(tmp, path);
 }
 
@@ -91,7 +98,7 @@ export async function loadHarnesses(options: HarnessLoadOptions): Promise<Record
 	const wanted = new Set(options.harnesses ?? EXTERNAL_HARNESSES);
 	const roots = harnessRoots(options.env, options.home, options.roots);
 	const cachePath = options.cache ?? harnessCachePath();
-	const cache = await readHarnessCache(cachePath);
+	const cache = await readHarnessCache(cachePath, options.salt);
 	const before = JSON.stringify(cache);
 	const scans = {
 		claude: wanted.has("claude") ? await readClaude(roots.claude, cache) : emptyScan(false),
@@ -102,7 +109,7 @@ export async function loadHarnesses(options: HarnessLoadOptions): Promise<Record
 	};
 	if (JSON.stringify(cache) !== before) {
 		try {
-			await writeHarnessCache(cachePath, cache);
+			await writeHarnessCache(cachePath, cache, options.salt);
 		} catch {
 			// The view still renders, but a producer must not claim durable history.
 			for (const h of wanted) if (h !== "opencode") scans[h].problems.push(`${h}: cache not written`);

@@ -302,7 +302,7 @@ it("rejects incomplete local scans, invalid machine directories, and older expor
 	rmSync(join(repo, "machines", "not-a-machine"), { recursive: true });
 	const manifestPath = join(exported.snapshotDir, "manifest.json");
 	const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-	writeFileSync(manifestPath, JSON.stringify({ ...manifest, exportedAt: 1 }));
+	writeFileSync(manifestPath, JSON.stringify({ ...manifest, exportedAt: 1, lastGoodAt: { pi: 1 } }));
 	expect((await importStats(viewer, repo)).problems).toContain(`Incomplete snapshot ${exported.machineId}`);
 });
 

@@ -29,8 +29,13 @@ The set an export published is recorded (see `export-state.json` below). A later
 *narrower* set than the last published one is refused before anything is read or written, because
 its snapshot would silently drop the missing harnesses' history (e.g. a scheduled `--harness pi`
 run after a manual `--harness pi,claude`). Widen the set, or pass `--replace-harnesses` to drop
-the history on purpose. A machine with no recorded set counts as having published `pi` only if it
-has a manifest, and nothing otherwise.
+the history on purpose. If the recorded set is missing (state file lost), it is derived from the
+last published snapshot: every harness with an event, a quota reading or a `lastGoodAt` mark in it
+(a pi-era snapshot counts as `pi`; one that cannot be read is assumed to be `pi`), and nothing if
+nothing was published.
+
+One export runs per agent dir at a time (see `export.lock` below); a second fails with
+`export already running`.
 
 `--agent-dir` defaults to `PI_CODING_AGENT_DIR`, then `~/.pi/agent`. The session root defaults to
 `PI_CODING_AGENT_SESSION_DIR`, then `DIR/sessions`; `--sessions-dir` takes precedence. History
@@ -47,16 +52,25 @@ CLI results:
   `claude: ! 2 unreadable lines`, Codex turns skipped for lack of per-turn records).
   A harness whose scan is incomplete (unreadable transcript files, a harness cache that cannot be
   written, a data root or OpenCode database that exists but cannot be reached, an OpenCode database
-  that is busy or unreadable) is `failed: "kept"`: what this machine
+  that is busy or unreadable) is `failed: "kept"`. So is one that is *not found* while the last
+  published snapshot holds data for it (a moved or unmounted root, a wrong `--codex-dir`), with the
+  diagnostic `<harness>: not found, but data was published before`; only `--replace-harnesses`
+  publishes the empty replacement. A harness never published and not found stays silent. Kept: what this machine
   last published for that harness (events, sessions, quota) is carried into the new snapshot
   unchanged, a diagnostic goes to stderr, and the export still succeeds, so one flaky harness
   cannot stop the pi export or replace good history with a partial scan. With nothing published
   yet there is nothing to carry. If the previous snapshot itself is unreadable the harness is
   `failed: "lost"` (diagnostic `<harness>: last published contents unreadable`): it is missing
   from this snapshot, and stderr says so. Pi itself still fails closed.
+  `consecutiveFailures` counts failed exports of a harness in a row (kept in `export-state.json`,
+  reset by a clean one); at 3 the CLI exits nonzero (after printing and publishing as usual) and
+  says `<harness>: failed 3 exports in a row`, so a stuck harness cannot be carried forever unseen.
   A transcript that vanishes between listing and reading (Claude and Codex prune old ones) is not a
   failure; its cached record stays.
-- Import: `{ "imported": N, "retained": N, "problems": [], "importedAt": MS }` on stdout.
+- Import: `{ "imported": N, "retained": N, "problems": [], "importedAt": MS, "stale": [..] }` on
+  stdout. `stale` lists `{machineId, harness, lastGoodAt}` for every cached machine harness whose
+  `lastGoodAt` is more than 2 days behind its manifest `exportedAt` (data carried through failures);
+  each is also a stderr line, and none changes the exit code.
 - Exactly one JSON object is emitted. Diagnostics go to stderr. Invalid commands, malformed local
   scans, unwritable caches and publication failures exit nonzero. Partial/corrupt imports emit
   a JSON result and exit nonzero, retaining every failed machine's last-good snapshot.
@@ -76,10 +90,15 @@ Installation state, never synced:
   cached record. Invalid cached identities and raw provider/model pairs are discarded. Persisted
   child markers apply only to the matching session ID, surviving user-visible renames.
 - `DIR/pi-session-kit/export-state.json`: the installation's secret salt (32 hex) and the harness set
-  the last successful export published (`null` until one is recorded). The salt keys the quota
+  the last successful export published (`null` until one is recorded). `failures` holds the consecutive failed exports per harness.
+  The salt keys the quota
   account discriminators below and never appears in a snapshot; like `machine.json`, it is created
   exclusively and atomically, and a corrupt file fails rather than being replaced. The set is
   written only after the manifest is published.
+- `DIR/pi-session-kit/export.lock`: held for the whole of an export (read the previous snapshot,
+  check the set, publish, record state). Created atomically with the owner's pid; a lock whose
+  process is dead (or whose contents are not a pid) is reclaimed, a live owner fails the second
+  export with `export already running`. Safe to delete when no export is running.
 - `DIR/pi-session-kit/stats-global.json`: one atomically replaced document containing validated
   last-good machine snapshots, last successful import time and coverage problems. Imports do not
   mutate local usage or installation identity. A wholly failed import does not advance the sync
@@ -101,6 +120,10 @@ Manifest exact keys:
 - `machineId`: persistent UUID v4, matching its directory.
 - `label`: installation label, maximum 1024 characters. Not a session name.
 - `exportedAt`: positive UTC Unix milliseconds.
+- `lastGoodAt` (v2 only): per harness in the snapshot (`pi`, `claude`, ...), when it was last read
+  cleanly: positive, at most `exportedAt`. Equal to `exportedAt` unless the harness failed and its
+  previous contents were carried, when it stays at the previous mark (or the previous `exportedAt`
+  for a snapshot with none); absent when that is unknown.
 - `shards`: unique month references, each exactly `{month, file, sha256, bytes}`. `file` MUST
   equal `<month>-<sha256>.json`. No absolute paths, traversal or arbitrary filenames.
 
@@ -206,7 +229,13 @@ pi (`Call.harness`: `pi | claude | codex | opencode`). Roots: `CLAUDE_CONFIG_DIR
 reads only. A missing root is silent ("not installed"). Parsed files are cached in
 `DIR/pi-session-kit/stats-harness-cache.json` by size and mtime, history for deleted files kept.
 That local, never-synced file is keyed by absolute transcript path (so Claude's cwd-encoded project
-directory names live there as keys); its values and every reader result carry no paths.
+directory names live there as keys); its values and every reader result carry no paths. It also
+records a hash of the installation salt (never the salt) and is discarded when that changes.
+
+Purging a harness: history for transcripts a tool has since pruned lives only in this cache and in
+the published snapshots. To drop a harness on purpose, export without it using
+`--replace-harnesses`; to also forget what the cache remembers of deleted files, delete
+`stats-harness-cache.json` (existing files re-parse; pruned history is gone for good).
 
 - Claude: `projects/**/*.jsonl` including `subagents/`. One response is written once per content
   block, so rows collapse by `(message.id, requestId)`, keeping the largest output count.
