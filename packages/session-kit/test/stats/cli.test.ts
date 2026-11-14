@@ -250,6 +250,28 @@ describe("stats CLI", () => {
 		expect(process.exitCode).toBe(1);
 	});
 
+	it("prints a warning from a published export and still exits 0", async () => {
+		process.exitCode = 0; // Bun cannot restore an unset exit code left by an earlier test
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		vi.resetModules();
+		vi.doMock("../../src/stats/snapshot.ts", () => ({
+			exportStats: async () => ({ machineId: "m", snapshotDir: "d", warnings: ["export state not recorded"] }),
+			importStats: async () => ({}),
+		}));
+		try {
+			const cli = await import("../../src/stats/cli.ts");
+			process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output];
+			await cli.run();
+		} finally {
+			vi.doUnmock("../../src/stats/snapshot.ts");
+			vi.resetModules();
+		}
+		expect(JSON.parse(log.mock.calls[0]?.[0] as string).warnings).toEqual(["export state not recorded"]);
+		expect(error).toHaveBeenCalledExactlyOnceWith("export state not recorded");
+		expect(process.exitCode ?? 0).toBe(0);
+	});
+
 	it("runs itself when it is the process entrypoint", async () => {
 		const error = vi.spyOn(console, "error").mockImplementation(() => {});
 		process.argv = ["node", fileURLToPath(new URL("../../src/stats/cli.ts", import.meta.url)), "unknown"];

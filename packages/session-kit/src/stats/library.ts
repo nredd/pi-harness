@@ -57,6 +57,7 @@ export {
 	type Coverage,
 	coverageLabel,
 	type ExportOptions,
+	type ExportResult,
 	eventId,
 	exportStats,
 	type GlobalCache,

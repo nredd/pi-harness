@@ -573,6 +573,14 @@ function carried(previous: Previous, harness: Harness): Contribution | null {
 	return out;
 }
 
+/** What an export that published a snapshot reports. `warnings` are things that did not stop publication. */
+export interface ExportResult {
+	machineId: string;
+	snapshotDir: string;
+	harnesses?: HarnessReport;
+	warnings?: string[];
+}
+
 /**
  * Write only this machine's immutable shards, publishing its manifest last. Callers must not run two exports
  * into one outbox at once (`pi-usage-sync` serializes its runs); nothing here locks.
@@ -582,7 +590,7 @@ export async function exportStats(
 	output: string,
 	root = sessionsDir(dir),
 	options: ExportOptions = {},
-): Promise<{ machineId: string; snapshotDir: string; harnesses?: HarnessReport }> {
+): Promise<ExportResult> {
 	const wanted = new Set<Harness>(options.harnesses ?? ["pi"]);
 	const identity = await machineIdentity(dir);
 	const state = await exportState(dir);
@@ -659,8 +667,23 @@ export async function exportStats(
 	await atomicJson(join(snapshotDir, "manifest.json"), validateManifest(snapshot.manifest));
 	// Recorded only once published: a failed export leaves the previous set, so the next run is still checked.
 	const published = HARNESSES.filter((h) => wanted.has(h));
-	await atomicJson(stateFile(dir), { version: 1, salt: state.salt, harnesses: published, failures });
-	return { machineId: identity.machineId, snapshotDir, ...(external.length ? { harnesses: report } : {}) };
+	// The snapshot is out by now: failing to record it is a warning, not a failed export. The next run
+	// still checks against the old set (stricter, never looser).
+	const warnings = await atomicJson(stateFile(dir), {
+		version: 1,
+		salt: state.salt,
+		harnesses: published,
+		failures,
+	}).then(
+		() => [],
+		() => ["export state not recorded"],
+	);
+	return {
+		machineId: identity.machineId,
+		snapshotDir,
+		...(external.length ? { harnesses: report } : {}),
+		...(warnings.length ? { warnings } : {}),
+	};
 }
 
 const globalPath = (dir: string): string => join(dir, "pi-session-kit", "stats-global.json");

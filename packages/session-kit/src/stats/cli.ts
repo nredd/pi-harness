@@ -62,6 +62,7 @@ export async function main(): Promise<void> {
 			roots: { claude: path("--claude-dir"), codex: path("--codex-dir"), opencode: path("--opencode-db") },
 		});
 		console.log(JSON.stringify(result));
+		for (const warning of result.warnings ?? []) console.error(warning);
 		for (const [name, status] of Object.entries(result.harnesses ?? {})) {
 			if (status.failed)
 				console.error(

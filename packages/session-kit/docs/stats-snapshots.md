@@ -76,13 +76,14 @@ CLI results:
 - Exactly one JSON object is emitted. Diagnostics go to stderr.
   Exit contract: an export that published a snapshot exits 0, however many harnesses `failed`
   (kept or lost) and however many times in a row: those are fields of the JSON result, plus a
-  stderr line each, for the caller to record as warnings. A nonzero exit means nothing was
-  published (invalid commands, an incomplete pi scan, an unwritable cache or output, a refused
-  narrower harness set).
-  An import that finds stale harnesses also exits 0 and lists them in `stale`.
-  Malformed local
-  scans, unwritable caches and publication failures exit nonzero. Partial/corrupt imports emit
-  a JSON result and exit nonzero, retaining every failed machine's last-good snapshot.
+  stderr line each, for the caller to record as warnings. So is `warnings: ["export state not
+  recorded"]`, when the snapshot is out but `export-state.json` could not be written (the next
+  export then checks against the old set). A nonzero exit means nothing was published: an invalid
+  command, an incomplete pi scan or unwritable pi cache, an unwritable output, corrupt installation
+  state, or a refused narrower harness set. (A harness cache that cannot be written is a failed
+  harness, carried, not a nonzero exit.) A partial or corrupt import emits a JSON result and exits
+  nonzero, retaining every failed machine's last-good snapshot; one that only finds stale harnesses
+  exits 0 and lists them in `stale`.
 - A failed export never replaces the previous manifest. Its validated immutable shards may remain
   unpublished. Export writes only its own machine directory; it never edits another machine.
 

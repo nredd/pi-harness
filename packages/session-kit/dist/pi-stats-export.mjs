@@ -1286,8 +1286,21 @@ async function exportStats(dir, output, root = sessionsDir(dir), options = {}) {
   }
   await atomicJson(join7(snapshotDir, "manifest.json"), validateManifest(snapshot.manifest));
   const published = HARNESSES.filter((h) => wanted.has(h));
-  await atomicJson(stateFile(dir), { version: 1, salt: state.salt, harnesses: published, failures });
-  return { machineId: identity.machineId, snapshotDir, ...external.length ? { harnesses: report } : {} };
+  const warnings = await atomicJson(stateFile(dir), {
+    version: 1,
+    salt: state.salt,
+    harnesses: published,
+    failures
+  }).then(
+    () => [],
+    () => ["export state not recorded"]
+  );
+  return {
+    machineId: identity.machineId,
+    snapshotDir,
+    ...external.length ? { harnesses: report } : {},
+    ...warnings.length ? { warnings } : {}
+  };
 }
 var globalPath = (dir) => join7(dir, "pi-session-kit", "stats-global.json");
 async function jsonFile(path) {
@@ -1425,6 +1438,7 @@ async function main() {
       roots: { claude: path("--claude-dir"), codex: path("--codex-dir"), opencode: path("--opencode-db") }
     });
     console.log(JSON.stringify(result));
+    for (const warning of result.warnings ?? []) console.error(warning);
     for (const [name2, status] of Object.entries(result.harnesses ?? {})) {
       if (status.failed)
         console.error(

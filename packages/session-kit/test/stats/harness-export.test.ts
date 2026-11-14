@@ -845,6 +845,29 @@ describe("exportStats with harnesses", () => {
 		});
 	});
 
+	it("still succeeds, with a warning, when the snapshot is out but the export state cannot be written", async () => {
+		seedPi();
+		const roots = seedHarnessHome(home);
+		const state = join(agent, "pi-session-kit", "export-state.json");
+		await exportStats(agent, repo, undefined, { harnesses: ["pi", "opencode"], roots, home });
+		const sabotage = async () => {
+			// by now the state was read; make writing it fail
+			rmSync(state);
+			mkdirSync(state);
+			throw Object.assign(new Error("locked"), { errcode: 5 });
+		};
+		const result = await exportStats(agent, repo, undefined, {
+			harnesses: ["pi", "opencode"],
+			roots,
+			home,
+			loadSqlite: sabotage,
+		});
+		expect(result.warnings).toEqual(["export state not recorded"]);
+		expect(result.harnesses?.opencode?.failed).toBe("kept");
+		expect(published(result.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness))).toContain("pi");
+		expect(statSync(state).isDirectory()).toBe(true);
+	});
+
 	describe("harness freshness and repeated failures", () => {
 		const busyDb = () => Promise.reject(Object.assign(new Error("locked"), { errcode: 5 }));
 		const statePath = () => join(agent, "pi-session-kit", "export-state.json");
