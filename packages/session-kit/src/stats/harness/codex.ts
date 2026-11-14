@@ -3,7 +3,8 @@
  * `<root>` is `CODEX_HOME` or `~/.codex`.
  *
  * Reads four row types and ignores everything else:
- * - `session_meta`: thread ID, provider, and whether the thread is a spawned child
+ * - `session_meta`: thread ID, provider, and whether the thread is a spawned child (`parent_thread_id`
+ *   or `agent_path`); only the first one in a file counts
  * - `turn_context`: the model of a turn
  * - `token_usage_record`: per-response usage, joined to its model by `turn_id`
  * - `event_msg`/`token_count`: only `rate_limits`, the freshest quota reading
@@ -53,10 +54,13 @@ class CodexParser extends RowParser {
 	protected row(row: Record<string, unknown>, ts: number): void {
 		const payload = asRecord(row.payload) ?? {};
 		if (row.type === "session_meta") {
+			// The first meta names the thread; a replayed parent meta later in a fork must not rewrite it.
 			const id = str(payload.id);
-			this.out.session ||= id && sessionHash("codex", id);
-			this.out.child = str(payload.parent_thread_id) !== "";
-			this.provider = str(payload.model_provider);
+			if (id && !this.out.session) {
+				this.out.session = sessionHash("codex", id);
+				this.out.child = str(payload.parent_thread_id) !== "" || str(payload.agent_path) !== "";
+				this.provider = str(payload.model_provider);
+			}
 		} else if (row.type === "turn_context") {
 			this.turnModels.set(str(payload.turn_id), str(payload.model));
 		} else if (row.type === "token_usage_record") {

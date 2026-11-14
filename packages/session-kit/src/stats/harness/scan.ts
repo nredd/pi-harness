@@ -8,7 +8,7 @@
 
 import { stat } from "node:fs/promises";
 import { resolve, sep } from "node:path";
-import { feedFile, listJsonl, looksLikeObject, NUL_PADDING, timeOf } from "../jsonl.ts";
+import { feedFile, isNum, listJsonl, looksLikeObject, NUL_PADDING, timeOf } from "../jsonl.ts";
 import { type Call, type CallTuple, type Harness, mergeSessionMetadata, type Session } from "../load.ts";
 import { nth } from "../nth.ts";
 import { asRecord, asRecordOf, emptyScan, type HarnessScan, type QuotaObservation, unreadable } from "./common.ts";
@@ -118,7 +118,6 @@ export abstract class RowParser {
 	}
 }
 
-const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const isHash = (v: unknown): boolean => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);
 const isQuota = (q: unknown): boolean => {
 	const r = asRecordOf(q);

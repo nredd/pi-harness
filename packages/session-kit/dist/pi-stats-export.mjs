@@ -27,6 +27,7 @@ import { join as join2 } from "node:path";
 import { createInterface } from "node:readline";
 import { setImmediate as tick } from "node:timers/promises";
 var YIELD_EVERY_LINES = 2e3;
+var isNum = (v) => typeof v === "number" && Number.isFinite(v);
 function num(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
@@ -207,7 +208,6 @@ async function parseFile(path, size, mtimeMs) {
   await feedFile(path, parser);
   return parser.finish();
 }
-var isNum = (v) => typeof v === "number" && Number.isFinite(v);
 function isFileStats(value) {
   if (typeof value !== "object" || value === null) return false;
   const f = value;

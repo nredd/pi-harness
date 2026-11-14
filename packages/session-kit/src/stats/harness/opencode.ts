@@ -8,7 +8,7 @@
  * IDs, timestamps and model names, so message and part bodies, titles and directories never leave
  * SQLite. `auth.json` is never opened. OpenCode keeps no quota.
  *
- * Every assistant row is read on each load (one row of counters each, no cache: the main file's mtime
+ * A message whose `data` is not valid JSON is skipped. Every assistant row is read on each load (one row of counters each, no cache: the main file's mtime
  * does not track WAL writes). Very large databases cost proportionally.
  *
  * `tokens.reasoning` is reported separately from `tokens.output`, so it is billed output here.
@@ -45,7 +45,7 @@ SELECT m.id AS id, m.session_id AS sid, s.parent_id IS NOT NULL AS child,
   json_extract(m.data, '$.tokens.cache.read') AS cache_read, json_extract(m.data, '$.tokens.cache.write') AS cache_write,
   json_extract(m.data, '$.cost') AS cost
 FROM message m LEFT JOIN session s ON s.id = m.session_id
-WHERE json_extract(m.data, '$.role') = 'assistant'`;
+WHERE CASE WHEN json_valid(m.data) THEN json_extract(m.data, '$.role') = 'assistant' ELSE 0 END`;
 
 async function isFile(path: string): Promise<boolean> {
 	try {

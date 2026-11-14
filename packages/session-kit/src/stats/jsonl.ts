@@ -8,6 +8,8 @@ import { setImmediate as tick } from "node:timers/promises";
 
 const YIELD_EVERY_LINES = 2000;
 
+export const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+
 export function num(value: unknown): number {
 	return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }

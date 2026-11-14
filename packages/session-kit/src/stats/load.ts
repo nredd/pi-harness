@@ -15,7 +15,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import { agentDir } from "../agent-dir.ts";
-import { feedFile, listJsonl, looksLikeObject, NUL_PADDING, num, timeOf } from "./jsonl.ts";
+import { feedFile, isNum, listJsonl, looksLikeObject, NUL_PADDING, num, timeOf } from "./jsonl.ts";
 import { nth } from "./nth.ts";
 export const CACHE_VERSION = 3;
 
@@ -247,8 +247,6 @@ export async function parseFile(path: string, size: number, mtimeMs: number): Pr
 	await feedFile(path, parser);
 	return parser.finish();
 }
-
-const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
 /** Whether a cached record has exactly the shape `flatten` relies on. */
 export function isFileStats(value: unknown): value is FileStats {

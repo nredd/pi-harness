@@ -106,6 +106,15 @@ describe("readOpenCode", () => {
 		for (const native of ["ses_1", "msg_1"]) expect(text).not.toContain(native);
 	});
 
+	it("skips a message whose data is not JSON without losing the rest", async () => {
+		session("ses_1");
+		message("ok", "ses_1", assistant());
+		writer.prepare("INSERT INTO message VALUES (?, ?, ?, ?)").run("bad", "ses_1", T0, "{not json");
+		const scan = await readOpenCode(dbPath);
+		expect(scan.calls).toHaveLength(1);
+		expect(scan.problems).toEqual([]);
+	});
+
 	it("counts unreadable rows", async () => {
 		session("ses_1");
 		message("m1", "ses_1", assistant({ tokens: { input: -1 } }));

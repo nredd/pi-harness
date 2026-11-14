@@ -86,6 +86,18 @@ describe("readCodex", () => {
 		expect(scan.sessions).toEqual([]);
 	});
 
+	it("takes thread identity from the first session_meta and detects children by agent_path too", async () => {
+		writeLines(rollout("fork"), [
+			codexMeta("thread-a", { model_provider: "azure", agent_path: "/root/worker" }),
+			codexMeta("thread-b", { model_provider: "other", agent_path: undefined }),
+			codexContext(),
+			codexRecord(),
+		]);
+		const scan = await readCodex(root, {});
+		expect(scan.calls[0]).toMatchObject({ provider: "azure", session: sessionHash("codex", "thread-a") });
+		expect(scan.sessionMetadata[0]?.child).toBe(true);
+	});
+
 	it("collapses a response copied into a forked or archived rollout", async () => {
 		const body = [codexMeta(), codexContext(), codexRecord()];
 		writeLines(rollout("a"), body);
