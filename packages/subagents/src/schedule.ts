@@ -359,8 +359,9 @@ export class SubagentScheduler {
         }
       } else {
         const cron = new Cron(job.schedule, self => this.executeJob(job.id, {
-          // The tick's own time, which every process computes alike.
-          at: self.currentRun()?.getTime() ?? Math.floor(this.clock.now() / 1000) * 1000,
+          // The scheduled tick, not the callback's start time (`currentRun()` carries that, with
+          // its ms, and differs per process): the latest tick at or before the callback.
+          at: self.previousRuns(1, new Date((self.currentRun()?.getTime() ?? this.clock.now()) + 1000))[0].getTime(),
           schedule: job.schedule,
         }));
         this.jobs.set(job.id, cron);
@@ -376,21 +377,22 @@ export class SubagentScheduler {
 
   /**
    * Fire on slots `createdAt + k * intervalMs`, which every process on the session
-   * shares, whatever time it armed at. Chained timeouts re-aim at the next slot each
-   * tick, so a resumed or late-joining process stays on the shared grid and the
-   * slot of a tick is the nearest one (tolerating early or late timers).
+   * shares, whatever time it armed at. A timer claims the slot it was armed for, never
+   * a later one, so a late callback cannot take an interval that is not yet due. Chained
+   * timeouts re-aim at the next slot after the current time, which keeps a resumed or
+   * late-joining process on the grid and skips slots missed while asleep.
    */
   private armInterval(job: ScheduledSubagent, intervalMs: number): TimerHandle {
     const anchor = new Date(job.createdAt).getTime();
+    const nextSlot = (): number => Math.floor((this.clock.now() - anchor) / intervalMs) + 1;
     let current: TimerHandle | undefined;
     const arm = (k: number): void => {
       current = this.clock.setTimeout(() => {
-        const slot = Math.max(k, Math.round((this.clock.now() - anchor) / intervalMs));
-        arm(slot + 1);
-        this.executeJob(job.id, { at: anchor + slot * intervalMs, schedule: job.schedule });
+        arm(Math.max(k + 1, nextSlot()));
+        this.executeJob(job.id, { at: anchor + k * intervalMs, schedule: job.schedule });
       }, Math.max(0, anchor + k * intervalMs - this.clock.now()));
     };
-    arm(Math.floor((this.clock.now() - anchor) / intervalMs) + 1);
+    arm(nextSlot());
     return { cancel: () => current?.cancel() };
   }
 

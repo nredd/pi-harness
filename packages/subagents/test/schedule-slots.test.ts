@@ -25,6 +25,7 @@ beforeEach(() => {
 afterEach(() => {
   for (const s of schedulers.splice(0)) s.stop();
   setFallbackSubagent(undefined);
+  vi.restoreAllMocks();
   vi.useRealTimers();
   rmSync(dir, { recursive: true, force: true });
 });
@@ -40,6 +41,16 @@ function process_(clock: FakeClock) {
   schedulers.push(scheduler);
   scheduler.start(pi, ctx, manager, store);
   return { spawn, store, scheduler };
+}
+
+/** A clock whose first timeout runs `late` ms after it was due, like a callback delayed by load or sleep. */
+class LateClock extends FakeClock {
+  constructor(private late: number) { super(); }
+  override setTimeout(callback: () => void, ms: number) {
+    const lateness = this.late;
+    this.late = 0;
+    return super.setTimeout(callback, ms + lateness);
+  }
 }
 
 const input = { name: "job", description: "job", schedule: "10s", subagent_type: "general-purpose", prompt: "work" };
@@ -127,7 +138,7 @@ describe("slot claims", () => {
     expect(a.spawn).toHaveBeenCalledTimes(2);
   });
 
-  it("falls back to the clock's second when croner reports no current run", () => {
+  it("falls back to the clock's time when croner reports no current run", () => {
     vi.useFakeTimers({ now: Date.UTC(2030, 0, 1) });
     vi.spyOn(Cron.prototype, "currentRun").mockReturnValue(null);
     const clock = new FakeClock();
@@ -135,6 +146,51 @@ describe("slot claims", () => {
     const job = a.scheduler.addJob({ ...input, schedule: "*/10 * * * * *" });
     vi.advanceTimersByTime(10_000);
     expect(a.spawn).toHaveBeenCalledTimes(1);
-    expect(new ScheduleStore(path).get(job.id)?.lastSlot).toBe(Math.floor(clock.now() / 1000) * 1000);
+    expect(new ScheduleStore(path).get(job.id)?.lastSlot).toBe(Math.floor(clock.now() / 10_000) * 10_000);
+  });
+
+  it("two cron processes whose callbacks start at different milliseconds share the tick", () => {
+    vi.useFakeTimers({ now: Date.UTC(2030, 0, 1) });
+    let calls = 0;
+    const real = Cron.prototype.currentRun;
+    vi.spyOn(Cron.prototype, "currentRun").mockImplementation(function (this: Cron) {
+      const at = real.call(this);
+      return at && new Date(at.getTime() + (calls++ % 2 === 0 ? 1 : 20));
+    });
+    const clock = new FakeClock();
+    const a = process_(clock);
+    const job = a.scheduler.addJob({ ...input, schedule: "*/10 * * * * *" });
+    const b = process_(clock);
+    vi.advanceTimersByTime(50_000);
+    expect(a.spawn.mock.calls.length + b.spawn.mock.calls.length).toBe(5);
+    expect(new ScheduleStore(path).get(job.id)?.lastSlot).toBe(Date.UTC(2030, 0, 1, 0, 0, 50));
+  });
+
+  it("a late interval callback claims its own slot, not the next one", () => {
+    const clock = new LateClock(6000);
+    const a = process_(clock);
+    const job = a.scheduler.addJob(input);
+    const created = Date.parse(job.createdAt);
+    const store = new ScheduleStore(path);
+    clock.advance(10_000);
+    // Another process fired slot 1 on time; this one's callback runs 6s late.
+    expect(store.claim(job.id, { pid: process.ppid, leaseUntil: 0 }, clock.now(), { at: created + 10_000, schedule: job.schedule })).toBeDefined();
+    clock.advance(6000);
+    expect(a.spawn).not.toHaveBeenCalled();
+    clock.advance(4000); // the real slot 2
+    expect(a.spawn).toHaveBeenCalledTimes(1);
+    expect(new ScheduleStore(path).get(job.id)?.lastSlot).toBe(created + 20_000);
+  });
+
+  it("fires its late slot once after a sleep, skips the missed ones and resumes on the grid", () => {
+    const clock = new LateClock(25_000);
+    const a = process_(clock);
+    const job = a.scheduler.addJob(input);
+    const created = Date.parse(job.createdAt);
+    clock.advance(35_000);
+    expect(a.spawn).toHaveBeenCalledTimes(1);
+    clock.advance(5000);
+    expect(a.spawn).toHaveBeenCalledTimes(2);
+    expect(new ScheduleStore(path).get(job.id)?.lastSlot).toBe(created + 40_000);
   });
 });
