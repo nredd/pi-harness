@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add readers for Claude Code, Codex CLI and OpenCode usage in `src/stats/harness/` and a `harness` field on `Call` (pi calls are `"pi"`), with entry dedup by `(message.id, requestId)` for Claude, per-turn Codex records joined to their model, Codex `rate_limits` quota observations and a read-only WAL-aware OpenCode query. Counts only; not yet exported or shown in `/stats` (part of [#367](https://github.com/nredd/pi-harness/issues/367))
+
 - Cover omitted stats API arguments and remove the unreachable private help default; preserve the stats library's runtime/type export contract with a validated named facade. Full local Node/Bun L/F/B/S reports are zero-miss; hosted zero receipts remain required before Bun enforcement (#824)
 
 - Isolate monitor regex workers in a killable child process so Bun cleanup does not wait for `Worker.terminate()`; preserve match ordering and existing deadlines, reap on close, and exit on parent IPC loss even during backtracking (#320)

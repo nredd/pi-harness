@@ -4,16 +4,18 @@
  */
 import { join } from "node:path";
 import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
-import { fauxAssistantMessage, type Harness } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { toolCall } from "@nredd/pi-test-lib/faux";
+import type { Harness } from "@nredd/pi-test-lib/harness";
 import { Type } from "typebox";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { createDevTools } from "../../packages/dev-tools/src/index.ts";
-import { runTools } from "../../packages/dev-tools/test/scenarios/support.ts";
+import { runTools } from "../../packages/dev-tools/test/fixtures/session.ts";
 import { defaultConfig } from "../../packages/session-kit/src/config.ts";
 import { createSessionKit } from "../../packages/session-kit/src/index.ts";
-import { configFor } from "../../packages/session-kit/test/scenarios/support.ts";
+import { configFor } from "../../packages/session-kit/test/fixtures/session.ts";
 import { createSubscriptionRouter } from "../../packages/subscription-router/src/index.ts";
-import { call, jsonFile } from "./agents-support.ts";
+import { jsonFile } from "./agents-support.ts";
 import { complete, GoalStack, goalStates, outcomes, tool } from "./goal-support.ts";
 import { isolateStackHome, loadThirdParty, startStack } from "./support.ts";
 
@@ -163,14 +165,14 @@ it("keeps routine tools active in the provider request triggered by a real child
 		]);
 		let tools: string[] | undefined;
 		notification.setResponses([
-			call("Agent", {
+			toolCall("Agent", {
 				subagent_type: "general-purpose",
 				description: "notify parent",
 				prompt: "finish",
 				run_in_background: true,
 				model: "kid/child",
 			}),
-			call("hold", {}),
+			toolCall("hold", {}),
 			fauxAssistantMessage("PARENT DONE"),
 			(ctx) => {
 				expect(ctx.messages.some((message) => JSON.stringify(message).includes("<task-notification>"))).toBe(true);

@@ -54,9 +54,12 @@ tarball, and requires
 `plan_mode_question` and `plan_mode_complete` from stock Pi. The faux provider enters Plan mode with
 `/plan <prompt>`, calls `plan_mode_question`, and the scenario records its explicit headless
 `ui_unavailable` result. `dist/` is required and packed because its extension manifest targets
-`./dist/index.ts`; `src/` stays packed as declared by the source package. Its native `npm run check`
-first rebuilds and byte-compares every committed `dist/` file, so stale, missing, or extra generated
-output fails before the ordinary package build.
+`./dist/index.ts`; `src/` stays packed as declared by the source package. `dist/` is gitignored build
+output (#866): `package_contracts.pack` removes `dist/` and runs `npm run build --if-present` before
+`npm pack --ignore-scripts` (which skips `prepack`). Do not run contract packing concurrently with builds or
+readers of the same checkout: it rebuilds in place. A missing `dist/index.ts` fails the `required`
+audit instead of packing an empty package. Its native `npm run check` builds first, and `build-runtime.test.ts`
+proves two builds of one tree are byte-identical.
 
 `@nredd/pi-todo` is also a separately invoked stock contract because its imported runtime dependencies
 `@juicesharp/rpiv-config` and `@juicesharp/rpiv-i18n` are installed from the registry. `make check-todo-package-contract`

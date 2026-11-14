@@ -5,6 +5,7 @@
 	"scripts": {
 		"lint": "biome check --error-on-warnings .",
 		"typecheck": "tsc --noEmit",
+		"pretest": "npm run --prefix ../.. build",
 		"test": "node ../../scripts/run-vitest.ts node --coverage",
 		"test:bun": "node ../../scripts/run-vitest.ts bun",
 		"check": "npm run lint && npm run typecheck && npm run test && npm run test:bun"
@@ -16,6 +17,7 @@
 		"@juicesharp/rpiv-config": "2.13.9",
 		"@juicesharp/rpiv-i18n": "2.13.9",
 		"@narumitw/pi-tui-kit": "0.65.5",
+		"@nredd/pi-test-lib": "0.0.0",
 		"@quintinshaw/pi-dynamic-workflows": "3.14.0",
 		"@types/node": "26.6.5",
 		"@vitest/coverage-istanbul": "5.0.3",

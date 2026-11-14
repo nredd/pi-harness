@@ -1,6 +1,5 @@
-import { type ChildProcess, spawnSync } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { lstat, readFile } from "node:fs/promises";
-import { platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -67,17 +66,67 @@ function watchNextChild(): { spawned: Promise<ChildProcess>; stop: () => void } 
 const MAX_EXIT_POLLS = 1000;
 
 /**
- * Kill a helper and park the event loop until the kernel reports it exited, so it is an unreaped zombie
+ * Kill a helper and park the event loop until the kernel reports it exited (zombie or already reaped),
  * whatever the host load. Condition-based: no duration can pass with the helper still running.
  * @param child Helper to end.
  */
 function parkUntilExited(child: ChildProcess): void {
 	child.kill("SIGKILL");
 	for (let i = 0; i < MAX_EXIT_POLLS; i++) {
-		const ps = spawnSync("/bin/ps", ["-o", "stat=", "-p", String(child.pid)], { encoding: "utf8" });
-		if (ps.stdout.trim().startsWith("Z")) return;
+		const stat = spawnSync("/bin/ps", ["-o", "stat=", "-p", String(child.pid)], { encoding: "utf8" }).stdout.trim();
+		// Empty: the runtime already reaped it (Bun does so off the event loop), which is exited all the same.
+		if (stat === "" || stat.startsWith("Z")) return;
 	}
 	throw new Error(`helper ${child.pid} never exited after SIGKILL`);
+}
+
+/**
+ * Longest a cancelled helper may take to report its exit. It must stay well under `SAMPLER_BUDGET_MS`, or the
+ * sampler's own deadline kill would end a helper whose cancel path is broken and hide the regression.
+ */
+const KILL_DEADLINE_MS = 2500;
+/** The sampler's maximum time budget, so its deadline cannot fire first. */
+const SAMPLER_BUDGET_MS = 5000;
+
+/**
+ * Wait for a helper's `exit`, bounded so a cancel that never kills it fails instead of hanging.
+ * @param child Helper expected to be killed.
+ * @returns Whether it exited within the deadline.
+ */
+function exitedSoon(child: ChildProcess): Promise<boolean> {
+	if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
+	return new Promise((resolve) => {
+		const timer = setTimeout(() => resolve(false), KILL_DEADLINE_MS);
+		child.once("exit", () => {
+			clearTimeout(timer);
+			resolve(true);
+		});
+	});
+}
+
+/**
+ * Freeze a helper and confirm the kernel holds it stopped, so it is provably alive when cancelled.
+ * @param child Freshly spawned helper.
+ * @returns Whether it was running (now stopped); false when it had already exited or been reaped.
+ */
+function freeze(child: ChildProcess): boolean {
+	try {
+		process.kill(child.pid as number, "SIGSTOP");
+	} catch {
+		return false;
+	}
+	const stat = spawnSync("/bin/ps", ["-o", "stat=", "-p", String(child.pid)], { encoding: "utf8" }).stdout.trim();
+	return stat.startsWith("T");
+}
+
+/** Whether a PID still names a live (or unreaped) process. */
+function alive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 /**
@@ -169,13 +218,14 @@ describe("published sampler source on this host", () => {
 				};
 			};
 			const { spawned, stop } = watchNextChild();
+			let poll: MonPoll | undefined;
 			try {
 				const pid = spawned.then((child) => {
 					if (parkLoop) parkUntilExited(child);
 					return child.pid;
 				});
 				const update = vi.fn();
-				const poll = new MonPoll(createSamplerSource(create), update);
+				poll = new MonPoll(createSamplerSource(create), update);
 				poll.start();
 				expect(inFlight).toBeDefined();
 				const outcome = inFlight?.then(
@@ -185,10 +235,8 @@ describe("published sampler source on this host", () => {
 				// The first helper, not any later instant: helpers run in turn and leave gaps with no child at all.
 				const helper = await Promise.race([pid, outcome?.then(() => undefined)]);
 				expect(helper, "the sample finished without spawning a helper").toBeDefined();
-				// macOS: `vm_stat`, listed even once exited because nothing has reaped it yet.
-				if (platform() === "darwin") expect(children()).toContain(helper);
-				// Linux reads /proc in-process and spawns only `getconf`, so the child listing stays darwin-only;
-				// the AbortError below is the provider's own cancellation evidence.
+				// Not asserted: that `helper` is still listed. A short-lived helper may be reaped before this
+				// turn resumes, which is runtime and load dependent; the spawn observed above is the evidence.
 				await poll.dispose();
 				expect(await outcome).toBe("AbortError");
 				expect(update).not.toHaveBeenCalled();
@@ -196,9 +244,80 @@ describe("published sampler source on this host", () => {
 				expect(timers()).toBeLessThanOrEqual(baseline);
 			} finally {
 				stop();
+				// A failed assertion must not leave the sampler running into the next case.
+				await poll?.dispose();
 			}
 		},
 	);
+
+	it("kills a helper that is provably alive when an injected sampler is cancelled", async () => {
+		const { spawned, stop } = watchNextChild();
+		let helper: ChildProcess | undefined;
+		const create = (): ResourceSampler => ({
+			sample: (signal) =>
+				new Promise<ResourceSnapshot>((_resolve, reject) => {
+					const child = spawn("/bin/sleep", ["30"], { stdio: "ignore" });
+					helper = child;
+					signal?.addEventListener("abort", () => child.kill("SIGKILL"), { once: true });
+					child.on("close", () => reject(new DOMException("cancelled", "AbortError")));
+				}),
+			dispose: async () => {},
+		});
+		const poll = new MonPoll(createSamplerSource(create), vi.fn());
+		try {
+			poll.start();
+			const child = await spawned;
+			expect(child).toBe(helper);
+			expect(alive(child.pid as number), "the helper must be running before cancel").toBe(true);
+			expect(child.exitCode).toBeNull();
+			expect(child.signalCode).toBeNull();
+			await poll.dispose();
+			expect(await exitedSoon(child)).toBe(true);
+			expect(child.signalCode).toBe("SIGKILL");
+			expect(alive(child.pid as number)).toBe(false);
+		} finally {
+			stop();
+			helper?.kill("SIGKILL");
+			await poll.dispose();
+		}
+	});
+
+	it("kills the real sampler's helper on close, once one is provably alive at cancel", async () => {
+		const attempts = 50;
+		let reachedAlive = false;
+		for (let i = 0; i < attempts && !reachedAlive; i++) {
+			await tick();
+			const { spawned, stop } = watchNextChild();
+			const poll = new MonPoll(
+				createSamplerSource((options) => createResourceSampler({ ...options, maxDurationMs: SAMPLER_BUDGET_MS })),
+				vi.fn(),
+			);
+			let child: ChildProcess | undefined;
+			try {
+				poll.start();
+				child = await spawned;
+				// Stopped by the kernel, not merely fast: it cannot finish on its own, so only the sampler's
+				// cancel path can end it. A short-lived helper that already exited is retried, not asserted.
+				if (!freeze(child)) {
+					await poll.dispose();
+					continue;
+				}
+				reachedAlive = true;
+				const disposed = poll.dispose();
+				expect(await exitedSoon(child), "cancel left the helper running").toBe(true);
+				await disposed;
+				expect(child.signalCode).toBe("SIGKILL");
+			} finally {
+				stop();
+				if (child) {
+					child.kill("SIGCONT");
+					child.kill("SIGKILL");
+				}
+				await poll.dispose();
+			}
+		}
+		expect(reachedAlive, `no helper was alive at cancel in ${attempts} attempts`).toBe(true);
+	});
 
 	it("awaits sampler disposal and creates one sampler per source", async () => {
 		const dispose = vi.fn(async () => {});

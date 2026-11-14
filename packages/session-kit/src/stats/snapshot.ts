@@ -462,6 +462,7 @@ export async function loadCombined(
 		for (const s of machine.shards) {
 			for (const e of s.events)
 				candidates.push({
+					harness: "pi",
 					session: e.sessionId,
 					entryId: e.entryId ?? undefined,
 					ms: e.ms,
