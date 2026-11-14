@@ -1982,9 +1982,6 @@ def test_capture_retains_first_failure_and_only_explicit_reports(
         artifacts = worktree / "integration" / name
         artifacts.mkdir()
         (artifacts / "wsl2-personal.xml").write_text("<testsuite/>\n")
-    scripts = worktree / "scripts"
-    scripts.mkdir()
-    shutil.copyfile(ROOT / "scripts/wsl2_cleanup.sh", scripts / "wsl2_cleanup.sh")
     host = tmp_path / "host"
     host_temp = host / "temp"
     (host_temp / "wsl2-diagnostics").mkdir(parents=True)
@@ -2046,8 +2043,6 @@ def test_failed_capture_exports_scanned_guest_state(tmp_path: Path, case: str, h
     worktree, env = guest_fixture(tmp_path)
     ti = worktree / ".ci-temp"
     (ti / "first-failure").write_text("47\n")
-    (worktree / "scripts").mkdir()
-    shutil.copyfile(ROOT / "scripts/wsl2_cleanup.sh", worktree / "scripts/wsl2_cleanup.sh")
     if case != "no-scanner":
         shutil.copytree(
             ROOT / "integration/harness",
@@ -2107,8 +2102,6 @@ def test_job_status_alone_triggers_guest_state(tmp_path: Path, job_status: str, 
         collected (bool): Guest state is expected.
     """
     worktree, env = guest_fixture(tmp_path)
-    (worktree / "scripts").mkdir()
-    shutil.copyfile(ROOT / "scripts/wsl2_cleanup.sh", worktree / "scripts/wsl2_cleanup.sh")
     shutil.copytree(
         ROOT / "integration/harness",
         worktree / "integration/harness",

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -41,7 +41,8 @@ function tarball(entries: Entry[], trailer = true): Buffer {
 
 const roots: string[] = [];
 function temp(): string {
-	const dir = mkdtempSync(join(tmpdir(), "core-artifacts-"));
+	// Realpath once: macOS tmpdir() is under the /var -> /private/var symlink, and require.resolve returns the realpath (#902).
+	const dir = realpathSync(mkdtempSync(join(tmpdir(), "core-artifacts-")));
 	roots.push(dir);
 	return dir;
 }

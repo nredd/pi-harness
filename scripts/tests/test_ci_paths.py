@@ -335,6 +335,7 @@ def test_write_github_output_keeps_input_flags_independent(
         ".github/actions/setup-ci-wsl/action.yml",
         "scripts/wsl2_setup.sh",
         "scripts/wsl2_shell.ps1",
+        "scripts/wsl2_capture.py",
         "scripts/wsl2_exec.py",
         "scripts/wsl2_run.py",
         "scripts/ci_paths.py",
