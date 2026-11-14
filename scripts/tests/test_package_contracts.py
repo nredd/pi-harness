@@ -1555,74 +1555,27 @@ def test_pack_builds_before_packing(tmp_path: Path, sandbox: pc.Sandbox) -> None
     assert "dist/index.ts" in artifact.files
 
 
-def _write_dist(source: Path, offset: float) -> None:
-    """Write `dist/index.ts` with an mtime `offset` seconds after the newest source file.
+def test_pack_rebuilds_after_imported_source_is_deleted(tmp_path: Path, sandbox: pc.Sandbox) -> None:
+    """Deleting an imported source must fail the next pack, not ship its old bundle.
 
     Parameters:
-        source (Path): Package directory.
-        offset (float): Seconds relative to the newest build input mtime.
+        tmp_path (Path): Pytest temporary directory.
+        sandbox (pc.Sandbox): Scrubbed environment.
     """
-    newest = max(
-        p.stat().st_mtime for p in [*(source / "src").rglob("*"), source / "package.json"] if p.is_file()
+    source = _build_fixture(
+        tmp_path,
+        "node -e \"const value=require('./src/imported.cjs');require('fs').mkdirSync('dist');"
+        "require('fs').writeFileSync('dist/index.ts',value)\"",
     )
-    (source / "dist").mkdir()
-    dist = source / "dist" / "index.ts"
-    dist.write_text("x")
-    os.utime(dist, (newest + offset, newest + offset))
-
-
-def test_pack_skips_the_build_when_dist_is_fresh(tmp_path: Path, sandbox: pc.Sandbox) -> None:
-    """A fresh `dist/` is not rewritten, so parallel packs never race on in-place output.
-
-    Parameters:
-        tmp_path (Path): Pytest temporary directory.
-        sandbox (pc.Sandbox): Scrubbed environment.
-    """
-    source = _build_fixture(tmp_path, 'node -e "process.exit(3)"')
-    _write_dist(source, 5)
+    imported = source / "src" / "imported.cjs"
+    imported.write_text("module.exports = 'export const value = 1;';\n")
+    pc.pack(DEV_TOOLS, tmp_path / "out", sandbox, source)
+    (source / "dist" / "obsolete.js").write_text("stale")
     artifact = pc.pack(DEV_TOOLS, tmp_path / "out", sandbox, source)
-    assert "dist/index.ts" in artifact.files
-
-
-def test_pack_rebuilds_a_stale_dist(tmp_path: Path, sandbox: pc.Sandbox) -> None:
-    """A `dist/` older than `src/` is rebuilt, never packed on old bytes.
-
-    Parameters:
-        tmp_path (Path): Pytest temporary directory.
-        sandbox (pc.Sandbox): Scrubbed environment.
-    """
-    source = _build_fixture(tmp_path, 'node -e "process.exit(3)"')
-    _write_dist(source, -5)
+    assert "dist/obsolete.js" not in artifact.files
+    imported.unlink()
     with pytest.raises(pc.ContractError):
         pc.pack(DEV_TOOLS, tmp_path / "out", sandbox, source)
-
-
-def test_dist_inputs_cover_the_builders(tmp_path: Path) -> None:
-    """Package scripts, tsconfig and the shared builder and lockfile are build inputs, not just `src/`.
-
-    Parameters:
-        tmp_path (Path): Pytest temporary directory.
-    """
-    (tmp_path / "scripts").mkdir()
-    (tmp_path / "scripts" / "build-runtime.mjs").write_text("x")
-    (tmp_path / "tsconfig.build.json").write_text("{}")
-    names = {p.relative_to(tmp_path) if p.is_relative_to(tmp_path) else p for p in pc.dist_inputs(tmp_path)}
-    assert Path("scripts/build-runtime.mjs") in names
-    assert Path("tsconfig.build.json") in names
-    assert pc.REPO_ROOT / "scripts" / "runtime-builder.mjs" in names
-    assert pc.REPO_ROOT / "package-lock.json" in names
-
-
-def test_dist_is_stale_without_a_build_or_src(tmp_path: Path) -> None:
-    """No `dist/` is stale; a package with no `src/` has nothing to compare and is fresh once built.
-
-    Parameters:
-        tmp_path (Path): Pytest temporary directory.
-    """
-    assert pc.dist_is_stale(tmp_path)
-    (tmp_path / "dist").mkdir()
-    (tmp_path / "dist" / "a.js").write_text("x")
-    assert not pc.dist_is_stale(tmp_path)
 
 
 def test_pack_fails_when_the_build_fails(tmp_path: Path, sandbox: pc.Sandbox) -> None:

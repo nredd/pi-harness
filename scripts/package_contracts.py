@@ -1655,45 +1655,6 @@ def verify_stock_pi(prefix: Path, pi_bin: Path, sandbox: Sandbox) -> None:
 # --- tarball audit --------------------------------------------------------------------------------
 
 
-def dist_inputs(package_dir: Path) -> list[Path]:
-    """List the files whose mtime decides whether a built `dist/` is current.
-
-    Parameters:
-        package_dir (Path): Package directory.
-
-    Returns:
-        list[Path]: Existing files: `src/`, the package's `scripts/` and `package.json`/`tsconfig*.json`,
-            plus the shared `scripts/runtime-builder.mjs` and root `package-lock.json` (bundler versions).
-    """
-    candidates = [
-        *(package_dir / "src").rglob("*"),
-        *(package_dir / "scripts").rglob("*"),
-        *package_dir.glob("tsconfig*.json"),
-        package_dir / "package.json",
-        REPO_ROOT / "scripts" / "runtime-builder.mjs",
-        REPO_ROOT / "package-lock.json",
-    ]
-    return [p for p in candidates if p.is_file()]
-
-
-def dist_is_stale(package_dir: Path) -> bool:
-    """Report whether `dist/` is missing or older than any build input (see `dist_inputs`).
-
-    A cheap mtime heuristic, so the in-place rebuild is skipped when nothing changed; `make build` is the
-    authority and CI builds from a fresh clone.
-
-    Parameters:
-        package_dir (Path): Package directory.
-
-    Returns:
-        bool: True when a build is needed before packing.
-    """
-    outputs = [p.stat().st_mtime for p in (package_dir / "dist").rglob("*") if p.is_file()]
-    if not outputs:
-        return True
-    return max((p.stat().st_mtime for p in dist_inputs(package_dir)), default=0.0) > min(outputs)
-
-
 def pack(
     contract: PackageContract, dest: Path, sandbox: Sandbox, package_dir: Path | None = None
 ) -> PackedArtifact:
@@ -1712,17 +1673,16 @@ def pack(
         ContractError: If npm output is malformed or disagrees with the tarball.
     """
     package_dir = package_dir or REPO_ROOT / "packages" / contract.directory
-    # `--ignore-scripts` skips `prepack` and `dist/` is gitignored, so build explicitly, but only when `dist/`
-    # is missing or older than `src/`: an in-place rebuild races with parallel packs and readers of the same
-    # checkout. A package without a `build` script is untouched; a failed build raises; a missing entry fails
-    # the `required` audit.
-    if dist_is_stale(package_dir):
-        run(
-            [sandbox.tools.npm, "run", "build", "--if-present"],
-            env=sandbox.env(),
-            cwd=package_dir,
-            timeout=NPM_TIMEOUT_S,
-        )
+    # `--ignore-scripts` skips `prepack`. Remove old outputs so deleted sources cannot survive a build.
+    dist = package_dir / "dist"
+    if dist.exists():
+        shutil.rmtree(dist)
+    run(
+        [sandbox.tools.npm, "run", "build", "--if-present"],
+        env=sandbox.env(),
+        cwd=package_dir,
+        timeout=NPM_TIMEOUT_S,
+    )
     done = run(
         [sandbox.tools.npm, "pack", "--json", "--ignore-scripts", "--pack-destination", dest],
         env=sandbox.env(),
