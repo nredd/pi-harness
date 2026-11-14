@@ -351,6 +351,7 @@ def test_an_unreadable_first_failure_record_counts_as_status_1(
     real = Path.read_text
 
     def read(self: Path, *args: Any, **kwargs: Any) -> str:
+        """Refuse the first-failure record and read everything else for real."""
         if self.name == "first-failure":
             raise PermissionError(13, "Permission denied")
         return real(self, *args, **kwargs)
@@ -374,6 +375,7 @@ def test_sigterm_during_the_export_exits_143_and_cleanup_still_runs(
     """A terminated export reports 143 like a Bash `trap ... EXIT`; `cleanup` mode also cleans up first."""
 
     def terminated(_ctx: capture.Capture) -> None:
+        """Deliver SIGTERM to the export."""
         capture.terminate(signal.SIGTERM, None)
 
     stub(tree, "python3", "exit 0")
@@ -599,6 +601,7 @@ def test_a_sigterm_during_cleanup_does_not_interrupt_it(tree: Tree, monkeypatch:
     """Housekeeping finishes, removing the checkout, even when the job is terminated again."""
 
     def terminated_again(_ctx: capture.Capture, _status: int) -> None:
+        """Deliver a second SIGTERM during the cleanup."""
         os.kill(os.getpid(), signal.SIGTERM)
 
     stub(tree, "python3", "exit 0")
@@ -630,3 +633,24 @@ def test_a_tree_is_removed_as_far_as_possible_before_the_failure_is_reported(tre
         assert not (victim / "gone.txt").exists()
     finally:
         locked.chmod(0o700)
+
+
+def test_a_dangling_link_at_a_wildcard_report_path_is_cleared(tree: Tree) -> None:
+    """The wildcard patterns match dangling links too, which `Path.glob` would miss."""
+    report = tree.host / "packages/p/coverage/primary/lcov.info"
+    report.parent.mkdir(parents=True)
+    report.symlink_to(tree.host / "nowhere")
+    write(tree.host / "packages/q/coverage", "a file, not a directory")
+    assert capture.main(environ=tree.env, argv=[]) == 0
+    assert not report.is_symlink()
+
+
+def test_cleanup_children_keep_the_default_sigterm_disposition(tree: Tree) -> None:
+    """`SIG_IGN` would be inherited, leaving `timeout` unable to stop a hung `dmesg` or scanner."""
+    stub(tree, "dmesg", "kill -TERM $$\necho survived")
+    stub(tree, "python3", "exit 0")
+    write(tree.worktree / ".ci-temp/first-failure", "47\n")
+    assert capture.main(environ=tree.env, argv=["cleanup"]) == 47
+    state = (tree.host_temp / "wsl2-diagnostics/guest-state.txt").read_text()
+    assert "survived" not in state
+    assert "UNAVAILABLE: unprivileged dmesg failed" in state

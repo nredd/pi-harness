@@ -32,10 +32,12 @@ import signal
 import subprocess
 import sys
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from fnmatch import fnmatchcase
 from pathlib import Path
+from types import FrameType
 
 from wsl2_exec import Runner, run_command, terminate
 
@@ -68,6 +70,31 @@ GUEST_STATE_FILES = (
 VMSTAT_COUNTER = re.compile(r"(pswpin|pswpout|pgmajfault|allocstall_[a-z0-9]+|oom_kill) ")
 DMESG_LINES = 400
 UNAVAILABLE = "UNAVAILABLE: not readable\n"
+
+
+def _ignore(_signum: int, _frame: FrameType | None) -> None:
+    """Swallow a signal in this process only; unlike `SIG_IGN`, children get the default disposition back.
+
+    Parameters:
+        _signum (int): The delivered signal number, unused.
+        _frame (FrameType | None): Interrupted frame, unused.
+    """
+
+
+@contextlib.contextmanager
+def _warn_on_error(warning: str) -> Iterator[None]:
+    """Turn a failed best-effort step into one `WARNING:` line.
+
+    Parameters:
+        warning (str): What could not be done, without the prefix.
+
+    Yields:
+        None: Control to the guarded step.
+    """
+    try:
+        yield
+    except (OSError, CaptureError):
+        sys.stderr.write(f"WARNING: could not {warning}\n")
 
 
 class CaptureError(Exception):
@@ -106,7 +133,11 @@ class Capture:
 
     @property
     def diagnostics(self) -> Path:
-        """Return the host directory holding bounded diagnostics."""
+        """Locate the host directory holding bounded diagnostics.
+
+        Returns:
+            Path: `wsl2-diagnostics` under the host temp.
+        """
         return self.host_temp / "wsl2-diagnostics"
 
     def command(
@@ -179,21 +210,37 @@ def _remove(path: Path, *, tree: bool = True) -> None:
 
 
 def _glob(base: Path, pattern: str) -> list[str]:
-    """Expand one shell-style pattern under `base`, never matching hidden names like a shell.
+    """Expand one shell-style pattern under `base`, matching every entry like a shell does.
+
+    `*` never matches hidden names, and an entry matches while it exists or is a link, dangling ones
+    included (`Path.glob` follows links and would miss a stale dangling report).
 
     Parameters:
         base (Path): Directory the pattern is relative to.
-        pattern (str): Relative glob pattern.
+        pattern (str): Relative pattern; only whole-component `*` wildcards are used.
 
     Returns:
         list[str]: Existing relative POSIX paths, sorted.
     """
-    if "*" not in pattern:
-        # A literal path matches while it exists, dangling links included, like a shell.
-        literal = base / pattern
-        return [pattern] if literal.exists() or literal.is_symlink() else []
-    found = (match.relative_to(base) for match in base.glob(pattern))
-    return sorted(path.as_posix() for path in found if not any(part.startswith(".") for part in path.parts))
+    matches = [Path()]
+    for part in pattern.split("/"):
+        found: list[Path] = []
+        for prefix in matches:
+            directory = base / prefix
+            if "*" not in part:
+                candidate = directory / part
+                if candidate.exists() or candidate.is_symlink():
+                    found.append(prefix / part)
+                continue
+            try:
+                names = [entry.name for entry in directory.iterdir()]
+            except OSError:
+                continue
+            found.extend(
+                prefix / name for name in names if not name.startswith(".") and fnmatchcase(name, part)
+            )
+        matches = found
+    return sorted(match.as_posix() for match in matches)
 
 
 def _matches(base: Path) -> list[str]:
@@ -215,6 +262,9 @@ def _mirror_artifacts(ctx: Capture) -> None:
 
     Parameters:
         ctx (Capture): Locations and runner.
+
+    Raises:
+        CaptureError: When a stale tree cannot be removed or `cp` fails.
     """
     for name in ARTIFACT_DIRECTORIES:
         target = ctx.host_workspace / "integration" / name
@@ -233,6 +283,9 @@ def _mirror_coverage(ctx: Capture) -> None:
 
     Parameters:
         ctx (Capture): Locations and runner.
+
+    Raises:
+        CaptureError: When a stale report cannot be removed or `cp` fails.
     """
     for relative in _matches(ctx.host_workspace):
         _remove(ctx.host_workspace / relative, tree=False)
@@ -419,20 +472,15 @@ def _guest_state(ctx: Capture, status: int) -> None:
     )[0]
     target = ctx.diagnostics / "guest-state.txt"
     if scanned == 0:
-        try:
-            target.write_text(
-                report.read_text(encoding="utf-8", errors="surrogateescape"),
-                encoding="utf-8",
-                errors="surrogateescape",
-            )
-        except OSError:
-            sys.stderr.write("WARNING: could not export WSL guest state\n")
+        with _warn_on_error("export WSL guest state"):
+            exported = report.read_text(encoding="utf-8", errors="surrogateescape")
+            target.write_text(exported, encoding="utf-8", errors="surrogateescape")
         return
-    notice = "WSL guest state withheld: the shared credential scan refused it or could not run.\n"
-    try:
-        target.write_text(notice, encoding="utf-8")
-    except OSError:
-        sys.stderr.write("WARNING: could not record withheld guest state\n")
+    with _warn_on_error("record withheld guest state"):
+        target.write_text(
+            "WSL guest state withheld: the shared credential scan refused it or could not run.\n",
+            encoding="utf-8",
+        )
 
 
 def _cleanup(ctx: Capture, status: int) -> None:
@@ -449,16 +497,12 @@ def _cleanup(ctx: Capture, status: int) -> None:
             preserved.mkdir(parents=True, exist_ok=True)
         if ctx.command(["cp", "-RP", f"{artifacts}/.", f"{preserved}/"])[0]:
             sys.stderr.write("WARNING: could not preserve WSL failure artifacts\n")
-    try:
+    with _warn_on_error("record WSL capture status"):
         (ctx.diagnostics / "capture-status.txt").write_text(
             f"WSL harness exited with status {status}.\n", encoding="utf-8"
         )
-    except OSError:
-        sys.stderr.write("WARNING: could not record WSL capture status\n")
-    try:
+    with _warn_on_error("remove disposable WSL worktree"):
         _remove(ctx.worktree)
-    except CaptureError:
-        sys.stderr.write("WARNING: could not remove disposable WSL worktree\n")
 
 
 def _finish(ctx: Capture, status: int) -> int:
@@ -475,7 +519,7 @@ def _finish(ctx: Capture, status: int) -> int:
         int: The exit status: first-failure (1 when unparseable), else `status`, modulo 256 like a shell.
     """
     # Cleanup is bounded work and must complete, as a Bash EXIT trap does; the caller's `timeout` escalates.
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, _ignore)
     first = ctx.runner_temp / "first-failure"
     if first.is_file():
         try:
