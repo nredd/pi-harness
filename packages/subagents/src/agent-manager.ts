@@ -57,7 +57,9 @@ import { cleanupWorktree, createWorktree, isWorktreeIsolationEnabled, pruneWorkt
  * Relabel a record's model from the response that just finished. A virtual
  * selection (`router/default`) is only a name until a request is routed; the
  * assistant message is the one place that records the physical model, so the
- * label follows it (and follows a router fallback to the next model).
+ * label follows it (and follows a router fallback to the next model). The
+ * thinking level follows too: the message records the level the request ran at,
+ * after core clamped it to what the physical model supports.
  */
 function relabelFromResponse(record: AgentRecord, message: AssistantMessageInfo | undefined): void {
   const registry = (record.session as { modelRegistry?: Parameters<typeof describePhysicalModel>[1] } | undefined)
@@ -66,6 +68,15 @@ function relabelFromResponse(record: AgentRecord, message: AssistantMessageInfo 
   if (!physical) return;
   record.invocation ??= {};
   Object.assign(record.invocation, physical);
+  // The routed request ran at the level core clamped to the physical model, which
+  // can differ from the session level the row showed while routing was pending.
+  // Idempotent per response; a message without a level (legacy) leaves the row as is.
+  const ran = message?.thinkingLevel;
+  if (ran) {
+    const requested = record.askedThinking;
+    record.invocation.thinking = ran;
+    record.invocation.requestedThinking = requested && requested !== ran ? requested : undefined;
+  }
   if ((record.modelTier?.kind === "routed" || record.modelTier?.kind === "static") && record.modelTier.answered !== physical.modelId) {
     record.modelTier = { ...record.modelTier, answered: physical.modelId };
     if (record.outputFile) appendModelTierEntry(record.outputFile, record.id, record.modelTier);
@@ -1331,6 +1342,9 @@ export class AgentManager {
           // Read the kept request first: a caller's level survives being clamped
           // AND, one line later, being replaced by the effective one.
           const requested = record.invocation.requestedThinking ?? record.invocation.thinking;
+          // Snapshot before the writeback below: once the session level lands in
+          // `thinking`, "no ask" is indistinguishable from "asked for the default".
+          record.askedThinking = requested;
           Object.assign(
             record.invocation,
             record.modelTier?.kind === "routed" && record.modelTier.admitted
