@@ -24,7 +24,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
-CLEANUP = ROOT / "scripts" / "wsl2_cleanup.sh"
+SCRIPTS = ROOT / "scripts"
 
 
 def workflow_text() -> str:
@@ -69,123 +69,11 @@ def test_wsl2_workflow_fails_closed_on_platform_or_mount_mismatch() -> None:
     assert "drvfs|''" in setup
 
 
-def run_cleanup(
-    tmp_path: Path,
-    status: int,
-    command_dir: Path | None = None,
-) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
-    """Run the workflow's real cleanup trap against a disposable harness worktree.
-
-    Parameters:
-        tmp_path: Root for the disposable worktree and diagnostics directory.
-        status: Harness exit status to preserve through the cleanup trap.
-        command_dir: Optional directory of failing command fixtures prepended to `PATH`.
-
-    Returns:
-        tuple[CompletedProcess[str], Path, Path]: Shell outcome, worktree, and diagnostics paths.
-    """
-    worktree = tmp_path / "worktree"
-    artifacts = worktree / "integration" / "artifacts"
-    artifacts.mkdir(parents=True)
-    (artifacts / "wsl2-personal.xml").write_text("<testsuite/>\n", encoding="utf-8")
-    diagnostics = tmp_path / "wsl2-diagnostics"
-    diagnostics.mkdir()
-    script = "\n".join(
-        [
-            "set -euo pipefail",
-            f"source {shlex.quote(str(CLEANUP))}",
-            f"worktree={shlex.quote(str(worktree))}",
-            f"diagnostics_dir={shlex.quote(str(diagnostics))}",
-            "trap cleanup_wsl2_worktree EXIT",
-            f"exit {status}",
-        ]
-    )
-    env = dict(os.environ)
-    if command_dir is not None:
-        env["PATH"] = f"{command_dir}{os.pathsep}{env['PATH']}"
-    completed = subprocess.run(
-        ["/bin/bash", "-c", script], capture_output=True, check=False, env=env, text=True
-    )
-    return completed, worktree, diagnostics
-
-
-def write_failing_command(directory: Path, name: str) -> None:
-    """Create a `PATH` fixture that causes one cleanup command to fail.
-
-    Parameters:
-        directory: Fixture command directory.
-        name: Command name intercepted by the fixture.
-
-    Returns:
-        None: The executable fixture is created.
-    """
-    command = directory / name
-    command.write_text("#!/bin/sh\nexit 92\n", encoding="utf-8")
-    command.chmod(0o755)
-
-
-def test_wsl2_cleanup_preserves_failure_artifacts_before_deleting_worktree(tmp_path: Path) -> None:
-    """Copy bounded artifacts before removing a failed harness worktree."""
-    completed, worktree, diagnostics = run_cleanup(tmp_path, 47)
-    assert completed.returncode == 47
-    assert not worktree.exists()
-    assert (diagnostics / "artifacts" / "wsl2-personal.xml").read_text(encoding="utf-8") == "<testsuite/>\n"
-    assert (diagnostics / "capture-status.txt").read_text(
-        encoding="utf-8"
-    ) == "WSL harness exited with status 47.\n"
-
-
-def test_wsl2_cleanup_preserves_success_status_and_artifacts(tmp_path: Path) -> None:
-    """Keep normal cleanup successful after retaining the bounded diagnostics."""
-    completed, worktree, diagnostics = run_cleanup(tmp_path, 0)
-    assert completed.returncode == 0
-    assert not worktree.exists()
-    assert (diagnostics / "artifacts" / "wsl2-personal.xml").is_file()
-    assert (diagnostics / "capture-status.txt").read_text(
-        encoding="utf-8"
-    ) == "WSL harness exited with status 0.\n"
-
-
-def test_wsl2_cleanup_retains_harness_failure_when_copying_artifacts_fails(tmp_path: Path) -> None:
-    """Do not replace the harness failure when diagnostic preservation fails."""
-    commands = tmp_path / "commands"
-    commands.mkdir()
-    write_failing_command(commands, "cp")
-    completed, worktree, diagnostics = run_cleanup(tmp_path, 47, commands)
-    assert completed.returncode == 47
-    assert "WARNING: could not preserve WSL failure artifacts" in completed.stderr
-    assert not worktree.exists()
-    assert not (diagnostics / "artifacts" / "wsl2-personal.xml").exists()
-    assert (diagnostics / "capture-status.txt").read_text(
-        encoding="utf-8"
-    ) == "WSL harness exited with status 47.\n"
-
-
-def test_wsl2_cleanup_retains_harness_failure_when_worktree_removal_fails(tmp_path: Path) -> None:
-    """Do not replace the harness failure when disposable-worktree removal fails."""
-    commands = tmp_path / "commands"
-    commands.mkdir()
-    write_failing_command(commands, "rm")
-    completed, worktree, diagnostics = run_cleanup(tmp_path, 47, commands)
-    assert completed.returncode == 47
-    assert "WARNING: could not remove disposable WSL worktree" in completed.stderr
-    assert worktree.is_dir()
-    assert (diagnostics / "artifacts" / "wsl2-personal.xml").is_file()
-    assert (diagnostics / "capture-status.txt").read_text(
-        encoding="utf-8"
-    ) == "WSL harness exited with status 47.\n"
-    shutil.rmtree(worktree)
-
-
 def test_wsl2_workflow_preserves_and_uploads_bounded_diagnostics() -> None:
     """Keep the executable cleanup and bounded upload attached to the native job."""
     workflow = workflow_text()
-    capture = (ROOT / "scripts/wsl2_capture.sh").read_text()
     assert "wsl2-diagnostics" in workflow
-    assert 'source "$worktree/scripts/wsl2_cleanup.sh"' in capture
-    assert "trap finish_capture EXIT" in capture
-    assert capture.index("trap finish_capture EXIT") < capture.index("for name in")
-    assert "cleanup_wsl2_worktree" in capture
+    assert not (SCRIPTS / "wsl2_cleanup.sh").exists()
     assert workflow.count("cleanup: cleanup") == 2
     # Both cleanup captures see timeouts and cancels, which leave no guest first-failure record.
     assert workflow.count("cleanup: cleanup\n          job-status: ${{ job.status }}\n") == 2
@@ -369,7 +257,7 @@ def test_wsl2_workflow_reuses_the_release_and_stack_entrypoints() -> None:
     assert "--stack stacks/local.json --runtime bun-standalone" in workflow
 
 
-INSTALL_GH = CLEANUP.parent / "install_gh_linux.sh"
+INSTALL_GH = SCRIPTS / "install_gh_linux.sh"
 INSTALL_GH_PY = INSTALL_GH.with_suffix(".py")
 
 
@@ -380,7 +268,7 @@ def test_wsl2_workflow_bootstraps_gh_and_verifies_overrides_before_npm_ci() -> N
     wrapper = (ROOT / "scripts/wsl2_shell.ps1").read_text()
     assert "GH_TOKEN: ${{ github.token }}" in workflow
     assert "GH_TOKEN/u" in wrapper
-    assert "Core Gitlink:" in (ROOT / "scripts/wsl2_capture.sh").read_text()
+    assert "Core Gitlink:" in (ROOT / "scripts/wsl2_capture.py").read_text(encoding="utf-8")
     action = (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
     assert "additional-packages" not in action
     assert "python3" in (ROOT / "scripts/wsl2_apt.sh").read_text().split("packages=(")[1].splitlines()[0]
