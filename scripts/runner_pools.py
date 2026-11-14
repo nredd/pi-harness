@@ -39,8 +39,8 @@ class Pool:
         queue_depth (int): Cells beyond its free slots a run may still queue on the pool. Zero keeps a
             pool strict; a positive depth pays off where the hosted runner of that OS queues for longer
             than a slot takes to free up (macOS), and is bounded by the backlog the pool reports.
-        run_cap (int): Most cells one run may take, 0 for no cap. Keeps part of a run hosted, so both
-            pools work at once instead of one run emptying the self-hosted queue into the other's idle time.
+        run_cap (int): Most cells one run may take, 0 for no cap. The rest of the run's heavy cells stay on
+            the hosted runner, so both pools work on the same run.
     """
 
     label: str
@@ -52,7 +52,8 @@ class Pool:
 
 # Hosted macOS jobs wait a median 215 s but p90 ~1 h under load (156 jobs, 2026-11-13), while `pi-macos` jobs
 # started in a median 30 s (p90 141 s). A busy `pi-macos` therefore queues up to four cells beyond its slots
-# (about one cell-length of wait at three runners), and one run takes at most three, so the other heavy
+# (about two cell-lengths of wait, ~15 min, still far under hosted's tail), and one run takes at most three,
+# so the other heavy
 # cells still use the hosted runners. Hosted Linux queues for seconds, so Linux stays strict.
 POOLS = {
     "pi-linux": Pool("pi-linux", "PI_LINUX_HEARTBEAT", 2),
@@ -76,7 +77,7 @@ CellKey = tuple[str, str, str]
 # is not known to pass on the pool images.
 CELL_SECONDS: dict[CellKey, int] = {
     # Every macOS cell that does real work. Hosted macOS is the longest pole (median queue ~10 min), and
-    # `pi-macos` has two slots plus one queued cell, so one PR can fill both slots on its own.
+    # `pi-macos` has two slots plus a queue (`POOLS`), and one PR takes at most `run_cap` of them.
     ("owned", "macos-14", "subagents"): 680,
     ("owned", "macos-14", "computer-use"): 360,
     ("owned", "macos-14", "ts"): 480,

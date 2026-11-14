@@ -122,18 +122,23 @@ def test_a_busy_macos_pool_queues_a_bounded_run_share(beat: str, capacity: int |
     assert got.get("pi-macos") == capacity
 
 
-def test_a_run_always_keeps_hosted_macos_cells_while_the_pool_is_idle_or_busy(table: dict[Any, int]) -> None:
-    """Heavy macOS cells split across BOTH pools: at most `run_cap` self-hosted, the rest `xcode-27`."""
-    for beat in (f"{FRESH}:2", f"{FRESH}:0", f"{FRESH}:-1"):
-        capacity = runner_pools.pool_capacity({"pi-macos": beat}, NOW, trusted=True)
-        runners = plan_runners(full_plan(capacity=capacity))
-        macos = {
-            k: v for k, v in runners.items() if k[1] == "macos-14" and k[0] in {"owned", "contracts", "stack"}
-        }
-        pooled = [k for k, v in macos.items() if v == "pi-macos"]
-        hosted = [k for k, v in macos.items() if v == "xcode-27" or (k[0] != "owned" and v == "")]
-        assert len(pooled) == MACOS.run_cap
-        assert len(hosted) >= 1
+@pytest.mark.usefixtures("table")
+@pytest.mark.parametrize("beat", [f"{FRESH}:2", f"{FRESH}:0", f"{FRESH}:-1"])
+def test_a_run_splits_macos_cells_across_both_pools(beat: str) -> None:
+    """Idle or busy, a run puts `run_cap` cells on `pi-macos` and keeps the rest hosted."""
+    capacity = runner_pools.pool_capacity({"pi-macos": beat}, NOW, trusted=True)
+    shards = {
+        k: v for k, v in plan_runners(full_plan(capacity=capacity)).items() if k[:2] == ("owned", "macos-14")
+    }
+    contracts = plan_runners(full_plan(capacity=capacity))[("contracts", "macos-14", "")]
+    runners = [*shards.values(), contracts or "xcode-27"]
+    assert runners.count("pi-macos") == MACOS.run_cap
+    assert runners.count("xcode-27") == len(runners) - MACOS.run_cap >= 1
+
+
+@pytest.mark.usefixtures("table")
+def test_a_saturated_macos_pool_takes_nothing_from_a_run() -> None:
+    """At the allowed backlog the pool takes no cell, so every macOS cell stays on `xcode-27`."""
     saturated = runner_pools.pool_capacity({"pi-macos": f"{FRESH}:-4"}, NOW, trusted=True)
     assert "pi-macos" not in set(plan_runners(full_plan(capacity=saturated)).values())
 
@@ -429,7 +434,13 @@ def wsl2_hosts(plan: dict[str, ci_paths.CellPlan]) -> dict[tuple[str, str], tupl
 def test_the_wsl2_pool_is_one_strict_slot_with_a_variable_of_its_own() -> None:
     """`pi-wsl2` runs one job at a time and never queues a second one behind it."""
     pool = runner_pools.POOLS["pi-wsl2"]
-    assert (pool.label, pool.variable, pool.slots, pool.queue_depth) == ("pi-wsl2", "PI_WSL2_HEARTBEAT", 1, 0)
+    assert (pool.label, pool.variable, pool.slots, pool.queue_depth, pool.run_cap) == (
+        "pi-wsl2",
+        "PI_WSL2_HEARTBEAT",
+        1,
+        0,
+        0,
+    )
     assert runner_pools.OS_POOLS["wsl2"] == "pi-wsl2"
     listed = {key for key in runner_pools.CELL_SECONDS if key[1] == "wsl2"}
     assert listed == {WSL2_FIRST, ("owned", "wsl2", "ts"), ("contracts", "wsl2", "")}
