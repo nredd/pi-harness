@@ -398,7 +398,13 @@ def write_bytes(repo: Path, path: str, content: bytes) -> None:
 
 @pytest.mark.parametrize(
     "magic",
-    [b"\x7fELF", b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xfe\xed\xfa\xcf", b"MZ\x90\x00"],
+    [
+        b"\x7fELF",
+        b"\xcf\xfa\xed\xfe",
+        b"\xca\xfe\xba\xbe",
+        b"\xfe\xed\xfa\xcf",
+        b"MZ" + b"\x00" * 58 + b"\x40\x00\x00\x00" + b"PE\x00\x00",
+    ],
 )
 def test_tracked_binaries_are_found_by_content(repo: Path, magic: bytes) -> None:
     """Flag a native executable by magic number wherever it is tracked.
@@ -418,6 +424,23 @@ def test_tracked_binaries_are_found_by_content(repo: Path, magic: bytes) -> None
         "packages/x: lib: top-level-entry",
         "packages/x: src/area/tool: tracked-binary",
     ]
+
+
+@pytest.mark.parametrize(
+    "text", [b"MZ is a text file\n", b"MZ" + b"\x00" * 62, b"MZ" + b"\x00" * 58 + b"\xff\xff\x00\x00"]
+)
+def test_text_that_starts_like_a_pe_image_is_not_a_binary(repo: Path, text: bytes) -> None:
+    """Require the PE signature at `e_lfanew`, not just a leading `MZ`.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        text (bytes): File contents that begin with `MZ` but are not a PE image.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    write_bytes(repo, f"{PACKAGE}/src/area/notes", text)
+    assert lines(repo) == []
 
 
 def test_everything_tracked_under_prebuilt_is_a_binary_violation(repo: Path) -> None:
@@ -449,7 +472,10 @@ def test_missing_binary_is_skipped(repo: Path) -> None:
     assert lines(repo) == []
 
 
-@pytest.mark.parametrize("name", ["scripts/a.sh", "scripts/a.ps1", "src/a.bash", "scripts/a.CMD", "a.sh"])
+@pytest.mark.parametrize(
+    "name",
+    ["scripts/a.sh", "scripts/a.ps1", "src/a.bash", "scripts/a.CMD", "a.sh", "a.bat", "a.zsh", "a.psm1"],
+)
 def test_standalone_shell_scripts_fail(repo: Path, name: str) -> None:
     """Flag `.sh`, `.ps1`, `.bash` and `.cmd` files; they belong in Makefile targets.
 
@@ -927,6 +953,30 @@ def test_renames_within_a_banned_entry_are_not_growth(repo: Path) -> None:
     out: list[str] = []
     assert package_layout.run(repo, "main", out.append) == 1
     assert out == [f"{PACKAGE}: test/m.test.ts: added-under-banned-entry (add it under `tests/` instead)"]
+
+
+def test_a_mostly_rewritten_file_is_not_a_rename(repo: Path) -> None:
+    """Count a moved file as growth when under 90% of it survives, so a gutted file cannot launder new code.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    waived = f"{PACKAGE}: test: top-level-entry"
+    old = "".join(f"export const line{n} = {n};\n" for n in range(20))
+    write_tree(repo, {f"{PACKAGE}/test/a.test.ts": old, package_layout.ALLOWLIST: entries_for(waived)})
+    commit(repo, "base")
+    git(repo, "checkout", "-q", "-b", "feature")
+    git(repo, "mv", f"{PACKAGE}/test/a.test.ts", f"{PACKAGE}/test/b.test.ts")
+    rewritten = "".join(f"export const line{n} = {n};\n" for n in range(11))
+    rewritten += "".join(f"export const fresh{n} = {n};\n" for n in range(9))
+    write_tree(repo, {f"{PACKAGE}/test/b.test.ts": rewritten})
+    commit(repo, "move and rewrite")
+    out: list[str] = []
+    assert package_layout.run(repo, "main", out.append) == 1
+    assert out == [f"{PACKAGE}: test/b.test.ts: added-under-banned-entry (add it under `tests/` instead)"]
 
 
 def test_growth_is_checked_where_the_base_has_no_allowlist(repo: Path) -> None:

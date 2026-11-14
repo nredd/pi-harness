@@ -121,10 +121,9 @@ MEDIA_SUFFIXES = frozenset(
         ".webp",
     }
 )
-SHELL_SUFFIXES = frozenset({".sh", ".ps1", ".bash", ".cmd"})
+SHELL_SUFFIXES = frozenset({".sh", ".ps1", ".psm1", ".bash", ".zsh", ".fish", ".bat", ".cmd"})
 BINARY_MAGICS = (
     b"\x7fELF",
-    b"MZ",
     b"\xfe\xed\xfa\xce",
     b"\xfe\xed\xfa\xcf",
     b"\xce\xfa\xed\xfe",
@@ -277,13 +276,12 @@ def import_escapes(package: str, path: str, root: Path) -> Iterable[Violation]:
             yield Violation(package, path, f"import-escape {specifier}")
 
 
-def file_violations(package: str, path: str, root: Path) -> Iterable[Violation]:
+def file_violations(package: str, path: str) -> Iterable[Violation]:
     """Yield the per-file rule violations of one tracked file inside an allowed top-level entry.
 
     Parameters:
         package (str): Package directory relative to the repository root.
         path (str): Package-relative POSIX path.
-        root (Path): Repository root.
 
     Returns:
         Iterable[Violation]: Violations of the structure rules (markdown, media, dist, test location,
@@ -320,14 +318,32 @@ def read_magic(package: str, path: str, root: Path) -> bytes:
         root (Path): Repository root.
 
     Returns:
-        bytes: Up to four bytes; empty when the file is absent or unreadable.
+        bytes: Up to 256 bytes; empty when the file is absent or unreadable.
     """
     try:
         with (root / package / path).open("rb") as handle:
-            return handle.read(4)
+            return handle.read(256)
     except OSError as e:
         LOGGER.debug(f"Cannot read '{package}/{path}' for the binary check: {e}")
         return b""
+
+
+def is_binary(head: bytes) -> bool:
+    """Return whether leading bytes are an ELF, Mach-O (thin or fat) or PE image.
+
+    Parameters:
+        head (bytes): Up to 256 leading bytes of a file.
+
+    Returns:
+        bool: Whether a native-executable magic number matches; a PE needs `PE\\0\\0` at `e_lfanew`, so a text
+            file that merely starts with `MZ` does not count. Java `.class` files share the fat Mach-O magic.
+    """
+    if head.startswith(BINARY_MAGICS):
+        return True
+    if head.startswith(b"MZ") and len(head) >= 64:
+        offset = int.from_bytes(head[60:64], "little")
+        return head[offset : offset + 4] == b"PE\x00\x00"
+    return False
 
 
 def content_violations(package: str, path: str, root: Path) -> Iterable[Violation]:
@@ -346,7 +362,7 @@ def content_violations(package: str, path: str, root: Path) -> Iterable[Violatio
     """
     top = path.split("/", maxsplit=1)[0]
     suffix = posixpath.splitext(path)[1].lower()
-    if top == "prebuilt" or read_magic(package, path, root).startswith(BINARY_MAGICS):
+    if top == "prebuilt" or is_binary(read_magic(package, path, root)):
         yield Violation(package, path, "tracked-binary")
     if is_fixture(path):
         return
@@ -448,7 +464,7 @@ def check_package(package: str, paths: list[str], root: Path, publish: bool) -> 
         found.extend(content_violations(package, path, root))
         if top in banned_tops:
             continue
-        found.extend(file_violations(package, path, root))
+        found.extend(file_violations(package, path))
         # A dot directory nested below an allowed entry (e.g. `src/.cache`); fixtures are exempt.
         nested = dot_entry(path)
         if nested is not None:
@@ -656,7 +672,7 @@ def base_renames(root: Path, reference: str) -> dict[str, str]:
         "diff",
         "--name-status",
         "-z",
-        "--find-renames",
+        "--find-renames=90%",
         "--diff-filter=R",
         base,
         "HEAD",
@@ -690,7 +706,7 @@ def growth_problems(
     """
     renames = renames or {}
     prefixes = {f"{package}/{entry}/": package for package, entry in banned_entries(violations)}
-    problems = set()
+    problems: set[str] = set()
     for path in tracked:
         if path in known:
             continue
