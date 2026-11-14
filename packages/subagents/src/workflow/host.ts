@@ -243,6 +243,15 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
        * point of that field existing.
        */
       let sessionReady = false;
+      // The last report, so a per-message or settle re-report that says nothing
+      // new is not emitted again.
+      let lastReported: string | undefined;
+      const report = (info: NonNullable<ReturnType<typeof resolvedInfo>>) => {
+        const key = JSON.stringify(info);
+        if (key === lastReported) return;
+        lastReported = key;
+        request.onResolved?.(info);
+      };
       const reportResolved = () => {
         // Called from BOTH the session hook and the spawn hook, because their
         // order is not guaranteed: the manager fires `onSpawned` after
@@ -252,7 +261,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
         // the one that reports.
         if (!sessionReady || spawnedId === undefined) return;
         const info = resolvedInfo(manager.getRecord(spawnedId));
-        if (info !== undefined) request.onResolved?.(info);
+        if (info !== undefined) report(info);
       };
       const command = request.gate;
       /**
@@ -312,6 +321,10 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
             // Fires once the child's session exists, which is where the model
             // and the clamped thinking level first become knowable.
             onSessionCreated: () => { sessionReady = true; reportResolved(); },
+            // The manager relabels the record from each answered message (the
+            // physical model and the level it really ran at) before this fires,
+            // so the card follows routing as it happens, not only at settle.
+            onAssistantUsage: reportResolved,
             ...(request.schema !== undefined ? { structuredOutput: request.schema } : {}),
             ...(request.isolation !== undefined ? { isolation: request.isolation } : {}),
             ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
@@ -330,10 +343,8 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
             reportResolved();
           },
         );
-        if (record.modelTier) {
-          const finalInfo = resolvedInfo(record);
-          if (finalInfo) request.onResolved?.(finalInfo);
-        }
+        const finalInfo = resolvedInfo(record);
+        if (finalInfo) report(finalInfo);
         return { ...toSpawnResult(record), ...(gate !== undefined ? { gate } : {}) };
       } catch (error) {
         // Strict worktree isolation rejects out of `awaitStartup` — the child
