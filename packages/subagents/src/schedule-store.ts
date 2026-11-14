@@ -30,6 +30,14 @@ export function isProcessRunning(pid: number, kill: (pid: number, signal: 0) => 
   try { kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException | undefined)?.code === "EPERM"; }
 }
 
+/** The fire a timer was armed for: its shared time and the schedule it was armed against. */
+export interface FireSlot {
+  /** Epoch ms every process computes alike for the same fire. */
+  at: number;
+  /** The job's `schedule` when the timer was armed; a differing stored value means the timer is stale. */
+  schedule: string;
+}
+
 /** A live pid stays authoritative this long past its lease, so a host sleep does not orphan a live run. */
 export const LEASE_GRACE_MS = 3 * LEASE_MS;
 
@@ -172,17 +180,20 @@ export class ScheduleStore {
 
   /**
    * Claim a fire under the store lock: reload, verify the job is still enabled,
-   * before its deadline and not held by another live process, then write
-   * `lastStatus: "running"` and the owner in the same write. Returns the job
-   * (with the status it replaced as `prior`), or undefined when the fire is lost.
+   * before its deadline, still on the schedule `slot` was armed for, for a slot
+   * later than the last claimed one, and not held by another live process, then
+   * write `lastStatus: "running"`, the owner and `lastSlot` in the same write.
+   * Returns the job (with the status it replaced as `prior`), or undefined when the fire is lost.
    */
-  claim(id: string, owner: RunOwner, now: number): { job: ScheduledSubagent; prior: ScheduledSubagent["lastStatus"] } | undefined {
+  claim(id: string, owner: RunOwner, now: number, slot: FireSlot): { job: ScheduledSubagent; prior: ScheduledSubagent["lastStatus"] } | undefined {
     return this.withLock(() => {
       const job = this.jobs.get(id);
       if (!job?.enabled) return undefined;
       if (job.until !== undefined && now >= new Date(job.until).getTime()) return undefined;
+      if (job.schedule !== slot.schedule) return undefined;
+      if (job.lastSlot !== undefined && slot.at <= job.lastSlot) return undefined;
       if (job.lastStatus === "running" && foreignOwnerLive(job.runOwner, now)) return undefined;
-      const claimed: ScheduledSubagent = { ...job, lastStatus: "running", runOwner: owner };
+      const claimed: ScheduledSubagent = { ...job, lastStatus: "running", runOwner: owner, lastSlot: slot.at };
       this.jobs.set(id, claimed);
       return { job: claimed, prior: job.lastStatus };
     });

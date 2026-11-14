@@ -141,7 +141,7 @@ describe("scheduler branches", () => {
 
   it("keeps no admission token for a job that never armed", () => {
     class FullClock extends FakeClock {
-      override setInterval(): never { throw "timer table full"; }
+      override setTimeout(): never { throw "timer table full"; }
     }
     const tokens = (s: SubagentScheduler) => (s as unknown as { scheduled: Map<string, object> }).scheduled;
     const full = setup({ clock: new FullClock(), path: join(dir, "full.json") });
@@ -159,7 +159,7 @@ describe("scheduler branches", () => {
 
   it("reports a non-Error timer failure as its string", () => {
     class FullClock extends FakeClock {
-      override setInterval(): never { throw "timer table full"; }
+      override setTimeout(): never { throw "timer table full"; }
     }
     const f = setup({ clock: new FullClock() });
     const job = f.scheduler.addJob(input);
