@@ -15,3 +15,5 @@ tests/**/coverage/
 scripts/coverage/
 benchmarks/comparison/coverage/
 /coverage/summary.json
+packages/*/dist/
+packages/*/*.tgz

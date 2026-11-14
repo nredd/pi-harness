@@ -789,6 +789,8 @@ jobs:
         if: steps.plan.outputs.run == 'true'
         run: |
           npm ci --ignore-scripts
+          # `dist/` is gitignored; the `local` stack and inprocess tests load it from the checkout.
+          npm run build
           cd integration && uv sync --locked --python "$(tr -d '\n' < ../.python-version)"
       - name: Fetch exact Gitlinked core release, formula-equivalent install
         if: steps.plan.outputs.run == 'true'

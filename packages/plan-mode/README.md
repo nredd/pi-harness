@@ -69,7 +69,7 @@ npm run build
 pi -e .
 ```
 
-The package declares `dist/index.ts`, so build an unbuilt local checkout before Pi loads the package directory.
+The package declares `dist/index.ts`, which is gitignored build output: run `make install-owned` (or `npm run build`) in a fresh checkout before Pi loads the package directory. Published tarballs ship it.
 Install only from sources you trust because Pi extensions run with Pi's permissions.
 
 ## 🚀 Quick start
@@ -453,8 +453,8 @@ pi-plan-mode/
 │   ├── index.ts                       # Thin Pi entrypoint
 │   ├── child-policy.ts                # State query and the Plan policy for subagent children
 │   └── plan-mode.ts                   # Planning policy and implementation handoff
-├── dist/                              # Generated Jiti runtime
-├── scripts/build-runtime.mjs          # Runtime builder
+├── dist/                              # Generated Jiti runtime (gitignored; `npm run build`)
+├── scripts/build-runtime.mjs          # Thin options for the shared root `scripts/runtime-builder.mjs`
 ├── docs/                              # Published reference documentation
 └── test/                              # Behavior and lifecycle coverage
 ```

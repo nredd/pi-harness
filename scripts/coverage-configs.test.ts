@@ -67,7 +67,7 @@ const PRODUCERS: Producer[] = [
 		config: "packages/plan-mode/vitest.runtime-build.config.ts",
 		policy: "runtime-build-tooling",
 		provider: "istanbul",
-		reportsDirectory: "coverage/runtime-build-tooling",
+		reportsDirectory: "packages/plan-mode/coverage/runtime-build-tooling",
 		load: () => import("../packages/plan-mode/vitest.runtime-build.config.ts"),
 	},
 	{
@@ -298,12 +298,11 @@ for (const producer of PRODUCERS) {
 	});
 }
 
-test("subagents runtime verification pins both complete scripts at zero L/F/B/S", async () => {
+test("subagents runtime verification pins the complete script at zero L/F/B/S", async () => {
 	const producer = PRODUCERS.find(({ policy }) => policy === "subagents-runtime-tooling");
 	assert.ok(producer);
 	assert.deepEqual((await coverageOf(producer)).thresholds, {
 		"scripts/build-runtime.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 },
-		"scripts/check-runtime.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 },
 	});
 });
 
