@@ -130,7 +130,7 @@ def test_classify_accepts_documentation_paths(repo: Path, path: str) -> None:
         "integration/README.md",
         "scripts/ci_paths.py",
         "releases/example.json",
-        "packages/session-kit/docs/stats-snapshots.md",
+        "packages/session-kit/docs/notes.md",
     ],
 )
 def test_classify_rejects_code_and_tested_documentation(repo: Path, path: str) -> None:

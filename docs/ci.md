@@ -84,7 +84,7 @@ The plan fails closed: an unreadable comparison, an empty diff or a Gitlink chan
 
 Adding an input class (for example the benchmark gate's inputs) is one `is_*_input` predicate, one entry in `INPUT_CLASSES` and the rule in `plan_cells`; the output, the `ChangeClassification.inputs` mapping and the tests' fixtures follow the registry.
 
-`owned` is sharded (#350). Each OS has an `owned-shards-<os>` job, whose `if` reads the cell's `run` and whose matrix `include` *is* the cell's `shards` list from the plan, and an `owned-<os>` fan-in job that reports the required `owned (<os>)` name. `scripts/ci_paths.py` `OWNED_SHARDS` owns the split; no step names a shard. Each shard runs one step per gate it lists (`Owned gate check-ts`, `check-scripts`, `check-integration`, and on WSL `check-probes`, `check-providers`, `check-import-audit`), each under `!cancelled()` after a successful `Install`, so a failing gate never hides another gate's evidence. A `check-ts` shard runs `make check-ts WORKSPACES="<paths>"`, which is `npm run check --workspace=<path>...`: each package's own `npm run check`, unchanged, in npm workspace order, one package at a time; no `-j`. A `check-ts` shard that names no workspaces takes every workspace no other shard of its cell names, computed from the root `package.json` when the plan is built, so a new workspace lands in a shard without a table edit, and the plan refuses a split that names an unknown workspace or leaves a `check-ts` shard empty. `make check-ts` with no `WORKSPACES` still runs every workspace locally. `harness.release_gate` requires each shard's gate steps and each fan-in's steps (see [release-verification.md](release-verification.md)); renaming a step means updating `OWNED_GATE_STEPS` there, and a test pins its `OWNED_SHARDS` to the plan's. The `Benchmark unit gate` step keeps its implicit `success()` (no `!cancelled()`) and runs when the shard's `gates` list `check-benchmark` and its `skipped_gates` do not. It runs before the shard's coverage upload, which carries its LCOV.
+`owned` is sharded (#350). Each OS has an `owned-shards-<os>` job, whose `if` reads the cell's `run` and whose matrix `include` *is* the cell's `shards` list from the plan, and an `owned-<os>` fan-in job that reports the required `owned (<os>)` name. `scripts/ci_paths.py` `OWNED_SHARDS` owns the split; no step names a shard. Each shard runs one step per gate it lists (`Owned gate check-ts`, `check-scripts`, `check-integration`, and on WSL `check-probes`, `check-providers`, `check-import-audit`), each under `!cancelled()` after a successful `Install`, so a failing gate never hides another gate's evidence. A `check-ts` shard runs `make check-ts WORKSPACES="<paths>"`, which is `npm run check --workspace=<path>...`: each package's own `npm run check`, unchanged, in npm workspace order, one package at a time; no `-j`. A `check-ts` shard that names no workspaces takes every workspace no other shard of its cell names, computed from the root `package.json` when the plan is built, so a new workspace lands in a shard without a table edit, and the plan refuses a split that names an unknown workspace or leaves a `check-ts` shard empty. `make check-ts` with no `WORKSPACES` still runs every workspace locally. `harness.release_gate` requires each shard's gate steps and each fan-in's steps (see [frozen release verification](../README.md#frozen-release-verification)); renaming a step means updating `OWNED_GATE_STEPS` there, and a test pins its `OWNED_SHARDS` to the plan's. The `Benchmark unit gate` step keeps its implicit `success()` (no `!cancelled()`) and runs when the shard's `gates` list `check-benchmark` and its `skipped_gates` do not. It runs before the shard's coverage upload, which carries its LCOV.
 
 A shard whose gates include `check-integration` (the Ubuntu and macOS `python` shards) installs tmux first with the `stack` job's own steps, `Install tmux (Linux)` (`apt-get install tmux`, only when `command -v tmux` finds none) and `Install tmux (macOS)` (`brew install tmux`) (#383). The integration units drive `harness.tmux`, `rpc`, `headless`, `interactive`, `probe` and `fleet_load` against `integration/tests/stub_pi.py` on private tmux servers, so those modules are measured in `python-harness` instead of only running in the uncovered `stack` scenarios. No shard runs a real Pi for this. The WSL guest never runs `check-integration` and needs no step.
 
@@ -410,7 +410,7 @@ The 2026-10-20 capacity measurement found median final-head PR latency of 11m45s
 
 PR runs cancel each other per ref. `main` runs do not: `cancel-in-progress` is PR-only and the concurrency group is per SHA on push, because GitHub drops an older pending run in a shared group even without cancellation. A push cannot kill the run proving the previous merge.
 
-Selective main-push smoke is not release evidence. Combined-result release safety comes from the explicit full frozen-candidate dispatch, not repeated update-branch matrices, and unrelated main advancement does not invalidate an unchanged reviewed PR HEAD ([release verification](release-verification.md)).
+Selective main-push smoke is not release evidence. Combined-result release safety comes from the explicit full frozen-candidate dispatch, not repeated update-branch matrices, and unrelated main advancement does not invalidate an unchanged reviewed PR HEAD ([release verification](../README.md#frozen-release-verification)).
 
 The required checks live in ruleset `main required checks` (id `25524267`, not classic branch protection), with `strict_required_status_checks_policy: false`. It is not strict: advancing `main` does not invalidate a PR's previous green result, so the merged tree can differ from the tree CI saw. The `main` push run is what validates it.
 
@@ -561,24 +561,16 @@ bootstrap exception. Istanbul consolidation is phase 3, not part of this produce
 Toolchain: Node from `.node-version`, npm from `packageManager`, Bun from `.bun-version`, uv `0.13.1`
 (Python from `.python-version` via uv). Every action is pinned to a commit SHA.
 
-PR freshness and release verification follow [the frozen-candidate policy](release-verification.md).
+PR freshness and release verification follow [the frozen-candidate policy](../README.md#frozen-release-verification).
 Do not update-branch solely because main advanced. Keep exact final-HEAD checks and both reviews.
 Manual `ci.yml` dispatch runs the complete matrix and core fork gate without docs/smoke shortcuts;
 push/main smoke is not release evidence.
 
-Required checks on `main`, twelve contexts:
-
-- `owned (ubuntu-24.04)`, `owned (macos-14)` and `owned (wsl2)`
-- `contracts (ubuntu-24.04)`, `contracts (macos-14)` and `contracts (wsl2)`
-- `stack (ubuntu-24.04, personal)`, `stack (ubuntu-24.04, local)`, `stack (macos-14, personal)`, `stack (macos-14, local)`, `stack (wsl2, personal)` and `stack (wsl2, local)`
-
-Dropping a cell from a matrix would leave its context pending forever, which is why the cells that no longer test anything stay as bypass cells.
-
-The `macos-14` in these names is a stable check context, not the OS version: GitHub retired that image, so the cells run on `xcode-27` (macOS 27, GitHub names new images after the Xcode major) via `matrix.runner`. Renaming them would need a ruleset change.
+The twelve required check names are listed [here](../README.md#required-checks).
 
 The historical nine-context receipt remains in `scripts/tests/fixtures/merge-pr-135.json`, unchanged. Tests explicitly add synthetic replacement matrix records; they are not hosted execution evidence.
 
-The twelve jobs are the configured required checks of ruleset `main required checks` (id `25524267`, `integration_id` 15368 each); `Promote stack` reads them from `GET /repos/nredd/pi-harness/rules/branches/main`, then attests and releases `stack/<sha>` (`docs/stack-promotion.md`). `migration-review/standards` and
+The twelve jobs are the configured required checks of ruleset `main required checks` (id `25524267`, `integration_id` 15368 each); `Promote stack` reads them from `GET /repos/nredd/pi-harness/rules/branches/main`, then attests and releases `stack/<sha>` ("Stack promotion" in `README.md`). `migration-review/standards` and
 `migration-review/spec` are no longer required. Reviews are our process, not a CI gate:
 
 - Run separate Standards + Spec reviews on the exact final HEAD; any HEAD change invalidates both

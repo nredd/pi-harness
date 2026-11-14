@@ -13,7 +13,7 @@ selection commit `19f31f02cf56233381e9d8fe97a80bac29afcede`, all four authentica
 and canonical/release workflow identities. It is an artifact/source record, not promotion approval.
 This npm tarball publication does not establish standalone binary #72 or live-install acceptance.
 
-Before publishing, require [full frozen-candidate verification](release-verification.md).
+Before publishing, require [full frozen-candidate verification](../README.md#frozen-release-verification).
 PR HEAD checks need not be rerun solely because main advanced. Release verification does:
 `publish.yml` now refuses missing exact-candidate full CI execution evidence before both its
 verification and privileged publication stages. Keep prepublication package verification separate
@@ -174,7 +174,7 @@ Planned versions, chosen by SemVer from that range (minor for added features or 
 - `@nredd/pi-session-kit` `0.9.0` -> `0.10.0`: `homeDir`, `/mon` and monitor-tool changes, settle enforcement
 - `@nredd/pi-dev-tools` `0.7.0` -> `0.8.0`: approved merge-commit support, resource and git/ssh/py changes
 
-Plan-mode newer than `0.59.3-nredd.3` and subagents newer than `0.22.0-nredd.8` must update together (`packages/subagents/README.md`), so the pin PR moves both `personal.json` pins in one change. "No source changes" applies only to this PR's own diff (versions and lockfile), not to what publishing `main` ships. Dev-tools and session-kit keep their exact `@nredd/pi-resource-sampler@0.2.0` dependency: they pin it exactly (`0.2.1` was unpublished when they were bumped, and is published now but not selected), and nothing verifies a dependency's provenance. The bump PR deliberately leaves `integration/stacks/personal.json` and `integration/stacks/runtime-locks.json` on the published selection, per [release verification](release-verification.md).
+Plan-mode newer than `0.59.3-nredd.3` and subagents newer than `0.22.0-nredd.8` must update together (`packages/subagents/README.md`), so the pin PR moves both `personal.json` pins in one change. "No source changes" applies only to this PR's own diff (versions and lockfile), not to what publishing `main` ships. Dev-tools and session-kit keep their exact `@nredd/pi-resource-sampler@0.2.0` dependency: they pin it exactly (`0.2.1` was unpublished when they were bumped, and is published now but not selected), and nothing verifies a dependency's provenance. The bump PR deliberately leaves `integration/stacks/personal.json` and `integration/stacks/runtime-locks.json` on the published selection, per [release verification](../README.md#frozen-release-verification).
 
 Published: see the selection table under Combined stack selection.
 

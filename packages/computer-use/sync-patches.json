@@ -1335,7 +1335,6 @@
 		"docs/content/docs/reference/platforms/macos/actions.mdx",
 		"docs/content/docs/reference/platforms/macos/root-targeting.mdx",
 		"docs/content/docs/tutorials/getting-started.mdx",
-		"docs/macos-root-targeting.md",
 		"docs/src/components/brand.tsx",
 		"extensions/computer-use.ts",
 		"native/linux/bridge-rs/tests/protocol_state_errors.rs",

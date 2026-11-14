@@ -1,4 +1,4 @@
-# Explicitly promotes one already-gated main commit. See docs/stack-promotion.md.
+# Explicitly promotes one already-gated main commit. See "Stack promotion" in README.md.
 name: Promote stack
 
 on:
@@ -20,7 +20,7 @@ defaults:
     shell: bash -euo pipefail {0}
 
 # One queue per operation and selected commit, so a `verify-only` dispatch never replaces a pending
-# `promote` of the same commit; see docs/stack-promotion.md.
+# `promote` of the same commit; see "Stack promotion" in README.md.
 concurrency:
   group: stack-promotion-${{ inputs.operation }}-${{ inputs.source_sha }}
   cancel-in-progress: false

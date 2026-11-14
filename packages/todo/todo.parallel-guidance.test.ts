@@ -26,7 +26,7 @@ describe("todo default guidance", () => {
 		const { pi, captured } = createMockPi();
 		registerTodoTool(pi);
 		const guidance = (captured.tools.get("todo")!.promptGuidelines as string[]).join("\n");
-		const reference = readFileSync(new URL("./docs/tool-schema.md", import.meta.url), "utf8");
+		const reference = readFileSync(new URL("./README.md", import.meta.url), "utf8");
 
 		for (const phrase of [
 			"started task `in_progress`",

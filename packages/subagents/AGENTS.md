@@ -30,12 +30,10 @@ Read the file that covers a surface before changing its behavior; update it in t
 | File | Covers |
 |---|---|
 | `README.md` | User-facing reference: features, install, tool parameter tables, commands, settings and defaults, the event table, the RPC channel list, and the `src/` file map (`## Architecture`). Source of truth for defaults and setting names. |
-| `docs/workflows.md` | `SubagentWorkflow` in depth — how the model writes a script, editing and re-running it, saving a named workflow, `agent()` options, recipes, troubleshooting. Examples in `examples/workflows/`. |
-| `docs/rpc.md` | Calling this extension from another pi extension — `pi.events` lifecycle events (`subagents:completed`, `subagents:ready`, …), the `subagents:rpc:*` channels (`ping`, `spawn`, `stop`, `consume`), spawn options, error strings, and the `Symbol.for("pi-subagents:manager")` registry. Source: `src/cross-extension-rpc.ts`. |
 | `CONTRIBUTING.md` | Contributor guidelines and quality bar. |
 | `SECURITY.md` | Vulnerability reporting. |
 
-`README.md` holds the reference tables and links out; `docs/` holds the long-form guides. Each guide states its audience in its first three lines — read that before deciding it is the wrong file. Renaming an event, an RPC channel, a reply-envelope field, or a workflow global is a docs change too.
+`README.md` holds the reference tables and the long-form guides (workflows, packages, RPC). Renaming an event, an RPC channel, a reply-envelope field, or a workflow global is a docs change too.
 
 Cite code by symbol or quoted string (`spawnTopLevel` in `src/index.ts`), never by line number: line numbers go stale on any edit above them.
 
@@ -135,7 +133,7 @@ Location: `CHANGELOG.md` (single file, [Keep a Changelog](https://keepachangelog
 Before a release:
 
 - Update `CHANGELOG.md` — move the `## [Unreleased]` entries under a new `## [X.Y.Z]` version section, and add a fresh empty `## [Unreleased]` for the next cycle.
-- Update `README.md` if user-facing behavior changed (features list, settings, usage), and the matching guide in `docs/` if the change touches workflows or the event/RPC surface.
+- Update `README.md` if user-facing behavior changed (features list, settings, usage), including its workflow, package and RPC guides.
 - Run the full check suite plus the e2e tests, and fix anything that fails:
   ```bash
   npm run check                    # lint + typecheck + test

@@ -34,7 +34,7 @@ because `main` advanced. Resolve actual conflicts and re-review every HEAD chang
 active twelve app-bound checks and non-strict ruleset policy; never re-enable strictness, disable
 protection or bypass checks. Before publishing, promoting or deploying, require the exact frozen
 combined candidate's full executed CI and artifact evidence, not selective main smoke or old PR
-checks. Follow `docs/release-verification.md`; unrelated later main advances do not stale that
+checks. Follow "Frozen release verification" in `README.md`; unrelated later main advances do not stale that
 candidate, but changed selected inputs do.
 
 # Mandatory PR review
