@@ -311,6 +311,13 @@ export interface AgentRecord {
   /** Resolved spawn params, captured for UI display. Fixed at spawn time. */
   invocation?: AgentInvocation;
   /**
+   * The thinking level the caller asked for, snapshotted when the session was
+   * created (before `invocation.thinking` takes the session level). `undefined`
+   * means no ask. Never cleared: each response re-derives `requestedThinking`
+   * from it.
+   */
+  askedThinking?: EffectiveThinkingLevel;
+  /**
    * Set when a configured model did not resolve and the agent runs on the parent
    * model. The single source for every disclosure surface; a resume reuses it
    * as is, never recomputes it from the resuming call's config.
@@ -388,11 +395,13 @@ export interface AgentInvocation {
   /** The level actually in effect, once a session exists to report one. */
   thinking?: EffectiveThinkingLevel;
   /**
-   * What the caller asked for, kept only when they did not get it — pi clamped
-   * the level to the model's capabilities, or an agent file's frontmatter
-   * outranked the parameter (#182). The snapshot exists to answer "did the spawn
-   * honor my instructions?" (#62), which it cannot do if the request is lost, so
-   * neither `requested*` field is overwritten once set.
+   * What the caller asked for, set only while the latest response (or the
+   * session, before one lands) differs from it — pi clamped the level to the
+   * model's capabilities, or an agent file's frontmatter outranked the
+   * parameter (#182). It answers "did the spawn honor my instructions?" (#62).
+   * On a router-backed agent it follows the latest response: a later turn that
+   * runs at the asked level clears it, and a later clamp sets it again. Absent
+   * when nothing was asked.
    */
   requestedThinking?: EffectiveThinkingLevel;
   maxTurns?: number;
