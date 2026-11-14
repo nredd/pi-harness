@@ -3,7 +3,7 @@
 Owner scope: the 100% line/function goal covers `subagents`, `plan-mode`, `todo`,
 `session-kit`, `resource-sampler`, `subscription-router`, `preset` and `dev-tools`, plus the
 `runtime-build-tooling`, `workflow-examples`, `import-audit` (`scripts/import_audit.ts`, 0/0 since #321, plus the root
-`run-vitest.ts`, `check-biome-paths.mjs` and `router_contract.mjs` helpers since #379),
+`run-vitest.ts` and `router_contract.mjs` helpers since #379),
 `probes` (every executable `integration/probes` source, 0/0 since #377) and
 `inprocess` (every in-process stack fixture module, 0/0 on both engines since #376) signals,
 and `python-benchmarks` (`benchmarks/comparison`, darwin only, 0/0 since #387).
@@ -161,9 +161,7 @@ same way. `run-vitest.ts` exports `main(argv, env)`; `run-vitest.test.ts` fakes 
 asserts engine selection, the appended Bun coverage arguments and the exact opt-out, real home
 creation and removal, toolchain homes, the step summary, and rejection of a bad engine. Its
 `dispatch(isMain)` is asserted in process for both arms, and the real entry stays with the subprocess
-tests in `launcher.test.ts` and `test_coverage_producers.py`. `check-biome-paths.mjs` stays a top-level CLI that its test re-imports
-per case with its own argv, like `anthropic-block-types.mjs`, against real Biome, faking `spawnSync`
-only for a spawn error and a signal-killed child. `router_contract.mjs` exports the per-scenario
+tests in `launcher.test.ts` and `test_coverage_producers.py`. `router_contract.mjs` exports the per-scenario
 synthetic utilization so every scenario runs in process; its two placeholder imports are virtual
 mocks. Vite's module runner pins `import.meta.main` false, so the dispatches of `run-vitest.ts` and
 `import_audit.ts` were the signal's last two uncovered branches (#418, #539): each is now an exported
@@ -366,7 +364,7 @@ each file. Blanket globs, missing files, duplicate entries and overlap with owne
 source fail. Classification also applies to imported LCOV records. A verification label does
 not waive the base-tree ratchet: moving previously owned production into this classification
 still requires a reasoned `reclassifications` entry. Root-level `.test.mjs` files such as
-`scripts/check-biome-paths.test.mjs` and `scripts/router_contract.test.mjs` need their own verification-helper entry; classifying the
+`scripts/router_contract.test.mjs` needs their own verification-helper entry; classifying the
 implementation helper does not implicitly classify its regression test.
 
 `computer-use-async/primary` (#759) independently measures the whole

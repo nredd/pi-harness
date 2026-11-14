@@ -212,7 +212,6 @@ def test_root_script_helpers_are_measured_by_import_audit_at_zero() -> None:
         for path in ROOT.glob(pattern)
     }
     assert inventory(ROOT, audit) == {
-        "scripts/check-biome-paths.mjs",
         "scripts/import_audit.ts",
         "scripts/merge-pr.ts",
         "scripts/router_contract.mjs",
@@ -229,7 +228,7 @@ def test_root_script_helpers_are_measured_by_import_audit_at_zero() -> None:
         "linux": (0, 0),
     }
     helpers = {helper.path for helper in cfg.verification_helpers}
-    assert {"scripts/check-biome-paths.test.mjs", "scripts/router_contract.test.mjs"} == {
+    assert {"scripts/router_contract.test.mjs"} == {
         path for path in helpers if path.startswith("scripts/") and "/" not in path.removeprefix("scripts/")
     }
 

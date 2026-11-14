@@ -89,6 +89,14 @@ current CPU/memory pressure and concurrent builds before starting; a low load av
 is not enough. Closed-lid maintenance sleep can suspend lifecycle timers for seconds or minutes,
 so check `powerd` sleep/wake logs when real-time assertions overrun. Do not relax their deadlines.
 
+Shared toolchain: one root `biome.json` (tabs, width 120, `recommended` plus eight `error` rules; JSON
+config files use two spaces), one `tsconfig.base.json` that every package `tsconfig.json` extends, and one
+set of pins (`@biomejs/biome`, `typescript`, `@types/node`, `vitest`, the coverage providers, `esbuild`) in the
+root `package.json`. Packages never pin them. A package that cannot meet a flag yet overrides it in its own
+`tsconfig.json` with a comment naming the issue; `plan-mode`, `subagents`, `todo` and `computer-use` keep their own
+`biome.json` until their layout issues land. `npm run lint` is `biome check .` and `npm run format` is
+`biome check --write .`.
+
 `make check` runs, without rewriting files:
 
 - `check-ts`: Biome, `tsc --noEmit`, Vitest for `packages/*`, plus the private
@@ -101,7 +109,7 @@ so check `powerd` sleep/wake logs when real-time assertions overrun. Do not rela
   coverage.py's `.coverage` and parallel `.coverage.*` data files
 - `check-import-audit`: Biome, strict `tsc` and Vitest (V8 coverage, `scripts/vitest.config.ts`) for `scripts/import_audit.ts`, the package-contract
   import parser (installed TypeScript 7 `unstable/sync` API; real parses, the only mock forces a project lookup miss), plus the
-  root `scripts/run-vitest.ts` launcher, `scripts/check-biome-paths.mjs` preflight and `scripts/router_contract.mjs` fixture, all enforced at 0/0
+  root `scripts/run-vitest.ts` launcher and `scripts/router_contract.mjs` fixture, all enforced at 0/0
 - `check-integration`: ruff, ty, unit tests for `integration/` (needs `tmux`: the live-session drivers run against a stub pi on private servers), then `check-probes` and `check-providers`
 - `check-probes`: Biome and strict `tsc` for every `integration/probes` source and test (real `dev-tools` and
   `session-kit` runner sources; Biome only for `anthropic-block-types.mjs`), then Vitest with V8 coverage over

@@ -45,8 +45,6 @@ WSL_INPUT_FILES = TOOLCHAIN_INPUTS | {
     "package-lock.json",
     "integration/pyproject.toml",
     "integration/uv.lock",
-    "scripts/check-biome-paths.mjs",
-    "scripts/check-biome-paths.test.mjs",
     "scripts/coverage-configs.test.ts",
     "scripts/import_audit.test.ts",
     "scripts/import_audit.ts",

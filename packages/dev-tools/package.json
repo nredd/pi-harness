@@ -30,7 +30,7 @@
     "typebox": "*"
   },
   "scripts": {
-    "lint": "biome check src/ test/",
+    "lint": "biome check .",
     "format": "biome check --write src/ test/",
     "typecheck": "tsc --noEmit",
     "test": "JITI_FS_CACHE=false vitest run --coverage",
@@ -38,13 +38,8 @@
     "check": "npm run lint && npm run typecheck && npm run test && npm run test:bun"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.15",
     "@earendil-works/pi-coding-agent": "https://github.com/nredd/pi/releases/download/v1.3.0-nredd.11/earendil-works-pi-coding-agent-1.3.0.tgz",
-    "@types/node": "26.6.5",
-    "@vitest/coverage-v8": "5.0.3",
-    "typebox": "1.3.36",
-    "typescript": "7.0.2",
-    "vitest": "5.0.3"
+    "typebox": "1.3.36"
   },
   "pi": {
     "extensions": [
