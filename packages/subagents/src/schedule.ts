@@ -483,8 +483,10 @@ export class SubagentScheduler {
     store.update(id, { runPid: process.pid, runAgentId: agentId });
     this.inFlight.set(id, (this.inFlight.get(id) ?? 0) + 1);
     const finalize = (status: "success" | "error") => {
+      let othersLive = false;
       if (this.store === store) {
         const left = (this.inFlight.get(id) ?? 1) - 1;
+        othersLive = left > 0;
         if (left > 0) this.inFlight.set(id, left);
         else this.inFlight.delete(id);
       }
@@ -493,9 +495,13 @@ export class SubagentScheduler {
       // through it so its cached view (and the job's name) catches up.
       const target = this.store?.get(id) ? this.store : store;
       const current = target.get(id);
-      // An overlapping newer run owns the job: count this one, but leave the
-      // status "running" and the owner for the run that is still live.
-      const superseded = current?.runAgentId !== undefined && current.runAgentId !== agentId;
+      // An overlapping run is still live (counted in flight, or the persisted owner
+      // is another live agent, which survives a re-bind): count this one, but leave
+      // the status "running" and the owner for it.
+      const owner = current?.runAgentId;
+      const ownerStatus = owner !== undefined && owner !== agentId ? manager.getRecord(owner)?.status : undefined;
+      const ownerLive = ownerStatus === "running" || ownerStatus === "queued";
+      const superseded = othersLive || ownerLive;
       target.update(id, {
         lastRun: new Date(this.clock.now()).toISOString(),
         runCount: (current?.runCount ?? 0) + 1,

@@ -658,6 +658,46 @@ describe("SubagentScheduler — fire path", () => {
       expect(store.get(job.id)).toMatchObject({ lastStatus: "running", runAgentId: "a2" });
     });
 
+    it("a newer run settling first leaves the job running until the older one settles", async () => {
+      const finishers = new Map<string, () => void>();
+      const promises = new Map<string, Promise<void>>();
+      const done = new Set<string>();
+      manager.spawn.mockReturnValueOnce("a1").mockReturnValueOnce("a2");
+      manager.getRecord.mockImplementation((id: string) => {
+        if (!promises.has(id)) promises.set(id, new Promise<void>(r => { finishers.set(id, r); }));
+        return { status: done.has(id) ? "completed" : "running", promise: promises.get(id) };
+      });
+      const job = scheduler.addJob({
+        name: "Over2", description: "Over2", schedule: "1s",
+        subagent_type: "general-purpose", prompt: "x",
+      });
+      vi.advanceTimersByTime(2_000);
+      done.add("a2");
+      finishers.get("a2")!();
+      await vi.waitFor(() => expect(store.get(job.id)?.runCount).toBe(1));
+      expect(store.get(job.id)?.lastStatus).toBe("running");
+      done.add("a1");
+      finishers.get("a1")!();
+      await vi.waitFor(() => expect(store.get(job.id)?.runCount).toBe(2));
+      expect(store.get(job.id)).toMatchObject({ lastStatus: "success", runAgentId: undefined });
+    });
+
+    it("a persisted live owner other than the settling run keeps the job running", async () => {
+      let finish: () => void = () => {};
+      const settle = new Promise<void>(r => { finish = r; });
+      manager.spawn.mockReturnValueOnce("a1");
+      manager.getRecord.mockImplementation((id: string) =>
+        id === "a1"
+          ? { status: "completed", promise: settle }
+          : { status: "queued", promise: new Promise(() => {}) });
+      const job = addOneShot();
+      vi.advanceTimersByTime(2_000);
+      store.update(job.id, { runAgentId: "other" });
+      finish();
+      await vi.waitFor(() => expect(store.get(job.id)?.runCount).toBe(1));
+      expect(store.get(job.id)).toMatchObject({ lastStatus: "running", runAgentId: "other" });
+    });
+
     it("settling clears the owner", async () => {
       manager.getRecord.mockImplementation(() => ({ status: "completed", promise: Promise.resolve("") }));
       const job = addOneShot();

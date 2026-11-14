@@ -1207,15 +1207,20 @@ var SubagentScheduler = class _SubagentScheduler {
     store.update(id, { runPid: process.pid, runAgentId: agentId });
     this.inFlight.set(id, (this.inFlight.get(id) ?? 0) + 1);
     const finalize = (status) => {
+      let othersLive = false;
       if (this.store === store) {
         const left = (this.inFlight.get(id) ?? 1) - 1;
+        othersLive = left > 0;
         if (left > 0) this.inFlight.set(id, left);
         else this.inFlight.delete(id);
       }
       const next = this.getNextRun(id);
       const target = this.store?.get(id) ? this.store : store;
       const current = target.get(id);
-      const superseded = current?.runAgentId !== void 0 && current.runAgentId !== agentId;
+      const owner = current?.runAgentId;
+      const ownerStatus = owner !== void 0 && owner !== agentId ? manager.getRecord(owner)?.status : void 0;
+      const ownerLive = ownerStatus === "running" || ownerStatus === "queued";
+      const superseded = othersLive || ownerLive;
       target.update(id, {
         lastRun: new Date(this.clock.now()).toISOString(),
         runCount: (current?.runCount ?? 0) + 1,
