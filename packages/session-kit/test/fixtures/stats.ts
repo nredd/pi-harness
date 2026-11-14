@@ -4,6 +4,9 @@ import { dirname, join } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { STATUS } from "@nredd/pi-test-lib/terminal";
 import { expect } from "vitest";
+import type { QuotaObservation } from "../../src/stats/harness/common.ts";
+import { type Harness, opaqueId } from "../../src/stats/load.ts";
+import { eventId, type Manifest, type SnapshotEvent } from "../../src/stats/snapshot.ts";
 import { configFor, type TerminalFixture } from "./session.ts";
 
 export const MODELS = [
@@ -203,4 +206,69 @@ export function danglingPorts(rows: string[]): string[] {
 				if (!(ports[rows[y + dy]?.[x + dx] ?? ""] ?? "").includes(need)) out.push(`${y}:${x} ${ch} ${port}`);
 			}
 	return out;
+}
+
+/** One event of another harness for `publishMachine`, `days` before `now`. */
+export interface RemoteEvent {
+	harness: Harness;
+	provider: string;
+	model: string;
+	days: number;
+	tokens: number;
+	/** `null` (the default) when the harness records no cost. */
+	cost?: number | null;
+}
+
+/**
+ * Write a v2 snapshot of a machine that is not the viewer under `repo`, as an exporter would, ready for
+ * `importStats`. Events are unique, so none collapses into another.
+ */
+export function publishMachine(
+	repo: string,
+	machineId: string,
+	now: number,
+	events: readonly RemoteEvent[],
+	quota: readonly QuotaObservation[],
+	lastGoodAt: Manifest["lastGoodAt"],
+): void {
+	const month = new Date(now).toISOString().slice(0, 7);
+	const session = opaqueId("remote-session");
+	const list: SnapshotEvent[] = events.map((e, i) => {
+		const bare = {
+			harness: e.harness,
+			entryId: opaqueId(`remote-${i}`),
+			sessionId: session,
+			ms: now - e.days * 24 * HOUR,
+			provider: e.provider,
+			model: e.model,
+			input: e.tokens,
+			output: e.tokens / 10,
+			cacheRead: 0,
+			cacheWrite: 0,
+			cost: e.cost ?? null,
+		};
+		return { id: eventId(bare), ...bare };
+	});
+	const text = JSON.stringify({
+		version: 2,
+		machineId,
+		month,
+		events: list.filter((e) => new Date(e.ms).toISOString().startsWith(month)),
+		sessions: [{ id: session, startMs: Date.parse(`${month}-01T01:00:00Z`), endMs: now, child: false }],
+		quota: quota.filter((q) => new Date(q.observedAt).toISOString().startsWith(month)),
+	});
+	const sha256 = opaqueId(text);
+	const file = `${month}-${sha256}.json`;
+	const base = join(repo, "machines", machineId);
+	mkdirSync(base, { recursive: true });
+	writeFileSync(join(base, file), text);
+	const manifest: Manifest = {
+		version: 2,
+		machineId,
+		label: "fixture",
+		exportedAt: now,
+		lastGoodAt,
+		shards: [{ month, file, sha256, bytes: Buffer.byteLength(text) }],
+	};
+	writeFileSync(join(base, "manifest.json"), JSON.stringify(manifest));
 }
