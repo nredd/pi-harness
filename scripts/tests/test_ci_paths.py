@@ -114,6 +114,8 @@ def test_classify_accepts_documentation_paths(repo: Path, path: str) -> None:
     Returns:
         None: Assertions verify classification.
     """
+    if path.startswith("packages/"):
+        classify_change(repo, {path: "seed\n"})  # editing a package doc, not adding one
     result = classify_change(repo, {path: "documentation\n"})
     assert result.docs_only
     assert result.paths == (path,)
@@ -645,6 +647,101 @@ def test_code_change_runs_every_native_cell_with_its_gates(repo: Path) -> None:
     assert plan["contracts (wsl2)"].reason.startswith(
         "This pull request changes no CI or WSL inputs; contracts"
     )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "packages/x/AGENTS.md",
+        "packages/x/NOTICE.md",
+        "packages/x/docs/a.md",
+        "packages/x/.hidden",
+        "packages/x/src/shot.png",
+        "packages/x/package.json",
+        "packages/x/test/a.test.mjs",
+        "integration/inprocess/biome.json",
+        "scripts/package_layout.json",
+    ],
+)
+def test_layout_relevant_changes_run_check_scripts_on_every_native_cell(repo: Path, path: str) -> None:
+    """Never skip the layout gate (`scripts/package_layout.py`, in `check-scripts`) for a change it reads.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        path (str): Changed path that can add or remove a layout violation.
+
+    Returns:
+        None: Assertions verify the classification and the planned gates.
+    """
+    assert not classify_change(repo, {path: "x\n"}).docs_only
+    plan = plan_change(repo, {path: "y\n"}, PULL_REQUEST)
+    for cell in ("owned (ubuntu-24.04)", "owned (macos-14)"):
+        assert plan[cell].run
+        assert "check-scripts" in plan[cell].gates
+
+
+@pytest.mark.parametrize("name", ["README.md", "CHANGELOG.md"])
+def test_adding_or_deleting_a_package_doc_is_not_docs_only(repo: Path, name: str) -> None:
+    """Run the layout gate when a package gains or loses a doc; editing the same doc stays docs-only.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        name (str): Package doc.
+
+    Returns:
+        None: Assertions verify each diff.
+    """
+    path = f"packages/x/{name}"
+    added = classify_change(repo, {path: "one\n"})
+    assert added.paths == (path,)
+    assert not added.docs_only
+    assert classify_change(repo, {path: "two\n"}).docs_only
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / path).unlink()
+    git(repo, "add", "--all")
+    commit(repo, "delete the doc")
+    result = ci_paths.classify(repo, base, "HEAD")
+    assert result.paths == (path,)
+    assert not result.docs_only
+
+
+def test_classify_fails_closed_when_the_trees_cannot_be_listed(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Treat a diff as code when the package-doc presence check cannot run.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        monkeypatch (pytest.MonkeyPatch): Makes the presence check fail.
+
+    Returns:
+        None: Assertions verify the classification.
+    """
+
+    def fail(*_args: object) -> bool:
+        """Fail like a broken Git.
+
+        Parameters:
+            *_args (object): Ignored.
+
+        Returns:
+            bool: Never.
+
+        Raises:
+            ClassificationError: Always.
+        """
+        raise ci_paths.ClassificationError("boom")
+
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / "packages" / "x").mkdir(parents=True)
+    (repo / "packages/x/README.md").write_text("x\n", encoding="utf-8")
+    git(repo, "add", "--all")
+    commit(repo, "add doc")
+    monkeypatch.setattr(ci_paths, "changes_package_doc_presence", fail)
+    result = ci_paths.classify(repo, base, "HEAD")
+    assert not result.docs_only
+    assert result.paths == ()
+    assert all(result.inputs.values())
 
 
 def test_wsl_inputs_wake_wsl_with_only_the_lcov_producers(repo: Path) -> None:
