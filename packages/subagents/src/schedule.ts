@@ -176,9 +176,14 @@ export class SubagentScheduler {
    */
   private reapOrphan(store: ScheduleStore, job: ScheduledSubagent): ScheduledSubagent {
     if (job.enabled || job.lastStatus !== "running") return job;
-    if (this.hasLiveRun(store, job.id) || foreignOwnerLive(job.runOwner, this.clock.now())) return job;
-    store.update(job.id, { lastStatus: "error", runOwner: undefined });
-    return { ...job, lastStatus: "error", runOwner: undefined };
+    if (this.hasLiveRun(store, job.id)) return job;
+    // Re-check under the lock: another process may have claimed the job since our cache loaded.
+    const now = this.clock.now();
+    store.update(job.id, fresh =>
+      fresh.enabled || fresh.lastStatus !== "running" || foreignOwnerLive(fresh.runOwner, now)
+        ? {}
+        : { lastStatus: "error", runOwner: undefined });
+    return { ...job, ...store.get(job.id) };
   }
 
   /** Is any fire of this job, in this process, claimed and not yet settled? */
@@ -430,9 +435,24 @@ export class SubagentScheduler {
     if (!claim) return;
     const token = holdFire(store, this.clock, id);
 
+    // Anything that throws before the handoff to spawn/admission must free the claim,
+    // or the job stays "running" with a lease renewed forever.
+    try {
+      this.fireClaimed({ store, pi, ctx, manager }, id, job, scheduled, token, claim.prior);
+    } catch (err) {
+      this.endFire(store, id, token, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
+      this.emit({ type: "error", jobId: id, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  /** Everything between a won claim and the hand-off to spawn or admission. */
+  private fireClaimed(
+    { store, pi, ctx, manager }: BoundSession, id: string, job: ScheduledSubagent, scheduled: object,
+    token: string, claimedPrior: ScheduledSubagent["lastStatus"],
+  ): void {
     // A fire that overlaps a pending admission inherits its prior status.
     const previous = this.pendingRuns.get(id);
-    const prior = previous ? previous.prior : claim.prior;
+    const prior = previous ? previous.prior : claimedPrior;
     this.pendingRuns.delete(id);
 
     // Resolve the original request at fire time, using the same type and model

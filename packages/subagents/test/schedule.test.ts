@@ -665,8 +665,13 @@ describe("SubagentScheduler — fire path", () => {
         expect(() => next.addJob(input)).not.toThrow();
       });
 
-      it("frees the name of a run whose lease lapsed even though the pid is alive (pid reuse)", () => {
-        const { job, next } = secondProcess(() => ({ pid: process.ppid, leaseUntil: Date.now() - 1 }));
+      it("a live pid stays authoritative while its lease lapsed by less than three leases (host sleep)", () => {
+        const { next } = secondProcess(() => ({ pid: process.ppid, leaseUntil: Date.now() - 3 * 120_000 + 1_000 }));
+        expect(() => next.addJob(input)).toThrow(/already exists/);
+      });
+
+      it("frees the name of a run whose lease lapsed by more than three leases even though the pid is alive (pid reuse)", () => {
+        const { job, next } = secondProcess(() => ({ pid: process.ppid, leaseUntil: Date.now() - 3 * 120_000 - 1 }));
         expect(next.list().find(j => j.id === job.id)?.lastStatus).toBe("error");
         expect(() => next.addJob(input)).not.toThrow();
       });
@@ -682,7 +687,7 @@ describe("SubagentScheduler — fire path", () => {
       it("a lease lapsing after start frees the name without another start()", () => {
         const { job, next } = secondProcess(() => ({ pid: process.ppid, leaseUntil: Date.now() + 1_000 }));
         expect(() => next.addJob(input)).toThrow(/already exists/);
-        vi.advanceTimersByTime(2_000);
+        vi.advanceTimersByTime(4 * 120_000);
         expect(() => next.addJob(input)).not.toThrow();
         expect(new ScheduleStore(path()).get(job.id)).toBeUndefined();
       });
@@ -743,7 +748,7 @@ describe("SubagentScheduler — fire path", () => {
         const now = Date.now();
         expect(a.claim(job.id, { pid: process.ppid, leaseUntil: now + 120_000 }, now)).toBeDefined();
         expect(b.claim(job.id, { pid: process.pid, leaseUntil: now + 120_000 }, now)).toBeUndefined();
-        expect(b.claim(job.id, { pid: process.pid, leaseUntil: now + 240_000 }, now + 121_000)?.job.runOwner?.pid).toBe(process.pid);
+        expect(b.claim(job.id, { pid: process.pid, leaseUntil: now + 600_000 }, now + 120_000 + 360_000 + 1)?.job.runOwner?.pid).toBe(process.pid);
       });
 
       it("a claim is refused for a job disabled or removed by another process", () => {
@@ -784,6 +789,52 @@ describe("SubagentScheduler — fire path", () => {
         finish();
         await vi.advanceTimersByTimeAsync(0);
         expect(() => scheduler.addJob(spec)).not.toThrow();
+      });
+
+      it("a throw between the claim and the spawn frees the claim and the lease", async () => {
+        const job = scheduler.addJob({ ...spec, schedule: "+1s" });
+        Object.defineProperty(ctx, "modelRegistry", { get: () => { throw new Error("registry gone"); } });
+        await vi.advanceTimersByTimeAsync(2_000);
+        const after = new ScheduleStore(path()).get(job.id);
+        expect(after?.lastStatus).toBe("error");
+        expect(after?.runOwner).toBeUndefined();
+        expect(after?.lastRun).toBeDefined();
+        const held = [...(globalThis as Record<symbol, Map<string, unknown>>)[Symbol.for("pi-subagents:scheduled-runs")].keys()];
+        expect(held.filter(key => key.includes(job.id))).toEqual([]);
+        expect(vi.getTimerCount()).toBe(0);
+        expect(pi.events.emit).toHaveBeenCalledWith("subagents:scheduled", expect.objectContaining({ type: "error", error: "registry gone" }));
+      });
+
+      it("a non-Error throw before the spawn is reported as text", async () => {
+        scheduler.addJob({ ...spec, schedule: "+1s" });
+        Object.defineProperty(ctx, "modelRegistry", { get: () => { throw "plain"; } });
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(pi.events.emit).toHaveBeenCalledWith("subagents:scheduled", expect.objectContaining({ type: "error", error: "plain" }));
+      });
+
+      it("the orphan reap re-checks the job under the lock", () => {
+        const reap = (scheduler as unknown as { reapOrphan(s: ScheduleStore, j: unknown): { lastStatus?: string } }).reapOrphan.bind(scheduler);
+        const base = scheduler.buildJob(spec);
+        const stale = { ...base, enabled: false, lastStatus: "running" as const, runOwner: { pid: 2 ** 31 - 2, leaseUntil: 1 } };
+        const put = (patch: object) => {
+          const other = new ScheduleStore(path());
+          other.add({ ...stale, ...patch });
+          store.reload();
+        };
+        // Another process claimed it with a live pid since our cache loaded: keep it.
+        put({ runOwner: { pid: process.ppid, leaseUntil: Date.now() + 120_000 } });
+        expect(reap(store, stale).lastStatus).toBe("running");
+        expect(store.get(base.id)?.lastStatus).toBe("running");
+        // Re-enabled or already settled under the lock: leave it.
+        put({ enabled: true });
+        expect(reap(store, stale).lastStatus).toBe("running");
+        expect(store.get(base.id)?.lastStatus).toBe("running");
+        put({ enabled: false, lastStatus: "success" });
+        reap(store, stale);
+        expect(store.get(base.id)?.lastStatus).toBe("success");
+        // Still an orphan under the lock: error it.
+        put({ lastStatus: "running" });
+        expect(reap(store, stale).lastStatus).toBe("error");
       });
 
       it("an error path before spawn releases the claim", async () => {

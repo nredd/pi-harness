@@ -30,9 +30,16 @@ export function isProcessRunning(pid: number, kill: (pid: number, signal: 0) => 
   try { kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException | undefined)?.code === "EPERM"; }
 }
 
-/** Does another live process hold a valid lease? A claim by this pid never counts: its runs are tracked in-process. */
+/** A live pid stays authoritative this long past its lease, so a host sleep does not orphan a live run. */
+export const LEASE_GRACE_MS = 3 * LEASE_MS;
+
+/**
+ * Does another live process hold the claim? A claim by this pid never counts: its runs
+ * are tracked in-process. A live pid holds it until its lease lapsed by more than
+ * `LEASE_GRACE_MS`, which also bounds how long a reused pid can hold a dead owner's name.
+ */
 export function foreignOwnerLive(owner: RunOwner | undefined, now: number): boolean {
-  return owner !== undefined && owner.pid !== process.pid && owner.leaseUntil > now && isProcessRunning(owner.pid);
+  return owner !== undefined && owner.pid !== process.pid && owner.leaseUntil + LEASE_GRACE_MS >= now && isProcessRunning(owner.pid);
 }
 
 function acquireLock(lockPath: string): void {

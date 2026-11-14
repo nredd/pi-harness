@@ -862,8 +862,9 @@ function isProcessRunning(pid, kill = (p, sig) => process.kill(p, sig)) {
     return e?.code === "EPERM";
   }
 }
+var LEASE_GRACE_MS = 3 * LEASE_MS;
 function foreignOwnerLive(owner, now) {
-  return owner !== void 0 && owner.pid !== process.pid && owner.leaseUntil > now && isProcessRunning(owner.pid);
+  return owner !== void 0 && owner.pid !== process.pid && owner.leaseUntil + LEASE_GRACE_MS >= now && isProcessRunning(owner.pid);
 }
 function acquireLock(lockPath) {
   for (let i = 0; i < LOCK_MAX_RETRIES; i++) {
@@ -1106,9 +1107,10 @@ var SubagentScheduler = class _SubagentScheduler {
    */
   reapOrphan(store, job) {
     if (job.enabled || job.lastStatus !== "running") return job;
-    if (this.hasLiveRun(store, job.id) || foreignOwnerLive(job.runOwner, this.clock.now())) return job;
-    store.update(job.id, { lastStatus: "error", runOwner: void 0 });
-    return { ...job, lastStatus: "error", runOwner: void 0 };
+    if (this.hasLiveRun(store, job.id)) return job;
+    const now = this.clock.now();
+    store.update(job.id, (fresh) => fresh.enabled || fresh.lastStatus !== "running" || foreignOwnerLive(fresh.runOwner, now) ? {} : { lastStatus: "error", runOwner: void 0 });
+    return { ...job, ...store.get(job.id) };
   }
   /** Is any fire of this job, in this process, claimed and not yet settled? */
   hasLiveRun(store, jobId) {
@@ -1324,8 +1326,17 @@ var SubagentScheduler = class _SubagentScheduler {
     const claim = store.claim(id, { pid: process.pid, leaseUntil: now + LEASE_MS }, now);
     if (!claim) return;
     const token = holdFire(store, this.clock, id);
+    try {
+      this.fireClaimed({ store, pi, ctx, manager }, id, job, scheduled, token, claim.prior);
+    } catch (err) {
+      this.endFire(store, id, token, { lastRun: new Date(this.clock.now()).toISOString(), lastStatus: "error" });
+      this.emit({ type: "error", jobId: id, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  /** Everything between a won claim and the hand-off to spawn or admission. */
+  fireClaimed({ store, pi, ctx, manager }, id, job, scheduled, token, claimedPrior) {
     const previous = this.pendingRuns.get(id);
-    const prior = previous ? previous.prior : claim.prior;
+    const prior = previous ? previous.prior : claimedPrior;
     this.pendingRuns.delete(id);
     const dispatch = resolveSpawnType(job.subagent_type);
     const config = dispatch.ok ? getAgentConfig(dispatch.type) : void 0;
