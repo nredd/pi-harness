@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Export Claude Code, Codex and OpenCode usage: snapshot version 2 adds `harness` on events, a nullable `cost` (`null` for Claude and Codex, not 0) and quota observations (freshest `observedAt` per `(provider, limitId, window)` wins across machines); `harness` joins the event fingerprint and the dedup key; v1 snapshots still import as `pi`. `pi-stats-export export` gains `--harness` (default `pi` only) and `--claude-dir` / `--codex-dir` / `--opencode-db`. The harness cache is bumped to version 2. Counts only; `/stats` display follows (part of [#367](https://github.com/nredd/pi-harness/issues/367))
+
 - Add readers for Claude Code, Codex CLI and OpenCode usage in `src/stats/harness/` and a `harness` field on `Call` (pi calls are `"pi"`), with entry dedup by `(message.id, requestId)` for Claude, per-turn Codex records joined to their model, Codex `rate_limits` quota observations and a read-only WAL-aware OpenCode query. Counts only; not yet exported or shown in `/stats` (part of [#367](https://github.com/nredd/pi-harness/issues/367))
 
 - Cover omitted stats API arguments and remove the unreachable private help default; preserve the stats library's runtime/type export contract with a validated named facade. Full local Node/Bun L/F/B/S reports are zero-miss; hosted zero receipts remain required before Bun enforcement (#824)

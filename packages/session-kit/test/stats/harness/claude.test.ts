@@ -49,7 +49,7 @@ describe("readClaude", () => {
 			output: 20,
 			cacheRead: 30,
 			cacheWrite: 40,
-			cost: 0,
+			cost: null,
 			entryId: entryHash("claude", JSON.stringify(["msg_1", "req_1"])),
 			session: sessionHash("claude", "sess-A"),
 		});

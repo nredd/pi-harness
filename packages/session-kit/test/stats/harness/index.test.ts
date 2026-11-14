@@ -154,7 +154,7 @@ describe("harness cache", () => {
 			session: "",
 			child: false,
 			models: [["p", "m"]],
-			calls: [[1, 0, 1, 1, 1, 1, 0]],
+			calls: [[1, 0, 1, 1, 1, 1, null]],
 			entryIds: ["a".repeat(64)],
 			quota: [],
 			badLines: 0,
@@ -166,6 +166,8 @@ describe("harness cache", () => {
 		const bad = [
 			{ ...good, models: [["p"]] },
 			{ ...good, calls: [[1, 5, 1, 1, 1, 1, 0]] },
+			{ ...good, calls: [[1, 0, 1, 1, 1, 1, "free"]] },
+			{ ...good, calls: [[1, 0, 1, 1, null, 1, 0]] },
 			{ ...good, entryIds: ["short"] },
 			{ ...good, entryIds: [] },
 			{ ...good, quota: [{ harness: "nope" }] },
@@ -186,7 +188,7 @@ describe("harness cache", () => {
 		writeFileSync(
 			path,
 			JSON.stringify({
-				version: 1,
+				version: 2,
 				harnesses: {
 					codex: {
 						...Object.fromEntries(bad.map((b, i) => [`/${i}`, b])),
@@ -200,6 +202,9 @@ describe("harness cache", () => {
 		expect(Object.keys(cache.codex ?? {})).toEqual(["/ok"]);
 		expect(cache.odd).toEqual({});
 
+		// v1 caches recorded Claude and Codex cost as 0: they are dropped and re-parsed, never trusted.
+		writeFileSync(path, JSON.stringify({ version: 1, harnesses: { codex: { "/ok": good } } }));
+		expect(await readHarnessCache(path)).toEqual({});
 		writeFileSync(path, JSON.stringify({ version: 99, harnesses: {} }));
 		expect(await readHarnessCache(path)).toEqual({});
 		writeFileSync(path, "{not json");

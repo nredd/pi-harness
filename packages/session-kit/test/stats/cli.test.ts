@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { main, run } from "../../src/stats/cli.ts";
 import { assistantLine, at, sessionFile } from "./fixtures.ts";
+import { seedHarnessHome } from "./harness/home.ts";
 
 let dir: string;
 let source: string;
@@ -74,6 +75,34 @@ describe("stats CLI", () => {
 		expect(exported.snapshotDir).toBe(join(output, "machines", exported.machineId));
 		// manifest plus the one shard holding the seeded call: the sessions came from --sessions-dir
 		expect(readdirSync(exported.snapshotDir)).toHaveLength(2);
+	});
+
+	it("exports the selected harnesses from explicit root flags", async () => {
+		const roots = seedHarnessHome(join(dir, "home"));
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		process.argv = [
+			"node",
+			"pi-stats-export",
+			"export",
+			...["--agent-dir", source, "--output", output, "--harness", "claude,codex,opencode"],
+			...["--claude-dir", roots.claude, "--codex-dir", roots.codex, "--opencode-db", roots.opencode],
+		];
+		await main();
+		const exported = JSON.parse(log.mock.calls[0]?.[0] as string);
+		expect(Object.keys(exported.harnesses)).toEqual(["claude", "codex", "opencode"]);
+		expect(exported.harnesses.claude).toEqual({ found: true, problems: [] });
+	});
+
+	it("rejects unknown or repeated harnesses and export-only flags on import", async () => {
+		const base = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output];
+		for (const harness of ["gemini", "pi,pi", "pi,", ""]) {
+			process.argv = [...base, "--harness", harness];
+			await expect(main()).rejects.toThrow("usage: export");
+		}
+		for (const flag of ["--harness", "--claude-dir", "--codex-dir", "--opencode-db", "--sessions-dir"]) {
+			process.argv = ["node", "pi-stats-export", "import", "--agent-dir", viewer, "--input", output, flag, "pi"];
+			await expect(main()).rejects.toThrow("usage: export");
+		}
 	});
 
 	it("rejects an export without --output and an import without --input", async () => {

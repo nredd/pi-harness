@@ -74,7 +74,7 @@ describe("readOpenCode", () => {
 			cacheWrite: 40,
 			cost: 0.25,
 		});
-		expect(scan.calls[1]).toMatchObject({ input: 3, output: 0, cost: 0 });
+		expect(scan.calls[1]).toMatchObject({ input: 3, output: 0, cost: null });
 		expect(scan.calls[2]).toMatchObject({ ms: T0 + 120_000, session: sessionHash("opencode", "ses_2") });
 		expect(scan.sessionMetadata).toHaveLength(2);
 		expect(scan.sessions).toEqual([

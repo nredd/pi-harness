@@ -140,7 +140,7 @@ class CodexParser extends RowParser {
 				this.out.badLines++;
 				continue;
 			}
-			this.addCall(this.provider || FALLBACK_PROVIDER, model, p.ms, p.counts, 0, entryHash("codex", p.responseId));
+			this.addCall(this.provider || FALLBACK_PROVIDER, model, p.ms, p.counts, null, entryHash("codex", p.responseId));
 		}
 		return this.out;
 	}

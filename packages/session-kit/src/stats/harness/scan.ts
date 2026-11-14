@@ -9,9 +9,20 @@
 import { stat } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { feedFile, isNum, listJsonl, looksLikeObject, NUL_PADDING, timeOf } from "../jsonl.ts";
-import { type Call, type CallTuple, type Harness, mergeSessionMetadata, type Session } from "../load.ts";
+import { type Call, type Harness, mergeSessionMetadata, type Session } from "../load.ts";
 import { nth } from "../nth.ts";
-import { asRecord, asRecordOf, emptyScan, type HarnessScan, type QuotaObservation, unreadable } from "./common.ts";
+import {
+	asRecord,
+	asRecordOf,
+	emptyScan,
+	type HarnessScan,
+	mergeQuota,
+	type QuotaObservation,
+	unreadable,
+} from "./common.ts";
+
+/** `[ms, model index, in, out, cacheRead, cacheWrite, cost]`; `cost` is `null` when the harness records none. */
+export type HarnessCallTuple = [number, number, number, number, number, number, number | null];
 
 /** One parsed transcript file, compact and free of content. */
 export interface ParsedFile {
@@ -24,9 +35,9 @@ export interface ParsedFile {
 	session: string;
 	/** A subagent or spawned thread: counts toward tokens, not Sessions. */
 	child: boolean;
-	/** Raw `[provider, model]` pairs, indexed by `CallTuple[1]`. */
+	/** Raw `[provider, model]` pairs, indexed by `HarnessCallTuple[1]`. */
 	models: [string, string][];
-	calls: CallTuple[];
+	calls: HarnessCallTuple[];
 	/** Opaque entry IDs, parallel to `calls`. */
 	entryIds: string[];
 	/** Freshest reading per `(limitId, window)` in this file. */
@@ -103,7 +114,7 @@ export abstract class RowParser {
 		model: string,
 		ms: number,
 		counts: readonly number[],
-		cost: number,
+		cost: number | null,
 		entryId: string,
 	): void {
 		const name = JSON.stringify([provider, model]);
@@ -144,7 +155,8 @@ export function isParsedFile(value: unknown): value is ParsedFile {
 			(c) =>
 				Array.isArray(c) &&
 				c.length === 7 &&
-				c.every(isNum) &&
+				c.slice(0, 6).every(isNum) &&
+				(c[6] === null || isNum(c[6])) &&
 				Number.isInteger(c[1]) &&
 				nth(c, 1) >= 0 &&
 				nth(c, 1) < models.length,
@@ -231,7 +243,7 @@ export function flattenHarness(harness: Harness, files: [string, ParsedFile][]) 
 	const ordered = [...files].sort(([pa, a], [pb, b]) => a.startMs - b.startMs || pa.localeCompare(pb));
 	const best = new Map<string, Call>();
 	const sessions: Session[] = [];
-	const quota = new Map<string, QuotaObservation>();
+	const quota: QuotaObservation[] = [];
 	let badLines = 0;
 	let unsupportedTurns = 0;
 	for (const [, file] of ordered) {
@@ -259,11 +271,7 @@ export function flattenHarness(harness: Harness, files: [string, ParsedFile][]) 
 		}
 		if (file.calls.length > 0)
 			sessions.push({ path: file.session, startMs: file.startMs, endMs: file.endMs, child: file.child });
-		for (const q of file.quota) {
-			const key = JSON.stringify([q.provider, q.limitId, q.window]);
-			const prev = quota.get(key);
-			if (!prev || q.observedAt >= prev.observedAt) quota.set(key, q);
-		}
+		quota.push(...file.quota);
 	}
 	const calls = [...best.values()].sort((a, b) => a.ms - b.ms);
 	const owners = new Set(calls.map((c) => c.session));
@@ -272,7 +280,7 @@ export function flattenHarness(harness: Harness, files: [string, ParsedFile][]) 
 		calls,
 		sessionMetadata: [...metadata.values()],
 		sessions: [...metadata.values()].filter((s) => !s.child && owners.has(s.path)),
-		quota: [...quota.values()],
+		quota: mergeQuota(quota),
 		badLines,
 		unsupportedTurns,
 	};

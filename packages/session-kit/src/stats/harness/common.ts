@@ -30,6 +30,26 @@ export interface QuotaObservation {
 	planType: string | null;
 }
 
+/**
+ * One reading per `(provider, limitId, window)`: the freshest `observedAt` wins, whichever harness or
+ * machine saw it. Never summed. Ties break on the serialized reading so the result does not depend on
+ * input order.
+ */
+export function mergeQuota(readings: Iterable<QuotaObservation>): QuotaObservation[] {
+	const best = new Map<string, QuotaObservation>();
+	for (const q of readings) {
+		const key = JSON.stringify([q.provider, q.limitId, q.window]);
+		const prev = best.get(key);
+		if (
+			!prev ||
+			q.observedAt > prev.observedAt ||
+			(q.observedAt === prev.observedAt && JSON.stringify(q) > JSON.stringify(prev))
+		)
+			best.set(key, q);
+	}
+	return [...best.values()];
+}
+
 /** What one reader found. Diagnostics are counts only: no paths, names or row content. */
 export interface HarnessScan {
 	/** The harness's data root exists on this machine. Absent is silent, never an error. */

@@ -58,7 +58,7 @@ describe("readCodex", () => {
 			output: 50,
 			cacheRead: 800,
 			cacheWrite: 0,
-			cost: 0,
+			cost: null,
 			entryId: entryHash("codex", "resp-1"),
 			session: sessionHash("codex", "thread-1"),
 		});

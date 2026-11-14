@@ -3,10 +3,21 @@ import { randomUUID } from "node:crypto";
 import { link, lstat, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { agentDir } from "../agent-dir.ts";
+import { mergeQuota, type QuotaObservation } from "./harness/common.ts";
+import {
+	EXTERNAL_HARNESSES,
+	type ExternalHarness,
+	type HarnessRoots,
+	harnessCachePath,
+	loadHarnesses,
+} from "./harness/index.ts";
+import type { LoadSqlite } from "./harness/opencode.ts";
 import {
 	type Call,
 	cachePath,
 	dedupCalls,
+	HARNESSES,
+	type Harness,
 	type Loaded,
 	loadUsage,
 	mergeSessionMetadata,
@@ -16,7 +27,9 @@ import {
 } from "./load.ts";
 import { nth } from "./nth.ts";
 
-export const SNAPSHOT_VERSION = 1;
+/** v2 adds `harness` on events, a null `cost` and quota observations. v1 is still imported (as pi). */
+export const SNAPSHOT_VERSION = 2;
+const VERSIONS: readonly number[] = [1, 2];
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -27,6 +40,8 @@ export interface Identity {
 }
 export interface SnapshotEvent {
 	id: string;
+	/** Absent in v1 shards, where it means `pi`. */
+	harness?: Harness;
 	entryId: string | null;
 	sessionId: string;
 	ms: number;
@@ -36,8 +51,11 @@ export interface SnapshotEvent {
 	output: number;
 	cacheRead: number;
 	cacheWrite: number;
-	cost: number;
+	/** `null` when the harness records no cost. */
+	cost: number | null;
 }
+/** A quota reading as exported; same shape as the readers' observation. */
+export type SnapshotQuota = QuotaObservation;
 export interface SnapshotSession {
 	id: string;
 	startMs: number;
@@ -50,6 +68,8 @@ export interface Shard {
 	month: string;
 	events: SnapshotEvent[];
 	sessions: SnapshotSession[];
+	/** v2 only; each reading lives in the UTC month of its `observedAt`. */
+	quota?: SnapshotQuota[];
 }
 export interface Manifest extends Identity {
 	version: number;
@@ -82,6 +102,8 @@ export interface Coverage {
 }
 export interface Combined extends Loaded {
 	coverage: Coverage;
+	/** Imported quota readings, freshest per `(provider, limitId, window)`. */
+	quota: QuotaObservation[];
 }
 
 /** Atomic replacement, also safe against concurrent writers' temporary-file collisions. */
@@ -140,44 +162,33 @@ export async function machineIdentity(dir = agentDir()): Promise<Identity> {
 	return validateIdentity(await jsonFile(path));
 }
 
-/** Canonical event fingerprint includes identity, timestamp, raw attribution and every counter. */
-export function eventId(event: Omit<SnapshotEvent, "id">): string {
+/**
+ * Canonical event fingerprint: identity, timestamp, raw attribution and every counter. v2 adds the
+ * harness so a pi row and a Codex row can never collide; v1 shards keep their original formula.
+ */
+export function eventId(event: Omit<SnapshotEvent, "id">, version: number = SNAPSHOT_VERSION): string {
+	const lead = version >= 2 ? [event.harness ?? "pi"] : [];
+	const counters = [event.input, event.output, event.cacheRead, event.cacheWrite];
 	if (event.entryId === null)
-		return opaqueId(
-			JSON.stringify([
-				event.provider,
-				event.model,
-				event.ms,
-				event.input,
-				event.output,
-				event.cacheRead,
-				event.cacheWrite,
-			]),
-		);
-	return opaqueId(
-		JSON.stringify([
-			event.entryId,
-			event.ms,
-			event.provider,
-			event.model,
-			event.input,
-			event.output,
-			event.cacheRead,
-			event.cacheWrite,
-		]),
-	);
+		return opaqueId(JSON.stringify([...lead, event.provider, event.model, event.ms, ...counters]));
+	return opaqueId(JSON.stringify([...lead, event.entryId, event.ms, event.provider, event.model, ...counters]));
 }
 
 /** Session metadata including children when the loader provided it. */
 const sessionsOf = (loaded: Loaded): Session[] => loaded.sessionMetadata ?? loaded.sessions;
 
 /** Allowlist projection. No source objects, paths, names or message payloads are serialized. */
-export function makeSnapshot(loaded: Loaded, identity: Identity, exportedAt = Date.now()): MachineSnapshot {
+export function makeSnapshot(
+	loaded: Loaded,
+	identity: Identity,
+	exportedAt = Date.now(),
+	quota: readonly QuotaObservation[] = [],
+): MachineSnapshot {
 	const shards = new Map<string, Shard>();
 	const shard = (month: string): Shard => {
 		let s = shards.get(month);
 		if (!s) {
-			s = { version: SNAPSHOT_VERSION, machineId: identity.machineId, month, events: [], sessions: [] };
+			s = { version: SNAPSHOT_VERSION, machineId: identity.machineId, month, events: [], sessions: [], quota: [] };
 			shards.set(month, s);
 		}
 		return s;
@@ -185,6 +196,7 @@ export function makeSnapshot(loaded: Loaded, identity: Identity, exportedAt = Da
 	const sessionId = (value: string): string => (HASH.test(value) ? value : opaqueId(`session:${value}`));
 	for (const c of loaded.calls) {
 		const e = {
+			harness: c.harness,
 			entryId: c.entryId ?? null,
 			sessionId: sessionId(c.session),
 			ms: c.ms,
@@ -198,6 +210,18 @@ export function makeSnapshot(loaded: Loaded, identity: Identity, exportedAt = Da
 		};
 		shard(monthOf(c.ms)).events.push({ id: eventId(e), ...e });
 	}
+	for (const q of mergeQuota(quota))
+		shard(monthOf(q.observedAt)).quota?.push({
+			harness: q.harness,
+			provider: q.provider,
+			limitId: q.limitId,
+			window: q.window,
+			usedPercent: q.usedPercent,
+			resetAt: q.resetAt,
+			durationMs: q.durationMs,
+			observedAt: q.observedAt,
+			planType: q.planType,
+		});
 	for (const s of sessionsOf(loaded))
 		shard(monthOf(s.startMs)).sessions.push({
 			id: sessionId(s.path),
@@ -220,7 +244,7 @@ export function makeSnapshot(loaded: Loaded, identity: Identity, exportedAt = Da
 export function validateManifest(value: unknown): Manifest {
 	exact(value, ["version", "machineId", "label", "exportedAt", "shards"]);
 	if (
-		value.version !== SNAPSHOT_VERSION ||
+		!VERSIONS.includes(value.version as number) ||
 		typeof value.machineId !== "string" ||
 		!UUID.test(value.machineId) ||
 		!name(value.label) ||
@@ -245,10 +269,39 @@ export function validateManifest(value: unknown): Manifest {
 	}
 	return value as unknown as Manifest;
 }
-export function validateShard(value: unknown, manifest: Manifest, month: string): Shard {
-	exact(value, ["version", "machineId", "month", "events", "sessions"]);
+const SHARD_KEYS = ["version", "machineId", "month", "events", "sessions"];
+const quotaKey = (q: SnapshotQuota): string => JSON.stringify([q.provider, q.limitId, q.window]);
+function validateQuota(q: unknown, month: string): void {
+	exact(q, [
+		"harness",
+		"provider",
+		"limitId",
+		"window",
+		"usedPercent",
+		"resetAt",
+		"durationMs",
+		"observedAt",
+		"planType",
+	]);
 	if (
-		value.version !== SNAPSHOT_VERSION ||
+		!HARNESSES.includes(q.harness as Harness) ||
+		![q.provider, q.limitId, q.window].every(name) ||
+		typeof q.usedPercent !== "number" ||
+		!Number.isFinite(q.usedPercent) ||
+		q.usedPercent < 0 ||
+		!positive(q.resetAt) ||
+		!positive(q.durationMs) ||
+		!positive(q.observedAt) ||
+		monthOf(q.observedAt) !== month ||
+		!(q.planType === null || name(q.planType))
+	)
+		throw new Error("Invalid snapshot quota");
+}
+export function validateShard(value: unknown, manifest: Manifest, month: string): Shard {
+	const v2 = manifest.version >= 2;
+	exact(value, v2 ? [...SHARD_KEYS, "quota"] : SHARD_KEYS);
+	if (
+		value.version !== manifest.version ||
 		value.machineId !== manifest.machineId ||
 		value.month !== month ||
 		!Array.isArray(value.events) ||
@@ -259,6 +312,7 @@ export function validateShard(value: unknown, manifest: Manifest, month: string)
 	for (const e of value.events) {
 		exact(e, [
 			"id",
+			...(v2 ? ["harness"] : []),
 			"entryId",
 			"sessionId",
 			"ms",
@@ -272,6 +326,7 @@ export function validateShard(value: unknown, manifest: Manifest, month: string)
 		]);
 		if (
 			!hash(e.id) ||
+			(v2 && !HARNESSES.includes(e.harness as Harness)) ||
 			seenEvents.has(e.id) ||
 			!(e.entryId === null || hash(e.entryId)) ||
 			!hash(e.sessionId) ||
@@ -282,10 +337,8 @@ export function validateShard(value: unknown, manifest: Manifest, month: string)
 			["router", "faux", "faux-provider", "fake-provider"].includes(e.provider as string) ||
 			![e.input, e.output, e.cacheRead, e.cacheWrite].every(count) ||
 			(e.input as number) + (e.output as number) + (e.cacheRead as number) + (e.cacheWrite as number) === 0 ||
-			typeof e.cost !== "number" ||
-			!Number.isFinite(e.cost) ||
-			e.cost < 0 ||
-			eventId(e as unknown as SnapshotEvent) !== e.id
+			!(e.cost === null ? v2 : typeof e.cost === "number" && Number.isFinite(e.cost) && e.cost >= 0) ||
+			eventId(e as unknown as SnapshotEvent, manifest.version) !== e.id
 		)
 			throw new Error("Invalid snapshot event");
 		seenEvents.add(e.id);
@@ -305,6 +358,7 @@ export function validateShard(value: unknown, manifest: Manifest, month: string)
 			throw new Error("Invalid snapshot session");
 		seenSessions.add(s.id);
 	}
+	if (v2) for (const q of value.quota as unknown[]) validateQuota(q, month);
 	return value as unknown as Shard;
 }
 
@@ -312,6 +366,7 @@ export function validateShard(value: unknown, manifest: Manifest, month: string)
 export function validateSnapshot(snapshot: MachineSnapshot): void {
 	const metadata = new Set<string>();
 	const events = new Set<string>();
+	const quota = new Set<string>();
 	for (const s of snapshot.shards) {
 		for (const session of s.sessions) {
 			if (metadata.has(session.id)) throw new Error("Duplicate session metadata");
@@ -321,22 +376,66 @@ export function validateSnapshot(snapshot: MachineSnapshot): void {
 			if (events.has(e.id)) throw new Error("Duplicate event identity");
 			events.add(e.id);
 		}
+		for (const q of s.quota ?? []) {
+			if (quota.has(quotaKey(q))) throw new Error("Duplicate quota window");
+			quota.add(quotaKey(q));
+		}
 	}
 	for (const s of snapshot.shards)
 		for (const e of s.events) if (!metadata.has(e.sessionId)) throw new Error("Missing session metadata");
 }
+
+/** Which harnesses an export reads, and where. Default is pi only: other tools are opt-in. */
+export interface ExportOptions {
+	harnesses?: readonly Harness[];
+	roots?: Partial<HarnessRoots>;
+	env?: Record<string, string | undefined>;
+	home?: string;
+	loadSqlite?: LoadSqlite;
+}
+/** Per requested non-pi harness: whether its data root exists, plus count-only diagnostics. */
+export type HarnessReport = Partial<Record<ExternalHarness, { found: boolean; problems: string[] }>>;
+
+/** A cache that did not persist, or files that could not be read, mean the history may be incomplete. */
+const fatalProblem = (p: string): boolean => p.endsWith(": cache not written") || p.includes(" unreadable files");
 
 /** Write only this machine's immutable shards, publishing its manifest last. */
 export async function exportStats(
 	dir: string,
 	output: string,
 	root = sessionsDir(dir),
-): Promise<{ machineId: string; snapshotDir: string }> {
+	options: ExportOptions = {},
+): Promise<{ machineId: string; snapshotDir: string; harnesses?: HarnessReport }> {
+	const wanted = new Set<Harness>(options.harnesses ?? ["pi"]);
 	const identity = await machineIdentity(dir);
-	const loaded = await loadUsage({ root, cache: cachePath(dir), includeAllRoots: true });
+	const loaded: Loaded = wanted.has("pi")
+		? await loadUsage({ root, cache: cachePath(dir), includeAllRoots: true })
+		: { calls: [], sessions: [], errors: 0, badLines: 0 };
 	if (loaded.errors || loaded.badLines)
 		throw new Error(`Incomplete local scan: ${loaded.errors} errors, ${loaded.badLines} bad lines`);
-	const snapshot = makeSnapshot(loaded, identity);
+	const external = EXTERNAL_HARNESSES.filter((h) => wanted.has(h));
+	const scans = await loadHarnesses({
+		harnesses: external,
+		roots: options.roots,
+		env: options.env,
+		home: options.home,
+		cache: harnessCachePath(dir),
+		loadSqlite: options.loadSqlite,
+	});
+	const report: HarnessReport = {};
+	const calls = [...loaded.calls];
+	const sessionMetadata = [...sessionsOf(loaded)];
+	const quota: QuotaObservation[] = [];
+	for (const h of external) {
+		const scan = scans[h];
+		if (scan.problems.some(fatalProblem))
+			throw new Error(`Incomplete ${h} scan: ${scan.problems.filter(fatalProblem).join("; ")}`);
+		report[h] = { found: scan.found, problems: scan.problems };
+		calls.push(...scan.calls);
+		sessionMetadata.push(...scan.sessionMetadata);
+		quota.push(...scan.quota);
+	}
+	const snapshot = makeSnapshot({ ...loaded, calls, sessionMetadata }, identity, Date.now(), quota);
 	validateSnapshot(snapshot);
 	const snapshotDir = join(output, "machines", identity.machineId);
 	await mkdir(snapshotDir, { recursive: true });
@@ -349,7 +448,7 @@ export async function exportStats(
 		snapshot.manifest.shards.push({ month: s.month, file, sha256, bytes: Buffer.byteLength(text) });
 	}
 	await atomicJson(join(snapshotDir, "manifest.json"), validateManifest(snapshot.manifest));
-	return { machineId: identity.machineId, snapshotDir };
+	return { machineId: identity.machineId, snapshotDir, ...(external.length ? { harnesses: report } : {}) };
 }
 
 const globalPath = (dir: string): string => join(dir, "pi-session-kit", "stats-global.json");
@@ -365,7 +464,7 @@ export async function readGlobal(dir: string): Promise<GlobalCache> {
 		const v = await jsonFile(globalPath(dir));
 		exact(v, ["version", "importedAt", "machines", "problems"]);
 		if (
-			v.version !== SNAPSHOT_VERSION ||
+			!VERSIONS.includes(v.version as number) ||
 			!count(v.importedAt) ||
 			!record(v.machines) ||
 			!Array.isArray(v.problems) ||
@@ -458,11 +557,12 @@ export async function loadCombined(
 	const remotes = Object.values(global.machines).filter((m) => m.manifest.machineId !== identity.machineId);
 	const candidates = [...local.calls];
 	const sessionCandidates = [...sessionsOf(local)];
+	const quotaCandidates: QuotaObservation[] = [];
 	for (const machine of remotes)
 		for (const s of machine.shards) {
 			for (const e of s.events)
 				candidates.push({
-					harness: "pi",
+					harness: e.harness ?? "pi",
 					session: e.sessionId,
 					entryId: e.entryId ?? undefined,
 					ms: e.ms,
@@ -474,6 +574,7 @@ export async function loadCombined(
 					cacheWrite: e.cacheWrite,
 					cost: e.cost,
 				});
+			quotaCandidates.push(...(s.quota ?? []));
 			for (const session of s.sessions)
 				sessionCandidates.push({
 					path: session.id,
@@ -492,6 +593,7 @@ export async function loadCombined(
 	return {
 		...local,
 		calls,
+		quota: mergeQuota(quotaCandidates),
 		sessionMetadata: [...sessions.values()],
 		sessions: [...sessions.values()].filter((s) => !s.child && owners.has(s.path)),
 		coverage: {

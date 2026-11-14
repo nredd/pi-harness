@@ -111,9 +111,17 @@ export async function readOpenCode(dbPath: string, load: LoadSqlite = loadNodeSq
 	let bad = 0;
 	for (const r of rows) {
 		const raw = counters([r.input, r.output, r.reasoning, r.cache_read, r.cache_write]);
-		const cost = r.cost ?? 0;
+		const cost = r.cost ?? null;
 		const [id, sid, provider, model, ms] = [str(r.id), str(r.sid), str(r.provider), str(r.model), timeOf(r.ms)];
-		if (!raw || typeof cost !== "number" || cost < 0 || !id || !sid || !provider || !model || ms <= 0) {
+		if (
+			!raw ||
+			(cost !== null && (typeof cost !== "number" || !(cost >= 0))) ||
+			!id ||
+			!sid ||
+			!provider ||
+			!model ||
+			ms <= 0
+		) {
 			bad++;
 			continue;
 		}

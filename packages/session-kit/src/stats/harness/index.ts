@@ -19,7 +19,8 @@ import { type HarnessCache, isParsedFile, type ParsedFile } from "./scan.ts";
 export type ExternalHarness = "claude" | "codex" | "opencode";
 export const EXTERNAL_HARNESSES: readonly ExternalHarness[] = ["claude", "codex", "opencode"];
 
-const CACHE_VERSION = 1;
+/** v2: Claude and Codex calls carry a `null` cost instead of 0. Older caches re-parse. */
+const CACHE_VERSION = 2;
 
 export const harnessCachePath = (dir = agentDir()): string => join(dir, "pi-session-kit", "stats-harness-cache.json");
 

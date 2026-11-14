@@ -1,6 +1,6 @@
 # Offline stats and portable snapshots
 
-Build the committed `dist/pi-stats-export.mjs` with `npm ci && npm run build:stats-export`.
+Build the committed `dist/pi-stats-export.mjs` (which bundles the harness readers) with `npm ci && npm run build:stats-export`.
 The exact esbuild version and dependencies are locked; tests assert byte-identical rebuilds.
 Copy only that file. Runtime is Node 22+ with builtins only, no Pi install, extension, private
 repository, package install, auth or network access. Importing the artifact is silent, even when
@@ -14,8 +14,15 @@ numeric range retain infinite headroom.
 
 ```
 node ARTIFACT export --agent-dir DIR --output OUT [--sessions-dir ROOT]
+  [--harness pi,claude,codex,opencode] [--claude-dir DIR] [--codex-dir DIR] [--opencode-db FILE]
 node ARTIFACT import --agent-dir DIR --input REPO
 ```
+
+`--harness` picks what an export reads; the default is `pi` only, so other tools are opt-in. Roots
+default to each harness's own variable, then its standard path (`CLAUDE_CONFIG_DIR` or `~/.claude`,
+`CODEX_HOME` or `~/.codex`, `OPENCODE_DB` or `$XDG_DATA_HOME/opencode/opencode.db`); the flags take
+precedence. A scheduled run with a minimal environment must pass the flags. Without `pi` in the list
+no pi session is read. The export-only flags are rejected on `import`.
 
 `--agent-dir` defaults to `PI_CODING_AGENT_DIR`, then `~/.pi/agent`. The session root defaults to
 `PI_CODING_AGENT_SESSION_DIR`, then `DIR/sessions`; `--sessions-dir` takes precedence. History
@@ -26,7 +33,11 @@ sync helper, not this data-only artifact.
 
 CLI results:
 
-- Export: `{ "machineId": "<UUID>", "snapshotDir": "<OUT>/machines/<UUID>" }` on stdout.
+- Export: `{ "machineId": "<UUID>", "snapshotDir": "<OUT>/machines/<UUID>" }` on stdout, plus
+  `"harnesses": { "<name>": { "found": bool, "problems": [..] } }` for each requested non-pi harness.
+  A missing harness is `found: false`, not an error. `problems` are counts only (e.g.
+  `claude: ! 2 unreadable lines`, Codex turns skipped for lack of per-turn records); they do not
+  fail the export. Unreadable harness files and a harness cache that cannot be written do, like pi.
 - Import: `{ "imported": N, "retained": N, "problems": [], "importedAt": MS }` on stdout.
 - Exactly one JSON object is emitted. Diagnostics go to stderr. Invalid commands, malformed local
   scans, unwritable caches and publication failures exit nonzero. Partial/corrupt imports emit
@@ -54,7 +65,7 @@ Installation state, never synced:
   bytes. Tests inject final-document byte accounting at the exact limit and one byte over, while
   retaining real import validation and atomic publication.
 
-Snapshot version 1:
+Snapshot version 2 (version 1 is still imported, see Compatibility):
 
 ```
 machines/<UUID>/manifest.json
@@ -63,14 +74,14 @@ machines/<UUID>/<YYYY-MM>-<sha256>.json
 
 Manifest exact keys:
 
-- `version`: `1`.
+- `version`: `2` (`1` for legacy exports).
 - `machineId`: persistent UUID v4, matching its directory.
 - `label`: installation label, maximum 1024 characters. Not a session name.
 - `exportedAt`: positive UTC Unix milliseconds.
 - `shards`: unique month references, each exactly `{month, file, sha256, bytes}`. `file` MUST
   equal `<month>-<sha256>.json`. No absolute paths, traversal or arbitrary filenames.
 
-Shard exact keys: `{version, machineId, month, events, sessions}`. All shard JSON is canonical
+Shard exact keys: `{version, machineId, month, events, sessions, quota}`; v1 shards have no `quota`. All shard JSON is canonical
 `JSON.stringify` output (no indentation/newline), bounded to 128 MiB per file. Manifest hashes
 cover exact UTF-8 shard bytes. Immutable content-addressed shards are published first, manifest
 last; unreferenced old shard generations are deliberately retained and ignored. No cleanup races
@@ -79,19 +90,36 @@ with readers. Each manifest references exactly one shard per month.
 Event exact keys:
 
 - `id`: SHA-256 event fingerprint.
+- `harness`: `pi`, `claude`, `codex` or `opencode` (v2 only).
 - `entryId`: SHA-256 of `entry:<preserved assistant entry ID>`, or `null` for legacy records.
 - `sessionId`: opaque session ID.
 - `ms`: original positive UTC Unix milliseconds, in the shard's UTC month.
 - `provider`, `model`: raw physical attribution, each nonempty and at most 1024 characters.
 - `input`, `output`, `cacheRead`, `cacheWrite`: nonnegative safe integers, not all zero.
-- `cost`: finite nonnegative recorded notional cost.
+- `cost`: finite nonnegative recorded notional cost, or `null` when the harness records none
+  (Claude, Codex; v2 only). `null` is not 0: totals treat it as 0, but it is not a recorded price.
 
 The identified fingerprint is SHA-256 of the JSON array
-`[entryId, ms, provider, model, input, output, cacheRead, cacheWrite]`.
+`[harness, entryId, ms, provider, model, input, output, cacheRead, cacheWrite]` (v1 had no
+`harness`, and the same arrays without it still verify v1 shards). The harness is also part of
+the dedup key, so a pi row and a Codex row with equal counts never merge.
 Notional price changes do not create new events. Different entry IDs survive equal usage. Copied entries across forks/machines count once. Legacy
 fingerprinting and matching use `[provider, model, ms, input, output, cacheRead, cacheWrite]`,
 intentionally without cost to preserve the old tuple rule; identified counterparts supersede
 legacy duplicates.
+
+Quota observation exact keys (v2; stored in the UTC month of `observedAt`):
+`{harness, provider, limitId, window, usedPercent, resetAt, durationMs, observedAt, planType}`.
+`harness` is the observer, `provider` the router provider name (Codex: `openai-codex`), `window`
+`5h`, `7d` or `<seconds>s`, times are epoch ms, `planType` is a string or `null`. No account email,
+ID or credits. A snapshot reports each `(provider, limitId, window)` once.
+Across machines and harnesses the freshest `observedAt` wins (ties break deterministically) and
+the observer is kept; readings are never summed. `loadCombined` returns the merged `quota`.
+
+Compatibility: import accepts v1 and v2 machines side by side, in one global cache (still
+validated with each manifest's own version). A v1 event loads as `harness: "pi"`. v1 shards are
+never rewritten; a machine moves to v2 on its next export, and the viewer's `exportedAt` ordering
+applies as before. Older kits cannot read v2 manifests, so update viewers before producers.
 
 Session exact keys: `{id, startMs, endMs, child}`. Header IDs hash as `session:<header ID>`;
 unidentified legacy sessions use a local path hash and therefore cannot always be matched across
@@ -135,7 +163,7 @@ collection. Keep custom labels non-sensitive: they are exported. No schema or sy
 Future calls are ignored in display totals, not removed from durable history. Statistics
 are not subscription quota measurements or router inputs.
 
-Harness readers (#367, reader layer only; not yet exported or shown):
+Harness readers (#367; exported by the CLI above, not yet shown in `/stats`):
 
 `src/stats/harness/` reads Claude Code, Codex CLI and OpenCode usage into the same `Call` model as
 pi (`Call.harness`: `pi | claude | codex | opencode`). Roots: `CLAUDE_CONFIG_DIR` or `~/.claude`;
@@ -147,7 +175,7 @@ directory names live there as keys); its values and every reader result carry no
 
 - Claude: `projects/**/*.jsonl` including `subagents/`. One response is written once per content
   block, so rows collapse by `(message.id, requestId)`, keeping the largest output count.
-  Subagent files and sidechain rows count toward tokens, not Sessions. No cost, no quota on disk.
+  Subagent files and sidechain rows count toward tokens, not Sessions. Cost `null`, no quota on disk.
 - Codex: `sessions/` and `archived_sessions/` rollouts. `token_usage_record` rows are joined to
   `turn_context.model` by turn. `input` is `input_tokens` minus the cached and cache-write subsets.
   Turns without per-turn records (older Codex, including old turns of a resumed rollout) are
@@ -164,7 +192,8 @@ directory names live there as keys); its values and every reader result carry no
   reset times) and hashes are projected: no text, tool arguments, cwd,
   titles, directory names, account IDs or credentials. `history.jsonl`, `auth.json`, credential
   files and Codex SQLite databases are never opened. Diagnostics are counts only.
-- Cost is recorded as 0 for Claude and Codex until snapshot v2 can carry `null`.
+- Cost is `null` for Claude and Codex (snapshot v2); OpenCode's recorded cost is kept, `null` when
+  absent. The harness cache is version 2: version 1 caches (which stored 0) are dropped and re-parsed.
 
 Harness API:
 
