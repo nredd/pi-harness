@@ -1046,7 +1046,7 @@ Independent of `reportUsage`: this one is what you read, that one is what your s
 
 Off by default because the row already carries the description, turns, tool uses, tokens and elapsed time, and every character it gains is one the description loses on a narrow terminal. The other surfaces show the pair either way: the `Agent` tool result names the model beside its tags, and the conversation viewer's `↳` row spells out the canonical `provider/model-id`.
 
-Both places report what the run *actually* used, read back from the child session once pi has resolved its defaults and clamped the level to what the model supports — not what the call asked for. Where Pi clamps the requested thinking level, the request is kept beside the effective value rather than dropped. An explicit `model` selection also overrides a frontmatter default; model resolution has no requested-versus-effective display:
+Both places report what the run *actually* used, read back from the child session once pi has resolved its defaults and clamped the level to what the model supports — not what the call asked for. Where Pi clamps the requested thinking level, the request is kept beside the effective value rather than dropped. A virtual (router) model has no physical model until a request is routed, so once the first response lands the row is relabelled with the physical model and the level that request actually ran at (e.g. `think:off (asked high)` when the physical model has no reasoning support). An explicit `model` selection also overrides a frontmatter default; model resolution has no requested-versus-effective display:
 
 ```text
   ↳ anthropic/claude-haiku-4-5 · thinking: low (asked max) · background
