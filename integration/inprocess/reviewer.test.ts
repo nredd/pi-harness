@@ -1,9 +1,9 @@
 /** A real package agent's scope, not a stub parser's interpretation of its frontmatter. */
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { Harness } from "@earendil-works/pi-coding-agent/testing";
 import { toolCall } from "@nredd/pi-test-lib/faux";
 import { makeGitFixture } from "@nredd/pi-test-lib/git";
+import type { Harness } from "@nredd/pi-test-lib/harness";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import {
 	agentStack,

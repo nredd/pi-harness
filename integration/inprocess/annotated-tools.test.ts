@@ -2,9 +2,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import type { Harness } from "@earendil-works/pi-coding-agent/testing";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { git } from "@nredd/pi-test-lib/git";
+import type { Harness } from "@nredd/pi-test-lib/harness";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createDevTools } from "../../packages/dev-tools/src/index.ts";
 import { runTools } from "../../packages/dev-tools/test/fixtures/session.ts";

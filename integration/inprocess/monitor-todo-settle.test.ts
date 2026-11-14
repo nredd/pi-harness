@@ -1,8 +1,9 @@
 /** A todo held while a real session-kit monitor is armed for it is waiting, not held by the parent. */
 import { join } from "node:path";
-import { createTestUiContext, fauxAssistantMessage, type Harness } from "@earendil-works/pi-coding-agent/testing";
+import { createTestUiContext, fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { nextEvent } from "@nredd/pi-test-lib/faux";
+import type { Harness } from "@nredd/pi-test-lib/harness";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runTools } from "../../packages/dev-tools/test/fixtures/session.ts";
 import { createSessionKit } from "../../packages/session-kit/src/index.ts";

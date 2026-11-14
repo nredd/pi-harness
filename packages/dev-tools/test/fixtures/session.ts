@@ -36,7 +36,7 @@ let nextCall = 0;
 
 /** Issue `calls` as one model turn and return one outcome per call, in call order. */
 export async function runTools<const Calls extends readonly ToolCallSpec[]>(
-	harness: Harness,
+	harness: Pick<Harness, "setResponses" | "session" | "eventsOfType">,
 	calls: Calls,
 ): Promise<{ [K in keyof Calls]: ToolOutcome }> {
 	const ids = calls.map(() => `call-${++nextCall}`);
