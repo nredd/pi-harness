@@ -36,7 +36,7 @@ The tool returns immediately. The run continues in the background and notifies y
 ```text
 Workflow "auth-audit" started in the background.
 Task ID: wf_9f3ab21c04de
-Script: /var/folders/xy/…/pi-subagents-501/Users-me-project/<session>/tasks/wf_9f3ab21c04de.workflow.js
+Script: /home/me/.local/state/pi-subagents/home-me-project/<session>/tasks/wf_9f3ab21c04de.workflow.js
 
 You will be notified when it finishes — do NOT poll or sleep waiting for it.
 To iterate, edit the script file and call SubagentWorkflow again with scriptPath.
@@ -46,7 +46,7 @@ Three things in there matter.
 
 **`Task ID`** is what `resumeFromRunId` takes, and what `/agents → Workflows` lists the run under.
 
-**`Script`** is the file to edit. **It is a scratch file in your system temp directory, not in your project** — it will not survive a reboot or a temp sweep. If the workflow turns out to be worth keeping, copy it somewhere durable; see [Save it](#5-save-it). The path means something slightly different depending on how the run was started: for an inline script it is a copy the tool just wrote, and for a run started from `scriptPath` or `name` it is *your own file*, reported straight back.
+**`Script`** is the file to edit. **It is a scratch file in the pi-subagents state directory (`$XDG_STATE_HOME/pi-subagents`), not in your project** — it survives a reboot but is deleted after 30 days without activity. If the workflow turns out to be worth keeping, copy it somewhere durable; see [Save it](#5-save-it). The path means something slightly different depending on how the run was started: for an inline script it is a copy the tool just wrote, and for a run started from `scriptPath` or `name` it is *your own file*, reported straight back.
 
 **The last line is addressed to the model, not to you.** You do not call `SubagentWorkflow` yourself — you tell the model to re-run the workflow at that path.
 
@@ -290,11 +290,11 @@ The child runs in the *same* worker and vm context under its own globals, so it 
 
 | What | Where |
 |---|---|
-| An inline script, as run | `<tmp>/pi-subagents-<uid>/<encoded-cwd>/<session>/tasks/<run id>.workflow.js` |
+| An inline script, as run | `$XDG_STATE_HOME/pi-subagents/<encoded-cwd>/<session>/tasks/<run id>.workflow.js` |
 | The resume journal | the same directory, `<run id>.workflow.jsonl` |
 | Saved workflows | `.pi/workflows/` → `.agents/workflows/` → `<agent dir>/workflows/` → installed pi packages, first hit wins |
 
-The first two are scratch: temp storage, wiped by a reboot or a temp sweep. Only the third is durable, and copying a script there is a manual step.
+The first two are scratch: state storage, pruned after 30 days idle (or wiped with the temp dir if the state dir was unwritable). Only the third is durable, and copying a script there is a manual step.
 
 A pi package can ship workflow scripts too, by declaring them in its `package.json`:
 

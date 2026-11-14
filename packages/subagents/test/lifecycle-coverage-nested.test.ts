@@ -48,7 +48,7 @@ describe("nested lifecycle boundaries", () => {
       const agent = tools.find(tool => tool.name === "Agent")!;
       const result = await agent.execute("call", { prompt: "p", description: "d", subagent_type: "general-purpose" }, undefined, undefined, f.ctx);
       expect(result.isError).toBe(true);
-      expect(result.content[0]).toMatchObject({ type: "text", text: expect.stringMatching(/ENOTDIR|EEXIST/) });
+      expect(result.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("ENOTDIR") });
       expect(runAgent).not.toHaveBeenCalled();
       expect(real.listAgents()).toEqual([]);
     } finally { await real.dispose(); }

@@ -7,7 +7,7 @@
 
 import { accessSync, appendFileSync, chmodSync, constants, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { type ModelFallback, modelFallbackNote } from "./model-resolver.js";
 import { type TierDisclosure, tierDisclosure, tierNote } from "./model-tiers.js";
@@ -46,8 +46,6 @@ const PRUNE_SCAN_LIMIT = 1000;
 
 /** Create `root` owner-only (0700) and prove it is usable; throws when it is not. */
 function prepareRoot(root: string): void {
-  // Parents keep the default mode: only the pi-subagents root itself is private.
-  mkdirSync(dirname(root), { recursive: true });
   mkdirSync(root, { recursive: true, mode: 0o700 });
   // chmod is a no-op on Windows and throws on some Windows filesystems.
   // On Unix we still want to enforce 0o700 past umask, so only swallow on Windows.
@@ -71,6 +69,8 @@ export function transcriptRoot(): string {
     const xdg = process.env.XDG_STATE_HOME;
     const base = xdg && isAbsolute(xdg) ? xdg : join(homedir(), ".local", "state");
     const root = join(base, "pi-subagents");
+    // Parents keep the default mode: only the pi-subagents root itself is private.
+    mkdirSync(base, { recursive: true });
     prepareRoot(root);
     return root;
   } catch { /* fall through to the temp root */ }
@@ -110,14 +110,12 @@ function newestActivity(sessionDir: string, cutoff: number): number {
  * Remove session task dirs (transcripts, workflow scripts and journals) with no
  * activity for `maxAgeMs`, so the state root does not grow forever. Never touches
  * `keepSessionId`, the `detached` spool, or anything through a symlink. Examines at
- * most {@link PRUNE_SCAN_LIMIT} session dirs per call (the rest wait for the next
+ * most {@link PRUNE_SCAN_LIMIT} session dirs per call, oldest first (the rest wait for the next
  * start) and holds no directory handle open: `readdirSync` closes before recursing.
  * Best effort: any filesystem error skips that entry. Returns the dirs removed.
  */
 export function pruneStaleTranscripts(keepSessionId?: string, now = Date.now(), maxAgeMs = TRANSCRIPT_RETENTION_MS): number {
   const cutoff = now - maxAgeMs;
-  let scanned = 0;
-  let removed = 0;
   let root: string;
   try {
     root = transcriptRoot();
@@ -131,20 +129,31 @@ export function pruneStaleTranscripts(keepSessionId?: string, now = Date.now(), 
       return [];
     }
   };
+  // Oldest session dirs first, so fresh ones can never starve the stale ones of the scan budget.
+  const candidates: { cwdName: string; sessionDir: string; mtime: number }[] = [];
   for (const cwdName of dirs(root)) {
     if (cwdName === "detached") continue;
-    const cwdDir = join(root, cwdName);
-    for (const sessionName of dirs(cwdDir)) {
-      if (scanned++ >= PRUNE_SCAN_LIMIT) return removed;
+    for (const sessionName of dirs(join(root, cwdName))) {
       if (sessionName === keepSessionId) continue;
-      const sessionDir = join(cwdDir, sessionName);
+      const sessionDir = join(root, cwdName, sessionName);
       try {
-        if (newestActivity(sessionDir, cutoff) > cutoff) continue;
-        rmSync(sessionDir, { recursive: true, force: true });
-        removed++;
-      } catch { /* skip: next start retries */ }
+        candidates.push({ cwdName, sessionDir, mtime: lstatSync(sessionDir).mtimeMs });
+      } catch { /* vanished: skip */ }
     }
-    try { rmdirSync(cwdDir); } catch { /* not empty: keep */ }
+  }
+  candidates.sort((x, y) => x.mtime - y.mtime);
+  let removed = 0;
+  const touched = new Set<string>();
+  for (const { cwdName, sessionDir } of candidates.slice(0, PRUNE_SCAN_LIMIT)) {
+    try {
+      if (newestActivity(sessionDir, cutoff) > cutoff) continue;
+      rmSync(sessionDir, { recursive: true, force: true });
+      removed++;
+      touched.add(cwdName);
+    } catch { /* skip: next start retries */ }
+  }
+  for (const cwdName of touched) {
+    try { rmdirSync(join(root, cwdName)); } catch { /* not empty: keep */ }
   }
   return removed;
 }

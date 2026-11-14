@@ -486,7 +486,7 @@ import { isAbsolute as isAbsolute5 } from "node:path";
 // src/agent-runner.ts
 import { readFileSync as readFileSync8 } from "node:fs";
 import { homedir as homedir6 } from "node:os";
-import { basename as basename3, dirname as dirname4, isAbsolute as isAbsolute4, join as join9, resolve as resolve5 } from "node:path";
+import { basename as basename3, dirname as dirname3, isAbsolute as isAbsolute4, join as join9, resolve as resolve5 } from "node:path";
 import {
   createAgentSession,
   createCodemodeExtension,
@@ -1731,7 +1731,7 @@ async function admitModelSelection(selection, registry, events, clock = realCloc
 // src/output-file.ts
 import { accessSync, appendFileSync, chmodSync, constants, existsSync as existsSync5, lstatSync as lstatSync2, mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync5, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir as homedir4, tmpdir } from "node:os";
-import { dirname as dirname2, isAbsolute as isAbsolute2, join as join6 } from "node:path";
+import { isAbsolute as isAbsolute2, join as join6 } from "node:path";
 var outputTranscriptDefault = true;
 function getOutputTranscriptDefault() {
   return outputTranscriptDefault;
@@ -1745,7 +1745,6 @@ function encodeCwd(cwd) {
 var TRANSCRIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1e3;
 var PRUNE_SCAN_LIMIT = 1e3;
 function prepareRoot(root) {
-  mkdirSync2(dirname2(root), { recursive: true });
   mkdirSync2(root, { recursive: true, mode: 448 });
   try {
     chmodSync(root, 448);
@@ -1759,6 +1758,7 @@ function transcriptRoot() {
     const xdg = process.env.XDG_STATE_HOME;
     const base = xdg && isAbsolute2(xdg) ? xdg : join6(homedir4(), ".local", "state");
     const root2 = join6(base, "pi-subagents");
+    mkdirSync2(base, { recursive: true });
     prepareRoot(root2);
     return root2;
   } catch {
@@ -1787,8 +1787,6 @@ function newestActivity(sessionDir, cutoff) {
 }
 function pruneStaleTranscripts(keepSessionId, now = Date.now(), maxAgeMs = TRANSCRIPT_RETENTION_MS) {
   const cutoff = now - maxAgeMs;
-  let scanned = 0;
-  let removed = 0;
   let root;
   try {
     root = transcriptRoot();
@@ -1802,22 +1800,33 @@ function pruneStaleTranscripts(keepSessionId, now = Date.now(), maxAgeMs = TRANS
       return [];
     }
   };
+  const candidates = [];
   for (const cwdName of dirs(root)) {
     if (cwdName === "detached") continue;
-    const cwdDir = join6(root, cwdName);
-    for (const sessionName of dirs(cwdDir)) {
-      if (scanned++ >= PRUNE_SCAN_LIMIT) return removed;
+    for (const sessionName of dirs(join6(root, cwdName))) {
       if (sessionName === keepSessionId) continue;
-      const sessionDir = join6(cwdDir, sessionName);
+      const sessionDir = join6(root, cwdName, sessionName);
       try {
-        if (newestActivity(sessionDir, cutoff) > cutoff) continue;
-        rmSync(sessionDir, { recursive: true, force: true });
-        removed++;
+        candidates.push({ cwdName, sessionDir, mtime: lstatSync2(sessionDir).mtimeMs });
       } catch {
       }
     }
+  }
+  candidates.sort((x, y) => x.mtime - y.mtime);
+  let removed = 0;
+  const touched = /* @__PURE__ */ new Set();
+  for (const { cwdName, sessionDir } of candidates.slice(0, PRUNE_SCAN_LIMIT)) {
     try {
-      rmdirSync(cwdDir);
+      if (newestActivity(sessionDir, cutoff) > cutoff) continue;
+      rmSync(sessionDir, { recursive: true, force: true });
+      removed++;
+      touched.add(cwdName);
+    } catch {
+    }
+  }
+  for (const cwdName of touched) {
+    try {
+      rmdirSync(join6(root, cwdName));
     } catch {
     }
   }
@@ -2725,7 +2734,7 @@ function createHomeResourceLoader(options, homeDir) {
 // src/skill-loader.ts
 import { existsSync as existsSync7, mkdirSync as mkdirSync3, mkdtempSync, readdirSync as readdirSync4, readFileSync as readFileSync7, realpathSync as realpathSync3, rmSync as rmSync2, statSync as statSync5, symlinkSync } from "node:fs";
 import { homedir as homedir5, tmpdir as tmpdir3 } from "node:os";
-import { dirname as dirname3, isAbsolute as isAbsolute3, join as join8, relative as relative3, resolve as resolve4, sep as sep2 } from "node:path";
+import { dirname as dirname2, isAbsolute as isAbsolute3, join as join8, relative as relative3, resolve as resolve4, sep as sep2 } from "node:path";
 import { loadSkills, SettingsManager as SettingsManager3 } from "@earendil-works/pi-coding-agent";
 var skipMissingSource = async () => "skip";
 async function preloadSkills(skillNames, cwd, options) {
@@ -2825,7 +2834,7 @@ function findInRoots(roots, name, trusted) {
   return void 0;
 }
 function findInRoot(root, name, trusted) {
-  if (!trusted && isPathThroughSymlink(dirname3(root), root)) return void 0;
+  if (!trusted && isPathThroughSymlink(dirname2(root), root)) return void 0;
   const flat = readSkillFile(join8(root, `${name}.md`), trusted)?.trim();
   if (flat !== void 0) return flat;
   if (!existsSync7(root)) return void 0;
@@ -2846,7 +2855,7 @@ function findInRoot(root, name, trusted) {
     for (const entry of entries) {
       if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
       const path = join8(current, entry.name);
-      if (!trusted && isPathThroughSymlink(dirname3(root), path)) continue;
+      if (!trusted && isPathThroughSymlink(dirname2(root), path)) continue;
       const isDirectory = entry.isDirectory() || trusted && entry.isSymbolicLink() && isDirectoryTarget(path);
       if (!isDirectory) continue;
       const skillFile = join8(path, "SKILL.md");
@@ -2896,7 +2905,7 @@ function projectSkillRoots(cwd) {
   while (true) {
     roots.push(join8(directory, ".agents"));
     if (existsSync7(join8(directory, ".git"))) break;
-    const parent = dirname3(directory);
+    const parent = dirname2(directory);
     if (parent === directory) break;
     directory = parent;
   }
@@ -3012,21 +3021,21 @@ function createWorkflowRefusalTool(reason) {
 var EXCLUDED_TOOL_NAMES = Object.values(SUBAGENT_TOOL_NAMES);
 function extensionCanonicalName(extPath) {
   const base = basename3(extPath);
-  const name = base === "index.ts" || base === "index.js" ? basename3(dirname4(extPath)) : base.replace(/\.(ts|js)$/, "");
+  const name = base === "index.ts" || base === "index.js" ? basename3(dirname3(extPath)) : base.replace(/\.(ts|js)$/, "");
   return name.toLowerCase();
 }
 function extensionPackageName(extPath) {
   if (extPath.startsWith("builtin:")) return void 0;
   const entry = resolve5(extPath);
-  const indexDir = /^index\.(ts|js)$/.test(basename3(entry)) ? dirname4(entry) : void 0;
-  let dir = dirname4(extPath);
+  const indexDir = /^index\.(ts|js)$/.test(basename3(entry)) ? dirname3(entry) : void 0;
+  let dir = dirname3(extPath);
   for (; ; ) {
     if (basename3(dir) === "node_modules") return void 0;
     let pkg;
     try {
       pkg = JSON.parse(readFileSync8(join9(dir, "package.json"), "utf-8"));
     } catch {
-      const parent = dirname4(dir);
+      const parent = dirname3(dir);
       if (parent === dir) return void 0;
       dir = parent;
       continue;
@@ -6823,4 +6832,4 @@ export {
   RESULT_MAX_CHARS,
   ConversationViewer
 };
-//# sourceMappingURL=chunk-OCF4X4JR.ts.map
+//# sourceMappingURL=chunk-UTWE64WY.ts.map

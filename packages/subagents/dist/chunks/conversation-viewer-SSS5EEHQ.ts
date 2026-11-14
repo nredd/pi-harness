@@ -5,11 +5,11 @@ import {
   RESULT_MAX_CHARS,
   VIEWPORT_HEIGHT_PCT,
   getConversationOverlayOptions
-} from "./chunk-OCF4X4JR.ts";
+} from "./chunk-UTWE64WY.ts";
 export {
   ConversationViewer,
   RESULT_MAX_CHARS,
   VIEWPORT_HEIGHT_PCT,
   getConversationOverlayOptions
 };
-//# sourceMappingURL=conversation-viewer-SG7CWC2G.ts.map
+//# sourceMappingURL=conversation-viewer-SSS5EEHQ.ts.map

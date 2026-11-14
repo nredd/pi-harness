@@ -300,6 +300,13 @@ describe("pruneStaleTranscripts (#900)", () => {
     expect(pruneStaleTranscripts(undefined, Date.now() + TRANSCRIPT_RETENTION_MS + DAY)).toBe(5);
   });
 
+  it("reaches a stale session behind a full scan budget of fresh ones", () => {
+    for (let i = 0; i < 1000; i++) mkdirSync(join(root, "bulk", `fresh${i}`, "tasks"), { recursive: true });
+    const old = session("proj", "old", TRANSCRIPT_RETENTION_MS + DAY);
+    expect(pruneStaleTranscripts()).toBe(1);
+    expect(existsSync(old)).toBe(false);
+  });
+
   it("does nothing when no root can be created", () => {
     chmodFault.error = new Error("EPERM: chmod");
     expect(pruneStaleTranscripts()).toBe(0);
