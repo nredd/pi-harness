@@ -237,8 +237,9 @@ describe("/stats command", () => {
 		expect(String(out.mock.calls[0]?.[0])).toMatch(
 			/^\/stats: no usage recorded yet\nquota:\n {2}openai-codex\/codex 7d: /,
 		);
-		const { run, custom } = setup("tui");
+		const { run, custom, rendered } = setup("tui");
 		await run("");
 		expect(custom).toHaveBeenCalledOnce();
+		expect(rendered[0]?.join("\n")).toMatch(/Quota[\s\S]*openai-codex\/codex 7d/);
 	});
 });
