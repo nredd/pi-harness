@@ -173,12 +173,6 @@ const MIN_SWEEP_INTERVAL_MS = 1_000;
 /** Characters of one agent's result kept past its eviction; the transcript holds the rest. */
 const MAX_RETAINED_RESULT_CHARS = 32_000;
 
-/**
- * Successor links kept. Notes and tombstones live for the session instead
- * (`clearCompleted` ends them), so only these bare id pairs keep a bound.
- */
-const MAX_SUCCESSOR_LINKS = 500;
-
 /** Mark a record's result as read, which shortens its retention and suppresses its notice. */
 export function markConsumed(record: Pick<AgentRecord, "resultConsumed" | "consumedAt">, now = Date.now()): void {
   record.resultConsumed = true;
@@ -2199,15 +2193,16 @@ export class AgentManager {
 
   /** What a settled record leaves behind once it is gone from this manager. */
   private evictionNote(record: SettledRecord): EvictedNote {
+    const transcript = record.outputFile ?? record.sessionFile;
     return {
       id: record.id,
       type: record.type,
       description: record.description,
       status: record.status,
       evictedAfterMin: Math.max(0, Math.round((this.clock.now() - record.completedAt) / 60_000)),
-      transcript: record.outputFile ?? record.sessionFile,
-      ...(record.result !== undefined ? { result: capRetained(record.result, record.outputFile ?? record.sessionFile) } : {}),
-      ...(record.error !== undefined ? { error: capRetained(record.error, record.outputFile ?? record.sessionFile) } : {}),
+      transcript,
+      ...(record.result !== undefined ? { result: capRetained(record.result, transcript) } : {}),
+      ...(record.error !== undefined ? { error: capRetained(record.error, transcript) } : {}),
       ...(record.modelTier ? { modelTier: record.modelTier } : {}),
       ...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
     };
@@ -2229,8 +2224,6 @@ export class AgentManager {
   linkSuccessor(id: string, next: string): void {
     this.successors.delete(id);
     this.successors.set(id, next);
-    // One link per call, so at most one over the bound: drop the oldest.
-    if (this.successors.size > MAX_SUCCESSOR_LINKS) this.successors.delete(this.successors.keys().next().value as string);
   }
 
   /** Forget a reopen that never started, so `id` resolves to its tombstone again. */

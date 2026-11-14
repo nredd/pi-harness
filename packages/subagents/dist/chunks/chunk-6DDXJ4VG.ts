@@ -3960,7 +3960,6 @@ function retentionMs(name, fallbackMs) {
 var MAX_SWEEP_INTERVAL_MS = 6e4;
 var MIN_SWEEP_INTERVAL_MS = 1e3;
 var MAX_RETAINED_RESULT_CHARS = 32e3;
-var MAX_SUCCESSOR_LINKS = 500;
 function markConsumed(record, now = Date.now()) {
   record.resultConsumed = true;
   record.consumedAt = now;
@@ -5251,15 +5250,16 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
   }
   /** What a settled record leaves behind once it is gone from this manager. */
   evictionNote(record) {
+    const transcript = record.outputFile ?? record.sessionFile;
     return {
       id: record.id,
       type: record.type,
       description: record.description,
       status: record.status,
       evictedAfterMin: Math.max(0, Math.round((this.clock.now() - record.completedAt) / 6e4)),
-      transcript: record.outputFile ?? record.sessionFile,
-      ...record.result !== void 0 ? { result: capRetained(record.result, record.outputFile ?? record.sessionFile) } : {},
-      ...record.error !== void 0 ? { error: capRetained(record.error, record.outputFile ?? record.sessionFile) } : {},
+      transcript,
+      ...record.result !== void 0 ? { result: capRetained(record.result, transcript) } : {},
+      ...record.error !== void 0 ? { error: capRetained(record.error, transcript) } : {},
       ...record.modelTier ? { modelTier: record.modelTier } : {},
       ...record.modelFallback ? { modelFallback: record.modelFallback } : {}
     };
@@ -5279,7 +5279,6 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
   linkSuccessor(id, next) {
     this.successors.delete(id);
     this.successors.set(id, next);
-    if (this.successors.size > MAX_SUCCESSOR_LINKS) this.successors.delete(this.successors.keys().next().value);
   }
   /** Forget a reopen that never started, so `id` resolves to its tombstone again. */
   unlinkSuccessor(id) {
@@ -6751,4 +6750,4 @@ export {
   RESULT_MAX_CHARS,
   ConversationViewer
 };
-//# sourceMappingURL=chunk-SAX2OHMX.ts.map
+//# sourceMappingURL=chunk-6DDXJ4VG.ts.map

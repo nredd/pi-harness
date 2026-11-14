@@ -936,7 +936,7 @@ describe("AgentManager — retention override (PI_SUBAGENTS_*_TTL_MIN)", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('ignoring PI_SUBAGENTS_CONSUMED_TTL_MIN="-1"'));
   });
 
-  it("follows reopen links to the newest id and bounds them like the eviction notes (#330)", () => {
+  it("follows reopen links to the newest id and keeps them for the session (#330, #372)", () => {
     manager = new AgentManager();
     expect(manager.latestId("a")).toBe("a");
     manager.linkSuccessor("a", "b");
@@ -945,9 +945,9 @@ describe("AgentManager — retention override (PI_SUBAGENTS_*_TTL_MIN)", () => {
     manager.unlinkSuccessor("b");
     expect(manager.latestId("a")).toBe("b");
 
-    // 500 more links push the oldest, "a", out; the newest still resolves.
+    // No cap: 500 more links leave "a" resolving.
     for (let i = 0; i < 500; i++) manager.linkSuccessor(`old-${i}`, `new-${i}`);
-    expect(manager.latestId("a")).toBe("a");
+    expect(manager.latestId("a")).toBe("b");
     expect(manager.latestId("old-0")).toBe("new-0");
     expect(manager.latestId("old-499")).toBe("new-499");
 
@@ -1003,6 +1003,19 @@ describe("AgentManager - retained result text (#372)", () => {
 
     expect(manager.getRecord(id)).toBeUndefined();
     expect(manager.getEvictedNote(id)?.result).toBe("unread answer");
+  });
+
+  it("keeps a failed run's error text", async () => {
+    manager = new AgentManager();
+    vi.mocked(runAgent).mockRejectedValue(new Error("boom: disk full"));
+    const id = manager.spawn(mockPi, mockCtx, "X", "p", { description: "p", isBackground: true });
+    const record = manager.getRecord(id)!;
+    await record.promise;
+    record.resultConsumed = true;
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000 + TICK);
+
+    expect(manager.getEvictedNote(id)).toMatchObject({ status: "error", error: "boom: disk full" });
   });
 
   it("keeps a bounded copy of an enormous result, naming where the whole text lives", async () => {
