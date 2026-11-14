@@ -361,16 +361,21 @@ export class SubagentScheduler {
         // The tick each callback was armed for, which every process computes alike. Callback
         // start time cannot stand in: it differs per process, and a late one would name a later tick.
         let armed: Date;
-        const cron = new Cron(job.schedule, self => {
-          const start = self.currentRun() ?? undefined;
-          // `armed` was read after croner armed its timer: past a tick boundary in between it
-          // names the tick after the one that fired, which is not due yet.
-          const tick = start && armed.getTime() > start.getTime() ? self.previousRuns(1, armed)[0] : armed;
-          // croner's own next tick: it schedules after this callback's start
-          armed = self.nextRun(start) as Date;
-          this.executeJob(job.id, { at: tick.getTime(), schedule: job.schedule });
-        });
-        armed = cron.nextRun() as Date; // a 6-field pattern without `maxRuns` always has a next tick
+        let cron: Cron;
+        for (;;) {
+          const before = new Date();
+          cron = new Cron(job.schedule, self => {
+            const tick = armed;
+            // croner's own next tick: it schedules after this callback's start
+            armed = self.nextRun(self.currentRun() ?? undefined) as Date; // a 6-field pattern always has a next tick
+            this.executeJob(job.id, { at: tick.getTime(), schedule: job.schedule });
+          });
+          armed = cron.nextRun(before) as Date;
+          // Croner armed its timer somewhere in between: unless no tick fell in that window, what it
+          // armed for is unknown, so start over.
+          if (armed.getTime() === cron.nextRun()?.getTime()) break;
+          cron.stop();
+        }
         this.jobs.set(job.id, cron);
       }
       // Disable at the deadline itself, not at the next (possibly days away) tick.

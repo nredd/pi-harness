@@ -209,14 +209,14 @@ describe("slot claims", () => {
     expect(new ScheduleStore(path).get(job.id)?.lastSlot).toBe(created + 40_000);
   });
 
-  it("names the tick that fired when a boundary passed while the timer was being armed", () => {
+  it("re-arms when a tick boundary passed while its timer was being armed", () => {
     vi.useFakeTimers({ now: Date.UTC(2030, 0, 1) });
     const t0 = Date.UTC(2030, 0, 1);
     const real = Cron.prototype.nextRun;
     let calls = 0;
     vi.spyOn(Cron.prototype, "nextRun").mockImplementation(function (this: Cron, from?: Date) {
       const next = real.call(this, from);
-      // Reads: cron validation, croner arming the job's timer, then the scheduler's own, which lands a tick late.
+      // Reads: cron validation, croner arming the timer, the scheduler's two checks. The first check reads a tick late, as if a boundary passed.
       return ++calls === 3 && next ? new Date(next.getTime() + 10_000) : next;
     });
     const a = process_(new FakeClock());
