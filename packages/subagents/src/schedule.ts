@@ -375,7 +375,7 @@ export class SubagentScheduler {
   /**
    * Fire on slots `createdAt + k * intervalMs`, which every process on the session
    * shares, whatever time it armed at. A timer claims the slot it was armed for, never
-   * a later one, so a late callback cannot take an interval that is not yet due. Chained
+   * a later one, so a late callback cannot take an interval that is not yet due, and a timer beyond `MAX_TIMER_MS` re-arms in steps. Chained
    * timeouts re-aim at the next slot after the current time, which keeps a resumed or
    * late-joining process on the grid and skips slots missed while asleep.
    */
@@ -384,10 +384,15 @@ export class SubagentScheduler {
     const nextSlot = (): number => Math.floor((this.clock.now() - anchor) / intervalMs) + 1;
     let current: TimerHandle | undefined;
     const arm = (k: number): void => {
+      const due = anchor + k * intervalMs;
       current = this.clock.setTimeout(() => {
+        if (this.clock.now() < due) {
+          arm(k); // a capped timer woke before its slot
+          return;
+        }
         arm(Math.max(k + 1, nextSlot()));
-        this.executeJob(job.id, { at: anchor + k * intervalMs, schedule: job.schedule });
-      }, Math.max(0, anchor + k * intervalMs - this.clock.now()));
+        this.executeJob(job.id, { at: due, schedule: job.schedule });
+      }, Math.min(Math.max(0, due - this.clock.now()), MAX_TIMER_MS));
     };
     arm(nextSlot());
     return { cancel: () => current?.cancel() };

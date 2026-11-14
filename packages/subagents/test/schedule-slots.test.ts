@@ -42,6 +42,13 @@ function process_(clock: FakeClock) {
   return { spawn, store, scheduler };
 }
 
+/** Like a native timer: a delay beyond 2^31 - 1 ms fires after 1ms. */
+class NativeRangeClock extends FakeClock {
+  override setTimeout(callback: () => void, ms: number) {
+    return super.setTimeout(callback, ms > 2_147_483_647 ? 1 : ms);
+  }
+}
+
 /** A clock whose first timeout runs `late` ms after it was due, like a callback delayed by load or sleep. */
 class LateClock extends FakeClock {
   constructor(private late: number, start?: number) { super(start); }
@@ -154,6 +161,18 @@ describe("slot claims", () => {
     expect(new ScheduleStore(path).get(job.id)?.lastSlot).toBe(created + 40_000);
   });
 
+  it("waits out an interval beyond the timer range in steps", () => {
+    const clock = new NativeRangeClock();
+    const a = process_(clock);
+    const day = 86_400_000;
+    a.scheduler.addJob({ ...input, schedule: "30d" });
+    expect(30 * day).toBeGreaterThan(2_147_483_647);
+    clock.advance(30 * day - 1);
+    expect(a.spawn).not.toHaveBeenCalled();
+    clock.advance(1);
+    expect(a.spawn).toHaveBeenCalledTimes(1);
+  });
+
   describe("cron", () => {
     const t0 = Date.UTC(2030, 0, 1);
     const cron = { ...input, schedule: "*/10 * * * * *" };
@@ -198,7 +217,7 @@ describe("slot claims", () => {
       // Cron fields are local time: pick local midnights so the test holds in any zone.
       const start = new Date(2030, 0, 1, 12).getTime();
       const tick = new Date(2030, 1, 1).getTime();
-      const clock = new FakeClock(start);
+      const clock = new NativeRangeClock(start);
       const a = process_(clock);
       const job = a.scheduler.addJob({ ...input, schedule: "0 0 0 1 * *" });
       expect(tick - start).toBeGreaterThan(2_147_483_647);
