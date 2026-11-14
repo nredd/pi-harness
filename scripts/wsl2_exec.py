@@ -14,6 +14,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from types import FrameType
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -39,6 +40,8 @@ def run_command(
     stdin: str | None = None,
     capture: bool = False,
     env: Mapping[str, str] | None = None,
+    cwd: Path | None = None,
+    quiet: bool = False,
 ) -> tuple[int, str]:
     """Run one command without raising on a non-zero exit.
 
@@ -46,8 +49,11 @@ def run_command(
         cmd (Sequence[str]): Argument vector, resolved through `PATH` (the child's `env` when given).
         run (Runner): `subprocess.run`-compatible callable.
         stdin (str | None): Text fed to the command's standard input.
-        capture (bool): Return standard output instead of passing it through.
+        capture (bool): Return standard output instead of passing it through. Undecodable bytes are kept
+            as `surrogateescape` surrogates rather than raising.
         env (Mapping[str, str] | None): Complete child environment; `None` inherits the current one.
+        cwd (Path | None): Working directory for the child; `None` keeps the current one.
+        quiet (bool): Discard the child's standard error and any start-up failure message, like `2>/dev/null`.
 
     Returns:
         tuple[int, str]: Exit status (127 when the command cannot be started, like a shell; 128 plus the
@@ -60,10 +66,14 @@ def run_command(
             text=True,
             check=False,
             stdout=subprocess.PIPE if capture else None,
+            stderr=subprocess.DEVNULL if quiet else None,
             env=None if env is None else dict(env),
+            cwd=cwd,
+            errors="surrogateescape",
         )
     except OSError as exc:
-        sys.stderr.write(f"{cmd[0]}: {exc.strerror or exc}\n")
+        if not quiet:
+            sys.stderr.write(f"{cmd[0]}: {exc.strerror or exc}\n")
         return 127, ""
     status = completed.returncode
     return (128 - status if status < 0 else status), (completed.stdout if capture else "")
