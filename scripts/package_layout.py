@@ -134,6 +134,7 @@ BINARY_MAGICS = (
     b"\xca\xfe\xba\xbe",
 )
 SHELL_INTERPRETERS = frozenset({"sh", "bash", "zsh", "fish", "dash", "ksh", "pwsh", "powershell"})
+ENV_OPTIONS_WITH_ARGUMENT = frozenset({"-u", "--unset", "-C", "--chdir"})
 PE_MAX_OFFSET = 64 * 1024
 BIOME_CONFIGS = frozenset({"biome.json", "biome.jsonc"})
 # `test:<signal>` is one name per extra `coverage/policy.json` signal, so any `test:` suffix is accepted.
@@ -371,6 +372,24 @@ def is_binary(head: bytes, source: Path) -> bool:
     return head.startswith(BINARY_MAGICS) or has_pe_signature(head, source)
 
 
+def env_command(words: list[str]) -> list[str]:
+    """Drop the options and `NAME=value` assignments that precede the command of an `env` shebang.
+
+    Parameters:
+        words (list[str]): Shebang words after `env`.
+
+    Returns:
+        list[str]: The command and its arguments; empty when none follows.
+    """
+    rest = iter(words)
+    for word in rest:
+        if word in ENV_OPTIONS_WITH_ARGUMENT:
+            next(rest, None)
+        elif not word.startswith("-") and "=" not in word:
+            return [word, *rest]
+    return []
+
+
 def is_shell_shebang(head: bytes) -> bool:
     """Return whether a file starts with a shebang naming a shell, directly or via `env`.
 
@@ -385,7 +404,7 @@ def is_shell_shebang(head: bytes) -> bool:
         return False
     words = head[2:].split(b"\n", maxsplit=1)[0].decode("utf-8", errors="replace").split()
     if words and posixpath.basename(words[0]) == "env":
-        words = [word for word in words[1:] if not word.startswith("-")]
+        words = env_command(words[1:])
     return bool(words) and posixpath.basename(words[0]) in SHELL_INTERPRETERS
 
 

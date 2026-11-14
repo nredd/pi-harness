@@ -426,6 +426,20 @@ def test_tracked_binaries_are_found_by_content(repo: Path, magic: bytes) -> None
     ]
 
 
+def mz_header(e_lfanew: int) -> bytes:
+    """Build a 64-byte `MZ` header whose `e_lfanew` field is set.
+
+    Parameters:
+        e_lfanew (int): Offset stored at 0x3c.
+
+    Returns:
+        bytes: The header.
+    """
+    head = bytearray(b"MZ" + b"\x00" * 62)
+    head[60:64] = e_lfanew.to_bytes(4, "little")
+    return bytes(head)
+
+
 def pe_image(e_lfanew: int, signature: bytes = b"PE\x00\x00") -> bytes:
     """Build a minimal PE image with its signature at `e_lfanew`.
 
@@ -436,12 +450,10 @@ def pe_image(e_lfanew: int, signature: bytes = b"PE\x00\x00") -> bytes:
     Returns:
         bytes: The image bytes.
     """
-    head = bytearray(b"MZ" + b"\x00" * 62)
-    head[60:64] = e_lfanew.to_bytes(4, "little")
-    return bytes(head).ljust(e_lfanew, b"\x00") + signature + b"\x00" * 8
+    return mz_header(e_lfanew).ljust(e_lfanew, b"\x00") + signature + b"\x00" * 8
 
 
-@pytest.mark.parametrize("e_lfanew", [0x40, 0x100, 0x118, 0xFFF0])
+@pytest.mark.parametrize("e_lfanew", [0x40, 0x100, 0x118, 0xFFF0, 0x10000])
 def test_pe_images_are_found_wherever_e_lfanew_points(repo: Path, e_lfanew: int) -> None:
     """Seek to `e_lfanew` instead of relying on the first 256 bytes.
 
@@ -456,7 +468,7 @@ def test_pe_images_are_found_wherever_e_lfanew_points(repo: Path, e_lfanew: int)
     assert lines(repo) == ["packages/x: src/area/tool: tracked-binary"]
 
 
-@pytest.mark.parametrize("e_lfanew", [0x10000, 0x7FFFFFFF, 0xFFFFFFFF, 0x200])
+@pytest.mark.parametrize("e_lfanew", [0x10001, 0x7FFFFFFF, 0xFFFFFFFF, 0x200])
 def test_out_of_bounds_e_lfanew_is_not_a_binary(repo: Path, e_lfanew: int) -> None:
     """Ignore an `e_lfanew` beyond the bound or past the end of the file without crashing.
 
@@ -467,9 +479,9 @@ def test_out_of_bounds_e_lfanew_is_not_a_binary(repo: Path, e_lfanew: int) -> No
     Returns:
         None: Assertions verify the report.
     """
-    head = bytearray(b"MZ" + b"\x00" * 62)
-    head[60:64] = e_lfanew.to_bytes(4, "little")
-    write_bytes(repo, f"{PACKAGE}/src/area/notes", bytes(head))
+    write_bytes(repo, f"{PACKAGE}/src/area/notes", mz_header(e_lfanew))
+    if e_lfanew == 0x10001:  # a real signature past the bound must still be ignored
+        write_bytes(repo, f"{PACKAGE}/src/area/notes", pe_image(e_lfanew))
     assert lines(repo) == []
 
 
@@ -482,6 +494,12 @@ def test_out_of_bounds_e_lfanew_is_not_a_binary(repo: Path, e_lfanew: int) -> No
         (b"#!/usr/bin/env -S fish -l\n", True),
         (b"#! /bin/dash\n", True),
         (b"#!/usr/bin/ksh\n", True),
+        (b"#!/bin/sh\r\n", True),
+        (b"#!/usr/bin/env FOO=1 bash\n", True),
+        (b"#!/usr/bin/env -u FOO sh\n", True),
+        (b"#!/usr/bin/env -u sh\n", False),
+        (b"#!/usr/bin/env -u FOO node\n", False),
+        (b"\xef\xbb\xbf#!/bin/sh\n", False),
         (b"#!/usr/bin/env pwsh\n", True),
         (b"#!/usr/local/bin/powershell\n", True),
         (b"#!/usr/bin/env node\n", False),
