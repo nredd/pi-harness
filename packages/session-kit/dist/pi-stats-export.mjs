@@ -1230,6 +1230,10 @@ async function exportStats(dir, output, root = sessionsDir(dir), options = {}) {
     throw new Error(
       `Refusing to publish a narrower harness set than last published (missing: ${dropped.join(", ")}); add them to --harness, or pass --replace-harnesses to drop their history`
     );
+  if (previous === "unreadable" && state.harnesses === null && !options.replaceHarnesses)
+    throw new Error(
+      "Cannot establish which harnesses were last published (unreadable snapshot, no recorded set); pass --replace-harnesses to publish anyway"
+    );
   const loaded = wanted.has("pi") ? await loadUsage({ root, cache: cachePath(dir), includeAllRoots: true }) : { calls: [], sessions: [], errors: 0, badLines: 0 };
   if (loaded.errors || loaded.badLines)
     throw new Error(`Incomplete local scan: ${loaded.errors} errors, ${loaded.badLines} bad lines`);

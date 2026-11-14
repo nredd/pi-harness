@@ -605,6 +605,12 @@ export async function exportStats(
 			`Refusing to publish a narrower harness set than last published (missing: ${dropped.join(", ")}); ` +
 				"add them to --harness, or pass --replace-harnesses to drop their history",
 		);
+	// With neither a readable snapshot nor a recorded set, what was last published cannot be established.
+	if (previous === "unreadable" && state.harnesses === null && !options.replaceHarnesses)
+		throw new Error(
+			"Cannot establish which harnesses were last published (unreadable snapshot, no recorded set); " +
+				"pass --replace-harnesses to publish anyway",
+		);
 	const loaded: Loaded = wanted.has("pi")
 		? await loadUsage({ root, cache: cachePath(dir), includeAllRoots: true })
 		: { calls: [], sessions: [], errors: 0, badLines: 0 };

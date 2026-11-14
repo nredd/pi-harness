@@ -764,12 +764,10 @@ describe("exportStats with harnesses", () => {
 			const roots = seedHarnessHome(home);
 			// every shard is valid and digest-correct, but an event has no session metadata
 			publish((await machineIdentity(agent)).machineId, 2, [event("opencode", "orphan")], [], []);
-			const result = await exportStats(agent, repo, undefined, {
-				harnesses: ["pi", "opencode"],
-				roots,
-				home,
-				loadSqlite: busyDb,
-			});
+			const opts = { harnesses: ["pi", "opencode"] as Harness[], roots, home, loadSqlite: busyDb };
+			// no recorded set either, so what was published cannot be established without saying so
+			await expect(exportStats(agent, repo, undefined, opts)).rejects.toThrow(/Cannot establish/);
+			const result = await exportStats(agent, repo, undefined, { ...opts, replaceHarnesses: true });
 			expect(result.harnesses?.opencode).toMatchObject({ failed: "lost" });
 			expect(published(result.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness))).toEqual(["pi"]);
 		});
@@ -1068,6 +1066,23 @@ describe("exportStats with harnesses", () => {
 			unlinkSync(statePath());
 			writeFileSync(join(repo, "machines", id, "manifest.json"), "{");
 			await expect(run(["codex"])).rejects.toThrow(/missing: pi/);
+		});
+
+		it("refuses to publish when neither the snapshot nor the recorded set can be read, unless replacing", async () => {
+			seedPi();
+			const roots = seedHarnessHome(home);
+			const run = (replaceHarnesses?: boolean) =>
+				exportStats(agent, repo, undefined, { harnesses: ["pi", "claude"], replaceHarnesses, roots, home });
+			const first = await run();
+			unlinkSync(statePath());
+			writeFileSync(join(first.snapshotDir, "manifest.json"), "{");
+			await expect(run()).rejects.toThrow(/Cannot establish which harnesses/);
+			// the recorded set alone is enough to keep protecting a narrowing over a corrupt snapshot
+			await expect(run(true)).resolves.toHaveProperty("machineId");
+			writeFileSync(join(first.snapshotDir, "manifest.json"), "{");
+			await expect(run()).resolves.toHaveProperty("machineId");
+			writeFileSync(join(first.snapshotDir, "manifest.json"), "{");
+			await expect(exportStats(agent, repo, undefined, { roots, home })).rejects.toThrow(/missing: claude/);
 		});
 
 		it("rejects malformed failure counts in state", async () => {

@@ -33,7 +33,11 @@ the history on purpose. The check is against the recorded set *and* what the las
 snapshot holds, so a lost state file, or one that failed to update after a widening, cannot hide a
 narrowing. What a snapshot holds is every harness with an event, a quota reading or a `lastGoodAt` mark in it
 (a pi-era snapshot counts as `pi`; one that cannot be read is assumed to be `pi`), and nothing if
-nothing was published. After a narrowing the state and snapshot agree again.
+nothing was published. After a narrowing the state and snapshot agree again. With the snapshot
+unreadable *and* no recorded set the last published set cannot be established, so the export is
+refused unless `--replace-harnesses` is given; with a recorded set it still guards a narrowing.
+(If both the state and the snapshot have gone bad, a stale state can understate a widening that
+was never recorded; that double fault is not defended.)
 
 Callers must not run two exports into the same outbox at once: nothing in the artifact locks. The
 only scheduled caller, `pi-usage-sync`, already serializes its runs under its own lock, so a manual
