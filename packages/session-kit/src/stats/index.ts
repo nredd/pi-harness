@@ -50,7 +50,11 @@ export function register(pi: ExtensionAPI, _config: KitConfig, options: AgentDir
 					resolveAgentDir(options),
 					tui ? (done, total) => ctx.ui.setStatus(STATUS_KEY, `stats: loading ${done}/${total}...`) : undefined,
 					clock.now(),
-					{ harnesses: readsOtherHarnesses(options) ? EXTERNAL_HARNESSES : [], home: options.homeDir },
+					{
+						harnesses: readsOtherHarnesses(options) ? EXTERNAL_HARNESSES : [],
+						home: options.homeDir,
+						onHarnessProgress: tui ? (status) => ctx.ui.setStatus(STATUS_KEY, `stats: ${status}...`) : undefined,
+					},
 				);
 			} catch (error) {
 				say(pi, ctx, MESSAGE_TYPE, `/stats: ${(error as Error).message}`, "error");

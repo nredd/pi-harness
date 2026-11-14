@@ -1,4 +1,4 @@
-import { parseColor, visibleWidth } from "@earendil-works/pi-tui";
+import { type Color, colorToRgb, parseColor, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { chartSeries, harnessesOf, modelTotals, overview, seriesKey } from "../../src/stats/aggregate.ts";
 import { StatsView, summary } from "../../src/stats/component.ts";
@@ -18,6 +18,14 @@ const theme = {
 	bold: (s: string) => s,
 	style: (s: string) => s,
 	colors: { accent: parseColor("#426a79") },
+};
+/** `style` paints real truecolor SGR, so a test can see which colour drew what. */
+const coloured = {
+	...theme,
+	style: (s: string, o: { fg?: Color }) => {
+		const { r, g, b } = colorToRgb(o.fg ?? parseColor("#000000"));
+		return `${ESC}[38;2;${r};${g};${b}m${s}${ESC}[39m`;
+	},
 };
 const TODAY = "2026-10-13";
 const NOW = at(TODAY, 18);
@@ -150,6 +158,31 @@ describe("quota rows", () => {
 		expect(rows[0]?.observed).toBe("observed 0s ago via codex");
 	});
 
+	it("drops a window reset more than one window ago, and an expired row beside a live one for any account", () => {
+		const week = 604_800_000;
+		const rows = quotaRows(
+			[
+				// reset over a window ago: long stale
+				quota({ window: "5h", durationMs: 18_000_000, resetAt: NOW - 18_000_001 }),
+				// reset recently, nothing live for the window: shown as reset
+				quota({ window: "1d", durationMs: 86_400_000, resetAt: NOW - 60_000 }),
+				// live reading for one account hides the expired one of another
+				quota({ account: "aaaa".repeat(16) }),
+				quota({ account: "bbbb".repeat(16), resetAt: NOW - 1, usedPercent: 99 }),
+				// the same window under another limit is not hidden by it
+				quota({ limitId: "other", durationMs: week, resetAt: NOW - 1 }),
+			],
+			NOW,
+		);
+		expect(rows.map((r) => [r.label, r.expired])).toEqual([
+			["openai-codex/codex 1d", true],
+			["openai-codex/codex 7d", false],
+			["openai-codex/other 7d", true],
+		]);
+		// exactly one window ago still shows
+		expect(quotaRows([quota({ resetAt: NOW - 604_800_000 })], NOW)).toHaveLength(1);
+	});
+
 	it("says Claude has no local reading only when Claude has data and nothing covers anthropic", () => {
 		expect(claudeHasNoReading([], true)).toBe(true);
 		expect(claudeHasNoReading([], false)).toBe(false);
@@ -233,6 +266,23 @@ describe("StatsView per-harness display", () => {
 		view.handleInput("m");
 		shown = text(view);
 		expect(shown).toContain("by model");
+	});
+
+	it("colours Models bullets only for series the chart draws: harness lines colour no provider or model row", () => {
+		// a provider that shares its name with a harness must not pick up that harness's line colour
+		const named = [
+			call(TODAY, "codex", "m", 100, 10, { harness: "codex", session: "/x" }),
+			call(TODAY, "claude", "m", 100, 10, { harness: "claude", session: "/c" }),
+		];
+		const view = make(named, { theme: coloured as never });
+		view.handleInput("\t");
+		const raw = view.render(160).join("\n");
+		expect(strip(raw)).toContain("by harness");
+		expect(raw).not.toMatch(new RegExp(`${ESC}\\[38;2;[\\d;]+m•`));
+		// under a model filter the chart is by model again, and its rows are coloured
+		for (let i = 0; i < 3; i++) view.handleInput("m");
+		expect(strip(view.render(160).join("\n"))).toContain("by model");
+		expect(view.render(160).join("\n")).toMatch(new RegExp(`${ESC}\\[38;2;[\\d;]+m•`));
 	});
 
 	it("adds a harness column to the Models table, and the harness to its cards when narrow", () => {
@@ -370,6 +420,15 @@ describe("summary", () => {
 			/^\/stats: no usage recorded yet\nquota:\n {2}openai-codex\/codex 7d: 47\.3% used/,
 		);
 		expect(summary([], [], NOW)).toBe("/stats: no usage recorded yet");
+	});
+
+	it("strips terminal control sequences from quota labels", () => {
+		const osc = `${ESC}]0;pwned\u0007`;
+		const out = summary(calls, [quota({ provider: `evil${osc}`, limitId: `evil${osc}` })], NOW);
+		expect(out).toContain("quota:\n  evil");
+		expect(out).not.toContain(ESC);
+		expect(out).not.toContain("\u0007");
+		expect(out).toContain("evil^[]0;pwned^G");
 	});
 
 	it("stays as before for one harness and no quota", () => {

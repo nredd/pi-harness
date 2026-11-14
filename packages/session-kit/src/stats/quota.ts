@@ -33,8 +33,15 @@ export function gauge(percent: number): string {
 	return `${"█".repeat(filled)}${"░".repeat(BAR_CELLS - filled)}`;
 }
 
-/** One row per reading, ordered by provider, limit, then window length. Readings are already merged. */
-export function quotaRows(readings: readonly QuotaObservation[], now: number): QuotaRow[] {
+/** One row per reading (see the filter for expired ones), ordered by provider, limit, then window length. Readings are already merged. */
+export function quotaRows(allReadings: readonly QuotaObservation[], now: number): QuotaRow[] {
+	const windowKey = (q: QuotaObservation) => JSON.stringify([q.provider, q.limitId, q.window]);
+	const live = new Set(allReadings.filter((q) => !isExpired(q, now)).map(windowKey));
+	// A window reset more than one window length ago is long stale; a reset one is moot beside a live
+	// reading of the same window, whichever account it came from.
+	const readings = allReadings.filter(
+		(q) => !isExpired(q, now) || (now - q.resetAt <= q.durationMs && !live.has(windowKey(q))),
+	);
 	const base = (q: QuotaObservation) => `${q.provider}${q.limitId === q.provider ? "" : `/${q.limitId}`} ${q.window}`;
 	const siblings = new Map<string, number>();
 	for (const q of readings) siblings.set(base(q), (siblings.get(base(q)) ?? 0) + 1);

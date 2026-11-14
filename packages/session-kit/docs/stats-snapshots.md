@@ -268,10 +268,13 @@ the published snapshots. To drop a harness on purpose, export without it using
   `rate_limits` from `token_count` rows become quota observations (provider `openai-codex`),
   freshest per `(limitId, window, account, resetAt)` per rollout, so a newer already-reset reading
   never hides an older live one. No account dimension on usage; quota carries the salted `account`.
-- OpenCode: one read-only `node:sqlite` query (`immutable=1` only when the WAL is checkpointed and
-  absent, so a read never creates `-shm`/`-wal` and pending WAL rows are always visible; 2s busy
-  timeout, then a generic "database busy" diagnostic) that
-  projects only counters, IDs, timestamps and model names. `reasoning` tokens count as output. The
+- OpenCode: a read-only `node:sqlite` read in keyset pages of 2000 rows, yielding to the event loop
+  between pages, cached per session in the harness cache under a stamp of the database plus its
+  `-wal` (summed size, newest mtime): an unchanged database is never reopened, a changed one is
+  re-read in full (`/stats` shows `reading opencode, N rows` in its loading status). The
+  open is `immutable=1` only when the WAL is checkpointed and absent (so a read never creates
+  `-shm`/`-wal` and pending WAL rows are always visible); 2s busy timeout, then a generic "database
+  busy" diagnostic. The query projects only counters, IDs, timestamps and model names. `reasoning` tokens count as output. The
   schema follows third-party readers; a mismatch or missing `node:sqlite` is a diagnostic.
 - Entry IDs hash `<harness>:<native id>`, session IDs `<harness>-session:<native id>`. Only counts,
   timestamps, raw provider/model names, Codex quota labels (`limit_id`, `plan_type`, percentages,

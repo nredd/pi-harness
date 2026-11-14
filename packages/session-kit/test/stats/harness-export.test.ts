@@ -32,7 +32,7 @@ import {
 } from "../../src/stats/snapshot.ts";
 import { assistantLine, at, call, sessionFile } from "./fixtures.ts";
 import { CANARY } from "./harness/fixtures.ts";
-import { CODEX_RESET_S, seedHarnessHome } from "./harness/home.ts";
+import { bumpOpenCode, CODEX_RESET_S, seedHarnessHome } from "./harness/home.ts";
 
 const OLD_MACHINE = "11111111-1111-4111-8111-111111111111";
 const NEW_MACHINE = "22222222-2222-4222-8222-222222222222";
@@ -632,7 +632,11 @@ describe("exportStats with harnesses", () => {
 
 	describe("a failing harness", () => {
 		const busy = Object.assign(new Error("database is locked"), { errcode: 5 });
-		const busyDb = () => Promise.reject(busy);
+		// A busy database is only reached when it changed since the cached read, so change it first.
+		const busyDb = (roots: { opencode: string }) => {
+			bumpOpenCode(roots.opencode);
+			return () => Promise.reject(busy);
+		};
 
 		it("keeps what it last published and reports the failure, without aborting the pi export", async () => {
 			seedPi();
@@ -652,7 +656,7 @@ describe("exportStats with harnesses", () => {
 				startMs: OCT,
 				lines: [assistantLine({ ms: OCT + 1000, provider: "pi-provider", model: "pi-model", input: 6 })],
 			});
-			const second = await exportStats(agent, repo, undefined, { harnesses, roots, home, loadSqlite: busyDb });
+			const second = await exportStats(agent, repo, undefined, { harnesses, roots, home, loadSqlite: busyDb(roots) });
 			expect(second.harnesses?.opencode).toEqual({
 				found: true,
 				problems: ["opencode: database busy, skipped"],
@@ -687,7 +691,7 @@ describe("exportStats with harnesses", () => {
 				harnesses: ["pi", "opencode"],
 				roots,
 				home,
-				loadSqlite: busyDb,
+				loadSqlite: busyDb(roots),
 			});
 			expect(
 				published(second.snapshotDir)
@@ -708,7 +712,7 @@ describe("exportStats with harnesses", () => {
 				harnesses: ["pi", "opencode"],
 				roots,
 				home,
-				loadSqlite: busyDb,
+				loadSqlite: busyDb(roots),
 			});
 			expect(result.harnesses?.opencode?.failed).toBe("kept");
 			expect(published(result.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness))).toEqual(["pi"]);
@@ -747,7 +751,7 @@ describe("exportStats with harnesses", () => {
 				harnesses: ["pi", "opencode"],
 				roots,
 				home,
-				loadSqlite: busyDb,
+				loadSqlite: busyDb(roots),
 			});
 			expect(result.harnesses?.opencode?.failed).toBe("kept");
 			expect(published(result.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness))).toEqual(["pi"]);
@@ -761,7 +765,7 @@ describe("exportStats with harnesses", () => {
 				harnesses: ["pi", "opencode"],
 				roots,
 				home,
-				loadSqlite: busyDb,
+				loadSqlite: busyDb(roots),
 			});
 			const carried = published(result.snapshotDir).flatMap((sh) => sh.events.filter((e) => e.harness === "opencode"));
 			expect(carried).toHaveLength(1);
@@ -773,7 +777,7 @@ describe("exportStats with harnesses", () => {
 			const roots = seedHarnessHome(home);
 			// every shard is valid and digest-correct, but an event has no session metadata
 			publish((await machineIdentity(agent)).machineId, 2, [event("opencode", "orphan")], [], []);
-			const opts = { harnesses: ["pi", "opencode"] as Harness[], roots, home, loadSqlite: busyDb };
+			const opts = { harnesses: ["pi", "opencode"] as Harness[], roots, home, loadSqlite: busyDb(roots) };
 			// no recorded set either, so what was published cannot be established without saying so
 			await expect(exportStats(agent, repo, undefined, opts)).rejects.toThrow(/Cannot establish/);
 			const result = await exportStats(agent, repo, undefined, { ...opts, replaceHarnesses: true });
@@ -791,7 +795,7 @@ describe("exportStats with harnesses", () => {
 				harnesses: ["pi", "opencode"],
 				roots,
 				home,
-				loadSqlite: busyDb,
+				loadSqlite: busyDb(roots),
 			});
 			// the previous snapshot cannot be read: say so rather than claim it was kept
 			expect(second.harnesses?.opencode).toMatchObject({ failed: "lost" });
@@ -857,6 +861,7 @@ describe("exportStats with harnesses", () => {
 		const roots = seedHarnessHome(home);
 		const state = join(agent, "pi-session-kit", "export-state.json");
 		await exportStats(agent, repo, undefined, { harnesses: ["pi", "opencode"], roots, home });
+		bumpOpenCode(roots.opencode);
 		const sabotage = async () => {
 			// by now the state was read; make writing it fail
 			rmSync(state);
@@ -900,7 +905,10 @@ describe("exportStats with harnesses", () => {
 	});
 
 	describe("harness freshness and repeated failures", () => {
-		const busyDb = () => Promise.reject(Object.assign(new Error("locked"), { errcode: 5 }));
+		const busyDb = (roots: { opencode: string }) => {
+			bumpOpenCode(roots.opencode);
+			return () => Promise.reject(Object.assign(new Error("locked"), { errcode: 5 }));
+		};
 		const statePath = () => join(agent, "pi-session-kit", "export-state.json");
 		const manifestOf = (snapshotDir: string) =>
 			JSON.parse(readFileSync(join(snapshotDir, "manifest.json"), "utf8")) as Manifest;
@@ -914,7 +922,7 @@ describe("exportStats with harnesses", () => {
 			expect(m1.lastGoodAt).toEqual({ pi: m1.exportedAt, claude: m1.exportedAt, opencode: m1.exportedAt });
 
 			await new Promise((r) => setTimeout(r, 5));
-			const second = await exportStats(agent, repo, undefined, { harnesses, roots, home, loadSqlite: busyDb });
+			const second = await exportStats(agent, repo, undefined, { harnesses, roots, home, loadSqlite: busyDb(roots) });
 			const m2 = manifestOf(second.snapshotDir);
 			expect(m2.exportedAt).toBeGreaterThan(m1.exportedAt);
 			expect(m2.lastGoodAt).toEqual({ pi: m2.exportedAt, claude: m2.exportedAt, opencode: m1.exportedAt });
@@ -928,11 +936,11 @@ describe("exportStats with harnesses", () => {
 				claude: manifestOf(healthy.snapshotDir).exportedAt,
 				opencode: manifestOf(healthy.snapshotDir).exportedAt,
 			});
-			await exportStats(agent, repo, undefined, { harnesses, roots, home, loadSqlite: busyDb });
+			await exportStats(agent, repo, undefined, { harnesses, roots, home, loadSqlite: busyDb(roots) });
 			// no mark at all for a harness whose previous snapshot could not be read
 			const manifest = manifestOf(second.snapshotDir);
 			for (const ref of manifest.shards) writeFileSync(join(second.snapshotDir, ref.file), "tampered");
-			const third = await exportStats(agent, repo, undefined, { harnesses, roots, home, loadSqlite: busyDb });
+			const third = await exportStats(agent, repo, undefined, { harnesses, roots, home, loadSqlite: busyDb(roots) });
 			expect(manifestOf(third.snapshotDir).lastGoodAt).not.toHaveProperty("opencode");
 		});
 
@@ -945,7 +953,7 @@ describe("exportStats with harnesses", () => {
 				harnesses: ["pi", "opencode"],
 				roots,
 				home,
-				loadSqlite: busyDb,
+				loadSqlite: busyDb(roots),
 			});
 			expect(result.harnesses?.opencode?.failed).toBe("kept");
 			expect(manifestOf(result.snapshotDir).lastGoodAt?.opencode).toBe(OCT);
@@ -956,7 +964,7 @@ describe("exportStats with harnesses", () => {
 				harnesses: ["pi", "opencode"],
 				roots,
 				home,
-				loadSqlite: busyDb,
+				loadSqlite: busyDb(roots),
 			});
 			expect(v1.harnesses?.opencode?.failed).toBe("kept");
 			expect(manifestOf(v1.snapshotDir).lastGoodAt?.opencode).toBe(OCT);
@@ -975,7 +983,7 @@ describe("exportStats with harnesses", () => {
 				harnesses: ["pi", "opencode"],
 				roots,
 				home,
-				loadSqlite: busyDb,
+				loadSqlite: busyDb(roots),
 			});
 			const m = manifestOf(result.snapshotDir);
 			expect(m.exportedAt).toBeLessThan(ahead);
@@ -1034,7 +1042,7 @@ describe("exportStats with harnesses", () => {
 			await exportStats(agent, repo, undefined, { harnesses, roots, home });
 			const counts: (number | undefined)[] = [];
 			for (let i = 0; i < 3; i++) {
-				const r = await exportStats(agent, repo, undefined, { harnesses, roots, home, loadSqlite: busyDb });
+				const r = await exportStats(agent, repo, undefined, { harnesses, roots, home, loadSqlite: busyDb(roots) });
 				counts.push(r.harnesses?.opencode?.consecutiveFailures);
 			}
 			expect(counts).toEqual([1, 2, 3]);

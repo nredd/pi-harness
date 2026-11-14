@@ -135,6 +135,8 @@ export interface CombinedOptions {
 	env?: Record<string, string | undefined>;
 	home?: string;
 	loadSqlite?: LoadSqlite;
+	/** Status text while other harnesses are read, for a loading line. */
+	onHarnessProgress?: (status: string) => void;
 }
 
 /** Atomic replacement, also safe against concurrent writers' temporary-file collisions. */
@@ -874,6 +876,7 @@ export async function loadCombined(
 				home: options.home,
 				cache: harnessCachePath(dir),
 				loadSqlite: options.loadSqlite,
+				onProgress: options.onHarnessProgress,
 				salt: (await exportState(dir)).salt,
 			});
 			for (const h of wanted) {

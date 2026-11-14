@@ -22,6 +22,7 @@ import {
 	limits,
 	writeLines,
 } from "./fixtures.ts";
+import { seedHarnessHome } from "./home.ts";
 
 const SALT = "0123456789abcdef0123456789abcdef";
 let home: string;
@@ -108,6 +109,25 @@ describe("loadHarnesses", () => {
 		expect(statSync(cache).ino).toBe(written);
 	});
 
+	it("reports what it is reading, and caches OpenCode so a repeat load never opens the database", async () => {
+		const roots = seedHarnessHome(home);
+		const cache = join(home, "c.json");
+		const status: string[] = [];
+		const first = await loadHarnesses({ home, env: {}, roots, cache, salt: SALT, onProgress: (s) => status.push(s) });
+		expect(status).toEqual(["reading claude", "reading codex", "reading opencode", "reading opencode, 1 rows"]);
+		expect(first.opencode.calls).toHaveLength(1);
+		const again = await loadHarnesses({
+			home,
+			env: {},
+			roots,
+			cache,
+			salt: SALT,
+			harnesses: ["opencode"],
+			loadSqlite: () => Promise.reject(new Error("opened")),
+		});
+		expect(again.opencode).toEqual(first.opencode);
+	});
+
 	it("defaults the cache to the agent dir", async () => {
 		const { env } = fakeHome();
 		vi.stubEnv("PI_CODING_AGENT_DIR", join(home, "agent"));
@@ -181,7 +201,7 @@ describe("loadHarnesses", () => {
 		expect(scans.claude.calls).toHaveLength(1);
 		expect(scans.claude.problems).toEqual(["claude: cache not written"]);
 		expect(scans.codex.problems).toEqual(["codex: cache not written"]);
-		expect(scans.opencode.problems).toEqual([]);
+		expect(scans.opencode.problems).toEqual(["opencode: cache not written"]);
 	});
 });
 

@@ -36,6 +36,7 @@ import {
 	RANGES,
 	type Range,
 	rangeStart,
+	type SeriesBy,
 	seriesKey,
 	TOKENS_NOTE,
 	tokensOf,
@@ -491,7 +492,7 @@ export class StatsView implements Component {
 		ranged: readonly Call[],
 		width: number,
 		height: number,
-	): { lines: string[]; colors: Map<string, number> } {
+	): { lines: string[]; colors: Map<string, number>; by: SeriesBy } {
 		const t = this.o.theme;
 		const inner = contentWidth(width);
 		const byHarness = this.splitHarness && this.filter.kind === "all";
@@ -548,7 +549,7 @@ export class StatsView implements Component {
 					inner,
 				),
 			);
-			return { lines: out, colors };
+			return { lines: out, colors, by };
 		}
 		const from = rangeStart(this.range, this.today) ?? dayKey(nth(ranged, 0).ms);
 		const series = dailySeries(ranged, from, this.today, seriesKey(by));
@@ -558,7 +559,7 @@ export class StatsView implements Component {
 		const out = head(`Tokens per ${bucketed.unit}`);
 		if (series.length < 2) {
 			out.push(this.paint("muted", "Not enough data for a chart yet"));
-			return { lines: out, colors };
+			return { lines: out, colors, by };
 		}
 		const p = plot(
 			top.map((_k, i) => ({
@@ -582,7 +583,7 @@ export class StatsView implements Component {
 				inner,
 			),
 		);
-		return { lines: out, colors };
+		return { lines: out, colors, by };
 	}
 
 	/** `● a · ● b · ● c`, wrapped onto more lines rather than cutting a series name off. */
@@ -618,8 +619,8 @@ export class StatsView implements Component {
 			return { lines, owners: lines.map(() => []), count: 0 };
 		}
 		// The list scrolls under the chart: the chart gets what a short list leaves, at least half the pane.
-		const colors = this.chart(ranged, width, TICKS).colors;
-		const list = this.listRows(totals, contentWidth(width), colors);
+		const { colors, by } = this.chart(ranged, width, TICKS);
+		const list = this.listRows(totals, contentWidth(width), colors, by);
 		const listLines = list.reduce((n, row) => n + row.lines.length, 0);
 		const chart = this.chart(ranged, width, chartHeight(Math.max(Math.floor(room / 2), room - listLines) - 7));
 		const head = [...chart.lines, ""];
@@ -634,7 +635,14 @@ export class StatsView implements Component {
 	 * Models grouped under their provider: a table when its columns fit, one aligned line per model with a
 	 * provider subtotal line above its models, else three-line cards one per row. Indented two columns.
 	 */
-	private listRows(totals: readonly ModelTotals[], inner: number, colors: ReadonlyMap<string, number>): ListRow[] {
+	private listRows(
+		totals: readonly ModelTotals[],
+		inner: number,
+		chartColors: ReadonlyMap<string, number>,
+		by: SeriesBy,
+	): ListRow[] {
+		// Harness lines are coloured by harness name, which says nothing about a provider or model row.
+		const colors: ReadonlyMap<string, number> = by === "harness" ? new Map() : chartColors;
 		const t = this.o.theme;
 		const grand = totals.reduce((n, m) => n + tokensOf(m), 0);
 		const bullet = (key: string) => {
@@ -771,7 +779,8 @@ function quotaLines(calls: readonly Call[], quota: readonly QuotaObservation[], 
 	return [
 		"quota:",
 		...rows.map(
-			(r) => `  ${r.label}: ${r.expired ? "" : `${usedLabel(r.usedPercent)} used, `}${r.reset}, ${r.observed}`,
+			(r) =>
+				`  ${sanitize(r.label)}: ${r.expired ? "" : `${usedLabel(r.usedPercent)} used, `}${r.reset}, ${r.observed}`,
 		),
 		...(noClaude ? [`  ${ANTHROPIC}: ${NO_LOCAL_READING}`] : []),
 	];
