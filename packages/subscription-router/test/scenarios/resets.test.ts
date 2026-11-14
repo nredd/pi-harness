@@ -2,7 +2,7 @@
 import { createHarness } from "@earendil-works/pi-coding-agent/testing";
 import { expect, it } from "vitest";
 import { createSubscriptionRouter } from "../../src/index.js";
-import { CachedUsage, Clock } from "./support.js";
+import { CachedUsage, Clock } from "../fixtures/router.js";
 
 it("prints cached reset schedules through the real session without triggering admission or a turn", async () => {
 	const clock = new Clock();

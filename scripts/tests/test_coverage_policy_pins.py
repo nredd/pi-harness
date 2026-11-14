@@ -208,6 +208,7 @@ def test_root_script_helpers_are_measured_by_import_audit_at_zero() -> None:
             "packages/todo/.vitest.config.ts",
             "integration/*/vitest.config.ts",
             "scripts/vitest.config.ts",
+            "tests/lib/vitest.config.ts",
         ]
         for path in ROOT.glob(pattern)
     }
@@ -219,7 +220,7 @@ def test_root_script_helpers_are_measured_by_import_audit_at_zero() -> None:
         "scripts/run-vitest.ts",
         *configs,
     }
-    assert len(configs) == 17, configs
+    assert len(configs) == 18, configs
     assert "coverage-configurations" not in cfg.packages
     assert audit.goal == "100-percent"
     primary = audit.signals["primary"]

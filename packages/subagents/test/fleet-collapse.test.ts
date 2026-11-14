@@ -1,11 +1,11 @@
 /** Fleet disclosure policy, counts and width safety, independent of agent execution. */
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { describe, expect, it, vi } from "vitest";
 import { type AgentManager, markConsumed } from "../src/agent-manager.js";
 import type { AgentRecord } from "../src/types.js";
 import { FLEET_DISCLOSURE_SETTLE_MS, FleetList, type FleetUICtx, type FleetWorkflow, renderFleetSummary, STOP_ALL_CONFIRM_MS } from "../src/ui/fleet-list.js";
 import { FLEET_STATE_ENTRY, FLEET_STATE_VERSION, type FleetJournalEntry, MAX_COMPACT_ALERT_COUNT, MAX_FLEET_ALERT_DETAILS } from "../src/ui/fleet-state.js";
-import { FakeClock } from "./helpers/fake-clock.js";
 
 const theme = {
   fg: (_color: string, text: string) => `\x1b[36m${text}\x1b[39m`,

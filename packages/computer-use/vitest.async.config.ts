@@ -12,7 +12,7 @@ export default defineConfig({
 		pool: "forks",
 		maxWorkers: 1,
 		testTimeout: 20_000,
-		setupFiles: ["../../integration/inprocess/verification/home-setup.ts"],
+		setupFiles: ["../../tests/lib/src/home-setup.ts"],
 		coverage: {
 			provider: "istanbul",
 			reporter: ["text", "lcov", "json-summary"],

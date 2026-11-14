@@ -6,7 +6,7 @@
 import { createHarness, fauxAssistantMessage, type Harness } from "@earendil-works/pi-coding-agent/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { createSubscriptionRouter } from "../../src/index.js";
-import { CachedUsage, Clock, prompt, type RouterScenario, startRouter } from "./support.js";
+import { CachedUsage, Clock, prompt, type RouterScenario, startRouter } from "../fixtures/router.js";
 
 const PROFILE = {
 	id: "spike",

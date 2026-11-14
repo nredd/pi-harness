@@ -1,12 +1,13 @@
 /** Real core sessions: the user edits a ready plan through the RPC editor dialog. */
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { createTestUiContext, fauxAssistantMessage, getUserTexts } from "@earendil-works/pi-coding-agent/testing";
+import { deferred } from "@nredd/pi-test-lib/deferred";
 import { expect, test } from "vitest";
 import { formatTransferredPlanPrompt } from "../src/fresh-implementation.js";
 import { PLAN_APPROVED_EVENT, type PlanApprovedPayload } from "../src/plan-approval.js";
 import { PLAN_EDIT_MESSAGE_TYPE, PLAN_EDIT_SOURCE } from "../src/plan-edit.js";
 import { PLAN_MESSAGE_TYPE } from "../src/presentation.js";
-import { complete, deferred, planFactory, SessionFixture, state } from "./session-support.js";
+import { complete, planFactory, SessionFixture, state } from "./session-support.js";
 
 const EDITED = "# First\n\n- Do the edited thing.";
 const EDIT_MARKER = "[PLAN EDITED BY USER]";

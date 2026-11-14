@@ -21,7 +21,7 @@ export default defineConfig({
 		},
 		pool: "forks",
 		maxWorkers: 2,
-		setupFiles: ["../../integration/inprocess/verification/home-setup.ts"],
+		setupFiles: ["../../tests/lib/src/home-setup.ts"],
 		testTimeout: 20_000,
 	},
 });

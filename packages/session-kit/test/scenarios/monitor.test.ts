@@ -6,6 +6,8 @@ import {
 	fauxAssistantMessage,
 	type Harness,
 } from "@earendil-works/pi-coding-agent/testing";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { outcomes, toolCall } from "@nredd/pi-test-lib/faux";
 import { afterEach, describe, expect, it } from "vitest";
 import { MESSAGE_TYPE } from "../../src/monitor/index.ts";
 import { OUTPUT_TRUNCATED_PREFIX } from "../../src/monitor/output.ts";
@@ -13,14 +15,11 @@ import {
 	advanceQuietly,
 	ControlledProcesses,
 	configFor,
-	FakeClock,
 	heldResponse,
-	outcomes,
 	ScenarioFixture,
 	spoken,
 	tick,
-	tool,
-} from "./support.ts";
+} from "../fixtures/session.ts";
 
 /** Persisted custom messages, not an intercepted extension send. */
 function messages(harness: Harness) {
@@ -53,7 +52,7 @@ describe("monitors through a real session", () => {
 		await start();
 		const held = heldResponse("waiting");
 		harness.setResponses([
-			tool("monitor_start", { argv: ["/controlled/watcher"], name, ...extra }),
+			toolCall("monitor_start", { argv: ["/controlled/watcher"], name, ...extra }),
 			held.response,
 			...followups,
 		]);
@@ -105,7 +104,7 @@ describe("monitors through a real session", () => {
 
 	it("matching output wakes once and is readable", async () => {
 		const run = await watching("srv", { match: "READY" }, [
-			tool("monitor_read", { id: "srv" }),
+			toolCall("monitor_read", { id: "srv" }),
 			fauxAssistantMessage("woken and read"),
 		]);
 		// Both matching and nonmatching batches traverse the real worker, not a canned match result.
@@ -146,7 +145,7 @@ describe("monitors through a real session", () => {
 		const suggested = Number(/"since":(\d+)/.exec(String(messages(harness)[1]?.content))?.[1]);
 		expect(suggested).toBe(251);
 		harness.setResponses([
-			tool("monitor_read", { id: "overflow", since: suggested }),
+			toolCall("monitor_read", { id: "overflow", since: suggested }),
 			fauxAssistantMessage("read retained"),
 		]);
 		await harness.session.prompt("read the suggested output");
@@ -162,7 +161,7 @@ describe("monitors through a real session", () => {
 	it("starts the next wake after passive output is read by the model", async () => {
 		const run = await watching("read-boundary", { match: "READY" }, [
 			fauxAssistantMessage("first wake"),
-			tool("monitor_read", { id: "read-boundary" }),
+			toolCall("monitor_read", { id: "read-boundary" }),
 			fauxAssistantMessage("read passive output"),
 			fauxAssistantMessage("second wake"),
 		]);
@@ -203,8 +202,8 @@ describe("monitors through a real session", () => {
 		await start();
 		const held = heldResponse("waiting");
 		harness.setResponses([
-			tool("monitor_start", { argv: ["/controlled/watcher"], name: "first", match: "READY" }),
-			tool("monitor_start", { argv: ["/controlled/watcher"], name: "second", match: "READY" }),
+			toolCall("monitor_start", { argv: ["/controlled/watcher"], name: "first", match: "READY" }),
+			toolCall("monitor_start", { argv: ["/controlled/watcher"], name: "second", match: "READY" }),
 			held.response,
 			fauxAssistantMessage("first initial wake"),
 			fauxAssistantMessage("second initial wake"),
@@ -249,9 +248,9 @@ describe("monitors through a real session", () => {
 		run.release();
 		await run.running;
 		harness.setResponses([
-			tool("monitor_read", { id: "lines" }),
-			tool("monitor_read", { id: "m1", since: 2 }),
-			tool("monitor_read", { id: "lines", since: 3 }),
+			toolCall("monitor_read", { id: "lines" }),
+			toolCall("monitor_read", { id: "m1", since: 2 }),
+			toolCall("monitor_read", { id: "lines", since: 3 }),
 			fauxAssistantMessage("end"),
 		]);
 		await harness.session.prompt("read");
@@ -271,11 +270,11 @@ describe("monitors through a real session", () => {
 
 	it("five-slot limit and names recover after stop", async () => {
 		await start();
-		const spawn = (name: string) => tool("monitor_start", { argv: ["/controlled/watcher"], name });
+		const spawn = (name: string) => toolCall("monitor_start", { argv: ["/controlled/watcher"], name });
 		harness.setResponses([
 			...Array.from({ length: 5 }, (_, i) => spawn(`w${i}`)),
 			spawn("w6"),
-			tool("monitor_stop", { id: "w0" }),
+			toolCall("monitor_stop", { id: "w0" }),
 			spawn("w7"),
 			spawn("w1"),
 			fauxAssistantMessage("end"),
@@ -313,10 +312,10 @@ describe("monitors through a real session", () => {
 	it("bad monitor arguments return errors without crashing", async () => {
 		await start();
 		harness.setResponses([
-			tool("monitor_start", { argv: ["/nonexistent/binary"], name: "x" }),
-			tool("monitor_start", { argv: ["/controlled/watcher"], name: "y", match: "(" }),
-			tool("monitor_start", { argv: ["/controlled/watcher"], name: "bad name!" }),
-			tool("monitor_read", { id: "nope" }),
+			toolCall("monitor_start", { argv: ["/nonexistent/binary"], name: "x" }),
+			toolCall("monitor_start", { argv: ["/controlled/watcher"], name: "y", match: "(" }),
+			toolCall("monitor_start", { argv: ["/controlled/watcher"], name: "bad name!" }),
+			toolCall("monitor_read", { id: "nope" }),
 			fauxAssistantMessage("end"),
 		]);
 		await harness.session.prompt("go");

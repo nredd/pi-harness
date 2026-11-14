@@ -6,6 +6,9 @@ import type { FauxProviderRegistration } from "@earendil-works/pi-ai/compat";
 import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { initTheme, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { deferred } from "@nredd/pi-test-lib/deferred";
+import { toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentManager } from "../src/agent-manager.js";
 import { getAgentConfig } from "../src/agent-types.js";
@@ -13,8 +16,7 @@ import { createSubagentsExtension } from "../src/index.js";
 import type { AgentRecord } from "../src/types.js";
 import { isWorktreeIsolationEnabled, setWorktreeIsolationEnabled } from "../src/worktree.js";
 import { type BootedPi, ctx, type Hermetic, hermeticDir, makePi, startSession } from "./helpers/boot-extension.js";
-import { FakeClock } from "./helpers/fake-clock.js";
-import { answer, barrier, calls } from "./helpers/scenario-session.js";
+import { answer } from "./helpers/scenario-session.js";
 
 let env: Hermetic;
 let boot: BootedPi;
@@ -84,7 +86,7 @@ describe("menu conversation viewer", () => {
     const result = await boot.tools.get("Agent").execute("fleet-viewer", {
       subagent_type: "general-purpose", description: "Private fleet child", prompt: "Work", run_in_background: false,
     }, undefined, undefined, context);
-    const rendered = barrier<string>();
+    const rendered = deferred<string>();
     context.ui.custom = vi.fn(async factory => {
       const component = await factory({ terminal: { rows: 30, columns: 120 }, requestRender: vi.fn() } as never,
         { fg: (_color: string, text: string) => text, bold: (text: string) => text } as never,
@@ -111,8 +113,8 @@ describe("menu conversation viewer", () => {
   });
 
   it.each(["steer", "stop", "background"] as const)("routes the running viewer's %s action to its actual child", async action => {
-    const entered = barrier();
-    const release = barrier();
+    const entered = deferred();
+    const release = deferred();
     provider.setResponses([async () => { entered.resolve(); await release.promise; return answer("Original answer."); }, answer("Redirected answer.")]);
     const registry = Reflect.get(globalThis, Symbol.for("pi-subagents:manager")) as {
       hasRunning(): boolean; waitForAll(): Promise<void>; getRecord(id: string): AgentRecord | undefined;
@@ -163,8 +165,8 @@ describe("menu conversation viewer", () => {
 
   describe("running agent picker edges", () => {
     async function startHeldChild() {
-      const entered = barrier();
-      const release = barrier();
+      const entered = deferred();
+      const release = deferred();
       provider.setResponses([async () => { entered.resolve(); await release.promise; return answer("Held answer."); }]);
       const registry = Reflect.get(globalThis, Symbol.for("pi-subagents:manager")) as {
         waitForAll(): Promise<void>; getRecord(id: string): AgentRecord | undefined;
@@ -242,7 +244,7 @@ describe("menu conversation viewer", () => {
 
 describe("generation wizard", () => {
   it("creates and reloads a real Markdown file through the child write tool", async () => {
-    provider.setResponses([calls({ name: "write", args: { path: target(), content: definition } }), answer("Written.")]);
+    provider.setResponses([toolCalls({ name: "write", args: { path: target(), content: definition } }), answer("Written.")]);
     await command();
     expect(readFileSync(target(), "utf8")).toBe(definition);
     expect(getAgentConfig("generated")?.description).toBe("Generated audit");
@@ -274,7 +276,7 @@ describe("generation wizard", () => {
     const old = definition.replace("Generated audit", "Original audit");
     writeFileSync(target(), old);
     confirm.mockResolvedValue(overwrite);
-    provider.setResponses([calls({ name: "write", args: { path: target(), content: definition } }), answer("Written.")]);
+    provider.setResponses([toolCalls({ name: "write", args: { path: target(), content: definition } }), answer("Written.")]);
     await command();
     expect(confirm).toHaveBeenCalledWith("Overwrite", `${target()} already exists. Overwrite?`);
     expect(readFileSync(target(), "utf8")).toBe(overwrite ? definition : old);

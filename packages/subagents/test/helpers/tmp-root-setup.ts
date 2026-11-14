@@ -8,33 +8,7 @@
  *
  * The real root is exposed as `PI_TEST_REAL_TMPDIR` for the leak regression test.
  */
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { sandboxTmpdir } from "@nredd/pi-test-lib/sandbox";
 import { afterAll } from "vitest";
 
-export const SANDBOX_PREFIX = "pi-subagents-test-tmp-";
-
-/** Redirect `TMPDIR` into a fresh sandbox; the returned function removes it and restores env. */
-export function sandboxTmpdir(): { sandbox: string; realTmp: string; restore: () => void } {
-  const realTmp = realpathSync(process.env.PI_TEST_REAL_TMPDIR ?? tmpdir());
-  const previousTmpdir = process.env.TMPDIR;
-  const previousReal = process.env.PI_TEST_REAL_TMPDIR;
-  const sandbox = realpathSync(mkdtempSync(join(realTmp, SANDBOX_PREFIX)));
-  process.env.PI_TEST_REAL_TMPDIR = realTmp;
-  process.env.TMPDIR = sandbox;
-  return {
-    sandbox,
-    realTmp,
-    restore() {
-      if (previousTmpdir === undefined) delete process.env.TMPDIR;
-      else process.env.TMPDIR = previousTmpdir;
-      if (previousReal === undefined) delete process.env.PI_TEST_REAL_TMPDIR;
-      else process.env.PI_TEST_REAL_TMPDIR = previousReal;
-      rmSync(sandbox, { recursive: true, force: true });
-    },
-  };
-}
-
-const active = sandboxTmpdir();
-afterAll(active.restore);
+afterAll(sandboxTmpdir().restore);

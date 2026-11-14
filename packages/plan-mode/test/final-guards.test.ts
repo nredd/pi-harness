@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
+import { deferred } from "@nredd/pi-test-lib/deferred";
 import { test } from "vitest";
 import planMode from "../src/plan-mode.js";
-import { deferred } from "./session-support.js";
 import { createMockContext, createMockPi } from "./support.js";
 
 test("active implementation menus require UI at the public command boundary", async () => {

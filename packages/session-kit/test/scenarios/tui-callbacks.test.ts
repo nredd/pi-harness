@@ -4,11 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { type Component, visibleWidth } from "@earendil-works/pi-tui";
+import { deferred } from "@nredd/pi-test-lib/deferred";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerMon } from "../../src/mon/index.ts";
+import { configFor, TerminalFixture } from "../fixtures/session.ts";
+import { assistant, history } from "../fixtures/stats.ts";
 import { snapshot } from "../mon/fixtures.ts";
-import { assistant, history } from "./stats-support.ts";
-import { configFor, deferred, TerminalFixture } from "./support.ts";
 
 let fixture: TerminalFixture | undefined;
 afterEach(async () => {

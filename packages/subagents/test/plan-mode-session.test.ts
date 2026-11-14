@@ -7,12 +7,13 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import type { Harness } from "@earendil-works/pi-coding-agent/testing";
+import { nextEvent, outcomes, text, toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it } from "vitest";
 import planMode from "../../plan-mode/src/plan-mode.js";
 import { NOTIFICATION_HOLD_MS } from "../src/completion-outbox.js";
 import { PLAN_MODE_GATE_QUERY, PLAN_PARK_REFUSAL, PLAN_SCHEDULE_REFUSAL, planSteerRefusal } from "../src/plan-mode-children.js";
 import type { AgentRecord } from "../src/types.js";
-import { answer, calls, nextEvent, outcomes, ScenarioSession, spawn, text } from "./helpers/scenario-session.js";
+import { answer, ScenarioSession, spawn } from "./helpers/scenario-session.js";
 
 let fixture: ScenarioSession;
 afterEach(async () => fixture?.dispose());
@@ -77,7 +78,7 @@ async function steerFinished(h: Harness, agent_id: string) {
     if (e.type === "message_end" && e.message.role === "custom" && e.message.customType === "subagent-notification") notified = true;
     return notified && e.type === "agent_settled";
   });
-  h.setResponses([calls({ name: "steer_subagent", args: { agent_id, message: "continue" } }), answer("STEERED"), answer("NOTICED")]);
+  h.setResponses([toolCalls({ name: "steer_subagent", args: { agent_id, message: "continue" } }), answer("STEERED"), answer("NOTICED")]);
   await h.session.prompt("Steer it.");
   expect(outcomes(h, "steer_subagent").at(-1)?.text).toContain("Agent resumed in background");
   await completed;
@@ -96,7 +97,7 @@ it("a child started while planning classifies its own extension tools under the 
   mkdirSync(join(fixture.cwd, ".pi", "extensions"), { recursive: true });
   writeFileSync(join(fixture.cwd, ".pi", "extensions", "proj.ts"), toolsSource([{ name: "proj_read", readOnly: true }, { name: "proj_sel" }]));
   fixture.physical("kid", "child", [
-    calls(...["alpha_write", "gamma_read", "sel_tool", "proj_read", "proj_sel"].map(name => ({ name, args: {} }))),
+    toolCalls(...["alpha_write", "gamma_read", "sel_tool", "proj_read", "proj_sel"].map(name => ({ name, args: {} }))),
     answer("CHILD DONE"),
   ]);
   // The parent selected `sel_tool` from the user's file, and `proj_sel` from another install. The path is
@@ -105,7 +106,7 @@ it("a child started while planning classifies its own extension tools under the 
     [parentTools(userTools, ["sel_tool"]), parentTools(join(fixture.root, "elsewhere", "proj_sel.ts"), ["proj_sel"])],
     ["sel_tool", "proj_sel"],
   );
-  h.setResponses([calls(spawn("tools", { run_in_background: false })), answer("PARENT DONE")]);
+  h.setResponses([toolCalls(spawn("tools", { run_in_background: false })), answer("PARENT DONE")]);
   await h.session.prompt("Plan the change.");
 
   const results = new Map(childResults(firstChild(h)).map(r => [r.name, r.text]));
@@ -120,12 +121,12 @@ it("a child started while planning classifies its own extension tools under the 
 
 it("a resume follows Plan: normal after exit, restricted again after re-entry", async () => {
   fixture = new ScenarioSession();
-  const write = (path: string) => calls({ name: "write", args: { path, content: "x" } });
+  const write = (path: string) => toolCalls({ name: "write", args: { path, content: "x" } });
   fixture.physical("kid", "child", [write("spawned.txt"), answer("C1"), write("after-exit.txt"), answer("C2"), write("replanned.txt"), answer("C3")]);
   const h = await startPlanning([], []);
-  const resume = () => calls(spawn("again", { resume: firstChild(h).id, run_in_background: false }));
+  const resume = () => toolCalls(spawn("again", { resume: firstChild(h).id, run_in_background: false }));
 
-  h.setResponses([calls(spawn("first", { run_in_background: false })), answer("P1")]);
+  h.setResponses([toolCalls(spawn("first", { run_in_background: false })), answer("P1")]);
   await h.session.prompt("Plan the change.");
   expect(childResults(firstChild(h)).at(-1)?.text).toBe("Plan mode blocks mutating tool 'write' in a subagent started while planning.");
   expect(existsSync(join(fixture.cwd, "spawned.txt"))).toBe(false);
@@ -146,12 +147,12 @@ it("a resume follows Plan: normal after exit, restricted again after re-entry", 
 
 it("steer_subagent resumes a finished pre-Plan child under Plan once Plan is on", async () => {
   fixture = new ScenarioSession();
-  const write = (path: string) => calls({ name: "write", args: { path, content: "x" } });
+  const write = (path: string) => toolCalls({ name: "write", args: { path, content: "x" } });
   fixture.physical("kid", "child", [write("before-plan.txt"), answer("C1"), write("steered.txt"), answer("C2")]);
   const h = await startHost([], []);
 
   // Plan is installed but off: the normal spawn and its write are untouched.
-  h.setResponses([calls(spawn("first", { run_in_background: false })), answer("P1")]);
+  h.setResponses([toolCalls(spawn("first", { run_in_background: false })), answer("P1")]);
   await h.session.prompt("Do the change.");
   const child = firstChild(h);
   expect(existsSync(join(fixture.cwd, "before-plan.txt"))).toBe(true);
@@ -164,11 +165,11 @@ it("steer_subagent resumes a finished pre-Plan child under Plan once Plan is on"
 
 it("steer_subagent resumes a child started during Plan with its normal surface after Plan exit", async () => {
   fixture = new ScenarioSession();
-  const write = (path: string) => calls({ name: "write", args: { path, content: "x" } });
+  const write = (path: string) => toolCalls({ name: "write", args: { path, content: "x" } });
   fixture.physical("kid", "child", [write("planned.txt"), answer("C1"), write("steered.txt"), answer("C2")]);
   const h = await startPlanning([], []);
 
-  h.setResponses([calls(spawn("first", { run_in_background: false })), answer("P1")]);
+  h.setResponses([toolCalls(spawn("first", { run_in_background: false })), answer("P1")]);
   await h.session.prompt("Plan the change.");
   const child = firstChild(h);
   expect(existsSync(join(fixture.cwd, "planned.txt"))).toBe(false);
@@ -182,16 +183,16 @@ it("steer_subagent resumes a child started during Plan with its normal surface a
 it("a running pre-Plan child cannot be steered while planning, and can be after Plan exit", async () => {
   fixture = new ScenarioSession();
   const hold = fixture.heldTool();
-  fixture.physical("kid", "child", [calls({ name: "hold", args: {} }), context => answer(`USERS ${context.messages.filter(m => m.role === "user").map(text).join(" | ")}`)]);
+  fixture.physical("kid", "child", [toolCalls({ name: "hold", args: {} }), context => answer(`USERS ${context.messages.filter(m => m.role === "user").map(text).join(" | ")}`)]);
   const h = await startHost([], []);
-  h.setResponses([calls(spawn("busy")), answer("SPAWNED")]);
+  h.setResponses([toolCalls(spawn("busy")), answer("SPAWNED")]);
   await h.session.prompt("Start it.");
   await hold.entered;
   const receipt = outcomes(h, "Agent")[0]?.text ?? "";
   const id = receipt.match(/Agent ID: (\S+)/)?.[1];
   if (!id) throw new Error(receipt);
   const steer = async (message: string) => {
-    h.setResponses([calls({ name: "steer_subagent", args: { agent_id: id, message } }), answer("STEERED")]);
+    h.setResponses([toolCalls({ name: "steer_subagent", args: { agent_id: id, message } }), answer("STEERED")]);
     await h.session.prompt("Steer it.");
     return outcomes(h, "steer_subagent").at(-1)?.text;
   };
@@ -205,7 +206,7 @@ it("a running pre-Plan child cannot be steered while planning, and can be after 
   const completed = fixture.completion();
   hold.release();
   await completed;
-  h.setResponses([calls({ name: "get_subagent_result", args: { agent_id: id, wait: true } }), answer("DONE")]);
+  h.setResponses([toolCalls({ name: "get_subagent_result", args: { agent_id: id, wait: true } }), answer("DONE")]);
   await h.session.prompt("Fetch it.");
   const result = outcomes(h, "get_subagent_result").at(-1)?.text ?? "";
   expect(result).toContain("USERS work | PIVOT");
@@ -215,10 +216,10 @@ it("a running pre-Plan child cannot be steered while planning, and can be after 
 it("another extension cannot steer a running pre-Plan child over RPC while planning", async () => {
   fixture = new ScenarioSession();
   const hold = fixture.heldTool();
-  fixture.physical("kid", "child", [calls({ name: "hold", args: {} }), context => answer(`USERS ${context.messages.filter(m => m.role === "user").map(text).join(" | ")}`)]);
+  fixture.physical("kid", "child", [toolCalls({ name: "hold", args: {} }), context => answer(`USERS ${context.messages.filter(m => m.role === "user").map(text).join(" | ")}`)]);
   let bus: ExtensionAPI["events"] | undefined;
   const h = await startHost([], [], { factories: [pi => { bus = pi.events; }] });
-  h.setResponses([calls(spawn("busy")), answer("SPAWNED")]);
+  h.setResponses([toolCalls(spawn("busy")), answer("SPAWNED")]);
   await h.session.prompt("Start it.");
   await hold.entered;
   const id = outcomes(h, "Agent")[0]?.text.match(/Agent ID: (\S+)/)?.[1];
@@ -240,7 +241,7 @@ it("another extension cannot steer a running pre-Plan child over RPC while plann
   const completed = fixture.completion();
   hold.release();
   await completed;
-  h.setResponses([calls({ name: "get_subagent_result", args: { agent_id: id, wait: true } }), answer("DONE")]);
+  h.setResponses([toolCalls({ name: "get_subagent_result", args: { agent_id: id, wait: true } }), answer("DONE")]);
   await h.session.prompt("Fetch it.");
   const result = outcomes(h, "get_subagent_result").at(-1)?.text ?? "";
   expect(result).toContain("USERS work | PIVOT");
@@ -250,10 +251,10 @@ it("another extension cannot steer a running pre-Plan child over RPC while plann
 it("stop_subagent stays available while planning and never asks for the subagent gate", async () => {
   fixture = new ScenarioSession();
   const hold = fixture.heldTool();
-  fixture.physical("kid", "child", [calls({ name: "hold", args: {} }), answer("NEVER")]);
+  fixture.physical("kid", "child", [toolCalls({ name: "hold", args: {} }), answer("NEVER")]);
   let gateQueries = 0;
   const h = await startHost([], [], { factories: [pi => { pi.events.on(PLAN_MODE_GATE_QUERY, () => { gateQueries++; }); }] });
-  h.setResponses([calls(spawn("busy")), answer("SPAWNED")]);
+  h.setResponses([toolCalls(spawn("busy")), answer("SPAWNED")]);
   await h.session.prompt("Start it.");
   await hold.entered;
   const id = outcomes(h, "Agent")[0]?.text.match(/Agent ID: (\S+)/)?.[1];
@@ -263,7 +264,7 @@ it("stop_subagent stays available while planning and never asks for the subagent
   await h.session.prompt("/plan start");
   const before = gateQueries;
   expect(before).toBeGreaterThan(0); // the listener sees Plan's own announce
-  h.setResponses([calls({ name: "stop_subagent", args: { agent_id: id } }), answer("STOPPED")]);
+  h.setResponses([toolCalls({ name: "stop_subagent", args: { agent_id: id } }), answer("STOPPED")]);
   await h.session.prompt("Stand it down.");
   const [stopped] = outcomes(h, "stop_subagent");
   expect(stopped?.isError).toBe(false);
@@ -277,7 +278,7 @@ it("a schedule is refused while planning", async () => {
   fixture = new ScenarioSession();
   fixture.physical("kid", "child", []);
   const h = await startPlanning([], []);
-  h.setResponses([calls(spawn("later", { schedule: "+1h" })), answer("P1")]);
+  h.setResponses([toolCalls(spawn("later", { schedule: "+1h" })), answer("P1")]);
   await h.session.prompt("Plan the change.");
   expect(outcomes(h, "Agent")[0]?.text).toBe(PLAN_SCHEDULE_REFUSAL);
 });
@@ -293,7 +294,7 @@ it("a quota-blocked dispatch is not parked while planning", async () => {
   };
   const h = await startHost([], [], { noRouter: true, factories: [blocked] });
   await h.session.prompt("/plan start");
-  h.setResponses([calls(spawn("parked")), answer("P1")]);
+  h.setResponses([toolCalls(spawn("parked")), answer("P1")]);
   await h.session.prompt("Plan the change.");
   const [outcome] = outcomes(h, "Agent");
   expect(outcome?.isError).toBe(true);
@@ -305,7 +306,7 @@ it("a worktree child is refused while planning", async () => {
   fixture = new ScenarioSession();
   fixture.physical("kid", "child", []);
   const h = await startPlanning([], []);
-  h.setResponses([calls(spawn("wt", { isolation: "worktree", run_in_background: false })), answer("P1")]);
+  h.setResponses([toolCalls(spawn("wt", { isolation: "worktree", run_in_background: false })), answer("P1")]);
   await h.session.prompt("Plan the change.");
   expect(outcomes(h, "Agent")[0]?.text).toContain('Cannot run with isolation: "worktree" while Plan mode is active');
 });

@@ -7,8 +7,9 @@ import { join } from "node:path";
 import type { Model, TranscriptContext } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/compat";
 import { fauxAssistantMessage, type Harness } from "@earendil-works/pi-coding-agent/testing";
+import { toolCall } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it, vi } from "vitest";
-import { call, jsonFile } from "./agents-support.ts";
+import { jsonFile } from "./agents-support.ts";
 import { isolateResearchPackages, isolateStackHome, loadThirdParty, startStack } from "./support.ts";
 
 /** The deferred tool `search_tools` promotes; the original reports named `web_enable`, but any promoted tool applies. */
@@ -134,7 +135,7 @@ it("resume after a promoted deferred tool went inactive declares no orphan tool 
 	// Explicit `promotionLifetime: "run"` (the engine default): the engine's agent_settled handler resets promotions after the first run.
 	const h = await start("run");
 	h.setResponses([
-		call("search_tools", { query: "web search capability", limit: 1, kind: "tool" }),
+		toolCall("search_tools", { query: "web search capability", limit: 1, kind: "tool" }),
 		fauxAssistantMessage("done"),
 	]);
 	await h.session.prompt("find a web tool");
@@ -158,8 +159,8 @@ it("continuing a run after demoting a promoted deferred tool declares no orphan 
 	const h = await start("session");
 	let request: TranscriptContext | undefined;
 	h.setResponses([
-		call("search_tools", { query: "web search capability", limit: 1, kind: "tool" }),
-		call("demote_tools", { names: [PROMOTED] }),
+		toolCall("search_tools", { query: "web search capability", limit: 1, kind: "tool" }),
+		toolCall("demote_tools", { names: [PROMOTED] }),
 		(ctx) => {
 			request = ctx;
 			return fauxAssistantMessage("done");

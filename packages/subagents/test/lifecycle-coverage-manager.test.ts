@@ -3,6 +3,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { deferred } from "@nredd/pi-test-lib/deferred";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentManager, markConsumed } from "../src/agent-manager.js";
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
@@ -10,7 +12,6 @@ import { streamToOutputFile } from "../src/output-file.js";
 import * as budget from "../src/process-budget.js";
 import { createWorkflowHost } from "../src/workflow/host.js";
 import * as worktrees from "../src/worktree.js";
-import { FakeClock } from "./helpers/fake-clock.js";
 
 vi.mock("../src/agent-runner.js", () => ({ runAgent: vi.fn(), resumeAgent: vi.fn() }));
 
@@ -42,12 +43,6 @@ function transcriptCleanup(id: string) {
 }
 
 /** A caller-controlled runner boundary, no timer or scheduling assumptions. */
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve };
-}
-
 function managerWithClock(onStart?: ConstructorParameters<typeof AgentManager>[2]) {
   const clock = new FakeClock();
   const onComplete = vi.fn();
