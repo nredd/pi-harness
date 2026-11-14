@@ -3,11 +3,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import type { Harness } from "@earendil-works/pi-coding-agent/testing";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { git } from "@nredd/pi-test-lib/git";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createDevTools } from "../../packages/dev-tools/src/index.ts";
-import { git, runTools } from "../../packages/dev-tools/test/scenarios/support.ts";
+import { runTools } from "../../packages/dev-tools/test/fixtures/session.ts";
 import { createSessionKit } from "../../packages/session-kit/src/index.ts";
-import { ControlledProcesses, configFor, FakeClock } from "../../packages/session-kit/test/scenarios/support.ts";
+import { ControlledProcesses, configFor } from "../../packages/session-kit/test/fixtures/session.ts";
 import { isolateStackHome, loadFork, startStack } from "./support.ts";
 
 const SSH = new URL("../../packages/dev-tools/test/fixtures/ssh/fake-ssh", import.meta.url).pathname;

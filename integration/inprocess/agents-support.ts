@@ -5,12 +5,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import {
-	fauxAssistantMessage,
-	fauxToolCall,
-	getMessageText,
-	type Harness,
-} from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage, getMessageText, type Harness } from "@earendil-works/pi-coding-agent/testing";
+import { toolCall } from "@nredd/pi-test-lib/faux";
 import { expect } from "vitest";
 import { loadFork, startStack } from "./support.ts";
 
@@ -44,11 +40,6 @@ export function jsonFile(path: string, data: unknown): void {
  */
 export function unavailable(name = "\\S+"): RegExp {
 	return new RegExp(`Tool ${name} (not found|is not available)`);
-}
-
-/** One model call, with no test-side dispatch of tools. */
-export function call(name: string, args: Parameters<typeof fauxToolCall>[1]): Step {
-	return fauxAssistantMessage([fauxToolCall(name, args)], { stopReason: "toolUse" });
 }
 
 /** Echo actual child results, including unavailable-tool errors, as its final report. */
@@ -104,7 +95,7 @@ export async function ask(
 ): Promise<string> {
 	const before = h.eventsOfType("tool_execution_end").length;
 	h.setResponses([
-		call("Agent", {
+		toolCall("Agent", {
 			subagent_type: type,
 			description: `run ${type}`,
 			prompt: "work",

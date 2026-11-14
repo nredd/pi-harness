@@ -4,57 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
-import { assertHomeDirectory, type GuardListener, installHomeGuard } from "./home-guard.ts";
 
 const FAILURE_EXIT_STATUS = 1;
 const root = fileURLToPath(new URL("../../../", import.meta.url));
-
-test("matching HOME and homedir pass", () => {
-	expect(() => assertHomeDirectory("matching.test.ts", "/fixture", "/fixture")).not.toThrow();
-});
-
-test("mismatched HOME fails with the file and injection fix", () => {
-	expect(() => assertHomeDirectory("offender.test.ts", "/fixture", "/real-home")).toThrow(
-		/HOMEDIR GUARD: offender.test.ts:.*Inject the home directory/,
-	);
-});
-
-test("missing HOME fails closed", () => {
-	// Passing undefined uses the real env default; remove it only for this pure check.
-	const previous = process.env.HOME;
-	try {
-		delete process.env.HOME;
-		expect(() => assertHomeDirectory("missing.test.ts", undefined, "/real-home")).toThrow(/HOMEDIR GUARD/);
-	} finally {
-		if (previous === undefined) delete process.env.HOME;
-		else process.env.HOME = previous;
-	}
-});
-
-test("installed guard checks setup and both per-test boundaries", () => {
-	const before: GuardListener[] = [];
-	const after: GuardListener[] = [];
-	const hooks = {
-		beforeEach: (listener: GuardListener) => before.push(listener),
-		afterEach: (listener: GuardListener) => after.push(listener),
-	};
-	const context = { task: { file: { filepath: "boundary.test.ts" } } };
-	installHomeGuard("setup.test.ts", hooks);
-	expect([before.length, after.length]).toEqual([1, 1]);
-	for (const listener of [...before, ...after]) expect(() => listener(context)).not.toThrow();
-	const previous = process.env.HOME;
-	try {
-		delete process.env.HOME;
-		expect(() => installHomeGuard(undefined, hooks)).toThrow(/^HOMEDIR GUARD: <unknown test file>:/);
-		expect([before.length, after.length]).toEqual([1, 1]);
-		for (const listener of [...before, ...after]) {
-			expect(() => listener(context)).toThrow(/^HOMEDIR GUARD: boundary\.test\.ts:/);
-		}
-	} finally {
-		if (previous === undefined) delete process.env.HOME;
-		else process.env.HOME = previous;
-	}
-});
 
 test("Bun runs the injected todo setup with the guard active", () => {
 	const home = realpathSync(mkdtempSync(join(tmpdir(), "pi-home-guard-control-")));
@@ -65,7 +17,7 @@ test("Bun runs the injected todo setup with the guard active", () => {
 			`import { mergeConfig } from ${JSON.stringify(join(root, "node_modules/vitest/dist/config.js"))};
 import config from ${JSON.stringify(join(root, "packages/todo/.vitest.config.ts"))};
 export default mergeConfig(config, { test: {
-  setupFiles: [${JSON.stringify(join(root, "integration/inprocess/verification/home-setup.ts"))}],
+  setupFiles: [${JSON.stringify(join(root, "tests/lib/src/home-setup.ts"))}],
   sequence: { setupFiles: "list" }
 } });\n`,
 		);
@@ -110,7 +62,7 @@ test("boundary mismatch", () => { ${boundary === "afterEach" ? mismatch : ""} })
 				config,
 				`export default { test: {
   include: [${JSON.stringify(fixture)}],
-  setupFiles: [${JSON.stringify(join(root, "integration/inprocess/verification/home-setup.ts"))}]
+  setupFiles: [${JSON.stringify(join(root, "tests/lib/src/home-setup.ts"))}]
 } };\n`,
 			);
 			const result = spawnSync(
@@ -138,6 +90,7 @@ test("guarded suites keep the shared setup and launcher in their gates", async (
 		"packages/dev-tools",
 		"packages/subagents",
 		"packages/session-kit",
+		"tests/lib",
 	]) {
 		const manifest = JSON.parse(readFileSync(join(root, directory, "package.json"), "utf8"));
 		// The launcher owns the coverage arguments; launcher.test.ts pins them.
@@ -156,9 +109,7 @@ test("guarded suites keep the shared setup and launcher in their gates", async (
 			join(root, directory, directory === "packages/todo" ? ".vitest.config.ts" : "vitest.config.ts")
 		);
 		expect(config.default.test.setupFiles).toContain(
-			directory === "integration/inprocess"
-				? "./verification/home-setup.ts"
-				: "../../integration/inprocess/verification/home-setup.ts",
+			directory === "tests/lib" ? "./src/home-setup.ts" : "../../tests/lib/src/home-setup.ts",
 		);
 	}
 });

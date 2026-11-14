@@ -2,8 +2,9 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { STATUS } from "@nredd/pi-test-lib/terminal";
 import { expect } from "vitest";
-import { configFor, STATUS, type TerminalFixture } from "./support.ts";
+import { configFor, type TerminalFixture } from "./session.ts";
 
 export const MODELS = [
 	["anthropic", "claude-opus-5-5", 9],

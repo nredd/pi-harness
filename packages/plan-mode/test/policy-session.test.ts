@@ -2,9 +2,10 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createBashTool } from "@earendil-works/pi-coding-agent";
 import { createTestUiContext, fauxAssistantMessage, getMessageText } from "@earendil-works/pi-coding-agent/testing";
+import { settled, toolCall } from "@nredd/pi-test-lib/faux";
 import { expect, test } from "vitest";
 import planMode from "../src/plan-mode.js";
-import { outcomes, SessionFixture, tool } from "./session-support.js";
+import { SessionFixture } from "./session-support.js";
 
 /** Every frozen shell row, replacing only owner directories with fixture trusted roots. */
 async function policyRun() {
@@ -63,12 +64,12 @@ async function policyRun() {
     });
     await harness.session.bindExtensions({ mode: "print", uiContext: createTestUiContext() });
     harness.setResponses([
-      ...[...allowed, ...blocked].map((command) => tool("bash", { command })),
+      ...[...allowed, ...blocked].map((command) => toolCall("bash", { command })),
       fauxAssistantMessage("POLICY DONE"),
     ]);
     await harness.session.prompt("/plan start");
     await harness.session.prompt("go");
-    const results = outcomes(harness, "bash");
+    const results = settled(harness, "bash");
     expect(results.map((result) => result.args.command)).toEqual([...allowed, ...blocked]);
     expect(harness.getPendingResponseCount()).toBe(0);
     return { allowed, blocked, results, executed };

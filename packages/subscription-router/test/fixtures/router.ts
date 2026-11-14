@@ -7,19 +7,16 @@ import {
 	type Harness,
 	registerFauxProvider,
 } from "@earendil-works/pi-coding-agent/testing";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import type { Profile } from "../../src/config.js";
 import { ExhaustionTracker } from "../../src/exhaustion.js";
 import { createSubscriptionRouter } from "../../src/index.js";
 import { type UsageGetOptions, UsageService, type UsageSnapshot } from "../../src/usage.js";
 
 /** Fixed quota time; core retry timing is separately disabled with `baseDelayMs: 0`. */
-export class Clock {
-	private time = Date.parse("2030-01-01T00:00:00Z");
-	now = (): number => this.time;
-
-	/** Advance the quota clock without waiting for wall time. */
-	advance(ms: number): void {
-		this.time += ms;
+export class Clock extends FakeClock {
+	constructor() {
+		super(Date.parse("2030-01-01T00:00:00Z"));
 	}
 }
 

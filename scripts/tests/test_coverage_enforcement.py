@@ -413,6 +413,7 @@ ENFORCED_BUN_PACKAGES = {
     "session-kit",
     "subagents",
     "subscription-router",
+    "test-lib",
     "todo",
     "workflow-examples",
 }
