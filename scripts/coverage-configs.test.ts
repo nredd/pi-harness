@@ -382,7 +382,7 @@ function resolvedShape(producer: Producer, config: { root?: string; test?: Recor
 		Array.isArray(value) ? value.map((path: string) => repoRelative(path)) : repoRelative(value as string);
 	const shape = {
 		...config,
-		...(config.root === undefined ? {} : { root: "." }),
+		...(config.root === undefined ? {} : { root: relative(REPO, config.root) || "." }),
 		test: Object.fromEntries(
 			Object.entries(test).map(([key, value]) => [key, PATH_OPTIONS.has(key) ? paths(value) : value]),
 		),
