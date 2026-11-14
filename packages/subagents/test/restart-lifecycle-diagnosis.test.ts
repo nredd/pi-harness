@@ -46,6 +46,8 @@ it("#330: a fresh stopped child retains its output across a fresh parent activat
 
   // Malformed custom history must not turn session startup into a failure.
   manager.appendCustomEntry("subagents:record", null);
+  // A saved run that left no result text still answers with its metadata alone.
+  manager.appendCustomEntry("subagents:record", { id: "synthetic-empty", type: "general-purpose", description: "no result", status: "completed" });
   const parentFile = manager.getSessionFile();
   if (!parentFile) throw new Error("Parent was not persisted");
   expect(manager.getBranch().some(entry => entry.type === "custom" && entry.customType === "subagents:record")).toBe(true);
@@ -70,6 +72,10 @@ it("#330: a fresh stopped child retains its output across a fresh parent activat
   expect(recovered).not.toContain("Agent not found");
   expect(recovered).toContain("last recorded status: stopped, recovered from saved parent session");
   expect(recovered).toContain(`transcript: ${output}`);
+  expect(recovered).toContain("SYNTHETIC PROGRESS 330"); // the saved result text comes back with the branch (#372)
+  reopened.setResponses([calls({ name: "get_subagent_result", args: { agent_id: "synthetic-empty" } }), answer("LOOKED UP EMPTY")]);
+  await reopened.session.prompt("lookup empty");
+  expect(outcomes(reopened, "get_subagent_result").at(-1)?.text).toMatch(/^Agent "synthetic-empty" \(no result\) last recorded status: completed, recovered from saved parent session[^\n]*$/);
   expect(readFileSync(output, "utf8")).toBe(persisted);
   expect(child.state.callCount).toBe(1);
   reopened.setResponses([

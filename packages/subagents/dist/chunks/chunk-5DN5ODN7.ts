@@ -1747,6 +1747,15 @@ var TRANSCRIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1e3;
 var PRUNE_SCAN_LIMIT = 1e3;
 var PRUNE_CURSOR_FILE = ".prune-cursor";
 var ROOT_MARKER = ".pi-subagents-root";
+function isOwnedDirectory(path) {
+  try {
+    const st = lstatSync2(path);
+    const uid = process.getuid?.();
+    return st.isDirectory() && (uid === void 0 || st.uid === uid);
+  } catch {
+    return false;
+  }
+}
 function prepareRoot(root, adopt) {
   let created = false;
   try {
@@ -1757,6 +1766,7 @@ function prepareRoot(root, adopt) {
   }
   const marker = join6(root, ROOT_MARKER);
   if (created || adopt || existsSync5(marker)) {
+    if (!created && !isOwnedDirectory(root)) return false;
     try {
       chmodSync(root, 448);
     } catch (err) {
@@ -1765,6 +1775,7 @@ function prepareRoot(root, adopt) {
     if (!existsSync5(marker)) writeFileSync(marker, "", "utf-8");
   }
   accessSync(root, constants.R_OK | constants.W_OK | constants.X_OK);
+  return true;
 }
 function defaultTranscriptRoot() {
   const xdg = process.env.XDG_STATE_HOME;
@@ -1775,34 +1786,25 @@ function transcriptDirOverride() {
   const override = process.env.PI_SUBAGENTS_TRANSCRIPT_DIR;
   return override && isAbsolute2(override) ? override : void 0;
 }
-function inspectRoot(path) {
-  let st;
-  try {
-    st = lstatSync2(path);
-  } catch (err) {
-    return err.code === "ENOENT" ? "absent" : false;
-  }
-  const uid = process.getuid?.();
-  return st.isDirectory() && (uid === void 0 || st.uid === uid);
-}
 var freshTempRoot;
 function tempFallbackRoot() {
   const base = tmpdir();
+  try {
+    mkdirSync2(base, { recursive: true });
+  } catch {
+  }
   const uid = process.getuid?.() ?? 0;
-  const hash = createHash("sha256").update(`${uid}:${realpathSync2(base)}`).digest("hex").slice(0, 8);
+  let real = base;
+  try {
+    real = realpathSync2(base);
+  } catch {
+  }
+  const hash = createHash("sha256").update(`${uid}:${real}`).digest("hex").slice(0, 8);
   const plain = join6(base, `pi-subagents-${uid}`);
   for (const root of [plain, `${plain}-${hash}`]) {
-    let state2 = inspectRoot(root);
-    if (state2 === "absent") {
-      prepareRoot(root, true);
-      state2 = inspectRoot(root);
-    }
-    if (state2 === true) {
-      prepareRoot(root, true);
-      return root;
-    }
+    if (prepareRoot(root, true)) return root;
   }
-  if (freshTempRoot?.base !== base || inspectRoot(freshTempRoot.path) !== true) {
+  if (freshTempRoot?.base !== base || !isOwnedDirectory(freshTempRoot.path)) {
     freshTempRoot = { base, path: mkdtempSync(`${plain}-`) };
   }
   prepareRoot(freshTempRoot.path, true);
@@ -1813,8 +1815,7 @@ function transcriptRoot() {
     const override = transcriptDirOverride();
     const root = override ?? defaultTranscriptRoot();
     mkdirSync2(dirname2(root), { recursive: true });
-    prepareRoot(root, override === void 0);
-    return root;
+    if (prepareRoot(root, override === void 0)) return root;
   } catch {
   }
   return tempFallbackRoot();
@@ -4201,10 +4202,27 @@ function retentionMs(name, fallbackMs) {
 }
 var MAX_SWEEP_INTERVAL_MS = 6e4;
 var MIN_SWEEP_INTERVAL_MS = 1e3;
-var MAX_EVICTED_NOTES = 500;
+var MAX_RETAINED_RESULT_CHARS = 32e3;
+var MAX_TOMBSTONES = 5e3;
 function markConsumed(record, now = Date.now()) {
   record.resultConsumed = true;
   record.consumedAt = now;
+}
+function flatCopy(text) {
+  return Buffer.from(text, "utf16le").toString("utf16le");
+}
+function capRetained(text, transcript) {
+  if (text.length <= MAX_RETAINED_RESULT_CHARS) return flatCopy(text);
+  const last = text.charCodeAt(MAX_RETAINED_RESULT_CHARS - 1);
+  const cut = last >= 55296 && last <= 56319 ? MAX_RETAINED_RESULT_CHARS - 1 : MAX_RETAINED_RESULT_CHARS;
+  const where = transcript ? `; full text in ${transcript}` : "";
+  return flatCopy(`${text.slice(0, cut)}
+[truncated ${text.length - cut} chars${where}]`);
+}
+function describeEvictedResult(note) {
+  const text = note.status === "error" ? void 0 : note.result?.trim();
+  if (text) return text;
+  return note.error?.trim() ? `Error: ${note.error}` : void 0;
 }
 function describeEvicted(note) {
   const where = note.transcript ? `; transcript: ${note.transcript}` : "";
@@ -4214,7 +4232,6 @@ ${disclosure}` : "";
   const state2 = note.fromSavedSession ? `last recorded status: ${note.status}, recovered from saved parent session (no live registry record)` : `${note.status}, evicted after ${note.evictedAfterMin} min`;
   return `Agent "${note.id}" (${note.description}) ${state2}${where}${fallback}`;
 }
-var MAX_TOMBSTONES = 100;
 function assertValidSpawnCwd(cwd) {
   if (cwd == null) return;
   if (typeof cwd !== "string" || !isAbsolute5(cwd)) {
@@ -4351,6 +4368,10 @@ var AgentManager = class {
    * completed records on session start/switch.
    */
   tombstones = /* @__PURE__ */ new Map();
+  /** Lowercase handle or alias -> its tombstone, so name checks are lookups, not scans of `tombstones`. */
+  tombstonesByName = /* @__PURE__ */ new Map();
+  /** Id -> tombstone. */
+  tombstonesById = /* @__PURE__ */ new Map();
   /** Evicted records by id, oldest first (insertion order). */
   evictedNotes = /* @__PURE__ */ new Map();
   /** Evicted id -> the id its reopened conversation runs under, so the old id keeps resolving (#330). */
@@ -5335,10 +5356,7 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
       if (record.handle) taken.add(record.handle);
       if (record.alias) taken.add(record.alias);
     }
-    for (const entry of this.tombstones.values()) {
-      taken.add(entry.handle);
-      if (entry.alias) taken.add(entry.alias);
-    }
+    for (const name of this.tombstonesByName.keys()) taken.add(name);
     return taken;
   }
   /**
@@ -5354,12 +5372,8 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
     }
     const byId = this.agents.get(name);
     if (byId?.parentAgentId === void 0 && byId !== void 0) return { kind: "live", record: byId };
-    for (const entry of this.tombstones.values()) {
-      if (entry.handle.toLowerCase() === wanted || entry.alias?.toLowerCase() === wanted || entry.id === name) {
-        return { kind: "tombstone", entry };
-      }
-    }
-    return void 0;
+    const entry = this.tombstonesByName.get(wanted) ?? this.tombstonesById.get(name);
+    return entry ? { kind: "tombstone", entry } : void 0;
   }
   /**
    * Forget an evicted agent, by handle. For the case where its session file has
@@ -5371,7 +5385,13 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
    * when it is itself evicted.
    */
   dropTombstone(handle) {
+    const entry = this.tombstones.get(handle);
+    if (entry) this.unindexTombstone(entry);
     this.tombstones.delete(handle);
+  }
+  /** The tombstone of evicted agent `id`, if it can still be reopened. */
+  tombstoneById(id) {
+    return this.tombstonesById.get(id);
   }
   /** Evicted agents whose conversation can still be reopened, newest first. */
   listTombstones() {
@@ -5462,7 +5482,7 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
     const reserved = new Set(this.reservedHandles());
     const owns = (own, name) => own.id !== entry.id && (name === own.handle || name === own.alias);
     const taken = names.find(
-      (name) => reserved.has(name) || [...this.agents.values()].some((own) => owns(own, name)) || [...this.tombstones.values()].some((own) => owns(own, name))
+      (name) => reserved.has(name) || [...this.agents.values()].some((own) => owns(own, name)) || this.tombstoneHolds(name, entry.id)
     );
     if (taken !== void 0) {
       const note = this.evictedNotes.get(entry.id);
@@ -5471,11 +5491,33 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
     }
     this.storeTombstone(entry);
   }
+  /** Whether a tombstone other than `exceptId`'s holds `name`. */
+  tombstoneHolds(name, exceptId) {
+    const own = this.tombstonesByName.get(name.toLowerCase());
+    return own !== void 0 && own.id !== exceptId;
+  }
+  unindexTombstone(entry) {
+    for (const name of [entry.handle, entry.alias]) {
+      if (name !== void 0 && this.tombstonesByName.get(name.toLowerCase()) === entry) this.tombstonesByName.delete(name.toLowerCase());
+    }
+    if (this.tombstonesById.get(entry.id) === entry) this.tombstonesById.delete(entry.id);
+  }
   storeTombstone(entry) {
+    const replaced = this.tombstones.get(entry.handle);
+    if (replaced) this.unindexTombstone(replaced);
+    this.tombstones.delete(entry.handle);
     this.tombstones.set(entry.handle, entry);
+    this.tombstonesByName.set(entry.handle.toLowerCase(), entry);
+    if (entry.alias) this.tombstonesByName.set(entry.alias.toLowerCase(), entry);
+    this.tombstonesById.set(entry.id, entry);
     while (this.tombstones.size > MAX_TOMBSTONES) {
-      const oldest = [...this.tombstones.values()].reduce((a, b) => a.completedAt <= b.completedAt ? a : b);
-      this.tombstones.delete(oldest.handle);
+      for (const [handle, oldest] of this.tombstones) {
+        this.unindexTombstone(oldest);
+        this.tombstones.delete(handle);
+        const note = this.evictedNotes.get(oldest.id);
+        if (note) note.tombstoneBoundSession = oldest.sessionFile;
+        break;
+      }
     }
   }
   /** Remember that `record` existed, so its id still answers with something better than "not found". */
@@ -5489,37 +5531,36 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
   }
   /** What a settled record leaves behind once it is gone from this manager. */
   evictionNote(record) {
+    const transcript = record.outputFile ?? record.sessionFile;
     return {
       id: record.id,
       type: record.type,
       description: record.description,
       status: record.status,
       evictedAfterMin: Math.max(0, Math.round((this.clock.now() - record.completedAt) / 6e4)),
-      transcript: record.outputFile ?? record.sessionFile,
+      transcript,
+      ...record.result !== void 0 ? { result: capRetained(record.result, transcript) } : {},
+      ...record.error !== void 0 ? { error: capRetained(record.error, transcript) } : {},
       ...record.modelTier ? { modelTier: record.modelTier } : {},
       ...record.modelFallback ? { modelFallback: record.modelFallback } : {}
     };
   }
   /**
-   * Keep `note` addressable by its id, bounded by age. Also how a result handed
+   * Keep `note` addressable by its id for the session. Also how a result handed
    * over by an orphaned manager (`/new`, `/reload`) stays answerable here: the
    * record settled in a manager this one never saw (#330).
    */
   rememberEvicted(note) {
     const existing = this.evictedNotes.get(note.id);
     if (note.fromSavedSession && existing && !existing.fromSavedSession) return;
+    if (existing?.tombstoneBoundSession && !note.tombstoneBoundSession) note.tombstoneBoundSession = existing.tombstoneBoundSession;
     this.evictedNotes.delete(note.id);
     this.evictedNotes.set(note.id, note);
-    if (this.evictedNotes.size > MAX_EVICTED_NOTES) {
-      const historical = [...this.evictedNotes].find(([, entry]) => entry.fromSavedSession)?.[0];
-      this.evictedNotes.delete(historical ?? this.evictedNotes.keys().next().value);
-    }
   }
-  /** Record that evicted `id` was reopened as `next`; bounded like the eviction notes. */
+  /** Record that evicted `id` was reopened as `next`. */
   linkSuccessor(id, next) {
     this.successors.delete(id);
     this.successors.set(id, next);
-    if (this.successors.size > MAX_EVICTED_NOTES) this.successors.delete(this.successors.keys().next().value);
   }
   /** Forget a reopen that never started, so `id` resolves to its tombstone again. */
   unlinkSuccessor(id) {
@@ -5567,6 +5608,8 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
       this.removeRecord(id, record);
     }
     this.tombstones.clear();
+    this.tombstonesByName.clear();
+    this.tombstonesById.clear();
     this.evictedNotes.clear();
     this.successors.clear();
   }
@@ -6962,6 +7005,8 @@ export {
   getBudgetPolicy,
   setBudgetPolicy,
   markConsumed,
+  capRetained,
+  describeEvictedResult,
   describeEvicted,
   isTopLevelAgent,
   AgentManager,
@@ -6992,4 +7037,4 @@ export {
   RESULT_MAX_CHARS,
   ConversationViewer
 };
-//# sourceMappingURL=chunk-2CLVI5OF.ts.map
+//# sourceMappingURL=chunk-5DN5ODN7.ts.map

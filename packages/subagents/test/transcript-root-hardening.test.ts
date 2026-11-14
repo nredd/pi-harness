@@ -276,6 +276,12 @@ describe("temp fallback root", () => {
     expect(statSync(victim).mode & 0o777).toBe(0o755);
   });
 
+  it("refuses a root that vanishes before it can be inspected", () => {
+    mkdirSync(join(fakeTmp.dir, `pi-subagents-${UID}`));
+    lstatCalls.vanish = `pi-subagents-${UID}`;
+    expect(transcriptRoot()).toBe(hashed());
+  });
+
   it("creates a missing tmpdir instead of throwing", () => {
     const real = fakeTmp.dir;
     fakeTmp.dir = join(real, "gone");

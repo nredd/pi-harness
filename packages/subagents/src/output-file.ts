@@ -129,7 +129,9 @@ let freshTempRoot: { base: string; path: string } | undefined;
  */
 export function tempFallbackRoot(): string {
   const base = tmpdir();
-  mkdirSync(base, { recursive: true });
+  try {
+    mkdirSync(base, { recursive: true });
+  } catch { /* a non-directory tmpdir fails below with the real error */ }
   const uid = process.getuid?.() ?? 0;
   let real = base;
   try {

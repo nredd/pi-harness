@@ -25,6 +25,7 @@ import {
   bindChildResourceLoader,
   boundedWrappedRows,
   buildInvocationTags,
+  capRetained,
   checkAdmission,
   compactThinkingTag,
   configuredTierNames,
@@ -34,6 +35,7 @@ import {
   describeActivity,
   describeBlock,
   describeEvicted,
+  describeEvictedResult,
   describeMention,
   describeModelCall,
   describeSelection,
@@ -152,7 +154,7 @@ import {
   toReportedUsage,
   withLeadingFlag,
   writeInitialEntry
-} from "./chunks/chunk-2CLVI5OF.ts";
+} from "./chunks/chunk-5DN5ODN7.ts";
 
 // src/index.ts
 import { existsSync as existsSync7, mkdirSync as mkdirSync4, readFileSync as readFileSync7, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "node:fs";
@@ -841,7 +843,9 @@ function savedAgentNote(data) {
     status: row.status,
     evictedAfterMin: 0,
     fromSavedSession: true,
-    ...transcript ? { transcript } : {}
+    ...transcript ? { transcript } : {},
+    ...typeof row.result === "string" ? { result: capRetained(row.result, transcript) } : {},
+    ...typeof row.error === "string" ? { error: capRetained(row.error, transcript) } : {}
   };
 }
 
@@ -4131,7 +4135,7 @@ var WorkflowDialog = class {
 
 // src/ui/workflow-menu.ts
 async function showWorkflowDialog(ctx, task, deps) {
-  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-CUFW6AJ4.ts");
+  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-37H4DZNN.ts");
   let overlay;
   await ctx.ui.custom(
     (tui, theme, _keybindings, done) => new WorkflowDialog(
@@ -7102,7 +7106,7 @@ Full transcript available at: ${record.outputFile}` : "";
   }, (note) => {
     pi.sendMessage({
       customType: "subagent-reaped",
-      content: `${describeEvicted(note)}. Its result was never read and its record is gone; reopen it with steer_subagent or Agent resume if its session is still saved.`,
+      content: describeEvictedResult(note) === void 0 ? `${describeEvicted(note)}. Its result was never read and its record is gone; it left no result text. Reopen it with steer_subagent or Agent resume if its session is still saved.` : `${describeEvicted(note)}. Its result was never read and its record is gone, but get_subagent_result still returns its result (capped); reopening it with steer_subagent or Agent resume is optional and needs its session to be saved.`,
       display: true
     }, { deliverAs: "nextTurn" });
   });
@@ -8148,10 +8152,10 @@ Terse command-style prompts produce shallow, generic work.
 `;
         const existing = manager.getRecord(latest);
         if (!existing) {
-          const entry = manager.listTombstones().find((t) => t.id === latest);
+          const entry = manager.tombstoneById(latest);
           if (!entry) {
             const note = manager.getEvictedNote(latest);
-            const gone = note?.fromSavedSession ? "only historical metadata is available; reopen the recorded session manually." : note?.nameTaken ? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.` : "no saved session is left to reopen.";
+            const gone = note?.fromSavedSession ? "only historical metadata is available; reopen the recorded session manually." : note?.tombstoneBoundSession ? `dropped by the per-session tombstone bound; reopen ${note.tombstoneBoundSession} manually.` : note?.nameTaken ? `its name "${note.nameTaken}" now belongs to another agent, so its saved session was not kept reopenable.` : "no saved session is left to reopen.";
             const why = note ? `Cannot resume agent "${latest}": ${gone}
 ${describeEvicted(note)}` : agentNotFound(latest);
             return textResult(`${continued}${why}`);
@@ -8784,9 +8788,12 @@ To iterate, edit the script file and call SubagentWorkflow again with scriptPath
       fleet.update();
     });
   }
-  function agentNotFound(ref) {
+  function agentNotFound(ref, withResult = false) {
     const note = manager.getEvictedNote(ref);
-    return note ? describeEvicted(note) : `Agent not found: "${ref}". It may have been cleaned up.`;
+    const result = withResult && note ? describeEvictedResult(note) : void 0;
+    return note ? describeEvicted(note) + (result ? `
+
+${result}` : "") : `Agent not found: "${ref}". It may have been cleaned up.`;
   }
   registerToolReportingUsage(defineTool({
     name: SUBAGENT_TOOL_NAMES.GET_RESULT,
@@ -8810,7 +8817,7 @@ To iterate, edit the script file and call SubagentWorkflow again with scriptPath
     }),
     execute: async (_toolCallId, params, signal, _onUpdate, _ctx) => {
       const record = resolveAgentRef(params.agent_id);
-      if (!record || !isTopLevelAgent(record)) return textResult(agentNotFound(params.agent_id));
+      if (!record || !isTopLevelAgent(record)) return textResult(agentNotFound(params.agent_id, !record));
       if (params.wait && (record.status === "running" || record.status === "queued")) {
         while (record.status === "queued") {
           await abortable(record.startGate ?? new Promise((resolve) => clock.setTimeout(resolve, QUEUE_WAIT_POLL_MS)), signal);
