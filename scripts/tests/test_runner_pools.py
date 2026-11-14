@@ -106,26 +106,49 @@ def test_pool_capacity_needs_a_live_beat_and_a_trusted_event() -> None:
 @pytest.mark.parametrize(
     ("beat", "capacity"),
     [
-        (f"{FRESH}:2", 3),  # two free plus the one queued cell the pool allows
-        (f"{FRESH}:0", 1),  # full, but one may wait
-        (f"{FRESH}:-1", 0),  # one already waits: the allowed queue is taken
-        (f"{FRESH}:-5", 0),  # deeper backlog never goes negative
+        (f"{FRESH}:2", 3),  # two free plus the queue allowance, held to the per-run cap
+        (f"{FRESH}:0", 3),  # full: four may wait, one run still takes at most three
+        (f"{FRESH}:-1", 3),  # one already waits: three more allowed
+        (f"{FRESH}:-3", 1),  # three wait: one more
+        (f"{FRESH}:-4", 0),  # the allowed queue is taken
+        (f"{FRESH}:-9", 0),  # deeper backlog never goes negative
         (f"{FRESH}:drain", None),  # draining: starts nothing, so nothing may be queued on it
         ("0", None),
     ],
 )
-def test_a_queue_depth_pool_allows_one_waiting_cell_and_no_more(beat: str, capacity: int | None) -> None:
-    """The macOS pool lets one cell wait beyond its free slots; the backlog the pool reports caps it."""
+def test_a_busy_macos_pool_queues_a_bounded_run_share(beat: str, capacity: int | None) -> None:
+    """The macOS pool queues up to `queue_depth` cells, a run takes at most `run_cap`, the backlog caps it."""
     got = runner_pools.pool_capacity({"pi-macos": beat}, NOW, trusted=True)
     assert got.get("pi-macos") == capacity
 
 
-def test_assign_cells_gives_a_pool_one_cell_beyond_its_free_slots(table: dict[Any, int]) -> None:
-    """With the pool full (capacity 1 from depth alone), the longest macOS cell queues; no more."""
-    running = [("owned", "macos-14", "ts"), ("owned", "macos-14", "python")]
+def test_a_run_always_keeps_hosted_macos_cells_while_the_pool_is_idle_or_busy(table: dict[Any, int]) -> None:
+    """Heavy macOS cells split across BOTH pools: at most `run_cap` self-hosted, the rest `xcode-27`."""
+    for beat in (f"{FRESH}:2", f"{FRESH}:0", f"{FRESH}:-1"):
+        capacity = runner_pools.pool_capacity({"pi-macos": beat}, NOW, trusted=True)
+        runners = plan_runners(full_plan(capacity=capacity))
+        macos = {
+            k: v for k, v in runners.items() if k[1] == "macos-14" and k[0] in {"owned", "contracts", "stack"}
+        }
+        pooled = [k for k, v in macos.items() if v == "pi-macos"]
+        hosted = [k for k, v in macos.items() if v == "xcode-27" or (k[0] != "owned" and v == "")]
+        assert len(pooled) == MACOS.run_cap
+        assert len(hosted) >= 1
+    saturated = runner_pools.pool_capacity({"pi-macos": f"{FRESH}:-4"}, NOW, trusted=True)
+    assert "pi-macos" not in set(plan_runners(full_plan(capacity=saturated)).values())
+
+
+def test_assign_cells_queues_the_longest_macos_cells_on_a_full_pool(table: dict[Any, int]) -> None:
+    """With the pool full, depth alone takes the longest cells, longest first; a deep backlog takes none."""
+    running = [("owned", "macos-14", "ts"), ("owned", "macos-14", "python"), ("contracts", "macos-14", "")]
     full = runner_pools.pool_capacity({"pi-macos": f"{FRESH}:0"}, NOW, trusted=True)
-    assert runner_pools.assign_cells(running, full) == {("owned", "macos-14", "ts"): "pi-macos"}
-    backlog = runner_pools.pool_capacity({"pi-macos": f"{FRESH}:-1"}, NOW, trusted=True)
+    assert runner_pools.assign_cells(running, full) == dict.fromkeys(running, "pi-macos")
+    two = {"pi-macos": 2}
+    assert set(runner_pools.assign_cells(running, two)) == {
+        ("owned", "macos-14", "python"),
+        ("owned", "macos-14", "ts"),
+    }
+    backlog = runner_pools.pool_capacity({"pi-macos": f"{FRESH}:-4"}, NOW, trusted=True)
     assert runner_pools.assign_cells(running, backlog) == {}
 
 
@@ -371,7 +394,7 @@ def test_main_routes_with_fresh_beats_and_never_with_no_pools(tmp_path: Path) ->
     stale = plan_with(tmp_path, "c", "--pool-heartbeat", "pi-macos=0", "--pool-heartbeat", "pi-linux=")
     assert set(cell_runners(stale, "owned (macos-14)").values()) == {"xcode-27"}
     full = plan_with(
-        tmp_path, "e", "--pool-heartbeat", f"pi-linux={beat}:0", "--pool-heartbeat", f"pi-macos={beat}:-1"
+        tmp_path, "e", "--pool-heartbeat", f"pi-linux={beat}:0", "--pool-heartbeat", f"pi-macos={beat}:-4"
     )
     assert full == stale == blocked == plan_with(tmp_path, "d")
 

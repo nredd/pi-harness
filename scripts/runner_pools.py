@@ -39,19 +39,24 @@ class Pool:
         queue_depth (int): Cells beyond its free slots a run may still queue on the pool. Zero keeps a
             pool strict; a positive depth pays off where the hosted runner of that OS queues for longer
             than a slot takes to free up (macOS), and is bounded by the backlog the pool reports.
+        run_cap (int): Most cells one run may take, 0 for no cap. Keeps part of a run hosted, so both
+            pools work at once instead of one run emptying the self-hosted queue into the other's idle time.
     """
 
     label: str
     variable: str
     slots: int
     queue_depth: int = 0
+    run_cap: int = 0
 
 
-# Hosted macOS queues for ~10 minutes (median, 17 jobs), so one waiting cell per pool beats going hosted;
-# hosted Linux queues for seconds, so Linux stays strict.
+# Hosted macOS jobs wait a median 215 s but p90 ~1 h under load (156 jobs, 2026-11-13), while `pi-macos` jobs
+# started in a median 30 s (p90 141 s). A busy `pi-macos` therefore queues up to four cells beyond its slots
+# (about one cell-length of wait at three runners), and one run takes at most three, so the other heavy
+# cells still use the hosted runners. Hosted Linux queues for seconds, so Linux stays strict.
 POOLS = {
     "pi-linux": Pool("pi-linux", "PI_LINUX_HEARTBEAT", 2),
-    "pi-macos": Pool("pi-macos", "PI_MACOS_HEARTBEAT", 2, queue_depth=1),
+    "pi-macos": Pool("pi-macos", "PI_MACOS_HEARTBEAT", 2, queue_depth=4, run_cap=3),
     # One ARM64 WSL2 slot and strict: nothing else can run that guest, and the hosted x64 `windows-2025`
     # cell keeps the required check names green whenever the pool is down or busy.
     "pi-wsl2": Pool("pi-wsl2", "PI_WSL2_HEARTBEAT", 1),
@@ -206,17 +211,25 @@ def pool_capacity(heartbeats: Mapping[str, str], now: float, *, trusted: bool) -
             no pool, whatever the heartbeats say.
 
     Returns:
-        dict[str, int]: Pool name -> free slots plus the pool's `queue_depth`, floored at 0, for every
-            pool that is up (a live, full pool maps to 0 unless it allows queueing); empty when
-            `trusted` is false. Because the reported free count is negative while jobs already wait,
-            concurrent runs cannot pile more than `queue_depth` cells on a pool between two beats.
+        dict[str, int]: Pool name -> free slots plus the pool's `queue_depth`, floored at 0 and capped at its
+            `run_cap` when it has one, for every pool that is up (a live, full pool maps to 0 unless it
+            allows queueing); empty when `trusted` is false. Because the reported free count is negative
+            while jobs already wait, concurrent runs cannot pile more than `queue_depth` cells on a pool
+            between two beats.
     """
     if not trusted:
         return {}
     capacity = {name: free_slots(heartbeats.get(name, ""), now, pool) for name, pool in POOLS.items()}
     return {
-        name: max(0, free + POOLS[name].queue_depth) for name, free in capacity.items() if free is not None
+        name: _cap(max(0, free + POOLS[name].queue_depth), POOLS[name].run_cap)
+        for name, free in capacity.items()
+        if free is not None
     }
+
+
+def _cap(cells: int, run_cap: int) -> int:
+    """Return `cells` limited to `run_cap`, where 0 means no limit."""
+    return min(cells, run_cap) if run_cap else cells
 
 
 def assign_cells(running: Iterable[CellKey], capacity: Mapping[str, int]) -> dict[CellKey, str]:
