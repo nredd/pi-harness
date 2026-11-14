@@ -46,7 +46,7 @@ Three things in there matter.
 
 **`Task ID`** is what `resumeFromRunId` takes, and what `/agents → Workflows` lists the run under.
 
-**`Script`** is the file to edit. **It is a scratch file in the pi-subagents state directory (`$XDG_STATE_HOME/pi-subagents`), not in your project** — it survives a reboot but is deleted after 30 days without activity. If the workflow turns out to be worth keeping, copy it somewhere durable; see [Save it](#5-save-it). The path means something slightly different depending on how the run was started: for an inline script it is a copy the tool just wrote, and for a run started from `scriptPath` or `name` it is *your own file*, reported straight back.
+**`Script`** is the file to edit. **It is a scratch file in the pi-subagents state directory (`$XDG_STATE_HOME/pi-subagents`, or `PI_SUBAGENTS_TRANSCRIPT_DIR`), not in your project** — it survives a reboot but is deleted after 30 days without activity. If the workflow turns out to be worth keeping, copy it somewhere durable; see [Save it](#5-save-it). The path means something slightly different depending on how the run was started: for an inline script it is a copy the tool just wrote, and for a run started from `scriptPath` or `name` it is *your own file*, reported straight back.
 
 **The last line is addressed to the model, not to you.** You do not call `SubagentWorkflow` yourself — you tell the model to re-run the workflow at that path.
 

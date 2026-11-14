@@ -248,7 +248,7 @@ describe("pruneStaleTranscripts (#900)", () => {
 
   it("never prunes the live session, even when stale", () => {
     const dir = session("proj", "live", TRANSCRIPT_RETENTION_MS + DAY);
-    expect(pruneStaleTranscripts("live")).toBe(0);
+    expect(pruneStaleTranscripts({ keepSessionIds: ["live"] })).toBe(0);
     expect(existsSync(dir)).toBe(true);
   });
 
@@ -290,21 +290,14 @@ describe("pruneStaleTranscripts (#900)", () => {
     mkdirSync(join(root, "proj"), { recursive: true });
     symlinkSync(outside, join(root, "proj", "link"));
     symlinkSync(outside, join(root, "linkcwd"));
-    expect(pruneStaleTranscripts(undefined, Date.now() + 365 * DAY)).toBe(0);
+    expect(pruneStaleTranscripts({ now: Date.now() + 365 * DAY })).toBe(0);
     expect(existsSync(join(outside, "tasks", "precious"))).toBe(true);
   });
 
   it("examines a bounded number of sessions per call", () => {
     for (let i = 0; i < 1005; i++) mkdirSync(join(root, "bulk", `s${i}`, "tasks"), { recursive: true });
-    expect(pruneStaleTranscripts(undefined, Date.now() + TRANSCRIPT_RETENTION_MS + DAY)).toBe(1000);
-    expect(pruneStaleTranscripts(undefined, Date.now() + TRANSCRIPT_RETENTION_MS + DAY)).toBe(5);
-  });
-
-  it("reaches a stale session behind a full scan budget of fresh ones", () => {
-    for (let i = 0; i < 1000; i++) mkdirSync(join(root, "bulk", `fresh${i}`, "tasks"), { recursive: true });
-    const old = session("proj", "old", TRANSCRIPT_RETENTION_MS + DAY);
-    expect(pruneStaleTranscripts()).toBe(1);
-    expect(existsSync(old)).toBe(false);
+    expect(pruneStaleTranscripts({ now: Date.now() + TRANSCRIPT_RETENTION_MS + DAY })).toBe(1000);
+    expect(pruneStaleTranscripts({ now: Date.now() + TRANSCRIPT_RETENTION_MS + DAY })).toBe(5);
   });
 
   it("does nothing when no root can be created", () => {

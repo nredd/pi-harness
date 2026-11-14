@@ -109,7 +109,6 @@ import {
   planSteerBlocked,
   planSteerRefusal,
   planningNow,
-  pruneStaleTranscripts,
   readEnabledModels,
   realClock,
   registerAgents,
@@ -123,8 +122,10 @@ import {
   resolveSpawnType,
   resolveType,
   resumeHint,
+  retainReferencedTranscripts,
   runInChildSessionContext,
   safeReadFile,
+  schedulePrune,
   selectModel,
   sessionTaskDir,
   setAgentModels,
@@ -151,7 +152,7 @@ import {
   toReportedUsage,
   withLeadingFlag,
   writeInitialEntry
-} from "./chunks/chunk-UTWE64WY.ts";
+} from "./chunks/chunk-OE5LJ6BZ.ts";
 
 // src/index.ts
 import { existsSync as existsSync7, mkdirSync as mkdirSync4, readFileSync as readFileSync7, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "node:fs";
@@ -4130,7 +4131,7 @@ var WorkflowDialog = class {
 
 // src/ui/workflow-menu.ts
 async function showWorkflowDialog(ctx, task, deps) {
-  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-SSS5EEHQ.ts");
+  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-5QDVOMOS.ts");
   let overlay;
   await ctx.ui.custom(
     (tui, theme, _keybindings, done) => new WorkflowDialog(
@@ -7177,7 +7178,6 @@ Full transcript available at: ${record.outputFile}` : "";
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
     restoreFleetDisclosure(ctx);
-    pruneStaleTranscripts(ctx.sessionManager.getSessionId());
     setProjectTrusted(ctx.isProjectTrusted?.() === true);
     invalidatePackageCache();
     const strictLoad = strictAgentFiles && !canonicalAgentsLoaded;
@@ -7217,6 +7217,10 @@ Full transcript available at: ${record.outputFile}` : "";
     for (const note of saved.values()) {
       if (!resolveAgentRef(note.id) && !manager.getEvictedNote(note.id)) manager.rememberEvicted(note);
     }
+    const referenced = [...[...saved.values()].map((n) => n.transcript), ...manager.listAgents().map((r) => r.outputFile)].filter((path) => path !== void 0);
+    schedulePrune({
+      keepSessionIds: [ctx.sessionManager.getSessionId(), ...retainReferencedTranscripts(referenced, ctx.sessionManager?.getHeader?.()?.parentSession)]
+    });
     announceSurvivors();
     unwatchAnnounce ??= pi.events.on("subagents:announce_survivors", announceSurvivors);
     fleet.update();
@@ -8033,7 +8037,7 @@ Terse command-style prompts produce shallow, generic work.
       const attachTranscript = (rec, agentId) => {
         if (!rec || !outputTranscript) return;
         rec.outputFile = createOutputFilePath(ctx.cwd, agentId, ctx.sessionManager.getSessionId());
-        writeInitialEntry(rec.outputFile, agentId, params.prompt, ctx.cwd);
+        rec.outputFile = writeInitialEntry(rec.outputFile, agentId, params.prompt, ctx.cwd);
       };
       const { modelName, modelId } = describeSelection(selection, ctx.modelRegistry);
       const effectiveMaxTurns = normalizeMaxTurns(resolvedConfig.maxTurns ?? getDefaultMaxTurns());

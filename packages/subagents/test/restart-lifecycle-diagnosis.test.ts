@@ -1,6 +1,6 @@
 /** Synthetic #330 diagnosis: distinguish activation reload, terminal stop and process-state loss. */
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, statSync, utimesSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
 import { afterEach, expect, it } from "vitest";
@@ -55,7 +55,15 @@ it("#330: a fresh stopped child retains its output across a fresh parent activat
   expect(readFileSync(output, "utf8")).toBe(persisted);
 
   // Fresh extension + manager, same saved parent: no old registry or detached survivor is retained.
+  // #900: the saved note still points at this transcript, so reopening keeps it past retention.
+  const tasksDir = dirname(output);
+  const stale = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+  for (const path of [output, tasksDir, dirname(tasksDir)]) utimesSync(path, stale, stale);
   const reopened = await fixture.start({ harness: { sessionManager: SessionManager.open(parentFile) } });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(existsSync(output)).toBe(true);
+  expect(Date.now() - statSync(dirname(tasksDir)).mtimeMs).toBeLessThan(60 * 1000);
   reopened.setResponses([calls({ name: "get_subagent_result", args: { agent_id: id } }), answer("LOOKED UP")]);
   await reopened.session.prompt("lookup");
   const recovered = outcomes(reopened, "get_subagent_result")[0]?.text ?? "";

@@ -54,7 +54,7 @@ import { admitModelSelection, describeSelection, modelIdentityNote, modelSelecti
 import { configuredTierNames, tierDisclosure } from "./model-tiers.js";
 import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.js";
 import { clipNotice, DEFAULT_NOTIFICATION_RESULT_CHARS, fairShares, GROUP_PREVIEW_RESULT_CHARS, NOTIFICATION_RESULT_CHARS_CEILING, type NoticeFrame, type NoticeParts, PREVIEW_RESULT_CHARS, previewResult, renderNotice } from "./notification-result.js";
-import { appendModelFallbackEntry, appendModelTierEntry, createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, pruneStaleTranscripts, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
+import { appendModelFallbackEntry, appendModelTierEntry, createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, retainReferencedTranscripts, schedulePrune, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
 import { getPackageAgentsGate, getPackageWorkflowsGate, invalidatePackageCache, isProjectTrusted, packageNameForPath, setPackageAgentsGate, setPackageWorkflowsGate, setProjectTrusted } from "./package-resources.js";
 import { answerPlanGateQueries, PLAN_PARK_REFUSAL, PLAN_SCHEDULE_REFUSAL, planningNow, planSteerBlocked, planSteerRefusal } from "./plan-mode-children.js";
 import { getBudgetPolicy, setBudgetPolicy } from "./process-budget.js";
@@ -1164,8 +1164,6 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
     restoreFleetDisclosure(ctx);
-    // Bounded retention for the state-dir transcripts (#900); the live session is exempt.
-    pruneStaleTranscripts(ctx.sessionManager.getSessionId());
     // Pi resolves project trust before the first session starts, so this is the
     // earliest honest answer. The activation-time load defaulted to untrusted,
     // so a trusted project's `packages[]` only becomes visible now.
@@ -1220,6 +1218,13 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
     for (const note of saved.values()) {
       if (!resolveAgentRef(note.id) && !manager.getEvictedNote(note.id)) manager.rememberEvicted(note);
     }
+    // Retention (#900), off the startup path: whatever this session's records and
+    // eviction notes (or its fork source) still point at is touched and exempted.
+    const referenced = [...[...saved.values()].map((n) => n.transcript), ...manager.listAgents().map((r) => r.outputFile)]
+      .filter((path): path is string => path !== undefined);
+    schedulePrune({
+      keepSessionIds: [ctx.sessionManager.getSessionId(), ...retainReferencedTranscripts(referenced, ctx.sessionManager?.getHeader?.()?.parentSession)],
+    });
     announceSurvivors();
     unwatchAnnounce ??= pi.events.on("subagents:announce_survivors", announceSurvivors);
     // Orphans from the previous instance are already registered; show them now.
@@ -2499,7 +2504,7 @@ Terse command-style prompts produce shallow, generic work.
       const attachTranscript = (rec: AgentRecord | undefined, agentId: string): void => {
         if (!rec || !outputTranscript) return;
         rec.outputFile = createOutputFilePath(ctx.cwd, agentId, ctx.sessionManager.getSessionId());
-        writeInitialEntry(rec.outputFile, agentId, params.prompt, ctx.cwd);
+        rec.outputFile = writeInitialEntry(rec.outputFile, agentId, params.prompt, ctx.cwd);
       };
 
       // Unconditional, not "only when it differs from the parent": a thinking
