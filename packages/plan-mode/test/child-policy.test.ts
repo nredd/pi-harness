@@ -53,7 +53,7 @@ test("Plan mode answers state queries with a frozen child policy while planning"
   assert.equal(evaluate(call("bash", builtinTool("bash"), { command: "git status" })), undefined);
   assert.equal(
     evaluate(call("bash", builtinTool("bash"), { command: "rm -rf x" })),
-    "Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.\nBlocked command: rm -rf x",
+    "Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.\nBlocked command: rm -rf x\nOffending token: rm (mutating command)",
   );
   // A child's own safe built-ins run even when the planner never activated them.
   assert.equal(evaluate(call("grep", builtinTool("grep"))), undefined);
