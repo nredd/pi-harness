@@ -495,11 +495,13 @@ export interface ToolActivity {
   toolName: string;
 }
 
-/** Physical model identity carried by an assistant message. */
+/** Physical model identity, and the thinking level the request ran at, carried by an assistant message. */
 export interface AssistantMessageInfo {
   api?: string;
   provider?: string;
   model?: string;
+  /** Effective level of that request, after core clamped it to the physical model. Absent on legacy messages. */
+  thinkingLevel?: ThinkingLevel;
 }
 
 export interface RunOptions {
