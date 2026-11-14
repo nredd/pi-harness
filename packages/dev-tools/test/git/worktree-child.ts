@@ -4,11 +4,11 @@
  * in-process lock map. argv: repo branch path [startAtEpochMs]
  */
 import { registerGitTools } from "../../src/git/index.ts";
-import { createMockPi } from "../support.ts";
+import { createToolHost } from "../support.ts";
 
 const [repo, branch, path, startAt] = process.argv.slice(2);
 if (!repo || !branch || !path) throw new Error("usage: worktree-child <repo> <branch> <path> [startAt]");
-const mock = createMockPi();
+const mock = createToolHost();
 registerGitTools(mock.pi);
 // Line the children up so they really race.
 const wait = Number(startAt ?? 0) - Date.now();

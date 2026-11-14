@@ -21,9 +21,9 @@ const { createResourceSampler } = await import("@nredd/pi-resource-sampler");
 const { registerResourceTools } = await import(
 	pathToFileURL(new URL("../src/resource/index.ts", import.meta.url).pathname)
 );
-const { createMockPi } = await import(pathToFileURL(new URL("./support.ts", import.meta.url).pathname));
+const { createToolHost } = await import(pathToFileURL(new URL("./support.ts", import.meta.url).pathname));
 const samples = [];
-const mock = createMockPi();
+const mock = createToolHost();
 registerResourceTools(mock.pi, {
 	createSampler(options) {
 		const sampler = createResourceSampler(options);

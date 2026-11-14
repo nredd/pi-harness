@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { registerGitTools } from "../../src/git/index.ts";
 import { HOOK_RUNNER, prepareMerge } from "../../src/git/merge.ts";
-import { createMockPi } from "../support.ts";
+import { createToolHost } from "../support.ts";
 
 const ENV = {
 	...process.env,
@@ -28,7 +28,7 @@ function git(cwd: string, args: string[]): string {
 	return execFileSync("git", ["-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8", env: ENV }).trim();
 }
 
-const mock = createMockPi();
+const mock = createToolHost();
 beforeAll(() => registerGitTools(mock.pi));
 const roots: string[] = [];
 afterEach(() => {
