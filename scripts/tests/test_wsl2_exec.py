@@ -56,3 +56,22 @@ def test_terminate_exits_with_the_shell_status_for_the_signal() -> None:
     with pytest.raises(SystemExit) as raised:
         terminate(signal.SIGTERM, None)
     assert raised.value.code == 143
+
+
+def test_quiet_discards_stderr_and_start_failures_and_cwd_moves_the_child(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """`quiet` is `2>/dev/null` for both the child and the 127 message; `cwd` is the child's directory."""
+    code = "import sys; sys.stderr.write('noise'); print('ok')"
+    assert run_command([sys.executable, "-c", code], subprocess.run, capture=True, quiet=True) == (0, "ok\n")
+    assert run_command([str(tmp_path / "no-such-tool")], subprocess.run, quiet=True) == (127, "")
+    assert capfd.readouterr().err == ""
+    pwd = "import os; print(os.getcwd())"
+    status, out = run_command([sys.executable, "-c", pwd], subprocess.run, capture=True, cwd=tmp_path)
+    assert (status, Path(out.strip()).resolve()) == (0, tmp_path.resolve())
+
+
+def test_undecodable_output_is_kept_not_raised() -> None:
+    """Kernel logs and `/proc` text can hold arbitrary bytes; they survive as surrogates."""
+    code = "import sys; sys.stdout.buffer.write(b'a\\xffb')"
+    assert run_command([sys.executable, "-c", code], subprocess.run, capture=True) == (0, "a\udcffb")
