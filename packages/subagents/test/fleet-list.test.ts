@@ -684,8 +684,8 @@ describe("FleetList rendering", () => {
     const many = harness(Array.from({ length: 8 }, (_, i) =>
       makeRecord({ id: `a${i}`, description: `report ${i}` }))).render(120);
     expect(many.at(-1)).toBe("");
-    expect(many.at(-2)).toBe(""); // unused upper-indicator slot stays below content
-    expect(many.at(-3)).toContain("↓ 5 more");
+    expect(plain(many.at(-2)!)).toBe("  ↓ 4 more: 4 running"); // left-aligned, no blank padding row (#857)
+    expect(plain(many.at(-3)!)).toContain("report"); // the free upper slot holds a fourth agent row
   });
 
   it("never emits a line wider than the terminal (guards wrap-induced flicker)", () => {
@@ -694,7 +694,7 @@ describe("FleetList rendering", () => {
     const h = harness(agents);
     for (const w of [4, 8, 12, 20, 40, 80, 200]) {
       for (const line of h.render(w)) {
-        expect(visibleWidth(line)).toBeLessThanOrEqual(w);
+        expect(visibleWidth(plain(line))).toBeLessThanOrEqual(w); // fake theme tags stand in for zero-width escapes
       }
     }
   });
@@ -1469,17 +1469,17 @@ describe("FleetList layout at real terminal sizes (#144)", () => {
   });
 
   it.each([[80, 24], [120, 40]])("summarizes hidden agents by state at %ix%i", (columns, rows) => {
-    // 7 agents: 5 visible rows - 2 indicators = 3 shown, 4 hidden below.
+    // 7 agents at the top edge: 4 rows shown, 3 hidden below.
     const lines = renderAt(mixed(), columns, rows);
     const more = lines.find(l => /↓ \d+ more/.test(l));
-    expect(more?.trim()).toBe("↓ 4 more: 1 queued, 1 failed, 1 stopped, 1 done");
+    expect(more).toBe("  ↓ 3 more: 1 failed, 1 stopped, 1 done");
     for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(columns);
   });
 
   it("summarizes rows scrolled above the window too", () => {
     const lines = renderAt(mixed(), 120, 40, 7);
     const above = lines.find(l => /↑ \d+ more/.test(l));
-    expect(above?.trim()).toMatch(/^↑ \d+ more: .*running/);
+    expect(above).toMatch(/^ {2}↑ \d+ more: .*running/);
   });
 });
 
@@ -1688,5 +1688,149 @@ describe("FleetList workflow rows", () => {
     h.setWorkflows([makeWorkflow({ status: "completed", startedAt: completedAt - 12_000, completedAt })]);
 
     expect(h.render().map(plain).join("\n")).toContain("12s");
+  });
+});
+
+/* ------------------------------------------------------------------------- *
+ * Overflow indicators (#857): RAW lines, never trimmed. Earlier regressions
+ * (#154, #559) passed because they `.trim()`ed a 95%-whitespace line.
+ * ------------------------------------------------------------------------- */
+
+describe("FleetList overflow window (#857)", () => {
+  const INDICATOR = /^ {2}[↑↓] \d+ more: /;
+  const GLYPH = /^ {2}[↑↓●○] /;
+
+  function roster(count: number): AgentRecord[] {
+    return Array.from({ length: count }, (_, i) => makeRecord({
+      id: `a${i}`, description: `child ${String(i).padStart(2, "0")}`, startedAt: Date.now() - (count - i) * 1000,
+    }));
+  }
+
+  /** Raw lines for `count` children with agent row `selRow` (0-based) selected. */
+  function renderSel(count: number, selRow: number, width: number, agents = roster(count)): string[] {
+    const h = harness(agents);
+    for (let i = 0; i <= selRow + 1; i++) h.press(DOWN); // first press activates, then selRow + 1 steps onto the row
+    return h.render(width).map(plain);
+  }
+
+  /** Lines strictly between `main` and the trailing footer spacer. */
+  function block(lines: string[]): string[] {
+    const main = lines.findIndex(l => /^ {2}[●○] main$/.test(l));
+    expect(main).toBeGreaterThanOrEqual(0);
+    expect(lines.at(-1)).toBe("");
+    return lines.slice(main + 1, -1);
+  }
+
+  // A true middle shows both indicators, so it needs selRow >= 4 and one row below it (overflowing rosters only).
+  const positions = (count: number) => [["top", 0], ["middle", count > 5 ? Math.max(4, Math.floor(count / 2)) : 2], ["bottom", count - 1]] as const;
+  const cases = [5, 6, 7, 12].flatMap(count => positions(count).map(([name, sel]) => [count, name, sel] as const));
+
+  it.each(cases)("%i children, selection at %s (row %i): raw layout", (count, _name, sel) => {
+    for (const width of [20, 40, 80, 120, 200, 300]) {
+      const lines = renderSel(count, sel, width);
+      const rows = block(lines);
+      const overflow = count > 5;
+      expect(rows).toHaveLength(5);
+      // Only the footer spacer is empty; nothing else is blank or whitespace-only.
+      expect(lines.filter(l => l === "")).toHaveLength(2); // hint/main spacer + footer spacer
+      for (const row of rows) {
+        if (width >= 80) expect(row).toMatch(GLYPH); // narrower rows drop their bullet to keep stats whole
+        expect(row.trim()).not.toBe("");
+        expect(visibleWidth(row)).toBeLessThanOrEqual(width);
+      }
+      const indicators = rows.filter(r => /^ {2}[↑↓] /.test(r));
+      for (const ind of indicators) {
+        expect(ind).toBe(ind.trimEnd());
+        if (width >= 40) expect(ind).toMatch(INDICATOR);
+        else expect(ind).toMatch(/^ {2}[↑↓] \d+/); // arrow and count survive truncation
+      }
+      const agentRows = rows.filter(r => !/^ {2}[↑↓] /.test(r));
+      const up = rows[0]?.startsWith("  ↑ ");
+      const down = rows.at(-1)?.startsWith("  ↓ ");
+      if (!overflow) {
+        expect(indicators).toHaveLength(0);
+        expect(agentRows).toHaveLength(5);
+        continue;
+      }
+      expect(agentRows).toHaveLength(up && down ? 3 : 4);
+      expect(up).toBe(sel >= 4);
+      expect(down).toBe(sel < count - 1);
+      // Hidden counts plus visible rows are the whole roster.
+      const hidden = indicators.reduce((n, ind) => n + Number(ind.match(/(\d+)/)![1]), 0);
+      expect(hidden + agentRows.length).toBe(count);
+      // Selected row is always visible.
+      if (width >= 80) expect(agentRows.some(r => r.startsWith("  ● "))).toBe(true);
+    }
+  });
+
+  it("keeps the block height constant and moves a visible row at most one line per step", () => {
+    for (const count of [6, 7, 12]) {
+      const h = harness(roster(count));
+      h.press(DOWN);
+      let prev: string[] | undefined;
+      for (let sel = 0; sel <= count; sel++) { // main, then every row incl. the bottom edge
+        const lines = h.render(120).map(plain);
+        expect(block(lines)).toHaveLength(5);
+        expect(lines).toHaveLength(9);
+        expect(lines.some(r => r.startsWith("  ● "))).toBe(true); // selection visible at every step
+        if (prev) {
+          for (const [i, line] of lines.entries()) {
+            const m = line.match(/child \d\d/);
+            if (!m) continue;
+            const before = prev.findIndex(l => l.includes(m[0]));
+            if (before >= 0) expect(Math.abs(before - i)).toBeLessThanOrEqual(1);
+          }
+        }
+        prev = lines;
+        h.press(DOWN);
+      }
+    }
+  });
+
+  it("leaves no leading whitespace beyond two columns at any width", () => {
+    for (const width of [80, 120, 200, 300]) {
+      const rows = block(renderSel(12, 6, width));
+      expect(rows[0]).toMatch(INDICATOR);
+      expect(rows.at(-1)).toMatch(INDICATOR);
+      expect(rows[0].length).toBeLessThan(40);
+    }
+  });
+
+  it("truncates the indicator on narrow terminals without wrapping", () => {
+    for (const width of [20, 40]) {
+      for (const row of block(renderSel(12, 6, width)).filter(r => /^ {2}[↑↓]/.test(r))) {
+        expect(visibleWidth(row)).toBeLessThanOrEqual(width);
+        expect(row).toMatch(/^ {2}[↑↓] \d+ more/);
+      }
+    }
+  });
+
+  it("keeps the truncation ellipsis inside the dim span with no stray reset", () => {
+    const h = harness(roster(12));
+    for (let i = 0; i <= 7; i++) h.press(DOWN);
+    const raw = h.render(20).filter(l => /^ {2}<dim>[↑↓] /.test(l));
+    expect(raw.length).toBeGreaterThan(0);
+    for (const line of raw) {
+      expect(line).toMatch(/\.\.\.<\/dim>$/);
+      expect(line).not.toContain("\u001b[0m");
+    }
+  });
+
+  it("counts mixed hidden states above and below in BUCKET_ORDER, failed included", () => {
+    const states = ["running", "error", "queued", "completed", "stopped", "running", "running", "error", "queued", "completed"] as const;
+    const agents = states.map((status, i) => makeRecord({
+      id: `m${i}`, status, description: `child ${String(i).padStart(2, "0")}`,
+      startedAt: Date.now() - (20 - i) * 1000, ...(status === "completed" || status === "error" || status === "stopped" ? { completedAt: Date.now() } : {}),
+    }));
+    const rows = block(renderSel(10, 5, 200, agents));
+    expect(rows[0]).toBe("  ↑ 3 more: 1 running, 1 queued, 1 failed");
+    expect(rows.at(-1)).toBe("  ↓ 4 more: 1 running, 1 queued, 1 failed, 1 done");
+  });
+
+  it("matches the issue example: 12 children, middle selection", () => {
+    const rows = block(renderSel(12, 9, 200));
+    expect(rows[0]).toBe("  ↑ 7 more: 7 running");
+    expect(rows[4]).toBe("  ↓ 2 more: 2 running");
+    expect(block(renderSel(12, 11, 200))[0]).toBe("  ↑ 8 more: 8 running");
   });
 });
