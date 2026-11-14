@@ -51,12 +51,13 @@ class Pool:
 
 
 # Hosted macOS jobs wait a median 215 s but p90 ~1 h under load (156 jobs, 2026-11-13), while `pi-macos` jobs
-# started in a median 30 s (p90 141 s). A busy `pi-macos` therefore queues up to four cells beyond its slots
-# (about two cell-lengths of wait, ~15 min, still far under hosted's tail), and one run takes at most three,
-# so the other heavy cells still use the hosted runners. Hosted Linux queues for seconds: strict.
+# started in a median 30 s (p90 141 s). An idle `pi-macos` takes up to three cells from a run (two free slots
+# plus one queued); a busy one queues only one more, so a host death strands little. Disk pressure is not
+# modelled here: the host publishes `<epoch>:drain` when storage is low (nredd/ci-runners#5), which already
+# fails closed to hosted. Hosted Linux queues for seconds: strict.
 POOLS = {
     "pi-linux": Pool("pi-linux", "PI_LINUX_HEARTBEAT", 2),
-    "pi-macos": Pool("pi-macos", "PI_MACOS_HEARTBEAT", 2, queue_depth=4, run_cap=3),
+    "pi-macos": Pool("pi-macos", "PI_MACOS_HEARTBEAT", 2, queue_depth=1, run_cap=3),
     # One ARM64 WSL2 slot and strict: nothing else can run that guest, and the hosted x64 `windows-2025`
     # cell keeps the required check names green whenever the pool is down or busy.
     "pi-wsl2": Pool("pi-wsl2", "PI_WSL2_HEARTBEAT", 1),
@@ -213,18 +214,23 @@ def pool_capacity(heartbeats: Mapping[str, str], now: float, *, trusted: bool) -
     Returns:
         dict[str, int]: Pool name -> free slots plus the pool's `queue_depth`, floored at 0 and capped at its
             `run_cap` when it has one, for every pool that is up (a live, full pool maps to 0 unless it
-            allows queueing); empty when `trusted` is false. Because the reported free count is negative
-            while jobs already wait, concurrent runs cannot pile more than `queue_depth` cells on a pool
-            between two beats.
+            allows queueing); empty when `trusted` is false. A beat without a count reports no backlog, so
+            it earns no queue allowance: capacity is its one free slot. The negative backlog in a counted
+            beat limits runs that classify after the writer publishes it, but runs inside one beat interval
+            all read the same count, so a burst of N runs can still put up to N times that capacity on the
+            pool; the per-run cap and small depth bound each run's share, not the burst.
     """
     if not trusted:
         return {}
-    capacity = {name: free_slots(heartbeats.get(name, ""), now, pool) for name, pool in POOLS.items()}
-    return {
-        name: _cap(max(0, free + POOLS[name].queue_depth), POOLS[name].run_cap)
-        for name, free in capacity.items()
-        if free is not None
-    }
+    result: dict[str, int] = {}
+    for name, pool in POOLS.items():
+        value = heartbeats.get(name, "")
+        free = free_slots(value, now, pool)
+        if free is None:
+            continue
+        counted = (parse_beat(value) or (0, None))[1] is not None
+        result[name] = _cap(max(0, free + (pool.queue_depth if counted else 0)), pool.run_cap)
+    return result
 
 
 def _cap(cells: int, run_cap: int) -> int:
