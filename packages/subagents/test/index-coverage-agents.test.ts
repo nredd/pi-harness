@@ -3,13 +3,13 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { initTheme } from "@earendil-works/pi-coding-agent";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getAgentConfig, getAllTypes } from "../src/agent-types.js";
 import { createSubagentsExtension } from "../src/index.js";
 import { setModelTiers } from "../src/model-tiers.js";
 import { invalidatePackageCache } from "../src/package-resources.js";
 import { type BootedPi, ctx, type Hermetic, hermeticDir, makePi, startSession } from "./helpers/boot-extension.js";
-import { FakeClock } from "./helpers/fake-clock.js";
 
 type Dialog = { render(width: number): string[]; invalidate(): void; handleInput(data: string): void };
 type Factory = (tui: unknown, theme: unknown, keys: unknown, done: (value: string | undefined) => void) => Dialog;

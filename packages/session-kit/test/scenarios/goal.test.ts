@@ -1,18 +1,9 @@
 import { getCurrentTools } from "@earendil-works/pi-ai/compat";
 import { type FauxResponseFactory, fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { outcomes, toolCall } from "@nredd/pi-test-lib/faux";
 import { afterEach, describe, expect, it } from "vitest";
 import { turnTokens } from "../../src/goal/index.ts";
-import {
-	complete,
-	configFor,
-	EVIDENCE,
-	goalStates,
-	nudges,
-	outcomes,
-	ScenarioFixture,
-	spoken,
-	tool,
-} from "./support.ts";
+import { complete, configFor, EVIDENCE, goalStates, nudges, ScenarioFixture, spoken } from "../fixtures/session.ts";
 
 describe("goals through a real session", () => {
 	let fixture: ScenarioFixture | undefined;
@@ -60,7 +51,7 @@ describe("goals through a real session", () => {
 	it("blocked goal settles without another nudge", async () => {
 		const harness = await start();
 		harness.setResponses([
-			tool("goal_update", { status: "blocked", evidence: "no API key" }),
+			toolCall("goal_update", { status: "blocked", evidence: "no API key" }),
 			fauxAssistantMessage("cannot go on"),
 			fauxAssistantMessage("SHOULD NOT RUN"),
 		]);

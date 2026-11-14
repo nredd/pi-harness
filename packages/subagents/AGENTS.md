@@ -56,7 +56,7 @@ Cite code by symbol or quoted string (`spawnTopLevel` in `src/index.ts`), never 
 - `npm run lint:fix` auto-fixes most style issues.
 - `npm run test` runs the whole suite, including `*-e2e.test.ts` files. To iterate on a single file, run it directly: `npx vitest run test/<file>.test.ts`.
 - If you create or modify a test file, run it and iterate on the test or implementation until it passes.
-- `npm run build` regenerates the esbuild runtime bundle `dist/` from `src/` (`scripts/build-runtime.mjs`, #577). Rebuild and commit `dist/` with every `src/` change; `npm run check:runtime` fails on a stale, missing or extra `dist/` file.
+- `npm run build` regenerates the esbuild runtime bundle `dist/` from `src/` (`scripts/build-runtime.mjs`, #577). `dist/` is gitignored build output: never commit it. `npm run check` and `make install-owned` build it, and `prepack` builds it for publish. The shared builder is root `scripts/runtime-builder.mjs`.
 - `npm run bench` runs the benchmarks in `test/perf/*.bench.ts` (absolute timings, ~1 min). Opt-in: it is not part of the check suite, and `npm run test` never picks bench files up. `npm run bench:ab -- <ref>` benchmarks the working tree against another commit and prints the delta — use it for a PR's `## Performance` section. The `*.perf.test.ts` guards beside them assert operation counts, not time, and DO run in the normal suite.
 - For ad-hoc scripts, write them to a temp file (e.g. `/tmp`), run, edit if needed, remove when done. Don't embed multi-line scripts in `bash` commands.
 

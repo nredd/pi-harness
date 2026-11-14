@@ -1,6 +1,7 @@
 /** Workflow card thinking level after routing (#886), through the actual SubagentWorkflow tool and the run's agent pane. */
+import { outcomes, toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it, vi } from "vitest";
-import { answer, calls, outcomes, ScenarioSession } from "./helpers/scenario-session.js";
+import { answer, ScenarioSession } from "./helpers/scenario-session.js";
 
 let fixture: ScenarioSession;
 afterEach(async () => {
@@ -15,7 +16,7 @@ it("workflow card relabels thinking after routing, while running and after settl
   fixture = new ScenarioSession({ workflowsEnabled: true });
   const hold = fixture.heldTool();
   // Physical model cannot reason: asked high, ran off. No modelTier on a plain virtual model.
-  const physical = fixture.physical("fauxphys", "physical", [calls({ name: "hold", args: {} }), answer("CHILD DONE")], false);
+  const physical = fixture.physical("fauxphys", "physical", [toolCalls({ name: "hold", args: {} }), answer("CHILD DONE")], false);
   const h = await fixture.start({ terminal: true });
   const model = physical.getModel();
   h.session.modelRuntime.registerVirtualModel({
@@ -25,7 +26,7 @@ it("workflow card relabels thinking after routing, while running and after settl
     thinkingLevels: ["off", "low", "high"],
     route: async request => ({ model, thinkingLevel: request.thinkingLevel }),
   });
-  h.setResponses([calls({ name: "SubagentWorkflow", args: { script: SCRIPT } }), answer("STARTED")]);
+  h.setResponses([toolCalls({ name: "SubagentWorkflow", args: { script: SCRIPT } }), answer("STARTED")]);
   await h.session.prompt("go");
   expect(outcomes(h, "SubagentWorkflow")[0]?.text).toContain("Task ID:");
   await hold.entered;

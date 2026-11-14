@@ -3,9 +3,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { expect, it, vi } from "vitest";
 import { createExpandedFooter, formatCwd } from "../extensions/expanded-footer.ts";
-import { FakeClock } from "./scenarios/support.ts";
 
 type Factory = NonNullable<Parameters<ExtensionUIContext["setFooter"]>[0]>;
 

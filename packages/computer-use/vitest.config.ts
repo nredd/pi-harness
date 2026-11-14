@@ -69,7 +69,7 @@ export default defineConfig({
 		// `swiftc` invariants (INV-8, INV-17) and the `macos-native-pure` Swift compile carry their
 		// own derived budgets.
 		testTimeout: 20_000,
-		setupFiles: ["../../integration/inprocess/verification/home-setup.ts"],
+		setupFiles: ["../../tests/lib/src/home-setup.ts"],
 		// `istanbul` like the other Pi-loading packages; caps in `coverage/policy.json`.
 		coverage: {
 			provider: "istanbul",

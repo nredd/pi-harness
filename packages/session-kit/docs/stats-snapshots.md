@@ -1,6 +1,6 @@
 # Offline stats and portable snapshots
 
-Build the committed `dist/pi-stats-export.mjs` with `npm ci && npm run build:stats-export`.
+Build `dist/pi-stats-export.mjs` (gitignored, not committed) with `npm ci && npm run build`.
 The exact esbuild version and dependencies are locked; tests assert byte-identical rebuilds.
 Copy only that file. Runtime is Node 22+ with builtins only, no Pi install, extension, private
 repository, package install, auth or network access. Importing the artifact is silent, even when
@@ -134,6 +134,37 @@ Labels come only from the existing local `machine.json`, never automatic hostnam
 collection. Keep custom labels non-sensitive: they are exported. No schema or sync cadence changes.
 Future calls are ignored in display totals, not removed from durable history. Statistics
 are not subscription quota measurements or router inputs.
+
+Harness readers (#367, reader layer only; not yet exported or shown):
+
+`src/stats/harness/` reads Claude Code, Codex CLI and OpenCode usage into the same `Call` model as
+pi (`Call.harness`: `pi | claude | codex | opencode`). Roots: `CLAUDE_CONFIG_DIR` or `~/.claude`;
+`CODEX_HOME` or `~/.codex`; `OPENCODE_DB`, else `$XDG_DATA_HOME/opencode/opencode.db`. Local file
+reads only. A missing root is silent ("not installed"). Parsed files are cached in
+`DIR/pi-session-kit/stats-harness-cache.json` by size and mtime, history for deleted files kept.
+That local, never-synced file is keyed by absolute transcript path (so Claude's cwd-encoded project
+directory names live there as keys); its values and every reader result carry no paths.
+
+- Claude: `projects/**/*.jsonl` including `subagents/`. One response is written once per content
+  block, so rows collapse by `(message.id, requestId)`, keeping the largest output count.
+  Subagent files and sidechain rows count toward tokens, not Sessions. No cost, no quota on disk.
+- Codex: `sessions/` and `archived_sessions/` rollouts. `token_usage_record` rows are joined to
+  `turn_context.model` by turn. `input` is `input_tokens` minus the cached and cache-write subsets.
+  Turns without per-turn records (older Codex, including old turns of a resumed rollout) are
+  skipped with a count-only diagnostic, never approximated.
+  `rate_limits` from `token_count` rows become quota observations (provider `openai-codex`),
+  freshest per `(limitId, window)`. No account dimension.
+- OpenCode: one read-only `node:sqlite` query (`immutable=1` only when the WAL is checkpointed and
+  absent, so a read never creates `-shm`/`-wal` and pending WAL rows are always visible; 2s busy
+  timeout, then a generic "database busy" diagnostic) that
+  projects only counters, IDs, timestamps and model names. `reasoning` tokens count as output. The
+  schema follows third-party readers; a mismatch or missing `node:sqlite` is a diagnostic.
+- Entry IDs hash `<harness>:<native id>`, session IDs `<harness>-session:<native id>`. Only counts,
+  timestamps, raw provider/model names, Codex quota labels (`limit_id`, `plan_type`, percentages,
+  reset times) and hashes are projected: no text, tool arguments, cwd,
+  titles, directory names, account IDs or credentials. `history.jsonl`, `auth.json`, credential
+  files and Codex SQLite databases are never opened. Diagnostics are counts only.
+- Cost is recorded as 0 for Claude and Codex until snapshot v2 can carry `null`.
 
 Harness API:
 

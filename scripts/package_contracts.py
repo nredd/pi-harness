@@ -1658,7 +1658,7 @@ def verify_stock_pi(prefix: Path, pi_bin: Path, sandbox: Sandbox) -> None:
 def pack(
     contract: PackageContract, dest: Path, sandbox: Sandbox, package_dir: Path | None = None
 ) -> PackedArtifact:
-    """Run `npm pack` for one workspace package.
+    """Build, then run `npm pack` for one workspace package.
 
     Parameters:
         contract (PackageContract): Package to pack.
@@ -1673,6 +1673,16 @@ def pack(
         ContractError: If npm output is malformed or disagrees with the tarball.
     """
     package_dir = package_dir or REPO_ROOT / "packages" / contract.directory
+    # `--ignore-scripts` skips `prepack`. Remove old outputs so deleted sources cannot survive a build.
+    dist = package_dir / "dist"
+    if dist.exists():
+        shutil.rmtree(dist)
+    run(
+        [sandbox.tools.npm, "run", "build", "--if-present"],
+        env=sandbox.env(),
+        cwd=package_dir,
+        timeout=NPM_TIMEOUT_S,
+    )
     done = run(
         [sandbox.tools.npm, "pack", "--json", "--ignore-scripts", "--pack-destination", dest],
         env=sandbox.env(),

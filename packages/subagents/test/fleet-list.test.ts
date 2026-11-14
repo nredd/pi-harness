@@ -1,4 +1,5 @@
 import { Editor, type OverlayOptions, type TuiMode, visibleWidth } from "@earendil-works/pi-tui";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.js";
 import { registerAgents } from "../src/agent-types.js";
@@ -14,7 +15,6 @@ import {
   formatFleetTokens,
 } from "../src/ui/fleet-list.js";
 import { FLEET_STATE_ENTRY, type FleetJournalEntry } from "../src/ui/fleet-state.js";
-import { FakeClock } from "./helpers/fake-clock.js";
 
 // ---- Key sequences (see node_modules/@earendil-works/pi-tui/dist/keys.js) ----
 const DOWN = "\x1b[B";

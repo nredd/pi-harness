@@ -33,7 +33,7 @@ subprocesses. Do not change the production cargo tool's scheduling semantics to
 solve test orchestration. If compiler overlap recurs with bounded gates, measure
 that fixture and inject a fixture-local job budget rather than changing user tool
 behavior. Session-kit's stats exporter is already built once before its Vitest
-suite (`test` -> `build:stats-export`); its dedicated snapshot build assertion is
+suite (`test` -> `build`); its dedicated snapshot build assertion is
 intentional artifact verification, not a build-per-render loop.
 
 ## Historical reports versus current source
