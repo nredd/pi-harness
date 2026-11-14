@@ -15,8 +15,10 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
-IPV6 = re.compile(r"(?<![0-9A-Fa-f:])(?:f[cde][0-9a-f]{2}|fe[89ab][0-9a-f]):[0-9a-f:]*", re.IGNORECASE)
+IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?!\d|\.\d)")
+IPV6 = re.compile(
+    r"(?<![0-9a-f:])(?:f[cde][0-9a-f]{2}|fe[89ab][0-9a-f])(?::[0-9a-f]{0,4}){2,}", re.IGNORECASE
+)
 TAILNET_HOST = re.compile(r"\b[\w-]+(?:\.[\w-]+)*\.(?:ts\.net|tailscale\.net)\b", re.IGNORECASE)
 
 # RFC1918, CGNAT (also used by tailnets) and IPv4 link-local.
@@ -51,7 +53,10 @@ EXCLUDED_PREFIXES = ("forks/",)
 
 
 def violations(text: str) -> list[str]:
-    """Return disallowed private IPv4/IPv6 addresses and tailnet hostnames found in text."""
+    """Return one kind label per disallowed private address or tailnet hostname found in text.
+
+    Labels never carry the matched value so failures cannot echo a real network detail.
+    """
     found: list[str] = []
     for match in IPV4.finditer(text):
         try:
@@ -85,6 +90,8 @@ def scanned_paths() -> list[str]:
         ("10.0.0.1 172.16.0.1 192.168.0.1 192.168.255.254", False),
         ("100.64.0.1 100.100.100.100 169.254.169.254 192.168.1.1", False),
         ("10.0.0.2", True),
+        ("host is 192.168.7.9.", True),
+        ("192.168.7.9.5", False),
         ("10.255.255.255", True),
         ("172.16.0.2", True),
         ("172.31.255.254", True),
@@ -102,6 +109,8 @@ def scanned_paths() -> list[str]:
         ("fe80::1", True),
         ("fc00:abcd::2", True),
         ("2001:db8::1", False),
+        ("feed: yes", False),
+        ("fade:", False),
         ("node.example.ts.net", True),
         ("node.tailscale.net", True),
         ("example.net", False),
