@@ -34,7 +34,7 @@
   },
   "scripts": {
     "lint": "biome check .",
-    "format": "biome check --write extensions/ lib/ test/",
+    "format": "biome check --write .",
     "typecheck": "tsc --noEmit",
     "test": "JITI_FS_CACHE=false vitest run --coverage",
     "test:bun": "node ../../scripts/run-vitest.ts bun",

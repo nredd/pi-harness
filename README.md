@@ -93,9 +93,9 @@ Shared toolchain: one root `biome.json` (tabs, width 120, `recommended` plus eig
 config files use two spaces), one `tsconfig.base.json` that every package `tsconfig.json` extends, and one
 set of pins (`@biomejs/biome`, `typescript`, `@types/node`, `vitest`, the coverage providers, `esbuild`) in the
 root `package.json`. Packages never pin them. A package that cannot meet a flag yet overrides it in its own
-`tsconfig.json` with a comment naming the issue; `plan-mode`, `subagents`, `todo` and `computer-use` keep their own
-`biome.json` until their layout issues land. `npm run lint` is `biome check .` and `npm run format` is
-`biome check --write .`.
+`tsconfig.json` with a comment naming the issue; `plan-mode`, `subagents` and `todo` keep their own
+`biome.json` until their layout issues land (`computer-use` has none yet). In `dev-tools`, `preset`, `resource-sampler`,
+`session-kit` and `subscription-router`, `npm run lint` is `biome check .` and `npm run format` is `biome check --write .`.
 
 `make check` runs, without rewriting files:
 

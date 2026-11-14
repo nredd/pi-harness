@@ -1,7 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    // nredd/pi-harness#870
+    // nredd/pi-harness#870: JSON imports, unchecked indexed access and parameter properties go with the TypeScript conversion
     "resolveJsonModule": true,
     "noUncheckedIndexedAccess": false,
     "erasableSyntaxOnly": false
