@@ -1,4 +1,13 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import * as fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +16,7 @@ import { withLock } from "../../src/stats/lock.ts";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:fs/promises")>();
-	return { ...actual, rename: vi.fn(actual.rename) };
+	return { ...actual, link: vi.fn(actual.link) };
 });
 
 let dir: string;
@@ -17,7 +26,7 @@ beforeEach(() => {
 	lock = join(dir, "sub", "export.lock");
 });
 afterEach(() => {
-	vi.mocked(fsp.rename).mockReset();
+	vi.mocked(fsp.link).mockClear();
 	rmSync(dir, { recursive: true, force: true });
 });
 
@@ -83,14 +92,68 @@ describe("withLock", () => {
 		expect(readFileSync(lock, "utf8")).toBe("1");
 	});
 
-	it("reports busy when another process wins the reclaim race", async () => {
+	it("lets exactly one of many contenders reclaim a dead lock, never two at once", async () => {
+		mkdirSync(join(dir, "sub"));
+		for (let round = 0; round < 25; round++) {
+			writeFileSync(lock, String(DEAD));
+			let inside = 0;
+			let peak = 0;
+			const contender = () =>
+				withLock(lock, BUSY, async () => {
+					inside++;
+					peak = Math.max(peak, inside);
+					await new Promise((r) => setTimeout(r, 2));
+					inside--;
+				});
+			const results = await Promise.allSettled([contender(), contender(), contender(), contender()]);
+			expect(peak).toBe(1);
+			expect(results.some((r) => r.status === "fulfilled")).toBe(true);
+			for (const r of results) if (r.status === "rejected") expect(String(r.reason)).toContain(BUSY);
+		}
+		expect(existsSync(lock)).toBe(false);
+		expect(existsSync(`${lock}.reclaim`)).toBe(false);
+	});
+
+	it("does not delete a lock a faster reclaimer already replaced", async () => {
 		mkdirSync(join(dir, "sub"));
 		writeFileSync(lock, String(DEAD));
-		vi.mocked(fsp.rename).mockRejectedValueOnce(Object.assign(new Error("gone"), { code: "ENOENT" }));
-		await expect(withLock(lock, BUSY, async () => 1)).rejects.toThrow(BUSY);
-		// the dead lock is still there for whoever won; nothing was published by us
-		vi.mocked(fsp.rename).mockImplementationOnce(async () => {});
-		await expect(withLock(lock, BUSY, async () => 1)).rejects.toThrow(BUSY);
+		// This contender saw the dead owner, then lost the guard race to one that took the lock for itself.
+		const real = process.kill.bind(process);
+		const kill = vi.spyOn(process, "kill");
+		let replaced = false;
+		kill.mockImplementation((pid, signal) => {
+			if (pid !== DEAD) return real(pid, signal);
+			if (!replaced) {
+				replaced = true;
+				writeFileSync(lock, String(process.ppid)); // a live process now owns it
+			}
+			throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+		});
+		try {
+			await expect(withLock(lock, BUSY, async () => 1)).rejects.toThrow(BUSY);
+		} finally {
+			kill.mockRestore();
+		}
+		expect(readFileSync(lock, "utf8")).toBe(String(process.ppid));
+	});
+
+	it("clears a guard left by a dead reclaimer, and waits out a live one", async () => {
+		mkdirSync(join(dir, "sub"));
+		writeFileSync(lock, String(DEAD));
+		writeFileSync(`${lock}.reclaim`, String(DEAD));
+		await expect(withLock(lock, BUSY, async () => "ok")).resolves.toBe("ok");
+		expect(existsSync(`${lock}.reclaim`)).toBe(false);
+
+		writeFileSync(lock, String(DEAD));
+		writeFileSync(`${lock}.reclaim`, String(process.pid));
+		await expect(withLock(lock, BUSY, async () => "no")).rejects.toThrow(BUSY);
+		expect(readFileSync(`${lock}.reclaim`, "utf8")).toBe(String(process.pid));
+	});
+
+	it("passes through a failure to publish the lock, leaving no temporary file behind", async () => {
+		vi.mocked(fsp.link).mockRejectedValueOnce(Object.assign(new Error("no hard links here"), { code: "EPERM" }));
+		await expect(withLock(lock, BUSY, async () => 1)).rejects.toMatchObject({ code: "EPERM" });
+		expect(readdirSync(join(dir, "sub"))).toEqual([]);
 	});
 
 	it.skipIf(process.getuid?.() === 0)("passes through other failures to take the lock", async () => {

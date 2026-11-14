@@ -87,8 +87,13 @@ function event(harness: Harness, entry: string | null, extra: Partial<SnapshotEv
 }
 
 /** A manifest plus one October shard, published for `version` (1 or 2) under `repo`. */
-function publish(machineId: string, version: 1 | 2, events: SnapshotEvent[], q: QuotaObservation[] = []): Manifest {
-	const sessions = [{ id: opaqueId("s"), startMs: OCT, endMs: OCT, child: false }];
+function publish(
+	machineId: string,
+	version: 1 | 2,
+	events: SnapshotEvent[],
+	q: QuotaObservation[] = [],
+	sessions = [{ id: opaqueId("s"), startMs: OCT, endMs: OCT, child: false }],
+): Manifest {
 	const shard: Record<string, unknown> = { version, machineId, month: "2026-10", events, sessions };
 	if (version === 2) shard.quota = q;
 	const text = JSON.stringify(shard);
@@ -755,6 +760,21 @@ describe("exportStats with harnesses", () => {
 			expect(carried[0]?.entryId).toBeNull();
 		});
 
+		it("treats a previous snapshot that fails whole-machine validation as unreadable, not as a crash", async () => {
+			seedPi();
+			const roots = seedHarnessHome(home);
+			// every shard is valid and digest-correct, but an event has no session metadata
+			publish((await machineIdentity(agent)).machineId, 2, [event("opencode", "orphan")], [], []);
+			const result = await exportStats(agent, repo, undefined, {
+				harnesses: ["pi", "opencode"],
+				roots,
+				home,
+				loadSqlite: busyDb,
+			});
+			expect(result.harnesses?.opencode).toMatchObject({ failed: "lost" });
+			expect(published(result.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness))).toEqual(["pi"]);
+		});
+
 		it("ignores an unreadable previous snapshot", async () => {
 			seedPi();
 			const roots = seedHarnessHome(home);
@@ -846,6 +866,16 @@ describe("exportStats with harnesses", () => {
 			expect(m2.exportedAt).toBeGreaterThan(m1.exportedAt);
 			expect(m2.lastGoodAt).toEqual({ pi: m2.exportedAt, claude: m2.exportedAt, opencode: m1.exportedAt });
 
+			// a clean read gets its mark even when the previous snapshot cannot be trusted
+			const unreadable = manifestOf(second.snapshotDir);
+			for (const ref of unreadable.shards) writeFileSync(join(second.snapshotDir, ref.file), "tampered");
+			const healthy = await exportStats(agent, repo, undefined, { harnesses, roots, home });
+			expect(manifestOf(healthy.snapshotDir).lastGoodAt).toEqual({
+				pi: manifestOf(healthy.snapshotDir).exportedAt,
+				claude: manifestOf(healthy.snapshotDir).exportedAt,
+				opencode: manifestOf(healthy.snapshotDir).exportedAt,
+			});
+			await exportStats(agent, repo, undefined, { harnesses, roots, home, loadSqlite: busyDb });
 			// no mark at all for a harness whose previous snapshot could not be read
 			const manifest = manifestOf(second.snapshotDir);
 			for (const ref of manifest.shards) writeFileSync(join(second.snapshotDir, ref.file), "tampered");

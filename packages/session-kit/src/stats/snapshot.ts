@@ -518,6 +518,7 @@ async function loadPrevious(snapshotDir: string): Promise<Previous> {
 			if (opaqueId(text) !== ref.sha256) throw new Error("Shard digest mismatch");
 			shards.push(validateShard(JSON.parse(text) as unknown, manifest, ref.month));
 		}
+		validateSnapshot({ manifest, shards });
 		return { manifest, shards };
 	} catch {
 		return "unreadable";
@@ -645,7 +646,7 @@ async function exportLocked(
 		// Carried data is as fresh as it was: the previous snapshot's own mark, else when it was published.
 		const was = previous !== null && previous !== "unreadable" ? previous.manifest : undefined;
 		const lastGood = failed ? (was?.lastGoodAt?.[h] ?? was?.exportedAt) : exportedAt;
-		if (lastGood !== undefined && old !== null) lastGoodAt[h] = lastGood;
+		if (lastGood !== undefined) lastGoodAt[h] = lastGood;
 		report[h] = {
 			found: scan.found,
 			problems,

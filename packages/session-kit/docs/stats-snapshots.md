@@ -97,8 +97,9 @@ Installation state, never synced:
   written only after the manifest is published.
 - `DIR/pi-session-kit/export.lock`: held for the whole of an export (read the previous snapshot,
   check the set, publish, record state). Created atomically with the owner's pid; a lock whose
-  process is dead (or whose contents are not a pid) is reclaimed, a live owner fails the second
-  export with `export already running`. Safe to delete when no export is running.
+  process is dead (or whose contents are not a pid) is reclaimed under a second lock,
+  `export.lock.reclaim`, so two reclaimers cannot delete each other's fresh lock; a live owner fails
+  the second export with `export already running`. Safe to delete when no export is running.
 - `DIR/pi-session-kit/stats-global.json`: one atomically replaced document containing validated
   last-good machine snapshots, last successful import time and coverage problems. Imports do not
   mutate local usage or installation identity. A wholly failed import does not advance the sync
@@ -258,7 +259,7 @@ the published snapshots. To drop a harness on purpose, export without it using
   titles, directory names, account IDs or credentials. `history.jsonl`, `auth.json`, credential
   files and Codex SQLite databases are never opened. Diagnostics are counts only.
 - Cost is `null` for Claude and Codex (snapshot v2); OpenCode's recorded cost is kept, `null` when
-  absent. The harness cache is version 3: older caches (cost 0, quota without `account`) are dropped and
+  absent. The harness cache is version 4: older caches (cost 0, quota without `account`, no salt mark) and caches made under another salt are dropped and
   re-parsed.
 
 Harness API:

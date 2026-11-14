@@ -356,7 +356,7 @@ function flatten(files) {
 
 // src/stats/snapshot.ts
 import { randomBytes, randomUUID as randomUUID4 } from "node:crypto";
-import { link as link2, lstat, mkdir as mkdir4, readdir as readdir2, readFile as readFile4, rename as rename4, unlink as unlink2, writeFile as writeFile4 } from "node:fs/promises";
+import { link as link2, lstat, mkdir as mkdir4, readdir as readdir2, readFile as readFile4, rename as rename3, unlink as unlink2, writeFile as writeFile4 } from "node:fs/promises";
 import { dirname as dirname4, join as join7 } from "node:path";
 
 // src/stats/harness/common.ts
@@ -913,7 +913,7 @@ async function loadHarnesses(options) {
 
 // src/stats/lock.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
-import { link, mkdir as mkdir3, readFile as readFile3, rename as rename3, rm, unlink, writeFile as writeFile3 } from "node:fs/promises";
+import { link, mkdir as mkdir3, readFile as readFile3, rm, unlink, writeFile as writeFile3 } from "node:fs/promises";
 import { dirname as dirname3 } from "node:path";
 function alive(pid) {
   try {
@@ -931,30 +931,39 @@ async function owner(path) {
     return null;
   }
 }
-async function acquire(path) {
+async function tryAcquire(path) {
   const tmp = `${path}.${randomUUID3()}.tmp`;
   await writeFile3(tmp, String(process.pid), { flag: "wx", mode: 384 });
   try {
     await link(tmp, path);
+    return true;
+  } catch (error) {
+    if (error.code === "EEXIST") return false;
+    throw error;
   } finally {
     await unlink(tmp);
   }
 }
+var ATTEMPTS = 3;
 async function withLock(path, busy, fn) {
   await mkdir3(dirname3(path), { recursive: true });
-  for (let attempt = 0; ; attempt++) {
-    try {
-      await acquire(path);
-      break;
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      const pid = await owner(path);
-      if (attempt > 0 || pid !== null && alive(pid)) throw new Error(busy);
-      const stale = `${path}.stale-${randomUUID3()}`;
-      await rename3(path, stale).catch(() => {
-        throw new Error(busy);
-      });
-      await rm(stale, { recursive: true, force: true });
+  const guard = `${path}.reclaim`;
+  let held = false;
+  for (let attempt = 0; !held; attempt++) {
+    held = await tryAcquire(path);
+    if (held) break;
+    const pid = await owner(path);
+    if (attempt === ATTEMPTS - 1 || pid !== null && alive(pid)) throw new Error(busy);
+    if (await tryAcquire(guard)) {
+      try {
+        const now = await owner(path);
+        if (now === null || !alive(now)) await rm(path, { recursive: true, force: true });
+      } finally {
+        await rm(guard, { force: true });
+      }
+    } else {
+      const reclaimer = await owner(guard);
+      if (reclaimer === null || !alive(reclaimer)) await rm(guard, { recursive: true, force: true });
     }
   }
   try {
@@ -976,7 +985,7 @@ async function atomicJson(path, value) {
   const tmp = `${path}.${randomUUID4()}.tmp`;
   try {
     await writeFile4(tmp, JSON.stringify(value), { mode: 384 });
-    await rename4(tmp, path);
+    await rename3(tmp, path);
   } catch (error) {
     await unlink2(tmp).catch(() => {
     });
@@ -1222,6 +1231,7 @@ async function loadPrevious(snapshotDir) {
       if (opaqueId(text) !== ref.sha256) throw new Error("Shard digest mismatch");
       shards.push(validateShard(JSON.parse(text), manifest, ref.month));
     }
+    validateSnapshot({ manifest, shards });
     return { manifest, shards };
   } catch {
     return "unreadable";
@@ -1322,7 +1332,7 @@ async function exportLocked(dir, output, root, options) {
     if (failed) failures[h] = (state.failures[h] ?? 0) + 1;
     const was = previous !== null && previous !== "unreadable" ? previous.manifest : void 0;
     const lastGood = failed ? was?.lastGoodAt?.[h] ?? was?.exportedAt : exportedAt;
-    if (lastGood !== void 0 && old !== null) lastGoodAt[h] = lastGood;
+    if (lastGood !== void 0) lastGoodAt[h] = lastGood;
     report[h] = {
       found: scan.found,
       problems,
