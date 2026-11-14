@@ -13,14 +13,20 @@ function alive(pid: number): boolean {
 	}
 }
 
-/** The pid a lock file names; `null` for anything else, which no live owner could have written. */
+/**
+ * The pid a lock file names; `null` for a missing path, a directory or contents that are no pid, which no
+ * live owner could have written. Any other read failure throws: an owner we could not inspect is not dead.
+ */
 async function owner(path: string): Promise<number | null> {
+	let text: string;
 	try {
-		const pid = Number((await readFile(path, "utf8")).trim());
-		return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
-	} catch {
-		return null;
+		text = await readFile(path, "utf8");
+	} catch (error) {
+		if (["ENOENT", "EISDIR"].includes(String((error as NodeJS.ErrnoException).code))) return null;
+		throw error;
 	}
+	const pid = Number(text.trim());
+	return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
 }
 
 /** Publish `path` atomically with this process's pid in it (hard link); EEXIST if it already exists. */

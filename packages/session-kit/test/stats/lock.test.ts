@@ -16,7 +16,7 @@ import { withLock } from "../../src/stats/lock.ts";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:fs/promises")>();
-	return { ...actual, link: vi.fn(actual.link) };
+	return { ...actual, link: vi.fn(actual.link), readFile: vi.fn(actual.readFile) };
 });
 
 let dir: string;
@@ -27,6 +27,7 @@ beforeEach(() => {
 });
 afterEach(() => {
 	vi.mocked(fsp.link).mockClear();
+	vi.mocked(fsp.readFile).mockClear();
 	rmSync(dir, { recursive: true, force: true });
 });
 
@@ -134,6 +135,15 @@ describe("withLock", () => {
 			await expect(withLock(lock, BUSY, async () => 1)).rejects.toThrow(BUSY);
 			expect(existsSync(`${lock}.reclaim`)).toBe(false);
 		});
+		expect(existsSync(`${lock}.reclaim`)).toBe(false);
+	});
+
+	it("fails closed when it cannot read the lock, rather than taking an owner for dead", async () => {
+		mkdirSync(join(dir, "sub"));
+		writeFileSync(lock, String(process.ppid));
+		vi.mocked(fsp.readFile).mockRejectedValueOnce(Object.assign(new Error("input/output error"), { code: "EIO" }));
+		await expect(withLock(lock, BUSY, async () => 1)).rejects.toMatchObject({ code: "EIO" });
+		expect(readFileSync(lock, "utf8")).toBe(String(process.ppid));
 		expect(existsSync(`${lock}.reclaim`)).toBe(false);
 	});
 

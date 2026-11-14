@@ -100,7 +100,8 @@ Installation state, never synced:
   changes under a second lock, `export.lock.reclaim`, held for the few calls it takes to inspect and
   take it; a process that cannot get the guard, or finds a live owner, fails with
   `export already running` instead of waiting. A lock whose owner is dead (or whose contents are not
-  a pid) is cleared by the next export. Two exports never run at once, and the failure modes are
+  a pid) is cleared by the next export; a lock that cannot be read (an I/O error) fails the export
+  rather than being taken for dead. Two exports never run at once, and the failure modes are
   safe: a pid reused by an unrelated live process, or a process killed in the few calls it holds the
   guard, leave exports failing `export already running` until the file is deleted. Delete
   `export.lock` and `export.lock.reclaim` only when no export is running.

@@ -924,12 +924,15 @@ function alive(pid) {
   }
 }
 async function owner(path) {
+  let text;
   try {
-    const pid = Number((await readFile3(path, "utf8")).trim());
-    return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
-  } catch {
-    return null;
+    text = await readFile3(path, "utf8");
+  } catch (error) {
+    if (["ENOENT", "EISDIR"].includes(String(error.code))) return null;
+    throw error;
   }
+  const pid = Number(text.trim());
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
 }
 async function create(path) {
   const tmp = `${path}.${randomUUID3()}.tmp`;
