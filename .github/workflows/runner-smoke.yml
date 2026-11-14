@@ -30,9 +30,13 @@ jobs:
       - name: Public internet reachable
         run: curl -fsS --max-time 10 -o /dev/null https://api.github.com
       - name: Private networks unreachable
+        env:
+          SMOKE_EXTRA_TARGETS: ${{ vars.SMOKE_EXTRA_TARGETS }}
         run: |
           fail=0
-          for target in 10.0.0.1:80 172.16.0.1:80 192.168.0.1:80 192.168.255.254:22 100.64.0.1:22 100.100.100.100:22 169.254.169.254:80; do
+          set -f
+          [ -z "$SMOKE_EXTRA_TARGETS" ] && echo "note: SMOKE_EXTRA_TARGETS is empty, only the neutral targets are probed"
+          for target in 10.0.0.1:80 172.16.0.1:80 192.168.0.1:80 192.168.255.254:22 100.64.0.1:22 100.100.100.100:22 169.254.169.254:80 $SMOKE_EXTRA_TARGETS; do
             if timeout 5 bash -c "exec 3<>/dev/tcp/${target%:*}/${target#*:}" 2>/dev/null; then
               echo "::error::reachable: $target"; fail=1
             else
@@ -55,9 +59,13 @@ jobs:
       - name: Public internet reachable
         run: curl -fsS --max-time 10 -o /dev/null https://api.github.com
       - name: Private networks unreachable
+        env:
+          SMOKE_EXTRA_TARGETS: ${{ vars.SMOKE_EXTRA_TARGETS }}
         run: |
           fail=0
-          for target in 10.0.0.1:80 172.16.0.1:80 192.168.0.1:80 192.168.255.254:22 100.64.0.1:22 100.100.100.100:22 169.254.169.254:80; do
+          set -f
+          [ -z "$SMOKE_EXTRA_TARGETS" ] && echo "note: SMOKE_EXTRA_TARGETS is empty, only the neutral targets are probed"
+          for target in 10.0.0.1:80 172.16.0.1:80 192.168.0.1:80 192.168.255.254:22 100.64.0.1:22 100.100.100.100:22 169.254.169.254:80 $SMOKE_EXTRA_TARGETS; do
             if /usr/bin/nc -z -G 3 "${target%:*}" "${target#*:}" 2>/dev/null; then
               echo "::error::reachable: $target"; fail=1
             else
@@ -66,9 +74,12 @@ jobs:
           done
           exit $fail
       - name: Owner home unreadable
+        env:
+          SMOKE_OWNER_HOME: ${{ vars.SMOKE_OWNER_HOME }}
         run: |
-          if ls /Users/redd >/dev/null 2>&1; then echo "::error::can read /Users/redd"; exit 1; fi
-          echo "blocked: /Users/redd"
+          if [ -z "$SMOKE_OWNER_HOME" ]; then echo "note: SMOKE_OWNER_HOME is empty, skipping the home probe"; exit 0; fi
+          if ls "$SMOKE_OWNER_HOME" >/dev/null 2>&1; then echo "::error::can read the owner home"; exit 1; fi
+          echo "blocked: owner home"
 
   pi-wsl2:
     # Same-repo guard as above, and the same caveat: the boundary is the pool supervisor's admission check (it
