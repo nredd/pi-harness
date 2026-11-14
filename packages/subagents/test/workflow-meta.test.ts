@@ -212,7 +212,6 @@ describe("extractMeta — isolation", () => {
     expect(Date.now() - started).toBeLessThan(2000);
   });
 
-
   it("does not execute the script body", () => {
     // If the body ran, this would throw something other than a meta error.
     const { meta } = extractMeta(`${HEADER}\nthrow new Error('body ran')`);

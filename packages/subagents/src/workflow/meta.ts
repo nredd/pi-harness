@@ -59,11 +59,10 @@ export interface ExtractMetaOptions {
 }
 
 /**
- * Wall-clock bound on evaluating the `meta` fragment. This exists only to stop a
- * pathological literal from hanging the host thread, so it is deliberately
- * generous: the bound is wall-clock, and a loaded host can preempt the vm thread
- * for well over 100ms while a real literal finishes in microseconds. A tight bound
- * turned that scheduler jitter into spurious "did not finish evaluating" failures.
+ * Wall-clock bound on evaluating the `meta` fragment. It only stops a pathological
+ * literal from hanging the host thread. It is generous because a loaded host can
+ * preempt the vm thread for longer than a tight bound, while a real literal takes
+ * microseconds.
  */
 const META_EVAL_TIMEOUT_MS = 1000;
 
