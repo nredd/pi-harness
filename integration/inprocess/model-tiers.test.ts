@@ -2,10 +2,11 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionFactory, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { createTestUiContext, fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_AGENTS } from "../../packages/subagents/src/default-agents.ts";
+import { explainModel } from "../../packages/subagents/src/model-explanation.ts";
 import { setAgentModels } from "../../packages/subagents/src/model-resolver.ts";
 import { setModelTiers, type TierDisclosure } from "../../packages/subagents/src/model-tiers.ts";
 import { hasFallback } from "../../packages/subagents/src/ui/fallback-flag.ts";
@@ -14,6 +15,7 @@ import {
 	createSubscriptionRouter,
 	type SubscriptionRouterOptions,
 } from "../../packages/subscription-router/src/index.ts";
+import type { PolicyV1 } from "../../packages/subscription-router/src/policy.ts";
 import { GoalStack, outcomes, tool } from "./goal-support.ts";
 
 const CHAIN: [ChainEntry, ChainEntry] = [
@@ -72,9 +74,14 @@ describe("model-tier/router stack", () => {
 	 *
 	 * @param policy - Exhaustion policy to substitute into the profile for this scenario.
 	 * @param id - Shipped profile to route; its real chain is swapped for the faux `CHAIN`.
+	 * @param routingPolicy - Explicit opt-in policy; omission preserves the shipped strategy.
 	 * @returns An extension factory backed by this stack's real router dependencies.
 	 */
-	function router(policy: "wait" | "fail" = "wait", id: keyof typeof SHIPPED = "cheap"): ExtensionFactory {
+	function router(
+		policy: "wait" | "fail" = "wait",
+		id: keyof typeof SHIPPED = "cheap",
+		routingPolicy?: PolicyV1,
+	): ExtensionFactory {
 		const shipped = parseConfig(
 			JSON.parse(
 				readFileSync(
@@ -89,7 +96,12 @@ describe("model-tier/router stack", () => {
 			config: {
 				ok: true,
 				profiles: [
-					{ ...shipped, chain: CHAIN, exhaustion: { policy } },
+					{
+						...shipped,
+						...(routingPolicy ? { strategy: undefined, policy: routingPolicy } : {}),
+						chain: CHAIN,
+						exhaustion: { policy },
+					},
 					{ id: "default", name: "Default must never run", strategy: "ordered", chain: [CHAIN[0]] },
 					{ id: "deep", name: "Deep must never run", strategy: "ordered", chain: [CHAIN[1]] },
 				],
@@ -142,6 +154,19 @@ describe("model-tier/router stack", () => {
 			const h = await stack.start([await stack.subagents(), ...(kind === "unavailable" ? [] : [router()])], {
 				useModelRuntimeStream: true,
 			});
+			const explanation = explainModel({
+				agentType: "Explore",
+				definitionModel: DEFAULT_AGENTS.get("Explore")?.model,
+				parentModel: h.session.model,
+				registry: new ModelRegistry(h.session.modelRuntime),
+				cwd: stack.home.root,
+			});
+			expect(explanation.source).toBe("definition");
+			expect(explanation.outcome).toBe(kind === "unmapped" || kind === "unavailable" ? "error" : "resolved");
+			if (explanation.outcome === "resolved")
+				expect(explanation.selected).toBe(kind === "routed" ? "router/cheap" : ref(0));
+			expect(explanation.text).toContain("Answering model: unknown");
+			expect(physical.map((p) => p.state.callCount)).toEqual([0, 0]);
 			physical[0]?.setResponses([fauxAssistantMessage("EXPLORE CHEAP ANSWER")]);
 			h.setResponses([
 				tool("Agent", {
@@ -670,78 +695,99 @@ describe("model-tier/router stack", () => {
 		await h.session.waitForIdle();
 	});
 
-	it("routes @frontier to the unblocked member inside its balanced profile", async () => {
-		stack = await GoalStack.create();
-		configure(undefined, { modelTiers: { frontier: ["router/frontier"] }, agentModels: {} });
-		const physical = stack.registerPhysical(CHAIN);
-		stack.usage.set(CHAIN[0]?.provider, 100);
-		const admissions: string[] = [];
-		const h = await stack.start(
-			[
-				await stack.subagents(),
-				router("wait", "frontier"),
-				(pi) => {
-					pi.events.on("router:rpc:admit", (raw) => admissions.push((raw as { model: string }).model));
-				},
-			],
-			{ useModelRuntimeStream: true },
-		);
-		physical[1]?.setResponses([fauxAssistantMessage("FRONTIER ANSWER")]);
-		h.setResponses([
-			tool("Agent", {
-				subagent_type: "general-purpose",
-				description: "frontier tier",
-				prompt: "answer",
-				model: "@frontier",
-				run_in_background: false,
-			}),
-			fauxAssistantMessage("DRIVER DONE"),
-		]);
-		await h.session.prompt("run the tier");
-		const result = outcomes(h, "Agent")[0];
-		expect(result?.isError).toBe(false);
-		expect(result?.text).toContain(`Model: @frontier -> ${ref(1)} via router/frontier`);
-		expect(result?.text).toContain("FRONTIER ANSWER");
-		expect(admissions).toEqual(["router/frontier"]);
-		expect(physical.map((provider) => provider.state.callCount)).toEqual([0, 1]);
-	});
+	it.each([undefined, "strict-priority", "remaining-balanced"] as const)(
+		"routes @frontier to its unblocked member with policy %s",
+		async (kind) => {
+			stack = await GoalStack.create();
+			configure(undefined, { modelTiers: { frontier: ["router/frontier"] }, agentModels: {} });
+			const physical = stack.registerPhysical(CHAIN);
+			stack.usage.set(CHAIN[0]?.provider, 100);
+			const admissions: string[] = [];
+			const h = await stack.start(
+				[
+					await stack.subagents(),
+					router("wait", "frontier", kind ? { version: 1, kind } : undefined),
+					(pi) => {
+						pi.events.on("router:rpc:admit", (raw) => admissions.push((raw as { model: string }).model));
+					},
+				],
+				{ useModelRuntimeStream: true },
+			);
+			physical[1]?.setResponses([fauxAssistantMessage("FRONTIER ANSWER")]);
+			h.setResponses([
+				tool("Agent", {
+					subagent_type: "general-purpose",
+					description: "frontier tier",
+					prompt: "answer",
+					model: "@frontier",
+					run_in_background: false,
+				}),
+				fauxAssistantMessage("DRIVER DONE"),
+			]);
+			await h.session.prompt("run the tier");
+			const result = outcomes(h, "Agent")[0];
+			expect(result?.isError).toBe(false);
+			expect(result?.text).toContain(`Model: @frontier -> ${ref(1)} via router/frontier`);
+			expect(result?.text).toContain("FRONTIER ANSWER");
+			expect(admissions).toEqual(["router/frontier"]);
+			expect(physical.map((provider) => provider.state.callCount)).toEqual([0, 1]);
+		},
+	);
 
-	it("parks an exhausted @frontier instead of borrowing router/deep or router/default", async () => {
-		stack = await GoalStack.create();
-		configure(undefined, { modelTiers: { frontier: ["router/frontier"] }, agentModels: {} });
-		const physical = stack.registerPhysical(CHAIN, 100);
-		const jobs: { type: string; job?: { model?: string; quotaParked?: boolean } }[] = [];
-		const admissions: string[] = [];
-		const h = await stack.start(
-			[
-				await stack.subagents(),
-				router("wait", "frontier"),
-				(pi) => {
-					pi.events.on("subagents:scheduled", (event) => jobs.push(event as (typeof jobs)[number]));
-					pi.events.on("router:rpc:admit", (raw) => admissions.push((raw as { model: string }).model));
-				},
-			],
-			{ useModelRuntimeStream: true },
-		);
-		h.setResponses([
-			tool("Agent", {
-				subagent_type: "general-purpose",
-				description: "park frontier",
-				prompt: "answer",
-				model: "@frontier",
-				run_in_background: true,
-			}),
-			fauxAssistantMessage("DRIVER DONE"),
-		]);
-		await h.session.prompt("run the tier");
-		const result = outcomes(h, "Agent")[0];
-		expect(result?.isError).toBe(false);
-		expect(result?.text).toContain("router/frontier is exhausted");
-		expect(result?.text).not.toMatch(/router\/(deep|default)/);
-		expect(admissions).toEqual(["router/frontier"]);
-		expect(jobs).toMatchObject([{ type: "added", job: { model: "@frontier", quotaParked: true } }]);
-		expect(physical.map((provider) => provider.state.callCount)).toEqual([0, 0]);
-	});
+	it.each([undefined, "strict-priority", "remaining-balanced"] as const)(
+		"parks and re-admits @frontier without borrowing another tier with policy %s",
+		async (kind) => {
+			stack = await GoalStack.create();
+			configure(undefined, { modelTiers: { frontier: ["router/frontier"] }, agentModels: {} });
+			const physical = stack.registerPhysical(CHAIN, 100);
+			const jobs: { type: string; job?: { model?: string; quotaParked?: boolean } }[] = [];
+			const admissions: string[] = [];
+			let complete!: () => void;
+			const finished = new Promise<void>((resolve) => {
+				complete = resolve;
+			});
+			const h = await stack.start(
+				[
+					await stack.subagents(),
+					router("wait", "frontier", kind ? { version: 1, kind } : undefined),
+					(pi) => {
+						pi.events.on("subagents:completed", () => complete());
+						pi.events.on("subagents:scheduled", (event) => jobs.push(event as (typeof jobs)[number]));
+						pi.events.on("router:rpc:admit", (raw) => admissions.push((raw as { model: string }).model));
+					},
+				],
+				{ useModelRuntimeStream: true },
+			);
+			h.setResponses([
+				tool("Agent", {
+					subagent_type: "general-purpose",
+					description: "park frontier",
+					prompt: "answer",
+					model: "@frontier",
+					run_in_background: true,
+				}),
+				fauxAssistantMessage("DRIVER DONE"),
+			]);
+			await h.session.prompt("run the tier");
+			const result = outcomes(h, "Agent")[0];
+			expect(result?.isError).toBe(false);
+			expect(result?.text).toContain("router/frontier is exhausted");
+			expect(result?.text).not.toMatch(/router\/(deep|default)/);
+			expect(admissions).toEqual(["router/frontier"]);
+			expect(jobs).toMatchObject([{ type: "added", job: { model: "@frontier", quotaParked: true } }]);
+			expect(physical.map((provider) => provider.state.callCount)).toEqual([0, 0]);
+			physical[1]?.setResponses([fauxAssistantMessage("FRONTIER AFTER RESET")]);
+			stack.clock.advance(3_659_000);
+			stack.usage.set(CHAIN[0]?.provider, 100);
+			stack.usage.set(CHAIN[1]?.provider, 0);
+			h.setResponses([fauxAssistantMessage("NOTICED COMPLETION")]);
+			stack.clock.advance(1000);
+			await finished;
+			expect(admissions).toEqual(["router/frontier", "router/frontier"]);
+			expect(physical.map((provider) => provider.state.callCount)).toEqual([0, 1]);
+			await h.session.waitForIdle();
+		},
+	);
 
 	it.each(["error", "inherit"] as const)("an unbound @frontier follows onUnmapped=%s", async (policy) => {
 		stack = await GoalStack.create();

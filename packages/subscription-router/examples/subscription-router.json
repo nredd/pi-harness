@@ -1,4 +1,5 @@
 {
+  "$schema": "../schemas/subscription-router.schema.json",
   "profiles": {
     "cheap": {
       "name": "Router cheap",

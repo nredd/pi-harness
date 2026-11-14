@@ -12,7 +12,7 @@ export default defineConfig({
     server: { deps: { inline: [/@earendil-works\/pi-/] } },
     coverage: {
       provider: "istanbul",
-      reporter: ["text", "lcov"],
+      reporter: ["text", "lcov", "json-summary"],
       reportsDirectory: "coverage/workflow-examples",
       reportOnFailure: true,
       include: owned,

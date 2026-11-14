@@ -62,9 +62,8 @@ export function stabilizeRefs(base: Outline | undefined, next: Outline): Outline
 	}
 	for (const node of next.nodes) {
 		if (assigned.has(node)) continue;
-		while (reserved.has(`@e${nextIndex}`)) nextIndex += 1;
+		// `nextIndex` starts above every numeric base ref and only grows, so a fresh ref can never collide with a reserved one.
 		node.ref = `@e${nextIndex++}`;
-		reserved.add(node.ref);
 	}
 	rebuildIndexes(next);
 	return next;

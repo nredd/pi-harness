@@ -10,7 +10,7 @@ export default defineConfig({
     maxWorkers: 2,
     coverage: {
       provider: "istanbul",
-      reporter: ["text", "lcov"],
+      reporter: ["text", "lcov", "json-summary"],
       reportsDirectory: "coverage/primary",
       reportOnFailure: true,
       include: owned,

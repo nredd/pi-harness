@@ -29,6 +29,7 @@ from coverage_accounting import (
     Reclassification,
     Signal,
     VerificationHelper,
+    account,
     audit_inventory,
     inventory,
     inventory_scopes,
@@ -213,11 +214,12 @@ def test_root_script_helpers_are_measured_by_import_audit_at_zero() -> None:
     assert inventory(ROOT, audit) == {
         "scripts/check-biome-paths.mjs",
         "scripts/import_audit.ts",
+        "scripts/merge-pr.ts",
         "scripts/router_contract.mjs",
         "scripts/run-vitest.ts",
         *configs,
     }
-    assert len(configs) == 15, configs
+    assert len(configs) == 17, configs
     assert "coverage-configurations" not in cfg.packages
     assert audit.goal == "100-percent"
     primary = audit.signals["primary"]
@@ -282,6 +284,122 @@ def test_shipped_computer_javascript_is_pending_production_not_verification() ->
     assert not {(Path(package.root) / path).as_posix() for path in shipped} & helpers
 
 
+def test_async_helper_is_independently_measured_at_zero() -> None:
+    """Keep the full async helper measured separately from the runtime inventory.
+
+    Parameters:
+        None.
+    Returns:
+        None: The exact source, mandatory report and per-OS zero caps stay pinned.
+    Raises:
+        AssertionError: The helper disappears, rejoins verification exclusions or loses enforcement.
+    """
+    cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
+    package = cfg.packages["computer-use-async"]
+    assert package.status == "measured"
+    assert package.goal == "report-only"
+    assert package.root == "packages/computer-use"
+    assert package.owned == ["scripts/check-async.mjs"]
+    assert not package.exclusions
+    assert "scripts/check-async.mjs" not in inventory(ROOT, cfg.packages["computer-use-vitest"])
+    assert not any(helper.path.endswith("/check-async.mjs") for helper in cfg.verification_helpers)
+    signal = package.signals["primary"]
+    assert signal.report == "coverage/async/lcov.info"
+    assert signal.enforcement == "report-only"
+    assert signal.reason.strip()
+    assert not signal.skip_hosts
+    assert not signal.gate
+    assert set(signal.max_uncovered) == {"darwin", "linux"}
+    for counts in signal.max_uncovered.values():
+        assert counts.lines == counts.functions == counts.branches == 0
+    manifest = json.loads((ROOT / package.root / "package.json").read_text())
+    assert "npm run test:async" in manifest["scripts"]["check"]
+    assert "--config vitest.async.config.ts --coverage" in manifest["scripts"]["test:async"]
+
+
+@pytest.mark.parametrize(("runner_os", "host"), [("darwin", "macos"), ("linux", "ubuntu"), ("linux", "wsl2")])
+def test_async_helper_missing_host_report_fails(tmp_path: Path, runner_os: str, host: str) -> None:
+    """Reject missing selected-host artifacts instead of reporting a false zero.
+
+    Parameters:
+        tmp_path (Path): Empty report-artifact directory.
+        runner_os (str): Declared measurement platform.
+        host (str): Selected CI guest class.
+    Returns:
+        None: Every declared host fails accounting without its async report.
+    Raises:
+        AssertionError: Missing coverage is silently skipped or represented by zero counters.
+    """
+    cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
+    cfg.packages = {"computer-use-async": cfg.packages["computer-use-async"]}
+    results, errors = account(ROOT, cfg, runner_os, tmp_path, host=host)
+    assert results == []
+    assert len(errors) == 1
+    assert errors[0].startswith("computer-use-async/primary:")
+    assert "coverage/async/lcov.info" in errors[0]
+
+
+def test_subagents_runtime_scripts_are_measured_at_zero() -> None:
+    """Keep both complete runtime scripts measured by a mandatory zero-floor producer.
+
+    Parameters:
+        None.
+    Returns:
+        None: Actual sources, CI command and per-OS counters remain pinned.
+    Raises:
+        AssertionError: A script becomes an unmeasured helper or loses its producer.
+    """
+    cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
+    package = cfg.packages["subagents-runtime-tooling"]
+    assert package.status == "measured"
+    assert package.goal == "100-percent"
+    assert package.root == "packages/subagents"
+    assert package.owned == ["scripts/build-runtime.mjs", "scripts/check-runtime.mjs"]
+    assert not package.exclusions
+    assert not any(
+        helper.path.startswith("packages/subagents/scripts/") for helper in cfg.verification_helpers
+    )
+    signal = package.signals["primary"]
+    assert signal.report == "coverage/runtime-build-tooling/lcov.info"
+    assert signal.enforcement == "enforced"
+    assert signal.reporters == ["text", "lcov", "json-summary"]
+    assert not signal.skip_hosts
+    assert not signal.skip_os
+    assert not signal.gate
+    assert set(signal.max_uncovered) == {"darwin", "linux"}
+    for counts in signal.max_uncovered.values():
+        assert counts.lines == counts.functions == counts.branches == counts.statements == 0
+    manifest = json.loads((ROOT / package.root / "package.json").read_text())
+    assert "npm run test:runtime-scripts" in manifest["scripts"]["check"]
+    assert manifest["scripts"]["test:runtime-scripts"] == (
+        "node ../../scripts/run-vitest.ts node --config vitest.runtime-build.config.ts --coverage"
+    )
+
+
+@pytest.mark.parametrize(("runner_os", "host"), [("darwin", "macos"), ("linux", "ubuntu"), ("linux", "wsl2")])
+def test_subagents_runtime_scripts_missing_host_report_fails(
+    tmp_path: Path, runner_os: str, host: str
+) -> None:
+    """Reject absent runtime-script producer data on every selected host.
+
+    Parameters:
+        tmp_path (Path): Empty artifact root, not the real producer directory.
+        runner_os (str): Declared measurement platform.
+        host (str): Selected CI guest class.
+    Returns:
+        None: No missing report can be represented by zero counters.
+    Raises:
+        AssertionError: Missing producer data silently passes accounting.
+    """
+    cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
+    cfg.packages = {"subagents-runtime-tooling": cfg.packages["subagents-runtime-tooling"]}
+    results, errors = account(ROOT, cfg, runner_os, tmp_path, host=host)
+    assert results == []
+    assert len(errors) == 1
+    assert errors[0].startswith("subagents-runtime-tooling/primary:")
+    assert "coverage/runtime-build-tooling/lcov.info" in errors[0]
+
+
 def test_unshipped_computer_checks_have_individual_verification_reasons() -> None:
     """Require concrete classifications for every non-shipped computer-use check harness.
 
@@ -296,11 +414,17 @@ def test_unshipped_computer_checks_have_individual_verification_reasons() -> Non
     directory = ROOT / "packages/computer-use"
     manifest = json.loads((directory / "package.json").read_text())
     helpers = {helper.path: helper.reason for helper in cfg.verification_helpers}
+    measured = {
+        (Path(cfg.packages["computer-use-async"].root) / path).as_posix()
+        for package in ["computer-use-async", "computer-use-vitest"]
+        for path in inventory(ROOT, cfg.packages[package])
+    }
     unclassified = [
         relative
         for path in directory.glob("scripts/check-*.mjs")
         if not published_path(path.relative_to(directory), manifest["files"])
         and not helpers.get(relative := path.relative_to(ROOT).as_posix(), "").strip()
+        and relative not in measured
     ]
     assert not unclassified, unclassified
 
@@ -310,7 +434,6 @@ def test_unshipped_computer_checks_have_individual_verification_reasons() -> Non
     [
         "packages/computer-use/scripts/pi-cubench-agent.mjs",
         "packages/computer-use/scripts/check-linux-live.mjs",
-        "packages/computer-use/scripts/check-package-assets.mjs",
     ],
 )
 def test_reviewed_javascript_harnesses_are_explicitly_classified(path: str) -> None:
@@ -326,6 +449,35 @@ def test_reviewed_javascript_harnesses_are_explicitly_classified(path: str) -> N
     cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
     helpers = {helper.path: helper.reason for helper in cfg.verification_helpers}
     assert helpers.get(path, "").strip(), path
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "check-commit-messages",
+        "check-docs-platform",
+        "check-docs",
+        "check-package-assets",
+        "check-sync-ledger",
+        "check-sync-reverts",
+        "check-upstream-sync",
+    ],
+)
+def test_retained_computer_use_gates_are_measured(name: str) -> None:
+    """Keep executable repository gates in both inventories, not helper exemptions.
+
+    Parameters:
+        name (str): Retained gate module measured under computer-use Vitest.
+    Returns:
+        None: Both inventories contain the gate and no helper exemption remains.
+    Raises:
+        AssertionError: A gate silently leaves the measured producer.
+    """
+    cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
+    source = f"scripts/{name}.mjs"
+    for package in ["computer-use", "computer-use-vitest"]:
+        assert source in inventory(ROOT, cfg.packages[package])
+    assert not any(helper.path == f"packages/computer-use/{source}" for helper in cfg.verification_helpers)
 
 
 def test_pytest_conftest_is_a_conventional_test_file_without_an_exclusion() -> None:
@@ -448,6 +600,7 @@ INERT_BY_DECISION = {
     ".github/workflows/publish.yml",
     ".github/workflows/runner-rescue.yml",
     ".github/workflows/runner-smoke.yml",
+    ".github/workflows/wsl-watchdog.yml",
     "Makefile",
     "benchmarks/comparison/Makefile",
     "integration/Makefile",

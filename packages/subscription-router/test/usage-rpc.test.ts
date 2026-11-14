@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { type ConfigResult, loadConfig, type Profile } from "../src/config.js";
 import { ExhaustionTracker } from "../src/exhaustion.js";
 import subscriptionRouter from "../src/index.js";
+import { ResetView } from "../src/reset-view.js";
 import { UsageService, type UsageSnapshot } from "../src/usage.js";
 
 vi.mock("../src/config.js", async (original) => ({
@@ -45,6 +46,7 @@ async function harness(startSession = true, profiles: Profile[] = [], config: Co
 		registerCommand: vi.fn(),
 		registerVirtualModel: vi.fn(),
 		appendEntry: vi.fn(),
+		sendMessage: vi.fn(),
 	} as unknown as ExtensionAPI;
 	await subscriptionRouter(pi);
 	if (startSession) {
@@ -100,6 +102,159 @@ afterEach(() => {
 });
 
 describe("router usage RPC", () => {
+	it("opens reset schedules cached-only, closes/cancels without reads, and bounds explicit refresh", async () => {
+		const h = await harness(false);
+		const notify = vi.fn();
+		const screens: string[] = [];
+		const choices = [false, true, false, false, false];
+		let cancelRefresh = false;
+		const custom = vi.fn(async (factory: Parameters<ExtensionCommandContext["ui"]["custom"]>[0]) => {
+			let finish: (value: unknown) => void = () => {};
+			const result = new Promise((resolve) => {
+				finish = resolve;
+			});
+			const component = await factory(
+				{ terminal: { rows: 40 }, requestRender: vi.fn() } as never,
+				{ fg: (_color: string, text: string) => text } as never,
+				{} as never,
+				finish,
+			);
+			try {
+				component.render(120);
+				if (component instanceof ResetView) {
+					screens.push(component.render(120).join("\n"));
+					component.handleInput(choices.shift() ? "r" : "q");
+				} else if (cancelRefresh) component.handleInput?.("\u001b");
+				return await result;
+			} finally {
+				if ("dispose" in component) component.dispose?.();
+			}
+		});
+		const ctx = {
+			mode: "tui",
+			scopedModels: [{ model: { provider: "anthropic" } }],
+			ui: { notify, custom },
+		} as unknown as ExtensionCommandContext;
+		await h.status(ctx, "resets invalid");
+		expect(notify).toHaveBeenLastCalledWith("subscription-router: expected resets [refresh|codex]", "error");
+		await h.status(ctx, "resets");
+		expect(h.fetch).not.toHaveBeenCalled();
+		expect(custom).toHaveBeenCalledTimes(1);
+		await h.status(ctx, "resets");
+		expect(h.fetch).toHaveBeenCalledTimes(1);
+		await h.status(ctx, "resets refresh");
+		expect(h.fetch).toHaveBeenCalledTimes(1);
+		expect(custom).toHaveBeenCalledTimes(6);
+		expect(screens.at(-1)).toContain("once per minute");
+		expect(screens.at(-1)).toContain("24% used");
+		h.advance(MINUTE);
+		cancelRefresh = true;
+		await h.status(ctx, "resets refresh");
+		expect(screens.at(-1)).toContain("cancelled");
+		expect(screens.at(-1)).toContain("24% used");
+		expect(h.pi.appendEntry).not.toHaveBeenCalled();
+	});
+
+	it("coalesces schedule refresh with a shared read without clearing confirmed blocks", async () => {
+		const h = await harness(false);
+		const ctx = {
+			mode: "json",
+			scopedModels: [{ model: { provider: "anthropic" } }],
+		} as unknown as ExtensionCommandContext;
+		let release: () => void = () => {};
+		let started: () => void = () => {};
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const ready = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		h.fetch.mockImplementationOnce(async () => {
+			started();
+			await held;
+			return new Response(JSON.stringify({ five_hour: { utilization: 10 } }));
+		});
+		h.tracker.mark(
+			{ provider: "anthropic", id: "sample" },
+			{ block: true, window: "weekly", resetAt: Date.now() + MINUTE },
+		);
+		const blocks = h.tracker.active();
+		const warm = h.usage.get(ctx, "anthropic");
+		await ready;
+		const command = h.status(ctx, "resets refresh");
+		release();
+		await Promise.all([warm, command]);
+		expect(h.fetch).toHaveBeenCalledTimes(1);
+		expect(h.tracker.active()).toEqual(blocks);
+		expect(h.pi.sendMessage).toHaveBeenCalledWith(
+			expect.objectContaining({ content: expect.stringContaining("10% used") }),
+			{ triggerTurn: false },
+		);
+	});
+
+	it("reports non-TUI schedules without a model turn and keeps windows on caller cancellation", async () => {
+		vi.useFakeTimers({ now: T0 });
+		const h = await harness(false);
+		const controller = new AbortController();
+		const ctx = {
+			mode: "print",
+			scopedModels: [{ model: { provider: "anthropic" } }],
+			signal: controller.signal,
+			ui: { notify: vi.fn() },
+		} as unknown as ExtensionCommandContext;
+		await h.usage.get(ctx, "anthropic");
+		controller.abort();
+		await h.status(ctx, "resets refresh");
+		expect(h.fetch).toHaveBeenCalledTimes(1);
+		expect(h.pi.sendMessage).toHaveBeenLastCalledWith(
+			{ customType: "router:resets", display: true, content: expect.stringContaining("cancelled") },
+			{ triggerTurn: false },
+		);
+		const message = vi.mocked(h.pi.sendMessage).mock.calls.at(-1)?.[0];
+		expect(message?.content).toContain("24% used");
+		expect(message?.content).toContain("stale");
+		expect(h.tracker.active()).toEqual([]);
+		expect(h.pi.appendEntry).not.toHaveBeenCalled();
+	});
+
+	it("explain validates flags/profile and is a cached, sanitized, nonpersisting forecast", async () => {
+		const profile: Profile = {
+			id: "new",
+			name: "New",
+			policy: { version: 1, kind: "remaining-balanced" },
+			chain: [{ provider: "anthropic", id: "sonnet" }],
+		};
+		const h = await harness(false, [profile]);
+		const notify = vi.fn();
+		const ctx = {
+			scopedModels: [],
+			ui: { notify },
+			modelRegistry: { find: (provider: string, id: string) => ({ provider, id }), hasConfiguredAuth: () => true },
+		} as unknown as ExtensionCommandContext;
+		for (const action of ["explain", "explain new --bad", "explain new --json --json"]) {
+			await h.status(ctx, action);
+			expect(notify.mock.calls.at(-1)).toEqual(["subscription-router: expected explain <profile> [--json]", "error"]);
+		}
+		await h.status(ctx, "explain missing");
+		expect(notify.mock.calls.at(-1)).toEqual(["subscription-router: unknown profile 'missing'", "error"]);
+		await h.status(ctx, "explain new --json");
+		expect(JSON.parse(notify.mock.calls.at(-1)?.[0] as string)).toMatchObject({
+			version: 1,
+			forecast: true,
+			reason: "direct",
+			caller: "unknown",
+			chosen: "anthropic/sonnet",
+		});
+		await h.status(ctx, "explain new");
+		expect(notify.mock.calls.at(-1)?.[0]).toContain("Cached fresh-dispatch forecast");
+		expect(h.fetch).not.toHaveBeenCalled();
+		expect(h.pi.appendEntry).not.toHaveBeenCalled();
+		await h.status(
+			{ ...ctx, modelRegistry: { ...ctx.modelRegistry, find: () => undefined } } as unknown as ExtensionCommandContext,
+			"explain new",
+		);
+		expect(notify.mock.calls.at(-1)?.[0]).toContain("-> exhausted");
+	});
 	it("records the historical decision in full, and status renders it apart from the forecast", async () => {
 		vi.useFakeTimers({ now: 1_700_000_000_000 });
 		const profile: Profile = {
@@ -271,6 +426,49 @@ describe("router usage RPC", () => {
 		const session = Object.assign(Object.create(ctx), { sessionManager }) as ExtensionCommandContext;
 		return { session, appendEntry, routeContext: { modelRegistry: ctx.modelRegistry, session, appendEntry } };
 	}
+
+	it("keeps versioned policy traces requester-local, bounded and deduplicated", async () => {
+		const profile: Profile = {
+			id: "new",
+			name: "New",
+			policy: { version: 1, kind: "remaining-balanced" },
+			chain: [{ provider: "synthetic", id: "a" }],
+		};
+		const h = await harness(false, [profile]);
+		const notify = vi.fn();
+		const ctx = {
+			scopedModels: [],
+			ui: { notify },
+			modelRegistry: { find: (provider: string, id: string) => ({ provider, id }), hasConfiguredAuth: () => true },
+		} as unknown as ExtensionCommandContext;
+		const first = requesterContext(ctx);
+		const second = requesterContext(ctx);
+		const registration = vi.mocked(h.pi.registerVirtualModel).mock.calls[0]?.[0];
+		for (let i = 0; i < 7; i++)
+			await registration?.route(
+				{
+					reason: "continuation",
+					thinkingLevel: "off",
+					previous: { model: { provider: "synthetic", id: "a" } },
+				} as never,
+				first.routeContext as never,
+			);
+		expect(first.appendEntry).toHaveBeenCalledTimes(1);
+		expect(first.appendEntry.mock.calls[0]?.[1]).toMatchObject({
+			version: 1,
+			evaluation: { override: "sticky", caller: "unknown" },
+		});
+		expect(second.appendEntry).not.toHaveBeenCalled();
+		await h.status(first.session);
+		expect(
+			String(notify.mock.calls.at(-1)?.[0])
+				.split("\n")
+				.filter((line) => line.includes("router/new continuation ->")),
+		).toHaveLength(5);
+		await h.status(second.session);
+		expect(notify.mock.calls.at(-1)?.[0]).not.toContain("last decisions");
+		expect(h.pi.appendEntry).not.toHaveBeenCalled();
+	});
 
 	it("logs a requested route to the requester, deduplicated, with its own status history", async () => {
 		const { h, ctx, notify, tick } = await routed();

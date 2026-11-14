@@ -79,7 +79,7 @@ from harness.release import (
     redact_diagnostic,
     release_asset_url,
     release_checksums,
-    release_tarballs,
+    release_package_urls,
     verify_asset,
     verify_provenance_anonymously,
     verify_public_attestation,
@@ -121,6 +121,8 @@ REQUIRED_TOOLS = {
     "npm": "npm installs the core and packages; it ships with Node.js",
 }
 PACKAGE_TREES = ("npm", "git")
+# Core packages npm installs (the rest are staged over nested copies); coding-agent first.
+INSTALLED_PACKAGES = ("pi-coding-agent", "pi-tui")
 # The documented `uvx --exclude-newer` bound: the installer's own Python dependencies resolve as
 # of this instant, never "latest". Bump it deliberately with the installer's dependencies.
 EXCLUDE_NEWER = "2026-10-23T00:00:00Z"
@@ -560,7 +562,8 @@ def verify_release(
     try:
         checksums = release_checksums(tag)
         validate_release_identity(stack, tag, checksums)
-        tarballs = release_tarballs(tag)[:2]
+        urls = release_package_urls(tag)
+        tarballs = [urls[package].rsplit("/", 1)[1] for package in INSTALLED_PACKAGES]
         missing = [name for name in tarballs if name not in stack.core.integrity]
         if missing:
             raise ValueError(f"the snapshot records no integrity for installed asset(s) {', '.join(missing)}")
@@ -2525,7 +2528,7 @@ def stage(
                 raise failure from failure.__cause__
             # Cleanup and the marker share the transaction's original staging/core parent.
             # Journal.place retires this subtree's descriptors before its intentional move.
-            for leftover in ("fetch-home", "npm-cache", "tui-resource"):
+            for leftover in ("fetch-home", "npm-cache", "release-resources"):
                 remove(staged_core / leftover, anchors=held)
             write_atomic(
                 staged_core / CORE_MARKER,

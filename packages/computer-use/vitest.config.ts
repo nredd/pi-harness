@@ -2,27 +2,58 @@ import { readFileSync } from "node:fs";
 import { defineConfig } from "vitest/config";
 
 // `computer-use-vitest`: the JS/TS runtime slice these suites measure; `computer-use` also inventories native and docs source.
-const {
-	owned,
-	exclusions,
-}: { owned: string[]; exclusions: { path: string }[] } = JSON.parse(
+const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] } = JSON.parse(
 	readFileSync(new URL("../../coverage/policy.json", import.meta.url), "utf8"),
 ).packages["computer-use-vitest"];
 
 /**
- * Files already at 0 uncovered lines, functions and branches on every OS (#645 T0). The policy schema has
+ * Files already at 0 uncovered lines, functions, branches and statements on every OS (#645 T0). The policy schema has
  * no per-file pins, so Vitest enforces them: any regression fails `npm test` even inside the aggregate cap.
  */
 const ZERO_UNCOVERED_FILES = [
+	"extensions/computer-use.ts",
 	"scripts/build-native.mjs",
+	"scripts/check-commit-messages.mjs",
+	"scripts/check-sync-ledger.mjs",
+	"scripts/check-sync-reverts.mjs",
+	"scripts/check-upstream-sync.mjs",
+	"scripts/check-docs-platform.mjs",
+	"scripts/check-docs.mjs",
+	"scripts/check-package-assets.mjs",
 	"scripts/docs-generators/generate-source-references.mjs",
 	"scripts/docs-generators/generate-tool-reference.mjs",
+	"scripts/make-signing-cert.mjs",
 	"scripts/rust-coverage.mjs",
 	"scripts/setup-helper.mjs",
+	"src/actions.ts",
+	"src/bridge.ts",
+	"src/cdp.ts",
+	"src/config.ts",
+	"src/contract.ts",
+	"src/desktop.ts",
+	"src/find-params.ts",
+	"src/note.ts",
 	"src/outline-store.ts",
 	"src/outline.ts",
+	"src/output.ts",
+	"src/permissions.ts",
+	"src/platform/architecture.ts",
+	"src/platform/coerce.ts",
+	"src/platform/index.ts",
+	"src/platform/linux/backend.ts",
+	"src/platform/linux/helper.ts",
+	"src/platform/linux/wsl.ts",
+	"src/platform/macos/backend.ts",
+	"src/platform/macos/browser.ts",
 	"src/platform/macos/helper-path.mjs",
 	"src/platform/macos/helper.ts",
+	"src/platform/macos/permissions.ts",
+	"src/platform/windows/backend.ts",
+	"src/platform/windows/helper.ts",
+	"src/root-selection.ts",
+	"src/runtime.ts",
+	"src/state.ts",
+	"src/view.ts",
 ];
 
 export default defineConfig({
@@ -42,13 +73,13 @@ export default defineConfig({
 		// `istanbul` like the other Pi-loading packages; caps in `coverage/policy.json`.
 		coverage: {
 			provider: "istanbul",
-			reporter: ["text", "lcov"],
+			reporter: ["text", "lcov", "json-summary"],
 			reportsDirectory: "coverage/primary",
 			reportOnFailure: true,
 			include: owned,
 			exclude: exclusions.map(({ path }) => path),
 			thresholds: Object.fromEntries(
-				ZERO_UNCOVERED_FILES.map((path) => [path, { lines: 100, functions: 100, branches: 100 }]),
+				ZERO_UNCOVERED_FILES.map((path) => [path, { lines: 100, functions: 100, branches: 100, statements: 100 }]),
 			),
 		},
 	},

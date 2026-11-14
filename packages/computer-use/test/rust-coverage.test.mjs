@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -26,10 +27,14 @@ test("validates crate/arguments and resolves output paths without shell interpol
 });
 
 test("missing cargo tool gives actionable pinned install documentation", () => {
-	const result = spawnSync(process.execPath, [fileURLToPath(new URL("../scripts/rust-coverage.mjs", import.meta.url))], {
-		env: { ...process.env, PATH: "" },
-		encoding: "utf8",
-	});
+	const result = spawnSync(
+		process.execPath,
+		[fileURLToPath(new URL("../scripts/rust-coverage.mjs", import.meta.url))],
+		{
+			env: { ...process.env, PATH: "" },
+			encoding: "utf8",
+		},
+	);
 	assert.equal(result.status, 1);
 	assert.match(
 		result.stderr,
@@ -66,9 +71,36 @@ test("collects tests once with locked manifests and renders all formats from iso
 		assert.equal(commands.filter(({ args }) => args.includes("test")).length, 1);
 		assert.equal(new Set(commands.map(({ options }) => options.env.CARGO_TARGET_DIR)).size, 1);
 		assert.ok(commands.every(({ options }) => options.env.CARGO_TARGET_DIR.startsWith(output)));
-		const run = path.join(output, readdirSync(output)[0]);
+		const run = path.join(
+			output,
+			readdirSync(output).find((entry) => entry.startsWith("linux-") || entry.startsWith("windows-")),
+		);
+		assert.deepEqual(readFileSync(path.join(output, "coverage.json")), readFileSync(path.join(run, "coverage.json")));
+		assert.ok(commands.slice(1).every(({ args }) => args.includes("--disable-default-ignore-filename-regex")));
 		assert.match(readFileSync(path.join(run, "summary.txt"), "utf8"), /TOTAL/);
-		assert.ok(JSON.parse(readFileSync(path.join(run, "metadata.json"), "utf8")).elapsedSeconds >= 0);
+		const metadata = JSON.parse(readFileSync(path.join(run, "metadata.json"), "utf8"));
+		assert.equal(metadata.arch, process.arch);
+		assert.deepEqual(metadata.unmeasured, ["branches", "statements"]);
+		const crate = process.platform === "win32" ? "windows" : "linux";
+		const crateRoot = fileURLToPath(new URL(`../native/${crate}/bridge-rs/`, import.meta.url));
+		const inputs = [
+			"Cargo.lock",
+			"Cargo.toml",
+			...["src", "tests"].flatMap((directory) =>
+				readdirSync(path.join(crateRoot, directory)).map((name) => `${directory}/${name}`),
+			),
+		].sort();
+		assert.deepEqual(Object.keys(metadata.sourceHashes), inputs);
+		for (const name of inputs)
+			assert.equal(
+				metadata.sourceHashes[name],
+				createHash("sha256")
+					.update(readFileSync(path.join(crateRoot, name)))
+					.digest("hex"),
+			);
+		assert.ok(metadata.elapsedSeconds >= 0);
+		assert.equal(metadata.commandSeconds.length, 4);
+		assert.ok(metadata.commandSeconds.every((seconds) => seconds >= 0));
 		assert.throws(
 			() => runCoverage([], () => ({ status: 0, stdout: "cargo-llvm-cov wrong" })),
 			/Expected cargo-llvm-cov/,

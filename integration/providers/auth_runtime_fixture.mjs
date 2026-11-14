@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { verifyTransport } from "./auth_transport.mjs";
+import { runtimeBun } from "./bun_runtime.mjs";
 
 if (process.argv.includes("--stale-nonce")) process.env.HARNESS_AUTH_NONCE = "wrong-nonce";
 if (process.argv.includes("--lost-egress")) {
@@ -11,14 +12,15 @@ if (process.argv.includes("--lost-egress")) {
 if (process.argv.includes("--wrong-echo")) globalThis.fetch = async () => Response.json({ nonce: "wrong" });
 await verifyTransport();
 // Simulate Pi's later fetch replacement. The accessor must remain in front of it.
-if (globalThis.Bun) globalThis.fetch = Bun.fetch;
+const bun = runtimeBun();
+if (bun) globalThis.fetch = bun.fetch;
 await verifyTransport();
 for (const name of ["claude", "security"]) {
 	const command = `/harness-never-exists/${name}`;
 	assert.throws(() => spawnSync(command), /harness blocked/);
-	if (globalThis.Bun) {
-		assert.throws(() => Bun.spawn([command]), /harness blocked/);
-		assert.throws(() => Bun.spawnSync({ cmd: [command] }), /harness blocked/);
+	if (bun) {
+		assert.throws(() => bun.spawn([command]), /harness blocked/);
+		assert.throws(() => bun.spawnSync({ cmd: [command] }), /harness blocked/);
 	}
 }
 const response = await fetch(

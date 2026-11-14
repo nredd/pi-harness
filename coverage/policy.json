@@ -1,11 +1,12 @@
 {
   "version": 2,
-  "target": { "lines": 0, "functions": 0, "branches": 0 },
+  "target": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 },
   "enforce_target": true,
   "unmeasured_trees": [
     { "path": "forks", "issue": 693, "reason": "Carried core fork patches have no coverage producer; diff coverage vs explicit exclusion is an open owner decision." }
   ],
   "reclassifications": [
+    { "package": "session-kit", "signal": "owned", "path": "packages/session-kit/src/stats/library.ts", "reason": "Relative to 57a0c580: preserve every runtime and type export through explicit static named re-exports. Real TypeScript and emitted-ESM Istanbul maps contain zero statements/functions/branches; real Node/Bun namespace parity and type tests preserve the export-star contract. Existing strict facade validation rejects executable additions; all three target modules remain owned and measured." },
     { "package": "dev-tools", "signal": "owned", "path": "packages/dev-tools/src/core/index.ts", "reason": "Relative to integration base 71b0aea: static named ESM re-export facade has zero Istanbul statements/functions in TypeScript and emitted ESM. Strict shape validation rejects executable additions; all executable target modules remain measured." },
     { "package": "plan-mode", "signal": "owned", "path": "packages/plan-mode/src/index.ts", "reason": "Relative to integration base 71b0aea: pure static ESM re-export of the default binding, with zero statements/functions in actual source/emitted-ESM Istanbul maps. Strict facade validation rejects executable additions; src/plan-mode.ts remains owned and measured." },
     { "package": "plan-mode", "signal": "owned", "path": "packages/plan-mode/src/interactive-ui.ts", "reason": "Relative to integration base 71b0aea: pure static ESM named re-export facade, with zero statements/functions in source/emitted-ESM Istanbul maps. Strict shape validation rejects executable additions; every UI target remains owned and measured." },
@@ -30,25 +31,17 @@
     { "package": "coverage-configurations", "signal": "owned", "path": "integration/probes/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
     { "package": "coverage-configurations", "signal": "owned", "path": "integration/providers/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
     { "package": "coverage-configurations", "signal": "owned", "path": "scripts/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
-    { "package": "plan-mode", "signal": "bun", "path": "packages/plan-mode/src/interactive-ui.ts", "reason": "Relative to integration base 71b0aea: remove the same validated zero-statement facade from the native Bun subset membership, not executable target logic. Native wrapper/linkage counters are not executable source counters; UI implementations remain inventoried and the subset stays report-only." }
+    { "package": "plan-mode", "signal": "bun", "path": "packages/plan-mode/src/interactive-ui.ts", "reason": "Relative to integration base 71b0aea: remove the same validated zero-statement facade from the native Bun subset membership, not executable target logic. Native wrapper/linkage counters are not executable source counters; UI implementations remain inventoried and the subset stays report-only." },
+    { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_cleanup.sh", "reason": "Relative to origin/main 06ceb029: deleted. Its cleanup is folded into `scripts/wsl2_capture.py` (`cleanup`), measured under python-scripts (#695 slice 3); the `shell-scripts` inventory cannot name a `.py` replacement. `wsl2_capture.sh` stays as an exec bootstrap and remains owned." }
   ],
   "enforcement_changes": [],
   "verification_helpers": [
-    { "path": "packages/computer-use/scripts/check-docs-platform.mjs", "reason": "Non-shipped subprocess fixtures verify host-independent generated documentation." },
-    { "path": "packages/computer-use/scripts/check-docs.mjs", "reason": "Non-shipped documentation link and owned-install instruction assertions." },
-    { "path": "packages/computer-use/scripts/check-sync-ledger.mjs", "reason": "Non-shipped sync provenance/disposition validator consumed by negative-control checks." },
-    { "path": "packages/computer-use/scripts/check-sync-reverts.mjs", "reason": "Non-shipped disposable patch-drop controls prove carried behaviors remain necessary." },
-    { "path": "packages/computer-use/scripts/check-upstream-sync.mjs", "reason": "Non-shipped pinned-upstream source comparison rejects undeclared drift." },
-    { "path": "packages/computer-use/scripts/check-async.mjs", "reason": "Non-shipped readiness and bounded subprocess helpers used only by verification check harnesses." },
     { "path": "scripts/check-biome-paths.test.mjs", "reason": "Non-shipped regression test exercises real Biome valid/missing-path behavior and preflight rejection; verification only, not a runtime entrypoint." },
     { "path": "scripts/router_contract.test.mjs", "reason": "Non-shipped Vitest suite runs the packed-router contract fixture in process against virtual mocks of its placeholder imports; verification only, not a runtime entrypoint." },
+    { "path": "integration/inprocess/verification/core-pins.ts", "reason": "Resolves the lockfile pin and release record to a cached tarball for `settlement-identity.test.ts` and `core-artifacts.test.ts`; it only reads the lockfile, `releases/` and the account home directory (`userInfo`) from disk; pin selection (`selectReleaseDigest`), cache search order (`npmCacheDirs`) and the digest checks are measured, with negative tests, in `core-artifacts.ts`. Never shipped." },
     { "path": "integration/inprocess/verification/home-setup.ts", "reason": "Vitest setup entry that only calls the measured `installHomeGuard` in `home-guard.ts`; Vitest hard-excludes a config's own `setupFiles` from coverage, so no producer can measure it. Never shipped." },
-    { "path": "packages/computer-use/scripts/check-commit-messages.mjs", "reason": "Repository commit-message policy checker, not runtime code or a published package file." },
     { "path": "packages/computer-use/scripts/check-linux-live.mjs", "reason": "Opt-in D-Bus session launcher for the live Linux Vitest scenario in test/linux-live.test.mjs; holds no assertions and is absent from published files." },
-    { "path": "packages/computer-use/scripts/check-package-assets.mjs", "reason": "Packed-asset and package-manifest verification harness, including Linux source checks from #150; not shipped." },
-    { "path": "packages/computer-use/scripts/pi-cubench-agent.mjs", "reason": "Manual Cubench benchmark driver using a benchmark gateway; verification infrastructure excluded from npm published files." },
-    { "path": "packages/subagents/scripts/build-runtime.mjs", "reason": "Repo-only, unpacked configuration of plan-mode's measured runtime builder (runtime-build-tooling) that regenerates dist/ (#577)." },
-    { "path": "packages/subagents/scripts/check-runtime.mjs", "reason": "Repo-only, unpacked staleness gate comparing the committed dist/ with a fresh build (#577)." }
+    { "path": "packages/computer-use/scripts/pi-cubench-agent.mjs", "reason": "Manual Cubench benchmark driver using a benchmark gateway; verification infrastructure excluded from npm published files." }
   ],
   "packages": {
     "dev-tools": {
@@ -60,14 +53,14 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "enforcement": "enforced",
-          "reporters": ["text", "lcov"]
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -84,14 +77,14 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "enforcement": "enforced",
-          "reporters": ["text", "lcov"]
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -104,15 +97,15 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
 
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "enforcement": "enforced",
-          "reporters": ["text", "lcov"]
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -125,15 +118,15 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
 
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "enforcement": "enforced",
-          "reporters": ["text", "lcov"]
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -142,37 +135,22 @@
       "owned": ["src/**/*.ts"],
       "exclusions": [
         { "path": "src/monitor/types.ts", "kind": "type-only", "reason": "Only TypeScript declarations; emits no executable JavaScript." },
+        { "path": "src/stats/library.ts", "kind": "non-executable-facade", "reason": "Only explicit static named ESM re-exports, including type bindings; zero source/emitted-ESM Istanbul maps. Real Node/Bun namespace parity preserves every original export-star binding. Strict facade validation rejects executable additions; aggregate.ts, load.ts and snapshot.ts remain fully owned and measured." },
         { "path": "dist/pi-stats-export.mjs", "kind": "generated", "reason": "Generated esbuild CLI bundle of the owned src/stats/cli.ts implementation; production source remains measured rather than counting the generated duplicate." }
       ],
       "status": "measured",
-      "note": "Hosted run 40857829296 establishes zero primary misses on both OSes after a deterministic multi-match formatter test removes the incidental coalescing/teardown comparator hit observed in 40852918834; independent Bun references are stable across both runs.",
+      "note": "Primary and full-source Bun enforce zero L/F/B/S misses. Complete macOS, Ubuntu and WSL/Linux Node/Bun reports from run 43395812528 cover all 53 executable sources with zero misses (#829); WSL is Linux, not native Windows. The strict named facade leaves its executable targets owned.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-          "files": [
-            "src/agent-dir.ts", "src/child.ts", "src/clock.ts", "src/config.ts", "src/diff/component.ts", "src/diff/git.ts",
-            "src/diff/index.ts", "src/diff/parse.ts", "src/diff/view.ts", "src/goal/index.ts",
-            "src/goal/state.ts", "src/goal/subagents.ts", "src/index.ts", "src/loop/index.ts",
-            "src/loop/state.ts", "src/mon/component.ts", "src/mon/index.ts", "src/mon/model.ts",
-            "src/mon/poll.ts", "src/mon/source.ts", "src/monitor/coalescer.ts", "src/monitor/index.ts",
-            "src/monitor/manager.ts", "src/monitor/matcher.ts", "src/monitor/messages.ts",
-            "src/monitor/output.ts", "src/monitor/pidfiles.ts", "src/monitor/process.ts",
-            "src/monitor/ring.ts", "src/monitor/splitter.ts", "src/monitor/validate.ts",
-            "src/monitor/widget.ts", "src/output.ts", "src/rules/index.ts", "src/rules/logic.ts",
-            "src/shared.ts", "src/stats/aggregate.ts", "src/stats/chart.ts", "src/stats/component.ts",
-            "src/stats/days.ts", "src/stats/format.ts", "src/stats/freshness.ts", "src/stats/heatmap.ts",
-            "src/stats/index.ts", "src/stats/load.ts", "src/stats/nth.ts", "src/stats/palette.ts", "src/stats/snapshot.ts",
-            "src/stats/ticks.ts", "src/titles/aliases.ts", "src/titles/index.ts", "src/titles/logic.ts"
-          ],
-          "max_uncovered": { "darwin": { "lines": 947, "functions": 96 }, "linux": { "lines": 947, "functions": 94 } },
-          "enforcement": "report-only",
-          "reason": "Compatibility subset, not a full source-complete Bun port. Flip this package to enforced when its full suite runs under Bun and the Bun inventory covers every owned source file: https://github.com/nredd/pi-harness/issues/160.",
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "enforcement": "enforced",
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -187,14 +165,14 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "enforcement": "enforced",
-          "reporters": ["text", "lcov"]
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -207,15 +185,15 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
 
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "enforcement": "enforced",
-          "reporters": ["text", "lcov"]
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -228,41 +206,101 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
 
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "enforcement": "enforced",
-          "reporters": ["text", "lcov"]
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
     "computer-use": {
       "root": "packages/computer-use",
-      "owned": ["src/**/*.ts", "src/**/*.mjs", "src/**/*.mts", "extensions/**/*.ts", "native/macos/*.swift", "native/windows/bridge-rs/src/**/*.rs", "native/linux/bridge-rs/src/**/*.rs", "scripts/build-native.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/docs-generators/*.mjs", "scripts/*.sh", "docs/**/*.ts", "docs/**/*.tsx", "docs/**/*.mjs"],
+      "owned": ["src/**/*.ts", "src/**/*.mjs", "src/**/*.mts", "extensions/**/*.ts", "native/macos/*.swift", "native/windows/bridge-rs/src/**/*.rs", "native/linux/bridge-rs/src/**/*.rs", "scripts/build-native.mjs", "scripts/check-docs-platform.mjs", "scripts/check-docs.mjs", "scripts/check-commit-messages.mjs", "scripts/check-sync-ledger.mjs", "scripts/check-sync-reverts.mjs", "scripts/check-upstream-sync.mjs", "scripts/check-package-assets.mjs", "scripts/make-signing-cert.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs", "scripts/docs-generators/*.mjs", "scripts/*.sh", "docs/**/*.ts", "docs/**/*.tsx", "docs/**/*.mjs"],
       "exclusions": [{ "path": "docs/next-env.d.ts", "kind": "generated", "reason": "Next.js-generated declaration references only; no executable source." }, { "path": "src/platform/macos/helper-path.d.mts", "kind": "type-only", "reason": "Only TypeScript declarations for helper-path.mjs; emits no executable JavaScript." }],
       "status": "pending",
       "goal": "excluded",
       "goal_reason": "Owner explicitly excludes computer-use from coverage maintenance; existing platform/native checks remain unchanged. Inventory remains visible, with no coverage claim.",
-      "note": "Not measured, tracked: native Swift/Rust and the documentation site have no maintained coverage producer. Its JS/TS runtime source is also measured, with enforced ratchet caps, by `computer-use-vitest` (#347, #645). Shipped setup-helper.mjs, build-native.mjs and src/ JavaScript remain inventoried production source, never verification helpers.",
+      "note": "Full inventory: Swift and native Linux Rust are measured separately by computer-use-swift and computer-use-linux-native; Windows Rust and the documentation site remain unmeasured. JS/TS runtime source is separately measured by computer-use-vitest (#347, #645). Shipped setup-helper.mjs, build-native.mjs and src/ JavaScript remain inventoried production source, never verification helpers.",
       "signals": {}
+    },
+    "computer-use-linux-native": {
+      "root": "packages/computer-use",
+      "owned": ["native/linux/bridge-rs/src/**/*.rs"],
+      "exclusions": [],
+      "status": "measured",
+      "goal": "excluded",
+      "goal_reason": "Native runtime closure remains #696; headless tests do not prove desktop adapters or exclude their policy logic.",
+      "note": "Native Ubuntu receipt 43183336941 at 793ad317354e12f696204cbdcbe5b11b4dee4433, artifact 13927707571: uncovered L/F/regions 1442/170/2625. Includes inline and separately named cfg(test) modules in src; no branch or statement producer. Windows and WSL remain unmeasured by this signal.",
+      "signals": {
+        "primary": {
+          "report": "coverage/native-linux/coverage.json",
+          "producer": "llvm-cov",
+          "max_uncovered": { "linux": { "lines": 1442, "functions": 170 } },
+          "enforcement": "report-only",
+          "reason": "Source-complete Ubuntu producer baseline (#758); runtime and inline-test attribution closure remains #696, not a native 100-percent claim.",
+          "reporters": ["text", "lcov", "json"],
+          "skip_os": ["darwin"],
+          "skip_hosts": ["wsl2"],
+          "gate": "check-ts"
+        }
+      }
+    },
+    "computer-use-async": {
+      "root": "packages/computer-use",
+      "owned": ["scripts/check-async.mjs"],
+      "exclusions": [],
+      "status": "measured",
+      "goal": "report-only",
+      "goal_reason": "Non-shipped verification tooling has a report-only maintenance goal, independently pinned at zero by its producer (#759).",
+      "note": "Istanbul imports the complete real helper with deterministic boundary mocks and retained real child-process tests. Generated preload source is exercised by subprocess refusal tests, not measured as a separate source file.",
+      "signals": {
+        "primary": {
+          "report": "coverage/async/lcov.info",
+          "enforcement": "report-only",
+          "reason": "Verification-only maintenance goal; the dedicated Vitest producer enforces a per-file zero L/F/B/S pin (#759). Missing or invalid selected-host reports still fail accounting.",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
+        }
+      }
+    },
+    "computer-use-swift": {
+      "root": "packages/computer-use",
+      "owned": ["native/macos/*.swift"],
+      "exclusions": [],
+      "status": "measured",
+      "goal": "excluded",
+      "goal_reason": "Report-only real-source Swift baseline for #757, not native 100%. Thin live adapters remain documented exceptions under #645; policy above them still needs deterministic seams.",
+      "note": "Full production source linked into one headless instrumented binary. Raw LLVM JSON preserves regions separately; LCOV accounts lines/functions, not fabricated branches or statements. Local initial reference; exact-HEAD hosted artifact must confirm it before merge.",
+      "signals": {
+        "primary": {
+          "report": "coverage/swift/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 4113, "functions": 765, "branches": null } },
+          "reporters": ["text", "lcov"],
+          "enforcement": "report-only",
+          "reason": "#757 establishes the full-source baseline for #645 deterministic S1-S5 closures; no all-native coverage claim.",
+          "skip_hosts": ["linux", "wsl2"],
+          "gate": "check-ts"
+        }
+      }
     },
     "computer-use-vitest": {
       "root": "packages/computer-use",
-      "owned": ["src/**/*.ts", "src/**/*.mjs", "extensions/**/*.ts", "scripts/build-native.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/docs-generators/*.mjs"],
+      "owned": ["src/**/*.ts", "src/**/*.mjs", "extensions/**/*.ts", "scripts/build-native.mjs", "scripts/check-docs-platform.mjs", "scripts/check-docs.mjs", "scripts/check-commit-messages.mjs", "scripts/check-sync-ledger.mjs", "scripts/check-sync-reverts.mjs", "scripts/check-upstream-sync.mjs", "scripts/check-package-assets.mjs", "scripts/make-signing-cert.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs", "scripts/docs-generators/*.mjs"],
       "exclusions": [{ "path": "src/platform/types.ts", "kind": "type-only", "reason": "Only TypeScript declarations; emits no executable JavaScript." }],
       "status": "measured",
       "goal": "excluded",
       "goal_reason": "Owner excludes computer-use from coverage maintenance; this measures its JS/TS runtime source under the Vitest suites from #347 with enforced uncovered-count ratchet caps (#645), not a 100% claim. `computer-use` keeps the full inventory.",
-      "note": "Istanbul over the package's Vitest suites; subprocess-run scripts (setup/build/docs generators) count only what the suites import. Caps are the measured per-OS uncovered counts (#645 T0), see docs/coverage.md.",
+      "note": "Istanbul over the package's Vitest suites; subprocess-run scripts count only what the suites import. At #755 CI HEAD 3a162381, macOS, Ubuntu and WSL2 each measured zero uncovered lines, functions, branches and statements; see docs/computer-use-coverage.md.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 572, "functions": 203, "branches": 871 }, "linux": { "lines": 592, "functions": 211, "branches": 900 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -273,7 +311,7 @@
       "status": "pending",
       "goal": "excluded",
       "goal_reason": "Owner has not chosen how to measure shell and PowerShell (port to Python vs kcov/Pester): https://github.com/nredd/pi-harness/issues/695. Inventory stays visible, with no coverage claim.",
-      "note": "Not measured, tracked in #695: no producer and no shellcheck for merge-pr.sh, install_*.sh, wsl2_*.sh and wsl2_*.ps1. `packages/computer-use/scripts/make-signing-cert.sh` is inventoried under `computer-use`.",
+      "note": "Not measured, tracked in #695: merge-pr.sh is only the explicit-Node compatibility bootstrap; its merge policy is measured under import-audit. install_gh_linux.sh is likewise only an `exec python3` bootstrap; its logic in `scripts/install_gh_linux.py` is measured under python-scripts. install_wsl_owned_tools.sh, wsl2_run.sh and wsl2_capture.sh are the same bootstrap; their logic in `scripts/install_wsl_owned_tools.py`, `scripts/wsl2_run.py` and `scripts/wsl2_capture.py` (shared plumbing in `scripts/wsl2_exec.py`; the former `wsl2_cleanup.sh` is folded into the capture) is measured under python-scripts. No producer or shellcheck for the remaining wsl2_*.sh and wsl2_*.ps1. `packages/computer-use/scripts/make-signing-cert.sh` is inventoried under `computer-use`.",
       "signals": {}
     },
     "runtime-build-tooling": {
@@ -285,8 +323,22 @@
       "signals": {
         "primary": {
           "report": "coverage/runtime-build-tooling/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
+        }
+      }
+    },
+    "subagents-runtime-tooling": {
+      "root": "packages/subagents",
+      "owned": ["scripts/build-runtime.mjs", "scripts/check-runtime.mjs"],
+      "exclusions": [],
+      "status": "measured",
+      "note": "The actual production scripts run against disposable source/output trees with the real shared builder and esbuild. No copied or extracted script logic is measured.",
+      "signals": {
+        "primary": {
+          "report": "coverage/runtime-build-tooling/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -299,8 +351,14 @@
       "signals": {
         "primary": {
           "report": "coverage/workflow-examples/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
+        },
+        "bun": {
+          "report": "coverage/workflow-examples-bun/lcov.info",
+          "enforcement": "enforced",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -355,15 +413,21 @@
     },
     "providers": {
       "root": "integration/providers",
-      "owned": ["auth_guard.mjs", "auth_runtime_fixture.mjs", "auth_transport.mjs", "extension_inventory.ts", "faux.ts", "redirect_anthropic.mjs", "usage_fixture.ts"],
+      "owned": ["auth_guard.mjs", "auth_runtime_fixture.mjs", "auth_transport.mjs", "bun_runtime.mjs", "extension_inventory.ts", "faux.ts", "redirect_anthropic.mjs", "usage_fixture.ts"],
       "exclusions": [],
       "status": "measured",
-      "note": "Synthetic providers and auth preloads, measured by `check-providers` against recording registries and a loopback mock; joins the 100-percent goal at 0/0.",
+      "note": "Synthetic providers and auth preloads, measured by `check-providers` against recording registries and a loopback mock on Node and Bun. The real engine preload is separately exercised before named builtin imports.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
+        },
+        "bun": {
+          "report": "coverage/bun/lcov.info",
+          "enforcement": "enforced",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -372,6 +436,7 @@
       "owned": [
         "scripts/check-biome-paths.mjs",
         "scripts/import_audit.ts",
+        "scripts/merge-pr.ts",
         "scripts/router_contract.mjs",
         "scripts/run-vitest.ts",
         "scripts/vitest.config.ts",
@@ -383,12 +448,12 @@
       ],
       "exclusions": [],
       "status": "measured",
-      "note": "Root Node verification scripts measured in process by `check-import-audit`: the import audit against the real tsgo parser, the Vitest launcher, the Biome path preflight and the packed-router contract fixture, plus every Vitest producer configuration (#380), imported and asserted by `scripts/coverage-configs.test.ts`. The Vitest root is the repository root so the report's paths cover configurations outside `scripts/`. Joins the 100-percent goal at 0/0. Python tooling retains its existing gates.",
+      "note": "Root Node verification scripts measured in process by `check-import-audit`: the import audit against the real tsgo parser, the Vitest launcher, the exact-HEAD merge receipt/command policy, the Biome path preflight and the packed-router contract fixture, plus every Vitest producer configuration (#380), imported and asserted by `scripts/coverage-configs.test.ts`. The Vitest root is the repository root so the report's paths cover configurations outside `scripts/`. Joins the 100-percent goal at 0/0. Python tooling retains its existing gates.",
       "signals": {
         "primary": {
           "report": "scripts/coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
@@ -401,28 +466,28 @@
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     },
     "inprocess": {
       "root": "integration/inprocess",
-      "owned": ["agents-support.ts", "goal-support.ts", "native-timers.ts", "support.ts", "todo-support.ts", "verification/home-guard.ts"],
+      "owned": ["agents-support.ts", "goal-support.ts", "native-timers.ts", "support.ts", "todo-support.ts", "verification/core-artifacts.ts", "verification/home-guard.ts"],
       "exclusions": [],
       "status": "measured",
       "note": "In-process stack fixtures, measured with every fixture module the suites run. `verification/home-setup.ts` stays a verification helper: Vitest hard-excludes its own `setupFiles` from coverage.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
-          "reporters": ["text", "lcov"]
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
         },
         "bun": {
           "report": "coverage/bun/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0 } },
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "enforcement": "enforced",
-          "reporters": ["text", "lcov"]
+          "reporters": ["text", "lcov", "json-summary"]
         }
       }
     }

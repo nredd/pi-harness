@@ -44,11 +44,16 @@ jobs:
           # A fork PR never gets a pool (a fork also controls its own workflow, so this is not the boundary).
           PI_LINUX_HEARTBEAT: ${{ vars.PI_LINUX_HEARTBEAT }}
           PI_MACOS_HEARTBEAT: ${{ vars.PI_MACOS_HEARTBEAT }}
+          PI_WSL2_HEARTBEAT: ${{ vars.PI_WSL2_HEARTBEAT }}
           # Maintainer kill switch: any non-empty value sends every cell back to hosted runners.
           PI_POOLS_DISABLED: ${{ vars.PI_POOLS_DISABLED }}
           UNTRUSTED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'true' || '' }}
         run: |
-          pools=(--pool-heartbeat "pi-linux=$PI_LINUX_HEARTBEAT" --pool-heartbeat "pi-macos=$PI_MACOS_HEARTBEAT")
+          pools=(
+            --pool-heartbeat "pi-linux=$PI_LINUX_HEARTBEAT"
+            --pool-heartbeat "pi-macos=$PI_MACOS_HEARTBEAT"
+            --pool-heartbeat "pi-wsl2=$PI_WSL2_HEARTBEAT"
+          )
           if [ -n "$UNTRUSTED" ] || [ -n "$PI_POOLS_DISABLED" ]; then pools+=(--no-pools); fi
           if [ "$EVENT" = workflow_dispatch ]; then
             # A frozen release-verification/<sha> ref can verify an older main
@@ -110,7 +115,9 @@ jobs:
     runs-on: &owned-shard-runner ${{ matrix.runner }}
     defaults: &owned-shard-defaults
       run:
-        shell: ${{ matrix.guest == 'wsl2' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash -e {0}' }}
+        # `defaults.run.shell` cannot read `runner.os`, so the plan's `host` picks it: a hosted wsl2 shard reaches its
+        # guest through `wsl.exe`, a pooled one (`native`) already runs inside the linux-arm64 distro.
+        shell: ${{ matrix.guest == 'wsl2' && matrix.host == 'windows' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash -e {0}' }}
     timeout-minutes: &owned-shard-timeout ${{ matrix.os == 'wsl2' && 45 || 30 }}
     steps: &owned-shard-steps
       - name: Select and verify Git Bash on the Windows host
@@ -137,7 +144,19 @@ jobs:
         id: tools
         with:
           guest: ${{ matrix.guest }}
+          host: ${{ matrix.host }}
           owned: 'true'
+      # The pooled ARM64 cell: prove the isolation first, then bootstrap in place (no copy, no `pi-ci` user; the
+      # golden image's tools are reused when their versions match the pins).
+      - name: Smoke the native guest
+        if: matrix.host == 'native'
+        run: bash scripts/wsl2_smoke.sh
+      - name: Bootstrap tools in the native guest
+        if: matrix.host == 'native'
+        env:
+          PI_WSL2_IN_GUEST: '1'
+          WSL_OWNED: 'true'
+        run: bash scripts/wsl2_setup.sh
       # Real reviewer reads need system binaries, not Pi's live latest-release download fallback.
       # Prebuilt release binaries from GitHub on both OSes: an Ubuntu apt mirror outage must not
       # block the Linux matrix. fd-find 10.4.2+ ships binstall metadata matching its release assets;
@@ -177,7 +196,8 @@ jobs:
       # computer-use's Linux helper checks (cargo tests, packed-source build, diagnostics) run inside its `check-ts` on
       # Ubuntu and WSL and print NOT RUN on macOS. ARM64 is compile-only (`cargo check`, no linker): never a runtime claim.
       - name: Add the aarch64 Linux compile target
-        if: matrix.guest != 'macos' && contains(matrix.workspaces, 'packages/computer-use')
+        # Skipped on the native ARM64 host: a native `cargo check` of that target is no extra evidence.
+        if: matrix.guest != 'macos' && matrix.host != 'native' && contains(matrix.workspaces, 'packages/computer-use')
         run: |
           rustup target add aarch64-unknown-linux-gnu
           echo "PI_CU_LINUX_ARM64_CHECK=1" >>"$GITHUB_ENV"
@@ -185,7 +205,33 @@ jobs:
       # only the shard's workspaces, each package's own `npm run check` in npm workspace order.
       - name: Owned gate check-ts (biome, tsc, Vitest on Node and Bun, computer-use checks)
         if: ${{ !cancelled() && steps.install.outcome == 'success' && contains(matrix.gates, 'check-ts') }}
+        env:
+          # computer-use's `check` also diffs its tree against the pinned upstream commit (#720). Linux only: one
+          # shallow fetch, and the check compares source trees, so one OS is enough.
+          PI_CU_UPSTREAM_SYNC: ${{ matrix.os == 'ubuntu-24.04' && '1' || '' }}
         run: make check-ts WORKSPACES="${{ matrix.workspaces }}"
+      - name: Install pinned native Ubuntu coverage tools
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && matrix.os == 'ubuntu-24.04' && contains(matrix.workspaces, 'packages/computer-use') }}
+        timeout-minutes: 8
+        env:
+          CARGO_BUILD_JOBS: '2'
+          RUSTUP_TOOLCHAIN: '1.97.1'
+        run: |
+          mkdir -p packages/computer-use/coverage/native-linux
+          {
+            time rustup toolchain install 1.97.1 --profile minimal --component llvm-tools-preview
+            time cargo +1.97.1 install cargo-llvm-cov --version 0.9.1 --locked --root "$RUNNER_TEMP/cu-cov-tools"
+            rustup run 1.97.1 rustc --version --verbose
+          } 2>&1 | tee packages/computer-use/coverage/native-linux/setup.log
+          echo "$(dirname "$(rustup which --toolchain 1.97.1 cargo)")" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/cu-cov-tools/bin" >> "$GITHUB_PATH"
+      - name: Collect native Ubuntu Rust coverage (headless, report-only)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && matrix.os == 'ubuntu-24.04' && contains(matrix.workspaces, 'packages/computer-use') }}
+        timeout-minutes: 8
+        env:
+          CARGO_BUILD_JOBS: '2'
+          RUSTUP_TOOLCHAIN: '1.97.1'
+        run: npm run coverage:rust --workspace @nredd/pi-computer-use -- --crate linux --output coverage/native-linux
       - name: Owned gate check-scripts (ruff, ty, pytest scripts, import audit)
         if: ${{ !cancelled() && steps.install.outcome == 'success' && contains(matrix.gates, 'check-scripts') }}
         run: make check-scripts
@@ -224,9 +270,18 @@ jobs:
             echo "### check-benchmark: NOT RUN"
             echo "$why This is not a pass."
           } >>"$GITHUB_STEP_SUMMARY"
+      # `macos-native-pure` compiles real shipped Swift sources once during the package gate.
+      # Retain raw region/profile evidence separately; fan-in still consumes its validated LCOV.
+      - name: Preserve real-source Swift coverage
+        if: always() && matrix.guest == 'macos' && contains(matrix.workspaces, 'packages/computer-use')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: computer-use-swift-${{ matrix.os }}
+          path: packages/computer-use/coverage/swift/
+          if-no-files-found: error
       # WSL producers run on the guest Linux filesystem; artifact actions run on Windows.
       - uses: ./.github/actions/capture-ci-wsl
-        if: always() && matrix.os == 'wsl2' && steps.tools.outcome == 'success'
+        if: always() && matrix.os == 'wsl2' && runner.os == 'Windows' && steps.tools.outcome == 'success'
       # Reports only: the fan-in accounts for the whole cell. A shard that produces no report (computer-use) uploads
       # nothing, and the fan-in's accounting fails on any report the policy expects and no shard produced.
       - name: Preserve this shard's coverage reports
@@ -236,15 +291,26 @@ jobs:
           name: coverage-${{ matrix.os }}-${{ matrix.shard }}
           path: |
             packages/*/coverage/**/lcov.info
+            packages/computer-use/coverage/native-linux/coverage.json
+            packages/computer-use/coverage/native-linux/setup.log
+            packages/computer-use/coverage/native-linux/*/coverage.json
+            packages/computer-use/coverage/native-linux/*/metadata.json
+            packages/computer-use/coverage/native-linux/*/summary.txt
+            packages/computer-use/coverage/native-linux/*/*.log
+            packages/*/coverage/**/coverage-summary.json
             integration/inprocess/coverage/**/lcov.info
+            integration/inprocess/coverage/**/coverage-summary.json
             integration/probes/coverage/**/lcov.info
+            integration/probes/coverage/**/coverage-summary.json
             integration/providers/coverage/**/lcov.info
+            integration/providers/coverage/**/coverage-summary.json
             integration/coverage/**/lcov.info
             scripts/coverage/**/lcov.info
+            scripts/coverage/**/coverage-summary.json
             benchmarks/comparison/coverage/**/lcov.info
           if-no-files-found: ignore
       - uses: ./.github/actions/capture-ci-wsl
-        if: always() && matrix.os == 'wsl2' && steps.tools.outcome == 'success'
+        if: always() && matrix.os == 'wsl2' && runner.os == 'Windows' && steps.tools.outcome == 'success'
         with:
           cleanup: cleanup
           job-status: ${{ job.status }}
@@ -281,18 +347,100 @@ jobs:
     timeout-minutes: *owned-shard-timeout
     steps: *owned-shard-steps
 
+  # Native Windows is not the Linux guest. Keep x64 hosted even when WSL routes to an ARM64 pool (#736).
+  computer-use-windows:
+    name: computer-use Rust (windows-x64)
+    needs: classify
+    if: ${{ fromJSON(needs.classify.outputs.plan || '{}')['owned (ubuntu-24.04)'].run && contains(toJSON(fromJSON(needs.classify.outputs.plan)['owned (ubuntu-24.04)'].shards), 'packages/computer-use') }}
+    runs-on: windows-2025
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_BUILD_JOBS: '2'
+      RUSTUP_TOOLCHAIN: '1.97.1'
+      PI_CU_WINDOWS_SCRIPTS: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci-tools
+        with:
+          guest: windows
+      - name: Verify root core overrides before installing dependencies
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $env:PYTHONPATH = 'integration'
+          # The verifier intentionally uses only explicit OpenSSL CA defaults. Windows Python has none.
+          # Export pinned Node's built-in public Mozilla roots, not private machine roots or a guessed Git layout.
+          # This is a temporary CA input, not a system trust-store change or TLS bypass.
+          $env:SSL_CERT_FILE = Join-Path $env:RUNNER_TEMP 'cu-public-node-ca.pem'
+          node -e 'require("node:fs").writeFileSync(process.argv[1], require("node:tls").rootCertificates.join("\n") + "\n")' "$env:SSL_CERT_FILE"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv run --no-project --python (Get-Content .python-version) python -m harness.release --verify-root-overrides --root .
+      - name: Install pinned native compiler and LLVM tools
+        run: |
+          New-Item -ItemType Directory -Force packages/computer-use/coverage/native-windows | Out-Null
+          rustup toolchain install 1.97.1 --profile minimal --component llvm-tools-preview,rustfmt,clippy
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +1.97.1 install cargo-llvm-cov --version 0.9.1 --locked --root "$env:RUNNER_TEMP/cu-cov-tools"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "$env:RUNNER_TEMP/cu-cov-tools/bin" >> $env:GITHUB_PATH
+          rustup run 1.97.1 rustc --version --verbose | Tee-Object packages/computer-use/coverage/native-windows/compiler.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Select-String -Quiet 'host: x86_64-pc-windows-msvc' packages/computer-use/coverage/native-windows/compiler.log)) { throw 'Native Windows x64 compiler required' }
+      - name: Format, compile, lint and document the Windows crate
+        run: |
+          $manifest = 'packages/computer-use/native/windows/bridge-rs/Cargo.toml'
+          cargo fmt --manifest-path $manifest -- --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo check --locked --all-targets --manifest-path $manifest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked --all-targets --manifest-path $manifest -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:RUSTDOCFLAGS = '-D warnings'
+          cargo doc --locked --no-deps --manifest-path $manifest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --doc --manifest-path $manifest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Native Windows tests and LLVM reports (no desktop interaction)
+        run: node packages/computer-use/scripts/rust-coverage.mjs --crate windows --output packages/computer-use/coverage/native-windows
+      - name: Install isolated script-test dependencies
+        run: npm ci --ignore-scripts
+      - name: Windows build and install routing into disposable paths
+        working-directory: packages/computer-use
+        run: node ../../scripts/run-vitest.ts node test/windows-build-scripts.test.mjs test/rust-coverage.test.mjs --coverage.enabled=false
+      - name: Preserve Windows source-bound native reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: computer-use-rust-windows-x64
+          path: |
+            packages/computer-use/coverage/native-windows/compiler.log
+            packages/computer-use/coverage/native-windows/coverage.json
+            packages/computer-use/coverage/native-windows/*/lcov.info
+            packages/computer-use/coverage/native-windows/*/coverage.json
+            packages/computer-use/coverage/native-windows/*/summary.txt
+            packages/computer-use/coverage/native-windows/*/metadata.json
+            packages/computer-use/coverage/native-windows/*/*.log
+          if-no-files-found: error
+
   # The fan-in always reports from Ubuntu: it runs no tests, so a NOT RUN, blocked or running cell holds no macOS or
   # Windows slot. Its one-cell matrix keeps the required name, and the `owned (${{ matrix.os }})` placeholder name of
   # a job a cancelled run never started.
   owned-ubuntu:
     if: ${{ !cancelled() }}
     name: &owned-name owned (${{ matrix.os }})
-    needs: [classify, owned-shards-ubuntu]
+    needs: [classify, owned-shards-ubuntu, computer-use-windows]
     strategy:
       matrix:
         os: [ubuntu-24.04]
     env:
       SHARDS_RESULT: ${{ needs.owned-shards-ubuntu.result }}
+      WINDOWS_REQUIRED: ${{ contains(toJSON(fromJSON(needs.classify.outputs.plan || '{}')['owned (ubuntu-24.04)'].shards), 'packages/computer-use') }}
+      WINDOWS_RESULT: ${{ needs.computer-use-windows.result }}
     runs-on: ubuntu-24.04
     timeout-minutes: &owned-timeout 15
     steps: &owned-steps
@@ -320,6 +468,10 @@ jobs:
         run: |
           if [ "$SHARDS_RESULT" != success ]; then
             echo "::error title=$CELL shards $SHARDS_RESULT::The plan runs this cell, but its shard jobs finished '$SHARDS_RESULT'; see the 'owned shard' jobs"
+            exit 1
+          fi
+          if [ "${WINDOWS_REQUIRED:-false}" = true ] && [ "$WINDOWS_RESULT" != success ]; then
+            echo "::error title=Windows native producer $WINDOWS_RESULT::Native Windows x64 compiler, tests, reports and build scripts must succeed"
             exit 1
           fi
           echo "Every planned shard of $CELL succeeded"
@@ -374,11 +526,22 @@ jobs:
           name: coverage-${{ matrix.os }}
           path: |
             packages/*/coverage/**/lcov.info
+            packages/computer-use/coverage/native-linux/coverage.json
+            packages/computer-use/coverage/native-linux/setup.log
+            packages/computer-use/coverage/native-linux/*/coverage.json
+            packages/computer-use/coverage/native-linux/*/metadata.json
+            packages/computer-use/coverage/native-linux/*/summary.txt
+            packages/computer-use/coverage/native-linux/*/*.log
+            packages/*/coverage/**/coverage-summary.json
             integration/inprocess/coverage/**/lcov.info
+            integration/inprocess/coverage/**/coverage-summary.json
             integration/probes/coverage/**/lcov.info
+            integration/probes/coverage/**/coverage-summary.json
             integration/providers/coverage/**/lcov.info
+            integration/providers/coverage/**/coverage-summary.json
             integration/coverage/**/lcov.info
             scripts/coverage/**/lcov.info
+            scripts/coverage/**/coverage-summary.json
             benchmarks/comparison/coverage/**/lcov.info
             coverage/summary.json
           if-no-files-found: error
@@ -443,7 +606,8 @@ jobs:
     runs-on: ${{ !fromJSON(needs.classify.outputs.plan || '{}')[format('contracts ({0})', matrix.os)].run && 'ubuntu-24.04' || fromJSON(needs.classify.outputs.plan || '{}')[format('contracts ({0})', matrix.os)].runner || matrix.runner }}
     defaults:
       run:
-        shell: ${{ matrix.guest == 'wsl2' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash -e {0}' }}
+        # The plan's `host` for this cell, as in the owned shards: empty (a bypass cell) means hosted.
+        shell: ${{ matrix.guest == 'wsl2' && (fromJSON(needs.classify.outputs.plan || '{}')['contracts (wsl2)'].host || 'windows') == 'windows' && format('bash "{0}/scripts/wsl2_host.sh" {{0}}', github.workspace) || 'bash -e {0}' }}
     timeout-minutes: ${{ matrix.os == 'wsl2' && 45 || 30 }}
     steps:
       - name: Select and verify Git Bash on the Windows host
@@ -486,6 +650,15 @@ jobs:
         if: steps.plan.outputs.run == 'true'
         with:
           guest: ${{ matrix.guest }}
+          host: ${{ matrix.guest == 'wsl2' && fromJSON(needs.classify.outputs.plan || '{}')['contracts (wsl2)'].host || '' }}
+      - name: Smoke the native guest
+        if: steps.plan.outputs.run == 'true' && matrix.guest == 'wsl2' && fromJSON(needs.classify.outputs.plan || '{}')['contracts (wsl2)'].host == 'native'
+        run: bash scripts/wsl2_smoke.sh
+      - name: Bootstrap tools in the native guest
+        if: steps.plan.outputs.run == 'true' && matrix.guest == 'wsl2' && fromJSON(needs.classify.outputs.plan || '{}')['contracts (wsl2)'].host == 'native'
+        env:
+          PI_WSL2_IN_GUEST: '1'
+        run: bash scripts/wsl2_setup.sh
       # Verifies the root core overrides before `npm ci`; the read-only token is for `gh attestation verify`.
       - name: Install
         if: steps.plan.outputs.run == 'true'
@@ -508,7 +681,7 @@ jobs:
         if: steps.plan.outputs.run == 'true'
         run: make check-todo-package-contract REPORT="$RUNNER_TEMP/todo-package-contracts.json"
       - uses: ./.github/actions/capture-ci-wsl
-        if: always() && matrix.os == 'wsl2' && steps.tools.outcome == 'success'
+        if: always() && matrix.os == 'wsl2' && runner.os == 'Windows' && steps.tools.outcome == 'success'
         with:
           cleanup: cleanup
           job-status: ${{ job.status }}

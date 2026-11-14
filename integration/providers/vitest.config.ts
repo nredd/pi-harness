@@ -10,10 +10,16 @@ const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] }
 // into another file. Explicit test files, no glob.
 export default defineConfig({
 	test: {
-		include: ["extension_inventory.test.ts", "faux.test.ts", "preloads.test.ts", "usage_fixture.test.ts"],
+		include: [
+			"bun_runtime.test.ts",
+			"extension_inventory.test.ts",
+			"faux.test.ts",
+			"preloads.test.ts",
+			"usage_fixture.test.ts",
+		],
 		coverage: {
 			provider: "v8",
-			reporter: ["text", "lcov"],
+			reporter: ["text", "lcov", "json-summary"],
 			reportsDirectory: "coverage/primary",
 			reportOnFailure: true,
 			include: owned,

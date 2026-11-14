@@ -50,7 +50,9 @@ WSL_INPUT_FILES = TOOLCHAIN_INPUTS | {
     "scripts/coverage-configs.test.ts",
     "scripts/import_audit.test.ts",
     "scripts/import_audit.ts",
+    "scripts/install_gh_linux.py",
     "scripts/install_gh_linux.sh",
+    "scripts/install_wsl_owned_tools.py",
     "scripts/install_wsl_owned_tools.sh",
     "scripts/router_contract.mjs",
     "scripts/router_contract.test.mjs",
@@ -133,6 +135,11 @@ OWNED_GATES = {
     os_name: tuple(dict.fromkeys(gate for shard in shards for gate in shard.gates))
     for os_name, shards in OWNED_SHARDS.items()
 }
+# Where a `wsl2` cell runs its guest. Hosted: the x64 Windows runner drives WSL through `wsl.exe`. Native: the
+# self-hosted pool runs the job inside a linux-arm64 distro, so the steps are plain Linux (#736). The guest
+# stays `wsl2` either way, so coverage accounting and `skip_hosts` keep working.
+HOST_WINDOWS = "windows"
+HOST_NATIVE = "native"
 # Runner label and execution guest per OS, as the `contracts` matrix spells them (a test pins the two).
 RUNNERS = {
     "ubuntu-24.04": ("ubuntu-24.04", "linux"),
@@ -216,6 +223,8 @@ class ShardPlan:
         gates (tuple[str, ...]): Make targets, one workflow step each.
         workspaces (tuple[str, ...]): npm workspaces its `check-ts` runs, in npm workspace order.
         skipped_gates (tuple[str, ...]): Its `PATH_GATED_GATES` this run reports NOT RUN.
+        host (str): Where a `wsl2` shard runs its guest: `windows` (hosted, through `wsl.exe`) or `native`
+            (the self-hosted linux-arm64 pool). Empty for every other guest.
     """
 
     os: str
@@ -225,14 +234,16 @@ class ShardPlan:
     gates: tuple[str, ...]
     workspaces: tuple[str, ...]
     skipped_gates: tuple[str, ...] = ()
+    host: str = ""
 
     def to_output(self) -> dict[str, str]:
         """Return the matrix `include` entry the shard job reads.
 
         Returns:
-            dict[str, str]: Strings only; gates, workspaces and skipped gates are space-joined.
+            dict[str, str]: Strings only; gates, workspaces and skipped gates are space-joined. `host` is
+                present only for a `wsl2` shard.
         """
-        return {
+        output = {
             "os": self.os,
             "shard": self.name,
             "runner": self.runner,
@@ -241,6 +252,9 @@ class ShardPlan:
             "workspaces": " ".join(self.workspaces),
             "skipped_gates": " ".join(self.skipped_gates),
         }
+        if self.host:
+            output["host"] = self.host
+        return output
 
 
 @dataclass(frozen=True)
@@ -261,6 +275,8 @@ class CellPlan:
             --skipped-gates`).
         runner (str): The self-hosted pool label a `contracts` or `stack` cell runs on, empty to keep the
             hosted runner its matrix names.
+        host (str): Where a `wsl2` `contracts` cell runs its guest, `windows` (hosted) or `native` (pool);
+            empty for every other cell.
     """
 
     run: bool
@@ -273,6 +289,7 @@ class CellPlan:
     coverage_os: str = ""
     skipped_gates: tuple[str, ...] = ()
     runner: str = ""
+    host: str = ""
 
     def to_output(self) -> dict[str, object]:
         """Return the JSON-ready form the workflow reads with `fromJSON`.
@@ -292,9 +309,11 @@ class CellPlan:
             "coverage_os": self.coverage_os,
             "skipped_gates": " ".join(self.skipped_gates),
         }
-        # Only a pool-routed cell carries a runner, so the plan is byte-identical while no pool is up.
+        # Only a pool-routed cell carries a runner, so the runner-less plan is unchanged while no pool is up.
         if self.runner:
             output["runner"] = self.runner
+        if self.host:
+            output["host"] = self.host
         return output
 
 
@@ -613,6 +632,7 @@ def shard_plans(
                 shard.gates,
                 selected if CHECK_TS in shard.gates else (),
                 tuple(gate for gate in shard.gates if gate in path_gated),
+                HOST_WINDOWS if guest == "wsl2" else "",
             )
         )
     return tuple(plans)
@@ -643,7 +663,8 @@ def native_plan(
     if result.docs_only and os_name != "wsl2":
         return skipped(NOT_RUN["docs_only"])
     if job != "owned":
-        return CellPlan(run=True, scenarios=True, gates=(), reason="")
+        host = HOST_WINDOWS if RUNNERS[os_name][1] == "wsl2" else ""
+        return CellPlan(run=True, scenarios=True, gates=(), reason="", host=host)
     path_gated = skipped_gates(result, event)
     return CellPlan(
         run=True,
@@ -722,13 +743,15 @@ def apply_capacity(cells: Mapping[str, CellPlan], capacity: Mapping[str, int]) -
         name = running[job, os_name, variant]
         label = POOLS[pool].label
         if job == "owned":
+            host = HOST_NATIVE if os_name == "wsl2" else ""
             shards = tuple(
-                replace(shard, runner=label) if shard.name == variant else shard
-                for shard in cells[name].shards
+                replace(shard, runner=label, host=host or shard.host) if shard.name == variant else shard
+                for shard in planned[name].shards
             )
-            planned[name] = replace(cells[name], shards=shards)
+            planned[name] = replace(planned[name], shards=shards)
         else:
-            planned[name] = replace(cells[name], runner=label)
+            host = HOST_NATIVE if os_name == "wsl2" else cells[name].host
+            planned[name] = replace(cells[name], runner=label, host=host)
     return planned
 
 

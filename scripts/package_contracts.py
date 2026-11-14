@@ -183,7 +183,7 @@ RESOURCE_SAMPLER_FILES = (
     ),
 )
 # Exact published release consumers install from the registry; never a range, workspace or file spec.
-RESOURCE_SAMPLER_VERSION = "0.2.0"
+RESOURCE_SAMPLER_VERSION = "0.2.1"
 # The hostile child puts a random secret in argv[0], its process title and (Linux) comm.
 SAMPLER_HOSTILE_CHILD = """process.title = process.env.S;
 if (process.platform === 'linux') require('node:fs').writeFileSync('/proc/self/comm', process.env.S);
@@ -442,11 +442,18 @@ CONTRACTS = (
             "package.json",
             "src/index.ts",
             "examples/subscription-router.json",
+            "examples/policies.json",
+            "schemas/subscription-router.schema.json",
+            "schemas/codex-reset-journal.schema.json",
+            "docs/policies.md",
+            "docs/fairness.md",
         ),
         allowed=(
             re.compile(r"^(LICENSE|README\.md|CHANGELOG\.md|package\.json)$"),
             re.compile(r"^src/.+\.ts$"),
-            re.compile(r"^examples/subscription-router\.json$"),
+            re.compile(r"^examples/(subscription-router|policies)\.json$"),
+            re.compile(r"^schemas/(subscription-router|codex-reset-journal)\.schema\.json$"),
+            re.compile(r"^docs/(policies|fairness)\.md$"),
         ),
         exposes_tools=frozenset({"subscription_usage"}),
     ),
@@ -502,6 +509,7 @@ COMPUTER_USE_CONTRACT = PackageContract(
         "native/macos/agent_cursor.swift",
         "native/macos/agent_cursor_motion.swift",
         "native/macos/bridge.swift",
+        "native/macos/helper_entry.swift",
         "prebuilt/macos/arm64/bridge",
         "prebuilt/macos/x64/bridge",
         "native/linux/bridge-rs/Cargo.lock",
@@ -531,7 +539,9 @@ COMPUTER_USE_CONTRACT = PackageContract(
             r"^src/(?:[a-z0-9-]+|platform/[a-z0-9-]+|platform/(?:linux|macos|windows)/[a-z0-9-]+(?:\.d)?)\.(?:ts|mts|mjs)$"
         ),
         re.compile(r"^scripts/(?:build-native|setup-helper)\.mjs$"),
-        re.compile(r"^native/macos/(?:bridge|activity_glow|agent_cursor|agent_cursor_motion)\.swift$"),
+        re.compile(
+            r"^native/macos/(?:bridge|activity_glow|agent_cursor|agent_cursor_motion|helper_entry)\.swift$"
+        ),
         re.compile(r"^native/linux/bridge-rs/(?:Cargo\.(?:toml|lock)|src/[a-z0-9_]+\.rs)$"),
         re.compile(r"^prebuilt/macos/(?:arm64|x64)/bridge$"),
     ),
@@ -610,6 +620,7 @@ COMPUTER_USE_CONTRACT = PackageContract(
         "native/macos/agent_cursor.swift",
         "native/macos/agent_cursor_motion.swift",
         "native/macos/bridge.swift",
+        "native/macos/helper_entry.swift",
         "package.json",
         "prebuilt/macos/arm64/bridge",
         "prebuilt/macos/x64/bridge",

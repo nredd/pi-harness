@@ -352,6 +352,7 @@ interface UsageRead {
 /** Subscription quota state for OAuth-backed consumer plans. */
 export class UsageService {
 	private readonly cache = new Map<string, UsageSnapshot>();
+	private readonly generations = new Map<string, number>();
 	private readonly lastManualRefreshAt = new Map<string, number>();
 	private readonly inFlight = new Map<string, UsageRead>();
 	private readonly backoff = new Map<string, { failures: number; until: number }>();
@@ -373,6 +374,7 @@ export class UsageService {
 	async get(ctx: RegistryContext, provider: string, options: UsageGetOptions = {}): Promise<UsageSnapshot> {
 		const now = this.transport.now();
 		if (options.signal?.aborted) return errorSnapshot(provider, "error", now, "Usage request was cancelled.");
+		const generation = this.generations.get(provider) ?? 0;
 		const cached = this.cache.get(provider);
 		const force = options.force === true;
 		if (!force && cached?.status === "available") {
@@ -408,6 +410,17 @@ export class UsageService {
 			consider(this.cache.get(provider));
 			return fallback;
 		});
+		if (generation !== (this.generations.get(provider) ?? 0) && !options.signal?.aborted) {
+			const current = this.peek(provider);
+			return current?.status === "available" && current.retrievedAt >= (options.notBefore ?? 0)
+				? current
+				: errorSnapshot(
+						provider,
+						"error",
+						this.transport.now(),
+						"Usage evidence preceded a verified reset; confirmation requires a new read.",
+					);
+		}
 		if (!snapshot) {
 			return errorSnapshot(
 				provider,
@@ -417,6 +430,14 @@ export class UsageService {
 			);
 		}
 		return snapshot;
+	}
+
+	/** Discard only this provider's cached evidence and prior read ownership after verified server mutation. */
+	invalidate(provider: string): void {
+		this.generations.set(provider, (this.generations.get(provider) ?? 0) + 1);
+		this.cache.delete(provider);
+		this.inFlight.delete(provider);
+		this.backoff.delete(provider);
 	}
 
 	/** Cached snapshot without any network read; expired data is reported `stale`. */

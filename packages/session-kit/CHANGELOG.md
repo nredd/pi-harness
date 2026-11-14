@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Cover omitted stats API arguments and remove the unreachable private help default; preserve the stats library's runtime/type export contract with a validated named facade. Full local Node/Bun L/F/B/S reports are zero-miss; hosted zero receipts remain required before Bun enforcement (#824)
+
+- Isolate monitor regex workers in a killable child process so Bun cleanup does not wait for `Worker.terminate()`; preserve match ordering and existing deadlines, reap on close, and exit on parent IPC loss even during backtracking (#320)
+- Run the full session-kit suite through the disposable-home Vitest launcher on Bun; retain report-only enforcement until the remaining stats branch/facade work is admitted (#320)
+
+- Pin published `@nredd/pi-resource-sampler@0.2.1` for `/mon`, removing the known Linux `/proc` iterator PID-exit collection race (#499); the historical #557 WSL incident errno remains unproven
+
 - Add an optional `todo` (an id, or a list of up to 20) to `monitor_start`, and carry `wake`, `match` and `todos` on `session-kit:monitor:started` / `:stopped` (`{ sessionId, id, name, wake, match?, todos? }`), so todo can show the linked work as waiting on the monitor instead of held; a monitor without `todo` no longer counts as a todo's continuation ([#522](https://github.com/nredd/pi-harness/issues/522))
 
 - Skip all-NUL crash-padding lines in session JSONL instead of counting them as bad lines, so `exportStats` no longer fails closed on them ([#585](https://github.com/nredd/pi-harness/issues/585)); NULs mixed with data still count. Bump the stats cache to version 3: older entries with bad lines are marked stale (`size: -1`) and re-parsed whenever their root is next listed; records for deleted or out-of-root files are kept. A migrated record for a since-deleted file keeps its old `badLines` (it cannot be re-derived), so export still fails closed for it

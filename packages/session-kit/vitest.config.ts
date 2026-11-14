@@ -8,9 +8,11 @@ const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] }
 // forks, not threads: same reason as pi-dev-tools (extension timers stall under the threads pool).
 export default defineConfig({
 	test: {
+		server: { deps: { inline: ["@nredd/pi-resource-sampler"] } },
+		setupFiles: ["../../integration/inprocess/verification/home-setup.ts"],
 		coverage: {
 			provider: "v8",
-			reporter: ["text", "lcov"],
+			reporter: ["text", "lcov", "json-summary"],
 			reportsDirectory: "coverage/primary",
 			reportOnFailure: true,
 			include: owned,

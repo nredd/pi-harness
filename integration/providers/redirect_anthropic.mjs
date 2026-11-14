@@ -12,6 +12,7 @@
 import { appendFileSync } from "node:fs";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { basename } from "node:path";
+import { runtimeBun } from "./bun_runtime.mjs";
 
 const mock = process.env.HARNESS_ANTHROPIC_MOCK;
 const nonce = process.env.HARNESS_AUTH_NONCE;
@@ -72,10 +73,11 @@ for (const fn of ["exec", "execSync", "execFile", "execFileSync", "spawn", "spaw
 }
 syncBuiltinESMExports();
 // Bun's native spawn API does not pass through node:child_process.
-if (globalThis.Bun) {
+const bun = runtimeBun();
+if (bun) {
 	for (const fn of ["spawn", "spawnSync"]) {
-		const original = Bun[fn];
-		Bun[fn] = function (command, ...rest) {
+		const original = bun[fn];
+		bun[fn] = function (command, ...rest) {
 			const argv = Array.isArray(command) ? command : command?.cmd;
 			const file = argv?.[0];
 			const name = forbiddenName(file);

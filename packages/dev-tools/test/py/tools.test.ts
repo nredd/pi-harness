@@ -30,7 +30,7 @@ requires-python = ">=3.12"
 dependencies = []
 
 [dependency-groups]
-dev = ["pytest", "ruff", "ty"]
+dev = ["pytest", "ruff", "ty==0.0.84"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]

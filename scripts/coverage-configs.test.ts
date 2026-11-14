@@ -15,7 +15,7 @@ interface Coverage {
 	reportOnFailure: boolean;
 	include: string[];
 	exclude: string[];
-	thresholds?: Record<string, Record<string, number>>;
+	thresholds?: Record<string, number | Record<string, number>>;
 }
 
 interface Entry {
@@ -35,6 +35,13 @@ interface Producer {
 }
 
 const PRODUCERS: Producer[] = [
+	{
+		config: "packages/computer-use/vitest.async.config.ts",
+		policy: "computer-use-async",
+		provider: "istanbul",
+		reportsDirectory: "coverage/async",
+		load: () => import("../packages/computer-use/vitest.async.config.ts"),
+	},
 	{
 		config: "packages/computer-use/vitest.config.ts",
 		policy: "computer-use-vitest",
@@ -92,6 +99,13 @@ const PRODUCERS: Producer[] = [
 		load: () => import("../packages/subagents/vitest.config.ts"),
 	},
 	{
+		config: "packages/subagents/vitest.runtime-build.config.ts",
+		policy: "subagents-runtime-tooling",
+		provider: "istanbul",
+		reportsDirectory: "coverage/runtime-build-tooling",
+		load: () => import("../packages/subagents/vitest.runtime-build.config.ts"),
+	},
+	{
 		config: "packages/subagents/vitest.workflow-examples.config.ts",
 		policy: "workflow-examples",
 		provider: "istanbul",
@@ -142,17 +156,51 @@ const PRODUCERS: Producer[] = [
 	},
 ];
 
-/** Files at 0/0/0 on every OS; adding or dropping a pin in the configuration must change this list too (#645). */
+/** Files at 0/0/0/0 on every OS; adding or dropping a pin must change this list too (#645). */
 const ZERO_UNCOVERED_FILES = [
+	"extensions/computer-use.ts",
 	"scripts/build-native.mjs",
+	"scripts/check-commit-messages.mjs",
+	"scripts/check-docs-platform.mjs",
+	"scripts/check-docs.mjs",
+	"scripts/check-package-assets.mjs",
+	"scripts/check-sync-ledger.mjs",
+	"scripts/check-sync-reverts.mjs",
+	"scripts/check-upstream-sync.mjs",
 	"scripts/docs-generators/generate-source-references.mjs",
 	"scripts/docs-generators/generate-tool-reference.mjs",
+	"scripts/make-signing-cert.mjs",
 	"scripts/rust-coverage.mjs",
 	"scripts/setup-helper.mjs",
+	"src/actions.ts",
+	"src/bridge.ts",
+	"src/cdp.ts",
+	"src/config.ts",
+	"src/contract.ts",
+	"src/desktop.ts",
+	"src/find-params.ts",
+	"src/note.ts",
 	"src/outline-store.ts",
 	"src/outline.ts",
+	"src/output.ts",
+	"src/permissions.ts",
+	"src/platform/architecture.ts",
+	"src/platform/coerce.ts",
+	"src/platform/index.ts",
+	"src/platform/linux/backend.ts",
+	"src/platform/linux/helper.ts",
+	"src/platform/linux/wsl.ts",
+	"src/platform/macos/backend.ts",
+	"src/platform/macos/browser.ts",
 	"src/platform/macos/helper-path.mjs",
 	"src/platform/macos/helper.ts",
+	"src/platform/macos/permissions.ts",
+	"src/platform/windows/backend.ts",
+	"src/platform/windows/helper.ts",
+	"src/root-selection.ts",
+	"src/runtime.ts",
+	"src/state.ts",
+	"src/view.ts",
 ];
 
 const POLICY_URL = new URL("../coverage/policy.json", import.meta.url);
@@ -201,12 +249,12 @@ test("the producer table is exactly the Vitest configurations the policy invento
 });
 
 for (const producer of PRODUCERS) {
-	test(`${producer.config} reports text and LCOV from ${producer.provider} even on failure`, async () => {
+	test(`${producer.config} reports text, LCOV and a statement summary from ${producer.provider} even on failure`, async () => {
 		const policy = realPolicy()[producer.policy];
 		assert.ok(policy, `${producer.policy} is in the policy`);
 		const coverage = await coverageOf(producer);
 		assert.equal(coverage.provider, producer.provider);
-		assert.deepEqual(coverage.reporter, ["text", "lcov"]);
+		assert.deepEqual(coverage.reporter, ["text", "lcov", "json-summary"]);
 		assert.equal(coverage.reportsDirectory, producer.reportsDirectory);
 		assert.equal(`${coverage.reportsDirectory}/lcov.info`, policy.signals.primary?.report);
 		assert.equal(coverage.reportOnFailure, true);
@@ -243,6 +291,23 @@ for (const producer of PRODUCERS) {
 	});
 }
 
+test("subagents runtime verification pins both complete scripts at zero L/F/B/S", async () => {
+	const producer = PRODUCERS.find(({ policy }) => policy === "subagents-runtime-tooling");
+	assert.ok(producer);
+	assert.deepEqual((await coverageOf(producer)).thresholds, {
+		"scripts/build-runtime.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 },
+		"scripts/check-runtime.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 },
+	});
+});
+
+test("computer-use async verification pins the whole helper at zero L/F/B/S", async () => {
+	const producer = PRODUCERS.find(({ policy }) => policy === "computer-use-async");
+	assert.ok(producer);
+	assert.deepEqual((await coverageOf(producer)).thresholds, {
+		"scripts/check-async.mjs": { lines: 100, functions: 100, branches: 100, statements: 100 },
+	});
+});
+
 test("computer-use-vitest is an enforced ratchet with a cap for every counter on both OSes (#645)", () => {
 	const signal = realPolicy()["computer-use-vitest"]?.signals.primary as
 		| { enforcement?: string; max_uncovered: Record<string, Record<string, number>> }
@@ -251,7 +316,7 @@ test("computer-use-vitest is an enforced ratchet with a cap for every counter on
 	assert.notEqual(signal.enforcement, "report-only");
 	assert.deepEqual(Object.keys(signal.max_uncovered).sort(), ["darwin", "linux"]);
 	for (const caps of Object.values(signal.max_uncovered)) {
-		assert.deepEqual(Object.keys(caps).sort(), ["branches", "functions", "lines"]);
+		assert.deepEqual(Object.keys(caps).sort(), ["branches", "functions", "lines", "statements"]);
 		for (const cap of Object.values(caps)) assert.ok(Number.isInteger(cap) && cap >= 0);
 	}
 });
@@ -267,6 +332,6 @@ test("computer-use pins every file already at zero uncovered, each owned (#645)"
 	assert.deepEqual(pinned.sort(), [...ZERO_UNCOVERED_FILES]);
 	for (const path of pinned) {
 		assert.ok(owned.has(path), `${path} is an owned source file`);
-		assert.deepEqual(thresholds[path], { lines: 100, functions: 100, branches: 100 });
+		assert.deepEqual(thresholds[path], { lines: 100, functions: 100, branches: 100, statements: 100 });
 	}
 });

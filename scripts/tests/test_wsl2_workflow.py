@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import os
 import re
+import runpy
 import shlex
 import shutil
 import subprocess
+import sys
 import textwrap
+from enum import StrEnum
 from pathlib import Path
 from typing import cast
 
@@ -21,7 +24,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
-CLEANUP = ROOT / "scripts" / "wsl2_cleanup.sh"
+SCRIPTS = ROOT / "scripts"
 
 
 def workflow_text() -> str:
@@ -66,123 +69,11 @@ def test_wsl2_workflow_fails_closed_on_platform_or_mount_mismatch() -> None:
     assert "drvfs|''" in setup
 
 
-def run_cleanup(
-    tmp_path: Path,
-    status: int,
-    command_dir: Path | None = None,
-) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
-    """Run the workflow's real cleanup trap against a disposable harness worktree.
-
-    Parameters:
-        tmp_path: Root for the disposable worktree and diagnostics directory.
-        status: Harness exit status to preserve through the cleanup trap.
-        command_dir: Optional directory of failing command fixtures prepended to `PATH`.
-
-    Returns:
-        tuple[CompletedProcess[str], Path, Path]: Shell outcome, worktree, and diagnostics paths.
-    """
-    worktree = tmp_path / "worktree"
-    artifacts = worktree / "integration" / "artifacts"
-    artifacts.mkdir(parents=True)
-    (artifacts / "wsl2-personal.xml").write_text("<testsuite/>\n", encoding="utf-8")
-    diagnostics = tmp_path / "wsl2-diagnostics"
-    diagnostics.mkdir()
-    script = "\n".join(
-        [
-            "set -euo pipefail",
-            f"source {shlex.quote(str(CLEANUP))}",
-            f"worktree={shlex.quote(str(worktree))}",
-            f"diagnostics_dir={shlex.quote(str(diagnostics))}",
-            "trap cleanup_wsl2_worktree EXIT",
-            f"exit {status}",
-        ]
-    )
-    env = dict(os.environ)
-    if command_dir is not None:
-        env["PATH"] = f"{command_dir}{os.pathsep}{env['PATH']}"
-    completed = subprocess.run(
-        ["/bin/bash", "-c", script], capture_output=True, check=False, env=env, text=True
-    )
-    return completed, worktree, diagnostics
-
-
-def write_failing_command(directory: Path, name: str) -> None:
-    """Create a `PATH` fixture that causes one cleanup command to fail.
-
-    Parameters:
-        directory: Fixture command directory.
-        name: Command name intercepted by the fixture.
-
-    Returns:
-        None: The executable fixture is created.
-    """
-    command = directory / name
-    command.write_text("#!/bin/sh\nexit 92\n", encoding="utf-8")
-    command.chmod(0o755)
-
-
-def test_wsl2_cleanup_preserves_failure_artifacts_before_deleting_worktree(tmp_path: Path) -> None:
-    """Copy bounded artifacts before removing a failed harness worktree."""
-    completed, worktree, diagnostics = run_cleanup(tmp_path, 47)
-    assert completed.returncode == 47
-    assert not worktree.exists()
-    assert (diagnostics / "artifacts" / "wsl2-personal.xml").read_text(encoding="utf-8") == "<testsuite/>\n"
-    assert (diagnostics / "capture-status.txt").read_text(
-        encoding="utf-8"
-    ) == "WSL harness exited with status 47.\n"
-
-
-def test_wsl2_cleanup_preserves_success_status_and_artifacts(tmp_path: Path) -> None:
-    """Keep normal cleanup successful after retaining the bounded diagnostics."""
-    completed, worktree, diagnostics = run_cleanup(tmp_path, 0)
-    assert completed.returncode == 0
-    assert not worktree.exists()
-    assert (diagnostics / "artifacts" / "wsl2-personal.xml").is_file()
-    assert (diagnostics / "capture-status.txt").read_text(
-        encoding="utf-8"
-    ) == "WSL harness exited with status 0.\n"
-
-
-def test_wsl2_cleanup_retains_harness_failure_when_copying_artifacts_fails(tmp_path: Path) -> None:
-    """Do not replace the harness failure when diagnostic preservation fails."""
-    commands = tmp_path / "commands"
-    commands.mkdir()
-    write_failing_command(commands, "cp")
-    completed, worktree, diagnostics = run_cleanup(tmp_path, 47, commands)
-    assert completed.returncode == 47
-    assert "WARNING: could not preserve WSL failure artifacts" in completed.stderr
-    assert not worktree.exists()
-    assert not (diagnostics / "artifacts" / "wsl2-personal.xml").exists()
-    assert (diagnostics / "capture-status.txt").read_text(
-        encoding="utf-8"
-    ) == "WSL harness exited with status 47.\n"
-
-
-def test_wsl2_cleanup_retains_harness_failure_when_worktree_removal_fails(tmp_path: Path) -> None:
-    """Do not replace the harness failure when disposable-worktree removal fails."""
-    commands = tmp_path / "commands"
-    commands.mkdir()
-    write_failing_command(commands, "rm")
-    completed, worktree, diagnostics = run_cleanup(tmp_path, 47, commands)
-    assert completed.returncode == 47
-    assert "WARNING: could not remove disposable WSL worktree" in completed.stderr
-    assert worktree.is_dir()
-    assert (diagnostics / "artifacts" / "wsl2-personal.xml").is_file()
-    assert (diagnostics / "capture-status.txt").read_text(
-        encoding="utf-8"
-    ) == "WSL harness exited with status 47.\n"
-    shutil.rmtree(worktree)
-
-
 def test_wsl2_workflow_preserves_and_uploads_bounded_diagnostics() -> None:
     """Keep the executable cleanup and bounded upload attached to the native job."""
     workflow = workflow_text()
-    capture = (ROOT / "scripts/wsl2_capture.sh").read_text()
     assert "wsl2-diagnostics" in workflow
-    assert 'source "$worktree/scripts/wsl2_cleanup.sh"' in capture
-    assert "trap finish_capture EXIT" in capture
-    assert capture.index("trap finish_capture EXIT") < capture.index("for name in")
-    assert "cleanup_wsl2_worktree" in capture
+    assert not (SCRIPTS / "wsl2_cleanup.sh").exists()
     assert workflow.count("cleanup: cleanup") == 2
     # Both cleanup captures see timeouts and cancels, which leave no guest first-failure record.
     assert workflow.count("cleanup: cleanup\n          job-status: ${{ job.status }}\n") == 2
@@ -217,7 +108,9 @@ def test_wsl2_capture_mirrors_only_coverage_reports_and_clears_stale_files(tmp_p
     (guest / ".ci-temp/tool-path").write_text(os.environ["PATH"])
     reports = [
         "packages/example/coverage/primary/lcov.info",
+        "packages/example/coverage/primary/coverage-summary.json",
         "packages/example/coverage/bun/lcov.info",
+        "packages/example/coverage/bun/coverage-summary.json",
         "integration/inprocess/coverage/primary/lcov.info",
         "integration/probes/coverage/primary/lcov.info",
         "integration/providers/coverage/primary/lcov.info",
@@ -364,7 +257,8 @@ def test_wsl2_workflow_reuses_the_release_and_stack_entrypoints() -> None:
     assert "--stack stacks/local.json --runtime bun-standalone" in workflow
 
 
-INSTALL_GH = CLEANUP.parent / "install_gh_linux.sh"
+INSTALL_GH = SCRIPTS / "install_gh_linux.sh"
+INSTALL_GH_PY = INSTALL_GH.with_suffix(".py")
 
 
 def test_wsl2_workflow_bootstraps_gh_and_verifies_overrides_before_npm_ci() -> None:
@@ -374,7 +268,7 @@ def test_wsl2_workflow_bootstraps_gh_and_verifies_overrides_before_npm_ci() -> N
     wrapper = (ROOT / "scripts/wsl2_shell.ps1").read_text()
     assert "GH_TOKEN: ${{ github.token }}" in workflow
     assert "GH_TOKEN/u" in wrapper
-    assert "Core Gitlink:" in (ROOT / "scripts/wsl2_capture.sh").read_text()
+    assert "Core Gitlink:" in (ROOT / "scripts/wsl2_capture.py").read_text(encoding="utf-8")
     action = (ROOT / ".github/actions/setup-ci-wsl/action.yml").read_text()
     assert "additional-packages" not in action
     assert "python3" in (ROOT / "scripts/wsl2_apt.sh").read_text().split("packages=(")[1].splitlines()[0]
@@ -384,8 +278,10 @@ def test_wsl2_workflow_bootstraps_gh_and_verifies_overrides_before_npm_ci() -> N
     assert "env -u GH_TOKEN npm ci --ignore-scripts" in makefile
     assert "env -u GH_TOKEN uv sync --locked" in makefile
     assert "cd integration && uv sync --locked --python" in workflow
-    verify = workflow.index("python3 -m harness.release --verify-root-overrides --root .")
-    npm_ci = workflow.index("npm ci --ignore-scripts")
+    # Inspect the stack's guest commands, not an unrelated native Windows npm installation.
+    commands = "\n".join(step.get("run", "") for step in yaml.safe_load(workflow)["jobs"]["stack"]["steps"])
+    verify = commands.index("python3 -m harness.release --verify-root-overrides --root .")
+    npm_ci = commands.index("npm ci --ignore-scripts")
     assert verify < npm_ci
     assert "echo $GH_TOKEN" not in workflow
 
@@ -414,6 +310,24 @@ def run_install_gh(tmp_path: Path, system: str, machine: str) -> subprocess.Comp
         ),
         encoding="utf-8",
     )
+    # macOS has no `sha256sum`: a portable stand-in that verifies the digest and path from stdin and
+    # records that it ran, so a wrong pinned digest or archive fails the check for the right reason.
+    (commands / "sha256sum").write_text(
+        textwrap.dedent(
+            f"""\
+            #!/usr/bin/env python3
+            import hashlib
+            import sys
+            from pathlib import Path
+
+            Path({str(tmp_path / "sha256sum-ran")!r}).touch()
+            digest, _, path = sys.stdin.readline().rstrip("\\n").partition("  ")
+            sys.exit(0 if hashlib.sha256(Path(path).read_bytes()).hexdigest() == digest else 1)
+            """
+        ),
+        encoding="utf-8",
+    )
+    (commands / "sha256sum").chmod(0o755)
     (commands / "curl").write_text(
         textwrap.dedent(
             """\
@@ -447,12 +361,34 @@ def test_install_gh_refuses_a_tarball_that_does_not_match_the_pinned_sha256(tmp_
     assert not (tmp_path / "gh" / "bin").exists()
 
 
-def test_install_gh_refuses_unsupported_platforms_before_downloading(tmp_path: Path) -> None:
-    """Fail closed off linux/x86_64 instead of installing the wrong binary."""
-    completed = run_install_gh(tmp_path, "Linux", "aarch64")
+@pytest.mark.parametrize(("system", "machine"), [("Darwin", "arm64"), ("Linux", "riscv64")])
+def test_install_gh_refuses_unsupported_platforms_before_downloading(
+    tmp_path: Path, system: str, machine: str
+) -> None:
+    """Fail closed off linux/x86_64 and linux/aarch64 instead of installing the wrong binary."""
+    completed = run_install_gh(tmp_path, system, machine)
     assert completed.returncode == 1
-    assert "supports only linux/x86_64" in completed.stderr
+    assert "supports only linux/x86_64 and linux/aarch64" in completed.stderr
     assert not (tmp_path / "gh").exists()
+
+
+@pytest.mark.parametrize(("machine", "asset"), [("x86_64", "linux_amd64"), ("aarch64", "linux_arm64")])
+def test_install_gh_downloads_the_asset_of_its_architecture(tmp_path: Path, machine: str, asset: str) -> None:
+    """Pick the amd64 or arm64 tarball by `uname -m` and pin a distinct digest for each."""
+    completed = run_install_gh(tmp_path, "Linux", machine)
+    assert completed.returncode == 1
+    assert f"for gh_{GH_VERSION}_{asset}.tar.gz; refusing to install" in completed.stderr
+    assert (tmp_path / "sha256sum-ran").is_file()
+    pins = re.findall(
+        r'^GH_SHA256_(AMD64|ARM64) = "([0-9a-f]{64})"$', INSTALL_GH_PY.read_text(), re.MULTILINE
+    )
+    assert sorted(name for name, _ in pins) == ["AMD64", "ARM64"]
+    assert len({digest for _, digest in pins}) == 2
+
+
+GH_VERSION = cast(
+    "re.Match[str]", re.search(r'^GH_VERSION = "(\S+)"$', INSTALL_GH_PY.read_text(), re.MULTILINE)
+)[1]
 
 
 def test_install_gh_requires_one_directory_argument() -> None:
@@ -571,6 +507,8 @@ def guest_setup_env(tmp_path: Path, stubs: dict[str, str]) -> tuple[dict[str, st
     commands.mkdir()
     log = tmp_path / "timeout.log"
     defaults = {
+        # The hosted fallback is x64 whatever machine runs this test.
+        "uname": "#!/bin/sh\necho x86_64\n",
         "findmnt": "#!/bin/sh\nprintf ext4\n",
         "ps": "#!/bin/sh\necho 'PID PPID ELAPSED STAT COMMAND'\necho '42 1 05:00 S synthetic-stuck-apt'\n",
         # The copy stub plants the pins the real checkout carries.
@@ -668,7 +606,8 @@ def test_guest_setup_leaves_no_external_command_unbounded() -> None:
     for label in ("copy checkout", "extract node", "install npm", "install bun", "install uv", "install gh"):
         assert f'bounded "{label}" ' in setup
     assert 'bounded "install owned tools" 90 ' in setup
-    assert "--connect-timeout 15 --max-time 45" in (ROOT / "scripts/install_wsl_owned_tools.sh").read_text()
+    owned_tools = (ROOT / "scripts/install_wsl_owned_tools.py").read_text(encoding="utf-8")
+    assert 'CURL_BOUNDS = ["--connect-timeout", "15", "--max-time", "45"]' in owned_tools
 
 
 APT = ROOT / "scripts" / "wsl2_apt.sh"
@@ -684,6 +623,92 @@ PACKAGES = (
 APT_FLAGS = "install --yes --no-install-recommends"
 
 
+class DnsToolMode(StrEnum):
+    """Diagnostic outcomes available to the isolated apt failure fixtures."""
+
+    FAILED = "failed"
+    TIMEOUT = "timeout"
+    MISSING = "missing"
+    RESOLVED = "resolved"
+    INVALID_CLASSIFICATION = "invalid-classification"
+    SYSTEM_CLASSIFICATION = "system-classification"
+
+
+def test_dns_timeout_fixture_is_import_safe() -> None:
+    """Import the timeout fixture without starting a subprocess.
+
+    Returns:
+        None: The fixture exposes its main function without executing it.
+    """
+    namespace = runpy.run_path(str(ROOT / "scripts/tests/fixtures/wsl_timeout.py"))
+    assert callable(namespace["main"])
+
+
+def dns_failure_stubs(commands: Path, tools: DnsToolMode, log: Path) -> dict[str, str]:
+    """Build isolated DNS failure tools with real timeout and shell processes.
+
+    Parameters:
+        commands (Path): Executable directory, without inherited host resolver tools.
+        tools (DnsToolMode): Diagnostic fixture outcome mode.
+        log (Path): Apt invocation log, proving no install occurs.
+    Returns:
+        dict[str, str]: Fixture bodies; supporting real tools are symlinked separately.
+    """
+    timeout_fixture = ROOT / "scripts/tests/fixtures/wsl_timeout.py"
+    stubs: dict[str, str] = {}
+    stubs[DnsToolMode.TIMEOUT] = textwrap.dedent(
+        f"""\
+        #!/bin/sh
+        exec {shlex.quote(sys.executable)} {shlex.quote(str(timeout_fixture))} "$@"
+        """
+    )
+    stubs["apt-get"] = textwrap.dedent(
+        f"""\
+        #!/bin/sh
+        printf "%s\\n" "$*" >> {shlex.quote(str(log))}
+        echo "Could not resolve fixture mirror" >&2
+        exit 100
+        """
+    )
+    for name in ("bash", "mkdir", "sed", "grep"):
+        binary = shutil.which(name)
+        assert binary is not None
+        (commands / name).symlink_to(binary)
+    if tools != DnsToolMode.MISSING:
+        body = {
+            DnsToolMode.FAILED: 'echo "192.0.2.19 private.invalid SECRET=fixture"; '
+            'echo "192.0.2.19 private.invalid SECRET=fixture" >&2; exit 2',
+            DnsToolMode.TIMEOUT: "exec /bin/sleep 30",
+            DnsToolMode.RESOLVED: 'echo "192.0.2.19 private.invalid SECRET=fixture"; exit 0',
+            DnsToolMode.INVALID_CLASSIFICATION: "exit 2",
+            DnsToolMode.SYSTEM_CLASSIFICATION: "exit 2",
+        }[tools]
+        for name in ("getent", "resolvectl"):
+            stubs[name] = textwrap.dedent(
+                f"""\
+                #!/bin/sh
+                {body}
+                """
+            )
+        classification = (
+            "private.invalid 192.0.2.19 SECRET=fixture"
+            if tools == DnsToolMode.INVALID_CLASSIFICATION
+            else "loopback-only"
+        )
+        if tools == DnsToolMode.SYSTEM_CLASSIFICATION:
+            awk = shutil.which("awk")
+            assert awk is not None
+            (commands / "awk").symlink_to(awk)
+        else:
+            stubs["awk"] = textwrap.dedent(
+                f"""\
+                #!/bin/sh
+                printf '%s\\n' {shlex.quote(classification)}
+                """
+            )
+    return stubs
+
+
 def run_apt(
     tmp_path: Path,
     fail_mirror: str | None = None,
@@ -695,6 +720,9 @@ def run_apt(
     extra_debs: tuple[str, ...] = (),
     tmpdir: Path | None = None,
     broken_cache_copy: bool = False,
+    install_status: int = 0,
+    dns_failure: bool = False,
+    dns_tools: DnsToolMode = DnsToolMode.FAILED,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     """Run the real apt script with stub `id`, `timeout`, `apt-get` and `ps`.
 
@@ -708,6 +736,10 @@ def run_apt(
         tmpdir (Path | None): `TMPDIR` for the script's scratch directory.
         stale (bool): Seed the host cache with a .deb of a superseded version.
         broken_cache_copy (bool): Model a host cache write failing (`cp` into `cache/` exits 1).
+        install_status (int): Offline installation exit status, after successful fetches.
+        dns_failure (bool): Fail both mirrors with captured DNS errors; use real diagnostic bounds.
+        dns_tools (DnsToolMode): Diagnostic fixture mode: failed, timeout, missing, resolved,
+            system-classification or invalid-classification.
 
     Returns:
         tuple[subprocess.CompletedProcess[str], Path, Path]: Outcome, the sources file and the stub call log.
@@ -754,9 +786,21 @@ def run_apt(
         + f"uris=$(grep -m1 URIs {quoted})\n"
         + f'case "$1" in update) echo "$uris" > {quoted_lists}; exit 0 ;; esac\n'
         + f'case "$*" in *--download-only*) touch "$WSL_APT_ARCHIVES/{fetched}"; exit 0 ;; esac\n'
-        + f'case "$1" in install) [ "$uris" = "$(cat {quoted_lists})" ] || {no_candidate} ;; esac\n'
+        + f'case "$1" in install) [ "$uris" = "$(cat {quoted_lists})" ] || {no_candidate}; '
+        + f"exit {install_status} ;; esac\n"
         + "exit 0\n",
     }
+    if dns_failure:
+        stubs |= dns_failure_stubs(commands, dns_tools, log)
+    else:
+        # Other apt fixtures must never reach the host resolver either.
+        unavailable = textwrap.dedent(
+            """\
+            #!/bin/sh
+            exit 2
+            """
+        )
+        stubs |= dict.fromkeys(("getent", "resolvectl"), unavailable)
     if broken_cache_copy:
         # Only writes into the host cache fail; seeding the archives from it still works.
         last = 'for a in "$@"; do t=$a; done\n'
@@ -771,10 +815,17 @@ def run_apt(
         "WSL_APT_CONF": str(tmp_path / "99-pi-ci"),
         "WSL_APT_ARCHIVES": str(tmp_path / "archives"),
         "WSL_APT_CACHE": str(cache),
+        "WSL_APT_DIAGNOSTICS": "",
     }
     if tmpdir is not None:
         env["TMPDIR"] = str(tmpdir)
-    result = subprocess.run(["/bin/bash", str(APT)], env=env, capture_output=True, check=False, text=True)
+    if dns_failure:
+        env["PATH"] = str(commands)
+        env["WSL_APT_CACHE"] = ""
+        env["WSL_APT_DIAGNOSTICS"] = str(tmp_path / "apt-dns.txt")
+    result = subprocess.run(
+        ["/bin/bash", str(APT)], env=env, capture_output=True, check=False, text=True, timeout=30
+    )
     return result, sources, log
 
 
@@ -819,7 +870,8 @@ def test_apt_debs_are_cached_by_the_host_and_keyed_by_script_and_week() -> None:
     prepare = next(step for step in steps if step.get("name") == "Assert WSL2 and prepare guest")
     prepare_env = cast("dict[str, str]", prepare["env"])
     assert prepare_env["WSL_APT_CACHE"] == "${{ steps.apt-cache.outputs.dir }}"
-    assert "$env:WSLENV = 'WSL_APT_CACHE/p'" in prepare["run"]
+    assert "$env:WSLENV = 'WSL_APT_CACHE/p:WSL_APT_DIAGNOSTICS/p'" in prepare["run"]
+    assert "wsl2-diagnostics/apt-dns.txt" in prepare["run"]
 
 
 def test_apt_prerequisites_restore_and_refill_the_host_cache(tmp_path: Path) -> None:
@@ -889,3 +941,347 @@ def test_apt_prerequisites_name_a_hang_on_both_mirrors(tmp_path: Path) -> None:
     assert "synthetic-stuck-apt" in result.stderr
     assert "every mirror failed" in result.stderr
     assert not log.exists()
+
+
+@pytest.mark.parametrize("tools", list(DnsToolMode))
+def test_apt_dns_failure_retains_only_bounded_allowlisted_evidence(
+    tmp_path: Path, tools: DnsToolMode
+) -> None:
+    """Replay both-mirror failure through the real trap, without DNS or root installation.
+
+    Parameters:
+        tmp_path (Path): Disposable apt filesystem and host-visible artifact destination.
+        tools (DnsToolMode): Optional tool behavior, including actual sleeping processes.
+    Returns:
+        None: Original failure survives; only safe diagnostic labels reach logs/artifacts.
+    """
+    result, _, log = run_apt(tmp_path, dns_failure=True, dns_tools=tools)
+    assert result.returncode == 1, result.stderr
+    assert log.read_text().splitlines() == ["update", "update"]
+    assert result.stderr.count("Could not resolve fixture mirror") == 2
+    assert "every mirror failed" in result.stderr
+    report = (tmp_path / "apt-dns.txt").read_text()
+    assert report in result.stdout
+    assert "failure-time guest resolver evidence" in report
+    assert "capture complete" in report
+    assert not any(
+        value in result.stdout + result.stderr + report
+        for value in ("192.0.2.19", "private.invalid", "SECRET")
+    )
+    classification = (
+        "unavailable"
+        if tools in (DnsToolMode.MISSING, DnsToolMode.INVALID_CLASSIFICATION)
+        else "loopback-only"
+    )
+    if tools == DnsToolMode.SYSTEM_CLASSIFICATION:
+        assert re.search(
+            r"configured-resolver=(?:loopback-only|nonloopback-present|none|unavailable)\n", report
+        )
+    else:
+        assert f"configured-resolver={classification}" in report
+    if tools == DnsToolMode.MISSING:
+        assert "getent=unavailable" in report
+        assert "resolvectl=unavailable" in report
+    else:
+        outcome = (
+            DnsToolMode.FAILED
+            if tools in (DnsToolMode.INVALID_CLASSIFICATION, DnsToolMode.SYSTEM_CLASSIFICATION)
+            else tools
+        )
+        for tool in ("getent", "resolvectl"):
+            for name in ("azure.archive.ubuntu.com", "archive.ubuntu.com"):
+                assert f"{tool} {name}={outcome}" in report
+
+
+def test_apt_dns_capture_preserves_an_offline_install_failure_status(tmp_path: Path) -> None:
+    """Keep a non-1 apt status and original error, without retrying a failed offline install.
+
+    Parameters:
+        tmp_path (Path): Disposable apt filesystem.
+    Returns:
+        None: The original status and error survive diagnostic capture.
+    """
+    result, _, log = run_apt(tmp_path, install_status=47)
+    assert result.returncode == 47
+    assert "FAILED: apt-get install (status 47)" in result.stderr
+    assert len(log.read_text().splitlines()) == 3
+    assert "capture complete" in result.stdout
+
+
+def test_apt_success_does_not_collect_dns_evidence(tmp_path: Path) -> None:
+    """Successful setup adds no resolver probes or diagnostic artifacts.
+
+    Parameters:
+        tmp_path (Path): Disposable apt filesystem.
+    Returns:
+        None: Successful setup emits no DNS diagnostics.
+    """
+    result, _, _ = run_apt(tmp_path)
+    assert result.returncode == 0
+    assert "wsl2-dns:" not in result.stdout + result.stderr
+    assert not (tmp_path / "apt-dns.txt").exists()
+
+
+def test_apt_dns_artifact_write_failure_cannot_mask_original_failure(tmp_path: Path) -> None:
+    """An unwritable artifact destination preserves log diagnostics and the apt failure.
+
+    Parameters:
+        tmp_path (Path): Disposable filesystem containing a directory instead of an artifact file.
+    Returns:
+        None: Log diagnostics and the original failure remain available.
+    """
+    (tmp_path / "apt-dns.txt").mkdir()
+    result, _, log = run_apt(tmp_path, dns_failure=True)
+    assert result.returncode == 1
+    assert log.read_text().splitlines() == ["update", "update"]
+    assert "artifact unavailable" in result.stderr
+    assert "capture complete" in result.stdout
+
+
+def test_apt_dns_blocked_artifact_write_is_bounded_without_masking_failure(tmp_path: Path) -> None:
+    """Even opening a FIFO with no reader cannot hang the apt failure trap.
+
+    Parameters:
+        tmp_path (Path): Disposable filesystem containing a FIFO instead of an artifact file.
+    Returns:
+        None: The outer capture deadline stops blocked IO and preserves the apt failure.
+    """
+    os.mkfifo(tmp_path / "apt-dns.txt")
+    result, _, log = run_apt(tmp_path, dns_failure=True)
+    assert result.returncode == 1
+    assert log.read_text().splitlines() == ["update", "update"]
+    assert "every mirror failed" in result.stderr
+    assert "DNS diagnostics unavailable or incomplete" in result.stderr
+
+
+SMOKE = ROOT / "scripts" / "wsl2_smoke.sh"
+
+
+def native_guest(tmp_path: Path, versions: dict[str, str]) -> tuple[dict[str, str], Path, Path]:
+    """Build an in-guest bootstrap fixture: a checkout on "ext4", stub tools and a recording `curl`.
+
+    Parameters:
+        tmp_path (Path): Scratch directory.
+        versions (dict[str, str]): Overrides of the stub tools' versions (`node`, `npm`, `bun`, `uv`).
+
+    Returns:
+        tuple[dict[str, str], Path, Path]: Environment for `wsl2_setup.sh`, the workspace and the log of
+            every command that would have downloaded something.
+    """
+    workspace = tmp_path / "workspace"
+    (workspace / ".git").mkdir(parents=True)
+    (workspace / "scripts").mkdir()
+    shutil.copy(INSTALL_GH, workspace / "scripts" / "install_gh_linux.sh")
+    shutil.copy(INSTALL_GH_PY, workspace / "scripts" / "install_gh_linux.py")
+    shutil.copy(INSTALL_GH_PY.with_name("wsl2_exec.py"), workspace / "scripts" / "wsl2_exec.py")
+    (workspace / ".node-version").write_text("22.0.0\n", encoding="utf-8")
+    (workspace / ".bun-version").write_text("1.4.4\n", encoding="utf-8")
+    (workspace / "package.json").write_text("{}", encoding="utf-8")
+    home = tmp_path / "home"
+    gh_bin = home / ".cache" / "pi-harness-wsl2-tools" / "gh" / "bin"
+    gh_bin.mkdir(parents=True)
+    (gh_bin / "gh").write_text(f"#!/bin/sh\necho 'gh version {GH_VERSION} (2026-01-01)'\n", encoding="utf-8")
+    (gh_bin / "gh").chmod(0o755)
+    downloads = tmp_path / "downloads.log"
+    reported = {"node": "22.0.0", "npm": "11.0.0", "bun": "1.4.4", "uv": "0.13.1"} | versions
+    stubs = {
+        "uname": "#!/bin/sh\necho aarch64\n",
+        "findmnt": "#!/bin/sh\nprintf ext4\n",
+        "timeout": '#!/bin/sh\nshift 2\nexec "$@"\n',
+        "node": f'#!/bin/sh\ncase "$1" in -p) echo npm@11.0.0 ;; *) echo v{reported["node"]} ;; esac\n',
+        "npm": f"#!/bin/sh\necho {reported['npm']}\n",
+        "bun": f"#!/bin/sh\necho {reported['bun']}\n",
+        "uv": f"#!/bin/sh\necho 'uv {reported['uv']} (abc 2026-01-01)'\n",
+        "curl": f'#!/bin/sh\necho "curl $*" >> {shlex.quote(str(downloads))}\nexit 99\n',
+    }
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    for name, body in stubs.items():
+        (commands / name).write_text(body, encoding="utf-8")
+        (commands / name).chmod(0o755)
+    env = {
+        "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+        "HOME": str(home),
+        "PI_WSL2_IN_GUEST": "1",
+        "GITHUB_WORKSPACE": str(workspace),
+        "RUNNER_TEMP": str(tmp_path / "temp"),
+        "GITHUB_PATH": str(tmp_path / "github_path"),
+    }
+    return env, workspace, downloads
+
+
+def test_in_guest_setup_reuses_baked_tools_and_never_touches_the_windows_side(tmp_path: Path) -> None:
+    """Matching versions mean no download, no `/mnt` check, no copy; the tool path goes to GITHUB_PATH."""
+    env, workspace, downloads = native_guest(tmp_path, {})
+    result = subprocess.run(
+        ["/bin/bash", str(SETUP)], cwd=workspace, env=env, capture_output=True, check=False, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert not downloads.exists()
+    assert not (tmp_path / "home" / "pi-harness-ci").exists()
+    tool_dirs = Path(env["GITHUB_PATH"]).read_text().splitlines()
+    assert str(tmp_path / "home" / ".cache" / "pi-harness-wsl2-tools" / "gh" / "bin") in tool_dirs
+    identity = (tmp_path / "temp" / "wsl2-diagnostics" / "identity.txt").read_text()
+    assert "Arch: aarch64" in identity
+    assert (workspace / ".ci-temp" / "tool-path").is_file()
+    # The runner prepends each line, so the file must list the PATH's home directories in reverse.
+    home_dirs = [
+        d
+        for d in (workspace / ".ci-temp" / "tool-path").read_text().strip().split(":")
+        if d.startswith(str(tmp_path / "home"))
+    ]
+    assert tool_dirs == home_dirs[::-1]
+
+
+@pytest.mark.parametrize(
+    ("versions", "url"),
+    [
+        ({"node": "21.0.0"}, "https://nodejs.org/dist/v22.0.0/node-v22.0.0-linux-arm64.tar.xz"),
+        ({"bun": "1.0.0"}, "https://bun.sh/install"),
+        ({"uv": "0.1.0"}, "https://astral.sh/uv/0.13.1/install.sh"),
+    ],
+)
+def test_in_guest_setup_downloads_only_the_tool_whose_version_drifted(
+    tmp_path: Path, versions: dict[str, str], url: str
+) -> None:
+    """A mismatch fetches that tool (for the guest's own architecture); the matching ones are reused."""
+    env, workspace, downloads = native_guest(tmp_path, versions)
+    result = subprocess.run(
+        ["/bin/bash", str(SETUP)], cwd=workspace, env=env, capture_output=True, check=False, text=True
+    )
+    assert result.returncode == 99
+    assert [line.split()[-1] for line in downloads.read_text().splitlines()] == [url]
+
+
+def test_in_guest_setup_needs_a_runner_checkout_and_an_unprivileged_user(tmp_path: Path) -> None:
+    """Refuse a workspace that is not a Git checkout instead of bootstrapping nothing."""
+    env, workspace, _ = native_guest(tmp_path, {})
+    shutil.rmtree(workspace / ".git")
+    result = subprocess.run(
+        ["/bin/bash", str(SETUP)], cwd=workspace, env=env, capture_output=True, check=False, text=True
+    )
+    assert result.returncode != 0
+
+
+def run_smoke(
+    tmp_path: Path,
+    blocked: bool,
+    extra_env: dict[str, str] | None = None,
+    *,
+    userns: bool = False,
+    ns_limit: str = "0",
+    control: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    """Run the real smoke script against stub network tools.
+
+    Parameters:
+        tmp_path (Path): Scratch directory.
+        blocked (bool): Whether private targets refuse connections (`timeout` exits 124 for them).
+        extra_env (dict[str, str] | None): Extra environment, e.g. injected host targets.
+        userns (bool): Whether `unshare -Urn` succeeds, i.e. unprivileged user namespaces are enabled.
+        ns_limit (str): Value of `user.max_user_namespaces`.
+        control (bool): Whether the public positive-control connection (port 443) opens.
+
+    Returns:
+        subprocess.CompletedProcess[str]: The smoke run; `aarch64` and a non-root, no-sudo user are stubbed.
+    """
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    refuse = (
+        (
+            'case "$*" in *"/443"*) '
+            + ("" if control else "exit 124 ")
+            + ';; *"/dev/tcp/"*) exit 124 ;; esac\n'
+        )
+        if blocked
+        else ""
+    )
+    stubs = {
+        "uname": '#!/bin/sh\ncase "$1" in -m) echo aarch64 ;; -r) echo 6.18-stub ;; *) echo Linux ;; esac\n',
+        "id": '#!/bin/sh\ncase "$1" in -u) echo 1001 ;; *) echo runner ;; esac\n',
+        "sudo": "#!/bin/sh\nexit 1\n",
+        "unshare": f"#!/bin/sh\nexit {0 if userns else 1}\n",
+        "curl": "#!/bin/sh\nexit 0\n",
+        "ip": "#!/bin/sh\necho 'default via 172.20.0.1 dev eth0'\n",
+        "nft": "#!/bin/sh\nexit 1\n",
+        "findmnt": "#!/bin/sh\nexit 1\n",
+        "timeout": f"#!/bin/sh\nshift\n{refuse}exit 0\n",
+    }
+    for name, body in stubs.items():
+        (commands / name).write_text(body, encoding="utf-8")
+        (commands / name).chmod(0o755)
+    root = tmp_path / "root"
+    (root / "proc/sys/net/ipv6/conf/all").mkdir(parents=True)
+    (root / "proc/sys/net/ipv6/conf/all/disable_ipv6").write_text("1\n")
+    (root / "proc/sys/user").mkdir(parents=True)
+    (root / "proc/sys/user/max_user_namespaces").write_text(f"{ns_limit}\n")
+    env = (
+        dict(os.environ)
+        | {"PATH": f"{commands}{os.pathsep}{os.environ['PATH']}", "SMOKE_ROOT": str(root)}
+        | (extra_env or {})
+    )
+    return subprocess.run(["/bin/bash", str(SMOKE)], env=env, capture_output=True, check=False, text=True)
+
+
+def test_smoke_passes_when_every_private_target_is_blocked(tmp_path: Path) -> None:
+    """Probe the generic private classes and the gateway, and every injected host and dev target."""
+    result = run_smoke(
+        tmp_path,
+        blocked=True,
+        extra_env={"SMOKE_HOST_IP": "172.20.0.2", "SMOKE_DEV_IP": "172.20.0.9", "SMOKE_DEV_PORTS": "22 8080"},
+    )
+    assert result.returncode == 0, result.stdout
+    assert "::error::" not in result.stdout
+    for target in (
+        "192.168.1.1:80",
+        "100.100.100.100:80",
+        "169.254.169.254:80",
+        "172.20.0.1:445",
+        "172.20.0.2:3389",
+        "172.20.0.9:8080",
+    ):
+        assert f"blocked: {target}" in result.stdout, target
+    assert "loopback:8080 closed" in result.stdout
+
+
+def test_smoke_fails_when_unprivileged_user_namespaces_are_enabled(tmp_path: Path) -> None:
+    """`unshare -Urn` working means root-in-namespace reaches kernel attack surface: a violation."""
+    result = run_smoke(tmp_path, blocked=True, userns=True)
+    assert result.returncode == 1
+    assert "::error::unprivileged user namespaces are enabled" in result.stdout
+
+
+def test_smoke_fails_when_the_user_namespace_limit_is_not_zero(tmp_path: Path) -> None:
+    """Read the sysctl itself: a failing `unshare` can have other causes than the limit being zero."""
+    result = run_smoke(tmp_path, blocked=True, ns_limit="1")
+    assert result.returncode == 1
+    assert "::error::user.max_user_namespaces is 1, not 0" in result.stdout
+
+
+def test_smoke_fails_when_the_positive_control_cannot_connect(tmp_path: Path) -> None:
+    """A failed public TCP probe makes every `blocked` line meaningless: fail instead of passing them."""
+    result = run_smoke(tmp_path, blocked=True, control=False)
+    assert result.returncode == 1
+    assert "::error::probe machinery cannot open a public connection" in result.stdout
+
+
+def test_smoke_fails_on_a_reachable_private_target(tmp_path: Path) -> None:
+    """A connection that opens to a private range is a violation, named with its address."""
+    result = run_smoke(tmp_path, blocked=False)
+    assert result.returncode == 1
+    assert "::error::reachable: 192.168.1.1:80" in result.stdout
+    assert "::error::reachable: 172.20.0.1:445" in result.stdout
+
+
+def test_smoke_hardcodes_no_host_or_dev_address() -> None:
+    """Host and dev addresses come from the environment; the script names only generic ranges."""
+    addresses = set(re.findall(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", SMOKE.read_text(encoding="utf-8")))
+    assert addresses == {
+        "192.168.1.1",
+        "10.0.0.1",
+        "172.16.0.1",
+        "100.64.0.1",
+        "100.100.100.100",
+        "169.254.169.254",
+        "127.0.0.1",
+    }

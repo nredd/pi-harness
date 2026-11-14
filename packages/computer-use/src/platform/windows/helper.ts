@@ -21,6 +21,10 @@ interface Pending<T> {
 	child: ChildProcessWithoutNullStreams;
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+	if (signal?.aborted) throw new Error("Operation aborted.");
+}
+
 async function isExecutable(filePath: string): Promise<boolean> {
 	try { await access(filePath, fsConstants.X_OK); return true; } catch { return false; }
 }
@@ -136,18 +140,33 @@ export class WindowsHelperClient {
 	}
 
 	async command<T>(cmd: string, args: Record<string, unknown> = {}, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<T> {
-		const child = await this.process(options?.signal);
+		const signal = options?.signal;
+		// A signal that is already aborted never fires again: refuse before installing, spawning or sending.
+		throwIfAborted(signal);
+		const child = await this.process(signal);
+		// ...and so does one aborted while the install check or helper start was in flight.
+		throwIfAborted(signal);
 		const id = randomUUID();
 		const timeoutMs = options?.timeoutMs ?? COMMAND_TIMEOUT_MS;
 		return await new Promise<T>((resolve, reject) => {
-			const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`Helper command '${cmd}' timed out after ${timeoutMs}ms.`)); }, timeoutMs);
-			this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timer, child });
-			child.stdin.write(`${JSON.stringify({ protocolVersion: WINDOWS_HELPER_PROTOCOL_VERSION, id, cmd, args })}\n`, (error) => {
-				if (!error) return;
+			// Every completion path owns the same cleanup, including abort and failed writes.
+			const cleanup = () => {
 				this.pending.delete(id);
 				clearTimeout(timer);
-				reject(error);
-			});
+				signal?.removeEventListener("abort", onAbort);
+			};
+			const fail = (error: Error) => { cleanup(); reject(error); };
+			const onAbort = () => fail(new Error("Operation aborted."));
+			const timer = setTimeout(() => fail(new Error(`Helper command '${cmd}' timed out after ${timeoutMs}ms.`)), timeoutMs);
+			this.pending.set(id, { resolve: (value) => { cleanup(); resolve(value as T); }, reject: fail, timer, child });
+			signal?.addEventListener("abort", onAbort, { once: true });
+			try {
+				child.stdin.write(`${JSON.stringify({ protocolVersion: WINDOWS_HELPER_PROTOCOL_VERSION, id, cmd, args })}\n`, (error) => {
+					if (error) fail(error);
+				});
+			} catch (error) {
+				fail(error instanceof Error ? error : new Error(String(error)));
+			}
 		});
 	}
 }

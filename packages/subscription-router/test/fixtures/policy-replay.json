@@ -1,0 +1,67 @@
+[
+	{
+		"at": 1893456000000,
+		"reason": "user",
+		"cost": 1,
+		"snapshots": [
+			{
+				"provider": "quota-0",
+				"status": "available",
+				"retrievedAt": 1893456000000,
+				"expiresAt": 1893456300000,
+				"windows": [{ "name": "weekly", "scope": "provider", "usedPercent": 60, "resetAt": 1893456060000 }]
+			},
+			{
+				"provider": "quota-1",
+				"status": "available",
+				"retrievedAt": 1893456000000,
+				"expiresAt": 1893456300000,
+				"windows": [{ "name": "weekly", "scope": "provider", "usedPercent": 20, "resetAt": 1893459600000 }]
+			}
+		]
+	},
+	{
+		"at": 1893456060000,
+		"reason": "continuation",
+		"previous": 1,
+		"outsideDebits": [3, 0],
+		"cost": 2,
+		"snapshots": [
+			{
+				"provider": "quota-0",
+				"status": "available",
+				"retrievedAt": 1893456060000,
+				"expiresAt": 1893456360000,
+				"windows": [{ "name": "weekly", "scope": "provider", "usedPercent": 0, "resetAt": 1893459660000 }]
+			},
+			{
+				"provider": "quota-1",
+				"status": "available",
+				"retrievedAt": 1893456060000,
+				"expiresAt": 1893456360000,
+				"windows": [{ "name": "weekly", "scope": "provider", "usedPercent": 90, "resetAt": 1893459600000 }]
+			}
+		]
+	},
+	{
+		"at": 1893456960001,
+		"reason": "direct",
+		"previous": 1,
+		"snapshots": [
+			{
+				"provider": "quota-0",
+				"status": "stale",
+				"retrievedAt": 1893456060000,
+				"expiresAt": 1893456360000,
+				"windows": [{ "name": "weekly", "scope": "provider", "usedPercent": 0, "resetAt": 1893459660000 }]
+			},
+			{
+				"provider": "quota-1",
+				"status": "unavailable",
+				"retrievedAt": 1893456960001,
+				"expiresAt": 1893457260001,
+				"windows": []
+			}
+		]
+	}
+]

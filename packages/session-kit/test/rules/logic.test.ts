@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import {
 	formatRule,
 	formatRules,
@@ -50,6 +51,16 @@ describe("relativeToCwd", () => {
 });
 
 describe("matchesRule", () => {
+	it("contains glob-engine errors rather than dropping a tool invocation", () => {
+		const match = vi.spyOn(path.posix, "matchesGlob").mockImplementationOnce(() => {
+			throw new Error("glob engine rejected input");
+		});
+		try {
+			expect(matchesRule({ id: "x", globs: ["bad"], body: "b" }, "a")).toBe(false);
+		} finally {
+			match.mockRestore();
+		}
+	});
 	const rule = (...globs: string[]) => ({ id: "x", globs, body: "b" });
 	it("matches globs against cwd-relative paths", () => {
 		expect(matchesRule(rule("src/**/*.ts"), "src/a/b.ts")).toBe(true);

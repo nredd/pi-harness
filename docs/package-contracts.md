@@ -73,7 +73,10 @@ What each package must satisfy:
   `test_session_kit_readme_links_only_packed_files`) and
   `dist/` + `docs/` (plan-mode, additionally pinned by `packed_files`/`packed_patterns`). computer-use is
   also pinned by exact `packed_files`, including upstream's moved `docs/content/docs` pages and
-  `activity_glow.swift` alongside the cursor/helper sources.
+  `activity_glow.swift` alongside the cursor/helper sources. The router requires its exact
+  `schemas/subscription-router.schema.json` and `schemas/codex-reset-journal.schema.json`, plus
+  its declared policy examples/docs. Private reset attempt/outcome records are not package inputs;
+  adding the journal schema does not broadly admit other JSON files.
   Tests, fixtures, `e2e/`, lint/TS/vitest config and planning docs must not ship. Before this change
   none of the tarballs had a `LICENSE` and all shipped `test/` plus dev config
 - Packed `LICENSE` is byte-identical to the root `LICENSE`, except imported packages marked `own_license`,
@@ -96,7 +99,7 @@ What each package must satisfy:
   may import only `node:` builtins: the standalone
   check runs before relative-import resolution, so `../src/index.ts` is rejected even if it exists
 - Imports are read with the repository's installed TypeScript 7.0.2 parser (`scripts/import_audit.ts`
-  via `typescript/unstable/sync`, which drives the bundled `tsgo`; no new dependency, one batched
+  via `typescript/unstable/async`, which drives the bundled `tsgo` on Node and Bun without Node-private pipe descriptors; no new dependency, one batched
   `node` run per package). It sees static imports and re-exports (including `import type`),
   `import x = require()`, `import("x")` types, dynamic `import()` and `require()` calls, with plain
   string and no-substitution template specifiers resolved. A computed specifier (template with
@@ -246,7 +249,7 @@ libproc symbols, not an installed addon or helper. Linux retains absent
 native-Darwin fields. `test_library_probe_rejects_missing_native_memory` executes the probe against
 older/broken synthetic producers to prove each missing field fails and the hostile child is reaped.
 This library gate tests the packed candidate tarball. Both consumers separately pin the published
-registry `0.2.0`; their independent registry-resolution tests reject a workspace link. A
+registry `0.2.1`; their independent registry-resolution tests reject a workspace link. A
 child's argv[0], process title and Linux comm hold a random 32-hex secret; the probe first proves the
 0.1.0 name source (`ps -c` comm on Darwin, `/proc/PID/comm` on Linux) shows it, then requires the
 child in the second snapshot and no 12-character window of the secret anywhere in either snapshot.

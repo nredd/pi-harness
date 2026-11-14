@@ -271,7 +271,7 @@ export class StatsView implements Component {
 		return lines.map((l) => truncateToWidth(l, inner, "…"));
 	}
 
-	private help(hint = ""): string {
+	private help(hint: string): string {
 		const keys = this.paint("dim", "tab tabs · r dates · m/M filter · ↑↓ scroll · q close");
 		return hint ? `${this.paint("muted", hint)}  ${keys}` : keys;
 	}

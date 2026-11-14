@@ -105,6 +105,13 @@ launch (3.1 s) and the 2 s activity-glow timeout. Those cases carry a 45 s budge
 longest, same twice-the-worst-hosted-figure rule once hosted numbers exist); the rest of the file
 runs well inside the 20 s default. Total alone: ~17 s on Apple M4.
 
+## computer-use bridge act, find and read_text (#710)
+
+`computer-use/test/bridge-act-list-read.test.mjs` drives the public executors against the fake
+desktop backend. Every `act_ui` pays the bridge's own 280 ms settle timer (120 ms headless), and the
+stored-output case writes a 16 MiB error to the output store; the longest case is under 1 s and the
+whole file about 5 s on Apple M4, so no case needs more than the 20 s suite default.
+
 ## Measured macOS Swift budget (#457)
 
 `computer-use/test/macos-native-pure.test.mjs` compiles the PURE region of

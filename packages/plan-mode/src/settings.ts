@@ -85,6 +85,8 @@ export type ImplementationPlanRetention = (typeof IMPLEMENTATION_PLAN_RETENTIONS
 export type PlanModeFixedThinkingLevel = (typeof IMPLEMENTATION_THINKING_LEVELS)[number];
 export interface PlanModeSettings {
   thinkingLevel: PlanModeThinkingLevel;
+  /** Allow model-requested entry with explicit confirmation; captured at session start. */
+  modelPlanEntry?: boolean;
   /** Router tier Plan turns run on, e.g. `@deep`; omitted inherits the current model. */
   planModel?: PlanModelTier;
   defaultPlanTools?: string[];
@@ -143,6 +145,10 @@ export function normalizePlanModeSettings(value: unknown): PlanModeSettings | un
   const settings: PlanModeSettings = {
     thinkingLevel: thinkingLevel as PlanModeThinkingLevel,
   };
+  if (Object.hasOwn(value, "modelPlanEntry")) {
+    if (typeof value.modelPlanEntry !== "boolean") return undefined;
+    settings.modelPlanEntry = value.modelPlanEntry;
+  }
   if (Object.hasOwn(value, "planModel")) {
     const planModel = normalizePlanModelTier(Reflect.get(value, "planModel"));
     if (!planModel) return undefined;

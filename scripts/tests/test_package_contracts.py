@@ -1455,6 +1455,24 @@ def test_real_workspace_tarballs_pass_audit(
     assert artifact.integrity.startswith("sha512-")
 
 
+def test_router_contract_requires_only_the_reset_schema_not_private_state() -> None:
+    """Require the shipped schema without admitting private operational records.
+
+    Parameters:
+        None.
+    Returns:
+        None: The schema is required and private journal records remain forbidden.
+    Raises:
+        AssertionError: The contract omits the schema or permits private state.
+    """
+    contract = next(c for c in pc.CONTRACTS if c.directory == "subscription-router")
+    schema = "schemas/codex-reset-journal.schema.json"
+    assert schema in contract.required
+    assert any(pattern.fullmatch(schema) for pattern in contract.allowed)
+    for private_record in ("schemas/attempt-1.json", "schemas/private-state.schema.json"):
+        assert not any(pattern.fullmatch(private_record) for pattern in contract.allowed)
+
+
 def test_router_contract_requires_the_cheap_profile() -> None:
     """Require the published cheap example without broadly allowing JSON files.
 
@@ -3082,7 +3100,7 @@ def test_shared_runner_script_exits_with_main_status(tmp_path: Path) -> None:
 def test_audit_files_computer_use_exact_payload() -> None:
     """The pinned payload passes; stray, missing and duplicated paths are each reported."""
     packed = list(pc.COMPUTER_USE_CONTRACT.packed_files)
-    assert len(packed) == 92
+    assert len(packed) == 93
     assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed]) == []
     assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed, "src/stray.ts"])
     missing = pc.audit_files(pc.COMPUTER_USE_CONTRACT, [name for name in packed if name != "src/view.ts"])

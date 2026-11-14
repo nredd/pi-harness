@@ -4,21 +4,57 @@ import type { Clock } from "../../src/clock.ts";
 import { BoundedMatcher } from "../../src/monitor/matcher.ts";
 
 const workers = vi.hoisted(() => ({
-	instances: [] as (EventEmitter & { terminate: ReturnType<typeof vi.fn>; postMessage: ReturnType<typeof vi.fn> })[],
+	instances: [] as (EventEmitter & { kill: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn> })[],
 }));
-vi.mock("node:worker_threads", () => ({
-	Worker: class extends EventEmitter {
-		readonly terminate = vi.fn(async () => 0);
-		readonly postMessage = vi.fn();
-		constructor() {
-			super();
-			workers.instances.push(this);
-		}
-	},
+vi.mock("node:child_process", () => ({
+	spawn: vi.fn(
+		() =>
+			new (class extends EventEmitter {
+				readonly kill = vi.fn(() => {
+					this.emit("close");
+					return true;
+				});
+				readonly send = vi.fn();
+				constructor() {
+					super();
+					workers.instances.push(this);
+				}
+			})(),
+	),
 }));
 afterEach(() => {
 	vi.useRealTimers();
 	workers.instances.length = 0;
+});
+
+it("fails open on process errors and awaits actual process close", async () => {
+	const matcher = new BoundedMatcher("READY");
+	const worker = workers.instances[0];
+	if (!worker) throw new Error("Expected process boundary");
+	worker.kill.mockImplementationOnce(() => true);
+	const outcomes: boolean[] = [];
+	matcher.test("pending", (matched) => outcomes.push(matched));
+	worker.emit("error", new Error("spawn failed"));
+	let closed = false;
+	const closing = matcher.close().then(() => (closed = true));
+	await Promise.resolve();
+	expect(closed).toBe(false);
+	expect(outcomes).toEqual([true]);
+	worker.emit("close");
+	await closing;
+	expect(closed).toBe(true);
+	expect(worker.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+});
+
+it("settles cleanup on reaped exit even when IPC disconnect omits close", async () => {
+	const matcher = new BoundedMatcher("READY");
+	const worker = workers.instances[0];
+	if (!worker) throw new Error("Expected process boundary");
+	worker.kill.mockImplementationOnce(() => true);
+	const closing = matcher.close();
+	worker.emit("exit", null, "SIGKILL");
+	await closing;
+	expect(worker.kill).toHaveBeenCalledOnce();
 });
 
 it("a slow but responsive queue fails open at the total drain deadline rather than waiting forever", async () => {
@@ -26,7 +62,7 @@ it("a slow but responsive queue fails open at the total drain deadline rather th
 	const matcher = new BoundedMatcher("READY");
 	const worker = workers.instances[0];
 	if (!worker) throw new Error("Expected worker boundary");
-	worker.emit("online");
+	worker.emit("message", "ready");
 	const outcomes: [number, boolean][] = [];
 	for (let index = 0; index < 12; index++) matcher.test(`line ${index}`, (matched) => outcomes.push([index, matched]));
 	const draining = matcher.drain();
@@ -40,7 +76,7 @@ it("a slow but responsive queue fails open at the total drain deadline rather th
 	expect(outcomes).toEqual([...Array.from({ length: 11 }, (_, index) => [index, false]), [11, true]]);
 	await draining;
 	await matcher.close();
-	expect(worker.terminate).toHaveBeenCalledOnce();
+	expect(worker.kill).toHaveBeenCalledOnce();
 	expect(vi.getTimerCount()).toBe(0);
 });
 
@@ -62,7 +98,7 @@ it("a worker that never comes online fails open at its startup deadline and rele
 		["future", true],
 	]);
 	await matcher.close();
-	expect(workers.instances[0]?.terminate).toHaveBeenCalledOnce();
+	expect(workers.instances[0]?.kill).toHaveBeenCalledOnce();
 	expect(vi.getTimerCount()).toBe(0);
 });
 
@@ -87,12 +123,12 @@ it("runs every deadline on the injected clock, so host time alone never fails a 
 	matcher.test("slow", (matched) => outcomes.push(["slow", matched]));
 	expect(timers.map(({ ms, cancelled }) => [ms, cancelled])).toEqual([[1000, false]]);
 	await vi.advanceTimersByTimeAsync(60_000);
-	worker.emit("online");
+	worker.emit("message", "ready");
 	expect(timers.map(({ ms, cancelled }) => [ms, cancelled])).toEqual([
 		[1000, true],
 		[100, false],
 	]);
-	expect(worker.postMessage).toHaveBeenCalledWith("slow");
+	expect(worker.send).toHaveBeenCalledWith("slow");
 	const draining = matcher.drain();
 	expect(timers.map(({ ms, cancelled }) => [ms, cancelled])).toEqual([
 		[1000, true],
@@ -106,7 +142,7 @@ it("runs every deadline on the injected clock, so host time alone never fails a 
 	await draining;
 	expect(timers.map(({ cancelled }) => cancelled)).toEqual([true, true, true]);
 	await matcher.close();
-	expect(worker.terminate).toHaveBeenCalledOnce();
+	expect(worker.kill).toHaveBeenCalledOnce();
 	expect(vi.getTimerCount()).toBe(0);
 });
 
@@ -119,9 +155,9 @@ it("ignores a late online or answer from a worker it already gave up on", async 
 	matcher.test("first", (matched) => outcomes.push(matched));
 	await matcher.close();
 	expect(outcomes).toEqual([true]);
-	worker.emit("online");
+	worker.emit("message", "ready");
 	worker.emit("message", false);
-	expect(worker.postMessage).not.toHaveBeenCalled();
+	expect(worker.send).not.toHaveBeenCalled();
 	expect(outcomes).toEqual([true]);
 	expect(vi.getTimerCount()).toBe(0);
 });
@@ -131,11 +167,11 @@ it("ignores an unsolicited answer while no line is in flight", () => {
 	const matcher = new BoundedMatcher("READY");
 	const worker = workers.instances[0];
 	if (!worker) throw new Error("Expected worker boundary");
-	worker.emit("online");
+	worker.emit("message", "ready");
 	worker.emit("message", true);
 	const outcomes: boolean[] = [];
 	matcher.test("line", (matched) => outcomes.push(matched));
-	expect(worker.postMessage).toHaveBeenCalledExactlyOnceWith("line");
+	expect(worker.send).toHaveBeenCalledExactlyOnceWith("line");
 	worker.emit("message", false);
 	expect(outcomes).toEqual([false]);
 	void matcher.close();

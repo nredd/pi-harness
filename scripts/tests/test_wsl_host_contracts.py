@@ -143,12 +143,12 @@ def test_adapter_failure_labels_name_each_hop_without_environment_dumping() -> N
     """Keep host, PowerShell, and guest diagnostics bounded to their failed hop."""
     host = (ROOT / "scripts/wsl2_host.sh").read_text()
     shell = (ROOT / "scripts/wsl2_shell.ps1").read_text()
-    guest = (ROOT / "scripts/wsl2_run.sh").read_text()
+    guest = (ROOT / "scripts/wsl2_run.py").read_text()
     assert "wsl2-host: pwsh command not found" in host
     assert "wsl2-shell: wslpath failed with status $status" in shell
     assert shell.index("$status = $LASTEXITCODE") < shell.index("$adapter = $adapterOutput.Trim()")
     assert "wsl2-shell: guest dispatch failed with status $status" in shell
-    assert "wsl2-run: guest-step failed with status %s" in guest
+    assert "wsl2-run: guest-step failed with status {status}" in guest
     assert "Get-ChildItem Env:" not in host + shell + guest
 
 
@@ -172,13 +172,20 @@ def test_native_shell_preserves_implicit_baseline_pipeline_behavior(tmp_path: Pa
     assert "\n    defaults:\n      run:\n        shell: bash -e {0}\n" in workflow
 
 
-@pytest.mark.parametrize("references", [1, 0, 2])
-def test_guest_owned_tools_reuse_native_pinned_action(tmp_path: Path, references: int) -> None:
+@pytest.mark.parametrize(
+    ("references", "machine", "runner_arch"),
+    [(1, "x86_64", "X64"), (1, "aarch64", "ARM64"), (0, "x86_64", "X64"), (2, "x86_64", "X64")],
+)
+def test_guest_owned_tools_reuse_native_pinned_action(
+    tmp_path: Path, references: int, machine: str, runner_arch: str
+) -> None:
     """Execute the installer against a local action fixture, refusing ambiguous pins.
 
     Parameters:
         tmp_path (Path): Disposable fixture directory.
         references (int): Number of authoritative action references in the fixture.
+        machine (str): The guest's `uname -m`.
+        runner_arch (str): The `RUNNER_ARCH` the action must be told for that machine.
     """
     repo = tmp_path / "repo"
     action = repo / ".github/actions/setup-ci-tools/action.yml"
@@ -191,6 +198,8 @@ def test_guest_owned_tools_reuse_native_pinned_action(tmp_path: Path, references
         command = commands / name
         command.write_text("#!/bin/sh\nprintf 'fixture tool version\\n'\n")
         command.chmod(0o755)
+    (commands / "uname").write_text(f"#!/bin/sh\necho {machine}\n")
+    (commands / "uname").chmod(0o755)
     source = tmp_path / "action-source"
     source.mkdir()
     (source / "main.sh").write_text(
@@ -200,11 +209,11 @@ def test_guest_owned_tools_reuse_native_pinned_action(tmp_path: Path, references
         test "$INPUT_CHECKSUM" = true
         test "$INPUT_FALLBACK" = none
         test "$RUNNER_OS" = Linux
-        test "$RUNNER_ARCH" = X64
+        test "$RUNNER_ARCH" = @ARCH@
         test -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}${DEFAULT_GITHUB_TOKEN:-}"
         printf '%s\n' "$FAKE_BIN" >> "$GITHUB_PATH"
         printf invoked > "$INSTALL_RECEIPT"
-        """)
+        """).replace("@ARCH@", runner_arch)
     )
     archive = tmp_path / "action.tar.gz"
     with tarfile.open(archive, "w:gz") as tar:

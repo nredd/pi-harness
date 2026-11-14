@@ -24,6 +24,9 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import IO, TYPE_CHECKING, Any, Literal, Self
 from urllib.parse import urlsplit
@@ -41,7 +44,7 @@ from harness.release import (
 from harness.stack import Stack, canonical_stack_bytes, source_string
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Iterator, Mapping
 
 LOGGER = logging.getLogger(__name__)
 ASSET = "dependency-graph.json"
@@ -58,6 +61,53 @@ TIMEOUT = 600
 
 class RuntimeLockError(ValueError):
     """An authenticated graph or its downloaded/installed bytes disagree."""
+
+
+@dataclass
+class CacheImports:
+    """Aggregate native cache calls, never archive names or subprocess output."""
+
+    total: int
+    attempted: int = 0
+    completed: int = 0
+
+
+@contextmanager
+def replay_phase(
+    phase: Literal[
+        "selection",
+        "checksums",
+        "acquisition",
+        "archive-verification",
+        "cache-import",
+        "offline-install",
+        "installed-byte-audit",
+        "smoke",
+    ],
+    counts: CacheImports | None = None,
+) -> Iterator[None]:
+    """Emit one fixed-shape timing record on success or unwinding a failed phase.
+
+    Parameters:
+        phase (Literal): internal phase label, never derived from selected inputs.
+        counts (CacheImports | None): optional aggregate cache invocation counters.
+
+    Returns:
+        Iterator[None]: the measured operation; exceptions propagate unchanged.
+    """
+    started = time.monotonic_ns()
+    status = "error"
+    try:
+        yield
+        status = "ok"
+    finally:
+        elapsed_ms = max(0, time.monotonic_ns() - started) // 1_000_000
+        summary = (
+            f" total={counts.total} attempted={counts.attempted} completed={counts.completed}"
+            if counts is not None
+            else ""
+        )
+        LOGGER.info(f"Runtime replay phase={phase} status={status} elapsed_ms={elapsed_ms}{summary}")
 
 
 class NpmGraph(BaseModel):
@@ -587,18 +637,28 @@ def install_graph(
     if root.exists() and any(root.iterdir()):
         raise RuntimeLockError("Runtime install root must be empty")
     # Recheck immediately before importing local archives into npm's private cache.
-    for key, archive in archives.items():
-        check_sri(archive.read_bytes(), graph.lock["packages"][key]["integrity"])
-        validate_archive(archive)
+    with replay_phase("archive-verification"):
+        for key, archive in archives.items():
+            check_sri(archive.read_bytes(), graph.lock["packages"][key]["integrity"])
+            validate_archive(archive)
     env = npm_env(scratch) | {"npm_config_offline": "true"}
     root.mkdir(parents=True, exist_ok=True)
     (root / "package.json").write_text(json.dumps(graph.manifest))
     (root / "package-lock.json").write_text(json.dumps(graph.lock))
-    for archive in dict.fromkeys(archives.values()):
-        run_npm(npm, ["cache", "add", str(archive), "--offline", "--ignore-scripts"], root, env)
-    run_npm(npm, ["ci", "--offline", "--ignore-scripts", "--include=optional", "--include=peer"], root, env)
-    checkpoint()
-    audit_install(graph, root, archives)
+    unique_archives = dict.fromkeys(archives.values())
+    counts = CacheImports(total=len(unique_archives))
+    with replay_phase("cache-import", counts):
+        for archive in unique_archives:
+            counts.attempted += 1
+            run_npm(npm, ["cache", "add", str(archive), "--offline", "--ignore-scripts"], root, env)
+            counts.completed += 1
+    with replay_phase("offline-install"):
+        run_npm(
+            npm, ["ci", "--offline", "--ignore-scripts", "--include=optional", "--include=peer"], root, env
+        )
+    with replay_phase("installed-byte-audit"):
+        checkpoint()
+        audit_install(graph, root, archives)
 
 
 def selected_graphs(runtime: RuntimeLocks) -> dict[str, NpmGraph]:
@@ -689,12 +749,15 @@ def replay_source(runtime: RuntimeLocks, stack: Stack, scratch: Path, npm: str) 
         OSError | ValueError: binding, acquisition, native replay or byte auditing fails.
         RuntimeLockError: the authenticated source runtime cannot start.
     """
-    runtime.bind(stack)
-    checksums = core_checksums(stack)
-    graphs = selected_graphs(runtime)
-    archives = {
-        kind: acquire(graph, scratch / kind / "archives", checksums) for kind, graph in graphs.items()
-    }
+    with replay_phase("selection"):
+        runtime.bind(stack)
+        graphs = selected_graphs(runtime)
+    with replay_phase("checksums"):
+        checksums = core_checksums(stack)
+    with replay_phase("acquisition"):
+        archives = {
+            kind: acquire(graph, scratch / kind / "archives", checksums) for kind, graph in graphs.items()
+        }
     for kind, graph in graphs.items():
         install_graph(graph, scratch / kind / "prefix", scratch / kind / "npm", npm, archives[kind])
     executable = scratch / "core" / "prefix" / "node_modules" / ".bin" / "pi"
@@ -704,20 +767,21 @@ def replay_source(runtime: RuntimeLocks, stack: Stack, scratch: Path, npm: str) 
         "PI_TELEMETRY": "0",
     }
     try:
-        version = subprocess.check_output(
-            [str(executable), "--version"],
-            cwd=scratch,
-            env=child_environment(os.environ, overrides=env),
-            text=True,
-            stderr=subprocess.STDOUT,
-            timeout=60,
-        )
+        with replay_phase("smoke"):
+            subprocess.check_output(
+                [str(executable), "--version"],
+                cwd=scratch,
+                env=child_environment(os.environ, overrides=env),
+                text=True,
+                stderr=subprocess.STDOUT,
+                timeout=60,
+            )
     except (OSError, subprocess.SubprocessError) as error:
         failure = detached_exception(
             RuntimeLockError(f"Verified source runtime could not start: {error}"), error
         )
     else:
-        LOGGER.info(f"Source-selected offline runtime replay and byte audits passed: {version.strip()}")
+        LOGGER.info("Source-selected offline runtime replay and byte audits passed")
         return
     raise failure from failure.__cause__
 

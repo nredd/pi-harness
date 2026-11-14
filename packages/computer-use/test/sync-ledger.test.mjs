@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { test } from "vitest";
-import { validateLedger } from "../scripts/check-sync-ledger.mjs";
+import {
+	upstreamRowNames,
+	validateLedger,
+	validateLedgerOrder,
+	validateUpstreamRows,
+} from "../scripts/check-sync-ledger.mjs";
 
 const control = { name: "remove behavior", file: "src/a.ts", check: "check-a.mjs" };
 const ledger = {
@@ -37,6 +44,14 @@ test("accepts complete structured metadata and rejects each missing status/drop 
 	assert.throws(() => validateLedger(ledger, []), /unknown drop control/);
 	assert.throws(() => validateLedger(ledger, [{ ...control, file: "src/b.ts" }]), /not owned/);
 	assert.throws(() => validateLedger(ledger, [{ ...control, check: "wrong" }]), /mismatch/);
+});
+
+test("real revert inventory agrees with the checked-in ledger", () => {
+	const script = fileURLToPath(new URL("../scripts/check-sync-reverts.mjs", import.meta.url));
+	const result = spawnSync(process.execPath, [script, "--validate-only"], { encoding: "utf8", timeout: 10_000 });
+	assert.ifError(result.error);
+	assert.equal(result.status, 0, result.stderr);
+	assert.match(result.stdout, /Sync ledger and actual revert cases validated/);
 });
 
 test("every checked-in disposition rejects missing status or reference; every patch requires its drop control", () => {
@@ -147,4 +162,40 @@ test("merged upstream and release requests require real upstream PR/issue URL sh
 			assert.throws(() => validateLedger(broken, [control]), /upstream reference/);
 		}
 	}
+});
+
+const read = (name) => readFileSync(new URL(`../${name}`, import.meta.url), "utf8");
+
+test("checked-in ledger lists, UPSTREAM.md rows and revert cases are sorted so PRs append without conflicts", () => {
+	const checkedIn = JSON.parse(read("sync-patches.json"));
+	validateLedgerOrder(checkedIn, read("UPSTREAM.md"), read("scripts/check-sync-reverts.mjs"));
+	const markdown = read("UPSTREAM.md");
+	const reverts = read("scripts/check-sync-reverts.mjs");
+	const swap = (items) => [items[1], items[0], ...items.slice(2)];
+	const unsorted = [
+		() => ({ ...checkedIn, files: swap(checkedIn.files) }),
+		() => ({ ...checkedIn, patches: swap(checkedIn.patches) }),
+		() => ({ ...checkedIn, patches: [{ ...checkedIn.patches[0], files: ["b", "a"] }] }),
+		() => ({ ...checkedIn, patches: [{ ...checkedIn.patches[0], dropControls: ["b", "a"] }] }),
+	];
+	for (const make of unsorted) assert.throws(() => validateLedgerOrder(make(), markdown, reverts), /sorted/);
+	const rows = markdown.split("\n").filter((line) => upstreamRowNames(line).length > 0);
+	const swapped = markdown.replace(rows[0], "\u0000").replace(rows[1], rows[0]).replace("\u0000", rows[1]);
+	assert.throws(() => validateLedgerOrder(checkedIn, swapped, reverts), /UPSTREAM\.md rows must be sorted/);
+	assert.throws(
+		() => validateLedgerOrder(checkedIn, markdown, '\t\tname: "b",\n\t\tname: "a",\n'),
+		/cases must be sorted/,
+	);
+});
+
+test("every sync-patches.json patch has an UPSTREAM.md row and every row has a patch", () => {
+	const checkedIn = JSON.parse(read("sync-patches.json"));
+	const markdown = read("UPSTREAM.md");
+	validateUpstreamRows(checkedIn, markdown);
+	const [row] = upstreamRowNames(markdown);
+	assert.throws(() => validateUpstreamRows(checkedIn, `${markdown}\n| Orphan | x | y | z |\n`), /without a sync-patches/);
+	assert.throws(() => validateUpstreamRows(checkedIn, markdown.replace(`| ${row} |`, "| Renamed |")), /no UPSTREAM\.md row/);
+	const missing = structuredClone(checkedIn);
+	delete missing.patches[0].rows;
+	assert.throws(() => validateUpstreamRows(missing, markdown), /rows required/);
 });

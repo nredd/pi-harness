@@ -12,6 +12,109 @@ no `// coverage:ignore`, no widened globs, no waived files. Unreachable code is 
 unreachable by types, as in the dev-tools precedent (the unused no-op mutex initializer).
 Every closed gap needs a test that fails without the behavior, not an executed line.
 
+## Missing-target call-path proof (#755)
+
+The remaining `src/bridge.ts` missing-target guard is dead, not a missing public error path.
+`executeTool` creates an isolated `OperationState` for each request via `SavedStates.hydrate`:
+no state yields `{}`, desktop records always restore both target and capture, browser records
+restore a CDP context without a desktop target. Session reconstruction also saves desktop records
+only after constructing both target and capture. No public input can mutate this operation state.
+
+The two former `currentTargetOrThrow` consumers are:
+
+- `performReadText`: output refs return first, browser states return through CDP, and desktop
+  reads require `currentCaptureOrThrow` before accessing the paired target.
+- `resolveCurrentTarget`: `resolveTargetByWindowSelector` calls it only after checking the current
+  target; `resolveTargetForObserve` does the same or selects the frontmost target. All selection
+  paths set the target before returning. `ensureTargetWindowId` is reached only with a selected
+  target or a hydrated desktop target. `captureCurrentTarget` receives the selected target from
+  observe, or runs after desktop capture validation. `performWaitFor` and `performDesktopTransaction`
+  require a capture first; `performSearchUi` and `performExpandUi` require an outline (which requires
+  a capture) and exclude browser contexts from native recapture.
+
+`clearDesktopOperationState` clears the capture and target together only on terminal transaction
+outcomes, which return without further resolution. Async-local operations cannot clear each other's
+targets. The guard and unused error constant are deleted, not ignored or pinned to success.
+
+`test/bridge-observe-query.test.mjs` verifies all six desktop state consumers reject missing,
+empty and whitespace states at the public executor boundary without reaching native capture/wait.
+Existing suites cover selected/frontmost roots, hydrated desktop reads/waits/acts, browser queries
+and reconstructed observations. A separate, explicitly structural removal control fails when the
+obsolete guard returns; it is not a claim of native behavior. Coverage pins and caps are changed
+only after measurements, never to hide a reachable failure.
+
+At source HEAD `3a1623815c57f814c67ec655692c6430c27e7ca5`, CI run `43184600748`
+measured macOS (job `131068948733`, 966 tests, 15 skipped), Ubuntu (job `131068948709`,
+958 tests, 23 skipped) and WSL2 (job `131068948676`, 958 tests, 23 skipped). Each reports
+L/F/B/S uncovered **0/0/0/0**, totals 3902/1022/3429/4676; all 35 files, including
+`src/bridge.ts`, are fully covered.
+The initial public-executor suite failed 1 removal assertion before deletion, then all
+19 tests passed. `check-sync-reverts.mjs` actually restores the guard and proves the
+removal assertion fails; all existing controls also pass after updating their deleted-error
+anchors/expectations. This is structural dead-code protection, not live native coverage.
+
+The aggregate L/F/B/S caps are now zero on both policy platforms, and all 35 files from that
+measurement, including `src/bridge.ts`, have per-file L/F/B/S zero thresholds. #742 supplies
+statement accounting and `json-summary`. The later Swift coverage producer adds another owned
+script; the earlier 35-file measurement does not establish its coverage. The overall
+`computer-use` inventory remains excluded: this result covers the TypeScript/Vitest slice,
+not all native Swift, Rust or documentation code.
+
+## Signing-certificate Node port (#803)
+
+The original `scripts/make-signing-cert.sh` was inventoried but unmeasured shell, not a
+zero-coverage Node baseline. Its deterministic setup now lives in
+`packages/computer-use/scripts/make-signing-cert.mjs`, measured by the existing Istanbul
+producer with a per-file zero L/F/B/S pin. Both inventory slices include it; no uncovered
+caps or exclusions change. The launcher and embedded Bash silent-password reader remain
+explicitly **unmeasured shell**. #695 stays open for remaining work.
+
+Scoped local Node and Bun suites exercise disposable files and injected command results,
+including EOF, command refusal, missing/nonexecutable tools, interrupts and filesystem
+failures. No real certificate, signing identity, Keychain, trust or credential prompt runs.
+The Node implementation measures L/F/B/S **31/4/23/35**, all covered, on both runtimes.
+These scoped reports do not establish whole-package or native coverage. The independent
+command-refusal mutation must fail before the patch is admitted. PR CI runs the full
+package/accounting gates, including missing-report refusal.
+
+## Retained verification gates (#697)
+
+Seven repository gates now export import-inert `main(argv, deps)` entrypoints (the shared
+`check-sync-ledger.mjs` already exported its validators). `computer-use-vitest` measures
+`check-commit-messages`, `check-docs-platform`, `check-docs`, `check-package-assets`,
+`check-sync-ledger`, `check-sync-reverts` and `check-upstream-sync` with per-file zero
+L/F/B/S thresholds. Both inventories retain every source; none remains a verification-helper
+exemption. Existing LCOV and `json-summary` producers supply actual counters; missing data
+still fails accounting closed, never becomes a zero.
+
+The scoped macOS run of `verification-gates`, `verification-sync-gates` and `sync-ledger`
+passed 27 tests, measuring L/F/B/S **279/46/165/314**, all covered. Actual tar archives,
+disposable Git histories, source-tree comparison, documentation generators and an expected-failure
+mutation child run offline. Injected boundaries cover launch failures, retry exhaustion, wrong
+failures, surviving mutations and cleanup without a network fetch or live helper. The full
+package gate previously hit its 90s outer deadline while the two drift controls ran the entire
+`invariants` suite, including SDK setup. #825 moves those controls to the same static parity test
+without native compilation; all controls retain the original 90s limit and expected-failure matching.
+These numbers
+are a scoped measurement, not whole-package or cross-platform evidence. CI run 43363268531
+failed because the mutated `check-docs.mjs` returned success. A path-alias repro shows how:
+`process.argv[1]` can retain a symlinked temporary path while `import.meta.url` resolves the real
+path, so the CLI guard silently skips the check. The runner's exact path identity was not captured.
+All six new CLI guards compare real paths. Tests run their real entrypoints via
+symlinks, and the actual documentation drop control runs the mutated sandbox through the same `tsx`
+launcher with a symlinked package path. The pre-fix control reproduced `Dropped patch survived`;
+the corrected guard causes the expected specific documentation refusal. The asset-validation
+mutation must fail the independent missing-asset fixture in `test:sync-reverts`.
+
+Launcher disposition remains explicit: retain `check-linux-live.mjs` as an unmeasured opt-in
+D-Bus lifecycle launcher (its assertions live in `test/linux-live.test.mjs`), and retain
+`pi-cubench-agent.mjs` as an unmeasured manual gateway/desktop benchmark driver. Neither is
+published or counted as measured here. The latter contains orchestration and must not be
+called a passive fixture. Measuring these launchers needs a separately admitted offline seam
+and does not authorize real UI or gateway calls. #697 remains open for that owner disposition
+and the separately owned subagents runtime scope (#802/#805); this change does not close the
+umbrella. #759 owns the separate async-helper measurement.
+
 ## Baseline
 
 Measured 2026-11-11 on macOS (Apple Silicon, Node 26.13.0) at `6d913af1` (main after #717, #718, #719,
@@ -28,119 +131,104 @@ gated (`linux-*`, `windows-*`, `macos-helper-live`).
 
 ### TypeScript (`computer-use-vitest`, 35 modules, Istanbul)
 
-Istanbul text summary: statements 82.84%, branches 74.67%, functions 79.98%, lines 85.24%. The policy
-reads the lcov rollup, which gives **572 uncovered lines, 871 uncovered branches, 203 uncovered
-functions** on macOS. `src/platform/types.ts` is excluded as type-only and stays so (no executable
-output).
+Hosted run `43173083073` on PR HEAD `e1df877e` measured the enforced signal:
 
-The signal is **enforced** since #645 T0, with caps equal to the measured per-OS uncovered counts:
+| Host | Lines | Functions | Branches | Statements | Job |
+| --- | --- | --- | --- | --- | --- |
+| macOS | 1 | 0 | 1 | 1 | `131037037506` |
+| Ubuntu | 1 | 0 | 1 | 1 | `131037793558` |
+| WSL2 | 1 | 0 | 1 | 1 | `131041874646` |
 
-| OS | Lines | Functions | Branches | Source |
+The `darwin` caps equal macOS; `linux` caps take the per-counter maximum of Ubuntu and WSL2.
+Each cap is lower than or equal to the previous 168/25/313/236 baseline. The 34 files
+at 0/0/0/0 on all three hosts are pinned in `packages/computer-use/vitest.config.ts`; the exact
+list is tested in `scripts/coverage-configs.test.ts`. The helpers from #749 were already pinned.
+
+macOS per-file uncovered counts (lines / functions / branches / statements):
+
+| File | Lines | Functions | Branches | Statements |
 | --- | --- | --- | --- | --- |
-| darwin | 572 | 203 | 871 | local `npm test` at `6d913af1` |
-| linux (max of Ubuntu and WSL2) | 592 | 211 | 900 | hosted `owned (ubuntu-24.04)` 589/209/900 and `owned (wsl2)` 592/211/900, PR #731 merged with main `9de93b4c` (after #723, #732, #733) |
+| `extensions/computer-use.ts` | 0/51 | 0/10 | 0/30 | 0/63 |
+| `scripts/build-native.mjs` | 0/154 | 0/23 | 0/120 | 0/167 |
+| `scripts/docs-generators/generate-source-references.mjs` | 0/85 | 0/22 | 0/55 | 0/106 |
+| `scripts/docs-generators/generate-tool-reference.mjs` | 0/65 | 0/15 | 0/68 | 0/79 |
+| `scripts/rust-coverage.mjs` | 0/62 | 0/6 | 0/56 | 0/67 |
+| `scripts/setup-helper.mjs` | 0/433 | 0/102 | 0/284 | 0/508 |
+| `src/actions.ts` | 0/87 | 0/23 | 0/149 | 0/108 |
+| `src/bridge.ts` | 1/1052 | 0/242 | 1/1162 | 1/1236 |
+| `src/cdp.ts` | 0/270 | 0/85 | 0/174 | 0/326 |
+| `src/config.ts` | 0/82 | 0/21 | 0/86 | 0/115 |
+| `src/contract.ts` | 0/1 | 0/0 | 0/0 | 0/1 |
+| `src/desktop.ts` | 0/67 | 0/21 | 0/88 | 0/85 |
+| `src/find-params.ts` | 0/7 | 0/2 | 0/12 | 0/8 |
+| `src/note.ts` | 0/74 | 0/18 | 0/85 | 0/88 |
+| `src/outline-store.ts` | 0/42 | 0/7 | 0/14 | 0/47 |
+| `src/outline.ts` | 0/317 | 0/92 | 0/302 | 0/400 |
+| `src/output.ts` | 0/77 | 0/11 | 0/50 | 0/95 |
+| `src/permissions.ts` | 0/26 | 0/11 | 0/18 | 0/35 |
+| `src/platform/architecture.ts` | 0/8 | 0/2 | 0/8 | 0/9 |
+| `src/platform/coerce.ts` | 0/7 | 0/3 | 0/15 | 0/9 |
+| `src/platform/index.ts` | 0/21 | 0/15 | 0/7 | 0/24 |
+| `src/platform/linux/backend.ts` | 0/47 | 0/26 | 0/79 | 0/54 |
+| `src/platform/linux/helper.ts` | 0/200 | 0/49 | 0/96 | 0/246 |
+| `src/platform/linux/wsl.ts` | 0/12 | 0/5 | 0/10 | 0/14 |
+| `src/platform/macos/backend.ts` | 0/39 | 0/20 | 0/55 | 0/44 |
+| `src/platform/macos/browser.ts` | 0/30 | 0/8 | 0/24 | 0/32 |
+| `src/platform/macos/helper-path.mjs` | 0/16 | 0/2 | 0/17 | 0/17 |
+| `src/platform/macos/helper.ts` | 0/233 | 0/68 | 0/83 | 0/271 |
+| `src/platform/macos/permissions.ts` | 0/34 | 0/10 | 0/33 | 0/34 |
+| `src/platform/windows/backend.ts` | 0/49 | 0/25 | 0/71 | 0/55 |
+| `src/platform/windows/helper.ts` | 0/98 | 0/24 | 0/46 | 0/135 |
+| `src/root-selection.ts` | 0/13 | 0/2 | 0/29 | 0/22 |
+| `src/runtime.ts` | 0/47 | 0/22 | 0/9 | 0/56 |
+| `src/state.ts` | 0/16 | 0/6 | 0/20 | 0/19 |
+| `src/view.ts` | 0/85 | 0/25 | 0/76 | 0/106 |
 
-Every later coverage PR lowers these caps to its own hosted numbers (never raises them). Statement
-accounting does not exist yet (#700), so statements carry no cap.
-
-Files at 0/0/0 on all three OSes in the hosted artifacts (`outline.ts`, `outline-store.ts`,
-`setup-helper.mjs`, `build-native.mjs`, both docs generators, `rust-coverage.mjs`, `macos/helper.ts`,
-`macos/helper-path.mjs`; `contract.ts` has one line and no functions or branches, so it is not pinned) are additionally locked per file by `coverage.thresholds` in
-`packages/computer-use/vitest.config.ts`, so a regression there fails `npm test` itself. `cdp.ts` joins
-that list when #726 merges.
-
-| File | Lines missed/total | Branches missed/total | Functions missed/total | Uncovered lines |
-| --- | --- | --- | --- | --- |
-| `extensions/computer-use.ts` | 20/51 | 29/30 | 8/10 | 175-176,184,187,234-235,240-243,247-250,254-256,260-262 |
-| `scripts/build-native.mjs` | 0/154 | 0/120 | 0/23 | none |
-| `scripts/docs-generators/generate-source-references.mjs` | 0/85 | 0/55 | 0/22 | none |
-| `scripts/docs-generators/generate-tool-reference.mjs` | 0/65 | 0/68 | 0/15 | none |
-| `scripts/rust-coverage.mjs` | 0/62 | 0/56 | 0/6 | none |
-| `scripts/setup-helper.mjs` | 0/433 | 0/284 | 0/102 | none |
-| `src/actions.ts` | 8/58 | 20/102 | 3/18 | 38,42-43,103,105-108 |
-| `src/bridge.ts` | 164/1063 | 312/1199 | 25/242 | 1103,1123-1129,1155-1160,1173-1174,1285-1290,1294-1295,1299-1306,1308,1327-1331,1335-1339,1351-1354,1357,1361-1371,1377-1381,1387-1388,1397,... |
-| `src/cdp.ts` | 144/272 | 138/178 | 54/85 | 91-92,104-105,109,140-141,143-144,146,148,153,157,161-163,165,169,173-177,182,186-190,194-197,200,206-209,214-216,223-224,232-233,239-241,... |
-| `src/config.ts` | 3/82 | 25/86 | 1/21 | 84,143,189 |
-| `src/contract.ts` | 0/1 | 0/0 | 0/0 | none |
-| `src/desktop.ts` | 0/67 | 6/88 | 0/21 | none |
-| `src/find-params.ts` | 0/7 | 0/12 | 0/2 | none |
-| `src/note.ts` | 8/74 | 31/85 | 0/18 | 118,149,162-163,165,192-194 |
-| `src/outline-store.ts` | 0/42 | 0/14 | 0/7 | none |
-| `src/outline.ts` | 0/317 | 0/302 | 0/92 | none |
-| `src/output.ts` | 7/79 | 16/52 | 0/11 | 51-56,66 |
-| `src/permissions.ts` | 26/26 | 18/18 | 11/11 | 52,56,60,64,73-74,76,80,82-83,85-89,91-92,94-95,97,100-103,105,110 |
-| `src/platform/architecture.ts` | 0/8 | 2/8 | 0/2 | none |
-| `src/platform/coerce.ts` | 0/7 | 0/15 | 0/3 | none |
-| `src/platform/index.ts` | 16/21 | 3/9 | 14/15 | 32-33,37,40-51,58 |
-| `src/platform/linux/backend.ts` | 5/47 | 18/79 | 2/26 | 109,116,120,155,158 |
-| `src/platform/linux/helper.ts` | 26/202 | 40/102 | 13/49 | 48,50,53-54,83-87,89-90,93-94,238,252,271-272,275-277,306-308,327-329 |
-| `src/platform/linux/wsl.ts` | 5/12 | 1/10 | 3/5 | 18-19,21-22,24 |
-| `src/platform/macos/backend.ts` | 26/39 | 45/55 | 11/20 | 8-9,11,13-16,23,27-28,37-38,40-43,83,92,95,99,106-109,111,146 |
-| `src/platform/macos/browser.ts` | 22/30 | 17/24 | 5/8 | 57,61,65-66,68-70,82,85-88,90-91,93,101-106,108 |
-| `src/platform/macos/helper-path.mjs` | 0/16 | 0/17 | 0/2 | none |
-| `src/platform/macos/helper.ts` | 0/219 | 0/81 | 0/62 | none |
-| `src/platform/macos/permissions.ts` | 33/36 | 41/41 | 12/12 | 23,27-28,33,37,51,55-57,86,94-96,98-99,101-102,104,107-108,111-112,114,117,120,125,127,131-132,134,136,142,145 |
-| `src/platform/windows/backend.ts` | 48/49 | 71/71 | 25/25 | 8,12,15,18,21,23,25,28,30,35-36,45,49-52,77-81,86-87,91-94,96-97,102,105,108-110,113-116,119,122,125,128,131,134,136-137,139-140 |
-| `src/platform/windows/helper.ts` | 7/88 | 12/42 | 8/21 | 42-43,58-59,132-134 |
-| `src/root-selection.ts` | 0/13 | 0/29 | 0/2 | none |
-| `src/runtime.ts` | 2/49 | 3/11 | 5/25 | 48,66 |
-| `src/state.ts` | 0/16 | 4/20 | 0/6 | none |
-| `src/view.ts` | 2/87 | 19/76 | 3/25 | 78,142 |
-| **Total** | **572/3877** | **871/3439** | **203/1014** | |
-
-Fully covered (0/0/0) modules: `src/contract.ts`, `src/outline.ts`, `src/outline-store.ts`,
-`src/platform/macos/helper.ts`, `src/platform/macos/helper-path.mjs`, `scripts/setup-helper.mjs`,
-`scripts/build-native.mjs`, both docs generators and `scripts/rust-coverage.mjs` (#704, #705, #717, #718,
-#724). At 0 lines/functions but with branches missing: `src/desktop.ts` 6, `src/platform/architecture.ts` 2,
-`src/state.ts` 4.
-
-Largest remaining gaps, in order of size:
-
-- `src/bridge.ts` holds 164 lines / 312 branches / 25 functions, mostly the act paths and the tail of the
-  file (#710 to #712).
-- `src/cdp.ts` (144 lines, 138 branches, 54 functions) has `test/fixtures/fake-cdp.mjs` but the WebSocket
-  client paths (errors, closes, timeouts, frames) are unreached until #726.
-- Backends and permissions: `src/permissions.ts`, `src/platform/macos/permissions.ts`,
-  `src/platform/macos/backend.ts`, `src/platform/macos/browser.ts`, `src/platform/windows/backend.ts`,
-  `src/platform/index.ts`; no test drives permission prompting (#707).
-- `src/platform/linux/helper.ts` 26 and `windows/helper.ts` 7 uncovered lines (#713); both are plain TS and
-  only need a fake child, not a Windows or Linux host.
-- `extensions/computer-use.ts` 20 lines (#703).
+At the earlier baseline only `src/bridge.ts` remained uncovered on all three hosts; #755 removes that dead path as documented above.
 
 ### Swift (`native/macos`, llvm-cov)
 
-Swift has no maintained producer. Real measurement with an instrumented rebuild of all four shipped
-sources plus a run of the helper (`shutdown` only, to get a valid denominator), and the two existing
-compiled-test regions instrumented the same way:
+The maintained `computer-use-swift/primary` producer (#757) links the real production files,
+including the unexecuted helper entry, into one headless binary. No regex extraction or copied
+production implementation is measured. The previous sliced-source numbers are retired as a
+current baseline.
 
-```sh
-S=packages/computer-use/native/macos
-swiftc -Onone -profile-generate -profile-coverage-mapping -target arm64-apple-macosx14.0 \
-  -framework ApplicationServices -framework AppKit -framework ScreenCaptureKit -framework Foundation -framework SwiftUI \
-  $S/activity_glow.swift $S/agent_cursor.swift $S/agent_cursor_motion.swift $S/bridge.swift -o full
-echo '{"id":"1","cmd":"shutdown"}' | LLVM_PROFILE_FILE=full.profraw ./full
-xcrun llvm-profdata merge -sparse full.profraw -o full.profdata   # use `$(xcrun -f llvm-profdata)`
-xcrun llvm-cov report -instr-profile=full.profdata ./full
-```
+Local initial reference on macOS arm64, Apple Swift 6.4.2. Hosted CI run `43183937349`, artifact `13929575830`, at prior HEAD `1a737e20` measured the same per-file counters with Apple Swift 6.4. The surrounding job failed later in the sync-ledger gate; a final-HEAD hosted receipt is still required:
 
-| File | Executable lines | Regions | Functions | Covered by suites today |
-| --- | --- | --- | --- | --- |
-| `bridge.swift` | 4586 | 2136 | 694 | 163 lines (3.6%): `PURE` region 134/139 + `KEYBOARD LAYOUT` region 29/30, compiled by `test/macos-native-pure.test.mjs` |
-| `agent_cursor.swift` | 162 | 38 | 19 | 88 lines (54.3%), INV-17 |
-| `agent_cursor_motion.swift` | 212 | 92 | 25 | 201 lines (94.8%), INV-17 |
-| `activity_glow.swift` | 152 | 39 | 27 | none; the 79 lines hit by a bare `shutdown` run are startup only |
+| File | Lines missed/total | Functions missed/total | LLVM regions missed/total |
+| --- | --- | --- | --- |
+| `bridge.swift` | 4810/5149 | 705/786 | 2250/2464 |
+| `agent_cursor.swift` | 162/162 | 19/19 | 38/38 |
+| `agent_cursor_motion.swift` | 11/212 | 1/25 | 19/92 |
+| `activity_glow.swift` | 152/152 | 27/27 | 39/39 |
+| `helper_entry.swift` | 5/5 | 1/1 | 3/3 |
+| Total | 5140/5680 | 753/858 | 2349/2636 |
 
-Test harness note: INV-17 (`test/invariants.test.mjs`) compiles `agent_cursor*.swift` plus
-`agent_cursor_tests.swift` and reports 81.62% lines (506 incl. the test file) / 74.14% regions;
-the `PURE` and `KEYBOARD LAYOUT` regions of `bridge.swift` are cut out by regex at test time. Nothing
-else in the 3550-line `final class Bridge` (163 methods) is compiled by any test, only by
-`build-native` and the live test, which does not collect coverage.
+These are LLVM source-view executable counters, not physical source lengths or Istanbul statements.
+LLVM's own LCOV export has different DA/FNDA denominators (line gaps and function instantiations).
+It even prints source-view LF/FNF summaries that disagree with those rows. The producer validates
+those summaries against LLVM JSON, then recomputes LCOV summaries from its actual records so
+shared accounting can validate them rather than accepting inconsistent totals:
 
-Branch units: Swift emits no branch records (`llvm-cov export` returns an empty `branches` array,
-confirmed above), so **regions are the Swift branch signal**. Every `if`/`guard` arm, `switch` case,
-`??`, ternary arm and `&&`/`||` operand is a region. The converter below writes each missed region
-as a `BRDA` row so `check-coverage` treats it like any other signal (a 0-region report with executable
-lines fails "Branch producer missing" the same as for Istanbul).
+| File | LCOV lines missed/rows | LCOV functions missed/rows |
+| --- | --- | --- |
+| `bridge.swift` | 3824/4111 | 716/797 |
+| `agent_cursor.swift` | 131/131 | 19/19 |
+| `agent_cursor_motion.swift` | 11/200 | 1/25 |
+| `activity_glow.swift` | 142/142 | 28/28 |
+| `helper_entry.swift` | 5/5 | 1/1 |
+| Total | 4113/4589 | 765/870 |
+
+Both units are retained in `summary.json`; the unmodified native export is
+`llvm-lcov.info.txt`. Policy's advisory line/function references use the LCOV-record units.
+No LLVM JSON lines, functions or regions are deleted to make those counters agree.
+Swift emits no branch outcomes here. Regions remain a distinct unit in raw `llvm.json` and
+`summary.json`; they are NEVER renamed to `BRDA`, branches or statements. LCOV accounts
+lines/functions only, with a null branch reference. No all-native 100% claim is made.
+Existing INV-17 window-lifecycle assertions remain separate behavior evidence, not coverage
+evidence for this headless producer.
+
+The following approximate area map is historical design context, not a current denominator:
 
 Where `Bridge` touches the system directly today (call sites in `bridge.swift`): `AXUIElement*` 143,
 `CGEvent*` 35, `NSWorkspace` 17, `CGWindowList*` 9, ScreenCaptureKit `SC*` 8, `FileHandle`/`FileManager`
@@ -212,38 +300,45 @@ land it before the next upstream sync or carry it as a recorded patch in `sync-p
 
 ## Swift measurement
 
-- `scripts/swift-coverage.mjs`, modeled on `scripts/rust-coverage.mjs`: build instrumented test binary
-  (`-profile-generate -profile-coverage-mapping`, all production sources minus `entry.swift`, plus `world_fake.swift`
-  and `tests/*.swift`), run with `LLVM_PROFILE_FILE=<dir>/%p.profraw`, merge, `llvm-cov export` JSON, emit
-  `coverage/swift/lcov.info` with `DA`, `FN`/`FNDA` and one `BRDA` per region (hit count, `-` for unreachable line).
-  `world_fake.swift` and `tests/` are non-shipped verification code, classified individually under the policy's `verification_helpers` (never llvm-cov filters); no shipped source is excluded.
-- Two producers merged into one profdata: (a) in-process unit tests with `FakeWorld`; (b) black-box protocol
-  tests, a TS Vitest suite spawning the instrumented helper (stdin NDJSON mode, then `serve --socket` mode) with
-  a fixture world selected by `PI_CU_WORLD_FIXTURE`, which only `world_fake.swift` reads. (b) covers `run`,
-  `runServer`, `processClient`, `handleLine`, `send`, signal/exit paths (`exit(0)`, `exit(1)`, lock contention)
-  that cannot run in-process; `exit` flushes profraw through the profile runtime's atexit hook.
-- Policy: new package-level signal `computer-use-swift`, `darwin` only (like `python-benchmarks`), `goal`
-  `100-percent`, per-OS reference from a hosted `macos-14` run, `max_uncovered.darwin` lines/functions/branches
-  starting at the measured values and ratcheting down per phase.
+Run `npm run coverage:swift --workspace @nredd/pi-computer-use` on macOS; other hosts print
+`NOT RUN` without writing a fake empty report. The macOS `test:macos-native` suite runs the same
+producer once as part of the hosted package gate. It replaces two sliced-source compiles with
+one complete-source compile. `headless_tests.swift` retains pure/ref/keyboard assertions and
+cursor-motion assertions and constructs injected `Bridge` instances for request-framing tests without
+creating AppKit windows, starting the live daemon, posting input, capturing screens or reading/writing
+the clipboard. AX handles and installed keyboard layout
+data are used without querying live application trees. Live INV-17 is not this producer.
+
+`helper_entry.swift` contains the unchanged shipped startup function. The test define suppresses
+ONLY its `@main` attribute; all executable startup code remains compiled, mapped and uncovered.
+Both production builders and the packed-source contract include the new entry source.
+
+The fresh `coverage/swift/` directory contains the binary, profraw, merged profdata, raw LLVM
+JSON, profile function dump, validated package-relative LCOV and SHA256/toolchain/argv/per-file
+metadata. CI preserves that directory as `computer-use-swift-macos-14` and passes LCOV through the
+ordinary shard fan-in. Exact artifact naming follows the matrix OS. New/missing production
+sources, foreign paths, duplicate/empty profiles, malformed counters and failed tools refuse
+collection. Mach-O profiles do not supply binary IDs, so each compile uses a unique Swift module
+identity; every recorded profile function must belong to that binary's coverage map. Another
+build of the same source cannot masquerade as its profile. No user-supplied old profile is merged.
+
+The separate native signal stays report-only/excluded while #645 closes deterministic policy
+gaps. Missing selected-host output fails accounting even though uncovered-count references are
+advisory. Linux and WSL2 skip by declared host policy. Raw regions remain reviewable even though
+the shared accounting schema currently supports only lines/functions/branches (and Istanbul
+statements where available), not a native region cap.
 
 ## Live adapters decision (owner)
 
-`LiveAX`, `LiveSink`, `LiveWindowServer`, `LiveScreenshotter`, `LiveWorkspace`, `LiveInputSources`,
-`LivePermissions` wrap real system calls. Kept to one expression per method (no branching, no policy), they
-still have to execute for 0 uncovered lines. Hosted `macos-14` cannot grant Accessibility or Screen
-Recording to a freshly built helper, so these can only be covered on a TCC-granted host. Options:
+The owner decision in [#645 comment 6772202242](https://github.com/nredd/pi-harness/issues/645#issuecomment-6772202242)
+allows narrow thin live AX/CGEvent/ScreenCaptureKit adapter exceptions until a dedicated
+TCC-granted runner exists. This supersedes the older rejected-exemption text. An exception is
+NOT coverage, and this producer does not remove those lines from its raw denominator.
 
-1. Run `test:macos-live` (disposable fixture app windows from `scripts/fixtures/alert-app.swift` and
-   `event-probe.swift`, plus a restorable clipboard round trip) against the instrumented helper on the
-   self-hosted macOS runner (`docs/self-hosted-runners.md`) with TCC pre-granted, and merge its profraw
-   into the `computer-use-swift` producer. Recommended. Needs a runner decision and a pre-granted TCC
-   database for the instrumented binary's identifier.
-2. Move the live adapters into a `verification_helpers`-style exclusion. Rejected: shipped runtime code is
-   never a verification helper (coverage.md), and policy forbids widening exclusions to pass.
-3. Leave `computer-use-swift` at a nonzero live-adapter cap. Rejected: the Swift signal is not enforced at a nonzero cap; only `computer-use-vitest` is, as the T0 ratchet.
-
-Until option 1 is available, phases S0-S4 get everything behind the seam to 0 and leave only the adapter
-files uncovered; the Swift signal stays report-only and the goal stays `excluded` for that file set.
+No whole `Bridge`, AppKit state, errors, timing, fallback or business policy is exempt. Until
+live calls are isolated behind deterministic seams, those misses remain visible and unfinished.
+Subsequent S1-S5 work must cover the policy using real-source tests; a future dedicated runner
+can measure the thin physical adapters. This PR neither grants TCC nor exercises the desktop.
 
 ## Phases
 
@@ -298,13 +393,26 @@ Documentation site (the Next.js sources under `packages/computer-use/docs`) and 
 inventory entry. T7/S6 must either give them producers or an owner-approved reclassification; this doc does not
 decide that.
 
-## Rust (out of scope, numbers only)
+## Rust (native Ubuntu producer, runtime closure pending)
 
 Re-measured 2026-11-09 with `CARGO_BUILD_JOBS=2 node scripts/rust-coverage.mjs --crate linux`
 (26.9s, 33 passed / 1 ignored), identical to [rust-coverage.md](../packages/computer-use/docs/rust-coverage.md):
 Linux crate **1163/2609 lines (44.58%), 125/295 functions (42.37%), 1681/4315 regions (38.96%)**.
-LLVM emits no Rust branch records either, so regions are again the branch signal. Windows crate: NOT RUN on macOS/Linux.
-A follow-up should reuse the `World`/seam approach for `atspi.rs`, `x11.rs`, `wayland.rs` and the Windows UIA/capture code.
+This historical macOS-hosted receipt is not a native Ubuntu baseline. LLVM regions are regions,
+NOT branches; absent Rust branch/statement records remain unmeasured. #758 adds maintained Ubuntu
+collection and source-complete report-only `computer-use-linux-native/primary` accounting, including
+separately named `cfg(test)` modules under `src`. Native absolute paths normalize to the package
+inventory; missing executable maps fail. A map-free module/re-export-only source is conservatively
+validated, not given fabricated executable counters. Inline/source test hits can inflate runtime
+coverage, so this is not runtime 100%. See [rust-coverage.md](../packages/computer-use/docs/rust-coverage.md)
+for pinned tools, artifacts, runtime and hosted per-file references.
+
+#696 adds a separate hosted `windows-2025` x64 compiler/test/LLVM producer, with source-hash
+metadata and raw artifacts. Native measurements require that exact-HEAD job's receipt; none are
+inferred from a cross-check or WSL run. Its failure holds the existing required Ubuntu fan-in.
+Windows is not part of the Ubuntu-only accounting signal; per-file Windows policy integration
+remains separate. WSL/ARM64 cells do not produce this Ubuntu-only signal. Headless Rust tests do not prove AT-SPI/X11/Wayland sessions or physical input.
+#696 retains runtime seams for `atspi.rs`, `x11.rs`, `wayland.rs` and Windows UIA/capture policy.
 
 ## Constraints and risks
 

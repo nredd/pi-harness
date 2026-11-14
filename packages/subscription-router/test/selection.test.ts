@@ -23,6 +23,10 @@ const snapshot = (windows: UsageWindow[], overrides: Partial<UsageSnapshot> = {}
 const measured = (score: number): QuotaScore => ({ kind: "measured", score, window: "test" });
 const fallback: QuotaScore = { kind: "fallback", reason: "usage missing" };
 
+it("omitted legacy selection strategy retains chain priority", () => {
+	expect(selectCandidate([measured(0.1), measured(0.9)])).toBe(0);
+});
+
 describe("scoreQuota", () => {
 	it("uses the minimum of short and weekly windows, without mutating input", () => {
 		const data = snapshot([window(), window(90, { name: "weekly", durationMs: 2000, resetAt: NOW + 2000 })]);

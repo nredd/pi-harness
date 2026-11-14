@@ -1,0 +1,26 @@
+{
+  "$schema": "../schemas/subscription-router.schema.json",
+  "profiles": {
+    "priority-example": {
+      "policy": { "version": 1, "kind": "strict-priority" },
+      "chain": [{ "model": "anthropic/claude-haiku-5-5" }, { "model": "openai-codex/gpt-6-luna" }],
+      "exhaustionPolicy": "wait"
+    },
+    "remaining-example": {
+      "policy": { "version": 1, "kind": "remaining-balanced", "switchMargin": 0, "stickiness": "continuation" },
+      "chain": [{ "model": "anthropic/claude-fable-5-1" }, { "model": "openai-codex/gpt-6-astra" }],
+      "exhaustionPolicy": "wait"
+    },
+    "lexicographic-example": {
+      "policy": {
+        "version": 1,
+        "kind": "lexicographic",
+        "by": [{ "metric": "remaining", "window": "binding", "direction": "desc" }, { "metric": "chain-index", "direction": "asc" }],
+        "switchMargin": 0.2,
+        "stickiness": "none"
+      },
+      "chain": [{ "model": "anthropic/claude-fable-5-1" }, { "model": "openai-codex/gpt-6-astra" }],
+      "exhaustionPolicy": "fail"
+    }
+  }
+}

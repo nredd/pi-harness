@@ -21,8 +21,17 @@ than the npm install directory, and need Cargo plus a C linker. See the
 [Linux guide](./docs/content/docs/how-to-guides/linux.mdx). Windows source remains in the repository;
 Windows helpers and crate sources are not packed. If the Linux helper's input stream fails, in-flight
 requests are rejected and the helper is stopped; a later request starts a fresh helper.
+Windows helper commands reject with `Operation aborted.` when their signal aborts after sending,
+without waiting for the command deadline. Cancellation clears the local pending request, timer and
+listener; late replies are ignored. It does not stop native work already sent or kill the helper.
+Deterministic client tests use scripted stdio helpers, not Windows UI or native coverage.
 
 ## Tools
+
+State-consuming desktop tools require an observation; missing or blank `stateId` fails with
+`No observation state is available. Call observe_ui first.` The obsolete internal missing-window
+guard is removed without changing this boundary; the call-path proof is in the harness
+[coverage policy](../../docs/computer-use-coverage.md#missing-target-call-path-proof-755).
 
 All platforms retain `find_roots`, `observe_ui`, `search_ui`, `expand_ui`, `inspect_ui`, `act_ui`,
 `read_text`, `wait_for`, `launch_browser`, `navigate_browser`, and `evaluate_browser`.
@@ -34,6 +43,11 @@ They share a scoped physical-input lock with `act_ui`; background semantic work 
 The normal loop is find a root, observe it, then query or act from the returned immutable `stateId`.
 `observe_ui` now defaults to compact controls; `detail: "outline"` returns the structural view.
 Upstream's opt-in `activity_glow` is retained and defaults to false.
+
+On CDP browser states, `act_ui` `moveMouse` requires explicit `x`/`y` coordinates; a `ref`
+target fails with `invalid_args` rather than sending absent coordinates. Browser `keypress` requires
+a non-empty `keys` array (`invalid_args`). Both checks run before any batch step is delivered or
+the observation epoch advances. Desktop ref movement is unchanged.
 
 ## Documentation
 
@@ -53,15 +67,38 @@ source-bound references, and `npm run docs:check` validates them without buildin
 
 ## Checks and release
 
+[Native request framing tests](docs/native-request-framing.md) cover real Swift protocol paths without desktop access.
+
 `npm run check` runs the owned deterministic package checks. Vitest reports native and live suites off
 their platform or opt-in as skipped; this package remains outside the coverage gate. Never run
 `test:macos-live` on an occupied desktop: it manipulates fixture windows, apps, and the clipboard. It
 starts, restarts and stops its own helper instance on the test home's socket, never the shared daemon.
 Owner-only smoke commands and rollback are recorded in `UPSTREAM.md`.
 
+`npm run coverage:swift` runs real-source headless motion and native assertions with one Swift
+compiler worker. The [motion coverage notes](./docs/cursor-motion-coverage.md) describe analytic
+geometry, clock/lifecycle checks, the clamp mutation control and honestly retained numerical guards.
+This does not run the live overlay suite or prove physical pointer behavior.
+
+`npm run coverage:swift` links all shipped Swift sources with the headless assertions.
+`native/macos/ref_look_tests.swift` checks real `AXRefStore` ownership and snapshots plus
+`LookNode.payload()` keys, flags, rectangles and recursive child order. It only constructs
+self-process/managed-child AX handles and synthetic nodes, never queries AX attributes.
+The child is reaped before assertions; a source-level guard forbids AX queries/actions.
+The sync-revert controls mutate window equality, destination ownership, optional flags and child order. Unexecuted live code
+stays in the denominator; this slice does not claim whole-file coverage or change runtime behavior.
+`node scripts/check-sync-reverts.mjs --validate-only` checks the real revert-case inventory
+against the ledger without running mutations; the normal command still runs every applicable
+mutation. Local measurements and the unequal-window fixture lifecycle are recorded
+[here](./docs/swift-ref-look-coverage.md).
+
 `npm run test:linux` uses disposable protocol children, not a native desktop helper. Its closed-stdin
 fixture initializes stdout before closing fd `0` (lazy pipe initialization aborts Node 26.12 on Darwin),
 acknowledges verified closure while alive, and requires real `EPIPE` rejection plus child cleanup.
+The next request carries a 64 KiB payload so Bun also reaches an OS write failure instead of accepting
+a small write into its buffer. A successful write callback is not proof of delivery; runtime command
+deadlines and error propagation are unchanged. Build-script tests assert the active runtime's executable,
+use numeric exit-code sentinels on Node/Bun, and require actual invalid CLI/symlink entries to exit `1`.
 
 The harness root `publish.yml` owns releases; nested upstream workflows are dormant reference source.
 Local helper builds and local signing remain unchanged. Source preparation is not activation.
@@ -70,6 +107,22 @@ Linux source-build cleanup gives its detached compiler group a bounded TERM/KILL
 KILL syscall alone is not treated as success: setup fails if the group cannot be confirmed empty, and
 keeps a fresh-probe-guarded exit-time KILL backstop while ownership remains signalable. Only ESRCH
 proves quiescence; permission or unexpected syscall errors surface uncertainty and revoke signalling.
+
+## Signing certificate setup
+
+From this package directory, `./scripts/make-signing-cert.sh [output-dir]` still creates
+`key.pem`, `cert.pem` and `id.p12` (default `./signing`) for the upstream self-signed release
+workflow. Keep those files permanently; this does not guarantee persistent TCC grants.
+The existing Node minimum, Bash and OpenSSL requirements are unchanged. The harness release
+workflow does not invoke this command or import a signing identity.
+
+`scripts/make-signing-cert.mjs` owns directory/config creation, OpenSSL arguments, failure
+propagation and successful cleanup. Tests inject every external command and use disposable
+files, never a real identity, Keychain, trust operation or credential prompt. Istanbul measures
+only that Node code with L/F/B/S zero thresholds. The three-line shell compatibility launcher
+and Bash `read -r -s` password fragment are explicitly **unmeasured shell**, not covered Node
+logic. The latter preserves Bash's terminal editing, whitespace, EOF and interrupt semantics
+without a new password-input dependency. Remaining shell work belongs to #695.
 
 ## License
 

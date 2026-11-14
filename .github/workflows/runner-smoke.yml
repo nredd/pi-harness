@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/runner-smoke.yml
       - docs/self-hosted-runners.md
+      - scripts/wsl2_smoke.sh
 
 permissions:
   contents: read
@@ -68,3 +69,31 @@ jobs:
         run: |
           if ls /Users/redd >/dev/null 2>&1; then echo "::error::can read /Users/redd"; exit 1; fi
           echo "blocked: /Users/redd"
+
+  pi-wsl2:
+    # Same-repo guard as above, and the same caveat: the boundary is the pool supervisor's admission check (it
+    # refuses any run whose head repository is not this one), repo-scoped single-use JIT runners and the
+    # per-job VM's firewall. The host-specific targets arrive through the runner's environment
+    # (`SMOKE_HOST_IP`, `SMOKE_DEV_IP`, `SMOKE_DEV_PORTS`), never from this repository.
+    # Until the pool's heartbeat variable exists no runner carries the label, so a PR-triggered job would queue
+    # forever (`timeout-minutes` only starts once a runner picks it up): PRs wait for the pool, and the acceptance
+    # smoke before that is a manual `workflow_dispatch`.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (vars.PI_WSL2_HEARTBEAT != '' && github.event.pull_request.head.repo.full_name == github.repository)
+    name: smoke (pi-wsl2)
+    runs-on: [self-hosted, pi-wsl2]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: scripts
+          persist-credentials: false
+      - name: Identify the runner
+        run: |
+          uname -a
+          echo "runner=$RUNNER_NAME os=$RUNNER_OS arch=$RUNNER_ARCH user=$(id -un)"
+          nproc
+          free -g | head -2
+      - name: Isolation smoke
+        run: bash scripts/wsl2_smoke.sh

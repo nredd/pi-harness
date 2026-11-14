@@ -1,7 +1,18 @@
 #!/usr/bin/env node
 // Opt-in report-only native coverage. No thresholds and no normal-check invocation.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+	copyFileSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -47,6 +58,7 @@ export function parseArgs(args, platform = process.platform) {
  */
 export function runCoverage(args, spawn = spawnSync) {
 	const { crate, output } = parseArgs(args);
+	if (output) rmSync(path.join(output, "coverage.json"), { force: true });
 	const version = spawn("cargo", ["llvm-cov", "--version"], { encoding: "utf8" });
 	if (version.error || version.status !== 0)
 		throw new Error(
@@ -58,7 +70,25 @@ export function runCoverage(args, spawn = spawnSync) {
 	// Never clean a caller's output or reuse instrumented profiles from an earlier run.
 	mkdirSync(directory, { recursive: true });
 	const run = mkdtempSync(path.join(directory, `${crate}-`));
-	const manifest = path.join(root, "native", crate, "bridge-rs", "Cargo.toml");
+	const crateRoot = path.join(root, "native", crate, "bridge-rs");
+	const manifest = path.join(crateRoot, "Cargo.toml");
+	// Bind the raw profile to every shipped source and locked build input, not only mapped files.
+	const sourceHashes = Object.fromEntries(
+		[
+			"Cargo.toml",
+			"Cargo.lock",
+			...["src", "tests"].flatMap((directory) =>
+				readdirSync(path.join(crateRoot, directory)).map((name) => `${directory}/${name}`),
+			),
+		]
+			.sort()
+			.map((name) => [
+				name,
+				createHash("sha256")
+					.update(readFileSync(path.join(crateRoot, name)))
+					.digest("hex"),
+			]),
+	);
 	const env = {
 		...process.env,
 		CARGO_TARGET_DIR: path.join(run, "target"),
@@ -66,8 +96,10 @@ export function runCoverage(args, spawn = spawnSync) {
 	};
 	const started = Date.now();
 	const commands = [];
+	const commandSeconds = [];
 	const execute = (parameters) => {
 		commands.push(parameters);
+		const commandStarted = Date.now();
 		const result = spawn("cargo", ["llvm-cov", ...parameters], {
 			cwd: root,
 			env,
@@ -75,6 +107,7 @@ export function runCoverage(args, spawn = spawnSync) {
 			timeout: 900_000,
 			maxBuffer: 32 * 1024 * 1024,
 		});
+		commandSeconds.push((Date.now() - commandStarted) / 1000);
 		writeFileSync(path.join(run, "commands.log"), `${commands.map((command) => JSON.stringify(command)).join("\n")}\n`);
 		writeFileSync(path.join(run, "run.log"), `${result.stdout ?? ""}\n${result.stderr ?? ""}`, { flag: "a" });
 		if (result.error || result.status !== 0)
@@ -89,9 +122,20 @@ export function runCoverage(args, spawn = spawnSync) {
 			["--lcov", "lcov.info"],
 			["--json", "coverage.json"],
 		]) {
-			execute(["report", "--manifest-path", manifest, format, "--output-path", path.join(run, filename)]);
+			execute([
+				"report",
+				"--manifest-path",
+				manifest,
+				"--disable-default-ignore-filename-regex",
+				format,
+				"--output-path",
+				path.join(run, filename),
+			]);
 		}
-		writeFileSync(path.join(run, "summary.txt"), execute(["report", "--manifest-path", manifest]));
+		writeFileSync(
+			path.join(run, "summary.txt"),
+			execute(["report", "--manifest-path", manifest, "--disable-default-ignore-filename-regex"]),
+		);
 		for (const filename of ["lcov.info", "coverage.json", "summary.txt"]) {
 			if (!existsSync(path.join(run, filename)) || !readFileSync(path.join(run, filename), "utf8").trim())
 				throw new Error(`Empty coverage report: ${filename}`);
@@ -107,6 +151,8 @@ export function runCoverage(args, spawn = spawnSync) {
 			throw new Error("LCOV report has no intended crate source");
 		if (!readFileSync(path.join(run, "summary.txt"), "utf8").includes("TOTAL"))
 			throw new Error("Coverage summary has no totals");
+		// Stable accounting entry, published only after the raw producer succeeds.
+		copyFileSync(path.join(run, "coverage.json"), path.join(directory, "coverage.json"));
 	} finally {
 		writeFileSync(
 			path.join(run, "metadata.json"),
@@ -114,9 +160,14 @@ export function runCoverage(args, spawn = spawnSync) {
 				{
 					crate,
 					platform: process.platform,
+					arch: process.arch,
+					sourceHashes,
+					// LLVM regions are independent units, never invented branches or statements.
+					unmeasured: ["branches", "statements"],
 					tool: version.stdout.trim(),
 					elapsedSeconds: (Date.now() - started) / 1000,
 					commands,
+					commandSeconds,
 				},
 				null,
 				2,

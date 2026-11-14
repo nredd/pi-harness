@@ -25,7 +25,7 @@ test("plan-mode registers question tools, command, and safety hooks without a CL
   assert.equal(mock.flags.has("plan"), false);
   assert.deepEqual(
     mock.tools.map((tool) => tool.name),
-    ["plan_mode_question", "plan_mode_complete"],
+    ["plan_mode_question", "plan_mode_complete", "plan_mode_enter"],
   );
   assert.ok(mock.commands.has("plan"));
   assert.equal(typeof mock.commands.get("plan")?.getArgumentCompletions, "function");

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -79,7 +80,7 @@ test("macOS arm64 build compiles with swiftc, chmods and ad-hoc signs", async ()
 		assert.equal(swift[swift.indexOf(framework) - 1], "-framework");
 	}
 	const sources = swift.filter((arg) => arg.endsWith(".swift")).map((arg) => path.relative(path.join(rootDir, "native", "macos"), arg));
-	assert.deepEqual(sources, ["activity_glow.swift", "agent_cursor.swift", "agent_cursor_motion.swift", "bridge.swift"]);
+	assert.deepEqual(sources, ["activity_glow.swift", "agent_cursor.swift", "agent_cursor_motion.swift", "bridge.swift", "helper_entry.swift"]);
 	assert.equal(swift.at(-2), "-o");
 	assert.equal(swift.at(-1), mac("arm64", "bridge"));
 	assert.deepEqual(h.calls[1][1], ["--force", "-i", "com.injaneity.pi-computer-use", "--timestamp=none", "--sign", "-", mac("arm64", "bridge")]);
@@ -268,7 +269,9 @@ test("Linux rejects non-Linux targets, non-ELF output, truncated output and arch
 
 test("run() resolves on exit 0 and rejects on failure or spawn error", async () => {
 	await run(process.execPath, ["-e", "process.exit(0)"]);
-	await expect(run(process.execPath, ["-e", "process.exit(3)"])).rejects.toThrow(/Command failed \(3\): .*node.* -e process\.exit\(3\)/);
+	await assert.rejects(run(process.execPath, ["-e", "process.exit(3)"]), {
+		message: `Command failed (3): ${process.execPath} -e process.exit(3)`,
+	});
 	await expect(run(path.join(sandbox, "no-such-binary"), [])).rejects.toThrow(/ENOENT/);
 });
 
@@ -301,6 +304,22 @@ test("main with no injected deps uses process defaults", async () => {
 	await expect(main(["--platform", "darwin", "--arch", "bad"])).rejects.toThrow(/Unsupported architecture/);
 });
 
+test("the actual CLI and symlink refuse invalid architecture with exit 1", () => {
+	const link = path.join(sandbox, "cli-build-native.mjs");
+	symlinkSync(scriptPath, link);
+	for (const entry of [scriptPath, link]) {
+		const result = spawnSync(process.execPath, [entry, "--platform", "darwin", "--arch", "bogus"], {
+			encoding: "utf8",
+			timeout: 5000,
+		});
+		assert.ifError(result.error);
+		assert.equal(result.signal, null);
+		assert.equal(result.status, 1);
+		assert.equal(result.stdout, "");
+		assert.equal(result.stderr.trim(), "Unsupported architecture 'bogus'. Supported: arm64, x64, universal, all.");
+	}
+});
+
 test("running the script as the entry point sets the exit code", async () => {
 	const argv = process.argv;
 	const exitCode = process.exitCode;
@@ -313,12 +332,12 @@ test("running the script as the entry point sets the exit code", async () => {
 		assert.match(spy.mock.calls[0][0], /Unsupported architecture 'bogus'/);
 		vi.resetModules();
 		process.argv = [argv[0], undefined];
-		process.exitCode = undefined;
+		process.exitCode = 0;
 		await import("../scripts/build-native.mjs");
-		assert.equal(process.exitCode, undefined, "no entry script means nothing runs");
+		assert.equal(process.exitCode, 0, "no entry script means nothing runs");
 	} finally {
 		process.argv = argv;
-		process.exitCode = exitCode;
+		process.exitCode = exitCode ?? 0;
 		spy.mockRestore();
 		vi.resetModules();
 	}
@@ -332,14 +351,14 @@ test("a symlinked entry path still runs the script instead of silently exiting 0
 		const link = path.join(sandbox, "linked-build-native.mjs");
 		symlinkSync(scriptPath, link);
 		vi.resetModules();
-		process.exitCode = undefined;
+		process.exitCode = 0;
 		process.argv = [argv[0], link, "--platform", "darwin", "--arch", "bogus"];
 		await import("../scripts/build-native.mjs");
 		assert.equal(process.exitCode, 1);
 		assert.match(spy.mock.calls[0][0], /Unsupported architecture 'bogus'/);
 	} finally {
 		process.argv = argv;
-		process.exitCode = exitCode;
+		process.exitCode = exitCode ?? 0;
 		spy.mockRestore();
 		vi.resetModules();
 	}

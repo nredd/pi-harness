@@ -13,7 +13,8 @@ test("a Node `--expose-gc` hook is used as is, and Bun is not consulted", () => 
 		Bun: { gc: () => calls.push("bun") },
 	});
 	assert.ok(collect);
-	collect();
+	assert.equal(collect.method, "global.gc");
+	collect.run();
 	assert.deepEqual(calls, ["node"]);
 });
 
@@ -21,7 +22,8 @@ test("Bun without an exposed `gc` falls back to collecting synchronously through
 	const args: boolean[] = [];
 	const collect = collector({ Bun: { gc: (sync: boolean) => args.push(sync) } });
 	assert.ok(collect);
-	collect();
+	assert.equal(collect.method, "Bun.gc(true)");
+	collect.run();
 	assert.deepEqual(args, [true]);
 });
 
@@ -102,9 +104,35 @@ test("times warmup plus requested forced and steady frames and appends one recor
 	assert.equal(record.steady_frames_ms.length, 3);
 	for (const ms of [...record.frames_ms, ...record.steady_frames_ms]) assert.ok(ms >= 0);
 	assert.ok(record.heap_used > 0);
-	assert.equal(record.gc, typeof (globalThis as { gc?: unknown }).gc === "function");
+	const host = globalThis as { gc?: unknown; Bun?: { gc?: unknown } };
+	assert.equal(record.gc, typeof host.gc === "function" || typeof host.Bun?.gc === "function");
+	assert.equal(record.gc_method, collector(globalThis)?.method ?? "none");
+	assert.deepEqual(record.runtime, {
+		engine: process.versions.bun ? "bun" : "node",
+		version: process.versions.bun ?? process.versions.node,
+		platform: process.platform,
+		arch: process.arch,
+	});
 	assert.equal(record.width, 132);
 	assert.equal(record.height, 41);
+});
+
+test("records Bun engine identity when the runtime exposes a Bun version", async () => {
+	const descriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
+	const out = output();
+	try {
+		Object.defineProperty(process.versions, "bun", { value: "synthetic-bun", configurable: true });
+		await harness(fakeTui().tui).run("1");
+		assert.deepEqual(JSON.parse(readFileSync(out, "utf8")).runtime, {
+			engine: "bun",
+			version: "synthetic-bun",
+			platform: process.platform,
+			arch: process.arch,
+		});
+	} finally {
+		if (descriptor) Object.defineProperty(process.versions, "bun", descriptor);
+		else Reflect.deleteProperty(process.versions, "bun");
+	}
 });
 
 test("empty or non-numeric arguments fall back to the default frame count", async () => {

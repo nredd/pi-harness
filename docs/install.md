@@ -155,6 +155,13 @@ Children keep their own transport semantics. Python urllib prefers lowercase; cu
 
 The install path spawns `node_version` and `post_check` in `install.py`, `verify_attestation` in `release.py`, and native npm through `runtime_lock.py.run_npm`. Shared release infrastructure retains `fetch_release` and `gitlink_tag`; `runtime_lock.py.replay_source` is the CI-only source compatibility smoke check. Every subprocess call in all three modules uses `child_environment`, with no bypass exceptions. The AST inventory test enumerates all calls and requires the helper, including local `env` assignments.
 
+The runtime-location allowlist preserves explicit `SYSTEMROOT` for native Windows verification
+infrastructure: removing it causes Windows `GetAddrInfoW` DNS failure in `gh` before Sigstore can
+initialize. An isolated native comparison retained only that OS-runtime key and verified the real
+public artifact under unchanged signer/ref policy ([receipt](https://github.com/nredd/pi-harness/actions/runs/43362875064)).
+It does not inherit other Windows profile/cache state, tool configuration, debug hooks or tokens.
+This does not change installer platform admission: Windows installation remains unsupported.
+
 `promotion.py.run_command`/`descends_from` are separate promotion CLI Git/build infrastructure, not installer children. The installer reaches promotion's read-only snapshot/core validation (`verify_core_assets`), whose downloads and provenance use the shared release helpers, not `run_command`. Other harness spawns in `sandbox.py` (`Sandbox.env`), `publish_gate`, `power`, `stats`, `rpc`, `git_fixture`, `tmux` and `headless` are test/benchmark/promotion infrastructure. They retain their separate environment policies and are NOT covered by the installer-child claim. `uvx`/Git that fetch the installer run before the installer starts and are outside its subprocess boundary too.
 
 ## Network trust

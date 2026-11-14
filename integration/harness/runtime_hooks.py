@@ -17,18 +17,21 @@ import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
     from pathlib import Path
 
 UNSAFE_PATH = re.compile(r"[\s\"']")
 
 
-def runtime_hooks(preloads: Iterable[Path] = (), *, expose_gc: bool = False) -> dict[str, str]:
+def runtime_hooks(
+    preloads: Iterable[Path] = (), *, expose_gc: bool = False, env: Mapping[str, str] | None = None
+) -> dict[str, str]:
     """Return the environment that loads `preloads` and optionally exposes `gc` on either runtime.
 
     Parameters:
         preloads (Iterable[Path]): modules to evaluate before the entrypoint, in order.
         expose_gc (bool): expose a synchronous global `gc()` (Node `--expose-gc`, Bun `--expose-gc`).
+        env (Mapping[str, str] | None): existing options to prepend verbatim, preserving caller flags/paths.
 
     Returns:
         dict[str, str]: `NODE_OPTIONS` and `BUN_OPTIONS`; empty when no hook is requested.
@@ -48,4 +51,10 @@ def runtime_hooks(preloads: Iterable[Path] = (), *, expose_gc: bool = False) -> 
     if expose_gc:
         node.append("--expose-gc")
         bun.append("--expose-gc")
-    return {"NODE_OPTIONS": " ".join(node), "BUN_OPTIONS": " ".join(bun)} if node else {}
+    if not node:
+        return {}
+    existing = env or {}
+    return {
+        key: " ".join(part for part in (existing.get(key, ""), value) if part)
+        for key, value in {"NODE_OPTIONS": " ".join(node), "BUN_OPTIONS": " ".join(bun)}.items()
+    }

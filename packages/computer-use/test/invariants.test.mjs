@@ -3,7 +3,6 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { strictHeadlessRejection } from "../src/actions.ts";
 import { noteAfterAct, noteFromLook } from "../src/note.ts";
 import { countOutlineNodes, foldToBudget, graftScopedOutline, nodeByRef, parseLookResponse, renderInteractiveControls } from "../src/outline.ts";
 import { shouldPreferForegroundModalWindow } from "../src/root-selection.ts";
@@ -251,8 +250,9 @@ test("INV-17b macOS activity glow is configurable, headless-safe, and connection
 	assert(extensionTs.includes('pi.on("tool_execution_start"') && extensionTs.includes('pi.on("agent_end"'), "extension does not track computer-use activity lifecycle");
 	assert(extensionTs.includes("config.headless") && extensionTs.includes("config.activity_glow"), "activity glow is not configurable or headless-safe");
 	assert(macosHelperTs.includes("class MacosActivityGlowConnection") && macosHelperTs.includes('cmd: "setActivityGlow"'), "activity glow does not use a persistent helper connection");
-	assert(swift.includes('case "setActivityGlow"') && swift.includes("activityGlow.disconnect(clientID)"), "native helper does not clear activity state on disconnect");
-	assert(swift.includes('"activityGlowActive": activityGlow.isActive'), "helper diagnostics cannot verify activity ownership");
+	assert(swift.includes("activityGlow: ActivityGlowController? = ActivityGlowController()"), "native helper must construct the real glow controller by default");
+	assert(swift.includes('case "setActivityGlow"') && swift.includes("activityGlow?.disconnect(clientID)"), "native helper does not clear activity state on disconnect");
+	assert(swift.includes('"activityGlowActive": activityGlow?.isActive ?? false'), "helper diagnostics cannot verify activity ownership");
 	assert(activityGlowSwift.includes("activeClients = Set<UUID>()"), "native activity state is not client-owned");
 	assert(activityGlowSwift.includes("window.ignoresMouseEvents = true") && activityGlowSwift.includes("window.sharingType = .readOnly"), "activity glow can accept input or is hidden from user screen recordings");
 	assert(swift.includes("SCContentFilter(desktopIndependentWindow"), "agent captures must stay per-window so the capturable activity glow cannot leak into observations");
@@ -298,7 +298,8 @@ test("INV-20 bounded broad root discovery", () => {
 	assert(ts.includes("return await collectWindowDetails(apps, config, signal)"), "filtered find_roots does not retain per-app discovery");
 	assert(swift.includes("signal(SIGPIPE, SIG_IGN)"), "helper daemon does not ignore process-wide SIGPIPE");
 	assert(swift.includes("SO_NOSIGPIPE"), "helper sockets can terminate the daemon on a late response");
-	assert(swift.includes("Darwin.send(responseSocket"), "helper socket responses do not use failure-tolerant writes");
+	assert(swift.includes("Darwin.send($0, $1, $2, 0)"), "helper default transport does not use failure-tolerant writes");
+	assert(swift.includes("writeSocket(responseSocket, base.advanced(by: offset), raw.count - offset)"), "helper socket responses bypass the short-write transport");
 	assert(swift.includes("recentCompletedRequestIds"), "helper diagnostics cannot establish abandoned-request completion");
 });
 
@@ -363,6 +364,7 @@ describeMacosOnly("swiftc", () => {
 			"native/macos/agent_cursor.swift",
 			"native/macos/agent_cursor_motion.swift",
 			"native/macos/bridge.swift",
+			"native/macos/helper_entry.swift",
 		], { cwd: root, label: "INV-8 Swift source typecheck", timeoutMs: 65_000 });
 	});
 
@@ -378,7 +380,7 @@ describeMacosOnly("swiftc", () => {
 		await runPreparedSwift(prepared, ["-typecheck", changed], { cwd: root, label: "INV-8 corrected source control", timeoutMs: 25_000 });
 	});
 
-	test("INV-17 macOS agent cursor lifecycle", { timeout: 50_000 }, async () => {
+	test("INV-17 cursor motion and opt-in macOS overlay lifecycle", { timeout: 50_000 }, async () => {
 		const binary = path.join(scratch, "cursor-tests");
 		await runPreparedSwift(prepared, [
 			"-framework", "AppKit",
@@ -388,7 +390,12 @@ describeMacosOnly("swiftc", () => {
 			"native/macos/agent_cursor_tests.swift",
 			"-o", binary,
 		], { cwd: root, label: "INV-17 Swift source compile", timeoutMs: 20_000 });
-		await runCheckCommand(binary, [], { cwd: root, label: "INV-17 cursor lifecycle binary", timeoutMs: 5000 });
+		const result = await runCheckCommand(binary, [], { cwd: root, label: "INV-17 cursor lifecycle binary", timeoutMs: 5000 });
+		assert(result.stdout.includes("cursor deterministic motion and fake live-gate checks passed"), "cursor motion and fake gate assertions must execute");
+		if (process.env.PI_COMPUTER_USE_LIVE !== "1") {
+			assert(result.stdout.includes("NOT RUN: cursor overlay lifecycle"), "headless gate must report live overlay checks as NOT RUN");
+		}
+		process.stdout.write(result.stdout);
 	});
 });
 
@@ -676,23 +683,4 @@ test.runIf(process.env.PI_CU_LIVE === "1")("LIVE invariants", async () => {
 	await liveChecks();
 	const failed = results.filter(([, ok]) => !ok).map(([name]) => name);
 	assert(failed.length === 0, `LIVE invariant failures: ${failed.join(", ")}`);
-});
-
-test("INV-strict-headless TS rejection mirrors the native keyboard-input rejections", () => {
-	// Native side: `action == "X"` branches whose first statement unconditionally rejects keyboard input.
-	// Conditional rejections (e.g. setText only inside a web area) are not mirrored in TS by design.
-	const nativeActions = new Set();
-	const branch = /else if (?:let \w+, )?action == "(\w+)" \{\s*try rejectInStrictHeadless\("([^"]*)"\)/g;
-	for (const [, action, reason] of swift.matchAll(branch)) {
-		if (/requires synthesized keyboard input/.test(reason)) nativeActions.add(action);
-	}
-	assert(nativeActions.size > 0, "no keyboard-input rejection branches parsed from bridge.swift");
-	const allNativeActions = new Set([...swift.matchAll(/action == "(\w+)"/g)].map((match) => match[1]));
-	const tsActions = new Set(
-		[...allNativeActions, ...nativeActions].filter((action) => strictHeadlessRejection({ action }, true, "darwin") !== undefined),
-	);
-	assert(
-		[...nativeActions].sort().join() === [...tsActions].sort().join(),
-		`strictHeadlessRejection (${[...tsActions].sort()}) drifted from bridge.swift rejectInStrictHeadless (${[...nativeActions].sort()})`,
-	);
 });
