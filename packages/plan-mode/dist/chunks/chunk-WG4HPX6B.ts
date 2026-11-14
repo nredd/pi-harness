@@ -160,41 +160,59 @@ function findBlockedRemoteCommand(command, safeSubcommands, platform) {
   return findBlockedCommandSegment(command, safeSubcommands, { platform });
 }
 function findBlockedCommandSegment(command, safeSubcommands = {}, options = {}) {
-  return explainBlockedCommand(command, safeSubcommands, options)?.segment;
+  return decideBlockedCommand(command, safeSubcommands, options)?.segment;
 }
-function explainBlockedCommand(command, safeSubcommands = {}, {
-  workingDirectory,
-  platform = process.platform,
-  trustedDirectories = [],
-  homeDir = homedir()
-} = {}) {
+function decideBlockedCommand(command, safeSubcommands = {}, { workingDirectory, platform = process.platform, trustedDirectories = [], homeDir = homedir() }) {
   const scan = scanShellSegments(command);
-  if ("rejection" in scan) return { segment: command.trim() || "(empty command)", ...scan.rejection };
+  if ("rejection" in scan) {
+    return { segment: command.trim() || "(empty command)", explain: () => scan.rejection };
+  }
   const { segments } = scan;
   const roots = allowedRoots(workingDirectory, trustedDirectories, homeDir);
   let base = workingDirectory;
   for (const [index, segment] of segments.entries()) {
     if (segment.separator === "|" && isInterpreterSegment(segment.text, INTERPRETERS)) {
-      const token = firstWord(shellWords(segment.text), segment.text);
-      return { segment: segment.text, token, reason: "interpreter in a pipeline" };
+      return {
+        segment: segment.text,
+        explain: () => ({
+          token: firstWord(shellWords(segment.text) ?? [], segment.text),
+          reason: "interpreter in a pipeline"
+        })
+      };
     }
     const tokens = shellWords(segment.text);
     if (tokens?.[0] === "cd" && matchConfiguredPrefix(segment.text, safeSubcommands) === void 0) {
       const target = tokens.length === 2 && !hasShellExpansion(segment.text) ? resolveDirectory(tokens[1], base, roots, homeDir) : void 0;
       if (target === void 0 || segments[index + 1]?.separator === "|") {
-        const reason = "cd needs one plain directory under the working or trusted directories, not piped";
-        return { segment: segment.text, token: tokens.length === 2 ? tokens[1] : "cd", reason };
+        return {
+          segment: segment.text,
+          explain: () => ({
+            token: tokens.length === 2 ? tokens[1] : "cd",
+            reason: "cd needs one plain directory under the working or trusted directories, not piped"
+          })
+        };
       }
       base = target;
       continue;
     }
     const paths = { base, roots, homeDir };
     if (!isSafeSegment(segment.text, safeSubcommands, paths, platform)) {
-      return { segment: segment.text, ...explainUnsafeSegment(segment.text, safeSubcommands, platform, paths) };
+      return {
+        segment: segment.text,
+        explain: () => explainUnsafeSegment(segment.text, safeSubcommands, platform, paths)
+      };
     }
   }
   return void 0;
 }
+function explainDecision(decision) {
+  try {
+    return decision.explain();
+  } catch {
+    return { token: decision.segment, reason: GENERIC_REASON };
+  }
+}
+var GENERIC_REASON = "outside the reviewed inspection policy";
 var NOT_ALLOWLISTED_REASON = "not on the reviewed read-only allowlist";
 function notAllowlistedReason(optIn) {
   if (!optIn) return NOT_ALLOWLISTED_REASON;
@@ -221,8 +239,9 @@ function explainUnsafeSegment(segment, safeSubcommands, platform, paths) {
     const words = shellWords(segment.trimStart().slice(prefix.length));
     if (!words || words.length === 0) return { token: first, reason: "ssh with no remote command" };
     if (words[0]?.startsWith("-")) return { token: words[0], reason: "ssh option before the remote command" };
-    const remote = explainBlockedCommand(words.join(" "), safeSubcommands, { platform });
-    return { token: remote.token, reason: `remote command: ${remote.reason}` };
+    const remote = decideBlockedCommand(words.join(" "), safeSubcommands, { platform });
+    const why = remote.explain();
+    return { token: why.token, reason: `remote command: ${why.reason}` };
   }
   if (command === "curl" || command === "gh" && args[0]?.toLowerCase() === "api") {
     return expansionBlock ?? {
@@ -2674,7 +2693,8 @@ export {
   canSelectToolInPlanMode,
   readCommand,
   findBlockedSshExecCall,
-  explainBlockedCommand,
+  decideBlockedCommand,
+  explainDecision,
   findBlockedPowerShellCommandSegment,
   PLAN_MODE_COMPLETE_TOOL_NAME,
   PLAN_MODE_COMPLETE_PARAMS,
@@ -2740,4 +2760,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-YMYTZ5XI.ts.map
+//# sourceMappingURL=chunk-WG4HPX6B.ts.map

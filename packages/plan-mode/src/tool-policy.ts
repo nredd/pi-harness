@@ -254,33 +254,43 @@ export function findBlockedCommandSegment(
   safeSubcommands: SafeSubcommands = {},
   options: CommandPolicyOptions = {},
 ): string | undefined {
-  return explainBlockedCommand(command, safeSubcommands, options)?.segment;
+  return decideBlockedCommand(command, safeSubcommands, options)?.segment;
+}
+
+/** The reviewed policy's verdict on a rejected command: the segment, and a lazy explanation of it. */
+export interface BlockedDecision {
+  /** The segment (or whole command, for syntax rejected before splitting) that failed. */
+  segment: string;
+  /** Names the offending token. Message only: may throw, and must never be consulted for the decision. */
+  explain: () => SyntaxRejection;
 }
 
 /**
- * Like {@link findBlockedCommandSegment}, but also names the token that tripped the policy and why,
- * so the model can adjust. Same decisions, same order; `undefined` means the command is acceptable.
+ * The decision, and only the decision: `undefined` accepts, a value rejects. It runs the boolean
+ * policy checks alone (the same ones `main` ran), so nothing that explains a rejection can change
+ * whether a command is allowed. `explain` is lazy for that reason.
  */
-export function explainBlockedCommand(
+export function decideBlockedCommand(
   command: string,
   safeSubcommands: SafeSubcommands = {},
-  {
-    workingDirectory,
-    platform = process.platform,
-    trustedDirectories = [],
-    homeDir = homedir(),
-  }: CommandPolicyOptions = {},
-): BlockedCommand | undefined {
+  { workingDirectory, platform = process.platform, trustedDirectories = [], homeDir = homedir() }: CommandPolicyOptions,
+): BlockedDecision | undefined {
   const scan = scanShellSegments(command);
-  if ("rejection" in scan) return { segment: command.trim() || "(empty command)", ...scan.rejection };
+  if ("rejection" in scan) {
+    return { segment: command.trim() || "(empty command)", explain: () => scan.rejection };
+  }
   const { segments } = scan;
   const roots = allowedRoots(workingDirectory, trustedDirectories, homeDir);
   let base = workingDirectory;
   for (const [index, segment] of segments.entries()) {
     if (segment.separator === "|" && isInterpreterSegment(segment.text, INTERPRETERS)) {
-      // Invariant: quotes were balanced by `scanShellSegments`, so the segment tokenizes.
-      const token = firstWord(shellWords(segment.text) as string[], segment.text);
-      return { segment: segment.text, token, reason: "interpreter in a pipeline" };
+      return {
+        segment: segment.text,
+        explain: () => ({
+          token: firstWord(shellWords(segment.text) ?? [], segment.text),
+          reason: "interpreter in a pipeline",
+        }),
+      };
     }
     const tokens = shellWords(segment.text);
     if (tokens?.[0] === "cd" && matchConfiguredPrefix(segment.text, safeSubcommands) === undefined) {
@@ -289,19 +299,53 @@ export function explainBlockedCommand(
           ? resolveDirectory(tokens[1], base, roots, homeDir)
           : undefined;
       if (target === undefined || segments[index + 1]?.separator === "|") {
-        const reason = "cd needs one plain directory under the working or trusted directories, not piped";
-        return { segment: segment.text, token: tokens.length === 2 ? tokens[1] : "cd", reason };
+        return {
+          segment: segment.text,
+          explain: () => ({
+            token: tokens.length === 2 ? tokens[1] : "cd",
+            reason: "cd needs one plain directory under the working or trusted directories, not piped",
+          }),
+        };
       }
       base = target;
       continue;
     }
     const paths: PathPolicy = { base, roots, homeDir };
     if (!isSafeSegment(segment.text, safeSubcommands, paths, platform)) {
-      return { segment: segment.text, ...explainUnsafeSegment(segment.text, safeSubcommands, platform, paths) };
+      return {
+        segment: segment.text,
+        explain: () => explainUnsafeSegment(segment.text, safeSubcommands, platform, paths),
+      };
     }
   }
   return undefined;
 }
+
+/**
+ * Like {@link findBlockedCommandSegment}, but also names the token that tripped the policy and why,
+ * so the model can adjust. Same decision (it *is* {@link decideBlockedCommand}); `undefined` means
+ * the command is acceptable. An explainer failure degrades to a generic reason, never a throw.
+ */
+export function explainBlockedCommand(
+  command: string,
+  safeSubcommands: SafeSubcommands = {},
+  options: CommandPolicyOptions = {},
+): BlockedCommand | undefined {
+  const decision = decideBlockedCommand(command, safeSubcommands, options);
+  if (decision === undefined) return undefined;
+  return { segment: decision.segment, ...explainDecision(decision) };
+}
+
+/** The explanation for `decision`, or a generic one when the explainer throws. */
+export function explainDecision(decision: BlockedDecision): SyntaxRejection {
+  try {
+    return decision.explain();
+  } catch {
+    return { token: decision.segment, reason: GENERIC_REASON };
+  }
+}
+
+const GENERIC_REASON = "outside the reviewed inspection policy";
 
 const NOT_ALLOWLISTED_REASON = "not on the reviewed read-only allowlist";
 
@@ -352,9 +396,11 @@ function explainUnsafeSegment(
     const words = shellWords(segment.trimStart().slice(prefix.length));
     if (!words || words.length === 0) return { token: first, reason: "ssh with no remote command" };
     if (words[0]?.startsWith("-")) return { token: words[0], reason: "ssh option before the remote command" };
-    // Invariant: `isSafeSshSegment` rejected via this same remote check, so an explanation exists.
-    const remote = explainBlockedCommand(words.join(" "), safeSubcommands, { platform }) as BlockedCommand;
-    return { token: remote.token, reason: `remote command: ${remote.reason}` };
+    // Invariant: `isSafeSshSegment` rejected via this same remote check, so a decision exists. If that
+    // ever broke, the TypeError is caught by `explainDecision` around this explainer.
+    const remote = decideBlockedCommand(words.join(" "), safeSubcommands, { platform }) as BlockedDecision;
+    const why = remote.explain();
+    return { token: why.token, reason: `remote command: ${why.reason}` };
   }
   if (command === "curl" || (command === "gh" && args[0]?.toLowerCase() === "api")) {
     return (
@@ -767,7 +813,7 @@ export interface BlockedCommand {
   reason: string;
 }
 
-interface SyntaxRejection {
+export interface SyntaxRejection {
   token: string;
   reason: string;
 }

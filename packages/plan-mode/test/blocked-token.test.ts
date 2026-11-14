@@ -55,6 +55,9 @@ const REJECTED: [string, string, RegExp][] = [
   ["cat x | sh", "sh", /interpreter/],
   ["cat x | bash -c 'rm y'", "bash", /interpreter/],
   ["cat x | xargs rm", "xargs", /interpreter/],
+  // An interpreter segment that does not tokenize (trailing backslash): `main` rejected, so must we.
+  ["ls | python3 \\ ; ls", "python3 \\", /interpreter/],
+  ["cat f | sh \\ | cat", "sh \\", /interpreter/],
   ["ls; rm -rf x", "rm", /mutat/],
   ["ls && rm x && ls", "rm", /mutat/],
   ["ls || touch x", "touch", /mutat/],
@@ -181,6 +184,9 @@ test("no rejected table input suggests an opt-in for an already-reviewed command
   }
 });
 
+// Fixture provenance: `isSafeCommand(input, { ssh: ["prod"] }, options)` evaluated by the unmodified
+// `src/tool-policy.ts` from `origin/main` (06ceb029), copied to a scratch module for the run. The 74
+// earlier values reproduced unchanged; the two trailing-backslash interpreter inputs were appended.
 test("accept/reject decisions match main for every table input", () => {
   const expected = JSON.parse(
     readFileSync(new URL("fixtures/blocked-token-main-decisions.json", import.meta.url), "utf8"),
@@ -193,6 +199,100 @@ test("accept/reject decisions match main for every table input", () => {
       expected[command],
       command,
     );
+  }
+});
+
+// Explainer branches the REJECTED table does not reach: [command, safeSubcommands, platform, token, reason].
+const MORE_EXPLANATIONS: [string, Record<string, string[]>, NodeJS.Platform, string, RegExp][] = [
+  ["''", {}, "linux", "''", /unparseable/],
+  ["uniq a b", {}, "linux", "uniq", /arguments not allowed/],
+  ["ssh prod ls $HOME", safeSubcommands, "linux", "$HOME", /expansion/],
+  ["tasklist /x", {}, "win32", "/x", /reviewed `tasklist` validator/],
+  [
+    "git --no-pager cat-file --textconv x",
+    { git: ["cat-file"] },
+    "linux",
+    "--textconv",
+    /reviewed `git cat-file` validator/,
+  ],
+];
+
+test.each(MORE_EXPLANATIONS)("explains %j", (command, safe, platform, token, reason) => {
+  const blocked = explainBlockedCommand(command, safe, { ...options, platform });
+  assert.ok(blocked);
+  assert.equal(blocked.token, token);
+  assert.match(blocked.reason, reason);
+  assert.equal(isSafeCommand(command, safe, { ...options, platform }), false);
+});
+
+// Adversarial shapes for the explainer: it must answer (never throw) for anything the decision rejects.
+const ADVERSARIAL = [
+  "",
+  " ",
+  "\\",
+  "ls \\",
+  "ls | python3 \\",
+  "ls | sh '\\",
+  "ls | python3 'unterminated",
+  'ls | sh "unterminated',
+  "ls |  | sh",
+  "ls ||| sh",
+  ";;;",
+  "| sh",
+  "ls | \\ | sh \\",
+  "cd",
+  "cd \\",
+  "cd 'x",
+  "cd a b | ls",
+  "cd /etc | sh \\",
+  "ssh prod",
+  "ssh prod \\",
+  "ssh prod 'x",
+  "ssh prod ls | sh \\",
+  "ssh prod rm \\",
+  "ssh prod -o x ls",
+  "git -C",
+  "git -C \\",
+  "git --no-pager",
+  "git branch \\",
+  "npm run \\",
+  "npm \\",
+  "sed \\",
+  "hostname \\",
+  "python3 \\",
+  "echo \u00e9\u4e2d\u6587\ud83e\udd69 | sh \\",
+  "ls \u0000 | sh",
+  "ls | sh\u0000\\",
+  "\u0000",
+  "caf\u00e9 \u0000 $(x)",
+  "FOO=\\",
+  "ls \\\\ | sh",
+];
+
+test("the explainer answers and never throws, and never changes the decision", () => {
+  const inputs = [...ACCEPTED, ...REJECTED.map(([command]) => command), ...EXTRA_DECISION_INPUTS, ...ADVERSARIAL];
+  for (const command of inputs) {
+    for (const [platform, safe] of [
+      ["linux", safeSubcommands],
+      ["win32", {}],
+    ] as const) {
+      const opts = { ...options, platform };
+      const blocked = explainBlockedCommand(command, safe, opts);
+      assert.equal(blocked === undefined, isSafeCommand(command, safe, opts), command);
+      assert.equal(findBlockedCommandSegment(command, safe, opts), blocked?.segment, command);
+      if (blocked) {
+        assert.equal(typeof blocked.token, "string", command);
+        assert.ok(blocked.reason.length > 0, command);
+        assert.equal(typeof blocked.segment, "string", command);
+      }
+      const message = blockedShellCallReason(
+        "bash",
+        { command },
+        { safeSubcommands: safe, trustedDirectories: [] },
+        opts,
+      );
+      assert.equal(message === undefined, blocked === undefined, command);
+    }
   }
 });
 

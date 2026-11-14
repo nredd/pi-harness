@@ -72,5 +72,7 @@
   "tsc": false,
   "wc -l < f": false,
   "wc -l a.ts b.ts": true,
-  "wc -l src/*.ts": false
+  "wc -l src/*.ts": false,
+  "ls | python3 \\ ; ls": false,
+  "cat f | sh \\ | cat": false
 }

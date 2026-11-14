@@ -26,7 +26,8 @@ import {
   configuredThinkingLevel,
   createImplementationRetentionCoordinator,
   createPlanEditMessage,
-  explainBlockedCommand,
+  decideBlockedCommand,
+  explainDecision,
   exportStoredPlan,
   filterAvailableSelectedToolNames,
   findAvailableImplementationModel,
@@ -64,7 +65,7 @@ import {
   snapshotPlanModeSelectedNames,
   updatePlanModeSettings,
   updatePlanModeUi
-} from "./chunks/chunk-YMYTZ5XI.ts";
+} from "./chunks/chunk-WG4HPX6B.ts";
 
 // src/plan-mode.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
@@ -82,11 +83,12 @@ var BLOCKED_MUTATING_TOOLS = /* @__PURE__ */ new Set(["edit", "write", "update_p
 function blockedShellCallReason(toolName, input, settings, options) {
   const shellOptions = { ...options, trustedDirectories: settings.trustedDirectories };
   if (toolName === "bash") {
-    const blocked = explainBlockedCommand(readCommand(input), settings.safeSubcommands, shellOptions);
-    if (blocked !== void 0) {
+    const decision = decideBlockedCommand(readCommand(input), settings.safeSubcommands, shellOptions);
+    if (decision !== void 0) {
+      const why = explainDecision(decision);
       return `Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.
-Blocked command: ${blocked.segment}
-Offending token: ${blocked.token} (${blocked.reason})`;
+Blocked command: ${decision.segment}
+Offending token: ${why.token} (${why.reason})`;
     }
   }
   if (toolName === SSH_EXEC_TOOL_NAME) {
@@ -1305,7 +1307,7 @@ function planMode(pi, dependencies = {}) {
   const loadInteractiveUi = () => {
     if (dependencies.loadInteractiveUi) return dependencies.loadInteractiveUi();
     if (!interactiveUiPromise) {
-      interactiveUiPromise = import("./chunks/interactive-ui-JYUE7FI2.ts").catch((error) => {
+      interactiveUiPromise = import("./chunks/interactive-ui-NNN4FL2Q.ts").catch((error) => {
         interactiveUiPromise = void 0;
         throw error;
       });
