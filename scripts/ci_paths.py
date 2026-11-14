@@ -409,28 +409,32 @@ def is_documentation_path(path: str) -> bool:
     return len(parts) == 3 and parts[0] == "packages" and parts[2] in {"README.md", "CHANGELOG.md"}
 
 
-def deletes_package_doc(repo: Path, paths: tuple[str, ...], head: str) -> bool:
-    """Return whether a changed `packages/<name>/README.md` or `CHANGELOG.md` no longer exists at `head`.
+def changes_package_doc_presence(repo: Path, paths: tuple[str, ...], base: str, head: str) -> bool:
+    """Return whether a changed `packages/<name>/README.md` or `CHANGELOG.md` was added or deleted.
 
-    A package doc edit is docs-only, but deleting a required one breaks the layout gate
-    (`scripts/package_layout.py`), so that diff must run `check-scripts`.
+    A package doc edit is docs-only, but adding or deleting one changes which required files a package
+    has, which `scripts/package_layout.py` gates, so that diff must run `check-scripts`.
 
     Parameters:
         repo (Path): Existing Git working tree.
         paths (tuple[str, ...]): Changed paths.
+        base (str): Earlier Git revision.
         head (str): Later Git revision.
 
     Returns:
-        bool: Whether any changed package doc is absent at `head`.
+        bool: Whether any changed package doc is absent at `base` or at `head`.
 
     Raises:
-        ClassificationError: Git cannot list `head`.
+        ClassificationError: Git cannot list a revision.
     """
     docs = [path for path in paths if path.startswith("packages/") and is_documentation_path(path)]
     if not docs:
         return False
-    present = set(run_git(repo, "ls-tree", "--name-only", "-z", head, "--", *docs).split("\0"))
-    return any(path not in present for path in docs)
+    at_base, at_head = (
+        set(run_git(repo, "ls-tree", "--name-only", "-z", rev, "--", *docs).split("\0"))
+        for rev in (base, head)
+    )
+    return any(path not in at_base or path not in at_head for path in docs)
 
 
 def is_wsl_input(path: str) -> bool:
@@ -510,7 +514,7 @@ def classify(repo: Path, base: str, head: str) -> ChangeClassification:
         docs_only = (
             bool(paths)
             and all(map(is_documentation_path, paths))
-            and not deletes_package_doc(repo, paths, head)
+            and not changes_package_doc_presence(repo, paths, base, head)
         )
     except ClassificationError as e:
         LOGGER.error(f"Failed to classify changed paths: {e}")

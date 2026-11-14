@@ -1,7 +1,14 @@
 """Gate the layout of every tracked package against the standard in nredd/pi-harness#860.
 
-Walks `git ls-files` for `packages/` (publish rules) plus `integration/inprocess` and `integration/testkit`
-(script and config rules only) and prints one line per violation: `<package>: <path>: <rule>`.
+Walks `git ls-files` for `packages/` (publish rules) plus the shared packages in `SHARED_PACKAGES`
+(script and config rules only) and prints one line per violation: `<package>: <path>: <rule>`. A shared
+package with no tracked files is a hard error (exit 2), so moving one without updating the gate cannot
+leave its tree silently unchecked.
+
+The test layout is plural `tests/` everywhere: per package `tests/*.test.ts` (and `tests/*.bench.ts`) plus
+`tests/fixtures/` for every non-test file, and no `support/`, `helpers/` or `lib/` below `tests/`. Root-level
+shared code is `tests/lib/` with data in `tests/fixtures/`; add `tests/lib` to `SHARED_PACKAGES` in the PR
+that creates it. Today's `test/` directories are migration debt, one `top-level-entry` line per package.
 
 Today's deviations live in `scripts/package_layout.json`, a sorted array with one violation line per entry.
 The list can only shrink:
@@ -9,17 +16,20 @@ The list can only shrink:
 - an entry that is no longer violated is stale and fails
 - with `--compare-ref`, an entry the merge base of `HEAD` and the ref does not carry fails, so a new
   violation cannot be waived by adding its line
+- with `--compare-ref`, a tracked path that is new since the merge base and sits under an allowlisted
+  banned top-level entry (e.g. `test/`, `lib/`) fails, so the waiver does not cover new files
 - the file must be in canonical form (sorted, unique, one entry per line) so merges stay mechanical
 
 A package issue deletes its own entries in the same PR that fixes the layout.
 
 A violation under a top-level entry that is itself a violation (a banned directory, or a file outside the
-closed list) is reported once, for that entry; the rules below the entry apply once it moves into place.
+closed list) is reported once, for that entry; the per-file rules below the entry apply once it moves into
+place, and until then the growth check above keeps new files out of it.
 Import scanning is textual (`from`, `import`, `require`), so `new URL("../x", import.meta.url)` and
 `vi.mock("../x")` are not seen.
 
 Not mechanically checkable here, so not gated: runtime data loaded away from its loader, tests that write
-inside the package tree, `test/` mirroring `src/`, and the `package.json` field values (`name`, `files`,
+inside the package tree, `tests/` mirroring `src/`, and the `package.json` field values (`name`, `files`,
 `pi.extensions`, the `check` composition) and `tsconfig.json` / `CHANGELOG.md` contents. `test:<signal>`
 script names are matched by prefix, not against `coverage/policy.json`.
 
@@ -47,7 +57,7 @@ LOGGER = logging.getLogger(__name__)
 ALLOWLIST = "scripts/package_layout.json"
 PUBLISH_ROOT = "packages"
 # Same `package.json` script and config rules as a package, none of the publish rules.
-SHARED_PACKAGES = ("integration/inprocess", "integration/testkit")
+SHARED_PACKAGES = ("integration/inprocess",)
 
 REQUIRED_FILES = (
     "package.json",
@@ -63,7 +73,7 @@ TOP_LEVEL_ENTRIES = frozenset(
     {
         *REQUIRED_FILES,
         "src",
-        "test",
+        "tests",
         "dist",
         "tsconfig.build.json",
         "scripts",
@@ -118,7 +128,8 @@ TICKET_TEST_NAME = re.compile(r"(?:^|[-_.])(?:issue|pr|gh)[-_]?\d+")
 CAMPAIGN_TEST_NAME = re.compile(r"(?:^|[-_.])coverage(?:[-_.]|$)")
 COVERAGE_TOOL_PREFIXES = ("rust-", "swift-")
 RELATIVE_SPECIFIER = re.compile(r"""\b(?:from|import|require)\s*\(?\s*["'](\.\.?(?:/[^"'\n]*)?)["']""")
-TEST_SUPPORT_DIRS = frozenset({"support", "fixtures"})
+# Below `tests/` only `fixtures/` holds non-test files; these are the superseded homes for them.
+TEST_SUPPORT_DIRS = frozenset({"support", "helpers", "lib"})
 SNAPSHOT_DIR = "__snapshots__"
 
 
@@ -146,7 +157,7 @@ class Violation:
 
 
 def is_fixture(path: str) -> bool:
-    """Return whether a package-relative path sits under `test/fixtures/`.
+    """Return whether a package-relative path sits under `tests/fixtures/`.
 
     Parameters:
         path (str): Package-relative POSIX path.
@@ -154,7 +165,7 @@ def is_fixture(path: str) -> bool:
     Returns:
         bool: Whether the path is fixture data, which may model any on-disk layout.
     """
-    return path.startswith("test/fixtures/")
+    return path.startswith("tests/fixtures/")
 
 
 def dot_entry(path: str) -> str | None:
@@ -188,22 +199,22 @@ def markdown_allowed(path: str) -> bool:
 
 
 def tree_rule(path: str) -> str | None:
-    """Name the rule a file under `test/` breaks, if any.
+    """Name the rule a file under `tests/` breaks, if any.
 
     Parameters:
-        path (str): Package-relative POSIX path starting with `test/`.
+        path (str): Package-relative POSIX path starting with `tests/`, outside `tests/fixtures/`.
 
     Returns:
-        str | None: A rule name, or None when the file belongs in `test/`.
+        str | None: A rule name, or None when the file belongs in `tests/`.
     """
     parts = path.split("/")[1:]
-    if SNAPSHOT_DIR in parts[:-1] or (len(parts) > 1 and parts[0] == "fixtures"):
+    if SNAPSHOT_DIR in parts[:-1]:
         return None
+    if len(parts) > 1 and parts[0] in TEST_SUPPORT_DIRS:
+        return "test-support-dir"
     name = parts[-1]
-    if parts[0] == "support":
-        return "test-in-support" if name.endswith(".test.ts") else None
-    if parts[0] == "bench":
-        return None if name.endswith(".bench.ts") and len(parts) == 2 else "test-content"
+    if name.endswith(".bench.ts"):
+        return None if len(parts) == 1 else "test-content"
     return None if name.endswith(".test.ts") else "test-content"
 
 
@@ -269,13 +280,13 @@ def file_violations(package: str, path: str, root: Path) -> Iterable[Violation]:
         yield Violation(package, path, "tracked-dist")
     if is_fixture(path):
         return
-    if top == "test" and ".test." in path and misnamed_test(posixpath.basename(path)):
+    if top == "tests" and ".test." in path and misnamed_test(posixpath.basename(path)):
         yield Violation(package, path, "test-name")
     if path.endswith(STRAY_TEST_SUFFIXES):
         yield Violation(package, path, "test-extension")
-    elif path.endswith(".test.ts") and top != "test":
+    elif path.endswith(".test.ts") and top != "tests":
         yield Violation(package, path, "test-location")
-    elif top == "test":
+    elif top == "tests":
         problem = tree_rule(path)
         if problem is not None:
             yield Violation(package, path, problem)
@@ -435,8 +446,14 @@ def find_violations(root: Path, tracked: Iterable[str] | None = None) -> list[Vi
 
     Raises:
         ClassificationError: Git fails.
+        ValueError: A configured shared package has no tracked files.
     """
     packages, found = group_packages(tracked_paths(root) if tracked is None else tracked)
+    missing = [name for name in SHARED_PACKAGES if name not in packages]
+    if missing:
+        raise ValueError(
+            f"Shared package(s) with no tracked files: {', '.join(missing)}; update SHARED_PACKAGES"
+        )
     for package, paths in packages.items():
         found.extend(check_package(package, paths, root, package.startswith(f"{PUBLISH_ROOT}/")))
     return sorted(set(found), key=Violation.line)
@@ -520,6 +537,67 @@ def base_entries(root: Path, reference: str) -> tuple[str, set[str]] | None:
     return base, set(parse_allowlist(text, f"{base[:12]}:{ALLOWLIST}"))
 
 
+def banned_entries(violations: Iterable[Violation]) -> set[tuple[str, str]]:
+    """Return the top-level entries of packages that are themselves violations.
+
+    Parameters:
+        violations (Iterable[Violation]): Current violations.
+
+    Returns:
+        set[tuple[str, str]]: `(package, entry)` for each `top-level-entry` and `dotfile` violation of an
+            entry directly under the package, i.e. the tops whose files skip the per-file rules.
+    """
+    return {
+        (violation.package, violation.path)
+        for violation in violations
+        if violation.rule in {"top-level-entry", "dotfile"} and "/" not in violation.path
+    }
+
+
+def base_tracked(root: Path, reference: str) -> set[str]:
+    """List the tracked paths the gate reads at the merge base of `HEAD` and a ref.
+
+    Parameters:
+        root (Path): Repository root.
+        reference (str): Ref to compare against, e.g. `origin/main`.
+
+    Returns:
+        set[str]: Repository-relative POSIX paths under `packages/` and the shared packages.
+
+    Raises:
+        ClassificationError: The ref or merge base cannot be resolved, or Git fails.
+    """
+    base = run_git(root, "merge-base", "--end-of-options", "HEAD", reference).strip()
+    out = run_git(root, "ls-tree", "-r", "--name-only", "-z", base, "--", PUBLISH_ROOT, *SHARED_PACKAGES)
+    return {path for path in out.split("\0") if path}
+
+
+def growth_problems(violations: Iterable[Violation], tracked: Iterable[str], known: set[str]) -> list[str]:
+    """Report tracked paths new since the base under a banned top-level entry.
+
+    The allowlist waives the entry, not what is added to it, and the per-file rules skip it.
+
+    Parameters:
+        violations (Iterable[Violation]): Current violations.
+        tracked (Iterable[str]): Tracked paths at `HEAD`.
+        known (set[str]): Tracked paths at the merge base.
+
+    Returns:
+        list[str]: One `<package>: <path>: added-under-banned-entry` line per new path, sorted.
+    """
+    prefixes = {f"{package}/{entry}/": package for package, entry in banned_entries(violations)}
+    problems = set()
+    for path in tracked:
+        if path in known:
+            continue
+        for prefix, package in prefixes.items():
+            if path.startswith(prefix):
+                problems.add(
+                    Violation(package, path.removeprefix(f"{package}/"), "added-under-banned-entry").line()
+                )
+    return sorted(problems)
+
+
 def allowlist_problems(
     violations: Iterable[Violation], text: str, entries: list[str], base: tuple[str, set[str]] | None
 ) -> list[str]:
@@ -554,20 +632,24 @@ def run(root: Path, compare_ref: str | None, emit: Callable[[str], object]) -> i
 
     Parameters:
         root (Path): Repository root.
-        compare_ref (str | None): Ref whose merge base with `HEAD` bounds the allowlist, or None.
+        compare_ref (str | None): Ref whose merge base with `HEAD` bounds the gate, or None.
         emit (Callable[[str], object]): Receives one line per problem.
 
     Returns:
         int: 0 when clean, 1 on violations or allowlist problems, 2 when the gate cannot run.
     """
     try:
-        violations = find_violations(root)
+        tracked = tracked_paths(root)
+        violations = find_violations(root, tracked)
         text, entries = load_allowlist(root)
         base = base_entries(root, compare_ref) if compare_ref else None
+        known = base_tracked(root, compare_ref) if compare_ref else None
     except (ClassificationError, ValueError) as e:
         LOGGER.error(f"Cannot check the package layout: {e}")
         return 2
     problems = allowlist_problems(violations, text, entries, base)
+    if known is not None:
+        problems += growth_problems(violations, tracked, known)
     for problem in problems:
         emit(problem)
     if problems:

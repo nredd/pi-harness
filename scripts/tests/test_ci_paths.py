@@ -114,6 +114,8 @@ def test_classify_accepts_documentation_paths(repo: Path, path: str) -> None:
     Returns:
         None: Assertions verify classification.
     """
+    if path.startswith("packages/"):
+        classify_change(repo, {path: "seed\n"})  # editing a package doc, not adding one
     result = classify_change(repo, {path: "documentation\n"})
     assert result.docs_only
     assert result.paths == (path,)
@@ -677,18 +679,20 @@ def test_layout_relevant_changes_run_check_scripts_on_every_native_cell(repo: Pa
 
 
 @pytest.mark.parametrize("name", ["README.md", "CHANGELOG.md"])
-def test_deleting_a_required_package_doc_is_not_docs_only(repo: Path, name: str) -> None:
-    """Run the layout gate when a package loses a required doc; editing the same doc stays docs-only.
+def test_adding_or_deleting_a_package_doc_is_not_docs_only(repo: Path, name: str) -> None:
+    """Run the layout gate when a package gains or loses a doc; editing the same doc stays docs-only.
 
     Parameters:
         repo (Path): Disposable repository.
-        name (str): Required package doc.
+        name (str): Package doc.
 
     Returns:
-        None: Assertions verify both diffs.
+        None: Assertions verify each diff.
     """
     path = f"packages/x/{name}"
-    assert classify_change(repo, {path: "one\n"}).docs_only
+    added = classify_change(repo, {path: "one\n"})
+    assert added.paths == (path,)
+    assert not added.docs_only
     assert classify_change(repo, {path: "two\n"}).docs_only
     base = git(repo, "rev-parse", "HEAD")
     (repo / path).unlink()
@@ -699,7 +703,7 @@ def test_deleting_a_required_package_doc_is_not_docs_only(repo: Path, name: str)
     assert not result.docs_only
 
 
-def test_classify_fails_closed_when_head_cannot_be_listed(
+def test_classify_fails_closed_when_the_trees_cannot_be_listed(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Treat a diff as code when the package-doc presence check cannot run.
@@ -731,7 +735,7 @@ def test_classify_fails_closed_when_head_cannot_be_listed(
     (repo / "packages/x/README.md").write_text("x\n", encoding="utf-8")
     git(repo, "add", "--all")
     commit(repo, "add doc")
-    monkeypatch.setattr(ci_paths, "deletes_package_doc", fail)
+    monkeypatch.setattr(ci_paths, "changes_package_doc_presence", fail)
     result = ci_paths.classify(repo, base, "HEAD")
     assert not result.docs_only
     assert result.paths == ()

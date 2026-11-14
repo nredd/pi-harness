@@ -8,6 +8,7 @@ References:
 from __future__ import annotations
 
 import json
+import os
 import runpy
 import subprocess
 import sys
@@ -33,10 +34,11 @@ CLEAN = {
     "vitest.config.ts": "export default {};\n",
     "src/index.ts": 'import { a } from "./area/a.ts";\nexport { a };\n',
     "src/area/a.ts": 'import { up } from "../index.ts";\nexport const a = up;\n',
-    "test/area/a.test.ts": "export {};\n",
-    "test/support/helper.ts": "export {};\n",
-    "test/fixtures/data.json": "{}\n",
+    "tests/a.test.ts": "export {};\n",
+    "tests/fixtures/helper.ts": "export {};\n",
+    "tests/fixtures/data.json": "{}\n",
 }
+SHARED = "integration/inprocess"
 
 
 def git(repo: Path, *args: str) -> str:
@@ -99,7 +101,7 @@ def repo(tmp_path: Path) -> Path:
     git(tmp_path, "config", "user.name", "t")
     git(tmp_path, "config", "commit.gpgsign", "false")
     write_tree(tmp_path, {f"{PACKAGE}/{path}": text for path, text in CLEAN.items()})
-    write_tree(tmp_path, {package_layout.ALLOWLIST: "[]\n"})
+    write_tree(tmp_path, {package_layout.ALLOWLIST: "[]\n", f"{SHARED}/index.ts": "export {};\n"})
     return tmp_path
 
 
@@ -143,27 +145,33 @@ def test_clean_package_passes_with_no_allowlist_entry(repo: Path) -> None:
         (".vitest.config.ts", "x\n", "packages/x: .vitest.config.ts: dotfile"),
         ("src/.cache/a.ts", "x\n", "packages/x: src/.cache: dotfile"),
         ("src/shot.PNG", "x\n", "packages/x: src/shot.PNG: media"),
-        ("test/fixtures/demo.mp4", "x\n", "packages/x: test/fixtures/demo.mp4: media"),
+        ("tests/fixtures/demo.mp4", "x\n", "packages/x: tests/fixtures/demo.mp4: media"),
         ("cover.png", "x\n", "packages/x: cover.png: media"),
         ("dist/index.js", "x\n", "packages/x: dist/index.js: tracked-dist"),
         ("src/a.test.ts", "x\n", "packages/x: src/a.test.ts: test-location"),
         ("a.test.ts", "x\n", "packages/x: a.test.ts: top-level-entry"),
-        ("test/a.test.mjs", "x\n", "packages/x: test/a.test.mjs: test-extension"),
+        ("tests/a.test.mjs", "x\n", "packages/x: tests/a.test.mjs: test-extension"),
         ("src/a.test.js", "x\n", "packages/x: src/a.test.js: test-extension"),
-        ("test/helper.ts", "x\n", "packages/x: test/helper.ts: test-content"),
-        ("test/area/helper.ts", "x\n", "packages/x: test/area/helper.ts: test-content"),
-        ("test/support/h.test.ts", "x\n", "packages/x: test/support/h.test.ts: test-in-support"),
-        ("test/bench/helper.ts", "x\n", "packages/x: test/bench/helper.ts: test-content"),
-        ("test/bench/deep/a.bench.ts", "x\n", "packages/x: test/bench/deep/a.bench.ts: test-content"),
-        ("test/issue-302-repro.test.ts", "x\n", "packages/x: test/issue-302-repro.test.ts: test-name"),
+        ("tests/helper.ts", "x\n", "packages/x: tests/helper.ts: test-content"),
+        ("tests/area/helper.ts", "x\n", "packages/x: tests/area/helper.ts: test-content"),
+        ("tests/support/h.test.ts", "x\n", "packages/x: tests/support/h.test.ts: test-support-dir"),
+        ("test/a.test.ts", "x\n", "packages/x: test: top-level-entry"),
+        ("tests/helpers/h.ts", "x\n", "packages/x: tests/helpers/h.ts: test-support-dir"),
+        ("tests/lib/h.ts", "x\n", "packages/x: tests/lib/h.ts: test-support-dir"),
+        ("tests/support/deep/h.ts", "x\n", "packages/x: tests/support/deep/h.ts: test-support-dir"),
+        ("tests/bench/a.bench.ts", "x\n", "packages/x: tests/bench/a.bench.ts: test-content"),
+        ("lib/a.ts", "x\n", "packages/x: lib: top-level-entry"),
+        ("tests/bench/helper.ts", "x\n", "packages/x: tests/bench/helper.ts: test-content"),
+        ("tests/bench/deep/a.bench.ts", "x\n", "packages/x: tests/bench/deep/a.bench.ts: test-content"),
+        ("tests/issue-302-repro.test.ts", "x\n", "packages/x: tests/issue-302-repro.test.ts: test-name"),
         (
-            "test/area/index-coverage-a.test.ts",
+            "tests/area/index-coverage-a.test.ts",
             "x\n",
-            "packages/x: test/area/index-coverage-a.test.ts: test-name",
+            "packages/x: tests/area/index-coverage-a.test.ts: test-name",
         ),
-        ("test/area/coverage.test.ts", "x\n", "packages/x: test/area/coverage.test.ts: test-name"),
-        ("test/area/a.gh_12.test.ts", "x\n", "packages/x: test/area/a.gh_12.test.ts: test-name"),
-        ("test/area/pr7.test.ts", "x\n", "packages/x: test/area/pr7.test.ts: test-name"),
+        ("tests/area/coverage.test.ts", "x\n", "packages/x: tests/area/coverage.test.ts: test-name"),
+        ("tests/area/a.gh_12.test.ts", "x\n", "packages/x: tests/area/a.gh_12.test.ts: test-name"),
+        ("tests/area/pr7.test.ts", "x\n", "packages/x: tests/area/pr7.test.ts: test-name"),
         ("src/issue-1.test.ts", "x\n", "packages/x: src/issue-1.test.ts: test-location"),
         ("biome.json", "{}\n", "packages/x: biome.json: biome-config"),
         ("src/biome.jsonc", "{}\n", "packages/x: src/biome.jsonc: biome-config"),
@@ -188,19 +196,18 @@ def test_violations_name_the_rule(repo: Path, path: str, text: str, expected: st
 @pytest.mark.parametrize(
     "path",
     [
-        "test/fixtures/.pi/agents/minimal.md",
-        "test/fixtures/README.md",
-        "test/fixtures/a.test.mjs",
-        "test/fixtures/helper.ts",
-        "test/__snapshots__/a.snap",
-        "test/area/__snapshots__/a.test.ts.snap",
-        "test/bench/a.bench.ts",
-        "test/scenarios/a.test.ts",
-        "test/area/rust-coverage.test.ts",
-        "test/area/swift-coverage-errors.test.ts",
-        "test/area/pr-review.test.ts",
-        "test/area/coverages.test.ts",
-        "test/support/deep/helper.ts",
+        "tests/fixtures/.pi/agents/minimal.md",
+        "tests/fixtures/README.md",
+        "tests/fixtures/a.test.mjs",
+        "tests/fixtures/helper.ts",
+        "tests/__snapshots__/a.snap",
+        "tests/area/__snapshots__/a.test.ts.snap",
+        "tests/a.bench.ts",
+        "tests/scenarios/a.test.ts",
+        "tests/area/rust-coverage.test.ts",
+        "tests/area/swift-coverage-errors.test.ts",
+        "tests/area/pr-review.test.ts",
+        "tests/area/coverages.test.ts",
         "skills/ship-issue/SKILL.md",
         "agents/reviewer.md",
         "themes/dark.json",
@@ -425,24 +432,19 @@ def test_shared_packages_get_script_and_config_rules_only(repo: Path) -> None:
     write_tree(
         repo,
         {
-            "integration/inprocess/package.json": json.dumps(manifest),
-            "integration/inprocess/biome.json": "{}\n",
-            "integration/inprocess/AGENTS.md": "x\n",
-            "integration/inprocess/.gitignore": "x\n",
-            "integration/inprocess/a.test.mjs": "x\n",
-            "integration/testkit/package.json": json.dumps({"scripts": {"build:x": "x"}}),
+            f"{SHARED}/package.json": json.dumps(manifest),
+            f"{SHARED}/biome.json": "{}\n",
+            f"{SHARED}/AGENTS.md": "x\n",
+            f"{SHARED}/.gitignore": "x\n",
+            f"{SHARED}/a.test.mjs": "x\n",
             "integration/other/package.json": json.dumps({"scripts": {"build:x": "x"}}),
         },
     )
-    assert lines(repo) == [
-        "integration/inprocess: biome.json: biome-config",
-        "integration/inprocess: package.json: script-name docs",
-        "integration/testkit: package.json: script-name build:x",
-    ]
+    assert lines(repo) == [f"{SHARED}: biome.json: biome-config", f"{SHARED}: package.json: script-name docs"]
 
 
 def test_shared_package_without_a_manifest_is_only_checked_for_config(repo: Path) -> None:
-    """Accept a shared directory with no `package.json` yet.
+    """Accept a shared directory with no `package.json`.
 
     Parameters:
         repo (Path): Disposable repository.
@@ -450,8 +452,30 @@ def test_shared_package_without_a_manifest_is_only_checked_for_config(repo: Path
     Returns:
         None: Assertions verify the report.
     """
-    write_tree(repo, {"integration/testkit/index.ts": "x\n"})
     assert lines(repo) == []
+
+
+def test_configured_shared_path_without_tracked_files_is_a_hard_error(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exit 2 when a configured shared path has no tracked files, so a move cannot leave it unchecked.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        monkeypatch (pytest.MonkeyPatch): Configures a second shared path that was never created.
+
+    Returns:
+        None: Assertions verify the exit status.
+    """
+    assert package_layout.run(repo, None, lambda _line: None) == 0
+    monkeypatch.setattr(package_layout, "SHARED_PACKAGES", (SHARED, "tests/lib"))
+    with pytest.raises(ValueError, match="tests/lib"):
+        package_layout.find_violations(repo)
+    assert package_layout.run(repo, None, lambda _line: None) == 2
+    write_tree(repo, {"tests/lib/index.ts": "export {};\n", "tests/lib/biome.json": "{}\n"})
+    assert lines(repo) == ["tests/lib: biome.json: biome-config"]
+    git(repo, "rm", "-q", "-r", "-f", SHARED)
+    assert package_layout.run(repo, None, lambda _line: None) == 2
 
 
 def test_file_directly_under_packages_is_not_a_package(repo: Path) -> None:
@@ -634,6 +658,121 @@ def test_comparison_fails_for_an_unknown_ref_or_malformed_base(repo: Path) -> No
     assert package_layout.run(repo, "main", lambda _line: None) == 2
 
 
+def feature_branch(repo: Path, files: dict[str, str]) -> None:
+    """Commit a clean base on `main`, then a feature commit that adds files.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        files (dict[str, str]): Repository-relative paths and contents added on the branch.
+
+    Returns:
+        None: `HEAD` is the feature commit.
+    """
+    commit(repo, "base")
+    git(repo, "checkout", "-q", "-b", "feature")
+    write_tree(repo, files)
+    commit(repo, "feature")
+
+
+@pytest.mark.parametrize(
+    ("banned", "added"),
+    [
+        ("test/a.test.ts", "test/issue-9-b.test.ts"),
+        ("lib/a.ts", "lib/deep/b.ts"),
+        ("docs/a.md", "docs/shot.png"),
+        (".github/ci.yml", ".github/workflows/x.yml"),
+        ("view/a.ts", "view/b.ts"),
+    ],
+)
+def test_new_files_under_an_allowlisted_banned_entry_fail(repo: Path, banned: str, added: str) -> None:
+    """Fail a file added below a waived banned directory; the waiver covers the directory, not new files.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        banned (str): Package-relative file that makes its top-level entry a waived violation.
+        added (str): Package-relative file added below the same entry on the branch.
+
+    Returns:
+        None: Assertions verify the report and exit status.
+    """
+    top = banned.split("/", maxsplit=1)[0]
+    rule = "dotfile" if top.startswith(".") else "top-level-entry"
+    waived = f"{PACKAGE}: {top}: {rule}"
+    write_tree(repo, {f"{PACKAGE}/{banned}": "x\n", package_layout.ALLOWLIST: entries_for(waived)})
+    feature_branch(repo, {f"{PACKAGE}/{added}": "x\n", f"{PACKAGE}/tests/new.test.ts": "x\n"})
+    out: list[str] = []
+    assert package_layout.run(repo, "main", out.append) == 1
+    assert out == [f"{PACKAGE}: {added}: added-under-banned-entry"]
+    # Without a ref there is nothing to compare, and a file that was already there is not new.
+    assert package_layout.run(repo, None, lambda _line: None) == 0
+    git(repo, "rm", "-q", "-f", f"{PACKAGE}/{added}")
+    assert package_layout.run(repo, "main", lambda _line: None) == 0  # new `tests/new.test.ts` is fine
+
+
+def test_moving_files_out_of_a_banned_entry_is_not_growth(repo: Path) -> None:
+    """Pass the migration itself: `test/` shrinks while `tests/` appears under the per-file rules.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the exit status.
+    """
+    waived = f"{PACKAGE}: test: top-level-entry"
+    write_tree(repo, {f"{PACKAGE}/test/b.test.ts": "x\n", package_layout.ALLOWLIST: entries_for(waived)})
+    commit(repo, "base")
+    git(repo, "checkout", "-q", "-b", "feature")
+    git(repo, "mv", f"{PACKAGE}/test/b.test.ts", f"{PACKAGE}/tests/b.test.ts")
+    write_tree(repo, {package_layout.ALLOWLIST: "[]\n"})
+    commit(repo, "migrate")
+    assert package_layout.run(repo, "main", lambda _line: None) == 0
+
+
+def test_growth_is_checked_where_the_base_has_no_allowlist(repo: Path) -> None:
+    """Compare tracked paths even for the commit that introduces the allowlist.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    write_tree(repo, {f"{PACKAGE}/lib/a.ts": "x\n"})
+    git(repo, "rm", "-q", "-f", "--cached", package_layout.ALLOWLIST)
+    commit(repo, "base without allowlist")
+    git(repo, "checkout", "-q", "-b", "feature")
+    write_tree(
+        repo,
+        {
+            f"{PACKAGE}/lib/b.ts": "x\n",
+            package_layout.ALLOWLIST: entries_for(f"{PACKAGE}: lib: top-level-entry"),
+        },
+    )
+    commit(repo, "introduce")
+    out: list[str] = []
+    assert package_layout.run(repo, "main", out.append) == 1
+    assert out == [f"{PACKAGE}: lib/b.ts: added-under-banned-entry"]
+
+
+def test_make_compares_against_origin_main_unless_base_is_set() -> None:
+    """Never skip the merge-base comparison: unset or empty `BASE` means `origin/main`.
+
+    Returns:
+        None: `make -n` prints the comparison argument for each `BASE`.
+    """
+    env = {key: value for key, value in os.environ.items() if key not in {"MAKEFLAGS", "MFLAGS", "BASE"}}
+    for overrides, expected in (([], "origin/main"), (["BASE="], "origin/main"), (["BASE=abc123"], "abc123")):
+        result = subprocess.run(
+            ["make", "-n", "check-scripts", *overrides],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert f'scripts/package_layout.py --compare-ref "{expected}"' in result.stdout
+
+
 def test_main_reports_exit_status(
     repo: Path, capsys: pytest.CaptureFixture[str], tmp_path_factory: pytest.TempPathFactory
 ) -> None:
@@ -712,7 +851,7 @@ def test_real_violation_lines_follow_the_documented_shape() -> None:
     _, listed = package_layout.load_allowlist(REPO_ROOT)
     for entry in listed:
         package, path, rule = entry.split(": ", 2)
-        assert package.startswith(("packages/", "integration/"))
+        assert package.startswith(("packages/", "integration/inprocess"))
         assert path
         assert rule.split(" ")[0] in {
             "biome-config",
@@ -725,7 +864,7 @@ def test_real_violation_lines_follow_the_documented_shape() -> None:
             "script-name",
             "test-content",
             "test-extension",
-            "test-in-support",
+            "test-support-dir",
             "test-location",
             "test-name",
             "top-level-entry",
