@@ -209,6 +209,32 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		await shutdownComputerUseSession();
 	});
 
+	test("stopping a browser skips another browser's stale tracked profile and still removes its own", async () => {
+		// A's profile holds a read-only subdir, so every removal attempt (shutdown's and the `close`
+		// listener's, whenever it runs) fails and the entry stays tracked. Stopping B must then walk past
+		// that entry, owned by a different process, in `profileDirOf` instead of racing a listener.
+		await testing.performLaunchBrowser({});
+		const { profile: stale } = JSON.parse(fs.readFileSync(log, "utf8"));
+		const locked = path.join(stale, "locked");
+		fs.mkdirSync(locked);
+		fs.writeFileSync(path.join(locked, "file"), "");
+		fs.chmodSync(locked, 0o555);
+		try {
+			await shutdownComputerUseSession();
+			assert(fs.existsSync(stale), "profile removal unexpectedly succeeded under a read-only subdir (root?)");
+			await testing.performLaunchBrowser({});
+			const { profile } = JSON.parse(fs.readFileSync(log, "utf8"));
+			assert.notEqual(profile, stale);
+			await shutdownComputerUseSession();
+			assert(!fs.existsSync(profile), "session shutdown returned before removing the profile dir");
+			assert(fs.existsSync(stale), "stopping B removed A's tracked profile");
+		} finally {
+			fs.chmodSync(locked, 0o755);
+		}
+		testing.removeProfileDirsOnExit();
+		assert(!fs.existsSync(stale), "exit hook did not remove the stale profile dir");
+	});
+
 	test("an aborted launch stops the browser and removes its profile", async () => {
 		const before = new Set(fs.readdirSync(tmp));
 		const controller = new AbortController();
