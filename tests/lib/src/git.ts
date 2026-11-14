@@ -1,3 +1,4 @@
+/** Disposable git repositories with a fixed identity and no signing, for real-git scenarios. */
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

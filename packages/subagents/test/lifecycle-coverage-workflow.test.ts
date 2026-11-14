@@ -1,16 +1,11 @@
 /** Real worker protocol failures and cancellation without timer-based orchestration. */
 import { setImmediate } from "node:timers/promises";
+import { deferred } from "@nredd/pi-test-lib/deferred";
 import { describe, expect, it, vi } from "vitest";
 import { assertBoundarySafe, runWorkflow, type WorkflowControl, type WorkflowHost, type WorkflowSpawnResult } from "../src/workflow/runtime.js";
 
 const HEAD = 'export const meta = {name: "lifecycle", description: "worker boundaries"};\n';
 const host = (): WorkflowHost => ({ spawnAgent: vi.fn(async request => ({ ok: true, text: request.prompt })), abortAgent: vi.fn() });
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve };
-}
 
 describe("workflow lifecycle boundaries", () => {
   it.each([
