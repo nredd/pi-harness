@@ -1213,14 +1213,14 @@ var SubagentScheduler = class _SubagentScheduler {
         else this.inFlight.delete(id);
       }
       const next = this.getNextRun(id);
-      const current = store.get(id);
-      store.update(id, {
+      const target = this.store?.get(id) ? this.store : store;
+      const current = target.get(id);
+      const superseded = current?.runAgentId !== void 0 && current.runAgentId !== agentId;
+      target.update(id, {
         lastRun: new Date(this.clock.now()).toISOString(),
-        lastStatus: status,
-        runPid: void 0,
-        runAgentId: void 0,
         runCount: (current?.runCount ?? 0) + 1,
-        nextRun: next
+        nextRun: next,
+        ...superseded ? {} : { lastStatus: status, runPid: void 0, runAgentId: void 0 }
       });
     };
     Promise.resolve(manager.getRecord(agentId)?.startGate).then(() => manager.awaitStartup(agentId)).then(() => manager.getRecord(agentId)?.promise).then(() => {

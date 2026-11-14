@@ -623,6 +623,41 @@ describe("SubagentScheduler — fire path", () => {
       expect(scheduler.list()[0]?.lastStatus).toBe("error");
     });
 
+    it("a run settling after a re-bind frees the name through the new store", async () => {
+      let finish: () => void = () => {};
+      manager.getRecord.mockImplementation(() => ({
+        status: "running", promise: new Promise<void>(r => { finish = r; }),
+      }));
+      addOneShot();
+      vi.advanceTimersByTime(2_000);
+      scheduler.stop();
+      const fresh = new ScheduleStore(join(tmp, "s.json"));
+      scheduler.start(pi, ctx, manager, fresh);
+      manager.getRecord.mockImplementation(() => ({ status: "completed", promise: Promise.resolve("") }));
+      finish();
+      await vi.waitFor(() => expect(fresh.list()[0]?.lastStatus).toBe("success"));
+      expect(() => again(scheduler)).not.toThrow();
+    });
+
+    it("an older overlapping run settling leaves the live newer run's status and owner", async () => {
+      const finishers = new Map<string, () => void>();
+      const promises = new Map<string, Promise<void>>();
+      manager.spawn.mockReturnValueOnce("a1").mockReturnValueOnce("a2");
+      manager.getRecord.mockImplementation((id: string) => {
+        if (!promises.has(id)) promises.set(id, new Promise<void>(r => { finishers.set(id, r); }));
+        return { status: "running", promise: promises.get(id) };
+      });
+      const job = scheduler.addJob({
+        name: "Over", description: "Over", schedule: "1s",
+        subagent_type: "general-purpose", prompt: "x",
+      });
+      vi.advanceTimersByTime(2_000);
+      expect(manager.spawn).toHaveBeenCalledTimes(2);
+      finishers.get("a1")!();
+      await vi.waitFor(() => expect(store.get(job.id)?.runCount).toBe(1));
+      expect(store.get(job.id)).toMatchObject({ lastStatus: "running", runAgentId: "a2" });
+    });
+
     it("settling clears the owner", async () => {
       manager.getRecord.mockImplementation(() => ({ status: "completed", promise: Promise.resolve("") }));
       const job = addOneShot();
