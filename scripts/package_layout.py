@@ -146,8 +146,8 @@ DENIED_SCRIPT_NAMES = frozenset({"test:upstream-sync", "test:sync-reverts"})
 SCRIPT_NAMES = frozenset(
     {"lint", "format", "typecheck", "test", "test:bun", "check", "build", "prepack", "pretest", "bench"}
 )
-# Root home of the shared toolchain (`runtime-builder.mjs`, `run-vitest.ts`): importing it is no escape.
-SHARED_TOOLCHAIN = "scripts"
+# Root shared-toolchain modules a package may import (#889/#890); any other root path is an escape.
+SHARED_TOOLCHAIN = frozenset({"scripts/runtime-builder.mjs", "scripts/run-vitest.ts"})
 CODE_SUFFIXES = frozenset({".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"})
 STRAY_TEST_SUFFIXES = (".test.mjs", ".test.js", ".test.mts", ".test.cts", ".test.tsx", ".test.jsx")
 # A test is named for the behavior it pins: not a ticket (`issue-302-repro`) and not a coverage campaign
@@ -285,7 +285,7 @@ def import_escapes(package: str, path: str, root: Path) -> Iterable[Violation]:
     for specifier in sorted(set(RELATIVE_SPECIFIER.findall(text))):
         target = posixpath.normpath(posixpath.join(directory, specifier))
         if target == ".." or target.startswith("../"):
-            if posixpath.normpath(posixpath.join(package, target)).startswith(f"{SHARED_TOOLCHAIN}/"):
+            if posixpath.normpath(posixpath.join(package, target)) in SHARED_TOOLCHAIN:
                 continue
             yield Violation(package, path, f"import-escape {specifier}")
 

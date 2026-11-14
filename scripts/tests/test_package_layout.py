@@ -263,6 +263,8 @@ def test_missing_required_file_fails(repo: Path, path: str) -> None:
     [
         ("../../plan-mode/scripts/runtime-builder.mjs", True),
         ("../../../scripts/runtime-builder.mjs", False),
+        ("../../../scripts/run-vitest.ts", False),
+        ("../../../scripts/merge-pr.ts", True),
         ("../../../scripts/../node_modules/a/b.js", True),
         ("../../../scriptsx/a.mjs", True),
         ("../../../node_modules/a/b.js", True),
