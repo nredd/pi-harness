@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test, vi } from "vitest";
 import planMode from "../src/plan-mode.js";
 import * as settings from "../src/settings.js";
-import { createMockContext, createMockPi } from "./support.js";
+import { createPlanContext, createPlanPi } from "./support.js";
 
 /** Public debounce expectation, deliberately independent of the implementation constant. */
 const expectedDebounceWindowMs = 75;
@@ -44,10 +44,10 @@ test("watch bursts cancel older reloads and watcher errors cancel pending work",
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   try {
     await writeFile(settingsPath, JSON.stringify({ thinkingLevel: "low" }));
-    const mock = createMockPi({ activeTools: ["read"], thinkingLevel: "off" });
+    const mock = createPlanPi({ activeTools: ["read"], thinkingLevel: "off" });
     planMode(mock.pi, { settingsPath });
-    const context = createMockContext();
-    await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+    const context = createPlanContext();
+    await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
     assert.ok(watchFixture.callback, "session startup must install the watcher before events are delivered");
     await writeFile(settingsPath, JSON.stringify({ thinkingLevel: "high" }));
     watchFixture.callback("change", "settings.json");
@@ -72,7 +72,7 @@ test("watch bursts cancel older reloads and watcher errors cancel pending work",
     await mock.commands.get("plan")?.handler("start", context.ctx);
     assert.equal(mock.thinkingLevel, "high", "an errored watch must cancel its pending reload");
     assert.equal(reads.length, 2, "cancelled reload must not start another filesystem read");
-    await mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
+    await mock.handlers.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
     assert.equal(closed, 1, "shutdown must not close an already stopped watcher twice");
   } finally {
     vi.useRealTimers();
@@ -92,10 +92,10 @@ test("watch events for other files or without a file name never reload settings"
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   try {
     await writeFile(settingsPath, JSON.stringify({ thinkingLevel: "low" }));
-    const mock = createMockPi({ activeTools: ["read"], thinkingLevel: "off" });
+    const mock = createPlanPi({ activeTools: ["read"], thinkingLevel: "off" });
     planMode(mock.pi, { settingsPath });
-    const context = createMockContext();
-    await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+    const context = createPlanContext();
+    await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
     assert.ok(watchFixture.callback, "session startup must install the watcher before events are delivered");
     const startupReads = readSpy.mock.calls.length;
 

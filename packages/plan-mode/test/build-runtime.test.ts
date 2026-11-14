@@ -11,7 +11,7 @@ import {
   type RuntimeBuilder,
   registerRuntimeBuilderContract,
 } from "./harness/runtime-builder-contract.js";
-import { builtinTool, createMockContext, extensionTool } from "./harness/support.js";
+import { builtinTool, createPlanContext, extensionTool } from "./harness/support.js";
 import { jitiRuntimeLoadBudgetMs, jitiRuntimeLoadTestName } from "./harness/test-timeout-policy.js";
 import { nativeTool } from "./tool-exposure-support.js";
 
@@ -505,13 +505,13 @@ test(jitiRuntimeLoadTestName, { timeout: jitiRuntimeLoadBudgetMs }, async () => 
         getSystemPromptOptions: () => ({ cwd: root }),
       } as never,
     );
-    const mockContext = createMockContext({
+    const mockContext = createPlanContext({
       mode: "tui",
       hasUI: true,
       cwd: root,
       sessionManager,
     });
-    runner.setUIContext((mockContext.ctx as { ui: never }).ui, "tui");
+    runner.setUIContext((mockContext.ctx as unknown as { ui: never }).ui, "tui");
     const errors: unknown[] = [];
     runner.onError((error) => errors.push(error));
     await runner.emit({ type: "session_start", reason: "startup" });
@@ -522,15 +522,15 @@ test(jitiRuntimeLoadTestName, { timeout: jitiRuntimeLoadBudgetMs }, async () => 
       { kind: "select", response: "[ ] mcp__docs__read" },
       { kind: "select", response: undefined },
     ]);
-    const rpcContext = createMockContext({ mode: "rpc", hasUI: true, cwd: root, sessionManager, ...rpc.ui });
-    runner.setUIContext((rpcContext.ctx as { ui: never }).ui, "rpc");
+    const rpcContext = createPlanContext({ mode: "rpc", hasUI: true, cwd: root, sessionManager, ...rpc.ui });
+    runner.setUIContext((rpcContext.ctx as unknown as { ui: never }).ui, "rpc");
     await command.handler("settings", runner.createCommandContext());
     rpc.assertConsumed();
     assert.deepEqual(JSON.parse(await readFile(join(agentDir, "pi-plan-mode.json"), "utf8")).defaultPlanTools, [
       "read",
       "mcp__docs__read",
     ]);
-    runner.setUIContext((mockContext.ctx as { ui: never }).ui, "tui");
+    runner.setUIContext((mockContext.ctx as unknown as { ui: never }).ui, "tui");
     await command.handler("start", runner.createCommandContext());
     const complete = runner.getToolDefinition("plan_mode_complete");
     assert.ok(complete);

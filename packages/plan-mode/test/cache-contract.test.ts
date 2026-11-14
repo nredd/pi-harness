@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import planMode from "../src/plan-mode.js";
-import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
+import { builtinTool, createPlanContext, createPlanPi, extensionTool } from "./support.js";
 import { nativeTool } from "./tool-exposure-support.js";
 
 interface CapturedRequest {
@@ -23,19 +23,19 @@ interface CapturedRequest {
 
 async function captureRequest(
   phase: CapturedRequest["phase"],
-  mock: ReturnType<typeof createMockPi>,
-  ctx: ReturnType<typeof createMockContext>["ctx"],
+  mock: ReturnType<typeof createPlanPi>,
+  ctx: ReturnType<typeof createPlanContext>["ctx"],
   messages: unknown[],
 ): Promise<CapturedRequest> {
   const baseSystemPrompt = "stable base system prompt";
-  const beforeStart = mock.events.get("before_agent_start")?.[0];
-  const contextHook = mock.events.get("context")?.[0];
+  const beforeStart = mock.handlers.get("before_agent_start")?.[0];
+  const contextHook = mock.handlers.get("context")?.[0];
   const beforeResult = (await beforeStart?.({ prompt: phase, systemPrompt: baseSystemPrompt }, ctx)) as
     | { systemPrompt?: string }
     | undefined;
   const contextResult = (await contextHook?.({ messages }, ctx)) as { messages?: unknown[] } | undefined;
-  const activeTools = mock.rawPi.getActiveTools();
-  const allTools = [...mock.rawPi.getAllTools(), ...mock.tools];
+  const activeTools = mock.pi.getActiveTools();
+  const allTools = [...mock.pi.getAllTools(), ...mock.tools.values()];
   const toolByName = new Map(
     allTools.map((tool) => [(tool as { name: string }).name, tool as Record<string, unknown>]),
   );
@@ -71,8 +71,8 @@ async function captureRequest(
   };
 }
 
-async function completePlan(mock: ReturnType<typeof createMockPi>, ctx: unknown) {
-  const complete = mock.tools.find((tool) => tool.name === "plan_mode_complete")?.execute as
+async function completePlan(mock: ReturnType<typeof createPlanPi>, ctx: unknown) {
+  const complete = [...mock.tools.values()].find((tool) => tool.name === "plan_mode_complete")?.execute as
     | ((...args: unknown[]) => Promise<unknown>)
     | undefined;
   assert.ok(complete);
@@ -81,10 +81,10 @@ async function completePlan(mock: ReturnType<typeof createMockPi>, ctx: unknown)
 
 test("first-context policy resolution does not mutate late active tool schemas", async () => {
   const allTools = [builtinTool("read")];
-  const mock = createMockPi({ activeTools: ["read"], allTools });
+  const mock = createPlanPi({ activeTools: ["read"], allTools });
   const activeToolWrites: string[][] = [];
-  const setActiveTools = mock.rawPi.setActiveTools.bind(mock.rawPi);
-  mock.rawPi.setActiveTools = (names) => {
+  const setActiveTools = mock.pi.setActiveTools.bind(mock.pi);
+  mock.pi.setActiveTools = (names) => {
     activeToolWrites.push([...names]);
     setActiveTools(names);
   };
@@ -94,14 +94,14 @@ test("first-context policy resolution does not mutate late active tool schemas",
       settings: { thinkingLevel: "inherit" as const, defaultPlanTools: ["late_tool"] },
     }),
   });
-  const context = createMockContext();
-  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  const context = createPlanContext();
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
   allTools.push(extensionTool("late_tool"));
-  setActiveTools([...mock.rawPi.getActiveTools(), "late_tool"]);
-  const activeBeforeContext = mock.rawPi.getActiveTools();
+  setActiveTools([...mock.pi.getActiveTools(), "late_tool"]);
+  const activeBeforeContext = mock.pi.getActiveTools();
   const definitionsBeforeContext = activeBeforeContext.map((name) => {
-    const tool = [...allTools, ...mock.tools].find((candidate) => candidate.name === name) as
+    const tool = [...allTools, ...mock.tools.values()].find((candidate) => candidate.name === name) as
       | Record<string, unknown>
       | undefined;
     return {
@@ -127,9 +127,9 @@ test("native callable admission preserves normalized request definitions and ret
     nativeTool("codemode", "model-only", "codemode"),
     nativeTool("mcp__docs__read", "codemode"),
   ];
-  const mock = createMockPi({ activeTools: ["read", "codemode"], allTools });
+  const mock = createPlanPi({ activeTools: ["read", "codemode"], allTools });
   const writes: string[][] = [];
-  mock.rawPi.setActiveTools = (names) => {
+  mock.pi.setActiveTools = (names) => {
     writes.push(names);
   };
   planMode(mock.pi, {
@@ -138,8 +138,8 @@ test("native callable admission preserves normalized request definitions and ret
       settings: { thinkingLevel: "inherit" as const, defaultPlanTools: ["codemode", "mcp__docs__read"] },
     }),
   });
-  const context = createMockContext();
-  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  const context = createPlanContext();
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
   try {
     const prefix = [
       { role: "user", content: "Before planning" },
@@ -169,21 +169,21 @@ test("native callable admission preserves normalized request definitions and ret
     assert.match(JSON.stringify(contract), /nested call/);
     assert.deepEqual(writes, []);
   } finally {
-    await mock.events.get("session_shutdown")?.[0]?.({ reason: "exit" }, context.ctx);
+    await mock.handlers.get("session_shutdown")?.[0]?.({ reason: "exit" }, context.ctx);
   }
 });
 
 test("stable Plan helper schema keeps request fields and inactive metadata safe", async () => {
   const allTools = [builtinTool("read"), builtinTool("bash"), builtinTool("edit"), builtinTool("write")];
-  const mock = createMockPi({ activeTools: ["read", "bash", "edit", "write"], allTools });
+  const mock = createPlanPi({ activeTools: ["read", "bash", "edit", "write"], allTools });
   planMode(mock.pi, {
     readSettings: async () => ({
       kind: "loaded" as const,
       settings: { thinkingLevel: "inherit" as const },
     }),
   });
-  const context = createMockContext();
-  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  const context = createPlanContext();
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
 
   const normal = await captureRequest("normal", mock, context.ctx, [{ role: "user", content: "A" }]);
   await mock.commands.get("plan")?.handler("start", context.ctx);

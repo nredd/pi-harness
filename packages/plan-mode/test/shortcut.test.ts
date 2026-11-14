@@ -20,7 +20,7 @@ import { test, vi } from "vitest";
 import planMode from "../src/plan-mode.js";
 import * as settingsModule from "../src/settings.js";
 import { createFakeSettingsWatch } from "./settings-watch-support.js";
-import { createMockContext, createMockPi } from "./support.js";
+import { createPlanContext, createPlanPi } from "./support.js";
 
 const KEY = "ctrl+alt+p";
 const NEXT_KEY = "ctrl+alt+y";
@@ -50,9 +50,9 @@ async function createShortcutFixture(initial: KeyId | undefined) {
   const settingsPath = join(root, "pi-plan-mode.json");
   const tui = createTuiHarness();
   const sessionManager = SessionManager.inMemory(root);
-  const context = createMockContext({ cwd: root, mode: "tui", hasUI: true, sessionManager, custom: tui.custom });
+  const context = createPlanContext({ cwd: root, mode: "tui", hasUI: true, sessionManager, custom: tui.custom });
   const ctx = context.ctx as ExtensionContext;
-  const mock = createMockPi({ activeTools: ["read", "write"], thinkingLevel: "low" });
+  const mock = createPlanPi({ activeTools: ["read", "write"], thinkingLevel: "low" });
   const errors: unknown[] = [];
   const watch = createFakeSettingsWatch();
   const reads: settingsModule.PlanModeSettingsLoadResult[] = [];
@@ -93,7 +93,7 @@ async function createShortcutFixture(initial: KeyId | undefined) {
     assert.deepEqual(loaded.errors, []);
     assert.equal(loaded.extensions.length, 1);
     runner = new ExtensionRunner(loaded.extensions, loaded.runtime, root, sessionManager, ctx.modelRegistry as never);
-    runner.bindCore({ ...mock.rawPi, refreshTools() {}, getCommands: () => [], setLabel() {} } as never, {
+    runner.bindCore({ ...mock.pi, refreshTools() {}, getCommands: () => [], setLabel() {} } as never, {
       getModel: () => undefined,
       getScopedModels: () => [],
       isIdle: () => true,
@@ -216,7 +216,7 @@ for (const boundary of ["shutdown", "replacement"] as const) {
       resolveRead = resolve;
     });
     let reads = 0;
-    const mock = createMockPi();
+    const mock = createPlanPi();
     planMode(mock.pi, {
       readSettings: () =>
         ++reads === 1
@@ -226,13 +226,13 @@ for (const boundary of ["shutdown", "replacement"] as const) {
               settings: { thinkingLevel: "inherit", toggleShortcut: NEXT_KEY },
             }),
     });
-    const oldContext = createMockContext({ mode: "tui", hasUI: true });
-    const start = mock.events.get("session_start")?.[0];
-    const shutdown = mock.events.get("session_shutdown")?.[0];
+    const oldContext = createPlanContext({ mode: "tui", hasUI: true });
+    const start = mock.handlers.get("session_start")?.[0];
+    const shutdown = mock.handlers.get("session_shutdown")?.[0];
     assert.ok(start);
     assert.ok(shutdown);
     const pendingStart = start({ reason: "startup" }, oldContext.ctx);
-    const nextContext = createMockContext({ mode: "tui", hasUI: true });
+    const nextContext = createPlanContext({ mode: "tui", hasUI: true });
     if (boundary === "replacement") await start({ reason: "new" }, nextContext.ctx);
     else await shutdown({ reason: "quit" }, oldContext.ctx);
     resolveRead({ kind: "loaded", settings: { thinkingLevel: "inherit", toggleShortcut: KEY } });

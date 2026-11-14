@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DefaultResourceLoader, ExtensionRunner, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
-import { builtinTool, createMockContext, extensionTool } from "./harness/support.js";
+import { builtinTool, createPlanContext, extensionTool } from "./harness/support.js";
 import { packagePath } from "./package-path.js";
 
 const EVENT_RECORDER = Symbol.for("pi-plan-mode.issue-1263-events");
@@ -122,7 +122,7 @@ export default function laterExtension(pi) {
         getSystemPromptOptions: () => ({ cwd: root }),
       } as never,
     );
-    const mockContext = createMockContext({
+    const mockContext = createPlanContext({
       mode: "rpc",
       hasUI: true,
       select: async (_title: string, options: string[]) => {
@@ -131,7 +131,7 @@ export default function laterExtension(pi) {
         return undefined;
       },
     });
-    runner.setUIContext((mockContext.ctx as { ui: never }).ui, "rpc");
+    runner.setUIContext((mockContext.ctx as unknown as { ui: never }).ui, "rpc");
     const handoffFinished = deferred<void>();
     let setupCalls = 0;
     let kickoffCalls = 0;
@@ -148,7 +148,7 @@ export default function laterExtension(pi) {
         } as never);
         await options?.withSession?.({
           sessionManager: { getBranch: () => [] },
-          ui: (mockContext.ctx as { ui: never }).ui,
+          ui: (mockContext.ctx as unknown as { ui: never }).ui,
           sendUserMessage: async () => {
             kickoffCalls += 1;
           },

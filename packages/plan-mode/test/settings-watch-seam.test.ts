@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { expect, test, vi } from "vitest";
 import planMode from "../src/plan-mode.js";
 import { createFakeSettingsWatch } from "./settings-watch-support.js";
-import { createMockContext, createMockPi } from "./support.js";
+import { createPlanContext, createPlanPi } from "./support.js";
 
 test("an injected watcher delivers reloads and is closed on shutdown", async () => {
   const directory = await mkdtemp(join(tmpdir(), "plan-watch-seam-"));
@@ -13,11 +13,11 @@ test("an injected watcher delivers reloads and is closed on shutdown", async () 
   const watch = createFakeSettingsWatch();
   try {
     await writeFile(settingsPath, JSON.stringify({ thinkingLevel: "low" }));
-    const mock = createMockPi({ activeTools: ["read"], thinkingLevel: "off" });
+    const mock = createPlanPi({ activeTools: ["read"], thinkingLevel: "off" });
     planMode(mock.pi, { settingsPath, watchSettingsDirectory: watch.watchSettingsDirectory });
-    const context = createMockContext();
+    const context = createPlanContext();
     assert.throws(() => watch.trigger(settingsPath), /no open settings watcher/);
-    await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+    await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
     assert.equal(watch.openCount(), 1);
     await writeFile(settingsPath, JSON.stringify({ thinkingLevel: "high" }));
     watch.trigger(settingsPath);
@@ -27,7 +27,7 @@ test("an injected watcher delivers reloads and is closed on shutdown", async () 
       await mock.commands.get("plan")?.handler("off", context.ctx);
       expect(level).toBe("high");
     });
-    await mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
+    await mock.handlers.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
     assert.equal(watch.openCount(), 0);
   } finally {
     await rm(directory, { recursive: true, force: true });

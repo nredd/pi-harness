@@ -1,26 +1,25 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import planMode from "../src/plan-mode.js";
-import { createMockContext, createMockPi } from "./support.js";
+import { createPlanContext, createPlanPi } from "./support.js";
 
 test("issue 302: history-only implementation stays ordinary context when Plan Mode restarts", async () => {
-  const mock = createMockPi({ activeTools: ["read", "bash", "custom"] });
+  const mock = createPlanPi({ activeTools: ["read", "bash", "custom"] });
   planMode(mock.pi);
-  const context = createMockContext();
+  const context = createPlanContext();
 
   await mock.commands.get("plan")?.handler("start", context.ctx);
-  const executeComplete = mock.tools.find((candidate) => candidate.name === "plan_mode_complete")?.execute as
-    | ((...args: unknown[]) => Promise<unknown>)
-    | undefined;
+  const executeComplete = [...mock.tools.values()].find((candidate) => candidate.name === "plan_mode_complete")
+    ?.execute as ((...args: unknown[]) => Promise<unknown>) | undefined;
   assert.ok(executeComplete);
   await executeComplete("complete", { plan: "# Plan Mode repro" }, undefined, undefined, context.ctx);
 
   await mock.commands.get("plan")?.handler("implement", context.ctx);
-  const implementationHandoff = mock.sentUserMessages.at(-1)?.text ?? "";
+  const implementationHandoff = mock.sentUserMessages.at(-1)?.content ?? "";
   assert.equal(implementationHandoff, "Implement the plan.");
   assert.equal(context.statuses.get("plan-mode"), undefined);
 
-  const contextHook = mock.events.get("context")?.[0];
+  const contextHook = mock.handlers.get("context")?.[0];
   assert.ok(contextHook);
   const implementationMessages = [
     { role: "user", content: "Plan a one-line README change." },
@@ -35,9 +34,9 @@ test("issue 302: history-only implementation stays ordinary context when Plan Mo
 
   await mock.commands.get("plan")?.handler("start", context.ctx);
   assert.equal(context.statuses.get("plan-mode"), "plan active");
-  assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "custom", "plan_mode_question", "plan_mode_complete"]);
+  assert.deepEqual(mock.pi.getActiveTools(), ["read", "bash", "custom", "plan_mode_question", "plan_mode_complete"]);
 
-  const beforeStart = mock.events.get("before_agent_start")?.[0];
+  const beforeStart = mock.handlers.get("before_agent_start")?.[0];
   assert.ok(beforeStart);
   const promptResult = beforeStart({ systemPrompt: "base" }, context.ctx) as { systemPrompt?: string } | undefined;
   assert.equal(promptResult?.systemPrompt, undefined);

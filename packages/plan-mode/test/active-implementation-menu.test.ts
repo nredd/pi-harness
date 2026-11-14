@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { showActiveImplementationMenu } from "../src/active-implementation-menu.js";
-import { createMockContext } from "./support.js";
+import { createPlanContext } from "./support.js";
 
 function activeMenuOptions(overrides: Partial<Parameters<typeof showActiveImplementationMenu>[1]> = {}) {
   return {
@@ -24,7 +24,7 @@ test("active implementation settings stay open, close, or reject stale results",
     const lifecycle = new AbortController();
     let selections = 0;
     let settings = 0;
-    const context = createMockContext({
+    const context = createPlanContext({
       hasUI: true,
       mode: "rpc",
       select: async () => (++selections === 1 ? "Settings" : undefined),
@@ -52,7 +52,7 @@ test("active implementation export closes on success and keeps the input open wh
     let inputs = 0;
     let selections = 0;
     const exported: string[] = [];
-    const context = createMockContext({
+    const context = createPlanContext({
       hasUI: true,
       mode: "rpc",
       select: async () => (++selections === 1 ? "Export plan…" : undefined),

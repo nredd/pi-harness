@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { createPlanActionController } from "../src/plan-action-controller.js";
 import { showSavedPlanMenu } from "../src/saved-plan-menu.js";
-import { createMockContext } from "./harness/support.js";
+import { createPlanContext } from "./harness/support.js";
 
 type InteractiveUi = typeof import("../src/interactive-ui.js");
 
 test("action controller forwards saved, ready, and current menu callbacks with their original ownership", async () => {
-  const context = createMockContext({ hasUI: true });
+  const context = createPlanContext({ hasUI: true });
   const owner = new AbortController();
   const action = new AbortController();
   const calls: string[] = [];
@@ -102,7 +102,7 @@ test("action controller forwards saved, ready, and current menu callbacks with t
   await controller.showSaved(context.ctx);
   await controller.showReady(context.ctx, () => true);
   await controller.showCurrent(context.ctx);
-  const headless = createMockContext({ hasUI: false });
+  const headless = createPlanContext({ hasUI: false });
   await controller.showCurrent(headless.ctx);
   assert.deepEqual(headless.notifications, [{ message: "ready", level: "info" }]);
   assert.deepEqual(calls, [
@@ -133,7 +133,7 @@ test("saved-plan settings stays, closes, or rejects stale results", async () => 
     let current = true;
     let selections = 0;
     let settings = 0;
-    const context = createMockContext({
+    const context = createPlanContext({
       hasUI: true,
       mode: "rpc",
       select: async () => (++selections === 1 ? "Settings" : undefined),
@@ -162,7 +162,7 @@ test("saved-plan settings stays, closes, or rejects stale results", async () => 
 });
 
 test("saved-plan menu rejects a headless caller with available command routes", async () => {
-  const context = createMockContext({ hasUI: false });
+  const context = createPlanContext({ hasUI: false });
   await assert.rejects(
     showSavedPlanMenu(context.ctx, {
       statusText: "saved",

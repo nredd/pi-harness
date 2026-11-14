@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import planMode from "../src/plan-mode.js";
-import { builtinTool, createMockContext, createMockPi } from "./support.js";
+import { builtinTool, createPlanContext, createPlanPi } from "./support.js";
 
 /** Commands can replace a workflow while first-input runtime application awaits the host model. */
 for (const snapshotEnabled of [false, true]) {
@@ -25,17 +25,17 @@ for (const snapshotEnabled of [false, true]) {
         },
       },
     ];
-    const mock = createMockPi({
+    const mock = createPlanPi({
       activeTools: ["read"],
       allTools: ["read", "find", "plan_mode_question", "plan_mode_complete"].map(builtinTool),
     });
-    mock.rawPi.setModel = async () => {
+    mock.pi.setModel = async () => {
       modelStarted();
       await gate;
       return true;
     };
     planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-    const context = createMockContext({
+    const context = createPlanContext({
       hasUI: true,
       sessionManager: { getBranch: () => branch, getEntries: () => branch },
       modelRegistry: {
@@ -43,13 +43,13 @@ for (const snapshotEnabled of [false, true]) {
         getApiKeyAndHeaders: async () => ({ ok: true as const }),
       },
     });
-    await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
-    const input = mock.events.get("input")?.[0];
+    await mock.handlers.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+    const input = mock.handlers.get("input")?.[0];
     const command = mock.commands.get("plan");
-    const transform = mock.events.get("context")?.[0];
-    const call = mock.events.get("tool_call")?.[0];
+    const transform = mock.handlers.get("context")?.[0];
+    const call = mock.handlers.get("tool_call")?.[0];
     assert.ok(input && command && transform && call);
-    const appendEntry = mock.rawPi.appendEntry;
+    const appendEntry = mock.pi.appendEntry;
     const leading = Promise.resolve(input({ text: "implement", source: "rpc" }, context.ctx));
     try {
       if (snapshotEnabled) {
@@ -61,13 +61,13 @@ for (const snapshotEnabled of [false, true]) {
       await started;
       if (snapshotEnabled) await command.handler("off", context.ctx);
       await command.handler("start", context.ctx);
-      mock.rawPi.setActiveTools(["read", "find", "plan_mode_question", "plan_mode_complete"]);
-      mock.rawPi.appendEntry = () => {
+      mock.pi.setActiveTools(["read", "find", "plan_mode_question", "plan_mode_complete"]);
+      mock.pi.appendEntry = () => {
         throw new Error("disk full during runtime intent consumption");
       };
       releaseModel();
       assert.deepEqual(await leading, { action: "handled" });
-      mock.rawPi.appendEntry = appendEntry;
+      mock.pi.appendEntry = appendEntry;
       assert.match(context.notifications.at(-1)?.message ?? "", /one-shot state could not be consumed/u);
       const before = mock.entries.length;
       await transform({ messages: [] }, context.ctx);
@@ -83,8 +83,8 @@ for (const snapshotEnabled of [false, true]) {
     } finally {
       releaseModel();
       await Promise.allSettled([leading]);
-      mock.rawPi.appendEntry = appendEntry;
-      await mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
+      mock.pi.appendEntry = appendEntry;
+      await mock.handlers.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
     }
   });
 }

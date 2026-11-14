@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import planMode from "../src/plan-mode.js";
-import { createMockContext, createMockPi } from "./support.js";
+import { createPlanContext, createPlanPi } from "./support.js";
 
 for (const failure of ["lookup", "missing", "auth-result", "auth-throw", "apply-throw", "thinking"] as const) {
   test(`restored implementation contains ${failure} failure and consumes its one-shot intent`, async () => {
-    const mock = createMockPi({ activeTools: ["read"], thinkingLevel: "low" });
+    const mock = createPlanPi({ activeTools: ["read"], thinkingLevel: "low" });
     const model = { provider: "fixture", id: "target" };
     const entry = {
       type: "custom",
@@ -23,15 +23,15 @@ for (const failure of ["lookup", "missing", "auth-result", "auth-throw", "apply-
     const branch = [entry];
     const attemptedModels: unknown[] = [];
     if (failure === "apply-throw")
-      mock.rawPi.setModel = async (target) => {
+      mock.pi.setModel = async (target) => {
         attemptedModels.push(target);
         throw new Error("apply denied");
       };
     if (failure === "thinking")
-      mock.rawPi.setThinkingLevel = () => {
+      mock.pi.setThinkingLevel = () => {
         throw new Error("thinking denied");
       };
-    const context = createMockContext({
+    const context = createPlanContext({
       sessionManager: { getBranch: () => branch, getEntries: () => branch },
       modelRegistry: {
         find: () => {
@@ -47,7 +47,7 @@ for (const failure of ["lookup", "missing", "auth-result", "auth-throw", "apply-
       },
     });
     planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-    await mock.events.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
+    await mock.handlers.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
     const expected = {
       lookup: /could not be resolved: lookup denied/u,
       missing: /is no longer available/u,
@@ -67,25 +67,25 @@ for (const failure of ["lookup", "missing", "auth-result", "auth-throw", "apply-
     assert.equal(mock.setModels.length, failure === "thinking" ? 1 : 0);
     assert.deepEqual(attemptedModels, failure === "apply-throw" ? [model] : []);
     const warnings = context.notifications.length;
-    await mock.events.get("input")?.[0]?.({ text: "implement", source: "user" }, context.ctx);
+    await mock.handlers.get("input")?.[0]?.({ text: "implement", source: "user" }, context.ctx);
     assert.equal(context.notifications.length, warnings, "consumed intent must not retry on input");
     assert.deepEqual(attemptedModels, failure === "apply-throw" ? [model] : []);
   });
 }
 
 test("a throwing tool registry falls back safely instead of admitting unknown tools", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
-  mock.rawPi.getAllTools = () => {
+  const mock = createPlanPi({ activeTools: ["read"] });
+  mock.pi.getAllTools = () => {
     throw new Error("registry unavailable");
   };
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-  const context = createMockContext();
+  const context = createPlanContext();
   await mock.commands.get("plan")?.handler("start", context.ctx);
-  const blocked = (await mock.events.get("tool_call")?.[0]?.({ toolName: "read", input: {} }, context.ctx)) as {
+  const blocked = (await mock.handlers.get("tool_call")?.[0]?.({ toolName: "read", input: {} }, context.ctx)) as {
     block?: boolean;
   };
   assert.equal(blocked?.block, true, "registry failure must block read");
-  const unknown = (await mock.events.get("tool_call")?.[0]?.(
+  const unknown = (await mock.handlers.get("tool_call")?.[0]?.(
     { toolName: "unregistered_mutation", input: {} },
     context.ctx,
   )) as { block?: boolean };

@@ -4,20 +4,20 @@ import {
   showPlanModeMenu as showPlanModeMenuWithModel,
   showReadyPlanMenu as showReadyPlanMenuWithModel,
 } from "../src/plan-action-menus.js";
-import { createMockPi as createBaseMockPi } from "./harness/support.js";
+import { createPlanPi as createBasePlanPi } from "./harness/support.js";
 
 export {
   builtinTool,
   createCustomSelectorHarness,
-  createMockContext,
+  createPlanContext,
   driveCustomSelector,
   extensionTool,
 } from "./harness/support.js";
 
 const PLAN_HELPERS = ["plan_mode_question", "plan_mode_complete"];
 
-export function createMockPi(options: Parameters<typeof createBaseMockPi>[0] = {}) {
-  return createBaseMockPi({
+export function createPlanPi(options: Parameters<typeof createBasePlanPi>[0] = {}) {
+  return createBasePlanPi({
     ...options,
     activeTools: [...new Set([...(options.activeTools ?? []), ...PLAN_HELPERS])],
   });

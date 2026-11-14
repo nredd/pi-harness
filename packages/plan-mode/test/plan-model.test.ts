@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ToolInfo } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import planMode from "../src/plan-mode.js";
@@ -21,8 +21,9 @@ import {
 import { showPlanModeSettings } from "../src/settings-menu.js";
 import { type PlanModelSwitch, restorePlanModeState } from "../src/state.js";
 import { AGENT_WORKFLOW_GROUP, WORKFLOW_MUTEX_CHANNEL } from "../src/workflow-mutex.js";
-import { builtinTool, createMockContext, createMockPi } from "./support.js";
+import { builtinTool, createPlanContext, createPlanPi } from "./support.js";
 
+type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 type TestModel = { provider: string; id: string; name?: string };
 
 const STATE_ENTRY_TYPE = "plan-mode-state";
@@ -136,16 +137,16 @@ function createModelHost(
     settings?: Partial<PlanModeSettings>;
     model?: TestModel;
     catalogue?: TestModel[];
-    thinkingLevel?: string;
+    thinkingLevel?: ThinkingLevel;
     /** Thinking level Pi selects when switching to each model; absent keeps the current level. */
-    switchThinking?: Record<string, string>;
-    clampThinkingLevel?: (level: string) => string;
+    switchThinking?: Record<string, ThinkingLevel>;
+    clampThinkingLevel?: (level: ThinkingLevel) => ThinkingLevel;
     branch?: unknown[];
     select?: (title: string, options: string[]) => Promise<string | undefined>;
   } = {},
 ) {
   let current: TestModel | undefined = "model" in options ? options.model : PREVIOUS;
-  const mock = createMockPi({
+  const mock = createPlanPi({
     activeTools: ["read"],
     thinkingLevel: options.thinkingLevel ?? "medium",
     clampThinkingLevel: options.clampThinkingLevel,
@@ -161,7 +162,7 @@ function createModelHost(
     entries: [],
     messages: [],
   };
-  const context = createMockContext({
+  const context = createPlanContext({
     // RPC drives menus through `select`, like the fresh-implementation session tests.
     mode: options.select ? "rpc" : "tui",
     hasUI: true,
@@ -199,23 +200,23 @@ function createModelHost(
   Object.defineProperty(context.ctx, "model", { get: () => current, configurable: true });
 
   const emit = async (name: string, event: unknown) => {
-    for (const handler of mock.events.get(name) ?? []) await handler(event, context.ctx);
+    for (const handler of mock.handlers.get(name) ?? []) await handler(event, context.ctx);
   };
   /** What Pi's `setModel` does: switch, re-select thinking for the model, emit both events. */
   const piSetModel = async (model: TestModel) => {
-    mock.setModels.push(model);
+    mock.setModels.push(model as never);
     const previousModel = current;
     current = model;
-    const previousLevel = mock.rawPi.getThinkingLevel();
+    const previousLevel = mock.pi.getThinkingLevel();
     const level = options.switchThinking?.[`${model.provider}/${model.id}`];
     if (level !== undefined) {
-      mock.rawPi.setThinkingLevel(level);
-      await emit("thinking_level_select", { level: mock.rawPi.getThinkingLevel(), previousLevel });
+      mock.pi.setThinkingLevel(level);
+      await emit("thinking_level_select", { level: mock.pi.getThinkingLevel(), previousLevel });
     }
     await emit("model_select", { model, previousModel, source: "set" });
     return true;
   };
-  mock.rawPi.setModel = piSetModel as never;
+  mock.pi.setModel = piSetModel as never;
   planMode(mock.pi, {
     readSettings: async () => ({
       kind: "loaded" as const,
@@ -246,7 +247,7 @@ function createModelHost(
       await emit("before_agent_start", { prompt: "go", systemPrompt: "" });
     },
     async completePlan() {
-      const complete = mock.tools.find((tool) => tool.name === "plan_mode_complete")?.execute as (
+      const complete = [...mock.tools.values()].find((tool) => tool.name === "plan_mode_complete")?.execute as (
         ...args: unknown[]
       ) => Promise<unknown>;
       await complete("complete", { plan: PLAN }, undefined, undefined, context.ctx);
@@ -256,9 +257,9 @@ function createModelHost(
       current = model;
       await emit("model_select", { model, previousModel, source: "set" });
     },
-    async userSelectsThinking(level: string) {
-      const previousLevel = mock.rawPi.getThinkingLevel();
-      mock.rawPi.setThinkingLevel(level);
+    async userSelectsThinking(level: ThinkingLevel) {
+      const previousLevel = mock.pi.getThinkingLevel();
+      mock.pi.setThinkingLevel(level);
       await emit("thinking_level_select", { level, previousLevel });
     },
     async shutdown() {
@@ -304,7 +305,8 @@ for (const exit of ["exit", "save", "implement"] as const) {
     assert.equal(host.mock.thinkingLevel, "medium");
     assert.deepEqual(host.mock.setModels, [DEEP, PREVIOUS]);
     assert.equal(host.latestState()?.planModelSwitch, undefined);
-    if (exit === "implement") assert.match(host.mock.sentUserMessages.at(-1)?.text ?? "", /Implement the plan/);
+    if (exit === "implement")
+      assert.match(String(host.mock.sentUserMessages.at(-1)?.content ?? ""), /Implement the plan/);
     assert.deepEqual(host.warnings(), []);
   });
 }
@@ -387,14 +389,14 @@ test("unusable tiers warn once and Plan still starts on the current model", asyn
     {
       name: "refused",
       configure: (host) => {
-        host.mock.rawPi.setModel = async () => false;
+        host.mock.pi.setModel = async () => false;
       },
       warning: /could not be applied; using the current model\./,
     },
     {
       name: "switch throwing",
       configure: (host) => {
-        host.mock.rawPi.setModel = async () => {
+        host.mock.pi.setModel = async () => {
           throw new Error("No API key for router/deep");
         };
       },
@@ -471,7 +473,7 @@ test("reload keeps Plan on the tier and the restored state still restores on exi
 
 test("a workflow mutex refusal changes no model", async () => {
   const host = createModelHost();
-  host.mock.eventBus.on(WORKFLOW_MUTEX_CHANNEL, (payload) => {
+  host.mock.bus.on(WORKFLOW_MUTEX_CHANNEL, (payload) => {
     const attempt = payload as { group?: string; busy?: boolean };
     if (attempt.group === AGENT_WORKFLOW_GROUP) attempt.busy = true;
   });
@@ -500,7 +502,7 @@ test("leaving Plan while the switch is in flight puts the previous model back", 
 
   const inFlight = createModelHost();
   let releaseSwitch!: () => void;
-  inFlight.mock.rawPi.setModel = (async (model: TestModel) => {
+  inFlight.mock.pi.setModel = (async (model: TestModel) => {
     if (model === DEEP) await new Promise<void>((resolve) => (releaseSwitch = resolve));
     return inFlight.piSetModel(model);
   }) as never;
@@ -531,14 +533,14 @@ test("a failed restore warns, keeps the tier and still restores thinking", async
     {
       name: "refused",
       configure: (host) => {
-        host.mock.rawPi.setModel = async () => false;
+        host.mock.pi.setModel = async () => false;
       },
       warning: /^Previous model anthropic\/claude-sonnet-5-5 could not be applied; Pi stays on router\/deep\.$/,
     },
     {
       name: "switch throwing",
       configure: (host) => {
-        host.mock.rawPi.setModel = async () => {
+        host.mock.pi.setModel = async () => {
           throw new Error("No API key for anthropic");
         };
       },
@@ -601,7 +603,7 @@ test("a failed Implement-here handoff re-applies the Plan model", async () => {
   await host.plan("start");
   await host.beforeAgentStart();
   await host.completePlan();
-  host.mock.rawPi.sendUserMessage = () => {
+  host.mock.pi.sendUserMessage = () => {
     throw new Error("handoff failed");
   };
   await host.plan("implement");
@@ -619,7 +621,7 @@ test("a failed Implement-here handoff drops the stale switch when the Plan model
   await host.plan("start");
   await host.beforeAgentStart();
   await host.completePlan();
-  host.mock.rawPi.sendUserMessage = () => {
+  host.mock.pi.sendUserMessage = () => {
     throw new Error("handoff failed");
   };
   host.registry.getApiKeyAndHeaders = async (model) =>
@@ -640,7 +642,7 @@ test("a failed Implement-here handoff keeps a fixed Plan thinking level", async 
   await host.beforeAgentStart();
   assert.equal(host.mock.thinkingLevel, "xhigh");
   await host.completePlan();
-  host.mock.rawPi.sendUserMessage = () => {
+  host.mock.pi.sendUserMessage = () => {
     throw new Error("handoff failed");
   };
   await host.plan("implement");
@@ -757,7 +759,7 @@ test("Plan model settings offer router tiers and fall back to inherit", async ()
   const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-plan-model-menu-"));
   const settingsPath = join(directory, "pi-plan-mode.json");
   const tui = createTuiHarness({ width: 100, rows: 30 });
-  const context = createMockContext({
+  const context = createPlanContext({
     cwd: directory,
     mode: "tui",
     hasUI: true,

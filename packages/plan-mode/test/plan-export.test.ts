@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import planMode, { completePlanArguments } from "../src/plan-mode.js";
-import { createCustomSelectorHarness, createMockContext, createMockPi } from "./support.js";
+import { createCustomSelectorHarness, createPlanContext, createPlanPi } from "./support.js";
 
 const PLAN = "# Exported plan\n\n1. Keep the exact plan.\n2. Make it readable to the agent.";
 const STATE_ENTRY_TYPE = "plan-mode-state";
@@ -14,8 +14,8 @@ function stateEntry(data: Record<string, unknown>) {
   return { type: "custom", customType: STATE_ENTRY_TYPE, data };
 }
 
-async function completePlan(mock: ReturnType<typeof createMockPi>, ctx: ReturnType<typeof createMockContext>["ctx"]) {
-  const complete = mock.tools.find((candidate) => candidate.name === "plan_mode_complete")?.execute as
+async function completePlan(mock: ReturnType<typeof createPlanPi>, ctx: ReturnType<typeof createPlanContext>["ctx"]) {
+  const complete = [...mock.tools.values()].find((candidate) => candidate.name === "plan_mode_complete")?.execute as
     | ((...args: unknown[]) => Promise<unknown>)
     | undefined;
   assert.ok(complete);
@@ -45,7 +45,7 @@ test("plan export autocomplete exposes a path-taking public route", () => {
 
 test("ready plan export ends Plan mode without triggering a model turn", async () => {
   await withTempDirectory(async (directory) => {
-    const mock = createMockPi({
+    const mock = createPlanPi({
       activeTools: ["read", "edit"],
       thinkingLevel: "low",
     });
@@ -55,8 +55,8 @@ test("ready plan export ends Plan mode without triggering a model turn", async (
         settings: { thinkingLevel: "medium" as const },
       }),
     });
-    const context = createMockContext({ cwd: directory, hasUI: true });
-    await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+    const context = createPlanContext({ cwd: directory, hasUI: true });
+    await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
     assert.equal(mock.thinkingLevel, "medium");
     await completePlan(mock, context.ctx);
@@ -71,7 +71,7 @@ test("ready plan export ends Plan mode without triggering a model turn", async (
     assert.equal(persistedState.enabled, false);
     assert.equal(persistedState.latestPlan, undefined);
     assert.equal(persistedState.awaitingAction, false);
-    assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "edit", "plan_mode_question", "plan_mode_complete"]);
+    assert.deepEqual(mock.pi.getActiveTools(), ["read", "edit", "plan_mode_question", "plan_mode_complete"]);
     assert.equal(mock.thinkingLevel, "low");
     assert.equal(mock.sentUserMessages.length, 0);
     assert.equal(mock.sentMessages.length, 2, "Plan and Normal contracts do not trigger turns");
@@ -85,7 +85,7 @@ test("configured export defaults resolve at action time and explicit paths still
       { command: "export", expectedPath: join(directory, "plans", "default.md") },
       { command: "export explicit.md", expectedPath: join(directory, "explicit.md") },
     ]) {
-      const mock = createMockPi({ activeTools: ["read"] });
+      const mock = createPlanPi({ activeTools: ["read"] });
       planMode(mock.pi, {
         readSettings: async () => ({
           kind: "loaded" as const,
@@ -95,8 +95,8 @@ test("configured export defaults resolve at action time and explicit paths still
           },
         }),
       });
-      const context = createMockContext({ cwd: directory, hasUI: true });
-      await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+      const context = createPlanContext({ cwd: directory, hasUI: true });
+      await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
       await mock.commands.get("plan")?.handler("start", context.ctx);
       await completePlan(mock, context.ctx);
       await mock.commands.get("plan")?.handler(command, context.ctx);
@@ -111,7 +111,7 @@ test("relative configured defaults resolve against the command context cwd", asy
     const exportDirectory = join(directory, "implementation");
     await mkdir(planningDirectory);
     await mkdir(exportDirectory);
-    const mock = createMockPi({ activeTools: ["read"] });
+    const mock = createPlanPi({ activeTools: ["read"] });
     planMode(mock.pi, {
       readSettings: async () => ({
         kind: "loaded" as const,
@@ -121,12 +121,12 @@ test("relative configured defaults resolve against the command context cwd", asy
         },
       }),
     });
-    const planningContext = createMockContext({ cwd: planningDirectory, hasUI: true });
-    await mock.events.get("session_start")?.[0]?.({}, planningContext.ctx);
+    const planningContext = createPlanContext({ cwd: planningDirectory, hasUI: true });
+    await mock.handlers.get("session_start")?.[0]?.({}, planningContext.ctx);
     await mock.commands.get("plan")?.handler("start", planningContext.ctx);
     await completePlan(mock, planningContext.ctx);
 
-    const exportContext = createMockContext({ cwd: exportDirectory, hasUI: true });
+    const exportContext = createPlanContext({ cwd: exportDirectory, hasUI: true });
     await mock.commands.get("plan")?.handler("export", exportContext.ctx);
     assert.equal(await readFile(join(exportDirectory, "plans", "default.md"), "utf8"), `${PLAN}\n`);
     await assert.rejects(readFile(join(planningDirectory, "plans", "default.md"), "utf8"));
@@ -136,7 +136,7 @@ test("relative configured defaults resolve against the command context cwd", asy
 test("an active Settings save changes the next export without changing active state", async () => {
   await withTempDirectory(async (directory) => {
     const settingsPath = join(directory, "pi-plan-mode.json");
-    const mock = createMockPi({ activeTools: ["read", "edit"] });
+    const mock = createPlanPi({ activeTools: ["read", "edit"] });
     planMode(mock.pi, {
       settingsPath,
       readSettings: async () => ({
@@ -149,7 +149,7 @@ test("an active Settings save changes the next export without changing active st
     });
     let openedSettings = false;
     let changedExport = false;
-    const context = createMockContext({
+    const context = createPlanContext({
       cwd: directory,
       mode: "tui",
       hasUI: true,
@@ -165,7 +165,7 @@ test("an active Settings save changes the next export without changing active st
       },
       input: async () => "next/export.md",
     });
-    await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+    await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
     await completePlan(mock, context.ctx);
     await mock.commands.get("plan")?.handler("implement", context.ctx);
@@ -190,9 +190,9 @@ test("ready plan export supports custom relative and absolute paths", async () =
         expectedPath: join(directory, "absolute-plan.md"),
       },
     ]) {
-      const mock = createMockPi({ activeTools: ["read"] });
+      const mock = createPlanPi({ activeTools: ["read"] });
       planMode(mock.pi);
-      const context = createMockContext({ cwd: directory, hasUI: true });
+      const context = createPlanContext({ cwd: directory, hasUI: true });
       await mock.commands.get("plan")?.handler("start", context.ctx);
       await completePlan(mock, context.ctx);
 
@@ -209,9 +209,9 @@ test("plan export refuses existing files and leaves their content and plan state
   await withTempDirectory(async (directory) => {
     const existingPath = join(directory, "PLAN.md");
     await writeFile(existingPath, "user-owned content\n", "utf8");
-    const mock = createMockPi({ activeTools: ["read"] });
+    const mock = createPlanPi({ activeTools: ["read"] });
     planMode(mock.pi);
-    const context = createMockContext({ cwd: directory, hasUI: true });
+    const context = createPlanContext({ cwd: directory, hasUI: true });
     await mock.commands.get("plan")?.handler("start", context.ctx);
     await completePlan(mock, context.ctx);
     const entriesBeforeExport = mock.entries.length;
@@ -227,9 +227,9 @@ test("plan export refuses existing files and leaves their content and plan state
 
 test("concurrent exports serialize and create the target only once", async () => {
   await withTempDirectory(async (directory) => {
-    const mock = createMockPi({ activeTools: ["read"] });
+    const mock = createPlanPi({ activeTools: ["read"] });
     planMode(mock.pi);
-    const context = createMockContext({ cwd: directory, hasUI: true });
+    const context = createPlanContext({ cwd: directory, hasUI: true });
     await mock.commands.get("plan")?.handler("start", context.ctx);
     await completePlan(mock, context.ctx);
 
@@ -268,15 +268,15 @@ test("queued export stops when the ready plan is superseded", async () => {
     });
     await mutationHeld;
 
-    const mock = createMockPi({ activeTools: ["read"] });
+    const mock = createPlanPi({ activeTools: ["read"] });
     planMode(mock.pi);
-    const context = createMockContext({ cwd: directory, hasUI: true });
-    await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+    const context = createPlanContext({ cwd: directory, hasUI: true });
+    await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
     await completePlan(mock, context.ctx);
     const pendingExport = mock.commands.get("plan")?.handler("export", context.ctx);
     await Promise.resolve();
-    await mock.events.get("before_agent_start")?.[0]?.({ systemPrompt: "base" }, context.ctx);
+    await mock.handlers.get("before_agent_start")?.[0]?.({ systemPrompt: "base" }, context.ctx);
     releaseMutation();
     await blocker;
     await pendingExport;
@@ -298,9 +298,9 @@ test("plan export refuses an existing symbolic link", {
     const exportPath = join(directory, "PLAN.md");
     await writeFile(targetPath, "user-owned content\n", "utf8");
     await symlink(targetPath, exportPath);
-    const mock = createMockPi({ activeTools: ["read"] });
+    const mock = createPlanPi({ activeTools: ["read"] });
     planMode(mock.pi);
-    const context = createMockContext({ cwd: directory, hasUI: true });
+    const context = createPlanContext({ cwd: directory, hasUI: true });
     await mock.commands.get("plan")?.handler("start", context.ctx);
     await completePlan(mock, context.ctx);
 
@@ -340,7 +340,7 @@ test("configured export defaults support saved and active plans in print and JSO
   ] as const) {
     await withTempDirectory(async (directory) => {
       const entry = stateEntry(scenario.data);
-      const mock = createMockPi({ activeTools: ["read", "edit"] });
+      const mock = createPlanPi({ activeTools: ["read", "edit"] });
       planMode(mock.pi, {
         readSettings: async () => ({
           kind: "loaded" as const,
@@ -350,7 +350,7 @@ test("configured export defaults support saved and active plans in print and JSO
           },
         }),
       });
-      const context = createMockContext({
+      const context = createPlanContext({
         cwd: directory,
         mode: scenario.mode,
         hasUI: false,
@@ -359,7 +359,7 @@ test("configured export defaults support saved and active plans in print and JSO
           getEntries: () => [entry],
         },
       });
-      await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+      await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
 
       await mock.commands.get("plan")?.handler("export", context.ctx);
 
@@ -373,9 +373,9 @@ test("configured export defaults support saved and active plans in print and JSO
 
 test("plan export fails observably without a plan or on an existing path in no-UI modes", async () => {
   await withTempDirectory(async (directory) => {
-    const missing = createMockPi({ activeTools: ["read"] });
+    const missing = createPlanPi({ activeTools: ["read"] });
     planMode(missing.pi);
-    const printContext = createMockContext({ cwd: directory, mode: "print", hasUI: false });
+    const printContext = createPlanContext({ cwd: directory, mode: "print", hasUI: false });
     await assert.rejects(
       missing.commands.get("plan")?.handler("export", printContext.ctx) as Promise<unknown>,
       /no completed plan/i,
@@ -387,9 +387,9 @@ test("plan export fails observably without a plan or on an existing path in no-U
       savedPlan: { plan: PLAN, source: "plan_mode_complete" },
     });
     await writeFile(join(directory, "PLAN.md"), "keep\n", "utf8");
-    const existing = createMockPi({ activeTools: ["read"] });
+    const existing = createPlanPi({ activeTools: ["read"] });
     planMode(existing.pi);
-    const jsonContext = createMockContext({
+    const jsonContext = createPlanContext({
       cwd: directory,
       mode: "json",
       hasUI: false,
@@ -398,7 +398,7 @@ test("plan export fails observably without a plan or on an existing path in no-U
         getEntries: () => [savedEntry],
       },
     });
-    await existing.events.get("session_start")?.[0]?.({}, jsonContext.ctx);
+    await existing.handlers.get("session_start")?.[0]?.({}, jsonContext.ctx);
     await assert.rejects(
       existing.commands.get("plan")?.handler("export", jsonContext.ctx) as Promise<unknown>,
       /already exists/i,
@@ -412,7 +412,7 @@ test("completion and management TUI menus preview and use the configured export 
   for (const scenario of ["manual-ready", "saved", "active"] as const) {
     await withTempDirectory(async (directory) => {
       const expectedPath = "configured/default-plan.md";
-      const mock = createMockPi({ activeTools: ["read", "edit"] });
+      const mock = createPlanPi({ activeTools: ["read", "edit"] });
       planMode(mock.pi, {
         readSettings: async () => ({
           kind: "loaded" as const,
@@ -444,7 +444,7 @@ test("completion and management TUI menus preview and use the configured export 
         hasUI: true,
         custom,
       };
-      const context = createMockContext(
+      const context = createPlanContext(
         scenario === "saved"
           ? {
               ...baseContext,
@@ -462,7 +462,7 @@ test("completion and management TUI menus preview and use the configured export 
           : baseContext,
       );
 
-      await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+      await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
       if (scenario === "saved") {
         await mock.commands.get("plan")?.handler("", context.ctx);
         assert.equal(context.statuses.get("plan-mode"), "plan saved");
@@ -470,7 +470,7 @@ test("completion and management TUI menus preview and use the configured export 
         await mock.commands.get("plan")?.handler("start", context.ctx);
         await completePlan(mock, context.ctx);
         if (scenario === "manual-ready") {
-          await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
+          await mock.handlers.get("agent_settled")?.[0]?.({}, context.ctx);
           await mock.commands.get("plan")?.handler("", context.ctx);
         } else {
           await mock.commands.get("plan")?.handler("implement", context.ctx);
@@ -522,7 +522,7 @@ function selectedMenuLabel(lines: readonly string[]) {
 
 test("RPC export menu exposes and uses the configured default", async () => {
   await withTempDirectory(async (directory) => {
-    const mock = createMockPi({ activeTools: ["read"] });
+    const mock = createPlanPi({ activeTools: ["read"] });
     planMode(mock.pi, {
       readSettings: async () => ({
         kind: "loaded" as const,
@@ -533,7 +533,7 @@ test("RPC export menu exposes and uses the configured default", async () => {
       }),
     });
     let inputCalls = 0;
-    const context = createMockContext({
+    const context = createPlanContext({
       cwd: directory,
       mode: "rpc",
       hasUI: true,
@@ -549,7 +549,7 @@ test("RPC export menu exposes and uses the configured default", async () => {
         return "";
       },
     });
-    await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+    await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
     await completePlan(mock, context.ctx);
 
@@ -564,9 +564,9 @@ test("RPC export menu exposes and uses the configured default", async () => {
 test("rejected TUI export retains the path draft for correction", async () => {
   await withTempDirectory(async (directory) => {
     await writeFile(join(directory, "PLAN.md"), "keep\n", "utf8");
-    const mock = createMockPi({ activeTools: ["read"] });
+    const mock = createPlanPi({ activeTools: ["read"] });
     planMode(mock.pi);
-    const context = createMockContext({
+    const context = createPlanContext({
       cwd: directory,
       mode: "tui",
       hasUI: true,
@@ -593,7 +593,7 @@ test("rejected TUI export retains the path draft for correction", async () => {
         return harness.resultPromise;
       },
     });
-    await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+    await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
     await completePlan(mock, context.ctx);
 
@@ -607,10 +607,10 @@ test("rejected TUI export retains the path draft for correction", async () => {
 
 test("Back from the export input returns without writing or changing ready state", async () => {
   await withTempDirectory(async (directory) => {
-    const mock = createMockPi({ activeTools: ["read"] });
+    const mock = createPlanPi({ activeTools: ["read"] });
     planMode(mock.pi);
     let returnedFromInput = false;
-    const context = createMockContext({
+    const context = createPlanContext({
       cwd: directory,
       mode: "tui",
       hasUI: true,
@@ -626,7 +626,7 @@ test("Back from the export input returns without writing or changing ready state
         return harness.resultPromise;
       },
     });
-    await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+    await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
     await mock.commands.get("plan")?.handler("start", context.ctx);
     await completePlan(mock, context.ctx);
     const entriesBeforeMenu = mock.entries.length;
@@ -666,9 +666,9 @@ test("pending export is cancelled by disposal, session replacement, and shutdown
       const externallyDisposed = new Promise<void>((resolve) => {
         releaseDisposed = resolve;
       });
-      const mock = createMockPi({ activeTools: ["read"] });
+      const mock = createPlanPi({ activeTools: ["read"] });
       planMode(mock.pi);
-      const context = createMockContext({
+      const context = createPlanContext({
         cwd: directory,
         mode: "tui",
         hasUI: true,
@@ -686,7 +686,7 @@ test("pending export is cancelled by disposal, session replacement, and shutdown
             : currentHarness.resultPromise;
         },
       });
-      await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+      await mock.handlers.get("session_start")?.[0]?.({}, context.ctx);
       await mock.commands.get("plan")?.handler("start", context.ctx);
       await completePlan(mock, context.ctx);
       const pendingMenu = mock.commands.get("plan")?.handler("", context.ctx);
@@ -698,8 +698,8 @@ test("pending export is cancelled by disposal, session replacement, and shutdown
           harness.dispose();
           releaseDisposed();
         } else if (ending === "replacement") {
-          await mock.events.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
-        } else await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
+          await mock.handlers.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
+        } else await mock.handlers.get("session_shutdown")?.[0]?.({}, context.ctx);
       } finally {
         releaseMutation();
       }
@@ -719,9 +719,9 @@ test("pending export is cancelled by disposal, session replacement, and shutdown
 test("plan export refuses an existing directory", async () => {
   await withTempDirectory(async (directory) => {
     await mkdir(join(directory, "PLAN.md"));
-    const mock = createMockPi({ activeTools: ["read"] });
+    const mock = createPlanPi({ activeTools: ["read"] });
     planMode(mock.pi);
-    const context = createMockContext({ cwd: directory, hasUI: true });
+    const context = createPlanContext({ cwd: directory, hasUI: true });
     await mock.commands.get("plan")?.handler("start", context.ctx);
     await completePlan(mock, context.ctx);
     await mock.commands.get("plan")?.handler("export", context.ctx);
