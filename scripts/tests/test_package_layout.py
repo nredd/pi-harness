@@ -172,7 +172,6 @@ def test_clean_package_passes_with_no_allowlist_entry(repo: Path) -> None:
         ("tests/area/coverage.test.ts", "x\n", "packages/x: tests/area/coverage.test.ts: test-name"),
         ("tests/area/a.gh_12.test.ts", "x\n", "packages/x: tests/area/a.gh_12.test.ts: test-name"),
         ("tests/area/pr7.test.ts", "x\n", "packages/x: tests/area/pr7.test.ts: test-name"),
-        ("src/issue-1.test.ts", "x\n", "packages/x: src/issue-1.test.ts: test-location"),
         ("biome.json", "{}\n", "packages/x: biome.json: biome-config"),
         ("src/biome.jsonc", "{}\n", "packages/x: src/biome.jsonc: biome-config"),
     ],
@@ -221,7 +220,6 @@ def test_violations_name_the_rule(repo: Path, path: str, text: str, expected: st
         "scripts/build.mjs",
         "examples/a.json",
         "schemas/a.json",
-        "prebuilt/a.bin",
     ],
 )
 def test_allowed_paths_pass(repo: Path, path: str) -> None:
@@ -306,8 +304,8 @@ def test_import_escape_reports_each_specifier_once(repo: Path) -> None:
     ]
 
 
-def test_imports_beneath_a_banned_directory_wait_for_the_move(repo: Path) -> None:
-    """Report a banned directory once, not every file inside it.
+def test_structure_rules_beneath_a_banned_directory_wait_for_the_move(repo: Path) -> None:
+    """Report a banned directory once for structure rules, not every file inside it.
 
     Parameters:
         repo (Path): Disposable repository.
@@ -318,12 +316,166 @@ def test_imports_beneath_a_banned_directory_wait_for_the_move(repo: Path) -> Non
     write_tree(
         repo,
         {
-            f"{PACKAGE}/lib/a.ts": 'import "../../../y.ts";\n',
+            f"{PACKAGE}/lib/a.ts": "export {};\n",
             f"{PACKAGE}/lib/b.png": "x\n",
             f"{PACKAGE}/lib/c.md": "x\n",
+            f"{PACKAGE}/test/d.test.ts": "export {};\n",
         },
     )
-    assert lines(repo) == ["packages/x: lib: top-level-entry"]
+    assert lines(repo) == ["packages/x: lib: top-level-entry", "packages/x: test: top-level-entry"]
+
+
+@pytest.mark.parametrize(
+    ("path", "text", "expected"),
+    [
+        ("lib/a.ts", 'import "../../../y.ts";\n', "packages/x: lib/a.ts: import-escape ../../../y.ts"),
+        ("test/a.test.mjs", "x\n", "packages/x: test/a.test.mjs: test-extension"),
+        ("test/issue-9-b.test.ts", "x\n", "packages/x: test/issue-9-b.test.ts: test-name"),
+        (
+            "test/area/index-coverage.test.ts",
+            "x\n",
+            "packages/x: test/area/index-coverage.test.ts: test-name",
+        ),
+    ],
+)
+def test_content_rules_still_run_beneath_a_banned_directory(
+    repo: Path, path: str, text: str, expected: str
+) -> None:
+    """Keep import, extension and name rules on files under a banned entry; they are debt, not waived.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        path (str): Package-relative path under a banned entry.
+        text (str): File contents.
+        expected (str): The file-level violation alongside the entry's own.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    write_tree(repo, {f"{PACKAGE}/{path}": text})
+    top = path.split("/", maxsplit=1)[0]
+    assert lines(repo) == sorted([f"packages/x: {top}: top-level-entry", expected])
+
+
+def test_editing_a_file_under_a_banned_directory_cannot_add_an_escape_import(repo: Path) -> None:
+    """Fail an escape import added to an existing file below a waived banned entry.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the report and exit status.
+    """
+    waived = f"{PACKAGE}: test: top-level-entry"
+    write_tree(
+        repo,
+        {f"{PACKAGE}/test/a.test.ts": "export {};\n", package_layout.ALLOWLIST: entries_for(waived)},
+    )
+    commit(repo, "base")
+    git(repo, "checkout", "-q", "-b", "feature")
+    write_tree(repo, {f"{PACKAGE}/test/a.test.ts": 'import "../../todo/state.ts";\n'})
+    out: list[str] = []
+    assert package_layout.run(repo, "main", out.append) == 1
+    assert out == [f"{PACKAGE}: test/a.test.ts: import-escape ../../todo/state.ts: not allowlisted"]
+
+
+def write_bytes(repo: Path, path: str, content: bytes) -> None:
+    """Write and stage a binary file.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        path (str): Repository-relative path.
+        content (bytes): File contents.
+
+    Returns:
+        None: The file is written and `git add`ed.
+    """
+    target = repo / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(content)
+    git(repo, "add", "--all")
+
+
+@pytest.mark.parametrize(
+    "magic",
+    [b"\x7fELF", b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xfe\xed\xfa\xcf", b"MZ\x90\x00"],
+)
+def test_tracked_binaries_are_found_by_content(repo: Path, magic: bytes) -> None:
+    """Flag a native executable by magic number wherever it is tracked.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        magic (bytes): Leading bytes of an ELF, Mach-O or PE image.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    write_bytes(repo, f"{PACKAGE}/src/area/tool", magic + b"\x00" * 8)
+    write_bytes(repo, f"{PACKAGE}/lib/tool", magic + b"\x00" * 8)
+    write_bytes(repo, f"{PACKAGE}/src/area/text", b"#!/bin/sh\n")
+    assert lines(repo) == [
+        "packages/x: lib/tool: tracked-binary",
+        "packages/x: lib: top-level-entry",
+        "packages/x: src/area/tool: tracked-binary",
+    ]
+
+
+def test_everything_tracked_under_prebuilt_is_a_binary_violation(repo: Path) -> None:
+    """Report `prebuilt/` as a banned entry and every file below it, whatever its content.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    write_tree(repo, {f"{PACKAGE}/prebuilt/macos/arm64/bridge": "not a binary\n"})
+    assert lines(repo) == [
+        "packages/x: prebuilt/macos/arm64/bridge: tracked-binary",
+        "packages/x: prebuilt: top-level-entry",
+    ]
+
+
+def test_missing_binary_is_skipped(repo: Path) -> None:
+    """Skip a tracked file that is gone from the work tree.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    (repo / PACKAGE / "src/area/a.ts").unlink()
+    assert lines(repo) == []
+
+
+@pytest.mark.parametrize("name", ["scripts/a.sh", "scripts/a.ps1", "src/a.bash", "scripts/a.CMD", "a.sh"])
+def test_standalone_shell_scripts_fail(repo: Path, name: str) -> None:
+    """Flag `.sh`, `.ps1`, `.bash` and `.cmd` files; they belong in Makefile targets.
+
+    Parameters:
+        repo (Path): Disposable repository.
+        name (str): Package-relative path.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    write_tree(repo, {f"{PACKAGE}/{name}": "x\n"})
+    found = lines(repo)
+    assert f"packages/x: {name}: shell-script" in found
+
+
+def test_shell_scripts_in_fixtures_are_data(repo: Path) -> None:
+    """Allow shell scripts under `tests/fixtures/`.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    write_tree(repo, {f"{PACKAGE}/tests/fixtures/a.sh": "x\n"})
+    assert lines(repo) == []
 
 
 def test_unreadable_and_deleted_sources_are_skipped(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -385,6 +537,23 @@ def test_package_json_script_names(repo: Path) -> None:
         f"{PACKAGE}: package.json: pi-media",
         f"{PACKAGE}: package.json: script-name lint:fix",
         f"{PACKAGE}: package.json: script-name postinstall",
+    ]
+
+
+def test_removed_upstream_sync_scripts_are_denied(repo: Path) -> None:
+    """Deny `test:upstream-sync` and `test:sync-reverts` despite the `test:` prefix.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the report.
+    """
+    manifest = {"scripts": {"test:upstream-sync": "x", "test:sync-reverts": "x", "test:ok": "x"}}
+    write_tree(repo, {f"{PACKAGE}/package.json": json.dumps(manifest)})
+    assert lines(repo) == [
+        "packages/x: package.json: script-name test:sync-reverts",
+        "packages/x: package.json: script-name test:upstream-sync",
     ]
 
 
@@ -677,7 +846,7 @@ def feature_branch(repo: Path, files: dict[str, str]) -> None:
 @pytest.mark.parametrize(
     ("banned", "added"),
     [
-        ("test/a.test.ts", "test/issue-9-b.test.ts"),
+        ("test/a.test.ts", "test/b.test.ts"),
         ("lib/a.ts", "lib/deep/b.ts"),
         ("docs/a.md", "docs/shot.png"),
         (".github/ci.yml", ".github/workflows/x.yml"),
@@ -702,7 +871,7 @@ def test_new_files_under_an_allowlisted_banned_entry_fail(repo: Path, banned: st
     feature_branch(repo, {f"{PACKAGE}/{added}": "x\n", f"{PACKAGE}/tests/new.test.ts": "x\n"})
     out: list[str] = []
     assert package_layout.run(repo, "main", out.append) == 1
-    assert out == [f"{PACKAGE}: {added}: added-under-banned-entry"]
+    assert out == [f"{PACKAGE}: {added}: added-under-banned-entry (add it under `tests/` instead)"]
     # Without a ref there is nothing to compare, and a file that was already there is not new.
     assert package_layout.run(repo, None, lambda _line: None) == 0
     git(repo, "rm", "-q", "-f", f"{PACKAGE}/{added}")
@@ -728,6 +897,38 @@ def test_moving_files_out_of_a_banned_entry_is_not_growth(repo: Path) -> None:
     assert package_layout.run(repo, "main", lambda _line: None) == 0
 
 
+def test_renames_within_a_banned_entry_are_not_growth(repo: Path) -> None:
+    """Allow a pure rename inside the same banned entry, but not a move into it or an edited copy.
+
+    Parameters:
+        repo (Path): Disposable repository.
+
+    Returns:
+        None: Assertions verify the exit status and report.
+    """
+    waived = f"{PACKAGE}: test: top-level-entry"
+    body = "export const stable = 1;\n" * 20
+    write_tree(
+        repo,
+        {
+            f"{PACKAGE}/test/a.test.ts": body,
+            f"{PACKAGE}/src/area/m.ts": body + "// m\n",
+            package_layout.ALLOWLIST: entries_for(waived),
+        },
+    )
+    commit(repo, "base")
+    git(repo, "checkout", "-q", "-b", "feature")
+    (repo / PACKAGE / "test/deep").mkdir()
+    git(repo, "mv", f"{PACKAGE}/test/a.test.ts", f"{PACKAGE}/test/deep/b.test.ts")
+    commit(repo, "rename within")
+    assert package_layout.run(repo, "main", lambda _line: None) == 0
+    git(repo, "mv", f"{PACKAGE}/src/area/m.ts", f"{PACKAGE}/test/m.test.ts")
+    commit(repo, "move in")
+    out: list[str] = []
+    assert package_layout.run(repo, "main", out.append) == 1
+    assert out == [f"{PACKAGE}: test/m.test.ts: added-under-banned-entry (add it under `tests/` instead)"]
+
+
 def test_growth_is_checked_where_the_base_has_no_allowlist(repo: Path) -> None:
     """Compare tracked paths even for the commit that introduces the allowlist.
 
@@ -751,7 +952,7 @@ def test_growth_is_checked_where_the_base_has_no_allowlist(repo: Path) -> None:
     commit(repo, "introduce")
     out: list[str] = []
     assert package_layout.run(repo, "main", out.append) == 1
-    assert out == [f"{PACKAGE}: lib/b.ts: added-under-banned-entry"]
+    assert out == [f"{PACKAGE}: lib/b.ts: added-under-banned-entry (add it under `tests/` instead)"]
 
 
 def test_make_compares_against_origin_main_unless_base_is_set() -> None:
@@ -868,5 +1069,7 @@ def test_real_violation_lines_follow_the_documented_shape() -> None:
             "test-location",
             "test-name",
             "top-level-entry",
+            "shell-script",
+            "tracked-binary",
             "tracked-dist",
         }

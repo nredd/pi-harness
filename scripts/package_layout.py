@@ -17,14 +17,21 @@ The list can only shrink:
 - with `--compare-ref`, an entry the merge base of `HEAD` and the ref does not carry fails, so a new
   violation cannot be waived by adding its line
 - with `--compare-ref`, a tracked path that is new since the merge base and sits under an allowlisted
-  banned top-level entry (e.g. `test/`, `lib/`) fails, so the waiver does not cover new files
+  banned top-level entry (e.g. `test/`, `lib/`) fails, so the waiver does not cover new files; a pure
+  rename inside the same entry is exempt
 - the file must be in canonical form (sorted, unique, one entry per line) so merges stay mechanical
 
 A package issue deletes its own entries in the same PR that fixes the layout.
 
-A violation under a top-level entry that is itself a violation (a banned directory, or a file outside the
-closed list) is reported once, for that entry; the per-file rules below the entry apply once it moves into
-place, and until then the growth check above keeps new files out of it.
+A structure violation (markdown, media, test location) under a top-level entry that is itself a violation (a
+banned directory, or a file outside the closed list) is reported once, for that entry, and until the entry
+moves into place the growth check above keeps new files out of it. The content rules (`import-escape`,
+`test-extension`, `test-name`, `shell-script`, `tracked-binary`) still run below a banned entry, so editing
+a file there cannot add a new one; their lines stay in the allowlist as debt.
+
+No committed binaries: anything tracked under `prebuilt/` and any tracked file with an ELF, Mach-O or PE
+magic number is `tracked-binary`. No standalone `.sh`, `.ps1`, `.bash` or `.cmd` outside `tests/fixtures/`
+(`shell-script`); use a Makefile target. `test:upstream-sync` and `test:sync-reverts` are denied names.
 Import scanning is textual (`from`, `import`, `require`), so `new URL("../x", import.meta.url)` and
 `vi.mock("../x")` are not seen.
 
@@ -87,7 +94,6 @@ TOP_LEVEL_ENTRIES = frozenset(
         "settings",
         "NOTICE.md",
         "licenses",
-        "prebuilt",
     }
 )
 EXTRA_VITEST_CONFIG = re.compile(r"vitest\.[a-z0-9][a-z0-9-]*\.config\.ts")
@@ -115,8 +121,19 @@ MEDIA_SUFFIXES = frozenset(
         ".webp",
     }
 )
+SHELL_SUFFIXES = frozenset({".sh", ".ps1", ".bash", ".cmd"})
+BINARY_MAGICS = (
+    b"\x7fELF",
+    b"MZ",
+    b"\xfe\xed\xfa\xce",
+    b"\xfe\xed\xfa\xcf",
+    b"\xce\xfa\xed\xfe",
+    b"\xcf\xfa\xed\xfe",
+    b"\xca\xfe\xba\xbe",
+)
 BIOME_CONFIGS = frozenset({"biome.json", "biome.jsonc"})
 # `test:<signal>` is one name per extra `coverage/policy.json` signal, so any `test:` suffix is accepted.
+DENIED_SCRIPT_NAMES = frozenset({"test:upstream-sync", "test:sync-reverts"})
 SCRIPT_NAMES = frozenset(
     {"lint", "format", "typecheck", "test", "test:bun", "check", "build", "prepack", "bench"}
 )
@@ -130,6 +147,7 @@ COVERAGE_TOOL_PREFIXES = ("rust-", "swift-")
 RELATIVE_SPECIFIER = re.compile(r"""\b(?:from|import|require)\s*\(?\s*["'](\.\.?(?:/[^"'\n]*)?)["']""")
 # Below `tests/` only `fixtures/` holds non-test files; these are the superseded homes for them.
 TEST_SUPPORT_DIRS = frozenset({"support", "helpers", "lib"})
+ADDED_RULE = "added-under-banned-entry (add it under `tests/` instead)"
 SNAPSHOT_DIR = "__snapshots__"
 
 
@@ -268,7 +286,8 @@ def file_violations(package: str, path: str, root: Path) -> Iterable[Violation]:
         root (Path): Repository root.
 
     Returns:
-        Iterable[Violation]: Violations of the markdown, media, dist, test and import rules.
+        Iterable[Violation]: Violations of the structure rules (markdown, media, dist, test location,
+            biome); the content rules come from `content_violations`.
     """
     top = path.split("/", maxsplit=1)[0]
     suffix = posixpath.splitext(path)[1].lower()
@@ -280,11 +299,9 @@ def file_violations(package: str, path: str, root: Path) -> Iterable[Violation]:
         yield Violation(package, path, "tracked-dist")
     if is_fixture(path):
         return
-    if top == "tests" and ".test." in path and misnamed_test(posixpath.basename(path)):
-        yield Violation(package, path, "test-name")
     if path.endswith(STRAY_TEST_SUFFIXES):
-        yield Violation(package, path, "test-extension")
-    elif path.endswith(".test.ts") and top != "tests":
+        return
+    if path.endswith(".test.ts") and top != "tests":
         yield Violation(package, path, "test-location")
     elif top == "tests":
         problem = tree_rule(path)
@@ -292,6 +309,53 @@ def file_violations(package: str, path: str, root: Path) -> Iterable[Violation]:
             yield Violation(package, path, problem)
     if posixpath.basename(path) in BIOME_CONFIGS:
         yield Violation(package, path, "biome-config")
+
+
+def read_magic(package: str, path: str, root: Path) -> bytes:
+    """Read the leading bytes of a tracked file.
+
+    Parameters:
+        package (str): Package directory relative to the repository root.
+        path (str): Package-relative POSIX path.
+        root (Path): Repository root.
+
+    Returns:
+        bytes: Up to four bytes; empty when the file is absent or unreadable.
+    """
+    try:
+        with (root / package / path).open("rb") as handle:
+            return handle.read(4)
+    except OSError as e:
+        LOGGER.debug(f"Cannot read '{package}/{path}' for the binary check: {e}")
+        return b""
+
+
+def content_violations(package: str, path: str, root: Path) -> Iterable[Violation]:
+    """Yield the rules that apply to a file even below a banned top-level entry.
+
+    The banned entry is reported once for its structure; these rules judge what is in the files, so they
+    keep running and their lines stay in the allowlist as debt.
+
+    Parameters:
+        package (str): Package directory relative to the repository root.
+        path (str): Package-relative POSIX path.
+        root (Path): Repository root.
+
+    Returns:
+        Iterable[Violation]: Binary, shell script, test extension, test name and import escape violations.
+    """
+    top = path.split("/", maxsplit=1)[0]
+    suffix = posixpath.splitext(path)[1].lower()
+    if top == "prebuilt" or read_magic(package, path, root).startswith(BINARY_MAGICS):
+        yield Violation(package, path, "tracked-binary")
+    if is_fixture(path):
+        return
+    if suffix in SHELL_SUFFIXES:
+        yield Violation(package, path, "shell-script")
+    if ".test." in path and misnamed_test(posixpath.basename(path)):
+        yield Violation(package, path, "test-name")
+    if path.endswith(STRAY_TEST_SUFFIXES):
+        yield Violation(package, path, "test-extension")
     if suffix in CODE_SUFFIXES:
         yield from import_escapes(package, path, root)
 
@@ -338,7 +402,7 @@ def script_violations(package: str, manifest: Path, publish: bool) -> Iterable[V
         return
     scripts = data.get("scripts") if isinstance(data, dict) else None
     for name in sorted(scripts if isinstance(scripts, dict) else ()):
-        if name not in SCRIPT_NAMES and not name.startswith("test:"):
+        if name in DENIED_SCRIPT_NAMES or (name not in SCRIPT_NAMES and not name.startswith("test:")):
             yield Violation(package, "package.json", f"script-name {name}")
     pi = data.get("pi") if isinstance(data, dict) else None
     if publish and isinstance(pi, dict) and ("image" in pi or "video" in pi):
@@ -381,6 +445,7 @@ def check_package(package: str, paths: list[str], root: Path, publish: bool) -> 
             found.append(violation)
     for path in paths:
         top = path.split("/")[0]
+        found.extend(content_violations(package, path, root))
         if top in banned_tops:
             continue
         found.extend(file_violations(package, path, root))
@@ -572,7 +637,43 @@ def base_tracked(root: Path, reference: str) -> set[str]:
     return {path for path in out.split("\0") if path}
 
 
-def growth_problems(violations: Iterable[Violation], tracked: Iterable[str], known: set[str]) -> list[str]:
+def base_renames(root: Path, reference: str) -> dict[str, str]:
+    """Map paths renamed since the merge base of `HEAD` and a ref to their old paths.
+
+    Parameters:
+        root (Path): Repository root.
+        reference (str): Ref to compare against, e.g. `origin/main`.
+
+    Returns:
+        dict[str, str]: Repository-relative new path -> old path, for renames Git detects.
+
+    Raises:
+        ClassificationError: The ref or merge base cannot be resolved, or Git fails.
+    """
+    base = run_git(root, "merge-base", "--end-of-options", "HEAD", reference).strip()
+    out = run_git(
+        root,
+        "diff",
+        "--name-status",
+        "-z",
+        "--find-renames",
+        "--diff-filter=R",
+        base,
+        "HEAD",
+        "--",
+        PUBLISH_ROOT,
+        *SHARED_PACKAGES,
+    )
+    fields = [field for field in out.split("\0") if field]
+    return {new: old for _status, old, new in zip(fields[::3], fields[1::3], fields[2::3], strict=False)}
+
+
+def growth_problems(
+    violations: Iterable[Violation],
+    tracked: Iterable[str],
+    known: set[str],
+    renames: dict[str, str] | None = None,
+) -> list[str]:
     """Report tracked paths new since the base under a banned top-level entry.
 
     The allowlist waives the entry, not what is added to it, and the per-file rules skip it.
@@ -581,20 +682,21 @@ def growth_problems(violations: Iterable[Violation], tracked: Iterable[str], kno
         violations (Iterable[Violation]): Current violations.
         tracked (Iterable[str]): Tracked paths at `HEAD`.
         known (set[str]): Tracked paths at the merge base.
+        renames (dict[str, str] | None): New path -> old path for renames since the merge base; one inside
+            the same banned entry is a move within the debt, not growth.
 
     Returns:
-        list[str]: One `<package>: <path>: added-under-banned-entry` line per new path, sorted.
+        list[str]: One `<package>: <path>: added-under-banned-entry (...)` line per new path, sorted.
     """
+    renames = renames or {}
     prefixes = {f"{package}/{entry}/": package for package, entry in banned_entries(violations)}
     problems = set()
     for path in tracked:
         if path in known:
             continue
         for prefix, package in prefixes.items():
-            if path.startswith(prefix):
-                problems.add(
-                    Violation(package, path.removeprefix(f"{package}/"), "added-under-banned-entry").line()
-                )
+            if path.startswith(prefix) and not renames.get(path, "").startswith(prefix):
+                problems.add(Violation(package, path.removeprefix(f"{package}/"), ADDED_RULE).line())
     return sorted(problems)
 
 
@@ -644,12 +746,13 @@ def run(root: Path, compare_ref: str | None, emit: Callable[[str], object]) -> i
         text, entries = load_allowlist(root)
         base = base_entries(root, compare_ref) if compare_ref else None
         known = base_tracked(root, compare_ref) if compare_ref else None
+        renames = base_renames(root, compare_ref) if compare_ref else None
     except (ClassificationError, ValueError) as e:
         LOGGER.error(f"Cannot check the package layout: {e}")
         return 2
     problems = allowlist_problems(violations, text, entries, base)
     if known is not None:
-        problems += growth_problems(violations, tracked, known)
+        problems += growth_problems(violations, tracked, known, renames)
     for problem in problems:
         emit(problem)
     if problems:
