@@ -1,14 +1,17 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	diffInstalled,
+	npmCacheDirs,
 	readAuthenticatedTarball,
 	selectReleaseDigest,
 	unpackTarball,
+	verifyCoreScope,
 	verifyInstalledPackage,
 } from "./core-artifacts.ts";
 import { pinnedCoreTarball } from "./core-pins.ts";
@@ -218,6 +221,53 @@ describe("selectReleaseDigest", () => {
 		["conflicting digests", [release({ url, sha256: "a" }), release({ url, sha256: "b" })]],
 	])("rejects %s", (_label, releases) => {
 		expect(() => selectReleaseDigest(lock(pinned), releases, "pi-tui")).toThrow(/No unambiguous release digest/);
+	});
+});
+
+describe("core scope directory", () => {
+	const expected = ["pi-ai", "pi-tui"];
+
+	it("accepts a scope holding only the pinned packages", () => {
+		const scope = install(temp(), { "pi-ai/package.json": "{}", "pi-tui/package.json": "{}" });
+		expect(() => verifyCoreScope(scope, expected)).not.toThrow();
+	});
+
+	it.each([
+		["a scope-level node_modules", "node_modules/shadowed/index.js"],
+		["an unpinned package", "pi-evil/package.json"],
+	])("rejects %s", (_label, path) => {
+		const scope = install(temp(), { "pi-ai/package.json": "{}", [path]: "x" });
+		expect(() => verifyCoreScope(scope, expected)).toThrow(/Unexpected entry/);
+	});
+
+	it("rejects a dangling scope-level node_modules symlink", () => {
+		const scope = install(temp(), { "pi-ai/package.json": "{}" });
+		symlinkSync(join(scope, "gone"), join(scope, "node_modules"));
+		expect(() => verifyCoreScope(scope, expected)).toThrow(/node_modules/);
+	});
+
+	it("rejects the shadow path Node really resolves before the hoisted copy", () => {
+		const root = install(temp(), {
+			"node_modules/shadowed/index.js": "good",
+			"node_modules/@earendil-works/pi-ai/index.js": "",
+			"node_modules/@earendil-works/node_modules/shadowed/index.js": "evil",
+		});
+		const scope = join(root, "node_modules/@earendil-works");
+		const resolved = createRequire(join(scope, "pi-ai/index.js")).resolve("shadowed");
+		expect(resolved).toBe(join(scope, "node_modules/shadowed/index.js"));
+		expect(() => verifyCoreScope(scope, expected)).toThrow(/node_modules/);
+	});
+});
+
+describe("npm cache search order", () => {
+	it("prefers the explicit override, then npm's variables, then the home default", () => {
+		const dirs = npmCacheDirs({ PI_CORE_TARBALL_CACHE: "/a", npm_config_cache: "/b", NPM_CONFIG_CACHE: "/c" }, "/h");
+		expect(dirs).toEqual(["/a", "/b", "/c", "/h/.npm"]);
+	});
+
+	it("drops unset and empty entries", () => {
+		const dirs = npmCacheDirs({ PI_CORE_TARBALL_CACHE: "", NPM_CONFIG_CACHE: "/c" }, "/h");
+		expect(dirs).toEqual(["/c", "/h/.npm"]);
 	});
 });
 

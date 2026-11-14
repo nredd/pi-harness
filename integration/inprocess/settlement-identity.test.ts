@@ -4,7 +4,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { loadFork, resolveHost } from "./support.ts";
-import { verifyInstalledPackage } from "./verification/core-artifacts.ts";
+import { verifyCoreScope, verifyInstalledPackage } from "./verification/core-artifacts.ts";
 import { pinnedCoreTarball } from "./verification/core-pins.ts";
 
 type Lock = { packages: Record<string, { resolved?: string; integrity?: string }> };
@@ -14,6 +14,11 @@ it("binds the fixture's core imports to the exact lockfile artifacts, not a same
 	const expected: Lock = JSON.parse(readFileSync(new URL("package-lock.json", root), "utf8"));
 	const installed: Lock = JSON.parse(readFileSync(new URL("node_modules/.package-lock.json", root), "utf8"));
 	const receipts = [];
+	const scoped = Object.keys(expected.packages)
+		.map((key) => /^node_modules\/@earendil-works\/([^/]+)$/.exec(key)?.[1])
+		.filter((name): name is string => name !== undefined);
+	// A scope-level node_modules would shadow every hoisted core package below.
+	verifyCoreScope(fileURLToPath(new URL("node_modules/@earendil-works", root)), scoped);
 	for (const name of ["pi-coding-agent", "pi-agent-core", "pi-ai", "pi-tui"]) {
 		const key = `node_modules/@earendil-works/${name}`;
 		const wanted = expected.packages[key];

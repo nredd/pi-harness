@@ -150,6 +150,28 @@ export function diffInstalled(root: string, shipped: Map<string, Buffer>): Conte
 	return { missing, modified, extra };
 }
 
+/** npm cache roots to search: explicit override, npm's own variables, then `<home>/.npm`; unset and empty entries dropped. */
+export function npmCacheDirs(env: NodeJS.ProcessEnv, home: string): string[] {
+	return [env.PI_CORE_TARBALL_CACHE, env.npm_config_cache, env.NPM_CONFIG_CACHE, join(home, ".npm")].filter(
+		(dir): dir is string => Boolean(dir),
+	);
+}
+
+/**
+ * Prove the core scope directory holds only the pinned packages.
+ *
+ * Node walks up through every `node_modules` ancestor, so a scope-level `node_modules` (or any unpinned entry)
+ * would shadow the hoisted copies that `verifyInstalledPackage` authenticates.
+ *
+ * Raises:
+ *   Error: the scope holds an entry that is not one of `packages`.
+ */
+export function verifyCoreScope(scope: string, packages: readonly string[]): void {
+	for (const entry of readdirSync(scope)) {
+		if (!packages.includes(entry)) throw new Error(`Unexpected entry ${entry} in core scope ${scope}`);
+	}
+}
+
 /**
  * Prove an installed package equals its authenticated tarball.
  *

@@ -678,7 +678,7 @@ verification-helper entry are gone. `verification/home-setup.ts` stays a verific
 Vitest hard-excludes a config's own `setupFiles` from coverage, so it is now a one-call entry and the
 guard it installs (`installHomeGuard`) is measured in `home-guard.ts`. `verification/core-pins.ts`
 likewise stays a verification helper: it only reads the lockfile, `releases/` and the home directory,
-while pin selection and tarball authentication are measured in `core-artifacts.ts` (#843). Before #376, main `f2d607eb`
+while pin selection, cache search order and tarball authentication are measured in `core-artifacts.ts` (#843). Before #376, main `f2d607eb`
 measured primary 15 / 4 darwin, 25 / 8 linux and Bun 17 / 4, 27 / 8 (run `41781117332`); the Linux
 delta was the macOS-only `caffeinate` teardown in `support.ts`. `stopWake()` and
 `isolateStackHome()` now take an injected `Deadline` and wake spawner, so `support.test.ts` drives
