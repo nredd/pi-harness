@@ -1,0 +1,209 @@
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	harnessCachePath,
+	harnessRoots,
+	loadHarnesses,
+	readHarnessCache,
+	writeHarnessCache,
+} from "../../../src/stats/harness/index.ts";
+import type { ParsedFile } from "../../../src/stats/harness/scan.ts";
+import { CANARY, claudeRow, codexContext, codexMeta, codexRecord, writeLines } from "./fixtures.ts";
+
+let home: string;
+beforeEach(() => {
+	home = mkdtempSync(join(tmpdir(), "psk-harness-"));
+});
+afterEach(() => {
+	vi.unstubAllEnvs();
+	rmSync(home, { recursive: true, force: true });
+});
+
+/** Every file under `dir` with its bytes and mtime. */
+function snapshot(dir: string): Record<string, [string, number]> {
+	const out: Record<string, [string, number]> = {};
+	for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+		if (!entry.isFile()) continue;
+		const path = join(entry.parentPath, entry.name);
+		out[path] = [readFileSync(path, "utf8"), statSync(path).mtimeMs];
+	}
+	return out;
+}
+
+describe("harnessRoots", () => {
+	it("prefers overrides, then the harness's environment variable, then standard paths", () => {
+		expect(harnessRoots({}, "/h")).toEqual({
+			claude: "/h/.claude",
+			codex: "/h/.codex",
+			opencode: "/h/.local/share/opencode/opencode.db",
+		});
+		const env = { CLAUDE_CONFIG_DIR: "/c", CODEX_HOME: "/x", XDG_DATA_HOME: "/d", OPENCODE_DB: "/o.db" };
+		expect(harnessRoots(env, "/h")).toEqual({ claude: "/c", codex: "/x", opencode: "/o.db" });
+		expect(harnessRoots({ XDG_DATA_HOME: "/d" }, "/h").opencode).toBe("/d/opencode/opencode.db");
+		expect(harnessRoots(env, "/h", { claude: "/a", codex: "/b", opencode: "/e" })).toEqual({
+			claude: "/a",
+			codex: "/b",
+			opencode: "/e",
+		});
+		expect(Object.keys(harnessRoots())).toEqual(["claude", "codex", "opencode"]);
+	});
+
+	it("places the cache under the agent dir", () => {
+		expect(harnessCachePath("/a")).toBe("/a/pi-session-kit/stats-harness-cache.json");
+		expect(harnessCachePath()).toMatch(/pi-session-kit\/stats-harness-cache\.json$/);
+	});
+});
+
+describe("loadHarnesses", () => {
+	function fakeHome(): { cache: string; env: Record<string, string> } {
+		writeLines(join(home, ".claude", "projects", `-Users-${CANARY}`, "a.jsonl"), [claudeRow()]);
+		writeLines(join(home, ".codex", "sessions", "2026", "10", "02", "rollout-a.jsonl"), [
+			codexMeta(),
+			codexContext(),
+			codexRecord(),
+		]);
+		writeLines(join(home, ".codex", "history.jsonl"), [{ text: `${CANARY} prompt` }]);
+		writeLines(join(home, ".codex", "auth.json"), [{ token: CANARY }]);
+		writeLines(join(home, ".claude", ".credentials.json"), [{ token: CANARY }]);
+		return { cache: join(home, "agent", "pi-session-kit", "stats-harness-cache.json"), env: {} };
+	}
+
+	it("reads every installed harness, silently skips the rest, and never modifies a source", async () => {
+		const { cache, env } = fakeHome();
+		const before = snapshot(join(home, ".claude"));
+		const beforeCodex = snapshot(join(home, ".codex"));
+		const scans = await loadHarnesses({ home, env, cache });
+		expect(scans.claude.calls).toHaveLength(1);
+		expect(scans.codex.calls).toHaveLength(1);
+		expect(scans.opencode).toMatchObject({ found: false, problems: [] });
+		expect(snapshot(join(home, ".claude"))).toEqual(before);
+		expect(snapshot(join(home, ".codex"))).toEqual(beforeCodex);
+		expect(JSON.stringify(scans)).not.toContain(CANARY);
+		// Local cache keys are paths (the encoded cwd); no cached value carries content.
+		const cached = JSON.parse(readFileSync(cache, "utf8")).harnesses;
+		expect(JSON.stringify(Object.values(cached).map((files) => Object.values(files as object)))).not.toContain(CANARY);
+	});
+
+	it("reuses the persisted cache and rewrites nothing when nothing changed", async () => {
+		const { cache, env } = fakeHome();
+		await loadHarnesses({ home, env, cache });
+		const written = statSync(cache).mtimeMs;
+		await new Promise((r) => setTimeout(r, 20));
+		const again = await loadHarnesses({ home, env, cache });
+		expect(again.claude.calls).toHaveLength(1);
+		expect(statSync(cache).mtimeMs).toBe(written);
+	});
+
+	it("defaults the cache to the agent dir", async () => {
+		const { env } = fakeHome();
+		vi.stubEnv("PI_CODING_AGENT_DIR", join(home, "agent"));
+		await loadHarnesses({ home, env, harnesses: ["claude", "opencode"] });
+		expect(statSync(harnessCachePath()).isFile()).toBe(true);
+	});
+
+	it("honors the harness subset and per-harness roots", async () => {
+		const { cache } = fakeHome();
+		const scans = await loadHarnesses({
+			harnesses: ["codex"],
+			roots: { codex: join(home, ".codex"), claude: join(home, ".claude") },
+			cache,
+		});
+		expect(scans.codex.calls).toHaveLength(1);
+		expect(scans.claude).toMatchObject({ found: false, calls: [] });
+	});
+
+	it("reads OpenCode through the injected loader", async () => {
+		const db = join(home, "opencode.db");
+		writeFileSync(db, "x");
+		const scans = await loadHarnesses({
+			harnesses: ["opencode"],
+			roots: { opencode: db },
+			cache: join(home, "c.json"),
+			loadSqlite: () => Promise.reject(new Error("nope")),
+		});
+		expect(scans.opencode.problems).toHaveLength(1);
+	});
+
+	it("reports a cache it cannot write without hiding the data", async () => {
+		const { env } = fakeHome();
+		const blocker = join(home, "blocker");
+		writeFileSync(blocker, "file");
+		const scans = await loadHarnesses({
+			home,
+			env,
+			cache: join(blocker, "sub", "cache.json"),
+			harnesses: ["claude", "codex"],
+		});
+		expect(scans.claude.calls).toHaveLength(1);
+		expect(scans.claude.problems).toEqual(["claude: cache not written"]);
+		expect(scans.codex.problems).toEqual(["codex: cache not written"]);
+	});
+});
+
+describe("harness cache", () => {
+	it("round-trips and drops malformed records, unknown versions and corrupt files", async () => {
+		const path = join(home, "c", "cache.json");
+		const good: ParsedFile = {
+			size: 1,
+			mtimeMs: 2,
+			startMs: 3,
+			endMs: 4,
+			session: "",
+			child: false,
+			models: [["p", "m"]],
+			calls: [[1, 0, 1, 1, 1, 1, 0]],
+			entryIds: ["a".repeat(64)],
+			quota: [],
+			badLines: 0,
+			unsupported: false,
+		};
+		await writeHarnessCache(path, { claude: { "/x": good } });
+		expect(await readHarnessCache(path)).toEqual({ claude: { "/x": good } });
+
+		const bad = [
+			{ ...good, models: [["p"]] },
+			{ ...good, calls: [[1, 5, 1, 1, 1, 1, 0]] },
+			{ ...good, entryIds: ["short"] },
+			{ ...good, entryIds: [] },
+			{ ...good, quota: [{ harness: "nope" }] },
+			{ ...good, child: "yes" },
+			"junk",
+		];
+		const quotaOk = {
+			harness: "codex",
+			provider: "p",
+			limitId: "l",
+			window: "5h",
+			usedPercent: 1,
+			resetAt: 2,
+			durationMs: 3,
+			observedAt: 4,
+			planType: null,
+		};
+		writeFileSync(
+			path,
+			JSON.stringify({
+				version: 1,
+				harnesses: {
+					codex: {
+						...Object.fromEntries(bad.map((b, i) => [`/${i}`, b])),
+						"/ok": { ...good, quota: [quotaOk, { ...quotaOk, planType: "pro" }] },
+					},
+					odd: "x",
+				},
+			}),
+		);
+		const cache = await readHarnessCache(path);
+		expect(Object.keys(cache.codex ?? {})).toEqual(["/ok"]);
+		expect(cache.odd).toEqual({});
+
+		writeFileSync(path, JSON.stringify({ version: 99, harnesses: {} }));
+		expect(await readHarnessCache(path)).toEqual({});
+		writeFileSync(path, "{not json");
+		expect(await readHarnessCache(path)).toEqual({});
+		mkdirSync(join(home, "d"));
+		expect(await readHarnessCache(join(home, "d", "missing.json"))).toEqual({});
+	});
+});
