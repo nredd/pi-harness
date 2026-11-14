@@ -12,8 +12,6 @@
     "src",
     "examples",
     "schemas",
-    "docs/policies.md",
-    "docs/fairness.md",
     "CHANGELOG.md",
     "LICENSE",
     "README.md"

@@ -7,14 +7,13 @@ Current core selection: `v1.3.0-nredd.11` at
 published all four tarballs. Every downloaded asset passed `SHA256SUMS` and provenance verification
 for that exact workflow, tag ref and source digest, denying self-hosted runners. Root overrides,
 all native test-host dependencies, the Gitlink, digest guard, personal stack and both runtime
-lock targets move together; no owned npm package version changes. See
-[the train](core-release-train.md) for lock drift and the separate combined-gate/promotion boundary.
+lock targets move together; no owned npm package version changes.
 The generated [artifact receipt](../releases/2026-11-12-core-nredd.11.json) records the clean
 selection commit `19f31f02cf56233381e9d8fe97a80bac29afcede`, all four authenticated asset digests,
 and canonical/release workflow identities. It is an artifact/source record, not promotion approval.
 This npm tarball publication does not establish standalone binary #72 or live-install acceptance.
 
-Before publishing, require [full frozen-candidate verification](release-verification.md).
+Before publishing, require [full frozen-candidate verification](../README.md#frozen-release-verification).
 PR HEAD checks need not be rerun solely because main advanced. Release verification does:
 `publish.yml` now refuses missing exact-candidate full CI execution evidence before both its
 verification and privileged publication stages. Keep prepublication package verification separate
@@ -115,7 +114,7 @@ Of the 2026-11-10 publications, `subagents` (`nredd.9`) and `resource-sampler` e
 endpoint lagged the upload; the rerun skipped republication on matching integrity.
 
 Regenerating `runtime-locks.json` also took the registry's current third-party resolutions
-(reviewed diff, per [runtime locks](runtime-locks.md)): in both graphs on both targets,
+(reviewed diff): in both graphs on both targets,
 `@aws-sdk/*` updates (patch releases of `core` 3.980.1 -> 3.980.2, the credential providers,
 middleware, `nested-clients`, `types` and `xml-builder`; minor for the nested `token-providers`
 3.1164.0 -> 3.1165.0), `@smithy/core` 3.39.0 -> 3.40.0 (minor) and `ws`
@@ -175,7 +174,7 @@ Planned versions, chosen by SemVer from that range (minor for added features or 
 - `@nredd/pi-session-kit` `0.9.0` -> `0.10.0`: `homeDir`, `/mon` and monitor-tool changes, settle enforcement
 - `@nredd/pi-dev-tools` `0.7.0` -> `0.8.0`: approved merge-commit support, resource and git/ssh/py changes
 
-Plan-mode newer than `0.59.3-nredd.3` and subagents newer than `0.22.0-nredd.8` must update together (`packages/subagents/README.md`), so the pin PR moves both `personal.json` pins in one change. "No source changes" applies only to this PR's own diff (versions and lockfile), not to what publishing `main` ships. Dev-tools and session-kit keep their exact `@nredd/pi-resource-sampler@0.2.0` dependency: they pin it exactly (`0.2.1` was unpublished when they were bumped, and is published now but not selected), and nothing verifies a dependency's provenance. The bump PR deliberately leaves `integration/stacks/personal.json` and `integration/stacks/runtime-locks.json` on the published selection, per [release verification](release-verification.md).
+Plan-mode newer than `0.59.3-nredd.3` and subagents newer than `0.22.0-nredd.8` must update together (`packages/subagents/README.md`), so the pin PR moves both `personal.json` pins in one change. "No source changes" applies only to this PR's own diff (versions and lockfile), not to what publishing `main` ships. Dev-tools and session-kit keep their exact `@nredd/pi-resource-sampler@0.2.0` dependency: they pin it exactly (`0.2.1` was unpublished when they were bumped, and is published now but not selected), and nothing verifies a dependency's provenance. The bump PR deliberately leaves `integration/stacks/personal.json` and `integration/stacks/runtime-locks.json` on the published selection, per [release verification](../README.md#frozen-release-verification).
 
 Published: see the selection table under Combined stack selection.
 
@@ -222,8 +221,7 @@ its full lockfile closure is verified.
 `@nredd/pi-computer-use` ships prebuilt helpers for macOS only. For Linux, `files` lists the locked crate source (`native/linux/bridge-rs`: `Cargo.toml`, `Cargo.lock`, `src/*.rs`) and `docs/content/docs/how-to-guides/linux.mdx`, built on opt-in by `setup-helper.mjs`; no `prebuilt/linux` ships, and no `prebuilt/windows` or Windows crate. It declares the two source-controlled per-architecture macOS helper payloads: `prebuilt/macos/arm64/bridge` and `prebuilt/macos/x64/bridge`. The committed macOS payloads remain historical development fixtures, not release inputs. For new releases, `publish.yml` selects `macos-15` and the release descriptor compiles both architectures from the exact tagged Swift sources in a disposable package copy. It deletes both imported payloads before invoking `build-native.mjs --platform darwin --arch all --no-sign`, refuses missing outputs, and requires the pack-once tarball's native bytes to equal those compiler outputs. The stock contract then checks those same bytes. This is source-to-binary trust through an attested workflow, NOT a bit-reproducibility claim. Its stock contract proves packing, auditing, standalone install, extension loading, and the platform-aware model-visible tool surface (exactly 13 on darwin, 11 elsewhere: `desktop_screenshot`/`desktop_input` register on darwin only) and that each packed `prebuilt/macos/{arm64,x64}/bridge` is a Mach-O of the right arch with mode 0755, while recording the `postinstall` (`setup-helper.mjs`, helper app install and codesign; the stock install uses `--ignore-scripts`) and native desktop behavior as `NOT RUN`: CI cannot supply an interactive desktop or Accessibility/Screen Recording TCC grants. `npm run check` runs the fork's portable suite, including macOS Swift pure checks and the packed-payload check; `npm run build:native` remains a separately invoked macOS build gate, and the live helper script remains opt-in.
 
 Computer-use `0.6.0` was synced from upstream main `67e9e2f77643f84605b738a3198048a88e92190e`
-and published in the batch above. See [its sync record](../packages/computer-use/UPSTREAM.md)
-for the carried patch queue, drop checks, rollback and owner-only validation. Local builds/signing
+and published in the batch above. Local builds/signing
 stay in place. CI builds only loose payloads, not an upstream-signed app: `--no-sign` skips the
 explicit codesign step (the Apple toolchain may emit an ad-hoc linker signature), and no signing
 identity or private key enters CI. Existing setup constructs the app at its unchanged resolved path
@@ -236,7 +234,7 @@ Computer-use platform notes:
 
 - `npm run check --workspace @nredd/pi-computer-use` runs the Swift/native suites only on macOS: Vitest reports `test:macos-native` as skipped elsewhere, and `test:macos-live` additionally needs `PI_COMPUTER_USE_LIVE=1` and skips cleanly otherwise (it starts, restarts and stops its own helper instance on the test home's socket). On Linux those two report skipped, not passed.
 - The imported `packages/computer-use/.github/` (its own `ci.yml`, `npm-audit.yml`, `publish-npm.yml`, dependabot) is dormant: GitHub only reads the repository-root `.github`, so those files never run here. Publication goes through `publish.yml` above. The nested `package-lock.json` was removed; the root workspace lockfile owns resolution, as for `packages/subagents`. The nested locks in `packages/todo` and `packages/plan-mode` were removed too; the root lock governs.
-- `scripts/setup-helper.mjs` still falls back to downloading from `injaneity/pi-computer-use` releases and uses the `com.injaneity.pi-computer-use` bundle id. See [forks](forks.md).
+- `scripts/setup-helper.mjs` still falls back to downloading from `injaneity/pi-computer-use` releases and uses the `com.injaneity.pi-computer-use` bundle id.
 Patterns use `PurePosixPath.full_match`: `*` and `?` stay within one path segment, while `**` matches zero
 or more segments. Requirements check both the source workspace and packed tarball.
 

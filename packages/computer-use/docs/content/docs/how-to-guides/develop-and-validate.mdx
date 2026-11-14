@@ -133,7 +133,7 @@ The harness creates its own D-Bus and Xvfb session. It fails rather than silentl
 The harness root `.github/workflows/publish.yml` owns releases of `@nredd/pi-computer-use`.
 Committed per-architecture macOS helpers are built locally; setup retains local signing with the
 existing keychain identity. This sync does not switch to an upstream-signed universal bundle,
-release, promote or activate anything. See the [signing and rollback runbook](https://github.com/nredd/pi-harness/blob/main/packages/computer-use/UPSTREAM.md#signing-decision-and-rollback)
+release, promote or activate anything. See the package [README](https://github.com/nredd/pi-harness/blob/main/packages/computer-use/README.md#upstream)
 and the harness [release procedure](https://github.com/nredd/pi-harness/blob/main/docs/releases.md).
 
 The nested `.github/workflows/publish-npm.yml` is dormant upstream reference source, not the

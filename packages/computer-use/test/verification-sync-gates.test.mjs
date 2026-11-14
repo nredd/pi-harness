@@ -130,13 +130,11 @@ function ledgerFixture() {
 				check: control.check,
 				files: [control.file],
 				dropControls: [control.name],
-				rows: ["Fixture"],
-				upstream: { status: "harness-only", reference: "UPSTREAM.md" },
+				upstream: { status: "harness-only", reference: "README.md" },
 			},
 		],
 	};
 	write(root, "sync-patches.json", JSON.stringify(ledger));
-	write(root, "UPSTREAM.md", "| Fixture | x | y | z |\n");
 	write(root, "scripts/check-sync-reverts.mjs", '\t\tname: "A control",\n');
 	return { root, control, ledger };
 }
@@ -155,7 +153,7 @@ test("upstream gate compares real tracked trees and rejects dirty, wrong-base an
 	git(source, "-c", "commit.gpgsign=false", "commit", "-qm", "Initial fixture");
 	ledger.upstream = git(source, "rev-parse", "HEAD");
 	// The comparison itself reads all bytes; the fixture owns its metadata differences explicitly.
-	ledger.files = ["UPSTREAM.md", "added", "changed", "deleted", "scripts/check-sync-reverts.mjs", "sync-patches.json"];
+	ledger.files = ["added", "changed", "deleted", "scripts/check-sync-reverts.mjs", "sync-patches.json"];
 	write(root, "sync-patches.json", JSON.stringify(ledger));
 	repo(root);
 	const deps = { ...quiet, root, env: {}, exec: execFileSync };

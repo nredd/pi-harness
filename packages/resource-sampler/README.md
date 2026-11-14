@@ -128,8 +128,7 @@ Bounds:
   immediate SIGKILL on abort/deadline/cap, and resolve only on close. No persistent children or workers.
 - Unsupported platforms keep native host metrics but report process coverage unavailable.
 
-macOS measurement/definition comparison, native ABI evidence and future publication checklist:
-[here](../../docs/mon-accuracy.md). Process `rssBytes` still excludes compressed pages; it is not
+Process `rssBytes` still excludes compressed pages; it is not
 Activity Monitor's physical footprint; use the separate `footprint` metric for that comparison.
 Names remain executable names, so Pi commonly appears as `node`.
 

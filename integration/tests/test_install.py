@@ -4184,7 +4184,7 @@ def test_installer_linux_helper_policy_documentation() -> None:
     """Installer policy is not a claim that the package lacks opt-in Linux support."""
     text = (INTEGRATION.parent / "docs/install.md").read_text()
     assert "Linux has no supported helper" not in text
-    assert "../packages/computer-use/docs/linux.md" in text
+    assert "../packages/computer-use/docs/content/docs/how-to-guides/linux.mdx" in text
     assert "disabled by installer policy" in text
 
 

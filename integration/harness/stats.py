@@ -5,7 +5,7 @@ artifact in a producer home with no Pi packages or credentials.
 
 References:
 - https://github.com/nredd/pi-session-kit
-- https://github.com/nredd/pi-subscription-router/blob/main/docs/reset-aware-stats-plan.md
+- https://github.com/nredd/pi-harness/blob/main/packages/subscription-router/README.md
 """
 
 from __future__ import annotations

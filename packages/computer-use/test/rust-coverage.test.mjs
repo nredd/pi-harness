@@ -38,7 +38,7 @@ test("missing cargo tool gives actionable pinned install documentation", () => {
 	assert.equal(result.status, 1);
 	assert.match(
 		result.stderr,
-		/Missing cargo-llvm-cov; install pinned cargo-llvm-cov and llvm-tools-preview using docs\/rust-coverage.md/,
+		/Missing cargo-llvm-cov; install pinned cargo-llvm-cov and llvm-tools-preview per the package README/,
 	);
 });
 

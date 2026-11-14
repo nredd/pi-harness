@@ -1242,20 +1242,19 @@ def test_audit_files_flags_leaks_and_gaps() -> None:
     assert "unexpected file 'src/x.test.snap'" in problems
 
 
-def test_session_kit_readme_links_only_packed_files() -> None:
-    """Every in-package README link is allowlisted for packing and required, so no tarball has dead links."""
+def test_session_kit_readme_is_required_and_links_only_packed_files() -> None:
+    """The README carries the folded reference, so it is required; any in-package link must be packed."""
     contract = next(c for c in pc.CONTRACTS if c.name == "@nredd/pi-session-kit")
     root = pc.REPO_ROOT / "packages" / contract.directory
     targets = re.findall(r"\]\(([^)\s]+)\)", (root / "README.md").read_text())
     links = {t.split("#")[0].removeprefix("./") for t in targets if not re.match(r"[a-z]+:|#", t)}
-    assert "docs/mon-dashboard.md" in links
     allowlist = json.loads((root / "package.json").read_text())["files"]
-    for link in sorted(links):
-        assert (root / link).is_file(), link
-        assert link in contract.required, link
-        assert any(link == entry or link.startswith(f"{entry}/") for entry in allowlist), link
-    packed = [name for name in contract.required if name != "docs/mon-dashboard.md"]
-    assert pc.audit_files(contract, packed) == ["missing required file 'docs/mon-dashboard.md'"]
+    assert all((root / link).is_file() for link in links), links
+    assert links <= set(contract.required), links
+    packable = {link for link in links if any(link == e or link.startswith(f"{e}/") for e in allowlist)}
+    assert links == packable
+    packed = [name for name in contract.required if name != "README.md"]
+    assert pc.audit_files(contract, packed) == ["missing required file 'README.md'"]
 
 
 def test_audit_license(tmp_path: Path) -> None:
@@ -1947,7 +1946,7 @@ SHARD_HASH = "a" * 64
 
 
 def good_stats_manifest() -> dict[str, object]:
-    """A manifest matching `docs/stats-snapshots.md`.
+    """A manifest matching the README's snapshot schema.
 
     Returns:
         dict[str, object]: Parsed manifest.
@@ -3100,7 +3099,7 @@ def test_shared_runner_script_exits_with_main_status(tmp_path: Path) -> None:
 def test_audit_files_computer_use_exact_payload() -> None:
     """The pinned payload passes; stray, missing and duplicated paths are each reported."""
     packed = list(pc.COMPUTER_USE_CONTRACT.packed_files)
-    assert len(packed) == 93
+    assert len(packed) == 91
     assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed]) == []
     assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed, "src/stray.ts"])
     missing = pc.audit_files(pc.COMPUTER_USE_CONTRACT, [name for name in packed if name != "src/view.ts"])

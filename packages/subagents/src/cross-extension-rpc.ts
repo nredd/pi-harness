@@ -8,7 +8,7 @@
  *   success → { success: true, data?: T }
  *   error   → { success: false, error: string }
  *
- * @see docs/rpc.md — the caller-facing integration reference: spawn options
+ * @see README.md ("Driving subagents from another extension"), the caller-facing integration reference: spawn options
  * (including the fields spawnTopLevel strips), every error string, the
  * completion-notification race, and what protocol version 2 does not promise.
  */

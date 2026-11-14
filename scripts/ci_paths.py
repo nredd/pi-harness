@@ -33,7 +33,16 @@ LOGGER = logging.getLogger(__name__)
 
 GIT = "/usr/bin/git"
 REPO_ROOT = Path(__file__).resolve().parents[1]
-TESTED_DOCUMENTATION = frozenset({"README.md", "packages/preset/README.md"})
+TESTED_DOCUMENTATION = frozenset(
+    {
+        "README.md",
+        "packages/computer-use/README.md",
+        "packages/plan-mode/README.md",
+        "packages/preset/README.md",
+        "packages/session-kit/README.md",
+        "packages/todo/README.md",
+    }
+)
 # Tool pins and root manifests read by both the WSL bootstrap and the stack job.
 TOOLCHAIN_INPUTS = frozenset(
     {"Makefile", "package.json", ".npmrc", ".gitmodules", ".node-version", ".bun-version", ".python-version"}
@@ -402,7 +411,7 @@ def is_documentation_path(path: str) -> bool:
     """
     if path in TESTED_DOCUMENTATION:
         return False
-    if path == "PLAN.md" or (path.startswith("docs/") and path.endswith(".md")):
+    if path.startswith("docs/") and path.endswith(".md"):
         return True
     if "/" not in path and path.endswith(".md"):
         return True

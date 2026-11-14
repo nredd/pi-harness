@@ -7,7 +7,7 @@ this package. `0.6.0` keeps passive monitor output only in the monitor ring buff
 
 ## Standalone use
 
-The packed tarball is self-contained: Pi host modules (`@earendil-works/pi-*`, `typebox`) are `*` peers supplied by Pi, and no sibling plugin is required. Its only runtime dependency in current source is the exact published `@nredd/pi-resource-sampler@0.2.1` library (no Pi imports), which npm installs from the registry for `/mon`. Verified by installing the tarball alone and running it in exact stock Pi 1.3.0 (see the repository's `docs/package-contracts.md`). Optional fork integrations (subagents, Plan mode) are absent in that setup; the exercised behavior does not need them.
+The packed tarball is self-contained: Pi host modules (`@earendil-works/pi-*`, `typebox`) are `*` peers supplied by Pi, and no sibling plugin is required. Its only runtime dependency in current source is the exact published `@nredd/pi-resource-sampler@0.2.1` library (no Pi imports), which npm installs from the registry for `/mon`. Verified by installing the tarball alone and running it in exact stock Pi 1.3.0 (`make check-package-contracts`). Optional fork integrations (subagents, Plan mode) are absent in that setup; the exercised behavior does not need them.
 
 Session-scoped pi extensions for tmux users. No daemon, supervisor, core patch or cross-pane
 registry. Each runtime owns its goal, loops and monitors; persisted goal state follows the active
@@ -18,7 +18,7 @@ every ~2s by the shared `@nredd/pi-resource-sampler` library only while it is op
 limits (macOS native CPU/footprint require Node >=26.1 or Bun, executable names keep 16 bytes,
 RSS excludes compressed pages, `f` toggles a labelled footprint column,
 and memory labels state their measurement basis) are in
-[docs/mon-dashboard.md](docs/mon-dashboard.md). It is not a second `/monitor` process runner.
+[here](#mon-resource-dashboard). It is not a second `/monitor` process runner.
 
 ## Install and config
 
@@ -142,7 +142,7 @@ not producer freshness; without imports it says `viewer never imported`. Tab/Shi
 instant plus age at opening. Old exports stay old after a fresh import; future clocks are flagged.
 Unknown/rejected sources and retained last-good snapshots are explicit. This lists known sources,
 not undiscovered machines. Invalid or missing snapshots show `incomplete coverage`.
-Print/JSON output includes the same provenance. Details: [here](docs/stats-snapshots.md).
+Print/JSON output includes the same provenance. Details: [here](#offline-stats-and-portable-snapshots).
 
 Pinned header: tabs and the coverage note, then the date ranges and the model filter, then a rule.
 Overview: an activity heatmap (one column per week) with the headline numbers (favorite model,
@@ -205,7 +205,7 @@ each `provider/model`), `j/k` or arrows scroll, `q` or Escape closes.
   `node ARTIFACT import --agent-dir DIR --input REPO` validates all machines and atomically
   publishes the local global cache. Both emit one JSON object on success; partial imports emit
   JSON and diagnostics with a nonzero exit. No Git/network operations are part of the CLI.
-  Schema, identity, atomicity and harness API details: [here](docs/stats-snapshots.md).
+  Schema, identity, atomicity and harness API details: [here](#offline-stats-and-portable-snapshots).
 
 ## Titles and rules
 
@@ -299,4 +299,302 @@ registration fixtures lock that ordering. The overwritten no-op resolver initial
 not a reachable validation or lifecycle path.
 `npm run check` runs Biome, TypeScript, the full Vitest suite and `bun test test/scenarios` (Bun 1.4.4).
 Cross-extension Plan/subagent/todo interactions and OS terminal boundaries remain in the integration tier;
-`docs/verification-rebuild.md` at the monorepo root tracks their destinations.
+
+## /mon resource dashboard
+
+`/mon` is a read-only, interactive-TUI view of local host resources. It is on by default and
+disabled with `{ "mon": { "enabled": false } }` in `pi-session-kit.json`. In RPC/print/JSON modes
+it only warns; it never samples there.
+
+### Source
+
+`src/mon/source.ts` is a thin mapping over the published `@nredd/pi-resource-sampler`, declared
+as the exact runtime dependency `0.2.1` (`0.1.0` leaked argv-style process titles as macOS names
+and could fake Bun host CPU). No collector lives in session-kit. Each open view creates
+one sampler (its own CPU baseline) and disposes it on close; disposal aborts and awaits any active
+sample, including its `ps` child on macOS. Mapping rules:
+
+- Collector success and host CPU state are separate. Every resolved sample is `LIVE` and refreshes
+  the last-success time, even while host CPU is `warming` or `unavailable`, because its memory,
+  load and process data are fresh. The CPU readout then says `-- warming` or `-- unavailable`.
+  The header pairs the state (`● LIVE`, `○ WAITING`, `▲ STALE`) with the local wall time of the
+  last successful collection (`updated HH:MM:SS`, `last ok` when stale), so freshness is never
+  inferred from the CPU state.
+- `warming` and `unavailable` metrics become `--`, never zero. The first observation is a warming
+  baseline; persistent warming shows the sampler's reason (e.g. `Host CPU warming: CPU counters
+  have not advanced`).
+- Two diagnostic tones. A warning (`▲`, warning color) means a limit hides data the user would
+  expect: `Partial list: S of E seen (reasons)` for budget caps or collector failures (at most three
+  reasons, in words: `time budget`, `process cap`, `read budget`, `ps failed`, ...), unavailable host
+  CPU, persistent warming. A muted hint states an expected platform limit: Linux always skips kernel
+  threads (no RSS) and processes that exit mid-scan, so a scan whose only reason is
+  `process-unreadable-or-changed` is `N skipped: kernel threads, exited or unreadable`, not a
+  warning; `N names unknown (no access, e.g. other users)`; macOS process CPU. The process header
+  counts *sampled* rows, not host processes.
+- Names are the sampler's executable basenames, never argv or process titles. `""` renders as a dim
+  `(unknown)` (Linux hides other users' `/proc/PID/exe` without ptrace access). macOS `p_comm` keeps
+  16 bytes, so a macOS name of 16+ UTF-8 bytes ends in a dim `…` (`Google Chrome He…`): possibly cut,
+  never claimed complete. Names stay untrusted text: sanitized, never interpreted.
+- Sampler `0.2.0` supplies macOS native interval CPU and footprint via builtin FFI and libproc,
+  with process-start absolute ticks plus microsecond identity. Inaccessible PIDs and unsupported
+  runtimes have unknown metrics; Node 22-25 lack the builtin FFI. `ps` whole-second start times
+  alone never authenticate CPU. The view orders by RSS only when every process CPU is unavailable,
+  until the user picks a sort. First samples are warming, so CPU order stays stable.
+- History spacing uses the sampler's monotonic `monotonicTimeMs`, so wall-clock steps (NTP, manual
+  changes) cannot invent or hide gaps; the wall `wallTimeMs` is only displayed (header clock and
+  last-success UTC).
+  Node's monotonic clock pauses during system sleep on macOS and Linux, so a suspend shows no gap.
+  `scan Nms` (80+ columns) is the sampler's collection duration. Missing/zero memory totals and non-finite values become unknown.
+
+### Presentation
+
+- From 72 columns and 17 rows (one more per diagnostic line), CPU and memory/load cards sit side
+  by side; CPU history is two rows (16 levels) there. Narrower or shorter terminals get a
+  three-line summary (`CPU`, `RAM`, 1-minute load, one-row history); at six rows summary/chrome
+  yields to the selected process, but a compact partial-list or stopped/retry warning remains visible.
+  At eight rows, core CPU/RAM/load metrics take priority over optional history and platform hints.
+  Compact metrics tighten spacing when needed to keep CPU, RAM and the 1-minute load visible.
+  The last row reserves close/help. Below 60 columns the header
+  keeps the update clock over the tagline.
+- Columns: `PID`, `CPU%` (100 = one core), `RSS`, `MEM%` (RSS over total RAM, 60+ columns),
+  `NAME` last so long names never push numbers off screen. `f` toggles the byte column between
+  `RSS` and `FOOT` (native physical footprint, including compressed memory); unavailable/failed
+  PIDs show `--`, never zero. `MEM%` and `m` sorting remain RSS-based in either view. `--` is dimmed. A `▸` marks the
+  selection; a theme scrollbar appears only when the list overflows. The memory card adds 1-minute
+  load per logical CPU.
+- Host CPU severity colors the value (success under 50%, warning under 85%, error above) next to
+  the number itself. Stale CPU retains the last measured value, muted rather than live severity-colored.
+  Cards add a `last value` label; compact summaries rely on the `STALE` header instead, reserving
+  the metric row for CPU, RAM and load.
+- Host CPU history keeps each capture timestamp, uses a fixed 0..100% scale and at most 120
+  samples, newest on the right. A column is the lower-median interval between captures, widened
+  only when the history is longer than the width, so completion-paced drift never invents gaps.
+  Columns with no CPU value after the first one are gaps (`·`), never zero or interpolation;
+  columns before it are blank, including the warming baseline. Stale snapshots add no point. The caption states the actual span. The latest sample in a bucket wins.
+  Stale views show the last successful capture's UTC timestamp (or `none`). Waiting/live/stale and
+  CPU warming/unavailable use semantic theme colors and text, so meaning does not depend on color.
+- Memory labels its actual basis. Older samplers report **total-free** (`T-F` in the compact
+  summary), which includes cached files and is NOT Activity Monitor's Memory Used. Additive v1
+  `memory.usage` metrics instead render **used (A+W+C)** (`A+W+C` compact), an estimate of resident
+  App + Wired + Compressed physical RAM. A failed native metric stays `--`, never total-free under
+  a used label. Cards also show free pages and swap used/allocated; missing swap stays `--/--`.
+  `?` explains each basis, RSS excluding compressed pages versus Activity Monitor's footprint,
+  executable names (`pi` runs as `node`), and decaying `ps %cpu` versus interval CPU.
+  Load averages are not percentages. Process CPU is interval CPU, where 100% is one logical CPU and
+  multithreaded processes can exceed 100%.
+- The source registry dependency is `0.2.1`, which removes the known Linux `/proc` iterator PID-exit race (the historical WSL incident's errno remains unproven). On native-capable macOS it supplies used/swap memory,
+  footprint and interval process CPU; unsupported or inaccessible metrics remain `--`, never zero
+  or an invented total-free fallback. Both consumer registry-resolution tests require those
+  published bytes rather than a workspace link.
+- The process viewport preserves selection by sampler identity, not PID or sorted row.
+  Exited identities choose a bounded neighboring row; PID reuse cannot inherit selection.
+  Unknown/non-finite measurements sort last with deterministic PID/identity tie breaks.
+- `j/k` and arrows select; PageUp/PageDown page; `g/G` jump first/last; `f` toggles RSS/FOOT; `c/m/p` sort
+  CPU/RSS/PID; `s` cycles sort; `?` toggles help; `q`/Escape close. CPU/RSS descend,
+  PID ascends. Help has a bounded, wrapped viewport with a visible range and scroll hint;
+  `j/k`, arrows, PageUp/PageDown and `g/G` scroll help without moving the process selection.
+  No kill, locks, workload control, process arguments or environment display. Process names
+  are the sampler's sanitized display names and are never interpreted.
+
+### Ownership
+
+`MonView` accepts presentation snapshots and never collects data. It caches rendered lines
+by dimensions until update/input/theme invalidation. `MonPoll` owns one completion-paced probe
+(~2s after the previous one completed), with no catch-up queue. Closing aborts collection,
+cancels the timeout and awaits the sampler's disposal. Errors stop collection and retain
+explicitly stale values; reopening is the retry mechanism. Late results are discarded.
+
+`registerMon` opens a source only inside a TUI interaction and serializes replacement through
+completed asynchronous disposal, including concurrent opens. Session shutdown/start invalidates
+pending openers before they can create a source, even when Pi defers the UI factory. It registers
+no model tool, persists no history, sends no model messages and does no network work.
+
+### Verification
+
+- `npm run check` in `packages/session-kit`. The root lock pins a nested registry install
+  (`packages/session-kit/node_modules/@nredd/pi-resource-sampler`, exact `0.2.1` tarball and
+  integrity), so tests run the published bytes, not the same-version workspace that npm would
+  otherwise link. `source.test.ts` fails if resolution ever reaches the workspace.
+  - `test/mon/source.test.ts`: two actual host observations (warming, then measured), a real poll's
+    two updates, and mapping edge cases. In-flight close wraps the real sampler to hold its pending
+    sample, then requires that sample to reject with `AbortError`, no update, no child and no timer.
+    The check is timed by Node's `child_process` diagnostics channel, in the microtask after the
+    first helper spawned, so it holds for a late spawn and for a helper that already exited, and it
+    fails at once if no helper spawned. On macOS it requires that child (`vm_stat`) in the process
+    list, even as an unreaped zombie; Linux reads `/proc` in process and spawns only `getconf`, so
+    there the `AbortError` is the only provider evidence and no listed child is claimed.
+  - `test/mon/theme.test.ts`: actual built-in dark and light themes over an actual observation at
+    40x12, 60x20, 80x24 and 120x40.
+  - `test/scenarios/mon.test.ts` (Vitest and Bun): the real interactive Pi host and the real sampler;
+    two observations, resize matrix, close/Escape/reopen, close before the first sample and session
+    shutdown all leave no kit timer or child process. Registration, shutdown and close-before-sample
+    go through `createSessionKit`. The observation cases call `registerMon` directly, with the real
+    sampler wrapped only to observe each resolved scan,
+    then check the frame against that scan: its exact process count, and its `time budget` notice
+    when a loaded host runs out of the 250ms scan budget. They never poll frames for a full scan,
+    which only a later fake-clock tick could bring.
+  - `test/mon/{component,poll,index}.test.ts`: layout, identity, history, lifecycle interleavings
+    with fakes; `resource-fixture.ts` is type-checked against the package's `ResourceSnapshot`.
+- `make check-package-contracts` packs session-kit, installs it alone (sampler from npm, exact
+  lockfile closure) and drives it through stock Pi.
+- Real macOS terminal recordings exercise the packed, registry-backed view, resize, navigation,
+  close and reopen. Empty direct-child lists before and after close show only that no child was
+  observed at those instants; they do NOT prove an in-flight helper was cancelled or reaped.
+  In-flight cancellation/reaping evidence comes from the deterministic real-sampler tests above,
+  not those terminal snapshots. No Linux terminal recording is claimed.
+- Manual fixture preview (no sampling): `bun test/mon/terminal.ts dark|light`. It is labelled
+  `FIXTURE DATA` and uses `fixture-*` names, so a capture can never pass for host data; it is not
+  evidence of real measurements.
+
+## Offline stats and portable snapshots
+
+Build the committed `dist/pi-stats-export.mjs` with `npm ci && npm run build:stats-export`.
+The exact esbuild version and dependencies are locked; tests assert byte-identical rebuilds.
+Copy only that file. Runtime is Node 22+ with builtins only, no Pi install, extension, private
+repository, package install, auth or network access. Importing the artifact is silent, even when
+an importing process supplies a nonexistent entrypoint argument; direct and symlinked Node execution
+still run the CLI. Packed-CLI tests explicitly launch `node`, including when their Vitest
+host is Bun; this tests the artifact's declared runtime, not Bun's entry-module resolver.
+
+Chart tick steps parse decimal powers directly rather than using implementation-approximated
+exponentiation, keeping large finite ticks consistent between Node and Bun. Steps above the
+numeric range retain infinite headroom.
+
+```
+node ARTIFACT export --agent-dir DIR --output OUT [--sessions-dir ROOT]
+node ARTIFACT import --agent-dir DIR --input REPO
+```
+
+`--agent-dir` defaults to `PI_CODING_AGENT_DIR`, then `~/.pi/agent`. The session root defaults to
+`PI_CODING_AGENT_SESSION_DIR`, then `DIR/sessions`; `--sessions-dir` takes precedence. History
+already cached under former roots is retained, even after files disappear. Paths are resolved
+locally and never exported. Run export before fetch/commit/push, then import the updated data
+checkout. Git, locking concurrent sync runs, retrying pushes and network deadlines belong to the
+sync helper, not this data-only artifact.
+
+CLI results:
+
+- Export: `{ "machineId": "<UUID>", "snapshotDir": "<OUT>/machines/<UUID>" }` on stdout.
+- Import: `{ "imported": N, "retained": N, "problems": [], "importedAt": MS }` on stdout.
+- Exactly one JSON object is emitted. Diagnostics go to stderr. Invalid commands, malformed local
+  scans, unwritable caches and publication failures exit nonzero. Partial/corrupt imports emit
+  a JSON result and exit nonzero, retaining every failed machine's last-good snapshot.
+- A failed export never replaces the previous manifest. Its validated immutable shards may remain
+  unpublished. Export writes only its own machine directory; it never edits another machine.
+
+Installation state, never synced:
+
+- `DIR/pi-session-kit/machine.json`: persistent UUID v4 and label, created exclusively and
+  atomically on first use. Default label is `Pi machine`, not the hostname. A corrupt identity
+  fails rather than silently enrolling another machine. Copying an entire agent dir also copies
+  its installation identity: remove `machine.json` on a genuinely new installation before export.
+- `DIR/pi-session-kit/stats-cache.json`: local parser cache v2, including file paths and compact
+  usage tuples. Version 1 entries for deleted files stay intact; existing files reparse even if
+  their mtime/size match. Strong identities are not invented for inaccessible legacy files.
+  Failed stat/parse operations count as incomplete history; a failed reparse retains the last-good
+  cached record. Invalid cached identities and raw provider/model pairs are discarded. Persisted
+  child markers apply only to the matching session ID, surviving user-visible renames.
+- `DIR/pi-session-kit/stats-global.json`: one atomically replaced document containing validated
+  last-good machine snapshots, last successful import time and coverage problems. Imports do not
+  mutate local usage or installation identity. A wholly failed import does not advance the sync
+  time; a partial import records valid updates and marks coverage incomplete. The assembled cache
+  accepts up to 128 MiB; exceeding that limit fails before replacement and retains its last-good
+  bytes. Tests inject final-document byte accounting at the exact limit and one byte over, while
+  retaining real import validation and atomic publication.
+
+Snapshot version 1:
+
+```
+machines/<UUID>/manifest.json
+machines/<UUID>/<YYYY-MM>-<sha256>.json
+```
+
+Manifest exact keys:
+
+- `version`: `1`.
+- `machineId`: persistent UUID v4, matching its directory.
+- `label`: installation label, maximum 1024 characters. Not a session name.
+- `exportedAt`: positive UTC Unix milliseconds.
+- `shards`: unique month references, each exactly `{month, file, sha256, bytes}`. `file` MUST
+  equal `<month>-<sha256>.json`. No absolute paths, traversal or arbitrary filenames.
+
+Shard exact keys: `{version, machineId, month, events, sessions}`. All shard JSON is canonical
+`JSON.stringify` output (no indentation/newline), bounded to 128 MiB per file. Manifest hashes
+cover exact UTF-8 shard bytes. Immutable content-addressed shards are published first, manifest
+last; unreferenced old shard generations are deliberately retained and ignored. No cleanup races
+with readers. Each manifest references exactly one shard per month.
+
+Event exact keys:
+
+- `id`: SHA-256 event fingerprint.
+- `entryId`: SHA-256 of `entry:<preserved assistant entry ID>`, or `null` for legacy records.
+- `sessionId`: opaque session ID.
+- `ms`: original positive UTC Unix milliseconds, in the shard's UTC month.
+- `provider`, `model`: raw physical attribution, each nonempty and at most 1024 characters.
+- `input`, `output`, `cacheRead`, `cacheWrite`: nonnegative safe integers, not all zero.
+- `cost`: finite nonnegative recorded notional cost.
+
+The identified fingerprint is SHA-256 of the JSON array
+`[entryId, ms, provider, model, input, output, cacheRead, cacheWrite]`.
+Notional price changes do not create new events. Different entry IDs survive equal usage. Copied entries across forks/machines count once. Legacy
+fingerprinting and matching use `[provider, model, ms, input, output, cacheRead, cacheWrite]`,
+intentionally without cost to preserve the old tuple rule; identified counterparts supersede
+legacy duplicates.
+
+Session exact keys: `{id, startMs, endMs, child}`. Header IDs hash as `session:<header ID>`;
+unidentified legacy sessions use a local path hash and therefore cannot always be matched across
+machines. Session metadata is independent of event dedup, lives in the start timestamp's UTC
+month, and merges time bounds by ID through the same helper for local and imported histories.
+Children retain usage but do not contribute to session count.
+Only sessions owning a retained event count. The oldest session owns copied events, independent
+of machine read order. Every exported event references session metadata.
+
+No message content, tool arguments/results, paths, session names, environment, credentials or
+source objects are exported. Explicit projections, not object spreads, enforce the allowlist.
+Raw attribution is retained to avoid display-sanitization collisions. Schema validators reject
+unknown fields, unsupported versions, duplicate IDs, invalid counters/time/months, excluded test
+providers, identity/digest/byte-size mismatches, symlink files and missing session metadata.
+
+Import validates a whole machine before replacement, retaining last-good data for bad, missing
+or older snapshots. Other valid machines still advance. Only the final validated global document
+is atomically renamed, so `/stats` sees either the old or new complete cache, never a mixed import.
+Producer updates are invisible until the producer exports AND the viewer imports. Coverage counts
+known machines, not undiscovered installations; it is not proof that every machine has synced.
+
+`/stats` freshly scans local sessions and combines them with this cache without network access.
+Its header labels cached coverage, **viewer last import**, local-only/never-imported state and
+incomplete coverage. Tab/Shift-Tab cycles Overview, Models and **Machines**. Machines lists each
+known installation's label plus full opaque UUID (default labels may repeat), fresh local scan
+status, and each remote producer's **exported-at** UTC instant and age at opening. Use j/k or
+arrows to scroll; narrow panes wrap details. Print/JSON output includes the same provenance;
+empty histories include it in the notification. Range/model filters do not filter provenance.
+
+The viewer import clock is NOT producer freshness: importing a ten-day-old export today still
+shows a ten-day producer age. Future export clocks say `future; clock skew`, never fresh.
+Absent/invalid display timestamps say `unknown`. Invalid v1 manifests still fail validation and
+retain last-good data; rejected known UUIDs without last-good data show unknown export time.
+Missing/rejected sources with retained data say `Incomplete import; retained last-good snapshot`.
+Existing v1 snapshots require no migration or re-export. Unreadable caches report incomplete
+coverage, not invented machine identities. Only known sources are listed; this cannot discover
+machines that have never supplied a snapshot. No freshness threshold implies fleet completeness.
+
+Labels come only from the existing local `machine.json`, never automatic hostname/environment
+collection. Keep custom labels non-sensitive: they are exported. No schema or sync cadence changes.
+Future calls are ignored in display totals, not removed from durable history. Statistics
+are not subscription quota measurements or router inputs.
+
+Harness API:
+
+- `src/stats/library.ts` is a Pi-independent barrel for parser, aggregation and snapshot APIs.
+- `parseSession`, `flatten`, `dedupCalls`, `hourlySeries`, `makeSnapshot`, `validateManifest`,
+  `validateShard`, `validateSnapshot`, `exportStats`, `importStats`, `loadCombined`, `coverageLabel`.
+- `hourlySeries(calls, "5h" | "24h", now, keyOf?)` is deterministic, zero-filled, filters exact
+  rolling boundaries and labels partial edges. UTC buckets keep repeated DST hours separate;
+  viewer-local labels carry UTC offsets, including fractional-offset zones.
+
+Limits: legacy no-ID copies can only use tuple dedup, legacy session metadata without header IDs
+cannot reliably match across machines, and concurrent sync workflows must serialize writes to
+one agent directory. The combined global cache is bounded to 128 MiB; a larger import fails
+without replacing last-good data. There is no automatic discovery/network refresh or daemon. Reinitializing
+both the local parser cache and source history permanently loses that machine's local history;
+keep these installation files out of synced snapshots but do not routinely delete them.

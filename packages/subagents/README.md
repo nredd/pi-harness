@@ -20,10 +20,10 @@ https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 - **FleetView** — one-line summary below the editor by default; `ctrl+shift+a` expands the Claude Code-style navigable list of `main` + every running subagent (earliest-launched first). `ctrl+shift+k` twice within 3s stops every running agent and workflow. Press `↓` (or `←`) at an empty prompt to jump in, `↑`/`↓` to move the selection, `Enter` to open the selected agent's live, auto-updating conversation, `Esc` to return. Finished agents linger briefly before dropping out, and a viewer stays open through completion so you can read the final output. Toggle via `/agents → Settings → Fleet view`
 - **Conversation viewer** — select any agent in `/agents` to open a live-scrolling overlay of its full conversation (auto-follows new content, scroll up to pause). In pi's fullscreen mode it is a borderless, full-terminal observer with mouse support. Steer a running agent inline by pressing `Enter` to open a composer, typing, then `Enter` to send (`Esc` or an empty submit returns) — the message appears as a user message and redirects the agent after its current tool. Press `b` on a running foreground `Agent` call to hand that run to the background (see [Sending a foreground agent to the background](#sending-a-foreground-agent-to-the-background)). Stop a still-running agent by pressing `x` (then `x` again to confirm) — steer and stop both work for background agents too. Assistant text renders as Markdown; `m` cycles that between off, assistant-only and everything (see [Viewer markdown](#persistent-settings))
 - **Custom agent types** — define agents in `.pi/agents/<name>.md` or `.agents/agents/<name>.md` (project) or globally, with YAML frontmatter: custom system prompts, model selection, thinking levels, tool restrictions, and Claude Code-compatible colored name badges
-- **Package-shipped agents** — a pi package can declare its own subagents (and workflow scripts) with `"pi": { "subagents": { "agents": ["./agents"] } }` in its `package.json`, so `pi install` is the whole setup: no copying files into `.pi/agents/` on every machine or container start. Only packages pi has actually installed are read (never `node_modules`), package definitions rank below every agent you wrote, and `/agents` shows them read-only with Eject and Disable. Narrow or switch it off with `packageAgents` / `packageWorkflows`. **[Full guide](https://github.com/tintinweb/pi-subagents/blob/master/docs/packages.md)**
+- **Package-shipped agents** — a pi package can declare its own subagents (and workflow scripts) with `"pi": { "subagents": { "agents": ["./agents"] } }` in its `package.json`, so `pi install` is the whole setup: no copying files into `.pi/agents/` on every machine or container start. Only packages pi has actually installed are read (never `node_modules`), package definitions rank below every agent you wrote, and `/agents` shows them read-only with Eject and Disable. Narrow or switch it off with `packageAgents` / `packageWorkflows`. **[Full guide](#shipping-subagents-in-a-pi-package)**
 - **Nested subagents** — opt-in, default-off delegation: a custom agent that sets `allowed_subagents` gets its own ownership-scoped `Agent`, `get_subagent_result`, `steer_subagent`, and `stop_subagent` tools, depth-capped from the main session (default 2). It can control only its own children, they are stopped when it finishes, and their transcripts and token spend roll up to it. The allowlist is a privilege boundary — a child runs with its own tools, so pick it as carefully as `tools:` itself
 - **Agent mentions** — subagents are first-class: type `@explore also check the RPC path` at the prompt and it goes to that agent instead of the main model, without a word of it entering the chat. One syntax covers the whole lifecycle — message it while it runs, resume it once it has finished, reopen its session from disk long after that, or start it if it never ran. Mentioning an agent that isn't running spawns it through an off-screen clone of the conversation, so it gets Claude Code's context-written prompt and a real `Agent` tool call without a word of it reaching the chat; `direct` mode starts it here from your text instead, with no model call at all. The orchestrator can `name` an agent so you address it as `@auth-audit`, and handles work in `steer_subagent`/`get_subagent_result` too. `@` completes live agents, resumable ones, and startable types alongside pi's file completion; `@main` forces text back to the main model. Toggle via `/agents → Settings → Agent mentions`
-- **Scripted workflows** — a `SubagentWorkflow` tool that runs a deterministic JavaScript script orchestrating many subagents: `agent()`, `parallel()`, `pipeline()`, `phase()`, `log()` and `args`, with a pure-literal `meta` block declaring the phases. `pipeline()` has no barrier between stages, so one item can be in a later stage while another is still in the first — unlike `parallel()`, which idles every fast agent until the slowest finishes. Runs in the background with a live card, inspectable via `/agents → Workflows` or by selecting the run in FleetView. `agent()` also takes `gate: "npm test"` to verify a child by running a command (inside its worktree, when isolated) rather than asking another model, and `resume: "<label>"` to continue a child instead of re-paying its context. Scripts run in a `node:vm` sandbox on a worker thread where `Date.now()`, `Math.random()` and `eval` throw. On by default, but it stands down for company: if another extension already provides a `Workflow` or `SubagentWorkflow` tool, this one warns and disables itself for the session rather than offering the model two orchestrators. Pin it either way with `"workflowsEnabled"` in `subagents.json` or `/agents → Settings → Workflows`. A script written for Claude Code's `Workflow` tool runs here unchanged: same globals, `schema` returns a validated object exactly as it does there, `budget` is present and always reports no token target (pi has no such directive) so its `budget.total`-guarded patterns still take the branch they were written for, and nested `workflow()` composes saved workflows one level deep. **[Full guide](https://github.com/tintinweb/pi-subagents/blob/master/docs/workflows.md)**
+- **Scripted workflows** — a `SubagentWorkflow` tool that runs a deterministic JavaScript script orchestrating many subagents: `agent()`, `parallel()`, `pipeline()`, `phase()`, `log()` and `args`, with a pure-literal `meta` block declaring the phases. `pipeline()` has no barrier between stages, so one item can be in a later stage while another is still in the first — unlike `parallel()`, which idles every fast agent until the slowest finishes. Runs in the background with a live card, inspectable via `/agents → Workflows` or by selecting the run in FleetView. `agent()` also takes `gate: "npm test"` to verify a child by running a command (inside its worktree, when isolated) rather than asking another model, and `resume: "<label>"` to continue a child instead of re-paying its context. Scripts run in a `node:vm` sandbox on a worker thread where `Date.now()`, `Math.random()` and `eval` throw. On by default, but it stands down for company: if another extension already provides a `Workflow` or `SubagentWorkflow` tool, this one warns and disables itself for the session rather than offering the model two orchestrators. Pin it either way with `"workflowsEnabled"` in `subagents.json` or `/agents → Settings → Workflows`. A script written for Claude Code's `Workflow` tool runs here unchanged: same globals, `schema` returns a validated object exactly as it does there, `budget` is present and always reports no token target (pi has no such directive) so its `budget.total`-guarded patterns still take the branch they were written for, and nested `workflow()` composes saved workflows one level deep. **[Full guide](#scripted-workflows)**
 - **Mid-run steering** — inject messages into running agents to redirect their work without restarting
 - **Session resume** — pick up where an agent left off, preserving full conversation context. Resumes detached by default and notifies you on completion, just like a fresh spawn; pass `run_in_background: false` to block and get the result inline
 - **Graceful turn limits** — agents get a "wrap up" warning before hard abort, producing clean partial results instead of cut-off output
@@ -37,7 +37,7 @@ https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 - **Stops are reported** — a run that settles while the session's own agents are still running or queued shows the count and what is armed to wake the parent, e.g. `Run ended with 3 agents running or queued, armed: 2 agent completion notices wake the parent; 1 foreground or RPC-spawned agent will not`. Background agents (`Agent` with `run_in_background`, `@handle` mentions, scheduled jobs) wake it in every join mode; foreground agents and RPC spawns without `isBackground` notify nobody, and when only those are pending the notice is a warning with `armed: no agent completion notice wakes the parent`. It speaks for agents only, beside the monitor and todo notices. Two edges: after a session switch the notice is spooled and lands when that session is live again, and a held notice can be dropped when `pi -p` tears down. Nested and workflow children are not counted
 - **Styled completion notifications** — background agent results render as themed, compact notification boxes (icon, stats, result preview) instead of raw XML. Expandable to show full output. Group completions render each agent individually
 - **Event bus** — lifecycle events (`subagents:created`, `started`, `completed`, `failed`, `steered`, `compacted`) and a per-message spend ledger (`subagents:usage`) emitted via `pi.events`, enabling other extensions to react to sub-agent activity
-- **Cross-extension RPC** — other pi extensions can spawn, stop, steer, and join subagents via the `pi.events` event bus (`subagents:rpc:ping`, `subagents:rpc:spawn`, `subagents:rpc:stop`, `subagents:rpc:consume`, `subagents:rpc:steer`). Standardized reply envelopes with protocol versioning. Emits `subagents:ready` on session start. **[Full reference](https://github.com/tintinweb/pi-subagents/blob/master/docs/rpc.md)**
+- **Cross-extension RPC** — other pi extensions can spawn, stop, steer, and join subagents via the `pi.events` event bus (`subagents:rpc:ping`, `subagents:rpc:spawn`, `subagents:rpc:stop`, `subagents:rpc:consume`, `subagents:rpc:steer`). Standardized reply envelopes with protocol versioning. Emits `subagents:ready` on session start. **[Full reference](#driving-subagents-from-another-extension)**
 - **Schedule subagents** — pass `schedule` to the `Agent` tool to fire on cron / interval / one-shot. Session-scoped jobs with PID-locked persistence; results arrive as the same completion notification as a manual background agent; manage via `/agents → Scheduled jobs`
 - **Model scope enforcement** — opt-in validation that subagent model choices stay within your pi `enabledModels` allowlist (sourced from `/scoped-models`, with both global and project-local pi settings honored). Caller-supplied out-of-scope → hard error to orchestrator; frontmatter-pinned out-of-scope → warning + runs anyway (frontmatter authoritative). Toggle via `/agents → Settings → Scope models`
 
@@ -73,8 +73,7 @@ const extension = createSubagentsExtension({ clock });
 
 `SubagentsExtensionOptions` accepts `clock?: Clock` and `homeDir?: string`. An explicit home binds
 user-scoped discovery, settings and child-session paths without mutating `HOME`; omitted homes keep
-call-time host defaults. Explicit agent/session directory overrides still win. The boundary audit and
-test seams are documented [here](docs/home-injection.md).
+call-time host defaults. Explicit agent/session directory overrides still win.
 
 The exported clock contract matches session-kit's scheduling boundary:
 
@@ -123,8 +122,7 @@ and `createInteractiveHarness`/`VirtualTerminal`, real child sessions and git, o
 clock, promise-held tools/streams and raw SGR mouse input. Homes, settings and provider credentials
 are fixtures; no installed pi, tmux or real-clock sleeps are needed. Existing old-host strict-mode
 coverage explicitly removes the optional SDK export; the shared faux runtime uses the host's real
-`withBeforeProviderRequest` facade. Maintainer guidance on public index callback
-coverage and retained safety guards is [here](../../docs/subagents-index-continuation.md).
+`withBeforeProviderRequest` facade.
 
 ### Other hosts
 
@@ -347,7 +345,7 @@ The cost is a visible turn — the model's reasoning and its tool block, narrati
             ▸ Cyan Agent   favorite color        ← widget, fleet row, handle
 ```
 
-It is a literal clone — the session's own entries and the same system prompt, not [`inherit_context`](#agent-frontmatter)'s text rendering of them — taken from memory and compaction-aware, so what the copy reads is what the main model is working from. The clone gets one tool and one job; it cannot read, write or run anything, because an invisible turn with the full toolset could do invisible work. The agent it starts is attributed to the *real* session, so its transcript and `rootSessionId` land where they would have anyway, and it carries no `tool-use-id` — the main conversation never issued one.
+It is a literal clone — the session's own entries and the same system prompt, not [`inherit_context`](#frontmatter-fields)'s text rendering of them — taken from memory and compaction-aware, so what the copy reads is what the main model is working from. The clone gets one tool and one job; it cannot read, write or run anything, because an invisible turn with the full toolset could do invisible work. The agent it starts is attributed to the *real* session, so its transcript and `rootSessionId` land where they would have anyway, and it carries no `tool-use-id` — the main conversation never issued one.
 
 | Mode | `@plan sketch the migration`, with no Plan agent running |
 |------|----------------------------------------------------------|
@@ -497,7 +495,7 @@ All fields are optional — sensible defaults for everything.
 
 Frontmatter is authoritative for `max_turns`, `inherit_context`, `run_in_background`, `isolated`, and `isolation`. An agent file's `model` and `thinking` are portable defaults: an explicit `Agent({ model, thinking })` selection overrides either for that run. With no explicit thinking level, the definition wins; if it has none either, no level is passed and pi picks one at session creation (the per-model setting, else `defaultThinkingLevel`, clamped to the model), which does not follow the parent's live level. Only the `@mention` clone path starts from the parent's `ctx.thinkingLevel`. Model selection additionally follows the [`agentModels`](#per-agent-models) precedence. Other `Agent` tool parameters only fill fields the agent config leaves unspecified. Other spawn paths differ per field:
 
-- `isolated` holds on every spawn path, including `@handle` mentions, workflows and [cross-extension RPC](https://github.com/tintinweb/pi-subagents/blob/master/docs/rpc.md).
+- `isolated` holds on every spawn path, including `@handle` mentions, workflows and [cross-extension RPC](#driving-subagents-from-another-extension).
 - `isolation` holds on every path except workflows: as in Claude Code, only the script's `agent()` option decides there.
 - `inherit_context` applies only to `Agent` tool and nested spawns, including default-mode `@handle` mentions, which spawn through the `Agent` tool. As in Claude Code, where only a fork inherits the conversation, every other spawn starts fresh unless its caller asks: workflow children and scheduled runs never inherit, and an RPC caller opts in with `inheritContext`.
 
@@ -635,7 +633,7 @@ Four rules define the feature:
 
 `packageAgents` and `packageWorkflows` in [`subagents.json`](#persistent-settings) default to `true`; set either to `false` or to a list of package names to narrow it. Installing a package is already the trust decision — pi runs that package's `extensions/` and puts its `skills/` in the system prompt with no further prompt, so a declared `.md` agent is strictly less privileged than what it already runs.
 
-**Full guide:** [`docs/packages.md`](https://github.com/tintinweb/pi-subagents/blob/master/docs/packages.md) — manifest syntax and the four accepted spellings, `!` exclusions, the development loop, naming, precedence, and troubleshooting.
+**Full guide:** [here](#shipping-subagents-in-a-pi-package) — manifest syntax and the four accepted spellings, `!` exclusions, the development loop, naming, precedence, and troubleshooting.
 
 ## Tools
 ### `Agent`
@@ -695,7 +693,7 @@ return await pipeline(
 
 Concurrency is capped at `max(1, min(16, cpus - 2))` — the run's own limit, independent of the session's `maxConcurrent` pool, which its agents do not enter. There are 1000 agents per run and 4096 items per `parallel`/`pipeline` call.
 
-**Full guide:** [`docs/workflows.md`](https://github.com/tintinweb/pi-subagents/blob/master/docs/workflows.md) — how the model writes the script for you, how to edit and re-run it, how to save one as a reusable named workflow, plus the complete `agent()` option reference, recipes and troubleshooting.
+**Full guide:** [here](#scripted-workflows) — how the model writes the script for you, how to edit and re-run it, how to save one as a reusable named workflow, plus the complete `agent()` option reference, recipes and troubleshooting.
 
 ### `get_subagent_result`
 
@@ -785,7 +783,7 @@ Settings                                    ← max concurrency (background + fo
 
 - **Running agents** — select one to open its live conversation viewer. While it's still running, press `Enter` to open the steering composer, then `Enter` again to send a message that redirects the agent (same mechanism as the `steer_subagent` tool; `Esc` or an empty submit returns). On a live foreground run, press `b` to hand the same session and in-flight work to the background without stopping or restarting it — the blocked `Agent` call returns the agent ID and the run notifies on completion like any background agent. Press `x` (then `x` again to confirm) to stop/abort it — including **background** agents, which a global Esc can't unambiguously target (Esc still stops a blocking foreground `Agent` call, but no longer reaches one that has been handed off — `x` here does). A stopped agent reports its partial output flagged as incomplete, not as a completion. `m` cycles how much of the transcript renders as Markdown — see [Viewer markdown](#persistent-settings).
 - **Stop all running** — after a confirmation, stops every running or queued top-level agent, background survivor of a session switch, and workflow run (with its agents), the same as the FleetView stop-all chord. A scheduled job that has not fired yet is not running and is left alone.
-- **Agent types** — unified list with source indicators: `•` (project), `◦` (global), `▪` ([package](docs/packages.md)), `✕` (disabled), explained by a legend naming only the badges actually on screen. Each row shows the agent's model, and the highlighted agent's full description appears below the list — prefixed with the declaring package's name for a `▪` agent, since the badge alone doesn't say *which* package. The model column names the winning configuration source and outcome, including the selected identity when it differs. It shows `(unavailable, fallback: inherit)` only for actual parent fallback, and `(error; no dispatch)` when selection refuses under the configured policy. Every detail menu offers **Explain model**, a read-only configuration preview showing precedence, shadowed defaults, exact tier binding and failure policies. Select an agent to manage it:
+- **Agent types** — unified list with source indicators: `•` (project), `◦` (global), `▪` ([package](#shipping-subagents-in-a-pi-package)), `✕` (disabled), explained by a legend naming only the badges actually on screen. Each row shows the agent's model, and the highlighted agent's full description appears below the list — prefixed with the declaring package's name for a `▪` agent, since the badge alone doesn't say *which* package. The model column names the winning configuration source and outcome, including the selected identity when it differs. It shows `(unavailable, fallback: inherit)` only for actual parent fallback, and `(error; no dispatch)` when selection refuses under the configured policy. Every detail menu offers **Explain model**, a read-only configuration preview showing precedence, shadowed defaults, exact tier binding and failure policies. Select an agent to manage it:
   - **Default agents** (no override): Eject (export as `.md`), Disable
   - **Default agents** (ejected/overridden): Edit, Disable, Reset to default, Delete
   - **Custom agents**: Edit, Disable, Delete
@@ -1130,7 +1128,7 @@ Agent lifecycle events are emitted via `pi.events.emit()` so other extensions ca
 | `subagents:settings_loaded` | Persisted settings applied at extension init | `settings` (merged global + project) |
 | `subagents:settings_changed` | `/agents` → Settings mutation was applied | `settings`, `persisted` (`boolean` — `false` on write failure) |
 
-**Agent identity on events.** `created`, `started`, `completed`, `failed` and `compacted` carry `handle`, the agent's type-derived `@handle` (`explore`, `explore-2`), and `name`, the second handle drawn from the spawner's `name` (`auth-audit` for `name: "Auth Audit"`), and `nameBase`, that name before collision numbering: a retry spawned as `Auth Audit` while the first try still holds `auth-audit` gets `name: "auth-audit-2"` and `nameBase: "auth-audit"`. An evicted agent reopened under a new id also carries `previousId`, the id it continues. Each is omitted when the agent has none; `previousId` cannot be set through `subagents:rpc:spawn`. `spawnSeq` orders the agent's creation, before any time queued, and `completed`/`failed` add `settleSeq` from the same counter (one per extension activation), so a listener can tell an agent spawned after another settled from one queued behind it. A listener can then match an agent by what the parent typed instead of only its opaque `id`; pi-todo uses them to show a todo `owner`'s live agent state ([owner match rule](https://github.com/nredd/pi-harness/tree/main/packages/todo/docs/overlay.md#owner-match-rule)).
+**Agent identity on events.** `created`, `started`, `completed`, `failed` and `compacted` carry `handle`, the agent's type-derived `@handle` (`explore`, `explore-2`), and `name`, the second handle drawn from the spawner's `name` (`auth-audit` for `name: "Auth Audit"`), and `nameBase`, that name before collision numbering: a retry spawned as `Auth Audit` while the first try still holds `auth-audit` gets `name: "auth-audit-2"` and `nameBase: "auth-audit"`. An evicted agent reopened under a new id also carries `previousId`, the id it continues. Each is omitted when the agent has none; `previousId` cannot be set through `subagents:rpc:spawn`. `spawnSeq` orders the agent's creation, before any time queued, and `completed`/`failed` add `settleSeq` from the same counter (one per extension activation), so a listener can tell an agent spawned after another settled from one queued behind it. A listener can then match an agent by what the parent typed instead of only its opaque `id`; pi-todo uses them to show a todo `owner`'s live agent state ([owner match rule](https://github.com/nredd/pi-harness/blob/main/packages/todo/README.md#owner-match-rule)).
 
 **Tier provenance on events.** Payloads that disclose fallback provenance also carry `modelTier` and `modelNote` for tier selections. Outcomes are `routed`, `static`, `unmapped`, `unavailable` or `exhausted`; successful outcomes include the tier, bound profile/member, admitted model and latest answering model, and static outcomes list skipped members and whether a quota signal was used. `subagents:record` history entries and detached completion spools retain the same outcome. Persisted `modelTier.model` contains identity only (`provider`, `id`, `name`, `api`), never provider URLs, headers or other credential-bearing model overlays.
 
@@ -1148,7 +1146,7 @@ Other pi extensions can spawn and stop subagents programmatically via the `pi.ev
 
 All RPC replies use a standardized envelope: `{ success: true, data?: T }` on success, `{ success: false, error: string }` on failure.
 
-**Full reference:** [`docs/rpc.md`](https://github.com/tintinweb/pi-subagents/blob/master/docs/rpc.md) — the complete spawn-option surface (including the fields that are silently stripped), every error string, the completion-notification race, the `Symbol.for("pi-subagents:manager")` registry, and what protocol version `2` does and does not promise. [`tintinweb/pi-tasks`](https://github.com/tintinweb/pi-tasks) is the reference implementation.
+**Full reference:** [here](#driving-subagents-from-another-extension) — the complete spawn-option surface (including the fields that are silently stripped), every error string, the completion-notification race, the `Symbol.for("pi-subagents:manager")` registry, and what protocol version `2` does and does not promise. [`tintinweb/pi-tasks`](https://github.com/tintinweb/pi-tasks) is the reference implementation.
 
 ### Discovery
 
@@ -1197,7 +1195,7 @@ pi.events.emit("subagents:rpc:spawn", {
 });
 ```
 
-`options` is the manager's spawn-option object, not the `Agent` tool's parameter schema — the background flag is `isBackground`, and the tool's snake_case `run_in_background` is forwarded verbatim and ignored. Every RPC spawn returns its id immediately and runs detached either way; `isBackground: true` is what makes the agent occupy one of the `maxConcurrent` slots (and queue behind them when they are full). It does not affect `subagents:created`, which is never emitted for an RPC spawn at all — the first event you see for one is normally `subagents:started`; an agent stopped while still queued emits only `subagents:failed` (see [docs/rpc.md](docs/rpc.md)). Leaving it unset starts the agent immediately regardless of that limit, though not of the [process budget](#process-budget) when it is on. `maxConcurrentForeground` never applies here whatever `isBackground` says: it bounds only spawns a caller is blocking on inline, and every RPC spawn is detached. A top-level RPC spawn renders in the widget and FleetView while it runs, with the same live tool activity and turn counter an `Agent`-tool spawn gets — only an explicit `isBackground: false` is dropped by the widget's default `background` mode, the way a foreground `Agent` call is. Nested spawns stay hidden from both.
+`options` is the manager's spawn-option object, not the `Agent` tool's parameter schema — the background flag is `isBackground`, and the tool's snake_case `run_in_background` is forwarded verbatim and ignored. Every RPC spawn returns its id immediately and runs detached either way; `isBackground: true` is what makes the agent occupy one of the `maxConcurrent` slots (and queue behind them when they are full). It does not affect `subagents:created`, which is never emitted for an RPC spawn at all — the first event you see for one is normally `subagents:started`; an agent stopped while still queued emits only `subagents:failed` (see [here](#driving-subagents-from-another-extension)). Leaving it unset starts the agent immediately regardless of that limit, though not of the [process budget](#process-budget) when it is on. `maxConcurrentForeground` never applies here whatever `isBackground` says: it bounds only spawns a caller is blocking on inline, and every RPC spawn is detached. A top-level RPC spawn renders in the widget and FleetView while it runs, with the same live tool activity and turn counter an `Agent`-tool spawn gets — only an explicit `isBackground: false` is dropped by the widget's default `background` mode, the way a foreground `Agent` call is. Nested spawns stay hidden from both.
 
 `options.model` accepts either a `Model` object (e.g. `ctx.model`) or a `"provider/modelId"` string — strings are validated against `ctx.modelRegistry` at the RPC boundary and selected by the shared spawn path, which records the original input and source. Cross-extension callers can forward serializable values without losing auth context. Resolution is fuzzy, so a bare `"sonnet"` can land on a provider you never named: with [Model Scope](#model-scope) on, an override that resolves outside `enabledModels` is refused with an error envelope listing the allowed models, exactly as a caller-supplied `Agent({ model })` is. `null` means unset — the agent inherits, same as omitting the field.
 
@@ -1360,10 +1358,6 @@ This is useful for creating agents that inherit extension tools but should not h
 `pi.extensions` loads `dist/index.ts`, a generated esbuild bundle of `src/` (`npm run build`; `npm run check:runtime` fails when it is stale). Edit `src/`, never `dist/`.
 
 ```
-docs/                 # Long-form guides (shipped to npm; README links out to them)
-  workflows.md        # SubagentWorkflow: writing, editing, saving and re-running scripts
-  rpc.md              # Cross-extension integration: pi.events, subagents:rpc:*, manager registry
-  home-injection.md   # Injected home boundaries, call-time defaults and filesystem canaries
 examples/
   workflows/          # Runnable examples, executed by test/workflow-examples.test.ts
   agent-tool-description.md
@@ -1451,6 +1445,930 @@ src/
     workflow-card.ts      # Inline workflow card (tool result and session entry)
     workflow-dialog.ts    # /agents → Workflows two-pane inspector
 ```
+
+## Scripted workflows
+
+A workflow is a small JavaScript program that spawns and coordinates many subagents: fan out over a list, push every item through the same stages, verify each result, return a summary. It runs in the background and reports as it goes.
+
+The thing worth understanding up front is that **you do not write these — the model does.** You describe the work; it emits the script; you keep the file and re-run it. This guide is about that loop.
+
+For the tool's parameter table and where it sits among the other tools, see [`README.md`](#subagentworkflow).
+
+### What a workflow is
+
+Until workflows existed, the only way to run several agents at once was to name them one by one in a single message. That is fine for three agents you already know about. It does not work for *"audit every route file in this repo"*, where the list only exists once something has gone and looked.
+
+A script can loop, branch, and fan out over a list discovered at runtime. A batch of tool calls cannot. Each `agent()` call in the script spawns a real subagent with its own context window, its own tools, and its own model — the script is only the coordinator, and it has no filesystem or network of its own.
+
+Use the `Agent` tool for one delegated task, or a handful you can name up front. Reach for a workflow when the *number* of agents depends on something discovered at runtime, when work flows through stages, or when you want findings independently verified before you believe them. It costs a subprocess per agent, so it is not the thing to dress a single task up as.
+
+### The lifecycle
+
+#### 1. Ask for one
+
+There is no `/workflows` command. The tool is model-invoked, so you get a workflow by asking for one in the prompt — the same way you ask for anything else. What you say shapes what you get:
+
+| What you say | What you get |
+|---|---|
+| "audit every route file for missing auth checks" | A discovery agent, then a fan-out over what it found |
+| "review the changed files for bugs, and verify each finding before reporting it" | Two stages, the second trying to refute the first |
+| "fix the failing test, and don't tell me it's done until `npm test` passes" | A `gate` on the fix agent, and a retry loop around it |
+| "use a workflow to …" | Forces the shape when the model would otherwise reach for plain `Agent` calls |
+
+You do not have to say "workflow" — the model picks the tool — but saying it removes the ambiguity when the task is borderline.
+
+#### 2. Read what came back
+
+The tool returns immediately. The run continues in the background and notifies you when it is done.
+
+```text
+Workflow "auth-audit" started in the background.
+Task ID: wf_9f3ab21c04de
+Script: /var/folders/xy/…/pi-subagents-501/Users-me-project/<session>/tasks/wf_9f3ab21c04de.workflow.js
+
+You will be notified when it finishes — do NOT poll or sleep waiting for it.
+To iterate, edit the script file and call SubagentWorkflow again with scriptPath.
+```
+
+Three things in there matter.
+
+**`Task ID`** is what `resumeFromRunId` takes, and what `/agents → Workflows` lists the run under.
+
+**`Script`** is the file to edit. **It is a scratch file in your system temp directory, not in your project** — it will not survive a reboot or a temp sweep. If the workflow turns out to be worth keeping, copy it somewhere durable; see [Save it](#5-save-it). The path means something slightly different depending on how the run was started: for an inline script it is a copy the tool just wrote, and for a run started from `scriptPath` or `name` it is *your own file*, reported straight back.
+
+**The last line is addressed to the model, not to you.** You do not call `SubagentWorkflow` yourself — you tell the model to re-run the workflow at that path.
+
+#### 3. Watch it run
+
+Three surfaces, in increasing order of detail.
+
+A **card in the transcript**, updating as the run goes:
+
+```text
+▸ SubagentWorkflow  auth-audit                       3/7 agents · 1m12s
+  Find routes missing auth checks, then verify each finding
+  ╭─ Scan
+  │ └─ ✔ discover        · Explore · haiku 4.5 · 26.4k · 8 tool calls · 25s
+  ╰─ Audit
+    ├─ ✔ audit:src/a.ts  · Explore · haiku 4.5 · 18.4k · 12 tool calls · 42s
+    ├─ ⟳ audit:src/b.ts  · Explore · haiku 4.5 · 8 tool calls · 21s
+    └─ ⟳ audit:src/c.ts
+  ⎿  auditing 6 route files
+```
+
+A **`workflow` row in FleetView**, above the agents, carrying its agent counts where a description would go. `⏎` on it opens the inspector rather than a conversation overlay.
+
+Each row names the model the child *actually* ran on — read back from its session once pi has resolved its defaults, not the string the script asked for — so a fuzzy `model: "haiku"` reads as the model it resolved to, and an `agent()` that named no model still says what it inherited.
+
+The **inspector**, at `/agents → Workflows` — two panes, two levels: phases on the left, that phase's agents on the right, and `⏎` to descend into one agent's prompt, activity and outcome. The detail pane has room for the canonical `provider/model-id` and the thinking level, including a level pi clamped (`thinking: low (asked max)`). A multiline model-fallback note is limited to four rendered rows; its opening and diagnosis survive an explicit omitted-lines marker. The full key table is in [the README](#commands); the four that change the run rather than the view are:
+
+| Key | |
+|---|---|
+| `x` | Stop the run |
+| `p` | Pause — running agents finish, no new ones start, and held time comes off the clock |
+| `s` | **Skip** the selected agent: its `agent()` call returns `null` in the script |
+| `r` | **Retry** the selected agent: the child is stopped and the same call runs again |
+
+`s` and `r` are not view filters. Skipping an agent puts a `null` into the data your script is assembling, exactly as a terminal failure would; the script carries on with a hole in its results.
+
+The fifth key only shows you something:
+
+| Key | |
+|---|---|
+| `c` | Open the selected agent's **conversation** — the same viewer a fleet-list row opens, over the dialog |
+
+Because it changes nothing, `c` works at both levels and on an agent that has already settled — which is the usual case, since reading what a child did is most of why the inspector gets opened. The dialog hides itself while the conversation is up and comes back when you close it. A row with no child behind it yet (queued, or replayed from the resume journal) has no conversation to open and does not offer the key.
+
+A run's own agents are not listed separately in the fleet list, the widget, the `/agents` menus or `@handle` resolution — they belong to the run, which reports for them. `c` in the inspector is the one way in to a child's conversation.
+
+#### 4. Edit and re-run
+
+Open the path from the `Script:` line, change it, and ask the model to run it again with `scriptPath`. That is the whole loop, and it is why the script is written to disk at all: iterating means editing a file, not asking the model to re-emit source it already produced.
+
+Re-running normally re-pays for every agent. `resumeFromRunId` avoids that:
+
+> Its unchanged leading `agent()` calls return their recorded results instantly; the first changed or failed call, and everything after it, runs live.
+
+Every run journals each settled `agent()` call beside its script as `<run id>.workflow.jsonl`, and the resume replays the **unchanged prefix** of that journal. It is a prefix and not a lookup table on purpose: a later call that still matches came from a run whose earlier stages no longer exist, so its recorded answer was produced downstream of work that has changed.
+
+Four things it will not do:
+
+- **Cross sessions.** The journal is keyed to the session that wrote it. Restart pi and the run id is dead — you get `No workflow run "<id>" in this session.`
+- **Resume a live run.** Stop it from `/agents → Workflows` first; while it is running you get `Workflow "<id>" is still running.`
+- **Replay a failure.** A journaled failure ends the prefix, so resuming a run that died at agent 5 retries exactly agent 5. That is the point.
+- **Replay a run that used `agent({ resume })` at all.** A replayed agent is text from a file rather than a live child, so there would be no conversation left for a later `resume` to continue.
+
+Replayed rows are annotated `from resume journal` on the card and in the inspector, and the completion notification counts them — a resume never quietly looks like a run that was simply fast. Passing only `resumeFromRunId`, with no script of its own, re-runs that run's own script.
+
+#### 5. Save it
+
+A script you will run more than once belongs somewhere durable. Copy it out of the temp directory into one of these, named `<name>.js`:
+
+| Location | Scope |
+|---|---|
+| `<project>/.pi/workflows/<name>.js` | This project. Checked in, if you want it shared |
+| `<project>/.agents/workflows/<name>.js` | This project, in the tool-agnostic directory |
+| `<agent dir>/workflows/<name>.js` | You, everywhere — follows you across projects |
+
+First hit wins, in that order, so a project file shadows a same-named global one.
+
+The file must carry an `export const meta = { name, description }` declaration. Those are ordinary directories that may hold anything, so that declaration is what marks a file as a workflow — name something else and you are told it is not a workflow rather than getting a parse error from halfway through it. Nothing in the file is executed to decide that.
+
+Then invoke it by name: *"run the auth-audit workflow"*. The model passes `name: "auth-audit"` and the run reports that file back as its `Script:`, so the edit-and-re-run loop still works on it.
+
+**Nothing lists your saved workflows for you.** `/agents → Workflows` is a *run* inspector scoped to the current session, not a workflow browser — with five workflows saved on disk it will show you nothing. You reach a saved workflow by naming it to the model, or with [`--subagents-workflow-file=`](#cli-flags). Keeping the names memorable is on you.
+
+#### 6. Parameterize it
+
+A workflow that hardcodes `src/routes/` is a one-off. Take the target from `args` instead, and it becomes reusable:
+
+```js
+export const meta = { name: 'audit', description: 'Audit a directory for missing auth checks' }
+
+const root = args?.root ?? 'src/'
+const listing = await agent(`List every file under ${root}. One path per line, nothing else.`)
+```
+
+`args` is whatever was passed to the tool, verbatim, and it must be JSON-shaped. Now *"run the audit workflow against src/api"* and *"…against src/admin"* are the same workflow.
+
+### A worked example
+
+The task: *"find routes that don't check auth, and don't just take the first answer — check each finding."*
+
+The model writes something like this, and the run starts:
+
+```js
+export const meta = {
+  name: 'auth-audit',
+  description: 'Find routes missing auth checks, then verify each finding',
+  phases: [{ title: 'Scan' }, { title: 'Audit' }, { title: 'Verify' }],
+}
+
+phase('Scan')
+const listing = await agent('List every route file under src/routes/. One path per line, nothing else.')
+const files = listing.split('\n').map(s => s.trim()).filter(Boolean)
+log(`auditing ${files.length} route files`)
+
+phase('Audit')
+const findings = await pipeline(
+  files,
+  file => agent(`Audit ${file} for missing auth checks. Report findings or "none".`, { label: `audit:${file}` }),
+  (found, file) => agent(`Try to REFUTE this finding about ${file}: ${found}`, { label: `verify:${file}`, phase: 'Verify' }),
+)
+
+return findings.filter(Boolean)
+```
+
+It works, but the result is a wall of prose you cannot sort — every verify agent answered in its own shape. So: edit the file, give the verify stage a `schema`, and return objects.
+
+```js
+const VERDICT = {
+  type: 'object',
+  properties: { file: { type: 'string' }, holds: { type: 'boolean' }, why: { type: 'string' } },
+  required: ['file', 'holds'],
+}
+
+const findings = await pipeline(
+  files,
+  file => agent(`Audit ${file} for missing auth checks. Report findings or "none".`, { label: `audit:${file}` }),
+  (found, file) => agent(`Try to REFUTE this finding about ${file}: ${found}`, { label: `verify:${file}`, phase: 'Verify', schema: VERDICT }),
+)
+
+return findings.filter(Boolean).filter(f => f.holds)
+```
+
+Only the second stage changed, so re-running with `resumeFromRunId` replays the whole `Scan` phase and every `audit:` call from the journal, and pays only for the verify agents. The notification says so: `… , 7 replayed from wf_9f3ab21c04de`.
+
+Then it earns its keep — copy it to `.pi/workflows/auth-audit.js`, swap `src/routes/` for `args?.root ?? 'src/routes/'`, and from then on it is *"run auth-audit against src/api"*.
+
+The finished script ships as [`examples/workflows/fan-out-audit.js`](examples/workflows/fan-out-audit.js).
+
+### Writing the script yourself
+
+Occasionally you will want to write or heavily edit one. The rules are short.
+
+**`meta` must be a pure literal** — no variables, function calls, spreads, or template interpolation. It is read *before* the script runs, which is what lets the phases appear on screen from the first frame instead of materializing one at a time as agents happen to start. `name` and `description` are required; `phases` and `whenToUse` are optional.
+
+```js
+export const meta = {
+  name: 'my-workflow',
+  description: 'One line, shown on the card and in the permission prompt',
+  phases: [{ title: 'Scan', detail: 'grep for candidates' }, { title: 'Fix' }],
+}
+```
+
+**The body is an async function body.** Top-level `await` and a bare top-level `return` are both allowed — the runtime wraps it. (This is also why a workflow script is not valid standalone JavaScript, and why your editor may complain about the `return`.)
+
+**What you `return` crosses a JSON boundary.** It is checked for cycles, non-finite numbers, sparse arrays, symbol keys and exotic prototypes. Return something useful on its own — the caller sees your return value, not the individual agent outputs.
+
+### Reference
+
+#### Tool parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `script` | string | Inline source. Must begin with `export const meta = { name, description }` |
+| `scriptPath` | string | A script file, absolute or project-relative. **Takes precedence over `script`** — this is how an edited workflow is re-run |
+| `name` | string | A saved workflow — `<name>.js` in one of the three directories above. Lowest precedence |
+| `args` | any | Handed to the script as the `args` global, verbatim. Must be JSON-shaped |
+| `resumeFromRunId` | string | Replay an earlier run in this session. Matches `^wf_[a-z0-9-]{6,}$` |
+| `title` / `description` | string | Accepted and ignored — for Claude Code parity, so a ported call does not fail. A workflow is named by its `meta` block |
+
+At least one of `script` / `scriptPath` / `name` is required; `scriptPath` wins over `script`, which wins over `name`.
+
+#### `agent(prompt, opts?)`
+
+Spawns one subagent and resolves to its final text — or, with `schema`, to a validated object.
+
+**Returns `null` if the agent failed terminally *or* if you skipped it from the inspector**, indistinguishably. Filter with `.filter(Boolean)` when a `null` would break a later stage, and be careful with in-script retry loops: retrying on `null` will re-run something you deliberately skipped.
+
+| Option | Type | Notes |
+|---|---|---|
+| `label` | string | Display name in the progress tree. Also the handle `resume` addresses |
+| `phase` | string | Put this agent in a named group, overriding the ambient `phase()`. **Use it inside `pipeline`/`parallel` stages**, where the ambient phase races |
+| `agentType` | string | Which agent definition to use. Defaults to `general-purpose`; built-ins are `general-purpose`, `Explore`, `Plan`, plus your custom agents |
+| `model` | string | `@tier`, exact `provider/modelId`, legacy alias, or explicit fuzzy input like `haiku` |
+| `effort` | string | `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Overrides the agent definition's `thinking` for this child; omitted, the definition decides, then the parent's |
+| `isolation` | `"worktree"` | Run in a throwaway git worktree. Only when agents write files in parallel and would collide — it costs setup time and disk per agent. Only this option decides, as in Claude Code — an agent file's `isolation:` does not apply to workflow children |
+| `gate` | string | A shell command run after the agent finishes; a non-zero exit fails the agent, returns `null` to the script, and records command output on the workflow agent error |
+| `resume` | string | Continue the child that ran under that label instead of starting fresh |
+| `schema` | object | A JSON Schema with an object root. Resolves to the validated object instead of text |
+
+**Model tiers.** `agent(prompt, { model: '@cheap' })` resolves the user's trusted global/enterprise binding, independently of `enabledModels`. Routed tiers keep router failover; static tiers list credential/quota skips and disclose when no quota signal was used. Missing bindings/routers follow `modelResolution`; exhausted workflow children fail rather than changing tiers. Live resumes retain the original selection. Progress entries, host results and replay journals retain `modelTier` alongside the `modelNote`; replay and re-journaling preserve both without re-resolving historical work. Text results lead with `Model: @cheap -> provider/id via router/cheap`; structured results use the existing `_modelNote`/run-log rules below. See [configuration examples](#model-tiers).
+
+**Model fallback disclosure.** When a child's configured model (`agentModels` or the agent file's `model:`) did not resolve and it ran on another model, the script is told, never silently:
+
+- Without `schema`, the returned text starts with `Note: configured model "x" did not resolve; running on parent model p/id.` and a blank line.
+- With `schema`, the payload must stay exactly what the schema describes, so the note is not put in the text. On an object payload it is added as a sibling `_modelNote` string, and in every case it is written to the run log. The field is added only when the schema is a plain `{ type: 'object', properties, required }` schema that does not itself declare `_modelNote` (extra keywords such as `allOf`, `anyOf`, `oneOf`, `$ref`, `patternProperties`, a schema-valued or `false` `additionalProperties` all count as not plain). Otherwise, and whenever the payload already has its own `_modelNote`, your value is left untouched and only the log line carries the note, so name your own field something else if you need it to survive a fallback. A child that failed (`null`) still logs the note. A `resume` result is plain text (resume forbids `schema`) and leads with the note.
+- The note is journaled with the answer, so a resumed run replays the same `_modelNote`, log line and row annotation. Journals written before this existed replay with no note.
+
+Any other key is rejected **by name** at the call. Note that this checks option *keys*, not option *values* — an `agentType` that names no known agent falls back to `general-purpose` silently.
+
+Combination rules: `resume` cannot be combined with `agentType`, `model`, `effort`, `isolation`, `gate` or `schema` — a resumed child keeps the agent type, model and tree it was started with, and its session predates the `StructuredOutput` tool.
+
+#### `pipeline()` and `parallel()`
+
+```js
+await pipeline(items, ...stages)   // no barrier between stages
+await parallel(thunks)             // barrier: waits for all of them
+```
+
+**`pipeline` has no barrier.** Item A can be in stage 3 while item B is still in stage 1, so the total time is the slowest single *chain* rather than the sum of the slowest per stage. Each stage receives `(previousResult, originalItem, index)` — the original item and its index stay available in later stages, so you do not have to thread them through the return value. A stage that throws drops that one item to `null` and skips its remaining stages.
+
+**`parallel` is a barrier.** It waits for everything before anything moves on, so if five agents run and the slowest takes three times the fastest, four sit finished doing nothing. A thunk that throws becomes `null` without taking its siblings down.
+
+Prefer `pipeline` unless a stage genuinely needs every prior result *together* — deduplicating across the whole set, deciding whether to continue at all, or a prompt that compares one result against all the others. Needing to flatten, map or filter is not such a case; do that inside a pipeline stage.
+
+#### `workflow(nameOrRef, args?)`
+
+Runs a saved workflow inline and returns its value. Pass a name, or `{ scriptPath }`. `args` becomes the child's `args` global.
+
+The child runs in the *same* worker and vm context under its own globals, so it shares this run's concurrency cap, agent counter, abort signal, journal and budget by construction — its agents are simply this run's agents, controllable from the same inspector. What it does not share is phase state: the child's phases render as their own `▸ <name>` group.
+
+**One level only** — `workflow()` inside a child throws saying so. An unknown name, an unreadable path, a child carrying no `meta`, or a child that will not parse all throw into the calling script, so `try`/`catch` if you want to handle them. Capped at 256 nested calls per run.
+
+#### `phase()`, `log()`, `args`, `budget`
+
+- **`phase(title)`** — start a new progress group; subsequent `agent()` calls are grouped under it. Inside `pipeline`/`parallel` stages use the `phase` *option* instead, since the ambient phase races.
+- **`log(message)`** — a progress line under the tree, for you to read.
+- **`args`** — whatever was passed as the tool's `args`, verbatim; `undefined` if none.
+- **`budget`** — `{ total, spent(), remaining() }`. **`total` is always `null` here**: it comes from a token-target directive pi does not have. That is deliberate rather than broken — Claude Code scripts guard on it (`while (budget.total && budget.remaining() > 50_000)`), and those guards correctly do not fire instead of throwing on a missing global. `remaining()` is `Infinity` with no target. `spent()` is real, and counts output tokens this run's agents have used.
+
+#### Where files live
+
+| What | Where |
+|---|---|
+| An inline script, as run | `<tmp>/pi-subagents-<uid>/<encoded-cwd>/<session>/tasks/<run id>.workflow.js` |
+| The resume journal | the same directory, `<run id>.workflow.jsonl` |
+| Saved workflows | `.pi/workflows/` → `.agents/workflows/` → `<agent dir>/workflows/` → installed pi packages, first hit wins |
+
+The first two are scratch: temp storage, wiped by a reboot or a temp sweep. Only the third is durable, and copying a script there is a manual step.
+
+A pi package can ship workflow scripts too, by declaring them in its `package.json`:
+
+```json
+{ "pi": { "subagents": { "workflows": ["./workflows"] } } }
+```
+
+Package directories are searched **last**, so a script of yours always wins the name, and only packages pi has actually installed are read — see [Shipping agents in a pi package](#shipping-agents-in-a-pi-package) for the full manifest and how discovery works. A package script still has to carry the `export const meta = …` declaration to count as a workflow. Set `"packageWorkflows": false` in `subagents.json` (or `/agents → Settings → Package workflows`) to leave package scripts out; the setting is separate from `packageAgents` because a workflow is JavaScript this extension executes.
+
+#### Limits and caps
+
+| Limit | Value |
+|---|---|
+| Agents running at once | `max(1, min(16, cpus - 2))` — 6 on an 8-core machine |
+| Agents per run, total | 1000 |
+| Items per `parallel`/`pipeline` **call** | 4096 |
+| Nested `workflow()` calls per run | 256 |
+| Script length | 512 KiB |
+
+These are three different things and are easy to conflate: 1000 is a budget for the whole run, the concurrency figure is how many run *simultaneously*, and 4096 is per call rather than per run. Excess items queue rather than melting the machine.
+
+Above 25 scheduled agents, or 1.5M tokens actual or projected, the card adds `⚠ Large workflow · /agents → Workflows to stop`.
+
+A run's concurrency limit is its own, independent of the session's `maxConcurrent` and `maxConcurrentForeground` pools — its agents do not enter either. They do count toward the process-wide `maxActiveSubagents` budget when it is on (see the README's Process budget), so a run's agents can wait there too.
+
+#### Settings and the CLI flag
+
+`workflowsEnabled` is **on**; leaving it unset means *auto*, which is on unless another extension already offers a `Workflow` or `SubagentWorkflow` tool, in which case this one stands down for the session. Setting it explicitly pins it. See [Persistent settings](#persistent-settings).
+
+`pi --subagents-workflow-file=<path>` runs a workflow at startup, including headless under `pi -p`. Use the `=` form — the bare `--flag value` spelling swallows the next argument. See [CLI flags](#cli-flags).
+
+### Recipes
+
+The orchestration patterns themselves — adversarial verification, judge panels, loop-until-dry — live in exactly one place: the tool description the model reads on every turn. It already knows them. So these are not instructions for writing scripts by hand; they are **what to ask for**, and what the resulting script looks like so you can recognize it in the file.
+
+#### Fan out over a list you don't have yet
+
+> *"audit every route file under src/routes for missing auth checks"*
+
+One discovery agent, then `pipeline` over what it returned. Recognize it by: a lone `await agent(...)` producing a string, a `.split('\n')`, then `pipeline(files, …)`.
+
+See [`fan-out-audit.js`](examples/workflows/fan-out-audit.js).
+
+#### Get objects back instead of prose
+
+> *"…and give me the results as structured data I can sort by severity"*
+
+Recognize it by a `const SCHEMA = { type: 'object', … }` near the top and `schema: SCHEMA` on the `agent()` calls. Worth asking for whenever the script has to *do* anything with the results rather than hand them to you.
+
+See [`structured-findings.js`](examples/workflows/structured-findings.js).
+
+#### Verify by running, not by asking
+
+> *"fix it, and don't report success unless `npm test` passes"*
+
+Recognize it by `gate: 'npm test'` on the fix agent. An LLM judging whether a fix works is a weaker signal than the test suite; this is the difference between a result that is *verified* and one that is merely *claimed*.
+
+See [`gated-fix.js`](examples/workflows/gated-fix.js).
+
+#### Keep an agent's context instead of re-paying for it
+
+> *"if the tests still fail, let the same agent diagnose and fix them"*
+
+Recognize it by `label: 'fix'` on the first call and `resume: 'fix'` on the second. A gate-rejected child stays resumable. The script receives `null`, not injected gate output, so ask the resumed child to run the command and inspect its own diagnostics.
+
+Also in [`gated-fix.js`](examples/workflows/gated-fix.js).
+
+#### Several opinions, then a synthesis
+
+> *"review this from a correctness, security and performance angle, then reconcile them"*
+
+This is the case where a barrier is *earned* — the synthesis agent's prompt genuinely needs every review at once. Recognize it by `parallel([...])` followed by a single `agent()` that interpolates all of the results.
+
+See [`review-panel.js`](examples/workflows/review-panel.js).
+
+#### Reuse a workflow inside another
+
+> *"map the repo first, then run the audit against what it found"*
+
+Recognize it by `await workflow('repo-map', { … })`. Reach for it to reuse something already saved, not to structure one script — inline composition is cheaper.
+
+See [`compose.js`](examples/workflows/compose.js).
+
+### Troubleshooting
+
+**Finding the script line that failed.**
+Failed runs include the authored stack in their result, result preview and completion notification;
+compact status text still shows only the error message. `workflow.js` names the
+root script and `workflow:<meta.name>.js` names a nested script. Lines and columns
+refer to the source you wrote, including its `export const meta` declaration,
+not the runtime's async wrapper. The shared compiler keeps authored lines intact
+rather than relying on VM offsets, which Bun 1.3/1.4 ignore. Structured stack
+frames map first-line columns without replacing Error objects, subclasses or causes.
+Bun 1.3 parser errors expose a line but no usable column; those show the authored
+line without an invented caret. Node and Bun 1.4 parser excerpts retain their
+reported authored caret column; truncated excerpts are handled without masking
+the original SyntaxError. Runtime error frames retain exact columns.
+The worker transports at most 16,384 characters of stack text across eight cause levels
+and 4,096 characters of message text; cyclic causes stop at the repeated value. Captured
+stacks and message text are not reinterpreted as source frames. The LLM-facing
+result retains the concise message before the bounded stack unless the stack's
+first line is exactly the message or ends with `: <message>` (an error heading).
+A mere substring in captured context does not suppress the concise message.
+The combined worker diagnostic result is at most 20,481 characters: 4,096 for
+the message, one newline and 16,384 for the stack. Completion notifications
+retain their existing 4,000-character result limit. Trusted-workflow diagnostics
+can include host file paths and user-controlled captured stacks; these bounds are
+not sanitization or credential isolation. Host frames are retained for error and
+cause context.
+
+To reproduce the offset bug, run `test/workflow-runtime.test.ts`'s
+`reports line numbers that match the script the author wrote` case under Node
+and Bun. The old wrapper inserted a newline and relied on `vm.Script.lineOffset`
+to undo it; Bun ignored the offset and reported `workflow.js:4:23` instead of
+line 3. `compileWorkflow` now shares line-preserving compilation for root and
+nested scripts; `authoredFrame` adjusts only structured first-line frames of
+known synthetic workflow filenames. No user path is evaluated or used as a
+source filename. Nested parser failures now retain their original error object
+and synthetic source filename rather than adding a `workflow("<label>")` message
+wrapper; resolution failures still include that reference label.
+`installAuthoredStacks` is compiled inside the VM realm, including its private
+filename Set and formatter functions. Only primitive prefix length and filenames
+cross in; the formatter adds no host callback or host-object constructor route.
+The Set lasts one worker/run and is bounded by the root compilation plus accepted
+nested calls (256 by default), not a process-wide registry.
+
+**The run failed with `… is unavailable in workflow scripts (breaks resume)`.**
+The script called `Date.now()`, `new Date()` or `Math.random()`. A script that varies run to run cannot be replayed from its journal, so these throw. Use the loop index for ids, pass timestamps in through `args`, or stamp them after the workflow returns. This most often bites pasted-in helper code, and it throws at the line that calls it — *after* you have already paid for the preceding agents.
+
+**`The meta object must be a PURE LITERAL — no variables, function calls, spreads, or template interpolation.`**
+`meta` is evaluated before the script runs, in an empty context, so it cannot reference anything. Move the dynamic part into the body.
+
+**`agent() opts.<key> is not a recognised option.`**
+A typo, or an option from a different tool. The supported set is `label`, `phase`, `model`, `agentType`, `isolation`, `gate`, `resume`, `effort`, `schema`.
+
+**An agent ran as the wrong type and nothing said so.**
+An `agentType` that names no known agent falls back to `general-purpose` **silently** — unlike the `Agent` tool, which tells you. Option *keys* are validated; option *values* are not. Check the spelling against `/agents`; matching is case-insensitive, and a disabled agent does not count.
+
+**`agent()` returned `null`.**
+The agent failed terminally, or you skipped it with `s` in the inspector. These are indistinguishable to the script. With `schema`, it also covers a child that never produced a payload matching the schema.
+
+**A `schema` call came back as `null` even though the agent clearly answered.**
+`schema` is pressure, not a guarantee. The child gets a `StructuredOutput` tool, `constrainedSampling` set to `strict: "prefer"`, and a validation-and-retry round trip — three soft pressures, where Claude Code has one hard one (it can force the tool call; this cannot, because `toolChoice` is not plumbed through pi's `AgentSession`). Keep schemas small and flat, and `.filter(Boolean)` after every schema stage.
+
+**The run failed complaining about an un-awaited `agent()`.**
+A dropped `await`, usually inside a `pipeline` stage. The run would otherwise finish while children were still working and throw their results away, so it fails instead — immediately rather than draining, since an agent that ignores its abort signal would wedge the run forever.
+
+**`Cannot run with isolation: "worktree"`.**
+The message names the directory it tried and the cause: not a git repo, no commits yet, a git timeout, or `git worktree add`'s stderr. Isolation is a strict guarantee rather than a hint, so it fails loudly instead of quietly running in your main tree. Initialize git and commit at least once, or drop the option.
+
+**`No saved workflow named "x". Looked in: …`**
+The file is not in any of the three directories, or it is there but carries no `export const meta =` declaration, so it is not recognized as a workflow. The message lists the directories it searched and any workflows it did find.
+
+**The run seems stuck with agents queued, or reports zero completed agents.**
+Concurrency is capped at `max(1, min(16, cpus - 2))`. Queued agents start as slots free. A pause (`p`) also holds new starts while letting running agents finish.
+
+The summary counts successful completions, not starts. Children deliberately do not appear as separate ordinary fleet agents: open `/agents → Workflows`, then `c` on a started child to inspect its conversation. The launch envelope proves acceptance, not child execution. Workflow token/tool totals are collected when a child settles; zero totals while children run, or immediately after stopping them, do not prove inactivity. Journal entries are also appended only when calls settle, so no journal yet does not mean no child started. Check actual child tool results before diagnosing a dispatch failure or starting replacement writers.
+
+Counts use each agent index's latest progress entry. Queued, started and model-resolution events for one child are not additional agents. This applies to the transcript card and completion/stop notification alike.
+
+### What workflows can't do
+
+- **No filesystem, network or module access inside the script.** All real work happens in the agents it spawns, which have their normal tools.
+- **No `eval` or `Function(...)`** — code generation is off in the vm; they throw `EvalError`.
+- **No cross-session resume.** Journals are per session.
+- **No resume at all for `--subagents-workflow-file` runs** — that path never journals.
+- **No UI that lists or launches saved workflows.** The inspector shows this session's runs.
+- **No scheduled workflows.** The scheduler runs agents, not workflows.
+- **Results are not persisted** beyond the journal and the transcript card.
+- **No driving one from another extension.** A workflow cannot be started or steered over the `pi.events` bus, and its agents are invisible to the RPC surface — they emit no lifecycle events, and `subagents:rpc:stop` refuses them. See [here](#driving-subagents-from-another-extension).
+
+The sandbox is a determinism and accident boundary, not a defence against a deliberately hostile script. Disabled code generation blocks realm-local `eval` and `Function`, including the realm-native stack formatter's constructor. Existing injected globals such as `agent` are host closures whose constructors remain a host-Function escape; this is not a credential or filesystem isolation boundary. Run only trusted workflow scripts.
+
+### Coming from Claude Code
+
+This is a port of Claude Code's `Workflow` tool down to its state model, so **a script written for Claude Code runs here unchanged.** `test/workflow-claude-code-compat.test.ts` runs the canonical `review-changes` example from that tool's own description, verbatim.
+
+Identical: `agent()`, `pipeline()`, `parallel()`, `workflow()`, `phase()`, `log()`, `args`, `budget`; the `meta` block; `schema` returning a validated object; one-level `workflow()` nesting; the determinism throws.
+
+Different:
+
+- The tool is **`SubagentWorkflow`**, not `Workflow` — pi's tool registry is flat across extensions, and the winner of a name clash also overwrites the loser's description.
+- **`budget.total` is always `null`**, because pi has no token-target directive. Claude Code's `budget.total`-guarded patterns therefore run unchanged, just without firing.
+- **`schema` is pressured, not forced** — see the troubleshooting entry above.
+- If both extensions are loaded, this one **stands down** rather than offering the model two orchestrators.
+
+Additions on this side: `gate`, `resume`, `effort`, journal-backed `resumeFromRunId`, and the un-awaited-`agent()` check. All are optional, which is what keeps a Claude Code script portable.
+
+### Examples
+
+Every file below is executed by `test/workflow-examples.test.ts` against a stub host on each CI run, so none of them can silently rot.
+
+| File | Demonstrates | Runs as-is? |
+|---|---|---|
+| [`fan-out-audit.js`](examples/workflows/fan-out-audit.js) | Runtime fan-out, `pipeline`, `label`, per-stage `phase` | Yes — takes `args.root` |
+| [`structured-findings.js`](examples/workflows/structured-findings.js) | `schema` on both stages, objects instead of prose | Yes |
+| [`gated-fix.js`](examples/workflows/gated-fix.js) | `gate`, `resume` retry loop | Needs a real test command |
+| [`review-panel.js`](examples/workflows/review-panel.js) | An earned `parallel` barrier, `effort` tiering, `model` | Yes |
+| [`compose.js`](examples/workflows/compose.js) | `workflow()` nesting and `args` plumbing | Needs `lib/count-child.js` saved |
+
+Copy one into `.pi/workflows/` to make it yours.
+
+## Shipping subagents in a pi package
+
+A pi package can declare its own subagents and workflow scripts. Installing the package is then the whole setup — no copying `.md` files into every project's `.pi/agents/`, and no sync script running on container start ([#109](https://github.com/tintinweb/pi-subagents/issues/109)).
+
+This guide is for both sides of that: authoring a package that ships agents, and controlling which packages a machine accepts them from.
+
+For where locally-authored agents live and what their frontmatter accepts, see [`README.md`](#custom-agents).
+
+### The idea
+
+Pi already ships four resource types inside packages — `extensions`, `skills`, `prompts`, `themes` — declared under a `pi` key in `package.json` and installed with `pi install`. Subagents are this extension's concept, so pi knows nothing about them, and until now a package author's only option was to tell users to copy files.
+
+The mechanism here is the same shape as pi's, with one deliberate difference: **a package must declare its agents by name.** Pi falls back to scanning conventional directories (`skills/`, `prompts/`, …) when a package has no `pi` key at all. This extension never does. A package that happens to carry an `agents/` folder for some other tool contributes nothing until it says so — that is the author's half of the agreement, and installing the package is the user's.
+
+### Authoring
+
+#### 1. Declare the paths
+
+```json
+{
+  "name": "my-subagents",
+  "version": "1.0.0",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./src/index.ts"],
+    "subagents": {
+      "agents": ["./agents"],
+      "workflows": ["./workflows"]
+    }
+  }
+}
+```
+
+`keywords: ["pi-package"]` is pi's discoverability convention, not a requirement. The `extensions` entry is only there to show the keys coexisting — a package can ship agents and nothing else.
+
+Adding `pi.subagents` is safe for pi itself: its manifest reader looks at `extensions`, `skills`, `prompts` and `themes` and ignores every other key.
+
+#### 2. Put the files there
+
+```
+my-subagents/
+├── package.json
+├── agents/
+│   ├── researcher.md
+│   └── reviewer.md
+└── workflows/
+    └── audit.js
+```
+
+An agent file is an ordinary agent `.md` — the same frontmatter a `.pi/agents/` file takes, documented in [`README.md`](#custom-agents). A workflow file is an ordinary saved workflow, and still has to carry its `export const meta = …` declaration to count as one ([here](#scripted-workflows)).
+
+```markdown
+---
+name: pkg-researcher
+description: Research with sources, for the my-subagents toolchain
+tools: read, grep, ext:my-mcp/search
+model: claude-haiku-4-5
+---
+
+You research things. Cite what you read.
+```
+
+#### 3. Ship it
+
+Include the directories in the published tarball — npm's `files` field, or an `.npmignore` that does not exclude them. Then:
+
+```bash
+pi install npm:my-subagents          # published
+pi install git:github.com/me/repo    # straight from git
+pi install /path/to/my-subagents     # local checkout, for development
+pi install ./my-subagents -l         # project scope, into .pi/settings.json
+```
+
+A local-path install is not copied, so an edit to the agent file is live on the next `Agent` call — the fastest authoring loop.
+
+#### Entry syntax
+
+Entries are paths relative to the package root.
+
+| Entry | Meaning |
+|---|---|
+| `"./agents"` | A directory. Scanned for `*.md` (`*.js` for workflows), non-recursively. |
+| `"./agents/one.md"` | A single file, taken as-is. |
+| `"!./agents/wip.md"` | An exclusion. Applies to a file inside an included directory, which is the only form that does anything useful. |
+
+The exclusion may name a path the package does not ship yet, so a file added in a later version is still skipped rather than silently appearing.
+
+Nothing outside the package root is read. The containment check runs on canonical paths, so `../../.ssh` is refused and a symlinked `agents/` pointing at `/etc` does not get around it either.
+
+Glob patterns are deliberately **not** supported. Pi expands globs because it resolves four resource types across arbitrary layouts; here the entries are one or two directories, and answering a glob would mean walking a third-party tree.
+
+#### Accepted spellings
+
+All four mean the same thing. The top-level `pi-subagents` key is the one [`nicobailon/pi-subagents`](https://github.com/nicobailon/pi-subagents) reads, so a single manifest works with either extension.
+
+```jsonc
+"pi": { "subagents": { "agents": ["./agents"], "workflows": ["./flows"] } }
+"pi": { "subagents": ["./agents"] }            // shorthand for { "agents": [...] }
+"pi-subagents": { "agents": ["./agents"] }
+"pi-subagents": ["./agents"]                   // shorthand for { "agents": [...] }
+```
+
+`pi.subagents` wins if a package carries both.
+
+#### Naming
+
+A package agent registers under its frontmatter `name:`, with no namespace prefix. There is no `mypkg:researcher` form (yet — the `:` character stays reserved for it, so agent names may not contain one).
+
+That makes a name a shared space, so prefix anything that could collide: `acme-researcher` rather than `researcher`. Two packages claiming one name is last-load-wins with a warning naming the file that took over, and *any* local file claiming it takes it from both.
+
+### Operating
+
+#### Which packages are read
+
+Only what pi itself has installed — the `packages[]` array in pi's `settings.json`, global (`~/.pi/agent/settings.json`) and project (`.pi/settings.json`), resolved through pi's own package manager so npm, git and local sources all land on the right install root.
+
+`node_modules` is never scanned. Being a transitive dependency of your project means nothing here, exactly as it means nothing to pi.
+
+A package listed only by a project's settings stays invisible until you trust the project, matching pi — an untrusted `.pi/settings.json` is not read at all. This is the shape a team distributes agents in: commit the package to `.pi/settings.json`, and everyone who trusts the repo gets them.
+
+One wrinkle on the *very first* session in a repo, before pi has saved a trust decision. The `Agent` tool's description — the list of agent types the model is told about — is built when the extension loads, which is before the trust prompt is answered. A project-scoped package's agents are registered and can be spawned by name that session, but the model is not told they exist until the next one. Once the decision is saved (or `defaultProjectTrust` is `"always"`), every later session is correct from the first turn.
+
+#### Precedence
+
+Lowest to highest:
+
+| | Source |
+|---|---|
+| 1 (lowest) | Built-in agents (`general-purpose`, `Explore`, `Plan`) |
+| 2 | Installed pi packages |
+| 3 | `$PI_CODING_AGENT_DIR/agents/*.md` (global) |
+| 4 | `.agents/agents/*.md` (project workspace) |
+| 5 (highest) | `.pi/agents/*.md` (project) |
+
+A package can offer a `reviewer`; it can never take the name from a `reviewer` of yours. This mirrors pi's own precedence for package-provided skills and Claude Code's for plugin agents.
+
+Saved workflows resolve first-hit-wins over the same ordering, so package directories are searched last.
+
+One consequence worth knowing: a package agent *does* outrank a built-in. A package could ship a `general-purpose` — which is also the default `fallbackSubagent` — and take over unspecified delegation. Narrow the gate below if that matters for your setup.
+
+#### In `/agents`
+
+A package agent is listed with a `▪` badge and is read-only: its file lives under pi's install root, where an edit is lost on the next `pi update` and a delete is undone by the next `pi install`.
+
+The badge says a package won, not which one. The declaring package's name — the full `@scope/name`, which is also what you can write into a [`packageAgents` allowlist](#turning-it-off) — is prefixed to the description line under the highlighted row, and titles the agent's action menu.
+
+- **Eject** copies it into your project or personal agent directory as an editable file that shadows the original. The copy carries the agent's full configuration, including `ext:` tool selectors and `persist_session`.
+- **Disable** writes an `enabled: false` stub at project or personal scope, which shadows the package definition without touching it. Deleting that stub restores the package agent.
+
+An agent the *package author* shipped with `enabled: false` shows as disabled and offers no Enable — only the package can take that back. Ejecting it is the way out: the copy is written without an `enabled:` line, so the ejected agent is on.
+
+#### Turning it off
+
+`packageAgents` and `packageWorkflows` in [`subagents.json`](#persistent-settings) both default to `true`:
+
+```json
+{
+  "packageAgents": ["my-subagents"],
+  "packageWorkflows": false
+}
+```
+
+| Value | Effect |
+|---|---|
+| `true` (or absent) | Every declaring package contributes. |
+| `false` | None do. |
+| `["a", "b"]` | Only those packages. |
+
+A list entry matches the unscoped short name (`@acme/tools` → `tools`), the full package name, or the settings source string, case-insensitively. A bare string is read as a one-entry list, so a `"my-pkg"` typo narrows the gate rather than silently widening it.
+
+The two are separate on purpose: an agent is markdown handed to a model, a workflow is JavaScript this extension executes, so package agents can be accepted while package workflow scripts are refused.
+
+Both appear in `/agents → Settings` as on/off rows. An allowlist is hand-written in `subagents.json`; toggling the row replaces it, and the toast says what it replaced.
+
+#### Why on by default
+
+Installing a package is already the trust decision. Pi executes an installed package's `extensions/` and puts its `skills/` descriptions in the system prompt, with no per-resource prompt — [pi's own docs](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md) say so plainly: *"Pi packages run with full system access."*
+
+A declared `.md` agent is strictly less privileged than what the same package already runs, so it rides the boundary the user crossed at `pi install` rather than inventing a second one. The gate exists for narrowing that anyway, not as a second install step.
+
+### Troubleshooting
+
+**The agent does not appear.**
+
+1. `pi list` — is the package in pi's settings at all? Discovery reads that array, not `node_modules`, and not a `pi -e` source: a `--extension` install is resolved for that one run and never written to `packages[]`, so its agents stay invisible even though its extensions and skills load.
+2. Does `package.json` carry `pi.subagents` (or `pi-subagents`)? A `pi` key that declares only `extensions` contributes no agents; the conventional `agents/` directory is not scanned.
+3. Is the file `*.md` directly inside a declared directory? The scan is not recursive.
+4. Does the frontmatter parse, and does it have a `name:`? A broken file is skipped with a `[pi-subagents] Skipping agent file …` warning on stderr.
+5. Is `packageAgents` set to `false` or to a list that does not include it? Check `/agents → Settings → Package agents`.
+6. Is the package configured only in an untrusted project's `.pi/settings.json`? Trust the project, or install it globally.
+
+**It appears but a different one runs.** A local file of the same name outranks it. `/agents` shows the badge of whichever won — `•` project, `◦` global, `▪` package.
+
+**Edits to the package file do nothing.** Agents reload on every `Agent` call, so a local-path install picks up edits immediately. An npm or git install is a copy under `~/.pi/agent/{npm,git}/`; edit the source and reinstall, or install the local path during development.
+
+**A file over 1 MB is skipped.** Package files are third-party content re-read on every spawn, so there is a per-file ceiling, matching Claude Code's for plugin agents. Local files are unbounded.
+
+**`strictAgentFiles` and a broken package file.** Strict mode fails startup over an unparseable file in *your* `.pi/agents/`, which is the point of it. It deliberately does not extend to files inside installed packages — those are not yours to fix, and one bad `.md` in a dependency should not stop pi from starting.
+
+### Reference
+
+| | |
+|---|---|
+| Manifest keys | `pi.subagents.agents`, `pi.subagents.workflows`, `pi-subagents.agents`, `pi-subagents.workflows`, plus the bare-array shorthand for each |
+| Settings | `packageAgents`, `packageWorkflows` — `boolean \| string[]`, default `true` |
+| Agent file layout | `<declared dir>/*.md`, non-recursive |
+| Workflow file layout | `<declared dir>/*.js`, must carry `export const meta = …` |
+| Per-file size ceiling | 1 MiB |
+| Discovery source | pi's `settings.json → packages[]`, global and project |
+| Precedence | Above built-ins, below every local agent |
+| Implementation | [`src/package-resources.ts`](src/package-resources.ts) |
+
+## Driving subagents from another extension
+
+Another pi extension can spawn a subagent, listen for subagent completion, read the result, steer and stop the run — all over the `pi.events` bus, without importing this package directly. Five request/reply channels (`subagents:rpc:ping`, `subagents:rpc:spawn`, `subagents:rpc:stop`, `subagents:rpc:consume`, `subagents:rpc:steer`), the lifecycle events in README's [event table](#events), one per-message usage event (`subagents:usage`), one terminal `subagents:disposed`, and one in-process registry at `Symbol.for("pi-subagents:manager")`.
+
+The thing worth understanding up front is that **the bus is in-process.** Every "RPC" call here is a synchronous `pi.events.emit` into the same event loop, and every reply comes back the same way. That single fact explains most of what follows: why `signal` and the `on*` callbacks work on a spawn payload at all, why a `consume` fired inside a `subagents:completed` handler lands *before* the notification decision has been made, and why none of this survives a real process boundary.
+
+For the channel list, the reply envelope, the per-channel snippets and the event table, see [`README.md`](#cross-extension-rpc). This document is the reference README does not have room for: the complete spawn-option surface, every error string, the notification race, the registry, and what protocol version `2` does and does not promise.
+
+### Spawn options
+
+`subagents:rpc:spawn` forwards `options` to `AgentManager.spawn` — but not verbatim. The manager's `spawn` behind the RPC is `spawnTopLevel` in `src/index.ts`, which deletes internal-only fields first, and then `spawnResolved` overwrites the activity-tracker callbacks with its own. The full interface is `SpawnOptions` in `src/agent-manager.ts`; what a bus caller actually gets is three different things.
+
+**Honoured** — set these and they take effect:
+
+| Field | Type | Notes |
+|---|---|---|
+| `description` | string | What the agent is doing. Shown in the widget, FleetView and the completion notification |
+| `name` | string | A memorable second handle (`@auth-audit`). Slugged, never validated — anything unusable degrades rather than failing the spawn |
+| `model` | `Model`, `"@tier"` **or** `"provider/modelId"` | Strings are validated at the RPC boundary against `ctx.modelRegistry`; the shared spawn selector retains the raw request and stores its outcome on the record. `null` means no explicit override: `agentModels[type]`, `agentModels["*"]`, definition, then parent apply. Only explicit non-tier strings retain fuzzy matching; tiers and alias members resolve exactly, independently of `enabledModels` — see [Model tiers](#model-tiers) |
+| `maxTurns` | number | Turn ceiling for the run |
+| `isolated` | boolean | Strips extensions, skills and nested tools. Applies only when the agent file leaves `isolated:` unset — frontmatter is authoritative. **Not** a git worktree — see the trap table below |
+| `inheritContext` | boolean | Fork the parent conversation into the child. Only this option decides — an agent file's `inherit_context:` does not apply to RPC spawns |
+| `thinkingLevel` | ThinkingLevel | Overrides the agent definition's thinking default for this run; clamped to what the resolved model supports |
+| `isBackground` | boolean | Occupies a `maxConcurrent` slot and queues behind them. Every RPC spawn runs detached regardless; this is what decides whether it is *pooled* |
+| `bypassQueue` | boolean | Starts immediately even when the concurrency limit would queue it. The slot is still counted once running |
+| `structuredOutput` | CompiledSchema | Makes the child report through a `StructuredOutput` tool |
+| `isolation` | `"worktree"` | Temp git worktree, committed to a `pi-agent-*` branch on completion. The agent file's `isolation:` wins: `worktree` applies even when this is omitted, and `off` refuses it |
+| `cwd` | absolute path | The agent's tools operate here; `.pi` config still loads from the parent session's project, and the child reports this directory as untrusted (`ctx.isProjectTrusted()` is `false`) |
+| `invocation` | AgentInvocation | Resolved snapshot used for UI display |
+| `signal` | AbortSignal | Aborting it stops the subagent |
+| `onSpawned` / `onQueued` / `onCompaction` / `onBeforeWorktreeCleanup` | functions | Fire as documented on `SpawnOptions` |
+
+**Silently stripped** — set these and nothing happens, with no error and no note. Each deletion is a deliberate guard, and the reasons are worth knowing because they say what the surface refuses to let a caller forge:
+
+| Field | Why it is taken away |
+|---|---|
+| `parentAgentId` | Ownership. A forged parent hides your agent under someone else's nested tools |
+| `workflowId` | A forged value would hide an RPC-spawned agent inside someone else's workflow — and take it out of the concurrency pool with it |
+| `depth`, `maxSubagentDepth` | The nesting cap is inherited, not declared |
+| `configCwd` | Config-discovery root; only nested launches may set it |
+| `configProjectTrusted` | Trust decision for `configCwd`; a forged `true` would trust a directory the user never opened. Only nested launches set it, always paired with `configCwd` |
+| `rootSessionId` | Names a transcript directory, so a forged value is a path-traversal primitive |
+| `resumeSessionFile` | Worse: it names a file to **open and replay** as a conversation. Dispatcher only, and only from a path this extension itself recorded |
+| `reclaim` | Bypasses handle allocation, so a forged value would duplicate a live agent's name and make `@handle` ambiguous |
+| `previousId` | Names the evicted agent a reopen continues, so a forged value would make lifecycle events claim another agent's id |
+| `blocking` | Every spawn through here is detached. A forged `blocking` would charge it to the foreground pool and defer it behind a queue whose gate nobody is holding |
+| `modelSelection`, `modelFallback`, `modelTier`, `previousModelTier` | Internal resolution outcomes. A caller cannot forge a different selection, bypass scope validation, or invent a fallback disclosure |
+
+**Silently overwritten** — `onToolActivity`, `onTextDelta`, `onTurnEnd`, `onSessionCreated` and `onAssistantUsage` are replaced by the activity tracker's own (`spawnResolved`, `src/index.ts`). Every programmatic spawn passes through one funnel so none can supply half-wired callbacks; a half-wired tracker renders worse than none, which is the bug behind a row that reads `thinking…` for an agent's whole life ([#181](https://github.com/tintinweb/pi-subagents/pull/181)).
+
+Four things that are not obvious from the tables:
+
+- **Nothing is required at runtime.** `description` is non-optional in TypeScript and never validated. A spawn with no `options` at all is legal and is what "returns agent id on success" in `test/cross-extension-rpc.test.ts` pins.
+- **`bypassQueue` is not stripped.** Its own doc comment scopes it to the scheduler and the `/agents` generator, but a bus caller can set it and skip the `maxConcurrent` check.
+- **`structuredOutput` is documented "set only by the workflow host"** (its field comment on `SpawnOptions`) and is also not stripped.
+- **`signal` and the `on*` callbacks are function values.** They work only because the bus is in-process. A caller that genuinely serializes its payload cannot use them, and they arrive as `undefined` rather than failing.
+
+#### Names that look right and are not
+
+One of these already shipped as a bug in this project's own README example, so it is worth reading the table even if you are sure.
+
+| You might write | What it does | What you meant |
+|---|---|---|
+| `run_in_background` | Forwarded verbatim and ignored — it is the [`Agent`](#agent) *tool's* parameter name | `isBackground` |
+| `isolated: true` | Disables extensions, skills and nested tools | `isolation: "worktree"` for a git worktree |
+| `isolation: "worktree"` | Creates a git worktree | `isolated: true` to strip capabilities |
+| `configCwd` | Stripped | `cwd` |
+| `max_turns` / `thinking` / `inherit_context` | Ignored — tool and frontmatter spellings | `maxTurns` / `thinkingLevel` / `inheritContext` |
+| `memory` | Nothing. **There is no such option** | Memory scope comes only from the agent definition's frontmatter |
+
+**None of these produce an error.** Option keys are not validated on this path at all — unknown ones are accepted and dropped. (Contrast `agent()` inside a [workflow](#scripted-workflows), which rejects unknown keys by name.)
+
+### Errors
+
+Every failure reaches the caller as `{ success: false, error }`, where `error` is `err?.message ?? String(err)` (`handleRpc` in `src/cross-extension-rpc.ts`) — so these strings are what you will actually see.
+
+| Error | Source |
+|---|---|
+| `No active session` | spawn handler, `src/cross-extension-rpc.ts` — called before the first bound `session_start`, or in a session that excludes pi-subagents |
+| `Model override "<label>" provided but ctx.modelRegistry is unavailable` | spawn handler, `src/cross-extension-rpc.ts` |
+| `Model not found: "<input>".` + in-scope available models | `resolveModel`, `src/model-resolver.ts` |
+| `Model not in scope: "<input>".` + allowed models | `checkModelScope`, `src/model-scope.ts` — only with `scopeModels` on, and checked against the *resolved* model |
+| `Unknown or disabled agent type: "<raw>". Available: <list>.` | `resolveSpawnTypeIn`, `src/agent-types.ts` — only under `fallbackSubagent: none` |
+| `No agent type given. Available: <list>.` | `resolveSpawnTypeIn` — same condition |
+| `<reason> The configured fallbackSubagent "<x>" is itself unknown or disabled. Available: <list>.` | `resolveSpawnTypeIn` |
+| `SpawnOptions.cwd must be an absolute path: "<value>"` | `assertValidSpawnCwd`, `src/agent-manager.ts` |
+| `SpawnOptions.cwd does not exist: "<cwd>"` | `assertValidSpawnCwd` |
+| `SpawnOptions.cwd is not a directory: "<cwd>"` | `assertValidSpawnCwd` |
+| `SpawnOptions.cwd is not readable (<code>): "<cwd>". ...` (or `The session cwd is not readable ...` when no `cwd` is given); `<code>` is `EACCES` or `EPERM` | `assertSpawnCwd`, at `spawn` and again at the queued start |
+| `Cannot run with isolation: "worktree": <cause>. <hint>` | `AgentManager.startAgent`, surfaced through `awaitStartup`. `<cause>` names the directory tried and why: not inside a git repository, no commits yet, a git timeout, or `git worktree add`'s stderr |
+| git plumbing failures | `src/worktree.ts` |
+| `Subagent queue is full (128 waiting for the process-wide maxActiveSubagents limit). ...` | `AgentManager.spawn`, `BUDGET_QUEUE_FULL_ERROR` in `src/process-budget.ts` — only with `maxActiveSubagents` on. Short of that, an RPC spawn at the cap returns its id and waits as `queued`, whatever `isBackground` says |
+| `Agent not found` | stop handler, `src/cross-extension-rpc.ts` |
+| `Agent is owned by another agent or workflow` | stop handler |
+| `Agent is not running` | stop handler. The record exists, so it has already settled |
+| `Agent not found or still running` | consume handler |
+| `Steer message must be a non-empty string` | steer handler — `message` missing, not a string, or whitespace |
+| `Agent not found` / `Agent is owned by another agent or workflow` / `Agent is not running` | steer handler — same lookup, ownership guard and settled check as stop |
+| `Cannot steer agent "<id>" while Plan mode is active: ...` | steer handler — `planSteerRefusal` in `src/plan-mode-children.ts`, the same refusal `steer_subagent` gives. The agent is running or queued without Plan's restrictions while the parent plans |
+
+Three things the table cannot show:
+
+- **The failure that is not an error.** With `worktreeIsolation` off project-wide, `isolation: "worktree"` is dropped by the `isWorktreeIsolationEnabled()` check in `AgentManager.startAgent` with no error, no note on the record, and a success envelope on the wire. Your agent runs in the main tree. If you asked for isolation because two agents were going to write the same files, they now collide and nothing told you.
+- **`data` is omitted** when a handler returns nothing, so a successful stop or consume reply is a bare `{ success: true }` and `reply.data.anything` throws.
+- **`requestId` is not validated.** It is interpolated straight into the reply channel, so a caller that omits it gets its reply on the literal channel `subagents:rpc:spawn:reply:undefined` — where every other caller that omitted it is also listening. Send one, and send a unique one.
+
+### Ownership
+
+`isTopLevelAgent(record)` is `parentAgentId === undefined && workflowId === undefined` (`src/agent-manager.ts`). `subagents:rpc:stop` and `subagents:rpc:steer` enforce it through one shared check (`assertOwned` in `src/cross-extension-rpc.ts`): a nested child or a workflow's agent is owned by something that is *waiting on it*, and aborting or redirecting it out from under that owner turns another extension's request into a failed step. It is defence in depth rather than a live hole — no RPC hands out agent ids, so a caller has no ordinary way to name one it does not own.
+
+Two asymmetries to know about, stated as they are:
+
+- **Stop takes an id only**: its `getRecord` is the manager's plain lookup. Consume takes an id *or* an `@handle`: its `consumeResult` (both wired in the `session_start` handler, `src/index.ts`) goes through `resolveAgentRef`.
+- **Consume checks `parentAgentId` but not `workflowId`** (`consumeResult`, `src/index.ts`). A workflow-owned agent's result can be marked consumed over the bus even though the same agent cannot be stopped.
+
+The same predicate silently scopes the events. **Every lifecycle event is top-level only** — `subagents:started`, `:completed`, `:failed`, `:steered` and `:compacted` all return early for nested and workflow-owned agents (the `isTopLevelAgent` checks in the `AgentManager` callbacks, `src/index.ts`). `subagents:usage` is the one event that is not scoped: it fires for every agent's messages, nested and workflow-owned included, so a ledger sees a workflow's children spend even though it never sees them start or finish.
+
+**Survivors of a session switch are re-announced.** `/new`, `/resume`, `/fork` and `/reload` detach running background agents instead of aborting them, and the new activation never heard them spawn. Survivors are registered under the session file they were spawned for, and their results spool there. At every `session_start`, and whenever `subagents:announce_survivors` (`{}`) is emitted, it emits `subagents:started` for each survivor registered under the current session file (a `/reload`, or a `/resume` back into the session that spawned them), with `wakesParent: true` and without `spawnSeq`/`runSeq`, which count the orphaned manager's own sequence. A listener bound before and after that `session_start` may hear a survivor twice, and the announcement repeats on every `subagents:announce_survivors`, so a listener must treat a repeated `started` for an agent it already tracks as running, with the same identity, as a no-op (pi-todo does: it must not move the agent to the newest match for its handle). A live survivor's handle and alias stay reserved: a spawn after the switch never reuses them, so a newer same-named agent is distinguishable from the survivor. When a survivor settles, its `subagents:completed` or `:failed` is emitted as its spooled result is delivered (also without `settleSeq`), so a listener such as pi-todo keeps the owner armed until then. Every other survivor in the process, registered under a different session file (after `/fork`, a fork of a fork, `/resume` of another session or `/new`), is announced at the same moments as `subagents:other_session_survivor`, with the `sessionFile` it wakes, without `wakesParent` and with no later `completed` / `failed` here: it wakes that session, so a listener must not treat it as armed. A survivor that already finished is no longer registered, so it is not announced; a listener that wants to drop a stale entry re-emits `subagents:announce_survivors` and rebuilds from the answer. Results are not re-routed.
+
+**`subagents:disposed` follows actual shutdown disposal, not detachment.** It is emitted only after this activation's manager and retained child sessions are disposed. A session switch (`new`, `resume`, `fork`, `reload`) that keeps background work alive emits no disposed event, including when that detached manager later finishes. Its `subagents:usage` and `subagents:compacted` events do *not* continue after the switch: the detached manager's `pi` belongs to the replaced session and is stale, so those observers fail and are dropped (the run itself is unaffected). A ledger therefore under-counts any agent that runs across `new`, `resume`, `fork` or `reload`; `reportUsage` pooling is lost for it too. Its completion is still delivered, through the session spool, to the session that spawned it. This is activation-local: an activation that was never detached keeps emitting. On quit a listener gets only its synchronous prefix: `pi.events.emit` does not await listeners, and pi exits once shutdown handlers return. Flush with `writeFileSync`, not `fs.promises`. Fields, and the other events, are in README's [event table](#events).
+
+Child shutdown handlers have a 3s ceiling before session disposal, both at eviction and quit. The ceiling timer is cancelled as soon as handlers finish or reject; it does not remain armed after disposal. A hung handler still reaches the same bounded disposal path.
+
+### The notification race
+
+When a background agent finishes, pi-subagents sends the user a completion notification. If you have already shown the model that result yourself, that notification arrives on top of an answer that was already given, and it costs the parent a turn to dismiss. `subagents:rpc:consume` is how you say you have handled it — the bus-side half of what `get_subagent_result` does when it returns a result.
+
+**When you send it decides whether it works.** The timeline:
+
+1. The agent settles, and the manager's completion callback in `src/index.ts` emits `subagents:completed`.
+2. Next, in the same synchronous callback, it checks `record.resultConsumed` and decides whether to notify at all.
+3. `pi.events` dispatch is synchronous and in-process, so a handler that emits `subagents:rpc:consume` **without awaiting anything** has already set that flag before step 2 evaluates.
+
+| When you consume | What happens |
+|---|---|
+| Synchronously, inside your `subagents:completed` handler | The notification is never scheduled. This is the clean path |
+| After an `await`, before the notification is sent | Still suppressed. The notification waits in the outbox (`src/completion-outbox.ts`), and consuming the result cancels it there. It is sent about 200 ms after the completion when the parent is idle (`NOTIFICATION_HOLD_MS`), and at the end of the parent's current tool batch when it is busy |
+| After it was sent | Too late. pi has queued it with `triggerTurn: true`, and it costs the parent a model call |
+
+Fire-and-forget is the intended use: the reply carries nothing to act on, and the channel sits outside the `subagents:rpc:ping` version handshake on purpose (the comment on the consume handler, `src/cross-extension-rpc.ts`), so you can send it unconditionally and an older pi-subagents with no handler simply keeps notifying.
+
+Consumption is not terminal. An `@handle` steer un-consumes the record (the mention handler, `src/index.ts`) because the agent's reply to that message still needs relaying. A background resume (`AgentManager.resume`) does too, because the record is starting a new run, and so does handing a foreground agent to the background (`AgentManager.sendToBackground`), because its result now has to reach the parent as a notification.
+
+One related thing that lives nowhere else: on every top-level settle of an agent that ran (not a queued stop, which never started), pi-subagents writes a session entry — not an event — via `pi.appendEntry("subagents:record", …)` (the manager's completion callback, `src/index.ts`), carrying `id`, `type`, `description`, `status`, `result`, `error`, `startedAt` and `completedAt`. It exists for cross-extension history reconstruction. It is append-only history, not something to react to.
+
+### Steering a running agent
+
+`subagents:rpc:steer` `{ requestId, agentId, message }` delivers `message` into a running or queued agent's conversation, the bus-side half of the `steer_subagent` tool. It exists for the caller that spawned an agent over the bus and then learns something that agent needs mid-run — a second CI failure on the head it is already fixing, a review that landed while it works — and would otherwise have to choose between spawning a duplicate agent for the same work and dropping the fact.
+
+It takes an id only, enforces the same top-level ownership guard as stop, and answers `Agent is not running` for a record that has settled. While the parent session is in `pi-plan-mode`'s Plan mode, it refuses a running or queued agent that runs without Plan's restrictions (one started before Plan), exactly as `steer_subagent` does, so your tool cannot steer that agent into edits; see README's [Plan mode](#plan-mode). A message queued before the agent's session exists is flushed when the session is created, exactly as the tool's steer is. A successful steer emits `subagents:steered` `{ id, message }`, as every steer path does. Like `consume`, it is outside the `ping` version handshake: an older build has no handler and the request times out on your side, so give it a timeout and treat expiry as "not available here".
+
+### The manager registry
+
+`globalThis[Symbol.for("pi-subagents:manager")]` (`MANAGER_KEY` and `registryEntry`, `src/index.ts`) is a second integration surface — the standard Node cross-package singleton pattern, no bus involved:
+
+| Member | Signature | Notes |
+|---|---|---|
+| `waitForAll()` | `() => Promise<void>` | Resolves when nothing is running. **All** agents, including ones you did not spawn — a shutdown barrier, not a join |
+| `hasRunning()` | `() => boolean` | |
+| `spawn(pi, ctx, type, prompt, options)` | `=> string` | **Is** `spawnTopLevel`, so the strip list above applies identically |
+| `getRecord(id)` | `=> AgentRecord \| undefined` | Filtered through `isTopLevelAgent`, so someone else's child comes back `undefined` rather than leaking |
+
+The slot is claimed by the first activation only; subagent sessions re-activate this extension in the same process, and unconditionally overwriting would point the registry at a short-lived child manager whose shutdown would then delete the root session's entry ([#128](https://github.com/tintinweb/pi-subagents/pull/128)). Child activations leave it alone, and shutdown releases it only if this activation claimed it (`ownsManagerRegistry`, checked in the `session_shutdown` handler).
+
+Prefer the bus. The registry has no reply envelope, no version, and no availability event — `globalThis[Symbol.for("pi-subagents:manager")] === undefined` is the only probe you get, and it is also `undefined` in a session that filtered pi-subagents out. Reach for it for the two things the bus has no verb for — *is anything still running*, and *give me a settled record back* — or for a headless host that wants to block on `waitForAll()` before exiting.
+
+### Protocol versions
+
+`subagents:rpc:ping` replies `{ version: PROTOCOL_VERSION }`, currently `2` (`src/cross-extension-rpc.ts`). The constant was introduced already equal to `2` in 0.5.0; "v1" is a retroactive name for the pre-envelope contract, where spawn replied with a bare `{ id }` or `{ error }`, stop replied `{ success: boolean }` with no message, and each handler caught its own errors.
+
+Everything added since shipped **without a bump**, because all of it is additive: stop's ownership refusal, string-`model` resolution ([#59](https://github.com/tintinweb/pi-subagents/pull/59)/[#60](https://github.com/tintinweb/pi-subagents/issues/60)), `scopeModels` enforcement ([#240](https://github.com/tintinweb/pi-subagents/issues/240)), and the whole `consume` and `steer` channels.
+
+> A `ping` that answers `2` does not tell you whether `consume` or `steer` exists, whether model scope is enforced, or whether stop checks ownership.
+
+So: send `consume` unconditionally and ignore the outcome — an older build has no handler and simply keeps notifying, which is exactly why it was left outside the handshake. And treat every error envelope as authoritative rather than trying to predict which checks are in force.
+
+### Availability
+
+`subagents:ready` is the discovery signal, and both the RPC handlers and the event itself are wired on the first bound `session_start` (its handler in `src/index.ts`) — deliberately not at factory time. pi runs every extension factory *before* applying an agent's `extensions:` filter and only delivers lifecycle events to the survivors, so a factory-time broadcast made a filtered-out session advertise a spawn service it could never provide: `ping` succeeded and every `spawn` answered `No active session` ([#142](https://github.com/tintinweb/pi-subagents/issues/142)).
+
+The consequence is worth stating plainly: **a session that excludes pi-subagents is indistinguishable from pi-subagents not being installed.** It emits no `subagents:ready` and answers nothing. Give discovery a timeout and treat expiry as "not available here" rather than waiting indefinitely. The payload is `{}` — read nothing off it. Handlers are torn down and `rpcHandle` reset in the `session_shutdown` handler, so a later `session_start` re-registers and re-emits.
+
+**Tier provenance.** `options.model: "@cheap"` wins over `agentModels` and resolves through the trusted global/enterprise tier table, without consulting `enabledModels` or fuzzy matching. A missing binding or router follows `modelResolution` (`inherit` with disclosure by default, or `error`). Tier admission finishes before `started`; exhausted RPC starts error rather than borrowing another tier. Successful lifecycle/usage payloads and `subagents:record` history carry the structured `modelTier` outcome plus a ready-made `modelNote`, e.g. `Model: @cheap -> provider/id via router/cheap`. The model label uses admission's physical model before the first response, then follows the answering model. RPC options cannot forge these fields. See [tier configuration](#model-tiers).
+
+A queued background resume emits `subagents:created` with `queuedAfterSettleSeq` matching its previous terminal event's `settleSeq`, and `queuedResumeSeq` ordering the new queue entry against spawns. These fields let listeners distinguish it from an old re-announcement; an immediate resume or foreground handoff does not carry them. Lifecycle payloads carry `wakesParent`, true only when the record currently has background completion-notice eligibility. A foreground handoff's `created` carries `backgroundHandoff: true` and the same `runSeq` as its `started`; listeners should match the run before updating eligibility.
+
+**Model fallback provenance on events.** The shared spawn path selects before `subagents:started`, even when the RPC names no model. An unresolved configured input runs on the parent, with `modelFallback` and `modelNote` present on `started`, `usage`, `compacted` and `completed`/`failed`. Each reads the same recorded provenance. Callers cannot forge it (see the stripped-fields table).
+
+One more trap on the way in: an RPC-spawned agent emits **no `subagents:created`**. The only three emit sites, all in `src/index.ts`, are the `Agent` tool's `run_in_background` branch, a detached resume (`startBackgroundResume`), and a foreground `Agent` call handed to the background with ctrl+b or the viewer's `b` (`sendForegroundToBackground`) — the handoff fires after `subagents:started`, while a queued resume announces before its next start. Your first event for your own agent is normally `subagents:started` (the manager's start callback), so key your bookkeeping off the id that `spawn` handed you, not off `subagents:created`. The exception: an agent stopped by any path while still queued (e.g. `subagents:rpc:stop`, `stop_subagent`, the spawn's own `options.signal` aborting, stop-all with `ctrl+shift+k` twice or `/agents` -> Stop all running, a session switch or quit) never starts, so `subagents:failed` with `status: "stopped"` and a `settleSeq` is its first and only event, with no completion notice (the manager's queued-stop callback). Resolve an outstanding spawn on `failed` whether or not you saw `started`.
+
+One case gets no event at all: a spawn that would queue and whose `signal` is *already* aborted is stopped before it is enqueued (`armQueuedAbort` in `src/agent-manager.ts`). The reply still carries an id, but its record is already `stopped` and nothing is emitted for it, so a "resolve on `failed`" waiter hangs. Check `signal.aborted` before you spawn, or resolve that id as stopped yourself. With a free slot the same spawn starts, emits `started`, and is stopped through the running path instead.
+
+### What the tests pin
+
+This document has no test of its own, so it is worth knowing which claims are actually held in place:
+
+| Test | Level | Pins |
+|---|---|---|
+| `test/cross-extension-rpc.test.ts` | Mocked `SpawnCapable` | Envelope shape, per-channel error strings (including steer's), model resolution and scope enforcement |
+| `test/rpc-lifecycle-gating.test.ts` | Real extension factory | Nothing wired at factory time, everything once at `session_start`, live widget activity for RPC spawns ([#142](https://github.com/tintinweb/pi-subagents/issues/142)/[#181](https://github.com/tintinweb/pi-subagents/pull/181)), and a queued spawn's `signal`: aborting it emits one `failed` `stopped`, an already-aborted one emits nothing ([#526](https://github.com/nredd/pi-harness/issues/526)) |
+| `test/rpc-result-consumption.test.ts` | Real delivery path | The notification firing, and not firing, around `consume` |
+| `test/model-selection-paths.test.ts` | Real entry paths, manager and Pi registry; child execution stubbed | RPC/Agent/nested/scheduled/direct-mention/workflow parity for precedence, aliases, virtual selections, parent fallback and scope; live resume retains the original selection |
+
+Not pinned anywhere, so treat them as descriptions rather than contracts: the `SpawnOptions.cwd` error strings, `subagents:ready`'s `{}` payload, consume's handle resolution, and its missing `workflowId` check.
+
+### Reference implementation
+
+[**`tintinweb/pi-tasks`**](https://github.com/tintinweb/pi-tasks) is the working integration and the one this surface was shaped by. Its `TaskExecute` drives `subagents:rpc:spawn` — including the serialized `"provider/modelId"` string form that the boundary now resolves — and its `TaskOutput` drives `subagents:rpc:consume`, which exists because pi-tasks joins an agent on `subagents:completed` and reports the result itself ([pi-tasks#62](https://github.com/tintinweb/pi-tasks/issues/62)).
+
+Read it for the shape of the whole loop: waiting on `subagents:ready`, keeping an id-keyed map of outstanding spawns, resolving each from the `subagents:completed` / `subagents:failed` handler, and consuming the result in the same synchronous handler that reports it.
+
+If what you want is many coordinated agents rather than one, hand a script to [`SubagentWorkflow`](#scripted-workflows) instead of fanning out over `subagents:rpc:spawn` — and note that a workflow's agents are not yours: they emit no lifecycle events — only `subagents:usage` — and `subagents:rpc:stop` refuses them.
 
 ## License
 
