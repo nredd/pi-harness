@@ -241,15 +241,15 @@ function explainUnsafeSegment(segment, safeSubcommands, platform, paths) {
   };
 }
 function firstWord(words, fallback) {
-  return [...words, fallback][0];
+  return words[0] ?? fallback;
 }
 function validatorRejection(label, token) {
   return { token, reason: `arguments rejected by the reviewed \`${label}\` validator` };
 }
 function explainReviewedRejection(command, first, args, safeSubcommands, platform, paths) {
-  if (command === "hostname") return validatorRejection("hostname", firstWord(args, first));
+  if (command === "hostname") return validatorRejection("hostname", args[0]);
   if (command === "tasklist") {
-    return platform === "win32" ? validatorRejection("tasklist", firstWord(args, first)) : { token: first, reason: "`tasklist` is only allowed on Windows" };
+    return platform === "win32" ? validatorRejection("tasklist", args[0]) : { token: first, reason: "`tasklist` is only allowed on Windows" };
   }
   if (command === "sed") {
     return validatorRejection(
@@ -265,8 +265,10 @@ function explainReviewedRejection(command, first, args, safeSubcommands, platfor
   const subcommand = args.find((argument) => !argument.startsWith("-"))?.toLowerCase();
   if (command === "npm" && subcommand === "audit") return validatorRejection("npm audit", "fix");
   if (command === "npm" && subcommand === "run") {
-    const runIndex = args.findIndex((argument) => argument.toLowerCase() === "run");
-    return validatorRejection("npm run", args[runIndex + 1] ?? "run");
+    return validatorRejection(
+      "npm run",
+      args[0]?.toLowerCase() === "run" ? firstWord(args.slice(1), "run") : args[0]
+    );
   }
   return void 0;
 }
@@ -276,7 +278,10 @@ function explainGitRejection(first, args, safeSubcommands, paths) {
     if (args[index] === "-C") {
       const directory = args[index + 1];
       if (resolveDirectory(directory, paths.base, paths.roots, paths.homeDir) === void 0) {
-        return { token: directory ?? "-C", reason: "`git -C` directory outside the allowed roots" };
+        return {
+          token: directory ?? "-C",
+          reason: "arguments rejected by the reviewed `git` validator: `-C` directory outside the allowed roots"
+        };
       }
       index += 2;
     } else {
@@ -284,7 +289,7 @@ function explainGitRejection(first, args, safeSubcommands, paths) {
     }
   }
   const subcommand = args[index]?.toLowerCase();
-  if (!subcommand) return { token: first, reason: "`git` needs a reviewed subcommand" };
+  if (!subcommand) return { token: first, reason: "arguments rejected by the reviewed `git` validator: no subcommand" };
   if (subcommand.startsWith("-")) return { token: subcommand, reason: "unsupported git option before the subcommand" };
   const validator = BUILTIN_GIT_VALIDATORS[subcommand] ?? (safeSubcommands.git?.includes(subcommand) ? CONFIGURABLE_GIT_VALIDATORS[subcommand] : void 0);
   if (!validator) return { token: `${first} ${subcommand}`, reason: NOT_ALLOWLISTED_REASON };
@@ -2719,4 +2724,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-SOIPKNC7.ts.map
+//# sourceMappingURL=chunk-7AOHUDU7.ts.map

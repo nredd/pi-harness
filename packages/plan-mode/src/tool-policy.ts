@@ -366,9 +366,9 @@ function explainUnsafeSegment(
   };
 }
 
-/** First of `words`, else `fallback`; branch-free because callers only differ on unreachable empties. */
+/** First of `words`, else `fallback`. */
 function firstWord(words: readonly string[], fallback: string): string {
-  return [...words, fallback][0] as string;
+  return words[0] ?? fallback;
 }
 
 /** Reason for a command already on the reviewed allowlist whose arguments failed its validator. */
@@ -389,10 +389,11 @@ function explainReviewedRejection(
   platform: NodeJS.Platform,
   paths: PathPolicy,
 ): SyntaxRejection | undefined {
-  if (command === "hostname") return validatorRejection("hostname", firstWord(args, first));
+  // Invariant: `hostname` and Windows `tasklist` accept no-argument forms, so a rejection has `args[0]`.
+  if (command === "hostname") return validatorRejection("hostname", args[0] as string);
   if (command === "tasklist") {
     return platform === "win32"
-      ? validatorRejection("tasklist", firstWord(args, first))
+      ? validatorRejection("tasklist", args[0] as string)
       : { token: first, reason: "`tasklist` is only allowed on Windows" };
   }
   if (command === "sed") {
@@ -409,8 +410,11 @@ function explainReviewedRejection(
   const subcommand = args.find((argument) => !argument.startsWith("-"))?.toLowerCase();
   if (command === "npm" && subcommand === "audit") return validatorRejection("npm audit", "fix");
   if (command === "npm" && subcommand === "run") {
-    const runIndex = args.findIndex((argument) => argument.toLowerCase() === "run");
-    return validatorRejection("npm run", args[runIndex + 1] ?? "run");
+    // `isSafeStructuredCommand` only accepts the script at `args[1]`, so a leading flag is the offender.
+    return validatorRejection(
+      "npm run",
+      args[0]?.toLowerCase() === "run" ? firstWord(args.slice(1), "run") : (args[0] as string),
+    );
   }
   return undefined;
 }
@@ -427,7 +431,10 @@ function explainGitRejection(
     if (args[index] === "-C") {
       const directory = args[index + 1];
       if (resolveDirectory(directory, paths.base, paths.roots, paths.homeDir) === undefined) {
-        return { token: directory ?? "-C", reason: "`git -C` directory outside the allowed roots" };
+        return {
+          token: directory ?? "-C",
+          reason: "arguments rejected by the reviewed `git` validator: `-C` directory outside the allowed roots",
+        };
       }
       index += 2;
     } else {
@@ -435,7 +442,7 @@ function explainGitRejection(
     }
   }
   const subcommand = args[index]?.toLowerCase();
-  if (!subcommand) return { token: first, reason: "`git` needs a reviewed subcommand" };
+  if (!subcommand) return { token: first, reason: "arguments rejected by the reviewed `git` validator: no subcommand" };
   if (subcommand.startsWith("-")) return { token: subcommand, reason: "unsupported git option before the subcommand" };
   const validator =
     (BUILTIN_GIT_VALIDATORS as Record<string, ArgumentValidator>)[subcommand] ??
