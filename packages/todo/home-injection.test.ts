@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
-import { createMockPi } from "@juicesharp/rpiv-test-utils";
 import { afterEach, expect, it, vi } from "vitest";
 import { TEST_HOME } from "./.test-support/setup.ts";
+import { createTodoPi } from "./.test-support/todo-host.ts";
 
 vi.mock("node:fs", async (importOriginal) => {
 	const actual = await importOriginal<typeof fs>();
@@ -52,7 +52,7 @@ it("never probes the real legacy home when an isolated XDG config is missing", (
 	expect(getMaxWidgetLines(TEST_HOME)).toBe(27);
 	expect(getCollapseOnResume(TEST_HOME)).toBe(false);
 	expect(resolveCollapseKey(TEST_HOME)).toBe("alt+o");
-	const { pi, captured } = createMockPi();
+	const { pi, captured } = createTodoPi();
 	registerTodoTool(pi, { homeDir: TEST_HOME });
 	registerTodo(pi, undefined, { homeDir: TEST_HOME });
 	expect(captured.shortcuts.has("alt+o")).toBe(true);
@@ -72,7 +72,7 @@ it("resolves the home itself when no homeDir is injected", () => {
 	const dir = join(process.env.XDG_CONFIG_HOME, "rpiv-todo");
 	fs.mkdirSync(dir, { recursive: true });
 	fs.writeFileSync(join(dir, "config.json"), JSON.stringify({ collapseKey: "alt+p" }));
-	const { pi, captured } = createMockPi();
+	const { pi, captured } = createTodoPi();
 	registerTodoTool(pi);
 	registerTodo(pi);
 	expect(captured.tools.has("todo")).toBe(true);

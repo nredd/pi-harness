@@ -3,10 +3,11 @@
 Source: `juicesharp/rpiv-mono` release `54df50eea935fc9753edc300d5f23c5e28d906d7`
 (`@juicesharp/rpiv-todo@2.13.9`, subtree split `7903c76b`).
 
-`upstream/{pi,session,theme,manifest}.ts` are unchanged copies from
+`upstream/{session,theme,manifest}.ts` are unchanged copies from
 `packages/test-utils/`, with the upstream MIT license. The local barrel exports
-only those helpers used by this package. `rpiv-workflow` is a dev-only dependency
-for their type imports; no workflow code is loaded by the helpers.
+only those helpers used by this package. The `ExtensionAPI` and context doubles are no
+longer vendored: `todo-host.ts` presets the shared recording doubles from
+`@nredd/pi-test-lib/pi` (#865), which also dropped the `rpiv-workflow` type dependency.
 
 `.vitest.config.ts` aliases the unpublished `@juicesharp/rpiv-test-utils` to this
 barrel. `setup.ts` preserves upstream's dynamic state/i18n reset and config

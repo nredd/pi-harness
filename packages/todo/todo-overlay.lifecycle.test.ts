@@ -1,7 +1,7 @@
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { createMockCtx, createMockPi, createMockUI } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetState, registerTodoTool, setActiveRenderSession, TodoOverlay } from "./.test-support/home-fixtures.ts";
+import { createTodoCtx, createTodoPi, createTodoUI } from "./.test-support/todo-host.ts";
 
 const WIDGET_KEY = "rpiv-todos";
 
@@ -14,10 +14,10 @@ const identityTheme = {
 
 // Register the todo tool and seed module state via its real execute() — this
 // exercises the same mutation path production uses.
-async function seed(captured: ReturnType<typeof createMockPi>["captured"], actions: unknown[]) {
+async function seed(captured: ReturnType<typeof createTodoPi>["captured"], actions: unknown[]) {
 	const tool = captured.tools.get("todo");
 	if (!tool) throw new Error("todo tool not registered");
-	const ctx = createMockCtx();
+	const ctx = createTodoCtx();
 	for (const p of actions) {
 		await tool.execute?.("tc", p as never, undefined as never, undefined as never, ctx as never);
 	}
@@ -26,11 +26,11 @@ async function seed(captured: ReturnType<typeof createMockPi>["captured"], actio
 }
 
 function makeCtx() {
-	return createMockUI() as unknown as ExtensionUIContext;
+	return createTodoUI() as unknown as ExtensionUIContext;
 }
 
 function registerTool() {
-	const { pi, captured } = createMockPi();
+	const { pi, captured } = createTodoPi();
 	registerTodoTool(pi);
 	return { captured };
 }
@@ -105,7 +105,7 @@ describe("TodoOverlay — lifecycle", () => {
 			{ action: "clear" } as never,
 			undefined as never,
 			undefined as never,
-			createMockCtx() as never,
+			createTodoCtx() as never,
 		);
 		overlay.update();
 		expect(setWidget).toHaveBeenCalledTimes(2);
@@ -124,7 +124,7 @@ describe("TodoOverlay — lifecycle", () => {
 			{ action: "clear" } as never,
 			undefined as never,
 			undefined as never,
-			createMockCtx() as never,
+			createTodoCtx() as never,
 		);
 		overlay.update();
 		await tool.execute?.(
@@ -132,7 +132,7 @@ describe("TodoOverlay — lifecycle", () => {
 			{ action: "create", subject: "b" } as never,
 			undefined as never,
 			undefined as never,
-			createMockCtx() as never,
+			createTodoCtx() as never,
 		);
 		overlay.update();
 		const setWidget = ui.setWidget as ReturnType<typeof vi.fn>;
@@ -201,7 +201,7 @@ describe("TodoOverlay — lifecycle", () => {
 		const initialTheme = colorTheme("initial");
 		const factoryTheme = colorTheme("factory");
 		const switchedTheme = colorTheme("switched");
-		const ui = createMockUI({ theme: initialTheme }) as unknown as ExtensionUIContext;
+		const ui = createTodoUI({ theme: initialTheme as never }) as unknown as ExtensionUIContext;
 		overlay.setUICtx(ui);
 		overlay.update();
 		const setWidget = ui.setWidget as ReturnType<typeof vi.fn>;
@@ -233,7 +233,7 @@ describe("TodoOverlay — lifecycle", () => {
 			{ action: "update", id: 1, status: "deleted" } as never,
 			undefined as never,
 			undefined as never,
-			createMockCtx() as never,
+			createTodoCtx() as never,
 		);
 		const overlay = new TodoOverlay();
 		const ui = makeCtx();

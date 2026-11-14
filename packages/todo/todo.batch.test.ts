@@ -1,4 +1,3 @@
-import { createMockCtx, createMockPi } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	__resetState,
@@ -7,6 +6,7 @@ import {
 	type TaskDetails,
 	TOOL_NAME,
 } from "./.test-support/home-fixtures.ts";
+import { createTodoCtx, createTodoPi } from "./.test-support/todo-host.ts";
 import { applyPlanApproval } from "./state/plan.ts";
 import { commitState, getState } from "./state/store.ts";
 
@@ -15,10 +15,10 @@ type Params = Record<string, unknown>;
 function setup() {
 	__resetState();
 	setActiveRenderSession("test-session");
-	const { pi, captured } = createMockPi();
+	const { pi, captured } = createTodoPi();
 	registerTodoTool(pi);
 	const tool = captured.tools.get(TOOL_NAME)!;
-	const ctx = createMockCtx();
+	const ctx = createTodoCtx();
 	const call = async (params: Params) => {
 		const result = await tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx as never);
 		return { text: (result!.content[0] as { text: string }).text, details: result!.details as TaskDetails };

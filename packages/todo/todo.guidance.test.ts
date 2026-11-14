@@ -1,6 +1,5 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { createMockPi } from "@juicesharp/rpiv-test-utils";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
 	DEFAULT_PROMPT_GUIDELINES,
@@ -9,6 +8,7 @@ import {
 	TOOL_NAME,
 } from "./.test-support/home-fixtures.ts";
 import { TEST_HOME } from "./.test-support/setup.ts";
+import { createTodoPi } from "./.test-support/todo-host.ts";
 
 const CONFIG_PATH = join(TEST_HOME, ".config", "rpiv-todo", "config.json");
 const DEFAULT_GUIDELINES_LENGTH = DEFAULT_PROMPT_GUIDELINES.length;
@@ -24,7 +24,7 @@ beforeEach(() => {
 
 describe("registerTodoTool — guidance overrides", () => {
 	it("uses built-in defaults when no config file exists", () => {
-		const { pi, captured } = createMockPi();
+		const { pi, captured } = createTodoPi();
 		registerTodoTool(pi);
 		const tool = captured.tools.get(TOOL_NAME)!;
 		expect(tool.promptSnippet).toBe(DEFAULT_PROMPT_SNIPPET);
@@ -33,7 +33,7 @@ describe("registerTodoTool — guidance overrides", () => {
 
 	it("uses built-in defaults when config has no guidance field", () => {
 		writeConfig({ otherField: true });
-		const { pi, captured } = createMockPi();
+		const { pi, captured } = createTodoPi();
 		registerTodoTool(pi);
 		const tool = captured.tools.get(TOOL_NAME)!;
 		expect(tool.promptSnippet).toBe(DEFAULT_PROMPT_SNIPPET);
@@ -41,7 +41,7 @@ describe("registerTodoTool — guidance overrides", () => {
 
 	it("overrides promptSnippet with valid value", () => {
 		writeConfig({ guidance: { promptSnippet: "Custom todo snippet" } });
-		const { pi, captured } = createMockPi();
+		const { pi, captured } = createTodoPi();
 		registerTodoTool(pi);
 		const tool = captured.tools.get(TOOL_NAME)!;
 		expect(tool.promptSnippet).toBe("Custom todo snippet");
@@ -50,7 +50,7 @@ describe("registerTodoTool — guidance overrides", () => {
 
 	it("overrides promptGuidelines with valid value", () => {
 		writeConfig({ guidance: { promptGuidelines: ["Rule one", "Rule two"] } });
-		const { pi, captured } = createMockPi();
+		const { pi, captured } = createTodoPi();
 		registerTodoTool(pi);
 		const tool = captured.tools.get(TOOL_NAME)!;
 		expect(tool.promptSnippet).toBe(DEFAULT_PROMPT_SNIPPET);
@@ -59,7 +59,7 @@ describe("registerTodoTool — guidance overrides", () => {
 
 	it("overrides both promptSnippet and promptGuidelines", () => {
 		writeConfig({ guidance: { promptSnippet: "Custom", promptGuidelines: ["Rule"] } });
-		const { pi, captured } = createMockPi();
+		const { pi, captured } = createTodoPi();
 		registerTodoTool(pi);
 		const tool = captured.tools.get(TOOL_NAME)!;
 		expect(tool.promptSnippet).toBe("Custom");
@@ -68,7 +68,7 @@ describe("registerTodoTool — guidance overrides", () => {
 
 	it("falls back to defaults on empty promptSnippet", () => {
 		writeConfig({ guidance: { promptSnippet: "" } });
-		const { pi, captured } = createMockPi();
+		const { pi, captured } = createTodoPi();
 		registerTodoTool(pi);
 		const tool = captured.tools.get(TOOL_NAME)!;
 		expect(tool.promptSnippet).toBe(DEFAULT_PROMPT_SNIPPET);
@@ -76,7 +76,7 @@ describe("registerTodoTool — guidance overrides", () => {
 
 	it("falls back to defaults on wrong types", () => {
 		writeConfig({ guidance: { promptSnippet: 123, promptGuidelines: "not-array" } });
-		const { pi, captured } = createMockPi();
+		const { pi, captured } = createTodoPi();
 		registerTodoTool(pi);
 		const tool = captured.tools.get(TOOL_NAME)!;
 		expect(tool.promptSnippet).toBe(DEFAULT_PROMPT_SNIPPET);
@@ -85,7 +85,7 @@ describe("registerTodoTool — guidance overrides", () => {
 
 	it("falls back to defaults on promptGuidelines with empty string item", () => {
 		writeConfig({ guidance: { promptGuidelines: ["valid", ""] } });
-		const { pi, captured } = createMockPi();
+		const { pi, captured } = createTodoPi();
 		registerTodoTool(pi);
 		const tool = captured.tools.get(TOOL_NAME)!;
 		expect((tool.promptGuidelines as string[]).length).toBe(DEFAULT_GUIDELINES_LENGTH);

@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs";
-import { createMockPi } from "@juicesharp/rpiv-test-utils";
 import { describe, expect, it } from "vitest";
 import { registerTodoTool } from "./.test-support/home-fixtures.ts";
+import { createTodoPi } from "./.test-support/todo-host.ts";
 
 /** Pin the instructions actually registered for agents, not a separate policy copy. */
 describe("todo default guidance", () => {
 	it("tracks parallel owned work accurately without delaying verified completions", () => {
-		const { pi, captured } = createMockPi();
+		const { pi, captured } = createTodoPi();
 		registerTodoTool(pi);
 		const guidance = (captured.tools.get("todo")!.promptGuidelines as string[]).join("\n");
 		expect(guidance).toContain("EVERY actually started task in_progress BEFORE");
@@ -23,7 +23,7 @@ describe("todo default guidance", () => {
 	});
 
 	it("keeps the shared reference consistent with injected guidance", () => {
-		const { pi, captured } = createMockPi();
+		const { pi, captured } = createTodoPi();
 		registerTodoTool(pi);
 		const guidance = (captured.tools.get("todo")!.promptGuidelines as string[]).join("\n");
 		const reference = readFileSync(new URL("./docs/tool-schema.md", import.meta.url), "utf8");

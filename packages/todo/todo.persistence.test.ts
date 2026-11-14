@@ -1,6 +1,6 @@
-import { createMockCtx, createMockPi } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { __resetState, registerTodoTool, type TaskDetails, TOOL_NAME } from "./.test-support/home-fixtures.ts";
+import { createTodoCtx, createTodoPi } from "./.test-support/todo-host.ts";
 import { applyPlanApproval } from "./state/plan.ts";
 import { replayFromBranch } from "./state/replay.ts";
 import { commitState, getState } from "./state/store.ts";
@@ -11,10 +11,10 @@ afterEach(__resetState);
 
 /** Capture the same custom snapshots the real host appends during execution. */
 function setup() {
-	const { pi, captured } = createMockPi();
+	const { pi, captured } = createTodoPi();
 	registerTodoTool(pi);
 	const tool = captured.tools.get(TOOL_NAME)!;
-	const ctx = createMockCtx();
+	const ctx = createTodoCtx();
 	const sessionId = ctx.sessionManager.getSessionId();
 	const call = async (params: Record<string, unknown>) => {
 		const result = await tool.execute!("tc", params as never, undefined, undefined, ctx as never);

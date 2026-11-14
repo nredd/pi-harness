@@ -1,14 +1,9 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import {
-	buildSessionEntries,
-	createMockCtx,
-	createMockPi,
-	makeTheme,
-	makeTodoToolResult,
-} from "@juicesharp/rpiv-test-utils";
+import { buildSessionEntries, makeTheme, makeTodoToolResult } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_HOME } from "./.test-support/setup.ts";
+import { createTodoCtx, createTodoPi } from "./.test-support/todo-host.ts";
 import registerTodo from "./index.ts";
 import { __resetState } from "./todo.ts";
 
@@ -30,10 +25,10 @@ function removeConfigFile(): void {
 // so driving session_start and tool_execution_end makes the toggle path reachable.
 function setup() {
 	__resetState();
-	const { pi, captured } = createMockPi();
+	const { pi, captured } = createTodoPi();
 	registerTodo(pi, undefined, { homeDir: TEST_HOME });
-	const sessionStart = captured.events.get("session_start")?.[0];
-	const toolEnd = captured.events.get("tool_execution_end")?.[0] as
+	const sessionStart = captured.handlers.get("session_start")?.[0];
+	const toolEnd = captured.handlers.get("tool_execution_end")?.[0] as
 		| ((event: { toolName: string; isError: boolean }) => Promise<void>)
 		| undefined;
 	const tool = captured.tools.get("todo");
@@ -63,7 +58,7 @@ describe("rpiv-todo — collapse/expand shortcut registration", () => {
 
 	it("handler is a no-op in headless mode (!ctx.hasUI)", async () => {
 		const { captured, sessionStart, toolEnd, tool } = setup();
-		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await sessionStart?.({} as never, ctx as never);
 		// Seed a task and pump tool_execution_end so the widget registers.
 		await tool.execute?.(
@@ -86,7 +81,7 @@ describe("rpiv-todo — collapse/expand shortcut registration", () => {
 	it("handler is a no-op before any session_start created the overlay (!todoOverlay)", async () => {
 		const { captured } = setup();
 		// No session_start fired yet → closure-local todoOverlay is undefined.
-		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await captured.shortcuts.get("ctrl+shift+t")?.handler?.(ctx as never);
 		expect(ctx.ui.setWidget as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
 	});
@@ -95,7 +90,7 @@ describe("rpiv-todo — collapse/expand shortcut registration", () => {
 		const { captured, sessionStart } = setup();
 		// A UI-bearing empty session records the foreground binding without loading
 		// or registering the overlay.
-		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await sessionStart?.({} as never, ctx as never);
 		expect(ctx.ui.setWidget as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
 
@@ -106,7 +101,7 @@ describe("rpiv-todo — collapse/expand shortcut registration", () => {
 
 	it("handler toggles the overlay when it is registered", async () => {
 		const { captured, sessionStart, toolEnd, tool } = setup();
-		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await sessionStart?.({} as never, ctx as never);
 		await tool.execute?.(
 			"tc",
@@ -186,7 +181,7 @@ describe("rpiv-todo — collapsed on resume", () => {
 				nextId: 2,
 			}),
 		]);
-		const ctx = createMockCtx({ branch, hasUI: true, sessionId: "s-off" });
+		const ctx = createTodoCtx({ branch, hasUI: true, sessionId: "s-off" });
 		await sessionStart({ reason: "resume" } as never, ctx as never);
 		const factory = (ctx.ui.setWidget as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
 		const widget = factory({ requestRender: () => {} }, makeTheme());
@@ -207,7 +202,7 @@ describe("rpiv-todo — collapsed on resume", () => {
 				nextId: 2,
 			}),
 		]);
-		const ctx = createMockCtx({ branch, hasUI: true, sessionId: `s-${reason}` });
+		const ctx = createTodoCtx({ branch, hasUI: true, sessionId: `s-${reason}` });
 		await sessionStart({ reason } as never, ctx as never);
 		const setWidget = ctx.ui.setWidget as ReturnType<typeof vi.fn>;
 		const factory = setWidget.mock.calls[0]?.[1] as (

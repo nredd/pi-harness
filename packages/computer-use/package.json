@@ -111,6 +111,7 @@
     "typebox": "*"
   },
   "devDependencies": {
+    "@nredd/pi-test-lib": "0.0.0",
     "tsx": "^4.23.1"
   }
 }

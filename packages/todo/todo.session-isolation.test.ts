@@ -1,6 +1,6 @@
-import { createMockCtx, createMockPi } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, type vi } from "vitest";
 import registerTodo from "./.test-support/home-fixtures.ts";
+import { createTodoCtx, createTodoPi } from "./.test-support/todo-host.ts";
 import { EMPTY_STATE } from "./state/state.ts";
 import { getActiveRenderSession, getRenderState, getState } from "./state/store.ts";
 import { __resetState } from "./todo.ts";
@@ -10,10 +10,10 @@ import { __resetState } from "./todo.ts";
 // between tests is automatic given __resetState() clears the store.
 function setup() {
 	__resetState();
-	const { pi, captured } = createMockPi();
+	const { pi, captured } = createTodoPi();
 	registerTodo(pi);
-	const sessionStart = captured.events.get("session_start")?.[0];
-	const sessionShutdown = captured.events.get("session_shutdown")?.[0];
+	const sessionStart = captured.handlers.get("session_start")?.[0];
+	const sessionShutdown = captured.handlers.get("session_shutdown")?.[0];
 	const tool = captured.tools.get("todo");
 	const cmd = captured.commands.get("todos");
 	if (!sessionStart) throw new Error("session_start handler not registered");
@@ -29,8 +29,8 @@ afterEach(() => __resetState());
 describe("rpiv-todo — per-session todo store isolation (Phase 1 baseline)", () => {
 	it("a child session_start (empty branch) leaves the parent's committed task intact", async () => {
 		const { sessionStart, tool } = setup();
-		const parent = createMockCtx({ sessionId: "parent", hasUI: true });
-		const child = createMockCtx({ sessionId: "child", hasUI: true });
+		const parent = createTodoCtx({ sessionId: "parent", hasUI: true });
+		const child = createTodoCtx({ sessionId: "child", hasUI: true });
 
 		// Parent comes online (empty branch → EMPTY_STATE in the parent slot) and
 		// creates a task.
@@ -53,8 +53,8 @@ describe("rpiv-todo — per-session todo store isolation (Phase 1 baseline)", ()
 
 	it("a child todo call mutates only the child's slot; the parent's /todos still shows only the parent's task", async () => {
 		const { sessionStart, tool, cmd } = setup();
-		const parent = createMockCtx({ sessionId: "parent", hasUI: true });
-		const child = createMockCtx({ sessionId: "child", hasUI: true });
+		const parent = createTodoCtx({ sessionId: "parent", hasUI: true });
+		const child = createTodoCtx({ sessionId: "child", hasUI: true });
 
 		await sessionStart({} as never, parent as never);
 		await tool.execute?.(
@@ -94,8 +94,8 @@ describe("rpiv-todo — per-session todo store isolation (Phase 1 baseline)", ()
 
 	it("the render pointer stays on the parent slot even after a child creates tasks (creator-ownership)", async () => {
 		const { sessionStart, tool } = setup();
-		const parent = createMockCtx({ sessionId: "parent", hasUI: true });
-		const child = createMockCtx({ sessionId: "child", hasUI: true });
+		const parent = createTodoCtx({ sessionId: "parent", hasUI: true });
+		const child = createTodoCtx({ sessionId: "child", hasUI: true });
 
 		await sessionStart({} as never, parent as never);
 		await tool.execute?.(
@@ -126,7 +126,7 @@ describe("rpiv-todo — per-session todo store isolation (Phase 1 baseline)", ()
 
 	it("session_shutdown evicts the shutting-down session's own slot (fresh EMPTY_STATE copy)", async () => {
 		const { sessionStart, sessionShutdown, tool } = setup();
-		const parent = createMockCtx({ sessionId: "parent", hasUI: true });
+		const parent = createTodoCtx({ sessionId: "parent", hasUI: true });
 
 		await sessionStart({} as never, parent as never);
 		await tool.execute?.(
@@ -153,20 +153,20 @@ describe("rpiv-todo — foreground overlay policy (Slice 2)", () => {
 	const CHILD = "child-session";
 	const WIDGET_KEY = "rpiv-todos";
 
-	function widgetSpy(ctx: ReturnType<typeof createMockCtx>) {
+	function widgetSpy(ctx: ReturnType<typeof createTodoCtx>) {
 		return ctx.ui.setWidget as unknown as ReturnType<typeof vi.fn>;
 	}
 
 	function setup() {
-		const { pi, captured } = createMockPi();
+		const { pi, captured } = createTodoPi();
 		registerTodo(pi);
-		const start = captured.events.get("session_start")?.[0] as
+		const start = captured.handlers.get("session_start")?.[0] as
 			| ((e: unknown, ctx: unknown) => Promise<void>)
 			| undefined;
-		const shutdown = captured.events.get("session_shutdown")?.[0] as
+		const shutdown = captured.handlers.get("session_shutdown")?.[0] as
 			| ((e: unknown, ctx: unknown) => Promise<void>)
 			| undefined;
-		const toolEnd = captured.events.get("tool_execution_end")?.[0] as
+		const toolEnd = captured.handlers.get("tool_execution_end")?.[0] as
 			| ((event: { toolName: string; isError: boolean }) => Promise<void>)
 			| undefined;
 		const tool = captured.tools.get("todo");
@@ -175,7 +175,7 @@ describe("rpiv-todo — foreground overlay policy (Slice 2)", () => {
 
 	it("first hasUI session_start claims the foreground and renders its slot", async () => {
 		const { start, toolEnd, tool } = setup();
-		const parentCtx = createMockCtx({ hasUI: true, sessionId: PARENT });
+		const parentCtx = createTodoCtx({ hasUI: true, sessionId: PARENT });
 
 		await start?.({}, parentCtx);
 		expect(getActiveRenderSession()).toBe(PARENT);
@@ -197,8 +197,8 @@ describe("rpiv-todo — foreground overlay policy (Slice 2)", () => {
 
 	it("a child session_start (distinct sid, hasUI) does not claim foreground or rebind the overlay", async () => {
 		const { start, toolEnd, tool } = setup();
-		const parentCtx = createMockCtx({ hasUI: true, sessionId: PARENT });
-		const childCtx = createMockCtx({ hasUI: true, sessionId: CHILD });
+		const parentCtx = createTodoCtx({ hasUI: true, sessionId: PARENT });
+		const childCtx = createTodoCtx({ hasUI: true, sessionId: CHILD });
 
 		await start?.({}, parentCtx);
 		await tool?.execute?.(
@@ -222,8 +222,8 @@ describe("rpiv-todo — foreground overlay policy (Slice 2)", () => {
 
 	it("a child todo call writes the child's slot; the overlay still shows the parent's todos", async () => {
 		const { start, toolEnd, tool } = setup();
-		const parentCtx = createMockCtx({ hasUI: true, sessionId: PARENT });
-		const childCtx = createMockCtx({ hasUI: true, sessionId: CHILD });
+		const parentCtx = createTodoCtx({ hasUI: true, sessionId: PARENT });
+		const childCtx = createTodoCtx({ hasUI: true, sessionId: CHILD });
 
 		await start?.({}, parentCtx);
 		await tool?.execute?.(
@@ -253,8 +253,8 @@ describe("rpiv-todo — foreground overlay policy (Slice 2)", () => {
 
 	it("a child session_shutdown does not dispose the foreground overlay", async () => {
 		const { start, shutdown, toolEnd, tool } = setup();
-		const parentCtx = createMockCtx({ hasUI: true, sessionId: PARENT });
-		const childCtx = createMockCtx({ hasUI: true, sessionId: CHILD });
+		const parentCtx = createTodoCtx({ hasUI: true, sessionId: PARENT });
+		const childCtx = createTodoCtx({ hasUI: true, sessionId: CHILD });
 
 		await start?.({}, parentCtx);
 		await tool?.execute?.(
@@ -277,8 +277,8 @@ describe("rpiv-todo — foreground overlay policy (Slice 2)", () => {
 
 	it("a stale child shutdown uses its captured identity without clearing foreground", async () => {
 		const { start, shutdown, tool } = setup();
-		const parent = createMockCtx({ hasUI: true, sessionId: PARENT });
-		const child = createMockCtx({ hasUI: true, sessionId: CHILD });
+		const parent = createTodoCtx({ hasUI: true, sessionId: PARENT });
+		const child = createTodoCtx({ hasUI: true, sessionId: CHILD });
 		await start?.({}, parent);
 		await start?.({}, child);
 		await tool?.execute?.(
@@ -300,8 +300,8 @@ describe("rpiv-todo — foreground overlay policy (Slice 2)", () => {
 
 	it("an unidentifiable stale shutdown cannot tear down a live foreground", async () => {
 		const { start, shutdown } = setup();
-		await start?.({}, createMockCtx({ hasUI: true, sessionId: PARENT }));
-		const stale = createMockCtx({ sessionId: CHILD });
+		await start?.({}, createTodoCtx({ hasUI: true, sessionId: PARENT }));
+		const stale = createTodoCtx({ sessionId: CHILD });
 		Object.defineProperty(stale, "sessionManager", {
 			get: () => {
 				throw new Error("stale after session replacement");
@@ -313,8 +313,8 @@ describe("rpiv-todo — foreground overlay policy (Slice 2)", () => {
 
 	it("a fresh shutdown context can use its captured session manager identity", async () => {
 		const { start, shutdown } = setup();
-		const parent = createMockCtx({ hasUI: true, sessionId: PARENT });
-		const child = createMockCtx({ hasUI: true, sessionId: CHILD });
+		const parent = createTodoCtx({ hasUI: true, sessionId: PARENT });
+		const child = createTodoCtx({ hasUI: true, sessionId: CHILD });
 		await start?.({}, parent);
 		await start?.({}, child);
 		const shutdownCtx = { sessionManager: child.sessionManager };
@@ -327,7 +327,7 @@ describe("rpiv-todo — foreground overlay policy (Slice 2)", () => {
 
 	it("the foreground's own session_shutdown disposes the overlay and clears foreground", async () => {
 		const { start, shutdown, toolEnd, tool } = setup();
-		const parentCtx = createMockCtx({ hasUI: true, sessionId: PARENT });
+		const parentCtx = createTodoCtx({ hasUI: true, sessionId: PARENT });
 
 		await start?.({}, parentCtx);
 		await tool?.execute?.(
@@ -349,7 +349,7 @@ describe("rpiv-todo — foreground overlay policy (Slice 2)", () => {
 
 	it("foreground shutdown still clears the pointer + evicts the slot when dispose() throws (try/finally)", async () => {
 		const { start, shutdown, toolEnd, tool } = setup();
-		const parentCtx = createMockCtx({ hasUI: true, sessionId: PARENT });
+		const parentCtx = createTodoCtx({ hasUI: true, sessionId: PARENT });
 		// dispose()'s first act is setWidget(KEY, undefined); simulate a stale ui
 		// proxy by throwing there (registration passes a factory fn → no throw).
 		widgetSpy(parentCtx).mockImplementation((_key: string, factory: unknown) => {
@@ -376,8 +376,8 @@ describe("rpiv-todo — foreground overlay policy (Slice 2)", () => {
 
 	it("a headless launcher (hasUI:false) never constructs an overlay, nor does a headless child", async () => {
 		const { start } = setup();
-		const headlessCtx = createMockCtx({ hasUI: false, sessionId: PARENT });
-		const childHeadlessCtx = createMockCtx({ hasUI: false, sessionId: CHILD });
+		const headlessCtx = createTodoCtx({ hasUI: false, sessionId: PARENT });
+		const childHeadlessCtx = createTodoCtx({ hasUI: false, sessionId: CHILD });
 
 		await start?.({}, headlessCtx);
 		await start?.({}, childHeadlessCtx);

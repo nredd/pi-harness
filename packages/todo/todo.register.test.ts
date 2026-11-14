@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { createMockCtx, createMockPi, makeTheme } from "@juicesharp/rpiv-test-utils";
+import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	__resetState,
@@ -9,6 +9,7 @@ import {
 	type TaskDetails,
 	TOOL_NAME,
 } from "./.test-support/home-fixtures.ts";
+import { createTodoCtx, createTodoPi } from "./.test-support/todo-host.ts";
 import { STATE_ENTRY_TYPE } from "./tool/types.ts";
 
 const theme = makeTheme() as unknown as Theme;
@@ -16,7 +17,7 @@ const theme = makeTheme() as unknown as Theme;
 function setup() {
 	__resetState();
 	setActiveRenderSession("test-session");
-	const { pi, captured } = createMockPi();
+	const { pi, captured } = createTodoPi();
 	registerTodoTool(pi);
 	const tool = captured.tools.get(TOOL_NAME);
 	if (!tool) throw new Error("tool not registered");
@@ -24,7 +25,7 @@ function setup() {
 }
 
 async function call(tool: ReturnType<typeof setup>["tool"], params: Record<string, unknown>) {
-	return tool.execute?.("tc", params as never, undefined as never, undefined as never, createMockCtx() as never);
+	return tool.execute?.("tc", params as never, undefined as never, undefined as never, createTodoCtx() as never);
 }
 
 beforeEach(() => {

@@ -5,9 +5,10 @@
  * during background work (#448).
  */
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { createMockCtx, createMockPi, makeTheme } from "@juicesharp/rpiv-test-utils";
+import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { describe, expect, it, vi } from "vitest";
 import registerTodo from "./.test-support/home-fixtures.ts";
+import { createTodoCtx, createTodoPi } from "./.test-support/todo-host.ts";
 import { agentLookup } from "./state/agents.ts";
 import { getState } from "./state/store.ts";
 import {
@@ -20,14 +21,14 @@ import {
 import { renderTodoResult } from "./view/format.ts";
 
 type Handler = (...args: unknown[]) => unknown;
-type Ctx = ReturnType<typeof createMockCtx>;
+type Ctx = ReturnType<typeof createTodoCtx>;
 
 const plainTheme = makeTheme({ fg: (_c, text) => text, strikethrough: (text) => text }) as unknown as Theme;
 
 function setup() {
 	const bus = new Map<string, Handler[]>();
 	const emitSpy = vi.fn();
-	const { pi, captured } = createMockPi({
+	const { pi, captured } = createTodoPi({
 		events: {
 			emit: emitSpy,
 			on: vi.fn((channel: string, handler: Handler) => {
@@ -38,7 +39,7 @@ function setup() {
 	} as never);
 	registerTodo(pi);
 	const handler = (name: string) => {
-		const found = captured.events.get(name)?.[0];
+		const found = captured.handlers.get(name)?.[0];
 		if (!found) throw new Error(`${name} not registered`);
 		return found;
 	};
@@ -52,7 +53,7 @@ function setup() {
 	};
 	const call = (ctx: Ctx, params: Record<string, unknown>) =>
 		tool.execute?.("tc", params as never, undefined as never, undefined as never, ctx as never);
-	const toolEnd = () => handler("tool_execution_end")({ toolName: "todo", isError: false });
+	const toolEnd = () => handler("tool_execution_end")({ toolName: "todo", isError: false }, createTodoCtx());
 	/** Rows the live overlay currently paints (identity theme), heading excluded. */
 	const rows = (ctx: Ctx) => {
 		const setWidget = ctx.ui.setWidget as ReturnType<typeof vi.fn>;
@@ -88,7 +89,7 @@ async function ownedTodo(h: ReturnType<typeof setup>, ctx: Ctx, owner: string) {
 describe("owner matches a subagent", () => {
 	it("shows running, flips to done, and leaves the todo in_progress", async () => {
 		const h = setup();
-		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await ownedTodo(h, ctx, "auth-audit");
 		await h.emit(SUBAGENT_STARTED_EVENT, {
 			id: "a1",
@@ -106,7 +107,7 @@ describe("owner matches a subagent", () => {
 
 	it("marks a failed agent's todo and names it in the settle warning", async () => {
 		const h = setup();
-		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await ownedTodo(h, ctx, "@explore");
 		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "explore" });
 		await h.emit(SUBAGENT_FAILED_EVENT, { id: "a1", status: "error" });
@@ -121,7 +122,7 @@ describe("owner matches a subagent", () => {
 
 	it("keeps the last known state within a session after the agent goes quiet", async () => {
 		const h = setup();
-		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await ownedTodo(h, ctx, "a1");
 		await h.emit(SUBAGENT_FAILED_EVENT, { id: "a1", status: "stopped" });
 		// Eviction emits nothing, so later work in the session still shows the last state.
@@ -132,7 +133,7 @@ describe("owner matches a subagent", () => {
 
 	it("never shows another session's agent after a session switch", async () => {
 		const h = setup();
-		const first = createMockCtx({ sessionId: "s1", hasUI: true });
+		const first = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await ownedTodo(h, first, "scout");
 		await h.emit(SUBAGENT_FAILED_EVENT, { id: "a1", handle: "scout", status: "error" });
 		expect(h.rows(first)).toEqual(["└─ ◐ #1 Audit auth @scout ✗ failed"]);
@@ -140,7 +141,7 @@ describe("owner matches a subagent", () => {
 		// Arrives with no session bound: dropped, nothing to render, no throw.
 		await h.emit(SUBAGENT_COMPLETED_EVENT, { id: "a1", handle: "scout" });
 
-		const second = createMockCtx({ sessionId: "s2", hasUI: true });
+		const second = createTodoCtx({ sessionId: "s2", hasUI: true });
 		await ownedTodo(h, second, "scout");
 		expect(h.rows(second)).toEqual(["└─ ◐ #1 Audit auth @scout"]);
 		await h.emit(SUBAGENT_STARTED_EVENT, { id: "b1", handle: "scout" });
@@ -149,27 +150,27 @@ describe("owner matches a subagent", () => {
 
 	it("forgets a session's agents when it shuts down, so a resume starts without stale states", async () => {
 		const h = setup();
-		const first = createMockCtx({ sessionId: "s1", hasUI: true });
+		const first = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await ownedTodo(h, first, "scout");
 		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "scout" });
 		await h.handler("session_shutdown")({}, first);
 
-		const resumed = createMockCtx({ sessionId: "s1", hasUI: true });
+		const resumed = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await ownedTodo(h, resumed, "scout");
 		expect(h.rows(resumed)).toEqual(["└─ ◐ #1 Audit auth @scout"]);
 	});
 
 	it("asks pi-subagents for survivors once the foreground UI session is bound, never for a child", async () => {
 		const h = setup();
-		await h.handler("session_start")({ reason: "reload" }, createMockCtx({ sessionId: "s1", hasUI: true }));
+		await h.handler("session_start")({ reason: "reload" }, createTodoCtx({ sessionId: "s1", hasUI: true }));
 		expect(h.emitSpy.mock.calls.filter(([c]) => c === SUBAGENT_ANNOUNCE_SURVIVORS_EVENT)).toHaveLength(1);
-		await h.handler("session_start")({ reason: "startup" }, createMockCtx({ sessionId: "child", hasUI: true }));
+		await h.handler("session_start")({ reason: "startup" }, createTodoCtx({ sessionId: "child", hasUI: true }));
 		expect(h.emitSpy.mock.calls.filter(([c]) => c === SUBAGENT_ANNOUNCE_SURVIVORS_EVENT)).toHaveLength(1);
 	});
 
 	it("repaints the live overlay when an owner's agent changes state", async () => {
 		const h = setup();
-		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await ownedTodo(h, ctx, "scout");
 		const tui = h.mount(ctx);
 		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "scout" });
@@ -181,7 +182,7 @@ describe("owner matches a subagent", () => {
 
 	it("matches a spawner name typed as free text, e.g. Auth Audit", async () => {
 		const h = setup();
-		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await ownedTodo(h, ctx, "Auth Audit");
 		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "general-purpose", name: "auth-audit" });
 		expect(h.rows(ctx)).toEqual(["└─ ◐ #1 Audit auth @Auth Audit running"]);
@@ -191,7 +192,7 @@ describe("owner matches a subagent", () => {
 describe("owner without a live agent", () => {
 	it("renders free text that matches no agent without a state", async () => {
 		const h = setup();
-		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await ownedTodo(h, ctx, "Sergii");
 		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "explore" });
 		expect(h.rows(ctx)).toEqual(["└─ ◐ #1 Audit auth @Sergii"]);
@@ -200,7 +201,7 @@ describe("owner without a live agent", () => {
 
 	it("renders the owner alone when pi-subagents never emits", async () => {
 		const h = setup();
-		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await ownedTodo(h, ctx, "explore");
 		expect(h.rows(ctx)).toEqual(["└─ ◐ #1 Audit auth @explore"]);
 		await h.handler("agent_settled")({ type: "agent_settled" }, ctx);
@@ -211,8 +212,8 @@ describe("owner without a live agent", () => {
 describe("isolation and history", () => {
 	it("never lets agent events or a child session read or write the parent list", async () => {
 		const h = setup();
-		const parent = createMockCtx({ sessionId: "parent", hasUI: true });
-		const child = createMockCtx({ sessionId: "child", hasUI: true });
+		const parent = createTodoCtx({ sessionId: "parent", hasUI: true });
+		const child = createTodoCtx({ sessionId: "child", hasUI: true });
 		await ownedTodo(h, parent, "a1");
 		const before = getState("parent");
 		await h.handler("session_start")({ reason: "startup" }, child);
@@ -228,7 +229,7 @@ describe("isolation and history", () => {
 
 	it("keeps live agent state out of persisted results and settled rows", async () => {
 		const h = setup();
-		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await ownedTodo(h, ctx, "a1");
 		await h.emit(SUBAGENT_FAILED_EVENT, { id: "a1", status: "error" });
 		const got = await h.call(ctx, { action: "get", id: 1 });
@@ -248,7 +249,7 @@ describe("repeated settles during background work (#448)", () => {
 
 	it("renotifies when a pending dependency changes its waking owner or agent state", async () => {
 		const h = setup();
-		const ctx = createMockCtx({ sessionId: "dependency-key", hasUI: true });
+		const ctx = createTodoCtx({ sessionId: "dependency-key", hasUI: true });
 		await h.handler("session_start")({ reason: "startup" }, ctx);
 		await h.call(ctx, { action: "create", subject: "Blocker", owner: "a" });
 		await h.call(ctx, { action: "create", subject: "Waiting", blockedBy: [1] });
@@ -301,7 +302,7 @@ describe("repeated settles during background work (#448)", () => {
 
 	it("repeats a warning on every settle and an unchanged info report only once", async () => {
 		const h = setup();
-		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await orchestration(h, ctx);
 
 		// Parent-held work only warns when nothing is armed. The running child's completion notice
@@ -350,7 +351,7 @@ describe("repeated settles during background work (#448)", () => {
 
 	it("shows an unchanged info report again after a person prompts, not after an extension prompt", async () => {
 		const h = setup();
-		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await orchestration(h, ctx);
 		for (const id of [3, 4]) await h.call(ctx, { action: "update", id, status: "completed", evidence: "done" });
 		expect(await settle(h, ctx)).toHaveLength(1);
@@ -365,7 +366,7 @@ describe("repeated settles during background work (#448)", () => {
 
 	it("is info while every todo waits on a running agent, and warns when it finishes unconsumed", async () => {
 		const h = setup();
-		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await ownedTodo(h, ctx, "scout");
 		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "scout" });
 		expect((await settle(h, ctx))[0]?.[1]).toBe("info");
@@ -378,7 +379,7 @@ describe("repeated settles during background work (#448)", () => {
 
 	it("repeats a warning for a silent agent, then dedupes after a verified handoff", async () => {
 		const h = setup();
-		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await ownedTodo(h, ctx, "scout");
 		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "scout", wakesParent: false, runSeq: 10 });
 		expect((await settle(h, ctx))[0]?.[1]).toBe("warning");
@@ -393,7 +394,7 @@ describe("repeated settles during background work (#448)", () => {
 
 	it("counts a queued Agent spawn with running, then follows started and completed", async () => {
 		const h = setup();
-		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await ownedTodo(h, ctx, "scout");
 		await h.emit(SUBAGENT_CREATED_EVENT, { id: "a1", handle: "scout", isBackground: true });
 		expect(await settle(h, ctx)).toEqual([
@@ -417,7 +418,7 @@ describe("repeated settles during background work (#448)", () => {
 
 	it("warns when a numbered retry fails while the named owner is still queued", async () => {
 		const h = setup();
-		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await ownedTodo(h, ctx, "auth-audit");
 		await h.emit(SUBAGENT_CREATED_EVENT, { id: "a1", name: "auth-audit", nameBase: "auth-audit" });
 		expect((await settle(h, ctx))[0]?.[1]).toBe("info");
@@ -435,7 +436,7 @@ describe("repeated settles during background work (#448)", () => {
 
 	it("warns once pi-subagents reports a queued owner stopped before it started", async () => {
 		const h = setup();
-		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await ownedTodo(h, ctx, "scout");
 		await h.emit(SUBAGENT_CREATED_EVENT, { id: "a1", handle: "scout", isBackground: true });
 		expect((await settle(h, ctx))[0]?.[1]).toBe("info");
@@ -450,7 +451,7 @@ describe("repeated settles during background work (#448)", () => {
 
 	it("reports again once the list empties and refills, and forgets a shut-down session", async () => {
 		const h = setup();
-		const ctx = createMockCtx({ sessionId: "s1", hasUI: true });
+		const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await ownedTodo(h, ctx, "scout");
 		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "scout" });
 		expect(await settle(h, ctx)).toHaveLength(1);
@@ -461,7 +462,7 @@ describe("repeated settles during background work (#448)", () => {
 		expect(await settle(h, ctx)).toHaveLength(1);
 
 		await h.handler("session_shutdown")({}, ctx);
-		const resumed = createMockCtx({ sessionId: "s1", hasUI: true });
+		const resumed = createTodoCtx({ sessionId: "s1", hasUI: true });
 		await ownedTodo(h, resumed, "scout");
 		await h.emit(SUBAGENT_STARTED_EVENT, { id: "a1", handle: "scout" });
 		expect(await settle(h, resumed)).toHaveLength(1);
