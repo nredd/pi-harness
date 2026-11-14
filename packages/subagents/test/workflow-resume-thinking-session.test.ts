@@ -1,6 +1,7 @@
 /** Resumed workflow child thinking level after routing (#906), through the actual SubagentWorkflow tool and the run's agent pane. */
+import { outcomes, toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it, vi } from "vitest";
-import { answer, calls, outcomes, ScenarioSession } from "./helpers/scenario-session.js";
+import { answer, ScenarioSession } from "./helpers/scenario-session.js";
 
 let fixture: ScenarioSession;
 afterEach(async () => {
@@ -15,7 +16,7 @@ it("resumed workflow child shows the level it ran at while running, not only at 
   fixture = new ScenarioSession({ workflowsEnabled: true });
   const hold = fixture.heldTool();
   // Physical model cannot reason: asked high, ran off. First run answers at once; the resume holds mid-run.
-  const physical = fixture.physical("fauxphys", "physical", [answer("FIRST DONE"), calls({ name: "hold", args: {} }), answer("SECOND DONE")], false);
+  const physical = fixture.physical("fauxphys", "physical", [answer("FIRST DONE"), toolCalls({ name: "hold", args: {} }), answer("SECOND DONE")], false);
   const h = await fixture.start({ terminal: true });
   const model = physical.getModel();
   h.session.modelRuntime.registerVirtualModel({
@@ -25,7 +26,7 @@ it("resumed workflow child shows the level it ran at while running, not only at 
     thinkingLevels: ["off", "low", "high"],
     route: async request => ({ model, thinkingLevel: request.thinkingLevel }),
   });
-  h.setResponses([calls({ name: "SubagentWorkflow", args: { script: SCRIPT } }), answer("STARTED")]);
+  h.setResponses([toolCalls({ name: "SubagentWorkflow", args: { script: SCRIPT } }), answer("STARTED")]);
   await h.session.prompt("go");
   expect(outcomes(h, "SubagentWorkflow")[0]?.text).toContain("Task ID:");
   await hold.entered;

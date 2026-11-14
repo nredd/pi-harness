@@ -1,7 +1,7 @@
 """CLI startup failures must not dispatch a provider request or leak held messages.
 
 References:
-- https://github.com/nredd/pi/blob/nredd/v1.3.0/packages/coding-agent/docs/extensions.md
+- https://github.com/nredd/pi/blob/main/packages/coding-agent/docs/extensions.md
 """
 
 from __future__ import annotations

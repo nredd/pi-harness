@@ -69,7 +69,7 @@ npm run build
 pi -e .
 ```
 
-The package declares `dist/index.ts`, so build an unbuilt local checkout before Pi loads the package directory.
+The package declares `dist/index.ts`, which is gitignored build output: run `make install-owned` (or `npm run build`) in a fresh checkout before Pi loads the package directory. Published tarballs ship it.
 Install only from sources you trust because Pi extensions run with Pi's permissions.
 
 ## 🚀 Quick start
@@ -189,7 +189,7 @@ It also accepts the same reviewed `git` and configured `gh` queries as limited B
 It rejects redirects, variables, substitutions, script blocks, call operators, type or method expressions, stop-parsing tokens, multiline input, non-ASCII quotation delimiters, aliases, mutating cmdlets, and unknown commands.
 Use canonical cmdlet names because PowerShell aliases are intentionally outside the reviewed policy.
 
-A rejected parsed command list or pipeline identifies its first blocked command segment; malformed or unsupported shell syntax reports the complete submitted input instead.
+A rejected parsed command list or pipeline identifies its first blocked command segment; malformed or unsupported shell syntax reports the complete submitted input instead. For bash, either way the rejection adds an `Offending token: <token> (<reason>)` line naming what tripped the policy (e.g. `>` redirection, `$(` substitution, `rm` mutating command, `-delete` argument, `src/*.ts` glob), so the command can be adjusted (PowerShell rejections still name only the segment). Commands such as `git ls-tree` are opt-in through `safeSubcommands`. Anything outside the reviewed read-only allowlist is reported as such, with an opt-in hint *only* for the reviewed configurable entries (`git` `rev-parse`, `blame`, `describe`, `merge-base`, `ls-tree`, `cat-file`; `gh` `pr view`, `pr list`, `issue view`, `issue list`, named as the exact entry); the hint warns that a `safeSubcommands` prefix is a trust override that skips all argument checks. Compounds (`|`, `&&`, `||`, `;`) are accepted only when *every* segment is independently allowed; quoted separators are literal text. Unquoted globs and variable expansion are rejected, as are env-assignment prefixes and `ssh` calls without the exact configured `ssh <host>` prefix.
 Tests and builds may still write ignored caches or build artifacts and may execute project-defined hooks; enable or invoke them only when the repository is trusted.
 Both limited-shell policies reduce risk but do not provide an OS sandbox or confidentiality boundary.
 A configured `safeSubcommands` match bypasses the argument checks for *its own segment only*; the other segments of a `&&`/`||`/`;`/`|` list are validated independently, and redirections, substitutions, and pipes into interpreters stay rejected.
@@ -453,8 +453,8 @@ pi-plan-mode/
 │   ├── index.ts                       # Thin Pi entrypoint
 │   ├── child-policy.ts                # State query and the Plan policy for subagent children
 │   └── plan-mode.ts                   # Planning policy and implementation handoff
-├── dist/                              # Generated Jiti runtime
-├── scripts/build-runtime.mjs          # Runtime builder
+├── dist/                              # Generated Jiti runtime (gitignored; `npm run build`)
+├── scripts/build-runtime.mjs          # Thin options for the shared root `scripts/runtime-builder.mjs`
 ├── docs/                              # Published reference documentation
 └── test/                              # Behavior and lifecycle coverage
 ```

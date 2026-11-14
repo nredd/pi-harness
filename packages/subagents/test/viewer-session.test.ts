@@ -1,6 +1,8 @@
 /** Fleet -> observer -> fleet, with raw SGR wheel and close input through the real terminal. */
+
+import { toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it } from "vitest";
-import { answer, calls, ScenarioSession, spawn } from "./helpers/scenario-session.js";
+import { answer, ScenarioSession, spawn } from "./helpers/scenario-session.js";
 
 let fixture: ScenarioSession;
 afterEach(async () => fixture?.dispose());
@@ -14,7 +16,7 @@ it("fleet opens viewer and raw mouse closes its footer", async () => {
   if (!host) throw new Error("Missing terminal host");
   host.resize(120, 40);
   const prompt = Array.from({ length: 200 }, (_, i) => `- L${String(i + 1).padStart(3, "0")}`).join("\n");
-  h.setResponses([calls(spawn("viewer child", { prompt, model: "fauxchild/child" })), answer("SPAWNED")]);
+  h.setResponses([toolCalls(spawn("viewer child", { prompt, model: "fauxchild/child" })), answer("SPAWNED")]);
   await h.session.prompt("go");
   await stream.entered;
   fixture.clock.advance(200);

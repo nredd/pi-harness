@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { initTheme, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentManager, describeEvicted } from "../src/agent-manager.js";
 import * as runner from "../src/agent-runner.js";
@@ -17,7 +18,6 @@ import { SubagentScheduler } from "../src/schedule.js";
 import { resolveStorePath, ScheduleStore } from "../src/schedule-store.js";
 import { createWorkflowHost } from "../src/workflow/host.js";
 import { flush, type Hermetic, hermeticDir, ctx as makeCtx, makePi, startSession } from "./helpers/boot-extension.js";
-import { FakeClock } from "./helpers/fake-clock.js";
 
 vi.mock("../src/agent-runner.js", async importOriginal => ({
   ...await importOriginal<typeof runner>(), runAgent: vi.fn(), resumeAgent: vi.fn(),

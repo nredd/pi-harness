@@ -9,7 +9,7 @@ const { owned, exclusions }: { owned: string[]; exclusions: { path: string }[] }
 export default defineConfig({
 	test: {
 		server: { deps: { inline: ["@nredd/pi-resource-sampler"] } },
-		setupFiles: ["../../integration/inprocess/verification/home-setup.ts"],
+		setupFiles: ["../../tests/lib/src/home-setup.ts"],
 		coverage: {
 			provider: "v8",
 			reporter: ["text", "lcov", "json-summary"],

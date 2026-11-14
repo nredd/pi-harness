@@ -266,7 +266,7 @@ def test_node_helper_gates_run_vitest_through_the_launcher() -> None:
         ROOT / "integration/providers/vitest.config.ts",
         ROOT / "scripts/vitest.config.ts",
     ]:
-        assert "verification/home-setup.ts" in config.read_text(), config
+        assert "tests/lib/src/home-setup.ts" in config.read_text(), config
 
 
 def owned_jobs() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:

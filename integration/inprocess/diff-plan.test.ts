@@ -2,9 +2,10 @@
 import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { git } from "@nredd/pi-test-lib/git";
+import { STATUS } from "@nredd/pi-test-lib/terminal";
 import { afterEach, expect, it } from "vitest";
-import { git } from "../../packages/dev-tools/test/scenarios/support.ts";
-import { configFor, STATUS, TerminalFixture } from "../../packages/session-kit/test/scenarios/support.ts";
+import { configFor, TerminalFixture } from "../../packages/session-kit/test/fixtures/session.ts";
 import { isolateStackHome, loadFork } from "./support.ts";
 
 let home: Awaited<ReturnType<typeof isolateStackHome>>;
