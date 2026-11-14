@@ -40,7 +40,8 @@ TOOLCHAIN_INPUTS = frozenset(
 )
 WSL_INPUT_FILES = TOOLCHAIN_INPUTS | {
     ".gitattributes",
-    # The guest's probes and import-audit Vitest configs read their coverage inventory from it.
+    # The guest's probes and import-audit Vitest configs read their coverage inventory from it, through the
+    # shared factory.
     "coverage/policy.json",
     "package-lock.json",
     "integration/pyproject.toml",
@@ -56,6 +57,7 @@ WSL_INPUT_FILES = TOOLCHAIN_INPUTS | {
     "scripts/router_contract.test.mjs",
     "scripts/run-vitest.test.ts",
     "scripts/run-vitest.ts",
+    "scripts/vitest-package.ts",
     "scripts/vitest.config.ts",
 }
 WSL_INPUT_PREFIXES = (

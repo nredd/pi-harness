@@ -205,7 +205,6 @@ def test_root_script_helpers_are_measured_by_import_audit_at_zero() -> None:
         path.relative_to(ROOT).as_posix()
         for pattern in [
             "packages/*/vitest*.config.ts",
-            "packages/todo/.vitest.config.ts",
             "integration/*/vitest.config.ts",
             "scripts/vitest.config.ts",
             "tests/lib/vitest.config.ts",
@@ -217,6 +216,7 @@ def test_root_script_helpers_are_measured_by_import_audit_at_zero() -> None:
         "scripts/merge-pr.ts",
         "scripts/router_contract.mjs",
         "scripts/run-vitest.ts",
+        "scripts/vitest-package.ts",
         *configs,
     }
     assert len(configs) == 18, configs
@@ -370,8 +370,8 @@ def test_subagents_runtime_scripts_are_measured_at_zero() -> None:
     for counts in signal.max_uncovered.values():
         assert counts.lines == counts.functions == counts.branches == counts.statements == 0
     manifest = json.loads((ROOT / package.root / "package.json").read_text())
-    assert "npm run test:runtime-scripts" in manifest["scripts"]["check"]
-    assert manifest["scripts"]["test:runtime-scripts"] == (
+    assert "npm run test:runtime-build" in manifest["scripts"]["check"]
+    assert manifest["scripts"]["test:runtime-build"] == (
         "node ../../scripts/run-vitest.ts node --config vitest.runtime-build.config.ts --coverage"
     )
 

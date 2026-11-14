@@ -13,7 +13,7 @@
 				"native/macos/bridge.swift",
 				"src/platform/macos/backend.ts"
 			],
-			"check": "test:macos-target; test:unpaired"
+			"check": "test/macos-observe-target.test.mjs; test/unpaired-act.test.mjs"
 		}
 	],
 	"release": {

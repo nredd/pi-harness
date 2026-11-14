@@ -147,7 +147,9 @@ SCRIPT_NAMES = frozenset(
     {"lint", "format", "typecheck", "test", "test:bun", "check", "build", "prepack", "pretest", "bench"}
 )
 # Root shared-toolchain modules a package may import (#889/#890); any other root path is an escape.
-SHARED_TOOLCHAIN = frozenset({"scripts/runtime-builder.mjs", "scripts/run-vitest.ts"})
+SHARED_TOOLCHAIN = frozenset(
+    {"scripts/runtime-builder.mjs", "scripts/run-vitest.ts", "scripts/vitest-package.ts"}
+)
 CODE_SUFFIXES = frozenset({".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"})
 STRAY_TEST_SUFFIXES = (".test.mjs", ".test.js", ".test.mts", ".test.cts", ".test.tsx", ".test.jsx")
 # A test is named for the behavior it pins: not a ticket (`issue-302-repro`) and not a coverage campaign

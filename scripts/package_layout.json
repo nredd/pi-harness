@@ -21,7 +21,6 @@
   "packages/computer-use: package.json: script-name docs:generate",
   "packages/computer-use: package.json: script-name docs:site:check",
   "packages/computer-use: package.json: script-name postinstall",
-  "packages/computer-use: package.json: script-name test:sync-reverts",
   "packages/computer-use: package.json: script-name test:upstream-sync",
   "packages/computer-use: prebuilt/macos/arm64/bridge: tracked-binary",
   "packages/computer-use: prebuilt/macos/x64/bridge: tracked-binary",
@@ -190,7 +189,6 @@
   "packages/todo: .bun-version: dotfile",
   "packages/todo: .gitignore: dotfile",
   "packages/todo: .test-support: dotfile",
-  "packages/todo: .vitest.config.ts: dotfile",
   "packages/todo: biome.json: biome-config",
   "packages/todo: config.test.ts: top-level-entry",
   "packages/todo: config.ts: top-level-entry",
@@ -228,6 +226,5 @@
   "packages/todo: todo.settled-row.test.ts: top-level-entry",
   "packages/todo: todo.ts: top-level-entry",
   "packages/todo: tool: top-level-entry",
-  "packages/todo: view: top-level-entry",
-  "packages/todo: vitest.config.ts: missing-file"
+  "packages/todo: view: top-level-entry"
 ]

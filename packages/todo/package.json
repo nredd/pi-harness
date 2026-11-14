@@ -23,11 +23,11 @@
     "access": "public"
   },
   "scripts": {
-    "test": "JITI_FS_CACHE=false vitest run --coverage --config .vitest.config.ts",
+    "test": "node ../../scripts/run-vitest.ts node --coverage",
     "lint": "biome check --error-on-warnings .",
     "typecheck": "tsc --noEmit",
     "check": "npm run lint && npm run typecheck && npm test && npm run test:bun",
-    "test:bun": "node ../../scripts/run-vitest.ts bun --config .vitest.config.ts"
+    "test:bun": "node ../../scripts/run-vitest.ts bun"
   },
   "files": [
     "config.ts",

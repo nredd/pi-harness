@@ -6,7 +6,7 @@ replacement renderer, overlay, pointer movement, capture, activation or TCC is i
 
 ## Default invariant gate and live opt-in (#819)
 
-`npm run test:invariants` keeps the Swift source typecheck, invalid-source/cache
+`npm test -- test/invariants.test.mjs --coverage.enabled=false` keeps the Swift source typecheck, invalid-source/cache
 controls and deterministic cursor-motion lifecycle enabled. Its cursor binary also
 checks the live-selection gate using fake callbacks: absent, empty, `0`, `true`
 and whitespace-padded values refuse the callback; only exact `1` invokes the fake.
@@ -17,7 +17,7 @@ It is **NOT RUN** by default; the native binary reports that boundary and the
 invariant runner preserves that output. Run it only in an authorized desktop window:
 
 ```sh
-PI_COMPUTER_USE_LIVE=1 npm run test:invariants
+PI_COMPUTER_USE_LIVE=1 npm test -- test/invariants.test.mjs --coverage.enabled=false
 ```
 
 This opt-in also applies when invoking the native cursor test binary directly.
