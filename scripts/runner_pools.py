@@ -238,7 +238,7 @@ def assign_cells(running: Iterable[CellKey], capacity: Mapping[str, int]) -> dic
     Parameters:
         running (Iterable[CellKey]): Cells this run actually executes, with their full work.
         capacity (Mapping[str, int]): Pool name -> cells it will take, from `pool_capacity` (free
-            slots plus its queue depth).
+            slots plus its queue depth, held to its run cap).
 
     Returns:
         dict[CellKey, str]: Cell -> pool for each cell sent to a pool. Cells that are short, unlisted, on an
