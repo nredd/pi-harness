@@ -1,7 +1,10 @@
 /**
  * Fresh `router/default` startup, quota dispatch and resume through core's real startup path
  * (`createAgentSessionServices` -> `resolveCliModel` -> `createAgentSessionFromServices`).
- * Only provider replies and quota snapshots are doubles; no credentials, no network.
+ * Doubled: provider replies (faux providers) and UsageService snapshots (`stack.usage`); no
+ * credentials, no network. The router config is a real `subscription-router.json` in the test
+ * agent dir, loaded through the production path. NOTE: the "stale" and "unavailable" fail-open
+ * cases exercise `decisionFor` on hand-built snapshots, not UsageService state transitions.
  *
  * Owner decision (nredd/dotfiles#84): fresh personal startup selects `router/default`;
  * resume/continue keeps the session's last model, including an explicit physical model.
@@ -18,6 +21,7 @@ import {
 	ModelRuntime,
 	resolveCliModel,
 	SessionManager,
+	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import {
 	createTestUiContext,
@@ -25,7 +29,8 @@ import {
 	fauxAssistantMessage,
 } from "@earendil-works/pi-coding-agent/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ConfigResult, Profile } from "../../packages/subscription-router/src/config.ts";
+import type { Profile } from "../../packages/subscription-router/src/config.ts";
+import { loadConfig } from "../../packages/subscription-router/src/config.ts";
 import { createSubscriptionRouter } from "../../packages/subscription-router/src/index.ts";
 import type { UsageGetOptions } from "../../packages/subscription-router/src/usage.ts";
 import { GoalStack, routePhysical } from "./goal-support.ts";
@@ -35,9 +40,6 @@ const CHAIN: Profile["chain"] = [
 	{ provider: "spike-b", id: "terra-b" },
 ];
 const VIRTUAL = "router/default";
-const PROFILE: Profile = { id: "default", name: "Router default", strategy: "ordered", chain: CHAIN };
-const ROUTER_ON: ConfigResult = { ok: true, profiles: [PROFILE] };
-const ROUTER_DISABLED: ConfigResult = { ok: false, error: "disabled for this test" };
 
 type Selection = `${string}/${string}`;
 
@@ -50,8 +52,13 @@ interface Started {
 }
 
 interface LaunchOptions {
-	/** Factory list; `"missing"` loads no router package at all. */
-	router?: ConfigResult | "missing";
+	/**
+	 * `"missing"` loads no router package; `"disabled"` writes an invalid config file; a chain
+	 * overrides the default profile's chain. All are written to `subscription-router.json`.
+	 */
+	router?: Profile["chain"] | "missing" | "disabled";
+	/** Whether project settings are trusted; default `true`. */
+	projectTrusted?: boolean;
 	/** Global `settings.json` keys, merged over the fixture defaults. */
 	settings?: Record<string, unknown>;
 	/** Project `.pi/settings.json` keys. */
@@ -101,6 +108,8 @@ describe("router/default startup, quota dispatch and resume", () => {
 		);
 		started = [];
 		fetched = [];
+		// Keeps any `getAgentDir()` consumer in the router (e.g. codex reset state) off the real home.
+		vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
 		// Nothing on the startup or dispatch path may reach the network.
 		vi.stubGlobal("fetch", async (...args: unknown[]) => {
 			fetched.push(args[0]);
@@ -120,6 +129,7 @@ describe("router/default startup, quota dispatch and resume", () => {
 
 	afterEach(async () => {
 		vi.unstubAllGlobals();
+		vi.unstubAllEnvs();
 		try {
 			for (const s of [...started].reverse()) await close(s);
 		} finally {
@@ -131,12 +141,23 @@ describe("router/default startup, quota dispatch and resume", () => {
 	async function launch(options: LaunchOptions = {}): Promise<Started> {
 		if (options.settings) writeFileSync(settingsPath(), JSON.stringify({ ...savedSettings(), ...options.settings }));
 		if (options.project) writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify(options.project));
+		const configPath = join(agentDir, "subscription-router.json");
+		if (options.router === "disabled") writeFileSync(configPath, "{ not json");
+		else {
+			const chain = Array.isArray(options.router) ? options.router : CHAIN;
+			const entries = chain.map(({ provider, id }) => ({ model: `${provider}/${id}` }));
+			writeFileSync(
+				configPath,
+				JSON.stringify({ profiles: { default: { name: "Router default", strategy: "ordered", chain: entries } } }),
+			);
+		}
 		const factories: ExtensionFactory[] =
 			options.router === "missing"
 				? []
 				: [
 						createSubscriptionRouter({
-							config: options.router ?? ROUTER_ON,
+							// Production loader on the real file; `config` is required by the options type.
+							config: await loadConfig(agentDir),
 							usage: stack.usage,
 							tracker: stack.tracker,
 							now: () => stack.clock.now(),
@@ -150,6 +171,7 @@ describe("router/default startup, quota dispatch and resume", () => {
 		const services = await createAgentSessionServices({
 			cwd,
 			agentDir,
+			settingsManager: SettingsManager.create(cwd, agentDir, { projectTrusted: options.projectTrusted ?? true }),
 			modelRuntime: runtime,
 			resourceLoaderOptions: { extensionFactories: factories, noSkills: true, noPromptTemplates: true, noThemes: true },
 		});
@@ -247,7 +269,7 @@ describe("router/default startup, quota dispatch and resume", () => {
 				reads.push({ provider, options });
 				return new Promise(() => {});
 			};
-			const s = await launch({ router: { ok: true, profiles: [{ ...PROFILE, chain: collected }] } });
+			const s = await launch({ router: collected });
 
 			expect(s.selected()).toBe(VIRTUAL);
 			// Background warm-up only: never forced, never fresh.
@@ -304,7 +326,7 @@ describe("router/default startup, quota dispatch and resume", () => {
 	describe("router unavailable", () => {
 		for (const mode of ["missing", "disabled"] as const) {
 			it(`falls back to a physical model and keeps the saved default when the router is ${mode}`, async () => {
-				const s = await launch({ router: mode === "missing" ? "missing" : ROUTER_DISABLED });
+				const s = await launch({ router: mode });
 				expect(s.selected()).not.toBe(VIRTUAL);
 				expect(s.session.model?.provider).toMatch(/^spike-/);
 				expect(s.session.model?.api).not.toBe("pi-virtual");
@@ -406,13 +428,25 @@ describe("router/default startup, quota dispatch and resume", () => {
 			expect(s.selected()).toBe(VIRTUAL);
 		});
 
-		it("project settings win over the saved global default", async () => {
-			const s = await launch({ project: { defaultProvider: "spike-b", defaultModel: "terra-b" } });
+		it("trusted project settings win over the saved global default", async () => {
+			const s = await launch({
+				projectTrusted: true,
+				project: { defaultProvider: "spike-b", defaultModel: "terra-b" },
+			});
 			expect(s.selected()).toBe("spike-b/terra-b");
 		});
 
-		it("CLI --model wins over project settings", async () => {
+		it("untrusted project settings are ignored and the global router/default wins", async () => {
 			const s = await launch({
+				projectTrusted: false,
+				project: { defaultProvider: "spike-b", defaultModel: "terra-b" },
+			});
+			expect(s.selected()).toBe(VIRTUAL);
+		});
+
+		it("CLI --model wins over trusted project settings", async () => {
+			const s = await launch({
+				projectTrusted: true,
 				cliModel: VIRTUAL,
 				project: { defaultProvider: "spike-b", defaultModel: "terra-b" },
 			});
