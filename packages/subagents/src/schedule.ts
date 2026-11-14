@@ -362,9 +362,12 @@ export class SubagentScheduler {
         // start time cannot stand in: it differs per process, and a late one would name a later tick.
         let armed: Date;
         const cron = new Cron(job.schedule, self => {
-          const tick = armed;
+          const start = self.currentRun() ?? undefined;
+          // `armed` was read after croner armed its timer: past a tick boundary in between it
+          // names the tick after the one that fired, which is not due yet.
+          const tick = start && armed.getTime() > start.getTime() ? self.previousRuns(1, armed)[0] : armed;
           // croner's own next tick: it schedules after this callback's start
-          armed = self.nextRun(self.currentRun() ?? undefined) as Date;
+          armed = self.nextRun(start) as Date;
           this.executeJob(job.id, { at: tick.getTime(), schedule: job.schedule });
         });
         armed = cron.nextRun() as Date; // a 6-field pattern without `maxRuns` always has a next tick
