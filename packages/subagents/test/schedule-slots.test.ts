@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
-import { Cron } from "croner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.js";
 import { NO_FALLBACK, registerAgents, setFallbackSubagent } from "../src/agent-types.js";
@@ -45,7 +44,7 @@ function process_(clock: FakeClock) {
 
 /** A clock whose first timeout runs `late` ms after it was due, like a callback delayed by load or sleep. */
 class LateClock extends FakeClock {
-  constructor(private late: number) { super(); }
+  constructor(private late: number, start?: number) { super(start); }
   override setTimeout(callback: () => void, ms: number) {
     const lateness = this.late;
     this.late = 0;
@@ -116,17 +115,6 @@ describe("slot claims", () => {
     expect(a.spawn.mock.calls.length + b.spawn.mock.calls.length).toBe(1);
   });
 
-  it("two processes fire a cron job exactly once per tick", () => {
-    vi.useFakeTimers({ now: Date.UTC(2030, 0, 1) });
-    const clock = new FakeClock();
-    const a = process_(clock);
-    const job = a.scheduler.addJob({ ...input, schedule: "*/10 * * * * *" });
-    const b = process_(clock);
-    vi.advanceTimersByTime(50_000);
-    expect(a.spawn.mock.calls.length + b.spawn.mock.calls.length).toBe(5);
-    expect(new ScheduleStore(path).get(job.id)?.lastSlot).toBe(Date.UTC(2030, 0, 1, 0, 0, 50));
-  });
-
   it("an edit to a new schedule restarts slot numbering", () => {
     const clock = new FakeClock();
     const a = process_(clock);
@@ -136,49 +124,6 @@ describe("slot claims", () => {
     a.scheduler.updateJob(job.id, { enabled: true, schedule: new Date(clock.now() + 5000).toISOString() });
     clock.advance(5000);
     expect(a.spawn).toHaveBeenCalledTimes(2);
-  });
-
-  it("still names the armed tick when croner reports no current run", () => {
-    vi.useFakeTimers({ now: Date.UTC(2030, 0, 1) });
-    vi.spyOn(Cron.prototype, "currentRun").mockReturnValue(null);
-    const a = process_(new FakeClock());
-    const job = a.scheduler.addJob({ ...input, schedule: "*/10 * * * * *" });
-    vi.advanceTimersByTime(10_000);
-    expect(a.spawn).toHaveBeenCalledTimes(1);
-    expect(new ScheduleStore(path).get(job.id)?.lastSlot).toBe(Date.UTC(2030, 0, 1, 0, 0, 10));
-  });
-
-  it("two cron processes whose callbacks start at different milliseconds share the tick", () => {
-    vi.useFakeTimers({ now: Date.UTC(2030, 0, 1) });
-    let calls = 0;
-    const real = Cron.prototype.currentRun;
-    vi.spyOn(Cron.prototype, "currentRun").mockImplementation(function (this: Cron) {
-      const at = real.call(this);
-      return at && new Date(at.getTime() + (calls++ % 2 === 0 ? 1 : 20));
-    });
-    const clock = new FakeClock();
-    const a = process_(clock);
-    const job = a.scheduler.addJob({ ...input, schedule: "*/10 * * * * *" });
-    const b = process_(clock);
-    vi.advanceTimersByTime(50_000);
-    expect(a.spawn.mock.calls.length + b.spawn.mock.calls.length).toBe(5);
-    expect(new ScheduleStore(path).get(job.id)?.lastSlot).toBe(Date.UTC(2030, 0, 1, 0, 0, 50));
-  });
-
-  it("a late cron callback claims its armed tick, not the one it woke up in", () => {
-    vi.useFakeTimers({ now: Date.UTC(2030, 0, 1) });
-    const a = process_(new FakeClock());
-    const job = a.scheduler.addJob({ ...input, schedule: "*/10 * * * * *" });
-    const store = new ScheduleStore(path);
-    const t0 = Date.UTC(2030, 0, 1);
-    // Another process fired the 10s tick; this one wakes at 25s (a sleep) for that same tick.
-    expect(store.claim(job.id, { pid: process.ppid, leaseUntil: 0 }, t0 + 10_000, { at: t0 + 10_000, schedule: job.schedule })).toBeDefined();
-    vi.setSystemTime(t0 + 15_000); // fake timers shift with it: the 10s tick's callback now runs at 25s
-    vi.advanceTimersToNextTimer();
-    expect(a.spawn).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(5000);
-    expect(a.spawn).toHaveBeenCalledTimes(1);
-    expect(new ScheduleStore(path).get(job.id)?.lastSlot).toBe(t0 + 30_000);
   });
 
   it("a late interval callback claims its own slot, not the next one", () => {
@@ -209,20 +154,78 @@ describe("slot claims", () => {
     expect(new ScheduleStore(path).get(job.id)?.lastSlot).toBe(created + 40_000);
   });
 
-  it("re-arms when a tick boundary passed while its timer was being armed", () => {
-    vi.useFakeTimers({ now: Date.UTC(2030, 0, 1) });
+  describe("cron", () => {
     const t0 = Date.UTC(2030, 0, 1);
-    const real = Cron.prototype.nextRun;
-    let calls = 0;
-    vi.spyOn(Cron.prototype, "nextRun").mockImplementation(function (this: Cron, from?: Date) {
-      const next = real.call(this, from);
-      // Reads: cron validation, croner arming the timer, the scheduler's two checks. The first check reads a tick late, as if a boundary passed.
-      return ++calls === 3 && next ? new Date(next.getTime() + 10_000) : next;
+    const cron = { ...input, schedule: "*/10 * * * * *" };
+
+    it("two processes fire a cron job exactly once per tick", () => {
+      const clock = new FakeClock(t0);
+      const a = process_(clock);
+      const job = a.scheduler.addJob(cron);
+      clock.advance(3000);
+      const b = process_(clock);
+      clock.advance(47_000);
+      expect(a.spawn.mock.calls.length + b.spawn.mock.calls.length).toBe(5);
+      expect(new ScheduleStore(path).get(job.id)?.lastSlot).toBe(t0 + 50_000);
     });
-    const a = process_(new FakeClock());
-    const job = a.scheduler.addJob({ ...input, schedule: "*/10 * * * * *" });
-    vi.advanceTimersByTime(10_000);
-    expect(a.spawn).toHaveBeenCalledTimes(1);
-    expect(new ScheduleStore(path).get(job.id)?.lastSlot).toBe(t0 + 10_000);
+
+    it("a late callback claims its armed tick, not the one it woke up in", () => {
+      const clock = new LateClock(6000, t0);
+      const a = process_(clock);
+      const job = a.scheduler.addJob(cron);
+      clock.advance(10_000);
+      // Another process fired the 10s tick on time; this one's callback runs 6s late.
+      expect(new ScheduleStore(path).claim(job.id, { pid: process.ppid, leaseUntil: 0 }, clock.now(), { at: t0 + 10_000, schedule: job.schedule })).toBeDefined();
+      clock.advance(6000);
+      expect(a.spawn).not.toHaveBeenCalled();
+      clock.advance(4000);
+      expect(a.spawn).toHaveBeenCalledTimes(1);
+      expect(new ScheduleStore(path).get(job.id)?.lastSlot).toBe(t0 + 20_000);
+    });
+
+    it("fires its late tick once after a sleep and skips the missed ones", () => {
+      const clock = new LateClock(25_000, t0);
+      const a = process_(clock);
+      const job = a.scheduler.addJob(cron);
+      clock.advance(35_000);
+      expect(a.spawn).toHaveBeenCalledTimes(1);
+      clock.advance(5000);
+      expect(a.spawn).toHaveBeenCalledTimes(2);
+      expect(new ScheduleStore(path).get(job.id)?.lastSlot).toBe(t0 + 40_000);
+    });
+
+    it("waits out a tick beyond the timer range in steps", () => {
+      // Cron fields are local time: pick local midnights so the test holds in any zone.
+      const start = new Date(2030, 0, 1, 12).getTime();
+      const tick = new Date(2030, 1, 1).getTime();
+      const clock = new FakeClock(start);
+      const a = process_(clock);
+      const job = a.scheduler.addJob({ ...input, schedule: "0 0 0 1 * *" });
+      expect(tick - start).toBeGreaterThan(2_147_483_647);
+      clock.advance(tick - start - 1);
+      expect(a.spawn).not.toHaveBeenCalled();
+      clock.advance(1);
+      expect(a.spawn).toHaveBeenCalledTimes(1);
+      expect(a.scheduler.getNextRun(job.id)).toBe(new Date(2030, 2, 1).toISOString());
+    });
+
+    it("re-arms a capped timer that wakes before its tick", () => {
+      class EarlyClock extends FakeClock {
+        private woken = false;
+        override setTimeout(callback: () => void, ms: number) {
+          // The first timer is claimed to be due, but fires 1s ahead of the tick.
+          if (!this.woken && ms > 1000) {
+            this.woken = true;
+            return super.setTimeout(callback, ms - 1000);
+          }
+          return super.setTimeout(callback, ms);
+        }
+      }
+      const clock = new EarlyClock(t0);
+      const a = process_(clock);
+      a.scheduler.addJob(cron);
+      clock.advance(10_000);
+      expect(a.spawn).toHaveBeenCalledTimes(1);
+    });
   });
 });

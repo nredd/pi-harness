@@ -309,7 +309,7 @@ export class SubagentScheduler {
 
   private nextRunUnbounded(jobId: string): string | undefined {
     const cron = this.jobs.get(jobId);
-    if (cron) return cron.nextRun()?.toISOString();
+    if (cron) return cron.nextRun(new Date(this.clock.now()))?.toISOString();
     const job = this.store?.get(jobId);
     if (!job?.enabled) return undefined;
     if (job.scheduleType === "once") return job.schedule;
@@ -358,24 +358,9 @@ export class SubagentScheduler {
           this.emit({ type: "error", jobId: job.id, error: `Scheduled time ${job.schedule} is in the past` });
         }
       } else {
-        // The tick each callback was armed for, which every process computes alike. Callback
-        // start time cannot stand in: it differs per process, and a late one would name a later tick.
-        let armed: Date;
-        let cron: Cron;
-        for (;;) {
-          const before = new Date();
-          cron = new Cron(job.schedule, self => {
-            const tick = armed;
-            // croner's own next tick: it schedules after this callback's start
-            armed = self.nextRun(self.currentRun() ?? undefined) as Date; // a 6-field pattern always has a next tick
-            this.executeJob(job.id, { at: tick.getTime(), schedule: job.schedule });
-          });
-          armed = cron.nextRun(before) as Date;
-          // Croner armed its timer somewhere in between: unless no tick fell in that window, what it
-          // armed for is unknown, so start over.
-          if (armed.getTime() === cron.nextRun()?.getTime()) break;
-          cron.stop();
-        }
+        // Pattern only: no croner timer, so the tick a callback fires for is the one we armed.
+        const cron = new Cron(job.schedule);
+        this.intervals.set(job.id, this.armCron(job, cron));
         this.jobs.set(job.id, cron);
       }
       // Disable at the deadline itself, not at the next (possibly days away) tick.
@@ -405,6 +390,30 @@ export class SubagentScheduler {
       }, Math.max(0, anchor + k * intervalMs - this.clock.now()));
     };
     arm(nextSlot());
+    return { cancel: () => current?.cancel() };
+  }
+
+  /**
+   * Fire on the pattern's ticks, which every process computes alike. A timer claims the tick
+   * it was armed for, never a later one, so a late callback cannot take a tick that is not yet
+   * due; re-arming after the current time skips ticks missed while asleep. Timers beyond
+   * `MAX_TIMER_MS` re-arm in steps.
+   */
+  private armCron(job: ScheduledSubagent, cron: Cron): TimerHandle {
+    // A 6-field pattern without `maxRuns` or `stopAt` always has a next tick.
+    const after = (): number => (cron.nextRun(new Date(this.clock.now())) as Date).getTime();
+    let current: TimerHandle | undefined;
+    const arm = (tick: number): void => {
+      current = this.clock.setTimeout(() => {
+        if (this.clock.now() < tick) {
+          arm(tick);
+          return;
+        }
+        arm(after());
+        this.executeJob(job.id, { at: tick, schedule: job.schedule });
+      }, Math.min(Math.max(0, tick - this.clock.now()), MAX_TIMER_MS));
+    };
+    arm(after());
     return { cancel: () => current?.cancel() };
   }
 
@@ -755,8 +764,8 @@ export class SubagentScheduler {
       };
     }
     try {
-      // Croner validates by construction.
-      new Cron(expr, () => {});
+      // Croner validates by construction; with no callback it arms no timer.
+      new Cron(expr);
       return { valid: true };
     } catch (e) {
       // Croner only throws Error subclasses (TypeError, RangeError).

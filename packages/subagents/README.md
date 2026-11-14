@@ -93,13 +93,13 @@ must be deferred, not invoked synchronously by `setTimeout` / `setInterval`.
 
 The clock controls relative schedule parsing, ISO validation, one-shot/interval dispatch, quota
 re-parking, the Agent admission timeout, manager retention and lifecycle timestamps, model-call
-activity/stall ages, UI repaint tickers and the 200ms idle completion hold. Cron remains owned by Croner, including
-validation and next-run calculation; this seam deliberately leaves its existing behavior untouched.
+activity/stall ages, UI repaint tickers and the 200ms idle completion hold, and cron dispatch. Croner still owns cron
+validation and next-run calculation; the scheduler arms each tick with the clock so every fire claims the tick it was armed for.
 `SubagentScheduler` also accepts `{ clock }` directly, and `CompletionOutbox` accepts it as its third
 constructor argument. Static `detectSchedule(s, now?)` and `parseRelativeTime(s, now?)` accept epoch
 milliseconds; omitted `now` uses `Date.now()`.
 
-This is not a whole-extension virtual clock: cron, scheduled re-admission's RPC timeout, group-join
+This is not a whole-extension virtual clock: scheduled re-admission's RPC timeout, group-join
 holds, workflow execution timers, child-shutdown watchdogs, detached-spool filenames, core scrollbar
 auto-hide and schedule-store lock retries retain native time. Queued result waits use the manager's
 start gate when present; legacy queued resumes retain the clock-driven fallback.
