@@ -131,7 +131,8 @@ def test_an_idle_run_splits_macos_cells_across_both_pools() -> None:
     # A hosted `contracts` cell carries no runner of its own; its matrix supplies `xcode-27`.
     runners = [*shards, planned[("contracts", "macos-14", "")] or "xcode-27"]
     assert runners.count("pi-macos") == MACOS.run_cap
-    assert runners.count("xcode-27") == len(runners) - MACOS.run_cap >= 1
+    assert runners.count("xcode-27") == len(runners) - MACOS.run_cap
+    assert runners.count("xcode-27") >= 1
 
 
 @pytest.mark.usefixtures("table")

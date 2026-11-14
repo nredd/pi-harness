@@ -228,7 +228,8 @@ def pool_capacity(heartbeats: Mapping[str, str], now: float, *, trusted: bool) -
         free = free_slots(value, now, pool)
         if free is None:
             continue
-        counted = (parse_beat(value) or (0, None))[1] is not None
+        parsed = parse_beat(value)
+        counted = parsed is not None and parsed[1] is not None
         result[name] = _cap(max(0, free + (pool.queue_depth if counted else 0)), pool.run_cap)
     return result
 
