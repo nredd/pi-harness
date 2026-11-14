@@ -60,7 +60,7 @@ check-integration:  ## integration units; requires initialized `forks/pi` Gitlin
 	$(MAKE) check-probes
 	$(MAKE) check-providers
 
-check-probes:  ## Offline probes: Biome + strict tsc, then Node coverage and Bun compatibility on the config's explicit test files (no glob)
+check-probes:  ## Offline probes: Biome on the directory + strict tsc, then Node coverage and Bun compatibility on the config's explicit test files (no glob)
 	node_modules/.bin/biome check integration/probes
 	node_modules/.bin/tsc -p integration/probes/tsconfig.probes.json
 	@sandbox=$$(mktemp -d); trap 'rm -rf "$$sandbox"' EXIT; \
@@ -70,7 +70,7 @@ check-probes:  ## Offline probes: Biome + strict tsc, then Node coverage and Bun
 	cd integration/probes && env -i PATH="$$PATH" HOME="$$sandbox" PI_OFFLINE=1 PI_NO_LOCAL_LLM=1 \
 	  node ../../scripts/run-vitest.ts bun --coverage.enabled=false
 
-check-providers:  ## Synthetic providers and auth preloads Biome + strict tsc, then Vitest on the config's explicit test files (no glob)
+check-providers:  ## Synthetic providers and auth preloads Biome on the directory + strict tsc, then Vitest on the config's explicit test files (no glob)
 	node_modules/.bin/biome check integration/providers
 	node_modules/.bin/tsc -p integration/providers/tsconfig.providers.json
 	cd integration/providers && node ../../scripts/run-vitest.ts node --coverage
