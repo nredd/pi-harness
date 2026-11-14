@@ -1,10 +1,11 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { getApiProvider, getApiProviders } from "@earendil-works/pi-ai/compat";
 import { type ExtensionFactory, SessionManager } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import {
 	createHarness,
 	createTestExtensionsResult,
@@ -155,9 +156,50 @@ test("a faux provider whose transport is gone is refused", async () => {
 	await expect(createHarness({ fauxProvider: faux })).rejects.toThrow("Faux transport missing");
 });
 
+test("a failed construction releases its scratch directory and owned provider", async () => {
+	const previous = process.env.TMPDIR;
+	const scratch = mkdtempSync(join(tmpdir(), "harness-fail-"));
+	process.env.TMPDIR = scratch;
+	const boom = new Error("factory exploded");
+	const before = getApiProviders().length;
+	try {
+		await expect(
+			createHarness({
+				extensionFactories: [
+					() => {
+						throw boom;
+					},
+				],
+			}),
+		).rejects.toBe(boom);
+		expect(readdirSync(scratch)).toEqual([]);
+		expect(getApiProviders()).toHaveLength(before);
+		// A caller-owned provider is never unregistered by a failed construction.
+		const faux = registerFauxProvider();
+		await expect(
+			createHarness({
+				fauxProvider: faux,
+				extensionFactories: [
+					() => {
+						throw boom;
+					},
+				],
+			}),
+		).rejects.toBe(boom);
+		expect(getApiProvider(faux.api)).toBeDefined();
+		faux.unregister();
+	} finally {
+		if (previous === undefined) delete process.env.TMPDIR;
+		else process.env.TMPDIR = previous;
+		rmSync(scratch, { recursive: true, force: true });
+	}
+});
+
 test("reload restores a transport the registry reset dropped", async () => {
 	const h = await start({ extensionFactories: [echo] });
 	await h.session.reload();
+	// The loader's own reload does not reset the registry, so the transport is already present.
+	await h.session.resourceLoader.reload();
 	h.setResponses([fauxAssistantMessage([fauxText("after reload")])]);
 	await h.session.prompt("hi");
 	expect(getAssistantTexts(h)).toEqual(["after reload"]);
@@ -227,10 +269,17 @@ test("without configured auth no credential is stored and no key is supplied", a
 
 test("useModelRuntimeStream routes through a shared runtime", async () => {
 	const owner = await start();
+	const stream = vi.spyOn(owner.session.modelRuntime, "streamSimple");
 	const h = await start({ modelRuntime: owner.session.modelRuntime, useModelRuntimeStream: true });
+	expect(h.session.modelRuntime).toBe(owner.session.modelRuntime);
 	h.setResponses([fauxAssistantMessage([fauxText("routed")])]);
 	await h.session.prompt("hi");
 	expect(getAssistantTexts(h)).toEqual(["routed"]);
+	expect(stream).toHaveBeenCalledTimes(1);
+	const direct = await start();
+	direct.setResponses([fauxAssistantMessage([fauxText("direct")])]);
+	await direct.session.prompt("hi");
+	expect(stream).toHaveBeenCalledTimes(1);
 });
 
 test("provider hooks and context transforms reach extension handlers", async () => {
@@ -303,6 +352,52 @@ test("extension inputs are named like the loader names them, and a path input re
 	expect(result.errors).toEqual([]);
 });
 
+test("a path input reports its provenance on everything its factory registered", async () => {
+	const registers: ExtensionFactory = (pi) => {
+		pi.registerTool({
+			name: "owned",
+			label: "Owned",
+			description: "Owned tool",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [], details: {} }),
+		});
+		pi.registerCommand("owned-cmd", { description: "Owned command", handler: async () => {} });
+		pi.registerFlag("owned-flag", { type: "boolean" });
+		pi.registerShortcut("ctrl+shift+o", { handler: async () => {} });
+		pi.registerProvider("owned-provider", {
+			baseUrl: "http://127.0.0.1:1",
+			apiKey: "k",
+			api: "openai-completions",
+			models: [],
+		});
+	};
+	const bystander: ExtensionFactory = (pi) => {
+		pi.registerProvider("other-provider", {
+			baseUrl: "http://127.0.0.1:1",
+			apiKey: "k",
+			api: "openai-completions",
+			models: [],
+		});
+	};
+	const result = await createTestExtensionsResult(
+		[
+			{ factory: registers, path: "/pkg/dir/index.ts" },
+			{ name: "bystander", factory: bystander },
+		],
+		"/",
+	);
+	const [owned, other] = result.extensions;
+	expect(owned?.tools.get("owned")?.sourceInfo.path).toBe("/pkg/dir/index.ts");
+	expect(owned?.commands.get("owned-cmd")?.sourceInfo.path).toBe("/pkg/dir/index.ts");
+	expect(owned?.flags.get("owned-flag")?.extensionPath).toBe("/pkg/dir/index.ts");
+	expect(owned?.shortcuts.get("ctrl+shift+o")?.extensionPath).toBe("/pkg/dir/index.ts");
+	expect(result.runtime.pendingProviderRegistrations.map(({ name, extensionPath }) => [name, extensionPath])).toEqual([
+		["owned-provider", "/pkg/dir/index.ts"],
+		["other-provider", "<inline:bystander>"],
+	]);
+	expect(other?.path).toBe("<inline:bystander>");
+});
+
 test("the default cwd is the process cwd, and a throwing factory rejects with its own error", async () => {
 	const boom = new Error("factory exploded");
 	await expect(
@@ -312,6 +407,16 @@ test("the default cwd is the process cwd, and a throwing factory rejects with it
 			},
 		]),
 	).rejects.toBe(boom);
+	const later = vi.fn();
+	await expect(
+		createTestExtensionsResult([
+			() => {
+				throw boom;
+			},
+			later,
+		]),
+	).rejects.toBe(boom);
+	expect(later).not.toHaveBeenCalled();
 	expect((await createTestExtensionsResult([])).extensions).toEqual([]);
 });
 

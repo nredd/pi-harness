@@ -6,7 +6,9 @@ import {
 	createExtensionRuntime,
 	createSyntheticSourceInfo,
 	DefaultResourceLoader,
+	type Extension,
 	type ExtensionFactory,
+	type ExtensionRuntime,
 	type InlineExtension,
 	type LoadExtensionsResult,
 	type ResourceLoader,
@@ -33,6 +35,29 @@ function resolve(input: TestExtensionInput, index: number): Resolved {
 	if (typeof input === "function") return { name: String(index + 1), factory: input };
 	if ("name" in input) return { name: input.name, factory: input.factory };
 	return { name: String(index + 1), factory: input.factory, path: input.path || undefined };
+}
+
+/**
+ * Report `extension` as loaded from `path`, as the fork's loader did, including everything its
+ * factory already registered under the inline name. MCP server ownership is the one thing not
+ * repointed: the registry is not editable through the public types.
+ */
+function repoint(extension: Extension, runtime: ExtensionRuntime, path: string): void {
+	const previous = extension.path;
+	const sourceInfo = createSyntheticSourceInfo(path, { source: "local", baseDir: dirname(path) });
+	extension.path = path;
+	extension.resolvedPath = path;
+	extension.sourceInfo = sourceInfo;
+	for (const tool of extension.tools.values()) tool.sourceInfo = sourceInfo;
+	for (const command of extension.commands.values()) command.sourceInfo = sourceInfo;
+	for (const owned of [...extension.flags.values(), ...extension.shortcuts.values()]) owned.extensionPath = path;
+	for (const pending of [
+		...runtime.pendingProviderRegistrations,
+		...runtime.pendingNativeProviderRegistrations,
+		...runtime.pendingVirtualModelRegistrations,
+	]) {
+		if (pending.extensionPath === previous) pending.extensionPath = path;
+	}
 }
 
 /**
@@ -66,6 +91,8 @@ export async function createTestExtensionsResult(
 			extensionFactories: resolved.map(({ name, factory }) => ({
 				name,
 				factory: async (pi) => {
+					// Like the fork, stop at the first failure: later factories never run.
+					if (thrown.length > 0) return;
 					try {
 						await factory(pi);
 					} catch (error) {
@@ -80,10 +107,7 @@ export async function createTestExtensionsResult(
 		const result = loader.getExtensions();
 		for (const [index, extension] of result.extensions.entries()) {
 			const path = resolved[index]?.path;
-			if (path === undefined) continue;
-			extension.path = path;
-			extension.resolvedPath = path;
-			extension.sourceInfo = createSyntheticSourceInfo(path, { source: "local", baseDir: dirname(path) });
+			if (path !== undefined) repoint(extension, result.runtime, path);
 		}
 		return result;
 	} finally {

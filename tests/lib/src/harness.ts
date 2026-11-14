@@ -5,7 +5,7 @@
  * fork's `/testing/interactive`.
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
@@ -102,73 +102,72 @@ export function getToolResult(harness: Harness, toolName: string): ToolResultMes
 	return result;
 }
 
-/** One color per foreground token. The tokens are the published theme schema's required set. */
-const FOREGROUND_TOKENS = [
-	"accent",
-	"border",
-	"borderAccent",
-	"borderMuted",
-	"success",
-	"error",
-	"warning",
-	"muted",
-	"dim",
-	"text",
-	"thinkingText",
-	"userMessageText",
-	"customMessageText",
-	"customMessageLabel",
-	"toolTitle",
-	"toolOutput",
-	"mdHeading",
-	"mdLink",
-	"mdLinkUrl",
-	"mdCode",
-	"mdCodeBlock",
-	"mdCodeBlockBorder",
-	"mdQuote",
-	"mdQuoteBorder",
-	"mdHr",
-	"mdListBullet",
-	"toolDiffAdded",
-	"toolDiffRemoved",
-	"toolDiffContext",
-	"syntaxComment",
-	"syntaxKeyword",
-	"syntaxFunction",
-	"syntaxVariable",
-	"syntaxString",
-	"syntaxNumber",
-	"syntaxType",
-	"syntaxOperator",
-	"syntaxPunctuation",
-	"thinkingOff",
-	"thinkingMinimal",
-	"thinkingLow",
-	"thinkingMedium",
-	"thinkingHigh",
-	"thinkingXhigh",
-	"thinkingMax",
-	"bashMode",
-] as const;
-const BACKGROUND_TOKENS = [
-	"selectedBg",
-	"userMessageBg",
-	"customMessageBg",
-	"toolPendingBg",
-	"toolSuccessBg",
-	"toolErrorBg",
-] as const;
+type ThemeForeground = ConstructorParameters<typeof Theme>[0];
+type ThemeBackground = ConstructorParameters<typeof Theme>[1];
+
+/** One color per required foreground token; an SDK that adds a token fails `tsc` here. */
+const FOREGROUND: ThemeForeground = {
+	accent: "#808080",
+	border: "#808080",
+	borderAccent: "#808080",
+	borderMuted: "#808080",
+	success: "#808080",
+	error: "#808080",
+	warning: "#808080",
+	muted: "#808080",
+	dim: "#808080",
+	text: "#808080",
+	thinkingText: "#808080",
+	userMessageText: "#808080",
+	customMessageText: "#808080",
+	customMessageLabel: "#808080",
+	toolTitle: "#808080",
+	toolOutput: "#808080",
+	mdHeading: "#808080",
+	mdLink: "#808080",
+	mdLinkUrl: "#808080",
+	mdCode: "#808080",
+	mdCodeBlock: "#808080",
+	mdCodeBlockBorder: "#808080",
+	mdQuote: "#808080",
+	mdQuoteBorder: "#808080",
+	mdHr: "#808080",
+	mdListBullet: "#808080",
+	toolDiffAdded: "#808080",
+	toolDiffRemoved: "#808080",
+	toolDiffContext: "#808080",
+	syntaxComment: "#808080",
+	syntaxKeyword: "#808080",
+	syntaxFunction: "#808080",
+	syntaxVariable: "#808080",
+	syntaxString: "#808080",
+	syntaxNumber: "#808080",
+	syntaxType: "#808080",
+	syntaxOperator: "#808080",
+	syntaxPunctuation: "#808080",
+	thinkingOff: "#808080",
+	thinkingMinimal: "#808080",
+	thinkingLow: "#808080",
+	thinkingMedium: "#808080",
+	thinkingHigh: "#808080",
+	thinkingXhigh: "#808080",
+	thinkingMax: "#808080",
+	bashMode: "#808080",
+};
+const BACKGROUND: ThemeBackground = {
+	selectedBg: "#202020",
+	userMessageBg: "#202020",
+	customMessageBg: "#202020",
+	toolPendingBg: "#202020",
+	toolSuccessBg: "#202020",
+	toolErrorBg: "#202020",
+};
 
 let testTheme: Theme | undefined;
 
 /** A deterministic theme built from public `Theme`, so tests never touch the global one. */
 function getTestTheme(): Theme {
-	testTheme ??= new Theme(
-		Object.fromEntries(FOREGROUND_TOKENS.map((token) => [token, "#808080"])) as ConstructorParameters<typeof Theme>[0],
-		Object.fromEntries(BACKGROUND_TOKENS.map((token) => [token, "#202020"])) as ConstructorParameters<typeof Theme>[1],
-		"truecolor",
-	);
+	testTheme ??= new Theme(FOREGROUND, BACKGROUND, "truecolor");
 	return testTheme;
 }
 
@@ -265,8 +264,8 @@ function createTempDir(): string {
 }
 
 /**
- * A function that re-registers `fauxProvider`'s transport after a session reload reset the API
- * registry; one per registration. The owner's `unregister` also drops the restored source.
+ * A function that re-registers `fauxProvider`'s transport when a session reload reset the API
+ * registry and dropped it; one per registration. The owner's `unregister` also drops the restored source.
  */
 function restorerFor(fauxProvider: FauxProviderRegistration): () => void {
 	const existing = fauxRegistrations.get(fauxProvider);
@@ -274,7 +273,9 @@ function restorerFor(fauxProvider: FauxProviderRegistration): () => void {
 	const provider = getApiProvider(fauxProvider.api);
 	if (!provider) throw new Error(`Faux transport missing: ${fauxProvider.api}`);
 	const sourceId = `harness-faux-${randomUUID()}`;
-	const restore = () => registerApiProvider(provider, sourceId);
+	const restore = () => {
+		if (!getApiProvider(fauxProvider.api)) registerApiProvider(provider, sourceId);
+	};
 	// pi-ai does not expose the original source ID. Extend the owner's unregister callback
 	// to remove restored registrations too; borrowed harnesses never invoke it on cleanup.
 	const unregister = fauxProvider.unregister;
@@ -294,13 +295,31 @@ function restorerFor(fauxProvider: FauxProviderRegistration): () => void {
  *
  * Returns:
  *   Promise<Harness>: the session, its scripted provider and a `cleanup` the caller must run.
+ *   When construction fails, what it acquired is released first: the scratch directory and an
+ *   owned faux provider, never a caller-owned one.
  */
 export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 	const tempDir = createTempDir();
-	const cwd = options.cwd ?? tempDir;
+	const owned = options.fauxProvider === undefined;
 	const fauxProvider: FauxProviderRegistration =
 		options.fauxProvider ?? registerFauxProvider({ models: options.models });
-	if (!options.fauxProvider) fauxProvider.setResponses([]);
+	if (owned) fauxProvider.setResponses([]);
+	try {
+		return await buildHarness(options, tempDir, fauxProvider, owned);
+	} catch (error) {
+		if (owned) fauxProvider.unregister();
+		rmSync(tempDir, { recursive: true, force: true });
+		throw error;
+	}
+}
+
+async function buildHarness(
+	options: HarnessOptions,
+	tempDir: string,
+	fauxProvider: FauxProviderRegistration,
+	owned: boolean,
+): Promise<Harness> {
+	const cwd = options.cwd ?? tempDir;
 	const restoreFauxProvider = restorerFor(fauxProvider);
 	const model = fauxProvider.getModel();
 	const toolMap = options.tools ? Object.fromEntries(options.tools.map((tool) => [tool.name, tool])) : undefined;
@@ -422,8 +441,8 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		tempDir,
 		cleanup() {
 			session.dispose();
-			if (!options.fauxProvider) fauxProvider.unregister();
-			if (existsSync(tempDir)) rmSync(tempDir, { recursive: true });
+			if (owned) fauxProvider.unregister();
+			rmSync(tempDir, { recursive: true, force: true });
 		},
 	};
 }
