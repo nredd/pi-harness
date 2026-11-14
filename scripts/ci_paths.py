@@ -36,6 +36,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 TESTED_DOCUMENTATION = frozenset(
     {
         "README.md",
+        "packages/computer-use/README.md",
         "packages/plan-mode/README.md",
         "packages/preset/README.md",
         "packages/session-kit/README.md",
@@ -60,6 +61,7 @@ WSL_INPUT_FILES = TOOLCHAIN_INPUTS | {
     "scripts/import_audit.ts",
     "scripts/install_gh_linux.py",
     "scripts/install_gh_linux.sh",
+    "scripts/install_wsl_owned_tools.py",
     "scripts/install_wsl_owned_tools.sh",
     "scripts/router_contract.mjs",
     "scripts/router_contract.test.mjs",

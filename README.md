@@ -38,7 +38,9 @@ make check-package-contracts # packed tarballs through exact stock Pi; not part 
 make help                    # every target
 ```
 
-- `make check` never rewrites files and never modifies `forks/`; `check-integration` needs the `forks/pi` Gitlink initialized. `check-ts` takes `WORKSPACES=<paths>`
+- `make check` never rewrites files and never modifies `forks/`
+- `check-integration` needs the `forks/pi` Gitlink initialized
+- `check-ts` takes `WORKSPACES=<paths>`
 - `check-benchmark` needs `@openai/codex@0.154.0` first on `PATH` on macOS; it fails, never skips
 - Packages build and test against the core fork's release tarballs pinned in root `overrides`.
   Stock Pi compatibility is `make check-package-contracts`' job
@@ -224,8 +226,8 @@ Workflow: `.github/workflows/promote-stack.yml` (`workflow_dispatch`, `main` onl
 
 Core SSH signing keys are checked by the core release workflow, not by the promotion
 consumer's attestation verifier. The core allowlist uses principal `nredd` and namespace `git`:
-MacBook `SHA256:YHzjQXY3SPl20zOMMOoNz8o4dk+eOZEi8FA+vS6nwFY` (retained for historical tags)
-and Mac mini `SHA256:+16+g7/7VKDJ2svgiuGIbfPnPF9pKKSU/h51+K9iHdk`.
+legacy key `SHA256:YHzjQXY3SPl20zOMMOoNz8o4dk+eOZEi8FA+vS6nwFY` (retained for historical tags)
+and current key `SHA256:+16+g7/7VKDJ2svgiuGIbfPnPF9pKKSU/h51+K9iHdk`.
 The latter is owner-approved for `.8` and future releases. No wildcard principal, skipped
 verification, new legacy exception, Gitlink move, or stack/pin change is implied.
 Core, harness, dotfiles and tap keep separate trust boundaries.

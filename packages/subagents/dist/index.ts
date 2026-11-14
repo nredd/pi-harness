@@ -150,7 +150,7 @@ import {
   toReportedUsage,
   withLeadingFlag,
   writeInitialEntry
-} from "./chunks/chunk-7A7BBITP.ts";
+} from "./chunks/chunk-TJQBFL4S.ts";
 
 // src/index.ts
 import { existsSync as existsSync7, mkdirSync as mkdirSync4, readFileSync as readFileSync7, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "node:fs";
@@ -2055,7 +2055,8 @@ function isOutstandingFailure(record) {
 }
 var FLEET_KEY = "fleet";
 var MAX_AGENT_ROWS = 5;
-var OVERFLOW_AGENT_ROWS = Math.max(1, MAX_AGENT_ROWS - 2);
+var MIDDLE_AGENT_ROWS = Math.max(1, MAX_AGENT_ROWS - 2);
+var EDGE_AGENT_ROWS = MAX_AGENT_ROWS - 1;
 var TICK_MS = 200;
 var FINISHED_LINGER_MS = 4e3;
 function formatFleetElapsed(ms) {
@@ -2669,9 +2670,20 @@ var FleetList = class {
     lines.push("");
     lines.push(truncateToWidth2(`  ${this.bullet(0, sel, theme)} main`, width));
     const overflow = rows.length > MAX_AGENT_ROWS;
-    const visible = Math.min(overflow ? OVERFLOW_AGENT_ROWS : MAX_AGENT_ROWS, rows.length);
     const selRow = Math.max(0, sel - 1);
-    const start = selRow < visible ? 0 : selRow - visible + 1;
+    let start = 0;
+    let visible = rows.length;
+    if (overflow) {
+      if (selRow < EDGE_AGENT_ROWS) {
+        visible = EDGE_AGENT_ROWS;
+      } else if (selRow === rows.length - 1) {
+        visible = EDGE_AGENT_ROWS;
+        start = rows.length - EDGE_AGENT_ROWS;
+      } else {
+        visible = MIDDLE_AGENT_ROWS;
+        start = selRow - MIDDLE_AGENT_ROWS + 1;
+      }
+    }
     const hiddenBelow = rows.length - (start + visible);
     const cells = /* @__PURE__ */ new Map();
     for (const r of rows) {
@@ -2686,7 +2698,7 @@ var FleetList = class {
       width - flagWidth
     );
     if (start > 0) {
-      lines.push(rightAlign("", theme.fg("dim", `\u2191 ${start} more: ${summarizeHidden(rows.slice(0, start))}`), width));
+      lines.push(this.renderOverflow(`\u2191 ${start} more: ${summarizeHidden(rows.slice(0, start))}`, width, theme));
     }
     for (let a = start; a < start + visible; a++) {
       const row = rows[a];
@@ -2695,11 +2707,15 @@ var FleetList = class {
       );
     }
     if (hiddenBelow > 0) {
-      lines.push(rightAlign("", theme.fg("dim", `\u2193 ${hiddenBelow} more: ${summarizeHidden(rows.slice(start + visible))}`), width));
-    } else if (overflow) lines.push("");
-    if (start === 0 && overflow) lines.push("");
+      lines.push(this.renderOverflow(`\u2193 ${hiddenBelow} more: ${summarizeHidden(rows.slice(start + visible))}`, width, theme));
+    }
     lines.push("");
     return lines;
+  }
+  /** Overflow indicator: dim, left-aligned with its arrow in the bullet column, truncated never wrapped. */
+  renderOverflow(text, width, theme) {
+    const body = truncateToWidth2(text, Math.max(0, width - 2)).replaceAll("\x1B[0m", "");
+    return "  " + theme.fg("dim", body);
   }
   bullet(rosterIndex, sel, theme) {
     return rosterIndex === sel ? theme.fg("accent", "\u25CF") : theme.fg("dim", "\u25CB");
@@ -4113,7 +4129,7 @@ var WorkflowDialog = class {
 
 // src/ui/workflow-menu.ts
 async function showWorkflowDialog(ctx, task, deps) {
-  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-425URFCT.ts");
+  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-G5SGTFWH.ts");
   let overlay;
   await ctx.ui.custom(
     (tui, theme, _keybindings, done) => new WorkflowDialog(

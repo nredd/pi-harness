@@ -1242,8 +1242,8 @@ def test_audit_files_flags_leaks_and_gaps() -> None:
     assert "unexpected file 'src/x.test.snap'" in problems
 
 
-def test_session_kit_readme_links_only_packed_files() -> None:
-    """Every in-package README link is allowlisted for packing and required, so no tarball has dead links."""
+def test_session_kit_readme_is_required_and_links_only_packed_files() -> None:
+    """The README carries the folded reference, so it is required; any in-package link must be packed."""
     contract = next(c for c in pc.CONTRACTS if c.name == "@nredd/pi-session-kit")
     root = pc.REPO_ROOT / "packages" / contract.directory
     targets = re.findall(r"\]\(([^)\s]+)\)", (root / "README.md").read_text())
