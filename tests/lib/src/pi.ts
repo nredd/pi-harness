@@ -151,15 +151,14 @@ function createBus(deliver: boolean): RecordingBus {
 			}
 		}),
 		on: vi.fn((channel: string, handler: (data: unknown) => unknown) => {
-			subscriptions.set(channel, [...(subscriptions.get(channel) ?? []), handler]);
+			// One wrapper per registration, as in pi: the same callback registered twice stays two entries.
+			const registered = (data: unknown) => handler(data);
+			subscriptions.set(channel, [...(subscriptions.get(channel) ?? []), registered]);
 			return () => {
-				const current = subscriptions.get(channel) ?? [];
-				const index = current.indexOf(handler);
-				if (index >= 0)
-					subscriptions.set(
-						channel,
-						current.filter((_, at) => at !== index),
-					);
+				subscriptions.set(
+					channel,
+					(subscriptions.get(channel) ?? []).filter((entry) => entry !== registered),
+				);
 			};
 		}),
 		clear() {
@@ -210,17 +209,13 @@ export function createRecordingPi(options: RecordingPiOptions = {}): RecordingPi
 
 	const methods = {
 		on: vi.fn((event: string, handler: RecordedHandler) => {
-			handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+			// One wrapper per registration, as in the loader: the same callback registered twice stays two entries.
+			const registered: RecordedHandler = (payload, ctx) => handler(payload, ctx);
+			handlers.set(event, [...(handlers.get(event) ?? []), registered]);
 			return () => {
-				const current = handlers.get(event) ?? [];
-				const index = current.indexOf(handler);
-				if (index < 0) return;
-				if (current.length === 1) handlers.delete(event);
-				else
-					handlers.set(
-						event,
-						current.filter((_, at) => at !== index),
-					);
+				const remaining = (handlers.get(event) ?? []).filter((entry) => entry !== registered);
+				if (remaining.length === 0) handlers.delete(event);
+				else handlers.set(event, remaining);
 			};
 		}),
 		registerTool: vi.fn((tool: ToolDefinition) => {

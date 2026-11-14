@@ -15,13 +15,32 @@ describe("createRecordingPi", () => {
 		expect(order).toEqual(["a", "b"]);
 	});
 
-	it("unsubscribes only the handler it returned for", () => {
+	it("unsubscribes only the registration it returned for, even for a repeated callback", async () => {
 		const rec = createRecordingPi();
-		const first = rec.pi.on("turn_end", () => undefined);
-		rec.pi.on("turn_end", () => undefined);
+		const ctx = createRecordingContext().ctx;
+		const shared = vi.fn();
+		const other = vi.fn();
+		const first = rec.pi.on("turn_end", shared);
+		rec.pi.on("turn_end", shared);
+		rec.pi.on("turn_end", other);
 		first();
-		expect(rec.handlers.get("turn_end")).toHaveLength(1);
-		rec.handlers.get("turn_end");
+		first();
+		await rec.dispatch("turn_end", {}, ctx);
+		expect(shared).toHaveBeenCalledTimes(1);
+		expect(other).toHaveBeenCalledTimes(1);
+		expect(rec.handlers.get("turn_end")).toHaveLength(2);
+	});
+
+	it("keeps a repeated bus callback registered once per subscription", () => {
+		const rec = createRecordingPi();
+		const seen = vi.fn();
+		const first = rec.pi.events.on("c", seen);
+		rec.pi.events.on("c", seen);
+		first();
+		first();
+		rec.pi.events.emit("c", 1);
+		expect(seen).toHaveBeenCalledTimes(1);
+		expect(rec.bus.listenerCount()).toBe(1);
 	});
 
 	it("drops the event key when its last handler unsubscribes", () => {
