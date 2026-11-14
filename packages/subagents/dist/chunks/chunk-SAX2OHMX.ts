@@ -3959,10 +3959,20 @@ function retentionMs(name, fallbackMs) {
 }
 var MAX_SWEEP_INTERVAL_MS = 6e4;
 var MIN_SWEEP_INTERVAL_MS = 1e3;
-var MAX_EVICTED_NOTES = 500;
+var MAX_RETAINED_RESULT_CHARS = 32e3;
+var MAX_SUCCESSOR_LINKS = 500;
 function markConsumed(record, now = Date.now()) {
   record.resultConsumed = true;
   record.consumedAt = now;
+}
+function capRetained(text, transcript) {
+  if (text.length <= MAX_RETAINED_RESULT_CHARS) return text;
+  const where = transcript ? `; full text in ${transcript}` : "";
+  return `${text.slice(0, MAX_RETAINED_RESULT_CHARS)}
+[truncated ${text.length - MAX_RETAINED_RESULT_CHARS} chars${where}]`;
+}
+function describeEvictedResult(note) {
+  return note.status === "error" ? note.error === void 0 ? void 0 : `Error: ${note.error}` : note.result?.trim() || void 0;
 }
 function describeEvicted(note) {
   const where = note.transcript ? `; transcript: ${note.transcript}` : "";
@@ -3972,7 +3982,6 @@ ${disclosure}` : "";
   const state2 = note.fromSavedSession ? `last recorded status: ${note.status}, recovered from saved parent session (no live registry record)` : `${note.status}, evicted after ${note.evictedAfterMin} min`;
   return `Agent "${note.id}" (${note.description}) ${state2}${where}${fallback}`;
 }
-var MAX_TOMBSTONES = 100;
 function assertValidSpawnCwd(cwd) {
   if (cwd == null) return;
   if (typeof cwd !== "string" || !isAbsolute4(cwd)) {
@@ -5230,10 +5239,6 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
   }
   storeTombstone(entry) {
     this.tombstones.set(entry.handle, entry);
-    while (this.tombstones.size > MAX_TOMBSTONES) {
-      const oldest = [...this.tombstones.values()].reduce((a, b) => a.completedAt <= b.completedAt ? a : b);
-      this.tombstones.delete(oldest.handle);
-    }
   }
   /** Remember that `record` existed, so its id still answers with something better than "not found". */
   noteEviction(record) {
@@ -5253,12 +5258,14 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
       status: record.status,
       evictedAfterMin: Math.max(0, Math.round((this.clock.now() - record.completedAt) / 6e4)),
       transcript: record.outputFile ?? record.sessionFile,
+      ...record.result !== void 0 ? { result: capRetained(record.result, record.outputFile ?? record.sessionFile) } : {},
+      ...record.error !== void 0 ? { error: capRetained(record.error, record.outputFile ?? record.sessionFile) } : {},
       ...record.modelTier ? { modelTier: record.modelTier } : {},
       ...record.modelFallback ? { modelFallback: record.modelFallback } : {}
     };
   }
   /**
-   * Keep `note` addressable by its id, bounded by age. Also how a result handed
+   * Keep `note` addressable by its id for the session. Also how a result handed
    * over by an orphaned manager (`/new`, `/reload`) stays answerable here: the
    * record settled in a manager this one never saw (#330).
    */
@@ -5267,16 +5274,12 @@ Changes saved to branch \`${wtResult.branch}\`${repoNote}. Merge with: \`git mer
     if (note.fromSavedSession && existing && !existing.fromSavedSession) return;
     this.evictedNotes.delete(note.id);
     this.evictedNotes.set(note.id, note);
-    if (this.evictedNotes.size > MAX_EVICTED_NOTES) {
-      const historical = [...this.evictedNotes].find(([, entry]) => entry.fromSavedSession)?.[0];
-      this.evictedNotes.delete(historical ?? this.evictedNotes.keys().next().value);
-    }
   }
-  /** Record that evicted `id` was reopened as `next`; bounded like the eviction notes. */
+  /** Record that evicted `id` was reopened as `next`. */
   linkSuccessor(id, next) {
     this.successors.delete(id);
     this.successors.set(id, next);
-    if (this.successors.size > MAX_EVICTED_NOTES) this.successors.delete(this.successors.keys().next().value);
+    if (this.successors.size > MAX_SUCCESSOR_LINKS) this.successors.delete(this.successors.keys().next().value);
   }
   /** Forget a reopen that never started, so `id` resolves to its tombstone again. */
   unlinkSuccessor(id) {
@@ -6717,6 +6720,7 @@ export {
   getBudgetPolicy,
   setBudgetPolicy,
   markConsumed,
+  describeEvictedResult,
   describeEvicted,
   isTopLevelAgent,
   AgentManager,
@@ -6747,4 +6751,4 @@ export {
   RESULT_MAX_CHARS,
   ConversationViewer
 };
-//# sourceMappingURL=chunk-7A7BBITP.ts.map
+//# sourceMappingURL=chunk-SAX2OHMX.ts.map

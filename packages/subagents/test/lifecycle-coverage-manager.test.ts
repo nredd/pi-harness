@@ -305,7 +305,7 @@ describe("workflow host lifecycle", () => {
 });
 
 describe("bounded eviction records", () => {
-  it("retains only the newest 500 evicted ids, without dropping the newest result", async () => {
+  it("retains every evicted id for the session, past the old 500 cap", async () => {
     const f = managerWithClock();
     const ids: string[] = [];
     let newest = "";
@@ -318,8 +318,8 @@ describe("bounded eviction records", () => {
       f.clock.advance(600000);
     }
     expect(f.manager.getRecord(newest)).toBeUndefined();
-    expect(f.manager.getEvictedNote(ids[0])).toBeUndefined();
-    expect(f.manager.getEvictedNote(ids[1])).toBeUndefined();
+    expect(f.manager.getEvictedNote(ids[0])).toMatchObject({ id: ids[0], description: "run-0" });
+    expect(f.manager.getEvictedNote(ids[1])).toMatchObject({ id: ids[1], description: "run-1" });
     expect(f.manager.getEvictedNote(ids[2])).toMatchObject({ id: ids[2], description: "run-2", status: "completed" });
     expect(f.manager.getEvictedNote(newest)).toMatchObject({ id: newest, description: "run-501", status: "completed", evictedAfterMin: 10 });
   });

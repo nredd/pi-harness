@@ -219,14 +219,14 @@ describe("AgentManager.rememberTombstone", () => {
     expect(manager.listTombstones().map(t => t.id)).toEqual(["c"]);
   });
 
-  it("marks the note of an entry it could not keep, and bounds what it does keep", () => {
+  it("marks the note of an entry it could not keep, and keeps the rest for the session", () => {
     const manager = new AgentManager(() => {});
     manager.rememberEvicted({ id: "n", type: "general-purpose", description: "d", status: "completed", evictedAfterMin: 0 });
     manager.rememberTombstone(entry("k", "gp"));
     manager.rememberTombstone(entry("n", "gp"));
     expect(manager.getEvictedNote("n")?.nameTaken).toBe("gp");
     for (let i = 0; i < 101; i++) manager.rememberTombstone({ ...entry(`t${i}`, `h${i}`), completedAt: i + 1 });
-    expect(manager.listTombstones()).toHaveLength(100);
+    expect(manager.listTombstones()).toHaveLength(102);
   });
 
   it("names the held name in the note, alias or handle", () => {

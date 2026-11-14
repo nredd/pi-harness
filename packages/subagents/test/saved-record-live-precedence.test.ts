@@ -40,30 +40,21 @@ it("preserves a delivered detached note and name conflict when saved history fil
   expect(text).not.toContain("recovered from saved parent session");
 });
 
-it("bounds both classes and lets actual notes supersede historical duplicates", () => {
+it("lets actual notes supersede historical duplicates, with no cap on either class (#372)", () => {
   const manager = new AgentManager(() => {});
   const note = (id: string, historical: boolean): EvictedNote => ({ id, type: "general-purpose", description: historical ? "historical" : "actual", status: "completed", evictedAfterMin: 0, ...(historical ? { fromSavedSession: true } : {}) });
   for (let i = 0; i < 500; i++) manager.rememberEvicted(note(`actual-${i}`, false));
-  manager.rememberEvicted(note("historical-overflow", true));
-  expect(manager.getEvictedNote("historical-overflow")).toBeUndefined();
+  manager.rememberEvicted(note("historical-late", true));
+  expect(manager.getEvictedNote("historical-late")?.description).toBe("historical");
   expect(manager.getEvictedNote("actual-0")?.description).toBe("actual");
   manager.rememberEvicted(note("actual-0", true));
   expect(manager.getEvictedNote("actual-0")?.description).toBe("actual");
-  manager.rememberEvicted(note("actual-new", false));
-  expect(manager.getEvictedNote("actual-0")).toBeUndefined();
-  expect(manager.getEvictedNote("actual-new")?.description).toBe("actual");
   const another = new AgentManager(() => {});
   another.rememberEvicted(note("duplicate", true));
   another.rememberEvicted(note("duplicate", false));
   expect(another.getEvictedNote("duplicate")?.description).toBe("actual");
-  for (let i = 0; i < 500; i++) another.rememberEvicted(note(`history-${i}`, true));
+  another.rememberEvicted(note("duplicate", true));
   expect(another.getEvictedNote("duplicate")?.description).toBe("actual");
-  expect(another.getEvictedNote("history-0")).toBeUndefined();
-  expect(another.getEvictedNote("history-499")?.description).toBe("historical");
-  another.rememberEvicted(note("history-499", true));
-  another.rememberEvicted(note("new-actual", false));
-  expect(another.getEvictedNote("history-1")).toBeUndefined();
-  expect(another.getEvictedNote("history-499")?.description).toBe("historical");
 });
 
 it("keeps a live survivor ahead of saved terminal history for that id", { timeout: 30_000 }, async () => {

@@ -34,6 +34,7 @@ import {
   describeActivity,
   describeBlock,
   describeEvicted,
+  describeEvictedResult,
   describeMention,
   describeModelCall,
   describeSelection,
@@ -150,7 +151,7 @@ import {
   toReportedUsage,
   withLeadingFlag,
   writeInitialEntry
-} from "./chunks/chunk-7A7BBITP.ts";
+} from "./chunks/chunk-SAX2OHMX.ts";
 
 // src/index.ts
 import { existsSync as existsSync7, mkdirSync as mkdirSync4, readFileSync as readFileSync7, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "node:fs";
@@ -4129,7 +4130,7 @@ var WorkflowDialog = class {
 
 // src/ui/workflow-menu.ts
 async function showWorkflowDialog(ctx, task, deps) {
-  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-425URFCT.ts");
+  const { VIEWPORT_HEIGHT_PCT } = await import("./chunks/conversation-viewer-FYCYA63J.ts");
   let overlay;
   await ctx.ui.custom(
     (tui, theme, _keybindings, done) => new WorkflowDialog(
@@ -8776,9 +8777,12 @@ To iterate, edit the script file and call SubagentWorkflow again with scriptPath
       fleet.update();
     });
   }
-  function agentNotFound(ref) {
+  function agentNotFound(ref, withResult = false) {
     const note = manager.getEvictedNote(ref);
-    return note ? describeEvicted(note) : `Agent not found: "${ref}". It may have been cleaned up.`;
+    const result = withResult && note ? describeEvictedResult(note) : void 0;
+    return note ? describeEvicted(note) + (result ? `
+
+${result}` : "") : `Agent not found: "${ref}". It may have been cleaned up.`;
   }
   registerToolReportingUsage(defineTool({
     name: SUBAGENT_TOOL_NAMES.GET_RESULT,
@@ -8802,7 +8806,7 @@ To iterate, edit the script file and call SubagentWorkflow again with scriptPath
     }),
     execute: async (_toolCallId, params, signal, _onUpdate, _ctx) => {
       const record = resolveAgentRef(params.agent_id);
-      if (!record || !isTopLevelAgent(record)) return textResult(agentNotFound(params.agent_id));
+      if (!record || !isTopLevelAgent(record)) return textResult(agentNotFound(params.agent_id, !record));
       if (params.wait && (record.status === "running" || record.status === "queued")) {
         while (record.status === "queued") {
           await abortable(record.startGate ?? new Promise((resolve) => clock.setTimeout(resolve, QUEUE_WAIT_POLL_MS)), signal);

@@ -20,7 +20,7 @@ import { Type } from "typebox";
 import { abortable } from "./abortable.js";
 import { hasAgentBadge, renderAgentName } from "./agent-color.js";
 import { buildNewAgentFile, disableInContent, enableInContent, isEmptyStub, locateAgentFile as locateAgentFileAtHome, personalAgentsDir as personalAgentsDirAtHome, projectAgentsDir, serializeAgentFile } from "./agent-file-toggle.js";
-import { AgentManager, describeEvicted, isTopLevelAgent, markConsumed, type OwnedPending } from "./agent-manager.js";
+import { AgentManager, describeEvicted, describeEvictedResult, isTopLevelAgent, markConsumed, type OwnedPending } from "./agent-manager.js";
 import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, getRememberAgents, normalizeMaxTurns, resolveEffectiveMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, setRememberAgents, steerAgent } from "./agent-runner.js";
 import { rowDescription, sourceIndicator, sourceLegend } from "./agent-source-badge.js";
 import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, getConfig, getFallbackSubagent, isDefaultsDisabled, NO_FALLBACK, registerAgents, resolveSpawnType, resolveType, setDefaultsDisabled, setFallbackSubagent } from "./agent-types.js";
@@ -3558,9 +3558,10 @@ Terse command-style prompts produce shallow, generic work.
   }
 
   /** "Not found", or what became of the agent when its record was evicted. */
-  function agentNotFound(ref: string): string {
+  function agentNotFound(ref: string, withResult = false): string {
     const note = manager.getEvictedNote(ref);
-    return note ? describeEvicted(note) : `Agent not found: "${ref}". It may have been cleaned up.`;
+    const result = withResult && note ? describeEvictedResult(note) : undefined;
+    return note ? describeEvicted(note) + (result ? `\n\n${result}` : "") : `Agent not found: "${ref}". It may have been cleaned up.`;
   }
 
   // ---- get_subagent_result tool ----
@@ -3588,7 +3589,7 @@ Terse command-style prompts produce shallow, generic work.
     }),
     execute: async (_toolCallId, params, signal, _onUpdate, _ctx) => {
       const record = resolveAgentRef(params.agent_id);
-      if (!record || !isTopLevelAgent(record)) return textResult(agentNotFound(params.agent_id));
+      if (!record || !isTopLevelAgent(record)) return textResult(agentNotFound(params.agent_id, !record));
 
       // Wait for completion if requested. Cancellation stops only this tool
       // call; the background agent keeps running and remains unconsumed so its

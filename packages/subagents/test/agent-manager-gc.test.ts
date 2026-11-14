@@ -782,20 +782,20 @@ describe("AgentManager — tombstones outliving the GC", () => {
     expect(resolved).toMatchObject({ record: { id } });
   });
 
-  it("drops the oldest once the cap is reached, keeping the most recent", async () => {
+  it("keeps every tombstone for the session lifetime, however many agents it spawns (#372)", async () => {
     manager = new AgentManager();
-    for (let i = 0; i < 101; i++) {
-      const { record } = await evictable("Explore", `run-${i}`, `/sessions/${i}.jsonl`);
-      // Distinct ages so "oldest" is well defined; run-0 is the oldest. Set on
-      // the record we just made — under fake timers every startedAt is equal,
-      // so listAgents() has no meaningful order to index into.
-      record.completedAt = Date.now() - (TEN_MINUTES + 101_000 - i * 1000);
+    for (let i = 0; i < 300; i++) {
+      await evictable("Explore", `run-${i}`, `/sessions/${i}.jsonl`);
     }
     await vi.advanceTimersByTimeAsync(TICK);
 
-    expect(manager.listTombstones()).toHaveLength(100);
-    expect(manager.resolveMention("explore")).toBeUndefined(); // run-0's handle
-    expect(manager.resolveMention("explore-101")?.kind).toBe("tombstone");
+    expect(manager.listTombstones()).toHaveLength(300);
+    expect(manager.resolveMention("explore")?.kind).toBe("tombstone"); // the oldest
+    expect(manager.resolveMention("explore-300")?.kind).toBe("tombstone");
+
+    // A session boundary is what ends the lifetime.
+    manager.clearCompleted();
+    expect(manager.listTombstones()).toHaveLength(0);
   });
 
   it("hands a reclaimed name straight back, numbering nothing", async () => {
@@ -953,5 +953,93 @@ describe("AgentManager — retention override (PI_SUBAGENTS_*_TTL_MIN)", () => {
 
     manager.clearCompleted();
     expect(manager.latestId("old-499")).toBe("old-499");
+  });
+});
+
+describe("AgentManager - retained result text (#372)", () => {
+  let manager: AgentManager;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    resetBudgetForTests();
+    manager?.dispose();
+    vi.useRealTimers();
+  });
+
+  async function finished(text: string, consumed: boolean) {
+    vi.mocked(runAgent).mockResolvedValue({
+      responseText: text,
+      session: { dispose: vi.fn() } as any,
+      aborted: false,
+      steered: false,
+    } as any);
+    const id = manager.spawn(mockPi, mockCtx, "X", "p", { description: "p", isBackground: true });
+    const record = manager.getRecord(id)!;
+    await record.promise;
+    record.resultConsumed = consumed;
+    return id;
+  }
+
+  it("answers with the result text after a read record's 10 minute window", async () => {
+    manager = new AgentManager();
+    const id = await finished("the answer", true);
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000 + TICK);
+
+    expect(manager.getRecord(id)).toBeUndefined();
+    expect(manager.getEvictedNote(id)?.result).toBe("the answer");
+  });
+
+  it("answers with the result text after an unread record's 60 minute window", async () => {
+    manager = new AgentManager();
+    const id = await finished("unread answer", false);
+
+    await vi.advanceTimersByTimeAsync(59 * 60_000);
+    expect(manager.getRecord(id)).toBeDefined();
+    await vi.advanceTimersByTimeAsync(2 * TICK);
+
+    expect(manager.getRecord(id)).toBeUndefined();
+    expect(manager.getEvictedNote(id)?.result).toBe("unread answer");
+  });
+
+  it("keeps a bounded copy of an enormous result, naming where the whole text lives", async () => {
+    manager = new AgentManager();
+    const id = await finished("x".repeat(1_000_000), true);
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000 + TICK);
+
+    const result = manager.getEvictedNote(id)!.result!;
+    expect(result.length).toBeLessThan(40_000);
+    expect(result).toContain("truncated");
+  });
+
+  it("holds hundreds of evicted agents without dropping a result or growing past the per-result cap", async () => {
+    manager = new AgentManager();
+    const ids: string[] = [];
+    for (let i = 0; i < 400; i++) ids.push(await finished(`${i}:`.padEnd(200_000, "y"), true));
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000 + TICK);
+
+    let bytes = 0;
+    for (const [i, id] of ids.entries()) {
+      const note = manager.getEvictedNote(id);
+      expect(note?.result?.startsWith(`${i}:`)).toBe(true);
+      bytes += note!.result!.length;
+    }
+    // 400 agents of 200k chars each are 80M chars in; far less is retained.
+    expect(bytes).toBeLessThan(400 * 40_000);
+  });
+
+  it("does not keep a result past the session boundary", async () => {
+    manager = new AgentManager();
+    const id = await finished("gone with the session", true);
+    await vi.advanceTimersByTimeAsync(10 * 60_000 + TICK);
+
+    manager.clearCompleted();
+
+    expect(manager.getEvictedNote(id)).toBeUndefined();
   });
 });

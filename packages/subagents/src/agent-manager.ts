@@ -170,8 +170,14 @@ function retentionMs(name: string, fallbackMs: number): number {
 const MAX_SWEEP_INTERVAL_MS = 60_000;
 const MIN_SWEEP_INTERVAL_MS = 1_000;
 
-/** How many evicted ids keep an answer to "what happened to that agent". */
-const MAX_EVICTED_NOTES = 500;
+/** Characters of one agent's result kept past its eviction; the transcript holds the rest. */
+const MAX_RETAINED_RESULT_CHARS = 32_000;
+
+/**
+ * Successor links kept. Notes and tombstones live for the session instead
+ * (`clearCompleted` ends them), so only these bare id pairs keep a bound.
+ */
+const MAX_SUCCESSOR_LINKS = 500;
 
 /** Mark a record's result as read, which shortens its retention and suppresses its notice. */
 export function markConsumed(record: Pick<AgentRecord, "resultConsumed" | "consumedAt">, now = Date.now()): void {
@@ -197,8 +203,24 @@ export interface EvictedNote {
   /** The run's model fallback, so even an evicted agent's id still discloses it. */
   modelFallback?: ModelFallback;
   modelTier?: TierDisclosure;
+  /** The result text, capped at `MAX_RETAINED_RESULT_CHARS`, so a read after eviction still returns it (#372). */
+  result?: string;
+  /** A failed run's error, kept like `result`. */
+  error?: string;
   /** Set when a saved session exists but its name now belongs to another agent, so it was not kept reopenable. */
   nameTaken?: string;
+}
+
+/** `text` clipped to `MAX_RETAINED_RESULT_CHARS`, with a marker naming where the whole of it lives. */
+function capRetained(text: string, transcript: string | undefined): string {
+  if (text.length <= MAX_RETAINED_RESULT_CHARS) return text;
+  const where = transcript ? `; full text in ${transcript}` : "";
+  return `${text.slice(0, MAX_RETAINED_RESULT_CHARS)}\n[truncated ${text.length - MAX_RETAINED_RESULT_CHARS} chars${where}]`;
+}
+
+/** The result or error an evicted agent left, or undefined when none was kept. */
+export function describeEvictedResult(note: EvictedNote): string | undefined {
+  return note.status === "error" ? (note.error === undefined ? undefined : `Error: ${note.error}`) : note.result?.trim() || undefined;
 }
 
 /** The text a tool returns for an id whose record was evicted. */
@@ -211,13 +233,6 @@ export function describeEvicted(note: EvictedNote): string {
     : `${note.status}, evicted after ${note.evictedAfterMin} min`;
   return `Agent "${note.id}" (${note.description}) ${state}${where}${fallback}`;
 }
-
-/**
- * How many evicted agents stay addressable by name. Only a bound on memory —
- * a session that spawns hundreds of agents shouldn't retain every one — and
- * far above the handful anyone keeps in their head.
- */
-const MAX_TOMBSTONES = 100;
 
 /**
  * Validate a caller-supplied SpawnOptions.cwd. `undefined`/`null` mean "unset"
@@ -2165,13 +2180,8 @@ export class AgentManager {
   }
 
   private storeTombstone(entry: AgentTombstone): void {
+    // Unbounded within a session (a few strings per agent); `clearCompleted` ends the lifetime (#372).
     this.tombstones.set(entry.handle, entry);
-    // Bound the memory a long session can accumulate. Oldest first, since the
-    // agent someone still wants to reach is the one they used most recently.
-    while (this.tombstones.size > MAX_TOMBSTONES) {
-      const oldest = [...this.tombstones.values()].reduce((a, b) => (a.completedAt <= b.completedAt ? a : b));
-      this.tombstones.delete(oldest.handle);
-    }
   }
 
   /** Remember that `record` existed, so its id still answers with something better than "not found". */
@@ -2196,13 +2206,15 @@ export class AgentManager {
       status: record.status,
       evictedAfterMin: Math.max(0, Math.round((this.clock.now() - record.completedAt) / 60_000)),
       transcript: record.outputFile ?? record.sessionFile,
+      ...(record.result !== undefined ? { result: capRetained(record.result, record.outputFile ?? record.sessionFile) } : {}),
+      ...(record.error !== undefined ? { error: capRetained(record.error, record.outputFile ?? record.sessionFile) } : {}),
       ...(record.modelTier ? { modelTier: record.modelTier } : {}),
       ...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
     };
   }
 
   /**
-   * Keep `note` addressable by its id, bounded by age. Also how a result handed
+   * Keep `note` addressable by its id for the session. Also how a result handed
    * over by an orphaned manager (`/new`, `/reload`) stays answerable here: the
    * record settled in a manager this one never saw (#330).
    */
@@ -2211,21 +2223,14 @@ export class AgentManager {
     if (note.fromSavedSession && existing && !existing.fromSavedSession) return;
     this.evictedNotes.delete(note.id);
     this.evictedNotes.set(note.id, note);
-    if (this.evictedNotes.size > MAX_EVICTED_NOTES) {
-      // Historical recovery is lower priority than actual eviction/delivery notes.
-      // Evict the oldest historical candidate first, including the new one when
-      // actual notes occupy the entire index. Preserve insertion order within each class.
-      const historical = [...this.evictedNotes].find(([, entry]) => entry.fromSavedSession)?.[0];
-      this.evictedNotes.delete(historical ?? this.evictedNotes.keys().next().value!);
-    }
   }
 
-  /** Record that evicted `id` was reopened as `next`; bounded like the eviction notes. */
+  /** Record that evicted `id` was reopened as `next`. */
   linkSuccessor(id: string, next: string): void {
     this.successors.delete(id);
     this.successors.set(id, next);
     // One link per call, so at most one over the bound: drop the oldest.
-    if (this.successors.size > MAX_EVICTED_NOTES) this.successors.delete(this.successors.keys().next().value as string);
+    if (this.successors.size > MAX_SUCCESSOR_LINKS) this.successors.delete(this.successors.keys().next().value as string);
   }
 
   /** Forget a reopen that never started, so `id` resolves to its tombstone again. */
