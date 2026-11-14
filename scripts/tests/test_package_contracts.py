@@ -1560,7 +1560,7 @@ def _write_dist(source: Path, offset: float) -> None:
 
     Parameters:
         source (Path): Package directory.
-        offset (float): Seconds relative to the newest `src/` or `package.json` mtime.
+        offset (float): Seconds relative to the newest build input mtime.
     """
     newest = max(
         p.stat().st_mtime for p in [*(source / "src").rglob("*"), source / "package.json"] if p.is_file()
@@ -1595,6 +1595,22 @@ def test_pack_rebuilds_a_stale_dist(tmp_path: Path, sandbox: pc.Sandbox) -> None
     _write_dist(source, -5)
     with pytest.raises(pc.ContractError):
         pc.pack(DEV_TOOLS, tmp_path / "out", sandbox, source)
+
+
+def test_dist_inputs_cover_the_builders(tmp_path: Path) -> None:
+    """Package scripts, tsconfig and the shared builder and lockfile are build inputs, not just `src/`.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+    """
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "build-runtime.mjs").write_text("x")
+    (tmp_path / "tsconfig.build.json").write_text("{}")
+    names = {p.relative_to(tmp_path) if p.is_relative_to(tmp_path) else p for p in pc.dist_inputs(tmp_path)}
+    assert Path("scripts/build-runtime.mjs") in names
+    assert Path("tsconfig.build.json") in names
+    assert pc.REPO_ROOT / "scripts" / "runtime-builder.mjs" in names
+    assert pc.REPO_ROOT / "package-lock.json" in names
 
 
 def test_dist_is_stale_without_a_build_or_src(tmp_path: Path) -> None:

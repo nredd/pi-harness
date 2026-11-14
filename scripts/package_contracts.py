@@ -1655,8 +1655,32 @@ def verify_stock_pi(prefix: Path, pi_bin: Path, sandbox: Sandbox) -> None:
 # --- tarball audit --------------------------------------------------------------------------------
 
 
+def dist_inputs(package_dir: Path) -> list[Path]:
+    """List the files whose mtime decides whether a built `dist/` is current.
+
+    Parameters:
+        package_dir (Path): Package directory.
+
+    Returns:
+        list[Path]: Existing files: `src/`, the package's `scripts/` and `package.json`/`tsconfig*.json`,
+            plus the shared `scripts/runtime-builder.mjs` and root `package-lock.json` (bundler versions).
+    """
+    candidates = [
+        *(package_dir / "src").rglob("*"),
+        *(package_dir / "scripts").rglob("*"),
+        *package_dir.glob("tsconfig*.json"),
+        package_dir / "package.json",
+        REPO_ROOT / "scripts" / "runtime-builder.mjs",
+        REPO_ROOT / "package-lock.json",
+    ]
+    return [p for p in candidates if p.is_file()]
+
+
 def dist_is_stale(package_dir: Path) -> bool:
-    """Report whether `dist/` is missing or older than the newest `src/` or `package.json` file.
+    """Report whether `dist/` is missing or older than any build input (see `dist_inputs`).
+
+    A cheap mtime heuristic, so the in-place rebuild is skipped when nothing changed; `make build` is the
+    authority and CI builds from a fresh clone.
 
     Parameters:
         package_dir (Path): Package directory.
@@ -1667,11 +1691,7 @@ def dist_is_stale(package_dir: Path) -> bool:
     outputs = [p.stat().st_mtime for p in (package_dir / "dist").rglob("*") if p.is_file()]
     if not outputs:
         return True
-    inputs = [p.stat().st_mtime for p in (package_dir / "src").rglob("*") if p.is_file()]
-    manifest = package_dir / "package.json"
-    if manifest.is_file():
-        inputs.append(manifest.stat().st_mtime)
-    return max(inputs, default=0.0) > min(outputs)
+    return max((p.stat().st_mtime for p in dist_inputs(package_dir)), default=0.0) > min(outputs)
 
 
 def pack(

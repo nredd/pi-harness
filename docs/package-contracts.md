@@ -55,8 +55,8 @@ tarball, and requires
 `/plan <prompt>`, calls `plan_mode_question`, and the scenario records its explicit headless
 `ui_unavailable` result. `dist/` is required and packed because its extension manifest targets
 `./dist/index.ts`; `src/` stays packed as declared by the source package. `dist/` is gitignored build
-output (#866): `package_contracts.pack` runs `npm run build --if-present` before `npm pack --ignore-scripts`
-(which skips `prepack`), so every contract packs a fresh build, and a missing `dist/index.ts` fails the `required`
+output (#866): `package_contracts.pack` runs `npm run build --if-present` (only when `dist/` is missing or older than its build inputs: `src/`, package `scripts/`, `tsconfig*.json`, `package.json`, `scripts/runtime-builder.mjs`, `package-lock.json`) before `npm pack --ignore-scripts`
+(which skips `prepack`), so every contract packs a current build, and a missing `dist/index.ts` fails the `required`
 audit instead of packing an empty package. Its native `npm run check` builds first, and `build-runtime.test.ts`
 proves two builds of one tree are byte-identical.
 

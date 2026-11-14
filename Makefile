@@ -24,7 +24,7 @@ install-owned: verify-root-overrides  ## Verify root core overrides, install own
 	$(MAKE) build
 	cd integration && env -u GH_TOKEN uv sync --locked
 
-build:  ## Build every generated `dist/` (gitignored; `pi.extensions`, the `local` stack and inprocess tests load it). Needs `npm ci` first. `check-scripts`, `check-core-compaction`, `integration/inprocess` tests and the `local` stack run it first so a stale `dist/` is never loaded
+build:  ## Build every generated `dist/` (gitignored; `pi.extensions`, the `local` stack and inprocess tests load it). Needs `npm ci` first
 	env -u GH_TOKEN npm run build
 
 install-benchmark:  ## Install benchmarks/comparison, only `check-benchmark` reads it
