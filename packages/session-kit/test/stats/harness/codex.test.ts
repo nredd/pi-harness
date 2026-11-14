@@ -106,12 +106,27 @@ describe("readCodex", () => {
 		expect(scan.calls).toHaveLength(1);
 	});
 
+	it("flags old token_count-only turns in a resumed rollout without dropping the new turns", async () => {
+		writeLines(rollout("mixed"), [
+			codexMeta(),
+			codexContext("turn-1"),
+			codexTokenCount(limits(null)),
+			codexContext("turn-2"),
+			codexRecord({ turn: "turn-2" }),
+			codexTokenCount(limits(null)),
+			{ type: "event_msg", timestamp: "2026-10-02T10:00:05.000Z", payload: { type: "token_count", info: null } },
+		]);
+		const scan = await readCodex(root, {});
+		expect(scan.calls).toHaveLength(1);
+		expect(scan.problems).toEqual(["codex: 1 turns skipped, no per-turn usage records"]);
+	});
+
 	it("skips rollouts without per-turn records, with a diagnostic and no approximation", async () => {
 		writeLines(rollout("old"), [codexMeta(), codexContext(), codexTokenCount(limits(weekly))]);
 		writeLines(rollout("new"), [codexMeta("thread-3"), codexContext(), codexRecord(), codexTokenCount(null)]);
 		const scan = await readCodex(root, {});
 		expect(scan.calls).toHaveLength(1);
-		expect(scan.problems).toEqual(["codex: 1 files skipped, no per-turn usage records"]);
+		expect(scan.problems).toEqual(["codex: 1 turns skipped, no per-turn usage records"]);
 		// quota from the skipped rollout is still a valid reading
 		expect(scan.quota).toHaveLength(1);
 	});

@@ -11,7 +11,8 @@
  *
  * `input_tokens` includes the cached (and cache-write) subset, so `input` is what is left after
  * subtracting both, keeping `input + output + cacheRead + cacheWrite` equal to Codex's own total.
- * Rollouts from before `token_usage_record` existed are skipped with a diagnostic, not approximated.
+ * Turns that only have a `token_count` with usage info (before `token_usage_record` existed, including
+ * old turns in a rollout later resumed on a newer Codex) are counted and reported, not approximated.
  * `history.jsonl`, `auth.json` and the SQLite databases are never opened. No cost is recorded.
  */
 
@@ -46,8 +47,9 @@ class CodexParser extends RowParser {
 	private readonly turnModels = new Map<string, string>();
 	private readonly pending: Pending[] = [];
 	private readonly quota = new Map<string, QuotaObservation>();
-	private sawTokenCount = false;
-	private records = 0;
+	private currentTurn = "";
+	private readonly countedTurns = new Set<string>();
+	private readonly recordedTurns = new Set<string>();
 
 	protected wanted(line: string): boolean {
 		return ["session_meta", "turn_context", "token_usage_record", "token_count"].some((t) => line.includes(t));
@@ -64,17 +66,18 @@ class CodexParser extends RowParser {
 				this.provider = str(payload.model_provider);
 			}
 		} else if (row.type === "turn_context") {
-			this.turnModels.set(str(payload.turn_id), str(payload.model));
+			this.currentTurn = str(payload.turn_id);
+			this.turnModels.set(this.currentTurn, str(payload.model));
 		} else if (row.type === "token_usage_record") {
 			this.usage(payload, ts);
 		} else if (row.type === "event_msg" && payload.type === "token_count") {
-			this.sawTokenCount = true;
+			if (asRecord(payload.info)) this.countedTurns.add(this.currentTurn);
 			this.limits(asRecord(payload.rate_limits), ts);
 		}
 	}
 
 	private usage(payload: Record<string, unknown>, ts: number): void {
-		this.records++;
+		this.recordedTurns.add(str(payload.turn_id));
 		const usage = asRecord(payload.usage);
 		const raw = [
 			usage?.input_tokens,
@@ -125,7 +128,7 @@ class CodexParser extends RowParser {
 
 	override finish(): ParsedFile {
 		this.out.quota = [...this.quota.values()];
-		this.out.unsupported = this.sawTokenCount && this.records === 0;
+		this.out.unsupportedTurns = [...this.countedTurns].filter((t) => !this.recordedTurns.has(t)).length;
 		if (!this.out.session) {
 			// Without `session_meta` there is no thread to attribute the usage to.
 			this.out.badLines += this.pending.length;

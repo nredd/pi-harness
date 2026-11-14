@@ -158,7 +158,7 @@ describe("harness cache", () => {
 			entryIds: ["a".repeat(64)],
 			quota: [],
 			badLines: 0,
-			unsupported: false,
+			unsupportedTurns: 0,
 		};
 		await writeHarnessCache(path, { claude: { "/x": good } });
 		expect(await readHarnessCache(path)).toEqual({ claude: { "/x": good } });

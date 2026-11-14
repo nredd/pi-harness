@@ -33,8 +33,8 @@ export interface ParsedFile {
 	quota: QuotaObservation[];
 	/** Lines that were not a JSON object, or rows with unusable counters. */
 	badLines: number;
-	/** Per-turn usage records are missing, so the file cannot be counted (older Codex). */
-	unsupported: boolean;
+	/** Turns with only a `token_count` and no per-turn usage record (older Codex): not counted. */
+	unsupportedTurns: number;
 }
 
 /** Cached parsed files by harness, then absolute path. Paths never leave this process. */
@@ -58,7 +58,7 @@ export abstract class RowParser {
 			entryIds: [],
 			quota: [],
 			badLines: 0,
-			unsupported: false,
+			unsupportedTurns: 0,
 		};
 	}
 
@@ -134,10 +134,9 @@ export function isParsedFile(value: unknown): value is ParsedFile {
 	const f = asRecordOf(value);
 	const { models, calls, entryIds, quota } = f;
 	return (
-		[f.size, f.mtimeMs, f.startMs, f.endMs, f.badLines].every(isNum) &&
+		[f.size, f.mtimeMs, f.startMs, f.endMs, f.badLines, f.unsupportedTurns].every(isNum) &&
 		typeof f.session === "string" &&
 		typeof f.child === "boolean" &&
-		typeof f.unsupported === "boolean" &&
 		Array.isArray(models) &&
 		models.every((m) => Array.isArray(m) && m.length === 2 && m.every((n) => typeof n === "string")) &&
 		Array.isArray(calls) &&
@@ -208,7 +207,9 @@ export async function scanJsonl(options: ScanOptions): Promise<HarnessScan> {
 	const problems = [
 		...(errors > 0 ? [`${harness}: ${errors} unreadable files`] : []),
 		...unreadable(harness, out.badLines),
-		...(out.unsupported > 0 ? [`${harness}: ${out.unsupported} files skipped, no per-turn usage records`] : []),
+		...(out.unsupportedTurns > 0
+			? [`${harness}: ${out.unsupportedTurns} turns skipped, no per-turn usage records`]
+			: []),
 	];
 	return {
 		found: true,
@@ -232,10 +233,10 @@ export function flattenHarness(harness: Harness, files: [string, ParsedFile][]) 
 	const sessions: Session[] = [];
 	const quota = new Map<string, QuotaObservation>();
 	let badLines = 0;
-	let unsupported = 0;
+	let unsupportedTurns = 0;
 	for (const [, file] of ordered) {
 		badLines += file.badLines;
-		unsupported += file.unsupported ? 1 : 0;
+		unsupportedTurns += file.unsupportedTurns;
 		for (const [i, tuple] of file.calls.entries()) {
 			const [ms, index, input, output, cacheRead, cacheWrite, cost] = tuple;
 			const entryId = file.entryIds[i] as string;
@@ -273,6 +274,6 @@ export function flattenHarness(harness: Harness, files: [string, ParsedFile][]) 
 		sessions: [...metadata.values()].filter((s) => !s.child && owners.has(s.path)),
 		quota: [...quota.values()],
 		badLines,
-		unsupported,
+		unsupportedTurns,
 	};
 }

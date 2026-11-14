@@ -150,10 +150,13 @@ directory names live there as keys); its values and every reader result carry no
   Subagent files and sidechain rows count toward tokens, not Sessions. No cost, no quota on disk.
 - Codex: `sessions/` and `archived_sessions/` rollouts. `token_usage_record` rows are joined to
   `turn_context.model` by turn. `input` is `input_tokens` minus the cached and cache-write subsets.
-  Rollouts without per-turn records (older Codex) are skipped with a diagnostic, never approximated.
+  Turns without per-turn records (older Codex, including old turns of a resumed rollout) are
+  skipped with a count-only diagnostic, never approximated.
   `rate_limits` from `token_count` rows become quota observations (provider `openai-codex`),
   freshest per `(limitId, window)`. No account dimension.
-- OpenCode: one read-only `node:sqlite` query (never `immutable=1`, so WAL rows are visible) that
+- OpenCode: one read-only `node:sqlite` query (`immutable=1` only when the WAL is checkpointed and
+  absent, so a read never creates `-shm`/`-wal` and pending WAL rows are always visible; 2s busy
+  timeout, then a generic "database busy" diagnostic) that
   projects only counters, IDs, timestamps and model names. `reasoning` tokens count as output. The
   schema follows third-party readers; a mismatch or missing `node:sqlite` is a diagnostic.
 - Entry IDs hash `<harness>:<native id>`, session IDs `<harness>-session:<native id>`. Only counts,

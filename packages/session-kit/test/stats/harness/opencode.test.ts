@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -96,6 +96,33 @@ describe("readOpenCode", () => {
 			expect(readFileSync(f).equals(before[i]?.bytes as Buffer)).toBe(true);
 			expect(statSync(f).mtimeMs).toBe(before[i]?.mtimeMs);
 		});
+	});
+
+	it("leaves the directory listing unchanged when reading a checkpointed database", async () => {
+		session("ses_1");
+		message("msg_1", "ses_1", assistant());
+		writer.close();
+		expect(readdirSync(dir)).toEqual(["opencode.db"]);
+		writer = new DatabaseSync(":memory:");
+		const scan = await readOpenCode(dbPath);
+		expect(scan.calls).toHaveLength(1);
+		expect(readdirSync(dir)).toEqual(["opencode.db"]);
+	});
+
+	it("reports a locked database as busy, without error text", async () => {
+		const plain = join(dir, "plain.db");
+		const lock = new DatabaseSync(plain);
+		lock.exec("CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, data TEXT)");
+		lock.exec("CREATE TABLE session (id TEXT, parent_id TEXT)");
+		lock.exec("BEGIN EXCLUSIVE");
+		try {
+			const scan = await readOpenCode(plain);
+			expect(scan).toMatchObject({ found: true, calls: [], problems: ["opencode: database busy, skipped"] });
+			expect(JSON.stringify(scan)).not.toContain(dir);
+		} finally {
+			lock.exec("ROLLBACK");
+			lock.close();
+		}
 	});
 
 	it("never projects titles, directories, message bodies or native IDs", async () => {

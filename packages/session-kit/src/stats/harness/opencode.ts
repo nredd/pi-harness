@@ -3,8 +3,11 @@
  *
  * The schema is taken from third-party readers, not OpenCode's docs: it is verified only by this
  * package's fixtures, and any mismatch is reported as a diagnostic, never a crash. The database is
- * opened read-only (a normal `mode=ro` open, never `immutable=1`, so un-checkpointed WAL pages are
- * visible), with one query, no writes and no long transaction. The query projects only counters,
+ * opened read-only with one query, no writes and no long transaction. While `-wal` exists (OpenCode
+ * is running or crashed) it is a normal `mode=ro` open, so un-checkpointed WAL pages are visible.
+ * A WAL-mode database with no `-wal` has nothing pending, and a plain read-only open would still
+ * create `-shm`/`-wal` beside it, so that case opens `immutable=1` to leave the directory untouched.
+ * A busy or locked database is retried for 2s, then reported as a generic busy diagnostic. The query projects only counters,
  * IDs, timestamps and model names, so message and part bodies, titles and directories never leave
  * SQLite. `auth.json` is never opened. OpenCode keeps no quota.
  *
@@ -17,7 +20,8 @@
  * `tokens.reasoning` is reported separately from `tokens.output`, so it is billed output here.
  */
 
-import { stat } from "node:fs/promises";
+import { open, stat } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 import { timeOf } from "../jsonl.ts";
 import { type Call, mergeSessionMetadata, type Session } from "../load.ts";
 import { nth } from "../nth.ts";
@@ -29,6 +33,7 @@ export interface SqliteModule {
 		path: string,
 		options: { readOnly: boolean },
 	) => {
+		exec(sql: string): void;
 		prepare(sql: string): { all(): Record<string, unknown>[] };
 		close(): void;
 	};
@@ -58,20 +63,47 @@ async function isFile(path: string): Promise<boolean> {
 	}
 }
 
+/** How long a busy or locked database is retried before giving up. */
+const BUSY_TIMEOUT_MS = 2000;
+
+/** SQLite primary result codes for `SQLITE_BUSY` and `SQLITE_LOCKED` (extended codes keep them in the low byte). */
+const BUSY_CODES = new Set([5, 6]);
+
+const isBusy = (error: unknown): boolean => {
+	const code = (error as { errcode?: unknown } | null)?.errcode;
+	return typeof code === "number" && BUSY_CODES.has(code & 0xff);
+};
+
+/** True for a WAL-mode database (header bytes 18-19 are 2) with no `-wal` file: nothing is pending. */
+async function isCheckpointedWal(path: string): Promise<boolean> {
+	if (await isFile(`${path}-wal`)) return false;
+	const handle = await open(path, "r");
+	try {
+		const header = Buffer.alloc(20);
+		const { bytesRead } = await handle.read(header, 0, 20, 0);
+		return bytesRead === 20 && header[18] === 2 && header[19] === 2;
+	} finally {
+		await handle.close();
+	}
+}
+
 /** Read every assistant message from the OpenCode database at `dbPath`. Missing file is "not installed". */
 export async function readOpenCode(dbPath: string, load: LoadSqlite = loadNodeSqlite): Promise<HarnessScan> {
 	if (!(await isFile(dbPath))) return emptyScan(false);
 	let rows: Record<string, unknown>[];
 	try {
 		const { DatabaseSync } = await load();
-		const db = new DatabaseSync(dbPath, { readOnly: true });
+		const target = (await isCheckpointedWal(dbPath)) ? `${pathToFileURL(dbPath).href}?mode=ro&immutable=1` : dbPath;
+		const db = new DatabaseSync(target, { readOnly: true });
 		try {
+			db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
 			rows = db.prepare(QUERY).all();
 		} finally {
 			db.close();
 		}
-	} catch {
+	} catch (error) {
 		// Deliberately drops the error text: SQLite messages can quote paths.
+		if (isBusy(error)) return emptyScan(true, ["opencode: database busy, skipped"]);
 		return emptyScan(true, ["opencode: database unreadable (missing node:sqlite or unexpected schema), skipped"]);
 	}
 	const calls: Call[] = [];
