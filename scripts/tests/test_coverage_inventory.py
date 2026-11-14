@@ -284,6 +284,34 @@ def test_removed_pending_package_still_needs_a_reclassification_per_file(tmp_pat
     check_inventory_ratchet(tmp_path, current, base, "HEAD")
 
 
+def test_reclassification_replacement_may_live_in_another_package(tmp_path: Path) -> None:
+    """Allow shared code to move across packages while staying measured.
+
+    Parameters:
+        tmp_path (Path): Disposable repository root.
+    Returns:
+        None: The cross-package replacement accounts for the lost base path.
+    Raises:
+        AssertionError: A move into another measured package is rejected.
+    """
+    base = scope_fixture(tmp_path)
+    current = base.model_copy(deep=True)
+    other = current.packages["example"].model_copy(deep=True)
+    other.root = "packages/other"
+    current.packages["other"] = other
+    (tmp_path / "packages/other/src").mkdir(parents=True)
+    (tmp_path / "packages/example/src/index.ts").rename(tmp_path / "packages/other/src/index.ts")
+    current.reclassifications = [
+        Reclassification(
+            package="example",
+            path="packages/example/src/index.ts",
+            replacement="packages/other/src/index.ts",
+            reason="Reviewed move of shared helper into another package.",
+        )
+    ]
+    check_inventory_ratchet(tmp_path, current, base, "HEAD")
+
+
 @pytest.mark.parametrize("invalid", ["duplicate", "stale", "replacement"])
 def test_invalid_reclassification_cannot_approve_loss(tmp_path: Path, invalid: str) -> None:
     """Reject ambiguous approvals and nonexistent replacement identities.
@@ -837,6 +865,23 @@ def test_swift_test_files_are_test_scope_but_other_swift_is_not() -> None:
     assert not is_test_path(Path("native/macos/agent_cursor.swift"))
     assert is_test_path(Path("native/linux/bridge-rs/tests/protocol_tests.rs"))
     assert not is_test_path(Path("native/linux/bridge-rs/src/lib.rs"))
+
+
+def test_shared_test_library_is_owned_code_not_a_test_tree() -> None:
+    """Keep `tests/lib/src` measurable although its path contains a `tests` directory.
+
+    Parameters:
+        None.
+    Returns:
+        None: Helper source is production scope; its own tests and other `tests/` trees are not.
+    Raises:
+        AssertionError: The shared library is classified as test scope or its tests are not.
+    """
+    assert not is_test_path(Path("tests/lib/src/clock.ts"))
+    assert is_test_path(Path("tests/lib/test/clock.test.ts"))
+    assert is_test_path(Path("tests/lib/test/fixtures/data.ts"))
+    assert is_test_path(Path("tests/fixtures/data.ts"))
+    assert is_test_path(Path("tests/other/src/x.ts"))
 
 
 def test_unmeasured_tree_is_tracked_and_reasoned(tmp_path: Path) -> None:

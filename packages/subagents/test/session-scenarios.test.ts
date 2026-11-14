@@ -2,8 +2,9 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AssistantMessageEventStream, type FauxResponseStep, getApiProvider, registerApiProvider } from "@earendil-works/pi-ai/compat";
+import { nextEvent, outcomes, text, toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it } from "vitest";
-import { answer, calls, nextEvent, notices, outcomes, ScenarioSession, spawn, text } from "./helpers/scenario-session.js";
+import { answer, notices, ScenarioSession, spawn } from "./helpers/scenario-session.js";
 
 let fixture: ScenarioSession;
 afterEach(async () => fixture?.dispose());
@@ -21,7 +22,7 @@ it("background child result is fetched through the session", async () => {
   const stream = fixture.holdStream(child);
   const hold = fixture.heldTool();
   const h = await fixture.start({ factories: [hold.factory] });
-  h.setResponses([calls(spawn("fetched")), calls({ name: "hold", args: {} }), () => calls({ name: "get_subagent_result", args: { agent_id: agentId(h) } }), answer("PARENT DONE")]);
+  h.setResponses([toolCalls(spawn("fetched")), toolCalls({ name: "hold", args: {} }), () => toolCalls({ name: "get_subagent_result", args: { agent_id: agentId(h) } }), answer("PARENT DONE")]);
   const turn = h.session.prompt("go");
   await hold.entered;
   await stream.entered;
@@ -40,18 +41,18 @@ it("background child result is fetched through the session", async () => {
 it("running child receives steer after held tool", async () => {
   fixture = new ScenarioSession();
   const hold = fixture.heldTool();
-  fixture.physical("kid", "child", [calls({ name: "hold", args: {} }), context => answer(`USERS ${context.messages.filter(m => m.role === "user").map(text).join(" | ")}`)]);
+  fixture.physical("kid", "child", [toolCalls({ name: "hold", args: {} }), context => answer(`USERS ${context.messages.filter(m => m.role === "user").map(text).join(" | ")}`)]);
   const h = await fixture.start();
-  h.setResponses([calls(spawn("steered")), answer("SPAWNED")]);
+  h.setResponses([toolCalls(spawn("steered")), answer("SPAWNED")]);
   await h.session.prompt("spawn");
   await hold.entered;
-  h.setResponses([calls({ name: "steer_subagent", args: { agent_id: agentId(h), message: "PIVOT 3x" } }), answer("STEERED")]);
+  h.setResponses([toolCalls({ name: "steer_subagent", args: { agent_id: agentId(h), message: "PIVOT 3x" } }), answer("STEERED")]);
   await h.session.prompt("steer");
   expect(outcomes(h, "steer_subagent")[0]?.text).toContain("Steering message sent to agent");
   const completed = fixture.completion();
   hold.release();
   await completed;
-  h.setResponses([calls({ name: "get_subagent_result", args: { agent_id: agentId(h), wait: true } }), answer("PARENT DONE")]);
+  h.setResponses([toolCalls({ name: "get_subagent_result", args: { agent_id: agentId(h), wait: true } }), answer("PARENT DONE")]);
   await h.session.prompt("fetch");
   expect(outcomes(h, "get_subagent_result")[0]?.text).toContain("USERS work | PIVOT 3x");
 });
@@ -62,19 +63,19 @@ it("queued child receives steer when slot opens", async () => {
   const stream = fixture.holdStream(first);
   fixture.physical("kidb", "child", [context => answer(`USERS ${context.messages.filter(m => m.role === "user").map(text).join(" | ")}`)]);
   const h = await fixture.start();
-  h.setResponses([calls(spawn("blocker", { model: "kida/child" }), spawn("queued", { model: "kidb/child" })), answer("SPAWNED")]);
+  h.setResponses([toolCalls(spawn("blocker", { model: "kida/child" }), spawn("queued", { model: "kidb/child" })), answer("SPAWNED")]);
   await h.session.prompt("spawn");
   await stream.entered;
   expect(outcomes(h, "Agent")[1]?.text.toLowerCase()).toContain("queued");
   const id = agentId(h, 1);
-  h.setResponses([calls({ name: "steer_subagent", args: { agent_id: id, message: "PIVOT 4q" } }), answer("STEERED")]);
+  h.setResponses([toolCalls({ name: "steer_subagent", args: { agent_id: id, message: "PIVOT 4q" } }), answer("STEERED")]);
   await h.session.prompt("steer");
   const [steered] = outcomes(h, "steer_subagent");
   expect(steered?.isError).toBe(false);
   expect(steered?.text).not.toContain("not running");
   // A waiting fetch crosses the real queued startGate; no queue polling is needed.
   const fetching = nextEvent(h, e => e.type === "tool_execution_start" && e.toolName === "get_subagent_result");
-  h.setResponses([calls({ name: "get_subagent_result", args: { agent_id: id, wait: true } }), answer("PARENT DONE")]);
+  h.setResponses([toolCalls({ name: "get_subagent_result", args: { agent_id: id, wait: true } }), answer("PARENT DONE")]);
   const turn = h.session.prompt("fetch");
   await fetching;
   stream.release();
@@ -89,14 +90,14 @@ it("zero consumed TTL from env is wired through session sweep", async () => {
     fixture = new ScenarioSession();
     fixture.physical("kid", "child", [answer("CHILD RESULT 5")]);
     const h = await fixture.start();
-    h.setResponses([calls(spawn("evicted")), () => calls({ name: "get_subagent_result", args: { agent_id: agentId(h), wait: true } }), answer("FETCHED")]);
+    h.setResponses([toolCalls(spawn("evicted")), () => toolCalls({ name: "get_subagent_result", args: { agent_id: agentId(h), wait: true } }), answer("FETCHED")]);
     await h.session.prompt("go");
     const id = agentId(h);
     expect(outcomes(h, "get_subagent_result")[0]?.text).toContain("CHILD RESULT 5");
     fixture.clock.advance(999);
     expect(fixture.record(id).status).toBe("completed");
     fixture.clock.advance(1);
-    h.setResponses([calls({ name: "get_subagent_result", args: { agent_id: id } }, { name: "steer_subagent", args: { agent_id: id, message: "hello" } }), answer("PARENT DONE")]);
+    h.setResponses([toolCalls({ name: "get_subagent_result", args: { agent_id: id } }, { name: "steer_subagent", args: { agent_id: id, message: "hello" } }), answer("PARENT DONE")]);
     await h.session.prompt("late");
     for (const name of ["get_subagent_result", "steer_subagent"]) {
       const late = outcomes(h, name).at(-1)?.text;
@@ -125,7 +126,7 @@ async function evictedChild(rememberAgents: boolean, childSteps: FauxResponseSte
   fixture = new ScenarioSession({ rememberAgents, outputTranscript: false, agentModels: { "*": "kid/child" } });
   fixture.physical("kid", "child", childSteps);
   const h = await fixture.start();
-  h.setResponses([calls(spawn("evicted")), () => calls({ name: "get_subagent_result", args: { agent_id: agentId(h), wait: true } }), answer("FETCHED")]);
+  h.setResponses([toolCalls(spawn("evicted")), () => toolCalls({ name: "get_subagent_result", args: { agent_id: agentId(h), wait: true } }), answer("FETCHED")]);
   await h.session.prompt("go");
   const id = agentId(h);
   expect(outcomes(h, "get_subagent_result")[0]?.text).toContain("FIRST 330");
@@ -138,7 +139,7 @@ async function evictedChild(rememberAgents: boolean, childSteps: FauxResponseSte
 
 /** One parent turn that resumes `id` through the real Agent tool; returns its result text. */
 async function resumeOnce(h: Awaited<ReturnType<ScenarioSession["start"]>>, id: string) {
-  h.setResponses([calls({ name: "Agent", args: { subagent_type: "general-purpose", description: "again", prompt: "MORE 330", resume: id } }), answer("RESUMED")]);
+  h.setResponses([toolCalls({ name: "Agent", args: { subagent_type: "general-purpose", description: "again", prompt: "MORE 330", resume: id } }), answer("RESUMED")]);
   await h.session.prompt("resume");
   return outcomes(h, "Agent").at(-1)?.text ?? "";
 }
@@ -151,7 +152,7 @@ it("resume reopens an evicted agent's conversation (#330)", () => withZeroConsum
   const next = resumed.match(/Agent ID: (\S+)/)?.[1];
   expect(next).toBeTruthy();
   await completed;
-  h.setResponses([calls({ name: "get_subagent_result", args: { agent_id: next, wait: true } }), answer("PARENT DONE")]);
+  h.setResponses([toolCalls({ name: "get_subagent_result", args: { agent_id: next, wait: true } }), answer("PARENT DONE")]);
   await h.session.prompt("fetch");
   // The child's second turn saw its first prompt, so this is the same conversation, not a fresh agent.
   expect(outcomes(h, "get_subagent_result").at(-1)?.text).toContain("USERS work | MORE 330");
@@ -181,7 +182,7 @@ it("coalesced notice reaches next provider request after turn_end", async () => 
   const hold = fixture.heldTool();
   const h = await fixture.start({ factories: [hold.factory] });
   let echoed = "";
-  h.setResponses([calls(spawn("alpha", { model: "kida/child" }), spawn("beta", { model: "kidb/child" })), calls({ name: "hold", args: {} }), context => {
+  h.setResponses([toolCalls(spawn("alpha", { model: "kida/child" }), spawn("beta", { model: "kidb/child" })), toolCalls({ name: "hold", args: {} }), context => {
     echoed = `ECHO ${text(context.messages.findLast(m => m.role !== "assistant"))}`;
     return answer(echoed);
   }]);
@@ -218,7 +219,7 @@ it("waiting fetch suppresses completion notice", async () => {
   const child = fixture.physical("kid", "child", [answer("CHILD RESULT 7")]);
   const stream = fixture.holdStream(child);
   const h = await fixture.start();
-  h.setResponses([calls(spawn("waited")), () => calls({ name: "get_subagent_result", args: { agent_id: agentId(h), wait: true } }), answer("PARENT DONE")]);
+  h.setResponses([toolCalls(spawn("waited")), () => toolCalls({ name: "get_subagent_result", args: { agent_id: agentId(h), wait: true } }), answer("PARENT DONE")]);
   const fetching = nextEvent(h, e => e.type === "tool_execution_start" && e.toolName === "get_subagent_result");
   const turn = h.session.prompt("go");
   await fetching;
@@ -240,7 +241,7 @@ it("dispatch ranks only enabled fuzzy candidates", async () => {
   for (const [provider, id] of Object.entries({ ...enabled, ...disabled })) fixture.physical(provider, id, [answer(`ANSWERED BY ${provider}/${id}`)]);
   const h = await fixture.start();
   writeFileSync(join(fixture.agentDir, "settings.json"), JSON.stringify({ enabledModels: [`${h.getModel().provider}/${h.getModel().id}`, ...Object.entries(enabled).map(([p, id]) => `${p}/${id}`)] }));
-  h.setResponses([calls(spawn("opus", { model: "opus", run_in_background: false })), calls(spawn("sonnet", { model: "sonnet", run_in_background: false })), calls(spawn("gpt", { model: "gpt-6", run_in_background: false })), answer("PARENT DONE")]);
+  h.setResponses([toolCalls(spawn("opus", { model: "opus", run_in_background: false })), toolCalls(spawn("sonnet", { model: "sonnet", run_in_background: false })), toolCalls(spawn("gpt", { model: "gpt-6", run_in_background: false })), answer("PARENT DONE")]);
   await h.session.prompt("go");
   expect(outcomes(h, "Agent")).toHaveLength(3);
   for (const [i, expected] of ["fopus55/claude-opus-5-5", "fsonnet55/claude-sonnet-5-5", "fgpt61/gpt-6.1-sol"].entries()) expect(outcomes(h, "Agent")[i]?.text).toContain(`ANSWERED BY ${expected}`);
@@ -253,7 +254,7 @@ it("dispatch applies all five model precedence levels", async () => {
   for (const name of ["pinned", "pinned-star"]) writeFileSync(join(fixture.agentDir, "agents", `${name}.md`), `---\nname: ${name}\ndescription: Harness agent pinned to a model\nmodel: pfile/child\ntools: read\n---\nAnswer.\n`);
   for (const p of ["pparam", "ptype", "pstar", "pfile"]) fixture.physical(p, "child", [answer(`ANSWERED BY ${p}`)]);
   const h = await fixture.start();
-  const mapped: FauxResponseStep[] = [calls(spawn("param", { model: "pparam/child", subagent_type: "pinned", run_in_background: false })), calls(spawn("type", { model: undefined, subagent_type: "pinned", run_in_background: false })), calls(spawn("star", { model: undefined, subagent_type: "pinned-star", run_in_background: false })), answer("PARENT DONE")];
+  const mapped: FauxResponseStep[] = [toolCalls(spawn("param", { model: "pparam/child", subagent_type: "pinned", run_in_background: false })), toolCalls(spawn("type", { model: undefined, subagent_type: "pinned", run_in_background: false })), toolCalls(spawn("star", { model: undefined, subagent_type: "pinned-star", run_in_background: false })), answer("PARENT DONE")];
   h.setResponses(mapped);
   await h.session.prompt("mapped");
   expect(outcomes(h, "Agent")).toHaveLength(3);
@@ -262,7 +263,7 @@ it("dispatch applies all five model precedence levels", async () => {
   fixture.settings({});
   await h.session.reload();
   fixture.restoreProviders(h);
-  h.setResponses([calls(spawn("file", { model: undefined, subagent_type: "pinned", run_in_background: false })), calls(spawn("parent", { model: undefined, run_in_background: false })), answer("ANSWERED BY faux"), answer("PARENT DONE")]);
+  h.setResponses([toolCalls(spawn("file", { model: undefined, subagent_type: "pinned", run_in_background: false })), toolCalls(spawn("parent", { model: undefined, run_in_background: false })), answer("ANSWERED BY faux"), answer("PARENT DONE")]);
   await h.session.prompt("unmapped");
   expect(outcomes(h, "Agent")).toHaveLength(5);
   expect(outcomes(h, "Agent")[3]?.text).toContain("ANSWERED BY pfile");
@@ -271,9 +272,9 @@ it("dispatch applies all five model precedence levels", async () => {
 
 it("child workflow stand-in refuses with reason", async () => {
   fixture = new ScenarioSession({ maxSubagentDepth: 2 });
-  fixture.physical("kid", "child", [calls({ name: "SubagentWorkflow", args: { script: "export const meta = { name: 'x', description: 'x' }" } }), context => answer(`REPORT ${context.messages.filter(m => m.role === "toolResult").map(text).join("\n")}`)]);
+  fixture.physical("kid", "child", [toolCalls({ name: "SubagentWorkflow", args: { script: "export const meta = { name: 'x', description: 'x' }" } }), context => answer(`REPORT ${context.messages.filter(m => m.role === "toolResult").map(text).join("\n")}`)]);
   const h = await fixture.start();
-  h.setResponses([calls(spawn("nester", { run_in_background: false })), answer("PARENT DONE")]);
+  h.setResponses([toolCalls(spawn("nester", { run_in_background: false })), answer("PARENT DONE")]);
   await h.session.prompt("go");
   expect(outcomes(h, "Agent")).toHaveLength(1);
   const report = outcomes(h, "Agent")[0]?.text;
@@ -302,7 +303,7 @@ it.each(["throw", "reject"] as const)("held stream terminates a %s response with
   }, fixture.root);
   const stream = fixture.holdStream(child);
   const h = await fixture.start();
-  h.setResponses([calls(spawn("rejected", { run_in_background: false })), answer("PARENT DONE")]);
+  h.setResponses([toolCalls(spawn("rejected", { run_in_background: false })), answer("PARENT DONE")]);
   const turn = h.session.prompt("go");
   await stream.entered;
   stream.release();
@@ -316,7 +317,7 @@ it("absent admission RPC admits physical child", async () => {
   fixture = new ScenarioSession();
   const child = fixture.physical("spike-b", "terra-b", [answer("ANSWERED on spike-b")]);
   const h = await fixture.start({ noRouter: true });
-  h.setResponses([calls(spawn("physical", { model: "spike-b/terra-b", run_in_background: false })), answer("DRIVER DONE")]);
+  h.setResponses([toolCalls(spawn("physical", { model: "spike-b/terra-b", run_in_background: false })), answer("DRIVER DONE")]);
   const turn = h.session.prompt("go");
   await fixture.admission.promise;
   fixture.clock.advance(99);
@@ -339,7 +340,7 @@ it("tells the parent when an unread agent is reaped, not only on a later lookup 
     fixture = new ScenarioSession({ notificationResultChars: 0 });
     fixture.physical("kid", "child", [answer("CHILD RESULT 330")]);
     const h = await fixture.start();
-    h.setResponses([calls(spawn("forgotten")), answer("SPAWNED"), answer("NOTICE SEEN")]);
+    h.setResponses([toolCalls(spawn("forgotten")), answer("SPAWNED"), answer("NOTICE SEEN")]);
     const completed = fixture.completion();
     await h.session.prompt("go");
     const id = agentId(h);
@@ -375,7 +376,7 @@ it("does not call a failure the parent was already told about never read (#330)"
     if (!transport) throw new Error("Missing child transport");
     registerApiProvider({ ...transport, streamSimple: () => { throw new Error("BROKEN CHILD 330"); } }, fixture.root);
     const h = await fixture.start();
-    h.setResponses([calls(spawn("failing")), answer("SPAWNED"), answer("NOTICE SEEN")]);
+    h.setResponses([toolCalls(spawn("failing")), answer("SPAWNED"), answer("NOTICE SEEN")]);
     const completed = new Promise<void>(resolve => {
       const off = fixture.pi!.events.on("subagents:failed", () => { off(); resolve(); });
     });

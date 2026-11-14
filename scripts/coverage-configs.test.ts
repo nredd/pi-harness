@@ -134,6 +134,13 @@ const PRODUCERS: Producer[] = [
 		load: () => import("../integration/inprocess/vitest.config.ts"),
 	},
 	{
+		config: "tests/lib/vitest.config.ts",
+		policy: "test-lib",
+		provider: "v8",
+		reportsDirectory: "coverage/primary",
+		load: () => import("../tests/lib/vitest.config.ts"),
+	},
+	{
 		config: "integration/probes/vitest.config.ts",
 		policy: "probes",
 		provider: "v8",

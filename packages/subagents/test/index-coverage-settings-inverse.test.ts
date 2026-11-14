@@ -4,11 +4,11 @@ import { join } from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { deferred } from "@nredd/pi-test-lib/deferred";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSubagentsExtension } from "../src/index.js";
 import { type BootedPi, ctx, type Hermetic, hermeticDir, makePi, startSession } from "./helpers/boot-extension.js";
-import { FakeClock } from "./helpers/fake-clock.js";
-import { barrier } from "./helpers/scenario-session.js";
 
 type Component = { render(width: number): string[]; handleInput(data: string): void };
 type Factory = (tui: unknown, theme: unknown, keys: unknown, done: (value: string | undefined) => void) => Component;
@@ -70,7 +70,7 @@ describe("settings dialog current values", () => {
   });
 
   it.each([["Scheduling", 8], ["Workflows", 9]] as const)("keeps %s on when overlapping dialogs both enable it", async (label, row) => {
-    const ready = barrier();
+    const ready = deferred();
     const dialogs: Component[] = [];
     let menus = 0;
     context.ui.select = vi.fn(async () => menus++ < 2 ? "Settings" : undefined);

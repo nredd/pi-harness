@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig } from "../../src/config.ts";
 import {
@@ -9,7 +10,7 @@ import {
 	TOOL_NAMES,
 } from "../../src/monitor/index.ts";
 import { psInfo, rootDir, writePidfile } from "../../src/monitor/pidfiles.ts";
-import { ControlledProcesses, FakeClock } from "../scenarios/support.ts";
+import { ControlledProcesses } from "../fixtures/session.ts";
 import { alive, cleanupProcs, deadPid, spawnSleeper, tempDir, waitFor } from "./helpers.ts";
 import { STAY } from "./stay.ts";
 

@@ -1,10 +1,10 @@
 /** Real Markdown, injected time, and visible fullscreen navigation outcomes. */
 import type { AgentSession, AgentSessionEventListener } from "@earendil-works/pi-coding-agent";
 import { getCapabilities, ScrollView, setCapabilities, stripTerminalSequences, type TUI } from "@earendil-works/pi-tui";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentRecord } from "../src/types.js";
 import { ConversationViewer } from "../src/ui/conversation-viewer.js";
-import { FakeClock } from "./helpers/fake-clock.js";
 
 /** No SDK theme initialization: the embedded viewer must provide its own theme. */
 function fixture(messages: unknown[], fullscreen = false, streamingMessage?: unknown) {

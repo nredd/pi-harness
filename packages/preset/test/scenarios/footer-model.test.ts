@@ -3,9 +3,11 @@ import { type ExtensionFactory, type ModelRouteContext, SessionManager } from "@
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
 import type { InteractiveHarness } from "@earendil-works/pi-coding-agent/testing/interactive";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { deferred } from "@nredd/pi-test-lib/deferred";
+import { WIDTHS } from "@nredd/pi-test-lib/terminal";
 import { Type } from "typebox";
 import { afterEach, expect, it } from "vitest";
-import { deferred, FooterFixture, WIDTHS } from "./support.ts";
+import { FooterFixture } from "../fixtures/footer.ts";
 
 let fixture: FooterFixture;
 afterEach(async () => fixture?.dispose());

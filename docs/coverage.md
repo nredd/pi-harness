@@ -586,7 +586,8 @@ Use `signal: "owned"` for production membership; compatibility subsets require t
 signal entry when they lose membership too. A measured package can never be removed; a pending one
 (no signals, so no budget) can, once every file it owned has an entry here, e.g. `probe-boundaries`
 in #377. For a deletion or genuine role change, omit
-`replacement` (or use null). A replacement must exist in the current inventory for that scope.
+`replacement` (or use null). A replacement must exist in the current inventory for that signal, in any
+package, so shared code may move across packages.
 Entries name exact files, not waiver globs. Old historical entries cannot authorize a new loss;
 duplicate, unrelated or invalid new entries fail. Reclassification never permits budget increases
 or an unsupported exclusion category. Review it as an explicit source-accounting change, not as a
@@ -672,11 +673,12 @@ tests cover the branch but cannot fail without it. Measured on darwin; hosted CI
 
 `inprocess` is `enforced` at 0/0 lines/functions on darwin and linux for both `primary` and `bun`
 since #376, with nothing excluded. Its inventory is every fixture module the suites run:
-`support.ts`, `goal-support.ts`, `native-timers.ts`, `agents-support.ts`, `todo-support.ts` and
-`verification/home-guard.ts`. The first two `test-helper` exclusions and the `home-guard.ts`
-verification-helper entry are gone. `verification/home-setup.ts` stays a verification helper:
+`support.ts`, `goal-support.ts`, `native-timers.ts`, `agents-support.ts` and `todo-support.ts`. The
+HOME guard moved to `tests/lib/src/home-guard.ts` (#864, `test-lib` in the policy, 0/0/0/0 on both
+signals from its own tests). The first two `test-helper` exclusions and the `home-guard.ts`
+verification-helper entry are gone. `tests/lib/src/home-setup.ts` stays a verification helper:
 Vitest hard-excludes a config's own `setupFiles` from coverage, so it is now a one-call entry and the
-guard it installs (`installHomeGuard`) is measured in `home-guard.ts`. Before #376, main `f2d607eb`
+guard it installs (`installHomeGuard`) is measured in `tests/lib/src/home-guard.ts`. Before #376, main `f2d607eb`
 measured primary 15 / 4 darwin, 25 / 8 linux and Bun 17 / 4, 27 / 8 (run `41781117332`); the Linux
 delta was the macOS-only `caffeinate` teardown in `support.ts`. `stopWake()` and
 `isolateStackHome()` now take an injected `Deadline` and wake spawner, so `support.test.ts` drives

@@ -5,7 +5,7 @@ import type { Profile } from "../src/config.js";
 import { ExhaustionTracker } from "../src/exhaustion.js";
 import { type RouteEnv, Router } from "../src/router.js";
 import type { UsageSnapshot } from "../src/usage.js";
-import { CachedUsage, Clock } from "./scenarios/support.js";
+import { CachedUsage, Clock } from "./fixtures/router.js";
 
 /** An offline normalized observation, never a provider payload or token conversion. */
 export interface ReplayFrame {

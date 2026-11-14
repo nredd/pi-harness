@@ -18,13 +18,13 @@ vi.mock("../src/agent-runner.js", async () => {
   return { ...actual, runAgent: vi.fn(), resumeAgent: vi.fn() };
 });
 
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import { registerAgents } from "../src/agent-types.js";
 import { NOTIFICATION_HOLD_MS } from "../src/completion-outbox.js";
 import { setAgentModels } from "../src/model-resolver.js";
 import { ADMIT_CHANNEL } from "../src/quota-admission.js";
 import { flush, makePi, startSession, textOf } from "./helpers/boot-extension.js";
-import { FakeClock } from "./helpers/fake-clock.js";
 import subagentsExtension, { createSubagentsExtension } from "./helpers/home-extension.js";
 import { runnerResolution } from "./helpers/runner-resolution.js";
 

@@ -77,6 +77,8 @@ for report in "$WSL_HOST_WORKSPACE"/packages/*/coverage/*/lcov.info \
   "$WSL_HOST_WORKSPACE"/packages/*/coverage/*/coverage-summary.json \
   "$WSL_HOST_WORKSPACE"/integration/inprocess/coverage/*/lcov.info \
   "$WSL_HOST_WORKSPACE"/integration/inprocess/coverage/*/coverage-summary.json \
+  "$WSL_HOST_WORKSPACE"/tests/lib/coverage/*/lcov.info \
+  "$WSL_HOST_WORKSPACE"/tests/lib/coverage/*/coverage-summary.json \
   "$WSL_HOST_WORKSPACE"/integration/probes/coverage/*/lcov.info \
   "$WSL_HOST_WORKSPACE"/integration/probes/coverage/*/coverage-summary.json \
   "$WSL_HOST_WORKSPACE"/integration/providers/coverage/*/lcov.info \
@@ -90,6 +92,8 @@ for report in "$worktree"/packages/*/coverage/*/lcov.info \
   "$worktree"/packages/*/coverage/*/coverage-summary.json \
   "$worktree"/integration/inprocess/coverage/*/lcov.info \
   "$worktree"/integration/inprocess/coverage/*/coverage-summary.json \
+  "$worktree"/tests/lib/coverage/*/lcov.info \
+  "$worktree"/tests/lib/coverage/*/coverage-summary.json \
   "$worktree"/integration/probes/coverage/*/lcov.info \
   "$worktree"/integration/probes/coverage/*/coverage-summary.json \
   "$worktree"/integration/providers/coverage/*/lcov.info \

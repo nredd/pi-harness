@@ -9,61 +9,11 @@ import {
 	type InteractiveHarness,
 	type InteractiveHarnessOptions,
 } from "@earendil-works/pi-coding-agent/testing/interactive";
-import { createExpandedFooter, type FooterClock, type TimerHandle } from "../../extensions/expanded-footer.ts";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { deferred } from "@nredd/pi-test-lib/deferred";
+import { STATUS } from "@nredd/pi-test-lib/terminal";
+import { createExpandedFooter } from "../../extensions/expanded-footer.ts";
 import { USAGE_CHANNEL } from "../../lib/footer-quota.ts";
-
-export const STATUS = "STATUS-LINE-OK";
-export const WIDTHS = [60, 80, 120, 160, 200, 240, 320];
-
-/** Advancing runs production callbacks in deadline/insertion order, never wall-clock sleeps. */
-export class FakeClock implements FooterClock {
-	private time = Date.parse("2026-10-19T12:00:00Z");
-	private nextId = 0;
-	private timers = new Map<number, { at: number; interval?: number; callback: () => void }>();
-	readonly fired: number[] = [];
-	now(): number {
-		return this.time;
-	}
-
-	setTimeout(callback: () => void, ms: number): TimerHandle {
-		return this.schedule(callback, ms);
-	}
-
-	setInterval(callback: () => void, ms: number): TimerHandle {
-		return this.schedule(callback, ms, ms);
-	}
-
-	/** Live timers prove shutdown and one-shot expiry leave no scheduling behind. */
-	get pending(): number {
-		return this.timers.size;
-	}
-
-	/** Execute due callbacks, including rearming/cancellation, on this single clock. */
-	advance(ms: number): void {
-		const end = this.time + ms;
-		for (;;) {
-			const due = [...this.timers].filter(([, timer]) => timer.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
-			if (!due) break;
-			const [id, timer] = due;
-			this.time = timer.at;
-			if (timer.interval === undefined) this.timers.delete(id);
-			else timer.at += timer.interval;
-			this.fired.push(id);
-			timer.callback();
-		}
-		this.time = end;
-	}
-
-	private schedule(callback: () => void, ms: number, interval?: number): TimerHandle {
-		const id = ++this.nextId;
-		this.timers.set(id, { at: this.time + ms, interval, callback });
-		return {
-			cancel: () => {
-				this.timers.delete(id);
-			},
-		};
-	}
-}
 
 /** Router-shaped usage snapshot, with provider-scoped names and unknown-provider validation. */
 export function snapshot(
@@ -206,7 +156,7 @@ export const DROP_SWITCH: Turn[] = [
 /** Caller-owned scratch history and one real interactive host. */
 export class FooterFixture {
 	readonly root = realpathSync(mkdtempSync(join(tmpdir(), "pi-footer-")));
-	readonly clock = new FakeClock();
+	readonly clock = new FakeClock(Date.parse("2026-10-19T12:00:00Z"));
 	readonly usage = new UsageBus(this.clock);
 	host: InteractiveHarness | undefined;
 
@@ -319,13 +269,4 @@ export function providerSegment(host: InteractiveHarness, provider: "anthropic" 
 /** Displayed window values, not poller internals. */
 export function values(host: InteractiveHarness, provider: "anthropic" | "openai-codex"): string[] {
 	return [...providerSegment(host, provider).matchAll(/(\d+%|--)/g)].map((match) => match[0]);
-}
-
-/** A promise gate, used for pending real faux requests with no elapsed wall time. */
-export function deferred<T>() {
-	let resolve: (value: T) => void = () => {};
-	const promise = new Promise<T>((done) => {
-		resolve = done;
-	});
-	return { promise, resolve: (value: T) => resolve(value) };
 }

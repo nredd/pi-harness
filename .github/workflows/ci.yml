@@ -300,6 +300,8 @@ jobs:
             packages/*/coverage/**/coverage-summary.json
             integration/inprocess/coverage/**/lcov.info
             integration/inprocess/coverage/**/coverage-summary.json
+            tests/lib/coverage/**/lcov.info
+            tests/lib/coverage/**/coverage-summary.json
             integration/probes/coverage/**/lcov.info
             integration/probes/coverage/**/coverage-summary.json
             integration/providers/coverage/**/lcov.info
@@ -535,6 +537,8 @@ jobs:
             packages/*/coverage/**/coverage-summary.json
             integration/inprocess/coverage/**/lcov.info
             integration/inprocess/coverage/**/coverage-summary.json
+            tests/lib/coverage/**/lcov.info
+            tests/lib/coverage/**/coverage-summary.json
             integration/probes/coverage/**/lcov.info
             integration/probes/coverage/**/coverage-summary.json
             integration/providers/coverage/**/lcov.info
