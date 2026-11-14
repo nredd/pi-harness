@@ -340,7 +340,7 @@ def test_async_helper_missing_host_report_fails(tmp_path: Path, runner_os: str, 
 
 
 def test_subagents_runtime_scripts_are_measured_at_zero() -> None:
-    """Keep both complete runtime scripts measured by a mandatory zero-floor producer.
+    """Keep the complete runtime script measured by a mandatory zero-floor producer.
 
     Parameters:
         None.
@@ -354,7 +354,7 @@ def test_subagents_runtime_scripts_are_measured_at_zero() -> None:
     assert package.status == "measured"
     assert package.goal == "100-percent"
     assert package.root == "packages/subagents"
-    assert package.owned == ["scripts/build-runtime.mjs", "scripts/check-runtime.mjs"]
+    assert package.owned == ["scripts/build-runtime.mjs"]
     assert not package.exclusions
     assert not any(
         helper.path.startswith("packages/subagents/scripts/") for helper in cfg.verification_helpers

@@ -16,8 +16,8 @@ the source repositories is recorded here.
 | `integration` | `pi-harness-e2e` | `e4a0123f14d0233452d4873f5579bbd21228c6b5` | `4d15e8d33e761a13236fb3bfc67202d7910fa2ca` | none | 108 |
 | `benchmarks/comparison` | `pi-harness-benchmark` | `c926ea2133967f798e006f04a30efc2da03d82a1` | `b8d76ecb6229faea445df1f0bc162588b7f8b5ef` | none | 70 |
 
-`packages/session-kit/dist/pi-stats-export.mjs` is tracked in the source and imported as is;
-`npm run test` rebuilds it byte-identically (verified against the source commit).
+`packages/session-kit/dist/pi-stats-export.mjs` was imported as is and verified byte-identical against the source
+commit; since #866 it is gitignored build output (`npm run build`), and `npm run test` proves two builds match.
 
 ## Computer-use upstream sync
 

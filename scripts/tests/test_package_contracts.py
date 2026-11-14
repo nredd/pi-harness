@@ -1516,6 +1516,80 @@ def test_pack_without_allowlist_is_rejected(tmp_path: Path, sandbox: pc.Sandbox)
     assert "unexpected file 'tsconfig.json'" in problems
 
 
+def _build_fixture(tmp_path: Path, build: str) -> Path:
+    """Copy `dev-tools` and give it a `build` script, as a package with gitignored `dist/` has.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        build (str): Shell command for the `build` script.
+
+    Returns:
+        Path: The copied package directory.
+    """
+    source = tmp_path / "dev-tools"
+    shutil.copytree(
+        pc.REPO_ROOT / "packages" / "dev-tools", source, ignore=shutil.ignore_patterns("node_modules")
+    )
+    manifest = json.loads((source / "package.json").read_text())
+    manifest["files"] = [*manifest["files"], "dist"]
+    manifest["scripts"] = {**manifest.get("scripts", {}), "build": build}
+    (source / "package.json").write_text(json.dumps(manifest))
+    (tmp_path / "out").mkdir()
+    return source
+
+
+def test_pack_builds_before_packing(tmp_path: Path, sandbox: pc.Sandbox) -> None:
+    """`--ignore-scripts` skips `prepack`, so `pack` itself must build the gitignored `dist/`.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        sandbox (pc.Sandbox): Scrubbed environment.
+    """
+    source = _build_fixture(
+        tmp_path,
+        "node -e \"require('fs').mkdirSync('dist');require('fs').writeFileSync('dist/index.ts','x')\"",
+    )
+    assert not (source / "dist").exists()
+    artifact = pc.pack(DEV_TOOLS, tmp_path / "out", sandbox, source)
+    assert "dist/index.ts" in artifact.files
+
+
+def test_pack_rebuilds_after_imported_source_is_deleted(tmp_path: Path, sandbox: pc.Sandbox) -> None:
+    """Deleting an imported source must fail the next pack, not ship its old bundle.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        sandbox (pc.Sandbox): Scrubbed environment.
+    """
+    source = _build_fixture(
+        tmp_path,
+        "node -e \"const value=require('./src/imported.cjs');require('fs').mkdirSync('dist');"
+        "require('fs').writeFileSync('dist/index.ts',value)\"",
+    )
+    imported = source / "src" / "imported.cjs"
+    imported.write_text("module.exports = 'export const value = 1;';\n")
+    pc.pack(DEV_TOOLS, tmp_path / "out", sandbox, source)
+    (source / "dist" / "obsolete.js").write_text("stale")
+    artifact = pc.pack(DEV_TOOLS, tmp_path / "out", sandbox, source)
+    assert "dist/obsolete.js" not in artifact.files
+    imported.unlink()
+    with pytest.raises(pc.ContractError):
+        pc.pack(DEV_TOOLS, tmp_path / "out", sandbox, source)
+
+
+def test_pack_fails_when_the_build_fails(tmp_path: Path, sandbox: pc.Sandbox) -> None:
+    """A failed build must stop the pack rather than ship a package without its entry.
+
+    Parameters:
+        tmp_path (Path): Pytest temporary directory.
+        sandbox (pc.Sandbox): Scrubbed environment.
+    """
+    source = _build_fixture(tmp_path, 'node -e "process.exit(3)"')
+    with pytest.raises(pc.ContractError):
+        pc.pack(DEV_TOOLS, tmp_path / "out", sandbox, source)
+    assert not list((tmp_path / "out").iterdir())
+
+
 def test_install_alone_has_no_host_copy(tmp_path: Path, sandbox: pc.Sandbox) -> None:
     """A real tarball installs by itself: no host module, no lockfile extras.
 
