@@ -427,6 +427,42 @@ test("a path input's temporary identity never captures another input's registrat
 	]);
 });
 
+test("a path input keeps owning its MCP servers: update replaces, unregister removes", async () => {
+	let api: Parameters<ExtensionFactory>[0] | undefined;
+	let other: Parameters<ExtensionFactory>[0] | undefined;
+	const result = await createTestExtensionsResult(
+		[
+			{
+				path: "/pkg/index.ts",
+				factory: (pi) => {
+					api = pi;
+					pi.registerMcpServer("demo", { command: "first" });
+					pi.registerMcpServer("gone", { command: "first" });
+				},
+			},
+			{
+				name: "bystander",
+				factory: (pi) => {
+					other = pi;
+					pi.registerMcpServer("theirs", { command: "theirs" });
+				},
+			},
+		],
+		"/",
+	);
+	expect(result.runtime.mcpServers.list().map(({ name, extensionPath }) => [name, extensionPath])).toEqual([
+		["demo", "/pkg/index.ts"],
+		["gone", "/pkg/index.ts"],
+		["theirs", "<inline:bystander>"],
+	]);
+	api?.registerMcpServer("demo", { command: "second" });
+	expect(result.runtime.mcpServers.get("demo")?.config).toMatchObject({ command: "second" });
+	api?.unregisterMcpServer("gone");
+	expect(result.runtime.mcpServers.get("gone")).toBeUndefined();
+	other?.unregisterMcpServer("theirs");
+	expect(result.runtime.mcpServers.get("theirs")).toBeUndefined();
+});
+
 test("the default cwd is the process cwd, and a throwing factory rejects with its own error", async () => {
 	const boom = new Error("factory exploded");
 	await expect(

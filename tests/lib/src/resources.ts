@@ -8,8 +8,10 @@ import {
 	DefaultResourceLoader,
 	type Extension,
 	type ExtensionFactory,
+	type ExtensionRuntime,
 	type InlineExtension,
 	type LoadExtensionsResult,
+	type RegisteredMcpServer,
 	type ResourceLoader,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -41,12 +43,17 @@ function resolve(input: TestExtensionInput, index: number): Resolved {
 /** A registration queued during loading, owned by the extension whose path it names. */
 type Pending = { extensionPath: string };
 
+/** Everything an extension registered under its loading identity, snapshotted before repointing. */
+interface Owned {
+	pending: Pending[];
+	servers: RegisteredMcpServer[];
+}
+
 /**
  * Report `extension` as loaded from `path`, as the fork's loader did, including everything its
- * factory already registered under the inline name. MCP server ownership is the one thing not
- * repointed: the registry is not editable through the public types.
+ * factory already registered under the inline name, MCP servers included.
  */
-function repoint(extension: Extension, pending: Pending[], path: string): void {
+function repoint(extension: Extension, owned: Owned, path: string, runtime: ExtensionRuntime): void {
 	const sourceInfo = createSyntheticSourceInfo(path, { source: "local", baseDir: dirname(path) });
 	extension.path = path;
 	extension.resolvedPath = path;
@@ -54,7 +61,9 @@ function repoint(extension: Extension, pending: Pending[], path: string): void {
 	for (const tool of extension.tools.values()) tool.sourceInfo = sourceInfo;
 	for (const command of extension.commands.values()) command.sourceInfo = sourceInfo;
 	for (const owned of [...extension.flags.values(), ...extension.shortcuts.values()]) owned.extensionPath = path;
-	for (const registration of pending) registration.extensionPath = path;
+	for (const registration of owned.pending) registration.extensionPath = path;
+	// `register()` replaces in place, so registration order is kept.
+	for (const server of owned.servers) runtime.mcpServers.register({ ...server, extensionPath: path });
 }
 
 /**
@@ -114,13 +123,15 @@ export async function createTestExtensionsResult(
 			...result.runtime.pendingNativeProviderRegistrations,
 			...result.runtime.pendingVirtualModelRegistrations,
 		];
+		const servers = result.runtime.mcpServers.list();
 		const owned = result.extensions.map((extension) => ({
 			extension,
 			pending: queued.filter((entry) => entry.extensionPath === extension.path),
+			servers: servers.filter((server) => server.extensionPath === extension.path),
 		}));
-		for (const [index, { extension, pending }] of owned.entries()) {
+		for (const [index, { extension, ...mine }] of owned.entries()) {
 			const path = resolved[index]?.path;
-			if (path !== undefined) repoint(extension, pending, path);
+			if (path !== undefined) repoint(extension, mine, path, result.runtime);
 		}
 		return result;
 	} finally {
