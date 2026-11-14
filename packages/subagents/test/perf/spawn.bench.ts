@@ -28,7 +28,7 @@ import { runAgent } from "../../src/agent-runner.js";
 import { registerAgents } from "../../src/agent-types.js";
 import { loadCustomAgents } from "../../src/custom-agents.js";
 import subagentsExtension from "../../src/index.js";
-import { ctx, type Hermetic, hermeticDir, makePi } from "../helpers/boot-extension.js";
+import { bootPi, ctx, type Hermetic, hermeticDir } from "../helpers/boot-extension.js";
 
 /** A believable agent file: frontmatter to parse plus a body to read past. */
 function agentFile(i: number): string {
@@ -99,7 +99,7 @@ describe("Agent tool — background spawn", () => {
 
   /** A freshly activated extension, reading agent files from `globalRedirect`. */
   function bootAgentTool() {
-    const { pi, tools } = makePi();
+    const { pi, tools } = bootPi();
     subagentsExtension(pi);
     return tools.get("Agent");
   }

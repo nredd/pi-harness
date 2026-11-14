@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { chooseReadyPlanAction } from "../src/ready-plan-chooser.js";
-import { createCustomSelectorHarness, createMockContext } from "./support.js";
+import { createCustomSelectorHarness, createPlanContext } from "./support.js";
 
 test("ready plan chooser keeps the plan when Escape closes a narrow layout", async () => {
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "tui",
     hasUI: true,
     custom: async (factory: unknown) => {
@@ -22,7 +22,7 @@ test("ready plan chooser keeps the plan when Escape closes a narrow layout", asy
 });
 
 test("ready plan chooser navigates with every supported cursor key", async () => {
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "tui",
     hasUI: true,
     custom: async (factory: unknown) => {
@@ -40,7 +40,7 @@ test("ready plan chooser navigates with every supported cursor key", async () =>
 });
 
 test("ready plan chooser selects and activates a mouse cell", async () => {
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "tui",
     hasUI: true,
     custom: async (factory: unknown) => {
@@ -65,13 +65,13 @@ test("ready plan chooser selects and activates a mouse cell", async () => {
 });
 
 test("ready plan chooser is unavailable outside the interactive TUI", async () => {
-  const context = createMockContext({ mode: "rpc", hasUI: true });
+  const context = createPlanContext({ mode: "rpc", hasUI: true });
   assert.equal(await chooseReadyPlanAction(context.ctx), undefined);
 });
 
 test("ready plan chooser offers Edit plan and binds Ctrl+G to it", async () => {
   for (const keys of [["\u0007"], [...Array<string>(4).fill("tui.select.down"), "tui.select.confirm"]]) {
-    const context = createMockContext({
+    const context = createPlanContext({
       mode: "tui",
       hasUI: true,
       custom: async (factory: unknown) => {
@@ -86,7 +86,7 @@ test("ready plan chooser offers Edit plan and binds Ctrl+G to it", async () => {
 });
 
 test("ready plan chooser confirms the selected action with Space", async () => {
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "tui",
     hasUI: true,
     custom: async (factory: unknown) => {
@@ -101,7 +101,7 @@ test("ready plan chooser confirms the selected action with Space", async () => {
 });
 
 test("ready plan chooser ignores keys that are not bound to an action", async () => {
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "tui",
     hasUI: true,
     custom: async (factory: unknown) => {

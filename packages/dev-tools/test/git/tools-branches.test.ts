@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { registerGitTools } from "../../src/git/index.ts";
-import { createMockPi } from "../support.ts";
+import { createToolHost } from "../support.ts";
 
 const ENV = {
 	...process.env,
@@ -16,7 +16,7 @@ const ENV = {
 const sh = (cwd: string, args: string[], env: NodeJS.ProcessEnv = ENV): string =>
 	execFileSync("git", ["-c", "commit.gpgsign=false", ...args], { cwd, env, encoding: "utf8" }).trim();
 
-const mock = createMockPi();
+const mock = createToolHost();
 beforeAll(() => registerGitTools(mock.pi));
 const roots: string[] = [];
 const oldPath = process.env.PATH;

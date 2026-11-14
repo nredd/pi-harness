@@ -3,11 +3,11 @@
 Source: `juicesharp/rpiv-mono` release `54df50eea935fc9753edc300d5f23c5e28d906d7`
 (`@juicesharp/rpiv-todo@2.13.9`, subtree split `7903c76b`).
 
-`upstream/{pi,session,theme}.ts` are unchanged copies from
-`packages/test-utils/`, with the upstream MIT license; `upstream/manifest.ts` is a copy that also skips
-`vitest.config.ts` in its ship-manifest walk (the config is not shipped). The local barrel exports
-only those helpers used by this package. `rpiv-workflow` is a dev-only dependency
-for their type imports; no workflow code is loaded by the helpers.
+`upstream/{session,theme}.ts` are unchanged copies from `packages/test-utils/`, with the upstream MIT
+license. `upstream/manifest.ts` also skips `tests/` and `vitest.config.ts` in its ship-manifest walk;
+neither is shipped. The local barrel exports only those helpers used by this package. The `ExtensionAPI`
+and context doubles are no longer vendored: `todo-host.ts` presets the shared recording doubles from
+`@nredd/pi-test-lib/pi` (#865), which also dropped the `rpiv-workflow` type dependency.
 
 `vitest.config.ts` (built by `scripts/vitest-package.ts`) aliases the unpublished `@juicesharp/rpiv-test-utils` to this
 barrel. `setup.ts` preserves upstream's dynamic state/i18n reset and config
@@ -17,7 +17,7 @@ when its config is absent, the legacy fallback must use that same injected home.
 Tests never mutate `HOME` or `USERPROFILE`. `home-injection.test.ts` asserts zero
 real-home filesystem probes for both present and missing fallback configs. No
 upstream test assertions or tests are removed. Keep support/config files in dot paths so
-upstream's unchanged ship-manifest walker does not mistake them for production.
+the ship-manifest walker does not mistake them for production.
 
 Path audit: `config.ts` imports `homedir` for the call-time `loadConfig` default;
 its `XDG_CONFIG_HOME` read and `~/` expansion use the injected home. Both config

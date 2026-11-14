@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { registerGitTools } from "../../src/git/index.ts";
-import { createMockPi } from "../support.ts";
+import { createToolHost } from "../support.ts";
 
 const GIT_ENV = {
 	...process.env,
@@ -23,7 +23,7 @@ function sh(cwd: string, args: string[]): string {
 
 let repo: string;
 let remote: string;
-const mock = createMockPi();
+const mock = createToolHost();
 
 beforeAll(() => {
 	registerGitTools(mock.pi);

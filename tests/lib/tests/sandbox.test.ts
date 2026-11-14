@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { SANDBOX_PREFIX, sandboxAgentDir, sandboxConfigHome, sandboxTmpdir } from "../src/sandbox.ts";
 
-const NAMES = ["TMPDIR", "PI_TEST_REAL_TMPDIR", "PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME"] as const;
+const NAMES = ["TMPDIR", "PI_TEST_REAL_TMPDIR", "PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "XDG_STATE_HOME"] as const;
 let saved: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -21,8 +21,10 @@ afterEach(() => {
 test("tmpdir sandbox redirects TMPDIR, nests under the real root and restores", () => {
 	delete process.env.PI_TEST_REAL_TMPDIR;
 	delete process.env.TMPDIR;
+	delete process.env.XDG_STATE_HOME;
 	const real = realpathSync(tmpdir());
 	const outer = sandboxTmpdir();
+	expect(process.env.XDG_STATE_HOME).toBe(join(outer.sandbox, "state"));
 	expect(outer.realTmp).toBe(real);
 	expect(outer.sandbox.startsWith(join(outer.realTmp, SANDBOX_PREFIX))).toBe(true);
 	expect(process.env.TMPDIR).toBe(outer.sandbox);
@@ -36,6 +38,7 @@ test("tmpdir sandbox redirects TMPDIR, nests under the real root and restores", 
 	expect(existsSync(inner.sandbox)).toBe(false);
 	outer.restore();
 	expect(process.env.TMPDIR).toBeUndefined();
+	expect(process.env.XDG_STATE_HOME).toBeUndefined();
 	expect(process.env.PI_TEST_REAL_TMPDIR).toBeUndefined();
 	expect(existsSync(outer.sandbox)).toBe(false);
 });

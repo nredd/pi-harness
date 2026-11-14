@@ -1,6 +1,6 @@
-import { createMockCtx, createMockPi } from "@juicesharp/rpiv-test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import registerTodo from "./.test-support/home-fixtures.ts";
+import { createTodoCtx, createTodoPi } from "./tests/fixtures/todo-host.ts";
 import { __resetState } from "./todo.ts";
 import { PLAN_APPROVED_EVENT } from "./tool/types.ts";
 
@@ -11,7 +11,7 @@ const PLAN = "# T\n\n## Work\n- one\n";
 
 function setup(importOverlay?: () => Promise<OverlayModule>) {
 	const bus = new Map<string, Handler[]>();
-	const { pi, captured } = createMockPi({
+	const { pi, captured } = createTodoPi({
 		events: {
 			emit: vi.fn(),
 			on: vi.fn((channel: string, handler: Handler) => {
@@ -22,7 +22,7 @@ function setup(importOverlay?: () => Promise<OverlayModule>) {
 	} as never);
 	registerTodo(pi, importOverlay);
 	const handler = (name: string) => {
-		const found = captured.events.get(name)?.[0] as Handler | undefined;
+		const found = captured.handlers.get(name)?.[0] as Handler | undefined;
 		if (!found) throw new Error(`${name} not registered`);
 		return found;
 	};
@@ -64,7 +64,7 @@ describe("overlay refresh failures", () => {
 	it("logs a non-Error rejection by its string form and keeps going", async () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		const { handler, create } = setup(() => Promise.reject("plain failure"));
-		const ctx = createMockCtx({ hasUI: true, sessionId: "s1" });
+		const ctx = createTodoCtx({ hasUI: true, sessionId: "s1" });
 		await handler("session_start")({ reason: "startup" }, ctx);
 		await create(ctx);
 		await expect(handler("tool_execution_end")({ toolName: "todo", isError: false })).resolves.toBeUndefined();
@@ -81,7 +81,7 @@ describe("tool_execution_end", () => {
 	])("does not touch the overlay for %j", async (event) => {
 		const { importer } = fakeOverlay();
 		const { handler, create } = setup(importer);
-		const ctx = createMockCtx({ hasUI: true, sessionId: "s1" });
+		const ctx = createTodoCtx({ hasUI: true, sessionId: "s1" });
 		await handler("session_start")({ reason: "startup" }, ctx);
 		await create(ctx);
 		await handler("tool_execution_end")(event);
@@ -95,7 +95,7 @@ describe("plan approval in the foreground session", () => {
 	it("refreshes the overlay when an approval seeds the active session", async () => {
 		const { importer, instances } = fakeOverlay();
 		const { bus, handler } = setup(importer);
-		const ctx = createMockCtx({ hasUI: true, sessionId: "s1" });
+		const ctx = createTodoCtx({ hasUI: true, sessionId: "s1" });
 		await handler("session_start")({ reason: "startup" }, ctx);
 		expect(importer).not.toHaveBeenCalled();
 		for (const h of bus.get(PLAN_APPROVED_EVENT) ?? [])
@@ -108,8 +108,8 @@ describe("plan approval in the foreground session", () => {
 	it("does not refresh for an approval seeded into a session that is not the foreground", async () => {
 		const { importer } = fakeOverlay();
 		const { bus, handler } = setup(importer);
-		const foreground = createMockCtx({ hasUI: true, sessionId: "s1" });
-		const child = createMockCtx({ hasUI: false, sessionId: "child" });
+		const foreground = createTodoCtx({ hasUI: true, sessionId: "s1" });
+		const child = createTodoCtx({ hasUI: false, sessionId: "child" });
 		await handler("session_start")({ reason: "startup" }, foreground);
 		await handler("session_start")({ reason: "startup" }, child);
 		for (const h of bus.get(PLAN_APPROVED_EVENT) ?? [])
@@ -121,7 +121,7 @@ describe("plan approval in the foreground session", () => {
 describe("session_shutdown", () => {
 	it("rethrows a context failure that is not a stale-context error", async () => {
 		const { handler } = setup();
-		const ctx = createMockCtx({ sessionId: "s1" });
+		const ctx = createTodoCtx({ sessionId: "s1" });
 		Object.defineProperty(ctx, "sessionManager", {
 			get() {
 				throw new Error("disk on fire");
@@ -132,7 +132,7 @@ describe("session_shutdown", () => {
 
 	it("swallows a stale-context failure with nothing to tear down", async () => {
 		const { handler } = setup();
-		const ctx = createMockCtx({ sessionId: "s1" });
+		const ctx = createTodoCtx({ sessionId: "s1" });
 		Object.defineProperty(ctx, "sessionManager", {
 			get() {
 				throw new Error("ctx is stale after session replacement");

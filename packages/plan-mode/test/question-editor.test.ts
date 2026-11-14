@@ -4,11 +4,11 @@ import { Editor, type EditorComponent } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
 import { test } from "vitest";
 import { askPlanModeQuestions } from "../src/question-tool.js";
-import { createMockContext } from "./support.js";
+import { createPlanContext } from "./support.js";
 
 test("Plan questions honor the public custom editor factory without changing the main editor", async () => {
   const tui = createTuiHarness();
-  const ctx = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom }).ctx as ExtensionContext;
+  const ctx = createPlanContext({ mode: "tui", hasUI: true, custom: tui.custom }).ctx as ExtensionContext;
   let editor: EditorComponent | undefined;
   ctx.ui.getEditorComponent = () => (host, theme) => {
     editor = new Editor(host, theme);

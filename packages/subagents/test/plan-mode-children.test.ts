@@ -17,7 +17,7 @@ import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
 import { PLAN_MODE_STATE_QUERY, type PlanToolPolicy } from "../src/plan-mode-children.js";
 import { buildInvocationTags } from "../src/ui/agent-widget.js";
-import { ctx, type Hermetic, hermeticDir, makePi } from "./helpers/boot-extension.js";
+import { bootPi, ctx, type Hermetic, hermeticDir } from "./helpers/boot-extension.js";
 
 const BLOCK_WRITE: PlanToolPolicy = ({ toolName }) => (toolName === "write" ? "Plan blocks write" : undefined);
 
@@ -186,7 +186,7 @@ describe("an @handle mention while planning", () => {
 
   it("starts a restricted child", async () => {
     hermetic = hermeticDir({ settings: { outputTranscript: false, agentMentions: "direct" } });
-    const booted = makePi();
+    const booted = bootPi();
     booted.pi.events.emit = planBus(() => ({ version: 1, active: true, evaluate: BLOCK_WRITE })).emit;
     subagentsExtension(booted.pi);
     lifecycle = booted.lifecycle;

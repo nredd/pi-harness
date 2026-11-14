@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type Clock, realClock } from "../src/clock.js";
 import { SubagentScheduler } from "../src/schedule.js";
 import { ScheduleStore } from "../src/schedule-store.js";
+import { bootPi } from "./helpers/boot-extension.js";
 
 type FakeRecord = { status: string; promise: Promise<string>; resolve: () => void };
 
@@ -47,9 +48,6 @@ function makeFaithfulManager(initialStatus = "completed") {
   } as any;
 }
 
-function makePi() {
-  return { events: { emit: vi.fn() } } as any;
-}
 
 function makeCtx() {
   return {
@@ -113,7 +111,7 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
 
   it("one-shot job: real setTimeout fires, agent runs, store reflects success", async () => {
     const manager = makeFaithfulManager("completed");
-    const pi = makePi();
+    const pi = bootPi().pi;
     scheduler.start(pi, makeCtx(), manager, store);
 
     // Fire ~100ms in the future. detectSchedule normalizes "+100ms" — but our
@@ -144,7 +142,7 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
   // correctly rejected. This pins that the fixture's frozen `now` keeps test targets valid across a stall.
   it("pinned clock keeps one-shot targets valid across a test-process stall", async () => {
     const manager = makeFaithfulManager("completed");
-    scheduler.start(makePi(), makeCtx(), manager, store);
+    scheduler.start(bootPi().pi, makeCtx(), manager, store);
 
     const future = isoAfter(HEADROOM_MS);
     stall(HEADROOM_MS * 2.5);  // outlasts the headroom: a wall-clock `now` would call this past
@@ -161,7 +159,7 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
 
   it("one-shot job that errors: store records lastStatus error (regression — bug #1)", async () => {
     const manager = makeFaithfulManager("error");  // Agent terminates with error status
-    const pi = makePi();
+    const pi = bootPi().pi;
     scheduler.start(pi, makeCtx(), manager, store);
 
     const future = isoAfter(HEADROOM_MS);
@@ -182,7 +180,7 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
 
   it("interval job: fires repeatedly, runCount grows", async () => {
     const manager = makeFaithfulManager("completed");
-    const pi = makePi();
+    const pi = bootPi().pi;
     scheduler.start(pi, makeCtx(), manager, store);
 
     // 100ms interval — wait for ~3 fires
@@ -209,7 +207,7 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
 
   it("persistence: schedules survive re-instantiating the store on the same file", async () => {
     const manager = makeFaithfulManager("completed");
-    const pi = makePi();
+    const pi = bootPi().pi;
     scheduler.start(pi, makeCtx(), manager, store);
 
     const future = isoAfter(60_000);  // far enough not to fire
@@ -231,7 +229,7 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
 
   it("on-disk file shape: version=1 plus jobs array", async () => {
     const manager = makeFaithfulManager("completed");
-    const pi = makePi();
+    const pi = bootPi().pi;
     scheduler.start(pi, makeCtx(), manager, store);
 
     scheduler.addJob({
@@ -256,7 +254,7 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
 
   it("subagents:scheduled events fire across the lifecycle", async () => {
     const manager = makeFaithfulManager("completed");
-    const pi = makePi();
+    const pi = bootPi().pi;
     scheduler.start(pi, makeCtx(), manager, store);
 
     const future = isoAfter(HEADROOM_MS);

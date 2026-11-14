@@ -18,7 +18,7 @@ vi.mock("../src/mention-clone.js", () => ({ runMentionClone: vi.fn() }));
 import { resumeAgent, runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
 import { runMentionClone } from "../src/mention-clone.js";
-import { ctx, type Hermetic, hermeticDir, makePi } from "./helpers/boot-extension.js";
+import { bootPi, ctx, type Hermetic, hermeticDir } from "./helpers/boot-extension.js";
 
 let hermetic: Hermetic | undefined;
 let booted: Map<string, any> | undefined;
@@ -49,7 +49,7 @@ function fakeSession() {
 
 function boot(settings: Record<string, unknown> = {}) {
   hermetic = hermeticDir({ settings: { outputTranscript: false, ...settings } });
-  const b = makePi();
+  const b = bootPi();
   subagentsExtension(b.pi);
   booted = b.lifecycle;
   return b;

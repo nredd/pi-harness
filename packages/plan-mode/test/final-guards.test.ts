@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { deferred } from "@nredd/pi-test-lib/deferred";
 import { test } from "vitest";
 import planMode from "../src/plan-mode.js";
-import { createMockContext, createMockPi } from "./support.js";
+import { createPlanContext, createPlanPi } from "./support.js";
 
 test("active implementation menus require UI at the public command boundary", async () => {
   for (const hasUI of [false, true]) {
-    const mock = createMockPi({ activeTools: ["read"] });
+    const mock = createPlanPi({ activeTools: ["read"] });
     let loads = 0;
     planMode(mock.pi, {
       readSettings: async () => ({ kind: "missing" as const }),
@@ -32,7 +32,7 @@ test("active implementation menus require UI at the public command boundary", as
         },
       },
     ];
-    const context = createMockContext({
+    const context = createPlanContext({
       mode: "rpc",
       hasUI,
       sessionManager: { getBranch: () => branch, getEntries: () => branch },
@@ -41,7 +41,7 @@ test("active implementation menus require UI at the public command boundary", as
         return "Show active implementation plan";
       },
     });
-    await mock.events.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
+    await mock.handlers.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
     if (hasUI) {
       await mock.commands.get("plan")?.handler("", context.ctx);
       assert.equal(loads, 1);
@@ -58,49 +58,49 @@ test("active implementation menus require UI at the public command boundary", as
 });
 
 test("disabled tool admission bypasses policy resolution before and after a workflow", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-  const context = createMockContext({ hasUI: true });
-  const allTools = mock.rawPi.getAllTools;
+  const context = createPlanContext({ hasUI: true });
+  const allTools = mock.pi.getAllTools;
   let policyReads = 0;
   const unavailableRegistry = () => {
     policyReads += 1;
     throw new Error("registry unavailable");
   };
   try {
-    mock.rawPi.getAllTools = unavailableRegistry;
-    const call = mock.events.get("tool_call")?.[0];
+    mock.pi.getAllTools = unavailableRegistry;
+    const call = mock.handlers.get("tool_call")?.[0];
     assert.ok(call);
     assert.equal(await call({ toolName: "read", input: {} }, context.ctx), undefined);
     assert.equal(policyReads, 0);
-    mock.rawPi.getAllTools = allTools;
+    mock.pi.getAllTools = allTools;
     await mock.commands.get("plan")?.handler("start", context.ctx);
     assert.equal(await call({ toolName: "read", input: {} }, context.ctx), undefined);
     await mock.commands.get("plan")?.handler("off", context.ctx);
-    mock.rawPi.getAllTools = unavailableRegistry;
+    mock.pi.getAllTools = unavailableRegistry;
     assert.equal(await call({ toolName: "read", input: {} }, context.ctx), undefined);
     assert.equal(policyReads, 0);
     assert.equal(context.statuses.get("plan-mode"), undefined);
   } finally {
-    mock.rawPi.getAllTools = allTools;
+    mock.pi.getAllTools = allTools;
   }
 });
 
 /** Drive the real RPC menu while a supported agent-start event invalidates its plan. */
 test("implementing from an open menu after a run clears its plan warns without sending a handoff", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     select: async (_title: string, choices: string[]) => {
       assert.ok(choices.includes("Implement here"));
-      await mock.events.get("before_agent_start")?.[0]?.({ prompt: "revise the proposal" }, context.ctx);
+      await mock.handlers.get("before_agent_start")?.[0]?.({ prompt: "revise the proposal" }, context.ctx);
       return "Implement here";
     },
   });
   await mock.commands.get("plan")?.handler("start", context.ctx);
-  const complete = mock.tools.find((tool) => tool.name === "plan_mode_complete")?.execute;
+  const complete = [...mock.tools.values()].find((tool) => tool.name === "plan_mode_complete")?.execute;
   assert.equal(typeof complete, "function");
   await (complete as (...args: unknown[]) => Promise<unknown>)(
     "ready",
@@ -141,15 +141,15 @@ test("failed runtime persistence keeps queued prompts protected after the applic
       },
     },
   ];
-  const mock = createMockPi();
-  const setModel = mock.rawPi.setModel;
-  mock.rawPi.setModel = async (model) => {
+  const mock = createPlanPi();
+  const setModel = mock.pi.setModel;
+  mock.pi.setModel = async (model) => {
     modelStarted();
     await gate;
     return setModel(model);
   };
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-  const context = createMockContext({
+  const context = createPlanContext({
     hasUI: true,
     sessionManager: { getBranch: () => branch, getEntries: () => branch, getEntry: () => undefined },
     modelRegistry: {
@@ -157,24 +157,24 @@ test("failed runtime persistence keeps queued prompts protected after the applic
       getApiKeyAndHeaders: async () => ({ ok: true as const }),
     },
   });
-  await mock.events.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
-  const appendEntry = mock.rawPi.appendEntry;
-  mock.rawPi.appendEntry = () => {
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "new" }, context.ctx);
+  const appendEntry = mock.pi.appendEntry;
+  mock.pi.appendEntry = () => {
     throw new Error("disk full");
   };
-  const input = mock.events.get("input")?.[0];
+  const input = mock.handlers.get("input")?.[0];
   assert.ok(input);
   const leading = Promise.resolve(input({ text: "implement", source: "rpc" }, context.ctx));
   await started;
   const follower = Promise.resolve(input({ text: "preserve this queued prompt", source: "rpc" }, context.ctx));
   releaseModel();
   assert.deepEqual(await Promise.all([leading, follower]), [{ action: "handled" }, { action: "handled" }]);
-  const beforeTree = mock.events.get("session_before_tree")?.[0];
+  const beforeTree = mock.handlers.get("session_before_tree")?.[0];
   assert.ok(beforeTree);
   assert.deepEqual(await beforeTree({ preparation: { targetId: "other" } }, context.ctx), { cancel: true });
   assert.match(context.notifications.at(-1)?.message ?? "", /admit the pending prompts before changing branches/u);
-  mock.rawPi.appendEntry = appendEntry;
-  await mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
+  mock.pi.appendEntry = appendEntry;
+  await mock.handlers.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
   const recovered = mock.sentMessages.filter(
     ({ message }) => (message as { customType?: string }).customType === "plan-mode-recovered-input",
   );
@@ -187,9 +187,9 @@ test("failed runtime persistence keeps queued prompts protected after the applic
 function createDestination() {
   const started = deferred<void>();
   const release = deferred<void>();
-  const mock = createMockPi();
-  const setModel = mock.rawPi.setModel;
-  mock.rawPi.setModel = async (model) => {
+  const mock = createPlanPi();
+  const setModel = mock.pi.setModel;
+  mock.pi.setModel = async (model) => {
     started.resolve();
     await release.promise;
     return setModel(model);
@@ -206,17 +206,17 @@ function createDestination() {
       },
     },
   ];
-  const context = createMockContext({
+  const context = createPlanContext({
     sessionManager: { getBranch: () => branch, getEntries: () => branch },
     modelRegistry: {
       find: () => ({ provider: "fixture", id: "target" }),
       getApiKeyAndHeaders: async () => ({ ok: true as const }),
     },
   });
-  const input = mock.events.get("input")?.[0];
-  const start = mock.events.get("session_start")?.[0];
-  const shutdown = mock.events.get("session_shutdown")?.[0];
-  const agentStart = mock.events.get("agent_start")?.[0];
+  const input = mock.handlers.get("input")?.[0];
+  const start = mock.handlers.get("session_start")?.[0];
+  const shutdown = mock.handlers.get("session_shutdown")?.[0];
+  const agentStart = mock.handlers.get("agent_start")?.[0];
   assert.ok(input && start && shutdown && agentStart);
   return { mock, context, started, release, input, start, shutdown, agentStart };
 }
@@ -273,7 +273,7 @@ test("replacement recovers outgoing input once before the fresh runner admits it
   await incoming.agentStart({}, incoming.context.ctx);
   await incoming.shutdown({ reason: "quit" }, incoming.context.ctx);
   assert.deepEqual(incoming.mock.sentUserMessages, [
-    { text: "incoming follower", options: { deliverAs: "followUp", expandPromptTemplates: true } },
+    { content: "incoming follower", options: { deliverAs: "followUp", expandPromptTemplates: true } },
   ]);
   assert.deepEqual(incoming.mock.sentMessages, []);
   assert.equal(outgoing.mock.sentMessages.length, 2);
@@ -282,7 +282,7 @@ test("replacement recovers outgoing input once before the fresh runner admits it
 /** Fault injection: replacement can occur while an SDK host awaits old shutdown. */
 test("shutdown rechecks its manager after awaited model application", async () => {
   const host = createDestination();
-  const incoming = createMockContext();
+  const incoming = createPlanContext();
   await host.start({ reason: "new" }, host.context.ctx);
   const leading = host.input({ text: "implement", source: "rpc" }, host.context.ctx);
   await host.started.promise;
@@ -301,7 +301,7 @@ test("shutdown rechecks its manager after awaited model application", async () =
 /** Fault injection: an SDK host retains one extension and sends another manager's shutdown. */
 test("shared-instance host shutdown cannot drain or discard another manager's queued input", async () => {
   const host = createDestination();
-  const other = createMockContext();
+  const other = createPlanContext();
   const image = { type: "image" as const, data: "retained-image", mimeType: "image/png" };
   await host.start({ reason: "new" }, host.context.ctx);
   const leading = host.input({ text: "implement", source: "rpc" }, host.context.ctx);
@@ -319,7 +319,7 @@ test("shared-instance host shutdown cannot drain or discard another manager's qu
   await host.shutdown({ reason: "quit" }, host.context.ctx);
   assert.deepEqual(host.mock.sentUserMessages, [
     {
-      text: [{ type: "text", text: "retain for owner" }, image],
+      content: [{ type: "text", text: "retain for owner" }, image],
       options: { deliverAs: "followUp", expandPromptTemplates: true },
     },
   ]);

@@ -4,14 +4,14 @@ import { test } from "vitest";
 import planMode from "../src/plan-mode.js";
 import { normalizePlanModeSettings } from "../src/settings.js";
 import { WORKFLOW_MUTEX_CHANNEL } from "../src/workflow-mutex.js";
-import { createMockContext, createMockPi } from "./support.js";
+import { createPlanContext, createPlanPi } from "./support.js";
 
-type Options = Parameters<typeof createMockContext>[0];
+type Options = Parameters<typeof createPlanContext>[0];
 
 /** Drive the production closure with explicit settings and a disposable in-memory branch. */
 async function fixture(options: Options = {}, data?: Record<string, unknown>, enabled = true) {
-  const mock = createMockPi({ activeTools: ["read", "write", "plan_mode_enter"] });
-  const context = createMockContext({
+  const mock = createPlanPi({ activeTools: ["read", "write", "plan_mode_enter"] });
+  const context = createPlanContext({
     hasUI: true,
     mode: "rpc",
     ...options,
@@ -28,11 +28,11 @@ async function fixture(options: Options = {}, data?: Record<string, unknown>, en
     readSettings: async () => ({ kind: "loaded", settings: { thinkingLevel: "inherit", modelPlanEntry: enabled } }),
   });
   const emit = async (name: string, event: unknown = {}) => {
-    for (const handler of mock.events.get(name) ?? []) await handler(event, context.ctx);
+    for (const handler of mock.handlers.get(name) ?? []) await handler(event, context.ctx);
   };
   await emit("session_start", { reason: "startup" });
   if (!data?.enabled) await emit("before_agent_start", { messageType: "user", prompt: "Original request" });
-  const execute = mock.tools.find((tool) => tool.name === "plan_mode_enter")?.execute as (
+  const execute = [...mock.tools.values()].find((tool) => tool.name === "plan_mode_enter")?.execute as unknown as (
     id: string,
     params: { reason: string },
     signal: AbortSignal | undefined,
@@ -51,7 +51,7 @@ test("model entry settings accept only booleans, default on, and opt-out does no
   });
   assert.equal(normalizePlanModeSettings({ modelPlanEntry: "false" }), undefined);
   const f = await fixture({}, undefined, false);
-  assert.equal(f.mock.rawPi.getActiveTools().includes("plan_mode_enter"), false);
+  assert.equal(f.mock.pi.getActiveTools().includes("plan_mode_enter"), false);
   assert.match((await f.enter()).content[0]?.text ?? "", /disabled/);
   assert.equal(f.mock.sentMessages.length, 0);
 });
@@ -86,7 +86,7 @@ for (const [data, message] of [
     const before = JSON.stringify(f.mock.entries);
     assert.match((await f.enter()).content[0]?.text ?? "", message);
     if (data.enabled) {
-      const policy = (await f.mock.events.get("tool_call")?.[0]?.(
+      const policy = (await f.mock.handlers.get("tool_call")?.[0]?.(
         { toolName: "plan_mode_enter", input: { reason: "Scope" } },
         f.context.ctx,
       )) as { block: boolean; reason: string };
@@ -106,14 +106,14 @@ test("mutex contention refuses anonymously before confirmation and rechecks afte
       return true;
     },
   });
-  const off = f.mock.eventBus.on(WORKFLOW_MUTEX_CHANNEL, (attempt) => {
+  const off = f.mock.bus.on(WORKFLOW_MUTEX_CHANNEL, (attempt) => {
     (attempt as { busy: boolean }).busy = true;
   });
   assert.match((await f.enter()).content[0]?.text ?? "", /Another workflow/);
   assert.equal(confirms, 0);
   off();
   await f.enter();
-  f.mock.eventBus.on(WORKFLOW_MUTEX_CHANNEL, (attempt) => {
+  f.mock.bus.on(WORKFLOW_MUTEX_CHANNEL, (attempt) => {
     (attempt as { busy: boolean }).busy = true;
   });
   await f.emit("agent_settled");
@@ -224,7 +224,7 @@ for (const busy of ["run", "queue"] as const) {
 
 test("aborted settlement invalidates confirmed entry without an aborted assistant message", async () => {
   const f = await fixture();
-  const tools = f.mock.rawPi.getActiveTools();
+  const tools = f.mock.pi.getActiveTools();
   const before = JSON.stringify(f.mock.entries);
   await f.enter();
   await f.emit("agent_end", { messages: [{ role: "assistant", stopReason: "toolUse", content: [] }] });
@@ -232,12 +232,12 @@ test("aborted settlement invalidates confirmed entry without an aborted assistan
   assert.equal(f.mock.sentUserMessages.length, 0);
   assert.equal(f.mock.sentMessages.length, 0);
   assert.equal(JSON.stringify(f.mock.entries), before);
-  assert.deepEqual(f.mock.rawPi.getActiveTools(), tools);
+  assert.deepEqual(f.mock.pi.getActiveTools(), tools);
 });
 
 test("a superseding user request drained before settlement invalidates confirmed entry", async () => {
   const f = await fixture();
-  const tools = f.mock.rawPi.getActiveTools();
+  const tools = f.mock.pi.getActiveTools();
   const before = JSON.stringify(f.mock.entries);
   await f.enter();
   await f.emit("input", { text: "Instead, inspect the tests", source: "interactive" });
@@ -246,7 +246,7 @@ test("a superseding user request drained before settlement invalidates confirmed
   assert.equal(f.mock.sentUserMessages.length, 0);
   assert.equal(f.mock.sentMessages.length, 0);
   assert.equal(JSON.stringify(f.mock.entries), before);
-  assert.deepEqual(f.mock.rawPi.getActiveTools(), tools);
+  assert.deepEqual(f.mock.pi.getActiveTools(), tools);
 });
 
 test("admitted user messages invalidate entry even when input is extension-owned or text is repeated", async () => {
@@ -267,7 +267,7 @@ test("fresh confirmation after superseding input replays only the newly admitted
   await f.enter();
   await f.emit("agent_settled", { aborted: false });
   assert.deepEqual(
-    f.mock.sentUserMessages.map((message) => message.text),
+    f.mock.sentUserMessages.map((message) => message.content),
     ["Instead, inspect tests"],
   );
 });
@@ -275,12 +275,12 @@ test("fresh confirmation after superseding input replays only the newly admitted
 test("settled entry uses helper admission without activating hidden helpers", async () => {
   const f = await fixture();
   await f.enter();
-  f.mock.rawPi.setActiveTools(["read", "plan_mode_enter"]);
+  f.mock.pi.setActiveTools(["read", "plan_mode_enter"]);
   await f.emit("agent_settled");
   assert.match(
     f.context.notifications.at(-1)?.message ?? "",
     /plan_mode_question and plan_mode_complete are unavailable/,
   );
-  assert.deepEqual(f.mock.rawPi.getActiveTools(), ["read", "plan_mode_enter"]);
+  assert.deepEqual(f.mock.pi.getActiveTools(), ["read", "plan_mode_enter"]);
   assert.equal(f.mock.sentUserMessages.length, 0);
 });

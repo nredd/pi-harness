@@ -14,21 +14,25 @@ function setEnv(name: string, value: string | undefined): void {
 
 /**
  * Redirect `TMPDIR` into a fresh sandbox so every `os.tmpdir()` write and helper `mkdtemp` lands in a
- * root removed on `restore`. The real root is exposed as `PI_TEST_REAL_TMPDIR`, and nested calls
+ * root removed on `restore`; `XDG_STATE_HOME` points at `<sandbox>/state` so state-dir writes (e.g.
+ * subagent transcripts) are removed with it. The real root is exposed as `PI_TEST_REAL_TMPDIR`, and nested calls
  * sandbox inside the real one rather than inside each other.
  */
 export function sandboxTmpdir(): { sandbox: string; realTmp: string; restore: () => void } {
 	const realTmp = realpathSync(process.env.PI_TEST_REAL_TMPDIR ?? tmpdir());
 	const previousTmpdir = process.env.TMPDIR;
 	const previousReal = process.env.PI_TEST_REAL_TMPDIR;
+	const previousState = process.env.XDG_STATE_HOME;
 	const sandbox = realpathSync(mkdtempSync(join(realTmp, SANDBOX_PREFIX)));
 	process.env.PI_TEST_REAL_TMPDIR = realTmp;
 	process.env.TMPDIR = sandbox;
+	process.env.XDG_STATE_HOME = join(sandbox, "state");
 	return {
 		sandbox,
 		realTmp,
 		restore() {
 			setEnv("TMPDIR", previousTmpdir);
+			setEnv("XDG_STATE_HOME", previousState);
 			setEnv("PI_TEST_REAL_TMPDIR", previousReal);
 			rmSync(sandbox, { recursive: true, force: true });
 		},

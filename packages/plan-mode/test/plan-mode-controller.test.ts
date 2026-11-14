@@ -3,11 +3,11 @@ import { test } from "vitest";
 import { MODE_CONTRACT_MESSAGE_TYPE } from "../src/mode-contract.js";
 import planMode from "../src/plan-mode.js";
 import { WORKFLOW_MUTEX_CHANNEL } from "../src/workflow-mutex.js";
-import { createMockContext, createMockPi } from "./support.js";
+import { createPlanContext, createPlanPi } from "./support.js";
 
 type InteractiveUi = typeof import("../src/interactive-ui.js");
-type Mock = ReturnType<typeof createMockPi>;
-type Context = ReturnType<typeof createMockContext>;
+type Mock = ReturnType<typeof createPlanPi>;
+type Context = ReturnType<typeof createPlanContext>;
 
 const MISSING = async () => ({ kind: "missing" as const });
 
@@ -31,25 +31,25 @@ async function command(mock: Mock, context: Context, args: string) {
 }
 
 async function emit(mock: Mock, name: string, event: unknown, context: Context) {
-  const handler = mock.events.get(name)?.[0];
+  const handler = mock.handlers.get(name)?.[0];
   assert.ok(handler, `${name} handler`);
   return handler(event, context.ctx);
 }
 
 async function completePlan(mock: Mock, context: Context, plan: string) {
-  const execute = mock.tools.find((tool) => tool.name === "plan_mode_complete")?.execute;
+  const execute = [...mock.tools.values()].find((tool) => tool.name === "plan_mode_complete")?.execute;
   assert.equal(typeof execute, "function");
   await (execute as (...args: unknown[]) => Promise<unknown>)("call", { plan }, undefined, undefined, context.ctx);
 }
 
 function failSendMessage(mock: Mock, error: unknown) {
-  mock.rawPi.sendMessage = () => {
+  mock.pi.sendMessage = () => {
     throw error;
   };
 }
 
 test("a ready plan stays active when its exit cannot publish the Normal contract", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, {
     readSettings: MISSING,
     loadInteractiveUi: scriptedUi({
@@ -59,7 +59,7 @@ test("a ready plan stays active when its exit cannot publish the Normal contract
       },
     }),
   });
-  const context = createMockContext({ hasUI: true, mode: "tui" });
+  const context = createPlanContext({ hasUI: true, mode: "tui" });
   await command(mock, context, "start");
   await completePlan(mock, context, "# Ready");
   await emit(mock, "agent_settled", {}, context);
@@ -78,7 +78,7 @@ test("busy runs keep a saved or active implementation plan when the menu clears 
       idle = false;
       (options as { clear(): void }).clear();
     };
-    const mock = createMockPi({ activeTools: ["read"] });
+    const mock = createPlanPi({ activeTools: ["read"] });
     planMode(mock.pi, {
       readSettings: async () => ({
         kind: "loaded" as const,
@@ -86,7 +86,7 @@ test("busy runs keep a saved or active implementation plan when the menu clears 
       }),
       loadInteractiveUi: scriptedUi({ showSavedPlanMenu: busyClear, showActiveImplementationMenu: busyClear }),
     });
-    const context = createMockContext({ hasUI: true, mode: "tui", isIdle: () => idle });
+    const context = createPlanContext({ hasUI: true, mode: "tui", isIdle: () => idle });
     await emit(mock, "session_start", { reason: "startup" }, context);
     await command(mock, context, "start");
     await completePlan(mock, context, "# Keep me");
@@ -101,16 +101,16 @@ test("busy runs keep a saved or active implementation plan when the menu clears 
 });
 
 test("headless /plan tools explains the lock while Planning is active", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, { readSettings: MISSING });
-  const context = createMockContext({ hasUI: false, mode: "print" });
+  const context = createPlanContext({ hasUI: false, mode: "print" });
   await command(mock, context, "start");
 
   await assert.rejects(command(mock, context, "tools"), /Plan-mode tools are locked while Planning is active/u);
 });
 
 test("headless tree moves are refused silently onto contract markers and during runtime admission", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, { readSettings: MISSING });
   let releaseAuth!: () => void;
   const authGate = new Promise<void>((resolve) => {
@@ -123,7 +123,7 @@ test("headless tree moves are refused silently onto contract markers and during 
       pendingImplementationRuntime: { version: 1, model: { provider: "p", modelId: "m" } },
     }),
   ];
-  const context = createMockContext({
+  const context = createPlanContext({
     hasUI: false,
     sessionManager: {
       getBranch: () => branch,
@@ -151,11 +151,11 @@ test("headless tree moves are refused silently onto contract markers and during 
 });
 
 test("a resumed Plan without helpers stops startup before announcing it", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
-  mock.rawPi.setActiveTools(["read"]);
+  const mock = createPlanPi({ activeTools: ["read"] });
+  mock.pi.setActiveTools(["read"]);
   planMode(mock.pi, { readSettings: MISSING });
   const branch = [stateEntry({ enabled: true, awaitingAction: false })];
-  const context = createMockContext({
+  const context = createPlanContext({
     hasUI: true,
     mode: "tui",
     sessionManager: { getBranch: () => branch, getEntries: () => branch },
@@ -168,11 +168,11 @@ test("a resumed Plan without helpers stops startup before announcing it", async 
 });
 
 test("re-selecting Plan's own thinking level is not a manual override", async () => {
-  const mock = createMockPi({ activeTools: ["read"], thinkingLevel: "low" });
+  const mock = createPlanPi({ activeTools: ["read"], thinkingLevel: "low" });
   planMode(mock.pi, {
     readSettings: async () => ({ kind: "loaded" as const, settings: { thinkingLevel: "high" as const } }),
   });
-  const context = createMockContext({ hasUI: true, mode: "tui" });
+  const context = createPlanContext({ hasUI: true, mode: "tui" });
   await emit(mock, "session_start", { reason: "startup" }, context);
   await command(mock, context, "start");
   const entries = mock.entries.length;
@@ -184,7 +184,7 @@ test("re-selecting Plan's own thinking level is not a manual override", async ()
 });
 
 test("agent_start from a replaced session does not flush the current session's queue", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, { readSettings: MISSING });
   let releaseAuth!: () => void;
   const authGate = new Promise<void>((resolve) => {
@@ -197,7 +197,7 @@ test("agent_start from a replaced session does not flush the current session's q
       pendingImplementationRuntime: { version: 1, model: { provider: "p", modelId: "m" } },
     }),
   ];
-  const context = createMockContext({
+  const context = createPlanContext({
     sessionManager: { getBranch: () => branch, getEntries: () => branch },
     modelRegistry: {
       find: () => ({ provider: "p", id: "m" }),
@@ -207,7 +207,7 @@ test("agent_start from a replaced session does not flush the current session's q
       },
     },
   });
-  const stale = createMockContext();
+  const stale = createPlanContext();
   await emit(mock, "session_start", { reason: "new" }, context);
   const leading = emit(mock, "input", { text: "implement", source: "rpc" }, context);
   const follower = emit(mock, "input", { text: "queued", source: "rpc" }, context);
@@ -218,13 +218,13 @@ test("agent_start from a replaced session does not flush the current session's q
   assert.deepEqual(mock.sentUserMessages, []);
   await emit(mock, "agent_start", {}, context);
   assert.deepEqual(
-    mock.sentUserMessages.map(({ text }) => text),
+    mock.sentUserMessages.map(({ content }) => content),
     ["queued"],
   );
 });
 
 test("a settle during an open ready menu does not reopen it, and a newer plan gets its own menu", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   const opened: string[] = [];
   let context!: Context;
   planMode(mock.pi, {
@@ -239,7 +239,7 @@ test("a settle during an open ready menu does not reopen it, and a newer plan ge
       },
     }),
   });
-  context = createMockContext({ hasUI: true, mode: "tui" });
+  context = createPlanContext({ hasUI: true, mode: "tui" });
   await command(mock, context, "start");
   await completePlan(mock, context, "# First");
 
@@ -251,11 +251,11 @@ test("a settle during an open ready menu does not reopen it, and a newer plan ge
 });
 
 test("a /plan prompt that cannot be sent keeps an already active Plan", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, { readSettings: MISSING });
-  const context = createMockContext({ hasUI: true, mode: "tui" });
+  const context = createPlanContext({ hasUI: true, mode: "tui" });
   await command(mock, context, "start");
-  mock.rawPi.sendUserMessage = () => {
+  mock.pi.sendUserMessage = () => {
     throw new Error("queue closed");
   };
   const contracts = mock.sentMessages.length;
@@ -269,11 +269,11 @@ test("a /plan prompt that cannot be sent keeps an already active Plan", async ()
 });
 
 test("headless activation fails loudly when the Plan contract cannot be published", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, { readSettings: MISSING });
   const failure = new Error("transcript closed");
   failSendMessage(mock, failure);
-  const context = createMockContext({ hasUI: false, mode: "print" });
+  const context = createPlanContext({ hasUI: false, mode: "print" });
 
   await assert.rejects(
     command(mock, context, "start"),
@@ -287,14 +287,14 @@ test("headless activation fails loudly when the Plan contract cannot be publishe
 });
 
 test("the toggle shortcut refuses to start over a saved plan", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, {
     readSettings: async () => ({
       kind: "loaded" as const,
       settings: { thinkingLevel: "inherit" as const, toggleShortcut: "ctrl+alt+p" as const },
     }),
   });
-  const context = createMockContext({ hasUI: true, mode: "tui" });
+  const context = createPlanContext({ hasUI: true, mode: "tui" });
   await emit(mock, "session_start", { reason: "startup" }, context);
   await command(mock, context, "start");
   await completePlan(mock, context, "# Later");
@@ -310,7 +310,7 @@ test("the toggle shortcut refuses to start over a saved plan", async () => {
 
 test("restored plans without a recorded source save and implement as legacy proposals", async () => {
   for (const action of ["save", "implement"] as const) {
-    const mock = createMockPi({ activeTools: ["read"] });
+    const mock = createPlanPi({ activeTools: ["read"] });
     planMode(mock.pi, {
       readSettings: async () => ({
         kind: "loaded" as const,
@@ -318,7 +318,7 @@ test("restored plans without a recorded source save and implement as legacy prop
       }),
     });
     const branch = [stateEntry({ enabled: true, awaitingAction: true, latestPlan: "# Restored" })];
-    const context = createMockContext({
+    const context = createPlanContext({
       hasUI: true,
       mode: "tui",
       sessionManager: { getSessionId: () => "restored", getBranch: () => branch, getEntries: () => branch },
@@ -335,9 +335,9 @@ test("restored plans without a recorded source save and implement as legacy prop
 
 test("save and implement keep the ready plan when the Normal contract cannot be published", async () => {
   for (const action of ["save", "implement"] as const) {
-    const mock = createMockPi({ activeTools: ["read"] });
+    const mock = createPlanPi({ activeTools: ["read"] });
     planMode(mock.pi, { readSettings: MISSING });
-    const context = createMockContext({ hasUI: true, mode: "tui" });
+    const context = createPlanContext({ hasUI: true, mode: "tui" });
     await command(mock, context, "start");
     await completePlan(mock, context, "# Ready");
     failSendMessage(mock, new Error("offline"));
@@ -352,9 +352,9 @@ test("save and implement keep the ready plan when the Normal contract cannot be 
 
 test("implementing during an active run is refused", async () => {
   let idle = true;
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, { readSettings: MISSING });
-  const context = createMockContext({ hasUI: true, mode: "tui", isIdle: () => idle });
+  const context = createPlanContext({ hasUI: true, mode: "tui", isIdle: () => idle });
   await command(mock, context, "start");
   await completePlan(mock, context, "# Ready");
   idle = false;
@@ -366,7 +366,7 @@ test("implementing during an active run is refused", async () => {
 });
 
 function launchHarness(options: { activeTools?: string[]; settings?: Record<string, unknown> } = {}) {
-  const mock = createMockPi({ activeTools: options.activeTools ?? ["read"] });
+  const mock = createPlanPi({ activeTools: options.activeTools ?? ["read"] });
   const launches: Record<string, unknown>[] = [];
   let onLaunch: (menu: Record<string, unknown>) => unknown = () => undefined;
   let onLoad: () => unknown = () => undefined;
@@ -386,7 +386,7 @@ function launchHarness(options: { activeTools?: string[]; settings?: Record<stri
       } as unknown as InteractiveUi;
     },
   });
-  const context = createMockContext({ hasUI: true, mode: "tui" });
+  const context = createPlanContext({ hasUI: true, mode: "tui" });
   return {
     mock,
     context,
@@ -450,7 +450,7 @@ test("starting with tools drops names that are neither available nor retained", 
 test("the launch menu says when the active tool policy hides the Plan helpers", async () => {
   const harness = launchHarness();
   const { mock, context, launches } = harness;
-  mock.rawPi.setActiveTools(["read"]);
+  mock.pi.setActiveTools(["read"]);
   await emit(mock, "session_start", { reason: "startup" }, context);
 
   await command(mock, context, "");
@@ -474,7 +474,7 @@ test("pending tool names are sanitized for the terminal", async () => {
 });
 
 async function activeImplementationHarness() {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   const shown: string[] = [];
   let onLoad: () => unknown = () => undefined;
   planMode(mock.pi, {
@@ -496,7 +496,7 @@ async function activeImplementationHarness() {
       } as unknown as InteractiveUi;
     },
   });
-  const context = createMockContext({ hasUI: true, mode: "tui" });
+  const context = createPlanContext({ hasUI: true, mode: "tui" });
   await emit(mock, "session_start", { reason: "startup" }, context);
   await command(mock, context, "start");
   await completePlan(mock, context, "# Active");
@@ -532,7 +532,7 @@ test("a shut-down session opens no active implementation menu", async () => {
 });
 
 test("settings saved after the session moved on are not applied", async () => {
-  const mock = createMockPi({ activeTools: ["read"], thinkingLevel: "low" });
+  const mock = createPlanPi({ activeTools: ["read"], thinkingLevel: "low" });
   let context!: Context;
   planMode(mock.pi, {
     readSettings: MISSING,
@@ -544,7 +544,7 @@ test("settings saved after the session moved on are not applied", async () => {
       },
     }),
   });
-  context = createMockContext({ hasUI: true, mode: "tui" });
+  context = createPlanContext({ hasUI: true, mode: "tui" });
   await emit(mock, "session_start", { reason: "startup" }, context);
 
   await command(mock, context, "settings");
@@ -554,7 +554,7 @@ test("settings saved after the session moved on are not applied", async () => {
 });
 
 test("the Plan menu status names an empty tool policy", async () => {
-  const mock = createMockPi({ activeTools: [] });
+  const mock = createPlanPi({ activeTools: [] });
   const statuses: string[] = [];
   planMode(mock.pi, {
     readSettings: MISSING,
@@ -564,7 +564,7 @@ test("the Plan menu status names an empty tool policy", async () => {
       },
     }),
   });
-  const context = createMockContext({ hasUI: true, mode: "tui" });
+  const context = createPlanContext({ hasUI: true, mode: "tui" });
   await command(mock, context, "start");
 
   await command(mock, context, "");
@@ -573,15 +573,15 @@ test("the Plan menu status names an empty tool policy", async () => {
 });
 
 test("a busy workflow silently blocks headless Plan restoration", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, { readSettings: MISSING });
   const branch = [stateEntry({ enabled: true, awaitingAction: false })];
   const sessionManager = { getSessionId: () => "busy", getBranch: () => branch, getEntries: () => branch };
-  mock.eventBus.on(WORKFLOW_MUTEX_CHANNEL, (payload) => {
+  mock.bus.on(WORKFLOW_MUTEX_CHANNEL, (payload) => {
     const attempt = payload as { session?: object; busy?: boolean };
     if (attempt.session === sessionManager) attempt.busy = true;
   });
-  const context = createMockContext({ hasUI: false, sessionManager });
+  const context = createPlanContext({ hasUI: false, sessionManager });
 
   await emit(mock, "session_start", { reason: "resume" }, context);
 
@@ -590,10 +590,10 @@ test("a busy workflow silently blocks headless Plan restoration", async () => {
 });
 
 test("a tree move onto an enabled Plan without helpers turns the current Plan off", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, { readSettings: MISSING });
   const branch: unknown[] = [];
-  const context = createMockContext({
+  const context = createPlanContext({
     hasUI: true,
     mode: "tui",
     sessionManager: { getSessionId: () => "tree", getBranch: () => branch, getEntries: () => branch },
@@ -601,7 +601,7 @@ test("a tree move onto an enabled Plan without helpers turns the current Plan of
   await emit(mock, "session_start", { reason: "startup" }, context);
   await command(mock, context, "start");
   branch.push(stateEntry({ enabled: true, awaitingAction: false }));
-  mock.rawPi.setActiveTools(["read"]);
+  mock.pi.setActiveTools(["read"]);
 
   await emit(mock, "session_tree", {}, context);
 
@@ -609,7 +609,7 @@ test("a tree move onto an enabled Plan without helpers turns the current Plan of
   const gate = await emit(mock, "tool_call", { toolName: "read", input: {} }, context);
   assert.equal(gate, undefined, "Plan no longer gates tools");
   assert.equal(context.statuses.get("plan-mode"), undefined);
-  mock.rawPi.setActiveTools(["read", "plan_mode_question", "plan_mode_complete"]);
+  mock.pi.setActiveTools(["read", "plan_mode_question", "plan_mode_complete"]);
   await command(mock, context, "start");
   assert.equal(context.statuses.get("plan-mode"), "plan active");
 });
@@ -626,7 +626,7 @@ function gate() {
 
 function runtimeSession(runtime: Record<string, unknown>, overrides: Record<string, unknown> = {}) {
   const branch = [stateEntry({ enabled: false, awaitingAction: false, pendingImplementationRuntime: runtime })];
-  return createMockContext({
+  return createPlanContext({
     sessionManager: { getSessionId: () => "runtime", getBranch: () => branch, getEntries: () => branch },
     modelRegistry: {
       find: (provider: string, id: string) =>
@@ -640,23 +640,23 @@ function runtimeSession(runtime: Record<string, unknown>, overrides: Record<stri
 const MODEL_RUNTIME = { version: 1, model: { provider: RUNTIME_MODEL.provider, modelId: RUNTIME_MODEL.id } };
 
 test("a session replaced before runtime application starts leaves the intent pending", async () => {
-  const mock = createMockPi();
+  const mock = createPlanPi();
   planMode(mock.pi, { readSettings: MISSING });
   const context = runtimeSession({ version: 1, thinkingLevel: "high" });
   await emit(mock, "session_start", { reason: "new" }, context);
 
   const input = emit(mock, "input", { text: "go", source: "rpc" }, context);
-  void emit(mock, "session_start", { reason: "new" }, createMockContext());
+  void emit(mock, "session_start", { reason: "new" }, createPlanContext());
 
   assert.deepEqual(await input, { action: "handled" });
   assert.deepEqual(mock.thinkingLevels, []);
 });
 
 test("a tree move during model application suppresses its warning and keeps the intent", async () => {
-  const mock = createMockPi();
+  const mock = createPlanPi();
   const modelGate = gate();
   const modelStarted = gate();
-  mock.rawPi.setModel = async () => {
+  mock.pi.setModel = async () => {
     modelStarted.open();
     await modelGate.opened;
     throw "provider offline";
@@ -681,11 +681,11 @@ test("a tree move during model application suppresses its warning and keeps the 
 });
 
 test("a thrown non-Error model or thinking failure is reported as text", async () => {
-  const mock = createMockPi();
-  mock.rawPi.setModel = async () => {
+  const mock = createPlanPi();
+  mock.pi.setModel = async () => {
     throw "provider offline";
   };
-  mock.rawPi.setThinkingLevel = () => {
+  mock.pi.setThinkingLevel = () => {
     throw "thinking locked";
   };
   planMode(mock.pi, { readSettings: MISSING });
@@ -704,10 +704,10 @@ test("a thrown non-Error model or thinking failure is reported as text", async (
 });
 
 test("a tree move while thinking is applied leaves the runtime intent unconsumed and unannounced", async () => {
-  const mock = createMockPi({ clampThinkingLevel: () => "medium" });
+  const mock = createPlanPi({ clampThinkingLevel: () => "medium" });
   let context!: Context;
-  const setThinkingLevel = mock.rawPi.setThinkingLevel.bind(mock.rawPi);
-  mock.rawPi.setThinkingLevel = (level) => {
+  const setThinkingLevel = mock.pi.setThinkingLevel.bind(mock.pi);
+  mock.pi.setThinkingLevel = (level) => {
     setThinkingLevel(level);
     void emit(mock, "session_tree", {}, context);
   };
@@ -723,12 +723,12 @@ test("a tree move while thinking is applied leaves the runtime intent unconsumed
 });
 
 test("a non-Error persistence failure blocks the prompt and keeps the intent", async () => {
-  const mock = createMockPi();
+  const mock = createPlanPi();
   planMode(mock.pi, { readSettings: MISSING });
   const context = runtimeSession({ version: 1, thinkingLevel: "high" });
   await emit(mock, "session_start", { reason: "new" }, context);
   let appends = 0;
-  mock.rawPi.appendEntry = () => {
+  mock.pi.appendEntry = () => {
     appends += 1;
     throw "disk full";
   };
@@ -740,7 +740,7 @@ test("a non-Error persistence failure blocks the prompt and keeps the intent", a
 });
 
 test("a newer session's runtime application is not cleared by an older one settling", async () => {
-  const mock = createMockPi();
+  const mock = createPlanPi();
   planMode(mock.pi, { readSettings: MISSING });
   const authGate = gate();
   const firstStarted = gate();
@@ -782,7 +782,7 @@ test("a newer session's runtime application is not cleared by an older one settl
 });
 
 test("a prompt queued behind runtime application and recovered at shutdown is not dequeued twice", async () => {
-  const mock = createMockPi();
+  const mock = createPlanPi();
   planMode(mock.pi, { readSettings: MISSING });
   const authGate = gate();
   const context = runtimeSession(MODEL_RUNTIME, {
@@ -810,7 +810,7 @@ test("a prompt queued behind runtime application and recovered at shutdown is no
 });
 
 test("a long missing implementation model name is truncated in the warning", async () => {
-  const mock = createMockPi();
+  const mock = createPlanPi();
   planMode(mock.pi, { readSettings: MISSING });
   const context = runtimeSession({ version: 1, model: { provider: "p", modelId: "m".repeat(200) } });
   await emit(mock, "session_start", { reason: "new" }, context);
@@ -825,9 +825,9 @@ test("a long missing implementation model name is truncated in the warning", asy
 
 test("a saved plan is not implemented when a run starts during its model preflight", async () => {
   let idle = true;
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, { readSettings: MISSING });
-  const context = createMockContext({
+  const context = createPlanContext({
     hasUI: true,
     mode: "tui",
     isIdle: () => idle,
@@ -851,17 +851,17 @@ test("a saved plan is not implemented when a run starts during its model preflig
 });
 
 test("a new session's first prompt does not restore a Plan whose helpers are unavailable", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, { readSettings: MISSING });
   const branch: unknown[] = [];
-  const context = createMockContext({
+  const context = createPlanContext({
     hasUI: true,
     mode: "tui",
     sessionManager: { getSessionId: () => "new", getBranch: () => branch, getEntries: () => branch },
   });
   await emit(mock, "session_start", { reason: "new" }, context);
   branch.push(stateEntry({ enabled: true, awaitingAction: false }));
-  mock.rawPi.setActiveTools(["read"]);
+  mock.pi.setActiveTools(["read"]);
 
   assert.equal(await emit(mock, "input", { text: "hello", source: "interactive" }, context), undefined);
 
@@ -870,7 +870,7 @@ test("a new session's first prompt does not restore a Plan whose helpers are una
 });
 
 test("a Plan exit before a failed implementation's re-applied thinking runs keeps the exit", async () => {
-  const mock = createMockPi({ activeTools: ["read"], thinkingLevel: "low" });
+  const mock = createPlanPi({ activeTools: ["read"], thinkingLevel: "low" });
   planMode(mock.pi, {
     readSettings: async () => ({
       kind: "loaded" as const,
@@ -878,7 +878,7 @@ test("a Plan exit before a failed implementation's re-applied thinking runs keep
     }),
   });
   const authGate = gate();
-  const context = createMockContext({
+  const context = createPlanContext({
     hasUI: true,
     mode: "tui",
     model: RUNTIME_MODEL,
@@ -893,7 +893,7 @@ test("a Plan exit before a failed implementation's re-applied thinking runs keep
   await emit(mock, "session_start", { reason: "startup" }, context);
   await command(mock, context, "start");
   await completePlan(mock, context, "# Ready");
-  mock.rawPi.sendUserMessage = () => {
+  mock.pi.sendUserMessage = () => {
     throw new Error("queue closed");
   };
   await command(mock, context, "implement");
@@ -908,7 +908,7 @@ test("a Plan exit before a failed implementation's re-applied thinking runs keep
 });
 
 test("a late prompt for a replaced session is surfaced once without starting a turn", async () => {
-  const mock = createMockPi();
+  const mock = createPlanPi();
   planMode(mock.pi, { readSettings: MISSING });
   const authGate = gate();
   const authStarted = gate();
@@ -925,7 +925,7 @@ test("a late prompt for a replaced session is surfaced once without starting a t
   await emit(mock, "session_start", { reason: "new" }, old);
   const leading = emit(mock, "input", { text: "lead", source: "rpc" }, old);
   await authStarted.opened;
-  await emit(mock, "session_start", { reason: "startup" }, createMockContext());
+  await emit(mock, "session_start", { reason: "startup" }, createPlanContext());
   const image = { type: "image" as const, data: "late-image", mimeType: "image/png" };
   const late = emit(mock, "input", { text: "late", images: [image], source: "rpc" }, old);
   authGate.open();

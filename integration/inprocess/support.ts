@@ -135,12 +135,13 @@ export async function isolateStackHome(
 		}
 	}
 	const previous = new Map<string, string | undefined>();
-	// Subagent task dirs live under os.tmpdir(); keep them inside this root so cleanup removes them (#678).
+	// Subagent task dirs live under XDG_STATE_HOME (os.tmpdir() as fallback); keep both inside this root so cleanup removes them (#678, #900).
 	mkdirSync(join(root, "tmp"));
 	for (const [key, value] of Object.entries({
 		PI_CODING_AGENT_DIR: join(root, "agent"),
 		XDG_CONFIG_HOME: join(root, ".config"),
 		TMPDIR: join(root, "tmp"),
+		XDG_STATE_HOME: join(root, "state"),
 	})) {
 		previous.set(key, process.env[key]);
 		process.env[key] = value;

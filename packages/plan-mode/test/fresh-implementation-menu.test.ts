@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { createCustomSelectorHarness, createMockContext, showReadyPlanMenu } from "./support.js";
+import { createCustomSelectorHarness, createPlanContext, showReadyPlanMenu } from "./support.js";
 
 function menuOptions(overrides: Record<string, unknown> = {}) {
   return {
@@ -33,7 +33,7 @@ const AVAILABLE_MODELS = [
 test("the ready-plan chooser is compact and opens its selected action", async () => {
   let screen = "";
   let implemented = 0;
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "tui",
     hasUI: true,
     custom: async (factory: unknown) => {
@@ -67,7 +67,7 @@ test("fresh settings select sanitized model metadata and fixed thinking in one m
   let freshVisits = 0;
   let availableReads = 0;
   let selectedRuntime: unknown;
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: AVAILABLE_MODELS[1],
@@ -124,7 +124,7 @@ test("fresh settings select sanitized model metadata and fixed thinking in one m
 
 test("fresh settings use the supplied plan thinking level on older Pi contexts", async () => {
   let selectedRuntime: unknown;
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: AVAILABLE_MODELS[0],
@@ -159,7 +159,7 @@ test("fresh settings use the supplied plan thinking level on older Pi contexts",
 test("fresh settings prioritize start and show the plan runtime defaults", async () => {
   let screen = 0;
   let settingsScreen = "";
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "tui",
     hasUI: true,
     model: AVAILABLE_MODELS[0],
@@ -193,7 +193,7 @@ test("fresh settings prioritize start and show the plan runtime defaults", async
 
 test("fresh settings start from persistent model and thinking defaults", async () => {
   let selectedRuntime: unknown;
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: AVAILABLE_MODELS[0],
@@ -230,7 +230,7 @@ test("fresh settings start from persistent model and thinking defaults", async (
 test("unavailable persistent model defaults fall back to same as plan", async () => {
   let availableReads = 0;
   let selectedRuntime: unknown;
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: AVAILABLE_MODELS[0],
@@ -277,7 +277,7 @@ test("unavailable persistent model defaults fall back to same as plan", async ()
 test("stale scoped persistent model defaults fall back to same as plan", async () => {
   let availableReads = 0;
   let selectedRuntime: unknown;
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: AVAILABLE_MODELS[0],
@@ -324,7 +324,7 @@ test("stale scoped persistent model defaults fall back to same as plan", async (
 test("fresh thinking choice mirrors the built-in thinking layout", async () => {
   let screen = 0;
   let thinkingScreen = "";
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "tui",
     hasUI: true,
     model: AVAILABLE_MODELS[0],
@@ -368,7 +368,7 @@ test("fresh model picker honors the nonempty session model scope", async () => {
   let freshVisits = 0;
   let modelOptions: string[] = [];
   let selectedRuntime: unknown;
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     scopedModels: [{ model: AVAILABLE_MODELS[1], thinkingLevel: "high" }],
@@ -416,7 +416,7 @@ test("fresh model picker keeps same as plan available outside the model scope", 
   let freshVisits = 0;
   let modelOptions: string[] = [];
   let selectedRuntime: unknown;
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: AVAILABLE_MODELS[0],
@@ -466,7 +466,7 @@ test("fresh model picker keeps same as plan available outside the model scope", 
 
 test("fresh model picker falls back when the scoped-model API is unavailable", async () => {
   let availableReads = 0;
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     modelRegistry: {
@@ -489,7 +489,7 @@ test("fresh model choice mirrors the searchable built-in model layout in TUI mod
   let initialModelScreen = "";
   let selectedModelScreen = "";
   let filteredModelScreen = "";
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "tui",
     hasUI: true,
     model: AVAILABLE_MODELS[0],
@@ -532,7 +532,7 @@ test("closing and reopening fresh settings resets its draft to the plan runtime"
   let mainVisits = 0;
   let freshVisits = 0;
   let selectedRuntime: unknown;
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: AVAILABLE_MODELS[0],
@@ -576,7 +576,7 @@ test("closing and reopening fresh settings resets its draft to the plan runtime"
 test("fresh model choices use placeholders for blank provider and model IDs", async () => {
   let modelOptions: string[] = [];
   let settingsVisits = 0;
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: { provider: "planning-provider", id: "planning-model" },

@@ -14,7 +14,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const SKIP_DIRS = new Set(["node_modules", "docs"]);
+// `tests` holds the recording-pi presets (`tests/fixtures`), not shipped code.
+const SKIP_DIRS = new Set(["node_modules", "docs", "tests"]);
 const SKIP_FILES = new Set(["test-fixtures.ts", "vitest.config.ts"]);
 
 export interface ShipManifestResult {
@@ -35,7 +36,7 @@ export interface ShipManifestResult {
  * pass `import.meta.url` directly — the helper resolves it to the test file's
  * parent directory).
  *
- * Skips: dotfiles/dotdirs, `node_modules`, `docs`, `*.test.ts`, `test-fixtures.ts`, `vitest.config.ts`.
+ * Skips: dotfiles/dotdirs, `node_modules`, `docs`, `tests`, `*.test.ts`, `test-fixtures.ts`, `vitest.config.ts`.
  * Does NOT check: asset directories (e.g. `locales/*.json`), `exports` map,
  * `main`/`module` fields.
  *

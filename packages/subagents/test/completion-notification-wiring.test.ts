@@ -11,6 +11,7 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
+import { bootPi } from "./helpers/boot-extension.js";
 
 interface RegisteredTool {
   name: string;
@@ -23,34 +24,6 @@ interface RegisteredTool {
   ) => Promise<unknown>;
 }
 
-function makePi() {
-  const tools = new Map<string, RegisteredTool>();
-  const handlers = new Map<string, (...args: never[]) => unknown>();
-
-  return {
-    pi: {
-      registerMessageRenderer: vi.fn(),
-      registerTool: vi.fn((tool: RegisteredTool) => {
-        tools.set(tool.name, tool);
-      }),
-      registerCommand: vi.fn(),
-      registerEntryRenderer: vi.fn(),
-      registerFlag: vi.fn(),
-      getFlag: vi.fn(),
-      on: vi.fn((event: string, handler: (...args: never[]) => unknown) => {
-        handlers.set(event, handler);
-      }),
-      events: {
-        emit: vi.fn(),
-        on: vi.fn(() => vi.fn()),
-      },
-      appendEntry: vi.fn(),
-      sendMessage: vi.fn(),
-    } as never,
-    tools,
-    handlers,
-  };
-}
 
 function makeHeadlessCtx() {
   return {
@@ -112,7 +85,7 @@ describe("background completion notification wiring", () => {
     vi.useFakeTimers();
     vi.mocked(runAgent).mockResolvedValue(completedRun());
 
-    const { pi, tools, handlers } = makePi();
+    const { pi, tools, handlers } = bootPi();
     subagentsExtension(pi);
 
     await spawnBackground(tools.get("Agent")!, "individual-call", "individual child");
@@ -140,7 +113,7 @@ describe("background completion notification wiring", () => {
       return completedRun();
     });
 
-    const { pi, tools, handlers } = makePi();
+    const { pi, tools, handlers } = bootPi();
     subagentsExtension(pi);
     const agentTool = tools.get("Agent")!;
 
@@ -173,7 +146,7 @@ describe("background completion notification wiring", () => {
     // used to notify each alone, then again in their group.
     vi.mocked(runAgent).mockResolvedValue(completedRun());
 
-    const { pi, tools, handlers } = makePi();
+    const { pi, tools, handlers } = bootPi();
     subagentsExtension(pi);
     const agentTool = tools.get("Agent")!;
 
@@ -196,7 +169,7 @@ describe("background completion notification wiring", () => {
     const failure = "API key auth failed for provider fake_provider: Failed to resolve API key from shell command: fake-secret-helper get (command exited with code 1; failed 3 attempts)";
     vi.mocked(runAgent).mockResolvedValue({ ...completedRun(), responseText: "", failure });
 
-    const { pi, tools, handlers } = makePi();
+    const { pi, tools, handlers } = bootPi();
     subagentsExtension(pi);
 
     await spawnBackground(tools.get("Agent")!, "auth-call", "auth child");
@@ -218,7 +191,7 @@ describe("background completion notification wiring", () => {
     vi.useFakeTimers();
     vi.mocked(runAgent).mockRejectedValue(new Error("model registry unavailable"));
 
-    const { pi, tools, handlers } = makePi();
+    const { pi, tools, handlers } = bootPi();
     subagentsExtension(pi);
 
     await spawnBackground(tools.get("Agent")!, "rejected-call", "rejected child");

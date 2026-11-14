@@ -1,12 +1,14 @@
 /** Plan-mode runtime boundaries for editing a ready or saved plan. */
+
 import assert from "node:assert/strict";
+import type { RecordedContext } from "@nredd/pi-test-lib/pi";
 import { test } from "vitest";
 import { formatTransferredPlanPrompt } from "../src/fresh-implementation.js";
 import { PLAN_APPROVAL_ENTRY_TYPE } from "../src/plan-approval.js";
 import { PLAN_EDIT_MESSAGE_TYPE, PLAN_EDIT_SOURCE } from "../src/plan-edit.js";
 import planMode from "../src/plan-mode.js";
 import { restorePlanModeState } from "../src/state.js";
-import { createMockContext, createMockPi } from "./support.js";
+import { createPlanContext, createPlanPi } from "./support.js";
 
 const PLAN = "# Original\n\n- Keep the first step.";
 const EDITED = "# Original\n\n- Keep the edited step.";
@@ -14,12 +16,12 @@ const MISSING_SETTINGS = { readSettings: async () => ({ kind: "missing" as const
 const STATE_ENTRY_TYPE = "plan-mode-state";
 const KEPT = " The edit was not applied; Edit plan… reopens it while this plan is current.";
 
-type Mock = ReturnType<typeof createMockPi>;
+type Mock = ReturnType<typeof createPlanPi>;
 
-async function readyPlan(mock: Mock, ctx: unknown) {
-  await mock.events.get("session_start")?.[0]?.({}, ctx);
+async function readyPlan(mock: Mock, ctx: RecordedContext) {
+  await mock.handlers.get("session_start")?.[0]?.({}, ctx);
   await mock.commands.get("plan")?.handler("start", ctx);
-  const complete = mock.tools.find((candidate) => candidate.name === "plan_mode_complete")?.execute as (
+  const complete = [...mock.tools.values()].find((candidate) => candidate.name === "plan_mode_complete")?.execute as (
     ...args: unknown[]
   ) => Promise<unknown>;
   await complete("complete", { plan: PLAN }, undefined, undefined, ctx);
@@ -42,7 +44,7 @@ function editMessages(mock: Mock) {
 function editingContext(editor: (title: string, prefill?: string) => Promise<string | undefined>, extra = {}) {
   let edits = 0;
   const titles: string[] = [];
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     select: async (title: string, options: string[]) => {
@@ -66,7 +68,7 @@ test("cancelled, unchanged, empty and oversized edits leave the plan, entries an
     ["  \n", `Edited plan rejected: plan must not be empty.${KEPT}`],
     ["x".repeat(50_001), `Edited plan rejected: plan must not exceed 50000 characters.${KEPT}`],
   ] as const) {
-    const mock = createMockPi({ activeTools: ["read"] });
+    const mock = createPlanPi({ activeTools: ["read"] });
     planMode(mock.pi, MISSING_SETTINGS);
     const { context, titles } = editingContext(async () => result);
     await readyPlan(mock, context.ctx);
@@ -85,7 +87,7 @@ test("cancelled, unchanged, empty and oversized edits leave the plan, entries an
 });
 
 test("an accepted edit persists once, tells the model once and is not a decline", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, MISSING_SETTINGS);
   const prefills: Array<{ title: string; prefill?: string }> = [];
   const { context } = editingContext(async (title, prefill) => {
@@ -115,13 +117,13 @@ test("an accepted edit persists once, tells the model once and is not a decline"
 });
 
 test("Edit then Start fresh hands the fresh session only the edited plan", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, MISSING_SETTINGS);
   const destinationEntries: Array<{ customType: string; data: unknown }> = [];
   const destinationMessages: string[] = [];
   const replacementMessages: string[] = [];
   let choices = 0;
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: { provider: "test-provider", id: "test-model" },
@@ -174,9 +176,9 @@ test("Edit then Start fresh hands the fresh session only the edited plan", async
 });
 
 test("an edit is discarded when the plan changes while the editor is open", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, MISSING_SETTINGS);
-  let ctx: unknown;
+  let ctx: RecordedContext;
   const { context } = editingContext(async () => {
     await mock.commands.get("plan")?.handler("exit", ctx);
     return EDITED;
@@ -194,11 +196,11 @@ test("an edit is discarded when the plan changes while the editor is open", asyn
 
 test("a failed edit record leaves the ready plan unchanged", async () => {
   for (const failure of [new Error("session closed\u001b[31m"), "session closed"]) {
-    const mock = createMockPi({ activeTools: ["read"] });
-    const send = mock.rawPi.sendMessage;
-    mock.rawPi.sendMessage = (message: unknown, options?: unknown) => {
+    const mock = createPlanPi({ activeTools: ["read"] });
+    const send = mock.pi.sendMessage;
+    mock.pi.sendMessage = (message: unknown, options?: unknown) => {
       if ((message as { customType?: string }).customType === PLAN_EDIT_MESSAGE_TYPE) throw failure;
-      send(message, options);
+      send(message as never, options as never);
     };
     planMode(mock.pi, MISSING_SETTINGS);
     const { context } = editingContext(async () => EDITED);
@@ -218,10 +220,10 @@ test("a failed edit record leaves the ready plan unchanged", async () => {
 });
 
 test("an edit after the ready chooser closed updates the plan without a live presentation", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, MISSING_SETTINGS);
   let menus = 0;
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     select: async (_title: string, options: string[]) => {
@@ -231,7 +233,7 @@ test("an edit after the ready chooser closed updates the plan without a live pre
     editor: async () => EDITED,
   });
   await readyPlan(mock, context.ctx);
-  await mock.events.get("agent_settled")?.[0]?.({}, context.ctx);
+  await mock.handlers.get("agent_settled")?.[0]?.({}, context.ctx);
   assert.equal(menus, 1, "the automatic chooser opened and closed with no action");
   await mock.commands.get("plan")?.handler("", context.ctx);
 
@@ -241,19 +243,19 @@ test("an edit after the ready chooser closed updates the plan without a live pre
 });
 
 test("an edit that finds no plan opens no editor", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, MISSING_SETTINGS);
   let editors = 0;
   let menus = 0;
-  let ctx: unknown;
-  const context = createMockContext({
+  let ctx: RecordedContext;
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     select: async () => {
       menus += 1;
       if (menus > 1) return undefined;
       // A user-started run clears the ready plan while this menu is still open.
-      await mock.events.get("before_agent_start")?.[0]?.({ messageType: "user" }, ctx);
+      await mock.handlers.get("before_agent_start")?.[0]?.({ messageType: "user" }, ctx);
       return "Edit plan…";
     },
     editor: async () => {
@@ -271,7 +273,7 @@ test("an edit that finds no plan opens no editor", async () => {
 });
 
 test("a saved plan edit is restored and implemented later with its edited text", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, MISSING_SETTINGS);
   const prefills: Array<{ title: string; prefill?: string }> = [];
   const { context } = editingContext(
@@ -293,10 +295,10 @@ test("a saved plan edit is restored and implemented later with its edited text",
   assert.equal(editMessages(mock).length, 1);
 
   // A fresh extension instance restores the edited saved plan from the persisted branch.
-  const resumed = createMockPi({ activeTools: ["read"] });
+  const resumed = createPlanPi({ activeTools: ["read"] });
   planMode(resumed.pi, MISSING_SETTINGS);
   const branch = mock.entries.map((entry) => ({ type: "custom", ...entry }));
-  const resumedContext = createMockContext({
+  const resumedContext = createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: { provider: "test-provider", id: "test-model" },
@@ -308,16 +310,16 @@ test("a saved plan edit is restored and implemented later with its edited text",
       getEntries: () => branch,
     },
   });
-  await resumed.events.get("session_start")?.[0]?.({}, resumedContext.ctx);
+  await resumed.handlers.get("session_start")?.[0]?.({}, resumedContext.ctx);
   await resumed.commands.get("plan")?.handler("implement", resumedContext.ctx);
   assert.deepEqual(
-    resumed.sentUserMessages.map(({ text }) => text),
+    resumed.sentUserMessages.map(({ content }) => content),
     [formatTransferredPlanPrompt(EDITED, false)],
   );
 });
 
 test("an edit is refused when a run starts while the editor is open", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, MISSING_SETTINGS);
   let idle = true;
   const { context } = editingContext(
@@ -345,7 +347,7 @@ test("an edit is refused when a run starts while the editor is open", async () =
 /** RPC `/plan` menus that pick `Edit plan…` on every open and close the reopened menu. */
 function repeatEditContext(editor: (title: string, prefill?: string) => Promise<string | undefined>) {
   let opened = 0;
-  return createMockContext({
+  return createPlanContext({
     mode: "rpc",
     hasUI: true,
     select: async (_title: string, options: string[]) => {
@@ -357,7 +359,7 @@ function repeatEditContext(editor: (title: string, prefill?: string) => Promise<
 }
 
 test("refused editor text reopens on the next edit of the same plan until it is saved", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, MISSING_SETTINGS);
   const tooLong = `${PLAN}\n${"x".repeat(50_000)}`;
   const results = [tooLong, undefined, EDITED, undefined];
@@ -376,13 +378,13 @@ test("refused editor text reopens on the next edit of the same plan until it is 
 });
 
 test("refused editor text is dropped once the plan it was based on changes", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, MISSING_SETTINGS);
   let idle = true;
   let opened = 0;
   const results = [EDITED, undefined];
   const prefills: Array<string | undefined> = [];
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     select: async (_title: string, options: string[]) => {
@@ -400,7 +402,7 @@ test("refused editor text is dropped once the plan it was based on changes", asy
   // The first edit is refused because a run starts while the editor is open.
   await mock.commands.get("plan")?.handler("", context.ctx);
   idle = true;
-  const complete = mock.tools.find((candidate) => candidate.name === "plan_mode_complete")?.execute as (
+  const complete = [...mock.tools.values()].find((candidate) => candidate.name === "plan_mode_complete")?.execute as (
     ...args: unknown[]
   ) => Promise<unknown>;
   await complete("replacement", { plan: "# Replacement\n\n- New step." }, undefined, undefined, context.ctx);
@@ -414,7 +416,7 @@ test("refused editor text is dropped once the plan it was based on changes", asy
 function branchBackedEditContext(mock: Mock, editor: (prefill?: string) => Promise<string | undefined>) {
   let opened = 0;
   const branch = () => mock.entries.map((entry) => ({ type: "custom", ...entry }));
-  return createMockContext({
+  return createPlanContext({
     mode: "rpc",
     hasUI: true,
     sessionManager: {
@@ -434,7 +436,7 @@ function branchBackedEditContext(mock: Mock, editor: (prefill?: string) => Promi
 const OVERSIZED = `${PLAN}\n${"x".repeat(50_000)}`;
 
 test("a kept draft is dropped by a tree move before the next edit", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, MISSING_SETTINGS);
   const results = [OVERSIZED, undefined];
   const prefills: Array<string | undefined> = [];
@@ -444,21 +446,21 @@ test("a kept draft is dropped by a tree move before the next edit", async () => 
   });
   await readyPlan(mock, context.ctx);
   await mock.commands.get("plan")?.handler("", context.ctx);
-  await mock.events.get("session_tree")?.[0]?.({}, context.ctx);
+  await mock.handlers.get("session_tree")?.[0]?.({}, context.ctx);
   await mock.commands.get("plan")?.handler("", context.ctx);
 
   assert.deepEqual(prefills, [PLAN, PLAN]);
 });
 
 test("an edit refused across a tree move made while the editor was open is not kept", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, MISSING_SETTINGS);
   const prefills: Array<string | undefined> = [];
-  let ctx: unknown;
+  let ctx: RecordedContext;
   const context = branchBackedEditContext(mock, async (prefill) => {
     prefills.push(prefill);
     if (prefills.length > 1) return undefined;
-    await mock.events.get("session_tree")?.[0]?.({}, ctx);
+    await mock.handlers.get("session_tree")?.[0]?.({}, ctx);
     return OVERSIZED;
   });
   ctx = context.ctx;
@@ -475,7 +477,7 @@ test("an edit refused across a tree move made while the editor was open is not k
 });
 
 test("a draft kept on the ready plan does not prefill the same text once it is saved for later", async () => {
-  const mock = createMockPi({ activeTools: ["read"] });
+  const mock = createPlanPi({ activeTools: ["read"] });
   planMode(mock.pi, MISSING_SETTINGS);
   const results = [OVERSIZED, undefined];
   const prefills: Array<string | undefined> = [];

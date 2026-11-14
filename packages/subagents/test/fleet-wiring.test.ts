@@ -20,25 +20,9 @@ vi.mock("../src/agent-runner.js", async () => {
 });
 
 import { runAgent } from "../src/agent-runner.js";
+import { bootPi } from "./helpers/boot-extension.js";
 import subagentsExtension from "./helpers/home-extension.js";
 
-function makePi() {
-  const tools = new Map<string, any>();
-  const lifecycle = new Map<string, any>();
-  const pi = {
-    registerMessageRenderer: vi.fn(),
-    registerTool: vi.fn((t: any) => tools.set(t.name, t)),
-    registerCommand: vi.fn(),
-    registerEntryRenderer: vi.fn(),
-    registerFlag: vi.fn(),
-    getFlag: vi.fn(),
-    on: vi.fn((event: string, handler: any) => lifecycle.set(event, handler)),
-    events: { emit: vi.fn(), on: vi.fn(() => vi.fn()) },
-    appendEntry: vi.fn(),
-    sendMessage: vi.fn(),
-  } as any;
-  return { pi, tools, lifecycle };
-}
 
 /** A UI context with the surfaces the widget + fleet touch; setWidget is spied. */
 function uiCtx() {
@@ -99,7 +83,7 @@ describe("FleetView wiring (real extension lifecycle)", () => {
   });
 
   it("captures terminal input on tool_execution_start (fleet hooked into the UI)", async () => {
-    const { pi, lifecycle } = makePi();
+    const { pi, lifecycle } = bootPi();
     subagentsExtension(pi);
     const ui = uiCtx();
     await lifecycle.get("tool_execution_start")?.({}, ctxWith(ui));
@@ -114,7 +98,7 @@ describe("FleetView wiring (real extension lifecycle)", () => {
       steered: false,
     });
 
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
 
     const ui = uiCtx();

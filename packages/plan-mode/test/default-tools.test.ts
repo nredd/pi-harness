@@ -6,28 +6,28 @@ import { test, vi } from "vitest";
 import planMode from "../src/plan-mode.js";
 import * as settingsModule from "../src/settings.js";
 import { createFakeSettingsWatch } from "./settings-watch-support.js";
-import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
+import { builtinTool, createPlanContext, createPlanPi, extensionTool } from "./support.js";
 
 const HELPERS = ["plan_mode_question", "plan_mode_complete"];
 
-async function start(mock: ReturnType<typeof createMockPi>, context = createMockContext()) {
-  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+async function start(mock: ReturnType<typeof createPlanPi>, context = createPlanContext()) {
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
   return context;
 }
 
 async function callTool(
-  mock: ReturnType<typeof createMockPi>,
-  context: ReturnType<typeof createMockContext>,
+  mock: ReturnType<typeof createPlanPi>,
+  context: ReturnType<typeof createPlanContext>,
   toolName: string,
   input: unknown = {},
 ) {
-  return mock.events.get("tool_call")?.[0]?.({ toolName, input }, context.ctx);
+  return mock.handlers.get("tool_call")?.[0]?.({ toolName, input }, context.ctx);
 }
 
 test("Plan lifecycle never mutates the stable helper-tool envelope", async () => {
   const baseline = ["read", "bash", "edit", "write", "custom", ...HELPERS];
-  const mock = createMockPi({
+  const mock = createPlanPi({
     activeTools: ["read", "bash", "edit", "write", "custom"],
     allTools: [
       builtinTool("read"),
@@ -38,21 +38,21 @@ test("Plan lifecycle never mutates the stable helper-tool envelope", async () =>
     ],
   });
   const writes: string[][] = [];
-  const setActiveTools = mock.rawPi.setActiveTools.bind(mock.rawPi);
-  mock.rawPi.setActiveTools = (names) => {
+  const setActiveTools = mock.pi.setActiveTools.bind(mock.pi);
+  mock.pi.setActiveTools = (names) => {
     writes.push([...names]);
     setActiveTools(names);
   };
   planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
-  const context = createMockContext();
+  const context = createPlanContext();
 
-  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
   await mock.commands.get("plan")?.handler("exit", context.ctx);
-  await mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
-  await mock.events.get("session_start")?.[0]?.({ reason: "reload" }, context.ctx);
+  await mock.handlers.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "reload" }, context.ctx);
 
-  assert.deepEqual(mock.rawPi.getActiveTools(), baseline);
+  assert.deepEqual(mock.pi.getActiveTools(), baseline);
   assert.deepEqual(writes, []);
 });
 
@@ -60,7 +60,7 @@ test("watched retired visibility is ignored while remaining settings still reloa
   await withAgentDir(async (agentDir) => {
     const settingsPath = join(agentDir, "pi-plan-mode.json");
     await writeFile(settingsPath, '{"toolVisibility":"always"}\n');
-    const mock = createMockPi({ activeTools: ["read"], thinkingLevel: "low" });
+    const mock = createPlanPi({ activeTools: ["read"], thinkingLevel: "low" });
     let reloaded = false;
     const watch = createFakeSettingsWatch();
     const readSettings = settingsModule.readPlanModeSettings;
@@ -70,9 +70,9 @@ test("watched retired visibility is ignored while remaining settings still reloa
       return result;
     });
     planMode(mock.pi, { settingsPath, watchSettingsDirectory: watch.watchSettingsDirectory });
-    const context = createMockContext();
+    const context = createPlanContext();
     try {
-      await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+      await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
       await writeFile(
         settingsPath,
         '{"toolVisibility":"after-first-plan","toggleShortcut":"ctrl+shift+p","thinkingLevel":"high"}\n',
@@ -83,9 +83,9 @@ test("watched retired visibility is ignored while remaining settings still reloa
 
       assert.equal(mock.thinkingLevel, "high");
       assert.equal(mock.shortcuts.size, 0, "shortcut changes remain pending until runtime reload");
-      assert.deepEqual(mock.rawPi.getActiveTools(), ["read", ...HELPERS]);
+      assert.deepEqual(mock.pi.getActiveTools(), ["read", ...HELPERS]);
     } finally {
-      await mock.events.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
+      await mock.handlers.get("session_shutdown")?.[0]?.({ reason: "quit" }, context.ctx);
       readSpy.mockRestore();
     }
   });
@@ -96,14 +96,14 @@ test("configured Plan tools are an allowlist over active tools, not an activatio
     const settingsPath = join(agentDir, "pi-plan-mode.json");
     await writeFile(settingsPath, JSON.stringify({ defaultPlanTools: ["bash", "custom", "write", "missing"] }));
     const baseline = ["read", "write", ...HELPERS];
-    const mock = createMockPi({
+    const mock = createPlanPi({
       activeTools: ["read", "write"],
       allTools: [builtinTool("read"), builtinTool("bash"), builtinTool("write"), extensionTool("custom")],
     });
     planMode(mock.pi);
     const context = await start(mock);
 
-    assert.deepEqual(mock.rawPi.getActiveTools(), baseline);
+    assert.deepEqual(mock.pi.getActiveTools(), baseline);
     for (const name of ["read", "bash", "custom", "write", "missing"]) {
       const result = (await callTool(mock, context, name)) as { block?: boolean } | undefined;
       assert.equal(result?.block, true, name);
@@ -117,22 +117,22 @@ test("configured Plan tools are an allowlist over active tools, not an activatio
 
 test("active PowerShell is an automatic safe built-in without changing tool schemas", async () => {
   const baseline = ["read", "powershell", "write", ...HELPERS];
-  const mock = createMockPi({
+  const mock = createPlanPi({
     activeTools: ["read", "powershell", "write"],
     allTools: [builtinTool("read"), builtinTool("powershell"), builtinTool("write")],
   });
   planMode(mock.pi);
-  const context = createMockContext();
+  const context = createPlanContext();
 
   assert.equal(
     await callTool(mock, context, "powershell", { command: "Remove-Item README.md" }),
     undefined,
     "inactive Plan mode must not enforce its PowerShell policy",
   );
-  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
 
-  assert.deepEqual(mock.rawPi.getActiveTools(), baseline);
+  assert.deepEqual(mock.pi.getActiveTools(), baseline);
   assert.equal(await callTool(mock, context, "powershell", { command: "Get-ChildItem -Force" }), undefined);
   assert.equal(
     (
@@ -146,7 +146,7 @@ test("active PowerShell is an automatic safe built-in without changing tool sche
 
 test("active selected custom tools execute while deselected and mutating tools fail closed", async () => {
   const baseline = ["read", "bash", "write", "custom", ...HELPERS];
-  const mock = createMockPi({
+  const mock = createPlanPi({
     activeTools: ["read", "bash", "write", "custom"],
     allTools: [builtinTool("read"), builtinTool("bash"), builtinTool("write"), extensionTool("custom")],
   });
@@ -158,7 +158,7 @@ test("active selected custom tools execute while deselected and mutating tools f
   });
   const context = await start(mock);
 
-  assert.deepEqual(mock.rawPi.getActiveTools(), baseline);
+  assert.deepEqual(mock.pi.getActiveTools(), baseline);
   assert.equal(await callTool(mock, context, "custom"), undefined);
   assert.equal(await callTool(mock, context, "bash", { command: "git status --short" }), undefined);
   for (const name of ["read", "write", "update_plan"]) {
@@ -173,7 +173,7 @@ test("automatic and explicit-empty policy defaults remain distinct without chang
     [undefined, ["read", "bash"]],
     [[], []],
   ] as const) {
-    const mock = createMockPi({ activeTools: ["read", "bash", "write"], allTools });
+    const mock = createPlanPi({ activeTools: ["read", "bash", "write"], allTools });
     planMode(mock.pi, {
       readSettings: async () => ({
         kind: "loaded" as const,
@@ -184,7 +184,7 @@ test("automatic and explicit-empty policy defaults remain distinct without chang
       }),
     });
     const context = await start(mock);
-    assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "write", ...HELPERS]);
+    assert.deepEqual(mock.pi.getActiveTools(), ["read", "bash", "write", ...HELPERS]);
     for (const name of ["read", "bash"]) {
       const result = (await callTool(mock, context, name, name === "bash" ? { command: "git status --short" } : {})) as
         | { block?: boolean }
@@ -199,7 +199,7 @@ test("an active workflow snapshots defaults instead of following later settings 
     thinkingLevel: "inherit" as const,
     defaultPlanTools: ["read"],
   };
-  const mock = createMockPi({
+  const mock = createPlanPi({
     activeTools: ["read", "bash"],
     allTools: [builtinTool("read"), builtinTool("bash")],
   });
@@ -219,20 +219,20 @@ test("branch-restored selections constrain policy while helpers remain model-vis
     customType: "plan-mode-state",
     data: { enabled: true, awaitingAction: false, selectedToolNames: ["read"] },
   };
-  const mock = createMockPi({
+  const mock = createPlanPi({
     activeTools: ["read", "bash", "write"],
     allTools: [builtinTool("read"), builtinTool("bash"), builtinTool("write")],
   });
   planMode(mock.pi);
-  const context = createMockContext({
+  const context = createPlanContext({
     sessionManager: {
       getBranch: () => [stateEntry],
       getEntries: () => [stateEntry],
     },
   });
-  await mock.events.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "resume" }, context.ctx);
 
-  assert.deepEqual(mock.rawPi.getActiveTools(), ["read", "bash", "write", ...HELPERS]);
+  assert.deepEqual(mock.pi.getActiveTools(), ["read", "bash", "write", ...HELPERS]);
   assert.equal(await callTool(mock, context, "read"), undefined);
   assert.equal(((await callTool(mock, context, "bash", { command: "pwd" })) as { block?: boolean }).block, true);
 });

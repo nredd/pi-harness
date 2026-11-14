@@ -24,7 +24,7 @@ import { registerAgents } from "../src/agent-types.js";
 import { NOTIFICATION_HOLD_MS } from "../src/completion-outbox.js";
 import { setAgentModels } from "../src/model-resolver.js";
 import { ADMIT_CHANNEL } from "../src/quota-admission.js";
-import { flush, makePi, startSession, textOf } from "./helpers/boot-extension.js";
+import { bootPi, flush, startSession, textOf } from "./helpers/boot-extension.js";
 import subagentsExtension, { createSubagentsExtension } from "./helpers/home-extension.js";
 import { runnerResolution } from "./helpers/runner-resolution.js";
 
@@ -35,7 +35,7 @@ const FALLBACK = { input: "claude-haiku-4-5", used: "anthropic/claude-sonnet-5-5
 let cwd: string;
 let saved: { cwd: string; agentDir?: string };
 let sessionFile: string;
-let activeLifecycle: ReturnType<typeof makePi>["lifecycle"] | undefined;
+let activeLifecycle: ReturnType<typeof bootPi>["lifecycle"] | undefined;
 
 function ctx() {
   return {
@@ -76,7 +76,7 @@ afterEach(async () => {
 });
 
 async function boot(clock?: FakeClock) {
-  const b = makePi();
+  const b = bootPi();
   activeLifecycle = b.lifecycle;
   if (clock) {
     const events = new EventEmitter();

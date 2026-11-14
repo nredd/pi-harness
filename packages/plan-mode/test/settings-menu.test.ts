@@ -8,7 +8,7 @@ import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing
 import { test } from "vitest";
 import { type PlanModeSettings, updatePlanModeSettings } from "../src/settings.js";
 import { showPlanModeSettings } from "../src/settings-menu.js";
-import { builtinTool, createMockContext, extensionTool } from "./harness/support.js";
+import { builtinTool, createPlanContext, extensionTool } from "./harness/support.js";
 import { nativeTool } from "./tool-exposure-support.js";
 
 const AVAILABLE_MODELS = [
@@ -20,8 +20,8 @@ async function withSettingsMenu(
   run: (fixture: {
     settingsPath: string;
     tui: ReturnType<typeof createTuiHarness>;
-    ctx: ReturnType<typeof createMockContext>["ctx"];
-    notifications: ReturnType<typeof createMockContext>["notifications"];
+    ctx: ReturnType<typeof createPlanContext>["ctx"];
+    notifications: ReturnType<typeof createPlanContext>["notifications"];
     saved: PlanModeSettings[];
   }) => Promise<void>,
   tuiOptions: Parameters<typeof createTuiHarness>[0] = {},
@@ -29,7 +29,7 @@ async function withSettingsMenu(
   const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-menu-"));
   const settingsPath = join(directory, "pi-plan-mode.json");
   const tui = createTuiHarness({ width: 72, rows: 24, ...tuiOptions });
-  const context = createMockContext({
+  const context = createPlanContext({
     cwd: directory,
     mode: "tui",
     hasUI: true,
@@ -485,7 +485,7 @@ test("RPC shortcut saves and clears explain that TUI bindings require reload", a
       { kind: "input", response: "" },
       { kind: "select", response: undefined },
     ]);
-    const context = createMockContext({ mode: "rpc", hasUI: true, ...rpc.ui });
+    const context = createPlanContext({ mode: "rpc", hasUI: true, ...rpc.ui });
     const saved: PlanModeSettings[] = [];
     await showPlanModeSettings(context.ctx, menuOptions(settingsPath, saved));
     rpc.assertConsumed();
@@ -577,7 +577,7 @@ test("RPC Settings persists native callable selection and keeps hidden tools una
       { kind: "select", response: "[ ] mcp__docs__read" },
       { kind: "select", response: undefined },
     ]);
-    const context = createMockContext({ cwd: directory, mode: "rpc", hasUI: true, ...rpc.ui });
+    const context = createPlanContext({ cwd: directory, mode: "rpc", hasUI: true, ...rpc.ui });
     const saved: PlanModeSettings[] = [];
     await showPlanModeSettings(
       context.ctx,
@@ -651,7 +651,7 @@ test("RPC Settings changes retention and export destination with the same flat n
         response: undefined,
       },
     ]);
-    const context = createMockContext({ cwd: directory, mode: "rpc", hasUI: true, ...rpc.ui });
+    const context = createPlanContext({ cwd: directory, mode: "rpc", hasUI: true, ...rpc.ui });
     const saved: PlanModeSettings[] = [];
     await showPlanModeSettings(context.ctx, menuOptions(settingsPath, saved));
     rpc.assertConsumed();
@@ -680,7 +680,7 @@ test("Plan settings adapt to RPC cancellation and disposal aborts an in-flight s
       response: undefined,
     },
   ]);
-  const rpcContext = createMockContext({ mode: "rpc", hasUI: true, ...rpc.ui });
+  const rpcContext = createPlanContext({ mode: "rpc", hasUI: true, ...rpc.ui });
   await showPlanModeSettings(
     rpcContext.ctx,
     menuOptions("/tmp/pi-plan-mode.json", [], { tools: [builtinTool("read")] as ToolInfo[] }),
@@ -772,7 +772,7 @@ test("Fresh model choices drop blank model names and keep every model selectable
     { provider: "provider-three", id: "model-three", name: "\u0001  " },
   ];
   const offered: string[][] = [];
-  const context = createMockContext({
+  const context = createPlanContext({
     mode: "rpc",
     hasUI: true,
     modelRegistry: { getAvailable: () => models },

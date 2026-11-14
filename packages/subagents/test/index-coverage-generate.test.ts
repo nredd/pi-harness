@@ -15,7 +15,7 @@ import { getAgentConfig } from "../src/agent-types.js";
 import { createSubagentsExtension } from "../src/index.js";
 import type { AgentRecord } from "../src/types.js";
 import { isWorktreeIsolationEnabled, setWorktreeIsolationEnabled } from "../src/worktree.js";
-import { type BootedPi, ctx, type Hermetic, hermeticDir, makePi, startSession } from "./helpers/boot-extension.js";
+import { type BootedPi, bootPi, ctx, type Hermetic, hermeticDir, startSession } from "./helpers/boot-extension.js";
 import { answer } from "./helpers/scenario-session.js";
 
 let env: Hermetic;
@@ -42,7 +42,7 @@ beforeEach(async () => {
   selections = ["Create new agent", "Project", "Generate with Claude (recommended)"];
   inputs = ["Audit private configuration", "generated"];
   notify.mockReset(); confirm.mockReset(); confirm.mockResolvedValue(false);
-  boot = makePi();
+  boot = bootPi();
   const events = new EventEmitter();
   boot.pi.events = {
     emit: vi.fn((event: string, value: unknown) => events.emit(event, value)),

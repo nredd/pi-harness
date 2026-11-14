@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import planMode from "../src/plan-mode.js";
 import { isSafeCommand, isSafePowerShellCommand } from "../src/tool-policy.js";
-import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
+import { builtinTool, createPlanContext, createPlanPi, extensionTool } from "./support.js";
 
 const CUSTOM_TOOL = "research_tool";
 
@@ -13,7 +13,7 @@ async function startPlan(options: {
   activeTools: string[];
   allTools: ReturnType<typeof builtinTool>[];
 }) {
-  const mock = createMockPi({ activeTools: options.activeTools, allTools: options.allTools });
+  const mock = createPlanPi({ activeTools: options.activeTools, allTools: options.allTools });
   planMode(mock.pi, {
     readSettings: async () => ({
       kind: "loaded" as const,
@@ -23,14 +23,14 @@ async function startPlan(options: {
       },
     }),
   });
-  const context = createMockContext();
-  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  const context = createPlanContext();
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
   return { context, mock };
 }
 
 async function callTool(fixture: Awaited<ReturnType<typeof startPlan>>, toolName: string, input: unknown = {}) {
-  return fixture.mock.events.get("tool_call")?.[0]?.({ toolName, input }, fixture.context.ctx) as ToolCallResult;
+  return fixture.mock.handlers.get("tool_call")?.[0]?.({ toolName, input }, fixture.context.ctx) as ToolCallResult;
 }
 
 test("issue 1039: any active extension tool requires explicit Plan-policy opt-in", async () => {
@@ -67,13 +67,13 @@ test("issue 1039: denied tools report inactive, unavailable, frozen, and blocked
     activeTools: ["read", CUSTOM_TOOL],
     allTools: [builtinTool("read"), extensionTool(CUSTOM_TOOL)],
   });
-  await deactivated.mock.events.get("context")?.[0]?.({ messages: [] }, deactivated.context.ctx);
-  deactivated.mock.rawPi.setActiveTools(["read", "plan_mode_question", "plan_mode_complete"]);
+  await deactivated.mock.handlers.get("context")?.[0]?.({ messages: [] }, deactivated.context.ctx);
+  deactivated.mock.pi.setActiveTools(["read", "plan_mode_question", "plan_mode_complete"]);
   assert.deepEqual(await callTool(deactivated, CUSTOM_TOOL), {
     block: true,
     reason: `Plan mode blocks tool '${CUSTOM_TOOL}' because it was admitted to the active Plan workflow but is currently inactive. Reactivate it to continue without restarting.`,
   });
-  deactivated.mock.rawPi.setActiveTools(["read", CUSTOM_TOOL, "plan_mode_question", "plan_mode_complete"]);
+  deactivated.mock.pi.setActiveTools(["read", CUSTOM_TOOL, "plan_mode_question", "plan_mode_complete"]);
   assert.equal(await callTool(deactivated, CUSTOM_TOOL), undefined);
 
   const late = await startPlan({
@@ -81,7 +81,7 @@ test("issue 1039: denied tools report inactive, unavailable, frozen, and blocked
     activeTools: ["read"],
     allTools: [builtinTool("read"), extensionTool(CUSTOM_TOOL)],
   });
-  late.mock.rawPi.setActiveTools(["read", CUSTOM_TOOL, "plan_mode_question", "plan_mode_complete"]);
+  late.mock.pi.setActiveTools(["read", CUSTOM_TOOL, "plan_mode_question", "plan_mode_complete"]);
   assert.deepEqual(await callTool(late, CUSTOM_TOOL), {
     block: true,
     reason: `Plan mode blocks tool '${CUSTOM_TOOL}' because it was not available when the active Plan workflow froze its tool policy. Exit Plan mode, then start again after the tool is available.`,
@@ -91,8 +91,8 @@ test("issue 1039: denied tools report inactive, unavailable, frozen, and blocked
     activeTools: ["read"],
     allTools: [builtinTool("read"), builtinTool("powershell")],
   });
-  await lateAutomatic.mock.events.get("context")?.[0]?.({ messages: [] }, lateAutomatic.context.ctx);
-  lateAutomatic.mock.rawPi.setActiveTools(["read", "powershell", "plan_mode_question", "plan_mode_complete"]);
+  await lateAutomatic.mock.handlers.get("context")?.[0]?.({ messages: [] }, lateAutomatic.context.ctx);
+  lateAutomatic.mock.pi.setActiveTools(["read", "powershell", "plan_mode_question", "plan_mode_complete"]);
   assert.deepEqual(await callTool(lateAutomatic, "powershell"), {
     block: true,
     reason:

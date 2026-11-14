@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { test } from "vitest";
 import { startFreshImplementationFromState, startFreshImplementationSession } from "../src/fresh-implementation.js";
-import { createMockContext } from "./harness/support.js";
+import { createPlanContext } from "./harness/support.js";
 
 const request = {
   plan: "# Approved",
@@ -13,7 +13,7 @@ const request = {
 };
 
 function fixture(overrides: Record<string, unknown> = {}) {
-  return createMockContext({
+  return createPlanContext({
     mode: "rpc",
     hasUI: true,
     model: { provider: "test", id: "plan" },

@@ -38,6 +38,7 @@ describe("nested lifecycle boundaries", () => {
     const blocked = join(dir, "not-a-directory");
     writeFileSync(blocked, "");
     vi.stubEnv("TMPDIR", blocked);
+    vi.stubEnv("XDG_STATE_HOME", join(blocked, "state"));
     const manager = {
       getRecord: (id: string) => id === f.parent.id ? f.parent : real.getRecord(id),
       spawnAndWait: real.spawnAndWait.bind(real),

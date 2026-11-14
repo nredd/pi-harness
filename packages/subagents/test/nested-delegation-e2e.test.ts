@@ -23,7 +23,7 @@ import { type Context, getCurrentTools } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerAgents } from "../src/agent-types.js";
 import { loadCustomAgents } from "../src/custom-agents.js";
-import { encodeCwd } from "../src/output-file.js";
+import { encodeCwd, transcriptRoot } from "../src/output-file.js";
 import { budgetUsage, resetBudgetForTests, setBudgetPolicy } from "../src/process-budget.js";
 import {
   agentCall,
@@ -184,8 +184,8 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
     const cwd = mkdtempSync(join(tmpdir(), "nested-e2e-bg-"));
     tmpDirs.push(cwd);
     writeAgents(cwd);
-    const transcriptRoot = join(tmpdir(), `pi-subagents-${process.getuid?.() ?? 0}`, encodeCwd(cwd));
-    rmSync(transcriptRoot, { recursive: true, force: true });
+    const cwdRoot = join(transcriptRoot(), encodeCwd(cwd));
+    rmSync(cwdRoot, { recursive: true, force: true });
 
     const respond = (context: Context): FauxReply => {
       const text = firstUserText(context);
@@ -240,7 +240,7 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
       // prompt that agent was given. Searching the whole file would also match the
       // orchestrator's, which records the same string inside its Agent tool-call
       // arguments, and would pass with nested transcripts switched off entirely.
-      const transcripts = findOutputFiles(transcriptRoot).map((f) => readFileSync(f, "utf-8"));
+      const transcripts = findOutputFiles(cwdRoot).map((f) => readFileSync(f, "utf-8"));
       const workerTranscript = transcripts.find((t) => {
         const first = JSON.parse(t.split("\n")[0]) as { message?: { content?: unknown } };
         return first.message?.content === "Do the leaf work.";
@@ -249,7 +249,7 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
       // ...and it streamed the child's own turn, not just the seeded prompt.
       expect(workerTranscript).toContain(WORKER_MARKER);
     } finally {
-      rmSync(transcriptRoot, { recursive: true, force: true });
+      rmSync(cwdRoot, { recursive: true, force: true });
     }
   });
   // Depth-2 review delegation under the process budget, through the real

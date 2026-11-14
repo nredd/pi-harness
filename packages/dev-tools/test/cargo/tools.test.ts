@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { findWorkspaceRoot, registerCargoTools } from "../../src/cargo/index.ts";
-import { createMockPi } from "../support.ts";
+import { createToolHost } from "../support.ts";
 
 function have(cmd: string): boolean {
 	try {
@@ -15,7 +15,7 @@ function have(cmd: string): boolean {
 	}
 }
 
-const mock = createMockPi();
+const mock = createToolHost();
 let root: string;
 
 /** Two crates: `good` (pedantic lint, one failing test, a doctest, a bin) and `bad` (type error). */
@@ -69,7 +69,7 @@ mod tests {
 // Plan admits check/test/doc by owner decision (#307): no direct edits, though `build.rs` and tests run
 // and write `target/`. Registration needs no toolchain, so this pin runs everywhere.
 it("annotates check/test/doc read-only and the rest not", () => {
-	const plain = createMockPi();
+	const plain = createToolHost();
 	registerCargoTools(plain.pi);
 	for (const name of ["cargo_check", "cargo_test", "cargo_doc"])
 		expect(plain.tools.get(name)?.annotations?.readOnlyHint, name).toBe(true);

@@ -9,11 +9,11 @@ import {
   type PlanModeStateSnapshot,
 } from "../src/child-policy.js";
 import planMode from "../src/plan-mode.js";
-import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
+import { builtinTool, createPlanContext, createPlanPi, extensionTool } from "./support.js";
 
-function query(mock: ReturnType<typeof createMockPi>) {
+function query(mock: ReturnType<typeof createPlanPi>) {
   const replies: PlanModeStateSnapshot[] = [];
-  mock.eventBus.emit(PLAN_MODE_STATE_QUERY, {
+  mock.bus.emit(PLAN_MODE_STATE_QUERY, {
     version: 1,
     reply: (state: PlanModeStateSnapshot) => replies.push(state),
   });
@@ -25,13 +25,13 @@ function call(toolName: string, tool: unknown, input: unknown = {}) {
 }
 
 test("Plan mode answers state queries with a frozen child policy while planning", async () => {
-  const mock = createMockPi({
+  const mock = createPlanPi({
     activeTools: ["read", "bash", "edit", "write"],
     allTools: [builtinTool("read"), builtinTool("bash"), builtinTool("edit"), builtinTool("write")],
   });
   planMode(mock.pi);
-  const context = createMockContext();
-  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  const context = createPlanContext();
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
 
   assert.deepEqual(query(mock), [{ version: 1, active: false, sessionId: "test-session" }]);
 
@@ -65,15 +65,15 @@ test("Plan mode answers state queries with a frozen child policy while planning"
 });
 
 test("a shut-down planner still answers active, with no session and no opt-in tools", async () => {
-  const mock = createMockPi({
+  const mock = createPlanPi({
     activeTools: ["read", "lsp_diagnostics"],
     allTools: [builtinTool("read"), extensionTool("lsp_diagnostics")],
   });
   planMode(mock.pi);
-  const context = createMockContext();
-  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  const context = createPlanContext();
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
-  await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
+  await mock.handlers.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
 
   const [stale] = query(mock);
   assert.equal(stale?.active, true);
@@ -86,11 +86,11 @@ test("a shut-down planner still answers active, with no session and no opt-in to
 });
 
 test("malformed state queries get no answer", () => {
-  const mock = createMockPi();
+  const mock = createPlanPi();
   planMode(mock.pi);
   let replied = false;
   for (const payload of [undefined, null, {}, { version: 2, reply: () => (replied = true) }, { version: 1 }]) {
-    mock.eventBus.emit(PLAN_MODE_STATE_QUERY, payload);
+    mock.bus.emit(PLAN_MODE_STATE_QUERY, payload);
   }
   assert.equal(replied, false);
 });
@@ -160,20 +160,20 @@ for (const reason of ["reload", "resume"] as const) {
       customType: "plan-mode-state",
       data: { enabled: true, awaitingAction: false, selectedToolNames: ["read", "bash"] },
     };
-    const mock = createMockPi({
+    const mock = createPlanPi({
       activeTools: ["read", "bash", "write"],
       allTools: [builtinTool("read"), builtinTool("bash"), builtinTool("write")],
     });
     planMode(mock.pi);
     assert.deepEqual(query(mock), [{ version: 1, active: false, sessionId: undefined }]);
-    const context = createMockContext({
+    const context = createPlanContext({
       sessionManager: {
         getSessionId: () => "restored-session",
         getBranch: () => [stateEntry],
         getEntries: () => [stateEntry],
       },
     });
-    await mock.events.get("session_start")?.[0]?.({ reason }, context.ctx);
+    await mock.handlers.get("session_start")?.[0]?.({ reason }, context.ctx);
 
     const [restored] = query(mock);
     assert.equal(restored?.active, true);
@@ -183,7 +183,7 @@ for (const reason of ["reload", "resume"] as const) {
 }
 
 test("a snapshot that throws answers active with a policy refusing every tool", () => {
-  const mock = createMockPi();
+  const mock = createPlanPi();
   answerPlanModeStateQueries(mock.pi, () => {
     throw new Error("broken");
   });
@@ -196,7 +196,7 @@ test("a snapshot that throws answers active with a policy refusing every tool", 
 });
 
 test("Plan refuses subagent tools unless a compatible gate answers, and announces itself at start", async () => {
-  const mock = createMockPi({
+  const mock = createPlanPi({
     activeTools: ["read", "Agent", "SubagentWorkflow", "steer_subagent", "get_subagent_result"],
     allTools: [
       builtinTool("read"),
@@ -217,17 +217,17 @@ test("Plan refuses subagent tools unless a compatible gate answers, and announce
   });
   const asked: unknown[] = [];
   let gateVersion: number | undefined;
-  mock.eventBus.on(PLAN_MODE_GATE_QUERY, (data) => {
+  mock.bus.on(PLAN_MODE_GATE_QUERY, (data) => {
     asked.push(data);
     if (gateVersion !== undefined) {
       (data as { reply: (answer: unknown) => void }).reply({ version: gateVersion, gate: "test" });
     }
   });
-  const context = createMockContext();
-  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  const context = createPlanContext();
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
   assert.equal(asked.length, 1, "session start announces Plan mode to subagent gates");
   await mock.commands.get("plan")?.handler("start", context.ctx);
-  const hook = mock.events.get("tool_call")?.[0];
+  const hook = mock.handlers.get("tool_call")?.[0];
 
   for (const toolName of ["Agent", "SubagentWorkflow", "steer_subagent"]) {
     assert.deepEqual(await hook?.({ toolName, input: {} }, context.ctx), {

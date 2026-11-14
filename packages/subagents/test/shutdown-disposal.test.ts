@@ -20,32 +20,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GroupJoinManager } from "../src/group-join.js";
 import { AgentWidget } from "../src/ui/agent-widget.js";
+import { bootPi } from "./helpers/boot-extension.js";
 import subagentsExtension from "./helpers/home-extension.js";
 
-function makePi() {
-  const tools = new Map<string, any>();
-  const lifecycle = new Map<string, any>(); // pi.on(...) — session_start, session_before_switch, session_shutdown
-  const events = new Map<string, any>(); // pi.events.on(...) — subagents:rpc:*, etc.
-  const pi = {
-    registerMessageRenderer: vi.fn(),
-    registerTool: vi.fn((t: any) => tools.set(t.name, t)),
-    registerCommand: vi.fn(),
-    registerEntryRenderer: vi.fn(),
-    registerFlag: vi.fn(),
-    getFlag: vi.fn(),
-    on: vi.fn((event: string, handler: any) => lifecycle.set(event, handler)),
-    events: {
-      emit: vi.fn(),
-      on: vi.fn((event: string, handler: any) => {
-        events.set(event, handler);
-        return vi.fn();
-      }),
-    },
-    appendEntry: vi.fn(),
-    sendMessage: vi.fn(),
-  } as any;
-  return { pi, tools, lifecycle, events };
-}
 
 function ctx() {
   return {
@@ -89,7 +66,7 @@ describe("session_shutdown disposes activation-owned resources (#256)", () => {
   });
 
   it("disposes the widget and group-join manager on shutdown", async () => {
-    const { pi, lifecycle } = makePi();
+    const { pi, lifecycle } = bootPi();
     const widgetDispose = vi.spyOn(AgentWidget.prototype, "dispose");
     const groupJoinDispose = vi.spyOn(GroupJoinManager.prototype, "dispose");
     subagentsExtension(pi);
@@ -101,7 +78,7 @@ describe("session_shutdown disposes activation-owned resources (#256)", () => {
   });
 
   it("does not dispose them on session_before_switch — a vetoed switch must keep the live UI", async () => {
-    const { pi, lifecycle } = makePi();
+    const { pi, lifecycle } = bootPi();
     const widgetDispose = vi.spyOn(AgentWidget.prototype, "dispose");
     const groupJoinDispose = vi.spyOn(GroupJoinManager.prototype, "dispose");
     subagentsExtension(pi);

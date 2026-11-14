@@ -22,7 +22,7 @@ import subagentsExtension from "../src/index.js";
 import { ADMIT_CHANNEL, admissionOutcome, checkAdmission, PARKED_RESUME_DELAY_MS, QUOTA_RESTART_GRACE_MS } from "../src/quota-admission.js";
 import { SubagentScheduler } from "../src/schedule.js";
 import { resolveStorePath, ScheduleStore } from "../src/schedule-store.js";
-import { ctx, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
+import { bootPi, ctx, hermeticDir, textOf } from "./helpers/boot-extension.js";
 
 type Verdict = { ok: boolean; resetAt?: number; wait?: boolean } | "error" | "silent" | "garbage";
 
@@ -102,7 +102,7 @@ describe("Agent tool admission", () => {
 
   async function boot(verdict: (model: string) => Verdict) {
     const hermetic = hermeticDir();
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     const bus = routerBus(verdict);
     pi.events = bus.events;
     subagentsExtension(pi);

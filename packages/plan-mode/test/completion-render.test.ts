@@ -11,7 +11,7 @@ import {
   renderPlanModeCompletionCall,
 } from "../src/completion-tool.js";
 import planMode from "../src/plan-mode.js";
-import { createMockPi } from "./support.js";
+import { createPlanPi } from "./support.js";
 
 const PLAN = "Intro line\n\n## Ship the thing\n\n- step one\n- step two";
 
@@ -45,9 +45,9 @@ test("planTitle prefers the first heading, then the first line", () => {
 
 test("plan_mode_complete renderCall is the title and the collapsed result leads with the summary", () => {
   initTheme("dark");
-  const mock = createMockPi();
+  const mock = createPlanPi();
   planMode(mock.pi);
-  const tool = mock.tools.find((candidate) => candidate.name === "plan_mode_complete");
+  const tool = [...mock.tools.values()].find((candidate) => candidate.name === "plan_mode_complete");
   const renderCall = tool?.renderCall as (args: unknown) => { render(width: number): string[]; invalidate(): void };
   const titledCall = renderCall({ plan: PLAN });
   assert.deepEqual(titledCall.render(80), ["Ship the thing"]);

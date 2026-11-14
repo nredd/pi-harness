@@ -1,11 +1,12 @@
-import { createMockPi, makeTheme } from "@juicesharp/rpiv-test-utils";
+import { makeTheme } from "@juicesharp/rpiv-test-utils";
 import { describe, expect, it, vi } from "vitest";
 import { registerTodoTool } from "./.test-support/home-fixtures.ts";
+import { createTodoPi } from "./tests/fixtures/todo-host.ts";
 
 type RenderState = { taskSnapshot?: unknown; onRenderStateChange?: () => void };
 
 function renderCallOf() {
-	const { pi, captured } = createMockPi();
+	const { pi, captured } = createTodoPi();
 	registerTodoTool(pi);
 	const tool = captured.tools.get("todo");
 	if (!tool?.renderCall) throw new Error("todo renderCall not registered");

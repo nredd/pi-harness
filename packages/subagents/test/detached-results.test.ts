@@ -27,25 +27,9 @@ import {
   watchDetached,
 } from "../src/detached-results.js";
 import { setAgentModels } from "../src/model-resolver.js";
+import { bootPi } from "./helpers/boot-extension.js";
 import subagentsExtension from "./helpers/home-extension.js";
 
-function makePi() {
-  const tools = new Map<string, any>();
-  const lifecycle = new Map<string, any>();
-  const pi = {
-    registerMessageRenderer: vi.fn(),
-    registerTool: vi.fn((t: any) => tools.set(t.name, t)),
-    registerCommand: vi.fn(),
-    registerEntryRenderer: vi.fn(),
-    registerFlag: vi.fn(),
-    getFlag: vi.fn(),
-    on: vi.fn((event: string, handler: any) => lifecycle.set(event, handler)),
-    events: { emit: vi.fn(), on: vi.fn(() => vi.fn()) },
-    appendEntry: vi.fn(),
-    sendMessage: vi.fn(),
-  } as any;
-  return { pi, tools, lifecycle };
-}
 
 function ctx(sessionFile: string | undefined) {
   return {
@@ -306,7 +290,7 @@ describe("session switch with a running background agent", () => {
   }
 
   it("does not abort on /new, and a later return to the session receives the result", async () => {
-    const first = makePi();
+    const first = bootPi();
     subagentsExtension(first.pi);
     await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
     const agent = await spawnRunning(first.tools);
@@ -319,7 +303,7 @@ describe("session switch with a running background agent", () => {
     // The orphaned instance must not talk to pi: its handle is stale.
     expect(first.pi.sendMessage).not.toHaveBeenCalled();
 
-    const back = makePi();
+    const back = bootPi();
     subagentsExtension(back.pi);
     await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
     await new Promise(resolve => setTimeout(resolve, 250));
@@ -334,7 +318,7 @@ describe("session switch with a running background agent", () => {
   });
 
   it("keeps the model fallback on the spooled history record and the notice details", async () => {
-    const first = makePi();
+    const first = bootPi();
     subagentsExtension(first.pi);
     await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
     setAgentModels({ "general-purpose": "ghost-model" });
@@ -344,7 +328,7 @@ describe("session switch with a running background agent", () => {
     agent.finish();
     await flush();
 
-    const back = makePi();
+    const back = bootPi();
     subagentsExtension(back.pi);
     await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
     await new Promise(resolve => setTimeout(resolve, 250));
@@ -359,7 +343,7 @@ describe("session switch with a running background agent", () => {
   });
 
   it("publishes the running agent for the next instance until it settles", async () => {
-    const first = makePi();
+    const first = bootPi();
     subagentsExtension(first.pi);
     await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
     const agent = await spawnRunning(first.tools);
@@ -374,7 +358,7 @@ describe("session switch with a running background agent", () => {
   });
 
   it("lets the reopened session read and steer a survivor by id, handle and name (#330)", async () => {
-    const first = makePi();
+    const first = bootPi();
     subagentsExtension(first.pi);
     await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
     const agent = await spawnRunning(first.tools, ctx(sessionFile), "auth-audit");
@@ -386,7 +370,7 @@ describe("session switch with a running background agent", () => {
     expect(handle).toBeTruthy();
     expect(alias).toBe("auth-audit");
 
-    const back = makePi();
+    const back = bootPi();
     subagentsExtension(back.pi);
     await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
     for (const ref of [agent.id, handle!, alias!]) {
@@ -405,7 +389,7 @@ describe("session switch with a running background agent", () => {
   });
 
   it("keeps a survivor that settled while detached answerable by id after its result is delivered (#330)", async () => {
-    const first = makePi();
+    const first = bootPi();
     subagentsExtension(first.pi);
     await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
     const agent = await spawnRunning(first.tools);
@@ -413,7 +397,7 @@ describe("session switch with a running background agent", () => {
     agent.finish();
     await flush();
 
-    const back = makePi();
+    const back = bootPi();
     subagentsExtension(back.pi);
     await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
     await new Promise(resolve => setTimeout(resolve, 250));
@@ -432,7 +416,7 @@ describe("session switch with a running background agent", () => {
   it("steer after a detached finish reopens the survivor's saved session (#330)", async () => {
     const saved = join(tmpDir, "survivor-session.jsonl");
     writeFileSync(saved, "");
-    const first = makePi();
+    const first = bootPi();
     subagentsExtension(first.pi);
     await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
     const agent = await spawnRunning(first.tools, ctx(sessionFile), "auth-audit", saved);
@@ -440,7 +424,7 @@ describe("session switch with a running background agent", () => {
     agent.finish();
     await flush();
 
-    const back = makePi();
+    const back = bootPi();
     subagentsExtension(back.pi);
     await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
     await new Promise(resolve => setTimeout(resolve, 250));
@@ -457,14 +441,14 @@ describe("session switch with a running background agent", () => {
   });
 
   it("a survivor with no saved session says so plainly after a detached finish (#330)", async () => {
-    const first = makePi();
+    const first = bootPi();
     subagentsExtension(first.pi);
     await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
     const agent = await spawnRunning(first.tools);
     await first.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "reload" }, ctx(sessionFile));
     agent.finish();
     await flush();
-    const back = makePi();
+    const back = bootPi();
     subagentsExtension(back.pi);
     await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
     await new Promise(resolve => setTimeout(resolve, 250));
@@ -486,7 +470,7 @@ describe("session switch with a running background agent", () => {
     });
     spoolDetached(sessionFile, result("first-1"));
     spoolDetached(sessionFile, result("second-1"));
-    const back = makePi();
+    const back = bootPi();
     subagentsExtension(back.pi);
     await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
     await new Promise(resolve => setTimeout(resolve, 250));
@@ -507,7 +491,7 @@ describe("session switch with a running background agent", () => {
       evicted: [{ id: "b0", type: "general-purpose", description: "d", status: "completed", evictedAfterMin: 0 }],
       tombstones: Array.from({ length: MAX_TOMBSTONES + 1 }, (_, i) => mk(i)),
     });
-    const back = makePi();
+    const back = bootPi();
     subagentsExtension(back.pi);
     await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
     await new Promise(resolve => setTimeout(resolve, 250));
@@ -517,7 +501,7 @@ describe("session switch with a running background agent", () => {
   });
 
   it("still delivers a spooled result written without an eviction note", async () => {
-    const back = makePi();
+    const back = bootPi();
     subagentsExtension(back.pi);
     spoolDetached(sessionFile, {
       id: "legacy-1",
@@ -533,13 +517,13 @@ describe("session switch with a running background agent", () => {
   });
 
   it("delivers immediately when the agent finishes while its session is open again", async () => {
-    const first = makePi();
+    const first = bootPi();
     subagentsExtension(first.pi);
     await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
     const agent = await spawnRunning(first.tools);
     await first.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "resume" }, ctx(sessionFile));
 
-    const back = makePi();
+    const back = bootPi();
     subagentsExtension(back.pi);
     await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
     expect(back.pi.sendMessage).not.toHaveBeenCalled();
@@ -554,7 +538,7 @@ describe("session switch with a running background agent", () => {
   it.each(["smart", "group"])("transfers held %s completions once, without repeating their history", async (joinMode) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     writeFileSync(join(tmpDir, ".pi", "subagents.json"), JSON.stringify({ schedulingEnabled: false, defaultJoinMode: joinMode }));
-    const first = makePi();
+    const first = bootPi();
     subagentsExtension(first.pi);
     const parent = ctx(sessionFile);
     parent.signal = new AbortController().signal;
@@ -567,7 +551,7 @@ describe("session switch with a running background agent", () => {
 
     await first.lifecycle.get("session_before_switch")?.();
     await first.lifecycle.get("session_shutdown")({ reason: "reload" });
-    const back = makePi();
+    const back = bootPi();
     subagentsExtension(back.pi);
     await back.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
     await vi.advanceTimersByTimeAsync(200);
@@ -581,7 +565,7 @@ describe("session switch with a running background agent", () => {
 
   it("keeps every agent in a held notice answerable after the switch (#330)", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const first = makePi();
+    const first = bootPi();
     subagentsExtension(first.pi);
     const parent = ctx(sessionFile);
     parent.signal = new AbortController().signal;
@@ -595,7 +579,7 @@ describe("session switch with a running background agent", () => {
 
     await first.lifecycle.get("session_before_switch")?.();
     await first.lifecycle.get("session_shutdown")({ reason: "reload" });
-    const back = makePi();
+    const back = bootPi();
     subagentsExtension(back.pi);
     await back.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
     for (const { id } of [one, two]) {
@@ -610,7 +594,7 @@ describe("session switch with a running background agent", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const saved = join(tmpDir, "held-session.jsonl");
     writeFileSync(saved, "");
-    const first = makePi();
+    const first = bootPi();
     subagentsExtension(first.pi);
     const parent = ctx(sessionFile);
     parent.signal = new AbortController().signal;
@@ -620,7 +604,7 @@ describe("session switch with a running background agent", () => {
     await flush();
     await first.lifecycle.get("session_before_switch")?.();
     await first.lifecycle.get("session_shutdown")({ reason: "reload" });
-    const back = makePi();
+    const back = bootPi();
     subagentsExtension(back.pi);
     await back.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
     vi.mocked(runAgent).mockClear();
@@ -634,7 +618,7 @@ describe("session switch with a running background agent", () => {
 
   it.each(["consumed", "delivered"])("does not replay a result already %s before a switch", async (handled) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const first = makePi();
+    const first = bootPi();
     subagentsExtension(first.pi);
     await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
     const agent = await spawnRunning(first.tools);
@@ -647,7 +631,7 @@ describe("session switch with a running background agent", () => {
       expect(first.pi.sendMessage).toHaveBeenCalledOnce();
     }
     await first.lifecycle.get("session_shutdown")({ reason: "new" });
-    const back = makePi();
+    const back = bootPi();
     subagentsExtension(back.pi);
     await back.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
     await vi.advanceTimersByTimeAsync(1000);
@@ -657,13 +641,13 @@ describe("session switch with a running background agent", () => {
 
   it("holds a detached result for the reopened parent's boundary and coalesces completions", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const first = makePi();
+    const first = bootPi();
     subagentsExtension(first.pi);
     await first.lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
     const one = await spawnRunning(first.tools);
     const two = await spawnRunning(first.tools);
     await first.lifecycle.get("session_shutdown")({ reason: "reload" });
-    const back = makePi();
+    const back = bootPi();
     subagentsExtension(back.pi);
     const parent = ctx(sessionFile);
     parent.signal = new AbortController().signal;
@@ -681,7 +665,7 @@ describe("session switch with a running background agent", () => {
   });
 
   it("still aborts on quit", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     await lifecycle.get("session_start")({ type: "session_start" }, ctx(sessionFile));
     const agent = await spawnRunning(tools);
@@ -690,7 +674,7 @@ describe("session switch with a running background agent", () => {
   });
 
   it("still aborts when the session has no file to hand results back to", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     await lifecycle.get("session_start")({ type: "session_start" }, ctx(undefined));
     const agent = await spawnRunning(tools);

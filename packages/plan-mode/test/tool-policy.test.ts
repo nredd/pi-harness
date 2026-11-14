@@ -14,7 +14,7 @@ import {
   isSafePowerShellCommand,
   readCommand,
 } from "../src/tool-policy.js";
-import { builtinTool, createMockContext, createMockPi, extensionTool } from "./support.js";
+import { builtinTool, createPlanContext, createPlanPi, extensionTool } from "./support.js";
 
 const HOME_POLICY = { workingDirectory: "/work", platform: "darwin", homeDir: "/isolated/home" } as const;
 
@@ -53,7 +53,7 @@ test("injected homes keep rejecting other users' tildes and traversal on the Bas
 test("Plan registration forwards its injected home to Bash and PowerShell trusted roots", async () => {
   const home = "/isolated/home";
   const trusted = `${home}/trusted`;
-  const mock = createMockPi({
+  const mock = createPlanPi({
     activeTools: ["bash", "powershell"],
     allTools: [builtinTool("bash"), builtinTool("powershell")],
   });
@@ -68,10 +68,10 @@ test("Plan registration forwards its injected home to Bash and PowerShell truste
       },
     }),
   });
-  const context = createMockContext();
-  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  const context = createPlanContext();
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
   await mock.commands.get("plan")?.handler("start", context.ctx);
-  const hook = mock.events.get("tool_call")?.[0];
+  const hook = mock.handlers.get("tool_call")?.[0];
 
   for (const [toolName, command] of [
     ["bash", `git -C ${trusted} status`],
@@ -635,14 +635,14 @@ const isSafeCommandWithPolicy = isSafeCommand as unknown as (
 ) => boolean;
 
 test("active Plan mode blocks update_plan and blocked built-ins at the tool hook", async () => {
-  const mock = createMockPi({
+  const mock = createPlanPi({
     activeTools: ["read", "bash", "update_plan", "danger"],
     allTools: [builtinTool("read"), builtinTool("bash"), builtinTool("danger"), extensionTool("edit")],
   });
   planMode(mock.pi);
-  const context = createMockContext();
-  await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
-  const hook = mock.events.get("tool_call")?.[0];
+  const context = createPlanContext();
+  await mock.handlers.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+  const hook = mock.handlers.get("tool_call")?.[0];
   const inactiveHelper = await hook?.({ toolName: "plan_mode_complete", input: { plan: "# invalid" } }, context.ctx);
   assert.deepEqual(inactiveHelper, {
     block: true,
@@ -667,7 +667,7 @@ test("active Plan mode blocks update_plan and blocked built-ins at the tool hook
     reason: "Plan mode blocks mutating tool 'edit'.",
   });
 
-  await mock.events.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
+  await mock.handlers.get("session_shutdown")?.[0]?.({ reason: "reload" }, context.ctx);
   assert.deepEqual(await hook?.({ toolName: "read", input: {} }, context.ctx), {
     block: true,
     reason: "Plan mode blocks tool 'read' because workflow ownership is unavailable.",

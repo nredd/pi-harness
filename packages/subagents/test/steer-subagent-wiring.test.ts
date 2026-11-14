@@ -23,7 +23,7 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { resumeAgent, runAgent, steerAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
-import { ctx, flush, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
+import { bootPi, ctx, flush, hermeticDir, textOf } from "./helpers/boot-extension.js";
 
 // steerAgent and runAgent are module-level mocks shared by every case here, so
 // call history has to be reset or a "was never called" assertion depends on the
@@ -81,7 +81,7 @@ const steer = (tools: Map<string, any>, agent_id: string, message: string) =>
 
 describe("steer_subagent before the session exists", () => {
   it("queues the message on the record and says so", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     heldRun();
 
@@ -97,7 +97,7 @@ describe("steer_subagent before the session exists", () => {
 
   it("appends a second queued steer instead of replacing the first", async () => {
     // Overwriting would lose the earlier correction while still reporting success.
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     const run = heldRun();
 
@@ -119,7 +119,7 @@ describe("steer_subagent before the session exists", () => {
   });
 
   it("does not call steerAgent — there is no session to steer yet", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     heldRun();
 
@@ -137,7 +137,7 @@ describe("steer_subagent once the session exists", () => {
   it("reports failure and emits no event when the steer throws", async () => {
     // The event is emitted only AFTER steerAgent resolves, so a failed steer
     // must not announce itself as delivered.
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     const run = heldRun();
 
@@ -160,7 +160,7 @@ describe("steer_subagent once the session exists", () => {
   });
 
   it("delivers through steerAgent and announces the steer on success", async () => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     const run = heldRun();
 
@@ -186,7 +186,7 @@ describe("steer_subagent on a queued agent", () => {
     // concurrency slot could not be redirected before it burned its first turn.
     const hermetic = hermeticDir({ settings: { maxConcurrent: 1 } });
     try {
-      const { pi, tools, lifecycle } = makePi();
+      const { pi, tools, lifecycle } = bootPi();
       subagentsExtension(pi);
       await lifecycle.get("session_start")?.({}, ctx());
 
@@ -234,7 +234,7 @@ describe("steer_subagent on a finished agent (#442)", () => {
     ["aborted", { aborted: true, steered: false }],
     ["error", new Error("provider 500")],
   ] as const)("resumes a finished agent (status %s) in the background with the message as its next prompt", async (status, outcome) => {
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     const session = fakeSession();
     vi.mocked(runAgent).mockImplementation(async (_ctx: any, _type: any, _prompt: any, opts: any) => {
@@ -261,7 +261,7 @@ describe("steer_subagent on a finished agent (#442)", () => {
   it("resumes once when two steers race on one finished agent; the second steers the resumed run", async () => {
     // Parallel tool calls in one turn: the first resume flips the record to
     // running before it awaits, so the second must not start a second run.
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     const session = fakeSession();
     vi.mocked(runAgent).mockImplementation(async (_ctx: any, _type: any, _prompt: any, opts: any) => {
@@ -288,7 +288,7 @@ describe("steer_subagent on a finished agent (#442)", () => {
   it("does not resume another agent's child, even once it has finished", async () => {
     // Ownership is unchanged: a nested or workflow child stays unreachable from
     // the top-level tool, so finishing cannot turn it into something to resume.
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     vi.mocked(runAgent).mockResolvedValue({ responseText: "done", session: fakeSession(), aborted: false, steered: false } as any);
 

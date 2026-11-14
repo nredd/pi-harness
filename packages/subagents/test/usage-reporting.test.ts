@@ -22,7 +22,7 @@ import { registerAgents } from "../src/agent-types.js";
 import { drainDetached } from "../src/detached-results.js";
 import subagentsExtension from "../src/index.js";
 import { addUsage, PendingUsagePool } from "../src/usage.js";
-import { ctx, flush, type Hermetic, hermeticDir, makePi, startSession } from "./helpers/boot-extension.js";
+import { bootPi, ctx, flush, type Hermetic, hermeticDir, startSession } from "./helpers/boot-extension.js";
 
 /** Drive one foreground run that spends `usage` on a single assistant message. */
 function runSpending(usage: { input: number; output: number; cacheWrite: number; cacheRead?: number; cost?: number }) {
@@ -51,7 +51,7 @@ describe("reporting subagent usage back to the parent session", () => {
 
   function boot(settings: Record<string, unknown>) {
     hermetic = hermeticDir({ settings });
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     return { pi, tools, lifecycle };
   }
@@ -159,7 +159,7 @@ describe("reporting subagent usage back to the parent session", () => {
       settings: { reportUsage: true },
       agentFiles: { rogue: "---\ndescription: ROGUE project only\ntools: read\n---\nRogue.\n" },
     });
-    const { pi, tools, lifecycle } = makePi();
+    const { pi, tools, lifecycle } = bootPi();
     subagentsExtension(pi);
     const activation = tools.get("Agent");
     await startSession(lifecycle, true);

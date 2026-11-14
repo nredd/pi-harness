@@ -24,7 +24,7 @@ import { join } from "node:path";
 import { fauxText, fauxToolCall, getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import { createCodemodeExtension } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
-import { encodeCwd } from "../../src/output-file.js";
+import { encodeCwd, transcriptRoot } from "../../src/output-file.js";
 import { readJournal } from "../../src/workflow/journal.js";
 import { workflowConcurrency } from "../../src/workflow/runtime.js";
 import { hermeticDir } from "../helpers/boot-extension.js";
@@ -62,7 +62,7 @@ const workflowCall = (script: string, id = "wf-call-1") =>
  * ended up with. The path is derived the same way `sessionTaskDir` derives it.
  */
 function journalsFor(cwd: string): string[] {
-  const root = join(tmpdir(), `pi-subagents-${process.getuid?.() ?? 0}`, encodeCwd(cwd));
+  const root = join(transcriptRoot(), encodeCwd(cwd));
   if (!existsSync(root)) return [];
   const found: string[] = [];
   for (const session of readdirSync(root)) {

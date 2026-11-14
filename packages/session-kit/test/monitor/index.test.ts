@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { createRecordingPi } from "@nredd/pi-test-lib/pi";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig } from "../../src/config.ts";
 import {
@@ -19,37 +20,38 @@ const shutdowns: (() => Promise<void>)[] = [];
 // biome-ignore lint/suspicious/noExplicitAny: a fake pi only needs the surface the extension touches
 type Any = any;
 
-function fakePi(sessionName?: string) {
-	const handlers = new Map<string, Any[]>();
-	const tools = new Map<string, Any>();
-	const commands = new Map<string, Any>();
-	const shortcuts = new Map<string, Any>();
-	const sendMessage = vi.fn();
+function createMonitorHost(sessionName?: string) {
 	const emitted: [string, Any][] = [];
-	let active = ["read", ...TOOL_NAMES];
 	const entries: Any[] = [];
-	const pi = {
-		events: { emit: (channel: string, data: unknown) => emitted.push([channel, data]) },
-		appendEntry: (customType: string, data: unknown) => entries.push({ type: "custom", customType, data }),
-		on: (e: string, h: Any) => handlers.set(e, [...(handlers.get(e) ?? []), h]),
-		registerTool: (t: Any) => {
-			tools.set(t.name, t);
-			if (t.exposure === "hidden") active = active.filter((name) => name !== t.name);
+	const recording = createRecordingPi({
+		activeTools: ["read", ...TOOL_NAMES],
+		autoActivate: false,
+		sessionName,
+		deliverEvents: false,
+		overrides: {
+			appendEntry: (customType: string, data?: unknown) => {
+				entries.push({ type: "custom", customType, data });
+			},
 		},
-		registerCommand: (n: string, c: Any) => commands.set(n, c),
-		registerShortcut: (key: string, s: Any) => shortcuts.set(key, s),
-		sendMessage,
-		getSessionName: () => sessionName,
-		getActiveTools: () => active,
-		setActiveTools: (n: string[]) => {
-			active = n;
-		},
-	};
+	});
+	vi.mocked(recording.bus.emit).mockImplementation((channel, data) => {
+		emitted.push([channel, data]);
+	});
 	const emit = async (e: string, ctx: Any, event: Any = { type: e }) => {
-		for (const h of handlers.get(e) ?? []) await h(event, ctx);
+		await recording.dispatch(e, event, ctx);
 	};
 	shutdowns.push(() => emit("session_shutdown", fakeCtx()));
-	return { pi: pi as Any, tools, commands, shortcuts, sendMessage, emit, emitted, entries, active: () => active };
+	return {
+		pi: recording.pi as Any,
+		tools: recording.tools as Map<string, Any>,
+		commands: recording.commands as Map<string, Any>,
+		shortcuts: recording.shortcuts as Map<string, Any>,
+		sendMessage: vi.mocked(recording.pi.sendMessage),
+		emit,
+		emitted,
+		entries,
+		active: () => recording.activeTools,
+	};
 }
 
 function fakeCtx(mode = "tui", sessionId = "sess-A", entries: Any[] = []) {
@@ -82,7 +84,7 @@ afterEach(async () => {
 
 describe("monitor extension", () => {
 	it("annotates ONLY monitor_read as read-only", () => {
-		const f = fakePi();
+		const f = createMonitorHost();
 		register(f.pi, defaultConfig());
 		expect([...f.tools.keys()].sort()).toEqual([...TOOL_NAMES].sort());
 		expect(f.tools.get("monitor_read").annotations.readOnlyHint).toBe(true);
@@ -91,7 +93,7 @@ describe("monitor extension", () => {
 	});
 
 	it("runs start -> read -> stop through the tools and delivers messages with the right wake options", async () => {
-		const f = fakePi();
+		const f = createMonitorHost();
 		register(f.pi, defaultConfig());
 		const ctx = fakeCtx();
 		await f.emit("session_start", ctx);
@@ -128,7 +130,7 @@ describe("monitor extension", () => {
 	});
 
 	it("binds the configured collapse shortcut and toggles only a visible widget", async () => {
-		const f = fakePi();
+		const f = createMonitorHost();
 		const config = defaultConfig();
 		config.monitor.collapseKey = "alt+m";
 		register(f.pi, config);
@@ -154,7 +156,7 @@ describe("monitor extension", () => {
 	});
 
 	it("registers no shortcut when collapseKey is off", () => {
-		const f = fakePi();
+		const f = createMonitorHost();
 		const config = defaultConfig();
 		config.monitor.collapseKey = "off";
 		register(f.pi, config);
@@ -162,7 +164,7 @@ describe("monitor extension", () => {
 	});
 
 	it("keeps passive output out of custom messages", async () => {
-		const f = fakePi();
+		const f = createMonitorHost();
 		register(f.pi, defaultConfig());
 		const ctx = fakeCtx();
 		await f.emit("session_start", ctx);
@@ -178,7 +180,7 @@ describe("monitor extension", () => {
 	});
 
 	it("returns isError results for bad input and unknown ids instead of throwing", async () => {
-		const f = fakePi();
+		const f = createMonitorHost();
 		register(f.pi, defaultConfig());
 		const ctx = fakeCtx();
 		await f.emit("session_start", ctx);
@@ -191,7 +193,7 @@ describe("monitor extension", () => {
 	});
 
 	it("/monitor lists and stops", async () => {
-		const f = fakePi();
+		const f = createMonitorHost();
 		register(f.pi, defaultConfig());
 		const ctx = fakeCtx();
 		await f.emit("session_start", ctx);
@@ -213,7 +215,7 @@ describe("monitor extension", () => {
 	});
 
 	it("reports running monitors and what wakes the parent when a run settles, and nothing once they stop", async () => {
-		const f = fakePi();
+		const f = createMonitorHost();
 		register(f.pi, defaultConfig());
 		const ctx = fakeCtx();
 		await f.emit("session_start", ctx);
@@ -238,7 +240,7 @@ describe("monitor extension", () => {
 	});
 
 	it("announces each monitor once on pi.events as it starts and stops", async () => {
-		const f = fakePi();
+		const f = createMonitorHost();
 		register(f.pi, defaultConfig());
 		const ctx = fakeCtx("tui", "sess-E");
 		await f.emit("session_start", ctx);
@@ -261,7 +263,7 @@ describe("monitor extension", () => {
 	});
 
 	it("carries the wake condition and linked todo on both lifecycle events", async () => {
-		const f = fakePi();
+		const f = createMonitorHost();
 		register(f.pi, defaultConfig());
 		const ctx = fakeCtx("tui", "sess-L");
 		await f.emit("session_start", ctx);
@@ -280,7 +282,7 @@ describe("monitor extension", () => {
 	});
 
 	it("rejects a todo link that is not a positive integer id", async () => {
-		const f = fakePi();
+		const f = createMonitorHost();
 		register(f.pi, defaultConfig());
 		const ctx = fakeCtx("tui", "sess-V");
 		await f.emit("session_start", ctx);
@@ -292,7 +294,7 @@ describe("monitor extension", () => {
 	});
 
 	it("reports nothing at settle in a child session", async () => {
-		const f = fakePi("general-purpose#0123abcd");
+		const f = createMonitorHost("general-purpose#0123abcd");
 		register(f.pi, defaultConfig());
 		const ctx = fakeCtx();
 		await f.emit("session_start", ctx);
@@ -302,7 +304,7 @@ describe("monitor extension", () => {
 
 	it("kills every child on session_shutdown, whatever the reason", async () => {
 		for (const reason of ["quit", "reload", "new", "resume", "fork"]) {
-			const f = fakePi();
+			const f = createMonitorHost();
 			register(f.pi, defaultConfig());
 			const ctx = fakeCtx();
 			await f.emit("session_start", ctx);
@@ -316,7 +318,7 @@ describe("monitor extension", () => {
 	});
 
 	it("is inert in child sessions: tools hidden, nothing spawned", async () => {
-		const f = fakePi("general-purpose#0123abcd");
+		const f = createMonitorHost("general-purpose#0123abcd");
 		register(f.pi, defaultConfig());
 		const ctx = fakeCtx();
 		await f.emit("session_start", ctx);
@@ -329,7 +331,7 @@ describe("monitor extension", () => {
 	});
 
 	it("shows no widget outside the TUI", async () => {
-		const f = fakePi();
+		const f = createMonitorHost();
 		register(f.pi, defaultConfig());
 		const ctx = fakeCtx("print");
 		await f.emit("session_start", ctx);
@@ -360,7 +362,7 @@ describe("monitor extension", () => {
 			name: "l",
 			command: (await psInfo(live.pid))?.command ?? "",
 		});
-		const f = fakePi();
+		const f = createMonitorHost();
 		register(f.pi, defaultConfig());
 		await f.emit("session_start", fakeCtx());
 		await waitFor(() => !alive(dead.pid));
@@ -371,7 +373,7 @@ describe("monitor extension", () => {
 
 describe("monitor extension with controlled children", () => {
 	async function boot() {
-		const f = fakePi();
+		const f = createMonitorHost();
 		const clock = new FakeClock(0);
 		const children = new ControlledProcesses(clock);
 		register(f.pi, defaultConfig(), tmp.dir, { clock, spawnMonitor: children.spawn });
@@ -383,7 +385,7 @@ describe("monitor extension with controlled children", () => {
 	}
 
 	it("is unavailable before a session starts, without throwing", async () => {
-		const f = fakePi();
+		const f = createMonitorHost();
 		register(f.pi, defaultConfig());
 		const ctx = fakeCtx();
 		for (const [name, params] of [
