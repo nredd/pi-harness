@@ -63,7 +63,49 @@ it("renders an overflowing expanded fleet without a blank row after main (#552)"
   expect(lines[main + 1]).toContain("gap child 0");
   expect(lines[main + 2]).toContain("gap child 1");
   expect(lines[main + 3]).toContain("gap child 2");
-  expect(lines[main + 4]).toContain("↓ 3 more: 3 running");
+  expect(lines[main + 4]).toContain("gap child 3");
+  expect(lines[main + 5]).toBe("  ↓ 2 more: 2 running");
+  for (const stream of streams) stream.release();
+});
+
+it("renders 12 held children with left-aligned indicators and no blank rows (#857)", async () => {
+  fixture = new ScenarioSession({ maxConcurrent: 12 });
+  const streams = Array.from({ length: 12 }, (_, i) => fixture.holdStream(
+    fixture.physical(`ovchild${i}`, "child", [answer("CHILD DONE")]),
+  ));
+  const h = await fixture.start({ terminal: true });
+  h.setResponses([
+    calls(...streams.map((_, i) => spawn(`ov child ${i}`, { model: `ovchild${i}/child` }))),
+    answer("SPAWNED"),
+  ]);
+  await h.session.prompt("go");
+  await Promise.all(streams.map(stream => stream.entered));
+  const host = fixture.host;
+  if (!host) throw new Error("No terminal host");
+  fixture.clock.advance(200);
+  await host.settle();
+  host.input(TOGGLE);
+  await host.settle();
+  const check = (lines: string[], up: boolean, down: boolean) => {
+    const main = lines.findIndex(line => /^ {2}[●○] main$/.test(line));
+    expect(main).toBeGreaterThanOrEqual(0);
+    const block = lines.slice(main + 1, main + 6);
+    for (const line of block) expect(line).toMatch(/^ {2}[↑↓●○] \S/);
+    expect(block[0].startsWith("  ↑ ")).toBe(up);
+    expect(block[4].startsWith("  ↓ ")).toBe(down);
+    for (const line of block.filter(l => /^ {2}[↑↓] /.test(l))) {
+      expect(line).toMatch(/^ {2}[↑↓] \d+ more: \d+ running$/);
+    }
+    return block;
+  };
+  check(host.viewport(), false, true);
+  for (let i = 0; i < 6; i++) host.input("\x1b[B");
+  await host.settle();
+  check(host.viewport(), true, true);
+  for (let i = 0; i < 7; i++) host.input("\x1b[B");
+  await host.settle();
+  const bottom = check(host.viewport(), true, false);
+  expect(bottom.some(line => line.includes("ov child 11"))).toBe(true);
   for (const stream of streams) stream.release();
 });
 

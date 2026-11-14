@@ -101,7 +101,7 @@ if ! baked "uv $uv_version" uv --version; then
   bounded "install uv" "$command_seconds" sh "$tool_dir/uv-install.sh"
 fi
 case "$(uv --version)" in "uv $uv_version"*) ;; *) exit 1 ;; esac
-gh_version=$(sed -n 's/^GH_VERSION=//p' scripts/install_gh_linux.sh)
+gh_version=$(sed -n 's/^GH_VERSION = "\(.*\)"$/\1/p' scripts/install_gh_linux.py)
 if ! baked "gh version $gh_version" "$tool_dir/gh/bin/gh" --version; then
   bounded "install gh" "$command_seconds" bash scripts/install_gh_linux.sh "$tool_dir/gh"
 fi

@@ -309,7 +309,7 @@
       "status": "pending",
       "goal": "excluded",
       "goal_reason": "Owner has not chosen how to measure shell and PowerShell (port to Python vs kcov/Pester): https://github.com/nredd/pi-harness/issues/695. Inventory stays visible, with no coverage claim.",
-      "note": "Not measured, tracked in #695: merge-pr.sh is only the explicit-Node compatibility bootstrap; its merge policy is measured under import-audit. No producer or shellcheck for the remaining install_*.sh, wsl2_*.sh and wsl2_*.ps1. `packages/computer-use/scripts/make-signing-cert.sh` is inventoried under `computer-use`.",
+      "note": "Not measured, tracked in #695: merge-pr.sh is only the explicit-Node compatibility bootstrap; its merge policy is measured under import-audit. install_gh_linux.sh is likewise only an `exec python3` bootstrap; its logic in `scripts/install_gh_linux.py` is measured under python-scripts. install_wsl_owned_tools.sh and wsl2_run.sh are the same bootstrap; their logic in `scripts/install_wsl_owned_tools.py` and `scripts/wsl2_run.py` (shared plumbing in `scripts/wsl2_exec.py`) is measured under python-scripts. No producer or shellcheck for the remaining wsl2_*.sh and wsl2_*.ps1. `packages/computer-use/scripts/make-signing-cert.sh` is inventoried under `computer-use`.",
       "signals": {}
     },
     "runtime-build-tooling": {
