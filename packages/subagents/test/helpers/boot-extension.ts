@@ -11,13 +11,19 @@ import type { ExtensionAPI, ExtensionContext, SessionShutdownEvent, SessionStart
 import {
   createRecordingContext,
   createRecordingPi,
+  expectNoSubscriberErrors,
   type RecordingPi,
   type RecordingPiOptions,
 } from "@nredd/pi-test-lib/pi";
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
 
 /** A `pi.on` lifecycle handler as the extension registers them; the map is keyed by event name. */
 export type SessionStartHandler = (event: SessionStartEvent | SessionShutdownEvent, ctx: ExtensionContext) => Promise<void> | void;
+
+const created: RecordingPi[] = [];
+afterEach(() => {
+  expectNoSubscriberErrors(created.splice(0));
+});
 
 export interface BootedPi {
   /** The recording `ExtensionAPI`; every method is a `vi.fn`. */
@@ -69,6 +75,7 @@ export function bootPi(flags: Record<string, boolean | string> = {}, options: Bo
     execResult: options.execResult,
     overrides: { getFlag: vi.fn((name: string) => flags[name]), ...options.overrides },
   });
+  created.push(recording);
   const lifecycle = new Map<string, SessionStartHandler>();
   const busHandlers = new Map<string, (raw: any) => unknown>();
   const emitted: { event: string; payload: any }[] = [];

@@ -5,21 +5,31 @@ import { Key, type KeyId, matchesKey } from "@earendil-works/pi-tui";
 import {
   createRecordingContext,
   createRecordingPi,
+  expectNoSubscriberErrors,
   type RecordingContextOptions,
+  type RecordingPi,
   type RecordingPiOptions,
 } from "@nredd/pi-test-lib/pi";
+import { afterEach } from "vitest";
+
+const created: RecordingPi[] = [];
+afterEach(() => {
+  expectNoSubscriberErrors(created.splice(0));
+});
 
 /** The shared recording `ExtensionAPI`, with the tools Plan expects active and a builtin catalogue. */
 export function createPlanPi(
   options: Pick<RecordingPiOptions, "activeTools" | "allTools" | "thinkingLevel" | "clampThinkingLevel"> = {},
 ) {
   const activeTools = [...(options.activeTools ?? [])];
-  return createRecordingPi({
+  const recording = createRecordingPi({
     ...options,
     autoActivate: false,
     activeTools,
     allTools: options.allTools ?? activeTools.map((name) => builtinTool(name)),
   });
+  created.push(recording);
+  return recording;
 }
 
 /**

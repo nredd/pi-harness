@@ -5,7 +5,18 @@
  */
 
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { createRecordingContext, createRecordingPi, type RecordingPi } from "@nredd/pi-test-lib/pi";
+import {
+	createRecordingContext,
+	createRecordingPi,
+	expectNoSubscriberErrors,
+	type RecordingPi,
+} from "@nredd/pi-test-lib/pi";
+import { afterEach } from "vitest";
+
+const created: RecordingPi[] = [];
+afterEach(() => {
+	expectNoSubscriberErrors(created.splice(0));
+});
 
 export interface FakeEntry {
 	type: string;
@@ -41,6 +52,7 @@ export function createGoalHost(options: FakeOptions = {}) {
 			},
 		},
 	});
+	created.push(recording);
 	const context = createRecordingContext({
 		hasUI: true,
 		mode: options.mode ?? "tui",

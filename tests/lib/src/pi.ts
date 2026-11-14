@@ -69,6 +69,8 @@ export interface RecordingPiOptions {
 	 * own emits.
 	 */
 	deliverEvents?: boolean;
+	/** Called with each subscriber error and its channel, besides being recorded in `bus.errors`. */
+	onSubscriberError?: (error: unknown, channel: string) => void;
 	thinkingLevel?: ThinkingLevel;
 	/** Maps a requested level to the one the model supports. */
 	clampThinkingLevel?: (level: ThinkingLevel) => ThinkingLevel;
@@ -89,6 +91,8 @@ export interface RecordingBus {
 	readonly subscribers: Map<string, ((data: unknown) => unknown)[]>;
 	/** Every payload emitted, by channel, in order. */
 	readonly emitted: Map<string, unknown[]>;
+	/** Errors thrown (or rejected) by subscribers, in order. pi swallows them; a test should assert this is empty. */
+	readonly errors: unknown[];
 	/** Live subscriptions across all channels. */
 	listenerCount(): number;
 }
@@ -133,20 +137,27 @@ export interface RecordingPi {
 	dispatch(event: string, payload: unknown, ctx: ExtensionContext): Promise<unknown[]>;
 }
 
-function createBus(deliver: boolean): RecordingBus {
+function createBus(deliver: boolean, onError?: (error: unknown, channel: string) => void): RecordingBus {
 	const subscriptions = new Map<string, ((data: unknown) => unknown)[]>();
 	const emitted = new Map<string, unknown[]>();
+	const errors: unknown[] = [];
+	const fail = (error: unknown, channel: string) => {
+		errors.push(error);
+		onError?.(error, channel);
+	};
 	return {
 		emitted,
+		errors,
 		subscribers: subscriptions,
 		emit: vi.fn((channel: string, data: unknown) => {
 			emitted.set(channel, [...(emitted.get(channel) ?? []), data]);
 			if (!deliver) return;
 			for (const handler of [...(subscriptions.get(channel) ?? [])]) {
 				try {
-					void Promise.resolve(handler(data)).catch(() => undefined);
-				} catch {
-					// Match pi's bus: one observer cannot interrupt its siblings.
+					Promise.resolve(handler(data)).catch((error: unknown) => fail(error, channel));
+				} catch (error) {
+					// Match pi's bus: one observer cannot interrupt its siblings, but a test can see it.
+					fail(error, channel);
 				}
 			}
 		}),
@@ -191,7 +202,7 @@ export function createRecordingPi(options: RecordingPiOptions = {}): RecordingPi
 	const sentMessages: RecordingPi["sentMessages"] = [];
 	const setModels: Model[] = [];
 	const thinkingLevels: ThinkingLevel[] = [];
-	const bus = createBus(options.deliverEvents ?? true);
+	const bus = createBus(options.deliverEvents ?? true, options.onSubscriberError);
 	const autoActivate = options.autoActivate ?? true;
 	const skillCommands = (options.skills ?? []).map(
 		(name) =>
@@ -205,7 +216,8 @@ export function createRecordingPi(options: RecordingPiOptions = {}): RecordingPi
 	let thinkingLevel: ThinkingLevel = options.thinkingLevel ?? "off";
 	let sessionName = options.sessionName;
 	const allTools: ToolInfo[] = options.allTools ?? [];
-	const execResult: ExecResult = options.execResult ?? { stdout: "", stderr: "", code: 0, killed: false };
+	const execResult: ExecResult =
+		options.execResult ?? ({ stdout: "", stderr: "", code: 0, killed: false } as ExecResult);
 
 	const methods = {
 		on: vi.fn((event: string, handler: RecordedHandler) => {
@@ -494,4 +506,16 @@ export function createRecordingContext(options: RecordingContextOptions = {}): R
 			pending = value;
 		},
 	};
+}
+
+/**
+ * Fails the surrounding test when any bus subscriber threw or rejected. Wrappers call it from an
+ * `afterEach` over every pi they created, since pi's own bus swallows those errors.
+ */
+export function expectNoSubscriberErrors(recordings: Iterable<RecordingPi>): void {
+	for (const recording of recordings) {
+		if (recording.bus.errors.length > 0) {
+			throw new Error(`event bus subscribers failed: ${recording.bus.errors.map(String).join("; ")}`);
+		}
+	}
 }

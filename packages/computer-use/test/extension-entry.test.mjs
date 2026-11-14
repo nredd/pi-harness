@@ -26,6 +26,9 @@ let savedEnv;
 let savedAgentDir;
 let root;
 
+/** Tool names in `registerTool` CALL order: the recording map would hide a duplicate registration. */
+const registeredNames = (pi) => pi.pi.registerTool.mock.calls.map(([tool]) => tool.name);
+
 /** A context that records `ui.notify`; `cwd` is the temp project directory. */
 function fakeCtx(over = {}) {
 	const notes = [];
@@ -68,8 +71,8 @@ describe("registration", () => {
 		setPlatform("linux");
 		const pi = createRecordingPi();
 		extension(pi.pi);
-		assert.deepEqual([...pi.tools.values()].map((tool) => tool.name), COMPUTER_USE_TOOLS.map((tool) => tool.name));
-		assert.equal(pi.tools.size, 11);
+		assert.deepEqual(registeredNames(pi), COMPUTER_USE_TOOLS.map((tool) => tool.name));
+		assert.equal(pi.pi.registerTool.mock.calls.length, 11);
 		assert.ok([...pi.commands.keys()].includes("computer-use"));
 		assert.deepEqual([...pi.handlers.keys()].sort(), ["agent_end", "session_shutdown", "session_start", "tool_execution_start"]);
 	});
@@ -78,9 +81,9 @@ describe("registration", () => {
 		setPlatform("darwin");
 		const pi = createRecordingPi();
 		extension(pi.pi);
-		assert.deepEqual([...pi.tools.values()].map((tool) => tool.name).slice(-2), ["desktop_screenshot", "desktop_input"]);
+		assert.deepEqual(registeredNames(pi).slice(-2), ["desktop_screenshot", "desktop_input"]);
 		assert.deepEqual(DESKTOP_TOOLS.map((tool) => tool.name), ["desktop_screenshot", "desktop_input"]);
-		assert.equal(pi.tools.size, 13);
+		assert.equal(pi.pi.registerTool.mock.calls.length, 13);
 		for (const tool of pi.tools.values()) assert.equal(tool.parameters.type, "object", `${tool.name} root schema`);
 	});
 });

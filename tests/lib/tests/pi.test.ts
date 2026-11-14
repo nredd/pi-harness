@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import { createRecordingContext, createRecordingPi } from "../src/pi.ts";
+import { createRecordingContext, createRecordingPi, expectNoSubscriberErrors } from "../src/pi.ts";
 
 const tool = (name: string, extra: object = {}) => ({ name, parameters: {}, ...extra }) as unknown as ToolDefinition;
 
@@ -137,6 +137,50 @@ describe("createRecordingPi", () => {
 		const rec = createRecordingPi({ overrides: { getSettings: (() => ({ x: 1 })) as ExtensionAPI["getSettings"] } });
 		expect(await rec.pi.exec("a", [])).toEqual({ stdout: "", stderr: "", code: 0, killed: false });
 		expect(rec.pi.getSettings()).toEqual({ x: 1 });
+	});
+
+	describe("subscriber errors", () => {
+		it("expectNoSubscriberErrors passes clean pis and names the failures", () => {
+			const clean = createRecordingPi();
+			expect(() => expectNoSubscriberErrors([clean])).not.toThrow();
+			const dirty = createRecordingPi();
+			dirty.pi.events.on("c", () => {
+				throw new Error("bad");
+			});
+			dirty.pi.events.emit("c", 1);
+			expect(() => expectNoSubscriberErrors([clean, dirty])).toThrow(/bad/);
+		});
+
+		it("records sync throws and async rejections in bus.errors without interrupting siblings", async () => {
+			const rec = createRecordingPi();
+			const seen = vi.fn();
+			const sync = new Error("sync");
+			const async_ = new Error("async");
+			rec.pi.events.on("c", () => {
+				throw sync;
+			});
+			rec.pi.events.on("c", async () => {
+				throw async_;
+			});
+			rec.pi.events.on("c", seen);
+			rec.pi.events.emit("c", 1);
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(seen).toHaveBeenCalledWith(1);
+			expect(rec.bus.errors).toEqual([sync, async_]);
+		});
+
+		it("also reports to onSubscriberError with the channel", async () => {
+			const onSubscriberError = vi.fn();
+			const rec = createRecordingPi({ onSubscriberError });
+			const boom = new Error("boom");
+			rec.pi.events.on("c", () => {
+				throw boom;
+			});
+			rec.pi.events.emit("c", 1);
+			expect(onSubscriberError).toHaveBeenCalledWith(boom, "c");
+			expect(rec.bus.errors).toEqual([boom]);
+		});
 	});
 
 	describe("event bus", () => {
