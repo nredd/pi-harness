@@ -16,9 +16,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?!\d|\.\d)")
-IPV6 = re.compile(
-    r"(?<![0-9a-f:])(?:f[cde][0-9a-f]{2}|fe[89ab][0-9a-f])(?::[0-9a-f]{0,4}){2,}", re.IGNORECASE
-)
+IPV6 = re.compile(r"(?<![0-9a-f:])(?:f[cd][0-9a-f]{2}|fe[89ab][0-9a-f])(?::[0-9a-f]{0,4}){2,}", re.IGNORECASE)
 TAILNET_HOST = re.compile(r"\b[\w-]+(?:\.[\w-]+)*\.(?:ts\.net|tailscale\.net)\b", re.IGNORECASE)
 
 # RFC1918, CGNAT (also used by tailnets) and IPv4 link-local.
@@ -110,6 +108,8 @@ def scanned_paths() -> list[str]:
         ("fc00:abcd::2", True),
         ("2001:db8::1", False),
         ("feed: yes", False),
+        ("feed::1", False),
+        ("fe00::1", False),
         ("fade:", False),
         ("node.example.ts.net", True),
         ("node.tailscale.net", True),
