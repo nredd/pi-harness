@@ -23,6 +23,7 @@ var CONFIGURABLE_SAFE_GIT_SUBCOMMANDS = [
   "cat-file"
 ];
 var SAFE_GIT_SUBCOMMANDS = [...BUILTIN_SAFE_GIT_SUBCOMMANDS, ...CONFIGURABLE_SAFE_GIT_SUBCOMMANDS];
+var SAFE_GH_SUBCOMMAND_PATHS = ["pr view", "pr list", "issue view", "issue list"];
 var SAFE_BUILTIN_PLAN_TOOLS = /* @__PURE__ */ new Set(["read", "bash", "powershell", "grep", "find", "ls"]);
 var BLOCKED_BUILTIN_TOOLS = /* @__PURE__ */ new Set(["edit", "write"]);
 var MUTATING_COMMANDS = /* @__PURE__ */ new Set([
@@ -194,7 +195,16 @@ function explainBlockedCommand(command, safeSubcommands = {}, {
   }
   return void 0;
 }
-var NOT_ALLOWLISTED_REASON = "not on the read-only allowlist; opt in via `safeSubcommands`";
+var NOT_ALLOWLISTED_REASON = "not on the reviewed read-only allowlist";
+function notAllowlistedReason(optIn) {
+  if (!optIn) return NOT_ALLOWLISTED_REASON;
+  return `${NOT_ALLOWLISTED_REASON}; the reviewed opt-in is the exact entry \`${optIn.entry}\` in \`safeSubcommands.${optIn.key}\`, a trust override that skips all argument checks`;
+}
+function ghOptIn(args) {
+  const [group, action] = args.filter((argument) => !argument.startsWith("-")).map((argument) => argument.toLowerCase());
+  const entry = `${group} ${action}`;
+  return SAFE_GH_SUBCOMMAND_PATHS.includes(entry) ? { key: "gh", entry } : void 0;
+}
 var SUBCOMMAND_COMMANDS = /* @__PURE__ */ new Set(["gh", "npm", "cargo", "go"]);
 function explainUnsafeSegment(segment, safeSubcommands, platform, paths) {
   const prefix = matchConfiguredPrefix(segment, safeSubcommands);
@@ -237,7 +247,7 @@ function explainUnsafeSegment(segment, safeSubcommands, platform, paths) {
   const subcommand = SUBCOMMAND_COMMANDS.has(command) ? args.find((argument) => !argument.startsWith("-")) : void 0;
   return {
     token: subcommand === void 0 ? first : `${first} ${subcommand}`,
-    reason: NOT_ALLOWLISTED_REASON
+    reason: notAllowlistedReason(command === "gh" ? ghOptIn(args) : void 0)
   };
 }
 function firstWord(words, fallback) {
@@ -292,7 +302,13 @@ function explainGitRejection(first, args, safeSubcommands, paths) {
   if (!subcommand) return { token: first, reason: "arguments rejected by the reviewed `git` validator: no subcommand" };
   if (subcommand.startsWith("-")) return { token: subcommand, reason: "unsupported git option before the subcommand" };
   const validator = BUILTIN_GIT_VALIDATORS[subcommand] ?? (safeSubcommands.git?.includes(subcommand) ? CONFIGURABLE_GIT_VALIDATORS[subcommand] : void 0);
-  if (!validator) return { token: `${first} ${subcommand}`, reason: NOT_ALLOWLISTED_REASON };
+  if (!validator) {
+    const configurable = CONFIGURABLE_SAFE_GIT_SUBCOMMANDS.includes(subcommand);
+    return {
+      token: `${first} ${subcommand}`,
+      reason: notAllowlistedReason(configurable ? { key: "git", entry: subcommand } : void 0)
+    };
+  }
   const label = `git ${subcommand}`;
   const subcommandArgs = args.slice(index + 1);
   const unsafe = subcommandArgs.filter(
@@ -2724,4 +2740,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-7AOHUDU7.ts.map
+//# sourceMappingURL=chunk-YMYTZ5XI.ts.map

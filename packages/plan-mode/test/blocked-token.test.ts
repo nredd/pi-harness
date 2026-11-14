@@ -77,8 +77,8 @@ const REJECTED: [string, string, RegExp][] = [
   ["find . -name x -delete", "-delete", /argument/],
   ["find . -execdir ls x +", "-execdir", /argument/],
   ["find . -exec rm {} +", "{}", /expansion/],
-  ["git push origin main", "git push", /allowlist/],
-  ["npm install left-pad", "npm install", /allowlist/],
+  ["git push origin main", "git push", /reviewed read-only allowlist/],
+  ["npm install left-pad", "npm install", /reviewed read-only allowlist/],
   ["sort -o out in", "-o", /argument/],
   ["sed -i s/a/b/ f", "-i", /argument/],
   ["git branch -D x", "-D", /reviewed `git branch` validator/],
@@ -89,7 +89,7 @@ const REJECTED: [string, string, RegExp][] = [
   ["git -C . -C /etc status", "/etc", /`-C` directory/],
   ["git -C /etc -C . status", "/etc", /`-C` directory/],
   ["git -C /etc push", "/etc", /`-C` directory/],
-  ["git -C . push", "git push", /allowlist/],
+  ["git -C . push", "git push", /reviewed read-only allowlist/],
   ["git", "git", /no subcommand/],
   ["tsc", "tsc", /reviewed `tsc` validator/],
   ["sed", "sed", /reviewed `sed` validator/],
@@ -98,7 +98,7 @@ const REJECTED: [string, string, RegExp][] = [
   ["npm --silent run test", "--silent", /reviewed `npm run` validator/],
   ["hostname foo", "foo", /reviewed `hostname` validator/],
   ["tasklist", "tasklist", /only allowed on Windows/],
-  ["frobnicate x", "frobnicate", /allowlist/],
+  ["frobnicate x", "frobnicate", /reviewed read-only allowlist/],
   ["ls &&", "&&", /no command|empty/],
   ["; ls", ";", /no command|empty/],
   ["ls |", "|", /no command|empty/],
@@ -204,4 +204,31 @@ test("a remote command rejected by a validator is named through the ssh prefix",
   const blocked = explainBlockedCommand("ssh prod git branch -D x", safeSubcommands, options);
   assert.equal(blocked?.token, "-D");
   assert.match(blocked?.reason ?? "", /remote command: arguments rejected/);
+});
+
+test("opt-in hints only name reviewed entries and warn about the trust override", () => {
+  const reason = (command: string) =>
+    explainBlockedCommand(command, {}, { ...options, platform: "linux" })?.reason ?? "";
+  assert.match(
+    reason("gh pr list --json number"),
+    /exact entry `pr list` in `safeSubcommands.gh`.*skips all argument checks/,
+  );
+  assert.doesNotMatch(reason("gh pr list --json number"), /`gh pr`|entry `pr`/);
+  assert.match(reason("git ls-tree HEAD"), /exact entry `ls-tree` in `safeSubcommands.git`.*skips all argument checks/);
+  for (const command of [
+    "gh pr merge 218",
+    "gh pr",
+    "gh",
+    "git push origin main",
+    "npm install x",
+    "cargo run",
+    "make",
+  ]) {
+    assert.doesNotMatch(reason(command), /safeSubcommands/, command);
+    assert.match(reason(command), /reviewed read-only allowlist/, command);
+  }
+  const remote = explainBlockedCommand("ssh prod git push", safeSubcommands, { ...options, platform: "linux" });
+  assert.ok(remote);
+  assert.doesNotMatch(remote.reason, /safeSubcommands/);
+  assert.match(remote.reason, /^remote command: .*reviewed read-only allowlist/);
 });

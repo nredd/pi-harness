@@ -303,7 +303,26 @@ export function explainBlockedCommand(
   return undefined;
 }
 
-const NOT_ALLOWLISTED_REASON = "not on the read-only allowlist; opt in via `safeSubcommands`";
+const NOT_ALLOWLISTED_REASON = "not on the reviewed read-only allowlist";
+
+/**
+ * Reason for a command outside the reviewed allowlist. Only a reviewed configurable opt-in
+ * (`optIn`, e.g. `safeSubcommands.git` `ls-tree` or `safeSubcommands.gh` `pr list`) earns a hint,
+ * and it states that a configured prefix skips every argument check.
+ */
+function notAllowlistedReason(optIn?: { readonly key: "git" | "gh"; readonly entry: string }): string {
+  if (!optIn) return NOT_ALLOWLISTED_REASON;
+  return `${NOT_ALLOWLISTED_REASON}; the reviewed opt-in is the exact entry \`${optIn.entry}\` in \`safeSubcommands.${optIn.key}\`, a trust override that skips all argument checks`;
+}
+
+/** The reviewed `gh` opt-in for `args` (`<group> <action>`), only when it is an exact reviewed path. */
+function ghOptIn(args: readonly string[]): { readonly key: "gh"; readonly entry: string } | undefined {
+  const [group, action] = args
+    .filter((argument) => !argument.startsWith("-"))
+    .map((argument) => argument.toLowerCase());
+  const entry = `${group} ${action}`;
+  return (SAFE_GH_SUBCOMMAND_PATHS as readonly string[]).includes(entry) ? { key: "gh", entry } : undefined;
+}
 
 /** Commands whose policy turns on a subcommand, so the subcommand is part of the offending token. */
 const SUBCOMMAND_COMMANDS = new Set(["gh", "npm", "cargo", "go"]);
@@ -362,7 +381,7 @@ function explainUnsafeSegment(
   const subcommand = SUBCOMMAND_COMMANDS.has(command) ? args.find((argument) => !argument.startsWith("-")) : undefined;
   return {
     token: subcommand === undefined ? first : `${first} ${subcommand}`,
-    reason: NOT_ALLOWLISTED_REASON,
+    reason: notAllowlistedReason(command === "gh" ? ghOptIn(args) : undefined),
   };
 }
 
@@ -449,7 +468,13 @@ function explainGitRejection(
     (safeSubcommands.git?.includes(subcommand as SafeGitSubcommand)
       ? (CONFIGURABLE_GIT_VALIDATORS as Record<string, ArgumentValidator>)[subcommand]
       : undefined);
-  if (!validator) return { token: `${first} ${subcommand}`, reason: NOT_ALLOWLISTED_REASON };
+  if (!validator) {
+    const configurable = (CONFIGURABLE_SAFE_GIT_SUBCOMMANDS as readonly string[]).includes(subcommand);
+    return {
+      token: `${first} ${subcommand}`,
+      reason: notAllowlistedReason(configurable ? { key: "git", entry: subcommand } : undefined),
+    };
+  }
   const label = `git ${subcommand}`;
   const subcommandArgs = args.slice(index + 1);
   const unsafe = subcommandArgs.filter(

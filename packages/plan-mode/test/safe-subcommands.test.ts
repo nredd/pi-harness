@@ -57,7 +57,7 @@ test("active Plan mode enforces session-loaded safe subcommands", async () => {
     assert.deepEqual(await hook({ toolName: "bash", input: { command: compoundCommand } }, context.ctx), {
       block: true,
       reason:
-        "Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.\nBlocked command: gh pr list --json number\nOffending token: gh pr (not on the read-only allowlist; opt in via `safeSubcommands`)",
+        "Plan mode blocks bash commands outside its reviewed inspection policy or containing explicitly unsafe arguments.\nBlocked command: gh pr list --json number\nOffending token: gh pr (not on the reviewed read-only allowlist; the reviewed opt-in is the exact entry `pr list` in `safeSubcommands.gh`, a trust override that skips all argument checks)",
     });
   });
 });
