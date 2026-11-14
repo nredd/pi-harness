@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { getKeybindings } from "@earendil-works/pi-tui";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { FLEET_COLLAPSE_KEY, FLEET_DISCLOSURE_SETTLE_MS } from "../src/ui/fleet-list.js";
 import { FLEET_STATE_ENTRY } from "../src/ui/fleet-state.js";
 import { answer, calls, ScenarioSession, spawn } from "./helpers/scenario-session.js";
@@ -432,6 +432,7 @@ async function twoTurnTags(turns: readonly [boolean, boolean]): Promise<{ first:
   const first = row();
   hold.release();
   await h.session.agent.waitForIdle();
+  await vi.waitFor(() => expect(usage).toHaveLength(2)); // the child runs in the background; wait for its second message
   fixture.clock.advance(200);
   await host.settle();
   return { first, second: row(), usage };
