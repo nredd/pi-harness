@@ -3,8 +3,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
+import { outcomes, toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it } from "vitest";
-import { answer, calls, outcomes, ScenarioSession, spawn } from "./helpers/scenario-session.js";
+import { answer, ScenarioSession, spawn } from "./helpers/scenario-session.js";
 
 let fixture: ScenarioSession;
 afterEach(async () => {
@@ -21,7 +22,7 @@ it("#330: a fresh stopped child retains its output across a fresh parent activat
   ]);
   const manager = SessionManager.create(fixture.cwd, join(fixture.root, "parents"));
   const h = await fixture.start({ harness: { sessionManager: manager } });
-  h.setResponses([calls(spawn("restart probe")), answer("SPAWNED")]);
+  h.setResponses([toolCalls(spawn("restart probe")), answer("SPAWNED")]);
   await h.session.prompt("spawn");
   await hold.entered;
   const id = outcomes(h, "Agent")[0]?.text.match(/Agent ID: (\S+)/)?.[1];
@@ -33,7 +34,7 @@ it("#330: a fresh stopped child retains its output across a fresh parent activat
   expect(existsSync(output)).toBe(true);
 
   // The real stop tool aborts the run, then the outstanding tool is allowed to settle.
-  h.setResponses([calls({ name: "stop_subagent", args: { agent_id: id } }), answer("STOP REQUESTED")]);
+  h.setResponses([toolCalls({ name: "stop_subagent", args: { agent_id: id } }), answer("STOP REQUESTED")]);
   await h.session.prompt("stop");
   hold.release();
   await record.promise;
@@ -46,6 +47,8 @@ it("#330: a fresh stopped child retains its output across a fresh parent activat
 
   // Malformed custom history must not turn session startup into a failure.
   manager.appendCustomEntry("subagents:record", null);
+  // A saved run that left no result text still answers with its metadata alone.
+  manager.appendCustomEntry("subagents:record", { id: "synthetic-empty", type: "general-purpose", description: "no result", status: "completed" });
   const parentFile = manager.getSessionFile();
   if (!parentFile) throw new Error("Parent was not persisted");
   expect(manager.getBranch().some(entry => entry.type === "custom" && entry.customType === "subagents:record")).toBe(true);
@@ -56,18 +59,22 @@ it("#330: a fresh stopped child retains its output across a fresh parent activat
 
   // Fresh extension + manager, same saved parent: no old registry or detached survivor is retained.
   const reopened = await fixture.start({ harness: { sessionManager: SessionManager.open(parentFile) } });
-  reopened.setResponses([calls({ name: "get_subagent_result", args: { agent_id: id } }), answer("LOOKED UP")]);
+  reopened.setResponses([toolCalls({ name: "get_subagent_result", args: { agent_id: id } }), answer("LOOKED UP")]);
   await reopened.session.prompt("lookup");
   const recovered = outcomes(reopened, "get_subagent_result")[0]?.text ?? "";
   expect(recovered).not.toContain("Agent not found");
   expect(recovered).toContain("last recorded status: stopped, recovered from saved parent session");
   expect(recovered).toContain(`transcript: ${output}`);
+  expect(recovered).toContain("SYNTHETIC PROGRESS 330"); // the saved result text comes back with the branch (#372)
+  reopened.setResponses([toolCalls({ name: "get_subagent_result", args: { agent_id: "synthetic-empty" } }), answer("LOOKED UP EMPTY")]);
+  await reopened.session.prompt("lookup empty");
+  expect(outcomes(reopened, "get_subagent_result").at(-1)?.text).toMatch(/^Agent "synthetic-empty" \(no result\) last recorded status: completed, recovered from saved parent session[^\n]*$/);
   expect(readFileSync(output, "utf8")).toBe(persisted);
   expect(child.state.callCount).toBe(1);
   reopened.setResponses([
-    calls({ name: "stop_subagent", args: { agent_id: id } }),
-    calls({ name: "Agent", args: { resume: id, subagent_type: "general-purpose", description: "manual recovery", prompt: "continue", run_in_background: true } }),
-    calls({ name: "steer_subagent", args: { agent_id: id, message: "continue manually" } }),
+    toolCalls({ name: "stop_subagent", args: { agent_id: id } }),
+    toolCalls({ name: "Agent", args: { resume: id, subagent_type: "general-purpose", description: "manual recovery", prompt: "continue", run_in_background: true } }),
+    toolCalls({ name: "steer_subagent", args: { agent_id: id, message: "continue manually" } }),
     answer("CHECKED HISTORICAL CONTROLS"),
   ]);
   await reopened.session.prompt("historical controls");

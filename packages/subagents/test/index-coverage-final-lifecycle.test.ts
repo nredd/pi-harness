@@ -8,6 +8,9 @@ import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { initTheme, ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { deferred } from "@nredd/pi-test-lib/deferred";
+import { toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentManager } from "../src/agent-manager.js";
 import { setFallbackSubagent } from "../src/agent-types.js";
@@ -20,8 +23,7 @@ import type { AgentRecord } from "../src/types.js";
 import { WorkflowDialog } from "../src/ui/workflow-dialog.js";
 import * as usage from "../src/usage.js";
 import { type BootedPi, ctx, flush, type Hermetic, hermeticDir, makePi, startSession } from "./helpers/boot-extension.js";
-import { FakeClock } from "./helpers/fake-clock.js";
-import { answer, barrier, calls } from "./helpers/scenario-session.js";
+import { answer } from "./helpers/scenario-session.js";
 
 interface Registry { waitForAll(): Promise<void>; getRecord(id: string): AgentRecord | undefined }
 interface Bound { bus: EventEmitter; boot: BootedPi; context: ExtensionCommandContext; registry: Registry; stopped: boolean }
@@ -90,7 +92,7 @@ async function spawn(bound: Bound, prompt: string, name?: string) {
   return result.details.agentId as string;
 }
 function heldResponse(text: string) {
-  const entered = barrier(); const release = barrier(); releases.push(() => release.resolve());
+  const entered = deferred(); const release = deferred(); releases.push(() => release.resolve());
   return { entered: entered.promise, release: () => release.resolve(),
     response: async () => { entered.resolve(); await release.promise; return answer(text); } };
 }
@@ -131,7 +133,7 @@ describe("index queued resume waiting", () => {
   it("reports a hard turn-cap failure as aborted when the final report still tries a tool", async () => {
     configure({ graceTurns: 1 });
     const path = join(env.dir, "private.txt"); writeFileSync(path, "private input");
-    provider.setResponses([calls({ name: "read", args: { path } }), calls({ name: "read", args: { path } }), calls({ name: "read", args: { path } })]);
+    provider.setResponses([toolCalls({ name: "read", args: { path } }), toolCalls({ name: "read", args: { path } }), toolCalls({ name: "read", args: { path } })]);
     const bound = await bind();
     const result = await bound.boot.tools.get("Agent").execute("capped-child", {
       subagent_type: "general-purpose", prompt: "Read privately", description: "hard capped child", max_turns: 1, run_in_background: true,
@@ -152,7 +154,7 @@ describe("index menu and branch races", () => {
     const select = vi.fn(async (_title: string, choices: string[]) => step++ === 0
       ? choices.find(choice => choice.startsWith("Agent types (")) : undefined);
     const custom = vi.fn(async (factory: (tui: unknown, theme: unknown, keys: undefined, done: (name: string | undefined) => void) => { handleInput(key: string): void }) => {
-      const selected = barrier<string | undefined>();
+      const selected = deferred<string | undefined>();
       const component = factory({}, {}, undefined, name => selected.resolve(name));
       rmSync(path);
       const result = await bound.boot.tools.get("Agent").execute("reload-selected-type", {
@@ -365,19 +367,22 @@ describe("index scheduler and file errors", () => {
     });
     const confirm = vi.fn(async () => true);
     const bound = await bind({ select, confirm });
-    const schedule = (expression: string) => bound.boot.tools.get("Agent").execute("schedule", {
-      subagent_type: "general-purpose", prompt: "later", description: "private schedule", schedule: expression, run_in_background: true,
+    const schedule = (expression: string, description = "private schedule") => bound.boot.tools.get("Agent").execute("schedule", {
+      subagent_type: "general-purpose", prompt: "later", description, schedule: expression, run_in_background: true,
     }, undefined, undefined, bound.context);
     const invalid = await schedule("not a schedule");
     expect(invalid.content[0].text).not.toContain('Scheduled "');
     expect(invalid.content[0].text).toContain('Invalid schedule "not a schedule". Use 6-field cron');
     const result = await schedule("+1h");
     expect(result.content[0].text).toContain('Scheduled "private schedule"');
+    expect(result.content[0].text).not.toContain("until:");
+    const bounded = await schedule("1h until 2099-01-01T00:00:00Z", "bounded schedule");
+    expect(bounded.content[0].text).toContain("until: 2099-01-01T00:00:00.000Z");
     const path = resolveStorePath(env.dir, "index-final-parent");
-    expect(new ScheduleStore(path).list()).toMatchObject([{ name: "private schedule" }]);
+    expect(new ScheduleStore(path).list()).toMatchObject([{ name: "private schedule" }, { name: "bounded schedule" }]);
     await bound.boot.commands.get("agents").handler("", bound.context);
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining("private schedule"), expect.any(String));
-    expect(new ScheduleStore(path).list()).toEqual([]);
+    expect(new ScheduleStore(path).list()).toMatchObject([{ name: "bounded schedule" }]);
     expect(provider.state.callCount).toBe(0);
   });
 
@@ -414,7 +419,7 @@ describe("index workflow entry callbacks", () => {
   it("opens the live workflow child through the fleet inspector's session and record callbacks", async () => {
     configure({ workflowsEnabled: true });
     const hold = heldResponse("private workflow result"); provider.setResponses([hold.response]);
-    const listeners: ((data: string) => unknown)[] = []; const viewed = barrier<string>();
+    const listeners: ((data: string) => unknown)[] = []; const viewed = deferred<string>();
     const bound = await bind({
       onTerminalInput: (handler: (data: string) => unknown) => { listeners.push(handler); return () => {}; },
       custom: vi.fn(async (factory: (tui: unknown, theme: unknown, keys: undefined, done: () => void) => { render(w: number): string[]; handleInput(key: string): void; dispose(): void }, options?: { onHandle?: (handle: { setHidden(value: boolean): void }) => void }) => {
@@ -779,7 +784,7 @@ describe("index retained lifecycle callbacks", () => {
     await shutdown(first, "reload");
     expect(listRunningDetached(sessionFile).map(entry => entry.record.id)).toContain(id);
     const listeners: ((data: string) => unknown)[] = [];
-    const viewed = barrier(); const rendered: string[] = [];
+    const viewed = deferred(); const rendered: string[] = [];
     const notify = vi.fn();
     const next = await bind({ notify, getEditorText: () => "",
       onTerminalInput: (handler: (data: string) => unknown) => { listeners.push(handler); return () => {}; },

@@ -58,6 +58,7 @@ function formatDetails(j: ScheduledSubagent, scheduler: SubagentScheduler): stri
   return [
     `name:      ${j.name}`,
     `schedule:  ${j.schedule} (${j.scheduleType})`,
+    ...(j.until ? [`until:     ${j.until}`] : []),
     `agent:     ${j.subagent_type}`,
     `prompt:    ${j.prompt.slice(0, 200)}${j.prompt.length > 200 ? "…" : ""}`,
     `created:   ${j.createdAt}`,

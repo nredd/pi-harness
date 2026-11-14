@@ -139,9 +139,12 @@ PE_MAX_OFFSET = 64 * 1024
 BIOME_CONFIGS = frozenset({"biome.json", "biome.jsonc"})
 # `test:<signal>` is one name per extra `coverage/policy.json` signal, so any `test:` suffix is accepted.
 DENIED_SCRIPT_NAMES = frozenset({"test:upstream-sync", "test:sync-reverts"})
+# `pretest` builds the gitignored `dist/` a test loads (#890), so it is a standard name.
 SCRIPT_NAMES = frozenset(
-    {"lint", "format", "typecheck", "test", "test:bun", "check", "build", "prepack", "bench"}
+    {"lint", "format", "typecheck", "test", "test:bun", "check", "build", "prepack", "pretest", "bench"}
 )
+# Root home of the shared toolchain (`runtime-builder.mjs`, `run-vitest.ts`, #889/#890): importing it is not an escape.
+SHARED_TOOLCHAIN = "scripts"
 CODE_SUFFIXES = frozenset({".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"})
 STRAY_TEST_SUFFIXES = (".test.mjs", ".test.js", ".test.mts", ".test.cts", ".test.tsx", ".test.jsx")
 # A test is named for the behavior it pins: not a ticket (`issue-302-repro`) and not a coverage campaign
@@ -279,6 +282,8 @@ def import_escapes(package: str, path: str, root: Path) -> Iterable[Violation]:
     for specifier in sorted(set(RELATIVE_SPECIFIER.findall(text))):
         target = posixpath.normpath(posixpath.join(directory, specifier))
         if target == ".." or target.startswith("../"):
+            if posixpath.normpath(posixpath.join(package, target)).startswith(f"{SHARED_TOOLCHAIN}/"):
+                continue
             yield Violation(package, path, f"import-escape {specifier}")
 
 

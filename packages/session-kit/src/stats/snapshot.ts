@@ -1,12 +1,23 @@
 /** Privacy-only monthly snapshots and offline, atomic last-good imports. Node builtins only. */
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { link, lstat, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { agentDir } from "../agent-dir.ts";
+import { mergeQuota, type QuotaObservation } from "./harness/common.ts";
+import {
+	EXTERNAL_HARNESSES,
+	type ExternalHarness,
+	type HarnessRoots,
+	harnessCachePath,
+	loadHarnesses,
+} from "./harness/index.ts";
+import type { LoadSqlite } from "./harness/opencode.ts";
 import {
 	type Call,
 	cachePath,
 	dedupCalls,
+	HARNESSES,
+	type Harness,
 	type Loaded,
 	loadUsage,
 	mergeSessionMetadata,
@@ -16,7 +27,9 @@ import {
 } from "./load.ts";
 import { nth } from "./nth.ts";
 
-export const SNAPSHOT_VERSION = 1;
+/** v2 adds `harness` on events, a null `cost` and quota observations. v1 is still imported (as pi). */
+export const SNAPSHOT_VERSION = 2;
+const VERSIONS: readonly number[] = [1, 2];
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -27,6 +40,8 @@ export interface Identity {
 }
 export interface SnapshotEvent {
 	id: string;
+	/** Absent in v1 shards, where it means `pi`. */
+	harness?: Harness;
 	entryId: string | null;
 	sessionId: string;
 	ms: number;
@@ -36,8 +51,11 @@ export interface SnapshotEvent {
 	output: number;
 	cacheRead: number;
 	cacheWrite: number;
-	cost: number;
+	/** `null` when the harness records no cost. */
+	cost: number | null;
 }
+/** A quota reading as exported; same shape as the readers' observation. */
+export type SnapshotQuota = QuotaObservation;
 export interface SnapshotSession {
 	id: string;
 	startMs: number;
@@ -50,10 +68,17 @@ export interface Shard {
 	month: string;
 	events: SnapshotEvent[];
 	sessions: SnapshotSession[];
+	/** v2 only; each reading lives in the UTC month of its `observedAt`. */
+	quota?: SnapshotQuota[];
 }
 export interface Manifest extends Identity {
 	version: number;
 	exportedAt: number;
+	/**
+	 * v2 only: per harness in this snapshot, when its data was last read cleanly. Equal to `exportedAt`
+	 * unless the harness failed and its previous contents were carried, which leaves it behind.
+	 */
+	lastGoodAt?: Partial<Record<Harness, number>>;
 	shards: { month: string; file: string; sha256: string; bytes: number }[];
 }
 export interface MachineSnapshot {
@@ -82,6 +107,8 @@ export interface Coverage {
 }
 export interface Combined extends Loaded {
 	coverage: Coverage;
+	/** Imported quota readings, freshest per `(provider, limitId, window)`. */
+	quota: QuotaObservation[];
 }
 
 /** Atomic replacement, also safe against concurrent writers' temporary-file collisions. */
@@ -117,67 +144,109 @@ function validateIdentity(value: unknown): Identity {
 	return value as unknown as Identity;
 }
 
-/** An installation identity belongs to the agent dir, never to the sync checkout. */
-export async function machineIdentity(dir = agentDir()): Promise<Identity> {
-	const path = join(dir, "pi-session-kit", "machine.json");
+/**
+ * Create-or-read one installation file. First use publishes atomically and exclusively (hard link), so
+ * concurrent first readers agree and never see partial JSON; a corrupt file fails rather than being replaced.
+ */
+async function installationFile<T>(path: string, fresh: () => object, validate: (value: unknown) => T): Promise<T> {
 	try {
-		return validateIdentity(await jsonFile(path));
+		return validate(await jsonFile(path));
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
 	await mkdir(dirname(path), { recursive: true });
-	const identity = { machineId: randomUUID(), label: "Pi machine" };
 	const tmp = `${path}.${randomUUID()}.tmp`;
-	await writeFile(tmp, JSON.stringify(identity), { flag: "wx", mode: 0o600 });
+	await writeFile(tmp, JSON.stringify(fresh()), { flag: "wx", mode: 0o600 });
 	try {
-		// Hard-link publication is atomic and exclusive: concurrent readers never see partial JSON.
 		await link(tmp, path);
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 	} finally {
 		await unlink(tmp);
 	}
-	return validateIdentity(await jsonFile(path));
+	return validate(await jsonFile(path));
 }
 
-/** Canonical event fingerprint includes identity, timestamp, raw attribution and every counter. */
-export function eventId(event: Omit<SnapshotEvent, "id">): string {
-	if (event.entryId === null)
-		return opaqueId(
-			JSON.stringify([
-				event.provider,
-				event.model,
-				event.ms,
-				event.input,
-				event.output,
-				event.cacheRead,
-				event.cacheWrite,
-			]),
-		);
-	return opaqueId(
-		JSON.stringify([
-			event.entryId,
-			event.ms,
-			event.provider,
-			event.model,
-			event.input,
-			event.output,
-			event.cacheRead,
-			event.cacheWrite,
-		]),
+/** An installation identity belongs to the agent dir, never to the sync checkout. */
+export async function machineIdentity(dir = agentDir()): Promise<Identity> {
+	return installationFile(
+		join(dir, "pi-session-kit", "machine.json"),
+		() => ({ machineId: randomUUID(), label: "Pi machine" }),
+		validateIdentity,
 	);
+}
+
+/** Local export state, never synced: the secret salt and the harness set last published. */
+export interface ExportState {
+	/** Keys the account discriminators on quota readings. Never leaves the machine. */
+	salt: string;
+	/** What the last successful export published; `null` before any export recorded it. */
+	harnesses: Harness[] | null;
+	/** Consecutive exports whose scan of a harness failed and carried its old data; absent means 0. */
+	failures: Partial<Record<Harness, number>>;
+}
+const stateFile = (dir: string): string => join(dir, "pi-session-kit", "export-state.json");
+function validateState(value: unknown): ExportState {
+	exact(value, ["version", "salt", "harnesses", "failures"]);
+	const harnesses = value.harnesses;
+	const failures = value.failures;
+	if (
+		value.version !== 1 ||
+		typeof value.salt !== "string" ||
+		!/^[a-f0-9]{32}$/.test(value.salt) ||
+		!(
+			harnesses === null ||
+			(Array.isArray(harnesses) &&
+				harnesses.every((h) => HARNESSES.includes(h as Harness)) &&
+				new Set(harnesses).size === harnesses.length)
+		) ||
+		!record(failures) ||
+		!Object.entries(failures).every(([h, n]) => HARNESSES.includes(h as Harness) && count(n) && n > 0)
+	)
+		throw new Error("Invalid export state");
+	return {
+		salt: value.salt,
+		harnesses: harnesses as Harness[] | null,
+		failures: failures as ExportState["failures"],
+	};
+}
+/** Created on first use with a fresh salt and no recorded set. */
+async function exportState(dir: string): Promise<ExportState> {
+	return installationFile(
+		stateFile(dir),
+		() => ({ version: 1, salt: randomBytes(16).toString("hex"), harnesses: null, failures: {} }),
+		validateState,
+	);
+}
+
+/**
+ * Canonical event fingerprint: identity, timestamp, raw attribution and every counter. v2 adds the
+ * harness so a pi row and a Codex row can never collide; v1 shards keep their original formula.
+ */
+export function eventId(event: Omit<SnapshotEvent, "id">, version: number = SNAPSHOT_VERSION): string {
+	const lead = version >= 2 ? [event.harness ?? "pi"] : [];
+	const counters = [event.input, event.output, event.cacheRead, event.cacheWrite];
+	if (event.entryId === null)
+		return opaqueId(JSON.stringify([...lead, event.provider, event.model, event.ms, ...counters]));
+	return opaqueId(JSON.stringify([...lead, event.entryId, event.ms, event.provider, event.model, ...counters]));
 }
 
 /** Session metadata including children when the loader provided it. */
 const sessionsOf = (loaded: Loaded): Session[] => loaded.sessionMetadata ?? loaded.sessions;
 
 /** Allowlist projection. No source objects, paths, names or message payloads are serialized. */
-export function makeSnapshot(loaded: Loaded, identity: Identity, exportedAt = Date.now()): MachineSnapshot {
+export function makeSnapshot(
+	loaded: Loaded,
+	identity: Identity,
+	exportedAt = Date.now(),
+	quota: readonly QuotaObservation[] = [],
+	lastGoodAt: Manifest["lastGoodAt"] = {},
+): MachineSnapshot {
 	const shards = new Map<string, Shard>();
 	const shard = (month: string): Shard => {
 		let s = shards.get(month);
 		if (!s) {
-			s = { version: SNAPSHOT_VERSION, machineId: identity.machineId, month, events: [], sessions: [] };
+			s = { version: SNAPSHOT_VERSION, machineId: identity.machineId, month, events: [], sessions: [], quota: [] };
 			shards.set(month, s);
 		}
 		return s;
@@ -185,6 +254,7 @@ export function makeSnapshot(loaded: Loaded, identity: Identity, exportedAt = Da
 	const sessionId = (value: string): string => (HASH.test(value) ? value : opaqueId(`session:${value}`));
 	for (const c of loaded.calls) {
 		const e = {
+			harness: c.harness,
 			entryId: c.entryId ?? null,
 			sessionId: sessionId(c.session),
 			ms: c.ms,
@@ -198,6 +268,19 @@ export function makeSnapshot(loaded: Loaded, identity: Identity, exportedAt = Da
 		};
 		shard(monthOf(c.ms)).events.push({ id: eventId(e), ...e });
 	}
+	for (const q of mergeQuota(quota, exportedAt))
+		shard(monthOf(q.observedAt)).quota?.push({
+			harness: q.harness,
+			provider: q.provider,
+			limitId: q.limitId,
+			window: q.window,
+			usedPercent: q.usedPercent,
+			resetAt: q.resetAt,
+			durationMs: q.durationMs,
+			observedAt: q.observedAt,
+			planType: q.planType,
+			account: q.account,
+		});
 	for (const s of sessionsOf(loaded))
 		shard(monthOf(s.startMs)).sessions.push({
 			id: sessionId(s.path),
@@ -211,6 +294,7 @@ export function makeSnapshot(loaded: Loaded, identity: Identity, exportedAt = Da
 			machineId: identity.machineId,
 			label: identity.label,
 			exportedAt,
+			lastGoodAt,
 			shards: [],
 		},
 		shards: [...shards.values()].sort((a, b) => a.month.localeCompare(b.month)),
@@ -218,9 +302,10 @@ export function makeSnapshot(loaded: Loaded, identity: Identity, exportedAt = Da
 }
 
 export function validateManifest(value: unknown): Manifest {
-	exact(value, ["version", "machineId", "label", "exportedAt", "shards"]);
+	const v2 = !(record(value) && value.version === 1);
+	exact(value, ["version", "machineId", "label", "exportedAt", ...(v2 ? ["lastGoodAt"] : []), "shards"]);
 	if (
-		value.version !== SNAPSHOT_VERSION ||
+		!VERSIONS.includes(value.version as number) ||
 		typeof value.machineId !== "string" ||
 		!UUID.test(value.machineId) ||
 		!name(value.label) ||
@@ -228,6 +313,16 @@ export function validateManifest(value: unknown): Manifest {
 		!Array.isArray(value.shards)
 	)
 		throw new Error("Invalid or unsupported manifest");
+	if (v2) {
+		const good = value.lastGoodAt;
+		if (
+			!record(good) ||
+			!Object.entries(good).every(
+				([h, at]) => HARNESSES.includes(h as Harness) && positive(at) && at <= (value.exportedAt as number),
+			)
+		)
+			throw new Error("Invalid harness freshness");
+	}
 	const months = new Set<string>();
 	for (const ref of value.shards) {
 		exact(ref, ["month", "file", "sha256", "bytes"]);
@@ -245,20 +340,53 @@ export function validateManifest(value: unknown): Manifest {
 	}
 	return value as unknown as Manifest;
 }
-export function validateShard(value: unknown, manifest: Manifest, month: string): Shard {
-	exact(value, ["version", "machineId", "month", "events", "sessions"]);
+const SHARD_KEYS = ["version", "machineId", "month", "events", "sessions"];
+const quotaKey = (q: SnapshotQuota): string => JSON.stringify([q.provider, q.limitId, q.window, q.account]);
+function validateQuota(q: unknown, month: string): void {
+	exact(q, [
+		"harness",
+		"provider",
+		"limitId",
+		"window",
+		"usedPercent",
+		"resetAt",
+		"durationMs",
+		"observedAt",
+		"planType",
+		"account",
+	]);
 	if (
-		value.version !== SNAPSHOT_VERSION ||
+		!HARNESSES.includes(q.harness as Harness) ||
+		![q.provider, q.limitId, q.window].every(name) ||
+		typeof q.usedPercent !== "number" ||
+		!Number.isFinite(q.usedPercent) ||
+		q.usedPercent < 0 ||
+		!positive(q.resetAt) ||
+		!positive(q.durationMs) ||
+		!positive(q.observedAt) ||
+		monthOf(q.observedAt) !== month ||
+		!(q.planType === null || name(q.planType)) ||
+		!(q.account === "" || hash(q.account))
+	)
+		throw new Error("Invalid snapshot quota");
+}
+export function validateShard(value: unknown, manifest: Manifest, month: string): Shard {
+	const v2 = manifest.version >= 2;
+	exact(value, v2 ? [...SHARD_KEYS, "quota"] : SHARD_KEYS);
+	if (
+		value.version !== manifest.version ||
 		value.machineId !== manifest.machineId ||
 		value.month !== month ||
 		!Array.isArray(value.events) ||
-		!Array.isArray(value.sessions)
+		!Array.isArray(value.sessions) ||
+		(v2 && !Array.isArray(value.quota))
 	)
 		throw new Error("Invalid shard header");
 	const seenEvents = new Set<string>();
 	for (const e of value.events) {
 		exact(e, [
 			"id",
+			...(v2 ? ["harness"] : []),
 			"entryId",
 			"sessionId",
 			"ms",
@@ -272,6 +400,7 @@ export function validateShard(value: unknown, manifest: Manifest, month: string)
 		]);
 		if (
 			!hash(e.id) ||
+			(v2 && !HARNESSES.includes(e.harness as Harness)) ||
 			seenEvents.has(e.id) ||
 			!(e.entryId === null || hash(e.entryId)) ||
 			!hash(e.sessionId) ||
@@ -282,10 +411,8 @@ export function validateShard(value: unknown, manifest: Manifest, month: string)
 			["router", "faux", "faux-provider", "fake-provider"].includes(e.provider as string) ||
 			![e.input, e.output, e.cacheRead, e.cacheWrite].every(count) ||
 			(e.input as number) + (e.output as number) + (e.cacheRead as number) + (e.cacheWrite as number) === 0 ||
-			typeof e.cost !== "number" ||
-			!Number.isFinite(e.cost) ||
-			e.cost < 0 ||
-			eventId(e as unknown as SnapshotEvent) !== e.id
+			!(e.cost === null ? v2 : typeof e.cost === "number" && Number.isFinite(e.cost) && e.cost >= 0) ||
+			eventId(e as unknown as SnapshotEvent, manifest.version) !== e.id
 		)
 			throw new Error("Invalid snapshot event");
 		seenEvents.add(e.id);
@@ -305,6 +432,7 @@ export function validateShard(value: unknown, manifest: Manifest, month: string)
 			throw new Error("Invalid snapshot session");
 		seenSessions.add(s.id);
 	}
+	if (v2) for (const q of value.quota as unknown[]) validateQuota(q, month);
 	return value as unknown as Shard;
 }
 
@@ -312,6 +440,7 @@ export function validateShard(value: unknown, manifest: Manifest, month: string)
 export function validateSnapshot(snapshot: MachineSnapshot): void {
 	const metadata = new Set<string>();
 	const events = new Set<string>();
+	const quota = new Set<string>();
 	for (const s of snapshot.shards) {
 		for (const session of s.sessions) {
 			if (metadata.has(session.id)) throw new Error("Duplicate session metadata");
@@ -321,24 +450,219 @@ export function validateSnapshot(snapshot: MachineSnapshot): void {
 			if (events.has(e.id)) throw new Error("Duplicate event identity");
 			events.add(e.id);
 		}
+		for (const q of s.quota ?? []) {
+			if (quota.has(quotaKey(q))) throw new Error("Duplicate quota window");
+			quota.add(quotaKey(q));
+		}
 	}
 	for (const s of snapshot.shards)
 		for (const e of s.events) if (!metadata.has(e.sessionId)) throw new Error("Missing session metadata");
 }
 
-/** Write only this machine's immutable shards, publishing its manifest last. */
+/** Which harnesses an export reads, and where. Default is pi only: other tools are opt-in. */
+export interface ExportOptions {
+	harnesses?: readonly Harness[];
+	/** Allow publishing a narrower harness set than last time, dropping the missing harnesses' history. */
+	replaceHarnesses?: boolean;
+	roots?: Partial<HarnessRoots>;
+	env?: Record<string, string | undefined>;
+	home?: string;
+	loadSqlite?: LoadSqlite;
+}
+/**
+ * Per requested non-pi harness: whether its data root exists, plus count-only diagnostics. `failed` means
+ * the scan was incomplete: `kept` carried what this machine last published for it over unchanged (or there
+ * was nothing), `lost` could not read the previous snapshot, so the harness is missing from this one.
+ */
+export type HarnessReport = Partial<
+	Record<
+		ExternalHarness,
+		{ found: boolean; problems: string[]; failed?: "kept" | "lost"; consecutiveFailures?: number }
+	>
+>;
+
+/**
+ * Diagnostics that mean the history may be incomplete, so publishing the scan would replace a good snapshot
+ * with a worse one: a cache that did not persist, transcript files or a data root that could not be read,
+ * or an OpenCode database that was busy or unreadable (it has no cache to fall back on).
+ */
+const fatalProblem = (p: string): boolean =>
+	p.endsWith(": cache not written") ||
+	p.includes(" unreadable files") ||
+	p.endsWith(": root unreadable") ||
+	p.startsWith("opencode: database ");
+
+/** What a harness contributes to a snapshot. */
+interface Contribution {
+	calls: Call[];
+	sessions: Session[];
+	quota: QuotaObservation[];
+}
+const emptyContribution = (): Contribution => ({ calls: [], sessions: [], quota: [] });
+
+/** This machine's last published snapshot: `null` if there is none, `"unreadable"` if it cannot be trusted. */
+type Previous = { manifest: Manifest; shards: Shard[] } | null | "unreadable";
+
+async function loadPrevious(snapshotDir: string): Promise<Previous> {
+	let manifest: Manifest;
+	try {
+		manifest = validateManifest(await jsonFile(join(snapshotDir, "manifest.json")));
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : "unreadable";
+	}
+	try {
+		const shards: Shard[] = [];
+		for (const ref of manifest.shards) {
+			const text = await readFile(join(snapshotDir, ref.file), "utf8");
+			if (opaqueId(text) !== ref.sha256) throw new Error("Shard digest mismatch");
+			shards.push(validateShard(JSON.parse(text) as unknown, manifest, ref.month));
+		}
+		validateSnapshot({ manifest, shards });
+		return { manifest, shards };
+	} catch {
+		return "unreadable";
+	}
+}
+
+/**
+ * The harnesses a previous snapshot holds data or freshness for. A pi-era (v1) manifest is a pi export even
+ * when empty; one that cannot be read is assumed to be that too, the only set every kit has published.
+ */
+function publishedSet(previous: Previous): Harness[] {
+	if (previous === null) return [];
+	if (previous === "unreadable") return ["pi"];
+	const seen = new Set<string>(Object.keys(previous.manifest.lastGoodAt ?? {}));
+	if (previous.manifest.version === 1) seen.add("pi");
+	for (const shard of previous.shards) {
+		for (const e of shard.events) seen.add(e.harness ?? "pi");
+		for (const q of shard.quota ?? []) seen.add(q.harness);
+	}
+	return HARNESSES.filter((h) => seen.has(h));
+}
+
+/** What `harness` contributed to the previous snapshot; `null` if that cannot be read. */
+function carried(previous: Previous, harness: Harness): Contribution | null {
+	if (previous === null) return emptyContribution();
+	if (previous === "unreadable") return null;
+	const out = emptyContribution();
+	const sessionIds = new Set<string>();
+	const sessions: SnapshotSession[] = [];
+	for (const shard of previous.shards) {
+		for (const e of shard.events) {
+			if ((e.harness ?? "pi") !== harness) continue;
+			sessionIds.add(e.sessionId);
+			out.calls.push({
+				harness,
+				session: e.sessionId,
+				entryId: e.entryId ?? undefined,
+				ms: e.ms,
+				provider: e.provider,
+				model: e.model,
+				input: e.input,
+				output: e.output,
+				cacheRead: e.cacheRead,
+				cacheWrite: e.cacheWrite,
+				cost: e.cost,
+			});
+		}
+		out.quota.push(...(shard.quota ?? []).filter((q) => q.harness === harness));
+		sessions.push(...shard.sessions);
+	}
+	for (const s of sessions)
+		if (sessionIds.has(s.id)) out.sessions.push({ path: s.id, startMs: s.startMs, endMs: s.endMs, child: s.child });
+	return out;
+}
+
+/** What an export that published a snapshot reports. `warnings` are things that did not stop publication. */
+export interface ExportResult {
+	machineId: string;
+	snapshotDir: string;
+	harnesses?: HarnessReport;
+	warnings?: string[];
+}
+
+/**
+ * Write only this machine's immutable shards, publishing its manifest last. Callers must not run two exports
+ * into one outbox at once (`pi-usage-sync` serializes its runs); nothing here locks.
+ */
 export async function exportStats(
 	dir: string,
 	output: string,
 	root = sessionsDir(dir),
-): Promise<{ machineId: string; snapshotDir: string }> {
+	options: ExportOptions = {},
+): Promise<ExportResult> {
+	const wanted = new Set<Harness>(options.harnesses ?? ["pi"]);
 	const identity = await machineIdentity(dir);
-	const loaded = await loadUsage({ root, cache: cachePath(dir), includeAllRoots: true });
+	const state = await exportState(dir);
+	const snapshotDir = join(output, "machines", identity.machineId);
+	const previous = await loadPrevious(snapshotDir);
+	// The recorded set can lag the snapshot (state not written after a publish) or be missing: check against
+	// both, so neither a lost nor a stale state file can hide a narrowing.
+	const last = new Set([...(state.harnesses ?? []), ...publishedSet(previous)]);
+	const dropped = HARNESSES.filter((h) => last.has(h) && !wanted.has(h));
+	if (dropped.length > 0 && !options.replaceHarnesses)
+		throw new Error(
+			`Refusing to publish a narrower harness set than last published (missing: ${dropped.join(", ")}); ` +
+				"add them to --harness, or pass --replace-harnesses to drop their history",
+		);
+	// With neither a readable snapshot nor a recorded set, what was last published cannot be established.
+	if (previous === "unreadable" && state.harnesses === null && !options.replaceHarnesses)
+		throw new Error(
+			"Cannot establish which harnesses were last published (unreadable snapshot, no recorded set); " +
+				"pass --replace-harnesses to publish anyway",
+		);
+	const loaded: Loaded = wanted.has("pi")
+		? await loadUsage({ root, cache: cachePath(dir), includeAllRoots: true })
+		: { calls: [], sessions: [], errors: 0, badLines: 0 };
 	if (loaded.errors || loaded.badLines)
 		throw new Error(`Incomplete local scan: ${loaded.errors} errors, ${loaded.badLines} bad lines`);
-	const snapshot = makeSnapshot(loaded, identity);
+	const external = EXTERNAL_HARNESSES.filter((h) => wanted.has(h));
+	const scans = await loadHarnesses({
+		harnesses: external,
+		roots: options.roots,
+		env: options.env,
+		home: options.home,
+		cache: harnessCachePath(dir),
+		loadSqlite: options.loadSqlite,
+		salt: state.salt,
+	});
+	const exportedAt = Date.now();
+	const report: HarnessReport = {};
+	const calls = [...loaded.calls];
+	const sessionMetadata = [...sessionsOf(loaded)];
+	const quota: QuotaObservation[] = [];
+	const lastGoodAt: Manifest["lastGoodAt"] = wanted.has("pi") ? { pi: exportedAt } : {};
+	const failures: ExportState["failures"] = {};
+	for (const h of external) {
+		const scan = scans[h];
+		const old = carried(previous, h);
+		// A harness that cannot be read, or that vanished while we hold data for it, keeps its last published
+		// contents: it must not take the pi export down, nor be replaced by an empty or partial scan.
+		const gone = !scan.found && !options.replaceHarnesses && old !== null && old.calls.length + old.quota.length > 0;
+		const failed = scan.problems.some(fatalProblem) || gone;
+		const use = failed ? (old ?? emptyContribution()) : { ...scan, sessions: scan.sessionMetadata };
+		const problems = [
+			...scan.problems,
+			...(gone ? [`${h}: not found, but data was published before`] : []),
+			...(failed && old === null ? [`${h}: last published contents unreadable`] : []),
+		];
+		if (failed) failures[h] = (state.failures[h] ?? 0) + 1;
+		// Carried data is as fresh as it was: the previous snapshot's own mark, else when it was published.
+		const was = previous !== null && previous !== "unreadable" ? previous.manifest : undefined;
+		const lastGood = failed ? (was?.lastGoodAt?.[h] ?? was?.exportedAt) : exportedAt;
+		// Never after the export itself: a carried mark from a snapshot written under a faster clock must stay valid.
+		if (lastGood !== undefined) lastGoodAt[h] = Math.min(lastGood, exportedAt);
+		report[h] = {
+			found: scan.found,
+			problems,
+			...(failed ? { failed: old ? ("kept" as const) : ("lost" as const), consecutiveFailures: failures[h] } : {}),
+		};
+		calls.push(...use.calls);
+		sessionMetadata.push(...use.sessions);
+		quota.push(...use.quota);
+	}
+	const snapshot = makeSnapshot({ ...loaded, calls, sessionMetadata }, identity, exportedAt, quota, lastGoodAt);
 	validateSnapshot(snapshot);
-	const snapshotDir = join(output, "machines", identity.machineId);
 	await mkdir(snapshotDir, { recursive: true });
 	for (const s of snapshot.shards) {
 		const text = JSON.stringify(s);
@@ -349,7 +673,25 @@ export async function exportStats(
 		snapshot.manifest.shards.push({ month: s.month, file, sha256, bytes: Buffer.byteLength(text) });
 	}
 	await atomicJson(join(snapshotDir, "manifest.json"), validateManifest(snapshot.manifest));
-	return { machineId: identity.machineId, snapshotDir };
+	// Recorded only once published: a failed export leaves the previous set, so the next run is still checked.
+	const published = HARNESSES.filter((h) => wanted.has(h));
+	// The snapshot is out by now: failing to record it is a warning, not a failed export. The next run
+	// derives the set from the snapshot itself, so a widening is still protected.
+	const warnings = await atomicJson(stateFile(dir), {
+		version: 1,
+		salt: state.salt,
+		harnesses: published,
+		failures,
+	}).then(
+		() => [],
+		() => ["export state not recorded"],
+	);
+	return {
+		machineId: identity.machineId,
+		snapshotDir,
+		...(external.length ? { harnesses: report } : {}),
+		...(warnings.length ? { warnings } : {}),
+	};
 }
 
 const globalPath = (dir: string): string => join(dir, "pi-session-kit", "stats-global.json");
@@ -365,7 +707,7 @@ export async function readGlobal(dir: string): Promise<GlobalCache> {
 		const v = await jsonFile(globalPath(dir));
 		exact(v, ["version", "importedAt", "machines", "problems"]);
 		if (
-			v.version !== SNAPSHOT_VERSION ||
+			!VERSIONS.includes(v.version as number) ||
 			!count(v.importedAt) ||
 			!record(v.machines) ||
 			!Array.isArray(v.problems) ||
@@ -392,11 +734,31 @@ export async function readGlobal(dir: string): Promise<GlobalCache> {
 	}
 }
 
+/** A harness is stale when its data is this much older than the snapshot that carries it. */
+export const STALE_AFTER_MS = 2 * 24 * 60 * 60 * 1000;
+export interface StaleHarness {
+	machineId: string;
+	harness: Harness;
+	lastGoodAt: number;
+}
+/** Harnesses of `manifest` whose last clean read lags its export by more than `STALE_AFTER_MS`. */
+export function staleHarnesses(manifest: Manifest): StaleHarness[] {
+	return Object.entries(manifest.lastGoodAt ?? {})
+		.filter(([, at]) => manifest.exportedAt - at > STALE_AFTER_MS)
+		.map(([harness, lastGoodAt]) => ({ machineId: manifest.machineId, harness: harness as Harness, lastGoodAt }));
+}
+
 /** Independent machine transactions: invalid/missing machines retain last-good data; one atomic publication. */
 export async function importStats(
 	dir: string,
 	input: string,
-): Promise<{ imported: number; retained: number; problems: string[]; importedAt: number }> {
+): Promise<{
+	imported: number;
+	retained: number;
+	problems: string[];
+	importedAt: number;
+	stale: StaleHarness[];
+}> {
 	const previous = await readGlobal(dir);
 	const machines = { ...previous.machines };
 	const problems: string[] = [];
@@ -444,13 +806,15 @@ export async function importStats(
 	if (Buffer.byteLength(JSON.stringify(next)) > MAX_BYTES)
 		throw new Error("Global cache exceeds 128 MiB; last-good cache retained");
 	await atomicJson(globalPath(dir), next);
-	return { imported, retained: Object.keys(machines).length - imported, problems, importedAt };
+	const stale = Object.values(machines).flatMap((m) => staleHarnesses(m.manifest));
+	return { imported, retained: Object.keys(machines).length - imported, problems, importedAt, stale };
 }
 
 /** Shared offline loader for /stats and harness fixtures. Local usage is always freshly scanned. */
 export async function loadCombined(
 	dir = agentDir(),
 	onProgress?: (done: number, total: number) => void,
+	now = Date.now(),
 ): Promise<Combined> {
 	const identity = await machineIdentity(dir);
 	const local = await loadUsage({ root: sessionsDir(dir), cache: cachePath(dir), includeAllRoots: true, onProgress });
@@ -458,10 +822,13 @@ export async function loadCombined(
 	const remotes = Object.values(global.machines).filter((m) => m.manifest.machineId !== identity.machineId);
 	const candidates = [...local.calls];
 	const sessionCandidates = [...sessionsOf(local)];
+	const quotaCandidates: QuotaObservation[] = [];
 	for (const machine of remotes)
 		for (const s of machine.shards) {
-			for (const e of s.events)
+			// Until `/stats` labels harnesses (and prices a null cost as unpriced, not $0), only pi usage is shown.
+			for (const e of s.events.filter((e) => (e.harness ?? "pi") === "pi"))
 				candidates.push({
+					harness: "pi",
 					session: e.sessionId,
 					entryId: e.entryId ?? undefined,
 					ms: e.ms,
@@ -473,6 +840,7 @@ export async function loadCombined(
 					cacheWrite: e.cacheWrite,
 					cost: e.cost,
 				});
+			quotaCandidates.push(...(s.quota ?? []));
 			for (const session of s.sessions)
 				sessionCandidates.push({
 					path: session.id,
@@ -491,6 +859,7 @@ export async function loadCombined(
 	return {
 		...local,
 		calls,
+		quota: mergeQuota(quotaCandidates, now),
 		sessionMetadata: [...sessions.values()],
 		sessions: [...sessions.values()].filter((s) => !s.child && owners.has(s.path)),
 		coverage: {

@@ -16,7 +16,7 @@ vi.mock("../src/agent-runner.js", async () => {
   return { ...actual, runAgent: vi.fn() };
 });
 
-import { AgentManager } from "../src/agent-manager.js";
+import { AgentManager, MAX_TOMBSTONES } from "../src/agent-manager.js";
 import { runAgent } from "../src/agent-runner.js";
 import {
   drainDetached,
@@ -219,14 +219,14 @@ describe("AgentManager.rememberTombstone", () => {
     expect(manager.listTombstones().map(t => t.id)).toEqual(["c"]);
   });
 
-  it("marks the note of an entry it could not keep, and bounds what it does keep", () => {
+  it("marks the note of an entry it could not keep, and keeps the rest for the session", () => {
     const manager = new AgentManager(() => {});
     manager.rememberEvicted({ id: "n", type: "general-purpose", description: "d", status: "completed", evictedAfterMin: 0 });
     manager.rememberTombstone(entry("k", "gp"));
     manager.rememberTombstone(entry("n", "gp"));
     expect(manager.getEvictedNote("n")?.nameTaken).toBe("gp");
     for (let i = 0; i < 101; i++) manager.rememberTombstone({ ...entry(`t${i}`, `h${i}`), completedAt: i + 1 });
-    expect(manager.listTombstones()).toHaveLength(100);
+    expect(manager.listTombstones()).toHaveLength(102);
   });
 
   it("names the held name in the note, alias or handle", () => {
@@ -493,6 +493,26 @@ describe("session switch with a running background agent", () => {
     const got = await back.tools.get("steer_subagent").execute("s", { agent_id: "second-1", message: "more" }, undefined, undefined, ctx(sessionFile));
     expect(got.content[0].text).toContain('Cannot resume agent "second-1": its name "gp" now belongs to another agent');
     expect(got.content[0].text).not.toContain("no saved session is left");
+    await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
+  });
+
+  it("names the session to reopen when the per-session tombstone bound dropped a conversation (#372)", async () => {
+    const saved = join(tmpDir, "bound-session.jsonl");
+    writeFileSync(saved, "");
+    const mk = (i: number) => ({ id: `b${i}`, handle: `bound-${i}`, type: "general-purpose", description: "d", sessionFile: saved, completedAt: i });
+    spoolDetached(sessionFile, {
+      id: "bound-delivery",
+      content: "<task-notification>bound</task-notification>",
+      details: { id: "b0" },
+      evicted: [{ id: "b0", type: "general-purpose", description: "d", status: "completed", evictedAfterMin: 0 }],
+      tombstones: Array.from({ length: MAX_TOMBSTONES + 1 }, (_, i) => mk(i)),
+    });
+    const back = makePi();
+    subagentsExtension(back.pi);
+    await back.lifecycle.get("session_start")({ type: "session_start", reason: "resume" }, ctx(sessionFile));
+    await new Promise(resolve => setTimeout(resolve, 250));
+    const got = await back.tools.get("steer_subagent").execute("s", { agent_id: "b0", message: "more" }, undefined, undefined, ctx(sessionFile));
+    expect(got.content[0].text).toContain(`Cannot resume agent "b0": dropped by the per-session tombstone bound; reopen ${saved} manually.`);
     await back.lifecycle.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx(sessionFile));
   });
 

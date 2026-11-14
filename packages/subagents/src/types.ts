@@ -311,6 +311,13 @@ export interface AgentRecord {
   /** Resolved spawn params, captured for UI display. Fixed at spawn time. */
   invocation?: AgentInvocation;
   /**
+   * The thinking level the caller asked for, snapshotted when the session was
+   * created (before `invocation.thinking` takes the session level). `undefined`
+   * means no ask. Never cleared: each response re-derives `requestedThinking`
+   * from it.
+   */
+  askedThinking?: EffectiveThinkingLevel;
+  /**
    * Set when a configured model did not resolve and the agent runs on the parent
    * model. The single source for every disclosure surface; a resume reuses it
    * as is, never recomputes it from the resuming call's config.
@@ -388,11 +395,13 @@ export interface AgentInvocation {
   /** The level actually in effect, once a session exists to report one. */
   thinking?: EffectiveThinkingLevel;
   /**
-   * What the caller asked for, kept only when they did not get it — pi clamped
-   * the level to the model's capabilities, or an agent file's frontmatter
-   * outranked the parameter (#182). The snapshot exists to answer "did the spawn
-   * honor my instructions?" (#62), which it cannot do if the request is lost, so
-   * neither `requested*` field is overwritten once set.
+   * What the caller asked for, set only while the latest response (or the
+   * session, before one lands) differs from it — pi clamped the level to the
+   * model's capabilities, or an agent file's frontmatter outranked the
+   * parameter (#182). It answers "did the spawn honor my instructions?" (#62).
+   * On a router-backed agent it follows the latest response: a later turn that
+   * runs at the asked level clears it, and a later clamp sets it again. Absent
+   * when nothing was asked.
    */
   requestedThinking?: EffectiveThinkingLevel;
   maxTurns?: number;
@@ -444,6 +453,13 @@ export interface EnvInfo {
  * Stored at `<cwd>/.pi/subagent-schedules/<sessionId>.json`. Session-scoped:
  * survives `/resume` but resets on `/new`, mirroring pi-chonky-tasks.
  */
+/** Cross-process claim on a scheduled job's live run(s). */
+export interface RunOwner {
+  pid: number;
+  /** Epoch ms; the owner renews it while running, so a crashed owner's claim lapses. */
+  leaseUntil: number;
+}
+
 export interface ScheduledSubagent {
   id: string;
   /** Unique within store. Defaults to `description`. */
@@ -454,6 +470,8 @@ export interface ScheduledSubagent {
   scheduleType: "cron" | "once" | "interval";
   /** Computed at create time for interval/once. */
   intervalMs?: number;
+  /** ISO deadline for a repeating job: no fire at or after it. */
+  until?: string;
 
   // spawn params (subset of Agent tool params; no inherit_context, no resume)
   subagent_type: SubagentType;
@@ -470,6 +488,12 @@ export interface ScheduledSubagent {
   createdAt: string;
   lastRun?: string;
   lastStatus?: "success" | "error" | "running";
+  /**
+   * The process owning the live run(s), claimed under the store lock when a fire
+   * starts and cleared when the last one settles. Live while `pid` is alive and
+   * `leaseUntil` (epoch ms, renewed by the owner) is in the future.
+   */
+  runOwner?: RunOwner;
   /**
    * Parked by quota admission: re-check admission at fire time and re-park at
    * the new reset while the model is still blocked. See `quota-admission.ts`.

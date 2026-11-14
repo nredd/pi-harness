@@ -3,60 +3,25 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AssistantMessageEventStream, type FauxProviderRegistration, type FauxResponseStep, getApiProvider, registerApiProvider, registerFauxProvider, unregisterApiProviders } from "@earendil-works/pi-ai/compat";
-import type { AgentSessionEvent, ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { createHarness, fauxAssistantMessage, fauxToolCall, type Harness, type HarnessOptions } from "@earendil-works/pi-coding-agent/testing";
+import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { createHarness, fauxAssistantMessage, type Harness, type HarnessOptions } from "@earendil-works/pi-coding-agent/testing";
 import { createInteractiveHarness, type InteractiveHarness } from "@earendil-works/pi-coding-agent/testing/interactive";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
+import { deferred } from "@nredd/pi-test-lib/deferred";
+import { text } from "@nredd/pi-test-lib/faux";
 import { createSubagentsExtension } from "../../src/index.js";
 import type { AgentRecord } from "../../src/types.js";
-import { FakeClock } from "./fake-clock.js";
 
 export { fauxAssistantMessage as answer } from "@earendil-works/pi-coding-agent/testing";
-
-/** An explicit rendezvous, never a polling loop or elapsed-time wait. */
-export function barrier<T = void>() {
-  let resolve: (value: T) => void = () => {};
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve };
-}
-
-/** A real model turn containing tool calls. */
-export function calls(...specs: { name: string; args: Record<string, unknown> }[]) {
-  return fauxAssistantMessage(specs.map(spec => fauxToolCall(spec.name, spec.args)), { stopReason: "toolUse" });
-}
 
 /** Default child spawn; callers override only the scenario's distinguishing arguments. */
 export function spawn(description: string, extra: Record<string, unknown> = {}) {
   return { name: "Agent", args: { subagent_type: "general-purpose", description, prompt: "work", model: "kid/child", run_in_background: true, ...extra } };
 }
 
-/** Extract text from persisted host messages or tool results without assuming one content block. */
-export function text(message: unknown): string {
-  if (!message || typeof message !== "object" || !("content" in message)) return "";
-  const content = message.content;
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content.map((part: { type?: string; text?: string }) => part.type === "text" ? part.text ?? "" : "").join("\n");
-}
-
-/** Settled results from the real host tool pipeline, including error status. */
-export function outcomes(h: Harness, name: string) {
-  const ended = new Map(h.eventsOfType("tool_execution_end").map(event => [event.toolCallId, event]));
-  return h.eventsOfType("tool_execution_start").filter(event => event.toolName === name).flatMap(start => {
-    const event = ended.get(start.toolCallId);
-    return event ? [{ text: text(event.result), isError: event.isError }] : [];
-  });
-}
-
 /** Completion notices as actually delivered to the parent transcript. */
 export function notices(h: Harness) {
   return h.session.messages.filter(m => m.role === "custom" && m.customType === "subagent-notification").map(text);
-}
-
-/** Listen before starting a real turn; unsubscribe at the exact event. */
-export function nextEvent(h: Harness, predicate: (event: AgentSessionEvent) => boolean) {
-  const done = barrier<AgentSessionEvent>();
-  const off = h.session.subscribe(event => { if (predicate(event)) { off(); done.resolve(event); } });
-  return done.promise;
 }
 
 /** Own the global-discovery inputs until every child has settled and shut down. */
@@ -66,7 +31,7 @@ export class ScenarioSession {
   readonly agentDir = join(this.root, "agent");
   readonly clock = new FakeClock();
   readonly providers: FauxProviderRegistration[] = [];
-  readonly admission = barrier();
+  readonly admission = deferred();
   private readonly previousCwd = process.cwd();
   private readonly previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   private h?: Harness;
@@ -89,8 +54,8 @@ export class ScenarioSession {
   }
 
   /** Register an explicit, credential-free physical transport before host construction. */
-  physical(provider = "kid", id = "child", responses: FauxResponseStep[] = []) {
-    const p = registerFauxProvider({ provider, models: [{ id }] });
+  physical(provider = "kid", id = "child", responses: FauxResponseStep[] = [], reasoning = false) {
+    const p = registerFauxProvider({ provider, models: [{ id, reasoning }] });
     p.setResponses(responses);
     this.providers.push(p);
     const transport = getApiProvider(p.api);
@@ -102,11 +67,14 @@ export class ScenarioSession {
 
   /** Hold an open provider stream with start already visible to the production observer. */
   holdStream(p: FauxProviderRegistration) {
-    const entered = barrier();
-    const release = barrier();
+    const entered = deferred();
+    const release = deferred();
     const delegate = getApiProvider(p.api);
     if (!delegate) throw new Error(`Missing transport ${p.api}`);
+    /** Options of the latest request; read only after `entered` resolves. */
+    const seen: { options?: Parameters<typeof delegate.streamSimple>[2] } = {};
     const stream: typeof delegate.streamSimple = (model, context, options) => {
+      seen.options = options;
       const output = new AssistantMessageEventStream();
       output.push({ type: "start", partial: { ...fauxAssistantMessage(""), provider: model.provider, model: model.id, api: model.api } });
       entered.resolve();
@@ -128,13 +96,13 @@ export class ScenarioSession {
     };
     registerApiProvider({ ...delegate, stream, streamSimple: stream }, this.root);
     this.releases.push(() => release.resolve());
-    return { entered: entered.promise, release: () => release.resolve() };
+    return { entered: entered.promise, release: () => release.resolve(), seen };
   }
 
   /** Install a tool held by a promise in both the parent and real disk-discovered child. */
   heldTool() {
-    const entered = barrier();
-    const release = barrier();
+    const entered = deferred();
+    const release = deferred();
     const execute = async () => { entered.resolve(); await release.promise; return { content: [{ type: "text" as const, text: "SLEPT" }] }; };
     Reflect.set(globalThis, "__subagentScenarioHold", execute);
     const extensions = join(this.cwd, ".pi", "extensions");
@@ -192,7 +160,7 @@ export class ScenarioSession {
 
   /** Await the lifecycle event rather than racing its completion callback. */
   completion() {
-    const done = barrier();
+    const done = deferred();
     if (!this.pi) throw new Error("Host not started");
     const off = this.pi.events.on("subagents:completed", () => { off(); done.resolve(); });
     return done.promise;

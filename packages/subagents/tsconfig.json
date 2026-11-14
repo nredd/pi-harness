@@ -1,14 +1,11 @@
 {
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "ES2022",
-    "moduleResolution": "bundler",
-    "strict": true,
+    // nredd/pi-harness#875: unchecked indexed access and parameter properties go with the layout move
     "esModuleInterop": true,
-    "skipLibCheck": true,
-    "outDir": "dist",
-    "rootDir": "src",
-    "declaration": true
+    "noUncheckedIndexedAccess": false,
+    "erasableSyntaxOnly": false
   },
-  "include": ["src/**/*.ts"]
+  // nredd/pi-harness#875: `test` and `scripts` join once the 334 test type errors (50 files, mostly loose mock shapes) are fixed
+  "include": ["src", "*.ts"]
 }

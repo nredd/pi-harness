@@ -1,12 +1,12 @@
 /** Exercise the factory through registered tools, session events and detached delivery. */
 import { join } from "node:path";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { afterEach, expect, it } from "vitest";
 import { spoolDetached } from "../src/detached-results.js";
 import subagentsExtension, { createSubagentsExtension } from "../src/index.js";
 import { resolveStorePath, ScheduleStore } from "../src/schedule-store.js";
 import { type BootedPi, ctx, type Hermetic, hermeticDir, makePi } from "./helpers/boot-extension.js";
-import { FakeClock } from "./helpers/fake-clock.js";
 
 let booted: BootedPi | undefined;
 let hermetic: Hermetic | undefined;
@@ -82,7 +82,7 @@ it("cancels a pending scheduled admission through the registered session switch"
   const before = clock.pending;
   await b.lifecycle.get("session_before_switch")?.({ type: "session_shutdown", reason: "quit" }, b.parent);
   expect([...handlers.keys()].filter(key => key.startsWith("router:rpc:admit:reply:"))).toHaveLength(0);
-  expect(clock.pending).toBe(before - 2);
+  expect(clock.pending).toBe(before - 3); // admission timeout, timer and lease renewal
   await Promise.resolve();
   expect(b.pi.events.emit.mock.calls.filter(([channel]: [string]) => channel === "subagents:scheduled")
     .some(([, event]: [string, { type: string }]) => event.type === "fired")).toBe(false);

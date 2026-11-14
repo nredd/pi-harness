@@ -538,8 +538,45 @@ describe("createWorkflowHost — abort, resume and gate", () => {
     await host.spawnAgent(request({ agentId: "wf-agent-0" }));
     const resumed = await host.resumeAgent?.("wf-agent-0", "and now this");
 
-    expect(stub.resume).toHaveBeenCalledWith("manager-id-7", "and now this", undefined);
+    expect(stub.resume).toHaveBeenCalledWith("manager-id-7", "and now this", undefined, expect.any(Object));
     expect(resumed).toMatchObject({ ok: true, text: "resumed" });
+  });
+
+  it("relabels a resumed child per answered message and skips unchanged reports (#906)", async () => {
+    const invocation = (thinking: string) => ({ modelName: "phys", modelId: "p/phys", thinking, requestedThinking: "high" });
+    let current: AgentRecord = record({ id: "manager-id-7", invocation: invocation("high") as never });
+    const stub = stubManager(() => current);
+    const getRecord = () => current;
+    const manager = { ...(stub.manager as object), getRecord } as unknown as AgentManager;
+    stub.resume.mockImplementation(async (_id: string, _prompt: string, _signal: unknown, options: any) => {
+      current = record({ id: "manager-id-7", invocation: invocation("off") as never });
+      options.onAssistantUsage();
+      options.onAssistantUsage(); // same answer again: nothing new to say
+      return current;
+    });
+    const host = createWorkflowHost({ pi: {} as any, ctx: ctx(), manager });
+    await host.spawnAgent(request({ agentId: "wf-agent-0" }));
+    const onResolved = vi.fn();
+
+    await host.resumeAgent?.("wf-agent-0", "again", onResolved);
+
+    const thinking = onResolved.mock.calls.map(([info]) => info.thinking).filter(Boolean);
+    expect(thinking).toEqual(["high", "off"]);
+  });
+
+  it("ignores a per-message relabel before the resumed child's model is known (#906)", async () => {
+    const stub = stubManager(() => record({ id: "manager-id-7" }));
+    stub.resume.mockImplementation(async (_id: string, _prompt: string, _signal: unknown, options: any) => {
+      options.onAssistantUsage();
+      return record({ id: "manager-id-7" });
+    });
+    const host = createWorkflowHost({ pi: {} as any, ctx: ctx(), manager: stub.manager });
+    await host.spawnAgent(request({ agentId: "wf-agent-0" }));
+    const onResolved = vi.fn();
+
+    await host.resumeAgent?.("wf-agent-0", "again", onResolved);
+
+    expect(onResolved.mock.calls.every(([info]) => info.modelName === undefined)).toBe(true);
   });
 
   it("refuses to resume an agent the run never spawned", async () => {

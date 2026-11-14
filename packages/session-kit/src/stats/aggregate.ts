@@ -134,7 +134,7 @@ export function modelTotals(calls: readonly Call[]): ModelTotals[] {
 		t.output += c.output;
 		t.cacheRead += c.cacheRead;
 		t.cacheWrite += c.cacheWrite;
-		t.cost += c.cost;
+		t.cost += c.cost ?? 0;
 		t.calls++;
 	}
 	return [...map.values()].sort((a, b) => tokensOf(b) - tokensOf(a) || a.name.localeCompare(b.name));

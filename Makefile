@@ -1,4 +1,4 @@
-.PHONY: help verify-root-overrides install install-owned install-benchmark check check-ts check-scripts check-coverage check-integration check-probes check-providers check-import-audit check-benchmark check-package-contracts check-plan-mode-package-contract check-computer-use-package-contract check-subagents-package-contract check-todo-package-contract check-resource-sampler-contract release-manifest clean
+.PHONY: help build verify-root-overrides install install-owned install-benchmark check check-ts check-scripts check-coverage check-integration check-probes check-providers check-import-audit check-benchmark check-package-contracts check-plan-mode-package-contract check-computer-use-package-contract check-subagents-package-contract check-todo-package-contract check-resource-sampler-contract release-manifest clean
 
 PY_CHECK = uv run --locked ruff format --check . && uv run --locked ruff check --no-fix --ignore-noqa . && uv run --locked ty check
 
@@ -19,17 +19,21 @@ verify-root-overrides:  ## Verify root core overrides against the lockfile, SHA2
 
 install: install-owned install-benchmark  ## Install everything `make check` needs. Never touches forks/
 
-install-owned: verify-root-overrides  ## Verify root core overrides, then install owned dependencies (npm ci --ignore-scripts, uv sync --locked). Never touches forks/
+install-owned: verify-root-overrides  ## Verify root core overrides, install owned dependencies (npm ci --ignore-scripts, uv sync --locked), then `make build`. Never touches forks/
 	env -u GH_TOKEN npm ci --ignore-scripts
+	$(MAKE) build
 	cd integration && env -u GH_TOKEN uv sync --locked
+
+build:  ## Build every generated `dist/` (gitignored; `pi.extensions`, the `local` stack and inprocess tests load it). Needs `npm ci` first
+	env -u GH_TOKEN npm run build
 
 install-benchmark:  ## Install benchmarks/comparison, only `check-benchmark` reads it
 	cd benchmarks/comparison && env -u GH_TOKEN uv sync --locked --all-extras
 
 .PHONY: check-core-compaction
 check-core-compaction:  ## Assembled child compaction on built candidate forks/pi, isolated from real auth
-	npm run build --workspace packages/subagents
-	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json integration/core-source
+	$(MAKE) build
+	node_modules/.bin/biome check integration/core-source
 	node_modules/.bin/tsc -p integration/core-source/tsconfig.json
 	@sandbox=$$(mktemp -d); trap 'rm -rf "$$sandbox"' EXIT; \
 	mkdir -p "$$sandbox/home" "$$sandbox/tmp"; \
@@ -48,6 +52,7 @@ check-ts:  ## Biome (non-rewriting), tsc, vitest for every npm workspace, or onl
 	PATH="$$PATH:$${HOME}/.pi/agent/bin" npm run check$(foreach workspace,$(WORKSPACES), --workspace=$(workspace))
 
 check-scripts:  ## Format/lint/type/tests for scripts/ (real disposable git repos), then the package layout gate (allowlist may only shrink vs BASE; unset or empty BASE means origin/main)
+	$(MAKE) build
 	$(call PY_GATE,scripts,--project ../integration,,.)
 	uv run --locked --project integration python scripts/package_layout.py --compare-ref "$(or $(BASE),origin/main)"
 	$(MAKE) check-import-audit
@@ -61,8 +66,8 @@ check-integration:  ## integration units; requires initialized `forks/pi` Gitlin
 	$(MAKE) check-probes
 	$(MAKE) check-providers
 
-check-probes:  ## Offline probes: Biome + strict tsc, then Node coverage and Bun compatibility on the config's explicit test files (no glob)
-	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json integration/probes/anthropic-block-types.mjs integration/probes/anthropic-block-types.test.ts integration/probes/latency.ts integration/probes/latency.test.ts integration/probes/process-lifecycle.test.ts integration/probes/render.ts integration/probes/render.test.ts integration/probes/session-kit-child-scope.ts integration/probes/session-kit-child-scope.test.ts integration/probes/stack-resources.ts integration/probes/stack-resources.test.ts integration/probes/transcript-types.ts integration/probes/transcript-types.test.ts integration/probes/vitest.config.ts
+check-probes:  ## Offline probes: Biome on the directory + strict tsc, then Node coverage and Bun compatibility on the config's explicit test files (no glob)
+	node_modules/.bin/biome check integration/probes
 	node_modules/.bin/tsc -p integration/probes/tsconfig.probes.json
 	@sandbox=$$(mktemp -d); trap 'rm -rf "$$sandbox"' EXIT; \
 	cd integration/probes && env -i PATH="$$PATH" HOME="$$sandbox" PI_OFFLINE=1 PI_NO_LOCAL_LLM=1 \
@@ -71,14 +76,14 @@ check-probes:  ## Offline probes: Biome + strict tsc, then Node coverage and Bun
 	cd integration/probes && env -i PATH="$$PATH" HOME="$$sandbox" PI_OFFLINE=1 PI_NO_LOCAL_LLM=1 \
 	  node ../../scripts/run-vitest.ts bun --coverage.enabled=false
 
-check-providers:  ## Synthetic providers and auth preloads Biome + strict tsc, then Vitest on the config's explicit test files (no glob)
-	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json integration/providers/auth_guard.mjs integration/providers/auth_runtime_fixture.mjs integration/providers/auth_transport.mjs integration/providers/bun_runtime.mjs integration/providers/bun_runtime.test.ts integration/providers/extension_inventory.test.ts integration/providers/extension_inventory.ts integration/providers/faux.test.ts integration/providers/faux.ts integration/providers/preloads.test.ts integration/providers/redirect_anthropic.mjs integration/providers/usage_fixture.test.ts integration/providers/usage_fixture.ts integration/providers/vitest.config.ts
+check-providers:  ## Synthetic providers and auth preloads Biome on the directory + strict tsc, then Vitest on the config's explicit test files (no glob)
+	node_modules/.bin/biome check integration/providers
 	node_modules/.bin/tsc -p integration/providers/tsconfig.providers.json
 	cd integration/providers && node ../../scripts/run-vitest.ts node --coverage
 	cd integration/providers && node ../../scripts/run-vitest.ts bun
 
 check-import-audit:  ## Offline import audit: Biome + strict tsc, then Node coverage and Bun compatibility against the real TypeScript parser
-	node_modules/.bin/biome check --config-path=packages/dev-tools/biome.json scripts/check-biome-paths.mjs scripts/check-biome-paths.test.mjs scripts/coverage-configs.test.ts scripts/import_audit.ts scripts/import_audit.test.ts scripts/merge-pr.ts scripts/merge-pr.test.ts scripts/router_contract.mjs scripts/router_contract.test.mjs scripts/run-vitest.ts scripts/run-vitest.test.ts scripts/vitest.config.ts
+	node_modules/.bin/biome check scripts/*.ts scripts/*.mjs
 	node --check scripts/router_contract.mjs
 	node_modules/.bin/tsc -p scripts/tsconfig.import-audit.json
 	@sandbox=$$(mktemp -d); trap 'rm -rf "$$sandbox"' EXIT; \

@@ -255,6 +255,9 @@ def test_missing_required_file_fails(repo: Path, path: str) -> None:
     ("specifier", "leaves"),
     [
         ("../../plan-mode/scripts/runtime-builder.mjs", True),
+        ("../../../scripts/runtime-builder.mjs", False),
+        ("../../../scripts/../node_modules/a/b.js", True),
+        ("../../../scriptsx/a.mjs", True),
         ("../../../node_modules/a/b.js", True),
         ("../..", True),
         ("../index.ts", False),
@@ -666,7 +669,7 @@ def test_package_json_script_names(repo: Path) -> None:
         None: Assertions verify the report.
     """
     scripts = dict.fromkeys(
-        ("lint", "format", "typecheck", "test", "test:bun", "check", "build", "prepack", "bench"), "x"
+        ("lint", "format", "typecheck", "test", "test:bun", "check", "build", "prepack", "pretest", "bench"), "x"
     )
     scripts |= {"test:dist": "x", "lint:fix": "x", "postinstall": "x"}
     manifest = {

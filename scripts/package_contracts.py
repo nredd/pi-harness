@@ -891,14 +891,21 @@ class StatsShardRef(BaseModel):
         return self
 
 
+StatsHarness = Literal["pi", "claude", "codex", "opencode"]
+STATS_HARNESS_VERSION = 2  # First snapshot version with `harness`, null `cost`, `quota` and `lastGoodAt`.
+
+
 class StatsManifest(BaseModel):
     model_config = PROTOCOL_MODEL
-    version: int = Field(ge=1, le=1, description="Snapshot schema version, exactly 1")
+    version: int = Field(ge=1, le=2, description="Snapshot schema version: 1 (legacy) or 2")
     machineId: UuidV4 = Field(description="Persistent installation UUID, matching its directory")
     label: Annotated[str, StringConstraints(min_length=1, max_length=1024)] = Field(
         description="Installation label"
     )
     exportedAt: int = Field(gt=0, le=STATS_MAX_MS, description="Export time, UTC Unix milliseconds")
+    lastGoodAt: dict[StatsHarness, Annotated[int, Field(gt=0, le=STATS_MAX_MS)]] | None = Field(
+        default=None, description="v2 only: when each harness was last read cleanly, at most `exportedAt`"
+    )
     shards: list[StatsShardRef] = Field(description="One shard reference per month")
 
     @model_validator(mode="after")
@@ -916,10 +923,29 @@ class StatsManifest(BaseModel):
             raise ValueError(f"duplicate month in shards: {months}")
         return self
 
+    @model_validator(mode="after")
+    def _freshness_matches_version(self) -> Self:
+        """Require `lastGoodAt` exactly for v2, never after the export itself.
+
+        Returns:
+            Self: The validated model.
+
+        Raises:
+            ValueError: If `lastGoodAt` is present in v1, absent in v2, or later than `exportedAt`.
+        """
+        if (self.version >= STATS_HARNESS_VERSION) != (self.lastGoodAt is not None):
+            raise ValueError(
+                f"lastGoodAt is required for version 2 and absent for version 1, got {self.version}"
+            )
+        if self.lastGoodAt and any(at > self.exportedAt for at in self.lastGoodAt.values()):
+            raise ValueError("lastGoodAt is later than exportedAt")
+        return self
+
 
 class StatsEvent(BaseModel):
     model_config = PROTOCOL_MODEL
     id: Sha256Hex = Field(description="Opaque stable event fingerprint")
+    harness: StatsHarness | None = Field(default=None, description="v2 only: tool that wrote the usage")
     entryId: str | None = Field(description="Preserved entry identity, absent for legacy events")
     sessionId: Sha256Hex = Field(description="Opaque session identity, never a source path")
     ms: int = Field(gt=0, le=STATS_MAX_MS, description="UTC event instant in milliseconds")
@@ -929,7 +955,9 @@ class StatsEvent(BaseModel):
     output: int = Field(ge=0, description="Output tokens")
     cacheRead: int = Field(ge=0, description="Cache-read tokens")
     cacheWrite: int = Field(ge=0, description="Cache-write tokens")
-    cost: float = Field(ge=0, allow_inf_nan=False, description="Notional event cost")
+    cost: Annotated[float, Field(ge=0, allow_inf_nan=False)] | None = Field(
+        description="Notional event cost; `null` (v2 only) when none is recorded"
+    )
 
 
 class StatsSession(BaseModel):
@@ -940,19 +968,81 @@ class StatsSession(BaseModel):
     child: bool = Field(description="Whether this session belongs to a subagent")
 
 
+class StatsQuota(BaseModel):
+    model_config = PROTOCOL_MODEL
+    harness: StatsHarness = Field(description="Tool that observed the reading")
+    provider: NonEmptyText = Field(description="Router provider name")
+    limitId: NonEmptyText = Field(description="Provider-native limit bucket")
+    window: NonEmptyText = Field(description="Router window name, e.g. `5h`, `7d`")
+    usedPercent: float = Field(ge=0, allow_inf_nan=False, description="Percent of the window used")
+    resetAt: int = Field(gt=0, le=STATS_MAX_MS, description="Window reset, UTC Unix milliseconds")
+    durationMs: int = Field(gt=0, le=STATS_MAX_MS, description="Window length in milliseconds")
+    observedAt: int = Field(gt=0, le=STATS_MAX_MS, description="Reading time, UTC Unix milliseconds")
+    planType: NonEmptyText | None = Field(description="Plan, when reported")
+    account: Annotated[str, StringConstraints(pattern=r"^([0-9a-f]{64})?$")] = Field(
+        description="Salted account hash, or empty when the harness exposes none"
+    )
+
+
 class StatsShard(BaseModel):
     model_config = PROTOCOL_MODEL
-    version: int = Field(ge=1, le=1, description="Month-shard schema version")
+    version: int = Field(ge=1, le=2, description="Month-shard schema version: 1 (legacy) or 2")
     machineId: UuidV4 = Field(description="Producer installation UUID")
     month: SnapshotMonth = Field(description="UTC month covered by this shard")
     events: list[StatsEvent] = Field(description="Usage-only assistant events")
     sessions: list[StatsSession] = Field(description="Usage-only session metadata")
+    quota: list[StatsQuota] | None = Field(default=None, description="v2 only: quota readings of the month")
+
+    @model_validator(mode="after")
+    def _fields_match_version(self) -> Self:
+        """Require the v2 fields exactly for v2 shards.
+
+        Returns:
+            Self: The validated model.
+
+        Raises:
+            ValueError: If a v1 shard carries a v2 field, or a v2 shard lacks one.
+        """
+        v2 = self.version >= STATS_HARNESS_VERSION
+        if v2 != (self.quota is not None):
+            raise ValueError(f"quota is required for version 2 and absent for version 1, got {self.version}")
+        for event in self.events:
+            if v2 != (event.harness is not None):
+                raise ValueError(
+                    f"event harness is required for version 2 and absent for version 1, got {self.version}"
+                )
+            if not v2 and event.cost is None:
+                raise ValueError("null event cost requires version 2")
+        return self
+
+
+class StatsHarnessStatus(BaseModel):
+    model_config = PROTOCOL_MODEL
+    found: bool = Field(description="The harness's data root exists")
+    problems: list[str] = Field(description="Count-only diagnostics")
+    failed: Literal["kept", "lost"] | None = Field(
+        default=None, description="Scan incomplete: last published contents kept, or unreadable and dropped"
+    )
+    consecutiveFailures: int | None = Field(default=None, ge=1, description="Failed exports in a row")
 
 
 class StatsExportResult(BaseModel):
     model_config = PROTOCOL_MODEL
     machineId: UuidV4 = Field(description="Installation UUID that exported")
     snapshotDir: NonEmptyText = Field(description="`<OUT>/machines/<UUID>` directory written")
+    harnesses: dict[Literal["claude", "codex", "opencode"], StatsHarnessStatus] | None = Field(
+        default=None, description="Per requested non-pi harness status"
+    )
+    warnings: list[NonEmptyText] | None = Field(
+        default=None, description="Notes that did not stop publication"
+    )
+
+
+class StatsStale(BaseModel):
+    model_config = PROTOCOL_MODEL
+    machineId: UuidV4 = Field(description="Producer whose harness is stale")
+    harness: StatsHarness = Field(description="Harness last read cleanly long before its snapshot")
+    lastGoodAt: int = Field(gt=0, le=STATS_MAX_MS, description="Last clean read, UTC Unix milliseconds")
 
 
 class StatsImportResult(BaseModel):
@@ -961,6 +1051,7 @@ class StatsImportResult(BaseModel):
     retained: int = Field(ge=0, description="Machines kept from earlier imports")
     problems: list[str] = Field(description="Coverage problems found")
     importedAt: int = Field(ge=0, le=STATS_MAX_MS, description="Last successful import, Unix milliseconds")
+    stale: list[StatsStale] = Field(description="Harnesses more than 2 days behind their snapshot")
 
 
 class ToolContentBlock(BaseModel):
@@ -1658,7 +1749,7 @@ def verify_stock_pi(prefix: Path, pi_bin: Path, sandbox: Sandbox) -> None:
 def pack(
     contract: PackageContract, dest: Path, sandbox: Sandbox, package_dir: Path | None = None
 ) -> PackedArtifact:
-    """Run `npm pack` for one workspace package.
+    """Build, then run `npm pack` for one workspace package.
 
     Parameters:
         contract (PackageContract): Package to pack.
@@ -1673,6 +1764,16 @@ def pack(
         ContractError: If npm output is malformed or disagrees with the tarball.
     """
     package_dir = package_dir or REPO_ROOT / "packages" / contract.directory
+    # `--ignore-scripts` skips `prepack`. Remove old outputs so deleted sources cannot survive a build.
+    dist = package_dir / "dist"
+    if dist.exists():
+        shutil.rmtree(dist)
+    run(
+        [sandbox.tools.npm, "run", "build", "--if-present"],
+        env=sandbox.env(),
+        cwd=package_dir,
+        timeout=NPM_TIMEOUT_S,
+    )
     done = run(
         [sandbox.tools.npm, "pack", "--json", "--ignore-scripts", "--pack-destination", dest],
         env=sandbox.env(),
@@ -3844,7 +3945,10 @@ def inspect_stats_snapshot(directory: Path, machine_id: str, forbidden: Sequence
             )
             text = data.decode()
             shard = parse_stats_json(StatsShard, text, "month shard")
-            require((shard.machineId, shard.month) == (machine_id, ref.month), "export shard header mismatch")
+            require(
+                (shard.machineId, shard.month, shard.version) == (machine_id, ref.month, manifest.version),
+                "export shard header mismatch",
+            )
             events += len(shard.events)
         require(events > 0, "export produced no usage events")
         exported = "\n".join(texts)
@@ -3880,7 +3984,9 @@ def inspect_stats_cache(viewer: Path, manifest: StatsManifest, snapshot_dir: Pat
     )
     machine = machines[manifest.machineId]
     require(isinstance(machine, dict), "import cache machine is not an object")
-    require(machine.get("manifest") == manifest.model_dump(), "import cache changed the manifest")
+    require(
+        machine.get("manifest") == manifest.model_dump(exclude_none=True), "import cache changed the manifest"
+    )
     expected = [json.loads((snapshot_dir / ref.file).read_text()) for ref in manifest.shards]
     require(machine.get("shards") == expected, "import cache changed or duplicated month events")
     return machines

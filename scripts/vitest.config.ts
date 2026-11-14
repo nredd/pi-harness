@@ -12,7 +12,6 @@ export default defineConfig({
 	root: fileURLToPath(new URL("..", import.meta.url)),
 	test: {
 		include: [
-			"scripts/check-biome-paths.test.mjs",
 			"scripts/coverage-configs.test.ts",
 			"scripts/import_audit.test.ts",
 			"scripts/merge-pr.test.ts",
@@ -30,6 +29,6 @@ export default defineConfig({
 		pool: "forks",
 		maxWorkers: 2,
 		testTimeout: 20_000,
-		setupFiles: ["integration/inprocess/verification/home-setup.ts"],
+		setupFiles: ["tests/lib/src/home-setup.ts"],
 	},
 });

@@ -12,13 +12,34 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { ScheduledSubagent, ScheduleStoreData } from "./types.js";
+import type { RunOwner, ScheduledSubagent, ScheduleStoreData } from "./types.js";
 
 const LOCK_RETRY_MS = 50;
 const LOCK_MAX_RETRIES = 100;
 
-function isProcessRunning(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch { return false; }
+/** How long a run claim stays valid without renewal. */
+export const LEASE_MS = 120_000;
+/** How often a live owner renews its lease. */
+export const LEASE_RENEW_MS = 30_000;
+
+/**
+ * Is `pid` a live process? (signal 0 probe). EPERM means it exists but belongs
+ * to another user, so it is alive. `kill` is injectable for tests.
+ */
+export function isProcessRunning(pid: number, kill: (pid: number, signal: 0) => unknown = (p, sig) => process.kill(p, sig)): boolean {
+  try { kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException | undefined)?.code === "EPERM"; }
+}
+
+/** A live pid stays authoritative this long past its lease, so a host sleep does not orphan a live run. */
+export const LEASE_GRACE_MS = 3 * LEASE_MS;
+
+/**
+ * Does another live process hold the claim? A claim by this pid never counts: its runs
+ * are tracked in-process. A live pid holds it until its lease lapsed by more than
+ * `LEASE_GRACE_MS`, which also bounds how long a reused pid can hold a dead owner's name.
+ */
+export function foreignOwnerLive(owner: RunOwner | undefined, now: number): boolean {
+  return owner !== undefined && owner.pid !== process.pid && owner.leaseUntil + LEASE_GRACE_MS >= now && isProcessRunning(owner.pid);
 }
 
 function acquireLock(lockPath: string): void {
@@ -62,6 +83,16 @@ export class ScheduleStore {
   constructor(filePath: string) {
     this.filePath = filePath;
     this.lockPath = filePath + ".lock";
+    this.load();
+  }
+
+  /** Backing file path (identifies the store across rebuilt instances). */
+  get path(): string {
+    return this.filePath;
+  }
+
+  /** Re-read the backing file, picking up writes made through another instance. */
+  reload(): void {
     this.load();
   }
 
@@ -125,16 +156,44 @@ export class ScheduleStore {
     });
   }
 
-  update(id: string, patch: Partial<ScheduledSubagent>): ScheduledSubagent | undefined {
+  /** `patch` may be a function of the freshly reloaded job, evaluated under the lock. */
+  update(id: string, patch: Partial<ScheduledSubagent> | ((job: ScheduledSubagent) => Partial<ScheduledSubagent>)): ScheduledSubagent | undefined {
     // No-op fast path — an unknown id changes nothing, so don't lock or touch
     // disk (which would otherwise lazily create the backing directory).
     if (!this.jobs.has(id)) return undefined;
     return this.withLock(() => {
       const existing = this.jobs.get(id);
       if (!existing) return undefined;
-      const updated = { ...existing, ...patch };
+      const updated = { ...existing, ...(typeof patch === "function" ? patch(existing) : patch) };
       this.jobs.set(id, updated);
       return updated;
+    });
+  }
+
+  /**
+   * Claim a fire under the store lock: reload, verify the job is still enabled,
+   * before its deadline and not held by another live process, then write
+   * `lastStatus: "running"` and the owner in the same write. Returns the job
+   * (with the status it replaced as `prior`), or undefined when the fire is lost.
+   */
+  claim(id: string, owner: RunOwner, now: number): { job: ScheduledSubagent; prior: ScheduledSubagent["lastStatus"] } | undefined {
+    return this.withLock(() => {
+      const job = this.jobs.get(id);
+      if (!job?.enabled) return undefined;
+      if (job.until !== undefined && now >= new Date(job.until).getTime()) return undefined;
+      if (job.lastStatus === "running" && foreignOwnerLive(job.runOwner, now)) return undefined;
+      const claimed: ScheduledSubagent = { ...job, lastStatus: "running", runOwner: owner };
+      this.jobs.set(id, claimed);
+      return { job: claimed, prior: job.lastStatus };
+    });
+  }
+
+  /** Extend this process's claim; a claim lost to another owner or removed is left alone. */
+  renewLease(id: string, owner: RunOwner): void {
+    if (!this.jobs.has(id)) return;
+    this.withLock(() => {
+      const job = this.jobs.get(id);
+      if (job?.runOwner?.pid === owner.pid) this.jobs.set(id, { ...job, runOwner: owner });
     });
   }
 

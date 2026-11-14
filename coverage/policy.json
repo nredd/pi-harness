@@ -6,6 +6,9 @@
     { "path": "forks", "issue": 693, "reason": "Carried core fork patches have no coverage producer; diff coverage vs explicit exclusion is an open owner decision." }
   ],
   "reclassifications": [
+    { "package": "import-audit", "signal": "owned", "path": "scripts/check-biome-paths.mjs", "reason": "Deleted for nredd/pi-harness#862: the preflight only existed to hand `biome check` an explicit path list so a missing path could not pass silently. The five migrated packages lint under the shared root `biome.json` (the three deferred packages keep nested configs marked `root: false`), and the integration/probes, integration/providers and scripts gates lint a directory or glob instead of hand-written file lists, so a renamed or deleted file cannot silently drop out and there is no path list to validate. Its test and verification helper entry go with it; no other owned file lost coverage and import-audit stays at 0/0/0/0." },
+    { "package": "runtime-build-tooling", "signal": "owned", "path": "packages/plan-mode/scripts/runtime-builder.mjs", "replacement": "scripts/runtime-builder.mjs", "reason": "Relative to 1b1ae909: the shared esbuild runtime builder moves to the root `scripts/` (#866) because subagents imported it across package boundaries. Same producer, same 0/0 floor: `test:dist` now roots Vitest at the repository so the moved file stays measured by the plan-mode `build-runtime.test.ts` that already exercised it." },
+    { "package": "subagents-runtime-tooling", "signal": "owned", "path": "packages/subagents/scripts/check-runtime.mjs", "reason": "Relative to 1b1ae909: deleted (#866). It compared a committed `dist/` with a fresh build, and `dist/` is no longer committed, so there is nothing to compare. Its guarantee survives as the `runtime-scripts.test.ts` case that two builds of one tree are byte-identical; `build-runtime.mjs` stays pinned at 100%." },
     { "package": "session-kit", "signal": "owned", "path": "packages/session-kit/src/stats/library.ts", "reason": "Relative to 57a0c580: preserve every runtime and type export through explicit static named re-exports. Real TypeScript and emitted-ESM Istanbul maps contain zero statements/functions/branches; real Node/Bun namespace parity and type tests preserve the export-star contract. Existing strict facade validation rejects executable additions; all three target modules remain owned and measured." },
     { "package": "dev-tools", "signal": "owned", "path": "packages/dev-tools/src/core/index.ts", "reason": "Relative to integration base 71b0aea: static named ESM re-export facade has zero Istanbul statements/functions in TypeScript and emitted ESM. Strict shape validation rejects executable additions; all executable target modules remain measured." },
     { "package": "plan-mode", "signal": "owned", "path": "packages/plan-mode/src/index.ts", "reason": "Relative to integration base 71b0aea: pure static ESM re-export of the default binding, with zero statements/functions in actual source/emitted-ESM Istanbul maps. Strict facade validation rejects executable additions; src/plan-mode.ts remains owned and measured." },
@@ -31,13 +34,16 @@
     { "package": "coverage-configurations", "signal": "owned", "path": "integration/probes/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
     { "package": "coverage-configurations", "signal": "owned", "path": "integration/providers/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
     { "package": "coverage-configurations", "signal": "owned", "path": "scripts/vitest.config.ts", "reason": "Relative to 56c108b7: the pending coverage-configurations package is deleted. `scripts/coverage-configs.test.ts` imports this configuration under `check-import-audit`, so the measured, enforced import-audit signal owns it (#380)." },
-    { "package": "plan-mode", "signal": "bun", "path": "packages/plan-mode/src/interactive-ui.ts", "reason": "Relative to integration base 71b0aea: remove the same validated zero-statement facade from the native Bun subset membership, not executable target logic. Native wrapper/linkage counters are not executable source counters; UI implementations remain inventoried and the subset stays report-only." }
+    { "package": "plan-mode", "signal": "bun", "path": "packages/plan-mode/src/interactive-ui.ts", "reason": "Relative to integration base 71b0aea: remove the same validated zero-statement facade from the native Bun subset membership, not executable target logic. Native wrapper/linkage counters are not executable source counters; UI implementations remain inventoried and the subset stays report-only." },
+    { "package": "inprocess", "signal": "owned", "path": "integration/inprocess/verification/home-guard.ts", "replacement": "tests/lib/src/home-guard.ts", "reason": "Shared test helper moved into the `tests/lib` workspace (#864); the guard stays measured at `tests/lib/src/home-guard.ts` with its own unit tests." },
+    { "package": "inprocess", "signal": "bun", "path": "integration/inprocess/verification/home-guard.ts", "replacement": "tests/lib/src/home-guard.ts", "reason": "Shared test helper moved into the `tests/lib` workspace (#864); the guard stays measured at `tests/lib/src/home-guard.ts` with its own unit tests." },
+    { "package": "shell-scripts", "signal": "owned", "path": "scripts/wsl2_cleanup.sh", "reason": "Relative to origin/main 06ceb029: deleted. Its cleanup is folded into `scripts/wsl2_capture.py` (`cleanup`), measured under python-scripts (#695 slice 3); the `shell-scripts` inventory cannot name a `.py` replacement. `wsl2_capture.sh` stays as an exec bootstrap and remains owned." }
   ],
   "enforcement_changes": [],
   "verification_helpers": [
-    { "path": "scripts/check-biome-paths.test.mjs", "reason": "Non-shipped regression test exercises real Biome valid/missing-path behavior and preflight rejection; verification only, not a runtime entrypoint." },
     { "path": "scripts/router_contract.test.mjs", "reason": "Non-shipped Vitest suite runs the packed-router contract fixture in process against virtual mocks of its placeholder imports; verification only, not a runtime entrypoint." },
-    { "path": "integration/inprocess/verification/home-setup.ts", "reason": "Vitest setup entry that only calls the measured `installHomeGuard` in `home-guard.ts`; Vitest hard-excludes a config's own `setupFiles` from coverage, so no producer can measure it. Never shipped." },
+    { "path": "integration/inprocess/verification/core-pins.ts", "reason": "Resolves the lockfile pin and release record to a cached tarball for `settlement-identity.test.ts` and `core-artifacts.test.ts`; it only reads the lockfile, `releases/` and the account home directory (`userInfo`) from disk; pin selection (`selectReleaseDigest`), cache search order (`npmCacheDirs`) and the digest checks are measured, with negative tests, in `core-artifacts.ts`. Never shipped." },
+    { "path": "tests/lib/src/home-setup.ts", "reason": "Vitest setup entry that only calls the measured `installHomeGuard` in `home-guard.ts`; Vitest hard-excludes a config's own `setupFiles` from coverage, so no producer can measure it. Never shipped." },
     { "path": "packages/computer-use/scripts/check-linux-live.mjs", "reason": "Opt-in D-Bus session launcher for the live Linux Vitest scenario in test/linux-live.test.mjs; holds no assertions and is absent from published files." },
     { "path": "packages/computer-use/scripts/pi-cubench-agent.mjs", "reason": "Manual Cubench benchmark driver using a benchmark gateway; verification infrastructure excluded from npm published files." }
   ],
@@ -66,7 +72,6 @@
       "root": "packages/plan-mode",
       "owned": ["src/**/*.ts"],
       "exclusions": [
-        { "path": "dist/**/*.ts", "kind": "generated", "reason": "Runtime builder output, including hashed chunks, duplicates src/; assembled Bun hosts load these generated files." },
         { "path": "src/index.ts", "kind": "non-executable-facade", "reason": "Only a static ESM re-export of plan-mode's default binding. Istanbul source/emitted-ESM maps contain zero statements/functions; all implementation remains owned in src/plan-mode.ts. Strict source-shape validation rejects executable additions." },
         { "path": "src/interactive-ui.ts", "kind": "non-executable-facade", "reason": "Only static ESM re-exports of UI menu bindings; Istanbul source/emitted-ESM maps contain zero statements/functions. Target implementations remain owned. Strict source-shape validation rejects executable additions." }
       ],
@@ -133,8 +138,7 @@
       "owned": ["src/**/*.ts"],
       "exclusions": [
         { "path": "src/monitor/types.ts", "kind": "type-only", "reason": "Only TypeScript declarations; emits no executable JavaScript." },
-        { "path": "src/stats/library.ts", "kind": "non-executable-facade", "reason": "Only explicit static named ESM re-exports, including type bindings; zero source/emitted-ESM Istanbul maps. Real Node/Bun namespace parity preserves every original export-star binding. Strict facade validation rejects executable additions; aggregate.ts, load.ts and snapshot.ts remain fully owned and measured." },
-        { "path": "dist/pi-stats-export.mjs", "kind": "generated", "reason": "Generated esbuild CLI bundle of the owned src/stats/cli.ts implementation; production source remains measured rather than counting the generated duplicate." }
+        { "path": "src/stats/library.ts", "kind": "non-executable-facade", "reason": "Only explicit static named ESM re-exports, including type bindings; zero source/emitted-ESM Istanbul maps. Real Node/Bun namespace parity preserves every original export-star binding. Strict facade validation rejects executable additions; aggregate.ts, load.ts and snapshot.ts remain fully owned and measured." }
       ],
       "status": "measured",
       "note": "Primary and full-source Bun enforce zero L/F/B/S misses. Complete macOS, Ubuntu and WSL/Linux Node/Bun reports from run 43395812528 cover all 53 executable sources with zero misses (#829); WSL is Linux, not native Windows. The strict named facade leaves its executable targets owned.",
@@ -155,9 +159,7 @@
     "subagents": {
       "root": "packages/subagents",
       "owned": ["src/**/*.ts"],
-      "exclusions": [
-        { "path": "dist/**/*.ts", "kind": "generated", "reason": "Runtime builder output, including hashed chunks, duplicates src/; Pi's Jiti loads this generated entry (#577)." }
-      ],
+      "exclusions": [],
       "status": "measured",
       "note": "",
       "signals": {
@@ -309,18 +311,18 @@
       "status": "pending",
       "goal": "excluded",
       "goal_reason": "Owner has not chosen how to measure shell and PowerShell (port to Python vs kcov/Pester): https://github.com/nredd/pi-harness/issues/695. Inventory stays visible, with no coverage claim.",
-      "note": "Not measured, tracked in #695: merge-pr.sh is only the explicit-Node compatibility bootstrap; its merge policy is measured under import-audit. install_gh_linux.sh is likewise only an `exec python3` bootstrap; its logic in `scripts/install_gh_linux.py` is measured under python-scripts. install_wsl_owned_tools.sh and wsl2_run.sh are the same bootstrap; their logic in `scripts/install_wsl_owned_tools.py` and `scripts/wsl2_run.py` (shared plumbing in `scripts/wsl2_exec.py`) is measured under python-scripts. No producer or shellcheck for the remaining wsl2_*.sh and wsl2_*.ps1. `packages/computer-use/scripts/make-signing-cert.sh` is inventoried under `computer-use`.",
+      "note": "Not measured, tracked in #695: merge-pr.sh is only the explicit-Node compatibility bootstrap; its merge policy is measured under import-audit. install_gh_linux.sh is likewise only an `exec python3` bootstrap; its logic in `scripts/install_gh_linux.py` is measured under python-scripts. install_wsl_owned_tools.sh, wsl2_run.sh and wsl2_capture.sh are the same bootstrap; their logic in `scripts/install_wsl_owned_tools.py`, `scripts/wsl2_run.py` and `scripts/wsl2_capture.py` (shared plumbing in `scripts/wsl2_exec.py`; the former `wsl2_cleanup.sh` is folded into the capture) is measured under python-scripts. No producer or shellcheck for the remaining wsl2_*.sh and wsl2_*.ps1. `packages/computer-use/scripts/make-signing-cert.sh` is inventoried under `computer-use`.",
       "signals": {}
     },
     "runtime-build-tooling": {
-      "root": "packages/plan-mode",
-      "owned": ["scripts/*.mjs"],
+      "root": ".",
+      "owned": ["packages/plan-mode/scripts/build-runtime.mjs", "scripts/runtime-builder.mjs"],
       "exclusions": [],
       "status": "measured",
-      "note": "`test:dist` emits a complete primary report for both runtime builder scripts; required CI enforces it at 0/0 on macOS and Linux.",
+      "note": "`test:dist` (Vitest root is the repository) emits a complete primary report for plan-mode's thin `build-runtime.mjs` and the shared root `scripts/runtime-builder.mjs` (moved from `packages/plan-mode/scripts/`, #866); required CI enforces it at 0/0 on macOS and Linux.",
       "signals": {
         "primary": {
-          "report": "coverage/runtime-build-tooling/lcov.info",
+          "report": "packages/plan-mode/coverage/runtime-build-tooling/lcov.info",
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
           "reporters": ["text", "lcov", "json-summary"]
         }
@@ -328,10 +330,10 @@
     },
     "subagents-runtime-tooling": {
       "root": "packages/subagents",
-      "owned": ["scripts/build-runtime.mjs", "scripts/check-runtime.mjs"],
+      "owned": ["scripts/build-runtime.mjs"],
       "exclusions": [],
       "status": "measured",
-      "note": "The actual production scripts run against disposable source/output trees with the real shared builder and esbuild. No copied or extracted script logic is measured.",
+      "note": "The actual production script runs against disposable source/output trees with the real shared builder and esbuild. No copied or extracted script logic is measured.",
       "signals": {
         "primary": {
           "report": "coverage/runtime-build-tooling/lcov.info",
@@ -432,7 +434,6 @@
     "import-audit": {
       "root": ".",
       "owned": [
-        "scripts/check-biome-paths.mjs",
         "scripts/import_audit.ts",
         "scripts/merge-pr.ts",
         "scripts/router_contract.mjs",
@@ -442,7 +443,8 @@
         "packages/todo/.vitest.config.ts",
         "integration/inprocess/vitest.config.ts",
         "integration/probes/vitest.config.ts",
-        "integration/providers/vitest.config.ts"
+        "integration/providers/vitest.config.ts",
+        "tests/lib/vitest.config.ts"
       ],
       "exclusions": [],
       "status": "measured",
@@ -471,10 +473,30 @@
     },
     "inprocess": {
       "root": "integration/inprocess",
-      "owned": ["agents-support.ts", "goal-support.ts", "native-timers.ts", "support.ts", "todo-support.ts", "verification/home-guard.ts"],
+      "owned": ["agents-support.ts", "goal-support.ts", "native-timers.ts", "support.ts", "todo-support.ts", "verification/core-artifacts.ts"],
       "exclusions": [],
       "status": "measured",
-      "note": "In-process stack fixtures, measured with every fixture module the suites run. `verification/home-setup.ts` stays a verification helper: Vitest hard-excludes its own `setupFiles` from coverage.",
+      "note": "In-process stack fixtures, measured with every fixture module the suites run. Shared fixtures that moved to `tests/lib` are measured there.",
+      "signals": {
+        "primary": {
+          "report": "coverage/primary/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "reporters": ["text", "lcov", "json-summary"]
+        },
+        "bun": {
+          "report": "coverage/bun/lcov.info",
+          "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
+          "enforcement": "enforced",
+          "reporters": ["text", "lcov", "json-summary"]
+        }
+      }
+    },
+    "test-lib": {
+      "root": "tests/lib",
+      "owned": ["src/clock.ts", "src/deferred.ts", "src/faux.ts", "src/git.ts", "src/harness.ts", "src/home-guard.ts", "src/resources.ts", "src/sandbox.ts", "src/terminal.ts"],
+      "exclusions": [],
+      "status": "measured",
+      "note": "Shared test helpers (#864): fake clock, promise gates, faux turns, terminal constants, git and temp/agent/config-home sandboxes, home guard, and the in-process session harness (#916: public SDK only; the interactive harness stays on the fork export). Carried by their own tests; package suites do not count. `src/home-setup.ts` stays a verification helper: Vitest hard-excludes its own `setupFiles` from coverage, and it only calls the measured `installHomeGuard`.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",

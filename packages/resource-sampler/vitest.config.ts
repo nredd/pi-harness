@@ -16,6 +16,6 @@ export default defineConfig({
 			include: owned,
 			exclude: exclusions.map(({ path }) => path),
 		},
-		setupFiles: ["../../integration/inprocess/verification/home-setup.ts"],
+		setupFiles: ["../../tests/lib/src/home-setup.ts"],
 	},
 });

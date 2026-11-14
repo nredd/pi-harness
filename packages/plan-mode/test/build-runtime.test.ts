@@ -47,12 +47,14 @@ const { packageRoot, loadBuilder } = registerRuntimeBuilderContract({
 test("direct build script invocation publishes the generated runtime", async () => {
   const scriptUrl = pathToFileURL(join(packageRoot, "scripts", "build-runtime.mjs")).href;
   const indexPath = join(packageRoot, "dist", "index.ts");
-  const committed = await readFile(indexPath, "utf8");
+  const builder = await loadBuilder();
+  await builder.buildRuntime();
+  const built = await readFile(indexPath, "utf8");
   const previousArgv = process.argv[1];
   try {
     process.argv[1] = fileURLToPath(scriptUrl);
     await import(`${scriptUrl}?direct-invocation=${crypto.randomUUID()}`);
-    assert.equal(await readFile(indexPath, "utf8"), committed);
+    assert.equal(await readFile(indexPath, "utf8"), built);
   } finally {
     process.argv[1] = previousArgv;
   }
@@ -248,7 +250,7 @@ test("generated interactive UI stays loadable with a lazy external questionnaire
   }
 });
 
-test("committed runtime matches a fresh build", async () => {
+test("two builds of the same tree are byte-identical", async () => {
   const builder = await loadBuilder();
   const output = join(packageRoot, "dist");
   const snapshot = async () =>
@@ -257,9 +259,10 @@ test("committed runtime matches a fresh build", async () => {
         (await listFiles(output)).map(async (path) => [path, await readFile(join(output, path), "base64")]),
       ),
     );
-  const committed = await snapshot();
   await builder.buildRuntime();
-  assert.deepEqual(await snapshot(), committed);
+  const first = await snapshot();
+  await builder.buildRuntime();
+  assert.deepEqual(await snapshot(), first);
 });
 
 const minimalBanner = "// minimal runtime builder fixture";
@@ -267,7 +270,7 @@ const minimalBanner = "// minimal runtime builder fixture";
 /** A builder with only the required options, so every optional policy takes its default. */
 async function loadMinimalBuilder(entries?: Record<string, string>): Promise<RuntimeBuilder> {
   const { createRuntimeBuilder } = (await import(
-    pathToFileURL(join(packageRoot, "scripts", "runtime-builder.mjs")).href
+    pathToFileURL(join(packageRoot, "..", "..", "scripts", "runtime-builder.mjs")).href
   )) as {
     createRuntimeBuilder(options: {
       packageRoot: string;

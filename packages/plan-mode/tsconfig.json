@@ -1,13 +1,12 @@
 {
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2022",
+    // nredd/pi-harness#873: `.js` import specifiers, unchecked indexed access and parameter properties go with the rewrite
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "strict": true,
-    "noEmit": true,
-    "skipLibCheck": true,
-    "types": ["node"],
+    "noUncheckedIndexedAccess": false,
+    "erasableSyntaxOnly": false,
     "rootDir": "."
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": ["src", "test", "*.ts"]
 }

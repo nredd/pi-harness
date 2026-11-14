@@ -198,7 +198,7 @@ each `provider/model`), `j/k` or arrows scroll, `q` or Escape closes.
   rebuilt. All-NUL lines (crash padding) are skipped; other lines that are not JSON objects show
   as `! N unreadable lines`.
 - Print mode prints a per-model table and coverage; JSON emits a display message. Works in Plan mode.
-- After `make install` at the monorepo root, `npm run build:stats-export --workspace @nredd/pi-session-kit`
+- After `make install` at the monorepo root, `npm run build --workspace @nredd/pi-session-kit`
   reproduces `dist/pi-stats-export.mjs` inside this package. Copy this standalone Node 22+ artifact
   to another machine: neither Pi nor the loaded session-kit extension is needed at runtime.
   `node ARTIFACT export --agent-dir DIR --output OUT` writes ONLY `OUT/machines/<UUID>/`.

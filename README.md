@@ -41,6 +41,7 @@ Layout:
 - `forks/pi`: exact upstream core source commit (submodule), with its native build system. See
   [fork ownership](docs/forks.md).
 - `integration/core-source/`: source-candidate direct/routed child compaction verification, run by `make check-core-compaction` and `Forks` CI, separate from the release host. Policy [here](docs/compaction-policy.md); coordinated release preparation and admission blockers [here](docs/core-release-train.md).
+- `tests/lib/`: private `@nredd/pi-test-lib` workspace, the one copy of shared test helpers: `FakeClock`, `deferred`, faux tool-call turns (`toolCall`, `settled`, `outcomes`, `nextEvent`), terminal constants, the disposable git fixture, temp/agent-dir/config-home sandboxes, the HOME guard and the non-interactive in-process session harness (`createHarness`, `createTestUiContext`, `createTestExtensionsResult`; public `@earendil-works/pi-coding-agent` root export only, so it typechecks and runs on the fork and on stock releases; the interactive harness stays on the fork's `/testing/interactive`, which needs fork-only `InteractiveModeOptions.{keybindings,footerDataProvider,prepareTools,onInput,onEditorSubmit}`, `InteractiveMode.flushRender()` -> `TUI.flushRender()`, the `FooterDataProvider` and `KeybindingsManager` classes (stock exports only types) and `@earendil-works/pi-tui/testing` `VirtualTerminal`). It imports nothing under `packages/` and is measured at 0/0/0/0 by its own tests (`test-lib` in `coverage/policy.json`). Packages take it as an exact-pinned devDependency; package-specific fixtures stay in the package under its `fixtures/` directory (today `test/fixtures/`; the `test/` -> `tests/` rename is left to the package issues).
 - `integration/inprocess/`: private `A-stack` scenarios on core's real harness, Vitest + Bun: Plan/todos, goals/loops, subagent delivery, router quota/admission. Assertion destinations and clock boundaries: [here](docs/verification-rebuild.md).
 - `integration/scenarios/`: retained process/terminal boundaries, opt-in live checks and benchmarks.
   CI runs D/E; bench F is NOT RUN and live G is never CI. No unported non-boundary scenarios remain.
@@ -89,6 +90,14 @@ current CPU/memory pressure and concurrent builds before starting; a low load av
 is not enough. Closed-lid maintenance sleep can suspend lifecycle timers for seconds or minutes,
 so check `powerd` sleep/wake logs when real-time assertions overrun. Do not relax their deadlines.
 
+Shared toolchain: one root `biome.json` (tabs, width 120, `recommended` plus eight `error` rules; JSON
+config files use two spaces), one `tsconfig.base.json` that every package `tsconfig.json` extends, and one
+set of pins (`@biomejs/biome`, `typescript`, `@types/node`, `vitest`, the coverage providers, `esbuild`) in the
+root `package.json`. Packages never pin them. A package that cannot meet a flag yet overrides it in its own
+`tsconfig.json` with a comment naming the issue; `plan-mode`, `subagents` and `todo` keep their own
+`biome.json` until their layout issues land (`computer-use` has none yet). In `dev-tools`, `preset`, `resource-sampler`,
+`session-kit` and `subscription-router`, `npm run lint` is `biome check .` and `npm run format` is `biome check --write .`.
+
 `make check` runs, without rewriting files:
 
 - `check-ts`: Biome, `tsc --noEmit`, Vitest for `packages/*`, plus the private
@@ -101,7 +110,7 @@ so check `powerd` sleep/wake logs when real-time assertions overrun. Do not rela
   coverage.py's `.coverage` and parallel `.coverage.*` data files
 - `check-import-audit`: Biome, strict `tsc` and Vitest (V8 coverage, `scripts/vitest.config.ts`) for `scripts/import_audit.ts`, the package-contract
   import parser (installed TypeScript 7 `unstable/sync` API; real parses, the only mock forces a project lookup miss), plus the
-  root `scripts/run-vitest.ts` launcher, `scripts/check-biome-paths.mjs` preflight and `scripts/router_contract.mjs` fixture, all enforced at 0/0
+  root `scripts/run-vitest.ts` launcher and `scripts/router_contract.mjs` fixture, all enforced at 0/0
 - `check-integration`: ruff, ty, unit tests for `integration/` (needs `tmux`: the live-session drivers run against a stub pi on private servers), then `check-probes` and `check-providers`
 - `check-probes`: Biome and strict `tsc` for every `integration/probes` source and test (real `dev-tools` and
   `session-kit` runner sources; Biome only for `anthropic-block-types.mjs`), then Vitest with V8 coverage over
