@@ -54,13 +54,26 @@ const PRUNE_CURSOR_FILE = ".prune-cursor";
  */
 const ROOT_MARKER = ".pi-subagents-root";
 
+/** A real directory (not a symlink) owned by this user. */
+function isOwnedDirectory(path: string): boolean {
+  try {
+    const st = lstatSync(path);
+    const uid = process.getuid?.();
+    return st.isDirectory() && (uid === undefined || st.uid === uid);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Make `root` usable and prove it: created owner-only (0700) when absent. A root pi
- * owns (just created, `adopt`, or already marked) is chmod'ed to 0700 and marked;
- * a pre-existing directory without the marker is only used, never chmod'ed or marked.
- * Throws when the result is not readable, writable and searchable.
+ * owns (just created, `adopt`, or already marked) is chmod'ed to 0700 and marked, but
+ * only after `lstat` shows a real directory owned by this user, so a symlink planted
+ * in the gap before `mkdir` is never chmod'ed or marked; that returns false
+ * ("refused"). A pre-existing directory without the marker is only used, never
+ * chmod'ed or marked. Throws when the result is not readable, writable and searchable.
  */
-function prepareRoot(root: string, adopt: boolean): void {
+function prepareRoot(root: string, adopt: boolean): boolean {
   let created = false;
   try {
     mkdirSync(root, { mode: 0o700 });
@@ -70,6 +83,7 @@ function prepareRoot(root: string, adopt: boolean): void {
   }
   const marker = join(root, ROOT_MARKER);
   if (created || adopt || existsSync(marker)) {
+    if (!created && !isOwnedDirectory(root)) return false;
     // chmod is a no-op on Windows and throws on some Windows filesystems.
     // On Unix we still want to enforce 0o700 past umask, so only swallow on Windows.
     try {
@@ -80,6 +94,7 @@ function prepareRoot(root: string, adopt: boolean): void {
     if (!existsSync(marker)) writeFileSync(marker, "", "utf-8");
   }
   accessSync(root, constants.R_OK | constants.W_OK | constants.X_OK);
+  return true;
 }
 
 /**
@@ -101,18 +116,6 @@ function transcriptDirOverride(): string | undefined {
   return override && isAbsolute(override) ? override : undefined;
 }
 
-/** A real directory we own is trusted; `"absent"` means nothing is there yet. */
-function inspectRoot(path: string): boolean | "absent" {
-  let st: ReturnType<typeof lstatSync>;
-  try {
-    st = lstatSync(path);
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : false;
-  }
-  const uid = process.getuid?.();
-  return st.isDirectory() && (uid === undefined || st.uid === uid);
-}
-
 let freshTempRoot: { base: string; path: string } | undefined;
 
 /**
@@ -126,21 +129,18 @@ let freshTempRoot: { base: string; path: string } | undefined;
  */
 export function tempFallbackRoot(): string {
   const base = tmpdir();
+  mkdirSync(base, { recursive: true });
   const uid = process.getuid?.() ?? 0;
-  const hash = createHash("sha256").update(`${uid}:${realpathSync(base)}`).digest("hex").slice(0, 8);
+  let real = base;
+  try {
+    real = realpathSync(base);
+  } catch { /* hash the unresolved path: the plain name must still work */ }
+  const hash = createHash("sha256").update(`${uid}:${real}`).digest("hex").slice(0, 8);
   const plain = join(base, `pi-subagents-${uid}`);
   for (const root of [plain, `${plain}-${hash}`]) {
-    let state = inspectRoot(root);
-    if (state === "absent") {
-      prepareRoot(root, true);
-      state = inspectRoot(root);
-    }
-    if (state === true) {
-      prepareRoot(root, true);
-      return root;
-    }
+    if (prepareRoot(root, true)) return root;
   }
-  if (freshTempRoot?.base !== base || inspectRoot(freshTempRoot.path) !== true) {
+  if (freshTempRoot?.base !== base || !isOwnedDirectory(freshTempRoot.path)) {
     freshTempRoot = { base, path: mkdtempSync(`${plain}-`) };
   }
   prepareRoot(freshTempRoot.path, true);
@@ -159,8 +159,7 @@ export function transcriptRoot(): string {
     // Parents keep the default mode: only the pi-subagents root itself is private.
     mkdirSync(dirname(root), { recursive: true });
     // A pi-named default dir is pi's to adopt; a user-chosen override is not until marked.
-    prepareRoot(root, override === undefined);
-    return root;
+    if (prepareRoot(root, override === undefined)) return root;
   } catch { /* fall through to the temp root */ }
   return tempFallbackRoot();
 }

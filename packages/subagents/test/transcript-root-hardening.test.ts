@@ -11,6 +11,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const fakeTmp = vi.hoisted(() => ({ dir: "" }));
 const writeFault = vi.hoisted(() => ({ code: undefined as string | undefined, match: "" }));
 const mkdirFault = vi.hoisted(() => ({ match: "" }));
+const mkdirRace = vi.hoisted(() => ({ path: "", victim: "", symlink: undefined as undefined | ((target: string, path: string) => void) }));
+const realpathFault = vi.hoisted(() => ({ on: false }));
 const chmodFault = vi.hoisted(() => ({ on: false }));
 const lstatCalls = vi.hoisted(() => ({ count: 0, vanish: "" }));
 
@@ -24,7 +26,17 @@ vi.mock("node:fs", async (importOriginal) => {
       }
       return actual.writeFileSync(...args);
     },
+    realpathSync: Object.assign((...args: Parameters<typeof actual.realpathSync>) => {
+      if (realpathFault.on) throw new Error("EIO: realpath");
+      return actual.realpathSync(...args);
+    }, actual.realpathSync),
     mkdirSync: (...args: Parameters<typeof actual.mkdirSync>) => {
+      if (mkdirRace.path && String(args[0]) === mkdirRace.path) {
+        // The attacker wins the window between "absent" and mkdir.
+        mkdirRace.symlink?.(mkdirRace.victim, mkdirRace.path);
+        mkdirRace.path = "";
+        throw Object.assign(new Error("EEXIST: mkdir"), { code: "EEXIST" });
+      }
       if (mkdirFault.match && String(args[0]) === mkdirFault.match) throw Object.assign(new Error("EACCES: mkdir"), { code: "EACCES" });
       return actual.mkdirSync(...args);
     },
@@ -81,6 +93,8 @@ afterEach(() => {
   writeFault.code = undefined;
   chmodFault.on = false;
   mkdirFault.match = "";
+  mkdirRace.path = "";
+  realpathFault.on = false;
   lstatCalls.vanish = "";
   restoreEnv("XDG_STATE_HOME", saved.xdg);
   restoreEnv("PI_SUBAGENTS_TRANSCRIPT_DIR", saved.override);
@@ -247,6 +261,35 @@ describe("temp fallback root", () => {
     expect(root.startsWith(join(fakeTmp.dir, `pi-subagents-${UID}-`))).toBe(true);
     expect(lstatSync(root).isDirectory()).toBe(true);
     expect(transcriptRoot()).toBe(root);
+  });
+
+  it.skipIf(process.platform === "win32")("never chmods or marks a symlink target planted between the absent check and mkdir", () => {
+    const victim = join(fakeTmp.dir, "victim-notes");
+    mkdirSync(victim, { mode: 0o755 });
+    chmodSync(victim, 0o755);
+    mkdirRace.path = join(fakeTmp.dir, `pi-subagents-${UID}`);
+    mkdirRace.victim = victim;
+    mkdirRace.symlink = symlinkSync;
+    const root = transcriptRoot();
+    expect(root).toBe(hashed());
+    expect(existsSync(join(victim, ".pi-subagents-root"))).toBe(false);
+    expect(statSync(victim).mode & 0o777).toBe(0o755);
+  });
+
+  it("creates a missing tmpdir instead of throwing", () => {
+    const real = fakeTmp.dir;
+    fakeTmp.dir = join(real, "gone");
+    process.env.XDG_STATE_HOME = unwritable(real);
+    try {
+      expect(transcriptRoot()).toBe(join(real, "gone", `pi-subagents-${UID}`));
+    } finally {
+      fakeTmp.dir = real;
+    }
+  });
+
+  it("still uses the plain name when the real tmpdir cannot be resolved for the hash", () => {
+    realpathFault.on = true;
+    expect(transcriptRoot()).toBe(join(fakeTmp.dir, `pi-subagents-${UID}`));
   });
 
   it.skipIf(process.platform === "win32")("is refused when another user owns it", () => {
