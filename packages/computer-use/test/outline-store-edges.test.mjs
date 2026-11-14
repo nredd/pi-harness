@@ -1,7 +1,9 @@
 // Edge cases for the agent-cache outline store: stray files, bad shapes, failed writes (#702).
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { beforeEach, test } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, test } from "vitest";
 
 const outlineOf = () => {
 	const node = { ref: "@e1", wireRef: "w1", role: "AXGroup", subrole: "", identifier: "", title: "t", description: "", value: "", actions: [], canPress: false, canFocus: false, canSetValue: false, canScroll: false, canIncrement: false, canDecrement: false, isTextInput: false, focused: false, offscreen: false, pictureOnly: false, truncated: false, text: [], children: [] };
@@ -14,9 +16,21 @@ async function modules() {
 	return { ...store, serializeOutline };
 }
 
-beforeEach(async () => {
-	const { outlineStoreDir } = await import("../src/outline-store.ts");
-	fs.rmSync(outlineStoreDir(), { recursive: true, force: true });
+// Vitest overlaps test files, and every file shares the run's HOME. Other suites write outlines through the bridge into the
+// default store, which breaks exact-count assertions and races `rmSync` (#930). Give each test its own agent directory.
+let savedAgentDir;
+let agentDir;
+
+beforeEach(() => {
+	savedAgentDir = process.env.PI_CODING_AGENT_DIR;
+	agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "cu-outline-store-"));
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+});
+
+afterEach(() => {
+	if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
+	fs.rmSync(agentDir, { recursive: true, force: true });
 });
 
 test("a missing store directory, stray files and unreadable states are all tolerated", async () => {
