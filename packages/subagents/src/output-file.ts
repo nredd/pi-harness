@@ -5,9 +5,10 @@
  * matching Claude Code's task output file format.
  */
 
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { accessSync, appendFileSync, chmodSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { type ModelFallback, modelFallbackNote } from "./model-resolver.js";
 import { type TierDisclosure, tierDisclosure, tierNote } from "./model-tiers.js";
@@ -39,27 +40,337 @@ export function encodeCwd(cwd: string): string {
     .replace(/^-+/, "");           // strip leading dashes (POSIX root, UNC)
 }
 
+/** Session task dirs untouched for this long are pruned (30 days). */
+export const TRANSCRIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+/** Upper bound on session dirs enumerated and examined per prune, so a huge root never costs a whole walk. */
+const PRUNE_SCAN_LIMIT = 1000;
+/** Where the previous prune stopped, so successive starts sweep the whole root. */
+const PRUNE_CURSOR_FILE = ".prune-cursor";
+
+/**
+ * Marker pi writes into a root it owns. Prune deletes nothing from a root without
+ * it, so pointing `PI_SUBAGENTS_TRANSCRIPT_DIR` at an existing directory (notes,
+ * a work tree) can never lose files; dropping the file in by hand opts that dir in.
+ */
+const ROOT_MARKER = ".pi-subagents-root";
+
+/** A real directory (not a symlink) owned by this user. */
+function isOwnedDirectory(path: string): boolean {
+  try {
+    const st = lstatSync(path);
+    const uid = process.getuid?.();
+    return st.isDirectory() && (uid === undefined || st.uid === uid);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Make `root` usable and prove it: created owner-only (0700) when absent. A root pi
+ * owns (just created, `adopt`, or already marked) is chmod'ed to 0700 and marked, but
+ * only after `lstat` shows a real directory owned by this user, so a symlink planted
+ * in the gap before `mkdir` is never chmod'ed or marked; that returns false
+ * ("refused"). A pre-existing directory without the marker is only used, never
+ * chmod'ed or marked. Throws when the result is not readable, writable and searchable.
+ */
+function prepareRoot(root: string, adopt: boolean): boolean {
+  let created = false;
+  try {
+    mkdirSync(root, { mode: 0o700 });
+    created = true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+  }
+  const marker = join(root, ROOT_MARKER);
+  if (created || adopt || existsSync(marker)) {
+    if (!created && !isOwnedDirectory(root)) return false;
+    // chmod is a no-op on Windows and throws on some Windows filesystems.
+    // On Unix we still want to enforce 0o700 past umask, so only swallow on Windows.
+    try {
+      chmodSync(root, 0o700);
+    } catch (err) {
+      if (process.platform !== "win32") throw err;
+    }
+    if (!existsSync(marker)) writeFileSync(marker, "", "utf-8");
+  }
+  accessSync(root, constants.R_OK | constants.W_OK | constants.X_OK);
+  return true;
+}
+
+/**
+ * The default transcript root: `$XDG_STATE_HOME/pi-subagents`, else
+ * `~/.local/state/pi-subagents`. The one place that decides where transcripts live
+ * absent an override, because `tmpdir()` is wiped by tmpfs mounts and
+ * systemd-tmpfiles on Linux (#900). A relative `XDG_STATE_HOME` is ignored per the
+ * XDG spec.
+ */
+function defaultTranscriptRoot(): string {
+  const xdg = process.env.XDG_STATE_HOME;
+  const base = xdg && isAbsolute(xdg) ? xdg : join(homedir(), ".local", "state");
+  return join(base, "pi-subagents");
+}
+
+/** `PI_SUBAGENTS_TRANSCRIPT_DIR`, when set to an absolute path. */
+function transcriptDirOverride(): string | undefined {
+  const override = process.env.PI_SUBAGENTS_TRANSCRIPT_DIR;
+  return override && isAbsolute(override) ? override : undefined;
+}
+
+let freshTempRoot: { base: string; path: string } | undefined;
+
+/**
+ * The shared temp location is attacker-reachable (`/tmp` is world-writable), so a
+ * root there is used only when it is a real directory owned by this user. Two
+ * deterministic names are tried, `<tmpdir>/pi-subagents-<uid>` then
+ * `pi-subagents-<uid>-<hash of uid and the real tmpdir>`, so every process of this
+ * user lands in the same dir and nothing piles up. Only when both are refused (a
+ * symlink, a file, another user's dir) does a fresh `mkdtemp` dir, stable for the
+ * process, take over. A refused path is never walked, written or pruned.
+ */
+export function tempFallbackRoot(): string {
+  const base = tmpdir();
+  try {
+    mkdirSync(base, { recursive: true });
+  } catch { /* a non-directory tmpdir fails below with the real error */ }
+  const uid = process.getuid?.() ?? 0;
+  let real = base;
+  try {
+    real = realpathSync(base);
+  } catch { /* hash the unresolved path: the plain name must still work */ }
+  const hash = createHash("sha256").update(`${uid}:${real}`).digest("hex").slice(0, 8);
+  const plain = join(base, `pi-subagents-${uid}`);
+  for (const root of [plain, `${plain}-${hash}`]) {
+    if (prepareRoot(root, true)) return root;
+  }
+  if (freshTempRoot?.base !== base || !isOwnedDirectory(freshTempRoot.path)) {
+    freshTempRoot = { base, path: mkdtempSync(`${plain}-`) };
+  }
+  prepareRoot(freshTempRoot.path, true);
+  return freshTempRoot.path;
+}
+
+/**
+ * The transcript root, created owner-only: `PI_SUBAGENTS_TRANSCRIPT_DIR` if set,
+ * else the default state dir. Falls back to {@link tempFallbackRoot} when that
+ * cannot be created or written; a failure there is the one thrown.
+ */
+export function transcriptRoot(): string {
+  try {
+    const override = transcriptDirOverride();
+    const root = override ?? defaultTranscriptRoot();
+    // Parents keep the default mode: only the pi-subagents root itself is private.
+    mkdirSync(dirname(root), { recursive: true });
+    // A pi-named default dir is pi's to adopt; a user-chosen override is not until marked.
+    if (prepareRoot(root, override === undefined)) return root;
+  } catch { /* fall through to the temp root */ }
+  return tempFallbackRoot();
+}
+
 /**
  * The per-session scratch directory, created if missing.
- * Mirrors Claude Code's layout: /tmp/{prefix}-{uid}/{encoded-cwd}/{sessionId}/tasks
+ * Layout: {transcriptRoot}/{encoded-cwd}/{sessionId}/tasks
  *
  * Shared with the workflow tool, which persists each invocation's script here so
  * iterating on one is edit-file-then-rerun — the same convention, one directory.
  */
 export function sessionTaskDir(cwd: string, sessionId: string): string {
-  const encoded = encodeCwd(cwd);
-  const root = join(tmpdir(), `pi-subagents-${process.getuid?.() ?? 0}`);
-  mkdirSync(root, { recursive: true, mode: 0o700 });
-  // chmod is a no-op on Windows and throws on some Windows filesystems.
-  // On Unix we still want to enforce 0o700 past umask, so only swallow on Windows.
-  try {
-    chmodSync(root, 0o700);
-  } catch (err) {
-    if (process.platform !== "win32") throw err;
-  }
-  const dir = join(root, encoded, sessionId, "tasks");
+  const dir = join(transcriptRoot(), encodeCwd(cwd), sessionId, "tasks");
   mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+/** A file pi writes into `tasks/`: a transcript, a saved workflow script or its journal. */
+const PI_TASK_FILE = /\.(output|workflow\.js|workflow\.jsonl)$/;
+
+/**
+ * Newest mtime across a session dir, its `tasks` dir and the files in it, or
+ * undefined when the dir is not pi-shaped: its only entry may be a real `tasks`
+ * directory holding only real `*.output` / `*.workflow.js` / `*.workflow.jsonl`
+ * files. Anything else means it is not ours to delete. Returns early once something
+ * is fresh, since a fresh dir is never deleted. Throws on a filesystem error, which
+ * the caller treats as "skip".
+ */
+function newestActivity(sessionDir: string, cutoff: number): number | undefined {
+  let newest = lstatSync(sessionDir).mtimeMs;
+  const entries = readdirSync(sessionDir, { withFileTypes: true });
+  if (entries.some((e) => !e.isDirectory() || e.name !== "tasks")) return undefined;
+  if (entries.length === 0) return newest;
+  const tasks = join(sessionDir, "tasks");
+  newest = Math.max(newest, lstatSync(tasks).mtimeMs);
+  if (newest > cutoff) return newest;
+  for (const file of readdirSync(tasks, { withFileTypes: true })) {
+    if (!file.isFile() || !PI_TASK_FILE.test(file.name)) return undefined;
+    newest = Math.max(newest, lstatSync(join(tasks, file.name)).mtimeMs);
+    if (newest > cutoff) return newest;
+  }
+  return newest;
+}
+
+/** Sub-directory names of `parent`, sorted; unreadable or symlinked entries are skipped. */
+function subdirs(parent: string): string[] {
+  try {
+    return readdirSync(parent, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+  } catch {
+    return [];
+  }
+}
+
+/** mtime of `path` without following a symlink; undefined when it vanished. */
+function mtimeOf(path: string): number | undefined {
+  try {
+    return lstatSync(path).mtimeMs;
+  } catch {
+    return undefined;
+  }
+}
+
+function readCursor(root: string): [string, string] | undefined {
+  try {
+    const value: unknown = JSON.parse(readFileSync(join(root, PRUNE_CURSOR_FILE), "utf-8"));
+    if (Array.isArray(value) && value.length === 2 && typeof value[0] === "string" && typeof value[1] === "string") {
+      return [value[0], value[1]];
+    }
+  } catch { /* missing or corrupt: sweep from the start */ }
+  return undefined;
+}
+
+function writeCursor(root: string, cursor: [string, string] | undefined): void {
+  try {
+    if (cursor) writeFileSync(join(root, PRUNE_CURSOR_FILE), JSON.stringify(cursor), "utf-8");
+    else rmSync(join(root, PRUNE_CURSOR_FILE), { force: true });
+  } catch { /* the next start just sweeps from the same place */ }
+}
+
+export interface PruneOptions {
+  /** Session ids never pruned, in any cwd dir (the live session and anything it references). */
+  keepSessionIds?: readonly string[];
+  now?: number;
+  maxAgeMs?: number;
+}
+
+/**
+ * Remove session task dirs (transcripts, workflow scripts and journals) with no
+ * activity for `maxAgeMs`, so the state root does not grow forever. Never touches
+ * `keepSessionIds`, the `detached` spool, or anything through a symlink.
+ *
+ * Bounded: at most {@link PRUNE_SCAN_LIMIT} session dirs are stat'ed and examined per
+ * call, in sorted order from a cursor persisted in the root, so successive calls
+ * sweep the whole root. (Listing a cwd dir's names is not capped, but names only.)
+ * The collected dirs are examined oldest first. Holds no directory handle open
+ * (`readdirSync` closes before recursing). Best effort: any filesystem error skips
+ * that entry. Returns the dirs removed.
+ */
+export function pruneStaleTranscripts(options: PruneOptions = {}): number {
+  const { now = Date.now(), maxAgeMs = TRANSCRIPT_RETENTION_MS } = options;
+  const keep = new Set(options.keepSessionIds);
+  const cutoff = now - maxAgeMs;
+  let root: string;
+  try {
+    root = transcriptRoot();
+  } catch {
+    return 0;
+  }
+  if (!existsSync(join(root, ROOT_MARKER))) return 0;
+  const cwdNames = subdirs(root).filter((name) => name !== "detached");
+  const cursor = readCursor(root);
+  const start = cursor ? Math.max(0, cwdNames.findIndex((name) => name >= cursor[0])) : 0;
+  const order = [...cwdNames.slice(start), ...cwdNames.slice(0, start)];
+
+  const candidates: { cwdName: string; sessionDir: string; mtime: number }[] = [];
+  let last: [string, string] | undefined;
+  let full = false;
+  const collect = (cwdName: string, accept: (sessionName: string) => boolean): void => {
+    for (const sessionName of subdirs(join(root, cwdName))) {
+      if (full) return;
+      if (!accept(sessionName) || keep.has(sessionName)) continue;
+      const sessionDir = join(root, cwdName, sessionName);
+      const mtime = mtimeOf(sessionDir);
+      if (mtime === undefined) continue;
+      candidates.push({ cwdName, sessionDir, mtime });
+      last = [cwdName, sessionName];
+      full = candidates.length >= PRUNE_SCAN_LIMIT;
+    }
+  };
+  for (const [i, cwdName] of order.entries()) {
+    if (full) break;
+    collect(cwdName, cursor && i === 0 && cwdName === cursor[0] ? (name) => name > cursor[1] : () => true);
+  }
+  // Wrap: the head of the cursor's own cwd dir, skipped on the way in.
+  if (!full && cursor && cwdNames.includes(cursor[0])) collect(cursor[0], (name) => name <= cursor[1]);
+  writeCursor(root, full ? last : undefined);
+
+  // Oldest first, so the likeliest-stale dirs are judged before the budget runs out.
+  candidates.sort((x, y) => x.mtime - y.mtime);
+  let removed = 0;
+  const touched = new Set<string>();
+  for (const { cwdName, sessionDir } of candidates) {
+    try {
+      const activity = newestActivity(sessionDir, cutoff);
+      if (activity === undefined || activity > cutoff) continue;
+      rmSync(sessionDir, { recursive: true, force: true });
+      removed++;
+      touched.add(cwdName);
+    } catch { /* skip: next start retries */ }
+  }
+  for (const cwdName of touched) {
+    try { rmdirSync(join(root, cwdName)); } catch { /* not empty: keep */ }
+  }
+  return removed;
+}
+
+/**
+ * Prune off the startup path: runs on the next macrotask, never throws, and never
+ * keeps the process alive. The walk is synchronous but capped (see
+ * {@link pruneStaleTranscripts}), so it cannot stall the event loop for long.
+ */
+export function schedulePrune(options?: PruneOptions): void {
+  setImmediate(() => {
+    try { pruneStaleTranscripts(options); } catch { /* best effort */ }
+  }).unref();
+}
+
+/** The session id in a pi session file name (`<timestamp>_<id>.jsonl`). */
+export function sessionIdFromSessionFile(file: string): string {
+  const stem = basename(file).replace(/\.jsonl$/, "");
+  return stem.slice(stem.lastIndexOf("_") + 1);
+}
+
+/**
+ * Keep what the current session still points at alive: touch the session dirs of
+ * referenced transcripts (a resumed or forked session's records and eviction notes
+ * name them) so retention measures from now, and return every session id to exempt
+ * from the next prune, including the fork source's.
+ */
+export function retainReferencedTranscripts(transcripts: Iterable<string>, parentSessionFile?: string): string[] {
+  const ids = new Set<string>();
+  const parentId = parentSessionFile ? sessionIdFromSessionFile(parentSessionFile) : undefined;
+  if (parentId) ids.add(parentId);
+  let root: string;
+  try {
+    root = transcriptRoot();
+  } catch {
+    return [...ids];
+  }
+  // Only a root pi owns (marked) is touched; an unmarked override dir is used as is.
+  if (!existsSync(join(root, ROOT_MARKER))) return [...ids];
+  const now = new Date();
+  const touch = (sessionDir: string): void => {
+    for (const dir of [join(sessionDir, "tasks"), sessionDir]) {
+      // lstat: utimes follows symlinks, and only real dirs inside the root are ours to touch.
+      try { if (lstatSync(dir).isDirectory()) utimesSync(dir, now, now); } catch { /* gone: nothing to keep */ }
+    }
+  };
+  // The fork source has no record naming its dirs, so find it in every cwd dir.
+  if (parentId) for (const cwdName of subdirs(root)) touch(join(root, cwdName, parentId));
+  for (const transcript of transcripts) {
+    const rel = relative(root, transcript);
+    const parts = rel.split(sep);
+    // <encoded-cwd>/<session>/tasks/<file>
+    if (rel.startsWith("..") || isAbsolute(rel) || parts.length !== 4 || parts[2] !== "tasks") continue;
+    ids.add(parts[1]);
+    touch(join(root, parts[0], parts[1]));
+  }
+  return [...ids];
 }
 
 /** Create the output file path, ensuring the directory exists. */
@@ -102,8 +413,24 @@ export function appendModelTierEntry(path: string, agentId: string, modelTier: T
   } catch { /* transcript writes are best effort */ }
 }
 
-/** Write the initial user prompt entry. */
-export function writeInitialEntry(path: string, agentId: string, prompt: string, cwd: string): void {
+/** Where `path` lands under the temp fallback root, when it sits under the transcript root and that differs. */
+function relocatedToTemp(path: string): string | undefined {
+  try {
+    const rel = relative(transcriptRoot(), path);
+    if (rel.startsWith("..") || isAbsolute(rel)) return undefined;
+    const alt = join(tempFallbackRoot(), rel);
+    return alt === path ? undefined : alt;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Write the initial user prompt entry and return the path actually written. A full
+ * or read-only state volume (ENOSPC/EROFS) retries once under the temp root, so the
+ * Agent call is not failed over a transcript; callers must use the returned path.
+ */
+export function writeInitialEntry(path: string, agentId: string, prompt: string, cwd: string): string {
   const entry = {
     isSidechain: true,
     agentId,
@@ -112,7 +439,18 @@ export function writeInitialEntry(path: string, agentId: string, prompt: string,
     timestamp: new Date().toISOString(),
     cwd,
   };
-  writeFileSync(path, JSON.stringify(entry) + "\n", "utf-8");
+  const line = JSON.stringify(entry) + "\n";
+  try {
+    writeFileSync(path, line, "utf-8");
+    return path;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    const alt = code === "ENOSPC" || code === "EROFS" ? relocatedToTemp(path) : undefined;
+    if (alt === undefined) throw err;
+    mkdirSync(dirname(alt), { recursive: true });
+    writeFileSync(alt, line, "utf-8");
+    return alt;
+  }
 }
 
 /**
