@@ -5,7 +5,8 @@
  * way as much as to check the features.
  */
 
-import { describe, expect, it } from "vitest";
+import { Worker } from "node:worker_threads";
+import { describe, expect, it, vi } from "vitest";
 import type { WorkflowAgentEntry, WorkflowEntry } from "../src/workflow/progress.js";
 import {
   type RunWorkflowOptions,
@@ -567,28 +568,42 @@ describe("unawaited launches", () => {
     expect(result.error).not.toContain("unawaited");
   });
 
-  it("drops a call the worker posted before the abort landed", async () => {
-    // Both calls leave the worker in one tick, but the host handles them one message at a time. Aborting
-    // inside the first call's synchronous queued report, once the worker has had time to post the second,
-    // makes the second arrive at an already-settled run on every platform. Racing a real abort against the
-    // worker leaves that arrival to scheduler timing, and the branch it covers flaps.
+  it("ignores a worker message delivered after the run settled", async () => {
+    // A real abort racing the worker leaves a late message to scheduler timing: terminate() can win before
+    // the worker posts it, and the zero-branch coverage budget then flaps. So the late delivery is made
+    // explicit: the first call is handled, the abort lands inside its synchronous queued report, and the
+    // same message is then delivered to the host listener once more, now to an already-settled run.
     const controller = new AbortController();
-    const { host, calls } = stubHost({ reply: () => new Promise<WorkflowSpawnResult>(() => {}) });
-    let aborted = false;
-
-    const result = await run('agent("first"); agent("second"); return null;', {
-      host,
-      signal: controller.signal,
-      onProgress() {
-        if (aborted) return;
-        aborted = true;
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
-        controller.abort();
-      },
+    let replayed = false;
+    const realOn = Worker.prototype.on;
+    const on = vi.spyOn(Worker.prototype, "on").mockImplementation(function (this: Worker, event, listener) {
+      if (event !== "message") return realOn.call(this, event, listener);
+      const handle = listener as (message: unknown) => void;
+      return realOn.call(this, event, (message: unknown) => {
+        handle(message);
+        if ((message as { type?: string }).type === "call" && controller.signal.aborted && !replayed) {
+          replayed = true;
+          handle(message);
+        }
+      });
     });
+    const { host, calls } = stubHost({ reply: () => new Promise<WorkflowSpawnResult>(() => {}) });
 
-    expect(result.status).toBe("killed");
-    expect(result.error).toBe("Workflow aborted.");
-    expect(calls).toHaveLength(0);
+    try {
+      const result = await run('agent("first"); return null;', {
+        host,
+        signal: controller.signal,
+        onProgress() {
+          controller.abort();
+        },
+      });
+
+      expect(result.status).toBe("killed");
+      expect(result.error).toBe("Workflow aborted.");
+      expect(replayed).toBe(true);
+      expect(calls).toHaveLength(0);
+    } finally {
+      on.mockRestore();
+    }
   });
 });
