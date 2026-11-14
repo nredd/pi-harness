@@ -7,6 +7,7 @@
  * timestamps, raw provider/model names, Codex quota labels and percentages, and hashed IDs.
  */
 
+import { stat } from "node:fs/promises";
 import { type Call, type Harness, opaqueId, type Session } from "../load.ts";
 
 /** One subscription quota reading, as persisted by the harness that observed it. */
@@ -28,6 +29,55 @@ export interface QuotaObservation {
 	/** Epoch ms of the reading. */
 	observedAt: number;
 	planType: string | null;
+	/**
+	 * Which account the reading belongs to: a salted hash computed locally from the harness's own account
+	 * ID (never the ID, and the salt never leaves the machine), or `""` where the harness exposes none.
+	 * `""` assumes a single account per harness; two accounts with no ID would merge.
+	 */
+	account: string;
+}
+
+/** A reading whose window has already reset says nothing about the current one. */
+export const isExpired = (q: QuotaObservation, now: number): boolean => q.resetAt <= now;
+
+/**
+ * One reading per `(provider, limitId, window, account)`, whichever harness or machine saw it. A reading
+ * that has not yet reset beats an expired one, then the freshest `observedAt` wins. Never summed. Ties
+ * break on the serialized reading so the result does not depend on input order. An expired winner is
+ * kept (the window has reset, with no newer reading) for the caller to show as such.
+ */
+export function mergeQuota(readings: Iterable<QuotaObservation>, now: number): QuotaObservation[] {
+	const best = new Map<string, QuotaObservation>();
+	const beats = (a: QuotaObservation, b: QuotaObservation): boolean =>
+		isExpired(a, now) !== isExpired(b, now)
+			? isExpired(b, now)
+			: a.observedAt !== b.observedAt
+				? a.observedAt > b.observedAt
+				: JSON.stringify(a) > JSON.stringify(b);
+	for (const q of readings) {
+		const key = JSON.stringify([q.provider, q.limitId, q.window, q.account]);
+		const prev = best.get(key);
+		if (!prev || beats(q, prev)) best.set(key, q);
+	}
+	return [...best.values()];
+}
+
+/** Account discriminator: salted, so the ID cannot be recovered or matched across machines. */
+export const accountHash = (salt: string, harness: Harness, native: string): string =>
+	opaqueId(`${salt}\0${harness}-account\0${native}`);
+
+/**
+ * Whether a harness's data root is there. Only "does not exist" is `absent` (not installed, silent): any
+ * other failure (permissions on a parent, I/O) is `unreadable`, so an installed harness that cannot be
+ * reached is never mistaken for an uninstalled one.
+ */
+export async function probe(path: string, kind: "file" | "directory"): Promise<"found" | "absent" | "unreadable"> {
+	try {
+		const info = await stat(path);
+		return (kind === "file" ? info.isFile() : info.isDirectory()) ? "found" : "absent";
+	} catch (error) {
+		return ["ENOENT", "ENOTDIR"].includes(String((error as NodeJS.ErrnoException).code)) ? "absent" : "unreadable";
+	}
 }
 
 /** What one reader found. Diagnostics are counts only: no paths, names or row content. */

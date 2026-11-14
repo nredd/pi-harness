@@ -1,10 +1,11 @@
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { main, run } from "../../src/stats/cli.ts";
 import { assistantLine, at, sessionFile } from "./fixtures.ts";
+import { seedHarnessHome } from "./harness/home.ts";
 
 let dir: string;
 let source: string;
@@ -43,7 +44,7 @@ describe("stats CLI", () => {
 		await expect(import("../../src/stats/cli.ts")).resolves.toHaveProperty("main");
 		expect(log).not.toHaveBeenCalled();
 		expect(error).not.toHaveBeenCalled();
-		expect(process.exitCode).toBe(exitCode);
+		expect(process.exitCode ?? 0).toBe(exitCode ?? 0);
 	});
 
 	it("exports and imports explicit fixture directories from real argv", async () => {
@@ -76,6 +77,151 @@ describe("stats CLI", () => {
 		expect(readdirSync(exported.snapshotDir)).toHaveLength(2);
 	});
 
+	it("exports the selected harnesses from explicit root flags", async () => {
+		const roots = seedHarnessHome(join(dir, "home"));
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		process.argv = [
+			"node",
+			"pi-stats-export",
+			"export",
+			...["--agent-dir", source, "--output", output, "--harness", "claude,codex,opencode"],
+			...["--claude-dir", roots.claude, "--codex-dir", roots.codex, "--opencode-db", roots.opencode],
+		];
+		await main();
+		const exported = JSON.parse(log.mock.calls[0]?.[0] as string);
+		expect(Object.keys(exported.harnesses)).toEqual(["claude", "codex", "opencode"]);
+		expect(exported.harnesses.claude).toEqual({ found: true, problems: [] });
+	});
+
+	it("refuses a narrower harness set unless --replace-harnesses, and reports a failed harness on stderr", async () => {
+		const roots = seedHarnessHome(join(dir, "home"));
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		const wide = ["--agent-dir", source, "--output", output, "--claude-dir", roots.claude, "--harness", "pi,claude"];
+		process.argv = ["node", "pi-stats-export", "export", ...wide];
+		await main();
+		process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output, "--harness", "pi"];
+		await expect(main()).rejects.toThrow("--replace-harnesses");
+		process.argv = [
+			"node",
+			"pi-stats-export",
+			"export",
+			"--agent-dir",
+			source,
+			"--output",
+			output,
+			"--replace-harnesses",
+		];
+		await main();
+		expect(log).toHaveBeenCalledTimes(2);
+		expect(JSON.parse(log.mock.calls[1]?.[0] as string).harnesses).toBeUndefined();
+		// a harness that cannot be read is reported without failing the run
+		const opencode = join(dir, "home", "bad.db");
+		writeFileSync(opencode, "not a database");
+		process.argv = [
+			...["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output],
+			...["--harness", "pi,opencode", "--opencode-db", opencode, "--replace-harnesses"],
+		];
+		await main();
+		expect(JSON.parse(log.mock.calls[2]?.[0] as string).harnesses.opencode.failed).toBe("kept");
+		expect(error).toHaveBeenCalledWith("opencode: scan incomplete (1 in a row), kept what was last published");
+		// and says so when the previous snapshot cannot be read either
+		writeFileSync(join(JSON.parse(log.mock.calls[2]?.[0] as string).snapshotDir, "manifest.json"), "{");
+		await main();
+		expect(JSON.parse(log.mock.calls[3]?.[0] as string).harnesses.opencode.failed).toBe("lost");
+		expect(error).toHaveBeenCalledWith(
+			"opencode: scan incomplete (2 in a row), last published contents unreadable, dropped",
+		);
+		expect(process.exitCode ?? 0).toBe(exitCode ?? 0);
+		for (const argv of [
+			["--replace-harnesses", "--replace-harnesses"],
+			["--replace-harnesses", "x"],
+		]) {
+			process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output, ...argv];
+			await expect(main()).rejects.toThrow("usage: export");
+		}
+	});
+
+	it("keeps Codex data when --codex-dir points nowhere, and still exits 0 however often in a row", async () => {
+		const roots = seedHarnessHome(join(dir, "home"));
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		const base = [
+			"node",
+			"pi-stats-export",
+			"export",
+			"--agent-dir",
+			source,
+			"--output",
+			output,
+			"--harness",
+			"pi,codex",
+		];
+		process.argv = [...base, "--codex-dir", roots.codex];
+		await main();
+		for (let run = 1; run <= 4; run++) {
+			process.argv = [...base, "--codex-dir", join(dir, "nonexistent")];
+			await main();
+			const status = JSON.parse(log.mock.calls[run]?.[0] as string).harnesses.codex;
+			expect(status).toMatchObject({ failed: "kept", consecutiveFailures: run });
+			// published, so success however many times in a row: the failure is data, not an exit code
+			expect(process.exitCode ?? 0).toBe(0);
+		}
+		expect(error).toHaveBeenCalledWith("codex: scan incomplete (4 in a row), kept what was last published");
+		// the data survived all of it
+		const manifestDir = JSON.parse(log.mock.calls[1]?.[0] as string).snapshotDir;
+		expect(readdirSync(manifestDir).length).toBeGreaterThan(1);
+	});
+
+	it("reports a stale harness on import", async () => {
+		const roots = seedHarnessHome(join(dir, "home"));
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		process.argv = [
+			"node",
+			"pi-stats-export",
+			"export",
+			"--agent-dir",
+			source,
+			"--output",
+			output,
+			"--harness",
+			"pi,codex",
+			"--codex-dir",
+			roots.codex,
+		];
+		await main();
+		const { snapshotDir } = JSON.parse(log.mock.calls[0]?.[0] as string);
+		const path = join(snapshotDir, "manifest.json");
+		const manifest = JSON.parse(readFileSync(path, "utf8"));
+		manifest.lastGoodAt.codex = manifest.exportedAt - 3 * 24 * 60 * 60 * 1000;
+		writeFileSync(path, JSON.stringify(manifest));
+		process.argv = ["node", "pi-stats-export", "import", "--agent-dir", viewer, "--input", output];
+		await main();
+		expect(JSON.parse(log.mock.calls[1]?.[0] as string).stale).toHaveLength(1);
+		expect(error).toHaveBeenCalledWith(expect.stringMatching(/: codex not read cleanly since \d{4}-/));
+		expect(process.exitCode ?? 0).toBe(exitCode ?? 0);
+	});
+
+	it("rejects unknown or repeated harnesses and export-only flags on import", async () => {
+		const base = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output];
+		for (const harness of ["gemini", "pi,pi", "pi,", ""]) {
+			process.argv = [...base, "--harness", harness];
+			await expect(main()).rejects.toThrow("usage: export");
+		}
+		for (const flag of [
+			"--harness",
+			"--claude-dir",
+			"--codex-dir",
+			"--opencode-db",
+			"--sessions-dir",
+			"--replace-harnesses",
+		]) {
+			process.argv = ["node", "pi-stats-export", "import", "--agent-dir", viewer, "--input", output, flag, "pi"];
+			await expect(main()).rejects.toThrow("usage: export");
+		}
+	});
+
 	it("rejects an export without --output and an import without --input", async () => {
 		process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source];
 		await expect(main()).rejects.toThrow("usage: export");
@@ -102,6 +248,28 @@ describe("stats CLI", () => {
 		}
 		expect(error).toHaveBeenCalledExactlyOnceWith("Stats operation failed");
 		expect(process.exitCode).toBe(1);
+	});
+
+	it("prints a warning from a published export and still exits 0", async () => {
+		process.exitCode = 0; // Bun cannot restore an unset exit code left by an earlier test
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		vi.resetModules();
+		vi.doMock("../../src/stats/snapshot.ts", () => ({
+			exportStats: async () => ({ machineId: "m", snapshotDir: "d", warnings: ["export state not recorded"] }),
+			importStats: async () => ({}),
+		}));
+		try {
+			const cli = await import("../../src/stats/cli.ts");
+			process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output];
+			await cli.run();
+		} finally {
+			vi.doUnmock("../../src/stats/snapshot.ts");
+			vi.resetModules();
+		}
+		expect(JSON.parse(log.mock.calls[0]?.[0] as string).warnings).toEqual(["export state not recorded"]);
+		expect(error).toHaveBeenCalledExactlyOnceWith("export state not recorded");
+		expect(process.exitCode ?? 0).toBe(0);
 	});
 
 	it("runs itself when it is the process entrypoint", async () => {

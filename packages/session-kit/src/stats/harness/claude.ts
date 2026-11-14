@@ -57,7 +57,7 @@ class ClaudeParser extends RowParser {
 		// A subagent file shares its parent's `sessionId`; give it its own session so it is flagged as a
 		// child without turning the parent into one.
 		this.out.session ||= sessionHash("claude", this.agent === null ? sessionId : `${sessionId}#${this.agent}`);
-		this.addCall("anthropic", model, ts, counts, 0, entryHash("claude", JSON.stringify([id, requestId])));
+		this.addCall("anthropic", model, ts, counts, null, entryHash("claude", JSON.stringify([id, requestId])));
 	}
 }
 
