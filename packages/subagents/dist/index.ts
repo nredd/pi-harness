@@ -876,10 +876,15 @@ var SubagentScheduler = class _SubagentScheduler {
     this.store = store;
     for (const job of store.list()) {
       if (job.enabled) this.scheduleJob(job);
-      if (store.get(job.id)?.enabled === false && job.lastStatus === "running") {
+      if (store.get(job.id)?.enabled === false && job.lastStatus === "running" && !this.ownsLiveRun(job, manager)) {
         store.update(job.id, { lastStatus: "error" });
       }
     }
+  }
+  ownsLiveRun(job, manager) {
+    if (job.runPid !== process.pid || !job.runAgentId) return false;
+    const status = manager.getRecord(job.runAgentId)?.status;
+    return status === "queued" || status === "running";
   }
   /** Stop all timers; drop refs. Safe to call repeatedly. */
   stop() {
@@ -1199,6 +1204,7 @@ var SubagentScheduler = class _SubagentScheduler {
       return;
     }
     this.emit({ type: "fired", jobId: id, agentId, name: job.name });
+    store.update(id, { runPid: process.pid, runAgentId: agentId });
     this.inFlight.set(id, (this.inFlight.get(id) ?? 0) + 1);
     const finalize = (status) => {
       if (this.store === store) {
@@ -1211,6 +1217,8 @@ var SubagentScheduler = class _SubagentScheduler {
       store.update(id, {
         lastRun: new Date(this.clock.now()).toISOString(),
         lastStatus: status,
+        runPid: void 0,
+        runAgentId: void 0,
         runCount: (current?.runCount ?? 0) + 1,
         nextRun: next
       });

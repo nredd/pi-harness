@@ -100,11 +100,18 @@ export class SubagentScheduler {
       if (job.enabled) this.scheduleJob(job);
       // A job disabled while "running" (or expired by the scheduling above) was cut
       // off by a previous process; no agent of this one can finalize it, so it must
-      // not hold its name forever.
-      if (store.get(job.id)?.enabled === false && job.lastStatus === "running") {
+      // not hold its name forever. A run this process still owns (a /resume, /new or
+      // /reload re-bind; the manager outlives it) is left for its finalize to settle.
+      if (store.get(job.id)?.enabled === false && job.lastStatus === "running" && !this.ownsLiveRun(job, manager)) {
         store.update(job.id, { lastStatus: "error" });
       }
     }
+  }
+
+  private ownsLiveRun(job: ScheduledSubagent, manager: AgentManager): boolean {
+    if (job.runPid !== process.pid || !job.runAgentId) return false;
+    const status = manager.getRecord(job.runAgentId)?.status;
+    return status === "queued" || status === "running";
   }
 
   /** Stop all timers; drop refs. Safe to call repeatedly. */
@@ -473,6 +480,7 @@ export class SubagentScheduler {
 
     this.emit({ type: "fired", jobId: id, agentId, name: job.name });
 
+    store.update(id, { runPid: process.pid, runAgentId: agentId });
     this.inFlight.set(id, (this.inFlight.get(id) ?? 0) + 1);
     const finalize = (status: "success" | "error") => {
       if (this.store === store) {
@@ -485,6 +493,8 @@ export class SubagentScheduler {
       store.update(id, {
         lastRun: new Date(this.clock.now()).toISOString(),
         lastStatus: status,
+        runPid: undefined,
+        runAgentId: undefined,
         runCount: (current?.runCount ?? 0) + 1,
         nextRun: next,
       });
