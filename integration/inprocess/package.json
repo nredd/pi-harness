@@ -15,6 +15,7 @@
     "@juicesharp/rpiv-config": "2.13.9",
     "@juicesharp/rpiv-i18n": "2.13.9",
     "@narumitw/pi-tui-kit": "0.65.5",
+    "@nredd/pi-test-lib": "0.0.0",
     "@quintinshaw/pi-dynamic-workflows": "3.14.0",
     "@xterm/headless": "5.5.0",
     "croner": "10.0.1",

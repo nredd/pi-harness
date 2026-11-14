@@ -1,6 +1,7 @@
 /** Public lifecycle outcomes for the fleet widget, tool row and alert journal. */
 
 import type { TUI } from "@earendil-works/pi-tui";
+import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.js";
 import { modelFallbackNote } from "../src/model-resolver.js";
@@ -10,7 +11,6 @@ import { type AgentActivity, type AgentDetails, AgentWidget, describeActivity, f
 import { FLEET_STATE_ENTRY, FleetJournal, type FleetJournalEntry, MAX_FLEET_ALERT_DETAILS } from "../src/ui/fleet-state.js";
 import { renderNotification } from "../src/ui/notification-view.js";
 import { handleWorkflowDialogKey, initialWorkflowDialogState, resolveWorkflowDialog, WorkflowDialog, type WorkflowDialogState } from "../src/ui/workflow-dialog.js";
-import { FakeClock } from "./helpers/fake-clock.js";
 
 const theme: Theme = { fg: (_color, text) => text, bold: text => text };
 

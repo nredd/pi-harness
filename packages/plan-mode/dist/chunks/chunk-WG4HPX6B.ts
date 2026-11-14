@@ -23,6 +23,7 @@ var CONFIGURABLE_SAFE_GIT_SUBCOMMANDS = [
   "cat-file"
 ];
 var SAFE_GIT_SUBCOMMANDS = [...BUILTIN_SAFE_GIT_SUBCOMMANDS, ...CONFIGURABLE_SAFE_GIT_SUBCOMMANDS];
+var SAFE_GH_SUBCOMMAND_PATHS = ["pr view", "pr list", "issue view", "issue list"];
 var SAFE_BUILTIN_PLAN_TOOLS = /* @__PURE__ */ new Set(["read", "bash", "powershell", "grep", "find", "ls"]);
 var BLOCKED_BUILTIN_TOOLS = /* @__PURE__ */ new Set(["edit", "write"]);
 var MUTATING_COMMANDS = /* @__PURE__ */ new Set([
@@ -158,29 +159,188 @@ function findBlockedSshExecCall(input, safeSubcommands = {}, platform = process.
 function findBlockedRemoteCommand(command, safeSubcommands, platform) {
   return findBlockedCommandSegment(command, safeSubcommands, { platform });
 }
-function findBlockedCommandSegment(command, safeSubcommands = {}, {
-  workingDirectory,
-  platform = process.platform,
-  trustedDirectories = [],
-  homeDir = homedir()
-} = {}) {
-  const segments = splitShellSegments(command);
-  if (!segments || segments.length === 0) return command.trim() || "(empty command)";
+function findBlockedCommandSegment(command, safeSubcommands = {}, options = {}) {
+  return decideBlockedCommand(command, safeSubcommands, options)?.segment;
+}
+function decideBlockedCommand(command, safeSubcommands = {}, { workingDirectory, platform = process.platform, trustedDirectories = [], homeDir = homedir() }) {
+  const scan = scanShellSegments(command);
+  if ("rejection" in scan) {
+    return { segment: command.trim() || "(empty command)", explain: () => scan.rejection };
+  }
+  const { segments } = scan;
   const roots = allowedRoots(workingDirectory, trustedDirectories, homeDir);
   let base = workingDirectory;
   for (const [index, segment] of segments.entries()) {
-    if (segment.separator === "|" && isInterpreterSegment(segment.text, INTERPRETERS)) return segment.text;
+    if (segment.separator === "|" && isInterpreterSegment(segment.text, INTERPRETERS)) {
+      return {
+        segment: segment.text,
+        explain: () => ({
+          token: firstWord(shellWords(segment.text) ?? [], segment.text),
+          reason: "interpreter in a pipeline"
+        })
+      };
+    }
     const tokens = shellWords(segment.text);
     if (tokens?.[0] === "cd" && matchConfiguredPrefix(segment.text, safeSubcommands) === void 0) {
       const target = tokens.length === 2 && !hasShellExpansion(segment.text) ? resolveDirectory(tokens[1], base, roots, homeDir) : void 0;
-      if (target === void 0 || segments[index + 1]?.separator === "|") return segment.text;
+      if (target === void 0 || segments[index + 1]?.separator === "|") {
+        return {
+          segment: segment.text,
+          explain: () => ({
+            token: tokens.length === 2 ? tokens[1] : "cd",
+            reason: "cd needs one plain directory under the working or trusted directories, not piped"
+          })
+        };
+      }
       base = target;
       continue;
     }
     const paths = { base, roots, homeDir };
-    if (!isSafeSegment(segment.text, safeSubcommands, paths, platform)) return segment.text;
+    if (!isSafeSegment(segment.text, safeSubcommands, paths, platform)) {
+      return {
+        segment: segment.text,
+        explain: () => explainUnsafeSegment(segment.text, safeSubcommands, platform, paths)
+      };
+    }
   }
   return void 0;
+}
+function explainDecision(decision) {
+  try {
+    return decision.explain();
+  } catch {
+    return { token: decision.segment, reason: GENERIC_REASON };
+  }
+}
+var GENERIC_REASON = "outside the reviewed inspection policy";
+var NOT_ALLOWLISTED_REASON = "not on the reviewed read-only allowlist";
+function notAllowlistedReason(optIn) {
+  if (!optIn) return NOT_ALLOWLISTED_REASON;
+  return `${NOT_ALLOWLISTED_REASON}; the reviewed opt-in is the exact entry \`${optIn.entry}\` in \`safeSubcommands.${optIn.key}\`, a trust override that skips all argument checks`;
+}
+function ghOptIn(args) {
+  const [group, action] = args.filter((argument) => !argument.startsWith("-")).map((argument) => argument.toLowerCase());
+  const entry = `${group} ${action}`;
+  return SAFE_GH_SUBCOMMAND_PATHS.includes(entry) ? { key: "gh", entry } : void 0;
+}
+var SUBCOMMAND_COMMANDS = /* @__PURE__ */ new Set(["gh", "npm", "cargo", "go"]);
+function explainUnsafeSegment(segment, safeSubcommands, platform, paths) {
+  const prefix = matchConfiguredPrefix(segment, safeSubcommands);
+  const tokens = shellWords(segment);
+  const first = tokens?.[0];
+  if (!tokens || !first) return { token: segment, reason: "unparseable segment" };
+  const command = first.toLowerCase();
+  const args = tokens.slice(1);
+  const expansion = findShellExpansion(segment);
+  const expansionBlock = expansion === void 0 ? void 0 : { token: wordAround(segment, expansion), reason: "shell expansion or glob" };
+  if (command === "ssh") {
+    if (prefix === void 0) return { token: first, reason: "needs a configured `ssh <host>` prefix" };
+    if (expansionBlock) return expansionBlock;
+    const words = shellWords(segment.trimStart().slice(prefix.length));
+    if (!words || words.length === 0) return { token: first, reason: "ssh with no remote command" };
+    if (words[0]?.startsWith("-")) return { token: words[0], reason: "ssh option before the remote command" };
+    const remote = decideBlockedCommand(words.join(" "), safeSubcommands, { platform });
+    const why = remote.explain();
+    return { token: why.token, reason: `remote command: ${why.reason}` };
+  }
+  if (command === "curl" || command === "gh" && args[0]?.toLowerCase() === "api") {
+    return expansionBlock ?? {
+      token: command === "curl" ? first : `${first} api`,
+      reason: "arguments write files, send a body, or are not GET-only"
+    };
+  }
+  if (expansionBlock) return expansionBlock;
+  const assignment = /(^|\s)[A-Za-z_][A-Za-z0-9_]*=/.exec(segment);
+  if (assignment) {
+    return {
+      token: wordAround(segment, assignment.index + assignment[0].length - 1),
+      reason: "environment assignment"
+    };
+  }
+  if (MUTATING_COMMANDS.has(command)) return { token: first, reason: "mutating command" };
+  const unsafeArgument = args.find((argument) => !hasSafeArguments(command, [argument]));
+  if (unsafeArgument !== void 0) return { token: unsafeArgument, reason: `argument not allowed for \`${first}\`` };
+  if (!hasSafeArguments(command, args)) return { token: first, reason: `arguments not allowed for \`${first}\`` };
+  const reviewed = explainReviewedRejection(command, first, args, safeSubcommands, platform, paths);
+  if (reviewed) return reviewed;
+  const subcommand = SUBCOMMAND_COMMANDS.has(command) ? args.find((argument) => !argument.startsWith("-")) : void 0;
+  return {
+    token: subcommand === void 0 ? first : `${first} ${subcommand}`,
+    reason: notAllowlistedReason(command === "gh" ? ghOptIn(args) : void 0)
+  };
+}
+function firstWord(words, fallback) {
+  return words[0] ?? fallback;
+}
+function validatorRejection(label, token) {
+  return { token, reason: `arguments rejected by the reviewed \`${label}\` validator` };
+}
+function explainReviewedRejection(command, first, args, safeSubcommands, platform, paths) {
+  if (command === "hostname") return validatorRejection("hostname", args[0]);
+  if (command === "tasklist") {
+    return platform === "win32" ? validatorRejection("tasklist", args[0]) : { token: first, reason: "`tasklist` is only allowed on Windows" };
+  }
+  if (command === "sed") {
+    return validatorRejection(
+      "sed",
+      firstWord([...args.filter((argument) => !argument.startsWith("-")), ...args], first)
+    );
+  }
+  if (command === "git") return explainGitRejection(first, args, safeSubcommands, paths);
+  if (["node", "python", "python3", "tsc", "biome", "ruff", "ty"].includes(command)) {
+    const forbidden = args.find((argument) => /^--(incremental|tsBuildInfoFile|generateTrace)(=|$)/.test(argument));
+    return validatorRejection(command, forbidden ?? firstWord(args, first));
+  }
+  const subcommand = args.find((argument) => !argument.startsWith("-"))?.toLowerCase();
+  if (command === "npm" && subcommand === "audit") return validatorRejection("npm audit", "fix");
+  if (command === "npm" && subcommand === "run") {
+    return validatorRejection(
+      "npm run",
+      args[0]?.toLowerCase() === "run" ? firstWord(args.slice(1), "run") : args[0]
+    );
+  }
+  return void 0;
+}
+function explainGitRejection(first, args, safeSubcommands, paths) {
+  let index = 0;
+  while (index < args.length && (args[index] === "--no-pager" || args[index] === "-C")) {
+    if (args[index] === "-C") {
+      const directory = args[index + 1];
+      if (resolveDirectory(directory, paths.base, paths.roots, paths.homeDir) === void 0) {
+        return {
+          token: directory ?? "-C",
+          reason: "arguments rejected by the reviewed `git` validator: `-C` directory outside the allowed roots"
+        };
+      }
+      index += 2;
+    } else {
+      index += 1;
+    }
+  }
+  const subcommand = args[index]?.toLowerCase();
+  if (!subcommand) return { token: first, reason: "arguments rejected by the reviewed `git` validator: no subcommand" };
+  if (subcommand.startsWith("-")) return { token: subcommand, reason: "unsupported git option before the subcommand" };
+  const validator = BUILTIN_GIT_VALIDATORS[subcommand] ?? (safeSubcommands.git?.includes(subcommand) ? CONFIGURABLE_GIT_VALIDATORS[subcommand] : void 0);
+  if (!validator) {
+    const configurable = CONFIGURABLE_SAFE_GIT_SUBCOMMANDS.includes(subcommand);
+    return {
+      token: `${first} ${subcommand}`,
+      reason: notAllowlistedReason(configurable ? { key: "git", entry: subcommand } : void 0)
+    };
+  }
+  const label = `git ${subcommand}`;
+  const subcommandArgs = args.slice(index + 1);
+  const unsafe = subcommandArgs.filter(
+    (argument) => !hasSafeGitArguments(subcommand, [argument]) || !validator([argument])
+  );
+  return validatorRejection(label, firstWord(unsafe, label));
+}
+function wordAround(segment, index) {
+  let from = index;
+  while (from > 0 && !/\s/u.test(segment.charAt(from - 1))) from -= 1;
+  let to = index;
+  while (to < segment.length && !/\s/u.test(segment.charAt(to))) to += 1;
+  return segment.slice(from, to);
 }
 function findBlockedPowerShellCommandSegment(command, safeSubcommands = {}, { workingDirectory, trustedDirectories = [], homeDir = homedir() } = {}) {
   const segments = splitPowerShellSegments(command);
@@ -377,9 +537,14 @@ function powerShellWords(segment) {
   words.push(word);
   return words;
 }
-function splitShellSegments(command) {
+var REASON_REDIRECTION = "redirection";
+var REASON_SUBSTITUTION = "command or process substitution";
+var REASON_EMPTY_SEGMENT = "operator with no command";
+function scanShellSegments(command) {
   const trimmed = command.trim();
-  if (!trimmed || /[\n\r`]/.test(trimmed)) return void 0;
+  if (!trimmed) return { rejection: { token: "(empty command)", reason: "empty command" } };
+  if (trimmed.includes("`")) return { rejection: { token: "`", reason: REASON_SUBSTITUTION } };
+  if (/[\n\r]/.test(trimmed)) return { rejection: { token: "\\n", reason: "newline (multi-line command)" } };
   const segments = [];
   let separator = "start";
   let quote;
@@ -397,32 +562,45 @@ function splitShellSegments(command) {
     }
     if (quote) {
       if (character === quote) quote = void 0;
-      else if (quote === '"' && character === "$" && trimmed[index + 1] === "(") return void 0;
+      else if (quote === '"' && character === "$" && trimmed[index + 1] === "(") {
+        return { rejection: { token: "$(", reason: REASON_SUBSTITUTION } };
+      }
       continue;
     }
     if (character === "'" || character === '"') {
       quote = character;
       continue;
     }
-    if (character === ">" || character === "<" || character === "(" || character === ")") {
-      return void 0;
-    }
     const next = trimmed[index + 1];
-    if (character === "&" && next !== "&") return void 0;
+    if (character === ">" || character === "<") {
+      if (next === "(") return { rejection: { token: `${character}(`, reason: REASON_SUBSTITUTION } };
+      const token = next === character ? `${character}${character}` : character;
+      return { rejection: { token, reason: REASON_REDIRECTION } };
+    }
+    if (character === "(" || character === ")") {
+      const substitution = character === "(" && trimmed[index - 1] === "$";
+      return {
+        rejection: substitution ? { token: "$(", reason: REASON_SUBSTITUTION } : { token: character, reason: "subshell or grouping" }
+      };
+    }
+    if (character === "&" && next !== "&") return { rejection: { token: "&", reason: "background execution" } };
     const separatorLength = character === ";" || character === "|" ? next === character ? 2 : 1 : character === "&" && next === "&" ? 2 : 0;
     if (separatorLength === 0) continue;
     const segment = trimmed.slice(start, index).trim();
-    if (!segment) return void 0;
+    if (!segment) {
+      return { rejection: { token: trimmed.slice(index, index + separatorLength), reason: REASON_EMPTY_SEGMENT } };
+    }
     segments.push({ text: segment, separator });
     separator = trimmed.slice(index, index + separatorLength);
     index += separatorLength - 1;
     start = index + 1;
   }
-  if (quote || escaped) return void 0;
+  if (quote) return { rejection: { token: quote, reason: "unbalanced quote" } };
+  if (escaped) return { rejection: { token: "\\", reason: "trailing escape" } };
   const finalSegment = trimmed.slice(start).trim();
-  if (!finalSegment) return void 0;
+  if (!finalSegment) return { rejection: { token: separator, reason: REASON_EMPTY_SEGMENT } };
   segments.push({ text: finalSegment, separator });
-  return segments;
+  return { segments };
 }
 function isSafeSegment(segment, safeSubcommands, paths, platform) {
   const prefix = matchConfiguredPrefix(segment, safeSubcommands);
@@ -543,10 +721,11 @@ function isSafeGhApiArguments(args) {
   }
   return true;
 }
-function hasShellExpansion(segment) {
+function findShellExpansion(segment) {
   let quote;
   let escaped = false;
-  for (const character of segment) {
+  for (let index = 0; index < segment.length; index += 1) {
+    const character = segment[index];
     if (escaped) {
       escaped = false;
       continue;
@@ -557,16 +736,19 @@ function hasShellExpansion(segment) {
     }
     if (quote) {
       if (character === quote) quote = void 0;
-      else if (character === "$" && quote === '"') return true;
+      else if (character === "$" && quote === '"') return index;
       continue;
     }
     if (character === "'" || character === '"') {
       quote = character;
       continue;
     }
-    if (["$", "*", "?", "[", "{"].includes(character)) return true;
+    if (["$", "*", "?", "[", "{"].includes(character)) return index;
   }
-  return false;
+  return void 0;
+}
+function hasShellExpansion(segment) {
+  return findShellExpansion(segment) !== void 0;
 }
 function shellWords(segment) {
   const words = [];
@@ -2511,7 +2693,8 @@ export {
   canSelectToolInPlanMode,
   readCommand,
   findBlockedSshExecCall,
-  findBlockedCommandSegment,
+  decideBlockedCommand,
+  explainDecision,
   findBlockedPowerShellCommandSegment,
   PLAN_MODE_COMPLETE_TOOL_NAME,
   PLAN_MODE_COMPLETE_PARAMS,
@@ -2577,4 +2760,4 @@ export {
   defaultPlanModeToolNames,
   snapshotPlanModeSelectedNames
 };
-//# sourceMappingURL=chunk-A6PCYLX7.ts.map
+//# sourceMappingURL=chunk-WG4HPX6B.ts.map

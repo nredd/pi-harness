@@ -1,4 +1,6 @@
+import { WIDTHS } from "@nredd/pi-test-lib/terminal";
 import { expect, it } from "vitest";
+import { RESIZES, TerminalFixture } from "../fixtures/session.ts";
 import {
 	AXIS_COLUMN,
 	chart,
@@ -12,8 +14,7 @@ import {
 	selectFilter,
 	selectTotal,
 	start,
-} from "./stats-support.ts";
-import { RESIZES, TerminalFixture, WIDTHS } from "./support.ts";
+} from "../fixtures/stats.ts";
 
 /** Own teardown inside the test body: runner timeouts do not cancel an async callback. */
 function statsTest<Args extends unknown[]>(

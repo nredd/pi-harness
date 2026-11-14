@@ -2,6 +2,7 @@
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { exportStats, importStats } from "../../packages/session-kit/src/stats/snapshot.ts";
+import { configFor, RESIZES, TerminalFixture } from "../../packages/session-kit/test/fixtures/session.ts";
 import {
 	chart,
 	footer,
@@ -10,8 +11,7 @@ import {
 	layout,
 	selectFilter,
 	selectTotal,
-} from "../../packages/session-kit/test/scenarios/stats-support.ts";
-import { configFor, RESIZES, TerminalFixture } from "../../packages/session-kit/test/scenarios/support.ts";
+} from "../../packages/session-kit/test/fixtures/stats.ts";
 import { isolateStackHome, loadFork } from "./support.ts";
 
 let home: Awaited<ReturnType<typeof isolateStackHome>>;

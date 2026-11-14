@@ -566,4 +566,29 @@ describe("unawaited launches", () => {
     expect(result.error).toBe("Workflow aborted.");
     expect(result.error).not.toContain("unawaited");
   });
+
+  it("drops a call the worker posted before the abort landed", async () => {
+    // Both calls leave the worker in one tick, but the host handles them one message at a time. Aborting
+    // inside the first call's synchronous queued report, once the worker has had time to post the second,
+    // makes the second arrive at an already-settled run on every platform. Racing a real abort against the
+    // worker leaves that arrival to scheduler timing, and the branch it covers flaps.
+    const controller = new AbortController();
+    const { host, calls } = stubHost({ reply: () => new Promise<WorkflowSpawnResult>(() => {}) });
+    let aborted = false;
+
+    const result = await run('agent("first"); agent("second"); return null;', {
+      host,
+      signal: controller.signal,
+      onProgress() {
+        if (aborted) return;
+        aborted = true;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+        controller.abort();
+      },
+    });
+
+    expect(result.status).toBe("killed");
+    expect(result.error).toBe("Workflow aborted.");
+    expect(calls).toHaveLength(0);
+  });
 });

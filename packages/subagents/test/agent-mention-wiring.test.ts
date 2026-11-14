@@ -1309,6 +1309,21 @@ describe("resuming an evicted agent by name", () => {
     expect(textOf(read)).toContain("Agent not found");
   });
 
+  it("get_subagent_result still returns the text of an evicted agent's result (#372)", async () => {
+    const { tools } = boot();
+    finishedRun(fakeSession());
+    const id = await spawnBackground(tools);
+    await evict(id);
+    await flush();
+
+    const read = await tools.get("get_subagent_result").execute(
+      "tc", { agent_id: id }, undefined, undefined, ctx(),
+    );
+
+    expect(textOf(read)).toContain("evicted after");
+    expect(textOf(read)).toContain("first answer");
+  });
+
   it("reports a session that is gone, rather than starting something else", async () => {
     // SessionManager.open runs inside runAgent, so a missing file rejects that
     // promise as an ordinary agent error — the dispatcher never sees it. The

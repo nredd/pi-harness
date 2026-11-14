@@ -1,8 +1,9 @@
 /** #779: a real invalidated extension context poisons a shared route, not its requesting child. */
 import { readFileSync } from "node:fs";
 import { createHarness, type Harness } from "@earendil-works/pi-coding-agent/testing";
+import { toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it, vi } from "vitest";
-import { answer, calls, ScenarioSession, spawn } from "./helpers/scenario-session.js";
+import { answer, ScenarioSession, spawn } from "./helpers/scenario-session.js";
 
 let fixture: ScenarioSession;
 let owner: Harness;
@@ -19,7 +20,7 @@ it.each([false, true])("terminates captured-context failure without retrying, in
   await owner.session.bindExtensions({ mode: "print" });
   const captured = owner.session.extensionRunner.createContext();
   const hold = fixture.heldTool();
-  const physical = fixture.physical("fauxphys", "physical", [calls({ name: "hold", args: {} }), answer("UNREACHABLE")]);
+  const physical = fixture.physical("fauxphys", "physical", [toolCalls({ name: "hold", args: {} }), answer("UNREACHABLE")]);
   let routes = 0;
   const h = await fixture.start({ factories: [pi => {
     pi.registerVirtualModel({
@@ -35,7 +36,7 @@ it.each([false, true])("terminates captured-context failure without retrying, in
   }] });
   if (!midrun) owner.session.dispose();
   for (let attempt = 0; attempt < 2; attempt++) {
-    h.setResponses([calls(spawn(`attempt ${attempt}`, { model: "captured/default" })), answer("PARENT ALIVE")]);
+    h.setResponses([toolCalls(spawn(`attempt ${attempt}`, { model: "captured/default" })), answer("PARENT ALIVE")]);
     await h.session.prompt("launch");
     const result = h.session.messages.filter(m => m.role === "toolResult" && m.toolName === "Agent").at(-1);
     const id = result?.content.flatMap(p => p.type === "text" ? [p.text] : []).join("\n").match(/Agent ID: (\S+)/)?.[1];

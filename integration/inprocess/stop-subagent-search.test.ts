@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import { fauxAssistantMessage, type Harness } from "@earendil-works/pi-coding-agent/testing";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { runTools } from "../../packages/dev-tools/test/scenarios/support.ts";
+import { runTools } from "../../packages/dev-tools/test/fixtures/session.ts";
 import { agentStack, closeAgentStack, jsonFile } from "./agents-support.ts";
 import { isolateStackHome, loadThirdParty } from "./support.ts";
 
