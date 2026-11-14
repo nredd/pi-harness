@@ -558,153 +558,94 @@ describe("SubagentScheduler — fire path", () => {
   });
 
   describe("re-bind while a fired run is live", () => {
-    const addOneShot = () =>
-      scheduler.addJob({
-        name: "Rebind", description: "Rebind", schedule: "+1s",
-        subagent_type: "general-purpose", prompt: "once",
-      });
-    const fireHung = (status: string) => {
-      manager.getRecord.mockImplementation(() => ({ status, startGate: undefined, promise: new Promise(() => {}) }));
-      const job = addOneShot();
+    const path = () => join(tmp, "s.json");
+    const input = { name: "Rebind", description: "Rebind", schedule: "+1h", subagent_type: "general-purpose" as const, prompt: "x" };
+    /** Production activation: a NEW manager (which has never seen the old agents), scheduler and store. */
+    const activate = () => {
+      scheduler.stop();
+      const fresh = makeMockManager();
+      fresh.getRecord.mockImplementation(() => undefined);
+      const next = new SubagentScheduler();
+      next.start(pi, ctx, fresh, new ScheduleStore(path()));
+      scheduler = next;
+      return next;
+    };
+    const fireOneShot = () => {
+      const job = scheduler.addJob({ ...input, schedule: "+1s" });
       vi.advanceTimersByTime(2_000);
       expect(scheduler.list()[0]?.lastStatus).toBe("running");
       return job;
     };
-    const again = (s: SubagentScheduler) =>
-      s.addJob({ name: "Rebind", description: "Rebind", schedule: "+1h", subagent_type: "general-purpose", prompt: "x" });
 
-    it("a live same-process run keeps its name across stop() and a new store", () => {
-      const job = fireHung("running");
-      scheduler.stop();
-      scheduler.start(pi, ctx, manager, new ScheduleStore(join(tmp, "s.json")));
-      expect(scheduler.list()[0]).toMatchObject({ id: job.id, lastStatus: "running" });
-      expect(() => again(scheduler)).toThrow(/already exists/);
+    it("a hung one-shot keeps its name across a re-bind with a fresh manager", () => {
+      manager.getRecord.mockImplementation(() => ({ status: "running", promise: new Promise(() => {}) }));
+      const job = fireOneShot();
+      const next = activate();
+      expect(next.list()[0]).toMatchObject({ id: job.id, lastStatus: "running" });
+      expect(() => next.addJob(input)).toThrow(/already exists/);
     });
 
-    it("a live run keeps its name across a new scheduler instance (/reload)", () => {
-      fireHung("queued");
-      scheduler.stop();
-      const next = new SubagentScheduler();
-      next.start(pi, ctx, manager, new ScheduleStore(join(tmp, "s.json")));
-      expect(() => again(next)).toThrow(/already exists/);
-      next.stop();
-    });
-
-    it("a run that finished during the gap frees its name", () => {
-      fireHung("running");
-      scheduler.stop();
-      manager.getRecord.mockImplementation(() => ({ status: "completed", promise: Promise.resolve("") }));
-      scheduler.start(pi, ctx, manager, new ScheduleStore(join(tmp, "s.json")));
-      expect(scheduler.list()[0]?.lastStatus).toBe("error");
-      expect(() => again(scheduler)).not.toThrow();
-    });
-
-    it("a run whose record is gone frees its name", () => {
-      fireHung("running");
-      scheduler.stop();
-      manager.getRecord.mockImplementation(() => undefined);
-      scheduler.start(pi, ctx, manager, new ScheduleStore(join(tmp, "s.json")));
-      expect(scheduler.list()[0]?.lastStatus).toBe("error");
-    });
-
-    it("a run owned by another process is errored even if the id looks live", () => {
-      const job = fireHung("running");
-      store.update(job.id, { runPid: process.pid + 1 });
-      scheduler.stop();
-      scheduler.start(pi, ctx, manager, new ScheduleStore(join(tmp, "s.json")));
-      expect(scheduler.list()[0]?.lastStatus).toBe("error");
-    });
-
-    it("a persisted run without an owner keeps the errored-on-restart behavior", () => {
-      const job = fireHung("running");
-      store.update(job.id, { runPid: undefined, runAgentId: undefined });
-      scheduler.stop();
-      scheduler.start(pi, ctx, manager, new ScheduleStore(join(tmp, "s.json")));
-      expect(scheduler.list()[0]?.lastStatus).toBe("error");
-    });
-
-    it("a run settling after a re-bind frees the name through the new store", async () => {
-      let finish: () => void = () => {};
-      manager.getRecord.mockImplementation(() => ({
-        status: "running", promise: new Promise<void>(r => { finish = r; }),
-      }));
-      addOneShot();
-      vi.advanceTimersByTime(2_000);
-      scheduler.stop();
-      const fresh = new ScheduleStore(join(tmp, "s.json"));
-      scheduler.start(pi, ctx, manager, fresh);
-      manager.getRecord.mockImplementation(() => ({ status: "completed", promise: Promise.resolve("") }));
-      finish();
-      await vi.waitFor(() => expect(fresh.list()[0]?.lastStatus).toBe("success"));
-      expect(() => again(scheduler)).not.toThrow();
-    });
-
-    it("an older overlapping run settling leaves the live newer run's status and owner", async () => {
-      const finishers = new Map<string, () => void>();
-      const promises = new Map<string, Promise<void>>();
-      manager.spawn.mockReturnValueOnce("a1").mockReturnValueOnce("a2");
-      manager.getRecord.mockImplementation((id: string) => {
-        if (!promises.has(id)) promises.set(id, new Promise<void>(r => { finishers.set(id, r); }));
-        return { status: "running", promise: promises.get(id) };
+    it("overlapping runs across a re-bind hold the name until the last settles", async () => {
+      const resolvers: Array<() => void> = [];
+      const records = new Map<string, { status: string; promise: Promise<string> }>();
+      manager.spawn.mockImplementation(() => {
+        const id = `agent-${records.size}`;
+        records.set(id, { status: "completed", promise: new Promise<string>(r => resolvers.push(() => r(""))) });
+        return id;
       });
-      const job = scheduler.addJob({
-        name: "Over", description: "Over", schedule: "1s",
-        subagent_type: "general-purpose", prompt: "x",
-      });
-      vi.advanceTimersByTime(2_000);
+      manager.getRecord.mockImplementation((id: string) => records.get(id));
+      const job = scheduler.addJob({ ...input, name: "Ovl", schedule: "1m until +150s" });
+      await vi.advanceTimersByTimeAsync(150_000);
       expect(manager.spawn).toHaveBeenCalledTimes(2);
-      finishers.get("a1")!();
-      await vi.waitFor(() => expect(store.get(job.id)?.runCount).toBe(1));
-      expect(store.get(job.id)).toMatchObject({ lastStatus: "running", runAgentId: "a2" });
+      const next = activate();
+      resolvers[1]();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(() => next.addJob({ ...input, name: "Ovl" })).toThrow(/already exists/);
+      expect(new ScheduleStore(path()).get(job.id)?.lastStatus).toBe("running");
+      resolvers[0]();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(() => next.addJob({ ...input, name: "Ovl" })).not.toThrow();
     });
 
-    it("a newer run settling first leaves the job running until the older one settles", async () => {
-      const finishers = new Map<string, () => void>();
-      const promises = new Map<string, Promise<void>>();
-      const done = new Set<string>();
-      manager.spawn.mockReturnValueOnce("a1").mockReturnValueOnce("a2");
-      manager.getRecord.mockImplementation((id: string) => {
-        if (!promises.has(id)) promises.set(id, new Promise<void>(r => { finishers.set(id, r); }));
-        return { status: done.has(id) ? "completed" : "running", promise: promises.get(id) };
-      });
-      const job = scheduler.addJob({
-        name: "Over2", description: "Over2", schedule: "1s",
-        subagent_type: "general-purpose", prompt: "x",
-      });
-      vi.advanceTimersByTime(2_000);
-      done.add("a2");
-      finishers.get("a2")!();
-      await vi.waitFor(() => expect(store.get(job.id)?.runCount).toBe(1));
-      expect(store.get(job.id)?.lastStatus).toBe("running");
-      done.add("a1");
-      finishers.get("a1")!();
-      await vi.waitFor(() => expect(store.get(job.id)?.runCount).toBe(2));
-      expect(store.get(job.id)).toMatchObject({ lastStatus: "success", runAgentId: undefined });
+    it("a live run holds the name whatever the persisted status says", () => {
+      manager.getRecord.mockImplementation(() => ({ status: "running", promise: new Promise(() => {}) }));
+      const job = fireOneShot();
+      scheduler.updateJob(job.id, { enabled: false });
+      store.update(job.id, { lastStatus: "success" });
+      expect(() => scheduler.addJob(input)).toThrow(/already exists/);
     });
 
-    it("a persisted live owner other than the settling run keeps the job running", async () => {
+    it("a run that finished during the gap frees its name", async () => {
       let finish: () => void = () => {};
-      const settle = new Promise<void>(r => { finish = r; });
-      manager.spawn.mockReturnValueOnce("a1");
-      manager.getRecord.mockImplementation((id: string) =>
-        id === "a1"
-          ? { status: "completed", promise: settle }
-          : { status: "queued", promise: new Promise(() => {}) });
-      const job = addOneShot();
-      vi.advanceTimersByTime(2_000);
-      store.update(job.id, { runAgentId: "other" });
+      const settled = new Promise<void>(r => { finish = r; });
+      manager.getRecord.mockImplementation(() => ({ status: "completed", promise: settled }));
+      fireOneShot();
+      scheduler.stop();
       finish();
-      await vi.waitFor(() => expect(store.get(job.id)?.runCount).toBe(1));
-      expect(store.get(job.id)).toMatchObject({ lastStatus: "running", runAgentId: "other" });
+      await vi.advanceTimersByTimeAsync(0);
+      const next = activate();
+      expect(next.list()[0]?.lastStatus).toBe("success");
+      expect(() => next.addJob(input)).not.toThrow();
     });
 
-    it("settling clears the owner", async () => {
-      manager.getRecord.mockImplementation(() => ({ status: "completed", promise: Promise.resolve("") }));
-      const job = addOneShot();
-      vi.advanceTimersByTime(2_000);
-      await vi.waitFor(() => expect(scheduler.list()[0]?.lastStatus).toBe("success"));
-      expect(store.get(job.id)?.runPid).toBeUndefined();
-      expect(store.get(job.id)?.runAgentId).toBeUndefined();
+    it("a run settling after a re-bind frees the name for the new scheduler", async () => {
+      let finish: () => void = () => {};
+      const settled = new Promise<void>(r => { finish = r; });
+      manager.getRecord.mockImplementation(() => ({ status: "completed", promise: settled }));
+      fireOneShot();
+      const next = activate();
+      expect(() => next.addJob(input)).toThrow(/already exists/);
+      finish();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(() => next.addJob(input)).not.toThrow();
+    });
+
+    it("a previous-process run left running is errored on start", () => {
+      const old = scheduler.buildJob({ ...input, name: "Cut" });
+      store.add({ ...old, enabled: false, lastRun: new Date().toISOString(), lastStatus: "running" });
+      const next = activate();
+      expect(next.list().find(j => j.id === old.id)?.lastStatus).toBe("error");
+      expect(() => next.addJob({ ...input, name: "Cut" })).not.toThrow();
     });
   });
 

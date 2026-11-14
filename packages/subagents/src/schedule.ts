@@ -54,6 +54,26 @@ export interface NewJobInput {
 /** Longest delay a native timer honors (2^31 - 1 ms). */
 const MAX_TIMER_MS = 2_147_483_647;
 
+/**
+ * Process-global registry of spawned, unfinalized scheduled runs, keyed by store
+ * path + job id. Schedulers, stores and managers are rebuilt on every activation
+ * (/resume, /new, /reload) while runs outlive them, so liveness lives here.
+ */
+const LIVE_RUNS = Symbol.for("pi-subagents:scheduled-runs");
+
+function liveRuns(): Map<string, Set<string>> {
+  const g = globalThis as { [LIVE_RUNS]?: Map<string, Set<string>> };
+  const existing = g[LIVE_RUNS];
+  if (existing) return existing;
+  const created = new Map<string, Set<string>>();
+  g[LIVE_RUNS] = created;
+  return created;
+}
+
+function runKey(store: ScheduleStore, jobId: string): string {
+  return `${store.path}\0${jobId}`;
+}
+
 /** What `start()` binds, captured by a fire so a later session switch cannot leak into it. */
 interface BoundSession {
   store: ScheduleStore;
@@ -77,8 +97,6 @@ export class SubagentScheduler {
   private admissions = new Map<string, Set<AbortController>>();
   /** Newest pending admission per job that wrote "running", with the status it replaced. */
   private pendingRuns = new Map<string, { token: AbortController; prior: ScheduledSubagent["lastStatus"] }>();
-  /** Spawned runs not yet finalized, per job id (interval runs can overlap). */
-  private inFlight = new Map<string, number>();
   private store: ScheduleStore | undefined;
   private pi: ExtensionAPI | undefined;
   private ctx: ExtensionContext | undefined;
@@ -98,20 +116,19 @@ export class SubagentScheduler {
 
     for (const job of store.list()) {
       if (job.enabled) this.scheduleJob(job);
-      // A job disabled while "running" (or expired by the scheduling above) was cut
-      // off by a previous process; no agent of this one can finalize it, so it must
-      // not hold its name forever. A run this process still owns (a /resume, /new or
-      // /reload re-bind; the manager outlives it) is left for its finalize to settle.
-      if (store.get(job.id)?.enabled === false && job.lastStatus === "running" && !this.ownsLiveRun(job, manager)) {
+      // A job disabled while "running" (or expired by the scheduling above) with no
+      // live run in this process was cut off by a previous one; nothing can finalize
+      // it, so it must not hold its name forever. A run this process still owns (a
+      // /resume, /new or /reload re-bind) is in the registry and settles itself.
+      if (store.get(job.id)?.enabled === false && job.lastStatus === "running" && !this.hasLiveRun(store, job.id)) {
         store.update(job.id, { lastStatus: "error" });
       }
     }
   }
 
-  private ownsLiveRun(job: ScheduledSubagent, manager: AgentManager): boolean {
-    if (job.runPid !== process.pid || !job.runAgentId) return false;
-    const status = manager.getRecord(job.runAgentId)?.status;
-    return status === "queued" || status === "running";
+  /** Is any run of this job, in this process, spawned and not yet finalized? */
+  private hasLiveRun(store: ScheduleStore, jobId: string): boolean {
+    return (liveRuns().get(runKey(store, jobId))?.size ?? 0) > 0;
   }
 
   /** Stop all timers; drop refs. Safe to call repeatedly. */
@@ -125,7 +142,6 @@ export class SubagentScheduler {
     for (const admissions of this.admissions.values()) for (const admission of admissions) admission.abort();
     this.admissions.clear();
     this.pendingRuns.clear();
-    this.inFlight.clear();
     this.scheduled.clear();
     this.store = undefined;
     this.pi = undefined;
@@ -173,6 +189,8 @@ export class SubagentScheduler {
   /** Add a job, persist, and arm if enabled. Returns the stored job. */
   addJob(input: NewJobInput): ScheduledSubagent {
     const store = this.requireStore();
+    // A run finalized by a pre-re-bind scheduler wrote through its own store.
+    store.reload();
     const sameName = store.list().filter(old => old.name === input.name);
     if (sameName.some(old => !this.isFinished(old))) {
       throw new Error(`A scheduled job named "${input.name}" already exists.`);
@@ -212,7 +230,8 @@ export class SubagentScheduler {
    * or a repeating job whose `until` deadline passed. Its name is reusable.
    */
   private isFinished(job: ScheduledSubagent): boolean {
-    if (job.enabled || job.lastStatus === "running" || (this.inFlight.get(job.id) ?? 0) > 0) return false;
+    if (job.enabled || job.lastStatus === "running") return false;
+    if (this.hasLiveRun(this.requireStore(), job.id)) return false;
     if (job.scheduleType === "once") return job.lastRun !== undefined || job.lastStatus === "error";
     return this.pastDeadline(job);
   }
@@ -480,33 +499,24 @@ export class SubagentScheduler {
 
     this.emit({ type: "fired", jobId: id, agentId, name: job.name });
 
-    store.update(id, { runPid: process.pid, runAgentId: agentId });
-    this.inFlight.set(id, (this.inFlight.get(id) ?? 0) + 1);
+    const key = runKey(store, id);
+    const runs = liveRuns().get(key) ?? new Set<string>();
+    runs.add(agentId);
+    liveRuns().set(key, runs);
     const finalize = (status: "success" | "error") => {
-      let othersLive = false;
-      if (this.store === store) {
-        const left = (this.inFlight.get(id) ?? 1) - 1;
-        othersLive = left > 0;
-        if (left > 0) this.inFlight.set(id, left);
-        else this.inFlight.delete(id);
-      }
+      runs.delete(agentId);
+      // An overlapping run is still live: count this one, leave the status "running".
+      const othersLive = runs.size > 0;
+      if (!othersLive && liveRuns().get(key) === runs) liveRuns().delete(key);
+      // The finishing run may belong to a pre-re-bind scheduler whose store cache is stale.
+      store.reload();
       const next = this.getNextRun(id);
-      // After a re-bind the live store is a new object over the same file; settle
-      // through it so its cached view (and the job's name) catches up.
-      const target = this.store?.get(id) ? this.store : store;
-      const current = target.get(id);
-      // An overlapping run is still live (counted in flight, or the persisted owner
-      // is another live agent, which survives a re-bind): count this one, but leave
-      // the status "running" and the owner for it.
-      const owner = current?.runAgentId;
-      const ownerStatus = owner !== undefined && owner !== agentId ? manager.getRecord(owner)?.status : undefined;
-      const ownerLive = ownerStatus === "running" || ownerStatus === "queued";
-      const superseded = othersLive || ownerLive;
-      target.update(id, {
+      const current = store.get(id);
+      store.update(id, {
         lastRun: new Date(this.clock.now()).toISOString(),
         runCount: (current?.runCount ?? 0) + 1,
         nextRun: next,
-        ...(superseded ? {} : { lastStatus: status, runPid: undefined, runAgentId: undefined }),
+        ...(othersLive ? {} : { lastStatus: status }),
       });
     };
 

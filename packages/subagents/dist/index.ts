@@ -847,6 +847,18 @@ function savedAgentNote(data) {
 import { Cron } from "croner";
 import { nanoid } from "nanoid";
 var MAX_TIMER_MS = 2147483647;
+var LIVE_RUNS = /* @__PURE__ */ Symbol.for("pi-subagents:scheduled-runs");
+function liveRuns() {
+  const g = globalThis;
+  const existing = g[LIVE_RUNS];
+  if (existing) return existing;
+  const created = /* @__PURE__ */ new Map();
+  g[LIVE_RUNS] = created;
+  return created;
+}
+function runKey(store, jobId) {
+  return `${store.path}\0${jobId}`;
+}
 var SubagentScheduler = class _SubagentScheduler {
   constructor(options = {}) {
     this.options = options;
@@ -861,8 +873,6 @@ var SubagentScheduler = class _SubagentScheduler {
   admissions = /* @__PURE__ */ new Map();
   /** Newest pending admission per job that wrote "running", with the status it replaced. */
   pendingRuns = /* @__PURE__ */ new Map();
-  /** Spawned runs not yet finalized, per job id (interval runs can overlap). */
-  inFlight = /* @__PURE__ */ new Map();
   store;
   pi;
   ctx;
@@ -876,15 +886,14 @@ var SubagentScheduler = class _SubagentScheduler {
     this.store = store;
     for (const job of store.list()) {
       if (job.enabled) this.scheduleJob(job);
-      if (store.get(job.id)?.enabled === false && job.lastStatus === "running" && !this.ownsLiveRun(job, manager)) {
+      if (store.get(job.id)?.enabled === false && job.lastStatus === "running" && !this.hasLiveRun(store, job.id)) {
         store.update(job.id, { lastStatus: "error" });
       }
     }
   }
-  ownsLiveRun(job, manager) {
-    if (job.runPid !== process.pid || !job.runAgentId) return false;
-    const status = manager.getRecord(job.runAgentId)?.status;
-    return status === "queued" || status === "running";
+  /** Is any run of this job, in this process, spawned and not yet finalized? */
+  hasLiveRun(store, jobId) {
+    return (liveRuns().get(runKey(store, jobId))?.size ?? 0) > 0;
   }
   /** Stop all timers; drop refs. Safe to call repeatedly. */
   stop() {
@@ -897,7 +906,6 @@ var SubagentScheduler = class _SubagentScheduler {
     for (const admissions of this.admissions.values()) for (const admission of admissions) admission.abort();
     this.admissions.clear();
     this.pendingRuns.clear();
-    this.inFlight.clear();
     this.scheduled.clear();
     this.store = void 0;
     this.pi = void 0;
@@ -941,6 +949,7 @@ var SubagentScheduler = class _SubagentScheduler {
   /** Add a job, persist, and arm if enabled. Returns the stored job. */
   addJob(input) {
     const store = this.requireStore();
+    store.reload();
     const sameName = store.list().filter((old) => old.name === input.name);
     if (sameName.some((old) => !this.isFinished(old))) {
       throw new Error(`A scheduled job named "${input.name}" already exists.`);
@@ -975,7 +984,8 @@ var SubagentScheduler = class _SubagentScheduler {
    * or a repeating job whose `until` deadline passed. Its name is reusable.
    */
   isFinished(job) {
-    if (job.enabled || job.lastStatus === "running" || (this.inFlight.get(job.id) ?? 0) > 0) return false;
+    if (job.enabled || job.lastStatus === "running") return false;
+    if (this.hasLiveRun(this.requireStore(), job.id)) return false;
     if (job.scheduleType === "once") return job.lastRun !== void 0 || job.lastStatus === "error";
     return this.pastDeadline(job);
   }
@@ -1204,28 +1214,22 @@ var SubagentScheduler = class _SubagentScheduler {
       return;
     }
     this.emit({ type: "fired", jobId: id, agentId, name: job.name });
-    store.update(id, { runPid: process.pid, runAgentId: agentId });
-    this.inFlight.set(id, (this.inFlight.get(id) ?? 0) + 1);
+    const key = runKey(store, id);
+    const runs = liveRuns().get(key) ?? /* @__PURE__ */ new Set();
+    runs.add(agentId);
+    liveRuns().set(key, runs);
     const finalize = (status) => {
-      let othersLive = false;
-      if (this.store === store) {
-        const left = (this.inFlight.get(id) ?? 1) - 1;
-        othersLive = left > 0;
-        if (left > 0) this.inFlight.set(id, left);
-        else this.inFlight.delete(id);
-      }
+      runs.delete(agentId);
+      const othersLive = runs.size > 0;
+      if (!othersLive && liveRuns().get(key) === runs) liveRuns().delete(key);
+      store.reload();
       const next = this.getNextRun(id);
-      const target = this.store?.get(id) ? this.store : store;
-      const current = target.get(id);
-      const owner = current?.runAgentId;
-      const ownerStatus = owner !== void 0 && owner !== agentId ? manager.getRecord(owner)?.status : void 0;
-      const ownerLive = ownerStatus === "running" || ownerStatus === "queued";
-      const superseded = othersLive || ownerLive;
-      target.update(id, {
+      const current = store.get(id);
+      store.update(id, {
         lastRun: new Date(this.clock.now()).toISOString(),
         runCount: (current?.runCount ?? 0) + 1,
         nextRun: next,
-        ...superseded ? {} : { lastStatus: status, runPid: void 0, runAgentId: void 0 }
+        ...othersLive ? {} : { lastStatus: status }
       });
     };
     Promise.resolve(manager.getRecord(agentId)?.startGate).then(() => manager.awaitStartup(agentId)).then(() => manager.getRecord(agentId)?.promise).then(() => {
@@ -1367,6 +1371,14 @@ var ScheduleStore = class {
   constructor(filePath) {
     this.filePath = filePath;
     this.lockPath = filePath + ".lock";
+    this.load();
+  }
+  /** Backing file path (identifies the store across rebuilt instances). */
+  get path() {
+    return this.filePath;
+  }
+  /** Re-read the backing file, picking up writes made through another instance. */
+  reload() {
     this.load();
   }
   /** Create the backing directory lazily — only when we're about to persist. */

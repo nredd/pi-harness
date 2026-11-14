@@ -65,6 +65,16 @@ export class ScheduleStore {
     this.load();
   }
 
+  /** Backing file path (identifies the store across rebuilt instances). */
+  get path(): string {
+    return this.filePath;
+  }
+
+  /** Re-read the backing file, picking up writes made through another instance. */
+  reload(): void {
+    this.load();
+  }
+
   /** Create the backing directory lazily — only when we're about to persist. */
   private ensureDir(): void {
     mkdirSync(dirname(this.filePath), { recursive: true });
