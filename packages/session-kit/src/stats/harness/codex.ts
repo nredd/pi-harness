@@ -120,7 +120,9 @@ class CodexParser extends RowParser {
 			const [used, minutes, resets] = [w?.used_percent, w?.window_minutes, w?.resets_at];
 			if (![used, minutes, resets].every((n) => typeof n === "number" && Number.isFinite(n)) || ts <= 0) continue;
 			const window = windowName((minutes as number) * 60);
-			const key = JSON.stringify([limitId, window, this.account]);
+			// Per reset time, not per window: whether a reading is still live depends on a clock the cache does
+			// not have, so a newer already-reset reading must not discard an older live one.
+			const key = JSON.stringify([limitId, window, this.account, resets]);
 			const prev = this.quota.get(key);
 			if (prev && prev.observedAt > ts) continue;
 			this.quota.set(key, {

@@ -123,8 +123,13 @@ describe("stats CLI", () => {
 			...["--harness", "pi,opencode", "--opencode-db", opencode, "--replace-harnesses"],
 		];
 		await main();
-		expect(JSON.parse(log.mock.calls[2]?.[0] as string).harnesses.opencode.failed).toBe(true);
+		expect(JSON.parse(log.mock.calls[2]?.[0] as string).harnesses.opencode.failed).toBe("kept");
 		expect(error).toHaveBeenCalledWith("opencode: scan incomplete, kept what was last published");
+		// and says so when the previous snapshot cannot be read either
+		writeFileSync(join(JSON.parse(log.mock.calls[2]?.[0] as string).snapshotDir, "manifest.json"), "{");
+		await main();
+		expect(JSON.parse(log.mock.calls[3]?.[0] as string).harnesses.opencode.failed).toBe("lost");
+		expect(error).toHaveBeenCalledWith("opencode: scan incomplete, last published contents unreadable, dropped");
 		expect(process.exitCode).toBe(exitCode);
 		for (const argv of [
 			["--replace-harnesses", "--replace-harnesses"],

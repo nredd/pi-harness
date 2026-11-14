@@ -181,6 +181,20 @@ describe("readCodex", () => {
 			]);
 		});
 
+		it("keeps an older live reading when a newer one in the same rollout has already reset", async () => {
+			const live = { ...fiveHour, used_percent: 30, resets_at: 4_102_444_800 };
+			const reset = { ...fiveHour, used_percent: 90, resets_at: 1_700_000_000 };
+			writeLines(rollout("a"), [
+				codexMeta(),
+				codexTokenCount(limits(live), "2026-10-02T10:00:00Z"),
+				codexTokenCount(limits(reset), "2026-10-02T11:00:00Z"),
+				// an older reading of a reset time already held is ignored
+				codexTokenCount(limits({ ...live, used_percent: 1 }), "2026-10-02T09:00:00Z"),
+			]);
+			const quota = (await readCodex(root, {}, SALT)).quota;
+			expect(quota.map((q) => q.usedPercent)).toEqual([30]);
+		});
+
 		it("keeps two accounts' readings apart, keyed by a salted hash and never the ID", async () => {
 			writeLines(rollout("a"), [
 				codexMeta("t1", { creator_account_id: "acct-1" }),

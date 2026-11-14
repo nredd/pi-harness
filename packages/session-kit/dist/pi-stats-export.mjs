@@ -472,7 +472,7 @@ var RowParser = class {
 var isHash = (v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);
 var isQuota = (q) => {
   const r = asRecordOf(q);
-  return typeof r.harness === "string" && [r.provider, r.limitId, r.window].every((v) => typeof v === "string") && [r.usedPercent, r.resetAt, r.durationMs, r.observedAt].every(isNum) && (r.planType === null || typeof r.planType === "string") && typeof r.account === "string";
+  return typeof r.harness === "string" && [r.provider, r.limitId, r.window].every((v) => typeof v === "string") && [r.usedPercent, r.resetAt, r.durationMs, r.observedAt].every(isNum) && (r.planType === null || typeof r.planType === "string") && (r.account === "" || isHash(r.account));
 };
 function isParsedFile(value) {
   const f = asRecordOf(value);
@@ -701,7 +701,7 @@ var CodexParser = class extends RowParser {
       const [used, minutes, resets] = [w?.used_percent, w?.window_minutes, w?.resets_at];
       if (![used, minutes, resets].every((n) => typeof n === "number" && Number.isFinite(n)) || ts <= 0) continue;
       const window = windowName(minutes * 60);
-      const key = JSON.stringify([limitId, window, this.account]);
+      const key = JSON.stringify([limitId, window, this.account, resets]);
       const prev = this.quota.get(key);
       if (prev && prev.observedAt > ts) continue;
       this.quota.set(key, {
@@ -1134,10 +1134,16 @@ var exists = (path) => lstat(path).then(
   () => true,
   () => false
 );
+var emptyCarry = { calls: [], sessions: [], quota: [] };
 async function lastPublished(snapshotDir, harness) {
   const out = { calls: [], sessions: [], quota: [] };
+  let manifest;
   try {
-    const manifest = validateManifest(await jsonFile(join7(snapshotDir, "manifest.json")));
+    manifest = validateManifest(await jsonFile(join7(snapshotDir, "manifest.json")));
+  } catch (error) {
+    return error.code === "ENOENT" ? out : null;
+  }
+  try {
     const sessionIds = /* @__PURE__ */ new Set();
     const sessions = [];
     for (const ref of manifest.shards) {
@@ -1167,7 +1173,7 @@ async function lastPublished(snapshotDir, harness) {
     for (const s of sessions)
       if (sessionIds.has(s.id)) out.sessions.push({ path: s.id, startMs: s.startMs, endMs: s.endMs, child: s.child });
   } catch {
-    return { calls: [], sessions: [], quota: [] };
+    return null;
   }
   return out;
 }
@@ -1202,8 +1208,13 @@ async function exportStats(dir, output, root = sessionsDir(dir), options = {}) {
   for (const h of external) {
     const scan = scans[h];
     const failed = scan.problems.some(fatalProblem);
-    const use = failed ? await lastPublished(snapshotDir, h) : { ...scan, sessions: scan.sessionMetadata };
-    report[h] = { found: scan.found, problems: scan.problems, ...failed ? { failed: true } : {} };
+    const carried = failed ? await lastPublished(snapshotDir, h) : null;
+    const use = failed ? carried ?? emptyCarry : { ...scan, sessions: scan.sessionMetadata };
+    report[h] = {
+      found: scan.found,
+      problems: failed && !carried ? [...scan.problems, `${h}: last published contents unreadable`] : scan.problems,
+      ...failed ? { failed: carried ? "kept" : "lost" } : {}
+    };
     calls.push(...use.calls);
     sessionMetadata.push(...use.sessions);
     quota.push(...use.quota);
@@ -1356,7 +1367,10 @@ async function main() {
     });
     console.log(JSON.stringify(result));
     for (const [name2, status] of Object.entries(result.harnesses ?? {}))
-      if (status.failed) console.error(`${name2}: scan incomplete, kept what was last published`);
+      if (status.failed)
+        console.error(
+          `${name2}: scan incomplete, ${status.failed === "kept" ? "kept what was last published" : "last published contents unreadable, dropped"}`
+        );
   } else if (command === "import" && input !== void 0 && output === void 0 && !EXPORT_ONLY.some((f) => options.has(f))) {
     const result = await importStats(dir, resolve3(input));
     console.log(JSON.stringify(result));

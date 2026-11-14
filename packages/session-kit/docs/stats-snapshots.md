@@ -46,11 +46,13 @@ CLI results:
   A missing harness is `found: false`, not an error. `problems` are counts only (e.g.
   `claude: ! 2 unreadable lines`, Codex turns skipped for lack of per-turn records).
   A harness whose scan is incomplete (unreadable transcript files, a harness cache that cannot be
-  written, an OpenCode database that is busy or unreadable) is `failed: true`: what this machine
+  written, an OpenCode database that is busy or unreadable) is `failed: "kept"`: what this machine
   last published for that harness (events, sessions, quota) is carried into the new snapshot
   unchanged, a diagnostic goes to stderr, and the export still succeeds, so one flaky harness
   cannot stop the pi export or replace good history with a partial scan. With nothing published
-  yet there is nothing to carry. Pi itself still fails closed.
+  yet there is nothing to carry. If the previous snapshot itself is unreadable the harness is
+  `failed: "lost"` (diagnostic `<harness>: last published contents unreadable`): it is missing
+  from this snapshot, and stderr says so. Pi itself still fails closed.
   A transcript that vanishes between listing and reading (Claude and Codex prune old ones) is not a
   failure; its cached record stays.
 - Import: `{ "imported": N, "retained": N, "problems": [], "importedAt": MS }` on stdout.
@@ -213,7 +215,8 @@ directory names live there as keys); its values and every reader result carry no
   Turns without per-turn records (older Codex, including old turns of a resumed rollout) are
   skipped with a count-only diagnostic, never approximated.
   `rate_limits` from `token_count` rows become quota observations (provider `openai-codex`),
-  freshest per `(limitId, window)`. No account dimension.
+  freshest per `(limitId, window, account, resetAt)` per rollout, so a newer already-reset reading
+  never hides an older live one. No account dimension on usage; quota carries the salted `account`.
 - OpenCode: one read-only `node:sqlite` query (`immutable=1` only when the WAL is checkpointed and
   absent, so a read never creates `-shm`/`-wal` and pending WAL rows are always visible; 2s busy
   timeout, then a generic "database busy" diagnostic) that

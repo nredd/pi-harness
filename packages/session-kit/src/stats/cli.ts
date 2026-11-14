@@ -63,7 +63,10 @@ export async function main(): Promise<void> {
 		});
 		console.log(JSON.stringify(result));
 		for (const [name, status] of Object.entries(result.harnesses ?? {}))
-			if (status.failed) console.error(`${name}: scan incomplete, kept what was last published`);
+			if (status.failed)
+				console.error(
+					`${name}: scan incomplete, ${status.failed === "kept" ? "kept what was last published" : "last published contents unreadable, dropped"}`,
+				);
 	} else if (
 		command === "import" &&
 		input !== undefined &&

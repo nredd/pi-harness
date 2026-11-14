@@ -444,9 +444,12 @@ export interface ExportOptions {
 }
 /**
  * Per requested non-pi harness: whether its data root exists, plus count-only diagnostics. `failed` means
- * the scan was incomplete, so what this machine last published for that harness was carried over unchanged.
+ * the scan was incomplete: `kept` carried what this machine last published for it over unchanged (or there
+ * was nothing), `lost` could not read the previous snapshot, so the harness is missing from this one.
  */
-export type HarnessReport = Partial<Record<ExternalHarness, { found: boolean; problems: string[]; failed?: true }>>;
+export type HarnessReport = Partial<
+	Record<ExternalHarness, { found: boolean; problems: string[]; failed?: "kept" | "lost" }>
+>;
 
 /**
  * Diagnostics that mean the history may be incomplete, so publishing the scan would replace a good snapshot
@@ -462,11 +465,18 @@ const exists = (path: string): Promise<boolean> =>
 		() => false,
 	);
 
-/** What a harness contributed to this machine's last published snapshot; empty if there is none or it is unreadable. */
+const emptyCarry = { calls: [] as Call[], sessions: [] as Session[], quota: [] as QuotaObservation[] };
+
+/** What a harness contributed to this machine's last published snapshot: empty if none, `null` if unreadable. */
 async function lastPublished(snapshotDir: string, harness: Harness) {
 	const out = { calls: [] as Call[], sessions: [] as Session[], quota: [] as QuotaObservation[] };
+	let manifest: Manifest;
 	try {
-		const manifest = validateManifest(await jsonFile(join(snapshotDir, "manifest.json")));
+		manifest = validateManifest(await jsonFile(join(snapshotDir, "manifest.json")));
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "ENOENT" ? out : null;
+	}
+	try {
 		const sessionIds = new Set<string>();
 		const sessions: SnapshotSession[] = [];
 		for (const ref of manifest.shards) {
@@ -496,7 +506,7 @@ async function lastPublished(snapshotDir: string, harness: Harness) {
 		for (const s of sessions)
 			if (sessionIds.has(s.id)) out.sessions.push({ path: s.id, startMs: s.startMs, endMs: s.endMs, child: s.child });
 	} catch {
-		return { calls: [], sessions: [], quota: [] };
+		return null;
 	}
 	return out;
 }
@@ -543,8 +553,13 @@ export async function exportStats(
 		const scan = scans[h];
 		// A failed harness keeps its last published contents: it must not take the pi export down with it.
 		const failed = scan.problems.some(fatalProblem);
-		const use = failed ? await lastPublished(snapshotDir, h) : { ...scan, sessions: scan.sessionMetadata };
-		report[h] = { found: scan.found, problems: scan.problems, ...(failed ? { failed: true as const } : {}) };
+		const carried = failed ? await lastPublished(snapshotDir, h) : null;
+		const use = failed ? (carried ?? emptyCarry) : { ...scan, sessions: scan.sessionMetadata };
+		report[h] = {
+			found: scan.found,
+			problems: failed && !carried ? [...scan.problems, `${h}: last published contents unreadable`] : scan.problems,
+			...(failed ? { failed: carried ? ("kept" as const) : ("lost" as const) } : {}),
+		};
 		calls.push(...use.calls);
 		sessionMetadata.push(...use.sessions);
 		quota.push(...use.quota);

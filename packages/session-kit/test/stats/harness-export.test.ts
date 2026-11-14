@@ -463,7 +463,7 @@ describe("exportStats with harnesses", () => {
 		const roots = seedHarnessHome(home);
 		const loadSqlite = () => Promise.reject(new Error("no sqlite"));
 		const result = await exportStats(agent, repo, undefined, { harnesses: ["opencode"], roots, home, loadSqlite });
-		expect(result.harnesses?.opencode).toMatchObject({ found: true, failed: true });
+		expect(result.harnesses?.opencode).toMatchObject({ found: true, failed: "kept" });
 		expect(result.harnesses?.opencode?.problems[0]).toContain("opencode: database unreadable");
 		expect(published(result.snapshotDir)).toEqual([]);
 	});
@@ -480,7 +480,7 @@ describe("exportStats with harnesses", () => {
 				expect(result.harnesses?.claude).toEqual({
 					found: true,
 					problems: ["claude: 1 unreadable files"],
-					failed: true,
+					failed: "kept",
 				});
 			expect(published(result.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness))).toContain("codex");
 		} finally {
@@ -616,7 +616,7 @@ describe("exportStats with harnesses", () => {
 			expect(second.harnesses?.opencode).toEqual({
 				found: true,
 				problems: ["opencode: database busy, skipped"],
-				failed: true,
+				failed: "kept",
 			});
 			expect(second.harnesses?.claude).toEqual({ found: true, problems: [] });
 			const after = kinds(second.snapshotDir);
@@ -669,7 +669,7 @@ describe("exportStats with harnesses", () => {
 				home,
 				loadSqlite: busyDb,
 			});
-			expect(result.harnesses?.opencode?.failed).toBe(true);
+			expect(result.harnesses?.opencode?.failed).toBe("kept");
 			expect(published(result.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness))).toEqual(["pi"]);
 		});
 
@@ -683,7 +683,7 @@ describe("exportStats with harnesses", () => {
 				home,
 				loadSqlite: busyDb,
 			});
-			expect(result.harnesses?.opencode?.failed).toBe(true);
+			expect(result.harnesses?.opencode?.failed).toBe("kept");
 			expect(published(result.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness))).toEqual(["pi"]);
 		});
 
@@ -714,7 +714,9 @@ describe("exportStats with harnesses", () => {
 				home,
 				loadSqlite: busyDb,
 			});
-			expect(second.harnesses?.opencode?.failed).toBe(true);
+			// the previous snapshot cannot be read: say so rather than claim it was kept
+			expect(second.harnesses?.opencode).toMatchObject({ failed: "lost" });
+			expect(second.harnesses?.opencode?.problems).toContain("opencode: last published contents unreadable");
 			expect(published(second.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness))).toEqual(["pi"]);
 		});
 	});

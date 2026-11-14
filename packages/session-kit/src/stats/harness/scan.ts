@@ -40,7 +40,7 @@ export interface ParsedFile {
 	calls: HarnessCallTuple[];
 	/** Opaque entry IDs, parallel to `calls`. */
 	entryIds: string[];
-	/** Freshest reading per `(limitId, window)` in this file. */
+	/** Freshest reading per `(limitId, window, account, resetAt)` in this file. */
 	quota: QuotaObservation[];
 	/** Lines that were not a JSON object, or rows with unusable counters. */
 	badLines: number;
@@ -137,7 +137,7 @@ const isQuota = (q: unknown): boolean => {
 		[r.provider, r.limitId, r.window].every((v) => typeof v === "string") &&
 		[r.usedPercent, r.resetAt, r.durationMs, r.observedAt].every(isNum) &&
 		(r.planType === null || typeof r.planType === "string") &&
-		typeof r.account === "string"
+		(r.account === "" || isHash(r.account))
 	);
 };
 

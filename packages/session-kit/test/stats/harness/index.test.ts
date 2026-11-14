@@ -189,6 +189,7 @@ describe("harness cache", () => {
 			{ ...good, quota: [{ harness: "nope" }] },
 			// a reading with no `account` is from before the discriminator and is re-parsed
 			{ ...good, quota: [{ ...quotaOk, account: undefined }] },
+			{ ...good, quota: [{ ...quotaOk, account: "not-a-hash" }] },
 			{ ...good, child: "yes" },
 			"junk",
 		];
@@ -199,7 +200,7 @@ describe("harness cache", () => {
 				harnesses: {
 					codex: {
 						...Object.fromEntries(bad.map((b, i) => [`/${i}`, b])),
-						"/ok": { ...good, quota: [quotaOk, { ...quotaOk, planType: "pro" }] },
+						"/ok": { ...good, quota: [quotaOk, { ...quotaOk, planType: "pro", account: "f".repeat(64) }] },
 					},
 					odd: "x",
 				},
