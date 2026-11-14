@@ -92,10 +92,25 @@ export interface GlobalCache {
 	problems: string[];
 }
 /** Known sources only, including failed imports with no last-good snapshot. */
+/** What one machine knows of one harness. Counts and timestamps only. */
+export interface HarnessStatus {
+	/** Local machine only: whether the harness's data root exists (absent means not installed). */
+	found?: boolean;
+	/** Newest event this machine contributed for the harness. */
+	lastEventMs?: number;
+	/** Imported machines only: when the harness was last read cleanly (see `Manifest.lastGoodAt`). */
+	lastGoodAt?: number;
+	/** Imported machines only: `lastGoodAt` lags the export by more than `STALE_AFTER_MS`. */
+	stale?: boolean;
+	/** Count-only diagnostics from the scan, e.g. `claude: ! 3 unreadable lines`. */
+	problems: string[];
+}
 export interface MachineCoverage extends Identity {
 	local: boolean;
 	exportedAt?: number;
 	incomplete: boolean;
+	/** Per harness; absent when nothing beyond a plain pi scan is known. */
+	harnesses?: Partial<Record<Harness, HarnessStatus>>;
 }
 export interface Coverage {
 	sources?: MachineCoverage[];
@@ -109,6 +124,17 @@ export interface Combined extends Loaded {
 	coverage: Coverage;
 	/** Imported quota readings, freshest per `(provider, limitId, window)`. */
 	quota: QuotaObservation[];
+	/** Diagnostics from this machine's own scans of other harnesses, count-only. */
+	harnessProblems: string[];
+}
+
+/** Which other harnesses `loadCombined` reads on this machine, and where. Default: none (pi only). */
+export interface CombinedOptions {
+	harnesses?: readonly ExternalHarness[];
+	roots?: Partial<HarnessRoots>;
+	env?: Record<string, string | undefined>;
+	home?: string;
+	loadSqlite?: LoadSqlite;
 }
 
 /** Atomic replacement, also safe against concurrent writers' temporary-file collisions. */
@@ -810,11 +836,23 @@ export async function importStats(
 	return { imported, retained: Object.keys(machines).length - imported, problems, importedAt, stale };
 }
 
-/** Shared offline loader for /stats and harness fixtures. Local usage is always freshly scanned. */
+/** Newest event per harness. */
+function lastEvents(calls: readonly { harness: Harness; ms: number }[]): Partial<Record<Harness, number>> {
+	const last: Partial<Record<Harness, number>> = {};
+	for (const c of calls) last[c.harness] = Math.max(last[c.harness] ?? 0, c.ms);
+	return last;
+}
+
+/**
+ * Shared offline loader for /stats and harness fixtures. Local pi usage is always freshly scanned; the
+ * other harnesses are scanned too when `options.harnesses` names them (read-only, no network), and every
+ * imported event keeps its harness label.
+ */
 export async function loadCombined(
 	dir = agentDir(),
 	onProgress?: (done: number, total: number) => void,
 	now = Date.now(),
+	options: CombinedOptions = {},
 ): Promise<Combined> {
 	const identity = await machineIdentity(dir);
 	const local = await loadUsage({ root: sessionsDir(dir), cache: cachePath(dir), includeAllRoots: true, onProgress });
@@ -823,12 +861,52 @@ export async function loadCombined(
 	const candidates = [...local.calls];
 	const sessionCandidates = [...sessionsOf(local)];
 	const quotaCandidates: QuotaObservation[] = [];
+	const harnessProblems: string[] = [];
+	const localStatus: Partial<Record<Harness, HarnessStatus>> = {};
+	const wanted = options.harnesses ?? [];
+	if (wanted.length > 0) {
+		localStatus.pi = { found: true, lastEventMs: lastEvents(local.calls).pi, problems: [] };
+		try {
+			const scans = await loadHarnesses({
+				harnesses: wanted,
+				roots: options.roots,
+				env: options.env,
+				home: options.home,
+				cache: harnessCachePath(dir),
+				loadSqlite: options.loadSqlite,
+				salt: (await exportState(dir)).salt,
+			});
+			for (const h of wanted) {
+				const scan = scans[h];
+				candidates.push(...scan.calls);
+				sessionCandidates.push(...scan.sessionMetadata);
+				quotaCandidates.push(...scan.quota);
+				harnessProblems.push(...scan.problems);
+				localStatus[h] = { found: scan.found, lastEventMs: lastEvents(scan.calls)[h], problems: scan.problems };
+			}
+		} catch {
+			harnessProblems.push("other harnesses not read: export state unreadable");
+		}
+	}
+	const remoteStatus = (machine: MachineSnapshot): Partial<Record<Harness, HarnessStatus>> | undefined => {
+		const { manifest } = machine;
+		const events = machine.shards.flatMap((s) => s.events.map((e) => ({ harness: e.harness ?? "pi", ms: e.ms })));
+		const last = lastEvents(events);
+		const stale = new Set(staleHarnesses(manifest).map((x) => x.harness));
+		const known = HARNESSES.filter((h) => manifest.lastGoodAt?.[h] !== undefined || last[h] !== undefined);
+		if (known.length === 0) return undefined;
+		return Object.fromEntries(
+			known.map((h) => [
+				h,
+				{ lastEventMs: last[h], lastGoodAt: manifest.lastGoodAt?.[h], stale: stale.has(h), problems: [] },
+			]),
+		);
+	};
 	for (const machine of remotes)
 		for (const s of machine.shards) {
-			// Until `/stats` labels harnesses (and prices a null cost as unpriced, not $0), only pi usage is shown.
-			for (const e of s.events.filter((e) => (e.harness ?? "pi") === "pi"))
+			for (const e of s.events)
 				candidates.push({
-					harness: "pi",
+					harness: e.harness ?? "pi",
 					session: e.sessionId,
 					entryId: e.entryId ?? undefined,
 					ms: e.ms,
@@ -860,18 +938,29 @@ export async function loadCombined(
 		...local,
 		calls,
 		quota: mergeQuota(quotaCandidates, now),
+		harnessProblems,
 		sessionMetadata: [...sessions.values()],
 		sessions: [...sessions.values()].filter((s) => !s.child && owners.has(s.path)),
 		coverage: {
 			sources: [
-				{ ...identity, local: true, incomplete: local.errors > 0 || local.badLines > 0 },
-				...remotes.map(({ manifest }) => ({
-					machineId: manifest.machineId,
-					label: manifest.label,
-					local: false,
-					exportedAt: manifest.exportedAt,
-					incomplete: global.problems.some((p) => p.endsWith(` ${manifest.machineId}`)),
-				})),
+				{
+					...identity,
+					local: true,
+					incomplete: local.errors > 0 || local.badLines > 0,
+					...(Object.keys(localStatus).length ? { harnesses: localStatus } : {}),
+				},
+				...remotes.map((machine) => {
+					const { manifest } = machine;
+					const harnesses = remoteStatus(machine);
+					return {
+						machineId: manifest.machineId,
+						label: manifest.label,
+						local: false,
+						exportedAt: manifest.exportedAt,
+						incomplete: global.problems.some((p) => p.endsWith(` ${manifest.machineId}`)),
+						...(harnesses ? { harnesses } : {}),
+					};
+				}),
 				...global.problems.flatMap((p) => {
 					const id = /^(?:Incomplete|Missing) snapshot (.+)$/.exec(p)?.[1];
 					return id && UUID.test(id) && id !== identity.machineId && !global.machines[id]

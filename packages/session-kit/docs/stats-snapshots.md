@@ -209,9 +209,16 @@ Producer updates are invisible until the producer exports AND the viewer imports
 known machines, not undiscovered installations; it is not proof that every machine has synced.
 
 `/stats` freshly scans local sessions and combines them with this cache without network access.
-Until the harness display lands (#367, PR 3) `loadCombined` returns only pi events from imported
-machines, so `/stats` never mixes unlabelled Claude, Codex or OpenCode usage into pi totals or
-shows a null cost as $0. Their events stay in the imported snapshot, with their quota.
+`loadCombined` keeps every imported event's `harness` label (v1 shards are `pi`). Passing
+`{ harnesses: [...] }` also scans this machine's Claude, Codex and OpenCode data (the `/stats`
+command does; the library default reads none, and an explicit `agentDir` without `homeDir` is an
+isolated root that reads none either). Local scans are deduplicated against imported events by the
+same fingerprint, their quota merges with imported quota (`Combined.quota`, freshest per window and
+account), and their count-only diagnostics land in `Combined.harnessProblems`. A null cost stays
+`null`: `/stats` shows `unpriced`, and a total over mixed calls reads `$X + N unpriced`.
+`Coverage.sources[].harnesses` holds per-harness status: locally `found` (false is "not
+installed"), `lastEventMs` and `problems`; for imported machines `lastGoodAt`, `lastEventMs` and
+`stale` (see `STALE_AFTER_MS`).
 Its header labels cached coverage, **viewer last import**, local-only/never-imported state and
 incomplete coverage. Tab/Shift-Tab cycles Overview, Models and **Machines**. Machines lists each
 known installation's label plus full opaque UUID (default labels may repeat), fresh local scan
@@ -233,7 +240,7 @@ collection. Keep custom labels non-sensitive: they are exported. No schema or sy
 Future calls are ignored in display totals, not removed from durable history. Statistics
 are not subscription quota measurements or router inputs.
 
-Harness readers (#367; exported by the CLI above, not yet shown in `/stats`):
+Harness readers (#367; exported by the CLI above and shown in `/stats`):
 
 `src/stats/harness/` reads Claude Code, Codex CLI and OpenCode usage into the same `Call` model as
 pi (`Call.harness`: `pi | claude | codex | opencode`). Roots: `CLAUDE_CONFIG_DIR` or `~/.claude`;

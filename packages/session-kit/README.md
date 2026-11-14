@@ -138,20 +138,36 @@ non-triggering display message. The overlay is TUI-only and works in Plan mode.
 `/stats` is Claude Code's `/stats` pane over fresh local sessions plus imported machine snapshots,
 split by provider and model. It NEVER performs network I/O. The header shows `viewer last import`,
 not producer freshness; without imports it says `viewer never imported`. Tab/Shift-Tab reaches
-**Machines**, with each known label/opaque UUID, local scan status, and remote exported-at UTC
-instant plus age at opening. Old exports stay old after a fresh import; future clocks are flagged.
+**Machines**, with each known label/opaque UUID, local scan status, per-harness status (found or
+not installed, last event, unreadable-line counts locally; last clean read and `STALE` for imported
+machines) and remote exported-at UTC instant plus age at opening. Old exports stay old after a fresh import; future clocks are flagged.
 Unknown/rejected sources and retained last-good snapshots are explicit. This lists known sources,
 not undiscovered machines. Invalid or missing snapshots show `incomplete coverage`.
 Print/JSON output includes the same provenance. Details: [here](docs/stats-snapshots.md).
 
-Pinned header: tabs and the coverage note, then the date ranges and the model filter, then a rule.
+Pinned header: tabs and the coverage note, then the date ranges, the harness and the model filter, then a rule.
 Overview: an activity heatmap (one column per week) with the headline numbers (favorite model,
 total tokens, sessions, longest session, active days, streaks, cache tokens, notional cost) beside
 it from about 105 columns and under it below that, then the token chart. Models: the chart, then every
 model grouped under its provider. From about 100 columns that is a table (tokens, share, in, out, cache
 read, cache write, notional cost; a subtotal line per provider), else three-line cards. Tab switches
-tabs, `r` cycles All / 7d / 30d / 5h / 24h (default All), `m`/`M` cycle the filter (All, each provider,
-each `provider/model`), `j/k` or arrows scroll, `q` or Escape closes.
+tabs, `r` cycles All / 7d / 30d / 5h / 24h (default All), `h`/`H` cycle the harness (All, then each of
+pi, claude, codex, opencode that has data; hidden when only one does), `m`/`M` cycle the filter (All,
+each provider, each `provider/model`; it composes with the harness and falls back to All where that
+harness lacks the model), `j/k` or arrows scroll, `q` or Escape closes.
+
+- Harnesses: `/stats` reads pi sessions plus local Claude Code, Codex CLI and OpenCode usage
+  (read-only, no network, nothing opened beyond usage fields; see `docs/stats-snapshots.md`) and
+  imported machines' events of every harness, each labelled. Under All the Models table gains a
+  Harness column (the harnesses behind each row; cards say `· pi,claude`) and, under the All model
+  filter, the chart plots one line per harness. A harness that records no cost (Claude, Codex) is
+  `unpriced`, never `$0`: a partial total reads `$1.50 + 3 unpriced`.
+- Quota: Overview shows one row per quota window with a gauge, percent used, `resets in ...` and
+  `observed 12m ago via codex`, dimmed once older than 15 minutes. A window that has already reset
+  shows `reset 5m ago, no newer reading` and no percent (unknown, not the old value). Readings come
+  from local Codex rollouts and imported snapshots only, are account-wide (no harness, model or range
+  filter applies), and are never fetched. Claude Code persists none locally, so its row says
+  `no local reading`.
 
 - The chart is an asciichart-style line plot (`╭╮╰╯`), one line per provider under All, else the top
   three models. Where lines overlap they merge into junctions (`┴┬├┤┼`) so every line stays
@@ -197,7 +213,9 @@ each `provider/model`), `j/k` or arrows scroll, `q` or Escape closes.
   their file is next listed; a deleted file keeps its old count. A corrupt record is dropped and
   rebuilt. All-NUL lines (crash padding) are skipped; other lines that are not JSON objects show
   as `! N unreadable lines`.
-- Print mode prints a per-model table and coverage; JSON emits a display message. Works in Plan mode.
+- Print mode prints a per-model table (with a harness column and a `by harness:` split when several
+  harnesses have data), the `quota:` rows and coverage; JSON emits the same as a display message.
+  Works in Plan mode.
 - After `make install` at the monorepo root, `npm run build --workspace @nredd/pi-session-kit`
   reproduces `dist/pi-stats-export.mjs` inside this package. Copy this standalone Node 22+ artifact
   to another machine: neither Pi nor the loaded session-kit extension is needed at runtime.

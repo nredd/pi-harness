@@ -298,8 +298,9 @@ describe("mixed-version machines", () => {
 		expect(global.problems).toEqual([]);
 		const { calls, coverage } = await loadCombined(viewer);
 		expect(coverage.incomplete).toBe(false);
-		// the pi row seen by both exporters collapses; the codex row is not shown until `/stats` labels harnesses
+		// the pi row seen by both exporters collapses; the codex row with the same entry ID is its own event
 		expect(calls.map((c) => [c.harness, c.entryId === opaqueId("shared"), c.input]).sort()).toEqual([
+			["codex", true, 10],
 			["pi", false, 3],
 			["pi", true, 10],
 		]);
@@ -316,21 +317,23 @@ describe("mixed-version machines", () => {
 		);
 		expect(await importStats(viewer, repo)).toMatchObject({ imported: 1, problems: [] });
 		const { calls } = await loadCombined(viewer);
-		expect(calls).toEqual([]);
-		// the data is there, just not shown yet
+		expect(calls.map((c) => [c.harness, c.cost])).toEqual([["claude", null]]);
 		const events = Object.values((await readGlobal(viewer)).machines).flatMap((m) =>
 			m.shards.flatMap((shard) => shard.events),
 		);
 		expect(events.map((e) => [e.harness, e.cost])).toEqual([["claude", null]]);
 	});
 
-	it("shows only pi usage and sessions from remote machines until harness display lands", async () => {
+	it("labels every imported harness and keeps a null cost null", async () => {
 		publish(OLD_MACHINE, 2, [event("pi", "p", { cost: 1 }), event("claude", "c"), event("opencode", "o", { cost: 3 })]);
 		await importStats(viewer, repo);
 		const combined = await loadCombined(viewer);
-		expect(combined.calls.map((c) => [c.harness, c.cost])).toEqual([["pi", 1]]);
+		expect(combined.calls.map((c) => [c.harness, c.cost]).sort()).toEqual([
+			["claude", null],
+			["opencode", 3],
+			["pi", 1],
+		]);
 		expect(combined.sessions).toHaveLength(1);
-		expect(combined.calls.reduce((n, c) => n + (c.cost ?? 0), 0)).toBe(1);
 	});
 
 	it("keeps a v1 global cache readable and rewrites it as v2", async () => {
@@ -428,9 +431,15 @@ describe("exportStats with harnesses", () => {
 
 		// and a second agent dir imports all of it
 		expect(await importStats(viewer, repo)).toMatchObject({ imported: 1, problems: [] });
-		// only pi is shown for now; the other three are in the imported snapshot, labelled
+		// every harness is shown, labelled; null cost stays null
 		const combined = await loadCombined(viewer);
-		expect(combined.calls.map((c) => c.harness)).toEqual(["pi"]);
+		expect(combined.calls.map((c) => c.harness).sort()).toEqual(["claude", "codex", "opencode", "pi"]);
+		expect(
+			combined.calls
+				.filter((c) => c.cost === null)
+				.map((c) => c.harness)
+				.sort(),
+		).toEqual(["claude", "codex"]);
 		const imported = Object.values((await readGlobal(viewer)).machines).flatMap((m) =>
 			m.shards.flatMap((shard) => shard.events),
 		);
