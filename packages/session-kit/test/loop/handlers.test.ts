@@ -3,10 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { register as registerGoal } from "../../src/goal/index.ts";
 import { GOAL_ENTRY } from "../../src/goal/state.ts";
 import { register } from "../../src/loop/index.ts";
-import { CONFIG, type Fake, fakePi, setPlanMode } from "../goal/fake-pi.ts";
+import { CONFIG, createGoalHost, type Fake, setPlanMode } from "../support/goal-host.ts";
 
-async function boot(options: Parameters<typeof fakePi>[0] = {}, withGoal = false): Promise<Fake> {
-	const fake = fakePi(options);
+async function boot(options: Parameters<typeof createGoalHost>[0] = {}, withGoal = false): Promise<Fake> {
+	const fake = createGoalHost(options);
 	register(fake.pi, CONFIG);
 	if (withGoal) registerGoal(fake.pi, CONFIG);
 	await fake.emit("session_start", { reason: "startup" });
@@ -142,7 +142,7 @@ describe("suspension", () => {
 		const fake = await boot({}, true);
 		await loopCmd(fake, "30s ping");
 		await fake.commands.get("goal")?.("ship it", fake.ctx);
-		fake.sent.length = 0;
+		fake.clearSent();
 		await vi.advanceTimersByTimeAsync(90_000);
 		expect(fake.sent).toHaveLength(0);
 		await fake.commands.get("goal")?.("pause", fake.ctx);

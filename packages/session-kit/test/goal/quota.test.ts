@@ -4,10 +4,10 @@ import { register as registerGoal, WAKE_MS } from "../../src/goal/index.ts";
 import { GOAL_ENTRY, GOAL_TOOL } from "../../src/goal/state.ts";
 import { register as registerLoop } from "../../src/loop/index.ts";
 import { coordination } from "../../src/shared.ts";
-import { CONFIG, type Fake, fakePi } from "./fake-pi.ts";
+import { CONFIG, createGoalHost, type Fake } from "../support/goal-host.ts";
 
 async function boot(goalFirst = true, child = false): Promise<Fake> {
-	const fake = fakePi(child ? { sessionName: "general-purpose#1a2b3c4d" } : {});
+	const fake = createGoalHost(child ? { sessionName: "general-purpose#1a2b3c4d" } : {});
 	for (const register of goalFirst ? [registerGoal, registerLoop] : [registerLoop, registerGoal])
 		register(fake.pi, CONFIG);
 	await fake.emit("session_start");
@@ -36,7 +36,7 @@ describe("quota admission coordination", () => {
 			await command(fake, "loop", "30s ping");
 			parked(fake);
 			expect(goal(fake)).toMatchObject({ status: "paused", reason: "quota parked" });
-			expect(fake.state.activeTools).not.toContain(GOAL_TOOL);
+			expect(fake.activeTools).not.toContain(GOAL_TOOL);
 			expect(coordination(fake.pi).goalActive).toBe(false);
 			expect(await fake.settle()).toBeUndefined();
 			await vi.advanceTimersByTimeAsync(90_000);
