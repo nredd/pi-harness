@@ -1042,7 +1042,7 @@ function validateQuota(q, month) {
 function validateShard(value, manifest, month) {
   const v2 = manifest.version >= 2;
   exact(value, v2 ? [...SHARD_KEYS, "quota"] : SHARD_KEYS);
-  if (value.version !== manifest.version || value.machineId !== manifest.machineId || value.month !== month || !Array.isArray(value.events) || !Array.isArray(value.sessions))
+  if (value.version !== manifest.version || value.machineId !== manifest.machineId || value.month !== month || !Array.isArray(value.events) || !Array.isArray(value.sessions) || v2 && !Array.isArray(value.quota))
     throw new Error("Invalid shard header");
   const seenEvents = /* @__PURE__ */ new Set();
   for (const e of value.events) {
@@ -1095,7 +1095,7 @@ function validateSnapshot(snapshot) {
   for (const s of snapshot.shards)
     for (const e of s.events) if (!metadata.has(e.sessionId)) throw new Error("Missing session metadata");
 }
-var fatalProblem = (p) => p.endsWith(": cache not written") || p.includes(" unreadable files");
+var fatalProblem = (p) => p.endsWith(": cache not written") || p.includes(" unreadable files") || p.startsWith("opencode: database ");
 async function exportStats(dir, output, root = sessionsDir(dir), options = {}) {
   const wanted = new Set(options.harnesses ?? ["pi"]);
   const identity = await machineIdentity(dir);

@@ -305,7 +305,8 @@ export function validateShard(value: unknown, manifest: Manifest, month: string)
 		value.machineId !== manifest.machineId ||
 		value.month !== month ||
 		!Array.isArray(value.events) ||
-		!Array.isArray(value.sessions)
+		!Array.isArray(value.sessions) ||
+		(v2 && !Array.isArray(value.quota))
 	)
 		throw new Error("Invalid shard header");
 	const seenEvents = new Set<string>();
@@ -396,8 +397,13 @@ export interface ExportOptions {
 /** Per requested non-pi harness: whether its data root exists, plus count-only diagnostics. */
 export type HarnessReport = Partial<Record<ExternalHarness, { found: boolean; problems: string[] }>>;
 
-/** A cache that did not persist, or files that could not be read, mean the history may be incomplete. */
-const fatalProblem = (p: string): boolean => p.endsWith(": cache not written") || p.includes(" unreadable files");
+/**
+ * Diagnostics that mean the history may be incomplete, so publishing would replace a good snapshot with
+ * a worse one: a cache that did not persist, transcript files that could not be read, or an OpenCode
+ * database that was busy or unreadable (it has no cache to fall back on).
+ */
+const fatalProblem = (p: string): boolean =>
+	p.endsWith(": cache not written") || p.includes(" unreadable files") || p.startsWith("opencode: database ");
 
 /** Write only this machine's immutable shards, publishing its manifest last. */
 export async function exportStats(

@@ -140,6 +140,9 @@ describe("snapshot v2 schema", () => {
 		const good = event("claude", "a");
 		const bad: unknown[] = [
 			{ ...shard([good]), quota: undefined },
+			{ ...shard([good]), quota: "" },
+			{ ...shard([good]), quota: null },
+			{ ...shard([good]), quota: {} },
 			{ ...shard([{ ...good, harness: "gemini" as Harness }]) },
 			{ ...shard([{ ...good, harness: undefined }]) },
 			{ ...shard([{ ...good, cost: -1 }]) },
@@ -399,6 +402,15 @@ describe("exportStats with harnesses", () => {
 		mkdirSync(agent, { recursive: true });
 		writeFileSync(blocker, "a file where the cache directory belongs");
 		await expect(exportStats(agent, repo, undefined, { harnesses: ["claude"], roots, home })).rejects.toThrow();
+		expect(() => statSync(join(repo, "machines"))).toThrow();
+	});
+
+	it("fails closed when the OpenCode database is unreadable or busy, which has no cache to fall back on", async () => {
+		const roots = seedHarnessHome(home);
+		const loadSqlite = () => Promise.reject(new Error("no sqlite"));
+		await expect(
+			exportStats(agent, repo, undefined, { harnesses: ["opencode"], roots, home, loadSqlite }),
+		).rejects.toThrow("Incomplete opencode scan: opencode: database unreadable");
 		expect(() => statSync(join(repo, "machines"))).toThrow();
 	});
 

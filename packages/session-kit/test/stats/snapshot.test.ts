@@ -6,6 +6,7 @@ import {
 	readdirSync,
 	readFileSync,
 	rmSync,
+	statSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -412,7 +413,13 @@ describe("actual portable bundled CLI", () => {
 		// Only HOME is set: the roots come from the harnesses' standard paths.
 		const env = { HOME: fakeHome, USERPROFILE: fakeHome } as NodeJS.ProcessEnv;
 		for (const name of ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "XDG_DATA_HOME", "OPENCODE_DB"]) env[name] = undefined;
-		const before = readdirSync(fakeHome, { recursive: true }).length;
+		const tree = (): [string, string, number][] =>
+			readdirSync(fakeHome, { recursive: true, withFileTypes: true })
+				.filter((e) => e.isFile())
+				.map((e) => join(e.parentPath, e.name))
+				.sort()
+				.map((path) => [path, readFileSync(path, "latin1"), statSync(path).mtimeMs]);
+		const before = tree();
 		const exported = run(
 			artifact,
 			["export", "--agent-dir", a, "--output", repo, "--harness", "pi,claude,codex,opencode"],
@@ -426,7 +433,8 @@ describe("actual portable bundled CLI", () => {
 			codex: { found: true, problems: [] },
 			opencode: { found: true, problems: [] },
 		});
-		expect(readdirSync(fakeHome, { recursive: true })).toHaveLength(before);
+		// the artifact only reads: no new file, and every source keeps its bytes and mtime
+		expect(tree()).toEqual(before);
 		const imported = run(artifact, ["import", "--agent-dir", b, "--input", repo]);
 		expect(imported.status, imported.stderr).toBe(0);
 		const cached = readFileSync(join(b, "pi-session-kit", "stats-global.json"), "utf8");

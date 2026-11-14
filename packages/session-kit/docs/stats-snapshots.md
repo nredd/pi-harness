@@ -37,7 +37,8 @@ CLI results:
   `"harnesses": { "<name>": { "found": bool, "problems": [..] } }` for each requested non-pi harness.
   A missing harness is `found: false`, not an error. `problems` are counts only (e.g.
   `claude: ! 2 unreadable lines`, Codex turns skipped for lack of per-turn records); they do not
-  fail the export. Unreadable harness files and a harness cache that cannot be written do, like pi.
+  fail the export. Unreadable harness files, a harness cache that cannot be written and an OpenCode database that
+  is busy or unreadable do, like pi: a good snapshot is never replaced by a partial one.
 - Import: `{ "imported": N, "retained": N, "problems": [], "importedAt": MS }` on stdout.
 - Exactly one JSON object is emitted. Diagnostics go to stderr. Invalid commands, malformed local
   scans, unwritable caches and publication failures exit nonzero. Partial/corrupt imports emit
