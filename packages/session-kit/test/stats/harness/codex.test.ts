@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readCodex } from "../../../src/stats/harness/codex.ts";
-import { entryHash, sessionHash } from "../../../src/stats/harness/common.ts";
+import { accountHash, entryHash, sessionHash } from "../../../src/stats/harness/common.ts";
 import type { HarnessCache } from "../../../src/stats/harness/scan.ts";
 import {
 	CANARY,
@@ -16,6 +16,7 @@ import {
 	writeLines,
 } from "./fixtures.ts";
 
+const SALT = "0123456789abcdef0123456789abcdef";
 let root: string;
 const rollout = (name: string, day = "2026/10/02") => join(root, "sessions", day, `rollout-${name}.jsonl`);
 beforeEach(() => {
@@ -28,7 +29,7 @@ const fiveHour = { used_percent: 40, window_minutes: 300, resets_at: 1_789_000_0
 
 describe("readCodex", () => {
 	it("reports a missing root as not installed, silently", async () => {
-		expect(await readCodex(join(root, "nope"), {})).toMatchObject({ found: false, problems: [] });
+		expect(await readCodex(join(root, "nope"), {}, SALT)).toMatchObject({ found: false, problems: [] });
 	});
 
 	it("joins usage to the turn's model and splits the cached subset out of input", async () => {
@@ -47,7 +48,7 @@ describe("readCodex", () => {
 			codexContext("turn-2", "gpt-6.1-mini"),
 			codexRecord({ turn: "turn-1", response: "resp-1" }),
 		]);
-		const scan = await readCodex(root, {});
+		const scan = await readCodex(root, {}, SALT);
 		expect(scan.problems).toEqual([]);
 		expect(scan.calls).toHaveLength(2);
 		expect(scan.calls[0]).toMatchObject({
@@ -79,7 +80,7 @@ describe("readCodex", () => {
 			codexContext(),
 			codexRecord({ response: "resp-9" }),
 		]);
-		const scan = await readCodex(root, {});
+		const scan = await readCodex(root, {}, SALT);
 		expect(scan.calls[0]?.provider).toBe("openai");
 		expect(scan.sessionMetadata).toHaveLength(1);
 		expect(scan.sessionMetadata[0]?.child).toBe(true);
@@ -93,7 +94,7 @@ describe("readCodex", () => {
 			codexContext(),
 			codexRecord(),
 		]);
-		const scan = await readCodex(root, {});
+		const scan = await readCodex(root, {}, SALT);
 		expect(scan.calls[0]).toMatchObject({ provider: "azure", session: sessionHash("codex", "thread-a") });
 		expect(scan.sessionMetadata[0]?.child).toBe(true);
 	});
@@ -102,7 +103,7 @@ describe("readCodex", () => {
 		const body = [codexMeta(), codexContext(), codexRecord()];
 		writeLines(rollout("a"), body);
 		writeLines(join(root, "archived_sessions", "rollout-a.jsonl"), body);
-		const scan = await readCodex(root, {});
+		const scan = await readCodex(root, {}, SALT);
 		expect(scan.calls).toHaveLength(1);
 	});
 
@@ -116,7 +117,7 @@ describe("readCodex", () => {
 			codexTokenCount(limits(null)),
 			{ type: "event_msg", timestamp: "2026-10-02T10:00:05.000Z", payload: { type: "token_count", info: null } },
 		]);
-		const scan = await readCodex(root, {});
+		const scan = await readCodex(root, {}, SALT);
 		expect(scan.calls).toHaveLength(1);
 		expect(scan.problems).toEqual(["codex: 1 turns skipped, no per-turn usage records"]);
 	});
@@ -124,7 +125,7 @@ describe("readCodex", () => {
 	it("skips rollouts without per-turn records, with a diagnostic and no approximation", async () => {
 		writeLines(rollout("old"), [codexMeta(), codexContext(), codexTokenCount(limits(weekly))]);
 		writeLines(rollout("new"), [codexMeta("thread-3"), codexContext(), codexRecord(), codexTokenCount(null)]);
-		const scan = await readCodex(root, {});
+		const scan = await readCodex(root, {}, SALT);
 		expect(scan.calls).toHaveLength(1);
 		expect(scan.problems).toEqual(["codex: 1 turns skipped, no per-turn usage records"]);
 		// quota from the skipped rollout is still a valid reading
@@ -149,14 +150,14 @@ describe("readCodex", () => {
 			codexRecord({ turn: "turn-1", response: "zero", usage: { input_tokens: 0, output_tokens: 0 } }),
 			codexRecord({ turn: "turn-1", response: "drift", usage: { total: 5 } }),
 		]);
-		const scan = await readCodex(root, {});
+		const scan = await readCodex(root, {}, SALT);
 		expect(scan.calls.map((c) => c.input)).toEqual([5]);
 		expect(scan.problems).toEqual(["codex: ! 8 unreadable lines"]);
 	});
 
 	it("drops usage that has no session_meta", async () => {
 		writeLines(rollout("orphan"), [{ type: "session_meta", payload: {} }, codexContext(), codexRecord()]);
-		const scan = await readCodex(root, {});
+		const scan = await readCodex(root, {}, SALT);
 		expect(scan.calls).toEqual([]);
 		expect(scan.problems).toEqual(["codex: ! 1 unreadable lines"]);
 	});
@@ -164,7 +165,7 @@ describe("readCodex", () => {
 	describe("quota", () => {
 		it("reads a weekly-only plan: primary is 10080 minutes, secondary null", async () => {
 			writeLines(rollout("a"), [codexMeta(), codexTokenCount(limits(weekly))]);
-			expect((await readCodex(root, {})).quota).toEqual([
+			expect((await readCodex(root, {}, SALT)).quota).toEqual([
 				{
 					harness: "codex",
 					provider: "openai-codex",
@@ -175,8 +176,37 @@ describe("readCodex", () => {
 					durationMs: 604_800_000,
 					observedAt: Date.parse("2026-10-02T10:00:03Z"),
 					planType: "pro",
+					account: accountHash(SALT, "codex", `${CANARY}-account`),
 				},
 			]);
+		});
+
+		it("keeps two accounts' readings apart, keyed by a salted hash and never the ID", async () => {
+			writeLines(rollout("a"), [
+				codexMeta("t1", { creator_account_id: "acct-1" }),
+				codexTokenCount(limits({ ...fiveHour, used_percent: 20 }), "2026-10-02T10:00:00Z"),
+			]);
+			writeLines(rollout("b", "2026/10/03"), [
+				codexMeta("t2", { creator_account_id: "acct-2" }),
+				codexTokenCount(limits({ ...fiveHour, used_percent: 60 }), "2026-10-03T10:00:00Z"),
+			]);
+			// no account ID in the rollout: a reading of its own, with no discriminator
+			writeLines(rollout("c", "2026/10/04"), [
+				codexMeta("t3", { creator_account_id: undefined }),
+				codexTokenCount(limits({ ...fiveHour, used_percent: 10 }), "2026-10-04T10:00:00Z"),
+			]);
+			const cache: HarnessCache = {};
+			const quota = (await readCodex(root, cache, SALT)).quota;
+			expect(quota.map((q) => [q.usedPercent, q.account]).sort()).toEqual(
+				[
+					[20, accountHash(SALT, "codex", "acct-1")],
+					[60, accountHash(SALT, "codex", "acct-2")],
+					[10, ""],
+				].sort(),
+			);
+			expect(accountHash(SALT, "codex", "acct-1")).toMatch(/^[a-f0-9]{64}$/);
+			expect(accountHash(SALT, "codex", "acct-1")).not.toBe(accountHash("other-salt", "codex", "acct-1"));
+			expect(JSON.stringify([quota, cache])).not.toContain("acct-");
 		});
 
 		it("reads both windows, names odd spans in seconds, clamps, and prefers the freshest reading", async () => {
@@ -210,7 +240,7 @@ describe("readCodex", () => {
 				codexTokenCount(null),
 				codexTokenCount(undefined, "garbage"),
 			]);
-			const quota = (await readCodex(root, {})).quota;
+			const quota = (await readCodex(root, {}, SALT)).quota;
 			const by = Object.fromEntries(quota.map((q) => [q.window, q]));
 			expect(Object.keys(by).sort()).toEqual(["3600s", "5h", "7d"]);
 			expect(by["5h"]).toMatchObject({ usedPercent: 30, limitId: "codex", planType: null });
@@ -230,7 +260,7 @@ describe("readCodex", () => {
 				codexMeta("t3"),
 				codexTokenCount(limits({ ...fiveHour, used_percent: 90 }), "2026-10-01T10:00:00Z"),
 			]);
-			const quota = (await readCodex(root, {})).quota;
+			const quota = (await readCodex(root, {}, SALT)).quota;
 			expect(quota.map((q) => q.usedPercent)).toEqual([60]);
 		});
 	});
@@ -246,7 +276,7 @@ describe("readCodex", () => {
 		writeLines(join(root, "history.jsonl"), [{ text: `${CANARY} prompt` }]);
 		writeLines(join(root, "auth.json"), [{ access_token: CANARY }]);
 		const cache: HarnessCache = {};
-		const scan = await readCodex(root, cache);
+		const scan = await readCodex(root, cache, SALT);
 		expect(scan.calls).toHaveLength(1);
 		for (const text of [JSON.stringify(scan), JSON.stringify(Object.values(cache.codex ?? {}))]) {
 			expect(text).not.toContain(CANARY);

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mergeQuota, type QuotaObservation } from "../../src/stats/harness/common.ts";
+import { isExpired, mergeQuota, type QuotaObservation } from "../../src/stats/harness/common.ts";
 import { type Harness, opaqueId } from "../../src/stats/load.ts";
 import {
 	eventId,
@@ -10,6 +10,7 @@ import {
 	importStats,
 	loadCombined,
 	type Manifest,
+	machineIdentity,
 	makeSnapshot,
 	readGlobal,
 	type Shard,
@@ -50,6 +51,7 @@ const quota = (extra: Partial<QuotaObservation> = {}): QuotaObservation => ({
 	durationMs: 604_800_000,
 	observedAt: OCT,
 	planType: "pro",
+	account: "",
 	...extra,
 });
 
@@ -185,28 +187,63 @@ describe("snapshot v2 schema", () => {
 });
 
 describe("quota merge", () => {
+	const NOW = at("2026-10-05");
+	const live = (extra: Partial<QuotaObservation> = {}) => quota({ resetAt: NOW + 1000, ...extra });
+
 	it("keeps the freshest reading per (provider, limitId, window), never summing", () => {
-		const old = quota({ usedPercent: 10, observedAt: 1 });
-		const fresh = quota({ usedPercent: 90, observedAt: 2, harness: "claude" });
-		const other = quota({ window: "5h" });
-		expect(mergeQuota([fresh, old, other])).toEqual([fresh, other]);
-		expect(mergeQuota([old, fresh])).toEqual([fresh]);
-		expect(mergeQuota([])).toEqual([]);
+		const old = live({ usedPercent: 10, observedAt: 1 });
+		const fresh = live({ usedPercent: 90, observedAt: 2, harness: "claude" });
+		const other = live({ window: "5h" });
+		expect(mergeQuota([fresh, old, other], NOW)).toEqual([fresh, other]);
+		expect(mergeQuota([old, fresh], NOW)).toEqual([fresh]);
+		expect(mergeQuota([], NOW)).toEqual([]);
 	});
 
 	it("breaks observedAt ties independent of input order", () => {
-		const a = quota({ harness: "claude", usedPercent: 1 });
-		const b = quota({ harness: "codex", usedPercent: 2 });
-		expect(mergeQuota([a, b])).toEqual(mergeQuota([b, a]));
-		expect(mergeQuota([a, b, a])).toHaveLength(1);
+		const a = live({ harness: "claude", usedPercent: 1 });
+		const b = live({ harness: "codex", usedPercent: 2 });
+		expect(mergeQuota([a, b], NOW)).toEqual(mergeQuota([b, a], NOW));
+		expect(mergeQuota([a, b, a], NOW)).toHaveLength(1);
+	});
+
+	it("does not merge two accounts, and merges an account with itself", () => {
+		const one = live({ account: opaqueId("one"), usedPercent: 10, observedAt: 1 });
+		const two = live({ account: opaqueId("two"), usedPercent: 80, observedAt: 2 });
+		const anon = live({ usedPercent: 5, observedAt: 3 });
+		const merged = mergeQuota([one, two, anon], NOW);
+		expect(merged).toHaveLength(3);
+		expect(mergeQuota([one, { ...one, usedPercent: 20, observedAt: 9 }], NOW).map((q) => q.usedPercent)).toEqual([20]);
+	});
+
+	it("treats a window that has reset as expired: a live reading wins however old, expired stays if alone", () => {
+		const liveOld = live({ usedPercent: 40, observedAt: 1 });
+		const expiredNew = quota({ usedPercent: 99, observedAt: 50, resetAt: NOW });
+		expect(isExpired(expiredNew, NOW)).toBe(true);
+		expect(isExpired(liveOld, NOW)).toBe(false);
+		expect(mergeQuota([expiredNew, liveOld], NOW)).toEqual([liveOld]);
+		expect(mergeQuota([liveOld, expiredNew], NOW)).toEqual([liveOld]);
+		// nothing live: the freshest expired reading stays, for the viewer to show as reset
+		expect(mergeQuota([expiredNew, { ...expiredNew, observedAt: 2 }], NOW)).toEqual([expiredNew]);
+		// the same readings are live earlier
+		expect(mergeQuota([expiredNew, liveOld], NOW - 10_000)).toEqual([expiredNew]);
 	});
 
 	it("is applied across imported machines, with the observer kept", async () => {
+		const later = OCT + 60_000;
 		publish(OLD_MACHINE, 2, [], [quota({ usedPercent: 10, observedAt: OCT })]);
-		publish(NEW_MACHINE, 2, [], [quota({ usedPercent: 70, observedAt: OCT + 60_000, harness: "claude" })]);
+		publish(NEW_MACHINE, 2, [], [quota({ usedPercent: 70, observedAt: later, harness: "claude" })]);
 		await importStats(viewer, repo);
-		const combined = await loadCombined(viewer);
-		expect(combined.quota).toEqual([quota({ usedPercent: 70, observedAt: OCT + 60_000, harness: "claude" })]);
+		const combined = await loadCombined(viewer, undefined, OCT);
+		expect(combined.quota).toEqual([quota({ usedPercent: 70, observedAt: later, harness: "claude" })]);
+	});
+
+	it("keeps two accounts' imported readings apart", async () => {
+		const [a, b] = [opaqueId("a"), opaqueId("b")];
+		publish(OLD_MACHINE, 2, [], [quota({ usedPercent: 10, account: a })]);
+		publish(NEW_MACHINE, 2, [], [quota({ usedPercent: 70, account: b, observedAt: OCT + 1 })]);
+		await importStats(viewer, repo);
+		const combined = await loadCombined(viewer, undefined, OCT);
+		expect(combined.quota.map((q) => q.account).sort()).toEqual([a, b].sort());
 	});
 
 	it("is stored in the month the reading was observed", () => {
@@ -236,9 +273,8 @@ describe("mixed-version machines", () => {
 		expect(global.problems).toEqual([]);
 		const { calls, coverage } = await loadCombined(viewer);
 		expect(coverage.incomplete).toBe(false);
-		// the pi row seen by both exporters collapses; the codex row with the same native id does not
+		// the pi row seen by both exporters collapses; the codex row is not shown until `/stats` labels harnesses
 		expect(calls.map((c) => [c.harness, c.entryId === opaqueId("shared"), c.input]).sort()).toEqual([
-			["codex", true, 10],
 			["pi", false, 3],
 			["pi", true, 10],
 		]);
@@ -255,8 +291,21 @@ describe("mixed-version machines", () => {
 		);
 		expect(await importStats(viewer, repo)).toMatchObject({ imported: 1, problems: [] });
 		const { calls } = await loadCombined(viewer);
-		expect(calls.map((c) => c.harness)).toEqual(["claude"]);
-		expect(calls[0]?.cost).toBeNull();
+		expect(calls).toEqual([]);
+		// the data is there, just not shown yet
+		const events = Object.values((await readGlobal(viewer)).machines).flatMap((m) =>
+			m.shards.flatMap((shard) => shard.events),
+		);
+		expect(events.map((e) => [e.harness, e.cost])).toEqual([["claude", null]]);
+	});
+
+	it("shows only pi usage and sessions from remote machines until harness display lands", async () => {
+		publish(OLD_MACHINE, 2, [event("pi", "p", { cost: 1 }), event("claude", "c"), event("opencode", "o", { cost: 3 })]);
+		await importStats(viewer, repo);
+		const combined = await loadCombined(viewer);
+		expect(combined.calls.map((c) => [c.harness, c.cost])).toEqual([["pi", 1]]);
+		expect(combined.sessions).toHaveLength(1);
+		expect(combined.calls.reduce((n, c) => n + (c.cost ?? 0), 0)).toBe(1);
 	});
 
 	it("keeps a v1 global cache readable and rewrites it as v2", async () => {
@@ -339,6 +388,7 @@ describe("exportStats with harnesses", () => {
 				window: "7d",
 				usedPercent: 12.5,
 				resetAt: CODEX_RESET_S * 1000,
+				account: expect.stringMatching(/^[a-f0-9]{64}$/),
 			}),
 		]);
 		// counts only: no canary and no path from any source reaches the output
@@ -353,10 +403,14 @@ describe("exportStats with harnesses", () => {
 
 		// and a second agent dir imports all of it
 		expect(await importStats(viewer, repo)).toMatchObject({ imported: 1, problems: [] });
+		// only pi is shown for now; the other three are in the imported snapshot, labelled
 		const combined = await loadCombined(viewer);
-		expect(combined.calls).toHaveLength(4);
-		// one session per harness plus pi's; a child never marks its parent
-		expect(new Set(combined.calls.map((c) => c.session)).size).toBe(4);
+		expect(combined.calls.map((c) => c.harness)).toEqual(["pi"]);
+		const imported = Object.values((await readGlobal(viewer)).machines).flatMap((m) =>
+			m.shards.flatMap((shard) => shard.events),
+		);
+		expect(imported.map((e) => e.harness).sort()).toEqual(["claude", "codex", "opencode", "pi"]);
+		expect(new Set(imported.map((e) => e.sessionId)).size).toBe(4);
 	});
 
 	it("is pi only by default and never opens the other harnesses", async () => {
@@ -405,26 +459,263 @@ describe("exportStats with harnesses", () => {
 		expect(() => statSync(join(repo, "machines"))).toThrow();
 	});
 
-	it("fails closed when the OpenCode database is unreadable or busy, which has no cache to fall back on", async () => {
+	it("reports an unreadable OpenCode database as failed; with nothing published before there is nothing to carry", async () => {
 		const roots = seedHarnessHome(home);
 		const loadSqlite = () => Promise.reject(new Error("no sqlite"));
-		await expect(
-			exportStats(agent, repo, undefined, { harnesses: ["opencode"], roots, home, loadSqlite }),
-		).rejects.toThrow("Incomplete opencode scan: opencode: database unreadable");
-		expect(() => statSync(join(repo, "machines"))).toThrow();
+		const result = await exportStats(agent, repo, undefined, { harnesses: ["opencode"], roots, home, loadSqlite });
+		expect(result.harnesses?.opencode).toMatchObject({ found: true, failed: true });
+		expect(result.harnesses?.opencode?.problems[0]).toContain("opencode: database unreadable");
+		expect(published(result.snapshotDir)).toEqual([]);
 	});
 
-	it("fails closed on unreadable harness files, without publishing a manifest", async () => {
+	it("reports unreadable harness files as failed, and keeps the readable history of the others", async () => {
 		const roots = seedHarnessHome(home);
 		const { chmodSync } = await import("node:fs");
 		const path = join(roots.claude, "projects", `-Users-${CANARY}-work`, "sess-A.jsonl");
 		chmodSync(path, 0o000);
 		try {
-			const result = exportStats(agent, repo, undefined, { harnesses: ["claude"], roots, home });
-			if (process.getuid?.() === 0) await result;
-			else await expect(result).rejects.toThrow("Incomplete claude scan: claude: 1 unreadable files");
+			const result = await exportStats(agent, repo, undefined, { harnesses: ["claude", "codex"], roots, home });
+			if (process.getuid?.() === 0) expect(result.harnesses?.claude?.failed).toBeUndefined();
+			else
+				expect(result.harnesses?.claude).toEqual({
+					found: true,
+					problems: ["claude: 1 unreadable files"],
+					failed: true,
+				});
+			expect(published(result.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness))).toContain("codex");
 		} finally {
 			chmodSync(path, 0o600);
 		}
+	});
+
+	describe("harness set", () => {
+		const all: Harness[] = ["pi", "claude", "codex", "opencode"];
+		const statePath = () => join(agent, "pi-session-kit", "export-state.json");
+
+		it("persists the published set and a private salt in installation state", async () => {
+			seedPi();
+			const roots = seedHarnessHome(home);
+			await exportStats(agent, repo, undefined, { harnesses: ["pi", "codex"], roots, home });
+			const state = JSON.parse(readFileSync(statePath(), "utf8"));
+			expect(state).toEqual({ version: 1, salt: expect.stringMatching(/^[a-f0-9]{32}$/), harnesses: ["pi", "codex"] });
+			// the salt never reaches the published snapshot
+			const out = Object.values(files(repo))
+				.map(([bytes]) => bytes)
+				.join("\n");
+			expect(out).not.toContain(state.salt);
+			// and survives later exports
+			await exportStats(agent, repo, undefined, { harnesses: ["pi", "codex"], roots, home });
+			expect(JSON.parse(readFileSync(statePath(), "utf8")).salt).toBe(state.salt);
+		});
+
+		it("refuses a narrower set than last published unless replacing is explicit", async () => {
+			seedPi();
+			const roots = seedHarnessHome(home);
+			const first = await exportStats(agent, repo, undefined, { harnesses: all, roots, home });
+			const manifest = readFileSync(join(first.snapshotDir, "manifest.json"), "utf8");
+			for (const harnesses of [
+				undefined,
+				["pi"],
+				["pi", "claude", "codex"],
+				["claude", "codex", "opencode"],
+			] as const) {
+				await expect(exportStats(agent, repo, undefined, { harnesses, roots, home })).rejects.toThrow(
+					/narrower harness set.*--replace-harnesses/,
+				);
+			}
+			// refused before anything is read or written
+			expect(readFileSync(join(first.snapshotDir, "manifest.json"), "utf8")).toBe(manifest);
+			expect(JSON.parse(readFileSync(statePath(), "utf8")).harnesses).toEqual(all);
+
+			// widening or repeating is fine, and so is an explicit narrowing
+			await exportStats(agent, repo, undefined, { harnesses: all, roots, home });
+			const narrowed = await exportStats(agent, repo, undefined, {
+				harnesses: ["pi", "claude"],
+				replaceHarnesses: true,
+				roots,
+				home,
+			});
+			expect(
+				published(narrowed.snapshotDir)
+					.flatMap((sh) => sh.events.map((e) => e.harness))
+					.sort(),
+			).toEqual(["claude", "pi"]);
+			expect(JSON.parse(readFileSync(statePath(), "utf8")).harnesses).toEqual(["pi", "claude"]);
+			await expect(exportStats(agent, repo, undefined, { roots, home })).rejects.toThrow(/missing: claude/);
+		});
+
+		it("treats a manifest with no recorded set as a pi-only export, and an empty output as nothing published", async () => {
+			seedPi();
+			const roots = seedHarnessHome(home);
+			// no state, nothing published: any set is fine, including one without pi
+			await exportStats(agent, join(dir, "elsewhere"), undefined, { harnesses: ["codex"], roots, home });
+			expect(JSON.parse(readFileSync(statePath(), "utf8")).harnesses).toEqual(["codex"]);
+			// state without a recorded set (as created before any export finished) and a pi-era manifest
+			const salt = JSON.parse(readFileSync(statePath(), "utf8")).salt;
+			writeFileSync(statePath(), JSON.stringify({ version: 1, salt, harnesses: null }));
+			await exportStats(agent, repo, undefined, { harnesses: ["pi"], roots, home });
+			writeFileSync(statePath(), JSON.stringify({ version: 1, salt, harnesses: null }));
+			await expect(exportStats(agent, repo, undefined, { harnesses: ["claude"], roots, home })).rejects.toThrow(
+				/missing: pi/,
+			);
+		});
+
+		it("rejects corrupt installation state", async () => {
+			seedPi();
+			await exportStats(agent, repo, undefined, { harnesses: ["pi"], home });
+			const salt = "a".repeat(32);
+			for (const bad of [
+				"{",
+				JSON.stringify({ version: 1, salt: "x", harnesses: ["pi"] }),
+				JSON.stringify({ version: 2, salt, harnesses: ["pi"] }),
+				JSON.stringify({ version: 1, salt, harnesses: "pi" }),
+				JSON.stringify({ version: 1, salt, harnesses: ["pi", "pi"] }),
+				JSON.stringify({ version: 1, salt, harnesses: ["vim"] }),
+				JSON.stringify({ version: 1, salt, harnesses: ["pi"], extra: 1 }),
+			]) {
+				writeFileSync(statePath(), bad);
+				await expect(exportStats(agent, repo, undefined, { home })).rejects.toThrow();
+			}
+		});
+
+		it("does not record a set when the export fails", async () => {
+			seedPi();
+			const roots = seedHarnessHome(home);
+			await exportStats(agent, repo, undefined, { harnesses: ["pi"], roots, home });
+			writeFileSync(join(agent, "sessions", "p", "bad.jsonl"), "{broken\n");
+			await expect(exportStats(agent, repo, undefined, { harnesses: all, roots, home })).rejects.toThrow(
+				"Incomplete local scan",
+			);
+			expect(JSON.parse(readFileSync(statePath(), "utf8")).harnesses).toEqual(["pi"]);
+		});
+	});
+
+	describe("a failing harness", () => {
+		const busy = Object.assign(new Error("database is locked"), { errcode: 5 });
+		const busyDb = () => Promise.reject(busy);
+
+		it("keeps what it last published and reports the failure, without aborting the pi export", async () => {
+			seedPi();
+			const roots = seedHarnessHome(home);
+			const harnesses: Harness[] = ["pi", "claude", "codex", "opencode"];
+			const first = await exportStats(agent, repo, undefined, { harnesses, roots, home });
+			const kinds = (dir: string) =>
+				published(dir)
+					.flatMap((sh) => sh.events.map((e) => `${e.harness}:${e.entryId}`))
+					.sort();
+			const before = kinds(first.snapshotDir);
+			expect(before).toHaveLength(4);
+			const quotaBefore = published(first.snapshotDir).flatMap((sh) => sh.quota ?? []);
+
+			// a new pi call must still be published while opencode is busy
+			sessionFile(join(agent, "sessions", "p", "s2.jsonl"), {
+				startMs: OCT,
+				lines: [assistantLine({ ms: OCT + 1000, provider: "pi-provider", model: "pi-model", input: 6 })],
+			});
+			const second = await exportStats(agent, repo, undefined, { harnesses, roots, home, loadSqlite: busyDb });
+			expect(second.harnesses?.opencode).toEqual({
+				found: true,
+				problems: ["opencode: database busy, skipped"],
+				failed: true,
+			});
+			expect(second.harnesses?.claude).toEqual({ found: true, problems: [] });
+			const after = kinds(second.snapshotDir);
+			expect(after.filter((k) => !k.startsWith("pi:"))).toEqual(before.filter((k) => !k.startsWith("pi:")));
+			expect(after.filter((k) => k.startsWith("pi:"))).toHaveLength(2);
+			const carried = published(second.snapshotDir)
+				.flatMap((sh) => sh.events)
+				.find((e) => e.harness === "opencode");
+			expect(carried).toMatchObject({ provider: "anthropic", cost: 0.25, output: 25 });
+			expect(published(second.snapshotDir).flatMap((sh) => sh.quota ?? [])).toEqual(quotaBefore);
+			// every carried event still has its session metadata (a snapshot without it fails validation)
+			const sessions = new Set(published(second.snapshotDir).flatMap((sh) => sh.sessions.map((x) => x.id)));
+			expect(carried && sessions.has(carried.sessionId)).toBe(true);
+			// the set is still recorded, and a recovered harness replaces the carried copy
+			expect(JSON.parse(readFileSync(join(agent, "pi-session-kit", "export-state.json"), "utf8")).harnesses).toEqual(
+				harnesses,
+			);
+			const third = await exportStats(agent, repo, undefined, { harnesses, roots, home });
+			expect(third.harnesses?.opencode).toEqual({ found: true, problems: [] });
+		});
+
+		it("carries a cache-write failure's previous contents too, and publishes nothing for a harness never published", async () => {
+			seedPi();
+			const roots = seedHarnessHome(home);
+			const first = await exportStats(agent, repo, undefined, { harnesses: ["pi", "opencode"], roots, home });
+			const second = await exportStats(agent, repo, undefined, {
+				harnesses: ["pi", "opencode"],
+				roots,
+				home,
+				loadSqlite: busyDb,
+			});
+			expect(
+				published(second.snapshotDir)
+					.flatMap((sh) => sh.events.map((e) => e.harness))
+					.sort(),
+			).toEqual(
+				published(first.snapshotDir)
+					.flatMap((sh) => sh.events.map((e) => e.harness))
+					.sort(),
+			);
+			// a machine whose first opted-in export fails has nothing to carry
+			const fresh = join(dir, "fresh-agent");
+			sessionFile(join(fresh, "sessions", "p", "s.jsonl"), {
+				startMs: OCT,
+				lines: [assistantLine({ ms: OCT, provider: "p", model: "m", input: 1 })],
+			});
+			const result = await exportStats(fresh, join(dir, "fresh-repo"), undefined, {
+				harnesses: ["pi", "opencode"],
+				roots,
+				home,
+				loadSqlite: busyDb,
+			});
+			expect(result.harnesses?.opencode?.failed).toBe(true);
+			expect(published(result.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness))).toEqual(["pi"]);
+		});
+
+		it("reads a pi-era (v1) previous snapshot as holding no other harness", async () => {
+			seedPi();
+			const roots = seedHarnessHome(home);
+			publish((await machineIdentity(agent)).machineId, 1, [v1Event("legacy")]);
+			const result = await exportStats(agent, repo, undefined, {
+				harnesses: ["pi", "opencode"],
+				roots,
+				home,
+				loadSqlite: busyDb,
+			});
+			expect(result.harnesses?.opencode?.failed).toBe(true);
+			expect(published(result.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness))).toEqual(["pi"]);
+		});
+
+		it("carries an event that has no entry identity", async () => {
+			seedPi();
+			const roots = seedHarnessHome(home);
+			publish((await machineIdentity(agent)).machineId, 2, [event("opencode", null)]);
+			const result = await exportStats(agent, repo, undefined, {
+				harnesses: ["pi", "opencode"],
+				roots,
+				home,
+				loadSqlite: busyDb,
+			});
+			const carried = published(result.snapshotDir).flatMap((sh) => sh.events.filter((e) => e.harness === "opencode"));
+			expect(carried).toHaveLength(1);
+			expect(carried[0]?.entryId).toBeNull();
+		});
+
+		it("ignores an unreadable previous snapshot", async () => {
+			seedPi();
+			const roots = seedHarnessHome(home);
+			const first = await exportStats(agent, repo, undefined, { harnesses: ["pi", "opencode"], roots, home });
+			const manifest = JSON.parse(readFileSync(join(first.snapshotDir, "manifest.json"), "utf8")) as Manifest;
+			for (const ref of manifest.shards) writeFileSync(join(first.snapshotDir, ref.file), "tampered");
+			const second = await exportStats(agent, repo, undefined, {
+				harnesses: ["pi", "opencode"],
+				roots,
+				home,
+				loadSqlite: busyDb,
+			});
+			expect(second.harnesses?.opencode?.failed).toBe(true);
+			expect(published(second.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness))).toEqual(["pi"]);
+		});
 	});
 });

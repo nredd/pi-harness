@@ -19,8 +19,8 @@ import { type HarnessCache, isParsedFile, type ParsedFile } from "./scan.ts";
 export type ExternalHarness = "claude" | "codex" | "opencode";
 export const EXTERNAL_HARNESSES: readonly ExternalHarness[] = ["claude", "codex", "opencode"];
 
-/** v2: Claude and Codex calls carry a `null` cost instead of 0. Older caches re-parse. */
-const CACHE_VERSION = 2;
+/** v2: Claude and Codex calls carry a `null` cost instead of 0. v3: quota readings carry an `account`. */
+const CACHE_VERSION = 3;
 
 export const harnessCachePath = (dir = agentDir()): string => join(dir, "pi-session-kit", "stats-harness-cache.json");
 
@@ -82,6 +82,8 @@ export interface HarnessLoadOptions {
 	/** Cache file; default under the agent dir. */
 	cache?: string;
 	loadSqlite?: LoadSqlite;
+	/** The installation's secret salt for account discriminators. Never exported. */
+	salt: string;
 }
 
 /** One scan per requested harness. A failing harness never hides the others. */
@@ -93,7 +95,7 @@ export async function loadHarnesses(options: HarnessLoadOptions): Promise<Record
 	const before = JSON.stringify(cache);
 	const scans = {
 		claude: wanted.has("claude") ? await readClaude(roots.claude, cache) : emptyScan(false),
-		codex: wanted.has("codex") ? await readCodex(roots.codex, cache) : emptyScan(false),
+		codex: wanted.has("codex") ? await readCodex(roots.codex, cache, options.salt) : emptyScan(false),
 		opencode: wanted.has("opencode")
 			? await readOpenCode(roots.opencode, options.loadSqlite ?? loadNodeSqlite)
 			: emptyScan(false),

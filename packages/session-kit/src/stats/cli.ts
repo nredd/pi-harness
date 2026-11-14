@@ -8,7 +8,7 @@ import { exportStats, importStats } from "./snapshot.ts";
 
 const USAGE =
 	"usage: export --agent-dir DIR --output OUT [--sessions-dir DIR] [--harness pi,claude,codex,opencode] " +
-	"[--claude-dir DIR] [--codex-dir DIR] [--opencode-db FILE] | import --agent-dir DIR --input REPO";
+	"[--claude-dir DIR] [--codex-dir DIR] [--opencode-db FILE] [--replace-harnesses] | import --agent-dir DIR --input REPO";
 const FLAGS = [
 	"--agent-dir",
 	"--output",
@@ -19,8 +19,10 @@ const FLAGS = [
 	"--codex-dir",
 	"--opencode-db",
 ];
+/** Flags without a value. */
+const SWITCHES = ["--replace-harnesses"];
 /** Flags that only an export accepts. */
-const EXPORT_ONLY = ["--sessions-dir", "--harness", "--claude-dir", "--codex-dir", "--opencode-db"];
+const EXPORT_ONLY = [...SWITCHES, "--sessions-dir", "--harness", "--claude-dir", "--codex-dir", "--opencode-db"];
 
 /** `pi,claude` -> harness names; anything unknown or repeated is a usage error. */
 function harnessList(value: string): Harness[] {
@@ -34,10 +36,15 @@ function harnessList(value: string): Harness[] {
 export async function main(): Promise<void> {
 	const [command, ...args] = process.argv.slice(2);
 	const options = new Map<string, string>();
-	for (let i = 0; i < args.length; i += 2) {
+	for (let i = 0; i < args.length; i++) {
 		const flag = args[i];
-		const value = args[i + 1];
-		if (!flag || !value || value.startsWith("--") || options.has(flag) || !FLAGS.includes(flag)) throw new Error(USAGE);
+		if (!flag || options.has(flag)) throw new Error(USAGE);
+		if (SWITCHES.includes(flag)) {
+			options.set(flag, "");
+			continue;
+		}
+		const value = args[++i];
+		if (!value || value.startsWith("--") || !FLAGS.includes(flag)) throw new Error(USAGE);
 		options.set(flag, value);
 	}
 	const dir = resolve(options.get("--agent-dir") ?? agentDir());
@@ -51,9 +58,12 @@ export async function main(): Promise<void> {
 		const harnesses = options.get("--harness");
 		const result = await exportStats(dir, resolve(output), path("--sessions-dir"), {
 			harnesses: harnesses === undefined ? undefined : harnessList(harnesses),
+			replaceHarnesses: options.has("--replace-harnesses"),
 			roots: { claude: path("--claude-dir"), codex: path("--codex-dir"), opencode: path("--opencode-db") },
 		});
 		console.log(JSON.stringify(result));
+		for (const [name, status] of Object.entries(result.harnesses ?? {}))
+			if (status.failed) console.error(`${name}: scan incomplete, kept what was last published`);
 	} else if (
 		command === "import" &&
 		input !== undefined &&

@@ -12,6 +12,7 @@ import {
 import type { ParsedFile } from "../../../src/stats/harness/scan.ts";
 import { CANARY, claudeRow, codexContext, codexMeta, codexRecord, writeLines } from "./fixtures.ts";
 
+const SALT = "0123456789abcdef0123456789abcdef";
 let home: string;
 beforeEach(() => {
 	home = mkdtempSync(join(tmpdir(), "psk-harness-"));
@@ -74,7 +75,7 @@ describe("loadHarnesses", () => {
 		const { cache, env } = fakeHome();
 		const before = snapshot(join(home, ".claude"));
 		const beforeCodex = snapshot(join(home, ".codex"));
-		const scans = await loadHarnesses({ home, env, cache });
+		const scans = await loadHarnesses({ home, env, cache, salt: SALT });
 		expect(scans.claude.calls).toHaveLength(1);
 		expect(scans.codex.calls).toHaveLength(1);
 		expect(scans.opencode).toMatchObject({ found: false, problems: [] });
@@ -88,10 +89,10 @@ describe("loadHarnesses", () => {
 
 	it("reuses the persisted cache and rewrites nothing when nothing changed", async () => {
 		const { cache, env } = fakeHome();
-		await loadHarnesses({ home, env, cache });
+		await loadHarnesses({ home, env, cache, salt: SALT });
 		// An atomic rewrite would replace the inode.
 		const written = statSync(cache).ino;
-		const again = await loadHarnesses({ home, env, cache });
+		const again = await loadHarnesses({ home, env, cache, salt: SALT });
 		expect(again.claude.calls).toHaveLength(1);
 		expect(statSync(cache).ino).toBe(written);
 	});
@@ -99,13 +100,14 @@ describe("loadHarnesses", () => {
 	it("defaults the cache to the agent dir", async () => {
 		const { env } = fakeHome();
 		vi.stubEnv("PI_CODING_AGENT_DIR", join(home, "agent"));
-		await loadHarnesses({ home, env, harnesses: ["claude", "opencode"] });
+		await loadHarnesses({ home, env, harnesses: ["claude", "opencode"], salt: SALT });
 		expect(statSync(harnessCachePath()).isFile()).toBe(true);
 	});
 
 	it("honors the harness subset and per-harness roots", async () => {
 		const { cache } = fakeHome();
 		const scans = await loadHarnesses({
+			salt: SALT,
 			harnesses: ["codex"],
 			roots: { codex: join(home, ".codex"), claude: join(home, ".claude") },
 			cache,
@@ -118,6 +120,7 @@ describe("loadHarnesses", () => {
 		const db = join(home, "opencode.db");
 		writeFileSync(db, "x");
 		const scans = await loadHarnesses({
+			salt: SALT,
 			harnesses: ["opencode"],
 			roots: { opencode: db },
 			cache: join(home, "c.json"),
@@ -131,6 +134,7 @@ describe("loadHarnesses", () => {
 		const blocker = join(home, "blocker");
 		writeFileSync(blocker, "file");
 		const scans = await loadHarnesses({
+			salt: SALT,
 			home,
 			env,
 			cache: join(blocker, "sub", "cache.json"),
@@ -163,17 +167,6 @@ describe("harness cache", () => {
 		await writeHarnessCache(path, { claude: { "/x": good } });
 		expect(await readHarnessCache(path)).toEqual({ claude: { "/x": good } });
 
-		const bad = [
-			{ ...good, models: [["p"]] },
-			{ ...good, calls: [[1, 5, 1, 1, 1, 1, 0]] },
-			{ ...good, calls: [[1, 0, 1, 1, 1, 1, "free"]] },
-			{ ...good, calls: [[1, 0, 1, 1, null, 1, 0]] },
-			{ ...good, entryIds: ["short"] },
-			{ ...good, entryIds: [] },
-			{ ...good, quota: [{ harness: "nope" }] },
-			{ ...good, child: "yes" },
-			"junk",
-		];
 		const quotaOk = {
 			harness: "codex",
 			provider: "p",
@@ -184,11 +177,25 @@ describe("harness cache", () => {
 			durationMs: 3,
 			observedAt: 4,
 			planType: null,
+			account: "",
 		};
+		const bad = [
+			{ ...good, models: [["p"]] },
+			{ ...good, calls: [[1, 5, 1, 1, 1, 1, 0]] },
+			{ ...good, calls: [[1, 0, 1, 1, 1, 1, "free"]] },
+			{ ...good, calls: [[1, 0, 1, 1, null, 1, 0]] },
+			{ ...good, entryIds: ["short"] },
+			{ ...good, entryIds: [] },
+			{ ...good, quota: [{ harness: "nope" }] },
+			// a reading with no `account` is from before the discriminator and is re-parsed
+			{ ...good, quota: [{ ...quotaOk, account: undefined }] },
+			{ ...good, child: "yes" },
+			"junk",
+		];
 		writeFileSync(
 			path,
 			JSON.stringify({
-				version: 2,
+				version: 3,
 				harnesses: {
 					codex: {
 						...Object.fromEntries(bad.map((b, i) => [`/${i}`, b])),
@@ -202,9 +209,11 @@ describe("harness cache", () => {
 		expect(Object.keys(cache.codex ?? {})).toEqual(["/ok"]);
 		expect(cache.odd).toEqual({});
 
-		// v1 caches recorded Claude and Codex cost as 0: they are dropped and re-parsed, never trusted.
-		writeFileSync(path, JSON.stringify({ version: 1, harnesses: { codex: { "/ok": good } } }));
-		expect(await readHarnessCache(path)).toEqual({});
+		// v1 caches recorded cost 0 and v2 quota had no account: dropped and re-parsed, never trusted.
+		for (const version of [1, 2, 99]) {
+			writeFileSync(path, JSON.stringify({ version, harnesses: { codex: { "/ok": good } } }));
+			expect(await readHarnessCache(path)).toEqual({});
+		}
 		writeFileSync(path, JSON.stringify({ version: 99, harnesses: {} }));
 		expect(await readHarnessCache(path)).toEqual({});
 		writeFileSync(path, "{not json");

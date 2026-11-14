@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -93,13 +93,62 @@ describe("stats CLI", () => {
 		expect(exported.harnesses.claude).toEqual({ found: true, problems: [] });
 	});
 
+	it("refuses a narrower harness set unless --replace-harnesses, and reports a failed harness on stderr", async () => {
+		const roots = seedHarnessHome(join(dir, "home"));
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		const wide = ["--agent-dir", source, "--output", output, "--claude-dir", roots.claude, "--harness", "pi,claude"];
+		process.argv = ["node", "pi-stats-export", "export", ...wide];
+		await main();
+		process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output, "--harness", "pi"];
+		await expect(main()).rejects.toThrow("--replace-harnesses");
+		process.argv = [
+			"node",
+			"pi-stats-export",
+			"export",
+			"--agent-dir",
+			source,
+			"--output",
+			output,
+			"--replace-harnesses",
+		];
+		await main();
+		expect(log).toHaveBeenCalledTimes(2);
+		expect(JSON.parse(log.mock.calls[1]?.[0] as string).harnesses).toBeUndefined();
+		// a harness that cannot be read is reported without failing the run
+		const opencode = join(dir, "home", "bad.db");
+		writeFileSync(opencode, "not a database");
+		process.argv = [
+			...["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output],
+			...["--harness", "pi,opencode", "--opencode-db", opencode, "--replace-harnesses"],
+		];
+		await main();
+		expect(JSON.parse(log.mock.calls[2]?.[0] as string).harnesses.opencode.failed).toBe(true);
+		expect(error).toHaveBeenCalledWith("opencode: scan incomplete, kept what was last published");
+		expect(process.exitCode).toBe(exitCode);
+		for (const argv of [
+			["--replace-harnesses", "--replace-harnesses"],
+			["--replace-harnesses", "x"],
+		]) {
+			process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output, ...argv];
+			await expect(main()).rejects.toThrow("usage: export");
+		}
+	});
+
 	it("rejects unknown or repeated harnesses and export-only flags on import", async () => {
 		const base = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output];
 		for (const harness of ["gemini", "pi,pi", "pi,", ""]) {
 			process.argv = [...base, "--harness", harness];
 			await expect(main()).rejects.toThrow("usage: export");
 		}
-		for (const flag of ["--harness", "--claude-dir", "--codex-dir", "--opencode-db", "--sessions-dir"]) {
+		for (const flag of [
+			"--harness",
+			"--claude-dir",
+			"--codex-dir",
+			"--opencode-db",
+			"--sessions-dir",
+			"--replace-harnesses",
+		]) {
 			process.argv = ["node", "pi-stats-export", "import", "--agent-dir", viewer, "--input", output, flag, "pi"];
 			await expect(main()).rejects.toThrow("usage: export");
 		}

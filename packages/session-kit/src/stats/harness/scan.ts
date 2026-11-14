@@ -136,7 +136,8 @@ const isQuota = (q: unknown): boolean => {
 		typeof r.harness === "string" &&
 		[r.provider, r.limitId, r.window].every((v) => typeof v === "string") &&
 		[r.usedPercent, r.resetAt, r.durationMs, r.observedAt].every(isNum) &&
-		(r.planType === null || typeof r.planType === "string")
+		(r.planType === null || typeof r.planType === "string") &&
+		typeof r.account === "string"
 	);
 };
 
@@ -207,8 +208,10 @@ export async function scanJsonl(options: ScanOptions): Promise<HarnessScan> {
 				const parser = options.parser(path, s.size, s.mtimeMs);
 				await feedFile(path, parser);
 				files[path] = parser.finish();
-			} catch {
-				// A failed stat or parse keeps the last-good record, but the history may be incomplete.
+			} catch (error) {
+				// A file pruned between listing and reading is gone, not damaged: its cached record stays.
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+				// Any other failed stat or parse keeps the last-good record, but the history may be incomplete.
 				errors++;
 			}
 		}
@@ -280,7 +283,7 @@ export function flattenHarness(harness: Harness, files: [string, ParsedFile][]) 
 		calls,
 		sessionMetadata: [...metadata.values()],
 		sessions: [...metadata.values()].filter((s) => !s.child && owners.has(s.path)),
-		quota: mergeQuota(quota),
+		quota: mergeQuota(quota, Date.now()),
 		badLines,
 		unsupportedTurns,
 	};

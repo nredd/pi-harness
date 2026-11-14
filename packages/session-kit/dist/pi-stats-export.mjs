@@ -355,21 +355,23 @@ function flatten(files) {
 }
 
 // src/stats/snapshot.ts
-import { randomUUID as randomUUID3 } from "node:crypto";
+import { randomBytes, randomUUID as randomUUID3 } from "node:crypto";
 import { link, lstat, mkdir as mkdir3, readdir as readdir2, readFile as readFile3, rename as rename3, unlink, writeFile as writeFile3 } from "node:fs/promises";
 import { dirname as dirname3, join as join7 } from "node:path";
 
 // src/stats/harness/common.ts
-function mergeQuota(readings) {
+var isExpired = (q, now) => q.resetAt <= now;
+function mergeQuota(readings, now) {
   const best = /* @__PURE__ */ new Map();
+  const beats = (a, b) => isExpired(a, now) !== isExpired(b, now) ? isExpired(b, now) : a.observedAt !== b.observedAt ? a.observedAt > b.observedAt : JSON.stringify(a) > JSON.stringify(b);
   for (const q of readings) {
-    const key = JSON.stringify([q.provider, q.limitId, q.window]);
+    const key = JSON.stringify([q.provider, q.limitId, q.window, q.account]);
     const prev = best.get(key);
-    if (!prev || q.observedAt > prev.observedAt || q.observedAt === prev.observedAt && JSON.stringify(q) > JSON.stringify(prev))
-      best.set(key, q);
+    if (!prev || beats(q, prev)) best.set(key, q);
   }
   return [...best.values()];
 }
+var accountHash = (salt, harness, native) => opaqueId(`${salt}\0${harness}-account\0${native}`);
 var emptyScan = (found, problems = []) => ({
   found,
   calls: [],
@@ -470,7 +472,7 @@ var RowParser = class {
 var isHash = (v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);
 var isQuota = (q) => {
   const r = asRecordOf(q);
-  return typeof r.harness === "string" && [r.provider, r.limitId, r.window].every((v) => typeof v === "string") && [r.usedPercent, r.resetAt, r.durationMs, r.observedAt].every(isNum) && (r.planType === null || typeof r.planType === "string");
+  return typeof r.harness === "string" && [r.provider, r.limitId, r.window].every((v) => typeof v === "string") && [r.usedPercent, r.resetAt, r.durationMs, r.observedAt].every(isNum) && (r.planType === null || typeof r.planType === "string") && typeof r.account === "string";
 };
 function isParsedFile(value) {
   const f = asRecordOf(value);
@@ -504,7 +506,8 @@ async function scanJsonl(options) {
         const parser = options.parser(path, s.size, s.mtimeMs);
         await feedFile(path, parser);
         files[path] = parser.finish();
-      } catch {
+      } catch (error) {
+        if (error.code === "ENOENT") continue;
         errors++;
       }
     }
@@ -567,7 +570,7 @@ function flattenHarness(harness, files) {
     calls,
     sessionMetadata: [...metadata.values()],
     sessions: [...metadata.values()].filter((s) => !s.child && owners.has(s.path)),
-    quota: mergeQuota(quota),
+    quota: mergeQuota(quota, Date.now()),
     badLines,
     unsupportedTurns
   };
@@ -629,7 +632,13 @@ import { join as join5 } from "node:path";
 var QUOTA_PROVIDER = "openai-codex";
 var FALLBACK_PROVIDER = "openai";
 var CodexParser = class extends RowParser {
+  constructor(size, mtimeMs, salt) {
+    super(size, mtimeMs);
+    this.salt = salt;
+  }
   provider = "";
+  account = "";
+  salt;
   turnModels = /* @__PURE__ */ new Map();
   pending = [];
   quota = /* @__PURE__ */ new Map();
@@ -647,6 +656,8 @@ var CodexParser = class extends RowParser {
         this.out.session = sessionHash("codex", id);
         this.out.child = str(payload.parent_thread_id) !== "" || str(payload.agent_path) !== "";
         this.provider = str(payload.model_provider);
+        const account = str(payload.creator_account_id);
+        this.account = account ? accountHash(this.salt, "codex", account) : "";
       }
     } else if (row.type === "turn_context") {
       this.currentTurn = str(payload.turn_id);
@@ -690,7 +701,7 @@ var CodexParser = class extends RowParser {
       const [used, minutes, resets] = [w?.used_percent, w?.window_minutes, w?.resets_at];
       if (![used, minutes, resets].every((n) => typeof n === "number" && Number.isFinite(n)) || ts <= 0) continue;
       const window = windowName(minutes * 60);
-      const key = JSON.stringify([limitId, window]);
+      const key = JSON.stringify([limitId, window, this.account]);
       const prev = this.quota.get(key);
       if (prev && prev.observedAt > ts) continue;
       this.quota.set(key, {
@@ -702,7 +713,8 @@ var CodexParser = class extends RowParser {
         resetAt: resets * 1e3,
         durationMs: minutes * 6e4,
         observedAt: ts,
-        planType: str(limits?.plan_type) || null
+        planType: str(limits?.plan_type) || null,
+        account: this.account
       });
     }
   }
@@ -724,13 +736,13 @@ var CodexParser = class extends RowParser {
     return this.out;
   }
 };
-async function readCodex(root, cache) {
+async function readCodex(root, cache, salt) {
   return scanJsonl({
     harness: "codex",
     root,
     dirs: [join5(root, "sessions"), join5(root, "archived_sessions")],
     cache,
-    parser: (_path, size, mtimeMs) => new CodexParser(size, mtimeMs)
+    parser: (_path, size, mtimeMs) => new CodexParser(size, mtimeMs, salt)
   });
 }
 
@@ -836,7 +848,7 @@ async function readOpenCode(dbPath, load = loadNodeSqlite) {
 
 // src/stats/harness/index.ts
 var EXTERNAL_HARNESSES = ["claude", "codex", "opencode"];
-var CACHE_VERSION2 = 2;
+var CACHE_VERSION2 = 3;
 var harnessCachePath = (dir = agentDir()) => join6(dir, "pi-session-kit", "stats-harness-cache.json");
 function harnessRoots(env = process.env, home = homedir2(), overrides = {}) {
   const data = env.XDG_DATA_HOME || join6(home, ".local", "share");
@@ -876,7 +888,7 @@ async function loadHarnesses(options) {
   const before = JSON.stringify(cache);
   const scans = {
     claude: wanted.has("claude") ? await readClaude(roots.claude, cache) : emptyScan(false),
-    codex: wanted.has("codex") ? await readCodex(roots.codex, cache) : emptyScan(false),
+    codex: wanted.has("codex") ? await readCodex(roots.codex, cache, options.salt) : emptyScan(false),
     opencode: wanted.has("opencode") ? await readOpenCode(roots.opencode, options.loadSqlite ?? loadNodeSqlite) : emptyScan(false)
   };
   if (JSON.stringify(cache) !== before) {
@@ -924,17 +936,15 @@ function validateIdentity(value) {
     throw new Error("Invalid installation identity");
   return value;
 }
-async function machineIdentity(dir = agentDir()) {
-  const path = join7(dir, "pi-session-kit", "machine.json");
+async function installationFile(path, fresh, validate) {
   try {
-    return validateIdentity(await jsonFile(path));
+    return validate(await jsonFile(path));
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
   await mkdir3(dirname3(path), { recursive: true });
-  const identity = { machineId: randomUUID3(), label: "Pi machine" };
   const tmp = `${path}.${randomUUID3()}.tmp`;
-  await writeFile3(tmp, JSON.stringify(identity), { flag: "wx", mode: 384 });
+  await writeFile3(tmp, JSON.stringify(fresh()), { flag: "wx", mode: 384 });
   try {
     await link(tmp, path);
   } catch (error) {
@@ -942,7 +952,29 @@ async function machineIdentity(dir = agentDir()) {
   } finally {
     await unlink(tmp);
   }
-  return validateIdentity(await jsonFile(path));
+  return validate(await jsonFile(path));
+}
+async function machineIdentity(dir = agentDir()) {
+  return installationFile(
+    join7(dir, "pi-session-kit", "machine.json"),
+    () => ({ machineId: randomUUID3(), label: "Pi machine" }),
+    validateIdentity
+  );
+}
+var stateFile = (dir) => join7(dir, "pi-session-kit", "export-state.json");
+function validateState(value) {
+  exact(value, ["version", "salt", "harnesses"]);
+  const harnesses = value.harnesses;
+  if (value.version !== 1 || typeof value.salt !== "string" || !/^[a-f0-9]{32}$/.test(value.salt) || !(harnesses === null || Array.isArray(harnesses) && harnesses.every((h) => HARNESSES.includes(h)) && new Set(harnesses).size === harnesses.length))
+    throw new Error("Invalid export state");
+  return { salt: value.salt, harnesses };
+}
+async function exportState(dir) {
+  return installationFile(
+    stateFile(dir),
+    () => ({ version: 1, salt: randomBytes(16).toString("hex"), harnesses: null }),
+    validateState
+  );
 }
 function eventId(event, version = SNAPSHOT_VERSION) {
   const lead = version >= 2 ? [event.harness ?? "pi"] : [];
@@ -979,7 +1011,7 @@ function makeSnapshot(loaded, identity, exportedAt = Date.now(), quota = []) {
     };
     shard(monthOf(c.ms)).events.push({ id: eventId(e), ...e });
   }
-  for (const q of mergeQuota(quota))
+  for (const q of mergeQuota(quota, exportedAt))
     shard(monthOf(q.observedAt)).quota?.push({
       harness: q.harness,
       provider: q.provider,
@@ -989,7 +1021,8 @@ function makeSnapshot(loaded, identity, exportedAt = Date.now(), quota = []) {
       resetAt: q.resetAt,
       durationMs: q.durationMs,
       observedAt: q.observedAt,
-      planType: q.planType
+      planType: q.planType,
+      account: q.account
     });
   for (const s of sessionsOf(loaded))
     shard(monthOf(s.startMs)).sessions.push({
@@ -1023,7 +1056,7 @@ function validateManifest(value) {
   return value;
 }
 var SHARD_KEYS = ["version", "machineId", "month", "events", "sessions"];
-var quotaKey = (q) => JSON.stringify([q.provider, q.limitId, q.window]);
+var quotaKey = (q) => JSON.stringify([q.provider, q.limitId, q.window, q.account]);
 function validateQuota(q, month) {
   exact(q, [
     "harness",
@@ -1034,9 +1067,10 @@ function validateQuota(q, month) {
     "resetAt",
     "durationMs",
     "observedAt",
-    "planType"
+    "planType",
+    "account"
   ]);
-  if (!HARNESSES.includes(q.harness) || ![q.provider, q.limitId, q.window].every(name) || typeof q.usedPercent !== "number" || !Number.isFinite(q.usedPercent) || q.usedPercent < 0 || !positive(q.resetAt) || !positive(q.durationMs) || !positive(q.observedAt) || monthOf(q.observedAt) !== month || !(q.planType === null || name(q.planType)))
+  if (!HARNESSES.includes(q.harness) || ![q.provider, q.limitId, q.window].every(name) || typeof q.usedPercent !== "number" || !Number.isFinite(q.usedPercent) || q.usedPercent < 0 || !positive(q.resetAt) || !positive(q.durationMs) || !positive(q.observedAt) || monthOf(q.observedAt) !== month || !(q.planType === null || name(q.planType)) || !(q.account === "" || hash(q.account)))
     throw new Error("Invalid snapshot quota");
 }
 function validateShard(value, manifest, month) {
@@ -1096,9 +1130,58 @@ function validateSnapshot(snapshot) {
     for (const e of s.events) if (!metadata.has(e.sessionId)) throw new Error("Missing session metadata");
 }
 var fatalProblem = (p) => p.endsWith(": cache not written") || p.includes(" unreadable files") || p.startsWith("opencode: database ");
+var exists = (path) => lstat(path).then(
+  () => true,
+  () => false
+);
+async function lastPublished(snapshotDir, harness) {
+  const out = { calls: [], sessions: [], quota: [] };
+  try {
+    const manifest = validateManifest(await jsonFile(join7(snapshotDir, "manifest.json")));
+    const sessionIds = /* @__PURE__ */ new Set();
+    const sessions = [];
+    for (const ref of manifest.shards) {
+      const text = await readFile3(join7(snapshotDir, ref.file), "utf8");
+      if (opaqueId(text) !== ref.sha256) throw new Error("Shard digest mismatch");
+      const shard = validateShard(JSON.parse(text), manifest, ref.month);
+      for (const e of shard.events) {
+        if ((e.harness ?? "pi") !== harness) continue;
+        sessionIds.add(e.sessionId);
+        out.calls.push({
+          harness,
+          session: e.sessionId,
+          entryId: e.entryId ?? void 0,
+          ms: e.ms,
+          provider: e.provider,
+          model: e.model,
+          input: e.input,
+          output: e.output,
+          cacheRead: e.cacheRead,
+          cacheWrite: e.cacheWrite,
+          cost: e.cost
+        });
+      }
+      out.quota.push(...(shard.quota ?? []).filter((q) => q.harness === harness));
+      sessions.push(...shard.sessions);
+    }
+    for (const s of sessions)
+      if (sessionIds.has(s.id)) out.sessions.push({ path: s.id, startMs: s.startMs, endMs: s.endMs, child: s.child });
+  } catch {
+    return { calls: [], sessions: [], quota: [] };
+  }
+  return out;
+}
 async function exportStats(dir, output, root = sessionsDir(dir), options = {}) {
   const wanted = new Set(options.harnesses ?? ["pi"]);
   const identity = await machineIdentity(dir);
+  const state = await exportState(dir);
+  const snapshotDir = join7(output, "machines", identity.machineId);
+  const previous = state.harnesses ?? (await exists(join7(snapshotDir, "manifest.json")) ? ["pi"] : []);
+  const dropped = previous.filter((h) => !wanted.has(h));
+  if (dropped.length > 0 && !options.replaceHarnesses)
+    throw new Error(
+      `Refusing to publish a narrower harness set than last published (missing: ${dropped.join(", ")}); add them to --harness, or pass --replace-harnesses to drop their history`
+    );
   const loaded = wanted.has("pi") ? await loadUsage({ root, cache: cachePath(dir), includeAllRoots: true }) : { calls: [], sessions: [], errors: 0, badLines: 0 };
   if (loaded.errors || loaded.badLines)
     throw new Error(`Incomplete local scan: ${loaded.errors} errors, ${loaded.badLines} bad lines`);
@@ -1109,7 +1192,8 @@ async function exportStats(dir, output, root = sessionsDir(dir), options = {}) {
     env: options.env,
     home: options.home,
     cache: harnessCachePath(dir),
-    loadSqlite: options.loadSqlite
+    loadSqlite: options.loadSqlite,
+    salt: state.salt
   });
   const report = {};
   const calls = [...loaded.calls];
@@ -1117,16 +1201,15 @@ async function exportStats(dir, output, root = sessionsDir(dir), options = {}) {
   const quota = [];
   for (const h of external) {
     const scan = scans[h];
-    if (scan.problems.some(fatalProblem))
-      throw new Error(`Incomplete ${h} scan: ${scan.problems.filter(fatalProblem).join("; ")}`);
-    report[h] = { found: scan.found, problems: scan.problems };
-    calls.push(...scan.calls);
-    sessionMetadata.push(...scan.sessionMetadata);
-    quota.push(...scan.quota);
+    const failed = scan.problems.some(fatalProblem);
+    const use = failed ? await lastPublished(snapshotDir, h) : { ...scan, sessions: scan.sessionMetadata };
+    report[h] = { found: scan.found, problems: scan.problems, ...failed ? { failed: true } : {} };
+    calls.push(...use.calls);
+    sessionMetadata.push(...use.sessions);
+    quota.push(...use.quota);
   }
   const snapshot = makeSnapshot({ ...loaded, calls, sessionMetadata }, identity, Date.now(), quota);
   validateSnapshot(snapshot);
-  const snapshotDir = join7(output, "machines", identity.machineId);
   await mkdir3(snapshotDir, { recursive: true });
   for (const s of snapshot.shards) {
     const text = JSON.stringify(s);
@@ -1137,6 +1220,8 @@ async function exportStats(dir, output, root = sessionsDir(dir), options = {}) {
     snapshot.manifest.shards.push({ month: s.month, file, sha256, bytes: Buffer.byteLength(text) });
   }
   await atomicJson(join7(snapshotDir, "manifest.json"), validateManifest(snapshot.manifest));
+  const published = HARNESSES.filter((h) => wanted.has(h));
+  await atomicJson(stateFile(dir), { version: 1, salt: state.salt, harnesses: published });
   return { machineId: identity.machineId, snapshotDir, ...external.length ? { harnesses: report } : {} };
 }
 var globalPath = (dir) => join7(dir, "pi-session-kit", "stats-global.json");
@@ -1222,7 +1307,7 @@ async function importStats(dir, input) {
 }
 
 // src/stats/cli.ts
-var USAGE = "usage: export --agent-dir DIR --output OUT [--sessions-dir DIR] [--harness pi,claude,codex,opencode] [--claude-dir DIR] [--codex-dir DIR] [--opencode-db FILE] | import --agent-dir DIR --input REPO";
+var USAGE = "usage: export --agent-dir DIR --output OUT [--sessions-dir DIR] [--harness pi,claude,codex,opencode] [--claude-dir DIR] [--codex-dir DIR] [--opencode-db FILE] [--replace-harnesses] | import --agent-dir DIR --input REPO";
 var FLAGS = [
   "--agent-dir",
   "--output",
@@ -1233,7 +1318,8 @@ var FLAGS = [
   "--codex-dir",
   "--opencode-db"
 ];
-var EXPORT_ONLY = ["--sessions-dir", "--harness", "--claude-dir", "--codex-dir", "--opencode-db"];
+var SWITCHES = ["--replace-harnesses"];
+var EXPORT_ONLY = [...SWITCHES, "--sessions-dir", "--harness", "--claude-dir", "--codex-dir", "--opencode-db"];
 function harnessList(value) {
   const names = value.split(",");
   if (new Set(names).size !== names.length || !names.every((n) => HARNESSES.includes(n)))
@@ -1243,10 +1329,15 @@ function harnessList(value) {
 async function main() {
   const [command, ...args] = process.argv.slice(2);
   const options = /* @__PURE__ */ new Map();
-  for (let i = 0; i < args.length; i += 2) {
+  for (let i = 0; i < args.length; i++) {
     const flag = args[i];
-    const value = args[i + 1];
-    if (!flag || !value || value.startsWith("--") || options.has(flag) || !FLAGS.includes(flag)) throw new Error(USAGE);
+    if (!flag || options.has(flag)) throw new Error(USAGE);
+    if (SWITCHES.includes(flag)) {
+      options.set(flag, "");
+      continue;
+    }
+    const value = args[++i];
+    if (!value || value.startsWith("--") || !FLAGS.includes(flag)) throw new Error(USAGE);
     options.set(flag, value);
   }
   const dir = resolve3(options.get("--agent-dir") ?? agentDir());
@@ -1260,9 +1351,12 @@ async function main() {
     const harnesses = options.get("--harness");
     const result = await exportStats(dir, resolve3(output), path("--sessions-dir"), {
       harnesses: harnesses === void 0 ? void 0 : harnessList(harnesses),
+      replaceHarnesses: options.has("--replace-harnesses"),
       roots: { claude: path("--claude-dir"), codex: path("--codex-dir"), opencode: path("--opencode-db") }
     });
     console.log(JSON.stringify(result));
+    for (const [name2, status] of Object.entries(result.harnesses ?? {}))
+      if (status.failed) console.error(`${name2}: scan incomplete, kept what was last published`);
   } else if (command === "import" && input !== void 0 && output === void 0 && !EXPORT_ONLY.some((f) => options.has(f))) {
     const result = await importStats(dir, resolve3(input));
     console.log(JSON.stringify(result));
