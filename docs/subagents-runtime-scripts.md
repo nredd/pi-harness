@@ -20,7 +20,7 @@ The Node producer writes `coverage/runtime-build-tooling/{lcov.info,coverage-sum
 `npm run check` runs it on every owned CI host, before the ordinary source suites. Existing
 artifact globs preserve both reports. Accounting requires the report on macOS, Ubuntu and WSL2;
 `test_subagents_runtime_scripts_missing_host_report_fails` proves an empty artifact root fails
-on each host. The file has a per-file 100% line/function/branch/statement thresholds and
+on each host. The file has per-file 100% line/function/branch/statement thresholds and
 per-OS zero uncovered caps, without exclusions. Before this producer there were no counters,
 not zero uncovered counters.
 

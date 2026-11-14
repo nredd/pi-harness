@@ -45,6 +45,7 @@
     "test:runtime-scripts": "node ../../scripts/run-vitest.ts node --config vitest.runtime-build.config.ts --coverage",
     "prepack": "npm run build",
     "prepublishOnly": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "pretest": "npm run build",
     "test": "node ../../scripts/run-vitest.ts node --coverage",
     "test:watch": "JITI_FS_CACHE=false vitest",
     "test:e2e": "JITI_FS_CACHE=false vitest run e2e --reporter=verbose",

@@ -42,6 +42,7 @@
     "check": "npm run build && npm run test:dist && biome check . && npm run typecheck && npm test && npm run test:bun",
     "format": "biome check --write .",
     "typecheck": "tsc --noEmit",
+    "pretest": "npm run build",
     "test": "JITI_FS_CACHE=false vitest run --coverage",
     "test:bun": "node ../../scripts/run-vitest.ts bun",
     "test:dist": "JITI_FS_CACHE=false vitest run --config vitest.runtime-build.config.ts --coverage",

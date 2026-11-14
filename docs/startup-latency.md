@@ -81,7 +81,7 @@ Where the time goes (direct binary, medians; `main:createAgentSessionRuntime` is
 - `--cpu-prof` of the launch: the time is Jiti reading and transforming ~80 TypeScript modules (1.3 MB) per launch, `readFileUtf8`, `jiti.cjs`, `vm`. A fresh `TMPDIR` cost only ~180 ms once, so the Jiti cache is not the lever
 - Pi with no extensions: `createAgentSessionRuntime` 55 ms
 
-Fix: `packages/subagents` ships `dist/index.ts`, the same graph pre-bundled by esbuild (`packages: "external"`) with the shared root `scripts/runtime-builder.mjs`. `pi.extensions` targets it, `src/` stays packed for `createSubagentsExtension` consumers. `npm run check:runtime` fails on a stale, missing or extra `dist/` file, `npm run build` regenerates it.
+Fix: `packages/subagents` ships `dist/index.ts`, the same graph pre-bundled by esbuild (`packages: "external"`) with the shared root `scripts/runtime-builder.mjs`. `pi.extensions` targets it, `src/` stays packed for `createSubagentsExtension` consumers. `dist/` is gitignored build output (#866): `npm run build` regenerates it, `npm run check` and `make install-owned` build it, and `prepack` builds it for publish.
 
 Before/after, profile copy with only the subagents manifest changed, 10 runs each, alternating, gap 0.5, load ~8:
 
