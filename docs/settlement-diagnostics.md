@@ -93,7 +93,7 @@ The separately installed CLI was still `.10`; its live processes were not reload
 The shared development dependency tree initially contained `.10` although the candidate lockfile
 selected `.11`. The isolated candidate install corrected this **test setup**, not production.
 `settlement-identity.test.ts` now fails closed on missing/mismatched installed lock receipts and
-checks that imports resolve to those exact package entries. It emits only fixed public artifact
+checks that imports resolve to those exact package entries. It also compares every file of each installed core package (`pi-coding-agent`, `pi-agent-core`, `pi-ai`, `pi-tui`) to the pinned release tarball, read offline from the npm cache (`PI_CORE_TARBALL_CACHE`, `npm_config_cache`, `NPM_CONFIG_CACHE`, then `~/.npm`; populated by `npm ci`) and authenticated by the lockfile sha512 SRI plus the sha256 in `releases/*.json`. Missing, byte-different, non-regular and unshipped files fail; the package-root `node_modules` is skipped as other packages, except that any nested `node_modules/@earendil-works` fails, since Node resolves it before the hoisted core copy. The `node_modules/@earendil-works` scope directory must hold only lockfile-pinned entries, so a scope-level `node_modules` (also resolved before the hoisted copies) or unpinned package fails closed. Lock metadata and barrel hashes alone passed a same-version stale extraction (#843). `verification/core-artifacts.test.ts` has the negative controls, including a one-byte change to a nested file of the real `pi-agent-core` tarball. It emits only fixed public artifact
 URLs, integrity strings and SHA-256 hashes, plus the todo source entry/policy file hashes.
 Package version `1.3.0` alone cannot distinguish these fork releases.
 
