@@ -35,11 +35,17 @@ export interface HarnessRoots {
 	opencode: string;
 }
 
+/**
+ * An injected `home` is an isolated root: without an explicit `env` it reads no `process.env` (so an operator's
+ * `XDG_DATA_HOME`, `CODEX_HOME` and friends never redirect it). Only the native home reads the real environment.
+ */
 export function harnessRoots(
-	env: Record<string, string | undefined> = process.env,
-	home = homedir(),
+	envIn?: Record<string, string | undefined>,
+	homeIn?: string,
 	overrides: Partial<HarnessRoots> = {},
 ): HarnessRoots {
+	const env = envIn ?? (homeIn === undefined ? process.env : {});
+	const home = homeIn ?? homedir();
 	const data = env.XDG_DATA_HOME || join(home, ".local", "share");
 	return {
 		claude: overrides.claude ?? (env.CLAUDE_CONFIG_DIR || join(home, ".claude")),

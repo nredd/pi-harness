@@ -63,6 +63,36 @@ describe("harnessRoots", () => {
 		expect(Object.keys(harnessRoots())).toEqual(["claude", "codex", "opencode"]);
 	});
 
+	it("never reads the process environment when a home is injected", async () => {
+		const canary = join(home, "operator-data");
+		mkdirSync(join(canary, "opencode"), { recursive: true });
+		const canaryDb = join(canary, "opencode", "opencode.db");
+		writeFileSync(canaryDb, "canary");
+		const injected = join(home, "injected");
+		vi.stubEnv("XDG_DATA_HOME", canary);
+		vi.stubEnv("OPENCODE_DB", join(canary, "other.db"));
+		vi.stubEnv("CODEX_HOME", canary);
+		expect(harnessRoots(undefined, injected)).toEqual({
+			claude: join(injected, ".claude"),
+			codex: join(injected, ".codex"),
+			opencode: join(injected, ".local", "share", "opencode", "opencode.db"),
+		});
+		const opened: string[] = [];
+		await loadHarnesses({
+			home: injected,
+			cache: join(home, "c.json"),
+			salt: SALT,
+			loadSqlite: () => {
+				opened.push("opened");
+				return Promise.reject(new Error("opened"));
+			},
+		});
+		expect(opened).toEqual([]);
+		expect(readFileSync(canaryDb, "utf8")).toBe("canary");
+		// the native home still honours the environment
+		expect(harnessRoots().opencode).toBe(join(canary, "other.db"));
+	});
+
 	it("places the cache under the agent dir", () => {
 		expect(harnessCachePath("/a")).toBe("/a/pi-session-kit/stats-harness-cache.json");
 		expect(harnessCachePath()).toMatch(/pi-session-kit\/stats-harness-cache\.json$/);
