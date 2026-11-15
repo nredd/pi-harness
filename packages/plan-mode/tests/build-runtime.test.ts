@@ -286,7 +286,7 @@ test("two builds of the same tree are byte-identical", async () => {
 const minimalBanner = "// minimal runtime builder fixture";
 
 /** A builder with only the required options, so every optional policy takes its default. */
-async function loadMinimalBuilder(entries?: Record<string, string>): Promise<RuntimeBuilder> {
+async function loadMinimalBuilder(entries?: Record<string, string>, root = packageRoot): Promise<RuntimeBuilder> {
 	const { createRuntimeBuilder } = (await import(
 		pathToFileURL(join(packageRoot, "..", "..", "scripts", "runtime-builder.mjs")).href
 	)) as {
@@ -297,8 +297,22 @@ async function loadMinimalBuilder(entries?: Record<string, string>): Promise<Run
 			entries?: Record<string, string>;
 		}): RuntimeBuilder;
 	};
-	return createRuntimeBuilder({ packageRoot, temporaryPrefix: ".pi-plan-mode", banner: minimalBanner, entries });
+	return createRuntimeBuilder({ packageRoot: root, temporaryPrefix: ".pi-plan-mode", banner: minimalBanner, entries });
 }
+
+test("default output stays inside an isolated builder fixture", async () => {
+	const root = await mkdtemp(join(packageRoot, ".pi-plan-mode-build-test-"));
+	try {
+		await mkdir(join(root, "src"));
+		await writeFile(join(root, "src", "index.ts"), "export const fixture = true;\n");
+		const builder = await loadMinimalBuilder(undefined, root);
+		await builder.buildRuntime();
+		assert.match(await readFile(join(root, "dist", "index.ts"), "utf8"), /fixture = true/u);
+		await builder.validateGeneratedFiles(join(root, "dist"));
+	} finally {
+		await rm(root, { force: true, recursive: true });
+	}
+});
 
 test("build script import without an invoked script path does not build", async () => {
 	const scriptUrl = pathToFileURL(join(packageRoot, "scripts", "build-runtime.mjs")).href;

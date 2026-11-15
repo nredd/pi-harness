@@ -259,7 +259,7 @@ No private subagent marker is imported. Existing tool permissions are not widene
 A prior settle handler's continuation (including a todo reminder) suppresses the goal nudge;
 the kit does not append a second reminder or request another continuation.
 
-The stats CLI reproducibility test builds into its per-test temporary directory, never the shared `dist/` read by concurrent tests.
+The stats CLI reproducibility test builds into its per-test temporary directory, never the shared `dist/` read by concurrent tests. Packed-CLI tests package the prebuilt artifact with lifecycle scripts disabled so `prepack` cannot rebuild shared output.
 
 `test/scenarios/` drives the real kit through core's in-process session harness under Vitest and Bun,
 covering goals, file-backed restore, child rename/reload, read-rule injection, titles,
