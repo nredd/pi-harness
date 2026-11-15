@@ -8,6 +8,15 @@
  * - persist those identities before TERM; await cleanup before removing the recovery file
  * - escalation/recovery requires an exact surviving member identity, not a surviving leader
  *   (ps start times have one-second resolution; the check-to-signal race cannot be atomic)
+ * Each record is serialized behind a PID/token sweep guard and reread before validation. Live guards
+ * are never age-reclaimed; dead guards lose only their immutable owner filename and empty directory.
+ * Empty/unknown guards require manual inspection. Busy guards and cleanup failures retain recovery
+ * identities and surface in `failed` as startup warnings. A pre-sweep dead leader requires a group
+ * member born in the recorded spawn second, no later than spawn; Linux also validates its session ID.
+ * macOS exposes no usable session ID, so group/start-time identity is the available boundary. An empty
+ * group permits removal; uncertainty, later-born-only survivors and changed identities retain the record.
+ * Escaped `setsid` groups and groups with every identity changed cannot be safely reclaimed; identical
+ * command/same-second PID reuse and check-to-signal races remain platform limitations.
  */
 
 import { execFile } from "node:child_process";

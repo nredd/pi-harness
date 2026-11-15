@@ -1,7 +1,9 @@
 /**
  * Read-only git access for `/diff`. Every call is an argv spawn (no shell) with `--no-pager
  * --literal-pathspecs`, `GIT_OPTIONAL_LOCKS=0` so a diff never takes the index lock another pi
- * session may be holding, a hard output cap and a timeout.
+ * session may be holding, a hard output cap and a timeout. Timeout/output-cap cleanup awaits the
+ * scheduled group SIGKILL even after the leader exits and descendants close their pipes. The TERM
+ * grace is 2s and hard-resolve bound 1s; signals never fall back to a potentially reused bare PID.
  */
 
 import { spawn } from "node:child_process";
