@@ -180,7 +180,7 @@ and call arguments, flow lists and maps, `--model` flags and pi's `/model` comma
 `subagentModel`, `model_id`, `agentModels`, ...), comments in data fences included. Only pi's
 `--model`/`--models` flags may add a thinking suffix (`--models @review:high`); pi-subagents never
 parses one, so `model: "@review:high"` fails. A best-effort prose scan also fails on
-provider-qualified refs, model ids and family names. The guard lives in `test/model-guard.ts`;
+provider-qualified refs, model ids and family names. The guard lives in `tests/lib/src/model-guard.ts` (`@nredd/pi-test-lib/model-guard`);
 pi-subagents' default-agent test shares it.
 
 `code-review` captures the original PR merge-base

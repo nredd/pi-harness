@@ -107,7 +107,7 @@ export function stripAgentPrefix(handle: string): string | undefined {
  * the model.
  */
 export function describeMention(message: string): string {
-  const oneLine = message.split("\n", 1)[0].replace(/\s+/g, " ").trim();
+  const oneLine = (message.split("\n", 1)[0] as string).replace(/\s+/g, " ").trim();
   return oneLine.length > 40 ? `${oneLine.slice(0, 39).trimEnd()}…` : oneLine;
 }
 
@@ -136,6 +136,6 @@ export function agentMentionReminder(type: string): string {
 export function parseMention(text: string): { handle: string; message: string } | null {
   const match = MENTION_SEND.exec(text);
   if (!match) return null;
-  const message = match[2].trim();
-  return message ? { handle: match[1], message } : null;
+  const message = (match[2] as string).trim();
+  return message ? { handle: match[1] as string, message } : null;
 }

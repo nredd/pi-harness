@@ -14,6 +14,7 @@ import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EvictedNote } from "./agent-manager.js";
+import type { SUBAGENT_COMPLETED_EVENT, SUBAGENT_FAILED_EVENT } from "./events.js";
 import type { NoticeParts } from "./notification-result.js";
 import type { AgentRecord, AgentTombstone } from "./types.js";
 import type { AgentActivity } from "./ui/agent-widget.js";
@@ -28,7 +29,7 @@ export interface DetachedResult {
   /** History entry for a result that finished detached; absent if already appended. */
   record?: Record<string, unknown>;
   /** The `subagents:completed`/`subagents:failed` event the live path would have emitted, replayed on delivery. */
-  lifecycle?: { channel: "subagents:completed" | "subagents:failed"; data: Record<string, unknown> };
+  lifecycle?: { channel: typeof SUBAGENT_COMPLETED_EVENT | typeof SUBAGENT_FAILED_EVENT; data: Record<string, unknown> };
   /** What the reopened session keeps so these agents' ids still answer after their records are gone. */
   evicted?: EvictedNote[];
   /** Reopenable sessions among them, so a steer or resume of these ids continues the saved conversation. */

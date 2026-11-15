@@ -3,10 +3,10 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { stripVTControlCharacters } from "node:util";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { getThemeByName } from "../../../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import { MonView } from "../../src/mon/component.ts";
 import type { MonSnapshot } from "../../src/mon/model.ts";
 import { createSamplerSource } from "../../src/mon/source.ts";
+import { getThemeByName } from "../../tests/fixtures/themes.ts";
 import { snapshot } from "./fixtures.ts";
 
 const SIZES = [

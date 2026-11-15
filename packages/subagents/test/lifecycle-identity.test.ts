@@ -7,8 +7,6 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { formatInProgressNotice } from "../../todo/plan-hooks.ts";
-import { agentLookup, agentStateFor, applyAgentEvent, forgetAgents } from "../../todo/state/agents.ts";
 import type * as AgentRunner from "../src/agent-runner.js";
 
 vi.mock("../src/agent-runner.js", async () => {
@@ -115,10 +113,9 @@ describe("lifecycle event identity", () => {
     ]);
   });
 
-  it.each(["done", "failed"])("tracks a queued background resume after %s without accepting a stale created", async (outcome) => {
+  it.each(["done", "failed"])("announces a queued background resume once after %s", async (outcome) => {
     writeFileSync(join(cwd, "agent-dir", "subagents.json"), JSON.stringify({ maxConcurrent: 1 }));
     const { pi, tools } = await boot();
-    pi.events.emit.mockImplementation((channel: string, data: unknown) => applyAgentEvent("resume-s1", channel, data));
     const resolve = runnerResolution();
     vi.mocked(runAgent).mockImplementationOnce(async (context, type, prompt, options) => {
       const result = await resolve(context, type, prompt, options);
@@ -132,10 +129,8 @@ describe("lifecycle event identity", () => {
     const first = await spawn("Auth Audit");
     await flush();
     const id = /Agent ID: (\S+)/.exec(first.content.map((c: { text?: string }) => c.text ?? "").join(""))![1];
-    expect(agentStateFor("resume-s1", "auth-audit")).toBe(outcome);
     const stale = eventsNamed(pi, "subagents:created").find((e: { id: string }) => e.id === id);
-    pi.events.emit("subagents:created", stale);
-    expect(agentStateFor("resume-s1", "auth-audit")).toBe(outcome);
+    expect(stale).toMatchObject({ id, name: "auth-audit" });
     await spawn("Blocker");
     await flush();
     const before = eventsNamed(pi, "subagents:created").length;
@@ -146,12 +141,10 @@ describe("lifecycle event identity", () => {
     const manager = Reflect.get(globalThis, Symbol.for("pi-subagents:manager")) as { getRecord(id: string): { status: string } };
     expect(manager.getRecord(id).status).toBe("queued");
     expect(eventsNamed(pi, "subagents:created")).toHaveLength(before + 1);
-    expect(agentStateFor("resume-s1", "auth-audit")).toBe("queued");
-    expect(agentLookup("resume-s1").wakesParent?.("auth-audit")).toBe(true);
-    forgetAgents("resume-s1");
+    expect(eventsNamed(pi, "subagents:created").at(-1)).toMatchObject({ id, name: "auth-audit", isBackground: true });
   });
 
-  it.each([false, true])("classifies actual RPC completion wake eligibility: background=%s", async (isBackground) => {
+  it.each([false, true])("consumes an RPC spawn's result only when it is foreground: background=%s", async (isBackground) => {
     const b = bootPi();
     const handlers = new Map<string, Array<(data: unknown) => void>>();
     b.pi.events.on.mockImplementation((name: string, handler: (data: unknown) => void) => {
@@ -159,7 +152,6 @@ describe("lifecycle event identity", () => {
       return () => {};
     });
     b.pi.events.emit.mockImplementation((name: string, data: unknown) => {
-      applyAgentEvent("rpc-wake", name, data);
       for (const handler of handlers.get(name) ?? []) handler(data);
     });
     subagentsExtension(b.pi);
@@ -175,14 +167,10 @@ describe("lifecycle event identity", () => {
     b.pi.events.emit("subagents:rpc:spawn", { requestId: "wake", type: "scout", prompt: "go", options: { description: "rpc", isBackground } });
     await flush();
     expect(id).not.toBe("");
-    const state = { tasks: [{ id: 1, subject: "Audit", status: "in_progress", owner: id }], nextId: 2 } as never;
-    const notice = formatInProgressNotice(state, agentLookup("rpc-wake"));
     finish({ responseText: "done", session: { dispose: vi.fn(), messages: [], model: PARENT }, aborted: false, steered: false } as never);
     await flush();
     const manager = Reflect.get(globalThis, Symbol.for("pi-subagents:manager")) as { getRecord(id: string): { resultConsumed?: boolean } };
     expect(Boolean(manager.getRecord(id).resultConsumed)).toBe(!isBackground);
-    expect(notice?.level).toBe(isBackground ? "info" : "warning");
-    forgetAgents("rpc-wake");
   });
 
   it("omits name for an unnamed spawn and keeps handle on a failure", async () => {
