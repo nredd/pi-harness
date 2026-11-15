@@ -2336,7 +2336,9 @@ def audit_source_files(
     return problems
 
 
-def run_packed_files_gate(work: Path, supplied: Mapping[str, Path] | None = None) -> dict[str, list[str]]:
+def run_packed_files_gate(
+    work: Path, supplied: Mapping[str, Path] | None = None, *, only: Sequence[str] | None = None
+) -> dict[str, list[str]]:
     """Check workspace payloads without installing or launching stock Pi.
 
     Supplied tarballs restrict the gate to those packages and are never repacked.
@@ -2344,6 +2346,7 @@ def run_packed_files_gate(work: Path, supplied: Mapping[str, Path] | None = None
     Parameters:
         work (Path): Scratch directory for disposable tarballs and npm environment.
         supplied (Mapping[str, Path] | None): Existing tarballs keyed by package directory.
+        only (Sequence[str] | None): Selected workspace directories, or all when absent.
 
     Returns:
         dict[str, list[str]]: Actual shipped files per package directory.
@@ -2356,6 +2359,8 @@ def run_packed_files_gate(work: Path, supplied: Mapping[str, Path] | None = None
     tarballs.mkdir()
     report: dict[str, list[str]] = {}
     for contract in ALL_CONTRACTS:
+        if only is not None and contract.directory not in only:
+            continue
         if supplied and contract.directory not in supplied:
             continue
         artifact = select_artifact(contract, tarballs, sandbox, supplied or {})
@@ -4882,7 +4887,10 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--tarball", action="append", default=[], metavar="DIRECTORY=PATH")
     parser.add_argument("--report", type=Path, help="Write the JSON identity/evidence report here")
     parser.add_argument(
-        "--package", action="append", choices=[c.directory for c in CONTRACTS], help="Restrict to one package"
+        "--package",
+        action="append",
+        choices=[c.directory for c in ALL_CONTRACTS],
+        help="Restrict to one package",
     )
     parser.add_argument(
         "--audit-preset", action="store_true", help="Only audit and install the packed `@nredd/pi-preset`"
@@ -4913,7 +4921,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     work.mkdir(parents=True, exist_ok=True)
     try:
         if args.packed_files_only:
-            packed = run_packed_files_gate(work.resolve(), parse_tarballs(args.tarball, ALL_CONTRACTS))
+            packed = run_packed_files_gate(
+                work.resolve(), parse_tarballs(args.tarball, ALL_CONTRACTS), only=args.package
+            )
             text = json.dumps(packed, indent=2, sort_keys=True) + "\n"
             if args.report:
                 args.report.write_text(text)

@@ -64,7 +64,10 @@ make help                    # every target
   `packed_files` (and counted patterns for hashed chunks). `make check-scripts` runs its
   `--packed-files-only` path without stock Pi, including production-source completeness and test/fixture
   exclusion. Compiled libraries require their matching JavaScript and declaration outputs instead of
-  raw sources. Add moved shipped paths there, not in package-local tarball tests
+  raw sources. Computer-use, preset and todo also begin their own `npm run check` with
+  `--packed-files-only --package <workspace-directory>` using the shared uv environment. This catches
+  missing assets and newly added, unpacked production modules before their language/test gates.
+  Add moved shipped paths there, not in package-local tarball tests
 - Keep package-local `node_modules/` host copies absent: the in-process stack loader refuses a
   second host copy
 - On macOS run long gates under `/usr/bin/caffeinate -is`. Do not relax real-time deadlines

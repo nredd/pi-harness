@@ -8,10 +8,16 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import package_contracts as pc
 
@@ -174,6 +180,108 @@ def test_packed_gate_reports_actual_pack_and_rejects_mismatch(
     work.mkdir()
     assert pc.run_packed_files_gate(work, {"preset": artifact.path}) == {"preset": ["LICENSE"]}
     load.assert_called_once_with(contract, artifact.path)
+    monkeypatch.setattr(pc, "pack", Mock(return_value=artifact))
+    work = tmp_path / "selected"
+    work.mkdir()
+    assert pc.run_packed_files_gate(work, only=["preset"]) == {"preset": ["LICENSE"]}
+
+
+@pytest.mark.parametrize("directory", ["computer-use", "preset", "todo"])
+def test_package_check_runs_selected_tarball_gate_first(directory: str) -> None:
+    """Keep each package's author-facing check connected to the sole payload authority.
+
+    Parameters:
+        directory (str): Workspace whose check must fail before unrelated expensive gates.
+
+    Returns:
+        None: The package check begins with its selected canonical packed-file gate.
+    """
+    manifest = json.loads((pc.REPO_ROOT / "packages" / directory / "package.json").read_text())
+    first = manifest["scripts"]["check"].split(" && ")[0]
+    assert first == (
+        "uv run --locked --project ../../integration python ../../scripts/package_contracts.py "
+        f"--packed-files-only --package {directory}"
+    )
+
+
+@pytest.mark.parametrize("directory", ["computer-use", "preset", "todo"])
+def test_packed_only_selects_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, directory: str) -> None:
+    """Pass package selection through the CLI without launching unrelated contracts.
+
+    Parameters:
+        tmp_path (Path): Disposable scratch directory.
+        monkeypatch (pytest.MonkeyPatch): Replace the external gate boundary.
+        directory (str): Selected workspace directory.
+
+    Returns:
+        None: CLI selection is passed to the canonical pack gate.
+    """
+    gate = Mock(return_value={directory: ["LICENSE"]})
+    monkeypatch.setattr(pc, "run_packed_files_gate", gate)
+    assert pc.main(["--packed-files-only", "--package", directory, "--work-dir", str(tmp_path)]) == 0
+    assert gate.call_args.kwargs == {"only": [directory]}
+
+
+@pytest.mark.parametrize(
+    ("directory", "omitted", "expected"),
+    [
+        ("computer-use", "native/macos/agent_cursor_motion.swift", "agent_cursor_motion.swift"),
+        ("preset", "themes/", "themes/belafonte-day.json"),
+        ("todo", "", "production source 'state/critic-unpacked.ts' requires packed"),
+    ],
+)
+def test_package_check_rejects_disposable_payload_mutation(
+    tmp_path: Path, directory: str, omitted: str, expected: str
+) -> None:
+    """Run the actual package check against disposable malformed production trees.
+
+    Parameters:
+        tmp_path (Path): Disposable repository parent.
+        directory (str): Workspace to mutate and check.
+        omitted (str): Manifest entry to remove, or empty to add an unlisted todo module.
+        expected (str): Diagnostic proving the payload gate, not an unrelated gate, refused.
+
+    Returns:
+        None: Every mutated package's own npm check fails through the canonical authority.
+    """
+    root = tmp_path / "repo"
+    shutil.copytree(
+        pc.REPO_ROOT,
+        root,
+        symlinks=True,
+        ignore=shutil.ignore_patterns(
+            ".git",
+            "node_modules",
+            ".venv",
+            "coverage",
+            "dist",
+            "forks",
+            "__pycache__",
+            ".ruff_cache",
+            ".ty_cache",
+            ".coverage*",
+        ),
+    )
+    package = root / "packages" / directory
+    if omitted:
+        path = package / "package.json"
+        manifest = json.loads(path.read_text())
+        manifest["files"].remove(omitted)
+        path.write_text(json.dumps(manifest))
+    else:
+        (package / "state/critic-unpacked.ts").write_text("export const unpacked = true;\n")
+    done = subprocess.run(
+        [pc.locate_tools().npm, "run", "check"],
+        cwd=package,
+        env=os.environ | {"UV_PROJECT_ENVIRONMENT": str(pc.REPO_ROOT / "integration/.venv")},
+        text=True,
+        capture_output=True,
+        timeout=90,
+        check=False,
+    )
+    assert done.returncode != 0
+    assert expected in done.stdout + done.stderr, done.stdout + done.stderr
+    assert "FAILED: Packed files" in done.stderr
 
 
 @pytest.mark.parametrize("report", [False, True])

@@ -809,12 +809,14 @@
 		},
 		{
 			"id": "owned-install-release-docs",
-			"purpose": "Document owned package identity, root release ownership and Linux build opt-in",
+			"purpose": "Document owned package identity, root release ownership and Linux build opt-in; route release payload validation through the central package contracts and delete the duplicate asset checker (#868)",
 			"files": [
+				".github/workflows/publish-npm.yml",
 				"docs/content/docs/how-to-guides/develop-and-validate.mdx",
 				"docs/content/docs/how-to-guides/troubleshooting.mdx",
 				"docs/content/docs/tutorials/getting-started.mdx",
-				"scripts/check-docs.mjs"
+				"scripts/check-docs.mjs",
+				"scripts/check-package-assets.mjs"
 			],
 			"check": "scripts/check-docs.mjs",
 			"dropControls": [
@@ -1278,6 +1280,7 @@
 		}
 	],
 	"files": [
+		".github/workflows/publish-npm.yml",
 		"CHANGELOG.md",
 		"CONTRIBUTING.md",
 		"README.md",
