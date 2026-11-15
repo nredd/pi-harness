@@ -22,7 +22,10 @@ export interface PackageConfigOptions extends Omit<ViteUserConfig, "test"> {
 	reportsDirectory?: string;
 	/** Put the home guard first in `setupFiles`. Default true; only a producer that never touches a home opts out. */
 	homeGuard?: boolean;
-	/** The package's own options (`pool`, `maxWorkers`, `testTimeout`, `server.deps`, `runner`, ...). `coverage` is merged over the shared block. */
+	/**
+	 * The package's own options (`pool`, `maxWorkers`, `testTimeout`, `server.deps`, `runner`, ...). `coverage` is merged over the
+	 * shared block. `maxWorkers: 1` means serial FILES and is made so, see `definePackageConfig`.
+	 */
 	test: TestOptions;
 }
 
@@ -32,6 +35,11 @@ export interface PackageConfigOptions extends Omit<ViteUserConfig, "test"> {
  * The factory owns what every producer repeats: the owned inventory and exclusions, the three reporters,
  * `reportOnFailure`, the report directory and the home guard. Everything else, with its comment, stays in
  * the package config and is merged as given.
+ *
+ * A package that sets `maxWorkers: 1` runs its files one at a time. Vitest 5 applies `VITEST_MAX_WORKERS` after the
+ * config resolves, over `maxWorkers` and over `fileParallelism: false` alike, so the factory also sets
+ * `fileParallelism: false` and drops the variable from this process (workers are spawned later, so they never
+ * see it either). A suite that needs more isolation than serial files should isolate its own HOME, not rely on this.
  *
  * @param signal The `coverage/policy.json` package key whose `owned` and `exclusions` the run measures.
  * @param options The provider, report directory and the package's own Vitest options.
@@ -44,11 +52,14 @@ export function definePackageConfig(
 ): ViteUserConfig {
 	const { owned, exclusions }: PolicyEntry = JSON.parse(readFileSync(POLICY, "utf8")).packages[signal];
 	const { coverage, setupFiles = [], ...rest } = test;
+	const serial = rest.maxWorkers === 1;
+	if (serial) delete process.env.VITEST_MAX_WORKERS;
 	const setup = [...(homeGuard ? [HOME_GUARD] : []), ...[setupFiles].flat()];
 	return defineConfig({
 		...config,
 		test: {
 			...rest,
+			...(serial ? { fileParallelism: false } : {}),
 			...(setup.length > 0 ? { setupFiles: setup } : {}),
 			coverage: {
 				provider,

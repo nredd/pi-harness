@@ -257,6 +257,7 @@ const RESOLVED: Record<string, unknown> = {
 			include: ["test/async.test.mjs", "test/async-observer.test.mjs", "test/async-safety.test.mjs"],
 			pool: "forks",
 			maxWorkers: 1,
+			fileParallelism: false,
 			testTimeout: 20000,
 			setupFiles: ["tests/lib/src/home-setup.ts"],
 		},
@@ -266,6 +267,7 @@ const RESOLVED: Record<string, unknown> = {
 			dir: "test",
 			pool: "forks",
 			maxWorkers: 1,
+			fileParallelism: false,
 			testTimeout: 20000,
 			setupFiles: ["tests/lib/src/home-setup.ts"],
 		},
@@ -307,7 +309,7 @@ const RESOLVED: Record<string, unknown> = {
 		test: { pool: "forks", maxWorkers: 2, testTimeout: 20000, setupFiles: ["tests/lib/src/home-setup.ts"] },
 	},
 	"packages/resource-sampler/vitest.config.ts": {
-		test: { maxWorkers: 1, setupFiles: ["tests/lib/src/home-setup.ts"] },
+		test: { maxWorkers: 1, fileParallelism: false, setupFiles: ["tests/lib/src/home-setup.ts"] },
 	},
 	"packages/session-kit/vitest.config.ts": {
 		test: {
@@ -327,7 +329,7 @@ const RESOLVED: Record<string, unknown> = {
 		resolve: { dedupe: ["@earendil-works/pi-ai"] },
 	},
 	"packages/subagents/vitest.runtime-build.config.ts": {
-		test: { maxWorkers: 1, include: ["test/runtime-scripts.test.ts"], testTimeout: 15000 },
+		test: { maxWorkers: 1, fileParallelism: false, include: ["test/runtime-scripts.test.ts"], testTimeout: 15000 },
 	},
 	"packages/subagents/vitest.workflow-examples.config.ts": {
 		test: {
@@ -418,6 +420,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	served.packages = null;
+	vi.unstubAllEnvs();
 });
 
 async function coverageOf({ load }: Producer): Promise<Coverage> {
@@ -488,6 +491,37 @@ for (const producer of PRODUCERS) {
 	test(`${producer.config} resolves the pinned non-coverage options (home guard first in setupFiles on purpose)`, async () => {
 		const config = (await producer.load()).default as { root?: string; test?: Record<string, unknown> };
 		assert.deepEqual(resolvedShape(producer, config), RESOLVED[producer.config]);
+	});
+}
+
+/**
+ * Vitest 5 lets `VITEST_MAX_WORKERS` override `maxWorkers` AND `fileParallelism: false` after the config
+ * resolves, so a shell that exports it (the shared heavy-slot wrapper sets 2) ran "serial" packages
+ * concurrently (#934). Only the config file can drop it, before Vitest reads it.
+ */
+const SERIAL_PRODUCERS = PRODUCERS.filter(
+	({ config }) => (RESOLVED[config] as { test: { maxWorkers?: number } }).test.maxWorkers === 1,
+);
+
+test("the serial producers are exactly the four pinned with maxWorkers 1", () => {
+	assert.deepEqual(
+		SERIAL_PRODUCERS.map(({ config }) => config),
+		[
+			"packages/computer-use/vitest.async.config.ts",
+			"packages/computer-use/vitest.config.ts",
+			"packages/resource-sampler/vitest.config.ts",
+			"packages/subagents/vitest.runtime-build.config.ts",
+		],
+	);
+});
+
+for (const producer of PRODUCERS) {
+	const serial = SERIAL_PRODUCERS.includes(producer);
+	test(`${producer.config} ${serial ? "runs files serially and ignores an exported VITEST_MAX_WORKERS" : "keeps its worker cap and an exported VITEST_MAX_WORKERS"}`, async () => {
+		vi.stubEnv("VITEST_MAX_WORKERS", "2");
+		const { test: options } = (await producer.load()).default as { test?: Record<string, unknown> };
+		assert.equal(options?.fileParallelism, serial ? false : undefined);
+		assert.equal(process.env.VITEST_MAX_WORKERS, serial ? undefined : "2");
 	});
 }
 
