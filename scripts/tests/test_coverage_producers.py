@@ -226,8 +226,9 @@ def test_generated_coverage_is_ignored_by_whole_workspace_linters() -> None:
     Raises:
         AssertionError: A repeated native gate starts linting generated reports.
     """
-    for directory in [ROOT / "packages/plan-mode", ROOT / "integration/inprocess"]:
-        assert "coverage/" in (directory / ".gitignore").read_text().splitlines()
+    root_patterns = (ROOT / ".gitignore").read_text().splitlines()
+    assert "packages/**/coverage/" in root_patterns
+    assert "integration/**/coverage/" in root_patterns
 
 
 def test_node_helper_gates_run_vitest_through_the_launcher() -> None:

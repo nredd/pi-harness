@@ -4,8 +4,8 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 export const HEADLESS_TURN_START_TIMEOUT_MS = 5_000;
 
 export interface HeadlessTurn {
-  /** Wait until the turn sent during the command has run, if one was sent. */
-  settle(): Promise<void>;
+	/** Wait until the turn sent during the command has run, if one was sent. */
+	settle(): Promise<void>;
 }
 
 /**
@@ -22,44 +22,44 @@ export interface HeadlessTurn {
  * there the user keeps the editor while the turn runs.
  */
 export function createHeadlessTurns(startTimeoutMs = HEADLESS_TURN_START_TIMEOUT_MS) {
-  let armed: { sent: boolean; started: boolean; onStart?: () => void } | undefined;
+	let armed: { sent: boolean; started: boolean; onStart?: () => void } | undefined;
 
-  return {
-    /** Call from `agent_start`. */
-    runStarted() {
-      if (!armed) return;
-      armed.started = true;
-      armed.onStart?.();
-    },
-    /** Call whenever a Plan-mode message was handed to `pi.sendUserMessage`. */
-    messageSent() {
-      if (armed) armed.sent = true;
-    },
-    /** Arm before running a command; `undefined` outside print/JSON mode. */
-    arm(ctx: Pick<ExtensionCommandContext, "mode" | "waitForIdle">): HeadlessTurn | undefined {
-      if (ctx.mode !== "print" && ctx.mode !== "json") return undefined;
-      const turn: { sent: boolean; started: boolean; onStart?: () => void } = { sent: false, started: false };
-      armed = turn;
-      return {
-        async settle() {
-          try {
-            if (!turn.sent) return;
-            if (!turn.started) {
-              let timer: ReturnType<typeof setTimeout> | undefined;
-              const started = await new Promise<boolean>((resolve) => {
-                turn.onStart = () => resolve(true);
-                timer = setTimeout(() => resolve(false), startTimeoutMs);
-                timer.unref?.();
-              });
-              clearTimeout(timer);
-              if (!started) return;
-            }
-            await ctx.waitForIdle();
-          } finally {
-            if (armed === turn) armed = undefined;
-          }
-        },
-      };
-    },
-  };
+	return {
+		/** Call from `agent_start`. */
+		runStarted() {
+			if (!armed) return;
+			armed.started = true;
+			armed.onStart?.();
+		},
+		/** Call whenever a Plan-mode message was handed to `pi.sendUserMessage`. */
+		messageSent() {
+			if (armed) armed.sent = true;
+		},
+		/** Arm before running a command; `undefined` outside print/JSON mode. */
+		arm(ctx: Pick<ExtensionCommandContext, "mode" | "waitForIdle">): HeadlessTurn | undefined {
+			if (ctx.mode !== "print" && ctx.mode !== "json") return undefined;
+			const turn: { sent: boolean; started: boolean; onStart?: () => void } = { sent: false, started: false };
+			armed = turn;
+			return {
+				async settle() {
+					try {
+						if (!turn.sent) return;
+						if (!turn.started) {
+							let timer: ReturnType<typeof setTimeout> | undefined;
+							const started = await new Promise<boolean>((resolve) => {
+								turn.onStart = () => resolve(true);
+								timer = setTimeout(() => resolve(false), startTimeoutMs);
+								timer.unref?.();
+							});
+							clearTimeout(timer);
+							if (!started) return;
+						}
+						await ctx.waitForIdle();
+					} finally {
+						if (armed === turn) armed = undefined;
+					}
+				},
+			};
+		},
+	};
 }

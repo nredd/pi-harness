@@ -455,15 +455,17 @@ pi-plan-mode/
 │   └── plan-mode.ts                   # Planning policy and implementation handoff
 ├── dist/                              # Generated Jiti runtime (gitignored; `npm run build`)
 ├── scripts/build-runtime.mjs          # Thin options for the shared root `scripts/runtime-builder.mjs`
-├── docs/                              # Published reference documentation
-└── test/                              # Behavior and lifecycle coverage
+└── tests/                             # Behavior and lifecycle coverage
+    └── fixtures/                      # Package-specific helpers, doubles, and data
 ```
 
 The generated runtime is built from `src/index.ts` and does not import back into `src`.
 
-`test/{confirmation,decline,policy,transcript}-session.test.ts` ports the seven retired process scenarios through the real core session and interactive harnesses. File-backed restore, canonical RPC select choices, all seven allowed/eleven blocked shell rows, and raw terminal clicks/Escape run without Pi binaries, owner configuration, polling, or sleeps. Only the Bash executor is inert; the production factory and admission hook run unchanged. `npm run check` includes these scenarios on Bun (verified with 1.3.14); `npm test` runs the full Vitest suite. The release-tarball development host provides `/testing` and `/testing/interactive`; `@xterm/headless@5.5.0` supplies its terminal emulator. Peer dependencies and the shipped runtime are unchanged.
+`tests/{confirmation,decline,policy,transcript}-session.test.ts` ports the seven retired process scenarios through the real core session and interactive harnesses. File-backed restore, canonical RPC select choices, all seven allowed/eleven blocked shell rows, and raw terminal clicks/Escape run without Pi binaries, owner configuration, polling, or sleeps. Only the Bash executor is inert; the production factory and admission hook run unchanged. `npm run check` includes these scenarios on Bun (verified with 1.3.14); `npm test` runs the full Vitest suite. The release-tarball development host provides `/testing` and `/testing/interactive`; `@xterm/headless@5.5.0` supplies its terminal emulator. Peer dependencies and the shipped runtime are unchanged.
 
-Fork maintenance follows the split/diff-replay queue, never unreleased upstream main. Exclude `dist/` from replay and regenerate the standalone lockfile for the release's development pins. Run `npm run check && npm test` locally; the typecheck covers source and test files. Test fixtures resolve relative to the package's source location rather than the runner's working directory, so both gate layouts exercise the same files. Also apply the queue in a full upstream monorepo clone at the release tag, run `npm ci --ignore-scripts`, build `packages/pi-tui-kit`, run the Plan package's `npm run check`, then run root `PI_EXTENSIONS_TEST_BASE='@narumitw/pi-plan-mode@0.59.3' npm test`. Rebuild the Plan package there after the final source change, copy its `dist/` back here, and commit those artifacts last. The vendored harness tracks that release, including the mock UI's `onTerminalInput` method.
+Fork maintenance follows the split/diff-replay queue, never unreleased upstream main. Exclude `dist/` from replay; builds regenerate it and it is never committed. Run `npm run check` locally; the typecheck covers source and tests. Fixtures resolve relative to the package rather than the runner's working directory. The shared `@nredd/pi-test-lib` supplies `createRecordingPi`, recording contexts, faux turns, and deferred promises; package-specific adapters live in `tests/fixtures/`. Both Vitest configurations use `definePackageConfig` from the root factory.
+
+Documentation consolidation moved `docs/settings.md` into the settings reference below and `docs/command-workflows.md` into the command workflows reference below. No package `docs/` remains. The former `AGENTS.md` live-branch guideline is a comment at the fresh-session handoff in `src/fresh-implementation.ts`.
 
 ## 🔎 Keywords
 

@@ -4,7 +4,6 @@
   "description": "Pi extension that adds a Codex-like read-only /plan collaboration mode.",
   "type": "module",
   "license": "MIT",
-  "private": false,
   "author": "narumiruna",
   "repository": {
     "type": "git",
@@ -38,7 +37,8 @@
   },
   "scripts": {
     "build": "node scripts/build-runtime.mjs",
-    "check": "npm run build && npm run test:runtime-build && biome check . && npm run typecheck && npm test && npm run test:bun",
+    "lint": "biome check .",
+    "check": "npm run lint && npm run typecheck && npm run build && npm test && npm run test:runtime-build && npm run test:bun",
     "format": "biome check --write .",
     "typecheck": "tsc --noEmit",
     "pretest": "npm run build",
