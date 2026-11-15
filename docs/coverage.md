@@ -648,7 +648,7 @@ Darwin `resource-sampler/primary` diagnostic uncovered branches changed 53 -> 54
 runs, while its gated uncovered lines/functions stayed 58/2. That branch was the late-stdout
 guard (`if (!complete) return` in the stdout `data` handler of `src/collect.ts`), which only ran
 when stream delivery raced cancellation. The controlled cancellation/data-event fixture in
-`packages/resource-sampler/test/sampler.test.ts` now forces that branch by emitting late stdout
+`packages/resource-sampler/tests/sampler.test.ts` now forces that branch by emitting late stdout
 after cancellation. Whether hosted Darwin counts stay stable is not yet measured (issue
 [here](https://github.com/nredd/pi-harness/issues/164)). That race-dependent branch is why the
 sampler's starting branch caps came from hosted counts rather than a single local run; #417 drove them
