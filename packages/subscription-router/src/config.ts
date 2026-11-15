@@ -25,8 +25,8 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
-import { parseRef, refKey } from "./model-ref.js";
-import { type PolicyV1, parsePolicy } from "./policy.js";
+import { parseRef, refKey } from "./model-ref.ts";
+import { type PolicyV1, parsePolicy } from "./policy.ts";
 
 export const CONFIG_FILE = "subscription-router.json";
 

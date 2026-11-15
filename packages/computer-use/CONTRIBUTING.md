@@ -46,7 +46,7 @@ The in-repo legacy benchmark harness was removed because it targeted old direct 
 
 ## Commit messages
 
-Use a capitalized imperative subject, at most 72 characters, with no trailing period and no conventional-commit prefix (`feat:`, `fix(scope):`). `scripts/check-commit-messages.mjs` enforces this.
+Use a capitalized imperative subject, at most 72 characters, with no trailing period and no conventional-commit prefix (`feat:`, `fix(scope):`). The root `make check-commits` target enforces this independently of package checks.
 
 Examples:
 
@@ -59,7 +59,7 @@ Simplify the public tool surface
 Check a range locally with:
 
 ```bash
-node scripts/check-commit-messages.mjs <base>..<head>
+make -C ../.. check-commits COMMIT_RANGE=<base>..<head>
 ```
 
 ## Pull requests

@@ -55,6 +55,9 @@ WSL_INPUT_FILES = TOOLCHAIN_INPUTS | {
     "package-lock.json",
     "integration/pyproject.toml",
     "integration/uv.lock",
+    "scripts/check-commit-messages.mjs",
+    "scripts/tests/commit-messages.test.mjs",
+    "scripts/tests/commit-policy.test.mjs",
     "scripts/coverage-configs.test.ts",
     "scripts/import_audit.test.ts",
     "scripts/import_audit.ts",
@@ -551,7 +554,7 @@ def utf16_length(text: str) -> int:
 
 
 def is_valid_subject(subject: str) -> bool:
-    """Mirror `validSubject` in `packages/computer-use/scripts/check-commit-messages.mjs`.
+    """Mirror `validSubject` in `scripts/check-commit-messages.mjs`.
 
     Parameters:
         subject (str): Commit subject.

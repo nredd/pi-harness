@@ -40,11 +40,6 @@ jobs:
       - name: Build macOS helper
         run: npm run build:native -- --platform darwin --arch arm64 --no-sign --output "$RUNNER_TEMP/bridge"
 
-      - name: Check commit messages
-        env:
-          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: npm run test:commits
-
   linux-native:
     name: Linux native (${{ matrix.arch }})
     strategy:

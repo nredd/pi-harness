@@ -1,1 +1,1 @@
-export { default } from "./plan-mode.js";
+export { default } from "./plan-mode.ts";

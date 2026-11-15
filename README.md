@@ -34,13 +34,14 @@ Node `26.12.0` (`.node-version`), npm `11.20.0` (`packageManager`), Python `3.13
 
 ```sh
 make install                 # install-owned (verify core overrides, npm ci --ignore-scripts, uv sync --locked) + install-benchmark
-make check                   # owned-code gate: check-ts check-scripts check-integration check-benchmark
+make check                   # owned-code gate: check-commits check-ts check-scripts check-integration check-benchmark
 make check-package-contracts # packed tarballs through exact stock Pi; not part of `make check`
 make help                    # every target
 ```
 
 - `make check` never rewrites files and never modifies `forks/`
 - `check-integration` needs the `forks/pi` Gitlink initialized
+- `check-commits` validates repository commit subjects independently of workspace selection; set `COMMIT_RANGE=<base>..<head>` locally. CI runs it before path classification on every PR and push
 - `check-ts` takes `WORKSPACES=<paths>`
 - Shared toolchain: one root `biome.json` (tabs, width 120, `recommended` plus eight `error` rules; JSON
   config files use two spaces), one `tsconfig.base.json` that every package `tsconfig.json` extends, and one

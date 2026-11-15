@@ -51,6 +51,12 @@
   },
   "overrides": [
     {
+      "includes": ["packages/subscription-router/tests/fixtures/legacy-oracle/**"],
+      "formatter": { "enabled": false },
+      "linter": { "enabled": false },
+      "assist": { "enabled": false }
+    },
+    {
       "includes": ["**/package.json", "**/tsconfig*.json", "biome.json", "!**/fixtures/**"],
       "json": {
         "formatter": {

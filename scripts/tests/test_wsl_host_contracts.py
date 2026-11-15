@@ -116,7 +116,7 @@ def test_guest_commit_gate_receives_event_payload(tmp_path: Path) -> None:
     payload = tmp_path / "host event.json"
     payload.write_text(json.dumps({"pull_request": {"base": {"sha": base}, "head": {"sha": head}}}))
     step = tmp_path / "step.sh"
-    gate = ROOT / "packages/computer-use/scripts/check-commit-messages.mjs"
+    gate = ROOT / "scripts/check-commit-messages.mjs"
     step.write_text(f'"{node}" "{gate}"\n')
     wrapper = (ROOT / "scripts/wsl2_shell.ps1").read_text()
     declaration = next(line for line in wrapper.splitlines() if line.startswith("$env:WSLENV = "))

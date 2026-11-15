@@ -809,8 +809,9 @@
 		},
 		{
 			"id": "owned-install-release-docs",
-			"purpose": "Document owned package identity, root release ownership and Linux build opt-in; route release payload validation through the central package contracts and delete the duplicate asset checker (#868)",
+			"purpose": "Document owned package identity, root release ownership and Linux build opt-in; move commit lint to root CI (#869) and route release payload validation through the central package contracts, deleting the duplicate asset checker (#868)",
 			"files": [
+				".github/workflows/ci.yml",
 				".github/workflows/publish-npm.yml",
 				"docs/content/docs/how-to-guides/develop-and-validate.mdx",
 				"docs/content/docs/how-to-guides/troubleshooting.mdx",
@@ -1280,6 +1281,7 @@
 		}
 	],
 	"files": [
+		".github/workflows/ci.yml",
 		".github/workflows/publish-npm.yml",
 		"CHANGELOG.md",
 		"CONTRIBUTING.md",
@@ -1388,7 +1390,6 @@
 		"test/build-native.test.mjs",
 		"test/cdp-client.test.mjs",
 		"test/cleanup.test.mjs",
-		"test/commit-messages.test.mjs",
 		"test/config-load.test.mjs",
 		"test/cursor-headless-gate.test.mjs",
 		"test/desktop-seam.test.mjs",

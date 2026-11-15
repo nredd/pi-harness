@@ -1,7 +1,7 @@
 /** Pure reset-aware ranking. Eligibility and quota confirmation remain the router's job. */
-import type { Strategy } from "./config.js";
-import type { ModelRef } from "./model-ref.js";
-import { modelMatchesFamily, type UsageSnapshot } from "./usage.js";
+import type { Strategy } from "./config.ts";
+import type { ModelRef } from "./model-ref.ts";
+import { modelMatchesFamily, type UsageSnapshot } from "./usage.ts";
 
 /** A score is diagnostic only: it never blocks quota or refreshes usage. */
 export type QuotaScore =

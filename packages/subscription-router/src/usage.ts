@@ -12,7 +12,7 @@
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type ModelRef, refKey } from "./model-ref.js";
+import { type ModelRef, refKey } from "./model-ref.ts";
 
 /** How long a successful read is served from cache to plain `get` calls. */
 const CACHE_TTL_MS = 5 * 60_000;
