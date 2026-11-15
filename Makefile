@@ -54,6 +54,7 @@ check-ts:  ## Biome (non-rewriting), tsc, vitest for every npm workspace, or onl
 check-scripts:  ## Format/lint/type/tests for scripts/ (real disposable git repos), then the package layout gate (allowlist may only shrink vs BASE; unset or empty BASE means origin/main)
 	$(MAKE) build
 	$(call PY_GATE,scripts,--project ../integration,,.)
+	uv run --locked --project integration python scripts/package_contracts.py --packed-files-only
 	uv run --locked --project integration python scripts/package_layout.py --compare-ref "$(or $(BASE),origin/main)"
 	$(MAKE) check-import-audit
 

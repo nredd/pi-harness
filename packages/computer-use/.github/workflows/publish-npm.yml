@@ -469,7 +469,7 @@ jobs:
         run: |
           set -euo pipefail
           PACKAGE_TARBALL="$(npm pack --ignore-scripts --silent)"
-          node scripts/check-package-assets.mjs "$PACKAGE_TARBALL"
+          uv run --locked --project ../../integration python ../../scripts/package_contracts.py --packed-files-only --tarball "computer-use=$PACKAGE_TARBALL"
           echo "PACKAGE_TARBALL=$PACKAGE_TARBALL" >> "$GITHUB_ENV"
 
       - name: Publish npm package

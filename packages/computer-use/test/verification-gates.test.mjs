@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, test, vi } from "vitest";
 import { main as docs } from "../scripts/check-docs.mjs";
 import { main as platforms } from "../scripts/check-docs-platform.mjs";
-import { main as assets } from "../scripts/check-package-assets.mjs";
 
 const temporary = [];
 const quiet = { log() {}, error() {} };
@@ -166,98 +165,6 @@ test("documentation gate rejects every stale macOS claim and propagates unreadab
 	assert.throws(() => docs([scratch()], quiet), /ENOENT/);
 });
 
-function archive() {
-	const root = scratch();
-	// Independent contract fixture, not the production expected list.
-	const files = [
-		"docs/content/docs/how-to-guides/linux.mdx",
-		...["activity_glow", "agent_cursor", "agent_cursor_motion", "bridge", "helper_entry"].map(
-			(name) => `native/macos/${name}.swift`,
-		),
-		...[
-			"Cargo.toml",
-			"Cargo.lock",
-			...["atspi", "error", "lib", "main", "protocol", "state", "wayland", "x11"].map((name) => `src/${name}.rs`),
-		].map((name) => `native/linux/bridge-rs/${name}`),
-		"prebuilt/macos/arm64/bridge",
-		"prebuilt/macos/x64/bridge",
-	];
-	for (const name of files) write(root, `package/${name}`, "synthetic");
-	const tarball = path.join(root, "fixture.tgz");
-	execFileSync("tar", ["-czf", tarball, "-C", root, "package"]);
-	return { root, files, tarball };
-}
-
-test("package-assets gate inspects a real archive and never deletes supplied archives", async () => {
-	const { root, tarball } = archive();
-	assert.equal(await assets([tarball]), 0);
-	assert.ok(readFileSync(tarball).length > 0);
-	for (const extra of [
-		"native/linux/bridge-rs/target/output",
-		"native/linux/bridge-rs/tests/test.rs",
-		"prebuilt/linux/bridge",
-	])
-		write(root, `package/${extra}`, "stray");
-	execFileSync("tar", ["-czf", tarball, "-C", root, "package"]);
-	await assert.rejects(assets([tarball]), /must not ship Linux/);
-	await assert.rejects(assets([path.join(root, "missing.tgz")]), /Command failed/);
-});
-
-test("package-assets gate rejects every missing required asset", async () => {
-	const { files } = archive();
-	for (const omitted of files) {
-		await assert.rejects(
-			assets(["supplied.tgz"], {
-				...quiet,
-				exec: async () => ({
-					stdout: files
-						.filter((name) => name !== omitted)
-						.map((name) => `package/${name}`)
-						.join("\n"),
-				}),
-				remove: async () => assert.fail("supplied archive removed"),
-			}),
-			/npm package is missing/,
-		);
-	}
-});
-
-test("package-assets gate creates and cleans only its own tarball on success and refusal", async () => {
-	const { tarball } = archive();
-	for (const failure of [false, true]) {
-		const removed = [];
-		const commands = [];
-		const deps = {
-			...quiet,
-			remove: async (...args) => removed.push(args),
-			exec: async (command, args, options) => {
-				commands.push([command, args, options]);
-				if (command === "npm") return { stdout: `notice\n${tarball}\nignored` };
-				if (failure) throw new Error("listing refused");
-				return { stdout: execFileSync(command, args, options) };
-			},
-		};
-		if (failure) await assert.rejects(assets([], deps), /listing refused/);
-		else assert.equal(await assets([], deps), 0);
-		assert.deepEqual(removed, [[tarball, { force: true }]]);
-		assert.deepEqual(commands[0].slice(0, 2), ["npm", ["pack", "--ignore-scripts", "--silent"]]);
-		assert.deepEqual(commands[1].slice(0, 2), ["tar", ["-tzf", tarball]]);
-	}
-	await assert.rejects(
-		assets([], { ...quiet, exec: async () => ({ stdout: "no archive" }) }),
-		/did not produce a tarball/,
-	);
-	await assert.rejects(
-		assets([], {
-			...quiet,
-			exec: async () => {
-				throw new Error("pack refused");
-			},
-		}),
-		/pack refused/,
-	);
-});
-
 test("platform gate runs both real offline generators and refuses launch errors or divergence", () => {
 	assert.equal(platforms(), 0);
 	for (const result of [
@@ -290,16 +197,12 @@ test("CLI entries dispatch in process and ordinary imports remain inert", async 
 	const argv = process.argv;
 	const exitCode = process.exitCode;
 	try {
-		for (const name of ["check-package-assets", "check-docs", "check-docs-platform"]) {
+		for (const name of ["check-docs", "check-docs-platform"]) {
 			const url = new URL(`../scripts/${name}.mjs`, import.meta.url);
 			process.argv = [process.execPath];
 			vi.resetModules();
 			await import(url.href);
-			process.argv = [
-				process.execPath,
-				fileURLToPath(url),
-				...(name === "check-package-assets" ? [archive().tarball] : []),
-			];
+			process.argv = [process.execPath, fileURLToPath(url)];
 			vi.resetModules();
 			await import(url.href);
 		}
@@ -309,11 +212,8 @@ test("CLI entries dispatch in process and ordinary imports remain inert", async 
 	}
 });
 
-test("asset and platform CLIs dispatch through symlinked paths", () => {
-	for (const [name, args, expected] of [
-		["check-package-assets", [archive().tarball], /package assets passed/],
-		["check-docs-platform", [], /host-independent/],
-	]) {
+test("platform CLI dispatches through symlinked paths", () => {
+	for (const [name, args, expected] of [["check-docs-platform", [], /host-independent/]]) {
 		const link = path.join(scratch(), `${name}.mjs`);
 		symlinkSync(fileURLToPath(new URL(`../scripts/${name}.mjs`, import.meta.url)), link);
 		const result = spawnSync(process.execPath, [link, ...args], { cwd: os.tmpdir(), encoding: "utf8" });

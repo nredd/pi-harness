@@ -59,7 +59,12 @@ make help                    # every target
   A suite that shares state beyond serial files (HOME, ports, global tools) isolates it per file; it does not lean on serialization
 - `check-benchmark` needs `@openai/codex@0.154.0` first on `PATH` on macOS; it fails, never skips
 - Packages build and test against the core fork's release tarballs pinned in root `overrides`.
-  Stock Pi compatibility is `make check-package-contracts`' job
+  Stock Pi compatibility is `make check-package-contracts`' job.
+  `scripts/package_contracts.py` is the sole tarball-membership authority: every package has exact
+  `packed_files` (and counted patterns for hashed chunks). `make check-scripts` runs its
+  `--packed-files-only` path without stock Pi, including production-source completeness and test/fixture
+  exclusion. Compiled libraries require their matching JavaScript and declaration outputs instead of
+  raw sources. Add moved shipped paths there, not in package-local tarball tests
 - Keep package-local `node_modules/` host copies absent: the in-process stack loader refuses a
   second host copy
 - On macOS run long gates under `/usr/bin/caffeinate -is`. Do not relax real-time deadlines

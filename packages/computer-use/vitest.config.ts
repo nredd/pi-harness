@@ -15,7 +15,6 @@ const ZERO_UNCOVERED_FILES = [
 	"scripts/check-upstream-sync.mjs",
 	"scripts/check-docs-platform.mjs",
 	"scripts/check-docs.mjs",
-	"scripts/check-package-assets.mjs",
 	"scripts/docs-generators/generate-source-references.mjs",
 	"scripts/docs-generators/generate-tool-reference.mjs",
 	"scripts/make-signing-cert.mjs",

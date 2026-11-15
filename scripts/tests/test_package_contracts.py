@@ -1253,8 +1253,11 @@ def test_session_kit_readme_is_required_and_links_only_packed_files() -> None:
     assert links <= set(contract.required), links
     packable = {link for link in links if any(link == e or link.startswith(f"{e}/") for e in allowlist)}
     assert links == packable
-    packed = [name for name in contract.required if name != "README.md"]
-    assert pc.audit_files(contract, packed) == ["missing required file 'README.md'"]
+    packed = [name for name in contract.packed_files if name != "README.md"]
+    assert pc.audit_files(contract, packed) == [
+        "missing required file 'README.md'",
+        "packed file 'README.md' required by the '@nredd/pi-session-kit' contract is missing",
+    ]
 
 
 def test_audit_license(tmp_path: Path) -> None:
