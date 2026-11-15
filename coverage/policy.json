@@ -6,6 +6,8 @@
     { "path": "forks", "issue": 693, "reason": "Carried core fork patches have no coverage producer; diff coverage vs explicit exclusion is an open owner decision." }
   ],
   "reclassifications": [
+    { "package": "computer-use", "signal": "owned", "path": "packages/computer-use/scripts/check-commit-messages.mjs", "replacement": "scripts/check-commit-messages.mjs", "reason": "Move repository-wide commit policy to root scripts (#869), measured by import-audit with the same real-history and refusal tests and zero uncovered floors." },
+    { "package": "computer-use-vitest", "signal": "owned", "path": "packages/computer-use/scripts/check-commit-messages.mjs", "replacement": "scripts/check-commit-messages.mjs", "reason": "Move repository-wide commit policy to root scripts (#869), measured by import-audit with the same real-history and refusal tests and zero uncovered floors." },
     { "package": "import-audit", "signal": "owned", "path": "scripts/check-biome-paths.mjs", "reason": "Deleted for nredd/pi-harness#862: the preflight only existed to hand `biome check` an explicit path list so a missing path could not pass silently. The five migrated packages lint under the shared root `biome.json` (the three deferred packages keep nested configs marked `root: false`), and the integration/probes, integration/providers and scripts gates lint a directory or glob instead of hand-written file lists, so a renamed or deleted file cannot silently drop out and there is no path list to validate. Its test and verification helper entry go with it; no other owned file lost coverage and import-audit stays at 0/0/0/0." },
     { "package": "import-audit", "signal": "owned", "path": "packages/todo/.vitest.config.ts", "replacement": "packages/todo/vitest.config.ts", "reason": "Relative to cba32fea: the config loses its dot prefix (#863, #860) so every package config is `vitest.config.ts` and no script passes `--config`. Same options, now built by `scripts/vitest-package.ts`, which is owned and measured at 0/0/0/0 in this signal." },
     { "package": "runtime-build-tooling", "signal": "owned", "path": "packages/plan-mode/scripts/runtime-builder.mjs", "replacement": "scripts/runtime-builder.mjs", "reason": "Relative to 1b1ae909: the shared esbuild runtime builder moves to the root `scripts/` (#866) because subagents imported it across package boundaries. Same producer, same 0/0 floor: `test:dist` now roots Vitest at the repository so the moved file stays measured by the plan-mode `build-runtime.test.ts` that already exercised it." },
@@ -221,7 +223,7 @@
     },
     "computer-use": {
       "root": "packages/computer-use",
-      "owned": ["src/**/*.ts", "src/**/*.mjs", "src/**/*.mts", "extensions/**/*.ts", "native/macos/*.swift", "native/windows/bridge-rs/src/**/*.rs", "native/linux/bridge-rs/src/**/*.rs", "scripts/build-native.mjs", "scripts/check-docs-platform.mjs", "scripts/check-docs.mjs", "scripts/check-commit-messages.mjs", "scripts/check-sync-ledger.mjs", "scripts/check-sync-reverts.mjs", "scripts/check-upstream-sync.mjs", "scripts/check-package-assets.mjs", "scripts/make-signing-cert.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs", "scripts/docs-generators/*.mjs", "scripts/*.sh", "docs/**/*.ts", "docs/**/*.tsx", "docs/**/*.mjs"],
+      "owned": ["src/**/*.ts", "src/**/*.mjs", "src/**/*.mts", "extensions/**/*.ts", "native/macos/*.swift", "native/windows/bridge-rs/src/**/*.rs", "native/linux/bridge-rs/src/**/*.rs", "scripts/build-native.mjs", "scripts/check-docs-platform.mjs", "scripts/check-docs.mjs", "scripts/check-sync-ledger.mjs", "scripts/check-sync-reverts.mjs", "scripts/check-upstream-sync.mjs", "scripts/check-package-assets.mjs", "scripts/make-signing-cert.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs", "scripts/docs-generators/*.mjs", "scripts/*.sh", "docs/**/*.ts", "docs/**/*.tsx", "docs/**/*.mjs"],
       "exclusions": [{ "path": "docs/next-env.d.ts", "kind": "generated", "reason": "Next.js-generated declaration references only; no executable source." }, { "path": "src/platform/macos/helper-path.d.mts", "kind": "type-only", "reason": "Only TypeScript declarations for helper-path.mjs; emits no executable JavaScript." }],
       "status": "pending",
       "goal": "excluded",
@@ -291,7 +293,7 @@
     },
     "computer-use-vitest": {
       "root": "packages/computer-use",
-      "owned": ["src/**/*.ts", "src/**/*.mjs", "extensions/**/*.ts", "scripts/build-native.mjs", "scripts/check-docs-platform.mjs", "scripts/check-docs.mjs", "scripts/check-commit-messages.mjs", "scripts/check-sync-ledger.mjs", "scripts/check-sync-reverts.mjs", "scripts/check-upstream-sync.mjs", "scripts/check-package-assets.mjs", "scripts/make-signing-cert.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs", "scripts/docs-generators/*.mjs"],
+      "owned": ["src/**/*.ts", "src/**/*.mjs", "extensions/**/*.ts", "scripts/build-native.mjs", "scripts/check-docs-platform.mjs", "scripts/check-docs.mjs", "scripts/check-sync-ledger.mjs", "scripts/check-sync-reverts.mjs", "scripts/check-upstream-sync.mjs", "scripts/check-package-assets.mjs", "scripts/make-signing-cert.mjs", "scripts/setup-helper.mjs", "scripts/rust-coverage.mjs", "scripts/swift-coverage.mjs", "scripts/docs-generators/*.mjs"],
       "exclusions": [{ "path": "src/platform/types.ts", "kind": "type-only", "reason": "Only TypeScript declarations; emits no executable JavaScript." }],
       "status": "measured",
       "goal": "excluded",
@@ -435,6 +437,7 @@
     "import-audit": {
       "root": ".",
       "owned": [
+        "scripts/check-commit-messages.mjs",
         "scripts/import_audit.ts",
         "scripts/merge-pr.ts",
         "scripts/router_contract.mjs",

@@ -9,6 +9,8 @@ export default definePackageConfig("import-audit", {
 	root: fileURLToPath(new URL("..", import.meta.url)),
 	test: {
 		include: [
+			"scripts/tests/commit-messages.test.mjs",
+			"scripts/tests/commit-policy.test.mjs",
 			"scripts/coverage-configs.test.ts",
 			"scripts/import_audit.test.ts",
 			"scripts/merge-pr.test.ts",

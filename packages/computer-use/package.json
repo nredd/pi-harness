@@ -74,7 +74,7 @@
     "test:async": "node ../../scripts/run-vitest.ts node --config vitest.async.config.ts --coverage",
     "coverage:swift": "node scripts/swift-coverage.mjs",
     "test:upstream-sync": "node scripts/check-upstream-sync.mjs",
-    "check": "npm run typecheck && npm run docs:check && npm test && npm run test:async && node scripts/check-package-assets.mjs && node scripts/check-commit-messages.mjs && node scripts/check-sync-reverts.mjs && node scripts/check-upstream-sync.mjs --fetch-if-enabled",
+    "check": "npm run typecheck && npm run docs:check && npm test && npm run test:async && node scripts/check-package-assets.mjs && node scripts/check-sync-reverts.mjs && node scripts/check-upstream-sync.mjs --fetch-if-enabled",
     "test": "node ../../scripts/run-vitest.ts node --coverage",
     "build:native": "node scripts/build-native.mjs",
     "build:windows": "node scripts/build-native.mjs --platform windows",

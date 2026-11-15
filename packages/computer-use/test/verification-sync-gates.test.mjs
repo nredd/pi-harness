@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, test, vi } from "vitest";
-import { main as commits } from "../scripts/check-commit-messages.mjs";
 import { validateLedger } from "../scripts/check-sync-ledger.mjs";
 import { cases, main as reverts } from "../scripts/check-sync-reverts.mjs";
 import { main as upstream } from "../scripts/check-upstream-sync.mjs";
@@ -35,74 +34,6 @@ function repo(root) {
 afterEach(() => {
 	vi.restoreAllMocks();
 	for (const root of temporary.splice(0)) rmSync(root, { recursive: true, force: true });
-});
-
-test("commit policy measures real disposable history success and refusal in process", () => {
-	const root = scratch();
-	repo(root);
-	for (const subject of ["Initial commit", "bad subject"]) {
-		git(root, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", subject);
-		assert.equal(
-			commits(["HEAD"], {
-				...quiet,
-				env: {},
-				read: readFileSync,
-				exec: (command, args, options) => execFileSync(command, ["-C", root, ...args], options),
-			}),
-			subject === "Initial commit" ? 0 : 1,
-		);
-	}
-});
-
-test("commit policy fails closed across event, history and command failures", () => {
-	const base = "a".repeat(40);
-	const head = "b".repeat(64);
-	const calls = [];
-	const deps = {
-		...quiet,
-		env: {},
-		read: () =>
-			JSON.stringify({ before: base, after: head, pull_request: { base: { sha: base }, head: { sha: head } } }),
-		exec: (_command, args) => {
-			calls.push(args);
-			return args[0] === "log" ? "Merge bad\nRevert bad\nValid subject\nrtl: Valid area\n" : "false";
-		},
-	};
-	assert.equal(commits([], deps), 0);
-	assert.equal(calls.at(-1)[2], "HEAD~1..HEAD");
-	assert.equal(commits([], { ...deps, env: { COMMIT_RANGE: "explicit" } }), 0);
-	assert.equal(calls.at(-1)[2], "explicit");
-	for (const event of ["push", "pull_request", "pull_request_target"]) {
-		const env = { GITHUB_EVENT_NAME: event, GITHUB_EVENT_PATH: "event.json" };
-		assert.equal(commits([], { ...deps, env }), 0);
-		assert.equal(calls.at(-1)[2], `${base}..${head}`);
-		assert.equal(commits([], { ...deps, env: { GITHUB_EVENT_NAME: event } }), 1);
-		for (const payload of [
-			"invalid",
-			"null",
-			"{}",
-			JSON.stringify({ before: "0".repeat(40), after: head }),
-			JSON.stringify({ before: "branch", after: head }),
-		])
-			assert.equal(commits([], { ...deps, env, read: () => payload }), 1);
-	}
-	for (const range of ["", "--all"]) assert.equal(commits([range], deps), 1);
-	assert.equal(commits([], { ...deps, exec: () => "true" }), 1);
-	for (const error of [new Error("not a repository"), "non-Error refusal"])
-		assert.equal(
-			commits([], {
-				...deps,
-				exec: () => {
-					throw error;
-				},
-			}),
-			1,
-		);
-	assert.equal(
-		commits([], { ...deps, exec: (_command, args) => (args[0] === "log" ? "lowercase\nTrailing period.\n" : "false") }),
-		1,
-	);
-	assert.equal(commits([], { ...deps, exec: (_command, args) => (args[0] === "log" ? "" : "false") }), 0);
 });
 
 function ledgerFixture() {
@@ -352,9 +283,8 @@ test("ledger gate rejects duplicate ids, undeclared sources and unowned controls
 	assert.ok(cases.length > 0);
 });
 
-test("sync and commit CLIs dispatch through symlinked paths", () => {
+test("sync CLIs dispatch through symlinked paths", () => {
 	for (const [name, args, expected] of [
-		["check-commit-messages", ["HEAD..HEAD"], /Checked 0 commit/],
 		["check-sync-reverts", ["--validate-only"], /Sync ledger and actual revert cases validated/],
 		["check-upstream-sync", ["--fetch-if-enabled"], /NOT RUN upstream sync/],
 	]) {
@@ -377,7 +307,6 @@ test("verification gate CLI dispatch is measured and imports without argv remain
 	try {
 		process.env = { ...env, COMMIT_RANGE: "HEAD..HEAD", PI_CU_UPSTREAM_SYNC: "" };
 		for (const [name, args] of [
-			["check-commit-messages", []],
 			["check-sync-reverts", ["--validate-only"]],
 			["check-upstream-sync", ["--fetch-if-enabled"]],
 		]) {
