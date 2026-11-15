@@ -46,7 +46,7 @@ title aliases and stats share one call-time agent-directory resolver, preserving
 SDK hosts can use
 `createSessionKit({ config, agentDir, homeDir, monitorRoot })` from `src/index.ts`: explicit `config` avoids
 loading the config file, `agentDir` scopes config/rules/title aliases, `homeDir` derives those paths and stats
-cache/session defaults when no agent directory is supplied, and `monitorRoot` isolates
+cache/session defaults when no agent directory is supplied (and is an isolated root for stats: other harnesses' paths, including `XDG_DATA_HOME`, come from it, never `process.env`), and `monitorRoot` isolates
 monitor pidfiles and orphan sweeps. Optional `clock` (`now`, cancellable `setTimeout`/`setInterval`)
 and `spawnMonitor` seams control scheduling and child lifetime in SDK tests; the real manager,
 ring, coalescer, regex worker and host follow-up queue still run. The regex worker's startup,
