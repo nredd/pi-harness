@@ -152,6 +152,7 @@ class PackageContract:
         packed_files (tuple[str, ...]): Exact packed paths, when the package has a fixed public payload.
         library (bool): Compiled ESM library, with no Pi entrypoint or host dependency permissions.
         node_probe (str): Fixed ESM consumer program executed against the isolated installed tarball.
+        resource_directories (tuple[str, ...]): Non-src resource trees whose every file must ship.
         packed_patterns (tuple[tuple[re.Pattern[str], int], ...]): (pattern, exact count) pairs for packed
             paths with build-hashed names; together with `packed_files` they must cover the tarball exactly.
     """
@@ -169,6 +170,7 @@ class PackageContract:
     node_probe: str = ""
     standalone_artifacts: frozenset[str] = frozenset()
     packed_files: tuple[str, ...] = ()
+    resource_directories: tuple[str, ...] = ()
     packed_patterns: tuple[tuple[re.Pattern[str], int], ...] = ()
 
 
@@ -586,6 +588,7 @@ CONTRACTS = (
 PRESET_CONTRACT = PackageContract(
     name="@nredd/pi-preset",
     directory="preset",
+    resource_directories=("agents", "extensions", "lib", "licenses", "settings", "skills", "themes"),
     packed_files=(
         "LICENSE",
         "NOTICE.md",
@@ -2268,13 +2271,20 @@ def audit_files(contract: PackageContract, files: Sequence[str]) -> list[str]:
     return problems
 
 
-def audit_source_files(package_dir: Path, files: Sequence[str], *, library: bool = False) -> list[str]:
+def audit_source_files(
+    package_dir: Path,
+    files: Sequence[str],
+    *,
+    library: bool = False,
+    resource_directories: tuple[str, ...] = (),
+) -> list[str]:
     """Require production sources in the pack and forbid test payloads.
 
     Parameters:
         package_dir (Path): Workspace root, including source-only development files.
         files (Sequence[str]): Actual npm tarball paths.
         library (bool): Compiled libraries ship matching JavaScript and declaration outputs.
+        resource_directories (tuple[str, ...]): Resource trees whose complete disk contents must ship.
 
     Returns:
         list[str]: Missing production files and forbidden test payloads.
@@ -2285,6 +2295,11 @@ def audit_source_files(package_dir: Path, files: Sequence[str], *, library: bool
         if set(PurePosixPath(name).parts) & {"test", "tests", "fixtures"}
         or name.endswith((".test.ts", ".test.mts", ".test.js", ".test.mjs"))
     ]
+    for directory in resource_directories:
+        for resource in sorted((package_dir / directory).rglob("*")):
+            name = resource.relative_to(package_dir).as_posix()
+            if resource.is_file() and name not in files:
+                problems.append(f"resource file '{name}' is not packed")
     source_root = package_dir / "src"
     # Todo's upstream layout still has root-level modules. Preserve its production walker
     # until its independent src/ migration; skip development directories, not production ones.
@@ -2295,7 +2310,7 @@ def audit_source_files(package_dir: Path, files: Sequence[str], *, library: bool
             continue
         if set(relative.parts) & {"node_modules", "docs", "dist", "test", "tests", "fixtures"}:
             continue
-        if not path.is_file() or path.suffix not in CODE_SUFFIXES:
+        if not path.is_file():
             continue
         if path.name.endswith((".test.ts", ".test.mts", ".test.js", ".test.mjs")):
             continue
@@ -2305,7 +2320,14 @@ def audit_source_files(package_dir: Path, files: Sequence[str], *, library: bool
         # Todo's old walker required every production .ts module, not JavaScript tooling.
         if not source_root.is_dir() and (package_dir.name != "todo" or path.suffix != ".ts"):
             continue
-        expected = (f"dist/{path.stem}.js", f"dist/{path.stem}.d.ts") if library else (relative.as_posix(),)
+        expected = (
+            (
+                f"dist/{path.relative_to(source_root).with_suffix('.js').as_posix()}",
+                f"dist/{path.relative_to(source_root).with_suffix('.d.ts').as_posix()}",
+            )
+            if library
+            else (relative.as_posix(),)
+        )
         for name in expected:
             if name not in files:
                 problems.append(f"production source '{relative.as_posix()}' requires packed '{name}'")
@@ -2337,7 +2359,10 @@ def run_packed_files_gate(work: Path, supplied: Mapping[str, Path] | None = None
         artifact = select_artifact(contract, tarballs, sandbox, supplied or {})
         problems = audit_files(contract, artifact.files)
         problems += audit_source_files(
-            REPO_ROOT / "packages" / contract.directory, artifact.files, library=contract.library
+            REPO_ROOT / "packages" / contract.directory,
+            artifact.files,
+            library=contract.library,
+            resource_directories=contract.resource_directories,
         )
         if problems:
             raise ContractError(f"Packed files for '{contract.name}':\n" + "\n".join(problems))
