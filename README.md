@@ -47,9 +47,9 @@ make help                    # every target
   config files use two spaces), one `tsconfig.base.json` that every package `tsconfig.json` extends, and one
   set of pins (`@biomejs/biome`, `typescript`, `@types/node`, `vitest`, the coverage providers, `esbuild`) in the
   root `package.json`. Packages never pin them. A package that cannot meet a flag yet overrides it in its own
-  `tsconfig.json` with a comment naming the issue; `plan-mode`, `subagents` and `todo` keep their own
+  `tsconfig.json` with a comment naming the issue; `subagents` and `todo` keep their own
   `biome.json` until their layout issues land (`computer-use` has none yet). In `dev-tools`, `preset`, `resource-sampler`,
-  `session-kit` and `subscription-router`, `npm run lint` is `biome check .` and `npm run format` is `biome check --write .`
+  `session-kit`, `subscription-router` and `plan-mode`, `npm run lint` is `biome check .` and `npm run format` is `biome check --write .`
 - `dist/` is gitignored build output (#866): `npm run build` or `make install-owned` regenerates it, `npm run check` builds first, and
   `package_contracts.pack` removes and rebuilds it in place before `npm pack --ignore-scripts`, so do not run contract packing
   concurrently with builds or readers of the same checkout. A missing `dist/index.ts` fails the `required` audit
