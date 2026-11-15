@@ -66,10 +66,13 @@ for (const fixture of fixtures) {
 					noExtensions: true,
 					noSkills: true,
 					noContextFiles: true,
-					additionalExtensionPaths: [packagePath()],
+					// build-runtime.test.ts replaces dist/ concurrently. Test settings through the source
+					// entry so discovery cannot miss /plan and fall through to an unauthenticated prompt.
+					additionalExtensionPaths: [packagePath("src/index.ts")],
 				});
 				await loader.reload();
 				assert.deepEqual(loader.getExtensions().errors, []);
+				assert.equal(loader.getExtensions().extensions.length, 1);
 				const created = await createAgentSession({
 					cwd: root,
 					agentDir,
