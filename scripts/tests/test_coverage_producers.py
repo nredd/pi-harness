@@ -20,12 +20,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = "node ../../scripts/run-vitest.ts bun"
 # Package-specific Vitest options only; the launcher owns every coverage flag.
-LAUNCHER_PACKAGE_ARGS = {
-    "session-kit": (
-        " --exclude test/scenarios/home-injection.test.ts && "
-        f"{LAUNCHER} test/scenarios/home-injection.test.ts --coverage.enabled=false"
-    ),
-}
+LAUNCHER_PACKAGE_ARGS: dict[str, str] = {}
 BUN_COVERAGE_ARGS = [
     "--coverage.provider=istanbul",
     "--coverage.reporter=text",
@@ -202,7 +197,7 @@ def test_declared_bun_commands_delegate_coverage_to_the_launcher() -> None:
     Parameters:
         None.
     Returns:
-        None: Manifests pass only package arguments and the separate home-injection canary.
+        None: Manifests pass only package arguments to the shared launcher.
     Raises:
         AssertionError: A manifest bypasses the launcher, restates coverage flags, drops a reporter
             or a retired native subset returns.
@@ -454,8 +449,8 @@ def test_test_scripts_go_through_the_launcher_and_read_policy_only_in_the_factor
     node = f"{LAUNCHER.replace(' bun', ' node')} --coverage"
     for manifest in ROOT.glob("packages/*/package.json"):
         scripts = json.loads(manifest.read_text())["scripts"]
-        if manifest.parent.name != "session-kit":
-            assert scripts["test"] == node, manifest
+        expected = f"npm run build && {node}" if manifest.parent.name == "session-kit" else node
+        assert scripts["test"] == expected, manifest
         for name, command in scripts.items():
             if name.startswith("test:") and name != "test:bun":
                 # One name per extra producer: its config, a non-Vitest check or the live run.

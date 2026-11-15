@@ -66,7 +66,7 @@ The goal/quota/loop ports in #33 remain native; their three deleted Python files
 
 Native preset footer receipts are in `packages/preset/test/scenarios/footer-{quota,cache,headless}.test.ts` (Vitest + Bun); the three legacy Python files are deleted. All helper assertions and renderer coverage live in the preset, while dotfiles retains installation filters and configuration checks.
 
-Native stats receipts remain in `packages/session-kit/test/scenarios/{stats-view,stats-data}.test.ts`; `inprocess/stats-plan.test.ts` adds three-machine dedup/freshness and Plan mode on native export/import. Packed standalone privacy, stable UUID and repeated import stay in `scripts/package_contracts.py::exercise_stats_artifact`, CI `contracts` only. `inprocess/diff-plan.test.ts` and `transcript.test.ts` replace the remaining command/Plan and composed-row processes. The two latency-probe functions moved into multisession calibration/readiness/sample assertions; bench remains NOT RUN.
+Native stats receipts remain in `packages/session-kit/tests/scenarios/{stats-view,stats-data}.test.ts`; `inprocess/stats-plan.test.ts` adds three-machine dedup/freshness and Plan mode on native export/import. Packed standalone privacy, stable UUID and repeated import stay in `scripts/package_contracts.py::exercise_stats_artifact`, CI `contracts` only. `inprocess/diff-plan.test.ts` and `transcript.test.ts` replace the remaining command/Plan and composed-row processes. The two latency-probe functions moved into multisession calibration/readiness/sample assertions; bench remains NOT RUN.
 
 `inprocess/memory-deferred-kit.test.ts` additionally drives real memory/context-engine/kit
 factories: system-context refresh, session-lifetime tool promotion and successful controlled

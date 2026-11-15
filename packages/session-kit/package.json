@@ -38,8 +38,8 @@
     "typecheck": "tsc --noEmit",
     "build": "esbuild src/stats/cli.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/pi-stats-export.mjs",
     "prepack": "npm run build",
-    "test": "npm run build && node ../../scripts/run-vitest.ts node --coverage --exclude test/scenarios/home-injection.test.ts && node ../../scripts/run-vitest.ts node test/scenarios/home-injection.test.ts --coverage.enabled=false",
-    "test:bun": "node ../../scripts/run-vitest.ts bun --exclude test/scenarios/home-injection.test.ts && node ../../scripts/run-vitest.ts bun test/scenarios/home-injection.test.ts --coverage.enabled=false",
+    "test": "npm run build && node ../../scripts/run-vitest.ts node --coverage",
+    "test:bun": "node ../../scripts/run-vitest.ts bun",
     "check": "npm run lint && npm run typecheck && npm run test && npm run test:bun"
   },
   "devDependencies": {

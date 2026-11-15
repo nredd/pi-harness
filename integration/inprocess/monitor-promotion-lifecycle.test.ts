@@ -7,7 +7,7 @@ import type { Harness } from "@nredd/pi-test-lib/harness";
 import { expect, it } from "vitest";
 import { runTools } from "../../packages/dev-tools/tests/fixtures/session.ts";
 import { createSessionKit } from "../../packages/session-kit/src/index.ts";
-import { ControlledProcesses, configFor } from "../../packages/session-kit/test/fixtures/session.ts";
+import { ControlledProcesses, configFor } from "../../packages/session-kit/tests/fixtures/session.ts";
 import { jsonFile } from "./agents-support.ts";
 import { deferred, GoalStack } from "./goal-support.ts";
 import { loadThirdParty } from "./support.ts";
